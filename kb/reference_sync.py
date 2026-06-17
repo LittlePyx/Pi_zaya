@@ -53,6 +53,7 @@ def _fmt_done_message(stats: dict[str, Any]) -> str:
         int(stats.get("refs_metadata_ready", 0) or 0),
         int(stats.get("refs_metadata_status_complete", 0) or 0)
         + int(stats.get("refs_metadata_status_crossref_enriched", 0) or 0)
+        + int(stats.get("refs_metadata_status_bibliographic_ready", 0) or 0)
         + int(stats.get("refs_metadata_status_non_article_source_ok", 0) or 0)
         + int(stats.get("refs_metadata_status_no_doi_expected", 0) or 0),
     )
@@ -228,7 +229,7 @@ def start_reference_sync(
     library_db_path: Path | None = None,
     incremental: bool = True,
     enable_title_lookup: bool = True,
-    crossref_time_budget_s: float = 45.0,
+    crossref_time_budget_s: float = 180.0,
     doi_prefetch_workers: int = 6,
 ) -> dict[str, Any]:
     global _THREAD

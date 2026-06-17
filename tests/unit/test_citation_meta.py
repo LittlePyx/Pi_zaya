@@ -35,3 +35,40 @@ def test_fetch_best_crossref_meta_prefers_candidate_with_matching_venue(monkeypa
 
     assert isinstance(out, dict)
     assert str(out.get("doi") or "") == "10.1038/s41467-021-24990-0"
+
+
+def test_fetch_best_openalex_meta_uses_title_year_author_gate(monkeypatch):
+    q = "Optical imaging by means of two-photon quantum entanglement"
+
+    monkeypatch.setattr(
+        citation_meta,
+        "_openalex_search_title_raw",
+        lambda *_args, **_kwargs: [
+            {
+                "title": "Optical imaging by means of two-photon quantum entanglement",
+                "publication_year": 1994,
+                "doi": "https://doi.org/10.1000/wrong",
+                "authorships": [{"author": {"display_name": "Alice Example"}}],
+                "primary_location": {"source": {"display_name": "Physical Review A"}},
+                "biblio": {},
+            },
+            {
+                "title": "Optical imaging by means of two-photon quantum entanglement",
+                "publication_year": 1995,
+                "doi": "https://doi.org/10.1103/PhysRevA.52.R3429",
+                "authorships": [{"author": {"display_name": "T. B. Pittman"}}],
+                "primary_location": {"source": {"display_name": "Physical Review A"}},
+                "biblio": {"volume": "52", "first_page": "R3429", "last_page": "R3432"},
+            },
+        ],
+    )
+
+    out = citation_meta.fetch_best_openalex_meta(
+        query_title=q,
+        reference_text=f"Pittman T B. {q}. Phys. Rev. A, 52:R3429-R3432, 1995.",
+        min_score=0.90,
+    )
+
+    assert isinstance(out, dict)
+    assert str(out.get("doi") or "") == "10.1103/PhysRevA.52.R3429"
+    assert str(out.get("match_method") or "") == "openalex_title"

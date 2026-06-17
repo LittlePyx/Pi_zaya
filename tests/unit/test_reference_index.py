@@ -107,12 +107,24 @@ def test_reference_metadata_classification_splits_actionable_reasons():
     assert sparse["metadata_status"] == "doi_sparse_refreshable"
     assert sparse["metadata_action"] == "auto_backfill"
 
-    retryable = ref_index.classify_reference_metadata(
+    bibliographic_ready = ref_index.classify_reference_metadata(
         {
             "raw": "[3] Smith J, Doe A. Snapshot compressive imaging with learned priors. Optics Express, 2020.",
             "title": "Snapshot compressive imaging with learned priors",
             "authors": "Smith J, Doe A",
             "venue": "Optics Express",
+            "year": "2020",
+        }
+    )
+    assert bibliographic_ready["metadata_status"] == "bibliographic_ready"
+    assert bibliographic_ready["metadata_ready"] is True
+    assert bibliographic_ready["metadata_action"] == "none"
+
+    retryable = ref_index.classify_reference_metadata(
+        {
+            "raw": "[3] Smith J, Doe A. Snapshot compressive imaging with learned priors. 2020.",
+            "title": "Snapshot compressive imaging with learned priors",
+            "authors": "Smith J, Doe A",
             "year": "2020",
         }
     )
@@ -139,6 +151,65 @@ def test_reference_metadata_classification_splits_actionable_reasons():
 
     low_confidence = ref_index.classify_reference_metadata({"raw": "[6] Bad OCR source 2020.", "parse_confidence": 0.45})
     assert low_confidence["metadata_status"] == "low_confidence_match"
+
+
+def test_lookup_reference_meta_falls_back_to_openalex(monkeypatch):
+    raw = (
+        "[3] T. B. Pittman, Y. H. Shih, D. V. Strekalov, and A. V. Sergienko. "
+        "Optical imaging by means of two-photon quantum entanglement. Phys. Rev. A, "
+        "52:R3429-R3432, 1995."
+    )
+    expected_title = "Optical imaging by means of two-photon quantum entanglement"
+    openalex_calls: list[dict] = []
+
+    monkeypatch.setattr(ref_index, "fetch_best_crossref_for_reference", lambda **kwargs: None)
+    monkeypatch.setattr(ref_index, "fetch_best_crossref_meta", lambda **kwargs: None)
+
+    def fake_fetch_best_openalex_meta(**kwargs):
+        openalex_calls.append(dict(kwargs))
+        return {
+            "title": expected_title,
+            "authors": "T. B. Pittman, Y. H. Shih, D. V. Strekalov, et al",
+            "venue": "Physical Review A",
+            "year": "1995",
+            "volume": "52",
+            "pages": "R3429-R3432",
+            "doi": "10.1103/PhysRevA.52.R3429",
+            "match_method": "openalex_title",
+            "match_score": 0.98,
+        }
+
+    monkeypatch.setattr(ref_index, "fetch_best_openalex_meta", fake_fetch_best_openalex_meta)
+    cache: dict = {}
+    stats: dict[str, int] = {}
+
+    meta, doi_hint = ref_index._lookup_crossref_meta_for_entry(
+        raw,
+        cache,
+        crossref_enabled=True,
+        enable_title_lookup=True,
+        stats=stats,
+    )
+
+    assert doi_hint == ""
+    assert isinstance(meta, dict)
+    assert meta["doi"] == "10.1103/PhysRevA.52.R3429"
+    assert meta["match_method"] == "openalex_title"
+    assert openalex_calls and openalex_calls[0]["query_title"] == expected_title
+    assert int(stats.get("openalex_network_attempts") or 0) == 1
+    assert ref_index._is_crossref_meta_cache_hit(next(iter((cache.get("openalex_title") or {}).values())))
+
+
+def test_reference_title_quality_allows_short_technical_titles():
+    assert ref_index._reference_has_usable_title("Compressed sensing") is True
+    assert ref_index._reference_has_usable_title(
+        "Snapshot Compressive Imaging: Theory, Algorithms, and Applications"
+    ) is True
+    assert ref_index._is_plausible_reference_title(
+        "Plug-and-Play Algorithms for Large-Scale Snapshot Compressive Imaging"
+    ) is True
+    assert ref_index._reference_has_usable_title("Johannes L Schonberger and Jan-Michael Frahm") is False
+    assert ref_index._is_plausible_reference_title("IEEE Transactions on Information Theory") is False
 
 
 def test_extract_references_map_cleans_noise_on_early_heading_return():
@@ -1108,6 +1179,7 @@ def test_build_reference_index_incremental_reuses_recent_unresolved_crossref_att
                 "crossref_unresolved_promising": 1,
                 "crossref_sparse_promising": 0,
                 "crossref_retry_ttl_s": 24 * 60 * 60,
+                "reference_lookup_version": ref_index.REFERENCE_LOOKUP_VERSION,
                 "index_status": "ready",
                 "quality_gate": {"status": "ready", "indexable": True, "action": "none"},
                 "refs": {
@@ -1154,6 +1226,100 @@ def test_build_reference_index_incremental_reuses_recent_unresolved_crossref_att
     assert int(out.get("refs_missing_doi") or 0) == 1
 
 
+def test_build_reference_index_retries_recent_unresolved_when_lookup_version_changes(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src_root.mkdir()
+    db_dir.mkdir()
+    md_path = src_root / "demo.en.md"
+    raw_ref = (
+        "[1] T. B. Pittman, Y. H. Shih, D. V. Strekalov, and A. V. Sergienko. "
+        "Optical imaging by means of two-photon quantum entanglement. Phys. Rev. A, "
+        "52:R3429-R3432, 1995."
+    )
+    md_path.write_text("# Demo\n\n## References\n" + raw_ref + "\n", encoding="utf-8")
+
+    src_key = ref_index._norm_source_key(md_path.resolve())
+    prev = {
+        "version": 1,
+        "updated_at": 0,
+        "doc_count": 1,
+        "next_cursor": 0,
+        "docs": {
+            src_key: {
+                "path": str(md_path.resolve()),
+                "name": md_path.name,
+                "stem": md_path.stem.lower(),
+                "sha1": ref_index.compute_file_sha1(md_path),
+                "source_doi": "",
+                "crossref_enriched": False,
+                "crossref_last_attempt_at": time.time(),
+                "crossref_unresolved_promising": 1,
+                "crossref_sparse_promising": 0,
+                "crossref_retry_ttl_s": 24 * 60 * 60,
+                "index_status": "ready",
+                "quality_gate": {"status": "ready", "indexable": True, "action": "none"},
+                "refs": {
+                    "1": {
+                        "num": 1,
+                        "raw": raw_ref,
+                        "doi": "",
+                        "doi_url": "",
+                        "title": "",
+                        "authors": "",
+                        "venue": "",
+                        "year": "",
+                        "volume": "",
+                        "issue": "",
+                        "pages": "",
+                        "crossref_ok": False,
+                        "match_method": "",
+                    }
+                },
+            }
+        },
+    }
+    (db_dir / "references_index.json").write_text(json.dumps(prev, ensure_ascii=False, indent=2), encoding="utf-8")
+    calls: list[str] = []
+
+    def fake_lookup(entry, *_args, **_kwargs):
+        calls.append(str(entry))
+        return (
+            {
+                "title": "Optical imaging by means of two-photon quantum entanglement",
+                "authors": "T. B. Pittman, Y. H. Shih, D. V. Strekalov, et al",
+                "venue": "Physical Review A",
+                "year": "1995",
+                "doi": "10.1103/PhysRevA.52.R3429",
+                "match_method": "openalex_title",
+                "match_score": 0.98,
+            },
+            "",
+        )
+
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **kwargs: True)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
+    monkeypatch.setattr(ref_index, "_lookup_crossref_meta_for_entry", fake_lookup)
+
+    out = ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=True,
+        enable_title_lookup=True,
+        quality_gate=True,
+    )
+
+    assert calls
+    assert int(out.get("docs_updated") or 0) == 1
+    assert int(out.get("refs_metadata_status_crossref_enriched") or 0) == 1
+    data = ref_index.load_reference_index(db_dir)
+    doc = next(iter((data.get("docs") or {}).values()))
+    assert int(doc.get("reference_lookup_version") or 0) == ref_index.REFERENCE_LOOKUP_VERSION
+    ref = (doc.get("refs") or {}).get("1") or {}
+    assert ref.get("crossref_ok") is True
+    assert "openalex_title" in str(ref.get("match_method") or "")
+
+
 def test_build_reference_index_incremental_hydrates_recent_unresolved_from_crossref_cache(tmp_path, monkeypatch):
     src_root = tmp_path / "src"
     db_dir = tmp_path / "db"
@@ -1184,6 +1350,7 @@ def test_build_reference_index_incremental_hydrates_recent_unresolved_from_cross
                 "crossref_unresolved_promising": 1,
                 "crossref_sparse_promising": 0,
                 "crossref_retry_ttl_s": 24 * 60 * 60,
+                "reference_lookup_version": ref_index.REFERENCE_LOOKUP_VERSION,
                 "index_status": "ready",
                 "quality_gate": {"status": "ready", "indexable": True, "action": "none"},
                 "refs": {

@@ -1056,6 +1056,7 @@ export default function LibraryPage() {
     const docsDone = store.refSync?.docsDone || numericStat(refSyncStats, 'docs_indexed')
     const statusReady = numericStat(refSyncStats, 'refs_metadata_status_complete')
       + numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
+      + numericStat(refSyncStats, 'refs_metadata_status_bibliographic_ready')
       + numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
       + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected')
     const metadataReady = Math.max(numericStat(refSyncStats, 'refs_metadata_user_ready'), statusReady, numericStat(refSyncStats, 'refs_metadata_ready'))
@@ -1089,6 +1090,7 @@ export default function LibraryPage() {
     if (store.refSync.status === 'done' && refsTotal > 0) {
       const statusReady = numericStat(refSyncStats, 'refs_metadata_status_complete')
         + numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
+        + numericStat(refSyncStats, 'refs_metadata_status_bibliographic_ready')
         + numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
         + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected')
       const metadataReady = Math.max(numericStat(refSyncStats, 'refs_metadata_user_ready'), statusReady, numericStat(refSyncStats, 'refs_metadata_ready'))

@@ -19,6 +19,7 @@ from kb.citation_meta import (
     extract_year_hint,
     fetch_best_crossref_for_reference,
     fetch_best_crossref_meta,
+    fetch_best_openalex_meta,
     fetch_crossref_references_by_doi,
     is_promising_reference_text,
     normalize_title_for_match,
@@ -29,6 +30,7 @@ from kb.store import compute_file_sha1
 INDEX_FILE_NAME = "references_index.json"
 CROSSREF_CACHE_FILE_NAME = "crossref_cache.json"
 REFERENCE_CATALOG_FILE_NAME = "reference_catalog.json"
+REFERENCE_LOOKUP_VERSION = 2
 
 _REF_HEAD_RE = re.compile(
     r"^#{1,6}\s+(references(?:\s+and\s+(?:notes|links))?|bibliography)\b",
@@ -50,6 +52,16 @@ _QUOTED_TITLE_RE = re.compile(r"[\"“”]([^\"“”]{8,260})[\"“”]")
 _YEAR_ANY_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 _REFERENCE_TRUNCATION_HINT_RE = re.compile(
     r"(?:\.\.\.|…|\b(?:incomplete|partially visible|not fully visible|unreadable|illegible)\b)",
+    re.IGNORECASE,
+)
+_REFERENCE_TITLE_SIGNAL_RE = re.compile(
+    r"\b("
+    r"algorithm|algorithms|application|applications|architecture|camera|compressed|compressive|"
+    r"communication|communications|computational|detection|fields|holography|image|imaging|"
+    r"information|learning|measurement|measurements|microscopy|network|networks|neural|"
+    r"optical|photon|photonic|photons|principle|principles|quantum|radiance|reconstruction|"
+    r"recovery|sensing|signal|snapshot|spectral|splatting|stereo|theory|uncertainty|video"
+    r")\b",
     re.IGNORECASE,
 )
 _REFERENCE_PERIOD_PLACEHOLDER = "<KB_REF_PERIOD>"
@@ -642,13 +654,14 @@ def _reference_title_looks_author_noise(title: str) -> bool:
     t = str(title or "").strip()
     if not t:
         return False
+    title_signal = bool(_REFERENCE_TITLE_SIGNAL_RE.search(t))
     if _looks_reference_author_segment(t):
-        return True
+        return not title_signal
     words = [w for w in re.split(r"\s+", t) if w]
     if 2 <= len(words) <= 8 and re.search(r"\band\b", t, flags=re.IGNORECASE):
         cap_n = sum(1 for w in words if w[:1].isupper())
         init_n = len(re.findall(r"\b[A-Z]{1,3}\.?\b", t))
-        return bool((cap_n / max(1, len(words))) >= 0.55 and init_n >= 1)
+        return bool((not title_signal) and (cap_n / max(1, len(words))) >= 0.55 and init_n >= 1)
     return False
 
 
@@ -786,6 +799,8 @@ def _reference_match_method_has_external_resolution(match_method: str, doi: str 
     tokens = {p.strip().lower() for p in str(match_method or "").split("+") if p.strip()}
     if any(token.startswith("source_work_reference") for token in tokens):
         return True
+    if any(token.startswith("openalex") or token.startswith("semantic_scholar") for token in tokens):
+        return True
     return bool(tokens.intersection({"bibliographic", "title", "doi", "doi_backfill"}))
 
 
@@ -917,7 +932,7 @@ def _looks_like_venue_or_publisher(text: str) -> bool:
         "workshop",
     )
     words = [w for w in re.split(r"\s+", t) if w]
-    if len(words) <= 8 and any(v in t for v in venueish):
+    if len(words) <= 8 and any(re.search(rf"\b{re.escape(v)}\b", t) for v in venueish):
         return True
     return False
 
@@ -931,7 +946,10 @@ def _is_plausible_reference_title(text: str) -> bool:
         return False
     if len(words) < 2 or len(words) > 32:
         return False
-    if _looks_like_venue_or_publisher(t):
+    if _reference_title_looks_author_noise(t):
+        return False
+    explicit_venue_title = bool(re.search(r"\b(?:journal|transactions|proceedings|conference)\b", t, flags=re.IGNORECASE))
+    if _looks_like_venue_or_publisher(t) and (explicit_venue_title or not _REFERENCE_TITLE_SIGNAL_RE.search(t)):
         return False
     if len(re.findall(r"[A-Za-z\u4e00-\u9fff]{2,}", t)) < 2:
         return False
@@ -1207,6 +1225,7 @@ def _doi_url(doi: str) -> str:
 REFERENCE_METADATA_STATUS_CODES = (
     "complete",
     "crossref_enriched",
+    "bibliographic_ready",
     "doi_sparse_refreshable",
     "title_lookup_retryable",
     "non_article_source_ok",
@@ -1262,7 +1281,8 @@ def _reference_has_usable_title(title: str) -> bool:
         return False
     if _reference_title_looks_author_noise(t):
         return False
-    if _looks_like_venue_or_publisher(t) and len(words) <= 3:
+    explicit_venue_title = bool(re.search(r"\b(?:journal|transactions|proceedings|conference)\b", t, flags=re.IGNORECASE))
+    if _looks_like_venue_or_publisher(t) and (len(words) <= 3 or explicit_venue_title):
         return False
     return bool(len(re.findall(r"[A-Za-z\u4e00-\u9fff]{2,}", t)) >= 2)
 
@@ -1295,6 +1315,8 @@ def _reference_has_external_metadata(rec: Mapping[str, Any], match_method: str, 
         return True
     tokens = {p.strip().lower() for p in str(match_method or "").split("+") if p.strip()}
     if any(token.startswith("source_work_reference") for token in tokens):
+        return True
+    if any(token.startswith("openalex") or token.startswith("semantic_scholar") for token in tokens):
         return True
     return bool(tokens.intersection({"bibliographic", "title", "doi", "doi_backfill", "shelf_metadata_repair"}))
 
@@ -1375,6 +1397,11 @@ def classify_reference_metadata(
             status = "no_doi_expected"
             reason = "no_doi_expected"
             action = "non_article_ok"
+            ready = True
+        elif has_title and has_authors and has_venue and has_year:
+            status = "bibliographic_ready"
+            reason = ""
+            action = "none"
             ready = True
         else:
             title_hint = _extract_query_title(raw)
@@ -2209,6 +2236,10 @@ def _lookup_crossref_meta_for_entry(
     if not isinstance(bib_cache, dict):
         bib_cache = {}
         cache["bib"] = bib_cache
+    openalex_title_cache = cache.get("openalex_title")
+    if not isinstance(openalex_title_cache, dict):
+        openalex_title_cache = {}
+        cache["openalex_title"] = openalex_title_cache
 
     if crossref_enabled and doi_key:
         if doi_key in doi_cache:
@@ -2400,6 +2431,36 @@ def _lookup_crossref_meta_for_entry(
             _stat_inc(stats, "crossref_negative_writes")
             _stat_inc(stats, "title_negative_writes")
 
+    if isinstance(meta, dict):
+        return meta, doi_hint
+
+    cached_openalex = openalex_title_cache.get(title_key)
+    if _is_crossref_meta_cache_hit(cached_openalex):
+        _stat_inc(stats, "crossref_cache_hits")
+        _stat_inc(stats, "openalex_cache_hits")
+        meta = dict(cached_openalex)
+    elif _is_fresh_crossref_cache_miss(cached_openalex):
+        _stat_inc(stats, "crossref_negative_hits")
+        _stat_inc(stats, "openalex_negative_hits")
+        meta = None
+    else:
+        _stat_inc(stats, "crossref_network_attempts")
+        _stat_inc(stats, "openalex_network_attempts")
+        try:
+            found = fetch_best_openalex_meta(
+                query_title=title_hint,
+                reference_text=raw,
+                expected_year=extract_year_hint(raw),
+                min_score=0.90,
+            )
+        except Exception:
+            found = None
+        meta = found if isinstance(found, dict) else None
+        openalex_title_cache[title_key] = meta if isinstance(meta, dict) else _crossref_cache_miss("openalex_title_not_found")
+        if not isinstance(meta, dict):
+            _stat_inc(stats, "crossref_negative_writes")
+            _stat_inc(stats, "openalex_negative_writes")
+
     return meta, doi_hint
 
 
@@ -2421,6 +2482,7 @@ def _cached_crossref_meta_for_record(
     doi_cache = cache.get("doi") if isinstance(cache.get("doi"), dict) else {}
     bib_cache = cache.get("bib") if isinstance(cache.get("bib"), dict) else {}
     title_cache = cache.get("title") if isinstance(cache.get("title"), dict) else {}
+    openalex_title_cache = cache.get("openalex_title") if isinstance(cache.get("openalex_title"), dict) else {}
 
     if doi_hint:
         cached = doi_cache.get(doi_hint.lower())
@@ -2446,6 +2508,11 @@ def _cached_crossref_meta_for_record(
                 _stat_inc(stats, "crossref_cache_hits")
                 _stat_inc(stats, "title_cache_hits")
                 return dict(cached), doi_hint, "title"
+            cached = openalex_title_cache.get(title_key)
+            if _is_crossref_meta_cache_hit(cached):
+                _stat_inc(stats, "crossref_cache_hits")
+                _stat_inc(stats, "openalex_cache_hits")
+                return dict(cached), doi_hint, "openalex_title"
 
     return None, doi_hint, ""
 
@@ -3115,7 +3182,16 @@ def build_reference_index(
                 # Rebuild only when promising references remain unresolved.
                 # Sparse-but-resolved docs are often already good enough and re-running can regress quality.
                 prev_needs_rebuild_for_enrich = bool(int(prev_unresolved) > 0)
-            prev_crossref_retry_due = _doc_crossref_retry_due(prev_doc, now_ts=time.time())
+            try:
+                prev_lookup_version = int(prev_doc.get("reference_lookup_version") or 1) if isinstance(prev_doc, dict) else 0
+            except Exception:
+                prev_lookup_version = 0
+            prev_lookup_stale = bool(
+                need_crossref_enrich
+                and prev_needs_rebuild_for_enrich
+                and int(prev_lookup_version) < int(REFERENCE_LOOKUP_VERSION)
+            )
+            prev_crossref_retry_due = bool(prev_lookup_stale or _doc_crossref_retry_due(prev_doc, now_ts=time.time()))
             prev_needs_rebuild_for_catalog = _previous_doc_refs_stale_against_catalog(prev_doc, prev_refs_obj)
             prev_has_quality_gate = bool(
                 isinstance(prev_doc, dict)
@@ -3148,6 +3224,7 @@ def build_reference_index(
                     kept_doc["crossref_enriched"] = bool(_doc_crossref_enriched(kept_refs))
                     kept_doc["crossref_unresolved_promising"] = int(unresolved_now)
                     kept_doc["crossref_sparse_promising"] = int(sparse_now)
+                    kept_doc["reference_lookup_version"] = int(REFERENCE_LOOKUP_VERSION)
                     docs_updated += 1
                     _stat_inc(crossref_stats, "docs_cache_hydrated")
                 else:
@@ -3645,6 +3722,7 @@ def build_reference_index(
                 "crossref_unresolved_promising": int(unresolved_promising),
                 "crossref_sparse_promising": int(sparse_promising),
                 "crossref_retry_ttl_s": int(_reference_sync_retry_ttl_s()) if need_crossref_enrich else 0,
+                "reference_lookup_version": int(REFERENCE_LOOKUP_VERSION),
                 "reference_catalog_status": str(reference_catalog.get("tail_continuity_status") or "").strip(),
                 "reference_catalog_ref_count": int(reference_catalog.get("ref_count") or 0),
                 "reference_catalog_missing_numbers": list(reference_catalog.get("missing_numbers") or []),
@@ -3671,6 +3749,7 @@ def build_reference_index(
                     kept_doc["crossref_unresolved_promising"] = int(prev_unresolved)
                     kept_doc["crossref_sparse_promising"] = int(prev_sparse)
                     kept_doc["crossref_retry_ttl_s"] = int(_reference_sync_retry_ttl_s())
+                    kept_doc["reference_lookup_version"] = int(REFERENCE_LOOKUP_VERSION)
                 kept_refs, hydrated_count = _hydrate_doc_refs_from_crossref_cache(
                     prev_doc.get("refs") if isinstance(prev_doc.get("refs"), dict) else None,
                     cache,
@@ -3683,6 +3762,7 @@ def build_reference_index(
                     kept_doc["crossref_enriched"] = bool(_doc_crossref_enriched(kept_refs))
                     kept_doc["crossref_unresolved_promising"] = int(unresolved_now)
                     kept_doc["crossref_sparse_promising"] = int(sparse_now)
+                    kept_doc["reference_lookup_version"] = int(REFERENCE_LOOKUP_VERSION)
                     docs_updated += 1
                     _stat_inc(crossref_stats, "docs_cache_hydrated")
                 else:

@@ -246,6 +246,7 @@ export type ReferenceSyncStatKey =
   | 'refs_crossref_ok'
   | 'refs_metadata_status_complete'
   | 'refs_metadata_status_crossref_enriched'
+  | 'refs_metadata_status_bibliographic_ready'
   | 'refs_metadata_status_doi_sparse_refreshable'
   | 'refs_metadata_status_title_lookup_retryable'
   | 'refs_metadata_status_non_article_source_ok'

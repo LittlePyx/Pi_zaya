@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import html
+import os
 import re
 from functools import lru_cache
 from typing import Any
@@ -54,6 +55,14 @@ def _clean_doi(doi: str) -> str:
         return ""
     d = d.strip(" \t\r\n.,;:()[]{}<>")
     return d
+
+
+def _normalize_doi_like(doi: str) -> str:
+    d = (doi or "").strip()
+    if not d:
+        return ""
+    d = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", d, flags=re.IGNORECASE)
+    return _clean_doi(d)
 
 
 def extract_first_doi(text: str) -> str:
@@ -228,6 +237,225 @@ def _author_family_set(item: dict[str, Any]) -> set[str]:
         fam = re.sub(r"[^a-z\-']", "", fam).strip("-'")
         if fam:
             out.add(fam)
+    return out
+
+
+def _openalex_author_display_name(author_ship: dict[str, Any]) -> str:
+    author = author_ship.get("author") if isinstance(author_ship, dict) else None
+    if not isinstance(author, dict):
+        return ""
+    return html.unescape(str(author.get("display_name") or "")).strip()
+
+
+def _openalex_author_family_set(item: dict[str, Any]) -> set[str]:
+    out: set[str] = set()
+    authorships = item.get("authorships") if isinstance(item, dict) else None
+    if not isinstance(authorships, list):
+        return out
+    for authorship in authorships:
+        name = _openalex_author_display_name(authorship if isinstance(authorship, dict) else {})
+        if not name:
+            continue
+        token = name.replace(",", " ").split()
+        fam = token[-1] if token else ""
+        fam = re.sub(r"[^a-zA-Z\-']", "", fam).strip("-'").lower()
+        if fam:
+            out.add(fam)
+    return out
+
+
+def _format_openalex_authors(item: dict[str, Any]) -> str:
+    authorships = item.get("authorships") if isinstance(item, dict) else None
+    if not isinstance(authorships, list):
+        return ""
+    names: list[str] = []
+    for authorship in authorships:
+        name = _openalex_author_display_name(authorship if isinstance(authorship, dict) else {})
+        if name:
+            names.append(name)
+    if not names:
+        return ""
+    if len(names) > 3:
+        return ", ".join(names[:3]) + ", et al"
+    return ", ".join(names)
+
+
+def _openalex_source_name(item: dict[str, Any]) -> str:
+    for location_key in ("primary_location", "best_oa_location"):
+        location = item.get(location_key) if isinstance(item, dict) else None
+        if not isinstance(location, dict):
+            continue
+        source = location.get("source")
+        if isinstance(source, dict):
+            name = html.unescape(str(source.get("display_name") or "")).strip()
+            if name:
+                return name
+    locations = item.get("locations") if isinstance(item, dict) else None
+    if isinstance(locations, list):
+        for location in locations:
+            if not isinstance(location, dict):
+                continue
+            source = location.get("source")
+            if isinstance(source, dict):
+                name = html.unescape(str(source.get("display_name") or "")).strip()
+                if name:
+                    return name
+    return ""
+
+
+def _openalex_pages(item: dict[str, Any]) -> str:
+    biblio = item.get("biblio") if isinstance(item, dict) else None
+    if not isinstance(biblio, dict):
+        return ""
+    first = str(biblio.get("first_page") or "").strip()
+    last = str(biblio.get("last_page") or "").strip()
+    if first and last and first != last:
+        return f"{first}-{last}"
+    return first or last
+
+
+def _meta_from_openalex_item(item: dict[str, Any], *, fallback_title: str = "") -> dict[str, str]:
+    title = html.unescape(str(item.get("title") or fallback_title or "")).strip()
+    biblio = item.get("biblio") if isinstance(item, dict) else None
+    if not isinstance(biblio, dict):
+        biblio = {}
+    return {
+        "title": title,
+        "authors": _format_openalex_authors(item) or "[Unknown Authors]",
+        "venue": _openalex_source_name(item),
+        "year": str(item.get("publication_year") or "").strip(),
+        "volume": str(biblio.get("volume") or "").strip(),
+        "issue": str(biblio.get("issue") or "").strip(),
+        "pages": _openalex_pages(item),
+        "doi": _normalize_doi_like(str(item.get("doi") or "")),
+    }
+
+
+@lru_cache(maxsize=1024)
+def _openalex_search_title_raw(title: str, rows: int) -> list[dict[str, Any]]:
+    q = str(title or "").strip()
+    if not q or len(q) < 8:
+        return []
+    mailto = str(os.environ.get("KB_OPENALEX_MAILTO") or "").strip()
+    params: dict[str, Any] = {
+        "search": q[:240],
+        "per-page": int(max(1, min(12, rows))),
+        "select": "id,doi,title,publication_year,authorships,primary_location,best_oa_location,locations,biblio",
+    }
+    if mailto:
+        params["mailto"] = mailto
+    headers = {"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"}
+    try:
+        resp = requests.get("https://api.openalex.org/works", params=params, headers=headers, timeout=4.5)
+        if resp.status_code != 200:
+            return []
+        payload = resp.json() or {}
+        results = payload.get("results") if isinstance(payload, dict) else []
+        if not isinstance(results, list):
+            return []
+        return [item for item in results if isinstance(item, dict)]
+    except Exception:
+        return []
+
+
+def fetch_best_openalex_meta(
+    *,
+    query_title: str,
+    reference_text: str = "",
+    expected_year: str = "",
+    expected_venue: str = "",
+    min_score: float = 0.88,
+) -> dict[str, Any] | None:
+    q = str(query_title or "").strip()
+    raw = _clean_reference_for_query(reference_text)
+    if not q:
+        q = raw
+    q = _WS_RE.sub(" ", q).strip()
+    if len(q) < 8:
+        return None
+
+    year_hint = str(expected_year or "").strip()
+    if not _YEAR_RE.fullmatch(year_hint):
+        year_hint = extract_year_hint(raw)
+    author_hint = extract_first_author_family_hint(raw)
+    venue_hint = str(expected_venue or "").strip()
+
+    items = _openalex_search_title_raw(q, 8)
+    if not items:
+        return None
+
+    best_meta: dict[str, str] | None = None
+    best_score = -1.0
+    best_title_sim = 0.0
+    best_year_match = False
+    best_author_match = False
+
+    for item in items:
+        meta = _meta_from_openalex_item(item, fallback_title=q)
+        cand_title = str(meta.get("title") or "").strip()
+        t_sim = title_similarity(q, cand_title)
+        year = str(meta.get("year") or "").strip()
+        y_match = bool(year_hint and year and year_hint == year)
+        y_near = False
+        if year_hint and year and (not y_match):
+            try:
+                y_near = abs(int(year_hint) - int(year)) <= 1
+            except Exception:
+                y_near = False
+
+        author_match = False
+        if author_hint:
+            author_match = author_hint in _openalex_author_family_set(item)
+
+        venue_sim = _venue_similarity(venue_hint, str(meta.get("venue") or "")) if venue_hint else 0.0
+        score = t_sim
+        if year_hint:
+            if y_match:
+                score += 0.08
+            elif y_near:
+                score += 0.03
+            else:
+                score -= 0.14
+        if author_hint:
+            score += 0.08 if author_match else -0.05
+        if venue_hint:
+            score += 0.04 * (2.0 * venue_sim - 1.0)
+        if str(meta.get("doi") or "").strip():
+            score += 0.02
+        score = max(0.0, min(1.0, score))
+
+        if (
+            score > best_score
+            or (
+                abs(score - best_score) <= 1e-9
+                and (
+                    (y_match and not best_year_match)
+                    or (author_match and not best_author_match)
+                    or (y_match and author_match and not (best_year_match and best_author_match))
+                )
+            )
+        ):
+            best_score = score
+            best_meta = meta
+            best_title_sim = t_sim
+            best_year_match = y_match
+            best_author_match = author_match
+
+    if not best_meta:
+        return None
+    if best_title_sim < 0.88:
+        return None
+    if year_hint and (not best_year_match) and best_score < 0.92:
+        return None
+    if author_hint and (not best_author_match) and best_score < 0.92:
+        return None
+    if best_score < float(min_score):
+        return None
+
+    out: dict[str, Any] = dict(best_meta)
+    out["match_method"] = "openalex_title"
+    out["title_similarity"] = round(best_title_sim, 4)
+    out["match_score"] = round(best_score, 4)
     return out
 
 

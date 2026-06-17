@@ -7519,9 +7519,9 @@ def _run_library_reindex() -> dict:
     if ok:
         try:
             try:
-                budget_s = float(os.environ.get("KB_CROSSREF_BUDGET_S", "45") or 45.0)
+                budget_s = float(os.environ.get("KB_CROSSREF_BUDGET_S", "180") or 180.0)
             except Exception:
-                budget_s = 45.0
+                budget_s = 180.0
             try:
                 workers = int(os.environ.get("KB_REFSYNC_WORKERS", "6") or 6)
             except Exception:
