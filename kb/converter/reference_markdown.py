@@ -220,6 +220,16 @@ def _should_keep_reference_open_on_blank(
         return False
     if tail.endswith("-"):
         return True
+    current_text = _join_reference_fragments(list(current_ref or []))
+    has_terminal_source_signal = bool(
+        re.search(
+            r"\b(?:18|19|20)\d{2}\b|https?://|www\.|\bdoi\s*:|10\.\d{4,9}/|arxiv",
+            current_text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if not has_terminal_source_signal and len(current_text) >= 20:
+        return True
     if not re.search(r"[.!?]\s*$", tail):
         return True
     return False

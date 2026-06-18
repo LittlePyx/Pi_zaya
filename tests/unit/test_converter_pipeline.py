@@ -510,6 +510,112 @@ def test_extract_pdf_reference_markdown_keeps_continuation_pages_and_stops_at_bo
     assert "This resumed body text must not be emitted" not in references_md
 
 
+def test_extract_pdf_reference_markdown_orders_two_column_reference_pages(tmp_path):
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / "dummy.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+
+    def line(text: str, x0: float, y0: float, x1=None) -> dict:
+        return {"bbox": (x0, y0, x1 or x0 + 220.0, y0 + 8.0), "spans": [{"text": text}]}
+
+    def page_dict(lines: list[dict]) -> dict:
+        return {"blocks": [{"bbox": (0.0, 0.0, 612.0, 792.0), "lines": lines}]}
+
+    class _Page:
+        rect = SimpleNamespace(width=612.0, height=792.0)
+
+        def __init__(self, plain: str, lines: list[dict]):
+            self._plain = plain
+            self._dict = page_dict(lines)
+
+        def get_text(self, mode: str):
+            if mode == "text":
+                return self._plain
+            if mode == "dict":
+                return self._dict
+            return ""
+
+    class _Doc:
+        def __init__(self):
+            self.pages = [
+                _Page(
+                    "\n".join(
+                        [
+                            "Body text that must be before the heading.",
+                            "References",
+                            "1.",
+                            "ALPHA, A. First source. Journal of Tests 1, 1-2 (2001).",
+                            "2.",
+                            "BETA, B., GAMMA, G., KAPPA, K.",
+                        ]
+                    ),
+                    [
+                        line("Body text that must be before the heading.", 55.0, 80.0),
+                        line("References", 320.0, 120.0),
+                        line("1.", 320.0, 150.0, 330.0),
+                        line("ALPHA, A. First source. Journal of Tests 1, 1-2 (2001).", 338.0, 150.0),
+                        line("2.", 320.0, 175.0, 330.0),
+                        line("BETA, B., GAMMA, G., KAPPA, K.", 338.0, 175.0),
+                    ],
+                ),
+                _Page(
+                    "\n".join(
+                        [
+                            "DELTA, D. Second source. Journal of Tests 2, 3-4 (2002).",
+                            "6.",
+                            "ETA, H. Sixth source. Journal of Tests 6, 11-12 (2006).",
+                            "3.",
+                            "GAMMA, G. Third source. Journal of Tests 3, 5-6 (2003).",
+                            "7.",
+                            "THETA, T. Seventh source. Journal of Tests 7, 13-14 (2007).",
+                            "4.",
+                            "EPSILON, E. Fourth source. Journal of Tests 4, 7-8 (2004).",
+                            "8.",
+                            "IOTA, I. Eighth source. Journal of Tests 8, 15-16 (2008).",
+                            "5.",
+                            "ZETA, Z. Fifth source. Journal of Tests 5, 9-10 (2005).",
+                        ]
+                    ),
+                    [
+                        line("DELTA, D. Second source. Journal of Tests 2, 3-4 (2002).", 76.0, 60.0),
+                        line("6.", 318.0, 61.0, 330.0),
+                        line("ETA, H. Sixth source. Journal of Tests 6, 11-12 (2006).", 336.0, 61.0),
+                        line("3.", 58.0, 100.0, 68.0),
+                        line("GAMMA, G. Third source. Journal of Tests 3, 5-6 (2003).", 76.0, 100.0),
+                        line("7.", 318.0, 101.0, 330.0),
+                        line("THETA, T. Seventh source. Journal of Tests 7, 13-14 (2007).", 336.0, 101.0),
+                        line("4.", 58.0, 140.0, 68.0),
+                        line("EPSILON, E. Fourth source. Journal of Tests 4, 7-8 (2004).", 76.0, 140.0),
+                        line("8.", 318.0, 141.0, 330.0),
+                        line("IOTA, I. Eighth source. Journal of Tests 8, 15-16 (2008).", 336.0, 141.0),
+                        line("5.", 58.0, 180.0, 68.0),
+                        line("ZETA, Z. Fifth source. Journal of Tests 5, 9-10 (2005).", 76.0, 180.0),
+                    ],
+                ),
+            ]
+
+        def __len__(self):
+            return len(self.pages)
+
+        def load_page(self, page_index: int):
+            return self.pages[page_index]
+
+    references_md, entry_count = converter._extract_pdf_reference_markdown(_Doc())
+
+    assert entry_count == 8
+    assert "[2] BETA, B., GAMMA, G., KAPPA, K. DELTA, D. Second source. Journal of Tests 2, 3-4 (2002)." in references_md
+    assert references_md.index("[5] ZETA") < references_md.index("[6] ETA")
+    assert "[8] IOTA" in references_md
+
+
 def test_recover_references_replaces_inflated_tail_from_pdf_text_layer(tmp_path):
     cfg = ConvertConfig(
         pdf_path=tmp_path / "dummy.pdf",

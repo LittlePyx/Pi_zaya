@@ -172,6 +172,7 @@ from .reference_markdown import (
     format_single_reference,
     normalize_references_page_text,
 )
+from .pdf_reference_text import reference_ordered_page_text
 from kb.reference_index import extract_references_map_from_md
 from .heading_markdown import fix_heading_structure
 from .llm_math_cleanup import llm_fix_inline_formulas, llm_fix_display_math
@@ -235,6 +236,16 @@ def _reference_map_has_short_truncated_entries(ref_map: dict[int, str]) -> bool:
         words = re.findall(r"[A-Za-z][A-Za-z'\-]*", body)
         if len(body) <= 32 and len(words) <= 5 and re.search(r"\bet\s+al\.?$", body, flags=re.IGNORECASE):
             return True
+        if (
+            len(body) <= 140
+            and len(words) >= 4
+            and (
+                body.endswith(("-", ","))
+                or re.search(r"\b(?:a|an|and|based|for|from|in|of|on|over|the|to|using|with)\s*$", body, re.IGNORECASE)
+            )
+        ):
+            bad_short += 1
+            continue
         if len(body) <= 90 and len(words) >= 4:
             bad_short += 1
     if bad_short >= 2:
@@ -1236,7 +1247,8 @@ class PDFConverter:
                 except Exception:
                     continue
             try:
-                page_text = str(page.get_text("text") or "").strip()
+                plain_text = str(page.get_text("text") or "")
+                page_text = reference_ordered_page_text(page, fallback_text=plain_text).strip()
             except Exception:
                 page_text = ""
             if not page_text:

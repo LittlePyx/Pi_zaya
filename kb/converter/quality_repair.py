@@ -21,6 +21,7 @@ from .reference_markdown import (
     _is_plausible_reference_number,
     _looks_like_author_year_reference_text,
 )
+from .pdf_reference_text import reference_ordered_page_text
 from .reference_page_vl import reference_markdown_entry_count
 from .tables import normalize_markdown_table_block
 from kb.reference_index import extract_references_map_from_md
@@ -105,6 +106,16 @@ def _reference_map_has_short_truncated_entries(ref_map: dict[int, str]) -> bool:
         words = re.findall(r"[A-Za-z][A-Za-z'\-]*", body)
         if len(body) <= 32 and len(words) <= 5 and re.search(r"\bet\s+al\.?$", body, flags=re.IGNORECASE):
             return True
+        if (
+            len(body) <= 140
+            and len(words) >= 4
+            and (
+                body.endswith(("-", ","))
+                or re.search(r"\b(?:a|an|and|based|for|from|in|of|on|over|the|to|using|with)\s*$", body, re.IGNORECASE)
+            )
+        ):
+            bad_short += 1
+            continue
         if len(body) <= 90 and len(words) >= 4:
             bad_short += 1
     return bad_short >= 2
@@ -2719,7 +2730,9 @@ def _extract_pdf_reference_markdown(pdf_path: Path) -> tuple[str, int]:
         in_references = False
         for page_index in range(len(doc)):
             try:
-                page_text = str(doc.load_page(page_index).get_text("text") or "").strip()
+                page = doc.load_page(page_index)
+                plain_text = str(page.get_text("text") or "")
+                page_text = reference_ordered_page_text(page, fallback_text=plain_text).strip()
             except Exception:
                 page_text = ""
             if not page_text:
