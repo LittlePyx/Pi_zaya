@@ -33,6 +33,8 @@ def test_message_agent_trace_endpoint_returns_stored_trace(monkeypatch, tmp_path
     assert payload["summary"]["schema_ok"] is True
     assert payload["summary"]["question_type"] == "single_paper_qa"
     assert payload["summary"]["query_scope"] == "library"
+    assert payload["summary"]["tool_call_count"] == trace["summary"]["tool_call_count"]
+    assert payload["summary"]["supported_claims"] == trace["summary"]["supported_claims"]
 
 
 def test_message_agent_trace_endpoint_returns_empty_for_message_without_trace(monkeypatch, tmp_path: Path):

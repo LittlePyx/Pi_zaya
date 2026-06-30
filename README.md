@@ -67,6 +67,7 @@ When enabled, a response includes an `agent_trace` object with:
 
 - `question_type`: `single_paper_qa`, `multi_paper_comparison`, `reading_guide`, `reference_followup`, or `unknown`
 - `context`: effective query scope, requested scope, current-paper lock, and selected-basket count when available
+- `summary`: compact audit fields for claim support, scope, tool-call count, and error presence
 - `plan`: planned steps with goal, tool, and status
 - `steps`: executed tool calls, observations, compact outputs, and errors
 - `verification`: sentence-level citation/evidence support counts, unsupported-claim reasons, and compact matched evidence sources
@@ -77,6 +78,8 @@ Historical agent traces can also be read through the compact audit endpoint
 `GET /api/messages/{message_id}/agent-trace`. The React UI keeps this as a
 collapsed, on-demand trace panel so ordinary answers are not crowded with
 planning or tool-log details.
+When opened, the panel shows the compact summary first; plan and tool-call logs
+stay behind a second "Execution Details" disclosure.
 The main answer body is kept focused on the response and necessary citations in
 rendered UI, API streaming, and stored chat messages; trace JSON, plan steps,
 tool calls, and verification details remain behind the trace panel.

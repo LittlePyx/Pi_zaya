@@ -91,6 +91,14 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
     if claims is not None and not isinstance(claims, list):
         errors.append("verification.claims must be a list")
 
+    summary = trace.get("summary", {})
+    if summary is not None and not isinstance(summary, dict):
+        errors.append("summary must be an object")
+        summary = {}
+    for field in ("total_claims", "supported_claims", "unsupported_claims", "plan_step_count", "tool_call_count"):
+        if isinstance(summary, dict) and field in summary and not _is_int_like(summary.get(field, 0)):
+            errors.append(f"summary.{field} must be an integer")
+
     return {
         "ok": not errors,
         "errors": errors,
@@ -104,6 +112,11 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
             "total_claims": int(verification.get("total_claims") or 0)
             if _is_int_like(verification.get("total_claims", 0))
             else 0,
+            "unsupported_claims": int(verification.get("unsupported_claims") or 0)
+            if _is_int_like(verification.get("unsupported_claims", 0))
+            else 0,
+            "tool_call_count": len(steps),
+            "has_errors": bool(trace.get("errors")) if isinstance(trace.get("errors"), list) else False,
             "has_context": isinstance(context, dict) and bool(context),
         },
     }

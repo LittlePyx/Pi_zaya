@@ -74,6 +74,7 @@ python tools\research_qa\validate_research_agent_golden.py
 | Tool observation usefulness | Manual | Review whether observations explain what happened without leaking internals. | TBD |
 | Trace actionability | Automated/manual | For reference-followup traces, confirm resolved references expose reader-open and basket-add actions. | TBD |
 | Trace scope reproducibility | Automated/manual | Inspect `agent_trace.context.query_scope`, `requested_query_scope`, and selected/current-source fields for scoped questions. | TBD |
+| Trace summary readability | Automated/manual | Confirm `agent_trace.summary` exposes claim support, scope, tool-call count, and error status, while plan/tool logs remain behind the UI's Execution Details disclosure. | TBD |
 | Trace audit replay | Automated/manual | Use `GET /api/messages/{message_id}/agent-trace` to confirm stored traces can be re-opened without adding default answer clutter. | TBD |
 | Answer clutter guardrail | Automated/manual | Confirm plan steps, tool calls, trace JSON, and verification details stay out of the main answer body, API stream text, and stored assistant message unless the user opens the trace panel. | TBD |
 | Error trace availability | Automated | Simulate degraded/error paths and confirm `agent_trace.errors` is returned. | TBD |

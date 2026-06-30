@@ -50,6 +50,15 @@ function unsupportedReasonText(value: unknown): string {
   return reason || 'Unsupported'
 }
 
+function traceBool(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value
+  const text = String(value ?? '').trim().toLowerCase()
+  if (!text) return fallback
+  if (['1', 'true', 'yes', 'on'].includes(text)) return true
+  if (['0', 'false', 'no', 'off'].includes(text)) return false
+  return fallback
+}
+
 function referenceDetail(ref: Record<string, unknown>): CiteDetail | null {
   const refNum = traceNum(ref.ref_num || ref.num)
   const sourcePath = refText(ref, 'source_path', 'sourcePath')
@@ -138,7 +147,11 @@ export function AgentTracePanel({
     setLoadedState({ messageId: mid, trace: null, status: 'loading' })
     try {
       const res = await onLoadTrace(mid)
-      const nextTrace = asTraceRecord(res.agent_trace)
+      const loadedTrace = asTraceRecord(res.agent_trace)
+      const auditSummary = asTraceRecord(res.summary)
+      const nextTrace = Object.keys(loadedTrace).length > 0 && Object.keys(auditSummary).length > 0 && Object.keys(asTraceRecord(loadedTrace.summary)).length <= 0
+        ? { ...loadedTrace, summary: auditSummary }
+        : loadedTrace
       if (res.available !== false && Object.keys(nextTrace).length > 0) {
         setLoadedState({ messageId: mid, trace: nextTrace, status: 'loaded' })
       } else {
@@ -175,17 +188,22 @@ export function AgentTracePanel({
   const steps = records(tr.steps)
   const context = asTraceRecord(tr.context)
   const verification = asTraceRecord(tr.verification)
+  const summary = asTraceRecord(tr.summary)
+  const errors = Array.isArray(tr.errors) ? tr.errors : []
   const claimRows = records(verification.claims)
   const unsupportedClaimRows = claimRows
     .filter((claim) => claim.supported === false || String(claim.unsupported_reason || '').trim())
-    .slice(0, 5)
-  const totalClaims = traceNum(verification.total_claims)
-  const supportedClaims = traceNum(verification.supported_claims)
-  const unsupportedClaims = traceNum(verification.unsupported_claims)
-  const questionType = String(tr.question_type || 'unknown').trim()
-  const status = String(tr.status || '').trim() || 'done'
-  const queryScope = String(context.query_scope || context.queryScope || '').trim()
-  const requestedScope = String(context.requested_query_scope || context.requestedQueryScope || '').trim()
+    .slice(0, 3)
+  const totalClaims = 'total_claims' in summary ? traceNum(summary.total_claims) : traceNum(verification.total_claims)
+  const supportedClaims = 'supported_claims' in summary ? traceNum(summary.supported_claims) : traceNum(verification.supported_claims)
+  const unsupportedClaims = 'unsupported_claims' in summary ? traceNum(summary.unsupported_claims) : traceNum(verification.unsupported_claims)
+  const planStepCount = 'plan_step_count' in summary ? traceNum(summary.plan_step_count) : plan.length
+  const toolCallCount = 'tool_call_count' in summary ? traceNum(summary.tool_call_count) : steps.length
+  const hasErrors = 'has_errors' in summary ? traceBool(summary.has_errors) : errors.length > 0
+  const questionType = String(summary.question_type || tr.question_type || 'unknown').trim()
+  const status = String(summary.status || tr.status || '').trim() || 'done'
+  const queryScope = String(summary.query_scope || context.query_scope || context.queryScope || '').trim()
+  const requestedScope = String(summary.requested_query_scope || context.requested_query_scope || context.requestedQueryScope || '').trim()
   const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
   const currentSource = shortText(context.current_source_name || context.currentSourceName || context.current_source_path || context.currentSourcePath, 90)
   const scopeBits = [
@@ -211,7 +229,7 @@ export function AgentTracePanel({
           <strong>{supportedClaims}/{totalClaims}</strong>
         </div>
         <div className={unsupportedClaims > 0 ? 'is-warning' : ''}>
-          <span>Unsupported</span>
+          <span>Needs Review</span>
           <strong>{unsupportedClaims}</strong>
         </div>
         {scopeSummary ? (
@@ -220,82 +238,95 @@ export function AgentTracePanel({
             <strong title={scopeSummary}>{shortText(scopeSummary, 72)}</strong>
           </div>
         ) : null}
+        <div className={hasErrors ? 'is-warning' : ''}>
+          <span>Tool Calls</span>
+          <strong>{hasErrors ? `${toolCallCount} / errors` : toolCallCount}</strong>
+        </div>
       </div>
       {unsupportedClaimRows.length > 0 ? (
         <div className="kb-agent-trace-section kb-agent-trace-unsupported">
-          <div className="kb-agent-trace-heading">Unsupported Claims</div>
+          <div className="kb-agent-trace-heading">Needs Review</div>
           {unsupportedClaimRows.map((claim, idx) => (
             <div className="kb-agent-trace-claim" key={`${String(claim.index || 'claim')}-${idx}`} data-testid="agent-trace-unsupported-claim">
               <strong>{shortText(claim.claim_text || claim.text, 240)}</strong>
               <span>
-                {unsupportedReasonText(claim.unsupported_reason)}
+                Needs Review: {unsupportedReasonText(claim.unsupported_reason)}
                 {traceNum(claim.matched_evidence_count) > 0 ? ` / ${traceNum(claim.matched_evidence_count)} evidence match(es)` : ''}
               </span>
             </div>
           ))}
         </div>
       ) : null}
-      {plan.length > 0 ? (
-        <div className="kb-agent-trace-section">
-          <div className="kb-agent-trace-heading">Plan</div>
-          {plan.map((step, idx) => (
-            <div className="kb-agent-trace-row" key={`${String(step.tool || 'plan')}-${idx}`}>
-              <span className={`kb-agent-trace-status ${statusClass(step.status)}`}>{String(step.status || 'pending')}</span>
-              <span className="kb-agent-trace-tool">{String(step.tool || '')}</span>
-              <span className="kb-agent-trace-text">{shortText(step.goal)}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {steps.length > 0 ? (
-        <div className="kb-agent-trace-section">
-          <div className="kb-agent-trace-heading">Tool Calls</div>
-          {steps.map((step, idx) => {
-            const output = asTraceRecord(step.output)
-            const refs = records(output.references).slice(0, 3)
-            return (
-              <div className="kb-agent-trace-call" key={`${String(step.tool || 'tool')}-${idx}`}>
-                <div className="kb-agent-trace-call-head">
-                  <span className={`kb-agent-trace-status ${statusClass(step.status)}`}>{String(step.status || '')}</span>
-                  <strong>{String(step.tool || '')}</strong>
-                  {traceNum(step.elapsed_ms) > 0 ? <span>{traceNum(step.elapsed_ms)}ms</span> : null}
+      {plan.length > 0 || steps.length > 0 ? (
+        <details className="kb-agent-trace-details" data-testid="agent-trace-execution-details">
+          <summary>
+            <span>Execution Details</span>
+            <span>{planStepCount} plan</span>
+            <span>{toolCallCount} tools</span>
+          </summary>
+          {plan.length > 0 ? (
+            <div className="kb-agent-trace-section">
+              <div className="kb-agent-trace-heading">Plan</div>
+              {plan.map((step, idx) => (
+                <div className="kb-agent-trace-row" key={`${String(step.tool || 'plan')}-${idx}`}>
+                  <span className={`kb-agent-trace-status ${statusClass(step.status)}`}>{String(step.status || 'pending')}</span>
+                  <span className="kb-agent-trace-tool">{String(step.tool || '')}</span>
+                  <span className="kb-agent-trace-text">{shortText(step.goal)}</span>
                 </div>
-                {step.observation ? <div className="kb-agent-trace-observation">{shortText(step.observation, 260)}</div> : null}
-                {refs.length > 0 ? (
-                  <div className="kb-agent-trace-refs">
-                    {refs.map((ref, refIdx) => {
-                      const detail = referenceDetail(ref)
-                      const canOpen = Boolean(detail?.sourcePath && onOpenReference)
-                      const canAdd = Boolean(detail && onAddReferenceToShelf)
-                      return (
-                        <div className="kb-agent-trace-ref" key={`${String(ref.ref_num || ref.title || 'ref')}-${refIdx}`} data-testid="agent-trace-reference">
-                          <strong data-testid="agent-trace-ref-title">{referenceTitle(ref)}</strong>
-                          {referenceMeta(ref) ? <span>{referenceMeta(ref)}</span> : null}
-                          {ref.why_relevant ? <em>{shortText(ref.why_relevant, 180)}</em> : null}
-                          {canOpen || canAdd ? (
-                            <div className="kb-agent-trace-ref-actions">
-                              {canOpen && detail ? (
-                                <button type="button" onClick={() => onOpenReference?.(detail, ref)} data-testid="agent-trace-ref-open">
-                                  Open
-                                </button>
-                              ) : null}
-                              {canAdd && detail ? (
-                                <button type="button" onClick={() => onAddReferenceToShelf?.(detail, ref)} data-testid="agent-trace-ref-add">
-                                  Add
-                                </button>
+              ))}
+            </div>
+          ) : null}
+          {steps.length > 0 ? (
+            <div className="kb-agent-trace-section">
+              <div className="kb-agent-trace-heading">Tool Calls</div>
+              {steps.map((step, idx) => {
+                const output = asTraceRecord(step.output)
+                const refs = records(output.references).slice(0, 3)
+                return (
+                  <div className="kb-agent-trace-call" key={`${String(step.tool || 'tool')}-${idx}`}>
+                    <div className="kb-agent-trace-call-head">
+                      <span className={`kb-agent-trace-status ${statusClass(step.status)}`}>{String(step.status || '')}</span>
+                      <strong>{String(step.tool || '')}</strong>
+                      {traceNum(step.elapsed_ms) > 0 ? <span>{traceNum(step.elapsed_ms)}ms</span> : null}
+                    </div>
+                    {step.observation ? <div className="kb-agent-trace-observation">{shortText(step.observation, 260)}</div> : null}
+                    {refs.length > 0 ? (
+                      <div className="kb-agent-trace-refs">
+                        {refs.map((ref, refIdx) => {
+                          const detail = referenceDetail(ref)
+                          const canOpen = Boolean(detail?.sourcePath && onOpenReference)
+                          const canAdd = Boolean(detail && onAddReferenceToShelf)
+                          return (
+                            <div className="kb-agent-trace-ref" key={`${String(ref.ref_num || ref.title || 'ref')}-${refIdx}`} data-testid="agent-trace-reference">
+                              <strong data-testid="agent-trace-ref-title">{referenceTitle(ref)}</strong>
+                              {referenceMeta(ref) ? <span>{referenceMeta(ref)}</span> : null}
+                              {ref.why_relevant ? <em>{shortText(ref.why_relevant, 180)}</em> : null}
+                              {canOpen || canAdd ? (
+                                <div className="kb-agent-trace-ref-actions">
+                                  {canOpen && detail ? (
+                                    <button type="button" onClick={() => onOpenReference?.(detail, ref)} data-testid="agent-trace-ref-open">
+                                      Open
+                                    </button>
+                                  ) : null}
+                                  {canAdd && detail ? (
+                                    <button type="button" onClick={() => onAddReferenceToShelf?.(detail, ref)} data-testid="agent-trace-ref-add">
+                                      Add
+                                    </button>
+                                  ) : null}
+                                </div>
                               ) : null}
                             </div>
-                          ) : null}
-                        </div>
-                      )
-                    })}
+                          )
+                        })}
+                      </div>
+                    ) : null}
+                    {step.error ? <div className="kb-agent-trace-error">{shortText(step.error, 260)}</div> : null}
                   </div>
-                ) : null}
-                {step.error ? <div className="kb-agent-trace-error">{shortText(step.error, 260)}</div> : null}
-              </div>
-            )
-          })}
-        </div>
+                )
+              })}
+            </div>
+          ) : null}
+        </details>
       ) : null}
     </details>
   )

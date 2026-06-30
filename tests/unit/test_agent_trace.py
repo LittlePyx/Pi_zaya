@@ -24,6 +24,10 @@ def test_agent_trace_serializes_completed_rag_answer():
     assert trace["context"]["query_scope"] == "library"
     assert trace["verification"]["total_claims"] == 1
     assert trace["verification"]["supported_claims"] == 1
+    assert trace["summary"]["supported_claims"] == 1
+    assert trace["summary"]["total_claims"] == 1
+    assert trace["summary"]["tool_call_count"] == 3
+    assert trace["summary"]["query_scope"] == "library"
     assert [step["tool"] for step in trace["steps"]] == [
         "retrieve_evidence",
         "generate_grounded_answer",

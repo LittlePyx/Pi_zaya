@@ -70,6 +70,27 @@ class AgentTrace:
     status: StepStatus = "pending"
     errors: list[str] = field(default_factory=list)
 
+    def summary_dict(self) -> dict[str, Any]:
+        total_claims = int(self.verification.total_claims or 0)
+        supported_claims = int(self.verification.supported_claims or 0)
+        unsupported_claims = int(self.verification.unsupported_claims or 0)
+        ratio = float(self.verification.support_ratio or 0.0)
+        if total_claims > 0 and ratio <= 0:
+            ratio = supported_claims / total_claims
+        return {
+            "question_type": self.question_type,
+            "status": self.status,
+            "query_scope": str(self.context.get("query_scope") or ""),
+            "requested_query_scope": str(self.context.get("requested_query_scope") or ""),
+            "total_claims": total_claims,
+            "supported_claims": supported_claims,
+            "unsupported_claims": unsupported_claims,
+            "support_ratio": round(max(0.0, min(1.0, ratio)), 4),
+            "plan_step_count": len(self.plan),
+            "tool_call_count": len(self.steps),
+            "has_errors": bool(self.errors),
+        }
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "mode": self.mode,
@@ -78,6 +99,7 @@ class AgentTrace:
             "plan": [step.to_dict() for step in self.plan],
             "steps": [step.to_dict() for step in self.steps],
             "verification": self.verification.to_dict(),
+            "summary": self.summary_dict(),
             "status": self.status,
             "errors": list(self.errors),
         }

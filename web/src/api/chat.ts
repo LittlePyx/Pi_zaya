@@ -82,6 +82,22 @@ export interface AgentTraceVerification {
   claims?: Array<Record<string, unknown>>
 }
 
+export interface AgentTraceSummary {
+  question_type?: string
+  status?: string
+  query_scope?: string
+  requested_query_scope?: string
+  total_claims?: number
+  supported_claims?: number
+  unsupported_claims?: number
+  support_ratio?: number
+  plan_step_count?: number
+  tool_call_count?: number
+  has_errors?: boolean
+  schema_ok?: boolean
+  [key: string]: unknown
+}
+
 export interface AgentTrace {
   mode?: 'research_agent' | string
   question_type?: string
@@ -89,6 +105,7 @@ export interface AgentTrace {
   plan?: AgentTracePlanStep[]
   steps?: AgentTraceExecutionStep[]
   verification?: AgentTraceVerification
+  summary?: AgentTraceSummary | Record<string, unknown>
   status?: string
   errors?: string[]
   [key: string]: unknown
@@ -99,7 +116,7 @@ export interface AgentTraceAuditResponse {
   conv_id: string
   available: boolean
   agent_trace?: AgentTrace | Record<string, unknown>
-  summary?: Record<string, unknown>
+  summary?: AgentTraceSummary | Record<string, unknown>
   schema_errors?: string[]
 }
 

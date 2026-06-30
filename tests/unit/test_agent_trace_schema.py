@@ -20,6 +20,8 @@ def test_agent_trace_schema_accepts_completed_trace():
 
     assert validation["ok"] is True
     assert validation["summary"]["has_context"] is True
+    assert validation["summary"]["tool_call_count"] == 3
+    assert trace["summary"]["plan_step_count"] == len(trace["plan"])
 
 
 def test_agent_trace_schema_reports_invalid_fields():
@@ -31,6 +33,7 @@ def test_agent_trace_schema_reports_invalid_fields():
             "plan": [{"goal": "", "tool": "missing", "status": "done"}],
             "steps": [{"tool": "retrieve_evidence", "status": "bad", "output": []}],
             "verification": {"total_claims": "x", "supported_claims": 0, "unsupported_claims": 0},
+            "summary": {"tool_call_count": "many"},
             "status": "done",
             "errors": [],
         }
@@ -40,3 +43,4 @@ def test_agent_trace_schema_reports_invalid_fields():
     assert any("mode" in error for error in validation["errors"])
     assert any("context" in error for error in validation["errors"])
     assert any("tool" in error for error in validation["errors"])
+    assert any("summary.tool_call_count" in error for error in validation["errors"])

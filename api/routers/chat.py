@@ -430,7 +430,15 @@ def _trace_int(value: object) -> int:
         return 0
 
 
+def _trace_float(value: object) -> float:
+    try:
+        return float(value or 0.0)
+    except Exception:
+        return 0.0
+
+
 def _agent_trace_audit_summary(trace: dict, validation: dict | None = None) -> dict:
+    existing = trace.get("summary") if isinstance(trace.get("summary"), dict) else {}
     verification = trace.get("verification") if isinstance(trace.get("verification"), dict) else {}
     context = trace.get("context") if isinstance(trace.get("context"), dict) else {}
     plan = trace.get("plan") if isinstance(trace.get("plan"), list) else []
@@ -439,16 +447,17 @@ def _agent_trace_audit_summary(trace: dict, validation: dict | None = None) -> d
     return {
         "available": True,
         "mode": str(trace.get("mode") or ""),
-        "question_type": str(trace.get("question_type") or "unknown"),
-        "status": str(trace.get("status") or ""),
-        "query_scope": str(context.get("query_scope") or ""),
-        "requested_query_scope": str(context.get("requested_query_scope") or ""),
-        "total_claims": _trace_int(verification.get("total_claims")),
-        "supported_claims": _trace_int(verification.get("supported_claims")),
-        "unsupported_claims": _trace_int(verification.get("unsupported_claims")),
-        "plan_step_count": len(plan),
-        "tool_call_count": len(steps),
-        "has_errors": bool(errors),
+        "question_type": str(existing.get("question_type") or trace.get("question_type") or "unknown"),
+        "status": str(existing.get("status") or trace.get("status") or ""),
+        "query_scope": str(existing.get("query_scope") or context.get("query_scope") or ""),
+        "requested_query_scope": str(existing.get("requested_query_scope") or context.get("requested_query_scope") or ""),
+        "total_claims": _trace_int(existing.get("total_claims") if "total_claims" in existing else verification.get("total_claims")),
+        "supported_claims": _trace_int(existing.get("supported_claims") if "supported_claims" in existing else verification.get("supported_claims")),
+        "unsupported_claims": _trace_int(existing.get("unsupported_claims") if "unsupported_claims" in existing else verification.get("unsupported_claims")),
+        "support_ratio": _trace_float(existing.get("support_ratio")),
+        "plan_step_count": _trace_int(existing.get("plan_step_count") if "plan_step_count" in existing else len(plan)),
+        "tool_call_count": _trace_int(existing.get("tool_call_count") if "tool_call_count" in existing else len(steps)),
+        "has_errors": bool(existing.get("has_errors")) if "has_errors" in existing else bool(errors),
         "schema_ok": bool((validation or {}).get("ok", False)),
     }
 

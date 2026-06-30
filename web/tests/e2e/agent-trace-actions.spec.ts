@@ -24,6 +24,9 @@ test('research agent trace references can open and enter the literature basket',
   await page.getByText('Research Agent Trace').click()
   await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('fully solves every downstream limitation')
   await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('Citation does not match retrieved evidence')
+  await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeHidden()
+  await page.getByText('Execution Details').click()
+  await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeVisible()
 
   const ref = page.getByTestId('agent-trace-reference').first()
   await expect(ref.getByTestId('agent-trace-ref-title')).toContainText('Fast hyperspectral single-pixel imaging')
@@ -55,7 +58,7 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
           mode: 'research_agent',
           question_type: 'single_paper_qa',
           status: 'done',
-          context: { query_scope: 'library' },
+          context: { query_scope: 'raw-trace-context' },
           plan: [
             { goal: 'Retrieve compact evidence.', tool: 'retrieve_evidence', status: 'done' },
           ],
@@ -68,14 +71,23 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
             },
           ],
           verification: {
-            total_claims: 1,
-            supported_claims: 1,
+            total_claims: 9,
+            supported_claims: 3,
             unsupported_claims: 0,
             claims: [],
           },
           errors: [],
         },
-        summary: { available: true, question_type: 'single_paper_qa' },
+        summary: {
+          available: true,
+          question_type: 'single_paper_qa',
+          total_claims: 1,
+          supported_claims: 1,
+          unsupported_claims: 0,
+          tool_call_count: 1,
+          has_errors: false,
+          query_scope: 'library',
+        },
       }),
     })
   })
@@ -83,8 +95,13 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
   await page.goto('/__message_list_test__?scenario=agent-trace-lazy-audit')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-lazy-audit')
-  await expect(page.getByText('Stored audit trace was loaded on demand.')).toHaveCount(0)
+  await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
   await page.getByText('Research Agent Trace').click()
+  await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
+  await expect(page.getByText('1/1')).toBeVisible()
+  await expect(page.getByText('library')).toBeVisible()
+  await expect(page.getByText('3/9')).toHaveCount(0)
+  await page.getByText('Execution Details').click()
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeVisible()
   expect(requested).toBe(true)
 })
