@@ -12,7 +12,7 @@ QuestionType = Literal[
     "unknown",
 ]
 
-EvidenceStatus = Literal["grounded", "needs_review", "insufficient"]
+EvidenceStatus = Literal["grounded", "needs_review", "insufficient", "not_applicable"]
 
 ToolName = Literal[
     "retrieve_evidence",

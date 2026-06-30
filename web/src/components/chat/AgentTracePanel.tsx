@@ -66,9 +66,9 @@ function verificationHeaderText(totalClaims: number, supportedClaims: number, un
   return 'Trace available'
 }
 
-function evidenceStatusValue(value: unknown): 'grounded' | 'needs_review' | 'insufficient' | '' {
+function evidenceStatusValue(value: unknown): 'grounded' | 'needs_review' | 'insufficient' | 'not_applicable' | '' {
   const text = String(value || '').trim().toLowerCase()
-  if (text === 'grounded' || text === 'needs_review' || text === 'insufficient') return text
+  if (text === 'grounded' || text === 'needs_review' || text === 'insufficient' || text === 'not_applicable') return text
   return ''
 }
 
@@ -77,6 +77,7 @@ function evidenceStatusLabel(value: unknown): string {
   if (status === 'grounded') return 'Evidence grounded'
   if (status === 'needs_review') return 'Needs review'
   if (status === 'insufficient') return 'Insufficient evidence'
+  if (status === 'not_applicable') return 'General answer'
   return ''
 }
 
@@ -243,7 +244,7 @@ export function AgentTracePanel({
   const requestedScope = String(summary.requested_query_scope || context.requested_query_scope || context.requestedQueryScope || '').trim()
   const evidenceStatus = evidenceStatusValue(summary.evidence_status || verification.evidence_status)
   const evidenceLabel = evidenceStatusLabel(evidenceStatus)
-  const taskLabel = questionTypeLabel(questionType)
+  const taskLabel = evidenceStatus === 'not_applicable' ? 'General' : questionTypeLabel(questionType)
   const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
   const currentSource = shortText(context.current_source_name || context.currentSourceName || context.current_source_path || context.currentSourcePath, 90)
   const scopeBits = [

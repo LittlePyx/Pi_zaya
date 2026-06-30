@@ -107,3 +107,27 @@ def test_runner_does_not_generate_content_without_evidence(monkeypatch, tmp_path
     assert result["agent_trace"]["verification"]["evidence_status"] == "insufficient"
     assert result["agent_trace"]["summary"]["evidence_status"] == "insufficient"
     assert result["agent_trace"]["summary"]["evidence_hit_count"] == 0
+
+
+def test_runner_allows_general_llm_answer_when_query_is_not_about_library(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_retrieve_evidence(query, *, db_dir, settings=None, top_k=6):
+        return {"hits": [], "observation": "empty"}
+
+    def fake_generate_grounded_answer(query, hits, *, settings=None, history=None, agent_notes=None, temperature=0.2, max_tokens=1200):
+        captured["agent_notes"] = agent_notes
+        return {"answer": "Python lists are mutable ordered sequences.", "answer_mode": "general_llm", "observation": "answered"}
+
+    monkeypatch.setattr(runner, "retrieve_evidence", fake_retrieve_evidence)
+    monkeypatch.setattr(runner, "generate_grounded_answer", fake_generate_grounded_answer)
+
+    result = runner.run_research_agent("Compare Python lists and tuples.", db_dir=tmp_path)
+
+    assert result["answer"] == "Python lists are mutable ordered sequences."
+    assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "general_llm"
+    assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "not_applicable"
+    assert result["agent_trace"]["verification"]["evidence_status"] == "not_applicable"
+    assert result["agent_trace"]["summary"]["evidence_status"] == "not_applicable"
+    assert result["agent_trace"]["steps"][-1]["tool"] == "verify_answer_citations"
+    assert result["agent_trace"]["steps"][-1]["status"] == "skipped"

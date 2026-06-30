@@ -344,6 +344,7 @@ def _format_agent_notes(agent_notes: dict[str, Any] | None) -> str:
         gate = agent_notes.get("evidence_gate") or {}
         compact["evidence_gate"] = {
             "evidence_status": str(gate.get("evidence_status") or "").strip(),
+            "answer_mode": str(gate.get("answer_mode") or "").strip(),
             "evidence_hit_count": _positive_int(gate.get("evidence_hit_count")),
             "reasons": list(gate.get("reasons") or [])[:4] if isinstance(gate.get("reasons"), list) else [],
             "instruction": _clip(gate.get("instruction"), 220),
@@ -549,6 +550,38 @@ def _fallback_grounded_answer(
     return "\n".join(lines).strip()
 
 
+def _is_general_llm_mode(agent_notes: dict[str, Any] | None) -> bool:
+    if not isinstance(agent_notes, dict):
+        return False
+    gate = agent_notes.get("evidence_gate")
+    return isinstance(gate, dict) and str(gate.get("answer_mode") or "").strip() == "general_llm"
+
+
+def _has_cjk(text: str) -> bool:
+    return sum(1 for c in str(text or "") if "\u3400" <= c <= "\u9fff" or "\uf900" <= c <= "\ufaff") >= 4
+
+
+def _general_llm_messages(query: str, history: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    prefer_zh = _has_cjk(query)
+    system = (
+        "You are a concise, helpful assistant. Answer the user's general question directly. "
+        "Do not invent local knowledge-base citations, paper evidence, tool traces, or JSON. "
+        "If the user asks for paper-specific evidence, say that the indexed evidence is insufficient."
+    )
+    if prefer_zh:
+        system += " Reply in Chinese unless the user asks otherwise."
+    trimmed = [m for m in list(history or []) if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    return [{"role": "system", "content": system}, *trimmed, {"role": "user", "content": str(query or "").strip()}]
+
+
+def _fallback_general_answer(query: str, *, reason: str = "") -> str:
+    if _has_cjk(query):
+        suffix = f" 原因：{reason}" if reason else ""
+        return f"这个问题不需要知识库证据，但当前没有可用的文本模型 API，无法生成普通回答。{suffix}".strip()
+    suffix = f" Reason: {reason}" if reason else ""
+    return f"This question does not require indexed evidence, but no text model API is available to generate a general answer.{suffix}"
+
+
 def generate_grounded_answer(
     query: str,
     hits: list[dict[str, Any]],
@@ -560,6 +593,45 @@ def generate_grounded_answer(
     max_tokens: int = 1200,
 ) -> dict[str, Any]:
     if not hits:
+        if _is_general_llm_mode(agent_notes):
+            if not getattr(settings, "text_api_key", None):
+                answer = _fallback_general_answer(query, reason="missing text API key")
+                return {
+                    "answer": answer,
+                    "llm_used": False,
+                    "answer_mode": "general_llm",
+                    "observation": "Could not call a general LLM answer because no text API key is configured.",
+                }
+            try:
+                answer = DeepSeekChat(settings).chat(
+                    messages=_general_llm_messages(query, history),
+                    temperature=float(temperature),
+                    max_tokens=max(256, min(4096, int(max_tokens or 1200))),
+                )
+                answer = clean_assistant_answer_presentation_text(answer).strip()
+                if not answer:
+                    answer = _fallback_general_answer(query, reason="empty LLM response")
+                    return {
+                        "answer": answer,
+                        "llm_used": False,
+                        "answer_mode": "general_llm",
+                        "observation": "General LLM returned empty text; used fallback answer.",
+                    }
+                return {
+                    "answer": answer,
+                    "llm_used": True,
+                    "answer_mode": "general_llm",
+                    "observation": "Generated a general LLM answer because no indexed evidence was required.",
+                }
+            except Exception as exc:
+                answer = _fallback_general_answer(query, reason=str(exc)[:160])
+                return {
+                    "answer": answer,
+                    "llm_used": False,
+                    "answer_mode": "general_llm",
+                    "error": str(exc)[:240],
+                    "observation": "General LLM generation failed; used fallback answer.",
+                }
         answer = _fallback_grounded_answer(query, hits, reason="no retrieved evidence", agent_notes=agent_notes)
         return {"answer": answer, "llm_used": False, "observation": "Skipped LLM answer because no indexed evidence was retrieved."}
     if not getattr(settings, "text_api_key", None):

@@ -53,8 +53,10 @@ the frontend sends `agent_mode: true` to `/api/generate` and renders the returne
 `agent_trace` inside a collapsible Research Agent Trace panel.
 The collapsed panel stays terse: evidence-check status and scope only, with
 planning and tool logs behind the explicit details disclosure.
-The evidence status is intentionally compact: `grounded`, `needs_review`, or
-`insufficient` in API data, rendered as a small user-facing status in the panel.
+The evidence status is intentionally compact: `grounded`, `needs_review`,
+`insufficient`, or `not_applicable` in API data, rendered as a small user-facing
+status in the panel. General questions that do not need local paper evidence can
+still use the normal text LLM path.
 
 The toggle is remembered per conversation, and the default chat flow is
 unchanged when it is off. For explicit test or deep-link entry, use

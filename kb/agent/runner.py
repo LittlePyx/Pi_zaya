@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,20 @@ from .tools import (
     retrieve_references,
     verify_answer_citations,
 )
-from .types import AgentExecutionStep, AgentTrace
+from .types import AgentExecutionStep, AgentTrace, AgentVerification, QuestionType
 from .verifier import verify_answer_citations as verify_completed_answer
+
+
+_RESEARCH_OBJECT_RE = re.compile(
+    r"\b(papers?|articles?|stud(?:y|ies)|literature|citations?|references?|bibliography|doi|arxiv|abstract|authors?)\b"
+    r"|(?:\u8bba\u6587|\u6587\u732e|\u6587\u7ae0|\u8fd9\u7bc7|\u8be5\u6587|\u5f15\u7528|\u53c2\u8003\u6587\u732e|\u4f5c\u8005|\u6458\u8981|\u77e5\u8bc6\u5e93)",
+    flags=re.IGNORECASE,
+)
+_RESEARCH_TASK_RE = re.compile(
+    r"\b(method|approach|contribution|limitation|experiment|result|dataset|ablation|evaluation|architecture|section|figure|table|claim|prove|show|finding|findings|upstream|prior\s+work|summari[sz]e|explain)\b"
+    r"|(?:\u65b9\u6cd5|\u8d21\u732e|\u5c40\u9650|\u5b9e\u9a8c|\u7ed3\u679c|\u6570\u636e\u96c6|\u6d88\u878d|\u8bc4\u4f30|\u7ae0\u8282|\u8bc1\u660e|\u4e0a\u6e38|\u603b\u7ed3|\u89e3\u91ca)",
+    flags=re.IGNORECASE,
+)
 
 
 def _normalize_query_scope(value: object) -> str:
@@ -181,11 +194,59 @@ def _summarize_hits(hits: list[dict[str, Any]], *, limit: int = 6) -> list[dict[
     return out
 
 
-def _pre_generation_evidence_gate(hits: list[dict[str, Any]]) -> dict[str, Any]:
+def _looks_like_research_grounding_request(
+    query: str,
+    *,
+    scope_context: dict[str, Any],
+    question_type: QuestionType,
+) -> bool:
+    text = str(query or "").strip()
+    if not text:
+        return False
+    has_research_object = bool(_RESEARCH_OBJECT_RE.search(text))
+    if has_research_object:
+        return True
+    has_research_task = bool(_RESEARCH_TASK_RE.search(text))
+    scope = str(scope_context.get("query_scope") or "").strip()
+    requested_scope = str(scope_context.get("requested_query_scope") or "").strip()
+    has_scoped_source = bool(
+        str(scope_context.get("current_source_path") or "").strip()
+        or str(scope_context.get("current_source_name") or "").strip()
+        or int(scope_context.get("selected_research_context_count") or 0) > 0
+    )
+    if scope in {"current_paper", "basket"} and has_scoped_source and has_research_task:
+        return True
+    if requested_scope in {"current_paper", "basket", "library"} and has_research_task:
+        return True
+    if question_type in {"reference_followup", "reading_guide"} and has_research_task:
+        return True
+    return False
+
+
+def _pre_generation_evidence_gate(
+    hits: list[dict[str, Any]],
+    *,
+    query: str = "",
+    scope_context: dict[str, Any] | None = None,
+    question_type: QuestionType = "unknown",
+) -> dict[str, Any]:
     hit_count = len([hit for hit in list(hits or []) if isinstance(hit, dict)])
     if hit_count <= 0:
+        if not _looks_like_research_grounding_request(
+            query,
+            scope_context=scope_context or {},
+            question_type=question_type,
+        ):
+            return {
+                "evidence_status": "not_applicable",
+                "answer_mode": "general_llm",
+                "evidence_hit_count": 0,
+                "reasons": ["general_question_no_indexed_evidence_required"],
+                "instruction": "Answer as a normal LLM response without inventing citations or paper evidence.",
+            }
         return {
             "evidence_status": "insufficient",
+            "answer_mode": "evidence_grounded",
             "evidence_hit_count": 0,
             "reasons": ["no_evidence_hits"],
             "instruction": "Do not infer an answer. Say that indexed evidence is insufficient.",
@@ -193,16 +254,33 @@ def _pre_generation_evidence_gate(hits: list[dict[str, Any]]) -> dict[str, Any]:
     if hit_count < 2:
         return {
             "evidence_status": "needs_review",
+            "answer_mode": "evidence_grounded",
             "evidence_hit_count": hit_count,
             "reasons": ["low_evidence_count"],
             "instruction": "Use cautious wording and avoid broad claims beyond the cited snippet.",
         }
     return {
         "evidence_status": "grounded",
+        "answer_mode": "evidence_grounded",
         "evidence_hit_count": hit_count,
         "reasons": [],
         "instruction": "Answer only from retrieved evidence and cite supported claims.",
     }
+
+
+def _is_general_answer_mode(agent_notes: dict[str, Any] | None) -> bool:
+    if not isinstance(agent_notes, dict):
+        return False
+    gate = agent_notes.get("evidence_gate")
+    return isinstance(gate, dict) and str(gate.get("answer_mode") or "") == "general_llm"
+
+
+def _general_answer_verification() -> AgentVerification:
+    return AgentVerification(
+        evidence_status="not_applicable",
+        evidence_hit_count=0,
+        evidence_status_reasons=["general_question_no_indexed_evidence_required"],
+    )
 
 
 def _run_step(trace: AgentTrace, index: int, tool_fn, *args, **kwargs) -> dict[str, Any]:
@@ -280,7 +358,12 @@ def run_research_agent(
                 trace.steps[-1].output["hits"] = _summarize_hits(context["hits"])
                 if scope_filter.get("active"):
                     trace.steps[-1].output["scope_filter"] = scope_filter
-            context["agent_notes"]["evidence_gate"] = _pre_generation_evidence_gate(context["hits"])
+            context["agent_notes"]["evidence_gate"] = _pre_generation_evidence_gate(
+                context["hits"],
+                query=query,
+                scope_context=scope_context,
+                question_type=question_type,
+            )
         elif plan_step.tool == "retrieve_references":
             result = _run_step(
                 trace,
@@ -317,6 +400,18 @@ def run_research_agent(
             )
             context["answer"] = str(result.get("answer") or "")
         elif plan_step.tool == "verify_answer_citations":
+            if _is_general_answer_mode(context.get("agent_notes")):
+                plan_step.status = "skipped"
+                trace.verification = _general_answer_verification()
+                trace.steps.append(
+                    AgentExecutionStep(
+                        tool=plan_step.tool,
+                        status="skipped",
+                        observation="Skipped citation verification because this was handled as a general LLM answer.",
+                        output=trace.verification.to_dict(),
+                    )
+                )
+                continue
             result = _run_step(trace, idx, verify_answer_citations, context["answer"], context["hits"])
             trace.verification = verify_completed_answer(context["answer"], context["hits"])
             if isinstance(result.get("verification"), dict):
