@@ -78,6 +78,9 @@ export interface AgentTraceVerification {
   total_claims?: number
   supported_claims?: number
   unsupported_claims?: number
+  local_claims?: number
+  external_background_claims?: number
+  source_notice_count?: number
   support_ratio?: number
   evidence_status?: 'grounded' | 'needs_review' | 'insufficient' | 'not_applicable' | string
   evidence_hit_count?: number
@@ -93,6 +96,9 @@ export interface AgentTraceSummary {
   total_claims?: number
   supported_claims?: number
   unsupported_claims?: number
+  local_claims?: number
+  external_background_claims?: number
+  source_notice_count?: number
   support_ratio?: number
   evidence_status?: 'grounded' | 'needs_review' | 'insufficient' | 'not_applicable' | string
   evidence_hit_count?: number

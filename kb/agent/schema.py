@@ -85,7 +85,14 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
     if not isinstance(verification, dict):
         errors.append("verification must be an object")
         verification = {}
-    for field in ("total_claims", "supported_claims", "unsupported_claims"):
+    for field in (
+        "total_claims",
+        "supported_claims",
+        "unsupported_claims",
+        "local_claims",
+        "external_background_claims",
+        "source_notice_count",
+    ):
         if not _is_int_like(verification.get(field, 0)):
             errors.append(f"verification.{field} must be an integer")
     if "evidence_status" in verification and str(verification.get("evidence_status") or "") not in VALID_EVIDENCE_STATUSES:
@@ -100,7 +107,16 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
     if summary is not None and not isinstance(summary, dict):
         errors.append("summary must be an object")
         summary = {}
-    for field in ("total_claims", "supported_claims", "unsupported_claims", "plan_step_count", "tool_call_count"):
+    for field in (
+        "total_claims",
+        "supported_claims",
+        "unsupported_claims",
+        "local_claims",
+        "external_background_claims",
+        "source_notice_count",
+        "plan_step_count",
+        "tool_call_count",
+    ):
         if isinstance(summary, dict) and field in summary and not _is_int_like(summary.get(field, 0)):
             errors.append(f"summary.{field} must be an integer")
     if isinstance(summary, dict) and "evidence_status" in summary and str(summary.get("evidence_status") or "") not in VALID_EVIDENCE_STATUSES:

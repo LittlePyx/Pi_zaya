@@ -322,6 +322,15 @@ def _is_general_answer_mode(agent_notes: dict[str, Any] | None) -> bool:
     }
 
 
+def _answer_mode(agent_notes: dict[str, Any] | None) -> str:
+    if not isinstance(agent_notes, dict):
+        return ""
+    gate = agent_notes.get("evidence_gate")
+    if not isinstance(gate, dict):
+        return ""
+    return str(gate.get("answer_mode") or "").strip()
+
+
 def _general_answer_verification() -> AgentVerification:
     return AgentVerification(
         evidence_status="not_applicable",
@@ -459,8 +468,20 @@ def run_research_agent(
                     )
                 )
                 continue
-            result = _run_step(trace, idx, verify_answer_citations, context["answer"], context["hits"])
-            trace.verification = verify_completed_answer(context["answer"], context["hits"])
+            answer_mode = _answer_mode(context.get("agent_notes"))
+            result = _run_step(
+                trace,
+                idx,
+                verify_answer_citations,
+                context["answer"],
+                context["hits"],
+                answer_mode=answer_mode,
+            )
+            trace.verification = verify_completed_answer(
+                context["answer"],
+                context["hits"],
+                answer_mode=answer_mode,
+            )
             if isinstance(result.get("verification"), dict):
                 # Keep the dataclass path authoritative while preserving tool output.
                 pass

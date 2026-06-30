@@ -52,6 +52,8 @@ def test_generate_grounded_answer_can_blend_local_evidence_with_external_context
     assert "local citations [n] come from the knowledge base" in result["answer"]
     assert "Local evidence says retrieval is used [1]." in result["answer"]
     assert "Hybrid answer source policy" in captured["messages"][-1]["content"]
+    assert "Compact answer shape" in captured["messages"][-1]["content"]
+    assert "External context" in captured["messages"][-1]["content"]
 
 
 def test_generate_grounded_answer_skips_llm_without_evidence(monkeypatch):

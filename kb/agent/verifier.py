@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 from typing import Any
 
@@ -11,27 +12,96 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?\u3002\uff01\uff1f])\s+|\n+")
 _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}")
 _SOURCE_NOTICE_RE = re.compile(
-    r"^(?:Note:\s*(?:local citations|no matching local knowledge-base evidence)|\u6ce8[：:]\s*(?:\u5e26\s*\[n\]|\u672c\u5730\u77e5\u8bc6\u5e93))",
+    r"^(?:Note:\s*(?:local citations|no matching local knowledge-base evidence)|"
+    r"(?:\u6ce8\u610f|\u6ce8)[:\uff1a]\s*(?:\u5e26\s*\[n\]|\u672c\u5730\u77e5\u8bc6\u5e93|local))",
+    flags=re.IGNORECASE,
+)
+_HYBRID_NOTICE_RE = re.compile(
+    r"^(?:Note:\s*local citations|(?:\u6ce8\u610f|\u6ce8)[:\uff1a]\s*\u5e26\s*\[n\])",
+    flags=re.IGNORECASE,
+)
+_EXTERNAL_BACKGROUND_PREFIX_RE = re.compile(
+    r"^(?:#{1,6}\s*)?"
+    r"(?:external\s+(?:context|background)|general\s+background|background|broader\s+context|context|"
+    r"\u5916\u90e8\u8865\u5145|\u5916\u90e8\u80cc\u666f|\u901a\u7528\u80cc\u666f|\u80cc\u666f|\u8865\u5145\u8bf4\u660e)"
+    r"\s*[:\uff1a]",
+    flags=re.IGNORECASE,
+)
+_GENERAL_BACKGROUND_RE = re.compile(
+    r"\b(?:generally|in general|typically|often|usually|background|broader literature|"
+    r"outside the local|external context|common pattern|commonly)\b"
+    r"|(?:\u4e00\u822c\u6765\u8bf4|\u901a\u5e38|\u5e38\u89c1|\u5b66\u672f\u4e0a|\u5916\u90e8|\u80cc\u666f|\u8865\u5145)",
     flags=re.IGNORECASE,
 )
 
 
-def split_answer_claims(answer: str) -> list[str]:
+@dataclass(frozen=True)
+class ClassifiedAnswerClaim:
+    text: str
+    kind: str
+    reason: str = ""
+
+
+def _clean_answer_part(part: str) -> str:
+    clean = _BULLET_PREFIX_RE.sub("", str(part or "").strip())
+    clean = re.sub(r"^\s*#{1,6}\s*", "", clean).strip()
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean.strip("`*_ ")
+
+
+def _candidate_answer_parts(answer: str) -> list[str]:
     text = str(answer or "").strip()
     if not text:
         return []
     chunks: list[str] = []
     for part in _SENTENCE_SPLIT_RE.split(text):
-        clean = _BULLET_PREFIX_RE.sub("", str(part or "").strip())
-        clean = re.sub(r"\s+", " ", clean).strip()
+        clean = _clean_answer_part(part)
+        if not clean:
+            continue
         if _SOURCE_NOTICE_RE.search(clean):
+            chunks.append(clean)
             continue
         if len(clean) < 12:
             continue
-        if clean.endswith(":") and len(clean) < 80:
+        if clean.endswith((":", "\uff1a")) and len(clean) < 80:
             continue
         chunks.append(clean)
     return chunks
+
+
+def _hybrid_external_allowed(answer: str, *, answer_mode: str = "") -> bool:
+    if str(answer_mode or "").strip() == "hybrid_local_external":
+        return True
+    return any(_HYBRID_NOTICE_RE.search(part) for part in _candidate_answer_parts(answer))
+
+
+def _looks_like_external_background(claim: str, *, hybrid_external_allowed: bool) -> bool:
+    if not hybrid_external_allowed or _CITATION_RE.search(claim):
+        return False
+    text = str(claim or "").strip()
+    return bool(_EXTERNAL_BACKGROUND_PREFIX_RE.search(text) or _GENERAL_BACKGROUND_RE.search(text))
+
+
+def classify_answer_claims(answer: str, *, answer_mode: str = "") -> list[ClassifiedAnswerClaim]:
+    """Classify answer sentences by verification scope.
+
+    Local paper claims remain citation-checked. External background is tracked,
+    but it does not lower local evidence support ratios in hybrid answers.
+    """
+    hybrid_allowed = _hybrid_external_allowed(answer, answer_mode=answer_mode)
+    classified: list[ClassifiedAnswerClaim] = []
+    for part in _candidate_answer_parts(answer):
+        if _SOURCE_NOTICE_RE.search(part):
+            classified.append(ClassifiedAnswerClaim(text=part, kind="source_notice", reason="source_disclosure"))
+        elif _looks_like_external_background(part, hybrid_external_allowed=hybrid_allowed):
+            classified.append(ClassifiedAnswerClaim(text=part, kind="external_background", reason="hybrid_external_context"))
+        else:
+            classified.append(ClassifiedAnswerClaim(text=part, kind="local_claim", reason="local_evidence_required"))
+    return classified
+
+
+def split_answer_claims(answer: str) -> list[str]:
+    return [item.text for item in classify_answer_claims(answer) if item.kind != "source_notice"]
 
 
 def _claim_terms(text: str) -> set[str]:
@@ -120,12 +190,44 @@ def assess_evidence_status(
     return "grounded", []
 
 
-def verify_answer_citations(answer: str, evidence_hits: list[dict[str, Any]] | None = None) -> AgentVerification:
+def verify_answer_citations(
+    answer: str,
+    evidence_hits: list[dict[str, Any]] | None = None,
+    *,
+    answer_mode: str = "",
+) -> AgentVerification:
     hits = [h for h in list(evidence_hits or []) if isinstance(h, dict)]
-    claims = split_answer_claims(answer)
+    classified_claims = classify_answer_claims(answer, answer_mode=answer_mode)
     claim_rows: list[dict[str, Any]] = []
     supported = 0
-    for idx, claim in enumerate(claims, start=1):
+    source_notice_count = len([item for item in classified_claims if item.kind == "source_notice"])
+    external_background_claims = len([item for item in classified_claims if item.kind == "external_background"])
+    local_claim_index = 0
+    for item in classified_claims:
+        if item.kind == "source_notice":
+            continue
+        claim = item.text
+        row_index = len(claim_rows) + 1
+        if item.kind == "external_background":
+            claim_rows.append(
+                {
+                    "index": row_index,
+                    "text": claim[:280],
+                    "claim_text": claim[:280],
+                    "claim_kind": "external_background",
+                    "verification_scope": "external_background",
+                    "classification_reason": item.reason,
+                    "has_citation": False,
+                    "citation_present": False,
+                    "has_evidence_overlap": False,
+                    "matched_evidence_count": 0,
+                    "matched_sources": [],
+                    "supported": None,
+                    "unsupported_reason": "",
+                }
+            )
+            continue
+        local_claim_index += 1
         citation_present = bool(_CITATION_RE.search(claim))
         matched_sources = _matched_evidence_sources(claim, hits) if hits else []
         matched_evidence_count = len(matched_sources)
@@ -140,9 +242,13 @@ def verify_answer_citations(answer: str, evidence_hits: list[dict[str, Any]] | N
             supported += 1
         claim_rows.append(
             {
-                "index": idx,
+                "index": row_index,
+                "local_claim_index": local_claim_index,
                 "text": claim[:280],
                 "claim_text": claim[:280],
+                "claim_kind": "local_claim",
+                "verification_scope": "local_evidence",
+                "classification_reason": item.reason,
                 "has_citation": citation_present,
                 "citation_present": citation_present,
                 "has_evidence_overlap": overlap,
@@ -152,7 +258,8 @@ def verify_answer_citations(answer: str, evidence_hits: list[dict[str, Any]] | N
                 "unsupported_reason": unsupported_reason,
             }
         )
-    total = len(claim_rows)
+    local_claims = local_claim_index
+    total = local_claims
     unsupported = max(0, total - supported)
     ratio = round((supported / total), 4) if total else 0.0
     evidence_status, evidence_status_reasons = assess_evidence_status(
@@ -166,6 +273,9 @@ def verify_answer_citations(answer: str, evidence_hits: list[dict[str, Any]] | N
         total_claims=total,
         supported_claims=supported,
         unsupported_claims=unsupported,
+        local_claims=local_claims,
+        external_background_claims=external_background_claims,
+        source_notice_count=source_notice_count,
         support_ratio=ratio,
         evidence_status=evidence_status,
         evidence_hit_count=len(hits),

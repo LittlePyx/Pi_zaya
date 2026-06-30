@@ -607,26 +607,6 @@ def _general_llm_messages(
     return [{"role": "system", "content": system}, *trimmed, {"role": "user", "content": str(query or "").strip()}]
 
 
-def _external_answer_notice(query: str, *, web_used: bool = False) -> str:
-    if _has_cjk(query):
-        if web_used:
-            return "注：本地知识库没有命中相关证据，以下是外部模型联网回答，不代表当前知识库结论。"
-        return "注：本地知识库没有命中相关证据，以下是外部模型的通用回答，不代表当前知识库结论。"
-    if web_used:
-        return "Note: no matching local knowledge-base evidence was found; this is an external model answer with web search, not a knowledge-base-grounded answer."
-    return "Note: no matching local knowledge-base evidence was found; this is an external model answer, not a knowledge-base-grounded answer."
-
-
-def _hybrid_answer_notice(query: str, *, web_used: bool = False) -> str:
-    if _has_cjk(query):
-        if web_used:
-            return "注：带 [n] 的内容来自本地知识库；未带本地引用的背景解释可能来自外部模型联网补充。"
-        return "注：带 [n] 的内容来自本地知识库；未带本地引用的背景解释可能来自外部模型补充。"
-    if web_used:
-        return "Note: local citations [n] come from the knowledge base; uncited background may use external model and web context."
-    return "Note: local citations [n] come from the knowledge base; uncited background may use external model context."
-
-
 def _prepend_external_notice(answer: str, query: str, *, web_used: bool = False) -> str:
     clean = str(answer or "").strip()
     notice = _external_answer_notice(query, web_used=web_used)
@@ -647,18 +627,6 @@ def _prepend_hybrid_notice(answer: str, query: str, *, web_used: bool = False) -
     return f"{notice}\n\n{clean}"
 
 
-def _fallback_general_answer(query: str, *, reason: str = "", academic: bool = False) -> str:
-    if _has_cjk(query):
-        suffix = f" 原因：{reason}" if reason else ""
-        if academic:
-            return f"本地知识库没有命中相关证据，且当前没有可用的文本模型 API，无法生成外部学术回答。{suffix}".strip()
-        return f"这个问题不需要知识库证据，但当前没有可用的文本模型 API，无法生成普通回答。{suffix}".strip()
-    suffix = f" Reason: {reason}" if reason else ""
-    if academic:
-        return f"No matching local knowledge-base evidence was found, and no text model API is available to generate an external academic answer.{suffix}"
-    return f"This question does not require indexed evidence, but no text model API is available to generate a general answer.{suffix}"
-
-
 def _web_search_configured(settings: Any) -> bool:
     return bool(
         getattr(settings, "agent_web_search_enabled", False)
@@ -667,15 +635,74 @@ def _web_search_configured(settings: Any) -> bool:
     )
 
 
+def _external_answer_notice(query: str, *, web_used: bool = False) -> str:
+    if _has_cjk(query):
+        if web_used:
+            return (
+                "\u6ce8\u610f\uff1a\u672c\u5730\u77e5\u8bc6\u5e93\u6ca1\u6709\u547d\u4e2d\u76f8\u5173\u8bc1\u636e\uff0c"
+                "\u4ee5\u4e0b\u662f\u5916\u90e8\u6a21\u578b\u7ed3\u5408\u8054\u7f51\u7684\u56de\u7b54\uff0c"
+                "\u4e0d\u4ee3\u8868\u5f53\u524d\u77e5\u8bc6\u5e93\u7ed3\u8bba\u3002"
+            )
+        return (
+            "\u6ce8\u610f\uff1a\u672c\u5730\u77e5\u8bc6\u5e93\u6ca1\u6709\u547d\u4e2d\u76f8\u5173\u8bc1\u636e\uff0c"
+            "\u4ee5\u4e0b\u662f\u5916\u90e8\u6a21\u578b\u7684\u901a\u7528\u56de\u7b54\uff0c"
+            "\u4e0d\u4ee3\u8868\u5f53\u524d\u77e5\u8bc6\u5e93\u7ed3\u8bba\u3002"
+        )
+    if web_used:
+        return "Note: no matching local knowledge-base evidence was found; this is an external model answer with web search, not a knowledge-base-grounded answer."
+    return "Note: no matching local knowledge-base evidence was found; this is an external model answer, not a knowledge-base-grounded answer."
+
+
+def _hybrid_answer_notice(query: str, *, web_used: bool = False) -> str:
+    if _has_cjk(query):
+        if web_used:
+            return (
+                "\u6ce8\u610f\uff1a\u5e26 [n] \u7684\u5185\u5bb9\u6765\u81ea\u672c\u5730\u77e5\u8bc6\u5e93\uff1b"
+                "\u672a\u5e26\u672c\u5730\u5f15\u7528\u7684\u80cc\u666f\u89e3\u91ca\u53ef\u80fd\u6765\u81ea\u5916\u90e8\u6a21\u578b\u8054\u7f51\u8865\u5145\u3002"
+            )
+        return (
+            "\u6ce8\u610f\uff1a\u5e26 [n] \u7684\u5185\u5bb9\u6765\u81ea\u672c\u5730\u77e5\u8bc6\u5e93\uff1b"
+            "\u672a\u5e26\u672c\u5730\u5f15\u7528\u7684\u80cc\u666f\u89e3\u91ca\u53ef\u80fd\u6765\u81ea\u5916\u90e8\u6a21\u578b\u8865\u5145\u3002"
+        )
+    if web_used:
+        return "Note: local citations [n] come from the knowledge base; uncited background may use external model and web context."
+    return "Note: local citations [n] come from the knowledge base; uncited background may use external model context."
+
+
+def _fallback_general_answer(query: str, *, reason: str = "", academic: bool = False) -> str:
+    if _has_cjk(query):
+        suffix = f" \u539f\u56e0\uff1a{reason}" if reason else ""
+        if academic:
+            return (
+                "\u672c\u5730\u77e5\u8bc6\u5e93\u6ca1\u6709\u547d\u4e2d\u76f8\u5173\u8bc1\u636e\uff0c"
+                "\u4e14\u5f53\u524d\u6ca1\u6709\u53ef\u7528\u7684\u6587\u672c\u6a21\u578b API\uff0c"
+                f"\u65e0\u6cd5\u751f\u6210\u5916\u90e8\u5b66\u672f\u56de\u7b54\u3002{suffix}"
+            ).strip()
+        return (
+            "\u8fd9\u4e2a\u95ee\u9898\u4e0d\u9700\u8981\u77e5\u8bc6\u5e93\u8bc1\u636e\uff0c"
+            "\u4f46\u5f53\u524d\u6ca1\u6709\u53ef\u7528\u7684\u6587\u672c\u6a21\u578b API\uff0c"
+            f"\u65e0\u6cd5\u751f\u6210\u666e\u901a\u56de\u7b54\u3002{suffix}"
+        ).strip()
+    suffix = f" Reason: {reason}" if reason else ""
+    if academic:
+        return f"No matching local knowledge-base evidence was found, and no text model API is available to generate an external academic answer.{suffix}"
+    return f"This question does not require indexed evidence, but no text model API is available to generate a general answer.{suffix}"
+
+
 def _hybrid_answer_query(query: str, notes_text: str, *, prefer_web: bool = False) -> str:
     policy = (
         "Hybrid answer source policy:\n"
         "- Treat retrieved knowledge-base snippets as authoritative for paper-specific claims.\n"
         "- Cite every local paper-specific claim with the retrieved snippet marker like [1] or [2].\n"
-        "- You may add compact external academic background to define terms, explain mechanisms, or frame limitations.\n"
+        "- Put external academic background only under a short 'External context'/'Background' line when it helps.\n"
         "- Do not cite external background with local snippet markers, and do not claim it came from the knowledge base.\n"
         "- If local evidence conflicts with external background, say so and prioritize local evidence.\n"
-        "- Keep the answer concise; avoid separate trace, plan, tool, or JSON output."
+        "- Use the user's language and keep the answer concise; do not output trace, plan, tool calls, verification statistics, or JSON.\n\n"
+        "Compact answer shape:\n"
+        "1. Start with one direct answer sentence.\n"
+        "2. Add 'Local evidence' bullets for paper-specific evidence, each with local citations.\n"
+        "3. Add one optional 'External context' line only for useful uncited background.\n"
+        "4. Add one optional 'Limit' sentence only when local evidence is thin, conflicting, or incomplete."
     )
     if prefer_web:
         policy += "\n- When web search contributes background, keep it secondary to the local snippets."
@@ -845,8 +872,8 @@ def generate_grounded_answer(
         }
 
 
-def verify_answer_citations(answer: str, hits: list[dict[str, Any]]) -> dict[str, Any]:
-    verification = _verify_answer_citations(answer, hits)
+def verify_answer_citations(answer: str, hits: list[dict[str, Any]], *, answer_mode: str = "") -> dict[str, Any]:
+    verification = _verify_answer_citations(answer, hits, answer_mode=answer_mode)
     return {
         "verification": verification.to_dict(),
         "observation": (

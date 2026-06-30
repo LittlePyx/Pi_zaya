@@ -54,6 +54,9 @@ class AgentVerification:
     total_claims: int = 0
     supported_claims: int = 0
     unsupported_claims: int = 0
+    local_claims: int = 0
+    external_background_claims: int = 0
+    source_notice_count: int = 0
     support_ratio: float = 0.0
     evidence_status: EvidenceStatus = "insufficient"
     evidence_hit_count: int = 0
@@ -93,6 +96,9 @@ class AgentTrace:
             "total_claims": total_claims,
             "supported_claims": supported_claims,
             "unsupported_claims": unsupported_claims,
+            "local_claims": int(self.verification.local_claims or 0),
+            "external_background_claims": int(self.verification.external_background_claims or 0),
+            "source_notice_count": int(self.verification.source_notice_count or 0),
             "support_ratio": round(max(0.0, min(1.0, ratio)), 4),
             "plan_step_count": len(self.plan),
             "tool_call_count": len(self.steps),
