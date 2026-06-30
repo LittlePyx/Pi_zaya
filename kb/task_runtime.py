@@ -3416,6 +3416,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
     worker_t0 = time.perf_counter()
     _gen_update_task(session_id, task_id, status="running", stage="starting", started_at=time.time())
     research_trace: dict = {}
+    agent_scope_context: dict = {}
     prompt = ""
     settings_obj = None
 
@@ -3476,6 +3477,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             current_source_name=paper_guide_bound_source_name,
             current_source_path=paper_guide_bound_source_path,
         )
+        agent_scope_context = {
+            "query_scope": str(effective_query_scope or ""),
+            "requested_query_scope": str(requested_query_scope or ""),
+            "current_source_path": str(paper_guide_bound_source_path or ""),
+            "current_source_name": str(paper_guide_bound_source_name or ""),
+            "selected_research_context_count": int(len(selected_research_context_items)),
+            "scope_source": "existing_rag",
+        }
         research_trace = _trace_new(
             session_id=session_id,
             task_id=task_id,
@@ -3603,6 +3612,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     quick_answer,
                     evidence_hits=[],
                     status="done",
+                    scope_context=agent_scope_context,
                 )
                 _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
             _gen_update_task(
@@ -5300,6 +5310,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 answer,
                 evidence_hits=answer_hits,
                 status="done",
+                scope_context=agent_scope_context,
             )
             _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
         _gen_update_task(
@@ -5345,6 +5356,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     answer,
                     evidence_hits=[],
                     status="canceled",
+                    scope_context=agent_scope_context,
                 )
                 _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
             _gen_update_task(
@@ -5381,6 +5393,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 err,
                 evidence_hits=[],
                 status="error",
+                scope_context=agent_scope_context,
             )
             _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
         _gen_update_task(

@@ -63,6 +63,7 @@ class AgentVerification:
 class AgentTrace:
     mode: Literal["research_agent"] = "research_agent"
     question_type: QuestionType = "unknown"
+    context: dict[str, Any] = field(default_factory=dict)
     plan: list[AgentPlanStep] = field(default_factory=list)
     steps: list[AgentExecutionStep] = field(default_factory=list)
     verification: AgentVerification = field(default_factory=AgentVerification)
@@ -73,6 +74,7 @@ class AgentTrace:
         return {
             "mode": self.mode,
             "question_type": self.question_type,
+            "context": dict(self.context),
             "plan": [step.to_dict() for step in self.plan],
             "steps": [step.to_dict() for step in self.steps],
             "verification": self.verification.to_dict(),

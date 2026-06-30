@@ -85,6 +85,7 @@ export interface AgentTraceVerification {
 export interface AgentTrace {
   mode?: 'research_agent' | string
   question_type?: string
+  context?: Record<string, unknown>
   plan?: AgentTracePlanStep[]
   steps?: AgentTraceExecutionStep[]
   verification?: AgentTraceVerification

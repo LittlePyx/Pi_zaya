@@ -12,7 +12,7 @@ documented manual review.
 | Research QA quality | Semi-automated/manual | Existing dry-run tooling and fixture replay can check harness health; answer quality still needs human review. |
 | Citation/evidence quality | Semi-automated/manual | Citation rendering and grounding have unit coverage; claim-level answer support needs review on real outputs. |
 | Converter quality | Semi-automated | Existing converter quality runners and unit tests cover structural regressions. |
-| Agent trace quality | Semi-automated/manual | New trace schema can be checked automatically; usefulness of plan/tool observations should be reviewed manually. |
+| Agent trace quality | Semi-automated/manual | Trace schema and scope context can be checked automatically; usefulness of plan/tool observations should be reviewed manually. |
 
 ## Golden Prompt Set
 
@@ -72,6 +72,7 @@ python tools\research_qa\validate_research_agent_golden.py
 | Plan execution completeness | Automated | Check every planned step reaches `done`, `error`, or `skipped`. | TBD |
 | Tool observation usefulness | Manual | Review whether observations explain what happened without leaking internals. | TBD |
 | Trace actionability | Automated/manual | For reference-followup traces, confirm resolved references expose reader-open and basket-add actions. | TBD |
+| Trace scope reproducibility | Automated/manual | Inspect `agent_trace.context.query_scope`, `requested_query_scope`, and selected/current-source fields for scoped questions. | TBD |
 | Error trace availability | Automated | Simulate degraded/error paths and confirm `agent_trace.errors` is returned. | TBD |
 | Trace payload size | Semi-automated | Inspect serialized message meta size; compact large claim/hit lists. | TBD |
 
@@ -121,6 +122,12 @@ Research Agent golden prompt validation:
 
 ```powershell
 python tools\research_qa\validate_research_agent_golden.py
+```
+
+Research Agent trace schema and scope-context validation:
+
+```powershell
+python tools\research_qa\run_agent_trace_eval.py
 ```
 
 Converter quality dry run:

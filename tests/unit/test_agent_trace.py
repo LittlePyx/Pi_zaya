@@ -16,10 +16,12 @@ def test_agent_trace_serializes_completed_rag_answer():
                 },
             }
         ],
+        scope_context={"query_scope": "library", "scope_source": "test"},
     )
 
     assert trace["mode"] == "research_agent"
     assert trace["question_type"] == "single_paper_qa"
+    assert trace["context"]["query_scope"] == "library"
     assert trace["verification"]["total_claims"] == 1
     assert trace["verification"]["supported_claims"] == 1
     assert [step["tool"] for step in trace["steps"]] == [

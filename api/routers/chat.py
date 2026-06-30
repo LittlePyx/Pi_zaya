@@ -65,6 +65,7 @@ _CHAT_PROJECT_NAME_MAX_CHARS = 120
 _CHAT_MESSAGE_MAX_CHARS = 80_000
 _CHAT_SOURCE_PATH_MAX_CHARS = 1_200
 _CHAT_SOURCE_NAME_MAX_CHARS = 500
+_CHAT_QUERY_SCOPE_MAX_CHARS = 40
 _CHAT_READER_TITLE_MAX_CHARS = 240
 _CHAT_READER_CONVERSATION_ID_MAX_CHARS = 120
 _CHAT_READER_PAYLOAD_MAX_JSON_CHARS = 120_000
@@ -72,6 +73,7 @@ _CHAT_STATE_MAX_JSON_CHARS = 160_000
 _CHAT_CITATION_SHELF_MAX_ITEMS = 120
 _CHAT_CITATION_SHELF_MAX_JSON_CHARS = 260_000
 _CHAT_CITATION_SHELF_ITEM_MAX_JSON_CHARS = 40_000
+_CHAT_PROMPT_CONTEXT_MAX_JSON_CHARS = 260_000
 
 
 def _bounded_json_size(value: Any, *, name: str, max_json_chars: int) -> Any:
@@ -146,6 +148,17 @@ class ResearchAgentBody(BaseModel):
     top_k: int = Field(6, ge=1, le=20)
     temperature: float = Field(0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(1200, ge=1, le=8192)
+    query_scope: str = Field("", max_length=_CHAT_QUERY_SCOPE_MAX_CHARS)
+    prompt_context: dict[str, Any] | None = None
+    source_lock_path: str = Field("", max_length=_CHAT_SOURCE_PATH_MAX_CHARS)
+    source_lock_name: str = Field("", max_length=_CHAT_SOURCE_NAME_MAX_CHARS)
+
+    @field_validator("prompt_context")
+    @classmethod
+    def _check_prompt_context(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return _bounded_dict(value, name="prompt context", max_json_chars=_CHAT_PROMPT_CONTEXT_MAX_JSON_CHARS)
 
 
 class UpdateMsgBody(BaseModel):
@@ -1049,6 +1062,10 @@ def run_chat_research_agent(body: ResearchAgentBody):
     if not query:
         raise HTTPException(400, "query required")
     settings = get_settings()
+    source_lock_path = str(body.source_lock_path or "").strip()
+    if source_lock_path:
+        source_lock_path = _resolve_allowed_paper_guide_source_path(source_lock_path)
+    source_lock_name = str(body.source_lock_name or "").strip()
     return run_research_agent(
         query,
         db_dir=settings.db_dir,
@@ -1056,6 +1073,10 @@ def run_chat_research_agent(body: ResearchAgentBody):
         top_k=body.top_k,
         temperature=body.temperature,
         max_tokens=body.max_tokens,
+        query_scope=body.query_scope,
+        selected_research_context=body.prompt_context or {},
+        current_source_path=source_lock_path,
+        current_source_name=source_lock_name,
     )
 
 

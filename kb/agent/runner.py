@@ -17,6 +17,154 @@ from .types import AgentExecutionStep, AgentTrace
 from .verifier import verify_answer_citations as verify_completed_answer
 
 
+def _normalize_query_scope(value: object) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_")
+    if raw in {"current", "paper", "current_paper", "source", "reader"}:
+        return "current_paper"
+    if raw in {"basket", "shelf", "citation_shelf", "selected"}:
+        return "basket"
+    if raw in {"library", "all", "all_library", "full_library"}:
+        return "library"
+    return ""
+
+
+def _clip_context_value(value: object, *, max_chars: int = 700) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = " ".join(text.split())
+    return text[:max_chars]
+
+
+def _selected_context_items(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for raw in list(value.get("items") or []):
+        if isinstance(raw, dict):
+            out.append(raw)
+    return out
+
+
+def _source_key(value: object) -> str:
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    try:
+        return str(Path(raw).expanduser().resolve(strict=False)).replace("\\", "/").lower()
+    except Exception:
+        return raw.lower()
+
+
+def _source_variants(value: object) -> set[str]:
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return set()
+    variants = {raw.lower(), _source_key(raw)}
+    try:
+        path = Path(raw)
+        if path.name:
+            variants.add(path.name.lower())
+        if path.stem:
+            variants.add(path.stem.lower())
+    except Exception:
+        pass
+    return {item for item in variants if item}
+
+
+def _hit_source_blob(hit: dict[str, Any]) -> str:
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    fields = [
+        meta.get("source_path"),
+        meta.get("source_name"),
+        meta.get("title"),
+        meta.get("doi"),
+        meta.get("source_sha1"),
+    ]
+    return " ".join(str(x or "").replace("\\", "/").lower() for x in fields if str(x or "").strip())
+
+
+def _selected_context_terms(items: list[dict[str, Any]]) -> set[str]:
+    terms: set[str] = set()
+    for item in list(items or []):
+        for field in (
+            "sourcePath",
+            "source_path",
+            "sourceName",
+            "source_name",
+            "title",
+            "doi",
+            "key",
+        ):
+            value = _clip_context_value(item.get(field), max_chars=500)
+            if not value:
+                continue
+            terms.update(_source_variants(value))
+            terms.add(value.lower())
+    return {term for term in terms if term}
+
+
+def _build_scope_context(
+    *,
+    query_scope: object = "",
+    selected_research_context: dict[str, Any] | None = None,
+    current_source_path: object = "",
+    current_source_name: object = "",
+    source: str = "agent_runner",
+) -> dict[str, Any]:
+    selected_items = _selected_context_items(selected_research_context or {})
+    requested = _normalize_query_scope(query_scope)
+    has_current = bool(str(current_source_path or "").strip() or str(current_source_name or "").strip())
+    has_basket = bool(selected_items)
+    effective = requested or ("current_paper" if has_current else "library")
+    if effective == "current_paper" and not has_current:
+        effective = "library"
+    if effective == "basket" and not has_basket:
+        effective = "library"
+    return {
+        "query_scope": effective,
+        "requested_query_scope": requested,
+        "current_source_path": _clip_context_value(current_source_path, max_chars=1200),
+        "current_source_name": _clip_context_value(current_source_name, max_chars=500),
+        "selected_research_context_count": len(selected_items),
+        "scope_source": source,
+    }
+
+
+def _filter_hits_by_scope(
+    hits: list[dict[str, Any]],
+    *,
+    scope_context: dict[str, Any],
+    selected_research_context: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    scope = str(scope_context.get("query_scope") or "").strip()
+    before = len(hits)
+    if scope not in {"current_paper", "basket"}:
+        return hits, {"active": False, "query_scope": scope or "library", "before": before, "after": before}
+
+    if scope == "current_paper":
+        terms: set[str] = set()
+        terms.update(_source_variants(scope_context.get("current_source_path")))
+        terms.update(_source_variants(scope_context.get("current_source_name")))
+    else:
+        terms = _selected_context_terms(_selected_context_items(selected_research_context or {}))
+
+    filtered: list[dict[str, Any]] = []
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        blob = _hit_source_blob(hit)
+        if any(term and term in blob for term in terms):
+            filtered.append(hit)
+    return filtered, {
+        "active": True,
+        "query_scope": scope,
+        "before": before,
+        "after": len(filtered),
+        "term_count": len(terms),
+    }
+
+
 def _summarize_hits(hits: list[dict[str, Any]], *, limit: int = 6) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for hit in list(hits or [])[:limit]:
@@ -77,16 +225,37 @@ def run_research_agent(
     temperature: float = 0.2,
     max_tokens: int = 1200,
     max_steps: int = 6,
+    query_scope: str = "",
+    selected_research_context: dict[str, Any] | None = None,
+    current_source_path: str = "",
+    current_source_name: str = "",
 ) -> dict[str, Any]:
     question_type, plan = plan_research_question(query)
-    trace = AgentTrace(question_type=question_type, plan=plan, status="running")
+    scope_context = _build_scope_context(
+        query_scope=query_scope,
+        selected_research_context=selected_research_context,
+        current_source_path=current_source_path,
+        current_source_name=current_source_name,
+        source="direct_research_agent",
+    )
+    trace = AgentTrace(question_type=question_type, context=scope_context, plan=plan, status="running")
     context: dict[str, Any] = {"hits": [], "answer": "", "agent_notes": {}}
     for idx, plan_step in enumerate(list(trace.plan)[: max(1, int(max_steps or 6))]):
         if plan_step.tool == "retrieve_evidence":
             result = _run_step(trace, idx, retrieve_evidence, query, db_dir=db_dir, settings=settings, top_k=top_k)
-            context["hits"] = list(result.get("hits") or [])
+            raw_hits = [hit for hit in list(result.get("hits") or []) if isinstance(hit, dict)]
+            scoped_hits, scope_filter = _filter_hits_by_scope(
+                raw_hits,
+                scope_context=scope_context,
+                selected_research_context=selected_research_context,
+            )
+            context["hits"] = scoped_hits
+            trace.context["retrieved_hit_count"] = len(raw_hits)
+            trace.context["scoped_hit_count"] = len(scoped_hits)
             if trace.steps:
                 trace.steps[-1].output["hits"] = _summarize_hits(context["hits"])
+                if scope_filter.get("active"):
+                    trace.steps[-1].output["scope_filter"] = scope_filter
         elif plan_step.tool == "retrieve_references":
             result = _run_step(
                 trace,
@@ -140,6 +309,7 @@ def build_agent_trace_for_completed_answer(
     *,
     evidence_hits: list[dict[str, Any]] | None = None,
     status: str = "done",
+    scope_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     question_type, plan = plan_research_question(query)
     hits = [h for h in list(evidence_hits or []) if isinstance(h, dict)]
@@ -147,7 +317,13 @@ def build_agent_trace_for_completed_answer(
     final_status = str(status or "done").strip().lower()
     if final_status not in {"done", "error", "canceled"}:
         final_status = "done"
-    trace = AgentTrace(question_type=question_type, plan=plan, verification=verification, status=final_status)
+    trace = AgentTrace(
+        question_type=question_type,
+        context=dict(scope_context or {}),
+        plan=plan,
+        verification=verification,
+        status=final_status,
+    )
     for step in trace.plan:
         step.status = "done" if final_status == "done" else "error"
     trace.steps.append(

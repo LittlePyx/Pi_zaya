@@ -104,12 +104,24 @@ export function AgentTracePanel({
 
   const plan = records(tr.plan)
   const steps = records(tr.steps)
+  const context = asTraceRecord(tr.context)
   const verification = asTraceRecord(tr.verification)
   const totalClaims = traceNum(verification.total_claims)
   const supportedClaims = traceNum(verification.supported_claims)
   const unsupportedClaims = traceNum(verification.unsupported_claims)
   const questionType = String(tr.question_type || 'unknown').trim()
   const status = String(tr.status || '').trim() || 'done'
+  const queryScope = String(context.query_scope || context.queryScope || '').trim()
+  const requestedScope = String(context.requested_query_scope || context.requestedQueryScope || '').trim()
+  const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
+  const currentSource = shortText(context.current_source_name || context.currentSourceName || context.current_source_path || context.currentSourcePath, 90)
+  const scopeBits = [
+    queryScope,
+    requestedScope && requestedScope !== queryScope ? `requested ${requestedScope}` : '',
+    selectedCount > 0 ? `${selectedCount} selected` : '',
+    queryScope === 'current_paper' && currentSource ? currentSource : '',
+  ].filter(Boolean)
+  const scopeSummary = scopeBits.join(' / ')
 
   return (
     <details className="kb-agent-trace">
@@ -127,6 +139,12 @@ export function AgentTracePanel({
           <span>Unsupported</span>
           <strong>{unsupportedClaims}</strong>
         </div>
+        {scopeSummary ? (
+          <div>
+            <span>Scope</span>
+            <strong title={scopeSummary}>{shortText(scopeSummary, 72)}</strong>
+          </div>
+        ) : null}
       </div>
       {plan.length > 0 ? (
         <div className="kb-agent-trace-section">

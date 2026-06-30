@@ -66,6 +66,7 @@ not replace retrieval, prompt building, citation cards, or the default chat flow
 When enabled, a response includes an `agent_trace` object with:
 
 - `question_type`: `single_paper_qa`, `multi_paper_comparison`, `reading_guide`, `reference_followup`, or `unknown`
+- `context`: effective query scope, requested scope, current-paper lock, and selected-basket count when available
 - `plan`: planned steps with goal, tool, and status
 - `steps`: executed tool calls, observations, compact outputs, and errors
 - `verification`: sentence-level citation/evidence support counts
@@ -106,7 +107,13 @@ Content-Type: application/json
 {
   "conv_id": "conversation-id",
   "prompt": "Compare these papers",
-  "agent_mode": true
+  "agent_mode": true,
+  "query_scope": "basket",
+  "prompt_context": {
+    "items": [
+      {"title": "Paper A", "sourcePath": "paper-a.md"}
+    ]
+  }
 }
 ```
 
@@ -118,10 +125,13 @@ Content-Type: application/json
 
 {
   "query": "How should I read this paper?",
-  "top_k": 6
+  "top_k": 6,
+  "query_scope": "current_paper",
+  "source_lock_path": "converted-paper.md"
 }
 ```
 
+Supported `query_scope` values are `current_paper`, `basket`, and `library`.
 Default chat behavior is unchanged when `agent_mode` is omitted or false.
 
 ## Quick Start
@@ -250,6 +260,7 @@ Useful commands:
 ```powershell
 python -m pytest tests/unit -q
 python tools\research_qa\validate_research_agent_golden.py
+python tools\research_qa\run_agent_trace_eval.py
 python tools\research_qa\run_research_qa_eval.py --dry-run
 python tools\converter_quality\run_converter_quality_eval.py --dry-run
 
