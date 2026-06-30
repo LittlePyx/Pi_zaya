@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .planner import plan_research_question
+from .planner import plan_research_intent, plan_research_question
 from .tools import (
     build_reading_guide,
     compare_papers,
@@ -670,6 +670,7 @@ def run_research_agent(
     current_source_path: str = "",
     current_source_name: str = "",
 ) -> dict[str, Any]:
+    intent = plan_research_intent(query)
     question_type, plan = plan_research_question(query)
     scope_context = _build_scope_context(
         query_scope=query_scope,
@@ -678,6 +679,9 @@ def run_research_agent(
         current_source_name=current_source_name,
         source="direct_research_agent",
     )
+    scope_context["planner_intent"] = intent.to_dict()
+    scope_context["planner_confidence"] = intent.confidence
+    scope_context["evidence_need"] = intent.evidence_need
     trace = AgentTrace(question_type=question_type, context=scope_context, plan=plan, status="running")
     context: dict[str, Any] = {"hits": [], "answer": "", "agent_notes": {}}
     for idx, plan_step in enumerate(list(trace.plan)[: max(1, int(max_steps or 6))]):
@@ -794,15 +798,20 @@ def build_agent_trace_for_completed_answer(
     status: str = "done",
     scope_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    intent = plan_research_intent(query)
     question_type, plan = plan_research_question(query)
     hits = [h for h in list(evidence_hits or []) if isinstance(h, dict)]
     verification = verify_completed_answer(answer, hits)
     final_status = str(status or "done").strip().lower()
     if final_status not in {"done", "error", "canceled"}:
         final_status = "done"
+    context = dict(scope_context or {})
+    context.setdefault("planner_intent", intent.to_dict())
+    context.setdefault("planner_confidence", intent.confidence)
+    context.setdefault("evidence_need", intent.evidence_need)
     trace = AgentTrace(
         question_type=question_type,
-        context=dict(scope_context or {}),
+        context=context,
         plan=plan,
         verification=verification,
         status=final_status,

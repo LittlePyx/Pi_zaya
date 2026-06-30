@@ -22,6 +22,8 @@ def test_agent_trace_schema_accepts_completed_trace():
     assert validation["summary"]["has_context"] is True
     assert validation["summary"]["tool_call_count"] == 3
     assert trace["summary"]["plan_step_count"] == len(trace["plan"])
+    assert trace["context"]["planner_intent"]["task_type"] == "single_paper_qa"
+    assert 0.0 <= trace["summary"]["planner_confidence"] <= 1.0
 
 
 def test_agent_trace_schema_reports_invalid_fields():

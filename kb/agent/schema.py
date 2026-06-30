@@ -58,6 +58,28 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
     context = trace.get("context", {})
     if context is not None and not isinstance(context, dict):
         errors.append("context must be an object")
+    if isinstance(context, dict) and "planner_intent" in context:
+        intent = context.get("planner_intent")
+        if not isinstance(intent, dict):
+            errors.append("context.planner_intent must be an object")
+        else:
+            if str(intent.get("task_type") or "") not in VALID_QUESTION_TYPES:
+                errors.append(f"context.planner_intent.task_type must be one of {sorted(VALID_QUESTION_TYPES)}")
+            try:
+                confidence = float(intent.get("confidence", 0.0) or 0.0)
+            except Exception:
+                errors.append("context.planner_intent.confidence must be numeric")
+            else:
+                if confidence < 0.0 or confidence > 1.0:
+                    errors.append("context.planner_intent.confidence must be between 0 and 1")
+            if "required_tools" in intent:
+                required_tools = intent.get("required_tools") or []
+                if not isinstance(required_tools, list):
+                    errors.append("context.planner_intent.required_tools must be a list")
+                    required_tools = []
+                for idx, tool in enumerate(required_tools):
+                    if str(tool or "") not in VALID_TOOLS:
+                        errors.append(f"context.planner_intent.required_tools[{idx}] is invalid")
 
     plan = _check_mapping_list(trace.get("plan"), name="plan", errors=errors)
     for idx, step in enumerate(plan):

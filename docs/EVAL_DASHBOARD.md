@@ -14,6 +14,9 @@ documented manual review.
 | Converter quality | Semi-automated | Existing converter quality runners and unit tests cover structural regressions. |
 | Agent trace quality | Semi-automated/manual | Trace schema and scope context can be checked automatically; usefulness of plan/tool observations should be reviewed manually. |
 
+The lightweight trace eval can write a portfolio-friendly JSON report. Metrics
+that are not measured by the current dry run are emitted as `null`, not guessed.
+
 ## Golden Prompt Set
 
 The first lightweight Research Agent prompt set lives at:
@@ -73,7 +76,10 @@ python tools\research_qa\validate_research_agent_golden.py
 | Metric | Type | How to measure | Baseline |
 |---|---|---|---|
 | Planner classification accuracy | Automated/manual | Unit tests for keyword classes; manual review on real prompts. | TBD |
+| Planner confidence calibration | Manual/semi-automated | Inspect `agent_trace.context.planner_intent.confidence` against reviewed task labels. | TBD |
+| Evidence need routing | Automated/manual | Confirm `agent_trace.context.planner_intent.evidence_need` is high for comparison, reference, method, limitation, and experiment prompts. | TBD |
 | Plan execution completeness | Automated | Check every planned step reaches `done`, `error`, or `skipped`. | TBD |
+| Tool latency | Semi-automated | Use `agent_trace.steps[*].elapsed_ms` to compute P50/P95 by tool and end-to-end trace. | TBD |
 | Tool observation usefulness | Manual | Review whether observations explain what happened without leaking internals. | TBD |
 | Trace actionability | Automated/manual | For reference-followup traces, confirm resolved references expose reader-open and basket-add actions. | TBD |
 | Trace scope reproducibility | Automated/manual | Inspect `agent_trace.context.query_scope`, `requested_query_scope`, and selected/current-source fields for scoped questions. | TBD |
@@ -134,7 +140,13 @@ python tools\research_qa\validate_research_agent_golden.py
 Research Agent trace schema and scope-context validation:
 
 ```powershell
-python tools\research_qa\run_agent_trace_eval.py
+python tools\research_qa\run_agent_trace_eval.py --json-out test_results\agent_trace_eval.json
+```
+
+To print the legacy summary shape only:
+
+```powershell
+python tools\research_qa\run_agent_trace_eval.py --summary-only
 ```
 
 Converter quality dry run:

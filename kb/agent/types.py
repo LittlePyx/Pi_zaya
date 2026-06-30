@@ -13,6 +13,7 @@ QuestionType = Literal[
 ]
 
 EvidenceStatus = Literal["grounded", "needs_review", "insufficient", "not_applicable"]
+EvidenceNeed = Literal["low", "medium", "high"]
 
 ToolName = Literal[
     "retrieve_evidence",
@@ -24,6 +25,21 @@ ToolName = Literal[
 ]
 
 StepStatus = Literal["pending", "running", "done", "error", "skipped", "canceled"]
+
+
+@dataclass
+class AgentIntent:
+    task_type: QuestionType = "unknown"
+    target_papers: list[str] = field(default_factory=list)
+    required_tools: list[ToolName] = field(default_factory=list)
+    evidence_need: EvidenceNeed = "medium"
+    confidence: float = 0.0
+    routing_signals: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["confidence"] = round(max(0.0, min(1.0, float(self.confidence or 0.0))), 4)
+        return data
 
 
 @dataclass
@@ -85,6 +101,13 @@ class AgentTrace:
         ratio = float(self.verification.support_ratio or 0.0)
         if total_claims > 0 and ratio <= 0:
             ratio = supported_claims / total_claims
+        planner_intent = self.context.get("planner_intent") if isinstance(self.context.get("planner_intent"), dict) else {}
+        try:
+            planner_confidence = float(
+                planner_intent.get("confidence", self.context.get("planner_confidence", 0.0)) or 0.0
+            )
+        except Exception:
+            planner_confidence = 0.0
         return {
             "question_type": self.question_type,
             "status": self.status,
@@ -93,6 +116,8 @@ class AgentTrace:
             "evidence_status_reasons": list(self.verification.evidence_status_reasons or [])[:4],
             "query_scope": str(self.context.get("query_scope") or ""),
             "requested_query_scope": str(self.context.get("requested_query_scope") or ""),
+            "planner_confidence": round(max(0.0, min(1.0, planner_confidence)), 4),
+            "evidence_need": str(planner_intent.get("evidence_need") or self.context.get("evidence_need") or ""),
             "retrieval_confidence": str(self.context.get("retrieval_confidence") or ""),
             "usable_hit_count": int(self.context.get("usable_hit_count") or 0),
             "total_claims": total_claims,

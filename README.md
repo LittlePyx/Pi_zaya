@@ -1,15 +1,34 @@
 # Pi_zaya
 
-Pi_zaya is a local-first, evidence-grounded research agent for academic PDFs.
-It converts papers into anchored Markdown, builds structured retrieval indexes,
-answers questions with traceable evidence, and helps manage a working literature
-basket for reading, synthesis, and citation workflows.
+Pi_zaya is a local-first, evidence-grounded research agent for academic PDFs. It
+helps users read papers, retrieve evidence, trace citations, compare papers, and
+generate verifiable answers with grounded references.
+
+This is a production-oriented AI agent / RAG engineering portfolio project, not
+a toy PDF chatbot. It connects PDF conversion, structured indexing, hybrid
+retrieval, agent planning, tool execution, claim verification, citation cards,
+and a React trace UI into one end-to-end research workflow.
 
 The product entry is FastAPI + React. The legacy Streamlit entry has been
 removed; do not use `app.py`, `streamlit run`, or port `8501` as the product
 entry.
 
-## What It Does
+## Problem
+
+Academic PDF QA demos often fail in the places researchers care about most:
+
+- They answer without showing which paper passage supports the claim.
+- They blur paper-specific findings with general model knowledge.
+- They do not expose retrieval scope, tool steps, or citation confidence.
+- They treat PDF conversion, reference metadata, and answer grounding as
+  separate demos instead of one workflow.
+
+Pi_zaya is designed around the opposite constraint: if an answer claims
+something about a paper, the user should be able to trace that claim back to
+local evidence or see a clear disclosure that the answer used external model or
+web context.
+
+## Key Features
 
 | Capability | What it provides |
 |---|---|
@@ -22,24 +41,38 @@ entry.
 
 ## Architecture
 
-```text
-PDF upload
-  -> api/routers/library.py
-  -> kb/converter/pipeline.py
-  -> anchored Markdown
-  -> kb/chunking.py + structured indexes
-  -> kb/store.py
-  -> kb/retrieval_engine.py / kb/retriever.py
-  -> kb/rag.py + kb/llm.py
-  -> FastAPI chat/generate endpoints
-  -> React chat, reader, citation cards, literature basket
-
-Research Agent Mode
-  -> kb/agent/planner.py
-  -> kb/agent/tools.py wrappers around retrieval/RAG/reference logic
-  -> kb/agent/verifier.py
-  -> agent_trace returned with the assistant response
+```mermaid
+flowchart LR
+  A["PDF Library"] --> B["PDF-to-Markdown Converter"]
+  B --> C["Chunking + Structured Index"]
+  C --> D["Hybrid Retrieval"]
+  D --> E["Research Agent Runtime"]
+  E --> P["Planner + Intent Router"]
+  E --> R["Evidence Retriever"]
+  E --> X["Reference Resolver"]
+  E --> G["Reading Guide Tool"]
+  E --> M["Paper Comparison Tool"]
+  E --> V["Claim Verifier"]
+  P --> O["Grounded Answer + Citation Trace UI"]
+  R --> O
+  X --> O
+  G --> O
+  M --> O
+  V --> O
 ```
+
+At a high level:
+
+1. PDFs are converted into anchored Markdown with page markers and source
+   locations.
+2. Markdown is chunked and indexed for retrieval, references, figures, and
+   reader navigation.
+3. Retrieval returns candidate evidence under the current-paper, basket, or full
+   library scope.
+4. Research Agent Mode plans tool calls, checks evidence sufficiency, generates
+   an answer, and verifies citation support.
+5. The frontend keeps the answer clean while citations, reference cards, reader
+   locate targets, and agent traces remain inspectable on demand.
 
 Key backend entry points:
 
@@ -66,6 +99,8 @@ not replace retrieval, prompt building, citation cards, or the default chat flow
 When enabled, a response includes an `agent_trace` object with:
 
 - `question_type`: `single_paper_qa`, `multi_paper_comparison`, `reading_guide`, `reference_followup`, or `unknown`
+- `context.planner_intent`: typed planner output with task type, required tools,
+  evidence need, target-paper hints, and planner confidence
 - `context`: effective query scope, requested scope, current-paper lock, and selected-basket count when available
 - `summary`: compact audit fields for claim support, scope, tool-call count, and error presence
 - `plan`: planned steps with goal, tool, and status
@@ -103,6 +138,12 @@ The planner uses simple heuristics first:
 - "how to read" / reading-guide language -> `reading_guide`
 - reference, citation, upstream, prior-work language -> `reference_followup`
 - otherwise -> `single_paper_qa`
+
+The runtime then applies an evidence sufficiency gate. Low-confidence retrieval
+hits are preserved in the trace for diagnosis, but only usable hits are treated
+as local evidence. If the local library is insufficient, the answer is qualified
+or routed to an external academic fallback when configured; it is not presented
+as a knowledge-base-grounded result.
 
 The tool layer wraps existing modules instead of adding external services:
 
@@ -171,6 +212,8 @@ Requirements:
 Install:
 
 ```powershell
+Copy-Item .env.example .env
+
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -230,7 +273,10 @@ python server.py
 
 For public deployments, keep token gates disabled by default:
 
-面向普通用户的公开部署保持 `KB_PRIVATE_INSTANCE_AUTH=0`、`KB_ENABLE_AUTH_GATE=0` 和 `KB_REQUIRE_AUTH=0`，用户打开应用不需要访问令牌。
+Set `KB_PRIVATE_INSTANCE_AUTH=0`, `KB_ENABLE_AUTH_GATE=0`, and
+`KB_REQUIRE_AUTH=0` so ordinary users can open the app without an access token.
+
+Chinese deployment note: 面向普通用户的公开部署保持 `KB_PRIVATE_INSTANCE_AUTH=0`、`KB_ENABLE_AUTH_GATE=0` 和 `KB_REQUIRE_AUTH=0`，用户打开应用不需要访问令牌。
 
 Use private/internal auth only for controlled instances, and configure
 `KB_ACCESS_TOKEN` or `KB_ACCESS_TOKEN_SHA256` when auth is enabled.
@@ -258,7 +304,13 @@ Common environment variables:
 - `KB_LIBRARY_DB`: library SQLite path
 - `KB_CROSSREF_BUDGET_S`: Crossref sync time budget
 
-Copy the production environment template when needed:
+For local development, copy the development environment template:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Copy the production environment template only for production-style deployment:
 
 ```powershell
 Copy-Item .env.production.example .env
@@ -278,18 +330,44 @@ Environment variables and `.env` values take precedence.
 7. Open answer evidence/citation cards in the Reader.
 8. Add important papers or excerpts to the literature basket and export citations.
 
+## Demo
+
+A polished demo GIF/video is not checked into the repository yet. Suggested demo
+path for portfolio use:
+
+1. Upload one or two academic PDFs.
+2. Convert and index the papers.
+3. Ask a paper-specific question in Agent Mode.
+4. Open the citation card and reader locate target.
+5. Ask a comparison or reading-guide question.
+6. Open the Research Agent Trace panel to show planner intent, tool calls,
+   evidence status, and claim verification.
+
 ## Evaluation
 
 See [docs/EVAL_DASHBOARD.md](docs/EVAL_DASHBOARD.md) for metric categories,
 manual/semi-automated evaluation tables, commands, current limitations, and
 future work. The document intentionally does not include fabricated numbers.
 
+Core evaluation dimensions:
+
+- Retrieval Recall@k and retrieval relevance
+- Citation precision and evidence locate success
+- Claim support rate and unsupported claim rate
+- No-evidence refusal accuracy
+- Agent trace completeness and planner accuracy
+- P50/P95 latency and cost per query when instrumentation is available
+
+Metrics remain `TBD` until produced by a reproducible run or documented manual
+review. The lightweight agent trace eval can also write a JSON report with null
+metric placeholders for unmeasured values.
+
 Useful commands:
 
 ```powershell
 python -m pytest tests/unit -q
 python tools\research_qa\validate_research_agent_golden.py
-python tools\research_qa\run_agent_trace_eval.py
+python tools\research_qa\run_agent_trace_eval.py --json-out test_results\agent_trace_eval.json
 python tools\research_qa\run_research_qa_eval.py --dry-run
 python tools\converter_quality\run_converter_quality_eval.py --dry-run
 
@@ -317,3 +395,39 @@ Local runtime data is not intended for Git commits:
 - Prefer fixing quality issues in converter/retrieval/data flow code instead of only hiding UI states.
 - Keep background and shared state thread-safe.
 - Before high-risk operations, create or verify a backup.
+
+## Roadmap
+
+- Add a small labeled QA benchmark with expected evidence and manual rubric notes.
+- Track retrieval/citation/claim metrics over time in JSON reports.
+- Improve intent routing beyond keyword heuristics while keeping degraded mode.
+- Add optional answer repair passes for unsupported claims.
+- Add a demo video and curated portfolio walkthrough.
+- Explore a future MCP-compatible local tool server for paper search, chunk
+  reading, reference resolution, and citation-grounded exports.
+
+## Portfolio / Interview Talking Points
+
+- Local-first architecture: papers, indexes, references, and chat state are
+  stored locally instead of requiring a hosted document service.
+- Evidence grounding: answers are designed around citations, reader locate
+  targets, and claim-level support checks.
+- Agent runtime: explicit planner intent, tool calls, evidence sufficiency, and
+  trace UI sit on top of the RAG pipeline.
+- Production concerns: FastAPI + React architecture, typed frontend API
+  contracts, background queues, SQLite stores, CI, unit/sanity/e2e tests, and
+  degraded-mode behavior when LLM keys are missing.
+- Evaluation honesty: docs and scripts expose evaluation dimensions without
+  inventing benchmark numbers.
+
+## Suggested GitHub Metadata
+
+Repository description:
+
+> Local-first evidence-grounded research agent for academic PDFs with RAG,
+> citation tracing, agent planning, and verifiable answers.
+
+Suggested topics:
+
+`ai-agent`, `rag`, `llm`, `research-agent`, `fastapi`, `react`, `typescript`,
+`pdf-processing`, `citation-tracing`, `agent-observability`, `llm-evaluation`

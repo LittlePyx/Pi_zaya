@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -66,12 +68,65 @@ def evaluate_cases(path: str | Path = DEFAULT_DATASET) -> dict[str, Any]:
     }
 
 
+def _git_commit() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return ""
+    return result.stdout.strip()
+
+
+def build_eval_report(
+    summary: dict[str, Any],
+    *,
+    commit: str | None = None,
+    date: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "commit": str(commit if commit is not None else _git_commit()),
+        "date": str(date or datetime.now(timezone.utc).isoformat()),
+        "num_cases": int(summary.get("case_count") or 0),
+        "planner_validation_ok": bool(summary.get("ok")),
+        "planner_error_count": len(list(summary.get("planning_errors") or [])),
+        "trace_schema_error_count": len(list(summary.get("schema_errors") or [])),
+        "question_types": dict(summary.get("question_types") or {}),
+        "retrieval_recall_at_5": None,
+        "citation_precision": None,
+        "claim_support_rate": None,
+        "unsupported_claim_rate": None,
+        "no_evidence_refusal_accuracy": None,
+        "p50_latency_ms": None,
+        "p95_latency_ms": None,
+        "cost_per_query_usd": None,
+        "notes": "Quality metrics are null until the eval suite is run on a labeled dataset with expected evidence and human-reviewed answers.",
+        "details": summary,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run lightweight Research Agent trace evaluation.")
     parser.add_argument("--path", default=str(DEFAULT_DATASET), help="JSONL golden dataset path.")
+    parser.add_argument("--json-out", default="", help="Optional path for the portfolio/eval JSON report.")
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Print the legacy summary instead of the report shape.",
+    )
     args = parser.parse_args()
     summary = evaluate_cases(args.path)
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    report = build_eval_report(summary)
+    if args.json_out:
+        target = Path(args.json_out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(summary if args.summary_only else report, ensure_ascii=False, indent=2))
     return 0 if summary["ok"] else 1
 
 
