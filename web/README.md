@@ -56,9 +56,11 @@ planning and tool logs behind the explicit details disclosure.
 The evidence status is intentionally compact: `grounded`, `needs_review`,
 `insufficient`, or `not_applicable` in API data, rendered as a small user-facing
 status in the panel. General questions that do not need local paper evidence can
-still use the normal text LLM path. Academic questions with no local evidence can
-fall back to an external model or configured API web search; the answer body and
-trace panel mark that output as not based on the local knowledge base.
+still use the normal text LLM path. Academic answers with local evidence can
+blend cited knowledge-base claims with compact external background, and no-hit
+academic questions can fall back to an external model or configured API web
+search. The answer body and trace panel mark when output is not purely based on
+the local knowledge base.
 
 The toggle is remembered per conversation, and the default chat flow is
 unchanged when it is off. For explicit test or deep-link entry, use

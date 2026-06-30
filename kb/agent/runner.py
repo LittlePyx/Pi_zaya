@@ -289,17 +289,26 @@ def _pre_generation_evidence_gate(
     if hit_count < 2:
         return {
             "evidence_status": "needs_review",
-            "answer_mode": "evidence_grounded",
+            "answer_mode": "hybrid_local_external",
             "evidence_hit_count": hit_count,
-            "reasons": ["low_evidence_count"],
-            "instruction": "Use cautious wording and avoid broad claims beyond the cited snippet.",
+            "reasons": ["low_evidence_count", "external_background_allowed"],
+            "instruction": (
+                "Use the retrieved snippet as local authority. External academic background may clarify context, "
+                "but paper-specific claims must stay tied to local evidence."
+            ),
         }
+    answer_mode = "hybrid_local_external" if _looks_like_academic_question(query, question_type=question_type) else "evidence_grounded"
     return {
         "evidence_status": "grounded",
-        "answer_mode": "evidence_grounded",
+        "answer_mode": answer_mode,
         "evidence_hit_count": hit_count,
-        "reasons": [],
-        "instruction": "Answer only from retrieved evidence and cite supported claims.",
+        "reasons": ["external_background_allowed"] if answer_mode == "hybrid_local_external" else [],
+        "instruction": (
+            "Prioritize retrieved evidence for paper-specific claims. External background may improve framing, "
+            "but it must not be presented as local knowledge-base evidence."
+            if answer_mode == "hybrid_local_external"
+            else "Answer only from retrieved evidence and cite supported claims."
+        ),
     }
 
 

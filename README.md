@@ -85,11 +85,14 @@ stay behind a second "Execution Details" disclosure.
 When collapsed, the panel only shows compact evidence-check status and scope, not
 raw question-type labels or tool execution logs.
 Agent Mode also applies a lightweight evidence gate: answers with retrieved
-local evidence stay knowledge-base grounded, while no-hit academic questions can
-fall back to an external model answer. If OpenAI web search is configured, that
-fallback can use API web search; otherwise it uses the normal text model. These
-fallback answers are visibly marked as not based on the local knowledge base and
-use `not_applicable` for local citation verification.
+local evidence keep local snippets as the authority, while the model may add
+compact external academic background to improve framing. If OpenAI web search is
+configured, that background can use API web search; otherwise it comes from the
+normal text model. No-hit academic questions can also fall back to an external
+model answer. External fallback and hybrid answers are visibly marked so users
+can tell which claims are knowledge-base grounded and which parts are model/web
+background; no-hit fallback uses `not_applicable` for local citation
+verification.
 The main answer body is kept focused on the response and necessary citations in
 rendered UI, API streaming, and stored chat messages; trace JSON, plan steps,
 tool calls, and verification details remain behind the trace panel.

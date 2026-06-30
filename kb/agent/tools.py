@@ -569,6 +569,10 @@ def _answer_mode(agent_notes: dict[str, Any] | None) -> str:
     return str(gate.get("answer_mode") or "").strip()
 
 
+def _is_hybrid_answer_mode(agent_notes: dict[str, Any] | None) -> bool:
+    return _answer_mode(agent_notes) == "hybrid_local_external"
+
+
 def _has_cjk(text: str) -> bool:
     return sum(1 for c in str(text or "") if "\u3400" <= c <= "\u9fff" or "\uf900" <= c <= "\ufaff") >= 4
 
@@ -613,9 +617,29 @@ def _external_answer_notice(query: str, *, web_used: bool = False) -> str:
     return "Note: no matching local knowledge-base evidence was found; this is an external model answer, not a knowledge-base-grounded answer."
 
 
+def _hybrid_answer_notice(query: str, *, web_used: bool = False) -> str:
+    if _has_cjk(query):
+        if web_used:
+            return "注：带 [n] 的内容来自本地知识库；未带本地引用的背景解释可能来自外部模型联网补充。"
+        return "注：带 [n] 的内容来自本地知识库；未带本地引用的背景解释可能来自外部模型补充。"
+    if web_used:
+        return "Note: local citations [n] come from the knowledge base; uncited background may use external model and web context."
+    return "Note: local citations [n] come from the knowledge base; uncited background may use external model context."
+
+
 def _prepend_external_notice(answer: str, query: str, *, web_used: bool = False) -> str:
     clean = str(answer or "").strip()
     notice = _external_answer_notice(query, web_used=web_used)
+    if not clean:
+        return notice
+    if clean.startswith(notice):
+        return clean
+    return f"{notice}\n\n{clean}"
+
+
+def _prepend_hybrid_notice(answer: str, query: str, *, web_used: bool = False) -> str:
+    clean = str(answer or "").strip()
+    notice = _hybrid_answer_notice(query, web_used=web_used)
     if not clean:
         return notice
     if clean.startswith(notice):
@@ -641,6 +665,28 @@ def _web_search_configured(settings: Any) -> bool:
         and getattr(settings, "agent_web_search_api_key", None)
         and str(getattr(settings, "agent_web_search_model", "") or "").strip()
     )
+
+
+def _hybrid_answer_query(query: str, notes_text: str, *, prefer_web: bool = False) -> str:
+    policy = (
+        "Hybrid answer source policy:\n"
+        "- Treat retrieved knowledge-base snippets as authoritative for paper-specific claims.\n"
+        "- Cite every local paper-specific claim with the retrieved snippet marker like [1] or [2].\n"
+        "- You may add compact external academic background to define terms, explain mechanisms, or frame limitations.\n"
+        "- Do not cite external background with local snippet markers, and do not claim it came from the knowledge base.\n"
+        "- If local evidence conflicts with external background, say so and prioritize local evidence.\n"
+        "- Keep the answer concise; avoid separate trace, plan, tool, or JSON output."
+    )
+    if prefer_web:
+        policy += "\n- When web search contributes background, keep it secondary to the local snippets."
+    if notes_text:
+        return (
+            f"{query}\n\n"
+            f"{policy}\n\n"
+            "Research Agent structured notes:\n"
+            f"{notes_text}"
+        )
+    return f"{query}\n\n{policy}"
 
 
 def generate_grounded_answer(
@@ -724,13 +770,40 @@ def generate_grounded_answer(
                 }
         answer = _fallback_grounded_answer(query, hits, reason="no retrieved evidence", agent_notes=agent_notes)
         return {"answer": answer, "llm_used": False, "observation": "Skipped LLM answer because no indexed evidence was retrieved."}
+    hybrid = _is_hybrid_answer_mode(agent_notes)
+    if hybrid and _web_search_configured(settings):
+        try:
+            notes_text = _format_agent_notes(agent_notes)
+            answer_query = _hybrid_answer_query(query, notes_text, prefer_web=True)
+            messages = build_messages(answer_query, list(history or []), list(hits or []))
+            web_result = DeepSeekChat(settings).chat_with_web_search(
+                messages=messages,
+                temperature=float(temperature),
+                max_tokens=max(256, min(4096, int(max_tokens or 1200))),
+            )
+            answer = clean_assistant_answer_presentation_text(str(web_result.get("content") or "")).strip()
+            if answer:
+                answer = _prepend_hybrid_notice(answer, query, web_used=True)
+                return {
+                    "answer": answer,
+                    "llm_used": True,
+                    "answer_mode": "hybrid_local_external",
+                    "web_search_used": True,
+                    "web_citations": list(web_result.get("annotations") or [])[:12],
+                    "web_search_model": str(web_result.get("model") or ""),
+                    "observation": "Generated a hybrid answer from local evidence plus external API web context.",
+                }
+        except Exception:
+            pass
     if not getattr(settings, "text_api_key", None):
         answer = _fallback_grounded_answer(query, hits, reason="missing text API key", agent_notes=agent_notes)
         return {"answer": answer, "llm_used": False, "observation": "Generated degraded-mode answer without an LLM."}
     try:
         notes_text = _format_agent_notes(agent_notes)
         answer_query = query
-        if notes_text:
+        if hybrid:
+            answer_query = _hybrid_answer_query(query, notes_text, prefer_web=False)
+        elif notes_text:
             answer_query = (
                 f"{query}\n\n"
                 "Research Agent structured notes. Use these as an evidence map for the answer; "
@@ -749,7 +822,19 @@ def generate_grounded_answer(
         if not answer:
             answer = _fallback_grounded_answer(query, hits, reason="empty LLM response", agent_notes=agent_notes)
             return {"answer": answer, "llm_used": False, "observation": "LLM returned empty text; used fallback answer."}
-        return {"answer": answer, "llm_used": True, "observation": "Generated answer with existing RAG prompt."}
+        if hybrid:
+            answer = _prepend_hybrid_notice(answer, query, web_used=False)
+        return {
+            "answer": answer,
+            "llm_used": True,
+            "answer_mode": "hybrid_local_external" if hybrid else "evidence_grounded",
+            "web_search_used": False,
+            "observation": (
+                "Generated a hybrid answer from local evidence plus external model context."
+                if hybrid
+                else "Generated answer with existing RAG prompt."
+            ),
+        }
     except Exception as exc:
         answer = _fallback_grounded_answer(query, hits, reason=str(exc)[:160], agent_notes=agent_notes)
         return {

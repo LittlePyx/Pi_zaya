@@ -10,6 +10,10 @@ _CITATION_RE = re.compile(r"(?:\[[0-9][0-9,\-\s]*\]|\[\[CITE:[^\]]+\]\])")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?\u3002\uff01\uff1f])\s+|\n+")
 _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}")
+_SOURCE_NOTICE_RE = re.compile(
+    r"^(?:Note:\s*(?:local citations|no matching local knowledge-base evidence)|\u6ce8[：:]\s*(?:\u5e26\s*\[n\]|\u672c\u5730\u77e5\u8bc6\u5e93))",
+    flags=re.IGNORECASE,
+)
 
 
 def split_answer_claims(answer: str) -> list[str]:
@@ -20,6 +24,8 @@ def split_answer_claims(answer: str) -> list[str]:
     for part in _SENTENCE_SPLIT_RE.split(text):
         clean = _BULLET_PREFIX_RE.sub("", str(part or "").strip())
         clean = re.sub(r"\s+", " ", clean).strip()
+        if _SOURCE_NOTICE_RE.search(clean):
+            continue
         if len(clean) < 12:
             continue
         if clean.endswith(":") and len(clean) < 80:

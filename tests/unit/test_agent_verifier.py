@@ -65,3 +65,14 @@ def test_verifier_marks_no_evidence_as_insufficient():
     assert result.evidence_status == "insufficient"
     assert result.evidence_hit_count == 0
     assert "no_evidence_hits" in result.evidence_status_reasons
+
+
+def test_verifier_ignores_source_notice_lines():
+    result = verify_answer_citations(
+        "Note: local citations [n] come from the knowledge base; uncited background may use external model context.\n\n"
+        "The retrieval module improves grounding quality [1].",
+        [{"text": "The retrieval module improves grounding quality.", "meta": {"source_name": "demo"}}],
+    )
+
+    assert result.total_claims == 1
+    assert result.supported_claims == 1

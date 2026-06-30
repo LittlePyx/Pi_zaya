@@ -47,6 +47,7 @@ def test_runner_passes_structured_comparison_notes_to_answer_tool(monkeypatch, t
     assert result["agent_trace"]["question_type"] == "multi_paper_comparison"
     assert captured["agent_notes"]["comparisons"][0]["paper"] == "Paper A"
     assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "needs_review"
+    assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "hybrid_local_external"
 
 
 def test_runner_passes_reference_notes_to_answer_tool(monkeypatch, tmp_path):

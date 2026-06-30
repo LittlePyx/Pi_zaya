@@ -50,6 +50,7 @@ python tools\research_qa\validate_research_agent_golden.py
 | Citation coverage | Semi-automated | `supported_claims / total_claims` from `agent_trace.verification`. | TBD |
 | Unsupported claim count | Semi-automated | `unsupported_claims` from `agent_trace.verification`. | TBD |
 | Evidence status distribution | Semi-automated | Count `grounded`, `needs_review`, `insufficient`, and `not_applicable` from `agent_trace.verification.evidence_status`. | TBD |
+| Hybrid answer rate | Semi-automated | Count traces where `generate_grounded_answer.answer_mode` is `hybrid_local_external`, split by `web_search_used`. | TBD |
 | No-hit external fallback rate | Semi-automated | Count no-hit traces where `generate_grounded_answer.answer_mode` is `external_academic_llm` and whether `web_search_used` is true. | TBD |
 | Unsupported claim diagnostics | Semi-automated/manual | Inspect `agent_trace.verification.claims[*].unsupported_reason` and matched evidence source summaries. | TBD |
 | Evidence locate success | Manual/semi-automated | Open citation/locate targets and confirm they land near supporting text. | TBD |
