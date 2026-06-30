@@ -554,32 +554,93 @@ def _is_general_llm_mode(agent_notes: dict[str, Any] | None) -> bool:
     if not isinstance(agent_notes, dict):
         return False
     gate = agent_notes.get("evidence_gate")
-    return isinstance(gate, dict) and str(gate.get("answer_mode") or "").strip() == "general_llm"
+    return isinstance(gate, dict) and str(gate.get("answer_mode") or "").strip() in {
+        "general_llm",
+        "external_academic_llm",
+    }
+
+
+def _answer_mode(agent_notes: dict[str, Any] | None) -> str:
+    if not isinstance(agent_notes, dict):
+        return ""
+    gate = agent_notes.get("evidence_gate")
+    if not isinstance(gate, dict):
+        return ""
+    return str(gate.get("answer_mode") or "").strip()
 
 
 def _has_cjk(text: str) -> bool:
     return sum(1 for c in str(text or "") if "\u3400" <= c <= "\u9fff" or "\uf900" <= c <= "\ufaff") >= 4
 
 
-def _general_llm_messages(query: str, history: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def _general_llm_messages(
+    query: str,
+    history: list[dict[str, Any]] | None = None,
+    *,
+    academic: bool = False,
+    prefer_web: bool = False,
+) -> list[dict[str, Any]]:
     prefer_zh = _has_cjk(query)
-    system = (
-        "You are a concise, helpful assistant. Answer the user's general question directly. "
-        "Do not invent local knowledge-base citations, paper evidence, tool traces, or JSON. "
-        "If the user asks for paper-specific evidence, say that the indexed evidence is insufficient."
-    )
+    if academic:
+        system = (
+            "You are a concise academic assistant. The local indexed knowledge base returned no relevant evidence. "
+            "Answer from general academic knowledge"
+            + (" and available web search results" if prefer_web else "")
+            + ". Do not claim that the answer is grounded in the user's local papers. "
+            "If the question asks about a specific local/current paper, explain that the local evidence was not found "
+            "and limit the rest of the answer to general background, likely interpretations, or how to verify it. "
+            "Do not invent local citation cards, local snippet ids, or tool traces."
+        )
+    else:
+        system = (
+            "You are a concise, helpful assistant. Answer the user's general question directly. "
+            "Do not invent local knowledge-base citations, paper evidence, tool traces, or JSON. "
+            "If the user asks for paper-specific evidence, say that the indexed evidence is insufficient."
+        )
     if prefer_zh:
         system += " Reply in Chinese unless the user asks otherwise."
     trimmed = [m for m in list(history or []) if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
     return [{"role": "system", "content": system}, *trimmed, {"role": "user", "content": str(query or "").strip()}]
 
 
-def _fallback_general_answer(query: str, *, reason: str = "") -> str:
+def _external_answer_notice(query: str, *, web_used: bool = False) -> str:
+    if _has_cjk(query):
+        if web_used:
+            return "注：本地知识库没有命中相关证据，以下是外部模型联网回答，不代表当前知识库结论。"
+        return "注：本地知识库没有命中相关证据，以下是外部模型的通用回答，不代表当前知识库结论。"
+    if web_used:
+        return "Note: no matching local knowledge-base evidence was found; this is an external model answer with web search, not a knowledge-base-grounded answer."
+    return "Note: no matching local knowledge-base evidence was found; this is an external model answer, not a knowledge-base-grounded answer."
+
+
+def _prepend_external_notice(answer: str, query: str, *, web_used: bool = False) -> str:
+    clean = str(answer or "").strip()
+    notice = _external_answer_notice(query, web_used=web_used)
+    if not clean:
+        return notice
+    if clean.startswith(notice):
+        return clean
+    return f"{notice}\n\n{clean}"
+
+
+def _fallback_general_answer(query: str, *, reason: str = "", academic: bool = False) -> str:
     if _has_cjk(query):
         suffix = f" 原因：{reason}" if reason else ""
+        if academic:
+            return f"本地知识库没有命中相关证据，且当前没有可用的文本模型 API，无法生成外部学术回答。{suffix}".strip()
         return f"这个问题不需要知识库证据，但当前没有可用的文本模型 API，无法生成普通回答。{suffix}".strip()
     suffix = f" Reason: {reason}" if reason else ""
+    if academic:
+        return f"No matching local knowledge-base evidence was found, and no text model API is available to generate an external academic answer.{suffix}"
     return f"This question does not require indexed evidence, but no text model API is available to generate a general answer.{suffix}"
+
+
+def _web_search_configured(settings: Any) -> bool:
+    return bool(
+        getattr(settings, "agent_web_search_enabled", False)
+        and getattr(settings, "agent_web_search_api_key", None)
+        and str(getattr(settings, "agent_web_search_model", "") or "").strip()
+    )
 
 
 def generate_grounded_answer(
@@ -594,43 +655,72 @@ def generate_grounded_answer(
 ) -> dict[str, Any]:
     if not hits:
         if _is_general_llm_mode(agent_notes):
+            mode = _answer_mode(agent_notes)
+            academic = mode == "external_academic_llm"
+            if academic and _web_search_configured(settings):
+                try:
+                    chat = DeepSeekChat(settings)
+                    web_result = chat.chat_with_web_search(
+                        messages=_general_llm_messages(query, history, academic=True, prefer_web=True),
+                        temperature=float(temperature),
+                        max_tokens=max(256, min(4096, int(max_tokens or 1200))),
+                    )
+                    answer = clean_assistant_answer_presentation_text(str(web_result.get("content") or "")).strip()
+                    if answer:
+                        answer = _prepend_external_notice(answer, query, web_used=True)
+                        return {
+                            "answer": answer,
+                            "llm_used": True,
+                            "answer_mode": mode,
+                            "web_search_used": True,
+                            "web_citations": list(web_result.get("annotations") or [])[:12],
+                            "web_search_model": str(web_result.get("model") or ""),
+                            "observation": "Generated an external academic answer with API web search because no local evidence was retrieved.",
+                        }
+                except Exception:
+                    pass
             if not getattr(settings, "text_api_key", None):
-                answer = _fallback_general_answer(query, reason="missing text API key")
+                answer = _fallback_general_answer(query, reason="missing text API key", academic=academic)
                 return {
                     "answer": answer,
                     "llm_used": False,
-                    "answer_mode": "general_llm",
-                    "observation": "Could not call a general LLM answer because no text API key is configured.",
+                    "answer_mode": mode or "general_llm",
+                    "web_search_used": False,
+                    "observation": "Could not call an external LLM answer because no text API key is configured.",
                 }
             try:
                 answer = DeepSeekChat(settings).chat(
-                    messages=_general_llm_messages(query, history),
+                    messages=_general_llm_messages(query, history, academic=academic),
                     temperature=float(temperature),
                     max_tokens=max(256, min(4096, int(max_tokens or 1200))),
                 )
                 answer = clean_assistant_answer_presentation_text(answer).strip()
                 if not answer:
-                    answer = _fallback_general_answer(query, reason="empty LLM response")
+                    answer = _fallback_general_answer(query, reason="empty LLM response", academic=academic)
                     return {
                         "answer": answer,
                         "llm_used": False,
-                        "answer_mode": "general_llm",
-                        "observation": "General LLM returned empty text; used fallback answer.",
+                        "answer_mode": mode or "general_llm",
+                        "web_search_used": False,
+                        "observation": "External LLM returned empty text; used fallback answer.",
                     }
+                answer = _prepend_external_notice(answer, query, web_used=False)
                 return {
                     "answer": answer,
                     "llm_used": True,
-                    "answer_mode": "general_llm",
-                    "observation": "Generated a general LLM answer because no indexed evidence was required.",
+                    "answer_mode": mode or "general_llm",
+                    "web_search_used": False,
+                    "observation": "Generated an external LLM answer because no local evidence was retrieved.",
                 }
             except Exception as exc:
-                answer = _fallback_general_answer(query, reason=str(exc)[:160])
+                answer = _fallback_general_answer(query, reason=str(exc)[:160], academic=academic)
                 return {
                     "answer": answer,
                     "llm_used": False,
-                    "answer_mode": "general_llm",
+                    "answer_mode": mode or "general_llm",
+                    "web_search_used": False,
                     "error": str(exc)[:240],
-                    "observation": "General LLM generation failed; used fallback answer.",
+                    "observation": "External LLM generation failed; used fallback answer.",
                 }
         answer = _fallback_grounded_answer(query, hits, reason="no retrieved evidence", agent_notes=agent_notes)
         return {"answer": answer, "llm_used": False, "observation": "Skipped LLM answer because no indexed evidence was retrieved."}

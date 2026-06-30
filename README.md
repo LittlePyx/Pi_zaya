@@ -84,12 +84,12 @@ When opened, the panel shows the compact summary first; plan and tool-call logs
 stay behind a second "Execution Details" disclosure.
 When collapsed, the panel only shows compact evidence-check status and scope, not
 raw question-type labels or tool execution logs.
-Agent Mode also applies a lightweight evidence gate: paper-specific questions
-with no indexed evidence yield a degraded "insufficient evidence" answer, while
-sparse or partially unsupported evidence is marked for review instead of being
-presented as fully grounded. General questions that do not require the indexed
-literature can still use the normal text LLM path and are marked
-`not_applicable` for citation verification.
+Agent Mode also applies a lightweight evidence gate: answers with retrieved
+local evidence stay knowledge-base grounded, while no-hit academic questions can
+fall back to an external model answer. If OpenAI web search is configured, that
+fallback can use API web search; otherwise it uses the normal text model. These
+fallback answers are visibly marked as not based on the local knowledge base and
+use `not_applicable` for local citation verification.
 The main answer body is kept focused on the response and necessary citations in
 rendered UI, API streaming, and stored chat messages; trace JSON, plan steps,
 tool calls, and verification details remain behind the trace panel.
@@ -245,6 +245,9 @@ Common environment variables:
 - `QWEN_API_KEY`, `DEEPSEEK_API_KEY`, or `OPENAI_API_KEY`: text model access
 - `QWEN_BASE_URL`, `DEEPSEEK_BASE_URL`, `OPENAI_BASE_URL`: optional provider base URLs
 - `QWEN_MODEL`, `DEEPSEEK_MODEL`, `OPENAI_MODEL`: optional model names
+- `KB_AGENT_WEB_SEARCH_ENABLED`: enable or disable no-hit academic web fallback
+- `KB_AGENT_WEB_SEARCH_API_KEY`: optional OpenAI-compatible web-search key; falls back to `OPENAI_API_KEY`
+- `KB_AGENT_WEB_SEARCH_MODEL`: web-search model, default `gpt-5-search-api`
 - `KB_PDF_DIR`: source PDF directory
 - `KB_MD_DIR`: converted Markdown directory
 - `KB_DB_DIR`: retrieval/index directory

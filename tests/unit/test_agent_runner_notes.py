@@ -95,18 +95,32 @@ def test_runner_passes_reference_notes_to_answer_tool(monkeypatch, tmp_path):
     assert captured["agent_notes"]["references"][0]["title"] == "Upstream Method Paper"
 
 
-def test_runner_does_not_generate_content_without_evidence(monkeypatch, tmp_path):
+def test_runner_marks_academic_no_hit_as_external_answer(monkeypatch, tmp_path):
+    captured = {}
+
     def fake_retrieve_evidence(query, *, db_dir, settings=None, top_k=6):
         return {"hits": [], "observation": "empty"}
 
+    def fake_generate_grounded_answer(query, hits, *, settings=None, history=None, agent_notes=None, temperature=0.2, max_tokens=1200):
+        captured["agent_notes"] = agent_notes
+        return {
+            "answer": "Note: no matching local knowledge-base evidence was found; this is an external model answer.",
+            "answer_mode": "external_academic_llm",
+            "observation": "answered",
+        }
+
     monkeypatch.setattr(runner, "retrieve_evidence", fake_retrieve_evidence)
+    monkeypatch.setattr(runner, "generate_grounded_answer", fake_generate_grounded_answer)
 
     result = runner.run_research_agent("What does the paper prove?", db_dir=tmp_path)
 
-    assert "cannot produce" in result["answer"]
-    assert result["agent_trace"]["verification"]["evidence_status"] == "insufficient"
-    assert result["agent_trace"]["summary"]["evidence_status"] == "insufficient"
+    assert "external model answer" in result["answer"]
+    assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "external_academic_llm"
+    assert "not_based_on_local_knowledge_base" in captured["agent_notes"]["evidence_gate"]["reasons"]
+    assert result["agent_trace"]["verification"]["evidence_status"] == "not_applicable"
+    assert result["agent_trace"]["summary"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["summary"]["evidence_hit_count"] == 0
+    assert result["agent_trace"]["steps"][-1]["status"] == "skipped"
 
 
 def test_runner_allows_general_llm_answer_when_query_is_not_about_library(monkeypatch, tmp_path):
@@ -130,4 +144,25 @@ def test_runner_allows_general_llm_answer_when_query_is_not_about_library(monkey
     assert result["agent_trace"]["verification"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["summary"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["steps"][-1]["tool"] == "verify_answer_citations"
+    assert result["agent_trace"]["steps"][-1]["status"] == "skipped"
+
+
+def test_runner_uses_external_academic_mode_for_academic_no_hit(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_retrieve_evidence(query, *, db_dir, settings=None, top_k=6):
+        return {"hits": [], "observation": "empty"}
+
+    def fake_generate_grounded_answer(query, hits, *, settings=None, history=None, agent_notes=None, temperature=0.2, max_tokens=1200):
+        captured["agent_notes"] = agent_notes
+        return {"answer": "External academic answer.", "answer_mode": "external_academic_llm", "observation": "answered"}
+
+    monkeypatch.setattr(runner, "retrieve_evidence", fake_retrieve_evidence)
+    monkeypatch.setattr(runner, "generate_grounded_answer", fake_generate_grounded_answer)
+
+    result = runner.run_research_agent("Why do diffusion models work?", db_dir=tmp_path)
+
+    assert result["answer"] == "External academic answer."
+    assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "external_academic_llm"
+    assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["steps"][-1]["status"] == "skipped"

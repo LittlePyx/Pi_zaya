@@ -65,5 +65,40 @@ def test_generate_grounded_answer_allows_general_llm_without_evidence(monkeypatc
 
     assert result["llm_used"] is True
     assert result["answer_mode"] == "general_llm"
-    assert result["answer"] == "Python lists are mutable ordered sequences."
+    assert "not a knowledge-base-grounded answer" in result["answer"]
+    assert "Python lists are mutable ordered sequences." in result["answer"]
     assert "Retrieved snippets" not in captured["messages"][-1]["content"]
+
+
+def test_generate_grounded_answer_uses_web_search_for_external_academic_no_hit(monkeypatch):
+    class _Settings:
+        text_api_key = "test-key"
+        agent_web_search_enabled = True
+        agent_web_search_api_key = "web-key"
+        agent_web_search_model = "gpt-5-search-api"
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def chat_with_web_search(self, messages, *, temperature=0.2, max_tokens=1200):
+            return {
+                "content": "Diffusion models learn to reverse a noising process.",
+                "annotations": [{"url": "https://example.org/paper", "title": "Example"}],
+                "model": "gpt-5-search-api",
+            }
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+
+    result = tools.generate_grounded_answer(
+        "Why do diffusion models work?",
+        [],
+        settings=_Settings(),
+        agent_notes={"evidence_gate": {"answer_mode": "external_academic_llm"}},
+    )
+
+    assert result["llm_used"] is True
+    assert result["web_search_used"] is True
+    assert result["answer_mode"] == "external_academic_llm"
+    assert "not a knowledge-base-grounded answer" in result["answer"]
+    assert result["web_citations"][0]["url"] == "https://example.org/paper"

@@ -95,6 +95,11 @@ class Settings:
     max_pdf_upload_bytes: int = field(default=80 * 1024 * 1024)
     max_image_upload_bytes: int = field(default=8 * 1024 * 1024)
     max_chat_upload_files: int = field(default=12)
+    agent_web_search_enabled: bool = field(default=False)
+    agent_web_search_api_key: str | None = field(default=None, repr=False)
+    agent_web_search_base_url: str = field(default="https://api.openai.com/v1")
+    agent_web_search_model: str = field(default="gpt-5-search-api")
+    agent_web_search_context_size: str = field(default="low")
 
     # ------------------------------------------------------------------
     # Backward-compatible accessors (so existing callers that read
@@ -274,6 +279,22 @@ def load_settings() -> Settings:
         max_chat_upload_files = max(1, int(_env("KB_MAX_CHAT_UPLOAD_FILES", "12")))
     except Exception:
         max_chat_upload_files = 12
+    agent_web_search_api_key = _clean_env_key(
+        _env("KB_AGENT_WEB_SEARCH_API_KEY") or _env("OPENAI_API_KEY") or ""
+    )
+    agent_web_search_base_url = (
+        _env("KB_AGENT_WEB_SEARCH_BASE_URL")
+        or _env("OPENAI_BASE_URL")
+        or "https://api.openai.com/v1"
+    ).strip().rstrip("/")
+    agent_web_search_model = (_env("KB_AGENT_WEB_SEARCH_MODEL") or "gpt-5-search-api").strip()
+    raw_agent_web_search_enabled = str(_env("KB_AGENT_WEB_SEARCH_ENABLED", "") or "").strip().lower()
+    if raw_agent_web_search_enabled:
+        agent_web_search_enabled = raw_agent_web_search_enabled in {"1", "true", "yes", "on"}
+    else:
+        agent_web_search_enabled = bool(agent_web_search_api_key)
+    raw_context_size = str(_env("KB_AGENT_WEB_SEARCH_CONTEXT_SIZE", "low") or "low").strip().lower()
+    agent_web_search_context_size = raw_context_size if raw_context_size in {"low", "medium", "high"} else "low"
 
     return Settings(
         text_api_key=text_api_key,
@@ -305,4 +326,9 @@ def load_settings() -> Settings:
         max_pdf_upload_bytes=max_pdf_upload_bytes,
         max_image_upload_bytes=max_image_upload_bytes,
         max_chat_upload_files=max_chat_upload_files,
+        agent_web_search_enabled=agent_web_search_enabled,
+        agent_web_search_api_key=agent_web_search_api_key,
+        agent_web_search_base_url=agent_web_search_base_url,
+        agent_web_search_model=agent_web_search_model,
+        agent_web_search_context_size=agent_web_search_context_size,
     )

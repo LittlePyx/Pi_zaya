@@ -77,7 +77,7 @@ function evidenceStatusLabel(value: unknown): string {
   if (status === 'grounded') return 'Evidence grounded'
   if (status === 'needs_review') return 'Needs review'
   if (status === 'insufficient') return 'Insufficient evidence'
-  if (status === 'not_applicable') return 'General answer'
+  if (status === 'not_applicable') return 'Not from KB'
   return ''
 }
 

@@ -24,8 +24,13 @@ _RESEARCH_OBJECT_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _RESEARCH_TASK_RE = re.compile(
-    r"\b(method|approach|contribution|limitation|experiment|result|dataset|ablation|evaluation|architecture|section|figure|table|claim|prove|show|finding|findings|upstream|prior\s+work|summari[sz]e|explain)\b"
+    r"\b(methods?|approaches?|models?|contributions?|limitations?|experiments?|results?|datasets?|ablation|evaluation|architecture|section|figure|table|claim|prove|show|finding|findings|upstream|prior\s+work|summari[sz]e|explain)\b"
     r"|(?:\u65b9\u6cd5|\u8d21\u732e|\u5c40\u9650|\u5b9e\u9a8c|\u7ed3\u679c|\u6570\u636e\u96c6|\u6d88\u878d|\u8bc4\u4f30|\u7ae0\u8282|\u8bc1\u660e|\u4e0a\u6e38|\u603b\u7ed3|\u89e3\u91ca)",
+    flags=re.IGNORECASE,
+)
+_ACADEMIC_DOMAIN_RE = re.compile(
+    r"\b(transformers?|attention|diffusion|rag|retrieval|embeddings?|neural\s+networks?|deep\s+learning|machine\s+learning|llms?|large\s+language\s+models?|contrastive|reinforcement\s+learning|bayesian|causal|statistical|optimization)\b"
+    r"|(?:\u6269\u6563\u6a21\u578b|\u6ce8\u610f\u529b|\u68c0\u7d22\u589e\u5f3a|\u5411\u91cf|\u795e\u7ecf\u7f51\u7edc|\u6df1\u5ea6\u5b66\u4e60|\u673a\u5668\u5b66\u4e60|\u5927\u8bed\u8a00\u6a21\u578b|\u56e0\u679c|\u8d1d\u53f6\u65af|\u4f18\u5316)",
     flags=re.IGNORECASE,
 )
 
@@ -223,6 +228,17 @@ def _looks_like_research_grounding_request(
     return False
 
 
+def _looks_like_academic_question(query: str, *, question_type: QuestionType) -> bool:
+    text = str(query or "").strip()
+    if not text:
+        return False
+    if question_type in {"reading_guide", "reference_followup"}:
+        return True
+    if _RESEARCH_OBJECT_RE.search(text) or _RESEARCH_TASK_RE.search(text) or _ACADEMIC_DOMAIN_RE.search(text):
+        return True
+    return False
+
+
 def _pre_generation_evidence_gate(
     hits: list[dict[str, Any]],
     *,
@@ -232,6 +248,25 @@ def _pre_generation_evidence_gate(
 ) -> dict[str, Any]:
     hit_count = len([hit for hit in list(hits or []) if isinstance(hit, dict)])
     if hit_count <= 0:
+        if _looks_like_academic_question(query, question_type=question_type):
+            local_grounding_requested = _looks_like_research_grounding_request(
+                query,
+                scope_context=scope_context or {},
+                question_type=question_type,
+            )
+            reasons = ["no_evidence_hits", "not_based_on_local_knowledge_base"]
+            if local_grounding_requested:
+                reasons.append("local_grounding_requested")
+            return {
+                "evidence_status": "not_applicable",
+                "answer_mode": "external_academic_llm",
+                "evidence_hit_count": 0,
+                "reasons": reasons,
+                "instruction": (
+                    "Use an external academic model answer. Clearly state that local indexed evidence was not found; "
+                    "do not claim the answer is grounded in the knowledge base."
+                ),
+            }
         if not _looks_like_research_grounding_request(
             query,
             scope_context=scope_context or {},
@@ -272,14 +307,17 @@ def _is_general_answer_mode(agent_notes: dict[str, Any] | None) -> bool:
     if not isinstance(agent_notes, dict):
         return False
     gate = agent_notes.get("evidence_gate")
-    return isinstance(gate, dict) and str(gate.get("answer_mode") or "") == "general_llm"
+    return isinstance(gate, dict) and str(gate.get("answer_mode") or "") in {
+        "general_llm",
+        "external_academic_llm",
+    }
 
 
 def _general_answer_verification() -> AgentVerification:
     return AgentVerification(
         evidence_status="not_applicable",
         evidence_hit_count=0,
-        evidence_status_reasons=["general_question_no_indexed_evidence_required"],
+        evidence_status_reasons=["not_based_on_local_knowledge_base"],
     )
 
 
@@ -407,7 +445,7 @@ def run_research_agent(
                     AgentExecutionStep(
                         tool=plan_step.tool,
                         status="skipped",
-                        observation="Skipped citation verification because this was handled as a general LLM answer.",
+                        observation="Skipped local citation verification because this answer was not grounded in local knowledge-base evidence.",
                         output=trace.verification.to_dict(),
                     )
                 )
