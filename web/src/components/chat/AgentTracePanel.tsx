@@ -66,6 +66,28 @@ function verificationHeaderText(totalClaims: number, supportedClaims: number, un
   return 'Trace available'
 }
 
+function evidenceStatusValue(value: unknown): 'grounded' | 'needs_review' | 'insufficient' | '' {
+  const text = String(value || '').trim().toLowerCase()
+  if (text === 'grounded' || text === 'needs_review' || text === 'insufficient') return text
+  return ''
+}
+
+function evidenceStatusLabel(value: unknown): string {
+  const status = evidenceStatusValue(value)
+  if (status === 'grounded') return 'Evidence grounded'
+  if (status === 'needs_review') return 'Needs review'
+  if (status === 'insufficient') return 'Insufficient evidence'
+  return ''
+}
+
+function evidenceStatusClass(value: unknown): string {
+  const status = evidenceStatusValue(value)
+  if (status === 'grounded') return 'is-grounded'
+  if (status === 'needs_review') return 'is-warning'
+  if (status === 'insufficient') return 'is-danger'
+  return ''
+}
+
 function traceBool(value: unknown, fallback = false): boolean {
   if (typeof value === 'boolean') return value
   const text = String(value ?? '').trim().toLowerCase()
@@ -219,6 +241,8 @@ export function AgentTracePanel({
   const questionType = String(summary.question_type || tr.question_type || 'unknown').trim()
   const queryScope = String(summary.query_scope || context.query_scope || context.queryScope || '').trim()
   const requestedScope = String(summary.requested_query_scope || context.requested_query_scope || context.requestedQueryScope || '').trim()
+  const evidenceStatus = evidenceStatusValue(summary.evidence_status || verification.evidence_status)
+  const evidenceLabel = evidenceStatusLabel(evidenceStatus)
   const taskLabel = questionTypeLabel(questionType)
   const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
   const currentSource = shortText(context.current_source_name || context.currentSourceName || context.current_source_path || context.currentSourcePath, 90)
@@ -229,8 +253,9 @@ export function AgentTracePanel({
     queryScope === 'current_paper' && currentSource ? currentSource : '',
   ].filter(Boolean)
   const scopeSummary = scopeBits.join(' / ')
-  const headerEvidence = verificationHeaderText(totalClaims, supportedClaims, unsupportedClaims, hasErrors)
-  const headerContext = scopeSummary ? shortText(scopeSummary, 42) : taskLabel
+  const claimSummary = verificationHeaderText(totalClaims, supportedClaims, unsupportedClaims, hasErrors)
+  const headerEvidence = evidenceLabel || claimSummary
+  const headerContext = totalClaims > 0 && evidenceLabel ? claimSummary : (scopeSummary ? shortText(scopeSummary, 42) : taskLabel)
 
   return (
     <details className="kb-agent-trace" onToggle={(event) => {
@@ -242,6 +267,12 @@ export function AgentTracePanel({
         <span>{headerContext}</span>
       </summary>
       <div className="kb-agent-trace-summary">
+        {evidenceLabel ? (
+          <div className={`kb-agent-trace-evidence-status ${evidenceStatusClass(evidenceStatus)}`} data-testid="agent-trace-evidence-status">
+            <span>Evidence</span>
+            <strong>{evidenceLabel}</strong>
+          </div>
+        ) : null}
         {totalClaims > 0 ? (
           <div>
             <span>Claims</span>

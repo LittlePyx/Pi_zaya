@@ -181,6 +181,30 @@ def _summarize_hits(hits: list[dict[str, Any]], *, limit: int = 6) -> list[dict[
     return out
 
 
+def _pre_generation_evidence_gate(hits: list[dict[str, Any]]) -> dict[str, Any]:
+    hit_count = len([hit for hit in list(hits or []) if isinstance(hit, dict)])
+    if hit_count <= 0:
+        return {
+            "evidence_status": "insufficient",
+            "evidence_hit_count": 0,
+            "reasons": ["no_evidence_hits"],
+            "instruction": "Do not infer an answer. Say that indexed evidence is insufficient.",
+        }
+    if hit_count < 2:
+        return {
+            "evidence_status": "needs_review",
+            "evidence_hit_count": hit_count,
+            "reasons": ["low_evidence_count"],
+            "instruction": "Use cautious wording and avoid broad claims beyond the cited snippet.",
+        }
+    return {
+        "evidence_status": "grounded",
+        "evidence_hit_count": hit_count,
+        "reasons": [],
+        "instruction": "Answer only from retrieved evidence and cite supported claims.",
+    }
+
+
 def _run_step(trace: AgentTrace, index: int, tool_fn, *args, **kwargs) -> dict[str, Any]:
     step = trace.plan[index]
     step.status = "running"
@@ -256,6 +280,7 @@ def run_research_agent(
                 trace.steps[-1].output["hits"] = _summarize_hits(context["hits"])
                 if scope_filter.get("active"):
                     trace.steps[-1].output["scope_filter"] = scope_filter
+            context["agent_notes"]["evidence_gate"] = _pre_generation_evidence_gate(context["hits"])
         elif plan_step.tool == "retrieve_references":
             result = _run_step(
                 trace,

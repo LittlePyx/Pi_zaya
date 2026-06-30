@@ -79,6 +79,9 @@ export interface AgentTraceVerification {
   supported_claims?: number
   unsupported_claims?: number
   support_ratio?: number
+  evidence_status?: 'grounded' | 'needs_review' | 'insufficient' | string
+  evidence_hit_count?: number
+  evidence_status_reasons?: string[]
   claims?: Array<Record<string, unknown>>
 }
 
@@ -91,6 +94,9 @@ export interface AgentTraceSummary {
   supported_claims?: number
   unsupported_claims?: number
   support_ratio?: number
+  evidence_status?: 'grounded' | 'needs_review' | 'insufficient' | string
+  evidence_hit_count?: number
+  evidence_status_reasons?: string[]
   plan_step_count?: number
   tool_call_count?: number
   has_errors?: boolean

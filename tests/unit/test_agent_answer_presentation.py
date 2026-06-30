@@ -22,3 +22,19 @@ def test_generate_grounded_answer_cleans_llm_trace_suffix(monkeypatch):
 
     assert result["llm_used"] is True
     assert result["answer"] == "Grounded answer [1]."
+
+
+def test_generate_grounded_answer_skips_llm_without_evidence(monkeypatch):
+    class _Settings:
+        text_api_key = "test-key"
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            raise AssertionError("LLM should not be called without evidence")
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+
+    result = tools.generate_grounded_answer("What is supported?", [], settings=_Settings())
+
+    assert result["llm_used"] is False
+    assert "No relevant indexed evidence" in result["answer"]

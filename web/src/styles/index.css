@@ -1319,6 +1319,14 @@ body.kb-reader-resizing .kb-reader-content {
   background: color-mix(in srgb, #f59e0b 14%, var(--bg));
 }
 
+.kb-agent-trace-summary div.is-danger {
+  background: color-mix(in srgb, #ef4444 12%, var(--bg));
+}
+
+.kb-agent-trace-summary div.is-grounded {
+  background: color-mix(in srgb, #10b981 10%, var(--bg));
+}
+
 .kb-agent-trace-summary span {
   display: block;
   color: color-mix(in srgb, var(--text-main) 52%, transparent);

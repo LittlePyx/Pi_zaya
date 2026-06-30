@@ -46,6 +46,7 @@ def test_runner_passes_structured_comparison_notes_to_answer_tool(monkeypatch, t
 
     assert result["agent_trace"]["question_type"] == "multi_paper_comparison"
     assert captured["agent_notes"]["comparisons"][0]["paper"] == "Paper A"
+    assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "needs_review"
 
 
 def test_runner_passes_reference_notes_to_answer_tool(monkeypatch, tmp_path):
@@ -92,3 +93,17 @@ def test_runner_passes_reference_notes_to_answer_tool(monkeypatch, tmp_path):
     assert result["agent_trace"]["question_type"] == "reference_followup"
     assert captured["db_dir"] == tmp_path
     assert captured["agent_notes"]["references"][0]["title"] == "Upstream Method Paper"
+
+
+def test_runner_does_not_generate_content_without_evidence(monkeypatch, tmp_path):
+    def fake_retrieve_evidence(query, *, db_dir, settings=None, top_k=6):
+        return {"hits": [], "observation": "empty"}
+
+    monkeypatch.setattr(runner, "retrieve_evidence", fake_retrieve_evidence)
+
+    result = runner.run_research_agent("What does the paper prove?", db_dir=tmp_path)
+
+    assert "cannot produce" in result["answer"]
+    assert result["agent_trace"]["verification"]["evidence_status"] == "insufficient"
+    assert result["agent_trace"]["summary"]["evidence_status"] == "insufficient"
+    assert result["agent_trace"]["summary"]["evidence_hit_count"] == 0

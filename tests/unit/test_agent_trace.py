@@ -26,6 +26,9 @@ def test_agent_trace_serializes_completed_rag_answer():
     assert trace["verification"]["supported_claims"] == 1
     assert trace["summary"]["supported_claims"] == 1
     assert trace["summary"]["total_claims"] == 1
+    assert trace["verification"]["evidence_status"] == "needs_review"
+    assert trace["summary"]["evidence_status"] == "needs_review"
+    assert trace["summary"]["evidence_hit_count"] == 1
     assert trace["summary"]["tool_call_count"] == 3
     assert trace["summary"]["query_scope"] == "library"
     assert [step["tool"] for step in trace["steps"]] == [
@@ -40,3 +43,11 @@ def test_agent_trace_can_mark_error_status():
 
     assert trace["status"] == "error"
     assert all(step["status"] == "error" for step in trace["plan"])
+
+
+def test_agent_trace_marks_no_evidence_as_insufficient():
+    trace = build_agent_trace_for_completed_answer("x", "Answer without evidence [1].", evidence_hits=[])
+
+    assert trace["verification"]["evidence_status"] == "insufficient"
+    assert trace["summary"]["evidence_status"] == "insufficient"
+    assert trace["summary"]["evidence_hit_count"] == 0

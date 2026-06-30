@@ -32,8 +32,8 @@ def test_agent_trace_schema_reports_invalid_fields():
             "context": [],
             "plan": [{"goal": "", "tool": "missing", "status": "done"}],
             "steps": [{"tool": "retrieve_evidence", "status": "bad", "output": []}],
-            "verification": {"total_claims": "x", "supported_claims": 0, "unsupported_claims": 0},
-            "summary": {"tool_call_count": "many"},
+            "verification": {"total_claims": "x", "supported_claims": 0, "unsupported_claims": 0, "evidence_status": "mystery"},
+            "summary": {"tool_call_count": "many", "evidence_status": "mystery"},
             "status": "done",
             "errors": [],
         }
@@ -43,4 +43,5 @@ def test_agent_trace_schema_reports_invalid_fields():
     assert any("mode" in error for error in validation["errors"])
     assert any("context" in error for error in validation["errors"])
     assert any("tool" in error for error in validation["errors"])
+    assert any("evidence_status" in error for error in validation["errors"])
     assert any("summary.tool_call_count" in error for error in validation["errors"])

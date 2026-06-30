@@ -12,6 +12,8 @@ QuestionType = Literal[
     "unknown",
 ]
 
+EvidenceStatus = Literal["grounded", "needs_review", "insufficient"]
+
 ToolName = Literal[
     "retrieve_evidence",
     "retrieve_references",
@@ -53,6 +55,9 @@ class AgentVerification:
     supported_claims: int = 0
     unsupported_claims: int = 0
     support_ratio: float = 0.0
+    evidence_status: EvidenceStatus = "insufficient"
+    evidence_hit_count: int = 0
+    evidence_status_reasons: list[str] = field(default_factory=list)
     claims: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -80,6 +85,9 @@ class AgentTrace:
         return {
             "question_type": self.question_type,
             "status": self.status,
+            "evidence_status": self.verification.evidence_status,
+            "evidence_hit_count": int(self.verification.evidence_hit_count or 0),
+            "evidence_status_reasons": list(self.verification.evidence_status_reasons or [])[:4],
             "query_scope": str(self.context.get("query_scope") or ""),
             "requested_query_scope": str(self.context.get("requested_query_scope") or ""),
             "total_claims": total_claims,

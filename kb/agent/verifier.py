@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .types import AgentVerification
+from .types import AgentVerification, EvidenceStatus
 
 
 _CITATION_RE = re.compile(r"(?:\[[0-9][0-9,\-\s]*\]|\[\[CITE:[^\]]+\]\])")
@@ -75,6 +75,45 @@ def _unsupported_reason(*, citation_present: bool, matched_evidence_count: int, 
     return ""
 
 
+def assess_evidence_status(
+    *,
+    evidence_hit_count: int,
+    total_claims: int,
+    supported_claims: int,
+    unsupported_claims: int,
+    support_ratio: float,
+) -> tuple[EvidenceStatus, list[str]]:
+    """Classify answer grounding with simple, explainable thresholds."""
+    hit_count = max(0, int(evidence_hit_count or 0))
+    total = max(0, int(total_claims or 0))
+    supported = max(0, int(supported_claims or 0))
+    unsupported = max(0, int(unsupported_claims or 0))
+    ratio = max(0.0, min(1.0, float(support_ratio or 0.0)))
+    reasons: list[str] = []
+
+    if hit_count <= 0:
+        reasons.append("no_evidence_hits")
+    if total <= 0:
+        reasons.append("no_checkable_claims")
+    if total > 0 and supported <= 0:
+        reasons.append("no_supported_claims")
+    if total > 0 and ratio < 0.5:
+        reasons.append("low_support_ratio")
+
+    if "no_evidence_hits" in reasons or "no_supported_claims" in reasons or "low_support_ratio" in reasons:
+        return "insufficient", reasons
+
+    if unsupported > 0:
+        reasons.append("unsupported_claims")
+    if hit_count < 2:
+        reasons.append("low_evidence_count")
+    if total <= 0:
+        return "needs_review", reasons
+    if reasons:
+        return "needs_review", reasons
+    return "grounded", []
+
+
 def verify_answer_citations(answer: str, evidence_hits: list[dict[str, Any]] | None = None) -> AgentVerification:
     hits = [h for h in list(evidence_hits or []) if isinstance(h, dict)]
     claims = split_answer_claims(answer)
@@ -110,10 +149,20 @@ def verify_answer_citations(answer: str, evidence_hits: list[dict[str, Any]] | N
     total = len(claim_rows)
     unsupported = max(0, total - supported)
     ratio = round((supported / total), 4) if total else 0.0
+    evidence_status, evidence_status_reasons = assess_evidence_status(
+        evidence_hit_count=len(hits),
+        total_claims=total,
+        supported_claims=supported,
+        unsupported_claims=unsupported,
+        support_ratio=ratio,
+    )
     return AgentVerification(
         total_claims=total,
         supported_claims=supported,
         unsupported_claims=unsupported,
         support_ratio=ratio,
+        evidence_status=evidence_status,
+        evidence_hit_count=len(hits),
+        evidence_status_reasons=evidence_status_reasons,
         claims=claim_rows,
     )

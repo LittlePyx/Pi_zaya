@@ -340,6 +340,14 @@ def _format_agent_notes(agent_notes: dict[str, Any] | None) -> str:
         compact["reading_guide"] = list(agent_notes.get("guide") or [])[:8]
     if isinstance(agent_notes.get("references"), list):
         compact["references"] = list(agent_notes.get("references") or [])[:8]
+    if isinstance(agent_notes.get("evidence_gate"), dict):
+        gate = agent_notes.get("evidence_gate") or {}
+        compact["evidence_gate"] = {
+            "evidence_status": str(gate.get("evidence_status") or "").strip(),
+            "evidence_hit_count": _positive_int(gate.get("evidence_hit_count")),
+            "reasons": list(gate.get("reasons") or [])[:4] if isinstance(gate.get("reasons"), list) else [],
+            "instruction": _clip(gate.get("instruction"), 220),
+        }
     if not compact:
         return ""
     try:
@@ -551,6 +559,9 @@ def generate_grounded_answer(
     temperature: float = 0.2,
     max_tokens: int = 1200,
 ) -> dict[str, Any]:
+    if not hits:
+        answer = _fallback_grounded_answer(query, hits, reason="no retrieved evidence", agent_notes=agent_notes)
+        return {"answer": answer, "llm_used": False, "observation": "Skipped LLM answer because no indexed evidence was retrieved."}
     if not getattr(settings, "text_api_key", None):
         answer = _fallback_grounded_answer(query, hits, reason="missing text API key", agent_notes=agent_notes)
         return {"answer": answer, "llm_used": False, "observation": "Generated degraded-mode answer without an LLM."}

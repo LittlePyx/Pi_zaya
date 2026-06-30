@@ -1262,6 +1262,10 @@ const agentTraceReferenceActionMessages: Message[] = [
           total_claims: 2,
           supported_claims: 1,
           unsupported_claims: 1,
+          support_ratio: 0.5,
+          evidence_status: 'needs_review',
+          evidence_hit_count: 1,
+          evidence_status_reasons: ['unsupported_claims', 'low_evidence_count'],
           claims: [
             {
               index: 1,

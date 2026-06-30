@@ -23,10 +23,12 @@ test('research agent trace references can open and enter the literature basket',
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-reference-actions')
   const traceSummary = page.locator('.kb-agent-trace > summary').first()
   await expect(traceSummary).toContainText('Research Agent Trace')
+  await expect(traceSummary).toContainText('Needs review')
   await expect(traceSummary).toContainText('Review 1/2')
   await expect(traceSummary).not.toContainText('reference_followup')
   await expect(traceSummary).not.toContainText('done')
   await page.getByText('Research Agent Trace').click()
+  await expect(page.getByTestId('agent-trace-evidence-status')).toContainText('Needs review')
   await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('fully solves every downstream limitation')
   await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('Citation does not match retrieved evidence')
   await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeHidden()
@@ -79,6 +81,9 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
             total_claims: 9,
             supported_claims: 3,
             unsupported_claims: 0,
+            evidence_status: 'grounded',
+            evidence_hit_count: 3,
+            evidence_status_reasons: [],
             claims: [],
           },
           errors: [],
@@ -89,6 +94,9 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
           total_claims: 1,
           supported_claims: 1,
           unsupported_claims: 0,
+          evidence_status: 'grounded',
+          evidence_hit_count: 3,
+          evidence_status_reasons: [],
           tool_call_count: 1,
           has_errors: false,
           query_scope: 'library',
@@ -103,7 +111,9 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
   await page.getByText('Research Agent Trace').click()
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText('Evidence grounded')
   await expect(page.locator('.kb-agent-trace > summary').first()).toContainText('Checked 1/1')
+  await expect(page.getByTestId('agent-trace-evidence-status')).toContainText('Evidence grounded')
   await expect(page.locator('.kb-agent-trace-summary strong', { hasText: '1/1' })).toBeVisible()
   await expect(page.locator('.kb-agent-trace-summary strong', { hasText: 'library' })).toBeVisible()
   await expect(page.getByText('3/9')).toHaveCount(0)

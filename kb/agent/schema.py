@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .types import QuestionType, StepStatus, ToolName
+from .types import EvidenceStatus, QuestionType, StepStatus, ToolName
 
 
 VALID_QUESTION_TYPES = set(QuestionType.__args__)
 VALID_STATUSES = set(StepStatus.__args__)
 VALID_TOOLS = set(ToolName.__args__)
+VALID_EVIDENCE_STATUSES = set(EvidenceStatus.__args__)
 
 
 def _is_int_like(value: Any) -> bool:
@@ -87,6 +88,10 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
     for field in ("total_claims", "supported_claims", "unsupported_claims"):
         if not _is_int_like(verification.get(field, 0)):
             errors.append(f"verification.{field} must be an integer")
+    if "evidence_status" in verification and str(verification.get("evidence_status") or "") not in VALID_EVIDENCE_STATUSES:
+        errors.append(f"verification.evidence_status must be one of {sorted(VALID_EVIDENCE_STATUSES)}")
+    if "evidence_hit_count" in verification and not _is_int_like(verification.get("evidence_hit_count", 0)):
+        errors.append("verification.evidence_hit_count must be an integer")
     claims = verification.get("claims", [])
     if claims is not None and not isinstance(claims, list):
         errors.append("verification.claims must be a list")
@@ -98,6 +103,10 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
     for field in ("total_claims", "supported_claims", "unsupported_claims", "plan_step_count", "tool_call_count"):
         if isinstance(summary, dict) and field in summary and not _is_int_like(summary.get(field, 0)):
             errors.append(f"summary.{field} must be an integer")
+    if isinstance(summary, dict) and "evidence_status" in summary and str(summary.get("evidence_status") or "") not in VALID_EVIDENCE_STATUSES:
+        errors.append(f"summary.evidence_status must be one of {sorted(VALID_EVIDENCE_STATUSES)}")
+    if isinstance(summary, dict) and "evidence_hit_count" in summary and not _is_int_like(summary.get("evidence_hit_count", 0)):
+        errors.append("summary.evidence_hit_count must be an integer")
 
     return {
         "ok": not errors,
@@ -114,6 +123,10 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
             else 0,
             "unsupported_claims": int(verification.get("unsupported_claims") or 0)
             if _is_int_like(verification.get("unsupported_claims", 0))
+            else 0,
+            "evidence_status": str(verification.get("evidence_status") or summary.get("evidence_status") or ""),
+            "evidence_hit_count": int(verification.get("evidence_hit_count") or summary.get("evidence_hit_count") or 0)
+            if _is_int_like(verification.get("evidence_hit_count", summary.get("evidence_hit_count", 0)))
             else 0,
             "tool_call_count": len(steps),
             "has_errors": bool(trace.get("errors")) if isinstance(trace.get("errors"), list) else False,

@@ -70,7 +70,9 @@ When enabled, a response includes an `agent_trace` object with:
 - `summary`: compact audit fields for claim support, scope, tool-call count, and error presence
 - `plan`: planned steps with goal, tool, and status
 - `steps`: executed tool calls, observations, compact outputs, and errors
-- `verification`: sentence-level citation/evidence support counts, unsupported-claim reasons, and compact matched evidence sources
+- `verification`: sentence-level citation/evidence support counts, `evidence_status`
+  (`grounded`, `needs_review`, or `insufficient`), unsupported-claim reasons, and
+  compact matched evidence sources
 
 For reference-followup answers, resolved upstream references in the trace can be
 opened in the reader or added to the literature basket from the chat UI.
@@ -82,6 +84,9 @@ When opened, the panel shows the compact summary first; plan and tool-call logs
 stay behind a second "Execution Details" disclosure.
 When collapsed, the panel only shows compact evidence-check status and scope, not
 raw question-type labels or tool execution logs.
+Agent Mode also applies a lightweight evidence gate: no indexed evidence yields a
+degraded "insufficient evidence" answer, while sparse or partially unsupported
+evidence is marked for review instead of being presented as fully grounded.
 The main answer body is kept focused on the response and necessary citations in
 rendered UI, API streaming, and stored chat messages; trace JSON, plan steps,
 tool calls, and verification details remain behind the trace panel.
