@@ -728,6 +728,7 @@ def test_user_issue_store_redacts_sensitive_remote_outbox_errors(monkeypatch, tm
 
 
 def test_user_issue_store_flush_rechecks_opt_in_after_claim(monkeypatch, tmp_path: Path):
+    _enable_remote_issue_reporting(monkeypatch, tmp_path)
     monkeypatch.setattr(UserIssueStore, "flush_remote_outbox_async", lambda self, limit=20: None)
     enabled_calls = {"count": 0}
     sent: list[dict] = []
