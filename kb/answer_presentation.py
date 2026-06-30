@@ -9,6 +9,20 @@ _AGENT_TRACE_HEADING_RE = re.compile(
 )
 _AGENT_TRACE_KEY_RE = re.compile(r'^\s*(?:"?agent_trace"?|agentTrace)\s*[:=]')
 _AGENT_TRACE_JSON_RE = re.compile(r'"(?:agent_trace|agentTrace)"\s*:', flags=re.IGNORECASE)
+_AGENT_TRACE_DEBUG_SECTION_RE = re.compile(
+    r"^(?:#{1,6}\s*)?(?:[*_`~\s]*)?"
+    r"(?:plan|tool\s+calls?|tools?|execution\s+details|verification|claim\s+verification)"
+    r"(?:[*_`~\s]*)?:?\s*$",
+    flags=re.IGNORECASE,
+)
+_AGENT_TRACE_DEBUG_LOOKAHEAD_RE = re.compile(
+    r"\b(?:"
+    r"retrieve_evidence|retrieve_references|build_reading_guide|compare_papers|"
+    r"generate_grounded_answer|verify_answer_citations|agent_trace|agentTrace|"
+    r"supported_claims|unsupported_claims|total_claims|question_type"
+    r")\b",
+    flags=re.IGNORECASE,
+)
 
 
 def _line_looks_like_agent_trace_boundary(line: str) -> bool:
@@ -34,6 +48,14 @@ def _json_block_looks_like_agent_trace(lines: list[str], index: int) -> bool:
     return bool(_AGENT_TRACE_JSON_RE.search(lookahead))
 
 
+def _section_looks_like_agent_debug(lines: list[str], index: int) -> bool:
+    line = str(lines[index] or "").strip()
+    if not _AGENT_TRACE_DEBUG_SECTION_RE.match(line):
+        return False
+    lookahead = "\n".join(lines[index + 1 : min(len(lines), index + 10)])
+    return bool(_AGENT_TRACE_DEBUG_LOOKAHEAD_RE.search(lookahead))
+
+
 def _find_agent_trace_boundary(text: str) -> int:
     lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
     for idx, line in enumerate(lines):
@@ -41,6 +63,7 @@ def _find_agent_trace_boundary(text: str) -> int:
             _line_looks_like_agent_trace_boundary(line)
             or _fenced_block_looks_like_agent_trace(lines, idx)
             or _json_block_looks_like_agent_trace(lines, idx)
+            or _section_looks_like_agent_debug(lines, idx)
         ):
             return idx
     return -1

@@ -50,6 +50,22 @@ function unsupportedReasonText(value: unknown): string {
   return reason || 'Unsupported'
 }
 
+function questionTypeLabel(value: unknown): string {
+  const text = String(value || '').trim().toLowerCase()
+  if (text === 'single_paper_qa') return 'Single paper'
+  if (text === 'multi_paper_comparison') return 'Comparison'
+  if (text === 'reading_guide') return 'Reading guide'
+  if (text === 'reference_followup') return 'Reference follow-up'
+  return 'General'
+}
+
+function verificationHeaderText(totalClaims: number, supportedClaims: number, unsupportedClaims: number, hasErrors: boolean): string {
+  if (hasErrors) return 'Needs check'
+  if (totalClaims > 0 && unsupportedClaims > 0) return `Review ${unsupportedClaims}/${totalClaims}`
+  if (totalClaims > 0) return `Checked ${supportedClaims}/${totalClaims}`
+  return 'Trace available'
+}
+
 function traceBool(value: unknown, fallback = false): boolean {
   if (typeof value === 'boolean') return value
   const text = String(value ?? '').trim().toLowerCase()
@@ -176,8 +192,8 @@ export function AgentTracePanel({
       }}>
         <summary>
           <span>Research Agent Trace</span>
-          <span>audit</span>
-          <span>{loadStatus === 'loading' ? 'loading' : 'archived'}</span>
+          <span>Stored trace</span>
+          <span>{loadStatus === 'loading' ? 'loading' : 'open to load'}</span>
         </summary>
         <div className="kb-agent-trace-empty">{note}</div>
       </details>
@@ -201,9 +217,9 @@ export function AgentTracePanel({
   const toolCallCount = 'tool_call_count' in summary ? traceNum(summary.tool_call_count) : steps.length
   const hasErrors = 'has_errors' in summary ? traceBool(summary.has_errors) : errors.length > 0
   const questionType = String(summary.question_type || tr.question_type || 'unknown').trim()
-  const status = String(summary.status || tr.status || '').trim() || 'done'
   const queryScope = String(summary.query_scope || context.query_scope || context.queryScope || '').trim()
   const requestedScope = String(summary.requested_query_scope || context.requested_query_scope || context.requestedQueryScope || '').trim()
+  const taskLabel = questionTypeLabel(questionType)
   const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
   const currentSource = shortText(context.current_source_name || context.currentSourceName || context.current_source_path || context.currentSourcePath, 90)
   const scopeBits = [
@@ -213,6 +229,8 @@ export function AgentTracePanel({
     queryScope === 'current_paper' && currentSource ? currentSource : '',
   ].filter(Boolean)
   const scopeSummary = scopeBits.join(' / ')
+  const headerEvidence = verificationHeaderText(totalClaims, supportedClaims, unsupportedClaims, hasErrors)
+  const headerContext = scopeSummary ? shortText(scopeSummary, 42) : taskLabel
 
   return (
     <details className="kb-agent-trace" onToggle={(event) => {
@@ -220,17 +238,25 @@ export function AgentTracePanel({
     }}>
       <summary>
         <span>Research Agent Trace</span>
-        <span>{questionType}</span>
-        <span>{status}</span>
+        <span>{headerEvidence}</span>
+        <span>{headerContext}</span>
       </summary>
       <div className="kb-agent-trace-summary">
+        {totalClaims > 0 ? (
+          <div>
+            <span>Claims</span>
+            <strong>{supportedClaims}/{totalClaims}</strong>
+          </div>
+        ) : null}
+        {unsupportedClaims > 0 ? (
+          <div className="is-warning">
+            <span>Needs Review</span>
+            <strong>{unsupportedClaims}</strong>
+          </div>
+        ) : null}
         <div>
-          <span>Claims</span>
-          <strong>{supportedClaims}/{totalClaims}</strong>
-        </div>
-        <div className={unsupportedClaims > 0 ? 'is-warning' : ''}>
-          <span>Needs Review</span>
-          <strong>{unsupportedClaims}</strong>
+          <span>Task</span>
+          <strong>{taskLabel}</strong>
         </div>
         {scopeSummary ? (
           <div>
@@ -238,10 +264,12 @@ export function AgentTracePanel({
             <strong title={scopeSummary}>{shortText(scopeSummary, 72)}</strong>
           </div>
         ) : null}
-        <div className={hasErrors ? 'is-warning' : ''}>
-          <span>Tool Calls</span>
-          <strong>{hasErrors ? `${toolCallCount} / errors` : toolCallCount}</strong>
-        </div>
+        {hasErrors ? (
+          <div className="is-warning">
+            <span>Run</span>
+            <strong>errors</strong>
+          </div>
+        ) : null}
       </div>
       {unsupportedClaimRows.length > 0 ? (
         <div className="kb-agent-trace-section kb-agent-trace-unsupported">

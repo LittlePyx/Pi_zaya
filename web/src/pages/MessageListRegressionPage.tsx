@@ -1318,7 +1318,6 @@ const agentTraceCleanAnswerMessages: Message[] = [
     content: [
       'The answer should stay focused on the evidence-backed conclusion.',
       '',
-      'Research Agent Trace',
       'Plan',
       '- retrieve_evidence debug detail leaked',
       'Tool Calls',
@@ -1329,7 +1328,6 @@ const agentTraceCleanAnswerMessages: Message[] = [
     rendered_body: [
       'The answer should stay focused on the evidence-backed conclusion.',
       '',
-      'Research Agent Trace',
       'Plan',
       '- retrieve_evidence debug detail leaked',
       'Tool Calls',
@@ -1340,7 +1338,6 @@ const agentTraceCleanAnswerMessages: Message[] = [
     copy_text: [
       'The answer should stay focused on the evidence-backed conclusion.',
       '',
-      'Research Agent Trace',
       'Plan',
       '- retrieve_evidence debug detail leaked',
       'Tool Calls',
@@ -1351,7 +1348,6 @@ const agentTraceCleanAnswerMessages: Message[] = [
     copy_markdown: [
       'The answer should stay focused on the evidence-backed conclusion.',
       '',
-      'Research Agent Trace',
       'Plan',
       '- retrieve_evidence debug detail leaked',
       'Tool Calls',

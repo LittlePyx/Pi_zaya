@@ -80,6 +80,8 @@ collapsed, on-demand trace panel so ordinary answers are not crowded with
 planning or tool-log details.
 When opened, the panel shows the compact summary first; plan and tool-call logs
 stay behind a second "Execution Details" disclosure.
+When collapsed, the panel only shows compact evidence-check status and scope, not
+raw question-type labels or tool execution logs.
 The main answer body is kept focused on the response and necessary citations in
 rendered UI, API streaming, and stored chat messages; trace JSON, plan steps,
 tool calls, and verification details remain behind the trace panel.

@@ -25,6 +25,8 @@ export interface MessageRenderPacketLite {
 const AGENT_TRACE_HEADING_RE = /^(?:#{1,6}\s*)?(?:[*_`~\s]*)?(?:research\s+agent\s+trace|agent\s+trace)(?:[*_`~\s]*)?:?\s*$/i
 const AGENT_TRACE_KEY_RE = /^\s*(?:"?agent_trace"?|agentTrace)\s*[:=]/
 const AGENT_TRACE_JSON_RE = /"(?:agent_trace|agentTrace)"\s*:/i
+const AGENT_TRACE_DEBUG_SECTION_RE = /^(?:#{1,6}\s*)?(?:[*_`~\s]*)?(?:plan|tool\s+calls?|tools?|execution\s+details|verification|claim\s+verification)(?:[*_`~\s]*)?:?\s*$/i
+const AGENT_TRACE_DEBUG_LOOKAHEAD_RE = /\b(?:retrieve_evidence|retrieve_references|build_reading_guide|compare_papers|generate_grounded_answer|verify_answer_citations|agent_trace|agentTrace|supported_claims|unsupported_claims|total_claims|question_type)\b/i
 
 function lineLooksLikeAgentTraceBoundary(line: string): boolean {
   const text = String(line || '').trim()
@@ -41,10 +43,29 @@ function fencedBlockLooksLikeAgentTrace(lines: string[], index: number): boolean
   return AGENT_TRACE_JSON_RE.test(lookahead)
 }
 
+function jsonBlockLooksLikeAgentTrace(lines: string[], index: number): boolean {
+  const line = String(lines[index] || '').trim()
+  if (!line.startsWith('{')) return false
+  const lookahead = lines.slice(index, Math.min(lines.length, index + 12)).join('\n')
+  return AGENT_TRACE_JSON_RE.test(lookahead)
+}
+
+function sectionLooksLikeAgentDebug(lines: string[], index: number): boolean {
+  const line = String(lines[index] || '').trim()
+  if (!AGENT_TRACE_DEBUG_SECTION_RE.test(line)) return false
+  const lookahead = lines.slice(index + 1, Math.min(lines.length, index + 10)).join('\n')
+  return AGENT_TRACE_DEBUG_LOOKAHEAD_RE.test(lookahead)
+}
+
 function findAgentTraceBoundary(text: string): number {
   const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n')
   for (let i = 0; i < lines.length; i += 1) {
-    if (lineLooksLikeAgentTraceBoundary(lines[i]) || fencedBlockLooksLikeAgentTrace(lines, i)) {
+    if (
+      lineLooksLikeAgentTraceBoundary(lines[i])
+      || fencedBlockLooksLikeAgentTrace(lines, i)
+      || jsonBlockLooksLikeAgentTrace(lines, i)
+      || sectionLooksLikeAgentDebug(lines, i)
+    ) {
       return i
     }
   }

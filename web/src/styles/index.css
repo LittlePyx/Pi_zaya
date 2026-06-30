@@ -1295,7 +1295,7 @@ body.kb-reader-resizing .kb-reader-content {
 
 .kb-agent-trace summary span:not(:first-child) {
   overflow: hidden;
-  max-width: 16ch;
+  max-width: 22ch;
   color: color-mix(in srgb, var(--text-main) 56%, transparent);
   text-overflow: ellipsis;
   white-space: nowrap;
