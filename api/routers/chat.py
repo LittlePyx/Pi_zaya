@@ -33,6 +33,7 @@ from api.routers.library import (
     save_pdf_to_library,
 )
 from kb.file_ops import _path_exists
+from kb.agent.runner import run_research_agent
 from kb.maintenance import create_auto_snapshot
 from kb.paper_guide_provenance import _resolve_paper_guide_md_path
 from kb.path_safety import (
@@ -135,6 +136,16 @@ class AppendMsgBody(BaseModel):
 
     role: str = Field("user", max_length=32)
     content: str = Field(..., max_length=_CHAT_MESSAGE_MAX_CHARS)
+
+
+class ResearchAgentBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    prompt: str = Field("", max_length=_CHAT_MESSAGE_MAX_CHARS)
+    query: str = Field("", max_length=_CHAT_MESSAGE_MAX_CHARS)
+    top_k: int = Field(6, ge=1, le=20)
+    temperature: float = Field(0.2, ge=0.0, le=2.0)
+    max_tokens: int = Field(1200, ge=1, le=8192)
 
 
 class UpdateMsgBody(BaseModel):
@@ -1030,6 +1041,22 @@ def _save_chat_image(*, raw_name: str, data: bytes, sha1: str) -> dict:
             "url": _chat_image_url(dest_img.name),
         },
     }
+
+
+@router.post("/chat/research-agent")
+def run_chat_research_agent(body: ResearchAgentBody):
+    query = str(body.query or body.prompt or "").strip()
+    if not query:
+        raise HTTPException(400, "query required")
+    settings = get_settings()
+    return run_research_agent(
+        query,
+        db_dir=settings.db_dir,
+        settings=settings,
+        top_k=body.top_k,
+        temperature=body.temperature,
+        max_tokens=body.max_tokens,
+    )
 
 
 @router.get("/chat/uploads/image")

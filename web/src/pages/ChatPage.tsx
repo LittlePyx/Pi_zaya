@@ -61,6 +61,7 @@ const DESKTOP_DOCK_COLLAPSED_WIDTH = 48
 const DESKTOP_DOCK_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
 const RIGHT_DOCK_WIDTH_STORAGE_KEY = 'kb:chat-side-dock-width'
 const RIGHT_DOCK_COLLAPSED_STORAGE_KEY = 'kb:chat-side-dock-collapsed'
+const AGENT_MODE_STORAGE_KEY = 'kb:chat-research-agent-mode'
 const SELECTED_RESEARCH_CONTEXT_STORAGE_PREFIX = 'kb:chat:selected-research-context:v1'
 const SELECTED_RESEARCH_CONTEXT_STATE_KEY = 'selected_research_context'
 const SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY = 'selected_research_context_scope'
@@ -115,6 +116,20 @@ function loadStoredRightDockWidth() {
 function loadStoredRightDockCollapsed() {
   if (typeof window === 'undefined') return false
   return window.localStorage.getItem(RIGHT_DOCK_COLLAPSED_STORAGE_KEY) === '1'
+}
+
+function loadStoredAgentMode() {
+  if (typeof window === 'undefined') return false
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const queryValue = String(params.get('agent_mode') || params.get('research_agent') || '').trim().toLowerCase()
+    if (['1', 'true', 'yes', 'on'].includes(queryValue)) return true
+  } catch { /* ignore */ }
+  try {
+    return window.localStorage.getItem(AGENT_MODE_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
 }
 
 function selectedResearchContextStorageKey(conversationId?: string | null, shelfScope?: string | null) {
@@ -352,6 +367,7 @@ export default function ChatPage() {
   const [citationShelfCount, setCitationShelfCount] = useState(0)
   const [selectedResearchContext, setSelectedResearchContext] = useState<SelectedResearchContextPack | null>(null)
   const [queryScope, setQueryScope] = useState<QueryScope>('library')
+  const [agentMode, setAgentMode] = useState(loadStoredAgentMode)
   const [selectedResearchContextLoadedKey, setSelectedResearchContextLoadedKey] = useState('')
   const [selectedResearchContextOwnerKey, setSelectedResearchContextOwnerKey] = useState('')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
@@ -634,6 +650,12 @@ export default function ChatPage() {
   }, [rightDockCollapsed])
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(AGENT_MODE_STORAGE_KEY, agentMode ? '1' : '0')
+    } catch { /* ignore */ }
+  }, [agentMode])
+
+  useEffect(() => {
     rightDockWidthLiveRef.current = rightDockWidth
     if (!rightDockResizing) {
       rightDockResizePreviewWidthRef.current = rightDockWidth
@@ -788,6 +810,7 @@ export default function ChatPage() {
       deepRead: true,
       promptContext: contextPackForSend,
       queryScope: resolvedScope,
+      agentMode,
     }).then(() => {
       if (!contextPackForSend) return
       setSelectedResearchContext((current) => (
@@ -820,6 +843,7 @@ export default function ChatPage() {
           running_upload_count: uploadItems.filter((item) => item.kind === 'pdf' && !item.ready && item.status !== 'error').length,
           selected_context: Boolean(contextPackForSend),
           selected_context_item_count: Array.isArray(contextPackForSend?.items) ? contextPackForSend.items.length : 0,
+          agent_mode: agentMode,
           prompt_length: text.trim().length,
           prompt_empty: text.trim().length === 0,
         },
@@ -1695,6 +1719,8 @@ export default function ChatPage() {
           { value: 'library' },
         ]}
         onQueryScopeChange={setQueryScope}
+        agentMode={agentMode}
+        onAgentModeChange={setAgentMode}
       />
     </>
   )
@@ -2039,6 +2065,7 @@ export default function ChatPage() {
                     generationPartial={generation?.partial}
                     generationStage={generation?.stage}
                     generationTrace={generation?.researchTrace}
+                    generationAgentTrace={generation?.agentTrace}
                     jumpTarget={timelineJump}
                     onJumpHandled={(handled) => {
                       setTimelineJump((current) => (

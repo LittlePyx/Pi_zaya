@@ -48,6 +48,7 @@ from kb.answer_quality import (
     _gen_answer_quality_summary,
     _gen_record_answer_quality,
 )
+from kb.agent.runner import build_agent_trace_for_completed_answer
 from kb.generation_citation_validation_runtime import (
     _source_refs_from_index as _citation_validation_source_refs_from_index,
     _validate_freeform_numeric_citations as _citation_validation_validate_freeform_numeric_citations,
@@ -3296,6 +3297,48 @@ def _gen_store_research_trace_meta(task: dict, *, research_trace: dict | None) -
         pass
 
 
+def _gen_compact_agent_trace(agent_trace: dict | None) -> dict:
+    if not isinstance(agent_trace, dict):
+        return {}
+    trace = copy.deepcopy(agent_trace)
+    verification = trace.get("verification")
+    if isinstance(verification, dict) and isinstance(verification.get("claims"), list):
+        verification["claims"] = verification["claims"][:50]
+    steps = trace.get("steps")
+    if isinstance(steps, list):
+        for step in steps[:10]:
+            if not isinstance(step, dict):
+                continue
+            output = step.get("output")
+            if not isinstance(output, dict):
+                continue
+            for key in ("hits", "references", "guide", "comparisons", "claims"):
+                if isinstance(output.get(key), list):
+                    output[key] = output[key][:8]
+        trace["steps"] = steps[:10]
+    return trace
+
+
+def _gen_store_agent_trace_meta(task: dict, *, agent_trace: dict | None) -> None:
+    if not bool(task.get("agent_mode")):
+        return
+    trace = _gen_compact_agent_trace(agent_trace)
+    if not trace:
+        return
+    chat_db = Path(str(task.get("chat_db") or "")).expanduser()
+    chat_store = ChatStore(chat_db)
+    try:
+        amid = int(task.get("assistant_msg_id") or 0)
+    except Exception:
+        amid = 0
+    if amid <= 0:
+        return
+    try:
+        chat_store.merge_message_meta(amid, {"agent_trace": trace, "agent_mode": "research_agent"})
+    except Exception:
+        pass
+
+
 def _gen_store_paper_guide_contract_meta(task: dict, *, paper_guide_contracts: dict | None) -> None:
     return _state_gen_store_paper_guide_contract_meta(
         task,
@@ -3373,6 +3416,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
     worker_t0 = time.perf_counter()
     _gen_update_task(session_id, task_id, status="running", stage="starting", started_at=time.time())
     research_trace: dict = {}
+    prompt = ""
+    settings_obj = None
 
     try:
         conv_id = str(task.get("conv_id") or "")
@@ -3551,6 +3596,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             _trace_section("answer", {"chars": len(quick_answer), "quick_answer": True})
             research_trace = _trace_finish(research_trace, status="done", total_elapsed_s=time.perf_counter() - worker_t0)
             _gen_store_research_trace_meta(task, research_trace=research_trace)
+            agent_trace = {}
+            if bool(task.get("agent_mode")):
+                agent_trace = build_agent_trace_for_completed_answer(
+                    prompt,
+                    quick_answer,
+                    evidence_hits=[],
+                    status="done",
+                )
+                _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
             _gen_update_task(
                 session_id,
                 task_id,
@@ -3564,6 +3618,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 answer_output_mode=answer_output_mode,
                 answer_contract_v1=bool(answer_contract_v1),
                 research_trace=research_trace,
+                agent_trace=agent_trace,
                 finished_at=time.time(),
             )
             return
@@ -5238,6 +5293,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         )
         research_trace = _trace_finish(research_trace, status="done", total_elapsed_s=time.perf_counter() - worker_t0)
         _gen_store_research_trace_meta(task, research_trace=research_trace)
+        agent_trace = {}
+        if bool(task.get("agent_mode")):
+            agent_trace = build_agent_trace_for_completed_answer(
+                prompt,
+                answer,
+                evidence_hits=answer_hits,
+                status="done",
+            )
+            _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
         _gen_update_task(
             session_id,
             task_id,
@@ -5252,6 +5316,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             paper_guide_debug=dict(paper_guide_debug),
             citation_validation=citation_validation,
             research_trace=research_trace,
+            agent_trace=agent_trace,
             finished_at=time.time(),
         )
         _perf_log("gen.answer", elapsed=time.perf_counter() - t_answer0, chars=len(answer))
@@ -5273,6 +5338,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             if research_trace:
                 research_trace = _trace_finish(research_trace, status="canceled", total_elapsed_s=time.perf_counter() - worker_t0)
                 _gen_store_research_trace_meta(task, research_trace=research_trace)
+            agent_trace = {}
+            if bool(task.get("agent_mode")):
+                agent_trace = build_agent_trace_for_completed_answer(
+                    prompt,
+                    answer,
+                    evidence_hits=[],
+                    status="canceled",
+                )
+                _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
             _gen_update_task(
                 session_id,
                 task_id,
@@ -5282,6 +5356,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 partial=answer,
                 char_count=len(answer),
                 research_trace=research_trace,
+                agent_trace=agent_trace,
                 finished_at=time.time(),
             )
             return
@@ -5299,6 +5374,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 error=str(e),
             )
             _gen_store_research_trace_meta(task, research_trace=research_trace)
+        agent_trace = {}
+        if bool(task.get("agent_mode")):
+            agent_trace = build_agent_trace_for_completed_answer(
+                prompt,
+                err,
+                evidence_hits=[],
+                status="error",
+            )
+            _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
         _gen_update_task(
             session_id,
             task_id,
@@ -5309,6 +5393,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             partial=err,
             char_count=len(err),
             research_trace=research_trace,
+            agent_trace=agent_trace,
             finished_at=time.time(),
         )
 

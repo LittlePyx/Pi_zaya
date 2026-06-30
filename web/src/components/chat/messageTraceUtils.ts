@@ -30,6 +30,12 @@ export function getMessageResearchTrace(message: Message): Record<string, unknow
   return traceId ? { trace_id: traceId } : null
 }
 
+export function getMessageAgentTrace(message: Message): Record<string, unknown> | null {
+  const meta = asTraceRecord(message.meta)
+  const trace = asTraceRecord(meta.agent_trace)
+  return Object.keys(trace).length > 0 ? trace : null
+}
+
 export function getAssistantSelectedResearchContext(message: Message): SelectedResearchContextPack | null {
   const meta = asTraceRecord(message.meta)
   const contracts = asTraceRecord(meta.paper_guide_contracts)

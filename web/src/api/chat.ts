@@ -59,9 +59,44 @@ export interface RefsResponseWithMeta {
   meta: RefsResponseMeta
 }
 
+export interface AgentTracePlanStep {
+  goal?: string
+  tool?: string
+  status?: string
+}
+
+export interface AgentTraceExecutionStep {
+  tool?: string
+  status?: string
+  observation?: string
+  output?: Record<string, unknown>
+  error?: string
+  elapsed_ms?: number
+}
+
+export interface AgentTraceVerification {
+  total_claims?: number
+  supported_claims?: number
+  unsupported_claims?: number
+  support_ratio?: number
+  claims?: Array<Record<string, unknown>>
+}
+
+export interface AgentTrace {
+  mode?: 'research_agent' | string
+  question_type?: string
+  plan?: AgentTracePlanStep[]
+  steps?: AgentTraceExecutionStep[]
+  verification?: AgentTraceVerification
+  status?: string
+  errors?: string[]
+  [key: string]: unknown
+}
+
 export interface MessageMeta {
   provenance?: MessageProvenance
   answer_quality?: Record<string, unknown>
+  agent_trace?: AgentTrace | Record<string, unknown>
   paper_guide_contracts?: MessagePaperGuideContracts
   render_cache?: Record<string, unknown>
   [key: string]: unknown

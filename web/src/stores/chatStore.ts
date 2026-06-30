@@ -1366,6 +1366,7 @@ interface GenerationState {
   partial: string
   done: boolean
   researchTrace?: Record<string, unknown>
+  agentTrace?: Record<string, unknown>
 }
 
 interface GuideBinding {
@@ -1469,7 +1470,7 @@ interface ChatState {
   removePendingImage: (key: string) => void
   dismissUploadItem: (key: string) => void
   sendMessage: (prompt: string, opts: {
-    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown; queryScope?: QueryScope
+    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown; queryScope?: QueryScope; agentMode?: boolean
   }) => Promise<void>
   cancelGeneration: () => void
   clearGeneration: () => void
@@ -2468,6 +2469,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         temperature: opts.temperature,
         max_tokens: opts.maxTokens,
         deep_read: opts.deepRead,
+        agent_mode: opts.agentMode || undefined,
         prompt_context: opts.promptContext || undefined,
       })
     } catch (err) {
@@ -2488,6 +2490,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       meta: {
         ...(opts.promptContext ? { prompt_context: opts.promptContext } : {}),
         ...(opts.queryScope ? { query_scope: opts.queryScope } : {}),
+        ...(opts.agentMode ? { agent_mode: 'research_agent' } : {}),
       },
     }
     const startFailureAssistantMessage: Message | null = generationStarted
@@ -2499,6 +2502,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           created_at: Date.now() / 1000,
           meta: {
             trace_id: res.trace_id,
+            ...(opts.agentMode ? { agent_mode: 'research_agent' } : {}),
           },
         }
     const currentGeneration = {
@@ -2691,6 +2695,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // ignore malformed SSE chunks
             continue
           }
+          const parsedResearchTrace = data.research_trace && typeof data.research_trace === 'object'
+            ? data.research_trace as Record<string, unknown>
+            : undefined
+          const parsedAgentTrace = data.agent_trace && typeof data.agent_trace === 'object'
+            ? data.agent_trace as Record<string, unknown>
+            : undefined
           const nextGeneration: GenerationState = {
             sessionId: res.session_id,
             taskId: res.task_id,
@@ -2699,17 +2709,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
             stage: String(data.stage || ''),
             partial: String(data.partial || ''),
             done: !!data.done,
-            researchTrace: data.research_trace && typeof data.research_trace === 'object'
-              ? data.research_trace as Record<string, unknown>
-              : undefined,
+            researchTrace: parsedResearchTrace,
+            agentTrace: parsedAgentTrace,
           }
           set((state) => {
             const cachedGeneration = convId ? state.conversationCacheById[convId]?.generation : null
             const candidate = state.activeConvId === convId ? state.generation : cachedGeneration
             if (candidate?.sessionId !== res.session_id) return {}
+            const generationWithTrace: GenerationState = {
+              ...nextGeneration,
+              researchTrace: parsedResearchTrace || candidate.researchTrace,
+              agentTrace: parsedAgentTrace || candidate.agentTrace,
+            }
             const nextCache = convId
               ? upsertConversationViewCache(state.conversationCacheById, convId, {
-                generation: nextGeneration,
+                generation: generationWithTrace,
                 sseController: ctrl,
                 cachedAt: Date.now(),
               })
@@ -2718,7 +2732,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               return { conversationCacheById: nextCache }
             }
             return {
-              generation: nextGeneration,
+              generation: generationWithTrace,
               conversationCacheById: nextCache,
             }
           })

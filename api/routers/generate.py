@@ -291,6 +291,7 @@ class GenerateBody(BaseModel):
     temperature: float = Field(0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(1216, ge=1, le=8192)
     deep_read: bool = False
+    agent_mode: bool = False
     image_attachments: list[dict[str, Any]] = Field(default_factory=list, max_length=_GENERATE_MAX_IMAGE_ATTACHMENTS)
     preferred_sources: list[str] = Field(default_factory=list, max_length=_GENERATE_MAX_PREFERRED_SOURCES)
     source_lock_path: str = Field("", max_length=_GENERATE_SOURCE_PATH_MAX_CHARS)
@@ -377,11 +378,14 @@ def start_generation(body: GenerateBody):
         bound_source_path = _resolve_allowed_paper_guide_source_path(bound_source_path)
 
     user_store_text = prompt if prompt else f"[Image attachment x{len(image_attachments)}]"
+    agent_mode = bool(body.agent_mode)
     user_meta: dict[str, object] = {}
     if prompt_context:
         user_meta["prompt_context"] = prompt_context
     if query_scope:
         user_meta["query_scope"] = query_scope
+    if agent_mode:
+        user_meta["agent_mode"] = "research_agent"
     user_msg_id = chat_store.append_message(
         body.conv_id,
         "user",
@@ -393,7 +397,7 @@ def start_generation(body: GenerateBody):
         body.conv_id,
         "assistant",
         _live_assistant_text(task_id),
-        meta={"trace_id": trace_id},
+        meta={"trace_id": trace_id, **({"agent_mode": "research_agent"} if agent_mode else {})},
     )
     preferred_sources = [str(x or "").strip() for x in list(body.preferred_sources or []) if str(x or "").strip()]
     if conv_mode == "paper_guide":
@@ -424,6 +428,7 @@ def start_generation(body: GenerateBody):
         "temperature": body.temperature,
         "max_tokens": max_tokens,
         "deep_read": body.deep_read,
+        "agent_mode": agent_mode,
         "settings_obj": settings,
         "user_msg_id": user_msg_id,
         "assistant_msg_id": assistant_msg_id,
@@ -494,6 +499,7 @@ async def stream_generation(session_id: str, request: Request):
                 "answer_quality": {},
                 "paper_guide_debug": {},
                 "research_trace": {},
+                "agent_trace": {},
             }
         partial = _strip_internal_structured_markers(str(t.get("partial", "") or ""))
         answer = _strip_internal_structured_markers(str(t.get("answer", "") or ""))
@@ -514,6 +520,7 @@ async def stream_generation(session_id: str, request: Request):
             "answer_quality": t.get("answer_quality", {}),
             "paper_guide_debug": t.get("paper_guide_debug", {}) if include_internal_debug else {},
             "research_trace": t.get("research_trace", {}) if include_internal_debug else {},
+            "agent_trace": t.get("agent_trace", {}) if bool(t.get("agent_mode")) else {},
         }
 
     return sse_response(sse_generator(poll, interval=0.15))

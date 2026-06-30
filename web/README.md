@@ -1,73 +1,55 @@
-# React + TypeScript + Vite
+# Pi_zaya Web
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This is the React + TypeScript frontend for Pi_zaya, a local-first,
+evidence-grounded research agent for academic PDFs.
 
-Currently, two official plugins are available:
+## Main Screens
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Chat workspace: RAG answers, Research Agent Mode toggle, evidence/citation surfaces, and literature basket.
+- Library workspace: PDF upload, conversion, quality checks, metadata, and indexing.
+- Reader surfaces: source locate targets, evidence anchors, and citation-card context.
 
-## React Compiler
+## Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Install dependencies from the repository root:
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```powershell
+cd web
+npm ci
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Run the Vite dev server:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```powershell
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
+
+Build:
+
+```powershell
+npm run build
+```
+
+Lint:
+
+```powershell
+npm run lint
+```
+
+Smoke tests:
+
+```powershell
+npm run test:e2e:smoke
+```
+
+The app expects the FastAPI backend at `http://127.0.0.1:8000/` during local
+development. From the repository root, `.\run_new.ps1 -StopExisting` starts both
+the backend and frontend with the expected ports.
+
+## Research Agent Mode
+
+The composer has an `Agent` toggle. When enabled for a turn, the frontend sends
+`agent_mode: true` to `/api/generate` and renders the returned `agent_trace`
+inside a collapsible Research Agent Trace panel.
+
+The default chat flow is unchanged when the toggle is off.

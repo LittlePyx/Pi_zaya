@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { Button, Input, Tag, message } from 'antd'
-import { BookOutlined, CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
+import { BookOutlined, CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, RobotOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
 import type { ChatImageAttachment, ChatUploadItem, QueryScope } from '../../api/chat'
 import { useT } from '../../i18n'
 import { ChatScopeControl } from './ChatScopeControl'
@@ -32,6 +32,8 @@ interface Props {
   queryScope: QueryScope
   queryScopeOptions: Array<{ value: QueryScope; disabled?: boolean }>
   onQueryScopeChange: (scope: QueryScope) => void
+  agentMode: boolean
+  onAgentModeChange: (enabled: boolean) => void
 }
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
@@ -160,6 +162,8 @@ export function ChatInput({
   queryScope,
   queryScopeOptions,
   onQueryScopeChange,
+  agentMode,
+  onAgentModeChange,
 }: Props) {
   const S = useT()
   const [text, setText] = useState('')
@@ -430,6 +434,17 @@ export function ChatInput({
                   {S.upload_file_btn}
                 </Button>
                 <ChatScopeControl value={queryScope} options={queryScopeOptions} onChange={onQueryScopeChange} />
+                <Button
+                  className={`kb-agent-mode-btn ${agentMode ? 'is-active' : ''}`}
+                  icon={<RobotOutlined />}
+                  type={agentMode ? 'primary' : 'default'}
+                  aria-pressed={agentMode}
+                  title="Research Agent Mode"
+                  disabled={generating}
+                  onClick={() => onAgentModeChange(!agentMode)}
+                >
+                  Agent
+                </Button>
               </div>
               <div className="kb-chat-toolbar-right">
                 {generating ? (

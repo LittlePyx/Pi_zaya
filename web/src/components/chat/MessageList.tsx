@@ -155,11 +155,13 @@ import {
 import {
   contextItemTitle,
   getAssistantSelectedResearchContext,
+  getMessageAgentTrace,
   getMessageResearchTrace,
   getUserPromptResearchContext,
   imageAttachmentsOf,
   isImageOnlyPlaceholder,
 } from './messageTraceUtils'
+import { AgentTracePanel } from './AgentTracePanel'
 import { ResearchTracePanel } from './ResearchTracePanel'
 import { ResearchContextReceipt } from './ResearchContextReceipt'
 
@@ -219,6 +221,7 @@ interface Props {
   generationPartial?: string
   generationStage?: string
   generationTrace?: Record<string, unknown>
+  generationAgentTrace?: Record<string, unknown>
   jumpTarget?: { messageId: number; token: number } | null
   onJumpHandled?: (jumpTarget: { messageId: number; token: number }) => void
   trackedMessageIds?: number[]
@@ -1369,6 +1372,7 @@ export function MessageList({
   generationPartial,
   generationStage,
   generationTrace,
+  generationAgentTrace,
   jumpTarget,
   onJumpHandled,
   trackedMessageIds,
@@ -3550,6 +3554,7 @@ export function MessageList({
             const message = row.message
             const isUser = message.role === 'user'
             const trace = assistantTraceByMsgId.get(message.id)
+            const agentTrace = !isUser ? getMessageAgentTrace(message) : null
             const researchTrace = !isUser ? getMessageResearchTrace(message) : null
             const selectedResearchContextPack = !isUser
               ? selectedResearchContextByAssistantId.get(Number(message.id)) || null
@@ -4359,6 +4364,7 @@ export function MessageList({
                           })}
                         </div>
                       ) : null}
+                      <AgentTracePanel trace={agentTrace} />
                       <ResearchTracePanel trace={researchTrace} />
                       <CopyBar
                         text={getMessageCopyTextValue(message)}
@@ -4399,6 +4405,7 @@ export function MessageList({
                     <span className="typing-dot" style={{ animationDelay: '0.3s' }} />
                   </div>
                 )}
+                <AgentTracePanel trace={generationAgentTrace} />
                 <ResearchTracePanel trace={generationTrace} />
               </div>
             </div>

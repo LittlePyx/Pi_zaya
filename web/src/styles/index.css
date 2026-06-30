@@ -1263,6 +1263,177 @@ body.kb-reader-resizing .kb-reader-content {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.kb-agent-trace {
+  margin-top: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  color: color-mix(in srgb, var(--text-main) 76%, transparent);
+  font-size: 11px;
+}
+
+.kb-agent-trace summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.kb-agent-trace summary::-webkit-details-marker {
+  display: none;
+}
+
+.kb-agent-trace summary span:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--text-main);
+  font-weight: 720;
+}
+
+.kb-agent-trace summary span:not(:first-child) {
+  overflow: hidden;
+  max-width: 16ch;
+  color: color-mix(in srgb, var(--text-main) 56%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-agent-trace-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+
+.kb-agent-trace-summary div {
+  min-width: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 74%, transparent);
+  padding: 6px 8px;
+}
+
+.kb-agent-trace-summary div.is-warning {
+  background: color-mix(in srgb, #f59e0b 14%, var(--bg));
+}
+
+.kb-agent-trace-summary span {
+  display: block;
+  color: color-mix(in srgb, var(--text-main) 52%, transparent);
+}
+
+.kb-agent-trace-summary strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-main);
+}
+
+.kb-agent-trace-section {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  padding: 8px 10px 10px;
+}
+
+.kb-agent-trace-heading {
+  color: color-mix(in srgb, var(--text-main) 58%, transparent);
+  font-size: 10px;
+  font-weight: 740;
+  text-transform: uppercase;
+}
+
+.kb-agent-trace-row,
+.kb-agent-trace-call {
+  min-width: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  padding: 7px 8px;
+}
+
+.kb-agent-trace-row {
+  display: grid;
+  grid-template-columns: auto minmax(9ch, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.kb-agent-trace-call-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.kb-agent-trace-call-head strong,
+.kb-agent-trace-tool,
+.kb-agent-trace-text,
+.kb-agent-trace-observation,
+.kb-agent-trace-error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-agent-trace-call-head strong {
+  color: var(--text-main);
+}
+
+.kb-agent-trace-call-head span:last-child {
+  margin-left: auto;
+  color: color-mix(in srgb, var(--text-main) 46%, transparent);
+}
+
+.kb-agent-trace-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 52%, transparent);
+  color: color-mix(in srgb, var(--text-main) 68%, transparent);
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 7px;
+}
+
+.kb-agent-trace-status.is-done {
+  background: color-mix(in srgb, #10b981 16%, var(--bg));
+  color: color-mix(in srgb, #047857 82%, var(--text-main));
+}
+
+.kb-agent-trace-status.is-warning,
+.kb-agent-trace-error {
+  color: color-mix(in srgb, #b45309 86%, var(--text-main));
+}
+
+.kb-agent-trace-observation,
+.kb-agent-trace-error {
+  margin-top: 5px;
+  color: color-mix(in srgb, var(--text-main) 58%, transparent);
+}
+
+.kb-agent-mode-btn.ant-btn {
+  border-radius: 8px;
+}
+
+.kb-agent-mode-btn.is-active.ant-btn {
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .kb-agent-trace-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .kb-agent-trace-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .kb-markdown.kb-markdown-reader {
   font-family: "Palatino Linotype", "Times New Roman", "Source Han Serif SC", "Noto Serif SC", serif;
   font-size: 16px;
