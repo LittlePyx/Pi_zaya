@@ -167,3 +167,81 @@ def test_runner_uses_external_academic_mode_for_academic_no_hit(monkeypatch, tmp
     assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "external_academic_llm"
     assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["steps"][-1]["status"] == "skipped"
+
+
+def test_runner_filters_low_confidence_hits_before_external_academic_answer(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_retrieve_evidence(query, *, db_dir, settings=None, top_k=6):
+        return {
+            "hits": [
+                {
+                    "text": "A cooking note about tomatoes and basil.",
+                    "score": 0.1,
+                    "meta": {"source_name": "Recipe", "source_path": "recipe.md"},
+                },
+                {
+                    "text": "A travel checklist for packing bags.",
+                    "score": 0.2,
+                    "meta": {"source_name": "Travel", "source_path": "travel.md"},
+                },
+            ],
+            "observation": "weak",
+        }
+
+    def fake_generate_grounded_answer(query, hits, *, settings=None, history=None, agent_notes=None, temperature=0.2, max_tokens=1200):
+        captured["hits"] = hits
+        captured["agent_notes"] = agent_notes
+        return {"answer": "External academic answer.", "answer_mode": "external_academic_llm", "observation": "answered"}
+
+    monkeypatch.setattr(runner, "retrieve_evidence", fake_retrieve_evidence)
+    monkeypatch.setattr(runner, "generate_grounded_answer", fake_generate_grounded_answer)
+
+    result = runner.run_research_agent("What does the paper prove?", db_dir=tmp_path)
+
+    gate = captured["agent_notes"]["evidence_gate"]
+    assert captured["hits"] == []
+    assert gate["answer_mode"] == "external_academic_llm"
+    assert gate["evidence_status"] == "not_applicable"
+    assert gate["candidate_hit_count"] == 2
+    assert gate["retrieval_confidence"] == "low"
+    assert "low_retrieval_confidence" in gate["reasons"]
+    assert result["agent_trace"]["context"]["scoped_hit_count"] == 2
+    assert result["agent_trace"]["context"]["usable_hit_count"] == 0
+    assert result["agent_trace"]["context"]["retrieval_confidence"] == "low"
+    assert result["agent_trace"]["steps"][0]["output"]["candidate_hits"]
+
+
+def test_retrieval_confidence_keeps_high_score_semantic_hit():
+    confidence = runner._assess_retrieval_confidence(
+        "Why do diffusion models work?",
+        [
+            {
+                "text": "The denoising objective learns a reverse process.",
+                "score": 9.0,
+                "meta": {"source_name": "Diffusion Paper"},
+            }
+        ],
+    )
+
+    assert confidence["level"] == "medium"
+    assert confidence["usable_hit_count"] == 1
+    assert confidence["usable_hits"][0]["meta"]["source_name"] == "Diffusion Paper"
+
+
+def test_retrieval_confidence_keeps_scoped_current_paper_hit():
+    confidence = runner._assess_retrieval_confidence(
+        "What does this paper prove?",
+        [
+            {
+                "text": "The abstract describes the proposed microscope and evaluation.",
+                "score": 0.8,
+                "meta": {"source_name": "Current Paper", "source_path": "paper.md"},
+            }
+        ],
+        scope_context={"query_scope": "current_paper"},
+    )
+
+    assert confidence["level"] == "medium"
+    assert confidence["usable_hit_count"] == 1
+    assert confidence["signals"][0]["scope_signal"] is True

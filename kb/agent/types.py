@@ -93,6 +93,8 @@ class AgentTrace:
             "evidence_status_reasons": list(self.verification.evidence_status_reasons or [])[:4],
             "query_scope": str(self.context.get("query_scope") or ""),
             "requested_query_scope": str(self.context.get("requested_query_scope") or ""),
+            "retrieval_confidence": str(self.context.get("retrieval_confidence") or ""),
+            "usable_hit_count": int(self.context.get("usable_hit_count") or 0),
             "total_claims": total_claims,
             "supported_claims": supported_claims,
             "unsupported_claims": unsupported_claims,

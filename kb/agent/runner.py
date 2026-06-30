@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import time
 from pathlib import Path
@@ -33,6 +34,52 @@ _ACADEMIC_DOMAIN_RE = re.compile(
     r"|(?:\u6269\u6563\u6a21\u578b|\u6ce8\u610f\u529b|\u68c0\u7d22\u589e\u5f3a|\u5411\u91cf|\u795e\u7ecf\u7f51\u7edc|\u6df1\u5ea6\u5b66\u4e60|\u673a\u5668\u5b66\u4e60|\u5927\u8bed\u8a00\u6a21\u578b|\u56e0\u679c|\u8d1d\u53f6\u65af|\u4f18\u5316)",
     flags=re.IGNORECASE,
 )
+_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,}")
+_CONFIDENCE_STOPWORDS = {
+    "about",
+    "after",
+    "again",
+    "also",
+    "answer",
+    "based",
+    "before",
+    "between",
+    "compare",
+    "does",
+    "doing",
+    "from",
+    "give",
+    "have",
+    "into",
+    "just",
+    "know",
+    "like",
+    "main",
+    "make",
+    "method",
+    "methods",
+    "paper",
+    "papers",
+    "please",
+    "read",
+    "really",
+    "show",
+    "shows",
+    "study",
+    "tell",
+    "that",
+    "their",
+    "there",
+    "these",
+    "this",
+    "what",
+    "where",
+    "which",
+    "while",
+    "with",
+    "work",
+    "works",
+}
 
 
 def _normalize_query_scope(value: object) -> str:
@@ -100,6 +147,208 @@ def _hit_source_blob(hit: dict[str, Any]) -> str:
         meta.get("source_sha1"),
     ]
     return " ".join(str(x or "").replace("\\", "/").lower() for x in fields if str(x or "").strip())
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        out = float(value or 0.0)
+    except Exception:
+        return default
+    return out if math.isfinite(out) else default
+
+
+def _confidence_token(token: str) -> str:
+    text = str(token or "").strip().lower()
+    if not text:
+        return ""
+    if re.fullmatch(r"[a-z][a-z0-9_-]+", text):
+        if len(text) > 4 and text.endswith("ies"):
+            text = f"{text[:-3]}y"
+        elif len(text) > 4 and text.endswith("s"):
+            text = text[:-1]
+    return text
+
+
+def _confidence_terms(text: object) -> set[str]:
+    terms: set[str] = set()
+    for raw in _TOKEN_RE.findall(str(text or "")):
+        token = _confidence_token(raw)
+        if not token or token in _CONFIDENCE_STOPWORDS:
+            continue
+        if len(token) < 3 and not re.search(r"[\u4e00-\u9fff]", token):
+            continue
+        terms.add(token)
+    return terms
+
+
+def _nested_numeric(meta: dict[str, Any], *path: str) -> float:
+    current: Any = meta
+    for key in path:
+        if not isinstance(current, dict):
+            return 0.0
+        current = current.get(key)
+    return _safe_float(current)
+
+
+def _hit_score(hit: dict[str, Any]) -> float:
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    scores = [
+        _safe_float(hit.get("score")),
+        _safe_float(meta.get("score")),
+        _safe_float(meta.get("display_score")),
+        _nested_numeric(meta, "ref_rank", "display_score"),
+        _nested_numeric(meta, "ref_rank", "score"),
+    ]
+    return max(scores or [0.0])
+
+
+def _meta_confidence_signal(meta: dict[str, Any]) -> bool:
+    numeric_signals = [
+        _safe_float(meta.get("direct_prompt_match_score")),
+        _safe_float(meta.get("explicit_doc_match_score")),
+        _safe_float(meta.get("anchor_match_score")),
+        _safe_float(meta.get("evidence_confidence")),
+    ]
+    if max(numeric_signals or [0.0]) >= 4.0:
+        return True
+    ref_rank = meta.get("ref_rank") if isinstance(meta.get("ref_rank"), dict) else {}
+    rank_signals = [
+        _safe_float(ref_rank.get("display_score")),
+        _safe_float(ref_rank.get("score")),
+        _safe_float(ref_rank.get("llm")),
+    ]
+    if max(rank_signals or [0.0]) >= 70.0:
+        return True
+    if str(meta.get("ref_loc_quality") or "").strip().lower() == "high":
+        return True
+    return False
+
+
+def _hit_confidence_blob(hit: dict[str, Any]) -> str:
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    fields = [
+        hit.get("text"),
+        meta.get("heading_path"),
+        meta.get("top_heading"),
+        meta.get("ref_best_heading_path"),
+        meta.get("source_name"),
+        meta.get("title"),
+    ]
+    return " ".join(str(x or "") for x in fields if str(x or "").strip())
+
+
+def _hit_confidence_row(
+    query_terms: set[str],
+    hit: dict[str, Any],
+    *,
+    scoped_source_requested: bool = False,
+) -> dict[str, Any]:
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    hit_terms = _confidence_terms(_hit_confidence_blob(hit))
+    overlap = sorted(query_terms & hit_terms)
+    score = _hit_score(hit)
+    meta_signal = _meta_confidence_signal(meta)
+    scope_signal = bool(scoped_source_requested and score >= 0.5)
+    useful = bool(
+        len(overlap) >= 2
+        or (len(overlap) >= 1 and score >= 1.0)
+        or score >= 8.0
+        or meta_signal
+        or scope_signal
+    )
+    return {
+        "source_name": str(meta.get("source_name") or meta.get("title") or "").strip(),
+        "source_path": str(meta.get("source_path") or "").strip(),
+        "heading_path": str(meta.get("heading_path") or meta.get("top_heading") or "").strip(),
+        "score": round(score, 4),
+        "query_overlap_count": len(overlap),
+        "query_overlap_terms": overlap[:8],
+        "metadata_signal": meta_signal,
+        "scope_signal": scope_signal,
+        "useful": useful,
+    }
+
+
+def _assess_retrieval_confidence(
+    query: str,
+    hits: list[dict[str, Any]],
+    *,
+    scope_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    candidate_hits = [hit for hit in list(hits or []) if isinstance(hit, dict)]
+    query_terms = _confidence_terms(query)
+    if not candidate_hits:
+        return {
+            "level": "none",
+            "candidate_hit_count": 0,
+            "usable_hit_count": 0,
+            "low_confidence_hit_count": 0,
+            "query_term_count": len(query_terms),
+            "top_score": 0.0,
+            "max_query_overlap": 0,
+            "reasons": ["no_candidate_hits"],
+            "signals": [],
+            "usable_hits": [],
+        }
+
+    scope = str((scope_context or {}).get("query_scope") or "").strip()
+    scoped_source_requested = scope in {"current_paper", "basket"}
+    rows = [
+        _hit_confidence_row(
+            query_terms,
+            hit,
+            scoped_source_requested=scoped_source_requested,
+        )
+        for hit in candidate_hits
+    ]
+    usable_pairs = [(hit, row) for hit, row in zip(candidate_hits, rows) if row.get("useful")]
+    usable_hits = [hit for hit, _row in usable_pairs]
+    top_score = max((_safe_float(row.get("score")) for row in rows), default=0.0)
+    max_overlap = max((int(row.get("query_overlap_count") or 0) for row in rows), default=0)
+    reasons: list[str] = []
+    if len(usable_hits) < len(candidate_hits):
+        reasons.append("filtered_low_confidence_hits")
+    if not query_terms:
+        reasons.append("no_query_terms")
+    if not usable_hits:
+        reasons.append("low_retrieval_confidence")
+        if max_overlap <= 0:
+            reasons.append("no_query_overlap")
+        if top_score < 1.0:
+            reasons.append("low_retrieval_score")
+        return {
+            "level": "low",
+            "candidate_hit_count": len(candidate_hits),
+            "usable_hit_count": 0,
+            "low_confidence_hit_count": len(candidate_hits),
+            "query_term_count": len(query_terms),
+            "top_score": round(top_score, 4),
+            "max_query_overlap": max_overlap,
+            "reasons": reasons,
+            "signals": rows[:6],
+            "usable_hits": [],
+        }
+
+    if len(usable_hits) >= 2 and (top_score >= 4.0 or max_overlap >= 2 or any(row.get("metadata_signal") for row in rows)):
+        level = "high"
+    else:
+        level = "medium"
+    return {
+        "level": level,
+        "candidate_hit_count": len(candidate_hits),
+        "usable_hit_count": len(usable_hits),
+        "low_confidence_hit_count": max(0, len(candidate_hits) - len(usable_hits)),
+        "query_term_count": len(query_terms),
+        "top_score": round(top_score, 4),
+        "max_query_overlap": max_overlap,
+        "reasons": reasons,
+        "signals": rows[:6],
+        "usable_hits": usable_hits,
+    }
+
+
+def _public_retrieval_confidence(confidence: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in dict(confidence or {}).items() if k != "usable_hits"}
 
 
 def _selected_context_terms(items: list[dict[str, Any]]) -> set[str]:
@@ -245,8 +494,17 @@ def _pre_generation_evidence_gate(
     query: str = "",
     scope_context: dict[str, Any] | None = None,
     question_type: QuestionType = "unknown",
+    retrieval_confidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     hit_count = len([hit for hit in list(hits or []) if isinstance(hit, dict)])
+    confidence = _public_retrieval_confidence(dict(retrieval_confidence or {}))
+    confidence_level = str(confidence.get("level") or "").strip()
+    confidence_reasons = [
+        str(reason or "").strip()
+        for reason in list(confidence.get("reasons") or [])
+        if str(reason or "").strip()
+    ]
+    candidate_hit_count = int(confidence.get("candidate_hit_count") or hit_count or 0)
     if hit_count <= 0:
         if _looks_like_academic_question(query, question_type=question_type):
             local_grounding_requested = _looks_like_research_grounding_request(
@@ -254,16 +512,23 @@ def _pre_generation_evidence_gate(
                 scope_context=scope_context or {},
                 question_type=question_type,
             )
-            reasons = ["no_evidence_hits", "not_based_on_local_knowledge_base"]
+            reasons = (
+                ["no_evidence_hits"]
+                if candidate_hit_count <= 0
+                else ["low_retrieval_confidence", "no_usable_local_evidence"]
+            )
+            reasons.append("not_based_on_local_knowledge_base")
             if local_grounding_requested:
                 reasons.append("local_grounding_requested")
             return {
                 "evidence_status": "not_applicable",
                 "answer_mode": "external_academic_llm",
                 "evidence_hit_count": 0,
-                "reasons": reasons,
+                "candidate_hit_count": candidate_hit_count,
+                "retrieval_confidence": confidence_level or ("none" if candidate_hit_count <= 0 else "low"),
+                "reasons": [*reasons, *[r for r in confidence_reasons if r not in reasons]][:8],
                 "instruction": (
-                    "Use an external academic model answer. Clearly state that local indexed evidence was not found; "
+                    "Use an external academic model answer. Clearly state that reliable local indexed evidence was not found; "
                     "do not claim the answer is grounded in the knowledge base."
                 ),
             }
@@ -276,33 +541,50 @@ def _pre_generation_evidence_gate(
                 "evidence_status": "not_applicable",
                 "answer_mode": "general_llm",
                 "evidence_hit_count": 0,
-                "reasons": ["general_question_no_indexed_evidence_required"],
+                "candidate_hit_count": candidate_hit_count,
+                "retrieval_confidence": confidence_level or ("none" if candidate_hit_count <= 0 else "low"),
+                "reasons": ["general_question_no_indexed_evidence_required", *confidence_reasons][:8],
                 "instruction": "Answer as a normal LLM response without inventing citations or paper evidence.",
             }
+        reasons = (
+            ["no_evidence_hits"]
+            if candidate_hit_count <= 0
+            else ["low_retrieval_confidence", "no_usable_local_evidence"]
+        )
         return {
             "evidence_status": "insufficient",
             "answer_mode": "evidence_grounded",
             "evidence_hit_count": 0,
-            "reasons": ["no_evidence_hits"],
+            "candidate_hit_count": candidate_hit_count,
+            "retrieval_confidence": confidence_level or ("none" if candidate_hit_count <= 0 else "low"),
+            "reasons": [*reasons, *[r for r in confidence_reasons if r not in reasons]][:8],
             "instruction": "Do not infer an answer. Say that indexed evidence is insufficient.",
         }
     if hit_count < 2:
+        reasons = ["low_evidence_count", "external_background_allowed"]
+        reasons.extend(r for r in confidence_reasons if r not in reasons)
         return {
             "evidence_status": "needs_review",
             "answer_mode": "hybrid_local_external",
             "evidence_hit_count": hit_count,
-            "reasons": ["low_evidence_count", "external_background_allowed"],
+            "candidate_hit_count": candidate_hit_count,
+            "retrieval_confidence": confidence_level or "medium",
+            "reasons": reasons[:8],
             "instruction": (
                 "Use the retrieved snippet as local authority. External academic background may clarify context, "
                 "but paper-specific claims must stay tied to local evidence."
             ),
         }
     answer_mode = "hybrid_local_external" if _looks_like_academic_question(query, question_type=question_type) else "evidence_grounded"
+    reasons = ["external_background_allowed"] if answer_mode == "hybrid_local_external" else []
+    reasons.extend(r for r in confidence_reasons if r not in reasons)
     return {
         "evidence_status": "grounded",
         "answer_mode": answer_mode,
         "evidence_hit_count": hit_count,
-        "reasons": ["external_background_allowed"] if answer_mode == "hybrid_local_external" else [],
+        "candidate_hit_count": candidate_hit_count,
+        "retrieval_confidence": confidence_level or "high",
+        "reasons": reasons[:8],
         "instruction": (
             "Prioritize retrieved evidence for paper-specific claims. External background may improve framing, "
             "but it must not be presented as local knowledge-base evidence."
@@ -407,11 +689,23 @@ def run_research_agent(
                 scope_context=scope_context,
                 selected_research_context=selected_research_context,
             )
-            context["hits"] = scoped_hits
+            retrieval_confidence = _assess_retrieval_confidence(
+                query,
+                scoped_hits,
+                scope_context=scope_context,
+            )
+            context["hits"] = [
+                hit for hit in list(retrieval_confidence.get("usable_hits") or []) if isinstance(hit, dict)
+            ]
             trace.context["retrieved_hit_count"] = len(raw_hits)
             trace.context["scoped_hit_count"] = len(scoped_hits)
+            trace.context["usable_hit_count"] = len(context["hits"])
+            trace.context["retrieval_confidence"] = str(retrieval_confidence.get("level") or "")
             if trace.steps:
                 trace.steps[-1].output["hits"] = _summarize_hits(context["hits"])
+                trace.steps[-1].output["retrieval_confidence"] = _public_retrieval_confidence(retrieval_confidence)
+                if len(context["hits"]) < len(scoped_hits):
+                    trace.steps[-1].output["candidate_hits"] = _summarize_hits(scoped_hits)
                 if scope_filter.get("active"):
                     trace.steps[-1].output["scope_filter"] = scope_filter
             context["agent_notes"]["evidence_gate"] = _pre_generation_evidence_gate(
@@ -419,6 +713,7 @@ def run_research_agent(
                 query=query,
                 scope_context=scope_context,
                 question_type=question_type,
+                retrieval_confidence=retrieval_confidence,
             )
         elif plan_step.tool == "retrieve_references":
             result = _run_step(

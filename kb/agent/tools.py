@@ -346,6 +346,8 @@ def _format_agent_notes(agent_notes: dict[str, Any] | None) -> str:
             "evidence_status": str(gate.get("evidence_status") or "").strip(),
             "answer_mode": str(gate.get("answer_mode") or "").strip(),
             "evidence_hit_count": _positive_int(gate.get("evidence_hit_count")),
+            "candidate_hit_count": _positive_int(gate.get("candidate_hit_count")),
+            "retrieval_confidence": str(gate.get("retrieval_confidence") or "").strip(),
             "reasons": list(gate.get("reasons") or [])[:4] if isinstance(gate.get("reasons"), list) else [],
             "instruction": _clip(gate.get("instruction"), 220),
         }

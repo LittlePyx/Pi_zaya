@@ -114,6 +114,7 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
         "local_claims",
         "external_background_claims",
         "source_notice_count",
+        "usable_hit_count",
         "plan_step_count",
         "tool_call_count",
     ):
