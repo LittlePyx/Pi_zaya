@@ -187,6 +187,21 @@ cd ..
 python server.py
 ```
 
+## Production Deployment
+
+For public deployments, keep token gates disabled by default:
+
+面向普通用户的公开部署保持 `KB_PRIVATE_INSTANCE_AUTH=0`、`KB_ENABLE_AUTH_GATE=0` 和 `KB_REQUIRE_AUTH=0`，用户打开应用不需要访问令牌。
+
+Use private/internal auth only for controlled instances, and configure
+`KB_ACCESS_TOKEN` or `KB_ACCESS_TOKEN_SHA256` when auth is enabled.
+
+Run the production readiness check after startup:
+
+```powershell
+python tools\check_production_readiness.py --base-url http://127.0.0.1:8000
+```
+
 ## Configuration
 
 Common environment variables:
