@@ -80,7 +80,7 @@ def run_research_agent(
 ) -> dict[str, Any]:
     question_type, plan = plan_research_question(query)
     trace = AgentTrace(question_type=question_type, plan=plan, status="running")
-    context: dict[str, Any] = {"hits": [], "answer": ""}
+    context: dict[str, Any] = {"hits": [], "answer": "", "agent_notes": {}}
     for idx, plan_step in enumerate(list(trace.plan)[: max(1, int(max_steps or 6))]):
         if plan_step.tool == "retrieve_evidence":
             result = _run_step(trace, idx, retrieve_evidence, query, db_dir=db_dir, settings=settings, top_k=top_k)
@@ -88,11 +88,17 @@ def run_research_agent(
             if trace.steps:
                 trace.steps[-1].output["hits"] = _summarize_hits(context["hits"])
         elif plan_step.tool == "retrieve_references":
-            _run_step(trace, idx, retrieve_references, query, context["hits"], settings=settings, top_k=top_k)
+            result = _run_step(trace, idx, retrieve_references, query, context["hits"], settings=settings, top_k=top_k)
+            if isinstance(result.get("references"), list):
+                context["agent_notes"]["references"] = result["references"]
         elif plan_step.tool == "build_reading_guide":
-            _run_step(trace, idx, build_reading_guide, query, context["hits"])
+            result = _run_step(trace, idx, build_reading_guide, query, context["hits"])
+            if isinstance(result.get("guide"), list):
+                context["agent_notes"]["guide"] = result["guide"]
         elif plan_step.tool == "compare_papers":
-            _run_step(trace, idx, compare_papers, query, context["hits"])
+            result = _run_step(trace, idx, compare_papers, query, context["hits"])
+            if isinstance(result.get("comparisons"), list):
+                context["agent_notes"]["comparisons"] = result["comparisons"]
         elif plan_step.tool == "generate_grounded_answer":
             result = _run_step(
                 trace,
@@ -102,6 +108,7 @@ def run_research_agent(
                 context["hits"],
                 settings=settings,
                 history=history,
+                agent_notes=context["agent_notes"],
                 temperature=temperature,
                 max_tokens=max_tokens,
             )

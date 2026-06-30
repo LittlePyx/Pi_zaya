@@ -14,6 +14,23 @@ documented manual review.
 | Converter quality | Semi-automated | Existing converter quality runners and unit tests cover structural regressions. |
 | Agent trace quality | Semi-automated/manual | New trace schema can be checked automatically; usefulness of plan/tool observations should be reviewed manually. |
 
+## Golden Prompt Set
+
+The first lightweight Research Agent prompt set lives at:
+
+- `docs/research_agent_golden_v0.jsonl`
+
+It covers single-paper QA, multi-paper comparison, reading-guide prompts,
+reference-followup prompts, and an unknown/empty-query edge case. The file does
+not contain scored results. It records expected planner classifications,
+required tools, and manual review dimensions.
+
+Validate the prompt set against the current planner/tool plan:
+
+```powershell
+python tools\research_qa\validate_research_agent_golden.py
+```
+
 ## Research QA Metrics
 
 | Metric | Type | How to measure | Baseline |
@@ -23,6 +40,7 @@ documented manual review.
 | Groundedness | Manual/semi-automated | Count answer claims that are supported by retrieved evidence. | TBD |
 | Retrieval relevance | Semi-automated/manual | Inspect top retrieved chunks for relevance to the query. | TBD |
 | Multi-paper comparison usefulness | Manual | Check whether comparison claims are source-specific and not merged vaguely. | TBD |
+| Structured comparison completeness | Semi-automated/manual | For comparison prompts, inspect `compare_papers` output for `paper`, `method`, `evidence`, `limitation`, and `relation_to_question`. | TBD |
 | Reading guide usefulness | Manual | Check whether suggested sections form a coherent reading path. | TBD |
 
 ## Citation And Evidence Metrics
@@ -95,6 +113,12 @@ Research QA dry run:
 
 ```powershell
 python tools\research_qa\run_research_qa_eval.py --dry-run
+```
+
+Research Agent golden prompt validation:
+
+```powershell
+python tools\research_qa\validate_research_agent_golden.py
 ```
 
 Converter quality dry run:

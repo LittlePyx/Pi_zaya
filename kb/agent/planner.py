@@ -6,13 +6,13 @@ from .types import AgentPlanStep, QuestionType
 
 
 _COMPARISON_RE = re.compile(
-    r"\b(compare|comparison|versus|vs\.?|difference|different|contrast|trade-?off|benchmark)\b"
+    r"\b(compare|comparison|versus|vs\.?|difference|differences|different|contrast|trade-?off|benchmark)\b"
     r"|(?:比较|对比|区别|差异|不同|相比|相较|取舍|权衡)"
     r"|(?:\bA\s+vs\.?\s+B\b)",
     flags=re.IGNORECASE,
 )
 _READING_GUIDE_RE = re.compile(
-    r"\b(how\s+to\s+read|reading\s+guide|reading\s+map|roadmap|study\s+plan|where\s+should\s+i\s+start)\b"
+    r"\b(how\s+(?:should\s+i\s+)?read|how\s+to\s+read|reading\s+guide|reading\s+map|roadmap|study\s+plan|where\s+should\s+i\s+start)\b"
     r"|(?:怎么读|如何读|阅读路线|阅读地图|读哪|先读|阅读指南|学习路线)",
     flags=re.IGNORECASE,
 )

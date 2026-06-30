@@ -82,7 +82,7 @@ The tool layer wraps existing modules instead of adding external services:
 - `retrieve_evidence`
 - `retrieve_references`
 - `build_reading_guide`
-- `compare_papers`
+- `compare_papers`, which returns source-specific `paper`, `method`, `evidence`, `limitation`, and `relation_to_question` fields
 - `generate_grounded_answer`
 - `verify_answer_citations`
 
@@ -246,6 +246,7 @@ Useful commands:
 
 ```powershell
 python -m pytest tests/unit -q
+python tools\research_qa\validate_research_agent_golden.py
 python tools\research_qa\run_research_qa_eval.py --dry-run
 python tools\converter_quality\run_converter_quality_eval.py --dry-run
 
