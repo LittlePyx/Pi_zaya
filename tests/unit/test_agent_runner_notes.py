@@ -45,6 +45,8 @@ def test_runner_passes_structured_comparison_notes_to_answer_tool(monkeypatch, t
     result = runner.run_research_agent("Compare retrieval methods", db_dir=tmp_path)
 
     assert result["agent_trace"]["question_type"] == "multi_paper_comparison"
+    assert result["agent_trace"]["research_run"]["source_policy"] == "local_plus_external_background"
+    assert result["agent_trace"]["research_run"]["metrics"]["evidence_matrix_rows"] == 1
     assert captured["agent_notes"]["comparisons"][0]["paper"] == "Paper A"
     assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "needs_review"
     assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "hybrid_local_external"
@@ -121,6 +123,8 @@ def test_runner_marks_academic_no_hit_as_external_answer(monkeypatch, tmp_path):
     assert result["agent_trace"]["verification"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["summary"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["summary"]["evidence_hit_count"] == 0
+    assert result["agent_trace"]["research_run"]["source_policy"] == "external_allowed_with_notice"
+    assert result["agent_trace"]["summary"]["evidence_matrix_rows"] == 0
     assert result["agent_trace"]["steps"][-1]["status"] == "skipped"
 
 

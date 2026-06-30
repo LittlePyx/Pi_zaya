@@ -89,6 +89,15 @@ function evidenceStatusClass(value: unknown): string {
   return ''
 }
 
+function sourcePolicyLabel(value: unknown): string {
+  const text = String(value || '').trim()
+  if (text === 'local_only') return 'Local only'
+  if (text === 'local_plus_external_background') return 'Local + external'
+  if (text === 'external_allowed_with_notice') return 'External allowed'
+  if (text === 'trusted_sites_only') return 'Trusted sites'
+  return text
+}
+
 function traceBool(value: unknown, fallback = false): boolean {
   if (typeof value === 'boolean') return value
   const text = String(value ?? '').trim().toLowerCase()
@@ -227,8 +236,11 @@ export function AgentTracePanel({
   const steps = records(tr.steps)
   const context = asTraceRecord(tr.context)
   const verification = asTraceRecord(tr.verification)
+  const researchRun = asTraceRecord(tr.research_run)
   const summary = asTraceRecord(tr.summary)
   const errors = Array.isArray(tr.errors) ? tr.errors : []
+  const evidenceMatrix = records(researchRun.evidence_matrix)
+  const researchSubtasks = records(researchRun.subtasks)
   const claimRows = records(verification.claims)
   const unsupportedClaimRows = claimRows
     .filter((claim) => claim.supported === false || String(claim.unsupported_reason || '').trim())
@@ -239,6 +251,10 @@ export function AgentTracePanel({
   const planStepCount = 'plan_step_count' in summary ? traceNum(summary.plan_step_count) : plan.length
   const toolCallCount = 'tool_call_count' in summary ? traceNum(summary.tool_call_count) : steps.length
   const hasErrors = 'has_errors' in summary ? traceBool(summary.has_errors) : errors.length > 0
+  const researchRunStatus = String(summary.research_run_status || researchRun.status || '').trim()
+  const sourcePolicy = String(summary.source_policy || researchRun.source_policy || '').trim()
+  const evidenceMatrixRows = 'evidence_matrix_rows' in summary ? traceNum(summary.evidence_matrix_rows) : evidenceMatrix.length
+  const subtaskCount = 'subtask_count' in summary ? traceNum(summary.subtask_count) : researchSubtasks.length
   const questionType = String(summary.question_type || tr.question_type || 'unknown').trim()
   const queryScope = String(summary.query_scope || context.query_scope || context.queryScope || '').trim()
   const requestedScope = String(summary.requested_query_scope || context.requested_query_scope || context.requestedQueryScope || '').trim()
@@ -302,7 +318,62 @@ export function AgentTracePanel({
             <strong>errors</strong>
           </div>
         ) : null}
+        {researchRunStatus || evidenceMatrixRows > 0 ? (
+          <div>
+            <span>Research Run</span>
+            <strong>
+              {[researchRunStatus || 'ready', evidenceMatrixRows > 0 ? `${evidenceMatrixRows} rows` : ''].filter(Boolean).join(' / ')}
+            </strong>
+          </div>
+        ) : null}
+        {sourcePolicy ? (
+          <div>
+            <span>Source Policy</span>
+            <strong>{sourcePolicyLabel(sourcePolicy)}</strong>
+          </div>
+        ) : null}
       </div>
+      {evidenceMatrix.length > 0 ? (
+        <div className="kb-agent-trace-section kb-agent-matrix" data-testid="agent-evidence-matrix">
+          <div className="kb-agent-trace-heading">
+            Evidence Matrix
+            {subtaskCount > 0 ? <span>{subtaskCount} subtasks</span> : null}
+          </div>
+          <div className="kb-agent-matrix-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Paper</th>
+                  <th>Method</th>
+                  <th>Result</th>
+                  <th>Limitation</th>
+                  <th>Evidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {evidenceMatrix.slice(0, 8).map((row, idx) => {
+                  const supportStatus = evidenceStatusLabel(row.support_status) || shortText(row.support_status, 40)
+                  return (
+                    <tr key={`${String(row.source_path || row.source_name || row.paper || 'row')}-${idx}`} data-testid="agent-evidence-matrix-row">
+                      <td>
+                        <strong>{shortText(row.paper || row.source_name || 'Source', 90)}</strong>
+                        {row.heading_path ? <span>{shortText(row.heading_path, 90)}</span> : null}
+                      </td>
+                      <td>{shortText(row.method, 140) || 'Not identified'}</td>
+                      <td>{shortText(row.key_result, 140) || 'Not identified'}</td>
+                      <td>{shortText(row.limitation, 140) || 'Not identified'}</td>
+                      <td>
+                        <span>{shortText(row.evidence_quote, 160) || 'No quote'}</span>
+                        <em>{[row.citation, supportStatus].filter(Boolean).join(' / ')}</em>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
       {unsupportedClaimRows.length > 0 ? (
         <div className="kb-agent-trace-section kb-agent-trace-unsupported">
           <div className="kb-agent-trace-heading">Needs Review</div>

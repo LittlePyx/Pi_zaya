@@ -3316,6 +3316,12 @@ def _gen_compact_agent_trace(agent_trace: dict | None) -> dict:
                 if isinstance(output.get(key), list):
                     output[key] = output[key][:8]
         trace["steps"] = steps[:10]
+    research_run = trace.get("research_run")
+    if isinstance(research_run, dict):
+        if isinstance(research_run.get("subtasks"), list):
+            research_run["subtasks"] = research_run["subtasks"][:12]
+        if isinstance(research_run.get("evidence_matrix"), list):
+            research_run["evidence_matrix"] = research_run["evidence_matrix"][:12]
     return trace
 
 

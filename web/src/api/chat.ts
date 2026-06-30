@@ -91,6 +91,10 @@ export interface AgentTraceVerification {
 export interface AgentTraceSummary {
   question_type?: string
   status?: string
+  research_run_status?: string
+  source_policy?: string
+  subtask_count?: number
+  evidence_matrix_rows?: number
   query_scope?: string
   requested_query_scope?: string
   retrieval_confidence?: string
@@ -112,6 +116,33 @@ export interface AgentTraceSummary {
   [key: string]: unknown
 }
 
+export interface EvidenceMatrixRow {
+  paper?: string
+  source_name?: string
+  source_path?: string
+  method?: string
+  dataset_or_experiment?: string
+  key_result?: string
+  limitation?: string
+  evidence_quote?: string
+  citation?: string
+  heading_path?: string
+  support_status?: string
+  [key: string]: unknown
+}
+
+export interface ResearchRun {
+  run_id?: string
+  status?: string
+  source_policy?: string
+  query_scope?: string
+  question?: string
+  subtasks?: Array<Record<string, unknown>>
+  evidence_matrix?: EvidenceMatrixRow[]
+  metrics?: Record<string, unknown>
+  [key: string]: unknown
+}
+
 export interface AgentTrace {
   mode?: 'research_agent' | string
   question_type?: string
@@ -119,6 +150,7 @@ export interface AgentTrace {
   plan?: AgentTracePlanStep[]
   steps?: AgentTraceExecutionStep[]
   verification?: AgentTraceVerification
+  research_run?: ResearchRun | Record<string, unknown>
   summary?: AgentTraceSummary | Record<string, unknown>
   status?: string
   errors?: string[]

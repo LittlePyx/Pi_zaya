@@ -36,7 +36,7 @@ web context.
 | Evidence-based QA | Searches the indexed library, builds a RAG prompt from retrieved snippets, and returns grounded answers. |
 | Citation tracing | Surfaces answer evidence, source cards, reference context, and reader locate targets. |
 | Literature basket | Lets users collect papers and excerpts, keep local research context, and export citations. |
-| Research Agent Mode | Adds explicit planning, tool-use trace, and sentence-level citation support checks on top of the existing RAG flow. |
+| Research Agent Mode | Adds explicit planning, source policy, evidence matrix, tool-use trace, and sentence-level citation support checks on top of the existing RAG flow. |
 | Quality tooling | Scans conversion quality, runs repair flows, rebuilds indexes, and tracks metadata/reference sync. |
 
 ## Architecture
@@ -52,12 +52,14 @@ flowchart LR
   E --> X["Reference Resolver"]
   E --> G["Reading Guide Tool"]
   E --> M["Paper Comparison Tool"]
+  E --> Q["Research Run + Evidence Matrix"]
   E --> V["Claim Verifier"]
   P --> O["Grounded Answer + Citation Trace UI"]
   R --> O
   X --> O
   G --> O
   M --> O
+  Q --> O
   V --> O
 ```
 
@@ -103,6 +105,8 @@ When enabled, a response includes an `agent_trace` object with:
   evidence need, target-paper hints, and planner confidence
 - `context`: effective query scope, requested scope, current-paper lock, and selected-basket count when available
 - `summary`: compact audit fields for claim support, scope, tool-call count, and error presence
+- `research_run`: compact run metadata with source policy, subtask summary, and
+  evidence-matrix rows for paper, method, result, limitation, quote, and support status
 - `plan`: planned steps with goal, tool, and status
 - `steps`: executed tool calls, observations, compact outputs, and errors
 - `verification`: sentence-level citation/evidence support counts, `evidence_status`
@@ -111,6 +115,9 @@ When enabled, a response includes an `agent_trace` object with:
 
 For reference-followup answers, resolved upstream references in the trace can be
 opened in the reader or added to the literature basket from the chat UI.
+For comparison and evidence-heavy answers, the trace can include a compact
+evidence matrix so reviewers can scan which source supports which method,
+result, or limitation without exposing raw tool logs in the main answer.
 Historical agent traces can also be read through the compact audit endpoint
 `GET /api/messages/{message_id}/agent-trace`. The React UI keeps this as a
 collapsed, on-demand trace panel so ordinary answers are not crowded with
@@ -341,7 +348,7 @@ path for portfolio use:
 4. Open the citation card and reader locate target.
 5. Ask a comparison or reading-guide question.
 6. Open the Research Agent Trace panel to show planner intent, tool calls,
-   evidence status, and claim verification.
+   evidence matrix, evidence status, and claim verification.
 
 ## Evaluation
 
@@ -355,7 +362,7 @@ Core evaluation dimensions:
 - Citation precision and evidence locate success
 - Claim support rate and unsupported claim rate
 - No-evidence refusal accuracy
-- Agent trace completeness and planner accuracy
+- Agent trace completeness, evidence-matrix coverage, and planner accuracy
 - P50/P95 latency and cost per query when instrumentation is available
 
 Metrics remain `TBD` until produced by a reproducible run or documented manual

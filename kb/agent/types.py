@@ -14,6 +14,8 @@ QuestionType = Literal[
 
 EvidenceStatus = Literal["grounded", "needs_review", "insufficient", "not_applicable"]
 EvidenceNeed = Literal["low", "medium", "high"]
+ResearchRunStatus = Literal["planning", "retrieving", "extracting", "synthesizing", "verified", "failed"]
+SourcePolicy = Literal["local_only", "local_plus_external_background", "external_allowed_with_notice", "trusted_sites_only"]
 
 ToolName = Literal[
     "retrieve_evidence",
@@ -84,6 +86,59 @@ class AgentVerification:
 
 
 @dataclass
+class ResearchSubtask:
+    goal: str
+    status: StepStatus = "pending"
+    tool: ToolName | str = ""
+    observation: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class EvidenceMatrixRow:
+    paper: str = ""
+    source_name: str = ""
+    source_path: str = ""
+    method: str = ""
+    dataset_or_experiment: str = ""
+    key_result: str = ""
+    limitation: str = ""
+    evidence_quote: str = ""
+    citation: str = ""
+    heading_path: str = ""
+    support_status: EvidenceStatus = "needs_review"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ResearchRun:
+    run_id: str
+    status: ResearchRunStatus = "planning"
+    source_policy: SourcePolicy = "local_only"
+    query_scope: str = ""
+    question: str = ""
+    subtasks: list[ResearchSubtask] = field(default_factory=list)
+    evidence_matrix: list[EvidenceMatrixRow] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "status": self.status,
+            "source_policy": self.source_policy,
+            "query_scope": self.query_scope,
+            "question": self.question,
+            "subtasks": [item.to_dict() for item in self.subtasks],
+            "evidence_matrix": [item.to_dict() for item in self.evidence_matrix],
+            "metrics": dict(self.metrics),
+        }
+
+
+@dataclass
 class AgentTrace:
     mode: Literal["research_agent"] = "research_agent"
     question_type: QuestionType = "unknown"
@@ -91,6 +146,7 @@ class AgentTrace:
     plan: list[AgentPlanStep] = field(default_factory=list)
     steps: list[AgentExecutionStep] = field(default_factory=list)
     verification: AgentVerification = field(default_factory=AgentVerification)
+    research_run: ResearchRun | None = None
     status: StepStatus = "pending"
     errors: list[str] = field(default_factory=list)
 
@@ -108,9 +164,15 @@ class AgentTrace:
             )
         except Exception:
             planner_confidence = 0.0
+        research_run = self.research_run.to_dict() if self.research_run is not None else {}
+        metrics = research_run.get("metrics") if isinstance(research_run.get("metrics"), dict) else {}
         return {
             "question_type": self.question_type,
             "status": self.status,
+            "research_run_status": str(research_run.get("status") or ""),
+            "source_policy": str(research_run.get("source_policy") or ""),
+            "subtask_count": int(metrics.get("subtask_count") or 0),
+            "evidence_matrix_rows": int(metrics.get("evidence_matrix_rows") or 0),
             "evidence_status": self.verification.evidence_status,
             "evidence_hit_count": int(self.verification.evidence_hit_count or 0),
             "evidence_status_reasons": list(self.verification.evidence_status_reasons or [])[:4],
@@ -140,6 +202,7 @@ class AgentTrace:
             "plan": [step.to_dict() for step in self.plan],
             "steps": [step.to_dict() for step in self.steps],
             "verification": self.verification.to_dict(),
+            "research_run": self.research_run.to_dict() if self.research_run is not None else {},
             "summary": self.summary_dict(),
             "status": self.status,
             "errors": list(self.errors),

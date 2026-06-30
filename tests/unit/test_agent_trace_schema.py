@@ -24,6 +24,10 @@ def test_agent_trace_schema_accepts_completed_trace():
     assert trace["summary"]["plan_step_count"] == len(trace["plan"])
     assert trace["context"]["planner_intent"]["task_type"] == "single_paper_qa"
     assert 0.0 <= trace["summary"]["planner_confidence"] <= 1.0
+    assert trace["research_run"]["status"] == "verified"
+    assert trace["summary"]["research_run_status"] == "verified"
+    assert trace["summary"]["source_policy"] == "local_only"
+    assert trace["summary"]["evidence_matrix_rows"] == 1
 
 
 def test_agent_trace_schema_reports_invalid_fields():

@@ -93,7 +93,8 @@ measured until a reproducible run exists:
 - Local-first document state instead of a hosted document service.
 - Anchored PDF conversion and reader locate targets.
 - Literature basket and scoped research context.
-- Explicit Research Agent Mode with planner intent and tool traces.
+- Explicit Research Agent Mode with planner intent, source policy, evidence
+  matrix, and tool traces.
 - Source-aware answer generation that separates local evidence from external
   background.
 - Claim-level verification summaries rather than only final text.
@@ -117,7 +118,8 @@ Deeper technical points:
 - Explain the difference between local evidence, external background, and
   no-evidence fallback.
 - Walk through the trace object: planner intent, plan steps, tool calls,
-  retrieval confidence, evidence status, and verification.
+  retrieval confidence, source policy, evidence matrix, evidence status, and
+  verification.
 - Be explicit that semantic evaluation is still an ongoing area and that the
   repository separates deterministic fixture checks from future live benchmark
   metrics.

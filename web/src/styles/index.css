@@ -1366,10 +1366,89 @@ body.kb-reader-resizing .kb-reader-content {
 }
 
 .kb-agent-trace-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   color: color-mix(in srgb, var(--text-main) 58%, transparent);
   font-size: 10px;
   font-weight: 740;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.kb-agent-trace-heading span {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text-main) 46%, transparent);
+  font-weight: 640;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.kb-agent-matrix {
+  gap: 8px;
+}
+
+.kb-agent-matrix-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.kb-agent-matrix table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.kb-agent-matrix th,
+.kb-agent-matrix td {
+  border-top: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+  padding: 7px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.kb-agent-matrix th {
+  color: color-mix(in srgb, var(--text-main) 50%, transparent);
+  font-size: 10px;
+  font-weight: 720;
+}
+
+.kb-agent-matrix td {
+  color: color-mix(in srgb, var(--text-main) 68%, transparent);
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+.kb-agent-matrix td strong,
+.kb-agent-matrix td span,
+.kb-agent-matrix td em {
+  display: block;
+  min-width: 0;
+}
+
+.kb-agent-matrix td strong {
+  color: color-mix(in srgb, var(--text-main) 82%, transparent);
+  font-weight: 680;
+}
+
+.kb-agent-matrix td span,
+.kb-agent-matrix td em {
+  margin-top: 2px;
+  color: color-mix(in srgb, var(--text-main) 50%, transparent);
+  font-style: normal;
+}
+
+.kb-agent-matrix th:nth-child(1),
+.kb-agent-matrix td:nth-child(1) {
+  width: 22%;
+}
+
+.kb-agent-matrix th:nth-child(5),
+.kb-agent-matrix td:nth-child(5) {
+  width: 24%;
 }
 
 .kb-agent-trace-row,
@@ -1535,6 +1614,10 @@ body.kb-reader-resizing .kb-reader-content {
 
   .kb-agent-trace-summary {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .kb-agent-matrix table {
+    min-width: 680px;
   }
 }
 

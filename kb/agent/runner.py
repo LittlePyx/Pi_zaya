@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .planner import plan_research_intent, plan_research_question
+from .research_run import build_research_run
 from .tools import (
     build_reading_guide,
     compare_papers,
@@ -787,6 +788,15 @@ def run_research_agent(
     if not context["answer"]:
         context["answer"] = "Research Agent Mode could not generate an answer. See agent_trace.errors for details."
     trace.status = "error" if trace.errors and not context["answer"] else "done"
+    trace.research_run = build_research_run(
+        query,
+        question_type=question_type,
+        hits=context["hits"],
+        agent_notes=context.get("agent_notes"),
+        scope_context=scope_context,
+        verification_status=trace.verification.evidence_status,
+        failed=trace.status == "error",
+    )
     return {"answer": context["answer"], "agent_trace": trace.to_dict(), "hits": context["hits"]}
 
 
@@ -815,6 +825,15 @@ def build_agent_trace_for_completed_answer(
         plan=plan,
         verification=verification,
         status=final_status,
+    )
+    trace.research_run = build_research_run(
+        query,
+        question_type=question_type,
+        hits=hits,
+        agent_notes={},
+        scope_context=context,
+        verification_status=verification.evidence_status,
+        failed=final_status == "error",
     )
     for step in trace.plan:
         step.status = "done" if final_status == "done" else "error"
