@@ -77,9 +77,9 @@ Historical agent traces can also be read through the compact audit endpoint
 `GET /api/messages/{message_id}/agent-trace`. The React UI keeps this as a
 collapsed, on-demand trace panel so ordinary answers are not crowded with
 planning or tool-log details.
-The main answer body is kept focused on the response and necessary citations;
-trace JSON, plan steps, tool calls, and verification details remain behind the
-trace panel.
+The main answer body is kept focused on the response and necessary citations in
+rendered UI, API streaming, and stored chat messages; trace JSON, plan steps,
+tool calls, and verification details remain behind the trace panel.
 
 The planner uses simple heuristics first:
 

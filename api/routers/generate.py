@@ -12,6 +12,7 @@ from api.deps import get_settings, get_chat_store, load_prefs
 from api.internal_access import internal_api_allowed, require_internal_api
 from api.routers.chat import _normalize_chat_image_attachment, _resolve_allowed_paper_guide_source_path
 from api.sse import sse_generator, sse_response
+from kb.answer_presentation import clean_assistant_answer_presentation_text
 from kb.generation_state_runtime import _strip_internal_generation_markers
 from kb.path_safety import resolve_verified_chat_image_upload_path
 from kb.task_runtime import (
@@ -503,6 +504,9 @@ async def stream_generation(session_id: str, request: Request):
             }
         partial = _strip_internal_structured_markers(str(t.get("partial", "") or ""))
         answer = _strip_internal_structured_markers(str(t.get("answer", "") or ""))
+        if bool(t.get("agent_mode")):
+            partial = clean_assistant_answer_presentation_text(partial)
+            answer = clean_assistant_answer_presentation_text(answer)
         visible_text = partial or answer
         return {
             "stream_schema_version": 2,

@@ -169,6 +169,97 @@ def test_gen_store_answer_sanitizes_internal_support_markers_for_update_and_appe
     assert captured["append_content"] == "final answer [[CITE:ref-2:9]]"
 
 
+def test_gen_store_answer_sanitizes_agent_trace_suffix_only_in_agent_mode():
+    captured: dict[str, object] = {}
+
+    class _FakeChatStore:
+        def __init__(self, _db_path):
+            pass
+
+        def update_message_content(self, message_id: int, content: str) -> bool:
+            captured["message_id"] = int(message_id)
+            captured["content"] = content
+            return True
+
+    _gen_store_answer(
+        {"chat_db": "/tmp/chat.db", "conv_id": "conv-1", "assistant_msg_id": 8, "agent_mode": True},
+        "Final answer.\n\nResearch Agent Trace\nPlan\n- retrieve_evidence debug",
+        chat_store_cls=_FakeChatStore,
+    )
+
+    assert captured["message_id"] == 8
+    assert captured["content"] == "Final answer."
+
+    _gen_store_answer(
+        {"chat_db": "/tmp/chat.db", "conv_id": "conv-1", "assistant_msg_id": 9, "agent_mode": False},
+        "Final answer.\n\nResearch Agent Trace\nPlan\n- user-requested example",
+        chat_store_cls=_FakeChatStore,
+    )
+
+    assert captured["message_id"] == 9
+    assert captured["content"] == "Final answer.\n\nResearch Agent Trace\nPlan\n- user-requested example"
+
+
+def test_gen_store_partial_sanitizes_agent_trace_json_in_agent_mode():
+    captured: dict[str, object] = {}
+
+    class _FakeChatStore:
+        def __init__(self, _db_path):
+            pass
+
+        def update_message_content(self, message_id: int, content: str) -> bool:
+            captured["message_id"] = int(message_id)
+            captured["content"] = content
+            return True
+
+    _gen_store_partial(
+        {"chat_db": "/tmp/chat.db", "assistant_msg_id": 10, "agent_mode": True},
+        'Streaming answer.\n\n```json\n{"agent_trace": {"mode": "research_agent"}}\n```',
+        chat_store_cls=_FakeChatStore,
+    )
+
+    assert captured["message_id"] == 10
+    assert captured["content"] == "Streaming answer."
+
+
+def test_gen_store_paper_guide_contract_meta_sanitizes_agent_render_packet():
+    captured: dict[str, object] = {}
+
+    class _FakeChatStore:
+        def __init__(self, _db_path):
+            pass
+
+        def merge_message_meta(self, message_id: int, patch: dict) -> bool:
+            captured["message_id"] = int(message_id)
+            captured["patch"] = patch
+            return True
+
+    polluted = "Clean answer.\n\nagent_trace: {debug: true}"
+    _gen_store_paper_guide_contract_meta(
+        {"chat_db": "/tmp/chat.db", "assistant_msg_id": 11, "agent_mode": True},
+        paper_guide_contracts={
+            "render_packet": {
+                "answer_markdown": polluted,
+                "rendered_body": polluted,
+                "rendered_content": polluted,
+                "copy_markdown": polluted,
+                "copy_text": polluted,
+                "notice": "notice stays",
+            }
+        },
+        chat_store_cls=_FakeChatStore,
+    )
+
+    packet = captured["patch"]["paper_guide_contracts"]["render_packet"]
+    assert captured["message_id"] == 11
+    assert packet["answer_markdown"] == "Clean answer."
+    assert packet["rendered_body"] == "Clean answer."
+    assert packet["rendered_content"] == "Clean answer."
+    assert packet["copy_markdown"] == "Clean answer."
+    assert packet["copy_text"] == "Clean answer."
+    assert packet["notice"] == "notice stays"
+
+
 def test_should_run_provenance_async_refine_requires_flags_and_api_key():
     class _Settings:
         api_key = "test-key"

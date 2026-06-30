@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from kb import runtime_state as RUNTIME
+from kb.answer_presentation import clean_assistant_answer_presentation_text
 from kb.chat_store import ChatStore
 from kb.paper_guide_provenance import _build_paper_guide_answer_provenance
 
@@ -159,11 +160,33 @@ def _strip_internal_generation_markers(text: str) -> str:
     return s
 
 
+def _clean_generation_answer_for_storage(task: dict, text: object) -> str:
+    cleaned = _strip_internal_generation_markers(str(text or ""))
+    if bool((task or {}).get("agent_mode")):
+        cleaned = clean_assistant_answer_presentation_text(cleaned)
+    return cleaned.strip()
+
+
+def _clean_agent_render_packet_for_storage(task: dict, contracts: dict) -> dict:
+    if not bool((task or {}).get("agent_mode")):
+        return contracts
+    packet = contracts.get("render_packet") if isinstance(contracts.get("render_packet"), dict) else {}
+    if not packet:
+        return contracts
+    packet = dict(packet)
+    for key in ("answer_markdown", "rendered_body", "rendered_content", "copy_markdown", "copy_text"):
+        if key in packet:
+            packet[key] = clean_assistant_answer_presentation_text(packet.get(key)).strip()
+    out = dict(contracts)
+    out["render_packet"] = packet
+    return out
+
+
 def _gen_store_answer(task: dict, answer: str, *, chat_store_cls=ChatStore) -> None:
     conv_id = str(task.get("conv_id") or "")
     chat_db = Path(str(task.get("chat_db") or "")).expanduser()
     chat_store = chat_store_cls(chat_db)
-    safe_answer = _strip_internal_generation_markers(answer)
+    safe_answer = _clean_generation_answer_for_storage(task, answer)
     try:
         amid = int(task.get("assistant_msg_id") or 0)
     except Exception:
@@ -185,7 +208,7 @@ def _gen_store_partial(task: dict, partial: str, *, chat_store_cls=ChatStore) ->
         amid = 0
     if amid <= 0:
         return
-    txt = _strip_internal_generation_markers(partial)
+    txt = _clean_generation_answer_for_storage(task, partial)
     if not txt:
         return
     try:
@@ -226,6 +249,7 @@ def _gen_store_paper_guide_contract_meta(
     contracts = dict(paper_guide_contracts or {})
     if not contracts:
         return
+    contracts = _clean_agent_render_packet_for_storage(task, contracts)
     chat_db = Path(str(task.get("chat_db") or "")).expanduser()
     chat_store = chat_store_cls(chat_db)
     try:

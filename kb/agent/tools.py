@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from kb.answer_presentation import clean_assistant_answer_presentation_text
 from kb.inpaper_citation_grounding import extract_candidate_ref_nums_from_hits, parse_ref_num_set
 from kb.llm import DeepSeekChat
 from kb.rag import build_messages
@@ -571,10 +572,11 @@ def generate_grounded_answer(
             temperature=float(temperature),
             max_tokens=max(256, min(4096, int(max_tokens or 1200))),
         )
-        if not str(answer or "").strip():
+        answer = clean_assistant_answer_presentation_text(answer).strip()
+        if not answer:
             answer = _fallback_grounded_answer(query, hits, reason="empty LLM response", agent_notes=agent_notes)
             return {"answer": answer, "llm_used": False, "observation": "LLM returned empty text; used fallback answer."}
-        return {"answer": str(answer).strip(), "llm_used": True, "observation": "Generated answer with existing RAG prompt."}
+        return {"answer": answer, "llm_used": True, "observation": "Generated answer with existing RAG prompt."}
     except Exception as exc:
         answer = _fallback_grounded_answer(query, hits, reason=str(exc)[:160], agent_notes=agent_notes)
         return {
