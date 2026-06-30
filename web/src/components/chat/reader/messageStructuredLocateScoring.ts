@@ -112,7 +112,7 @@ export function extractFigureNumbersFromText(text: string): number[] {
     seen.add(k)
     out.push(k)
   }
-  for (const m of src.matchAll(/\b(?:fig(?:ure)?\.?\s*#?\s*(\d{1,4})|鍥綷s*(\d{1,4}))\b/gi)) {
+  for (const m of src.matchAll(/\b(?:fig(?:ure)?\.?\s*#?\s*(\d{1,4})|[\u56fe\u5716]\s*(\d{1,4}))\b/gi)) {
     push(String(m[1] || m[2] || ''))
   }
   return out
@@ -160,7 +160,7 @@ export function figureNumberMatchScore(text: string, numbers: number[]): number 
   let best = 0
   for (const num of numbers) {
     if (new RegExp(`\\bfig(?:ure)?\\.?\\s*#?\\s*${num}\\b`, 'i').test(src)) best = Math.max(best, 1.0)
-    if (new RegExp(`鍥綷\s*${num}\\b`).test(src)) best = Math.max(best, 1.0)
+    if (new RegExp(`[\\u56fe\\u5716]\\s*${num}\\b`).test(src)) best = Math.max(best, 1.0)
   }
   return best
 }
