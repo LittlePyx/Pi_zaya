@@ -74,6 +74,7 @@ python tools\research_qa\validate_research_agent_golden.py
 | Tool observation usefulness | Manual | Review whether observations explain what happened without leaking internals. | TBD |
 | Trace actionability | Automated/manual | For reference-followup traces, confirm resolved references expose reader-open and basket-add actions. | TBD |
 | Trace scope reproducibility | Automated/manual | Inspect `agent_trace.context.query_scope`, `requested_query_scope`, and selected/current-source fields for scoped questions. | TBD |
+| Trace audit replay | Automated/manual | Use `GET /api/messages/{message_id}/agent-trace` to confirm stored traces can be re-opened without adding default answer clutter. | TBD |
 | Error trace availability | Automated | Simulate degraded/error paths and confirm `agent_trace.errors` is returned. | TBD |
 | Trace payload size | Semi-automated | Inspect serialized message meta size; compact large claim/hit lists. | TBD |
 

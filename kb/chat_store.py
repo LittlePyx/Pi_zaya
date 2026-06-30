@@ -1817,6 +1817,21 @@ class ChatStore:
             rows = conn.execute(sql, params).fetchall()
         return self._hydrate_message_rows(rows)
 
+    def get_message(self, message_id: int) -> dict | None:
+        try:
+            mid = int(message_id or 0)
+        except Exception:
+            return None
+        if mid <= 0:
+            return None
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, conv_id, role, content, attachments_json, meta_json, created_at FROM messages WHERE id = ?",
+                (mid,),
+            ).fetchall()
+        messages = self._hydrate_message_rows(rows)
+        return messages[0] if messages else None
+
     def get_messages_page(
         self,
         conv_id: str,

@@ -1296,6 +1296,21 @@ const agentTraceReferenceActionMessages: Message[] = [
   },
 ]
 
+const agentTraceLazyAuditMessages: Message[] = [
+  {
+    id: 9301,
+    role: 'assistant',
+    content: 'A stored research-agent audit trace is available for this answer.',
+    rendered_body: 'A stored research-agent audit trace is available for this answer.',
+    copy_text: 'A stored research-agent audit trace is available for this answer.',
+    copy_markdown: 'A stored research-agent audit trace is available for this answer.',
+    created_at: Date.now(),
+    meta: {
+      agent_mode: 'research_agent',
+    },
+  },
+]
+
 type RegressionScenario =
   | 'structured-primary-rerank'
   | 'required-fallback-anchor'
@@ -1319,6 +1334,7 @@ type RegressionScenario =
   | 'normal-multi-doc-ambiguous-inline-locate'
   | 'live-user-pending-refs'
   | 'agent-trace-reference-actions'
+  | 'agent-trace-lazy-audit'
 
 export default function MessageListRegressionPage() {
   const scenarioParam = (() => {
@@ -1347,6 +1363,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'normal-multi-doc-ambiguous-inline-locate') return 'normal-multi-doc-ambiguous-inline-locate'
     if (scenarioParam === 'live-user-pending-refs') return 'live-user-pending-refs'
     if (scenarioParam === 'agent-trace-reference-actions') return 'agent-trace-reference-actions'
+    if (scenarioParam === 'agent-trace-lazy-audit') return 'agent-trace-lazy-audit'
     return 'structured-primary-rerank'
   })()
   const regressionMessages: Message[] = (() => {
@@ -1371,6 +1388,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateMessages
     if (scenario === 'live-user-pending-refs') return liveUserPendingRefsMessages
     if (scenario === 'agent-trace-reference-actions') return agentTraceReferenceActionMessages
+    if (scenario === 'agent-trace-lazy-audit') return agentTraceLazyAuditMessages
     return structuredPrimaryRerankMessages
   })()
   const regressionRefs: Record<string, unknown> = (() => {

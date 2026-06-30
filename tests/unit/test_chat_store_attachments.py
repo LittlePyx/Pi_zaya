@@ -98,6 +98,11 @@ def test_chat_store_persists_message_meta_and_provenance(tmp_path: Path):
     assert messages[0]["provenance"]["version"] == 1
     assert messages[0]["provenance"]["segments"][0]["segment_id"] == "seg_001"
 
+    message = store.get_message(msg_id)
+    assert message is not None
+    assert message["conv_id"] == conv_id
+    assert message["meta"]["trace_id"] == "t-1"
+
 
 def test_chat_store_merge_message_meta_keeps_previous_fields(tmp_path: Path):
     store = ChatStore(tmp_path / "chat.sqlite3")

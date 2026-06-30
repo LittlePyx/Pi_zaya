@@ -160,6 +160,7 @@ import {
   getUserPromptResearchContext,
   imageAttachmentsOf,
   isImageOnlyPlaceholder,
+  messageHasAgentTraceHint,
 } from './messageTraceUtils'
 import { AgentTracePanel } from './AgentTracePanel'
 import { ResearchTracePanel } from './ResearchTracePanel'
@@ -3555,6 +3556,7 @@ export function MessageList({
             const isUser = message.role === 'user'
             const trace = assistantTraceByMsgId.get(message.id)
             const agentTrace = !isUser ? getMessageAgentTrace(message) : null
+            const canLoadAgentTrace = !isUser ? messageHasAgentTraceHint(message) : false
             const researchTrace = !isUser ? getMessageResearchTrace(message) : null
             const selectedResearchContextPack = !isUser
               ? selectedResearchContextByAssistantId.get(Number(message.id)) || null
@@ -4366,6 +4368,9 @@ export function MessageList({
                       ) : null}
                       <AgentTracePanel
                         trace={agentTrace}
+                        messageId={message.id}
+                        canLoadTrace={canLoadAgentTrace}
+                        onLoadTrace={(messageId) => chatApi.getMessageAgentTrace(messageId, activeConvId)}
                         onOpenReference={openReaderFromDetail}
                         onAddReferenceToShelf={addToShelf}
                       />

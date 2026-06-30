@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import type { AgentTraceAuditResponse } from '../../api/chat'
 import { normalizeCiteDetail, type CiteDetail } from './citationState'
 import { asTraceRecord, traceNum } from './messageTraceUtils'
 
@@ -98,17 +100,76 @@ function referenceDetail(ref: Record<string, unknown>): CiteDetail | null {
 
 export function AgentTracePanel({
   trace,
+  messageId,
+  canLoadTrace,
+  onLoadTrace,
   onOpenReference,
   onAddReferenceToShelf,
 }: {
   trace?: Record<string, unknown> | null
+  messageId?: number
+  canLoadTrace?: boolean
+  onLoadTrace?: (messageId: number) => Promise<AgentTraceAuditResponse>
   onOpenReference?: (detail: CiteDetail, ref: Record<string, unknown>) => void
   onAddReferenceToShelf?: (detail: CiteDetail, ref: Record<string, unknown>) => void
 }) {
-  const tr = asTraceRecord(trace)
-  if (Object.keys(tr).length <= 0) return null
+  const initialTrace = asTraceRecord(trace)
+  const [loadedState, setLoadedState] = useState<{
+    messageId: number
+    trace: Record<string, unknown> | null
+    status: 'idle' | 'loading' | 'loaded' | 'empty' | 'error'
+  }>({ messageId: 0, trace: null, status: 'idle' })
+
+  const hasInitialTrace = Object.keys(initialTrace).length > 0
+  const currentMessageId = Number(messageId || 0)
+  const loadedTraceRecord = loadedState.messageId === currentMessageId ? asTraceRecord(loadedState.trace) : {}
+  const loadStatus = loadedState.messageId === currentMessageId ? loadedState.status : 'idle'
+  const tr = hasInitialTrace ? initialTrace : loadedTraceRecord
+  const hasTrace = Object.keys(tr).length > 0
+  const canLazyLoad = Boolean(!hasInitialTrace && canLoadTrace && onLoadTrace && Number(messageId || 0) > 0)
+  if (!hasTrace && !canLazyLoad) return null
   const mode = String(tr.mode || '').trim()
-  if (mode && mode !== 'research_agent') return null
+  if (hasTrace && mode && mode !== 'research_agent') return null
+
+  const loadArchivedTrace = async () => {
+    if (!canLazyLoad || loadStatus === 'loading' || loadStatus === 'loaded') return
+    const mid = Number(messageId || 0)
+    if (!mid || !onLoadTrace) return
+    setLoadedState({ messageId: mid, trace: null, status: 'loading' })
+    try {
+      const res = await onLoadTrace(mid)
+      const nextTrace = asTraceRecord(res.agent_trace)
+      if (res.available !== false && Object.keys(nextTrace).length > 0) {
+        setLoadedState({ messageId: mid, trace: nextTrace, status: 'loaded' })
+      } else {
+        setLoadedState({ messageId: mid, trace: null, status: 'empty' })
+      }
+    } catch {
+      setLoadedState({ messageId: mid, trace: null, status: 'error' })
+    }
+  }
+
+  if (!hasTrace) {
+    const note = loadStatus === 'loading'
+      ? 'Loading stored trace...'
+      : loadStatus === 'error'
+        ? 'Stored trace could not be loaded.'
+        : loadStatus === 'empty'
+          ? 'No stored trace is available.'
+          : 'Open to load stored trace.'
+    return (
+      <details className="kb-agent-trace" onToggle={(event) => {
+        if ((event.currentTarget as HTMLDetailsElement).open) void loadArchivedTrace()
+      }}>
+        <summary>
+          <span>Research Agent Trace</span>
+          <span>audit</span>
+          <span>{loadStatus === 'loading' ? 'loading' : 'archived'}</span>
+        </summary>
+        <div className="kb-agent-trace-empty">{note}</div>
+      </details>
+    )
+  }
 
   const plan = records(tr.plan)
   const steps = records(tr.steps)
@@ -136,7 +197,9 @@ export function AgentTracePanel({
   const scopeSummary = scopeBits.join(' / ')
 
   return (
-    <details className="kb-agent-trace">
+    <details className="kb-agent-trace" onToggle={(event) => {
+      if ((event.currentTarget as HTMLDetailsElement).open) void loadArchivedTrace()
+    }}>
       <summary>
         <span>Research Agent Trace</span>
         <span>{questionType}</span>

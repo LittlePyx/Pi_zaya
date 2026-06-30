@@ -39,3 +39,52 @@ test('research agent trace references can open and enter the literature basket',
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
   await expect(page.getByTestId('citation-shelf-item-title')).toContainText('Fast hyperspectral single-pixel imaging')
 })
+
+test('research agent trace can be loaded from stored audit endpoint on demand', async ({ page }) => {
+  let requested = false
+  await page.route('**/api/messages/9301/agent-trace**', async (route) => {
+    requested = true
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        message_id: 9301,
+        conv_id: 'message-list-regression:agent-trace-lazy-audit',
+        available: true,
+        agent_trace: {
+          mode: 'research_agent',
+          question_type: 'single_paper_qa',
+          status: 'done',
+          context: { query_scope: 'library' },
+          plan: [
+            { goal: 'Retrieve compact evidence.', tool: 'retrieve_evidence', status: 'done' },
+          ],
+          steps: [
+            {
+              tool: 'retrieve_evidence',
+              status: 'done',
+              observation: 'Stored audit trace was loaded on demand.',
+              output: {},
+            },
+          ],
+          verification: {
+            total_claims: 1,
+            supported_claims: 1,
+            unsupported_claims: 0,
+            claims: [],
+          },
+          errors: [],
+        },
+        summary: { available: true, question_type: 'single_paper_qa' },
+      }),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=agent-trace-lazy-audit')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-lazy-audit')
+  await expect(page.getByText('Stored audit trace was loaded on demand.')).toHaveCount(0)
+  await page.getByText('Research Agent Trace').click()
+  await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeVisible()
+  expect(requested).toBe(true)
+})

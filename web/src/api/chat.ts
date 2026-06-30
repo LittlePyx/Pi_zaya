@@ -94,6 +94,15 @@ export interface AgentTrace {
   [key: string]: unknown
 }
 
+export interface AgentTraceAuditResponse {
+  message_id: number
+  conv_id: string
+  available: boolean
+  agent_trace?: AgentTrace | Record<string, unknown>
+  summary?: Record<string, unknown>
+  schema_errors?: string[]
+}
+
 export interface MessageMeta {
   provenance?: MessageProvenance
   answer_quality?: Record<string, unknown>
@@ -537,6 +546,11 @@ export const chatApi = {
     ),
   appendMessage: (convId: string, role: string, content: string) =>
     api.post<{ id: number }>(`/api/conversations/${convId}/messages`, { role, content }),
+  getMessageAgentTrace: (messageId: number, convId?: string | null) =>
+    api.get<AgentTraceAuditResponse>(
+      `/api/messages/${Math.floor(Number(messageId || 0))}/agent-trace`
+      + `${convId ? `?conv_id=${encodeURIComponent(convId)}` : ''}`,
+    ),
   uploadFiles: async (files: File[], opts?: { quickIngest?: boolean; speedMode?: string; convId?: string | null }) => {
     const fd = new FormData()
     files.forEach((file) => fd.append('files', file))

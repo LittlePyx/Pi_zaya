@@ -34,6 +34,7 @@ from api.routers.library import (
 )
 from kb.file_ops import _path_exists
 from kb.agent.runner import run_research_agent
+from kb.agent.schema import validate_agent_trace
 from kb.maintenance import create_auto_snapshot
 from kb.paper_guide_provenance import _resolve_paper_guide_md_path
 from kb.path_safety import (
@@ -420,6 +421,36 @@ def _normalize_message_attachments(message: dict) -> dict:
         attachments.append(_normalize_chat_image_attachment(item))
     rec["attachments"] = attachments
     return rec
+
+
+def _trace_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _agent_trace_audit_summary(trace: dict, validation: dict | None = None) -> dict:
+    verification = trace.get("verification") if isinstance(trace.get("verification"), dict) else {}
+    context = trace.get("context") if isinstance(trace.get("context"), dict) else {}
+    plan = trace.get("plan") if isinstance(trace.get("plan"), list) else []
+    steps = trace.get("steps") if isinstance(trace.get("steps"), list) else []
+    errors = trace.get("errors") if isinstance(trace.get("errors"), list) else []
+    return {
+        "available": True,
+        "mode": str(trace.get("mode") or ""),
+        "question_type": str(trace.get("question_type") or "unknown"),
+        "status": str(trace.get("status") or ""),
+        "query_scope": str(context.get("query_scope") or ""),
+        "requested_query_scope": str(context.get("requested_query_scope") or ""),
+        "total_claims": _trace_int(verification.get("total_claims")),
+        "supported_claims": _trace_int(verification.get("supported_claims")),
+        "unsupported_claims": _trace_int(verification.get("unsupported_claims")),
+        "plan_step_count": len(plan),
+        "tool_call_count": len(steps),
+        "has_errors": bool(errors),
+        "schema_ok": bool((validation or {}).get("ok", False)),
+    }
 
 
 def _recover_stale_live_assistant_messages(messages: list[dict], store) -> list[dict]:
@@ -1676,6 +1707,38 @@ def get_messages_page(conv_id: str, limit: int = 24, before_id: int | None = Non
         "has_more_before": bool(has_more_before),
         "oldest_loaded_id": oldest_loaded_id,
         "newest_loaded_id": newest_loaded_id,
+    }
+
+
+@router.get("/messages/{msg_id}/agent-trace")
+def get_message_agent_trace(msg_id: int, conv_id: str = Query("")):
+    store = get_chat_store()
+    msg = store.get_message(msg_id)
+    if msg is None:
+        raise HTTPException(404, "message not found")
+    conv_id_expected = str(conv_id or "").strip()
+    conv_id_actual = str(msg.get("conv_id") or "").strip()
+    if conv_id_expected and conv_id_expected != conv_id_actual:
+        raise HTTPException(404, "message not found")
+
+    meta = msg.get("meta") if isinstance(msg.get("meta"), dict) else {}
+    trace = meta.get("agent_trace") if isinstance(meta.get("agent_trace"), dict) else {}
+    if not trace:
+        return {
+            "message_id": int(msg_id),
+            "conv_id": conv_id_actual,
+            "available": False,
+            "agent_trace": {},
+            "summary": {"available": False},
+        }
+    validation = validate_agent_trace(trace)
+    return {
+        "message_id": int(msg_id),
+        "conv_id": conv_id_actual,
+        "available": True,
+        "agent_trace": trace,
+        "summary": _agent_trace_audit_summary(trace, validation),
+        "schema_errors": list(validation.get("errors") or [])[:8],
     }
 
 

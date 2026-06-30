@@ -1337,6 +1337,12 @@ body.kb-reader-resizing .kb-reader-content {
   padding: 8px 10px 10px;
 }
 
+.kb-agent-trace-empty {
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  color: color-mix(in srgb, var(--text-main) 56%, transparent);
+  padding: 8px 10px 10px;
+}
+
 .kb-agent-trace-heading {
   color: color-mix(in srgb, var(--text-main) 58%, transparent);
   font-size: 10px;

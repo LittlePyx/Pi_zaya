@@ -36,6 +36,13 @@ export function getMessageAgentTrace(message: Message): Record<string, unknown> 
   return Object.keys(trace).length > 0 ? trace : null
 }
 
+export function messageHasAgentTraceHint(message: Message): boolean {
+  if (getMessageAgentTrace(message)) return true
+  const meta = asTraceRecord(message.meta)
+  const mode = String(meta.agent_mode || meta.agentMode || '').trim().toLowerCase()
+  return mode === 'research_agent' || meta.agent_trace_available === true || meta.agentTraceAvailable === true
+}
+
 export function getAssistantSelectedResearchContext(message: Message): SelectedResearchContextPack | null {
   const meta = asTraceRecord(message.meta)
   const contracts = asTraceRecord(meta.paper_guide_contracts)
