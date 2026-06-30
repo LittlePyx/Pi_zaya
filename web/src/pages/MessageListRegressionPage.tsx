@@ -1198,6 +1198,76 @@ const liveUserPendingRefs: Record<string, unknown> = {
   },
 }
 
+const agentTraceReferenceActionMessages: Message[] = [
+  {
+    id: 9201,
+    role: 'assistant',
+    content: 'For upstream reading, start with Fast hyperspectral single-pixel imaging.',
+    rendered_body: 'For upstream reading, start with Fast hyperspectral single-pixel imaging.',
+    copy_text: 'For upstream reading, start with Fast hyperspectral single-pixel imaging.',
+    copy_markdown: 'For upstream reading, start with Fast hyperspectral single-pixel imaging.',
+    created_at: Date.now(),
+    meta: {
+      agent_trace: {
+        mode: 'research_agent',
+        question_type: 'reference_followup',
+        status: 'done',
+        plan: [
+          { goal: 'Retrieve evidence snippets.', tool: 'retrieve_evidence', status: 'done' },
+          { goal: 'Trace upstream references.', tool: 'retrieve_references', status: 'done' },
+        ],
+        steps: [
+          {
+            tool: 'retrieve_references',
+            status: 'done',
+            observation: 'Resolved 1 upstream reference from 1 citing source paper.',
+            elapsed_ms: 12,
+            output: {
+              reference_index_available: true,
+              resolved_reference_count: 1,
+              references: [
+                {
+                  anchor: 'agent-ref-fixture-24',
+                  num: 24,
+                  ref_num: 24,
+                  is_inpaper: true,
+                  source_name: READER_REGRESSION_SOURCE_NAME,
+                  source_path: READER_REGRESSION_SOURCE_PATH,
+                  source_paper: READER_REGRESSION_SOURCE_NAME,
+                  heading_path: 'Fixture Paper / Related Work',
+                  title: 'Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination',
+                  authors: 'Jiang X, Li Z, Du G',
+                  year: '2022',
+                  venue: 'Optics Express',
+                  doi: '10.1364/oe.458742',
+                  doi_url: 'https://doi.org/10.1364/oe.458742',
+                  raw: '[24] Jiang X, Li Z, Du G. Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination. Optics Express, 2022.',
+                  cite_fmt: '[24] Jiang X, Li Z, Du G. Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination. Optics Express, 2022.',
+                  evidence_preview: 'The current paper cites frequency-division multiplexed illumination as prior work [24].',
+                  evidence_quote: 'The current paper cites frequency-division multiplexed illumination as prior work [24].',
+                  why_relevant: 'Matches the query and citing context through: frequency, illumination.',
+                  shelf_item_kind: 'reference',
+                  shelf_origin: 'agent_trace',
+                  shelf_excerpt: '[24] Jiang X, Li Z, Du G. Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination. Optics Express, 2022.',
+                  shelf_excerpt_label: 'Reference entry',
+                  card_kind: 'reference',
+                  card_title: 'Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination',
+                  card_reference_entry: '[24] Jiang X, Li Z, Du G. Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination. Optics Express, 2022.',
+                },
+              ],
+            },
+          },
+        ],
+        verification: {
+          total_claims: 1,
+          supported_claims: 1,
+          unsupported_claims: 0,
+        },
+      },
+    },
+  },
+]
+
 type RegressionScenario =
   | 'structured-primary-rerank'
   | 'required-fallback-anchor'
@@ -1220,6 +1290,7 @@ type RegressionScenario =
   | 'negative-evidence-locate'
   | 'normal-multi-doc-ambiguous-inline-locate'
   | 'live-user-pending-refs'
+  | 'agent-trace-reference-actions'
 
 export default function MessageListRegressionPage() {
   const scenarioParam = (() => {
@@ -1247,6 +1318,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'negative-evidence-locate') return 'negative-evidence-locate'
     if (scenarioParam === 'normal-multi-doc-ambiguous-inline-locate') return 'normal-multi-doc-ambiguous-inline-locate'
     if (scenarioParam === 'live-user-pending-refs') return 'live-user-pending-refs'
+    if (scenarioParam === 'agent-trace-reference-actions') return 'agent-trace-reference-actions'
     return 'structured-primary-rerank'
   })()
   const regressionMessages: Message[] = (() => {
@@ -1270,6 +1342,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'negative-evidence-locate') return negativeEvidenceLocateMessages
     if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateMessages
     if (scenario === 'live-user-pending-refs') return liveUserPendingRefsMessages
+    if (scenario === 'agent-trace-reference-actions') return agentTraceReferenceActionMessages
     return structuredPrimaryRerankMessages
   })()
   const regressionRefs: Record<string, unknown> = (() => {

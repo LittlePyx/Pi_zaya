@@ -75,6 +75,13 @@ def test_retrieve_references_resolves_upstream_reference_from_index(monkeypatch,
     assert refs[0]["doi"] == "10.1364/oe.458742"
     assert refs[0]["source_paper"] == "Current Paper"
     assert refs[0]["reference_index_available"] is True
+    assert refs[0]["anchor"]
+    assert refs[0]["num"] == 7
+    assert refs[0]["is_inpaper"] is True
+    assert refs[0]["cite_fmt"].startswith("[7] Jiang")
+    assert refs[0]["shelf_item_kind"] == "reference"
+    assert refs[0]["shelf_origin"] == "agent_trace"
+    assert refs[0]["card_reference_entry"].startswith("[7] Jiang")
     assert "frequency" in refs[0]["why_relevant"]
     json.dumps(result)
 

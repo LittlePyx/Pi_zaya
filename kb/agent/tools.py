@@ -245,7 +245,15 @@ def _resolved_reference_row(
     source_path = str(resolved.get("source_path") or meta.get("source_path") or "").strip()
     source_name = str(resolved.get("source_name") or meta.get("source_name") or Path(source_path).name).strip()
     heading = str(meta.get("heading_path") or meta.get("ref_best_heading_path") or meta.get("top_heading") or "").strip()
+    page_start = _positive_int(meta.get("page_start"))
+    page_end = _positive_int(meta.get("page_end"))
+    anchor_seed = re.sub(r"[^A-Za-z0-9_-]+", "-", f"{source_path}-{ref_num}")[:80].strip("-")
+    anchor = f"agent-ref-{anchor_seed or ref_num}"
+    relation = _reference_relation_to_question(query, ref, evidence_preview)
     return {
+        "anchor": anchor,
+        "num": ref_num,
+        "is_inpaper": True,
         "source_name": source_name,
         "source_path": source_path,
         "source_paper": source_name,
@@ -258,8 +266,31 @@ def _resolved_reference_row(
         "doi": str(ref.get("doi") or "").strip(),
         "doi_url": str(ref.get("doi_url") or "").strip(),
         "raw": _clip(raw, 520),
+        "cite_fmt": _clip(raw, 520),
         "evidence_preview": _clip(evidence_preview, 320),
-        "why_relevant": _reference_relation_to_question(query, ref, evidence_preview),
+        "evidence_quote": _clip(evidence_preview, 320),
+        "why_relevant": relation,
+        "citation_context": _clip(evidence_preview, 320),
+        "citation_context_source": "agent_trace",
+        "upstream_work_role": relation,
+        "user_question_relation": relation,
+        "why_line": relation,
+        "support_relation": relation,
+        "location_label": heading,
+        "shelf_item_kind": "reference",
+        "shelf_origin": "agent_trace",
+        "shelf_excerpt": _clip(raw or title, 520),
+        "shelf_excerpt_label": "Reference entry",
+        "card_kind": "reference",
+        "card_title": title,
+        "card_subtitle": " / ".join([x for x in [str(ref.get("authors") or "").strip(), str(ref.get("year") or "").strip(), str(ref.get("venue") or "").strip()] if x]),
+        "card_reference_entry": _clip(raw, 520),
+        "card_context_summary": relation,
+        "card_evidence": _clip(evidence_preview, 320),
+        "card_locator": heading,
+        "card_support_explanation": relation,
+        "page_start": page_start,
+        "page_end": page_end,
         "score": float(doc.get("score") or meta.get("score") or 0.0),
         "reference_index_available": True,
         "metadata_status": str(ref.get("metadata_status") or "").strip(),

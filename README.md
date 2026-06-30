@@ -70,6 +70,9 @@ When enabled, a response includes an `agent_trace` object with:
 - `steps`: executed tool calls, observations, compact outputs, and errors
 - `verification`: sentence-level citation/evidence support counts
 
+For reference-followup answers, resolved upstream references in the trace can be
+opened in the reader or added to the literature basket from the chat UI.
+
 The planner uses simple heuristics first:
 
 - comparison keywords -> `multi_paper_comparison`

@@ -1449,6 +1449,29 @@ body.kb-reader-resizing .kb-reader-content {
   font-style: normal;
 }
 
+.kb-agent-trace-ref-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.kb-agent-trace-ref-actions button {
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  color: color-mix(in srgb, var(--text-main) 72%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 4px 7px;
+}
+
+.kb-agent-trace-ref-actions button:hover {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+  color: var(--text-main);
+}
+
 .kb-agent-mode-btn.ant-btn {
   border-radius: 8px;
 }

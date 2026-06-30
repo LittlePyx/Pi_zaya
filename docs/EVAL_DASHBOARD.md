@@ -71,6 +71,7 @@ python tools\research_qa\validate_research_agent_golden.py
 | Planner classification accuracy | Automated/manual | Unit tests for keyword classes; manual review on real prompts. | TBD |
 | Plan execution completeness | Automated | Check every planned step reaches `done`, `error`, or `skipped`. | TBD |
 | Tool observation usefulness | Manual | Review whether observations explain what happened without leaking internals. | TBD |
+| Trace actionability | Automated/manual | For reference-followup traces, confirm resolved references expose reader-open and basket-add actions. | TBD |
 | Error trace availability | Automated | Simulate degraded/error paths and confirm `agent_trace.errors` is returned. | TBD |
 | Trace payload size | Semi-automated | Inspect serialized message meta size; compact large claim/hit lists. | TBD |
 
@@ -145,7 +146,8 @@ Manual Research Agent review:
 4. Enable the `Agent` composer toggle.
 5. Record the returned `agent_trace.question_type`, plan steps, tool calls, and verification summary.
 6. For reference-followup prompts, inspect the `retrieve_references` tool output for resolved upstream references.
-7. Open evidence/citation cards and confirm that cited claims map to source text.
+7. Use trace actions to open one upstream reference in the reader and add one to the literature basket.
+8. Open evidence/citation cards and confirm that cited claims map to source text.
 
 ## Limitations
 

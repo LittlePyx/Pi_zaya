@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:e2e": "node scripts/playwright-with-port.mjs",
-    "test:e2e:smoke": "node scripts/playwright-with-port.mjs auth-gate.spec.ts api-client.spec.ts chat-refs-perf.spec.ts reader-locate-guard.spec.ts settings-api-guidance.spec.ts",
+    "test:e2e:smoke": "node scripts/playwright-with-port.mjs auth-gate.spec.ts api-client.spec.ts chat-refs-perf.spec.ts reader-locate-guard.spec.ts settings-api-guidance.spec.ts agent-trace-actions.spec.ts",
     "test:e2e:headed": "node scripts/playwright-with-port.mjs --headed"
   },
   "dependencies": {

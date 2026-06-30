@@ -4364,7 +4364,11 @@ export function MessageList({
                           })}
                         </div>
                       ) : null}
-                      <AgentTracePanel trace={agentTrace} />
+                      <AgentTracePanel
+                        trace={agentTrace}
+                        onOpenReference={openReaderFromDetail}
+                        onAddReferenceToShelf={addToShelf}
+                      />
                       <ResearchTracePanel trace={researchTrace} />
                       <CopyBar
                         text={getMessageCopyTextValue(message)}
@@ -4405,7 +4409,11 @@ export function MessageList({
                     <span className="typing-dot" style={{ animationDelay: '0.3s' }} />
                   </div>
                 )}
-                <AgentTracePanel trace={generationAgentTrace} />
+                <AgentTracePanel
+                  trace={generationAgentTrace}
+                  onOpenReference={openReaderFromDetail}
+                  onAddReferenceToShelf={addToShelf}
+                />
                 <ResearchTracePanel trace={generationTrace} />
               </div>
             </div>
