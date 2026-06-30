@@ -518,11 +518,11 @@ def _fallback_grounded_answer(
     if not hits:
         suffix = f" Reason: {reason}" if reason else ""
         return (
-            "No relevant indexed evidence was retrieved, so Research Agent Mode cannot produce "
+            "No relevant indexed evidence was retrieved, so I cannot produce "
             f"a paper-grounded answer yet.{suffix}"
         )
     lines = [
-        "Research Agent Mode ran in degraded mode because no text LLM is configured.",
+        "No text LLM is configured; showing retrieved evidence notes.",
         "",
         "Evidence-backed notes:",
     ]
@@ -560,7 +560,9 @@ def generate_grounded_answer(
             answer_query = (
                 f"{query}\n\n"
                 "Research Agent structured notes. Use these as an evidence map for the answer; "
-                "do not add claims that are not supported by the retrieved snippets:\n"
+                "do not add claims that are not supported by the retrieved snippets. "
+                "Return only the user-facing answer; do not include Research Agent Trace, "
+                "plan steps, tool calls, verification statistics, or JSON:\n"
                 f"{notes_text}"
             )
         messages = build_messages(answer_query, list(history or []), list(hits or []))

@@ -1311,6 +1311,69 @@ const agentTraceLazyAuditMessages: Message[] = [
   },
 ]
 
+const agentTraceCleanAnswerMessages: Message[] = [
+  {
+    id: 9401,
+    role: 'assistant',
+    content: [
+      'The answer should stay focused on the evidence-backed conclusion.',
+      '',
+      'Research Agent Trace',
+      'Plan',
+      '- retrieve_evidence debug detail leaked',
+      'Tool Calls',
+      '- verify_answer_citations debug detail leaked',
+      'Verification',
+      '- supported_claims: 1',
+    ].join('\n'),
+    rendered_body: [
+      'The answer should stay focused on the evidence-backed conclusion.',
+      '',
+      'Research Agent Trace',
+      'Plan',
+      '- retrieve_evidence debug detail leaked',
+      'Tool Calls',
+      '- verify_answer_citations debug detail leaked',
+      'Verification',
+      '- supported_claims: 1',
+    ].join('\n'),
+    copy_text: [
+      'The answer should stay focused on the evidence-backed conclusion.',
+      '',
+      'Research Agent Trace',
+      'Plan',
+      '- retrieve_evidence debug detail leaked',
+      'Tool Calls',
+      '- verify_answer_citations debug detail leaked',
+      'Verification',
+      '- supported_claims: 1',
+    ].join('\n'),
+    copy_markdown: [
+      'The answer should stay focused on the evidence-backed conclusion.',
+      '',
+      'Research Agent Trace',
+      'Plan',
+      '- retrieve_evidence debug detail leaked',
+      'Tool Calls',
+      '- verify_answer_citations debug detail leaked',
+      'Verification',
+      '- supported_claims: 1',
+    ].join('\n'),
+    created_at: Date.now(),
+    meta: {
+      agent_mode: 'research_agent',
+    },
+  },
+]
+
+const agentTraceStreamingPartial = [
+  'Streaming answer stays focused on the conclusion.',
+  '',
+  '```json',
+  '{"agent_trace":{"mode":"research_agent"},"debug":"stream trace leaked"}',
+  '```',
+].join('\n')
+
 type RegressionScenario =
   | 'structured-primary-rerank'
   | 'required-fallback-anchor'
@@ -1335,6 +1398,8 @@ type RegressionScenario =
   | 'live-user-pending-refs'
   | 'agent-trace-reference-actions'
   | 'agent-trace-lazy-audit'
+  | 'agent-trace-clean-answer'
+  | 'agent-trace-streaming-clean'
 
 export default function MessageListRegressionPage() {
   const scenarioParam = (() => {
@@ -1364,6 +1429,8 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'live-user-pending-refs') return 'live-user-pending-refs'
     if (scenarioParam === 'agent-trace-reference-actions') return 'agent-trace-reference-actions'
     if (scenarioParam === 'agent-trace-lazy-audit') return 'agent-trace-lazy-audit'
+    if (scenarioParam === 'agent-trace-clean-answer') return 'agent-trace-clean-answer'
+    if (scenarioParam === 'agent-trace-streaming-clean') return 'agent-trace-streaming-clean'
     return 'structured-primary-rerank'
   })()
   const regressionMessages: Message[] = (() => {
@@ -1389,6 +1456,8 @@ export default function MessageListRegressionPage() {
     if (scenario === 'live-user-pending-refs') return liveUserPendingRefsMessages
     if (scenario === 'agent-trace-reference-actions') return agentTraceReferenceActionMessages
     if (scenario === 'agent-trace-lazy-audit') return agentTraceLazyAuditMessages
+    if (scenario === 'agent-trace-clean-answer') return agentTraceCleanAnswerMessages
+    if (scenario === 'agent-trace-streaming-clean') return []
     return structuredPrimaryRerankMessages
   })()
   const regressionRefs: Record<string, unknown> = (() => {
@@ -1406,6 +1475,9 @@ export default function MessageListRegressionPage() {
   const regressionGuideSourceName = scenario === 'normal-multi-doc-ambiguous-inline-locate' || scenario === 'citation-hover-race'
     ? ''
     : READER_REGRESSION_SOURCE_NAME
+  const regressionGenerationPartial = scenario === 'agent-trace-streaming-clean'
+    ? agentTraceStreamingPartial
+    : undefined
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
   const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
   const [qualityDiagnosticsEnabled] = useState(qualityDiagnosticsVisible)
@@ -1516,6 +1588,7 @@ export default function MessageListRegressionPage() {
             readerLocateResults={readerLocateResults}
             paperGuideSourcePath={regressionGuideSourcePath}
             paperGuideSourceName={regressionGuideSourceName}
+            generationPartial={regressionGenerationPartial}
           />
         </div>
 

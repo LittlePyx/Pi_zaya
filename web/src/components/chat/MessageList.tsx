@@ -133,6 +133,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { basenameFromSourcePath, normalizeSourcePathForMatch as normalizeSourcePathForMatchShared } from '../../utils/sourcePath'
 import { useSettingsStore } from '../../stores/settingsStore'
 import {
+  cleanAssistantAnswerPresentationText,
   getMessageCiteDetailRecords,
   getMessageCopyMarkdownValue,
   getMessageCopyTextValue,
@@ -3529,6 +3530,9 @@ export function MessageList({
   const renderedShelfNode = shelfDockMode
     ? (shelfPortalTarget ? createPortal(shelfNode, shelfPortalTarget) : null)
     : shelfNode
+  const cleanGenerationPartial = generationPartial !== undefined && generationPartial !== null
+    ? cleanAssistantAnswerPresentationText(generationPartial)
+    : ''
 
   return (
     <>
@@ -4403,9 +4407,9 @@ export function MessageList({
                     </Text>
                   </div>
                 ) : null}
-                {generationPartial ? (
+                {cleanGenerationPartial ? (
                   <div className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--text)]">
-                    {generationPartial}
+                    {cleanGenerationPartial}
                   </div>
                 ) : (
                   <div className="flex items-center gap-1 py-1">

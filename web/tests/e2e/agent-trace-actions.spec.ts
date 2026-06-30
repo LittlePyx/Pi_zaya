@@ -88,3 +88,22 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeVisible()
   expect(requested).toBe(true)
 })
+
+test('research agent debug sections stay out of the answer body', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-clean-answer')
+  await expect(page.getByText('The answer should stay focused on the evidence-backed conclusion.')).toBeVisible()
+  await expect(page.getByText('retrieve_evidence debug detail leaked')).toHaveCount(0)
+  await expect(page.getByText('verify_answer_citations debug detail leaked')).toHaveCount(0)
+  await expect(page.getByText('supported_claims: 1')).toHaveCount(0)
+})
+
+test('streaming research agent partial hides appended trace json', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-streaming-clean')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-streaming-clean')
+  await expect(page.getByText('Streaming answer stays focused on the conclusion.')).toBeVisible()
+  await expect(page.getByText('stream trace leaked')).toHaveCount(0)
+  await expect(page.getByText('agent_trace')).toHaveCount(0)
+})
