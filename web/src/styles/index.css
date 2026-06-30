@@ -1415,6 +1415,40 @@ body.kb-reader-resizing .kb-reader-content {
   color: color-mix(in srgb, var(--text-main) 58%, transparent);
 }
 
+.kb-agent-trace-refs {
+  display: grid;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.kb-agent-trace-ref {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  padding-left: 7px;
+}
+
+.kb-agent-trace-ref strong,
+.kb-agent-trace-ref span,
+.kb-agent-trace-ref em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-agent-trace-ref strong {
+  color: color-mix(in srgb, var(--text-main) 84%, transparent);
+  font-weight: 700;
+}
+
+.kb-agent-trace-ref span,
+.kb-agent-trace-ref em {
+  color: color-mix(in srgb, var(--text-main) 54%, transparent);
+  font-style: normal;
+}
+
 .kb-agent-mode-btn.ant-btn {
   border-radius: 8px;
 }

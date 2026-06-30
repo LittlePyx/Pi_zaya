@@ -18,6 +18,19 @@ function statusClass(status: unknown) {
   return ''
 }
 
+function referenceTitle(ref: Record<string, unknown>): string {
+  const refNum = traceNum(ref.ref_num)
+  const prefix = refNum > 0 ? `[${refNum}] ` : ''
+  return `${prefix}${shortText(ref.title || ref.raw || ref.source_name || 'Reference', 132)}`
+}
+
+function referenceMeta(ref: Record<string, unknown>): string {
+  return [ref.authors, ref.year, ref.venue, ref.doi]
+    .map((item) => shortText(item, 70))
+    .filter(Boolean)
+    .join(' · ')
+}
+
 export function AgentTracePanel({ trace }: { trace?: Record<string, unknown> | null }) {
   const tr = asTraceRecord(trace)
   if (Object.keys(tr).length <= 0) return null
@@ -65,17 +78,32 @@ export function AgentTracePanel({ trace }: { trace?: Record<string, unknown> | n
       {steps.length > 0 ? (
         <div className="kb-agent-trace-section">
           <div className="kb-agent-trace-heading">Tool Calls</div>
-          {steps.map((step, idx) => (
-            <div className="kb-agent-trace-call" key={`${String(step.tool || 'tool')}-${idx}`}>
-              <div className="kb-agent-trace-call-head">
-                <span className={`kb-agent-trace-status ${statusClass(step.status)}`}>{String(step.status || '')}</span>
-                <strong>{String(step.tool || '')}</strong>
-                {traceNum(step.elapsed_ms) > 0 ? <span>{traceNum(step.elapsed_ms)}ms</span> : null}
+          {steps.map((step, idx) => {
+            const output = asTraceRecord(step.output)
+            const refs = records(output.references).slice(0, 3)
+            return (
+              <div className="kb-agent-trace-call" key={`${String(step.tool || 'tool')}-${idx}`}>
+                <div className="kb-agent-trace-call-head">
+                  <span className={`kb-agent-trace-status ${statusClass(step.status)}`}>{String(step.status || '')}</span>
+                  <strong>{String(step.tool || '')}</strong>
+                  {traceNum(step.elapsed_ms) > 0 ? <span>{traceNum(step.elapsed_ms)}ms</span> : null}
+                </div>
+                {step.observation ? <div className="kb-agent-trace-observation">{shortText(step.observation, 260)}</div> : null}
+                {refs.length > 0 ? (
+                  <div className="kb-agent-trace-refs">
+                    {refs.map((ref, refIdx) => (
+                      <div className="kb-agent-trace-ref" key={`${String(ref.ref_num || ref.title || 'ref')}-${refIdx}`}>
+                        <strong>{referenceTitle(ref)}</strong>
+                        {referenceMeta(ref) ? <span>{referenceMeta(ref)}</span> : null}
+                        {ref.why_relevant ? <em>{shortText(ref.why_relevant, 180)}</em> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {step.error ? <div className="kb-agent-trace-error">{shortText(step.error, 260)}</div> : null}
               </div>
-              {step.observation ? <div className="kb-agent-trace-observation">{shortText(step.observation, 260)}</div> : null}
-              {step.error ? <div className="kb-agent-trace-error">{shortText(step.error, 260)}</div> : null}
-            </div>
-          ))}
+            )
+          })}
         </div>
       ) : null}
     </details>

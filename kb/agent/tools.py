@@ -5,8 +5,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+from kb.inpaper_citation_grounding import extract_candidate_ref_nums_from_hits, parse_ref_num_set
 from kb.llm import DeepSeekChat
 from kb.rag import build_messages
+from kb.reference_index import load_reference_index, resolve_reference_entry
 from kb.retrieval_engine import _group_hits_by_doc_for_refs, _search_hits_with_fallback
 from kb.retriever import BM25Retriever
 from kb.store import load_all_chunks
@@ -63,6 +65,205 @@ def _score(hit: dict[str, Any]) -> float:
         return float(hit.get("score") or 0.0)
     except Exception:
         return 0.0
+
+
+def _positive_int(value: Any) -> int:
+    try:
+        n = int(value)
+    except Exception:
+        return 0
+    return n if n > 0 else 0
+
+
+def _append_ref_num(out: list[int], seen: set[int], value: Any, *, limit: int) -> None:
+    if len(out) >= max(1, int(limit)):
+        return
+    if isinstance(value, dict):
+        for key in ("ref_num", "reference_num", "resolved_ref_num", "top_ref_num", "num"):
+            _append_ref_num(out, seen, value.get(key), limit=limit)
+            if len(out) >= max(1, int(limit)):
+                return
+        for key in ("candidate_refs", "support_ref_candidates", "ref_nums"):
+            _append_ref_num(out, seen, value.get(key), limit=limit)
+            if len(out) >= max(1, int(limit)):
+                return
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            _append_ref_num(out, seen, item, limit=limit)
+            if len(out) >= max(1, int(limit)):
+                return
+        return
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return
+        parsed = parse_ref_num_set(text.strip("[](){} "), max_items=max(1, int(limit)))
+        if not parsed:
+            parsed = [_positive_int(m.group(1)) for m in re.finditer(r"\b(\d{1,4})\b", text)]
+        for n in parsed:
+            _append_ref_num(out, seen, n, limit=limit)
+            if len(out) >= max(1, int(limit)):
+                return
+        return
+    n = _positive_int(value)
+    if n <= 0 or n in seen:
+        return
+    seen.add(n)
+    out.append(n)
+
+
+def _candidate_ref_nums_for_source(
+    hits: list[dict[str, Any]],
+    *,
+    source_path: str,
+    limit: int,
+) -> list[int]:
+    out: list[int] = []
+    seen: set[int] = set()
+    for n in extract_candidate_ref_nums_from_hits(
+        list(hits or []),
+        source_path=source_path,
+        max_candidates=max(1, int(limit)),
+    ):
+        _append_ref_num(out, seen, n, limit=limit)
+        if len(out) >= max(1, int(limit)):
+            return out
+    for hit in list(hits or []):
+        meta = _hit_meta(hit)
+        src = str(meta.get("source_path") or "").strip()
+        if source_path and src and src != source_path:
+            continue
+        for key in (
+            "resolved_ref_num",
+            "top_ref_num",
+            "ref_num",
+            "reference_num",
+            "candidate_refs",
+            "support_ref_candidates",
+            "ref_nums",
+        ):
+            _append_ref_num(out, seen, meta.get(key), limit=limit)
+            if len(out) >= max(1, int(limit)):
+                return out
+    return out
+
+
+def _doc_ref_nums_from_index(
+    index_data: dict[str, Any],
+    *,
+    source_path: str,
+    source_sha1: str = "",
+    limit: int = 6,
+) -> list[int]:
+    docs = index_data.get("docs") if isinstance(index_data, dict) else {}
+    if not isinstance(docs, dict):
+        return []
+    want_path = str(source_path or "").strip().lower()
+    want_name = Path(str(source_path or "")).name.lower()
+    want_stem = Path(str(source_path or "")).stem.lower()
+    want_sha1 = str(source_sha1 or "").strip().lower()
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for raw_doc in docs.values():
+        if not isinstance(raw_doc, dict):
+            continue
+        score = 0
+        doc_path = str(raw_doc.get("path") or "").strip().lower()
+        doc_name = str(raw_doc.get("name") or "").strip().lower()
+        doc_stem = str(raw_doc.get("stem") or "").strip().lower()
+        doc_sha1 = str(raw_doc.get("sha1") or "").strip().lower()
+        if want_sha1 and doc_sha1 and want_sha1 == doc_sha1:
+            score = max(score, 5)
+        if want_path and doc_path and want_path == doc_path:
+            score = max(score, 4)
+        if want_name and doc_name and want_name == doc_name:
+            score = max(score, 3)
+        if want_stem and doc_stem and want_stem == doc_stem:
+            score = max(score, 2)
+        if score <= 0:
+            continue
+        candidates.append((score, raw_doc))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    for _score_value, doc in candidates[:1]:
+        refs = doc.get("refs") if isinstance(doc, dict) else {}
+        if not isinstance(refs, dict):
+            continue
+        nums = sorted((_positive_int(k) for k in refs.keys()), key=int)
+        return [n for n in nums if n > 0][: max(1, int(limit))]
+    return []
+
+
+def _load_reference_index_safely(db_dir: str | Path | None, settings: Any = None) -> dict[str, Any]:
+    raw_dir = db_dir if db_dir is not None else getattr(settings, "db_dir", None)
+    if not raw_dir:
+        return {}
+    try:
+        return load_reference_index(Path(raw_dir).expanduser())
+    except Exception:
+        return {}
+
+
+def _source_summary_row(doc: dict[str, Any]) -> dict[str, Any]:
+    meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+    source_path = str(meta.get("source_path") or "").strip()
+    return {
+        "source_name": str(meta.get("source_name") or meta.get("title") or Path(source_path).name).strip(),
+        "source_path": source_path,
+        "heading_path": str(meta.get("heading_path") or meta.get("ref_best_heading_path") or meta.get("top_heading") or "").strip(),
+        "evidence_preview": _clip(doc.get("text") or " ".join(list(meta.get("ref_show_snippets") or [])[:1]), 320),
+        "score": float(doc.get("score") or meta.get("score") or 0.0),
+        "reference_index_available": False,
+    }
+
+
+def _reference_relation_to_question(query: str, ref: dict[str, Any], evidence_preview: str) -> str:
+    query_terms = _tokens(query)
+    ref_text = " ".join(
+        str(ref.get(key) or "")
+        for key in ("title", "authors", "venue", "year", "doi", "raw")
+    )
+    overlap = sorted(query_terms & (_tokens(ref_text) | _tokens(evidence_preview)))[:8]
+    if overlap:
+        return f"Matches the query or citing context through: {', '.join(overlap)}."
+    if evidence_preview:
+        return "Selected from retrieved citing-paper evidence near an in-text reference marker."
+    return "Selected from the citing paper's local reference index."
+
+
+def _resolved_reference_row(
+    resolved: dict[str, Any],
+    *,
+    query: str,
+    doc: dict[str, Any],
+    evidence_preview: str,
+) -> dict[str, Any]:
+    meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+    ref = resolved.get("ref") if isinstance(resolved.get("ref"), dict) else {}
+    ref_num = _positive_int(resolved.get("ref_num") or ref.get("num"))
+    title = str(ref.get("title") or "").strip()
+    raw = str(ref.get("raw") or "").strip()
+    source_path = str(resolved.get("source_path") or meta.get("source_path") or "").strip()
+    source_name = str(resolved.get("source_name") or meta.get("source_name") or Path(source_path).name).strip()
+    heading = str(meta.get("heading_path") or meta.get("ref_best_heading_path") or meta.get("top_heading") or "").strip()
+    return {
+        "source_name": source_name,
+        "source_path": source_path,
+        "source_paper": source_name,
+        "heading_path": heading,
+        "ref_num": ref_num,
+        "title": title,
+        "authors": str(ref.get("authors") or "").strip(),
+        "year": str(ref.get("year") or "").strip(),
+        "venue": str(ref.get("venue") or "").strip(),
+        "doi": str(ref.get("doi") or "").strip(),
+        "doi_url": str(ref.get("doi_url") or "").strip(),
+        "raw": _clip(raw, 520),
+        "evidence_preview": _clip(evidence_preview, 320),
+        "why_relevant": _reference_relation_to_question(query, ref, evidence_preview),
+        "score": float(doc.get("score") or meta.get("score") or 0.0),
+        "reference_index_available": True,
+        "metadata_status": str(ref.get("metadata_status") or "").strip(),
+    }
 
 
 def _evidence_row(hit: dict[str, Any]) -> dict[str, Any]:
@@ -138,30 +339,81 @@ def retrieve_evidence(query: str, *, db_dir: str | Path, settings: Any = None, t
     }
 
 
-def retrieve_references(query: str, hits: list[dict[str, Any]], *, settings: Any = None, top_k: int = 6) -> dict[str, Any]:
+def retrieve_references(
+    query: str,
+    hits: list[dict[str, Any]],
+    *,
+    db_dir: str | Path | None = None,
+    settings: Any = None,
+    top_k: int = 6,
+) -> dict[str, Any]:
+    limit = max(1, min(10, int(top_k or 6)))
     docs = _group_hits_by_doc_for_refs(
         list(hits or []),
         prompt_text=query,
-        top_k_docs=max(1, min(10, int(top_k or 6))),
+        top_k_docs=limit,
         deep_query=query,
         deep_read=False,
         llm_rerank=False,
         settings=settings,
     )
+    index_data = _load_reference_index_safely(db_dir, settings=settings)
+    index_available = bool(isinstance(index_data.get("docs"), dict) and index_data.get("docs"))
     references: list[dict[str, Any]] = []
-    for doc in docs[: max(1, min(10, int(top_k or 6)))]:
+    fallback_sources: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for doc in docs[:limit]:
         meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
-        references.append(
-            {
-                "source_name": str(meta.get("source_name") or meta.get("title") or "").strip(),
-                "source_path": str(meta.get("source_path") or "").strip(),
-                "heading_path": str(meta.get("heading_path") or meta.get("ref_best_heading_path") or "").strip(),
-                "score": float(doc.get("score") or meta.get("score") or 0.0),
-            }
-        )
+        source_path = str(meta.get("source_path") or "").strip()
+        source_sha1 = str(meta.get("source_sha1") or "").strip()
+        fallback_sources.append(_source_summary_row(doc))
+        if not source_path or not index_available:
+            continue
+        ref_limit = max(limit * 2, 6)
+        ref_nums = _candidate_ref_nums_for_source(list(hits or []), source_path=source_path, limit=ref_limit)
+        if not ref_nums:
+            ref_nums = _doc_ref_nums_from_index(
+                index_data,
+                source_path=source_path,
+                source_sha1=source_sha1,
+                limit=min(3, limit),
+            )
+        evidence_preview = _clip(doc.get("text") or " ".join(list(meta.get("ref_show_snippets") or [])[:1]), 360)
+        for ref_num in ref_nums:
+            resolved = resolve_reference_entry(index_data, source_path, int(ref_num), source_sha1=source_sha1)
+            if not isinstance(resolved, dict):
+                continue
+            resolved_source_path = str(resolved.get("source_path") or source_path).strip().lower()
+            key = (resolved_source_path, _positive_int(resolved.get("ref_num") or ref_num))
+            if key in seen or key[1] <= 0:
+                continue
+            seen.add(key)
+            references.append(
+                _resolved_reference_row(
+                    resolved,
+                    query=query,
+                    doc=doc,
+                    evidence_preview=evidence_preview,
+                )
+            )
+            if len(references) >= limit:
+                break
+        if len(references) >= limit:
+            break
+    if references:
+        observation = f"Resolved {len(references)} upstream reference(s) from {len(docs)} citing source paper(s)."
+    elif index_available:
+        references = fallback_sources[:limit]
+        observation = "Reference index was available, but no concrete upstream reference matched the retrieved evidence."
+    else:
+        references = fallback_sources[:limit]
+        observation = f"Grouped evidence into {len(references)} reference source(s); reference index was unavailable."
     return {
         "references": references,
-        "observation": f"Grouped evidence into {len(references)} reference source(s).",
+        "reference_index_available": index_available,
+        "source_count": len(docs),
+        "resolved_reference_count": len([r for r in references if r.get("reference_index_available") is True]),
+        "observation": observation,
     }
 
 

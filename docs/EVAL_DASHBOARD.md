@@ -52,6 +52,7 @@ python tools\research_qa\validate_research_agent_golden.py
 | Evidence locate success | Manual/semi-automated | Open citation/locate targets and confirm they land near supporting text. | TBD |
 | Source-card accuracy | Manual | Check title, source, DOI/reference metadata, and displayed evidence quote. | TBD |
 | Reference-followup precision | Manual | For upstream/reference questions, verify cited prior work matches the answer. | TBD |
+| Reference-index resolution coverage | Semi-automated/manual | For `reference_followup` traces, inspect `retrieve_references.resolved_reference_count` and spot-check that returned `ref_num/title/doi` fields match the citing paper bibliography. | TBD |
 
 ## Converter Quality Metrics
 
@@ -143,7 +144,8 @@ Manual Research Agent review:
 3. Ask one question for each type: single-paper QA, comparison, reading guide, and reference followup.
 4. Enable the `Agent` composer toggle.
 5. Record the returned `agent_trace.question_type`, plan steps, tool calls, and verification summary.
-6. Open evidence/citation cards and confirm that cited claims map to source text.
+6. For reference-followup prompts, inspect the `retrieve_references` tool output for resolved upstream references.
+7. Open evidence/citation cards and confirm that cited claims map to source text.
 
 ## Limitations
 

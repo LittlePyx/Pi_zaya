@@ -80,7 +80,7 @@ The planner uses simple heuristics first:
 The tool layer wraps existing modules instead of adding external services:
 
 - `retrieve_evidence`
-- `retrieve_references`
+- `retrieve_references`, which reads the local reference index when available and returns compact upstream-reference fields such as `ref_num`, `title`, `authors`, `year`, `doi`, `source_paper`, and `why_relevant`
 - `build_reading_guide`
 - `compare_papers`, which returns source-specific `paper`, `method`, `evidence`, `limitation`, and `relation_to_question` fields
 - `generate_grounded_answer`

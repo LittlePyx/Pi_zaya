@@ -88,7 +88,16 @@ def run_research_agent(
             if trace.steps:
                 trace.steps[-1].output["hits"] = _summarize_hits(context["hits"])
         elif plan_step.tool == "retrieve_references":
-            result = _run_step(trace, idx, retrieve_references, query, context["hits"], settings=settings, top_k=top_k)
+            result = _run_step(
+                trace,
+                idx,
+                retrieve_references,
+                query,
+                context["hits"],
+                db_dir=db_dir,
+                settings=settings,
+                top_k=top_k,
+            )
             if isinstance(result.get("references"), list):
                 context["agent_notes"]["references"] = result["references"]
         elif plan_step.tool == "build_reading_guide":
