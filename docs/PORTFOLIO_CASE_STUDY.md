@@ -72,6 +72,9 @@ Measured or semi-automated checks include:
 - Frontend lint/build/e2e smoke tests.
 - Research Agent golden prompt validation.
 - Agent trace schema validation.
+- Recorded answer-quality fixture checks for source disclosure, expected answer
+  points, local citation support, and no trace/tool/debug clutter in the main
+  answer.
 - Converter quality dry-run validation.
 
 Metrics that should be tracked on labeled datasets, but are not claimed as
@@ -116,7 +119,8 @@ Deeper technical points:
 - Walk through the trace object: planner intent, plan steps, tool calls,
   retrieval confidence, evidence status, and verification.
 - Be explicit that semantic evaluation is still an ongoing area and that the
-  repository separates measured checks from future metrics.
+  repository separates deterministic fixture checks from future live benchmark
+  metrics.
 
 ## Suggested GitHub Metadata
 

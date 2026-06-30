@@ -16,6 +16,8 @@ documented manual review.
 
 The lightweight trace eval can write a portfolio-friendly JSON report. Metrics
 that are not measured by the current dry run are emitted as `null`, not guessed.
+The current answer-quality numbers are fixture-based regression checks over
+recorded cases, not a live model benchmark.
 
 ## Golden Prompt Set
 
@@ -34,6 +36,25 @@ Validate the prompt set against the current planner/tool plan:
 python tools\research_qa\validate_research_agent_golden.py
 ```
 
+## Answer Quality Fixture
+
+The first recorded answer-quality fixture lives at:
+
+- `docs/research_agent_eval_v1.jsonl`
+
+It covers:
+
+- local evidence-grounded answers
+- hybrid local evidence plus external background
+- academic no-hit external fallback disclosure
+- knowledge-base-unrelated general API answers
+- paper-specific insufficient-evidence disclosure
+
+These cases are intentionally small and deterministic. They verify source
+disclosure, expected answer points, citation support on local claims, and that
+trace/tool/debug content stays out of the main answer. They should not be
+presented as live LLM quality scores.
+
 ## Research QA Metrics
 
 | Metric | Type | How to measure | Baseline |
@@ -41,6 +62,7 @@ python tools\research_qa\validate_research_agent_golden.py
 | Answer correctness | Manual | Review answer against source paper(s). | TBD |
 | Answer completeness | Manual | Check whether required aspects of the question are addressed. | TBD |
 | Groundedness | Manual/semi-automated | Count answer claims that are supported by retrieved evidence. | TBD |
+| Expected answer point coverage | Semi-automated fixture | Count expected answer points found in `docs/research_agent_eval_v1.jsonl` recorded answers. | Fixture-only |
 | Retrieval relevance | Semi-automated/manual | Inspect top retrieved chunks for relevance to the query. | TBD |
 | Multi-paper comparison usefulness | Manual | Check whether comparison claims are source-specific and not merged vaguely. | TBD |
 | Structured comparison completeness | Semi-automated/manual | For comparison prompts, inspect `compare_papers` output for `paper`, `method`, `evidence`, `limitation`, and `relation_to_question`. | TBD |
@@ -51,10 +73,12 @@ python tools\research_qa\validate_research_agent_golden.py
 | Metric | Type | How to measure | Baseline |
 |---|---|---|---|
 | Citation coverage | Semi-automated | `supported_claims / total_claims` from `agent_trace.verification`. | TBD |
+| Citation precision | Semi-automated fixture/manual | In the recorded quality fixture, count supported cited local claims divided by cited local claims; for live answers, review against labeled expected evidence. | Fixture-only |
 | Unsupported claim count | Semi-automated | `unsupported_claims` from `agent_trace.verification`. | TBD |
 | Evidence status distribution | Semi-automated | Count `grounded`, `needs_review`, `insufficient`, and `not_applicable` from `agent_trace.verification.evidence_status`. | TBD |
 | Hybrid answer rate | Semi-automated | Count traces where `generate_grounded_answer.answer_mode` is `hybrid_local_external`, split by `web_search_used`. | TBD |
 | No-hit external fallback rate | Semi-automated | Count no-hit traces where `generate_grounded_answer.answer_mode` is `external_academic_llm` and whether `web_search_used` is true. | TBD |
+| External fallback disclosure accuracy | Semi-automated fixture/manual | Check whether external or hybrid answers visibly disclose that non-local content is not knowledge-base-grounded. | Fixture-only |
 | Unsupported claim diagnostics | Semi-automated/manual | Inspect `agent_trace.verification.claims[*].unsupported_reason` and matched evidence source summaries. | TBD |
 | Evidence locate success | Manual/semi-automated | Open citation/locate targets and confirm they land near supporting text. | TBD |
 | Source-card accuracy | Manual | Check title, source, DOI/reference metadata, and displayed evidence quote. | TBD |
@@ -88,6 +112,7 @@ python tools\research_qa\validate_research_agent_golden.py
 | Answer clutter guardrail | Automated/manual | Confirm plan steps, tool calls, trace JSON, and verification details stay out of the main answer body, API stream text, and stored assistant message unless the user opens the trace panel. | TBD |
 | Error trace availability | Automated | Simulate degraded/error paths and confirm `agent_trace.errors` is returned. | TBD |
 | Trace payload size | Semi-automated | Inspect serialized message meta size; compact large claim/hit lists. | TBD |
+| Main-answer clutter rate | Semi-automated fixture/e2e | Confirm answer text does not include `agent_trace`, plan steps, tool calls, or verification statistics. | Fixture-only |
 
 ## Baseline Tables
 
@@ -143,6 +168,10 @@ Research Agent trace schema and scope-context validation:
 python tools\research_qa\run_agent_trace_eval.py --json-out test_results\agent_trace_eval.json
 ```
 
+This command validates both `docs/research_agent_golden_v0.jsonl` and
+`docs/research_agent_eval_v1.jsonl` by default. Use `--skip-quality` to run only
+planner/schema validation.
+
 To print the legacy summary shape only:
 
 ```powershell
@@ -181,6 +210,8 @@ Manual Research Agent review:
 - Claim verification is sentence-level and citation/evidence-overlap based; it is not a semantic entailment model.
 - Degraded mode can summarize retrieved snippets without an LLM, but it cannot synthesize a full research answer.
 - Some metrics remain manual until curated gold datasets and grading rubrics are added.
+- The answer-quality fixture is a deterministic regression suite, not a live
+  benchmark of model quality across arbitrary papers.
 - Trace usefulness should be reviewed by researchers, not judged only by schema validity.
 
 ## Future Work

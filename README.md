@@ -359,8 +359,15 @@ Core evaluation dimensions:
 - P50/P95 latency and cost per query when instrumentation is available
 
 Metrics remain `TBD` until produced by a reproducible run or documented manual
-review. The lightweight agent trace eval can also write a JSON report with null
-metric placeholders for unmeasured values.
+review. The lightweight agent trace eval can write a JSON report with measured
+fixture-regression fields and `null` placeholders for unmeasured live metrics
+such as latency and cost.
+
+The recorded fixture `docs/research_agent_eval_v1.jsonl` checks a small set of
+answer-quality guardrails: local-evidence support, hybrid/external source
+disclosure, expected answer-point coverage, and keeping trace/tool/debug content
+out of the main answer. Treat these as reproducible regression checks, not as a
+claimed live benchmark.
 
 Useful commands:
 
