@@ -22,6 +22,8 @@ test('research agent trace references can open and enter the literature basket',
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-reference-actions')
   await page.getByText('Research Agent Trace').click()
+  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('fully solves every downstream limitation')
+  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('Citation does not match retrieved evidence')
 
   const ref = page.getByTestId('agent-trace-reference').first()
   await expect(ref.getByTestId('agent-trace-ref-title')).toContainText('Fast hyperspectral single-pixel imaging')

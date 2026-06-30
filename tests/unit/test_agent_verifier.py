@@ -12,7 +12,27 @@ def test_verifier_counts_supported_and_unsupported_claims():
     assert result.supported_claims == 1
     assert result.unsupported_claims == 1
     assert result.claims[0]["has_citation"] is True
+    assert result.claims[0]["citation_present"] is True
+    assert result.claims[0]["matched_evidence_count"] == 1
+    assert result.claims[0]["matched_sources"][0]["source_name"] == "demo"
+    assert result.claims[0]["unsupported_reason"] == ""
     assert result.claims[1]["has_citation"] is False
+    assert result.claims[1]["unsupported_reason"] == "missing_citation"
+
+
+def test_verifier_flags_cited_claim_without_matching_evidence():
+    result = verify_answer_citations(
+        "The model uses contrastive decoding [1].",
+        [{"text": "The retrieval module improves grounding quality.", "meta": {"source_name": "demo"}}],
+    )
+
+    assert result.total_claims == 1
+    assert result.supported_claims == 0
+    assert result.unsupported_claims == 1
+    assert result.claims[0]["citation_present"] is True
+    assert result.claims[0]["matched_evidence_count"] == 0
+    assert result.claims[0]["matched_sources"] == []
+    assert result.claims[0]["unsupported_reason"] == "missing_evidence_overlap"
 
 
 def test_split_answer_claims_ignores_tiny_fragments_and_headings():

@@ -1429,9 +1429,21 @@ body.kb-reader-resizing .kb-reader-content {
   padding-left: 7px;
 }
 
+.kb-agent-trace-claim {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border-left: 2px solid color-mix(in srgb, #f59e0b 56%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, #f59e0b 7%, var(--bg));
+  padding: 6px 8px;
+}
+
 .kb-agent-trace-ref strong,
 .kb-agent-trace-ref span,
-.kb-agent-trace-ref em {
+.kb-agent-trace-ref em,
+.kb-agent-trace-claim strong,
+.kb-agent-trace-claim span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1443,8 +1455,14 @@ body.kb-reader-resizing .kb-reader-content {
   font-weight: 700;
 }
 
+.kb-agent-trace-claim strong {
+  color: color-mix(in srgb, var(--text-main) 84%, transparent);
+  font-weight: 650;
+}
+
 .kb-agent-trace-ref span,
-.kb-agent-trace-ref em {
+.kb-agent-trace-ref em,
+.kb-agent-trace-claim span {
   color: color-mix(in srgb, var(--text-main) 54%, transparent);
   font-style: normal;
 }

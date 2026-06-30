@@ -40,6 +40,14 @@ function referenceMeta(ref: Record<string, unknown>): string {
     .join(' / ')
 }
 
+function unsupportedReasonText(value: unknown): string {
+  const reason = String(value || '').trim()
+  if (reason === 'missing_citation') return 'Missing citation'
+  if (reason === 'no_evidence_hits') return 'No evidence hits'
+  if (reason === 'missing_evidence_overlap') return 'Citation does not match retrieved evidence'
+  return reason || 'Unsupported'
+}
+
 function referenceDetail(ref: Record<string, unknown>): CiteDetail | null {
   const refNum = traceNum(ref.ref_num || ref.num)
   const sourcePath = refText(ref, 'source_path', 'sourcePath')
@@ -106,6 +114,10 @@ export function AgentTracePanel({
   const steps = records(tr.steps)
   const context = asTraceRecord(tr.context)
   const verification = asTraceRecord(tr.verification)
+  const claimRows = records(verification.claims)
+  const unsupportedClaimRows = claimRows
+    .filter((claim) => claim.supported === false || String(claim.unsupported_reason || '').trim())
+    .slice(0, 5)
   const totalClaims = traceNum(verification.total_claims)
   const supportedClaims = traceNum(verification.supported_claims)
   const unsupportedClaims = traceNum(verification.unsupported_claims)
@@ -146,6 +158,20 @@ export function AgentTracePanel({
           </div>
         ) : null}
       </div>
+      {unsupportedClaimRows.length > 0 ? (
+        <div className="kb-agent-trace-section kb-agent-trace-unsupported">
+          <div className="kb-agent-trace-heading">Unsupported Claims</div>
+          {unsupportedClaimRows.map((claim, idx) => (
+            <div className="kb-agent-trace-claim" key={`${String(claim.index || 'claim')}-${idx}`} data-testid="agent-trace-unsupported-claim">
+              <strong>{shortText(claim.claim_text || claim.text, 240)}</strong>
+              <span>
+                {unsupportedReasonText(claim.unsupported_reason)}
+                {traceNum(claim.matched_evidence_count) > 0 ? ` / ${traceNum(claim.matched_evidence_count)} evidence match(es)` : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {plan.length > 0 ? (
         <div className="kb-agent-trace-section">
           <div className="kb-agent-trace-heading">Plan</div>

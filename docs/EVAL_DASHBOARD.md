@@ -49,6 +49,7 @@ python tools\research_qa\validate_research_agent_golden.py
 |---|---|---|---|
 | Citation coverage | Semi-automated | `supported_claims / total_claims` from `agent_trace.verification`. | TBD |
 | Unsupported claim count | Semi-automated | `unsupported_claims` from `agent_trace.verification`. | TBD |
+| Unsupported claim diagnostics | Semi-automated/manual | Inspect `agent_trace.verification.claims[*].unsupported_reason` and matched evidence source summaries. | TBD |
 | Evidence locate success | Manual/semi-automated | Open citation/locate targets and confirm they land near supporting text. | TBD |
 | Source-card accuracy | Manual | Check title, source, DOI/reference metadata, and displayed evidence quote. | TBD |
 | Reference-followup precision | Manual | For upstream/reference questions, verify cited prior work matches the answer. | TBD |

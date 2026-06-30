@@ -69,7 +69,7 @@ When enabled, a response includes an `agent_trace` object with:
 - `context`: effective query scope, requested scope, current-paper lock, and selected-basket count when available
 - `plan`: planned steps with goal, tool, and status
 - `steps`: executed tool calls, observations, compact outputs, and errors
-- `verification`: sentence-level citation/evidence support counts
+- `verification`: sentence-level citation/evidence support counts, unsupported-claim reasons, and compact matched evidence sources
 
 For reference-followup answers, resolved upstream references in the trace can be
 opened in the reader or added to the literature basket from the chat UI.
