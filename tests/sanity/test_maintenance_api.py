@@ -59,6 +59,7 @@ def _settings(tmp_path: Path) -> SimpleNamespace:
 
 def test_maintenance_backup_and_diagnostics_routes(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("KB_REQUIRE_AUTH", "0")
+    monkeypatch.setenv("KB_ENABLE_INTERNAL_API", "1")
     monkeypatch.setenv("KB_BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("KB_DIAGNOSTICS_DIR", str(tmp_path / "diagnostics"))
     monkeypatch.setenv("KB_RESTORE_AUDIT_PATH", str(tmp_path / "restore_audit.jsonl"))

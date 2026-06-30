@@ -31,6 +31,25 @@ _STATE: dict[str, Any] = {
     "updated_at": 0.0,
 }
 
+_PROGRESS_STAT_KEYS = (
+    "docs_total",
+    "docs_indexed",
+    "refs_total",
+    "refs_with_doi",
+    "refs_with_title",
+    "refs_with_authors",
+    "refs_with_venue",
+    "refs_metadata_ready",
+    "refs_metadata_user_ready",
+    "refs_missing_doi",
+    "refs_missing_title",
+    "refs_missing_authors",
+    "refs_missing_venue",
+    "refs_unresolved",
+    "refs_crossref_ok",
+    "refs_source_map_ok",
+)
+
 
 def _now() -> float:
     return float(time.time())
@@ -73,6 +92,15 @@ def _fmt_done_message(stats: dict[str, Any]) -> str:
         f"元数据就绪 {ready}/{refs}（其中联网补齐 {online_ready}），"
         f"非期刊/免 DOI {non_article_ok}，待人工处理 {manual_repair}，联网查询 {attempts}。"
     )
+
+
+def _progress_stats_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    stats_raw = payload.get("stats")
+    stats = dict(stats_raw) if isinstance(stats_raw, dict) else {}
+    for key in _PROGRESS_STAT_KEYS:
+        if key in payload:
+            stats[key] = payload.get(key)
+    return stats
 
 
 def _pdf_md_coverage(src_root: Path, pdf_root: Path | None) -> dict[str, Any]:
@@ -156,6 +184,7 @@ def _worker(
     def _on_progress(payload: dict[str, Any]) -> None:
         if not isinstance(payload, dict):
             return
+        stats = _progress_stats_from_payload(payload)
         _set_state_if_current(
             run_id,
             stage=str(payload.get("stage") or "").strip(),
@@ -166,7 +195,7 @@ def _worker(
             refs_with_doi=int(payload.get("refs_with_doi", 0) or 0),
             refs_crossref_ok=int(payload.get("refs_crossref_ok", 0) or 0),
             refs_source_map_ok=int(payload.get("refs_source_map_ok", 0) or 0),
-            stats=dict(payload.get("stats") or {}),
+            stats=stats,
         )
 
     try:
@@ -189,12 +218,12 @@ def _worker(
         if isinstance(coverage, dict):
             merged_stats.update(coverage)
 
-        done_msg = _fmt_done_message(stats if isinstance(stats, dict) else {})
+        done_msg = _fmt_done_message(merged_stats)
         try:
             pdf_total = int((coverage or {}).get("pdf_total", 0) or 0)
             missing_n = int((coverage or {}).get("missing_pdf_count", 0) or 0)
             if pdf_total > 0:
-                done_msg = done_msg + f"（MD 文档 {int(stats.get('docs_indexed', 0) or 0)}/{pdf_total} 篇 PDF）"
+                done_msg = done_msg + f"（MD 文档 {int(merged_stats.get('docs_indexed', 0) or 0)}/{pdf_total} 篇 PDF）"
             if missing_n > 0:
                 done_msg = done_msg + f"；另有 {missing_n} 篇 PDF 尚未生成主 MD。"
         except Exception:
@@ -265,24 +294,39 @@ def start_reference_sync(
             }
         )
 
-        t = threading.Thread(
-            target=_worker,
-            kwargs={
-                "run_id": run_id,
-                "src_root": src,
-                "db_dir": db,
-                "pdf_root": pdf,
-                "library_db_path": lib_db,
-                "incremental": bool(incremental),
-                "enable_title_lookup": bool(enable_title_lookup),
-                "crossref_time_budget_s": float(max(5.0, crossref_time_budget_s)),
-                "doi_prefetch_workers": int(max(1, doi_prefetch_workers)),
-            },
-            daemon=True,
-            name=f"kb-ref-sync-{run_id}",
-    )
-        _THREAD = t
-        t.start()
+        try:
+            t = threading.Thread(
+                target=_worker,
+                kwargs={
+                    "run_id": run_id,
+                    "src_root": src,
+                    "db_dir": db,
+                    "pdf_root": pdf,
+                    "library_db_path": lib_db,
+                    "incremental": bool(incremental),
+                    "enable_title_lookup": bool(enable_title_lookup),
+                    "crossref_time_budget_s": float(max(5.0, crossref_time_budget_s)),
+                    "doi_prefetch_workers": int(max(1, doi_prefetch_workers)),
+                },
+                daemon=True,
+                name=f"kb-ref-sync-{run_id}",
+            )
+            _THREAD = t
+            t.start()
+        except Exception as exc:
+            _THREAD = None
+            _STATE.update(
+                {
+                    "running": False,
+                    "status": "error",
+                    "stage": "error",
+                    "message": "参考文献后台同步无法启动，请稍后重试。",
+                    "error": f"thread_start_failed: {exc}",
+                    "finished_at": _now(),
+                    "updated_at": _now(),
+                }
+            )
+            return {"started": False, "reason": "thread_start_failed", "run_id": run_id}
         return {"started": True, "run_id": run_id}
 
 

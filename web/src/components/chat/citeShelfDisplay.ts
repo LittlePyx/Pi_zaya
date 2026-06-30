@@ -1,5 +1,7 @@
 import type { ConversionQualitySummary, LibrarySourceQualityItem } from '../../api/library'
 import type { ShelfMetadataQuality } from '../../api/references'
+import { basenameFromSourcePath, normalizeSourcePathForMatch } from '../../utils/sourcePath'
+import { readerSourcePathsMatch } from './reader/readerLocateGuard'
 import type { ReaderLocateResult } from './reader/readerTypes'
 import {
   citationCardView,
@@ -60,12 +62,10 @@ export const SCOPE_FILTER_LABEL = (S: Record<string, string>): Record<ScopeFilte
 })
 
 export const normalizeSourceIdentity = (value: string | null | undefined): string =>
-  String(value || '').trim().replace(/\\/g, '/').toLowerCase()
+  normalizeSourcePathForMatch(value)
 
 export const basenameFromPath = (value: string): string => {
-  const text = String(value || '').trim()
-  if (!text) return ''
-  return text.split(/[\\/]/).filter(Boolean).pop() || text
+  return basenameFromSourcePath(value)
 }
 
 export const normalizeTitle = (value: string): string =>
@@ -177,7 +177,15 @@ export const sourceQualityForItem = (
   sourceQualityByPath: SourceQualityByPath,
 ): ConversionQualitySummary | null => {
   const sourcePath = String(item.sourcePath || '').trim()
-  return sourcePath ? sourceQualityByPath[sourcePath]?.conversion_quality || null : null
+  if (!sourcePath) return null
+  const exact = sourceQualityByPath[sourcePath]?.conversion_quality || null
+  if (exact) return exact
+  const sourceKey = normalizeSourceIdentity(sourcePath)
+  if (!sourceKey) return null
+  for (const [path, quality] of Object.entries(sourceQualityByPath)) {
+    if (normalizeSourceIdentity(path) === sourceKey) return quality?.conversion_quality || null
+  }
+  return null
 }
 
 export const sourceOpenQualityView = (
@@ -199,7 +207,7 @@ export const sourceOpenQualityView = (
       repairable: false,
     }
   }
-  if (locateResult && String(locateResult.sourcePath || '').trim() === sourcePath) {
+  if (locateResult && readerSourcePathsMatch(locateResult.sourcePath, sourcePath)) {
     const resultStatus = String(locateResult.status || '').trim().toLowerCase()
     const resultPrecision = String(locateResult.precision || '').trim().toLowerCase()
     const reason = String(locateResult.reason || locateResult.hint || '').trim()
@@ -371,7 +379,22 @@ export const metadataQuality = (item: CiteShelfItem): ShelfMetadataQuality | nul
   return raw as unknown as ShelfMetadataQuality
 }
 
+export const metadataExportAcceptance = (item: CiteShelfItem): Record<string, unknown> | null => {
+  const raw = item.metadataExportAcceptance
+  if (!raw || typeof raw !== 'object') return null
+  return raw
+}
+
+const metadataExportAcceptanceReady = (item: CiteShelfItem): boolean | null => {
+  const acceptance = metadataExportAcceptance(item)
+  if (!acceptance) return null
+  if (!('export_ready' in acceptance) && !('exportReady' in acceptance)) return null
+  return acceptance.export_ready === true || acceptance.exportReady === true
+}
+
 export const metadataQualityReady = (item: CiteShelfItem): boolean => {
+  const acceptanceReady = metadataExportAcceptanceReady(item)
+  if (acceptanceReady !== null) return acceptanceReady
   const quality = metadataQuality(item)
   if (!quality) return false
   const status = String(quality.status || '').trim().toLowerCase()
@@ -380,8 +403,14 @@ export const metadataQualityReady = (item: CiteShelfItem): boolean => {
 
 export const metadataQualityNeedsRepair = (item: CiteShelfItem): boolean => {
   const quality = metadataQuality(item)
-  if (!quality) return false
   if (metadataQualityReady(item)) return false
+  const acceptance = metadataExportAcceptance(item)
+  if (acceptance) {
+    const missing = Array.isArray(acceptance.missing_fields) ? acceptance.missing_fields : acceptance.missingFields
+    const issues = Array.isArray(acceptance.issue_codes) ? acceptance.issue_codes : acceptance.issueCodes
+    if ((Array.isArray(missing) && missing.length > 0) || (Array.isArray(issues) && issues.length > 0)) return true
+  }
+  if (!quality) return false
   return Boolean(quality.repairable || quality.retryable || (quality.issues || []).length > 0)
 }
 
@@ -497,11 +526,21 @@ export const groundedDisplaySummaryQuality = (
 
 export const shelfSummaryDisplay = (
   item: CiteShelfItem,
-  _cardView: ReturnType<typeof citationCardView>,
+  cardView: ReturnType<typeof citationCardView>,
   S: Record<string, string>,
 ): ShelfSummaryDisplay => {
   const quality = summaryQualityView(item, S)
   const sourceLabels = shelfSummarySourceLabels(S)
+  const cardSummary = item.cardView
+    ? compactShelfSummaryCandidate(cardView.summary)
+    : ''
+  if (cardSummary && !looksLowValueShelfSummary(cardSummary) && !looksMetadataOnlyShelfSummary(cardSummary)) {
+    return {
+      line: cardSummary,
+      sourceLabel: sourceLabels.citationCard,
+      quality: groundedDisplaySummaryQuality(quality, S),
+    }
+  }
   const source = String(item.summarySource || '').trim().toLowerCase()
   const existing = compactShelfSummaryCandidate(item.summaryLine)
   if (

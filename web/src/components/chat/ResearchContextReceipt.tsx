@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { basenameFromSourcePath } from '../../utils/sourcePath'
 import type { ReaderOpenPayload } from './reader/readerTypes'
 import type { SelectedResearchContextItem, SelectedResearchContextPack } from './researchContextPack'
 import { contextItemMeta, contextItemTitle } from './messageTraceUtils'
@@ -98,7 +99,7 @@ export function ResearchContextReceipt({
                         onClick={() => {
                           onOpenReader?.({
                             sourcePath: item.sourcePath,
-                            sourceName: item.sourceName || pack.guideSourceName || item.sourcePath.split(/[\\/]/).pop() || '',
+                            sourceName: item.sourceName || pack.guideSourceName || basenameFromSourcePath(item.sourcePath) || '',
                             headingPath: location,
                             snippet: item.excerpt || item.summary || title,
                             highlightSnippet: item.excerpt || item.summary || title,

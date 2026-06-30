@@ -1,3 +1,5 @@
+import { internalDebugEnabled } from '../../utils/internalDebug'
+
 const MESSAGE_LIST_PREP_PERF_LIMIT = 180
 
 export interface MessageListPrepPerfEvent {
@@ -32,6 +34,7 @@ export function messageListPerfNow() {
 
 function ensureMessageListPerfApi() {
   if (typeof window === 'undefined') return
+  if (!internalDebugEnabled()) return
   const w = window as MessageListDebugWindow
   if (w.__kbMessageListPerf) return
   w.__kbMessageListPerf = {

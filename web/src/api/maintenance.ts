@@ -1,4 +1,4 @@
-import { api, authFetch } from './client'
+import { api, authFetch, responseError } from './client'
 
 export interface MaintenanceBackupItem {
   name: string
@@ -137,13 +137,7 @@ function filenameFromDisposition(header: string | null, fallback: string) {
 async function downloadUrl(url: string, fallbackName: string) {
   const res = await authFetch(url, { method: 'GET' })
   if (!res.ok) {
-    let detail = ''
-    try {
-      detail = await res.text()
-    } catch {
-      detail = ''
-    }
-    throw new Error(`${res.status} ${res.statusText}${detail ? `: ${detail}` : ''}`)
+    throw await responseError(res)
   }
   const blob = await res.blob()
   const filename = filenameFromDisposition(res.headers.get('content-disposition'), fallbackName)

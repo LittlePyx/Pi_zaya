@@ -8,8 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e": "node scripts/playwright-with-port.mjs",
+    "test:e2e:smoke": "node scripts/playwright-with-port.mjs auth-gate.spec.ts api-client.spec.ts chat-refs-perf.spec.ts reader-locate-guard.spec.ts settings-api-guidance.spec.ts",
+    "test:e2e:headed": "node scripts/playwright-with-port.mjs --headed"
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.0",

@@ -62,6 +62,25 @@ test('refs panel renders provisional cards while refs enrichment is pending', as
   await expect(page.getByTestId('refs-panel-open-payload')).toContainText('"strictLocate": false')
 })
 
+test('refs panel renders synthetic research basket evidence as non-openable context', async ({ page }) => {
+  await page.goto('/__refs_panel_test__?scenario=research-basket-synthetic')
+
+  await expect(page.getByTestId('refs-panel-test-scenario')).toHaveText('research-basket-synthetic')
+  await page.getByRole('button').first().click()
+  await expect(page.locator('.kb-ref-title')).toContainText('Research basket: A hard to find preprint')
+  await expect(page.locator('.kb-ref-card').first()).toContainText('Research basket')
+  await expect(page.locator('.kb-ref-card').first()).toContainText('Selected Context')
+  await expect(page.locator('.kb-ref-card').first()).toContainText('10.1234/example.1')
+
+  const actions = page.locator('.kb-ref-action')
+  await expect(actions).toHaveCount(4)
+  await expect(actions.nth(0)).toBeDisabled()
+  await expect(actions.nth(1)).toBeDisabled()
+  await expect(actions.nth(2)).toBeDisabled()
+  await expect(actions.nth(3)).toBeDisabled()
+  await expect(page.getByTestId('refs-panel-open-payload')).toContainText('(empty)')
+})
+
 test('refs panel surfaces reference-card polish status', async ({ page }) => {
   await page.goto('/__refs_panel_test__?scenario=polish-status')
 

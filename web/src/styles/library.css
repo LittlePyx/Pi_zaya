@@ -995,22 +995,22 @@
   gap: 2px 8px;
 }
 
-.kb-lib-rename-list .ant-list-items {
+.kb-lib-rename-list-body {
   display: grid;
   gap: 0;
 }
 
-.kb-lib-rename-list .ant-list-pagination {
+.kb-lib-list-pagination {
   margin-top: 12px;
 }
 
-.kb-lib-rename-list-item.ant-list-item {
-  padding: 12px 0 !important;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 66%, transparent) !important;
+.kb-lib-rename-list-item {
+  padding: 12px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 66%, transparent);
 }
 
-.kb-lib-rename-list-item.ant-list-item:last-child {
-  border-bottom: none !important;
+.kb-lib-rename-list-item:last-child {
+  border-bottom: none;
 }
 
 .kb-lib-rename-item {
@@ -1453,16 +1453,26 @@
   border-bottom-color: color-mix(in srgb, var(--border) 80%, transparent) !important;
 }
 
-.kb-lib-file-item.ant-list-item {
-  display: block !important;
+.kb-lib-file-item {
+  display: block;
   width: 100%;
-  padding: 7px 0 !important;
-  border-bottom: none !important;
+  padding: 7px 0;
+  border-bottom: none;
 }
 
-.kb-lib-file-list .ant-list-items {
+.kb-lib-file-list,
+.kb-lib-upload-draft-list-body {
   display: grid;
   gap: 5px;
+}
+
+.kb-lib-upload-draft-item {
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.kb-lib-upload-draft-item:last-child {
+  border-bottom: none;
 }
 
 .kb-lib-file-virtual-shell {
@@ -4089,6 +4099,24 @@ button.kb-lib-quality-report-metric:disabled {
   min-width: 28px;
   height: 28px;
   padding-inline: 0;
+}
+
+.kb-lib-delete-confirm {
+  display: grid;
+  gap: 8px;
+}
+
+.kb-lib-delete-confirm .ant-typography {
+  margin: 0;
+}
+
+.kb-lib-batch-confirm {
+  display: grid;
+  gap: 8px;
+}
+
+.kb-lib-batch-confirm .ant-typography {
+  margin: 0;
 }
 
 .kb-lib-tabs .ant-tabs-nav {

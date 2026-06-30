@@ -20,6 +20,12 @@ import {
   READER_STANDALONE_WINDOW_NAME,
   READER_SESSION_SYNC_CHANNEL,
 } from '../components/chat/reader/readerTypes'
+import { normalizeReaderSourcePathForMatch } from '../components/chat/reader/readerLocateGuard'
+import {
+  sanitizeReaderLocateCandidates,
+  sanitizeReaderLocateTarget,
+} from '../components/chat/reader/readerOpenPayloadUtils'
+import { readerHighlightsSignature, stableReaderHighlightId } from '../components/chat/reader/readerSessionState'
 import type { CiteDetail } from '../components/chat/citationState'
 import { useT } from '../i18n'
 
@@ -68,27 +74,7 @@ function numberField(rec: Record<string, unknown>, key: string) {
 }
 
 function candidateList(value: unknown): ReaderLocateCandidate[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const out = value
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-    .map((item) => ({
-      headingPath: stringField(item, 'headingPath') || undefined,
-      snippet: stringField(item, 'snippet') || undefined,
-      highlightSnippet: stringField(item, 'highlightSnippet') || undefined,
-      anchorId: stringField(item, 'anchorId') || undefined,
-      blockId: stringField(item, 'blockId') || undefined,
-      anchorKind: stringField(item, 'anchorKind') || undefined,
-      anchorNumber: numberField(item, 'anchorNumber'),
-    }))
-    .filter((item) => Boolean(
-      item.headingPath
-      || item.snippet
-      || item.highlightSnippet
-      || item.anchorId
-      || item.blockId
-      || item.anchorKind
-      || item.anchorNumber,
-    ))
+  const out = sanitizeReaderLocateCandidates(value)
   return out.length > 0 ? out : undefined
 }
 
@@ -96,73 +82,42 @@ function normalizeSessionHighlights(value: unknown): ReaderSessionHighlight[] {
   if (!Array.isArray(value)) return []
   return value
     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-    .map((item) => ({
-      id: stringField(item, 'id') || `imported-${Math.random().toString(36).slice(2, 10)}`,
-      text: stringField(item, 'text'),
-      noteKind: stringField(item, 'noteKind') || undefined,
-      sourcePath: stringField(item, 'sourcePath') || undefined,
-      sourceName: stringField(item, 'sourceName') || undefined,
-      conversationId: stringField(item, 'conversationId') || undefined,
-      messageId: numberField(item, 'messageId'),
-      locateRequestId: numberField(item, 'locateRequestId'),
-      locateFeedbackKey: stringField(item, 'locateFeedbackKey') || undefined,
-      createdAt: numberField(item, 'createdAt'),
-      updatedAt: numberField(item, 'updatedAt'),
-      feedback: stringField(item, 'feedback') || undefined,
-      feedbackAt: numberField(item, 'feedbackAt'),
-      headingPath: stringField(item, 'headingPath') || undefined,
-      startOffset: numberField(item, 'startOffset'),
-      endOffset: numberField(item, 'endOffset'),
-      blockId: stringField(item, 'blockId') || undefined,
-      anchorId: stringField(item, 'anchorId') || undefined,
-      occurrence: numberField(item, 'occurrence'),
-      readableIndex: numberField(item, 'readableIndex'),
-      documentOccurrence: numberField(item, 'documentOccurrence'),
-      startReadableIndex: numberField(item, 'startReadableIndex'),
-      endReadableIndex: numberField(item, 'endReadableIndex'),
-    }))
+    .map((item) => {
+      const highlight = {
+        id: stringField(item, 'id'),
+        text: stringField(item, 'text'),
+        noteKind: stringField(item, 'noteKind') || undefined,
+        sourcePath: stringField(item, 'sourcePath') || undefined,
+        sourceName: stringField(item, 'sourceName') || undefined,
+        conversationId: stringField(item, 'conversationId') || undefined,
+        messageId: numberField(item, 'messageId'),
+        locateRequestId: numberField(item, 'locateRequestId'),
+        locateFeedbackKey: stringField(item, 'locateFeedbackKey') || undefined,
+        createdAt: numberField(item, 'createdAt'),
+        updatedAt: numberField(item, 'updatedAt'),
+        feedback: stringField(item, 'feedback') || undefined,
+        feedbackAt: numberField(item, 'feedbackAt'),
+        headingPath: stringField(item, 'headingPath') || undefined,
+        startOffset: numberField(item, 'startOffset'),
+        endOffset: numberField(item, 'endOffset'),
+        blockId: stringField(item, 'blockId') || undefined,
+        anchorId: stringField(item, 'anchorId') || undefined,
+        occurrence: numberField(item, 'occurrence'),
+        readableIndex: numberField(item, 'readableIndex'),
+        documentOccurrence: numberField(item, 'documentOccurrence'),
+        startReadableIndex: numberField(item, 'startReadableIndex'),
+        endReadableIndex: numberField(item, 'endReadableIndex'),
+      }
+      return {
+        ...highlight,
+        id: highlight.id || stableReaderHighlightId(highlight),
+      }
+    })
     .filter((item) => Boolean(item.id && item.text))
 }
 
-function readerHighlightsSignature(items: ReaderSessionHighlight[]) {
-  return items
-    .map((item) => [
-      String(item.id || '').trim(),
-      String(item.updatedAt || item.createdAt || ''),
-      String(item.feedback || ''),
-      String(item.text || '').length,
-    ].join(':'))
-    .join('|')
-}
-
 function normalizeLocateTarget(value: unknown): ReaderLocateTarget | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const rec = value as Record<string, unknown>
-  const target: ReaderLocateTarget = {
-    segmentId: stringField(rec, 'segmentId') || undefined,
-    sourceSegmentId: stringField(rec, 'sourceSegmentId') || undefined,
-    headingPath: stringField(rec, 'headingPath') || undefined,
-    snippet: stringField(rec, 'snippet') || undefined,
-    highlightSnippet: stringField(rec, 'highlightSnippet') || undefined,
-    evidenceQuote: stringField(rec, 'evidenceQuote') || undefined,
-    anchorText: stringField(rec, 'anchorText') || undefined,
-    hitLevel: stringField(rec, 'hitLevel') || undefined,
-    blockId: stringField(rec, 'blockId') || undefined,
-    anchorId: stringField(rec, 'anchorId') || undefined,
-    anchorKind: stringField(rec, 'anchorKind') || undefined,
-    anchorNumber: numberField(rec, 'anchorNumber'),
-    claimType: stringField(rec, 'claimType') || undefined,
-    locatePolicy: stringField(rec, 'locatePolicy') || undefined,
-    locateSurfacePolicy: stringField(rec, 'locateSurfacePolicy') || undefined,
-    snippetAliases: Array.isArray(rec.snippetAliases)
-      ? rec.snippetAliases.map((item) => String(item || '').trim()).filter(Boolean)
-      : undefined,
-    relatedBlockIds: Array.isArray(rec.relatedBlockIds)
-      ? rec.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
-      : undefined,
-  }
-  if (Object.values(target).some((item) => Boolean(item))) return target
-  return undefined
+  return sanitizeReaderLocateTarget(value)
 }
 
 function normalizeReaderPayload(record: ReaderSessionRecord | null): ReaderOpenPayload | null {
@@ -301,7 +256,10 @@ export default function ReaderPage() {
         : {}
       if (String(data.type || '') !== 'reader-session-state') return
       const sourcePath = String(data.sourcePath || '').trim()
-      if (!sourcePath || sourcePath !== payloadSourcePath) return
+      if (
+        !normalizeReaderSourcePathForMatch(sourcePath)
+        || normalizeReaderSourcePathForMatch(sourcePath) !== normalizeReaderSourcePathForMatch(payloadSourcePath)
+      ) return
       if (String(data.sessionId || '').trim() === sessionId) return
       const highlights = normalizeSessionHighlights(data.highlights)
       setSessionHighlights((current) => {

@@ -1,4 +1,5 @@
 import type { ReaderOpenPayload } from '../chat/reader/readerTypes'
+import { basenameFromSourcePath, normalizeSourcePathForMatch as normalizeSourcePathForMatchShared } from '../../utils/sourcePath'
 
 export interface RefsPanelRefUiMeta {
   display_name?: string
@@ -81,7 +82,7 @@ function normalizeRefFocusText(input: unknown) {
 }
 
 function normalizeSourcePathForMatch(input: unknown): string {
-  return String(input || '').trim().replace(/\\/g, '/').toLowerCase()
+  return normalizeSourcePathForMatchShared(input)
 }
 
 function sourceDocumentIdentityKey(input: unknown): string {
@@ -98,11 +99,7 @@ function sourceDocumentIdentityKey(input: unknown): string {
 }
 
 function normalizeSourceNameIdentity(input: unknown): string {
-  const file = String(input || '')
-    .trim()
-    .replace(/\\/g, '/')
-    .split('/')
-    .pop() || ''
+  const file = basenameFromSourcePath(input) || String(input || '').trim()
   return file
     .replace(/\.en\.md$/i, '')
     .replace(/\.md$/i, '')
@@ -307,7 +304,8 @@ export function prepareRefsPanelHits(
     : rawHits.filter((hit) => !shouldSuppressRefHitCard(prompt, hit))
   const activeSourcePath = String(opts?.activeSourcePath || '').trim()
   const activeSourceName = String(opts?.activeSourceName || '').trim()
-  const hideActiveSource = Boolean(activeSourcePath || activeSourceName)
+  const hasPendingHit = rawHits.some((hit) => String(hit?.meta?.ref_pack_state || '').trim().toLowerCase() === 'pending')
+  const hideActiveSource = Boolean(activeSourcePath || activeSourceName) && displayState !== 'pending' && !hasPendingHit
   const withoutActiveSource = hideActiveSource
     ? filteredByRelevance.filter((hit) => !hitMatchesActiveSource(hit, activeSourcePath, activeSourceName))
     : filteredByRelevance

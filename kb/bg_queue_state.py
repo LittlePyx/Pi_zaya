@@ -15,8 +15,41 @@ def _active_tasks(state: dict[str, Any]) -> list[dict[str, Any]]:
     return tasks
 
 
-def _task_info_from_active_record(rec: dict[str, Any]) -> dict[str, Any]:
+def _task_pdf_key(task: dict[str, Any]) -> str:
+    raw = str((task or {}).get("pdf") or "").strip()
+    if not raw:
+        return ""
+    try:
+        return str(Path(raw).expanduser().resolve(strict=False)).casefold()
+    except Exception:
+        return raw.casefold()
+
+
+def _compact_repair_context(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    issue_codes = [
+        str(item or "").strip()
+        for item in list(value.get("issue_codes") or [])
+        if str(item or "").strip()
+    ]
+    out = {
+        "action": str(value.get("action") or ""),
+        "scope": str(value.get("scope") or ""),
+        "reason": str(value.get("reason") or ""),
+        "source": str(value.get("source") or ""),
+        "repair_run_id": str(value.get("repair_run_id") or ""),
+        "issue_codes": issue_codes[:30],
+    }
     return {
+        key: item
+        for key, item in out.items()
+        if (item if not isinstance(item, list) else bool(item))
+    }
+
+
+def _task_info_from_active_record(rec: dict[str, Any]) -> dict[str, Any]:
+    info = {
         "_tid": str(rec.get("_tid") or ""),
         "pdf": str(rec.get("pdf") or ""),
         "name": str(rec.get("name") or ""),
@@ -29,6 +62,10 @@ def _task_info_from_active_record(rec: dict[str, Any]) -> dict[str, Any]:
         "cur_llm_profile": str(rec.get("cur_llm_profile") or ""),
         "cur_log_tail": list(rec.get("cur_log_tail") or []),
     }
+    repair_context = _compact_repair_context(rec.get("repair_context"))
+    if repair_context:
+        info["repair_context"] = repair_context
+    return info
 
 
 def _sync_legacy_summary_fields(state: dict[str, Any]) -> None:
@@ -47,14 +84,27 @@ def _sync_legacy_summary_fields(state: dict[str, Any]) -> None:
     state["cur_log_tail"] = list(primary.get("cur_log_tail") or [])
 
 
-def enqueue(state: dict[str, Any], lock: Lock, task: dict[str, Any]) -> None:
+def enqueue(state: dict[str, Any], lock: Lock, task: dict[str, Any]) -> bool:
     with lock:
+        task_key = _task_pdf_key(task)
+        if task_key:
+            queued_keys = {_task_pdf_key(item) for item in list(state.get("queue") or [])}
+            if task_key in queued_keys:
+                _sync_legacy_summary_fields(state)
+                return False
+            if not bool(state.get("cancel")):
+                active_keys = {_task_pdf_key(item) for item in _active_tasks(state)}
+                if task_key in active_keys:
+                    _sync_legacy_summary_fields(state)
+                    return False
         if (not bool(state.get("running"))) and (not state.get("queue")) and (not _active_tasks(state)):
             state["done"] = 0
             state["total"] = 0
             state["last"] = ""
         state.setdefault("queue", []).append(task)
         state["total"] = int(state.get("total", 0)) + 1
+        _sync_legacy_summary_fields(state)
+        return True
 
 
 def remove_queued_tasks_for_pdf(state: dict[str, Any], lock: Lock, pdf_path: Path) -> int:
@@ -81,13 +131,19 @@ def remove_queued_tasks_for_pdf(state: dict[str, Any], lock: Lock, pdf_path: Pat
 
 def cancel_all(state: dict[str, Any], lock: Lock, message: str) -> None:
     with lock:
-        state["cancel"] = True
+        active = _active_tasks(state)
+        state["cancel"] = bool(active)
         state["cur_page_msg"] = message
-        for task in _active_tasks(state):
+        state["last"] = message
+        state["queue"] = []
+        done = int(state.get("done", 0) or 0)
+        state["total"] = done + len(active)
+        for task in active:
             try:
                 task["cur_page_msg"] = str(message or "")
             except Exception:
                 pass
+        _sync_legacy_summary_fields(state)
 
 
 def snapshot(state: dict[str, Any], lock: Lock) -> dict[str, Any]:
@@ -108,9 +164,10 @@ def snapshot(state: dict[str, Any], lock: Lock) -> dict[str, Any]:
 def begin_next_task_or_idle(state: dict[str, Any], lock: Lock) -> dict[str, Any] | None:
     with lock:
         if state.get("cancel"):
-            state.setdefault("queue", []).clear()
-            state["total"] = int(state.get("done", 0)) + len(_active_tasks(state))
-        state["cancel"] = False
+            if _active_tasks(state):
+                _sync_legacy_summary_fields(state)
+                return None
+            state["cancel"] = False
 
         queue = state.get("queue") or []
         if queue:
@@ -121,6 +178,7 @@ def begin_next_task_or_idle(state: dict[str, Any], lock: Lock) -> dict[str, Any]
                     "pdf": str(task.get("pdf") or ""),
                     "name": str(task.get("name") or ""),
                     "replace": bool(task.get("replace", False)),
+                    "repair_context": _compact_repair_context(task.get("repair_context")),
                     "started_at": float(time.time()),
                     "cur_page_done": 0,
                     "cur_page_total": 0,

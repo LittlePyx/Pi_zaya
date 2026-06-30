@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from api.deps import get_settings
+from api.internal_access import require_internal_api
 from api.routers.settings import production_readiness_payload
 from kb.maintenance import (
     acknowledge_latest_restore_review,
@@ -20,7 +21,7 @@ from kb.maintenance import (
     verify_backup_archive,
 )
 
-router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
+router = APIRouter(prefix="/api/maintenance", tags=["maintenance"], dependencies=[Depends(require_internal_api)])
 
 
 class CreateBackupBody(BaseModel):
@@ -34,7 +35,7 @@ class CleanupBackupsBody(BaseModel):
 
 class RestoreBackupBody(BaseModel):
     confirm: str = ""
-    components: dict[str, bool] = {}
+    components: dict[str, bool] = Field(default_factory=dict)
     create_pre_restore_backup: bool = True
     force: bool = False
 

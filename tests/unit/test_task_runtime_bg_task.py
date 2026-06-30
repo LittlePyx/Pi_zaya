@@ -10,7 +10,9 @@ from kb.task_runtime import (
     _augment_prompt_with_source_hint,
     _await_stored_doc_list_contract,
     _bg_ingest_py_path,
+    _bg_conversion_result_message,
     _bg_post_convert_quality_gate,
+    _bg_run_ingest_subprocess,
     _build_bg_task,
     _build_doc_list_contract_from_rendered_payload,
     _build_doc_list_refs_render_payload,
@@ -110,14 +112,65 @@ def test_bg_task_carries_quality_repair_context_and_resolves_ingest_script():
             "scope": "document",
             "reason": "weak conversion",
             "source": "test",
+            "repair_run_id": "run-123",
             "issue_codes": ["weak_structure"],
         },
     )
 
     assert task["repair_context"]["action"] == "reconvert"
+    assert task["repair_context"]["repair_run_id"] == "run-123"
     assert task["repair_context"]["issue_codes"] == ["weak_structure"]
     assert _bg_ingest_py_path().name == "ingest.py"
     assert _bg_ingest_py_path().exists()
+
+
+def test_bg_conversion_result_treats_late_cancel_as_cancelled():
+    ok, out_folder, msg = _bg_conversion_result_message(
+        True,
+        Path("out/paper"),
+        lambda: True,
+    )
+
+    assert ok is False
+    assert out_folder == "cancelled"
+    assert msg == "CANCELLED"
+
+
+def test_bg_ingest_subprocess_terminates_when_cancel_requested(monkeypatch):
+    from kb import task_runtime
+
+    class FakeProc:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+            self.killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            return "", "cancelled"
+
+    fake = FakeProc()
+    monkeypatch.setattr(task_runtime.subprocess, "Popen", lambda *args, **kwargs: fake)
+
+    result = _bg_run_ingest_subprocess(["python", "ingest.py"], lambda: True)
+
+    assert result.returncode == -15
+    assert result.stderr == "cancelled"
+    assert fake.terminated is True
+    assert fake.killed is False
 
 
 def test_post_convert_source_retry_targets_source_level_conversion_damage(monkeypatch):
@@ -189,7 +242,7 @@ def test_post_convert_quality_gate_autofixes_and_records_attempt(monkeypatch, tm
 
     monkeypatch.setattr(task_runtime, "rebuild_structured_indices_for_markdown", fake_rebuild)
 
-    result = _bg_post_convert_quality_gate(md_path, task_id="task-1", speed_mode="balanced")
+    result = _bg_post_convert_quality_gate(md_path, task_id="task-1", repair_run_id="run-123", speed_mode="balanced")
 
     assert result["indexable"] is True
     assert result["status"] == "ready"
@@ -203,6 +256,7 @@ def test_post_convert_quality_gate_autofixes_and_records_attempt(monkeypatch, tm
     assert attempt["status"] == "autofixed"
     assert attempt["action"] == "none"
     assert attempt["task_id"] == "task-1"
+    assert attempt["repair_run_id"] == "run-123"
     assert attempt["extra"]["auto_repair"]["changed"] is True
     assert attempt["extra"]["structured_indices_rebuilt"] is True
 
@@ -807,6 +861,128 @@ def test_build_precomputed_refs_render_payload_uses_bounded_full_variant(monkeyp
     assert kwargs.get("allow_exact_locate") is True
 
 
+def test_build_precomputed_refs_render_payload_keeps_synthetic_basket_card_non_openable(monkeypatch):
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: None)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_refs_pack_render_signature", lambda **kwargs: "sig-basket")
+
+    def fail_enrich_refs_payload(*args, **kwargs):  # pragma: no cover - assertion helper
+        raise AssertionError("synthetic-only basket refs should not call refs enrichment")
+
+    monkeypatch.setattr(reference_ui, "enrich_refs_payload", fail_enrich_refs_payload)
+
+    payload, sig = _build_precomputed_refs_render_payload(
+        user_msg_id=9,
+        prompt="Use my selected item",
+        prompt_sig="sig-9",
+        hits=[
+            {
+                "text": "Title: A hard to find preprint\nDOI: 10.1234/example.1\nSummary: selected metadata",
+                "score": 999.0,
+                "meta": {
+                    "source_path": "__research_basket__/item_1_deadbeef",
+                    "source_name": "Research basket: A hard to find preprint",
+                    "title": "A hard to find preprint",
+                    "doi": "10.1234/example.1",
+                    "ref_pack_state": "ready",
+                    "research_basket_evidence": True,
+                    "basket_source_role": "synthetic_basket_item",
+                },
+            }
+        ],
+        scores=[999.0],
+        used_query="",
+        used_translation=False,
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+        library_db_path=None,
+    )
+
+    assert sig == "sig-basket"
+    assert payload is not None
+    assert payload["display_state"] == "ready"
+    assert len(payload["hits"]) == 1
+    hit = payload["hits"][0]
+    assert hit["meta"]["source_path"].startswith("__research_basket__/")
+    assert hit["meta"]["ref_display_reason"] == "research_basket_evidence"
+    assert hit["ui_meta"]["display_name"] == "Research basket: A hard to find preprint"
+    assert hit["ui_meta"]["can_open"] is False
+    assert not hit["ui_meta"].get("source_path")
+    assert hit["ui_meta"]["citation_meta"]["doi"] == "10.1234/example.1"
+
+
+def test_build_precomputed_refs_render_payload_appends_synthetic_basket_after_real_refs(monkeypatch):
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: None)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_refs_pack_render_signature", lambda **kwargs: "sig-mixed")
+
+    def fake_enrich_refs_payload(refs_by_user, **kwargs):
+        calls["refs_by_user"] = refs_by_user
+        return {
+            10: {
+                "hits": [
+                    {
+                        "text": "real rendered card",
+                        "meta": {"source_path": "db/real.en.md", "ref_pack_state": "ready"},
+                        "ui_meta": {"display_name": "real.pdf", "source_path": "db/real.en.md", "can_open": True},
+                    }
+                ],
+                "payload_mode": "full",
+                "display_state": "ready",
+            }
+        }
+
+    monkeypatch.setattr(reference_ui, "enrich_refs_payload", fake_enrich_refs_payload)
+
+    payload, sig = _build_precomputed_refs_render_payload(
+        user_msg_id=10,
+        prompt="Compare these",
+        prompt_sig="sig-10",
+        hits=[
+            {
+                "text": "real evidence",
+                "meta": {"source_path": "db/real.en.md", "ref_pack_state": "ready"},
+                "score": 4.0,
+            },
+            {
+                "text": "Title: Basket-only reference\nSummary: selected metadata",
+                "meta": {
+                    "source_path": "__research_basket__/item_2_beef",
+                    "source_name": "Research basket: Basket-only reference",
+                    "title": "Basket-only reference",
+                    "ref_pack_state": "ready",
+                    "research_basket_evidence": True,
+                    "basket_source_role": "synthetic_basket_item",
+                },
+                "score": 998.0,
+            },
+        ],
+        scores=[4.0, 998.0],
+        used_query="compare",
+        used_translation=False,
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+        library_db_path=None,
+    )
+
+    assert sig == "sig-mixed"
+    assert payload is not None
+    assert [hit["meta"]["source_path"] for hit in payload["hits"]] == [
+        "db/real.en.md",
+        "__research_basket__/item_2_beef",
+    ]
+    assert (calls.get("refs_by_user") or {}).get(10, {}).get("hits")[0]["meta"]["source_path"] == "db/real.en.md"
+    assert len((calls.get("refs_by_user") or {}).get(10, {}).get("hits")) == 1
+    synthetic_ui = payload["hits"][1]["ui_meta"]
+    assert synthetic_ui["can_open"] is False
+    assert not synthetic_ui.get("source_path")
+    assert payload["pipeline_debug"]["research_basket_synthetic_hit_count"] == 1
+
+
 def test_exclude_bound_source_hits_for_cross_paper_refs_drops_current_paper_before_grouping():
     hits = [
         {
@@ -967,6 +1143,193 @@ def test_await_stored_doc_list_contract_waits_for_assistant_meta(tmp_path: Path)
             "source_name": "ICIP-2025-SCIGS.pdf",
         }
     ]
+
+
+def test_gen_start_task_stores_error_when_thread_start_fails(monkeypatch, tmp_path: Path):
+    from kb import runtime_state as RUNTIME
+    import kb.task_runtime as task_runtime
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("generation")
+    task_id = "task-start-fail"
+    session_id = "session-start-fail"
+    assistant_msg_id = store.append_message(conv_id, "assistant", task_runtime._live_assistant_text(task_id))
+
+    class _FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("thread pool unavailable")
+
+    monkeypatch.setattr(task_runtime.threading, "Thread", _FailingThread)
+    with RUNTIME.GEN_LOCK:
+        RUNTIME.GEN_TASKS.pop(session_id, None)
+
+    try:
+        ok = task_runtime._gen_start_task(
+            {
+                "session_id": session_id,
+                "id": task_id,
+                "conv_id": conv_id,
+                "chat_db": str(tmp_path / "chat.sqlite3"),
+                "assistant_msg_id": assistant_msg_id,
+            }
+        )
+
+        snap = task_runtime._gen_get_task(session_id) or {}
+        messages = store.get_messages(conv_id)
+        assistant = next(item for item in messages if int(item["id"]) == assistant_msg_id)
+
+        assert ok is False
+        assert snap["status"] == "error"
+        assert snap["stage"] == "error"
+        assert snap["error"] == "thread_start_failed"
+        assert snap["answer"] == task_runtime.GENERATION_START_FAILED_MESSAGE
+        assert snap["partial"] == task_runtime.GENERATION_START_FAILED_MESSAGE
+        assert snap["char_count"] == len(task_runtime.GENERATION_START_FAILED_MESSAGE)
+        assert assistant["content"] == task_runtime.GENERATION_START_FAILED_MESSAGE
+    finally:
+        with RUNTIME.GEN_LOCK:
+            RUNTIME.GEN_TASKS.pop(session_id, None)
+
+
+def test_gen_start_task_rejects_running_task_for_same_conversation(monkeypatch, tmp_path: Path):
+    from kb import runtime_state as RUNTIME
+    import kb.task_runtime as task_runtime
+
+    chat_db = tmp_path / "chat.sqlite3"
+    conv_id = "conv-running"
+    existing_session_id = "session-existing"
+
+    class _UnexpectedThread:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("thread should not be created")
+
+    monkeypatch.setattr(task_runtime.threading, "Thread", _UnexpectedThread)
+    with RUNTIME.GEN_LOCK:
+        RUNTIME.GEN_TASKS[existing_session_id] = {
+            "id": "task-existing",
+            "session_id": existing_session_id,
+            "conv_id": conv_id,
+            "chat_db": str(chat_db),
+            "status": "running",
+            "answer_ready": False,
+            "created_at": 1.0,
+            "updated_at": 1.0,
+        }
+
+    try:
+        ok = task_runtime._gen_start_task(
+            {
+                "session_id": "session-next",
+                "id": "task-next",
+                "conv_id": conv_id,
+                "chat_db": str(chat_db),
+            }
+        )
+
+        assert ok is False
+        assert task_runtime._gen_get_task("session-next") is None
+    finally:
+        with RUNTIME.GEN_LOCK:
+            RUNTIME.GEN_TASKS.pop(existing_session_id, None)
+            RUNTIME.GEN_TASKS.pop("session-next", None)
+
+
+def test_gen_start_task_allows_new_task_after_previous_cancel_request(monkeypatch, tmp_path: Path):
+    from kb import runtime_state as RUNTIME
+    import kb.task_runtime as task_runtime
+
+    chat_db = tmp_path / "chat.sqlite3"
+    conv_id = "conv-cancel-then-retry"
+    existing_session_id = "session-cancel-old"
+    started_threads: list[tuple] = []
+
+    class _NoopThread:
+        def __init__(self, *args, **kwargs):
+            started_threads.append((args, kwargs))
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(task_runtime.threading, "Thread", _NoopThread)
+    with RUNTIME.GEN_LOCK:
+        RUNTIME.GEN_TASKS[existing_session_id] = {
+            "id": "task-cancel-old",
+            "session_id": existing_session_id,
+            "conv_id": conv_id,
+            "chat_db": str(chat_db),
+            "status": "running",
+            "answer_ready": False,
+            "cancel": True,
+            "created_at": 1.0,
+            "updated_at": 1.0,
+        }
+
+    try:
+        ok = task_runtime._gen_start_task(
+            {
+                "session_id": "session-retry",
+                "id": "task-retry",
+                "conv_id": conv_id,
+                "chat_db": str(chat_db),
+            }
+        )
+
+        assert ok is True
+        assert len(started_threads) == 1
+        retry = task_runtime._gen_get_task("session-retry") or {}
+        assert retry["id"] == "task-retry"
+        assert retry["status"] == "running"
+    finally:
+        with RUNTIME.GEN_LOCK:
+            RUNTIME.GEN_TASKS.pop(existing_session_id, None)
+            RUNTIME.GEN_TASKS.pop("session-retry", None)
+
+
+def test_gen_worker_keeps_canceled_status_when_cancel_flag_precedes_error(tmp_path: Path):
+    from kb import runtime_state as RUNTIME
+    import kb.task_runtime as task_runtime
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("generation")
+    task_id = "task-cancel-before-error"
+    session_id = "session-cancel-before-error"
+    assistant_msg_id = store.append_message(conv_id, "assistant", task_runtime._live_assistant_text(task_id))
+
+    with RUNTIME.GEN_LOCK:
+        RUNTIME.GEN_TASKS[session_id] = {
+            "id": task_id,
+            "session_id": session_id,
+            "conv_id": conv_id,
+            "prompt": "",
+            "image_attachments": [],
+            "chat_db": str(tmp_path / "chat.sqlite3"),
+            "db_dir": str(tmp_path / "db"),
+            "assistant_msg_id": assistant_msg_id,
+            "status": "running",
+            "stage": "starting",
+            "partial": "",
+            "cancel": True,
+            "created_at": 1.0,
+            "updated_at": 1.0,
+        }
+
+    try:
+        task_runtime._gen_worker(session_id, task_id)
+
+        snap = task_runtime._gen_get_task(session_id) or {}
+        messages = store.get_messages(conv_id)
+        assistant = next(item for item in messages if int(item["id"]) == assistant_msg_id)
+
+        assert snap["status"] == "canceled"
+        assert snap["stage"] == "canceled"
+        assert snap["answer"] == "(Generation canceled)"
+        assert assistant["content"] == "(Generation canceled)"
+    finally:
+        with RUNTIME.GEN_LOCK:
+            RUNTIME.GEN_TASKS.pop(session_id, None)
 
 
 def test_filter_multi_paper_seed_docs_for_display_keeps_prompt_aligned_sci_docs():

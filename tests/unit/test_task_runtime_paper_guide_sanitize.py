@@ -1,3 +1,4 @@
+from kb.paper_guide_postprocess import _strip_model_ref_section
 from kb.task_runtime import _sanitize_paper_guide_answer_for_user
 
 
@@ -11,6 +12,11 @@ def test_sanitize_paper_guide_answer_strips_internal_doc_context_labels():
     assert "DOC-2" not in out
     assert "the supporting excerpts" not in out
     assert "source evidence" in out
+
+
+def test_strip_model_ref_section_removes_leading_internal_reference_block():
+    assert _strip_model_ref_section("Reference locate\n- [1] internal trace") == ""
+    assert _strip_model_ref_section("Answer first.\n\nReference locate\n- [1] internal trace") == "Answer first."
 
 
 def test_sanitize_paper_guide_answer_strips_empty_reference_number_shells():

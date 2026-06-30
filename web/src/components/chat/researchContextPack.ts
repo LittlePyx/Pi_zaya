@@ -16,8 +16,17 @@ export interface SelectedResearchContextItem {
   sourceName: string
   sourcePath: string
   locationLabel: string
+  headingPath: string
+  blockId: string
+  anchorId: string
+  anchorKind: string
   refNum: number | null
   doi: string
+  libraryMatchPath: string
+  libraryMatchStatus: string
+  libraryMatchTitle: string
+  libraryMatchDoi: string
+  libraryMatchYear: string
   authors: string
   year: string
   summary: string
@@ -114,8 +123,17 @@ function buildContextItem(item: CiteShelfItem): SelectedResearchContextItem | nu
     sourceName: clipText(firstText(item.sourceName, display.source), 240),
     sourcePath: asText(item.sourcePath),
     locationLabel: clipText(firstText(item.locationLabel, item.cardLocator, item.headingPath), 240),
+    headingPath: clipText(item.headingPath, 320),
+    blockId: clipText(item.blockId, 160),
+    anchorId: clipText(item.anchorId || item.anchor, 200),
+    anchorKind: clipText(item.anchorKind, 80),
     refNum: Number.isFinite(Number(item.displayNum || item.num)) ? Number(item.displayNum || item.num) : null,
     doi: normalizeDoi(firstText(item.doi, item.doiUrl)),
+    libraryMatchPath: asText(item.libraryMatchPath),
+    libraryMatchStatus: clipText(item.libraryMatchStatus, 80),
+    libraryMatchTitle: clipText(item.libraryMatchTitle, 240),
+    libraryMatchDoi: normalizeDoi(item.libraryMatchDoi),
+    libraryMatchYear: clipText(item.libraryMatchYear, 24),
     authors: clipText(firstText(item.authors, display.authors), 240),
     year: clipText(item.year, 24),
     summary,
@@ -139,8 +157,17 @@ export function normalizeSelectedResearchContextPack(raw: unknown): SelectedRese
         sourceName: clipText(itemObj.sourceName, 240),
         sourcePath: asText(itemObj.sourcePath),
         locationLabel: clipText(itemObj.locationLabel, 240),
+        headingPath: clipText(itemObj.headingPath, 320),
+        blockId: clipText(itemObj.blockId, 160),
+        anchorId: clipText(itemObj.anchorId, 200),
+        anchorKind: clipText(itemObj.anchorKind, 80),
         refNum: asNumber(itemObj.refNum) > 0 ? Math.floor(asNumber(itemObj.refNum)) : null,
         doi: normalizeDoi(itemObj.doi),
+        libraryMatchPath: asText(itemObj.libraryMatchPath),
+        libraryMatchStatus: clipText(itemObj.libraryMatchStatus, 80),
+        libraryMatchTitle: clipText(itemObj.libraryMatchTitle, 240),
+        libraryMatchDoi: normalizeDoi(itemObj.libraryMatchDoi),
+        libraryMatchYear: clipText(itemObj.libraryMatchYear, 24),
         authors: clipText(itemObj.authors, 240),
         year: clipText(itemObj.year, 24),
         summary: clipText(itemObj.summary, 900),

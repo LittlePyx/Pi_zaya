@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from kb.generation_state_runtime import (
+    _gen_store_answer,
     _gen_store_answer_provenance,
     _gen_store_answer_quality_meta,
     _gen_store_paper_guide_contract_meta,
+    _gen_store_partial,
     _gen_store_answer_provenance_async,
+    _gen_has_active_task_id,
+    _gen_has_running_for_conversation,
     _is_live_assistant_text,
     _live_assistant_task_id,
     _live_assistant_text,
     _should_run_provenance_async_refine,
+    _strip_internal_generation_markers,
 )
 
 
@@ -18,6 +23,150 @@ def test_live_assistant_helpers_roundtrip():
     assert _is_live_assistant_text(text, live_assistant_prefix="__LIVE__: ") is True
     assert _live_assistant_task_id(text, live_assistant_prefix="__LIVE__: ") == "task-123"
     assert _is_live_assistant_text("plain text", live_assistant_prefix="__LIVE__: ") is False
+
+
+def test_strip_internal_generation_markers_preserves_cites():
+    out = _strip_internal_generation_markers(
+        "draft [[SUPPORT:DOC-1-S2]] still cites [[CITE:ref-1:12]]"
+    )
+
+    assert "SUPPORT:" not in out
+    assert "[[CITE:ref-1:12]]" in out
+    assert out == "draft still cites [[CITE:ref-1:12]]"
+
+
+def test_gen_has_running_for_conversation_ignores_cancel_requested_task():
+    from kb import runtime_state as RUNTIME
+
+    session_id = "session-cancel-requested"
+    with RUNTIME.GEN_LOCK:
+        RUNTIME.GEN_TASKS[session_id] = {
+            "id": "task-cancel-requested",
+            "session_id": session_id,
+            "conv_id": "conv-cancel-requested",
+            "chat_db": "/tmp/chat.sqlite3",
+            "status": "running",
+            "answer_ready": False,
+            "cancel": True,
+            "created_at": 1.0,
+            "updated_at": 1.0,
+        }
+
+    try:
+        assert _gen_has_running_for_conversation(
+            "conv-cancel-requested",
+            chat_db_path="/tmp/chat.sqlite3",
+        ) is False
+    finally:
+        with RUNTIME.GEN_LOCK:
+            RUNTIME.GEN_TASKS.pop(session_id, None)
+
+
+def test_gen_has_running_for_conversation_keeps_active_task_blocking():
+    from kb import runtime_state as RUNTIME
+
+    session_id = "session-active-running"
+    with RUNTIME.GEN_LOCK:
+        RUNTIME.GEN_TASKS[session_id] = {
+            "id": "task-active-running",
+            "session_id": session_id,
+            "conv_id": "conv-active-running",
+            "chat_db": "/tmp/chat.sqlite3",
+            "status": "running",
+            "answer_ready": False,
+            "cancel": False,
+            "created_at": 1.0,
+            "updated_at": 1.0,
+        }
+
+    try:
+        assert _gen_has_running_for_conversation(
+            "conv-active-running",
+            chat_db_path="/tmp/chat.sqlite3",
+        ) is True
+    finally:
+        with RUNTIME.GEN_LOCK:
+            RUNTIME.GEN_TASKS.pop(session_id, None)
+
+
+def test_gen_has_active_task_id_detects_uncancelled_running_task():
+    from kb import runtime_state as RUNTIME
+
+    session_id = "session-active-by-task-id"
+    with RUNTIME.GEN_LOCK:
+        RUNTIME.GEN_TASKS[session_id] = {
+            "id": "task-active-by-task-id",
+            "session_id": session_id,
+            "conv_id": "conv-active-by-task-id",
+            "chat_db": "/tmp/chat.sqlite3",
+            "status": "running",
+            "answer_ready": False,
+            "cancel": False,
+            "created_at": 1.0,
+            "updated_at": 1.0,
+        }
+
+    try:
+        assert _gen_has_active_task_id("task-active-by-task-id") is True
+        assert _gen_has_active_task_id("missing-task") is False
+    finally:
+        with RUNTIME.GEN_LOCK:
+            RUNTIME.GEN_TASKS.pop(session_id, None)
+
+
+def test_gen_store_partial_sanitizes_internal_support_markers():
+    captured: dict[str, object] = {}
+
+    class _FakeChatStore:
+        def __init__(self, db_path):
+            captured["db_path"] = str(db_path)
+
+        def update_message_content(self, message_id: int, content: str) -> bool:
+            captured["message_id"] = int(message_id)
+            captured["content"] = content
+            return True
+
+    _gen_store_partial(
+        {"chat_db": "/tmp/chat.db", "assistant_msg_id": 7},
+        "partial [[SUPPORT:DOC-1]] with [[CITE:ref-1:5]]",
+        chat_store_cls=_FakeChatStore,
+    )
+
+    assert captured["message_id"] == 7
+    assert captured["content"] == "partial with [[CITE:ref-1:5]]"
+
+
+def test_gen_store_answer_sanitizes_internal_support_markers_for_update_and_append():
+    captured: dict[str, object] = {"append_calls": 0}
+
+    class _FakeChatStore:
+        def __init__(self, _db_path):
+            pass
+
+        def update_message_content(self, message_id: int, content: str) -> bool:
+            captured["updated_message_id"] = int(message_id)
+            captured["updated_content"] = content
+            return False
+
+        def append_message(self, conv_id: str, role: str, content: str) -> int:
+            captured["append_calls"] = int(captured["append_calls"]) + 1
+            captured["append_conv_id"] = conv_id
+            captured["append_role"] = role
+            captured["append_content"] = content
+            return 99
+
+    _gen_store_answer(
+        {"chat_db": "/tmp/chat.db", "conv_id": "conv-1", "assistant_msg_id": 8},
+        "final [[SUPPORT:DOC-2]] answer [[CITE:ref-2:9]]",
+        chat_store_cls=_FakeChatStore,
+    )
+
+    assert captured["updated_message_id"] == 8
+    assert captured["updated_content"] == "final answer [[CITE:ref-2:9]]"
+    assert captured["append_calls"] == 1
+    assert captured["append_conv_id"] == "conv-1"
+    assert captured["append_role"] == "assistant"
+    assert captured["append_content"] == "final answer [[CITE:ref-2:9]]"
 
 
 def test_should_run_provenance_async_refine_requires_flags_and_api_key():

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from typing import Any
+from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.deps import get_settings, get_chat_store, load_prefs
-from api.routers.chat import _normalize_chat_image_attachment
+from api.internal_access import internal_api_allowed, require_internal_api
+from api.routers.chat import _normalize_chat_image_attachment, _resolve_allowed_paper_guide_source_path
 from api.sse import sse_generator, sse_response
+from kb.generation_state_runtime import _strip_internal_generation_markers
+from kb.path_safety import resolve_verified_chat_image_upload_path
 from kb.task_runtime import (
+    generation_start_failed_message,
+    _gen_has_running_for_conversation,
     _gen_start_task,
     _gen_get_task,
     _gen_mark_cancel,
@@ -36,13 +43,7 @@ def _strip_internal_structured_markers(text: str) -> str:
     never be user-visible.  Preserves [[CITE:...]] tokens because they are intentionally
     generated citation markers that the renderer converts to user-visible links.
     """
-    s = str(text or "")
-    if not s:
-        return s
-    s = re.sub(r"\[\[\s*SUPPORT\s*:[^\]]+\]\]", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"[ \t]{2,}", " ", s)
-    s = re.sub(r"\n{3,}", "\n\n", s).strip()
-    return s
+    return _strip_internal_generation_markers(text)
 
 
 _TITLE_LEADING_NOISE_RE = re.compile(
@@ -140,6 +141,43 @@ router = APIRouter(prefix="/api/generate", tags=["generate"])
 _PROMPT_CONTEXT_MAX_ITEMS = 8
 _PROMPT_CONTEXT_MAX_TEXT = 900
 _PROMPT_CONTEXT_MAX_TOTAL = 4200
+_GENERATE_CONV_ID_MAX_CHARS = 120
+_GENERATE_PROMPT_MAX_CHARS = 80_000
+_GENERATE_SOURCE_PATH_MAX_CHARS = 1_200
+_GENERATE_SOURCE_NAME_MAX_CHARS = 500
+_GENERATE_QUERY_SCOPE_MAX_CHARS = 40
+_GENERATE_MAX_IMAGE_ATTACHMENTS = 4
+_GENERATE_IMAGE_ATTACHMENT_MAX_JSON_CHARS = 40_000
+_GENERATE_IMAGE_ATTACHMENTS_MAX_JSON_CHARS = 90_000
+_GENERATE_MAX_PREFERRED_SOURCES = 12
+_GENERATE_PREFERRED_SOURCE_MAX_CHARS = 1_200
+_GENERATE_PROMPT_CONTEXT_MAX_JSON_CHARS = 260_000
+
+
+def _json_size(value: Any, *, name: str, max_json_chars: int) -> Any:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
+    except Exception as exc:
+        raise ValueError(f"{name} must be JSON serializable") from exc
+    if len(encoded) > int(max_json_chars):
+        raise ValueError(f"{name} is too large; max {int(max_json_chars)} JSON chars")
+    return value
+
+
+def _json_dict(value: Any, *, name: str, max_json_chars: int) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    return _json_size(value, name=name, max_json_chars=max_json_chars)
+
+
+def _json_dict_list(value: Any, *, name: str, max_items: int, max_json_chars: int, item_max_json_chars: int) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a list")
+    if len(value) > int(max_items):
+        raise ValueError(f"{name} has too many items; max {int(max_items)}")
+    for item in value:
+        _json_dict(item, name=f"{name} item", max_json_chars=item_max_json_chars)
+    return _json_size(value, name=name, max_json_chars=max_json_chars)
 
 
 def _clip_prompt_context_text(value, max_chars: int = _PROMPT_CONTEXT_MAX_TEXT) -> str:
@@ -224,19 +262,76 @@ def _sanitize_prompt_context(value) -> dict:
     }
 
 
+def _safe_generation_image_attachments(items: list[dict], *, db_dir) -> list[dict]:
+    out: list[dict] = []
+    for raw in list(items or []):
+        if not isinstance(raw, dict):
+            continue
+        rec = dict(_normalize_chat_image_attachment(raw))
+        verified = resolve_verified_chat_image_upload_path(rec.get("path"), db_dir=db_dir)
+        if verified is None:
+            raise HTTPException(400, "invalid image attachment")
+        image_path, mime = verified
+        safe_rec = {
+            "sha1": str(rec.get("sha1") or "").strip().lower(),
+            "path": str(image_path),
+            "name": str(rec.get("name") or image_path.name),
+            "mime": mime,
+        }
+        out.append(_normalize_chat_image_attachment(safe_rec))
+    return out[:4]
+
+
 class GenerateBody(BaseModel):
-    conv_id: str
-    prompt: str = ""
-    top_k: int = 6
-    temperature: float = 0.2
-    max_tokens: int = 1216
+    model_config = ConfigDict(extra="ignore")
+
+    conv_id: str = Field(..., max_length=_GENERATE_CONV_ID_MAX_CHARS)
+    prompt: str = Field("", max_length=_GENERATE_PROMPT_MAX_CHARS)
+    top_k: int = Field(6, ge=1, le=20)
+    temperature: float = Field(0.2, ge=0.0, le=2.0)
+    max_tokens: int = Field(1216, ge=1, le=8192)
     deep_read: bool = False
-    image_attachments: list[dict] = Field(default_factory=list)
-    preferred_sources: list[str] = Field(default_factory=list)
-    source_lock_path: str = ""
-    source_lock_name: str = ""
-    query_scope: str = ""
+    image_attachments: list[dict[str, Any]] = Field(default_factory=list, max_length=_GENERATE_MAX_IMAGE_ATTACHMENTS)
+    preferred_sources: list[str] = Field(default_factory=list, max_length=_GENERATE_MAX_PREFERRED_SOURCES)
+    source_lock_path: str = Field("", max_length=_GENERATE_SOURCE_PATH_MAX_CHARS)
+    source_lock_name: str = Field("", max_length=_GENERATE_SOURCE_NAME_MAX_CHARS)
+    query_scope: str = Field("", max_length=_GENERATE_QUERY_SCOPE_MAX_CHARS)
     prompt_context: dict | None = None
+
+    @field_validator("image_attachments")
+    @classmethod
+    def _check_image_attachments(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return _json_dict_list(
+            value,
+            name="image attachments",
+            max_items=_GENERATE_MAX_IMAGE_ATTACHMENTS,
+            max_json_chars=_GENERATE_IMAGE_ATTACHMENTS_MAX_JSON_CHARS,
+            item_max_json_chars=_GENERATE_IMAGE_ATTACHMENT_MAX_JSON_CHARS,
+        )
+
+    @field_validator("preferred_sources")
+    @classmethod
+    def _check_preferred_sources(cls, value: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in list(value or []):
+            text = str(raw or "").strip()
+            if len(text) > _GENERATE_PREFERRED_SOURCE_MAX_CHARS:
+                raise ValueError(f"preferred source is too long; max {_GENERATE_PREFERRED_SOURCE_MAX_CHARS} chars")
+            out.append(text)
+        return out
+
+    @field_validator("prompt_context")
+    @classmethod
+    def _check_prompt_context(cls, value: dict | None) -> dict | None:
+        if value is None:
+            return None
+        return _json_dict(value, name="prompt context", max_json_chars=_GENERATE_PROMPT_CONTEXT_MAX_JSON_CHARS)
+
+
+class CancelGenerationBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    task_id: str = Field("", max_length=160)
 
 
 @router.post("")
@@ -249,7 +344,10 @@ def start_generation(body: GenerateBody):
     trace_id = uuid.uuid4().hex[:16]
     prompt = str(body.prompt or "").strip()
     max_tokens = max(256, min(4096, int(body.max_tokens or 1216)))
-    image_attachments = [_normalize_chat_image_attachment(it) for it in list(body.image_attachments or []) if isinstance(it, dict)]
+    image_attachments = _safe_generation_image_attachments(
+        [it for it in list(body.image_attachments or []) if isinstance(it, dict)],
+        db_dir=settings.db_dir,
+    )
     prompt_context = _sanitize_prompt_context(body.prompt_context)
     query_scope = _normalize_query_scope(body.query_scope)
     if (not prompt) and (not image_attachments):
@@ -257,6 +355,26 @@ def start_generation(body: GenerateBody):
     conv_meta = chat_store.get_conversation(body.conv_id)
     if conv_meta is None:
         raise HTTPException(404, "conversation not found")
+    if _gen_has_running_for_conversation(body.conv_id, chat_db_path=settings.chat_db_path):
+        raise HTTPException(409, "generation already running for this conversation")
+    conv_mode = str(conv_meta.get("mode") or "normal").strip().lower()
+    bound_source_path = str(conv_meta.get("bound_source_path") or "").strip()
+    bound_source_name = str(conv_meta.get("bound_source_name") or "").strip()
+    try:
+        bound_source_ready = bool(int(conv_meta.get("bound_source_ready") or 0))
+    except Exception:
+        bound_source_ready = False
+    source_lock_path = str(body.source_lock_path or "").strip()
+    source_lock_name = str(body.source_lock_name or "").strip()
+    if source_lock_path:
+        source_lock_path = _resolve_allowed_paper_guide_source_path(source_lock_path)
+        conv_mode = "paper_guide"
+        bound_source_path = source_lock_path
+        if source_lock_name:
+            bound_source_name = source_lock_name
+        bound_source_ready = True
+    elif conv_mode == "paper_guide" and bound_source_path:
+        bound_source_path = _resolve_allowed_paper_guide_source_path(bound_source_path)
 
     user_store_text = prompt if prompt else f"[Image attachment x{len(image_attachments)}]"
     user_meta: dict[str, object] = {}
@@ -277,28 +395,6 @@ def start_generation(body: GenerateBody):
         _live_assistant_text(task_id),
         meta={"trace_id": trace_id},
     )
-    title_candidate = _conversation_title_candidate(
-        prompt,
-        image_count=len(image_attachments),
-        current_title=str(conv_meta.get("title") or ""),
-    )
-    title_changed = bool(chat_store.set_title_if_default(body.conv_id, title_candidate))
-    conversation_title = title_candidate if title_changed else str(conv_meta.get("title") or "").strip()
-    conv_mode = str(conv_meta.get("mode") or "normal").strip().lower()
-    bound_source_path = str(conv_meta.get("bound_source_path") or "").strip()
-    bound_source_name = str(conv_meta.get("bound_source_name") or "").strip()
-    try:
-        bound_source_ready = bool(int(conv_meta.get("bound_source_ready") or 0))
-    except Exception:
-        bound_source_ready = False
-    source_lock_path = str(body.source_lock_path or "").strip()
-    source_lock_name = str(body.source_lock_name or "").strip()
-    if source_lock_path:
-        conv_mode = "paper_guide"
-        bound_source_path = source_lock_path
-        if source_lock_name:
-            bound_source_name = source_lock_name
-        bound_source_ready = True
     preferred_sources = [str(x or "").strip() for x in list(body.preferred_sources or []) if str(x or "").strip()]
     if conv_mode == "paper_guide":
         for hint in (bound_source_path, bound_source_name):
@@ -331,12 +427,37 @@ def start_generation(body: GenerateBody):
         "settings_obj": settings,
         "user_msg_id": user_msg_id,
         "assistant_msg_id": assistant_msg_id,
+        "ui_locale": str(prefs.get("ui_locale") or "").strip(),
         "answer_contract_v1": bool(prefs.get("answer_contract_v1", False)),
         "answer_depth_auto": bool(prefs.get("answer_depth_auto", True)),
         "answer_mode_hint": str(prefs.get("answer_mode_hint") or "").strip()[:32],
         "answer_output_mode": str(prefs.get("answer_output_mode") or "").strip()[:32],
     }
-    _gen_start_task(task)
+    started = bool(_gen_start_task(task))
+    start_error = ""
+    if (not started) and _gen_has_running_for_conversation(body.conv_id, chat_db_path=settings.chat_db_path):
+        for message_id in (assistant_msg_id, user_msg_id):
+            try:
+                chat_store.delete_message(message_id)
+            except Exception:
+                pass
+        raise HTTPException(409, "generation already running for this conversation")
+
+    title_candidate = _conversation_title_candidate(
+        prompt,
+        image_count=len(image_attachments),
+        current_title=str(conv_meta.get("title") or ""),
+    )
+    title_changed = bool(chat_store.set_title_if_default(body.conv_id, title_candidate))
+    latest_conv_meta = chat_store.get_conversation(body.conv_id) or conv_meta
+    conversation_title = title_candidate if title_changed else str(latest_conv_meta.get("title") or "").strip()
+    if not started:
+        start_error = "generation_start_failed"
+        failure_message = generation_start_failed_message(prefs.get("ui_locale"))
+        try:
+            chat_store.update_message_content(assistant_msg_id, failure_message)
+        except Exception:
+            pass
     return {
         "session_id": session_id,
         "task_id": task_id,
@@ -344,38 +465,63 @@ def start_generation(body: GenerateBody):
         "user_msg_id": user_msg_id,
         "assistant_msg_id": assistant_msg_id,
         "conversation_title": conversation_title,
+        "started": started,
+        "start_error": start_error,
     }
 
 
 @router.get("/{session_id}/stream")
-async def stream_generation(session_id: str):
+async def stream_generation(session_id: str, request: Request):
+    include_internal_debug = internal_api_allowed(request)
+
     def poll():
         t = _gen_get_task(session_id)
         if t is None:
-            return {"done": True, "error": "not_found"}
+            failure_message = generation_start_failed_message(load_prefs().get("ui_locale"))
+            return {
+                "stream_schema_version": 2,
+                "stage": "error",
+                "partial": failure_message,
+                "char_count": len(failure_message),
+                "done": True,
+                "status": "error",
+                "answer": failure_message,
+                "error": "not_found",
+                "answer_intent": "",
+                "answer_depth": "",
+                "answer_output_mode": "",
+                "answer_contract_v1": False,
+                "answer_quality": {},
+                "paper_guide_debug": {},
+                "research_trace": {},
+            }
+        partial = _strip_internal_structured_markers(str(t.get("partial", "") or ""))
         answer = _strip_internal_structured_markers(str(t.get("answer", "") or ""))
+        visible_text = partial or answer
         return {
             "stream_schema_version": 2,
             "stage": t.get("stage", ""),
-            "partial": t.get("partial", ""),
-            "char_count": t.get("char_count", 0),
+            "partial": partial,
+            "char_count": len(visible_text) if visible_text else t.get("char_count", 0),
             "done": t.get("status") in ("done", "error", "canceled"),
             "status": t.get("status", ""),
             "answer": answer,
+            "error": t.get("error", ""),
             "answer_intent": t.get("answer_intent", ""),
             "answer_depth": t.get("answer_depth", ""),
             "answer_output_mode": t.get("answer_output_mode", ""),
             "answer_contract_v1": bool(t.get("answer_contract_v1", False)),
             "answer_quality": t.get("answer_quality", {}),
-            "paper_guide_debug": t.get("paper_guide_debug", {}),
-            "research_trace": t.get("research_trace", {}),
+            "paper_guide_debug": t.get("paper_guide_debug", {}) if include_internal_debug else {},
+            "research_trace": t.get("research_trace", {}) if include_internal_debug else {},
         }
 
     return sse_response(sse_generator(poll, interval=0.15))
 
 
 @router.get("/{session_id}/trace")
-def generation_trace(session_id: str):
+def generation_trace(session_id: str, request: Request):
+    require_internal_api(request)
     t = _gen_get_task(session_id)
     if t is None:
         raise HTTPException(404, "generation session not found")
@@ -383,18 +529,27 @@ def generation_trace(session_id: str):
 
 
 @router.post("/{session_id}/cancel")
-def cancel_generation(session_id: str, task_id: str):
-    ok = _gen_mark_cancel(session_id, task_id)
+def cancel_generation(
+    session_id: str,
+    body: CancelGenerationBody | None = Body(default=None),
+    task_id: str = Query(default=""),
+):
+    task_id_final = str(task_id or "").strip()
+    if not task_id_final and body is not None:
+        task_id_final = str(body.task_id or "").strip()
+    ok = _gen_mark_cancel(session_id, task_id_final)
     return {"ok": ok}
 
 
 @router.get("/quality/summary")
 def generation_quality_summary(
+    request: Request,
     limit: int = 200,
     intent: str = "",
     depth: str = "",
     only_failed: bool = False,
 ):
+    require_internal_api(request)
     return _gen_answer_quality_summary(
         limit=limit,
         intent=intent,

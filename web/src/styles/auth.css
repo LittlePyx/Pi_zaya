@@ -52,6 +52,12 @@
   font-size: 13px;
 }
 
+.kb-auth-help {
+  color: var(--muted-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .kb-auth-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

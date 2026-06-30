@@ -53,6 +53,12 @@ from kb.paper_guide_shared import (
     normalize_match_text,
     split_answer_segments,
 )
+from kb.path_safety import (
+    path_is_within_roots,
+    resolve_existing_file_under_roots,
+    resolved_path,
+    unique_resolved_roots,
+)
 
 _PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION = 4
 _CITE_MARKER_RE = re.compile(r"\[\[\s*CITE\s*:\s*[A-Za-z0-9_-]{4,24}\s*:\s*\d{1,4}\s*\]\]", re.IGNORECASE)
@@ -259,6 +265,26 @@ def _normalize_support_resolution_surface(text: str) -> str:
     src = normalize_inline_markdown(src)
     src = re.sub(r"\s+([,.;:!?])", r"\1", src)
     return re.sub(r"\s+", " ", src).strip().lower()
+
+
+def _resolve_first_existing_md_candidate_under_roots(
+    candidates: list[Path],
+    roots: list[Path | str | None],
+) -> Path | None:
+    seen_paths: set[str] = set()
+    uniq_candidates: list[Path] = []
+    for cand in candidates:
+        key = _normalize_fs_path_for_match(str(cand))
+        if (not key) or (key in seen_paths):
+            continue
+        seen_paths.add(key)
+        uniq_candidates.append(cand)
+    uniq_candidates.sort(key=lambda p: (0 if p.name.lower().endswith(".en.md") else 1, len(str(p))))
+    for cand in uniq_candidates:
+        resolved = resolve_existing_file_under_roots(cand, roots)
+        if resolved is not None:
+            return resolved
+    return None
 
 
 def _support_heading_with_figure_local(heading_path: str, *, figure_number: int) -> str:
@@ -952,43 +978,44 @@ def _resolve_paper_guide_md_path(
     *,
     md_root: Path | str | None = None,
     db_dir: Path | str | None = None,
+    pdf_root: Path | str | None = None,
 ) -> Path | None:
     raw = str(source_path or "").strip()
     if not raw:
         return None
     src = Path(raw).expanduser()
+    md_roots = unique_resolved_roots([
+        md_root,
+        db_dir,
+        (Path(db_dir).expanduser() / "db") if db_dir else None,
+        (Path(db_dir).expanduser().parent / "md_output") if db_dir else None,
+    ])
     try:
         if src.is_file() and src.suffix.lower().endswith(".md"):
-            return src.resolve(strict=False)
+            return resolve_existing_file_under_roots(src, md_roots)
     except Exception:
         pass
 
     if src.suffix.lower() != ".pdf":
         return None
 
+    pdf_roots = unique_resolved_roots([pdf_root])
+    if pdf_roots and not src.is_absolute():
+        src = pdf_roots[0] / src
+    resolved_src = resolved_path(src)
+    if resolved_src is None:
+        return None
+    if pdf_roots and not path_is_within_roots(resolved_src, pdf_roots):
+        return None
+    source_parent_allowed = (not pdf_roots) or path_is_within_roots(resolved_src, pdf_roots)
+
     roots: list[Path] = []
-    if md_root:
+    roots.extend(md_roots)
+    if source_parent_allowed:
         try:
-            roots.append(Path(md_root).expanduser())
+            roots.append(resolved_src.parent)
         except Exception:
             pass
-    if db_dir:
-        try:
-            roots.append(Path(db_dir).expanduser())
-        except Exception:
-            pass
-        try:
-            roots.append(Path(db_dir).expanduser() / "db")
-        except Exception:
-            pass
-        try:
-            roots.append(Path(db_dir).expanduser().parent / "md_output")
-        except Exception:
-            pass
-    try:
-        roots.append(src.parent)
-    except Exception:
-        pass
 
     uniq_roots: list[Path] = []
     seen_roots: set[str] = set()
@@ -1001,22 +1028,20 @@ def _resolve_paper_guide_md_path(
 
     for root in uniq_roots:
         try:
-            _md_dir, md_main, md_exists = _resolve_md_output_paths(root, src)
+            _md_dir, md_main, md_exists = _resolve_md_output_paths(root, resolved_src)
         except Exception:
             continue
         if md_exists:
-            try:
-                if md_main.is_file():
-                    return md_main.resolve(strict=False)
-            except Exception:
-                pass
+            resolved_md = resolve_existing_file_under_roots(md_main, [root])
+            if resolved_md is not None:
+                return resolved_md
         try:
             root_path = Path(root).expanduser()
         except Exception:
             continue
         if not root_path.exists() or (not root_path.is_dir()):
             continue
-        target_identity = _source_stem_identity(str(src))
+        target_identity = _source_stem_identity(str(resolved_src))
         if not target_identity:
             continue
         fallback_candidates: list[Path] = []
@@ -1048,22 +1073,9 @@ def _resolve_paper_guide_md_path(
         except Exception:
             fallback_candidates = []
         if fallback_candidates:
-            seen_paths: set[str] = set()
-            uniq_candidates: list[Path] = []
-            for cand in fallback_candidates:
-                key = _normalize_fs_path_for_match(str(cand))
-                if (not key) or (key in seen_paths):
-                    continue
-                seen_paths.add(key)
-                uniq_candidates.append(cand)
-            uniq_candidates.sort(key=lambda p: (0 if p.name.lower().endswith(".en.md") else 1, len(str(p))))
-            try:
-                return uniq_candidates[0].resolve(strict=False)
-            except Exception:
-                try:
-                    return uniq_candidates[0]
-                except Exception:
-                    pass
+            resolved_candidate = _resolve_first_existing_md_candidate_under_roots(fallback_candidates, [root])
+            if resolved_candidate is not None:
+                return resolved_candidate
 
     return None
 

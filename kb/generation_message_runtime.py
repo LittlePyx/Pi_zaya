@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
+from kb.path_safety import path_is_within_roots, sniff_image_mime
+
 
 def _filter_history_for_multimodal_turn(
     history: list[dict],
@@ -52,6 +54,7 @@ def _build_multimodal_user_content(
     image_attachments: list[dict] | None,
     *,
     vision_image_mime_by_suffix: dict[str, str],
+    allowed_image_roots: list[Path | str] | None = None,
 ) -> str | list[dict]:
     user_content: str | list[dict] = str(user or "")
     if not image_attachments:
@@ -61,12 +64,16 @@ def _build_multimodal_user_content(
     for item in image_attachments or []:
         try:
             path = Path(str(item.get("path") or "")).expanduser()
+            if allowed_image_roots and not path_is_within_roots(path, allowed_image_roots):
+                continue
             if (not path.exists()) or (not path.is_file()):
                 continue
             data = path.read_bytes()
             if (not data) or (len(data) > 8 * 1024 * 1024):
                 continue
-            mime = str(item.get("mime") or "").strip().lower() or vision_image_mime_by_suffix.get(path.suffix.lower(), "image/png")
+            mime = sniff_image_mime(data[:32])
+            if not mime:
+                continue
             b64 = base64.b64encode(data).decode("ascii")
             mm_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
         except Exception:

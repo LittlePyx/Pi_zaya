@@ -1,4 +1,9 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import {
+  installAppShellMocks,
+  installEmptyCitationShelfMock,
+  installIdleReferenceMocks,
+} from './mockAppShell'
 
 const CONV_ID = 'conv-src-persistence'
 const USER_MSG_ID = 301
@@ -76,6 +81,12 @@ async function fulfillJson(route: Route, body: unknown) {
 async function installMockBackend(page: Page, options: { messagesPageDelayMs?: number; hideConversationFromList?: boolean } = {}) {
   let renderPacketOnlyPageLoads = 0
 
+  await installAppShellMocks(page, {
+    rootConversations: options.hideConversationFromList ? [] : [conversation],
+  })
+  await installEmptyCitationShelfMock(page, { scopeId: '__default__', projectId: null })
+  await installIdleReferenceMocks(page)
+
   await page.route('**/api/settings', async (route) => {
     await fulfillJson(route, {
       model: 'test-model',
@@ -118,16 +129,16 @@ async function installMockBackend(page: Page, options: { messagesPageDelayMs?: n
     })
   })
 
-  await page.route('**/api/projects', async (route) => {
-    await fulfillJson(route, [])
-  })
-
   await page.route(/\/api\/conversations(?:\?.*)?$/, async (route) => {
     await fulfillJson(route, options.hideConversationFromList ? [] : [conversation])
   })
 
   await page.route(`**/api/conversations/${CONV_ID}`, async (route) => {
     await fulfillJson(route, conversation)
+  })
+
+  await page.route(`**/api/conversations/${CONV_ID}/research-state`, async (route) => {
+    await fulfillJson(route, { ok: true, state: null })
   })
 
   await page.route(`**/api/conversations/${CONV_ID}/messages_page**`, async (route) => {
@@ -152,20 +163,6 @@ async function installMockBackend(page: Page, options: { messagesPageDelayMs?: n
 
   await page.route(`**/api/references/conversation/${CONV_ID}`, async (route) => {
     await fulfillJson(route, {})
-  })
-
-  await page.route('**/api/chat/citation-shelf**', async (route) => {
-    await fulfillJson(route, {
-      version: 1,
-      scope: 'project',
-      scope_id: '__default__',
-      project_id: null,
-      items: [],
-      open: false,
-      revision: 0,
-      created_at: 0,
-      updated_at: 0,
-    })
   })
 
   await page.route('**/api/references/citation-meta', async (route) => {

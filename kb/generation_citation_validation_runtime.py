@@ -729,8 +729,11 @@ def _validate_structured_citations(
 # ── Standard RAG [n] freeform citation validation ────────────────────────
 
 _FREEFORM_NUMERIC_CITE_RE = re.compile(
-    r"(?<![!\\])\[(\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*)\](?!\()"
+    r"(?<![!\\])\[(\d{1,4}(?:\s*(?:[-\u2013\u2014\u2212,])\s*\d{1,4})*)\](?!\()"
 )
+_FREEFORM_NUMERIC_SPLIT_RE = re.compile(r"\s*,\s*")
+_FREEFORM_NUMERIC_RANGE_RE = re.compile(r"^\s*(\d{1,4})\s*[-\u2013\u2014\u2212]\s*(\d{1,4})\s*$")
+_ORPHANED_CITE_SPACE_RE = re.compile(r"[ \t]+([,.;:!?，。；：！？])")
 
 
 def _validate_freeform_numeric_citations(
@@ -756,6 +759,7 @@ def _validate_freeform_numeric_citations(
         "out_of_range": 0,
         "dropped": 0,
         "kept": 0,
+        "rewritten": 0,
         "hits_available": len(list(answer_hits or [])),
     }
     if (not text) or ("[" not in text):
@@ -769,15 +773,35 @@ def _validate_freeform_numeric_citations(
     stats["raw_count"] = len(raw_tokens)
 
     def _all_nums_in_spec(spec: str) -> list[int]:
-        """Parse '1,2' or '1-3' or '1' into a list of ints."""
+        """Parse '1,2', '1-3', '1–3', or '1' into citation numbers."""
         out: list[int] = []
-        for item in re.split(r"\s*(?:-|–|—|,)\s*", str(spec or "").strip()):
+        seen: set[int] = set()
+
+        def _add(value: object) -> None:
             try:
-                n = int(item)
+                n = int(value)
             except Exception:
-                continue
-            if n > 0:
+                return
+            if n not in seen:
+                seen.add(n)
                 out.append(n)
+
+        for item in _FREEFORM_NUMERIC_SPLIT_RE.split(str(spec or "").strip()):
+            token = str(item or "").strip()
+            if not token:
+                continue
+            range_match = _FREEFORM_NUMERIC_RANGE_RE.match(token)
+            if range_match:
+                start = int(range_match.group(1))
+                end = int(range_match.group(2))
+                if start <= end and (end - start) <= 100:
+                    for n in range(start, end + 1):
+                        _add(n)
+                else:
+                    _add(start)
+                    _add(end)
+                continue
+            _add(token)
         return out
 
     def _repl(m: re.Match[str]) -> str:
@@ -787,21 +811,22 @@ def _validate_freeform_numeric_citations(
             stats["dropped"] = int(stats["dropped"]) + 1
             return ""
 
-        # Check each number in the spec against hit bounds
-        all_valid = True
-        for n in nums:
-            if n > hit_count:
-                all_valid = False
-                break
-
-        if not all_valid:
-            stats["out_of_range"] = int(stats["out_of_range"]) + 1
+        valid_nums = [n for n in nums if 0 < n <= hit_count]
+        out_of_range_count = len([n for n in nums if n > hit_count])
+        invalid_count = len(nums) - len(valid_nums)
+        if out_of_range_count:
+            stats["out_of_range"] = int(stats["out_of_range"]) + int(out_of_range_count)
+        if not valid_nums:
             stats["dropped"] = int(stats["dropped"]) + 1
             return ""
 
         stats["valid_count"] = int(stats["valid_count"]) + 1
         stats["kept"] = int(stats["kept"]) + 1
+        if invalid_count:
+            stats["rewritten"] = int(stats["rewritten"]) + 1
+            return "[" + ",".join(str(n) for n in valid_nums) + "]"
         return m.group(0)
 
     out = _FREEFORM_NUMERIC_CITE_RE.sub(_repl, text)
+    out = _ORPHANED_CITE_SPACE_RE.sub(r"\1", out)
     return out, stats

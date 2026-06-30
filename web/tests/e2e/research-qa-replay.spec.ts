@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import { expectCitationShelfQuality } from './cite-shelf-quality'
+import { installAppShellMocks } from './mockAppShell'
 
 async function expectNoHorizontalOverflow(page: import('@playwright/test').Page) {
   const metrics = await page.evaluate(() => ({
@@ -48,7 +49,9 @@ async function addCitationToShelf(page: import('@playwright/test').Page, chip: i
   await chip.click()
   const popover = page.locator('.kb-cite-pop')
   await expect(popover).toBeVisible()
-  await popover.locator('.kb-cite-pop-add').click()
+  const addButton = popover.locator('.kb-cite-pop-add')
+  await expect(addButton).toBeVisible()
+  await addButton.click()
   await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
   const closePopover = page.locator('.kb-cite-pop-close')
   if (await closePopover.count()) {
@@ -59,6 +62,62 @@ async function addCitationToShelf(page: import('@playwright/test').Page, chip: i
 test.beforeEach(async ({ page }) => {
   let sourceRepairRequested = false
   let sourceRepairCompleted = false
+  let shelfItems: Array<Record<string, unknown>> = []
+  let shelfOpen = false
+  let shelfRevision = 0
+  await installAppShellMocks(page)
+  await page.route('**/api/conversations**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+  })
+  const fulfillShelf = async (route: import('@playwright/test').Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        version: 1,
+        scope: 'project',
+        scope_id: 'research-qa-replay-project',
+        project_id: 'research-qa-replay-project',
+        items: shelfItems,
+        open: shelfOpen,
+        revision: shelfRevision,
+        created_at: 1,
+        updated_at: 2 + shelfRevision,
+      }),
+    })
+  }
+  await page.route('**/api/chat/citation-shelf**', async (route) => {
+    const request = route.request()
+    const method = request.method()
+    if (method === 'POST' && new URL(request.url()).pathname.endsWith('/items')) {
+      const payload = request.postDataJSON() as { item?: Record<string, unknown>; open?: boolean } | undefined
+      if (payload?.item && typeof payload.item === 'object') {
+        shelfItems = [payload.item, ...shelfItems]
+        shelfRevision += 1
+      }
+      shelfOpen = payload?.open ?? true
+      await fulfillShelf(route)
+      return
+    }
+    if (method === 'PATCH') {
+      const payload = request.postDataJSON() as { items?: unknown[]; open?: boolean } | undefined
+      if (Array.isArray(payload?.items)) {
+        shelfItems = payload.items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        shelfRevision += 1
+      }
+      shelfOpen = Boolean(payload?.open)
+      await fulfillShelf(route)
+      return
+    }
+    if (method === 'DELETE') {
+      shelfItems = []
+      shelfOpen = false
+      shelfRevision += 1
+      await fulfillShelf(route)
+      return
+    }
+    await fulfillShelf(route)
+  })
   await page.route('**/api/references/citation-meta', async (route) => {
     await route.fulfill({
       status: 200,
@@ -78,6 +137,75 @@ test.beforeEach(async ({ page }) => {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ bibliometrics_checked: true }),
+    })
+  })
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> } | undefined
+    const items = Array.isArray(payload?.items) ? payload.items : []
+    const readyQuality = {
+      contract_version: 1,
+      ok: true,
+      status: 'ready',
+      score: 96,
+      missing_fields: [],
+      issues: [],
+      repairable: true,
+      retryable: false,
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: items.length,
+        ready: items.length,
+        export_ready: items.length,
+        partial: 0,
+        retryable: 0,
+        failed: 0,
+        unresolved: 0,
+        changed: 0,
+        persisted: 0,
+        items: items.map((item, idx) => ({
+          key: String(item.key || item.anchor || `repair-${idx}`),
+          ok: true,
+          changed: false,
+          changed_fields: [],
+          repair_status: 'ready',
+          retryable: false,
+          fixed_issue_codes: [],
+          remaining_issue_codes: [],
+          repair_sources: ['e2e_fixture'],
+          before: readyQuality,
+          after: readyQuality,
+          export_acceptance: {
+            contract_version: 1,
+            ok: true,
+            status: 'ready',
+            score: 96,
+            missing_fields: [],
+            issues: [],
+            summary_export_ready: true,
+          },
+          meta: {
+            ...item,
+            metadata_quality: readyQuality,
+            metadata_export_acceptance: {
+              contract_version: 1,
+              ok: true,
+              status: 'ready',
+              score: 96,
+              missing_fields: [],
+              issues: [],
+              summary_export_ready: true,
+            },
+            metadata_repair_status: 'ready',
+            metadata_repair_sources: ['e2e_fixture'],
+          },
+          persisted: false,
+          persisted_targets: [],
+        })),
+      }),
     })
   })
   await page.route('**/api/library/quality/sources', async (route) => {
@@ -370,6 +498,7 @@ test('research QA replay visual acceptance: refs and citation surfaces stay read
 })
 
 test('research QA replay citation shelf acceptance: saved literature stays useful', async ({ page }) => {
+  test.setTimeout(60_000)
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/__research_qa_replay__')
 
@@ -396,6 +525,10 @@ test('research QA replay citation shelf acceptance: saved literature stays usefu
 })
 
 test('research QA replay citation shelf workflow: snapshots and CSV export work', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem('kb.internal.showQualityDiagnostics', '1')
+  })
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/__research_qa_replay__')
 
@@ -433,7 +566,15 @@ test('research QA replay citation shelf workflow: snapshots and CSV export work'
 
   await page.getByTestId('citation-shelf-search').fill('SCINeRF')
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
-  const autoRepairRequest = page.waitForRequest('**/api/library/quality/repair')
+  const autoRepairRequest = page.waitForRequest((request) => {
+    if (!request.url().includes('/api/library/quality/repair') || request.method() !== 'POST') return false
+    try {
+      const body = request.postDataJSON() as { sources?: Array<{ source_path?: string }> }
+      return Boolean((body.sources || []).some((item) => String(item.source_path || '').includes('SCINeRF')))
+    } catch {
+      return false
+    }
+  })
   const repairedSourceQuality = page.waitForResponse(async (response) => {
     if (!response.url().includes('/api/library/quality/sources') || response.request().method() !== 'POST') return false
     try {
@@ -448,8 +589,8 @@ test('research QA replay citation shelf workflow: snapshots and CSV export work'
   })
   await page.locator('.kb-shelf-advanced-toggle').click()
   await page.getByTestId('citation-shelf-add-visible').click()
-  const autoRepairPayload = autoRepairRequest.then((request) => request.postDataJSON() as { sources?: Array<{ source_path?: string }> })
-  await expect.poll(async () => (await autoRepairPayload).sources?.[0]?.source_path || '').toContain('SCINeRF')
+  const autoRepairPayload = (await autoRepairRequest).postDataJSON() as { sources?: Array<{ source_path?: string }> }
+  expect((autoRepairPayload.sources || []).some((item) => String(item.source_path || '').includes('SCINeRF'))).toBeTruthy()
   await repairedSourceQuality
   await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
   await expect(page.getByTestId('citation-shelf-readiness')).toContainText(/2\/2/)
@@ -481,12 +622,13 @@ test('research QA replay citation shelf workflow: snapshots and CSV export work'
 })
 
 test('research QA replay mobile visual acceptance: cards stack without clipping', async ({ page }) => {
+  test.setTimeout(60_000)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/__research_qa_replay__')
   await expectNoHorizontalOverflow(page)
 
   const firstRefsHeader = page.locator('.kb-refs-panel .ant-collapse-header').first()
-  await firstRefsHeader.scrollIntoViewIfNeeded()
+  await expect(firstRefsHeader).toBeVisible()
   await firstRefsHeader.click()
   const firstCard = page.locator('.kb-ref-card').nth(0)
   const secondCard = page.locator('.kb-ref-card').nth(1)

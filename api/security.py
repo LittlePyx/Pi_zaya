@@ -56,11 +56,12 @@ def request_is_authenticated(request: Request, settings: Settings | None = None)
 
 def auth_status_payload(request: Request | None = None, settings: Settings | None = None) -> dict:
     s = settings or auth_settings()
+    required = bool(getattr(s, "auth_required", False))
     authenticated = request_is_authenticated(request, settings=s) if request is not None else False
     return {
-        "required": bool(getattr(s, "auth_required", False)),
-        "configured": auth_token_configured(s),
-        "authenticated": authenticated,
+        "required": required,
+        "configured": auth_token_configured(s) if required else False,
+        "authenticated": authenticated if required else False,
         "env": str(getattr(s, "app_env", "development") or "development"),
         "production": bool(getattr(s, "production", False)),
     }

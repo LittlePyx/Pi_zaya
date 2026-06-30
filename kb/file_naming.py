@@ -31,8 +31,9 @@ def sanitize_filename_component(text: str) -> str:
     s = re.sub(r'[<>:"/\\\\|?*]+', "-", s)
     s = s.replace("\u0000", "").strip()
     s = s.strip(" .-_")
-    if s.upper() in _WINDOWS_RESERVED_NAMES:
-        s = f"{s}-paper"
+    reserved_probe, dot, rest = s.partition(".")
+    if reserved_probe.upper() in _WINDOWS_RESERVED_NAMES:
+        s = f"{reserved_probe}-paper{dot}{rest}" if dot else f"{s}-paper"
     return s
 
 

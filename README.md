@@ -109,6 +109,8 @@ cd ..
 .\run_new.ps1 -StopExisting
 ```
 
+本地开发启动默认保持公开模式；即使 `.env` 里误留了 `KB_PRIVATE_INSTANCE_AUTH=1`、`KB_REQUIRE_AUTH=1` 或 `KB_ENABLE_AUTH_GATE=1`，普通 `run_new.ps1` 也会在本进程内关掉令牌门禁，用户打开页面不需要访问令牌。只有调试私有实例鉴权时才使用 `.\run_new.ps1 -AllowAuthGate`。
+
 `run.ps1` 是等价的便捷入口：
 
 ```powershell
@@ -152,8 +154,9 @@ Copy-Item .env.production.example .env
 
 重点确认：
 
-- `KB_ACCESS_TOKEN` 或 `KB_ACCESS_TOKEN_SHA256` 已设置。
-- `KB_REQUIRE_AUTH=1`，并按部署方式配置 `KB_AUTH_COOKIE_SECURE`。
+- 面向普通用户的公开部署保持 `KB_PRIVATE_INSTANCE_AUTH=0`、`KB_ENABLE_AUTH_GATE=0` 和 `KB_REQUIRE_AUTH=0`，用户打开应用不需要访问令牌。
+- 只有私有/内部实例才同时设置 `KB_PRIVATE_INSTANCE_AUTH=1`、`KB_ENABLE_AUTH_GATE=1`、`KB_REQUIRE_AUTH=1`，并配置 `KB_ACCESS_TOKEN` 或 `KB_ACCESS_TOKEN_SHA256`。
+- 仅在同时开启 `KB_PRIVATE_INSTANCE_AUTH=1`、`KB_ENABLE_AUTH_GATE=1` 和 `KB_REQUIRE_AUTH=1` 时，按部署方式配置 `KB_AUTH_COOKIE_SECURE`。
 - `KB_API_ALLOW_ORIGINS` 只包含允许访问的前端来源。
 - `KB_DB_DIR`、`KB_CHAT_DB`、`KB_LIBRARY_DB`、`KB_BACKUP_DIR` 使用稳定的绝对路径。
 - 文本问答 API 和视觉/图片 API 都已配置并测试通过。
@@ -172,8 +175,10 @@ python server.py
 启动后执行上线检查：
 
 ```powershell
-python tools\check_production_readiness.py --base-url http://127.0.0.1:8000 --token $env:KB_ACCESS_TOKEN
+python tools\check_production_readiness.py --base-url http://127.0.0.1:8000
 ```
+
+私有/内部实例如果同时启用了 `KB_PRIVATE_INSTANCE_AUTH=1`、`KB_ENABLE_AUTH_GATE=1` 和 `KB_REQUIRE_AUTH=1`，再追加 `--token $env:KB_ACCESS_TOKEN`。
 
 完整部署说明见 `docs/DEPLOYMENT.md`。
 
@@ -236,7 +241,7 @@ python tools\research_qa\run_research_qa_eval.py --dry-run
 python tools\converter_quality\run_converter_quality_eval.py --dry-run
 ```
 
-GitHub Actions 会在 push 和 pull request 时执行前端 lint/build、后端 unit tests，以及两组 dry-run 回归检查。
+GitHub Actions 会在 push 和 pull request 时执行前端 lint/build、轻量 Playwright smoke、后端 unit tests、后端 sanity/API 回归测试，以及两组 dry-run 回归检查。
 
 ## 项目结构
 

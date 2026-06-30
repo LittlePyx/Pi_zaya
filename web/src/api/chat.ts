@@ -1,4 +1,4 @@
-import { api, authFetch } from './client'
+import { api, authFetch, responseError, responseJson } from './client'
 
 export interface Conversation {
   id: string
@@ -19,6 +19,14 @@ export interface Project {
   name: string
   created_at: number
   updated_at: number
+}
+
+export interface SidebarSnapshot {
+  projects: Project[]
+  root_conversations?: Conversation[]
+  rootConversations?: Conversation[]
+  project_conversations?: Record<string, Conversation[]>
+  projectConversations?: Record<string, Conversation[]>
 }
 
 export interface Message {
@@ -349,27 +357,13 @@ const refsNowMs = () => (
     : Date.now()
 )
 
-async function getRefsWithMeta(convId: string): Promise<RefsResponseWithMeta> {
+async function getRefsWithMeta(convId: string, init?: RequestInit): Promise<RefsResponseWithMeta> {
   const startedAt = refsNowMs()
-  let res: Response
-  try {
-    res = await authFetch(`/api/references/conversation/${convId}`)
-  } catch {
-    throw new Error(
-      'Cannot connect to backend. Ensure the backend is running and Vite proxy /api targets the correct port.',
-    )
-  }
+  const res = await authFetch(`/api/references/conversation/${convId}`, init)
   if (!res.ok) {
-    let detail = ''
-    try {
-      const text = (await res.text()).trim()
-      detail = text ? `: ${text}` : ''
-    } catch {
-      detail = ''
-    }
-    throw new Error(`${res.status} ${res.statusText}${detail}`)
+    throw await responseError(res)
   }
-  const data = await res.json() as Record<string, unknown>
+  const data = await responseJson<Record<string, unknown>>(res)
   return {
     data,
     meta: {
@@ -458,6 +452,10 @@ export const chatApi = {
     api.patch(`/api/projects/${projectId}`, { name }),
   deleteProject: (projectId: string) =>
     api.delete(`/api/projects/${projectId}`),
+  getSidebar: (limit = 80, includeArchived = false) =>
+    api.get<SidebarSnapshot>(
+      `/api/sidebar?limit=${limit}${includeArchived ? '&include_archived=1' : ''}`,
+    ),
   listConversations: (limit = 80, projectId?: string | null, includeArchived = false) =>
     api.get<Conversation[]>(
       `/api/conversations?limit=${limit}`
@@ -510,8 +508,7 @@ export const chatApi = {
     fd.append('speed_mode', opts?.speedMode ?? 'balanced')
     if (opts?.convId) fd.append('conv_id', String(opts.convId))
     const res = await authFetch('/api/chat/uploads', { method: 'POST', body: fd })
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-    return res.json() as Promise<{ items: ChatUploadItem[] }>
+    return responseJson<{ items: ChatUploadItem[] }>(res)
   },
   getUploadStatuses: (jobIds: string[]) =>
     api.get<{ items: ChatUploadItem[] }>(`/api/chat/uploads/status?job_ids=${encodeURIComponent(jobIds.join(','))}`),
@@ -541,8 +538,8 @@ export const chatApi = {
   deleteCitationShelf: (opts?: CitationShelfRequest) =>
     api.delete<CitationShelfRecord>(citationShelfUrl(opts)),
   getRefsWithMeta,
-  getRefs: async (convId: string) =>
-    (await getRefsWithMeta(convId)).data,
+  getRefs: async (convId: string, init?: RequestInit) =>
+    (await getRefsWithMeta(convId, init)).data,
   updateTitle: (convId: string, title: string) =>
     api.patch(`/api/conversations/${convId}/title`, { title }),
   updateConversationProject: (convId: string, projectId?: string | null) =>

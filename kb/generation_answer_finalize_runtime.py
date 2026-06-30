@@ -47,7 +47,7 @@ from kb.reference_index import (
     resolve_reference_entry as _resolve_reference_entry,
 )
 from kb.source_blocks import normalize_inline_markdown
-from ui.chat_widgets import _normalize_math_markdown
+from kb.markdown_rendering import _normalize_math_markdown
 
 _CITE_CANON_RE = re.compile(
     r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]",
@@ -2617,6 +2617,7 @@ def _finalize_generation_answer(
     paper_guide_candidate_refs_by_source: dict[str, list[int]] | None,
     paper_guide_support_slots: list[dict] | None,
     paper_guide_evidence_cards: list[dict] | None,
+    research_answer_plan: str = "",
     paper_guide_contracts_seed: dict | None = None,
     paper_guide_retrieval_confidence_hint: dict[str, object] | None = None,
     apply_paper_guide_answer_postprocess,
@@ -2631,6 +2632,7 @@ def _finalize_generation_answer(
     )
     effective_paper_guide_family = str(getattr(resolved_paper_guide_intent, "family", "") or "").strip()
     sanitize_paper_guide_family = effective_paper_guide_family or "overview"
+    research_answer_plan_norm = str(research_answer_plan or "").strip()
     multi_paper_list_prompt = bool(prompt_explicitly_requests_multi_paper_list(prompt_for_user or prompt))
     multi_paper_doc_list = (
         _build_multi_paper_doc_list_contract(
@@ -2885,6 +2887,14 @@ def _finalize_generation_answer(
         doc_list_contract=list(multi_paper_doc_list or []),
         paper_guide_contracts_seed=dict(paper_guide_contracts_seed or {}),
     )
+    if research_answer_plan_norm:
+        intent_contract = (
+            dict(paper_guide_contracts.get("intent") or {})
+            if isinstance(paper_guide_contracts.get("intent"), dict)
+            else {}
+        )
+        intent_contract["research_answer_plan"] = research_answer_plan_norm
+        paper_guide_contracts["intent"] = intent_contract
     answer_quality = _build_answer_quality_probe(
         answer,
         has_hits=bool(answer_hits),
@@ -2895,6 +2905,8 @@ def _finalize_generation_answer(
         paper_guide_mode=bool(paper_guide_mode),
         prompt_family=sanitize_paper_guide_family,
     )
+    if research_answer_plan_norm:
+        answer_quality["research_answer_plan"] = research_answer_plan_norm
     retrieval_confidence = dict(paper_guide_retrieval_confidence_hint or {})
     citation_plan = (
         dict((paper_guide_contracts_seed or {}).get("citation_plan") or {})

@@ -1782,12 +1782,14 @@ def test_build_reference_index_incremental_reuses_sparse_but_resolved_doc(tmp_pa
     monkeypatch.setattr(ref_index, "_infer_source_doi_from_doc_hints", lambda *args, **kwargs: "")
     monkeypatch.setattr(ref_index, "_load_source_reference_rows", lambda *args, **kwargs: [])
     monkeypatch.setattr(ref_index, "_lookup_crossref_meta_for_entry", lambda *args, **kwargs: (None, ""))
+    progress_events: list[dict] = []
 
     out = ref_index.build_reference_index(
         src_root=src_root,
         db_dir=db_dir,
         incremental=True,
         enable_title_lookup=True,
+        progress_cb=progress_events.append,
     )
 
     assert int(out.get("docs_reused") or 0) == 1
@@ -1795,6 +1797,10 @@ def test_build_reference_index_incremental_reuses_sparse_but_resolved_doc(tmp_pa
     assert int(out.get("refs_metadata_ready") or 0) == 0
     assert int(out.get("refs_metadata_user_ready") or 0) == 1
     assert int(out.get("refs_action_auto_backfill") or 0) == 1
+    final_progress_stats = progress_events[-1]["stats"]
+    assert int(final_progress_stats.get("refs_total") or 0) == 1
+    assert int(final_progress_stats.get("refs_metadata_ready") or 0) == 0
+    assert int(final_progress_stats.get("refs_metadata_user_ready") or 0) == 1
 
 
 def test_prefer_previous_doc_refs_when_new_is_worse():

@@ -8,6 +8,7 @@ import {
   READER_REGRESSION_SOURCE_NAME,
   READER_REGRESSION_SOURCE_PATH,
 } from '../testing/readerRegressionFixtures'
+import { qualityDiagnosticsVisible } from '../utils/qualityDiagnostics'
 
 const EQUATION_TEXT = '$$\nC(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt\n$$'
 
@@ -913,6 +914,24 @@ const plainCitationRefsFallbackMessages: Message[] = [
   },
 ]
 
+const plainCitationRefsPartialFallbackMessages: Message[] = [
+  {
+    id: 1,
+    role: 'user',
+    content: 'Explain papers with a partially stale citation bracket.',
+    created_at: Date.now(),
+  },
+  {
+    id: 2,
+    role: 'assistant',
+    content: 'Mixed citation bracket should keep valid sources [1, 99, 2]. Zero mixed marker [0,1] should not leak zero.',
+    rendered_body: 'Mixed citation bracket should keep valid sources [1, 99, 2]. Zero mixed marker [0,1] should not leak zero.',
+    copy_text: 'Mixed citation bracket should keep valid sources [1, 99, 2]. Zero mixed marker [0,1] should not leak zero.',
+    copy_markdown: 'Mixed citation bracket should keep valid sources [1, 99, 2]. Zero mixed marker [0,1] should not leak zero.',
+    created_at: Date.now(),
+  },
+]
+
 const plainCitationRefsFallbackRefs: Record<string, unknown> = {
   '1': {
     hits: [
@@ -1195,6 +1214,7 @@ type RegressionScenario =
   | 'low-quality-system-a-old-packet'
   | 'fragmentary-system-a-old-packet'
   | 'plain-citation-refs-fallback'
+  | 'plain-citation-refs-partial'
   | 'plain-math-width'
   | 'guide-filter-empty-external'
   | 'negative-evidence-locate'
@@ -1221,6 +1241,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'low-quality-system-a-old-packet') return 'low-quality-system-a-old-packet'
     if (scenarioParam === 'fragmentary-system-a-old-packet') return 'fragmentary-system-a-old-packet'
     if (scenarioParam === 'plain-citation-refs-fallback') return 'plain-citation-refs-fallback'
+    if (scenarioParam === 'plain-citation-refs-partial') return 'plain-citation-refs-partial'
     if (scenarioParam === 'plain-math-width') return 'plain-math-width'
     if (scenarioParam === 'guide-filter-empty-external') return 'guide-filter-empty-external'
     if (scenarioParam === 'negative-evidence-locate') return 'negative-evidence-locate'
@@ -1243,6 +1264,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'low-quality-system-a-old-packet') return lowQualitySystemAOldPacketMessages
     if (scenario === 'fragmentary-system-a-old-packet') return fragmentarySystemAOldPacketMessages
     if (scenario === 'plain-citation-refs-fallback') return plainCitationRefsFallbackMessages
+    if (scenario === 'plain-citation-refs-partial') return plainCitationRefsPartialFallbackMessages
     if (scenario === 'plain-math-width') return plainMathWidthMessages
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyMessages
     if (scenario === 'negative-evidence-locate') return negativeEvidenceLocateMessages
@@ -1253,6 +1275,7 @@ export default function MessageListRegressionPage() {
   const regressionRefs: Record<string, unknown> = (() => {
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyRefs
     if (scenario === 'plain-citation-refs-fallback') return plainCitationRefsFallbackRefs
+    if (scenario === 'plain-citation-refs-partial') return plainCitationRefsFallbackRefs
     if (scenario === 'plain-math-width') return plainMathWidthRefs
     if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateRefs
     if (scenario === 'live-user-pending-refs') return liveUserPendingRefs
@@ -1266,15 +1289,23 @@ export default function MessageListRegressionPage() {
     : READER_REGRESSION_SOURCE_NAME
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
   const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
+  const [qualityDiagnosticsEnabled] = useState(qualityDiagnosticsVisible)
   const readerLocateQualitySubmittedRef = useRef<Set<string>>(new Set())
   const readerEnabled = typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search).get('reader') === '1'
     : false
+  const regressionShelfProjectInitialId = typeof window !== 'undefined'
+    ? (new URLSearchParams(window.location.search).get('project') || 'message-list-regression-project')
+    : 'message-list-regression-project'
+  const regressionShelfProjectSwitchId = typeof window !== 'undefined'
+    ? (new URLSearchParams(window.location.search).get('switchProject') || '')
+    : ''
+  const [regressionShelfProjectId, setRegressionShelfProjectId] = useState(regressionShelfProjectInitialId)
   const recordLocateResult = useCallback((result: ReaderLocateResult) => {
     const key = String(result.locateFeedbackKey || '').trim()
     if (!key) return
     const submitKey = [key, result.locateRequestId, result.status, result.precision, result.hint, result.reason].join('|')
-    if (!readerLocateQualitySubmittedRef.current.has(submitKey)) {
+    if (qualityDiagnosticsEnabled && !readerLocateQualitySubmittedRef.current.has(submitKey)) {
       readerLocateQualitySubmittedRef.current.add(submitKey)
       libraryApi.recordReaderLocateQuality({
         source_path: String(result.sourcePath || ''),
@@ -1308,7 +1339,7 @@ export default function MessageListRegressionPage() {
       }
       return { ...current, [key]: result }
     })
-  }, [])
+  }, [qualityDiagnosticsEnabled])
   const dispatchReaderSelectionShelfFixture = useCallback(() => {
     window.dispatchEvent(new CustomEvent('kb:reader-selection-shelf', {
       detail: {
@@ -1341,12 +1372,25 @@ export default function MessageListRegressionPage() {
           >
             Add reader selection fixture
           </button>
+          {regressionShelfProjectSwitchId ? (
+            <button
+              type="button"
+              className="ml-2 mt-3 rounded border border-[var(--border)] px-3 py-1 text-xs text-black/60 dark:text-white/60"
+              onClick={() => setRegressionShelfProjectId(regressionShelfProjectSwitchId)}
+              data-testid="message-list-switch-project-scope"
+            >
+              Switch project scope
+            </button>
+          ) : null}
+          <div className="mt-2 text-[11px] text-black/40 dark:text-white/40" data-testid="message-list-current-project">
+            {regressionShelfProjectId}
+          </div>
         </div>
 
         <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-4">
           <MessageList
             activeConvId={`message-list-regression:${scenario}`}
-            shelfProjectId="message-list-regression-project"
+            shelfProjectId={regressionShelfProjectId}
             messages={regressionMessages}
             refs={regressionRefs}
             onOpenReader={(nextPayload) => setPayload(nextPayload)}

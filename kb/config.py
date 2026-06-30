@@ -23,7 +23,8 @@ def _clean_env_key(raw: str) -> str | None:
 
 
 def _load_runtime_prefs() -> dict:
-    prefs_path = Path(__file__).resolve().parent.parent / "user_prefs.json"
+    configured = str(os.environ.get("KB_USER_PREFS_PATH") or "").strip()
+    prefs_path = Path(configured).expanduser() if configured else Path(__file__).resolve().parent.parent / "user_prefs.json"
     if not prefs_path.exists():
         return {}
     try:
@@ -223,11 +224,27 @@ def load_settings() -> Settings:
     access_token_sha256 = _clean_env_key(
         _env("KB_ACCESS_TOKEN_SHA256") or _env("KB_API_TOKEN_SHA256") or _env("KB_AUTH_TOKEN_SHA256") or ""
     )
+    auth_gate_enabled = str(_env("KB_ENABLE_AUTH_GATE", "") or "").strip().lower() in {"1", "true", "yes", "on"}
+    private_instance_auth = str(_env("KB_PRIVATE_INSTANCE_AUTH", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     auth_raw = _env("KB_REQUIRE_AUTH")
     if auth_raw is None or str(auth_raw).strip() == "":
-        auth_required = production or bool(access_token or access_token_sha256)
+        auth_requested = False
     else:
-        auth_required = str(auth_raw).strip().lower() in {"1", "true", "yes", "on"}
+        auth_requested = str(auth_raw).strip().lower() in {"1", "true", "yes", "on"}
+    local_auth_gate_allowed = str(_env("KB_ALLOW_LOCAL_AUTH_GATE", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    auth_required = private_instance_auth and auth_gate_enabled and auth_requested and (
+        production or local_auth_gate_allowed
+    )
     cookie_secure_raw = _env("KB_AUTH_COOKIE_SECURE")
     if cookie_secure_raw is None or str(cookie_secure_raw).strip() == "":
         auth_cookie_secure = production

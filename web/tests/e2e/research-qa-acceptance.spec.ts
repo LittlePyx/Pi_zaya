@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test'
+import { installAppShellMocks, installEmptyCitationShelfMock } from './mockAppShell'
 
 const CONV_ID = 'conv-research-qa-acceptance'
 const BASE_TIME = 1_780_000_000
@@ -265,6 +266,7 @@ async function fulfillJson(route: Route, body: unknown, headers?: Record<string,
 }
 
 async function installResearchQaBackend(page: Page) {
+  await installAppShellMocks(page, { rootConversations: [conversation] })
   await page.route('**/api/settings', async (route) => {
     if (route.request().method() === 'PATCH') {
       await fulfillJson(route, { ok: true })
@@ -286,10 +288,6 @@ async function installResearchQaBackend(page: Page) {
     })
   })
 
-  await page.route('**/api/projects', async (route) => {
-    await fulfillJson(route, [])
-  })
-
   await page.route(/\/api\/conversations(?:\?.*)?$/, async (route) => {
     if (route.request().method() === 'POST') {
       await fulfillJson(route, { id: CONV_ID })
@@ -300,6 +298,10 @@ async function installResearchQaBackend(page: Page) {
 
   await page.route(`**/api/conversations/${CONV_ID}`, async (route) => {
     await fulfillJson(route, conversation)
+  })
+
+  await page.route(`**/api/conversations/${CONV_ID}/research-state`, async (route) => {
+    await fulfillJson(route, { ok: true, state: null })
   })
 
   await page.route(new RegExp(`/api/conversations/${CONV_ID}/messages(?:\\?.*)?$`), async (route) => {
@@ -331,6 +333,20 @@ async function installResearchQaBackend(page: Page) {
   })
   await page.route('**/api/references/bibliometrics', async (route) => {
     await fulfillJson(route, {})
+  })
+  await installEmptyCitationShelfMock(page, { scopeId: CONV_ID, projectId: null })
+  await page.route('**/api/library/quality/sources', async (route) => {
+    const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
+    await fulfillJson(route, {
+      ok: true,
+      requested: payload.sources?.length || 0,
+      review_count: 0,
+      items: (payload.sources || []).map((source) => ({
+        source_path: source.source_path || '',
+        source_name: source.source_name || '',
+        conversion_quality: { status: 'good', has_review_issue: false, score: 98, issues: [] },
+      })),
+    })
   })
   await page.route('**/api/references/reader/doc', async (route) => {
     await fulfillJson(route, {

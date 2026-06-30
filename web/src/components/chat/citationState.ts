@@ -80,6 +80,7 @@ export interface CiteDetail {
   libraryMatchDoi: string
   libraryMatchYear: string
   metadataQuality: Record<string, unknown> | null
+  metadataExportAcceptance: Record<string, unknown> | null
   metadataRepairStatus: string
   metadataRepairSources: string[]
   metadataChangedFields: string[]
@@ -188,7 +189,7 @@ export function cleanCitationDisplayText(value: string): string {
     .replace(/(?:\$\s*)?\^\{\s*\[[\d,\-\s;]+\]\s*\}(?:\s*\$)?/g, ' ')
     .replace(/\\textsuperscript\{\s*\[[^\]\n]{1,80}\]\s*\}/gi, ' ')
     .replace(/\\(?:cite|citep|citet|citealp|upcite)\s*\{[^}\n]{1,200}\}/gi, ' ')
-    .replace(/\[\[?\s*CITE\s*:[^\]\n]{1,160}\]?\]?/gi, ' ')
+    .replace(/\[\[?\s*(?:CITE|SUPPORT)\s*:[^\]\n]{1,200}\]?\]?/gi, ' ')
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s{0,3}>\s?/gm, '')
     .replace(/^\s{0,3}[-*+]\s+/gm, '')
@@ -207,8 +208,9 @@ export function cleanCitationDisplayText(value: string): string {
     .replace(/(^|\s)#{1,6}\s+/g, ' ')
     .replace(/\s*\|\s*/g, ' ')
     .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:!?，。；：！？])/g, '$1')
     .trim()
-    .replace(/^(?:\.{2,}|…)+\s*/, '')
+    .replace(/^(?:\.{2,}|\u2026)+\s*/, '')
 }
 
 export function normalizeShelfItemKind(value: string | null | undefined): ShelfItemKind {
@@ -756,7 +758,16 @@ export function shelfItemDoiExportValue(item: CiteShelfItem): string {
   return normalizeDoiLike(item.doi || item.doiUrl) || String(item.doi || item.doiUrl || '').trim()
 }
 
-function metadataQualityOk(value: unknown): boolean {
+function metadataExportAcceptanceReady(value: unknown): boolean | null {
+  if (!value || typeof value !== 'object') return null
+  const rec = value as Record<string, unknown>
+  if (!('export_ready' in rec) && !('exportReady' in rec)) return null
+  return rec.export_ready === true || rec.exportReady === true
+}
+
+function metadataQualityOk(value: unknown, exportAcceptance?: unknown): boolean {
+  const acceptanceReady = metadataExportAcceptanceReady(exportAcceptance)
+  if (acceptanceReady !== null) return acceptanceReady
   if (!value || typeof value !== 'object') return false
   const rec = value as Record<string, unknown>
   const status = String(rec.status || '').trim().toLowerCase()
@@ -764,7 +775,10 @@ function metadataQualityOk(value: unknown): boolean {
 }
 
 function metadataRepairMetaTrusted(meta: Record<string, unknown>): boolean {
-  const qualityOk = metadataQualityOk(meta.metadata_quality || meta.metadataQuality)
+  const qualityOk = metadataQualityOk(
+    meta.metadata_quality || meta.metadataQuality,
+    meta.metadata_export_acceptance || meta.metadataExportAcceptance || meta.export_acceptance || meta.exportAcceptance,
+  )
   const repairStatus = String(meta.metadata_repair_status || meta.metadataRepairStatus || '').trim().toLowerCase()
   const changedFields = Array.isArray(meta.metadata_changed_fields)
     ? meta.metadata_changed_fields
@@ -774,15 +788,20 @@ function metadataRepairMetaTrusted(meta: Record<string, unknown>): boolean {
 }
 
 export function shelfItemMetadataQualityReady(item: CiteShelfItem): boolean {
-  const quality = item.metadataQuality
-  if (!quality || typeof quality !== 'object') return false
-  return metadataQualityOk(quality)
+  return metadataQualityOk(item.metadataQuality, item.metadataExportAcceptance)
 }
 
 export function shelfItemMetadataQualityNeedsRepair(item: CiteShelfItem): boolean {
   const quality = item.metadataQuality
-  if (!quality || typeof quality !== 'object') return false
   if (shelfItemMetadataQualityReady(item)) return false
+  const acceptance = item.metadataExportAcceptance
+  if (acceptance && typeof acceptance === 'object') {
+    const rec = acceptance as Record<string, unknown>
+    const missing = Array.isArray(rec.missing_fields) ? rec.missing_fields : rec.missingFields
+    const issues = Array.isArray(rec.issue_codes) ? rec.issue_codes : rec.issueCodes
+    if ((Array.isArray(missing) && missing.length > 0) || (Array.isArray(issues) && issues.length > 0)) return true
+  }
+  if (!quality || typeof quality !== 'object') return false
   const rec = quality as Record<string, unknown>
   const issues = Array.isArray(rec.issues) ? rec.issues : []
   return Boolean(rec.repairable || rec.retryable || issues.length > 0)
@@ -1052,6 +1071,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     libraryMatchDoi: pickText(rec, 'library_match_doi', 'libraryMatchDoi') || pickText(libraryMatch, 'doi'),
     libraryMatchYear: pickText(rec, 'library_match_year', 'libraryMatchYear') || pickText(libraryMatch, 'year'),
     metadataQuality: pickRecord(rec, 'metadata_quality', 'metadataQuality'),
+    metadataExportAcceptance: pickRecord(rec, 'metadata_export_acceptance', 'metadataExportAcceptance', 'export_acceptance', 'exportAcceptance'),
     metadataRepairStatus: pickText(rec, 'metadata_repair_status', 'metadataRepairStatus'),
     metadataRepairSources: pickStringArray(rec, 'metadata_repair_sources', 'metadataRepairSources'),
     metadataChangedFields: pickStringArray(rec, 'metadata_changed_fields', 'metadataChangedFields'),
@@ -1592,6 +1612,7 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'library_match_doi',
     'library_match_year',
     'metadata_quality',
+    'metadata_export_acceptance',
     'metadata_repair_status',
     'metadata_repair_sources',
     'metadata_changed_fields',

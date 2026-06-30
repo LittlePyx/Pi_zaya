@@ -12,6 +12,16 @@ def _top_heading(heading_path: str) -> str:
     return hp.split(" / ", 1)[0].strip()
 
 
+def _truncate_text(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return "." * max_chars
+    return text[: max_chars - 3].rstrip() + "..."
+
+
 def _compact_heading_path(heading_path: str, max_chars: int = 180) -> str:
     hp = " / ".join(part.strip() for part in (heading_path or "").split(" / ") if part.strip())
     if len(hp) <= max_chars:
@@ -22,7 +32,7 @@ def _compact_heading_path(heading_path: str, max_chars: int = 180) -> str:
         compact = f"{parts[0]} / ... / {parts[-1]}"
         if len(compact) <= max_chars:
             return compact
-    return hp[: max_chars - 1].rstrip() + "…"
+    return _truncate_text(hp, max_chars)
 
 
 def _path_name(path_text: str) -> str:
@@ -49,6 +59,10 @@ def _source_label(meta: dict[str, Any]) -> str:
         return name
     doc_id = str(meta.get("doc_id") or meta.get("source_sha1") or "").strip()
     return doc_id
+
+
+def _source_path_prompt_label(path_text: str) -> str:
+    return _path_name(path_text) or str(path_text or "").strip()
 
 
 def _format_score(value: Any) -> str:
@@ -94,7 +108,7 @@ def _format_context(hits: list[dict], max_chars: int = 12000) -> str:
 
         source_path = str(meta.get("source_path") or meta.get("md_path") or "").strip()
         if source_path:
-            header_parts.append(f"source: {source_path}")
+            header_parts.append(f"source: {_source_path_prompt_label(source_path)}")
 
         heading = _compact_heading_path(str(meta.get("heading_path") or meta.get("top_heading") or ""))
         if heading:
@@ -122,7 +136,7 @@ def _format_context(hits: list[dict], max_chars: int = 12000) -> str:
         if used and used + len(chunk) > max_chars:
             break
         if not parts and len(chunk) > max_chars:
-            chunk = chunk[: max_chars - 1].rstrip() + "…"
+            chunk = _truncate_text(chunk, max_chars)
         parts.append(chunk)
         used += len(chunk)
     return "\n\n---\n\n".join(parts)

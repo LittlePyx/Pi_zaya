@@ -57,8 +57,8 @@ from kb.evidence_text import (
 )
 from kb.config import load_settings
 from kb.reference_index import extract_references_map_from_md, load_reference_index, resolve_reference_entry
-from ui.chat_widgets import _md_to_plain_text, _normalize_copy_citation_links, _normalize_math_markdown
-from ui.refs_renderer import (
+from kb.markdown_rendering import _md_to_plain_text, _normalize_copy_citation_links, _normalize_math_markdown
+from api.reference_rendering import (
     _annotate_equation_tags_with_sources,
     _annotate_inpaper_citations_with_hover_meta,
     _normalize_reference_for_popup,

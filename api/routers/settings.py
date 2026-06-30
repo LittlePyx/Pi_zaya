@@ -1,28 +1,89 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
+import re
+import secrets
 import time
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.deps import get_settings, load_prefs, save_prefs
-from api.security import auth_token_configured
+from api.security import auth_token_configured, request_is_authenticated
 from kb.file_ops import _pick_directory_dialog
 from kb.maintenance import latest_restore_review_state
+from kb.user_issue_store import UserIssueStore
 
 router = APIRouter(prefix="/api", tags=["settings"])
 _PATH_PREF_KEYS = {"pdf_dir", "md_dir"}
 _API_KEY_PREF_KEYS = {"text_api_key", "vision_api_key"}
 _LLM_PREF_KEYS = {"text_base_url", "text_model", "vision_base_url", "vision_model"}
-_BOOL_PREF_KEYS = {"auto_backup_enabled"}
+_BOOL_PREF_KEYS = {"auto_backup_enabled", "quality_data_sharing_enabled"}
+_PRIVATE_PREF_KEYS = _API_KEY_PREF_KEYS | {"quality_data_client_id"}
+_PUBLIC_PREF_KEYS = {
+    "top_k",
+    "temperature",
+    "max_tokens",
+    "deep_read",
+    "show_context",
+    "theme",
+    "pdf_dir",
+    "md_dir",
+    "answer_contract_v1",
+    "answer_depth_auto",
+    "answer_mode_hint",
+    "answer_output_mode",
+    "refs_card_locale",
+    "ui_locale",
+    "sidebar_collapsed",
+    "auto_backup_enabled",
+    "quality_data_sharing_enabled",
+}
+_ANSWER_MODE_HINTS = {"", "reading", "compare", "idea", "experiment", "troubleshoot", "writing"}
+_ANSWER_OUTPUT_MODES = {"", "reading_guide", "fact_answer", "critical_review"}
+_CHOICE_PREF_VALUES = {
+    "theme": {"light", "dark"},
+    "ui_locale": {"zh", "en"},
+    "refs_card_locale": {"auto", "zh", "en"},
+    "answer_mode_hint": _ANSWER_MODE_HINTS,
+    "answer_output_mode": _ANSWER_OUTPUT_MODES,
+}
 _LLM_TEST_RESULTS: dict[str, dict] = {}
 _RESTORE_NOTICE_WINDOW_S = 7 * 24 * 60 * 60
 _RESTORE_FAILURE_NOTICE_WINDOW_S = 24 * 60 * 60
+_SENSITIVE_PREF_KEY_RE = re.compile(
+    r"(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|"
+    r"passphrase|authorization|cookie|credential|private[_-]?key|client[_-]?secret)(?:$|[_-])",
+    flags=re.IGNORECASE,
+)
+_TOKEN_TEXT_RE = re.compile(r"\b(?:sk|pk|ghp|github_pat|xoxb|xoxp|ya29|AIza)[A-Za-z0-9_\-]{12,}\b")
+_AUTH_VALUE_RE = re.compile(r"\b(Bearer|Token|Api[-_ ]?Key)\s+([A-Za-z0-9._\-]{8,})", flags=re.IGNORECASE)
+_URL_QUERY_RE = re.compile(r"(https?://[^\s?#]+)(?:\?[^ \t\r\n\"'<>]*)?")
+_MAX_PATH_PREF_CHARS = 1200
+_MAX_API_KEY_CHARS = 4096
+_MAX_BASE_URL_CHARS = 500
+_MAX_MODEL_CHARS = 200
+_MAX_HINT_CHARS = 40
+
+
+def _validate_model_base_url(raw: str, *, key: str) -> str:
+    value = str(raw or "").replace("\x00", "").strip().rstrip("/")
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(400, f"{key} must be an http(s) URL")
+    if parsed.username or parsed.password:
+        raise HTTPException(400, f"{key} must not include credentials")
+    if parsed.query or parsed.fragment:
+        raise HTTPException(400, f"{key} must not include query or fragment")
+    return value
 
 
 def _classify_connection_error(error: object) -> str:
@@ -42,6 +103,15 @@ def _classify_connection_error(error: object) -> str:
     return "unknown"
 
 
+def _public_error_text(error: object, *, limit: int = 800) -> str:
+    text = str(error or "").replace("\x00", " ")
+    text = _AUTH_VALUE_RE.sub(r"\1 [redacted]", text)
+    text = _TOKEN_TEXT_RE.sub("[token]", text)
+    text = _URL_QUERY_RE.sub(r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[: int(max(0, limit))]
+
+
 def _normalize_pref_value(key: str, value):
     if key in _API_KEY_PREF_KEYS:
         raw = str(value or "").replace("\x00", "").strip()
@@ -51,7 +121,7 @@ def _normalize_pref_value(key: str, value):
     if key in _LLM_PREF_KEYS:
         raw = str(value or "").replace("\x00", "").strip()
         if key.endswith("_base_url"):
-            raw = raw.rstrip("/")
+            raw = _validate_model_base_url(raw, key=key)
         return raw
     if key in _BOOL_PREF_KEYS:
         if isinstance(value, bool):
@@ -62,11 +132,19 @@ def _normalize_pref_value(key: str, value):
         if raw in {"0", "false", "no", "off"}:
             return False
         raise HTTPException(400, f"{key} must be a boolean")
+    if key in _CHOICE_PREF_VALUES:
+        raw = str(value or "").replace("\x00", "").strip().lower()
+        if raw not in _CHOICE_PREF_VALUES[key]:
+            allowed = ", ".join(sorted(_CHOICE_PREF_VALUES[key]))
+            raise HTTPException(400, f"{key} must be one of: {allowed}")
+        return raw
     if key not in _PATH_PREF_KEYS:
         return value
     raw = str(value or "").strip()
     if not raw:
         raise HTTPException(400, f"{key} cannot be empty")
+    if len(raw) > _MAX_PATH_PREF_CHARS:
+        raise HTTPException(400, f"{key} is too long")
     try:
         path = Path(raw).expanduser().resolve(strict=False)
     except Exception as exc:
@@ -74,6 +152,32 @@ def _normalize_pref_value(key: str, value):
     if path.exists() and not path.is_dir():
         raise HTTPException(400, f"{key} must be a directory")
     return str(path)
+
+
+def _discard_unsent_quality_data_outbox() -> dict:
+    try:
+        settings = get_settings()
+        db_path = getattr(settings, "user_issues_db_path", None)
+        if not db_path:
+            db_dir = Path(getattr(settings, "db_dir", Path.cwd() / "db")).expanduser().resolve()
+            db_path = db_dir.parent / "user_issues.sqlite3"
+        return UserIssueStore(Path(db_path)).discard_unsent_remote_outbox()
+    except Exception as exc:
+        return {"ok": False, "removed": 0, "error": str(exc)[:240]}
+
+
+def _discard_stale_quality_data_before_enable() -> None:
+    result = _discard_unsent_quality_data_outbox()
+    if not bool(result.get("ok")):
+        detail = str(result.get("error") or "failed to clear pending quality data before enabling sharing")
+        raise HTTPException(500, detail[:240])
+
+
+def _pref_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    raw = str(value or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _connection_status(s) -> dict:
@@ -93,8 +197,21 @@ def _connection_status(s) -> dict:
     }
 
 
+def _pref_key_is_sensitive(key: object) -> bool:
+    clean = str(key or "").strip()
+    return bool(clean in _PRIVATE_PREF_KEYS or _SENSITIVE_PREF_KEY_RE.search(clean))
+
+
 def _public_prefs(prefs: dict) -> dict:
-    return {k: v for k, v in prefs.items() if k not in _API_KEY_PREF_KEYS}
+    out: dict[str, object] = {}
+    for key, value in dict(prefs or {}).items():
+        clean = str(key or "")
+        if clean not in _PUBLIC_PREF_KEYS or _pref_key_is_sensitive(clean):
+            continue
+        if isinstance(value, (dict, list, tuple)):
+            continue
+        out[clean] = value
+    return out
 
 
 def _provider_fingerprint(*, api_key: str | None, base_url: str, model: str) -> str:
@@ -311,6 +428,71 @@ def _restore_readiness_item(event: dict | None, *, acknowledged: bool = False) -
     return None
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(name, "") or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _quality_remote_host_is_local(hostname: str) -> bool:
+    host = str(hostname or "").strip("[]").lower().split("%", 1)[0]
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host in {"localhost"} or host.endswith(".localhost") or host.endswith(".local")
+    return bool(
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_unspecified
+        or ip.is_reserved
+        or ip.is_multicast
+    )
+
+
+def _quality_remote_url_block_reason(url: str, *, production: bool = False) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return "missing_remote_url"
+    try:
+        parsed = urlsplit(raw)
+        try:
+            parsed.port
+        except ValueError:
+            return "invalid_remote_url"
+    except Exception:
+        return "invalid_remote_url"
+
+    scheme = str(parsed.scheme or "").strip().lower()
+    hostname = str(parsed.hostname or "").strip()
+    if scheme not in {"http", "https"} or not hostname:
+        return "invalid_remote_url"
+    if parsed.username or parsed.password:
+        return "remote_url_credentials"
+
+    is_local = _quality_remote_host_is_local(hostname)
+    local_allowed = _env_bool("KB_USER_ISSUES_ALLOW_LOCAL_REMOTE", False)
+    if is_local and (production or not local_allowed):
+        return "local_remote_url"
+    if scheme != "https" and not ((not production) and is_local and local_allowed and scheme == "http"):
+        return "insecure_remote_url"
+    return ""
+
+
+def _quality_remote_detail(block_reason: str) -> str:
+    details = {
+        "missing_remote_url": "Enabled but KB_USER_ISSUES_REMOTE_URL is not configured.",
+        "invalid_remote_url": "KB_USER_ISSUES_REMOTE_URL must be a valid http(s) URL with a host.",
+        "remote_url_credentials": "KB_USER_ISSUES_REMOTE_URL must not include embedded user:pass credentials.",
+        "local_remote_url": "KB_USER_ISSUES_REMOTE_URL points to a local/private host; enable KB_USER_ISSUES_ALLOW_LOCAL_REMOTE only for private tests.",
+        "insecure_remote_url": "KB_USER_ISSUES_REMOTE_URL must use HTTPS for real user deployments.",
+    }
+    return details.get(block_reason, "Remote quality telemetry is not safely configured.")
+
+
 def _production_readiness_payload(s) -> dict:
     items: list[dict] = []
     llm = _readiness_payload(s)
@@ -337,13 +519,17 @@ def _production_readiness_payload(s) -> dict:
     remote_issue_enabled = bool(getattr(s, "user_issues_remote_enabled", False))
     remote_issue_url = str(getattr(s, "user_issues_remote_url", "") or "").strip()
     remote_issue_token = str(getattr(s, "user_issues_remote_token", "") or "").strip()
-    if remote_issue_enabled and not remote_issue_url:
+    production = bool(getattr(s, "production", False))
+    remote_issue_url_block = (
+        _quality_remote_url_block_reason(remote_issue_url, production=production) if remote_issue_enabled else ""
+    )
+    if remote_issue_enabled and remote_issue_url_block:
         items.append(_readiness_item(
             "user_issues_remote",
-            severity="warning",
+            severity="error" if production else "warning",
             label="Remote quality telemetry",
-            detail="Enabled but KB_USER_ISSUES_REMOTE_URL is not configured.",
-            action="set_user_issues_remote_url",
+            detail=_quality_remote_detail(remote_issue_url_block),
+            action="fix_user_issues_remote_url",
         ))
     elif remote_issue_enabled and not remote_issue_token:
         items.append(_readiness_item(
@@ -362,7 +548,6 @@ def _production_readiness_payload(s) -> dict:
         ))
 
     auth_required = bool(getattr(s, "auth_required", False))
-    production = bool(getattr(s, "production", False))
     if auth_required and not auth_token_configured(s):
         items.append(_readiness_item(
             "api_auth",
@@ -376,10 +561,9 @@ def _production_readiness_payload(s) -> dict:
     else:
         items.append(_readiness_item(
             "api_auth",
-            severity="warning" if production else "ok",
+            severity="ok",
             label="API access protection",
-            detail="Disabled",
-            action="enable_auth" if production else "",
+            detail="Disabled; public access",
         ))
 
     raw_origins = (os.environ.get("KB_API_ALLOW_ORIGINS") or os.environ.get("KB_CORS_ALLOW_ORIGINS") or "").strip()
@@ -469,54 +653,107 @@ def get_readiness():
 
 
 class PrefsPatch(BaseModel):
-    top_k: int | None = None
-    temperature: float | None = None
-    max_tokens: int | None = None
+    model_config = ConfigDict(extra="ignore")
+
+    top_k: int | None = Field(None, ge=2, le=20)
+    temperature: float | None = Field(None, ge=0.0, le=1.0)
+    max_tokens: int | None = Field(None, ge=512, le=3072)
     deep_read: bool | None = None
     show_context: bool | None = None
-    theme: str | None = None
-    pdf_dir: str | None = None
-    md_dir: str | None = None
+    theme: str | None = Field(None, max_length=_MAX_HINT_CHARS)
+    pdf_dir: str | None = Field(None, max_length=_MAX_PATH_PREF_CHARS)
+    md_dir: str | None = Field(None, max_length=_MAX_PATH_PREF_CHARS)
     answer_contract_v1: bool | None = None
     answer_depth_auto: bool | None = None
-    answer_mode_hint: str | None = None
-    answer_output_mode: str | None = None
-    refs_card_locale: str | None = None
-    ui_locale: str | None = None
+    answer_mode_hint: str | None = Field(None, max_length=_MAX_HINT_CHARS)
+    answer_output_mode: str | None = Field(None, max_length=_MAX_HINT_CHARS)
+    refs_card_locale: str | None = Field(None, max_length=_MAX_HINT_CHARS)
+    ui_locale: str | None = Field(None, max_length=_MAX_HINT_CHARS)
     sidebar_collapsed: bool | None = None
-    text_api_key: str | None = None
-    text_base_url: str | None = None
-    text_model: str | None = None
-    vision_api_key: str | None = None
-    vision_base_url: str | None = None
-    vision_model: str | None = None
+    text_api_key: str | None = Field(None, max_length=_MAX_API_KEY_CHARS)
+    text_base_url: str | None = Field(None, max_length=_MAX_BASE_URL_CHARS)
+    text_model: str | None = Field(None, max_length=_MAX_MODEL_CHARS)
+    vision_api_key: str | None = Field(None, max_length=_MAX_API_KEY_CHARS)
+    vision_base_url: str | None = Field(None, max_length=_MAX_BASE_URL_CHARS)
+    vision_model: str | None = Field(None, max_length=_MAX_MODEL_CHARS)
     auto_backup_enabled: bool | None = None
+    quality_data_sharing_enabled: bool | None = None
+
+    @field_validator("theme", "answer_mode_hint", "answer_output_mode", "refs_card_locale", "ui_locale")
+    @classmethod
+    def _clean_small_choice(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return str(value).replace("\x00", "").strip().lower()
+
+    @field_validator("text_api_key", "vision_api_key", "text_base_url", "vision_base_url", "text_model", "vision_model", "pdf_dir", "md_dir")
+    @classmethod
+    def _clean_text_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return str(value).replace("\x00", "").strip()
 
 
 @router.patch("/settings")
 def update_settings(body: PrefsPatch):
     prefs = load_prefs()
-    for k, v in body.model_dump(exclude_none=True).items():
+    patch = body.model_dump(exclude_none=True)
+    previous_quality_sharing_enabled = _pref_bool(prefs.get("quality_data_sharing_enabled"))
+    quality_sharing_disabled = False
+    quality_sharing_enabled_from_off = False
+    quality_cleanup_result: dict | None = None
+    for k, v in patch.items():
         normalized = _normalize_pref_value(k, v)
         if k in (_API_KEY_PREF_KEYS | _LLM_PREF_KEYS) and not normalized:
             prefs.pop(k, None)
         else:
             prefs[k] = normalized
+        if k == "quality_data_sharing_enabled" and normalized is False:
+            quality_sharing_disabled = True
+            prefs.pop("quality_data_client_id", None)
+        elif k == "quality_data_sharing_enabled" and normalized is True and not str(prefs.get("quality_data_client_id") or "").strip():
+            quality_sharing_enabled_from_off = not previous_quality_sharing_enabled
+            prefs["quality_data_client_id"] = secrets.token_urlsafe(18)
+        elif k == "quality_data_sharing_enabled" and normalized is True:
+            quality_sharing_enabled_from_off = not previous_quality_sharing_enabled
+    if quality_sharing_enabled_from_off:
+        _discard_stale_quality_data_before_enable()
     save_prefs(prefs)
+    if quality_sharing_disabled:
+        quality_cleanup_result = _discard_unsent_quality_data_outbox()
     try:
         get_settings.cache_clear()
     except Exception:
         pass
-    return {"ok": True}
+    response: dict[str, object] = {"ok": True}
+    if quality_cleanup_result is not None:
+        response["quality_data_cleanup"] = {
+            "ok": bool(quality_cleanup_result.get("ok")),
+            "removed": int(quality_cleanup_result.get("removed") or 0),
+            "error": str(quality_cleanup_result.get("error") or "")[:240],
+        }
+    return response
 
 
 class PickDirRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     target: Literal["pdf", "md"]
-    initial_dir: str | None = None
+    initial_dir: str | None = Field(None, max_length=_MAX_PATH_PREF_CHARS)
+
+
+def _require_server_file_picker_allowed(request: Request) -> None:
+    settings = get_settings()
+    if not bool(getattr(settings, "production", False)):
+        return
+    if bool(getattr(settings, "auth_required", False)) and request_is_authenticated(request, settings=settings):
+        return
+    raise HTTPException(status_code=404, detail="Not found")
 
 
 @router.post("/settings/pick-dir")
-def pick_dir(body: PickDirRequest):
+def pick_dir(body: PickDirRequest, request: Request):
+    _require_server_file_picker_allowed(request)
     prefs = load_prefs()
     key = "pdf_dir" if body.target == "pdf" else "md_dir"
     initial = (body.initial_dir or "").strip() or str(prefs.get(key) or "").strip()
@@ -527,10 +764,19 @@ def pick_dir(body: PickDirRequest):
 
 
 class ConnectionTestBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     target: Literal["text", "vision"] = "text"
-    api_key: str | None = None
-    base_url: str | None = None
-    model: str | None = None
+    api_key: str | None = Field(None, max_length=_MAX_API_KEY_CHARS)
+    base_url: str | None = Field(None, max_length=_MAX_BASE_URL_CHARS)
+    model: str | None = Field(None, max_length=_MAX_MODEL_CHARS)
+
+    @field_validator("api_key", "base_url", "model")
+    @classmethod
+    def _clean_override(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return str(value).replace("\x00", "").strip()
 
 
 def _test_chat_completion(*, api_key: str | None, base_url: str, model: str, timeout_s: float) -> dict:
@@ -584,6 +830,8 @@ def test_llm(body: ConnectionTestBody | None = None):
         if not result.get("ok") and not error_type:
             error_type = _classify_connection_error(result.get("error"))
             result["error_type"] = error_type
+        if not result.get("ok"):
+            result["error"] = _public_error_text(result.get("error"))
         result["checked_at"] = checked_at
         _LLM_TEST_RESULTS[target] = {
             "ok": bool(result.get("ok")),
@@ -596,26 +844,28 @@ def test_llm(body: ConnectionTestBody | None = None):
         return result
     except Exception as e:
         error_type = _classify_connection_error(e)
+        error_text = _public_error_text(e)
         _LLM_TEST_RESULTS[target] = {
             "ok": False,
             "reply": "",
-            "error": str(e),
+            "error": error_text,
             "error_type": error_type,
             "checked_at": checked_at,
             "fingerprint": _provider_fingerprint(api_key=api_key, base_url=base_url, model=model),
         }
-        return {"ok": False, "error": str(e), "error_type": error_type, "checked_at": checked_at}
+        return {"ok": False, "error": error_text, "error_type": error_type, "checked_at": checked_at}
 
 
 @router.get("/health")
 def health():
     s = get_settings()
+    auth_required = bool(getattr(s, "auth_required", False))
     return {
         "status": "ok",
         "env": str(getattr(s, "app_env", "development") or "development"),
         "production": bool(getattr(s, "production", False)),
         "auth": {
-            "required": bool(getattr(s, "auth_required", False)),
-            "configured": auth_token_configured(s),
+            "required": auth_required,
+            "configured": auth_token_configured(s) if auth_required else False,
         },
     }

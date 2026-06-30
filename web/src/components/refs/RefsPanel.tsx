@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Collapse, Modal, Tabs, Typography, message } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '../../i18n'
-import { referencesApi } from '../../api/references'
+import { referenceSourcePathCacheKey, referencesApi } from '../../api/references'
 import { useChatStore } from '../../stores/chatStore'
+import { basenameFromSourcePath } from '../../utils/sourcePath'
 import type { ReaderOpenPayload } from '../chat/reader/readerTypes'
 import { buildBasicReaderOpenPayload } from '../chat/reader/readerOpenPayloadUtils'
 import {
@@ -185,7 +186,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
     displayState === 'hidden_by_guide'
     || ((!hasBackendDisplayState) && rawHitCount === 0 && Boolean(guideFilter.hidden_self_source))
   )
-  const shouldShowNegativeSuppressedNote = false
+  const shouldShowNegativeSuppressedNote = displayState === 'suppressed'
   const shouldShowEmptyNote = !hasPending && displayState === 'empty'
   const suppressionNoteText = suppressionReason === 'focus_filter_removed_all'
     ? S.refs_suppressed_focus
@@ -243,7 +244,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
       if (!sourcePath) continue
       const existingMeta = (remoteMeta[index] || ui.citation_meta || {}) as Record<string, unknown>
       if (hasResolvedCitationMeta(existingMeta)) continue
-      const fetchKey = `${msgId}:${index}:${sourcePath}`
+      const fetchKey = `${msgId}:${index}:${referenceSourcePathCacheKey(sourcePath)}`
       if (autoFetchedCitationMetaRef.current.has(fetchKey)) continue
       autoFetchedCitationMetaRef.current.add(fetchKey)
       void fetchCitationMeta(index, ui, { silent: true })
@@ -268,7 +269,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
       message.info(S.refs_reader_missing)
       return
     }
-    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || S.default_source_fallback
+    const sourceName = String(ui.display_name || '').trim() || basenameFromSourcePath(sourcePath) || S.default_source_fallback
     setGuideLoadingIndex(index)
     try {
       await createPaperGuideConversation({

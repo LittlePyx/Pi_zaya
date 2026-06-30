@@ -4,9 +4,9 @@ import {
   Upload,
   AutoComplete,
   Button,
-  List,
   Drawer,
   message,
+  Pagination,
   Progress,
   Select,
   Typography,
@@ -81,6 +81,7 @@ import {
   type WorkbenchTone,
 } from '../components/library/WorkbenchPrimitives'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
+import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
   SCOPE_OPTIONS,
   RENAME_SCOPE_OPTIONS,
@@ -145,9 +146,12 @@ const { Dragger } = Upload
 const FILE_VIRTUAL_THRESHOLD = 60
 const FILE_VIRTUAL_HEIGHT = 620
 const FILE_VIRTUAL_ROW_HEIGHT = 88
+const RENAME_PAGE_SIZE = 6
+const UPLOAD_DRAFT_PAGE_SIZE = 8
 const EMPTY_REF_SYNC_STATS: ReferenceSyncStats = {}
-const INTERNAL_ROUTES_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_INTERNAL_ROUTES === '1'
-const SHOW_USER_QUALITY_DIAGNOSTICS = import.meta.env.VITE_SHOW_USER_QUALITY_DIAGNOSTICS === '1'
+const INTERNAL_ROUTES_ENABLED = import.meta.env.VITE_ENABLE_INTERNAL_ROUTES === '1'
+const QUALITY_DIAGNOSTICS_VISIBLE = qualityDiagnosticsVisible()
+const QUALITY_STATUS_VISIBLE = qualityStatusVisible()
 
 type FileTabKey = 'pending' | 'converted' | 'all'
 type LibraryBrowseMode = 'list' | 'categories' | 'tags'
@@ -204,6 +208,13 @@ type QualityRepairBaseline = {
 type QualityRepairRunOptions = {
   autoReindexImmediate?: boolean
   autoReindexQueued?: boolean
+  operationToken?: LibraryQualityOperationToken
+}
+
+type LibraryQualityOperationToken = {
+  id: number
+  key: string
+  scope: string
 }
 
 type QualityIssueStat = {
@@ -378,6 +389,8 @@ export default function LibraryPage() {
   const [qualityCaseRerunResults, setQualityCaseRerunResults] = useState<Record<string, LibraryResearchQaRerunResponse>>({})
   const [qualityFailureFilter, setQualityFailureFilter] = useState('')
   const qualityRepairBaselinesRef = useRef<Record<string, QualityRepairBaseline>>({})
+  const qualityOperationSeqRef = useRef(0)
+  const activeQualityOperationRef = useRef<LibraryQualityOperationToken | null>(null)
   const [batchDraft, setBatchDraft] = useState<LibraryBatchMetaDraft>({
     apply_paper_category: false,
     paper_category: '',
@@ -401,6 +414,7 @@ export default function LibraryPage() {
   const [uploadInspecting, setUploadInspecting] = useState(false)
   const [uploadSaving, setUploadSaving] = useState(false)
   const [uploadWorkbenchOpen, setUploadWorkbenchOpen] = useState(false)
+  const [uploadDraftPage, setUploadDraftPage] = useState(1)
   const autoInspectingRef = useRef(false)
 
   const [renameScope, setRenameScope] = useState('30')
@@ -410,6 +424,7 @@ export default function LibraryPage() {
   const [renameSelected, setRenameSelected] = useState<Record<string, boolean>>({})
   const [renameOverrides, setRenameOverrides] = useState<Record<string, string>>({})
   const [renameResultsOpen, setRenameResultsOpen] = useState(false)
+  const [renamePage, setRenamePage] = useState(1)
   const [suggestionsRefreshing, setSuggestionsRefreshing] = useState(false)
 
   const uploadLocked = store.converting || Boolean(store.refSync?.running)
@@ -423,6 +438,41 @@ export default function LibraryPage() {
     message.warning(S.lib_llm_unavailable_fallback.replace('{action}', action))
     openApiSettings()
   }, [S.lib_llm_unavailable_fallback, openApiSettings])
+  const beginQualityOperation = useCallback((key: string): LibraryQualityOperationToken => {
+    const token = {
+      id: qualityOperationSeqRef.current + 1,
+      key,
+      scope,
+    }
+    qualityOperationSeqRef.current = token.id
+    activeQualityOperationRef.current = token
+    setQualityCaseActionKey('')
+    setQualityFullChainActionKey('')
+    setQualityBatchRunning(false)
+    setShelfMetadataBackfillRefreshing(false)
+    setQualityRepairAdvancing(false)
+    return token
+  }, [scope])
+  const qualityOperationIsCurrent = useCallback((token?: LibraryQualityOperationToken | null): boolean => {
+    if (!token) return true
+    const active = activeQualityOperationRef.current
+    return Boolean(active && active.id === token.id && active.key === token.key && active.scope === token.scope && scope === token.scope)
+  }, [scope])
+  const qualityOperationIsActive = useCallback((token?: LibraryQualityOperationToken | null): boolean => {
+    if (!token) return true
+    const active = activeQualityOperationRef.current
+    return Boolean(active && active.id === token.id && active.key === token.key && active.scope === token.scope)
+  }, [])
+  const clearQualityOperation = useCallback((token?: LibraryQualityOperationToken | null) => {
+    if (!token) {
+      activeQualityOperationRef.current = null
+      return
+    }
+    const active = activeQualityOperationRef.current
+    if (active && active.id === token.id && active.key === token.key) {
+      activeQualityOperationRef.current = null
+    }
+  }, [])
 
   const dirDirty = useMemo(
     () =>
@@ -941,6 +991,10 @@ export default function LibraryPage() {
     () => failedUploadDrafts.filter((x) => isDuplicateFailure(x.note)),
     [failedUploadDrafts],
   )
+  const retryableFailedUploadDrafts = useMemo(
+    () => failedUploadDrafts.filter((x) => x.failureStage !== 'duplicate' && !isDuplicateFailure(x.note)),
+    [failedUploadDrafts],
+  )
   const failedUploadNotes = useMemo(
     () => Array.from(new Set(failedUploadDrafts.map((x) => String(x.note || '').trim()).filter(Boolean))).slice(0, 3),
     [failedUploadDrafts],
@@ -977,6 +1031,22 @@ export default function LibraryPage() {
     ],
     [uploadDrafts, S],
   )
+  const renamePageCount = Math.max(1, Math.ceil(renameVisible.length / RENAME_PAGE_SIZE))
+  const uploadDraftPageCount = Math.max(1, Math.ceil(filteredUploadDrafts.length / UPLOAD_DRAFT_PAGE_SIZE))
+  const pagedRenameVisible = useMemo(
+    () => renameVisible.slice((renamePage - 1) * RENAME_PAGE_SIZE, renamePage * RENAME_PAGE_SIZE),
+    [renamePage, renameVisible],
+  )
+  const pagedUploadDrafts = useMemo(
+    () => filteredUploadDrafts.slice((uploadDraftPage - 1) * UPLOAD_DRAFT_PAGE_SIZE, uploadDraftPage * UPLOAD_DRAFT_PAGE_SIZE),
+    [filteredUploadDrafts, uploadDraftPage],
+  )
+  useEffect(() => {
+    if (renamePage > renamePageCount) setRenamePage(renamePageCount)
+  }, [renamePage, renamePageCount])
+  useEffect(() => {
+    if (uploadDraftPage > uploadDraftPageCount) setUploadDraftPage(uploadDraftPageCount)
+  }, [uploadDraftPage, uploadDraftPageCount])
   const activeErrorReasonText = useMemo(() => {
     const map: Record<UploadErrorReason, string> = {
       all: S.lib_error_filter_all,
@@ -1052,8 +1122,8 @@ export default function LibraryPage() {
   const refSyncStats = useMemo(() => store.refSync?.stats || EMPTY_REF_SYNC_STATS, [store.refSync?.stats])
   const refSyncMetricItems = useMemo<WorkbenchMetricItem[]>(() => {
     const refsTotal = numericStat(refSyncStats, 'refs_total')
-    const docsTotal = store.refSync?.docsTotal || numericStat(refSyncStats, 'docs_total')
-    const docsDone = store.refSync?.docsDone || numericStat(refSyncStats, 'docs_indexed')
+    const docsTotal = store.refSync?.docsTotal ?? numericStat(refSyncStats, 'docs_total')
+    const docsDone = store.refSync?.docsDone ?? numericStat(refSyncStats, 'docs_indexed')
     const statusReady = numericStat(refSyncStats, 'refs_metadata_status_complete')
       + numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
       + numericStat(refSyncStats, 'refs_metadata_status_bibliographic_ready')
@@ -1362,6 +1432,14 @@ export default function LibraryPage() {
   )
 
   const selectedLibraryCount = selectedLibraryNamesList.length
+  const batchDraftCategory = normalizeTextValue(batchDraft.paper_category)
+  const batchDraftAddTags = normalizeTextList(batchDraft.add_tags)
+  const batchDraftRemoveTags = normalizeTextList(batchDraft.remove_tags)
+  const batchDraftWillClearCategory = batchDraft.apply_paper_category && !batchDraftCategory
+  const batchDraftWillClearStatus = batchDraft.apply_reading_status && !batchDraft.reading_status
+  const batchDraftReadingLabel = batchDraft.apply_reading_status
+    ? readingStatusLabel(batchDraft.reading_status, S)
+    : ''
   const selectedQualityReviewNames = useMemo(
     () => store.files
       .filter((item) => Boolean(selectedLibraryNames[item.name]) && hasConversionQualityIssue(item) && item.task_state === 'idle')
@@ -1512,6 +1590,7 @@ export default function LibraryPage() {
           selected: true,
           stem: file.name.replace(/\.pdf$/i, ''),
           status: 'queued',
+          failureStage: '',
           displayName: file.name,
           note: '',
           savedName: '',
@@ -1528,35 +1607,43 @@ export default function LibraryPage() {
     })
   }
 
-  const inspectDraft = useCallback(async (key: string, opts?: { useLlm?: boolean }) => {
+  const inspectDraft = useCallback(async (key: string, opts?: { useLlm?: boolean }): Promise<{
+    ok: boolean
+    duplicate: boolean
+    suggestedStem: string
+  }> => {
     const ready = await ensureDirsReady()
-    if (!ready) return
+    if (!ready) return { ok: false, duplicate: false, suggestedStem: '' }
     const target = uploadDrafts.find((x) => x.key === key)
-    if (!target) return
+    if (!target) return { ok: false, duplicate: false, suggestedStem: '' }
     const effectiveUseLlm = Boolean(opts?.useLlm ?? uploadUseLlm)
-    setUploadDrafts((cur) => cur.map((x) => (x.key === key ? { ...x, status: 'inspecting', note: '' } : x)))
+    setUploadDrafts((cur) => cur.map((x) => (x.key === key ? { ...x, status: 'inspecting', failureStage: '', note: '' } : x)))
     try {
       const res = await libraryApi.inspectUpload(target.file, effectiveUseLlm)
+      const suggestedStem = String(res.suggested_stem || target.stem || '')
       setUploadDrafts((cur) => cur.map((x) => {
         if (x.key !== key) return x
         return {
           ...x,
-          stem: res.suggested_stem || x.stem,
+          stem: suggestedStem || x.stem,
           displayName: res.display_full_name || x.displayName,
           suggestionBasisLabel: String(res.meta?.basis_label || ''),
           suggestionBasisDetail: String(res.meta?.basis_detail || ''),
           suggestionMatchMethod: String(res.meta?.match_method || ''),
           suggestionYearSource: String(res.meta?.year_source || ''),
           status: res.duplicate ? 'error' : 'ready',
+          failureStage: res.duplicate ? 'duplicate' : '',
           note: res.duplicate ? `${S.lib_upload_dup_prefix}${String(res.existing || '')}` : S.lib_upload_scan_done,
         }
       }))
+      return { ok: !res.duplicate, duplicate: Boolean(res.duplicate), suggestedStem }
     } catch (err) {
       setUploadDrafts((cur) => cur.map((x) => (
         x.key === key
-          ? { ...x, status: 'error', note: err instanceof Error ? err.message : S.lib_upload_scan_fail }
+          ? { ...x, status: 'error', failureStage: 'inspect', note: err instanceof Error ? err.message : S.lib_upload_scan_fail }
           : x
       )))
+      return { ok: false, duplicate: false, suggestedStem: '' }
     }
   }, [ensureDirsReady, uploadDrafts, uploadUseLlm, S])
 
@@ -1623,7 +1710,7 @@ export default function LibraryPage() {
     })
   }, [store.files])
 
-  const saveDraft = async (key: string, convertNow: boolean, opts?: { syncUi?: boolean }) => {
+  const saveDraft = async (key: string, convertNow: boolean, opts?: { syncUi?: boolean; baseName?: string }) => {
     const syncUi = opts?.syncUi ?? true
     const ready = await ensureDirsReady()
     if (!ready) return { saved: false, enqueued: false }
@@ -1634,6 +1721,7 @@ export default function LibraryPage() {
         ? {
           ...x,
           status: 'saving',
+          failureStage: '',
           note: '',
           savedName: '',
           savedSha1: '',
@@ -1644,7 +1732,7 @@ export default function LibraryPage() {
     )))
     try {
       const res = await libraryApi.commitUpload(target.file, {
-        baseName: target.stem,
+        baseName: opts?.baseName ?? target.stem,
         convertNow,
         speedMode: CONVERT_MODE,
         allowDuplicate: false,
@@ -1653,10 +1741,18 @@ export default function LibraryPage() {
       const enqueued = Boolean(convertNow && res.enqueued)
       setUploadDrafts((cur) => cur.map((x) => {
         if (x.key !== key) return x
-        if (res.duplicate) return { ...x, status: 'error', note: `${S.lib_upload_dup_prefix}${String(res.existing || '')}` }
+        if (res.duplicate) {
+          return {
+            ...x,
+            status: 'error',
+            failureStage: 'duplicate',
+            note: `${S.lib_upload_dup_prefix}${String(res.existing || '')}`,
+          }
+        }
         return {
           ...x,
           status: 'saved',
+          failureStage: '',
           selected: false,
           stem: savedName.replace(/\.pdf$/i, '') || x.stem,
           displayName: savedName || x.displayName,
@@ -1676,7 +1772,7 @@ export default function LibraryPage() {
     } catch (err) {
       setUploadDrafts((cur) => cur.map((x) => (
         x.key === key
-          ? { ...x, status: 'error', note: err instanceof Error ? err.message : S.lib_upload_save_fail }
+          ? { ...x, status: 'error', failureStage: 'save', note: err instanceof Error ? err.message : S.lib_upload_save_fail }
           : x
       )))
       return { saved: false, enqueued: false }
@@ -1753,21 +1849,38 @@ export default function LibraryPage() {
 
   const retryFailedDrafts = async (convertNow: boolean) => {
     const failed = uploadDrafts.filter((x) => x.status === 'error')
-    if (!failed.length) {
+    const retryable = failed.filter((x) => x.failureStage !== 'duplicate' && !isDuplicateFailure(x.note))
+    if (!retryable.length) {
       message.info(S.lib_msg_no_retryable)
       return
     }
     setUploadSaving(true)
+    setUploadInspecting(true)
     try {
       let anyEnqueued = false
-      for (const x of failed) {
+      const effectiveUseLlm = uploadUseLlm && textModelReady
+      if (uploadUseLlm && !textModelReady) {
+        warnLlmFallback(S.lib_upload_use_llm)
+      }
+      for (const x of retryable) {
+        if (x.failureStage === 'inspect') {
+          const inspectResult = await inspectDraft(x.key, { useLlm: effectiveUseLlm })
+          if (!inspectResult.ok || !convertNow) continue
+          const result = await saveDraft(x.key, true, {
+            syncUi: false,
+            baseName: inspectResult.suggestedStem || x.stem,
+          })
+          anyEnqueued = anyEnqueued || Boolean(result.enqueued)
+          continue
+        }
         const result = await saveDraft(x.key, convertNow, { syncUi: false })
         anyEnqueued = anyEnqueued || Boolean(result.enqueued)
       }
       await store.loadFiles(scope)
       if (anyEnqueued) store.startProgressStream()
-      message.success(S.lib_msg_retried_count.replace('{n}', String(failed.length)))
+      message.success(S.lib_msg_retried_count.replace('{n}', String(retryable.length)))
     } finally {
+      setUploadInspecting(false)
       setUploadSaving(false)
     }
   }
@@ -1880,6 +1993,8 @@ export default function LibraryPage() {
       message.info(S.lib_msg_quality_repair_none)
       return { ok: true, targetCount: 0, queued: 0, repaired: 0, needsReindex: false, reindexed: false, impact: null as LibraryQualityRepairImpact | null }
     }
+    const operationToken = opts.operationToken || beginQualityOperation(`quality-repair:${targets.join('|')}`)
+    const ownsOperation = !opts.operationToken
     const startedAt = Date.now()
     const baselineByName = new Map(store.files.map((item) => [item.name, item.conversion_quality || null]))
     qualityRepairBaselinesRef.current = {
@@ -1909,6 +2024,9 @@ export default function LibraryPage() {
       const impact = res.impact || null
       const needsReindex = Boolean(res.needs_reindex || impact?.needs_reindex)
       let reindexed = false
+      if (!qualityOperationIsCurrent(operationToken)) {
+        return { ok: false, targetCount: targets.length, queued, repaired, needsReindex, reindexed, impact: null as LibraryQualityRepairImpact | null }
+      }
       if (res.repair_run) {
         setQualityRepairRun(res.repair_run)
       }
@@ -1928,8 +2046,14 @@ export default function LibraryPage() {
         message.info(S.lib_msg_quality_repair_none)
       }
       await store.loadFiles(scope)
+      if (!qualityOperationIsCurrent(operationToken)) {
+        return { ok: false, targetCount: targets.length, queued, repaired, needsReindex, reindexed, impact: null as LibraryQualityRepairImpact | null }
+      }
       if (needsReindex && repaired > 0 && queued <= 0 && opts.autoReindexImmediate !== false) {
-        reindexed = await handleReindex()
+        reindexed = await handleReindex(operationToken)
+        if (!qualityOperationIsCurrent(operationToken)) {
+          return { ok: false, targetCount: targets.length, queued, repaired, needsReindex, reindexed, impact: null as LibraryQualityRepairImpact | null }
+        }
         if (impact) {
           setQualityRepairImpact({ ...impact, reindexed })
         }
@@ -1946,7 +2070,9 @@ export default function LibraryPage() {
       qualityRepairBaselinesRef.current = Object.fromEntries(
         Object.entries(qualityRepairBaselinesRef.current).filter(([name]) => !targets.includes(name)),
       )
-      message.error(err instanceof Error ? err.message : S.lib_msg_quality_repair_failed)
+      if (qualityOperationIsCurrent(operationToken)) {
+        message.error(err instanceof Error ? err.message : S.lib_msg_quality_repair_failed)
+      }
       return { ok: false, targetCount: targets.length, queued: 0, repaired: 0, needsReindex: false, reindexed: false, impact: null as LibraryQualityRepairImpact | null }
     } finally {
       setQualityRepairingNames((cur) => {
@@ -1954,6 +2080,7 @@ export default function LibraryPage() {
         for (const name of targets) delete next[name]
         return next
       })
+      if (ownsOperation) clearQualityOperation(operationToken)
     }
   }
 
@@ -2049,6 +2176,7 @@ export default function LibraryPage() {
       message.info('Reader locate has no source repair targets yet')
       return
     }
+    const operationToken = beginQualityOperation('reader-locate-source-repair')
     try {
       const res = await store.repairQuality({
         sources,
@@ -2058,6 +2186,7 @@ export default function LibraryPage() {
       }, {
         autoReindexAfterQueued: true,
       })
+      if (!qualityOperationIsCurrent(operationToken)) return
       if (res.repair_run) setQualityRepairRun(res.repair_run)
       if (res.impact) setQualityRepairImpact(res.impact)
       const enqueued = Number(res.enqueued || 0)
@@ -2075,6 +2204,7 @@ export default function LibraryPage() {
       if (needsReindex && enqueued <= 0) {
         if (res.repair_run?.run_id) {
           const advanced = await libraryApi.advanceQualityRepairRun(res.repair_run.run_id)
+          if (!qualityOperationIsCurrent(operationToken)) return
           setQualityRepairRun(advanced.item)
           if (advanced.reindex?.ok) {
             setQualityRepairImpact(res.impact ? { ...res.impact, reindexed: true } : null)
@@ -2082,13 +2212,18 @@ export default function LibraryPage() {
             setQualityRepairImpact(res.impact ? { ...res.impact, reindexed: false } : null)
           }
         } else {
-          const reindexed = await handleReindex()
+          const reindexed = await handleReindex(operationToken)
+          if (!qualityOperationIsCurrent(operationToken)) return
           if (res.impact) setQualityRepairImpact({ ...res.impact, reindexed })
         }
       }
       await store.loadQualityOverview('all')
     } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Reader locate repair failed')
+      if (qualityOperationIsCurrent(operationToken)) {
+        message.error(err instanceof Error ? err.message : 'Reader locate repair failed')
+      }
+    } finally {
+      clearQualityOperation(operationToken)
     }
   }
 
@@ -2174,6 +2309,8 @@ export default function LibraryPage() {
       if (!opts.silent) message.info(S.lib_msg_quality_repair_none)
       return { queued: 0, completed: true, repaired: 0, needsReindex: false, reindexed: false, impact: null }
     }
+    const operationToken = opts.operationToken || beginQualityOperation(`case-source-repair:${normalizeTextValue(item.id)}`)
+    const ownsOperation = !opts.operationToken
     const key = opts.actionKey || `${item.id}:repair_sources`
     const manageActionKey = opts.manageActionKey !== false
     if (manageActionKey) setQualityCaseActionKey(key)
@@ -2190,6 +2327,9 @@ export default function LibraryPage() {
       const impact = res.impact || null
       const needsReindex = Boolean(res.needs_reindex || impact?.needs_reindex)
       let reindexed = false
+      if (!qualityOperationIsCurrent(operationToken)) {
+        return { queued, completed: false, repaired, needsReindex, reindexed, impact: null }
+      }
       if (res.repair_run) {
         setQualityRepairRun(res.repair_run)
       }
@@ -2199,8 +2339,14 @@ export default function LibraryPage() {
       if (queued > 0) {
         if (!opts.silent) message.success(S.lib_msg_quality_repair_enqueued.replace('{n}', String(queued)))
         const completed = opts.waitForCompletion ? await waitForLibraryConversionDone() : false
+        if (!qualityOperationIsCurrent(operationToken)) {
+          return { queued, completed: false, repaired, needsReindex, reindexed, impact: null }
+        }
         if (completed && needsReindex && opts.autoReindexImmediate !== false) {
-          reindexed = await handleReindex()
+          reindexed = await handleReindex(operationToken)
+          if (!qualityOperationIsCurrent(operationToken)) {
+            return { queued, completed: false, repaired, needsReindex, reindexed, impact: null }
+          }
           if (impact) setQualityRepairImpact({ ...impact, reindexed })
           if (res.repair_run?.run_id) {
             const status = reindexed ? 'completed' : 'warning'
@@ -2214,7 +2360,10 @@ export default function LibraryPage() {
       } else if (repaired > 0) {
         if (!opts.silent) message.success(`Markdown repaired: ${repaired}`)
         if (needsReindex && opts.autoReindexImmediate !== false) {
-          reindexed = await handleReindex()
+          reindexed = await handleReindex(operationToken)
+          if (!qualityOperationIsCurrent(operationToken)) {
+            return { queued: 0, completed: false, repaired, needsReindex, reindexed, impact: null }
+          }
           if (impact) setQualityRepairImpact({ ...impact, reindexed })
           if (res.repair_run?.run_id) {
             const status = reindexed ? 'completed' : 'warning'
@@ -2230,10 +2379,13 @@ export default function LibraryPage() {
         return { queued: 0, completed: true, repaired, needsReindex, reindexed, impact }
       }
     } catch (err) {
-      message.error(err instanceof Error ? err.message : S.lib_msg_quality_repair_failed)
+      if (qualityOperationIsCurrent(operationToken)) {
+        message.error(err instanceof Error ? err.message : S.lib_msg_quality_repair_failed)
+      }
       return { queued: 0, completed: false, repaired: 0, needsReindex: false, reindexed: false, impact: null }
     } finally {
-      if (manageActionKey) setQualityCaseActionKey('')
+      if (manageActionKey && qualityOperationIsActive(operationToken)) setQualityCaseActionKey('')
+      if (ownsOperation) clearQualityOperation(operationToken)
     }
   }
 
@@ -2269,12 +2421,19 @@ export default function LibraryPage() {
     }
   }
 
-  const runQualityFailureCaseRerun = async (item: LibraryQualityFailureCase) => {
+  const runQualityFailureCaseRerun = async (item: LibraryQualityFailureCase, operationToken?: LibraryQualityOperationToken) => {
     const caseId = normalizeTextValue(item.id)
     if (!caseId) return null
+    const token = operationToken || beginQualityOperation(`qa-rerun:${caseId}`)
+    const ownsOperation = !operationToken
     const res = await libraryApi.rerunResearchQaCase({ case_id: caseId })
+    if (!qualityOperationIsCurrent(token)) {
+      if (ownsOperation) clearQualityOperation(token)
+      return null
+    }
     storeQualityCaseRerunResult(caseId, res)
     await store.loadQualityOverview('all')
+    if (ownsOperation) clearQualityOperation(token)
     return res
   }
 
@@ -2283,16 +2442,22 @@ export default function LibraryPage() {
     if (!caseId) return
     const key = `${item.id}:rerun_case:`
     setQualityCaseActionKey(key)
+    const operationToken = beginQualityOperation(key)
     try {
-      await runQualityFailureCaseRerun(item)
+      await runQualityFailureCaseRerun(item, operationToken)
     } catch (err) {
-      message.error(err instanceof Error ? err.message : 'QA rerun failed')
+      if (qualityOperationIsCurrent(operationToken)) {
+        message.error(err instanceof Error ? err.message : 'QA rerun failed')
+      }
     } finally {
-      setQualityCaseActionKey('')
+      if (qualityOperationIsActive(operationToken)) setQualityCaseActionKey('')
+      clearQualityOperation(operationToken)
     }
   }
 
-  const repairQualityCaseShelfMetadata = async (item: LibraryQualityFailureCase) => {
+  const repairQualityCaseShelfMetadata = async (item: LibraryQualityFailureCase, operationToken?: LibraryQualityOperationToken) => {
+    const token = operationToken || beginQualityOperation(`case-metadata-repair:${normalizeTextValue(item.id)}`)
+    const ownsOperation = !operationToken
     const backendTargets = Array.isArray(item.shelf_metadata_repair_targets) ? item.shelf_metadata_repair_targets : []
     const fallbackItems = [
       ...(Array.isArray(item.citation_diagnostics) ? item.citation_diagnostics : []),
@@ -2315,13 +2480,26 @@ export default function LibraryPage() {
       }))
       .filter((entry) => entry.source_path || entry.source_name || entry.title || entry.raw)
       .slice(0, 12)
-    if (!candidates.length) return { ready: 0, exportReady: 0, changed: 0, retryable: 0, unresolved: 0, verification: {} as Record<string, unknown> }
-    const res = await referencesApi.repairShelfMetadata(candidates as Array<Record<string, unknown>>, candidates.length)
+    if (!candidates.length) {
+      if (ownsOperation) clearQualityOperation(token)
+      return { ready: 0, exportReady: 0, changed: 0, retryable: 0, unresolved: 0, verification: {} as Record<string, unknown> }
+    }
+    let res: Awaited<ReturnType<typeof referencesApi.repairShelfMetadata>>
+    try {
+      res = await referencesApi.repairShelfMetadata(candidates as Array<Record<string, unknown>>, candidates.length)
+    } catch (err) {
+      if (ownsOperation) clearQualityOperation(token)
+      throw err
+    }
     const ready = Number(res.ready || 0)
     const exportReady = Number(res.acceptance?.export_ready_after || res.export_ready || ready)
     const changed = Number(res.changed || 0)
     const retryable = Number(res.retryable || 0)
     const unresolved = Number(res.acceptance?.unresolved_after || res.unresolved || 0)
+    if (!qualityOperationIsCurrent(token)) {
+      if (ownsOperation) clearQualityOperation(token)
+      return { ready: 0, exportReady: 0, changed: 0, retryable: 0, unresolved: 0, verification: {} as Record<string, unknown> }
+    }
     if (res.repair_run) {
       setQualityRepairRun(res.repair_run as unknown as LibraryQualityRepairRun)
     }
@@ -2330,14 +2508,21 @@ export default function LibraryPage() {
     } else if (changed > 0) {
       message.success(`Citation metadata repaired: ${changed}`)
     }
+    if (ownsOperation) clearQualityOperation(token)
     return { ready, exportReady, changed, retryable, unresolved, verification: (res.verification || res.repair_run?.verification || {}) as Record<string, unknown> }
   }
 
-  const applyQualityFailureRepairPlan = async (item: LibraryQualityFailureCase, action: LibraryQualityRepairAction) => {
+  const applyQualityFailureRepairPlan = async (
+    item: LibraryQualityFailureCase,
+    action: LibraryQualityRepairAction,
+    operationToken?: LibraryQualityOperationToken,
+  ) => {
     const caseId = normalizeTextValue(item.id)
     const steps = Array.isArray(action.steps) ? action.steps : []
     const stepKinds = new Set(steps.map((step) => normalizeTextValue(step.kind)))
     const key = `${item.id}:apply_repair_plan:${action.target || ''}`
+    const token = operationToken || beginQualityOperation(key)
+    const ownsOperation = !operationToken
     setQualityCaseActionKey(key)
     try {
       let sourceRepairImpact: LibraryQualityRepairImpact | null = null
@@ -2347,7 +2532,9 @@ export default function LibraryPage() {
           manageActionKey: false,
           waitForCompletion: true,
           autoReindexImmediate: !stepKinds.has('rebuild_index'),
+          operationToken: token,
         })
+        if (!qualityOperationIsCurrent(token)) return { ok: false, caseId, status: 'stale', rerun: null as LibraryResearchQaRerunResponse | null }
         sourceRepairImpact = result.impact
         if (result.queued > 0 && !result.completed) {
           message.warning('Source repair is still running; QA rerun will wait for the next refresh.')
@@ -2356,25 +2543,31 @@ export default function LibraryPage() {
         }
       }
       if (stepKinds.has('repair_shelf_metadata')) {
-        await repairQualityCaseShelfMetadata(item)
+        await repairQualityCaseShelfMetadata(item, token)
+        if (!qualityOperationIsCurrent(token)) return { ok: false, caseId, status: 'stale', rerun: null as LibraryResearchQaRerunResponse | null }
       }
       if (stepKinds.has('rebuild_index')) {
-        const ok = await handleReindex()
+        const ok = await handleReindex(token)
+        if (!qualityOperationIsCurrent(token)) return { ok: false, caseId, status: 'stale', rerun: null as LibraryResearchQaRerunResponse | null }
         if (sourceRepairImpact) setQualityRepairImpact({ ...sourceRepairImpact, reindexed: ok })
         if (!ok) return { ok: false, caseId, status: 'reindex_failed', rerun: null as LibraryResearchQaRerunResponse | null }
       }
       if (stepKinds.has('rerun_case') && caseId) {
-        const rerun = await runQualityFailureCaseRerun(item)
+        const rerun = await runQualityFailureCaseRerun(item, token)
+        if (!qualityOperationIsCurrent(token)) return { ok: false, caseId, status: 'stale', rerun: null as LibraryResearchQaRerunResponse | null }
         return { ok: Boolean(rerun?.quality_ok || rerun?.status === 'passed'), caseId, status: String(rerun?.status || ''), rerun }
       } else {
         await store.loadQualityOverview('all')
       }
       return { ok: true, caseId, status: 'repaired', rerun: null as LibraryResearchQaRerunResponse | null }
     } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Quality repair plan failed')
+      if (qualityOperationIsCurrent(token)) {
+        message.error(err instanceof Error ? err.message : 'Quality repair plan failed')
+      }
       return { ok: false, caseId, status: 'error', rerun: null as LibraryResearchQaRerunResponse | null }
     } finally {
-      setQualityCaseActionKey('')
+      if (qualityOperationIsActive(token)) setQualityCaseActionKey('')
+      if (ownsOperation) clearQualityOperation(token)
     }
   }
 
@@ -2399,11 +2592,13 @@ export default function LibraryPage() {
       return
     }
     if (actionKind === 'rebuild_index') {
+      const operationToken = beginQualityOperation(key)
       setQualityCaseActionKey(key)
       try {
-        await handleReindex()
+        await handleReindex(operationToken)
       } finally {
-        setQualityCaseActionKey('')
+        if (qualityOperationIsActive(operationToken)) setQualityCaseActionKey('')
+        clearQualityOperation(operationToken)
       }
       return
     }
@@ -2416,10 +2611,16 @@ export default function LibraryPage() {
     qualityFailureCases.find((item) => qualityFailureCaseMatchesStage(item, stageKey)) || qualityFailureCases[0] || null
   )
 
-  const repairQualityStageShelfMetadata = async (stageKey: string) => {
+  const repairQualityStageShelfMetadata = async (stageKey: string, operationToken?: LibraryQualityOperationToken) => {
+    const token = operationToken || beginQualityOperation(`stage-metadata:${stageKey}`)
+    const ownsOperation = !operationToken
     const targets = qualityFailureCases.filter((item) => qualityFailureCaseMatchesStage(item, stageKey)).slice(0, 3)
     if (!targets.length) {
-      const state = await startShelfMetadataBackfill({ silent: true })
+      const state = await startShelfMetadataBackfill({ silent: true, operationToken: token })
+      if (!qualityOperationIsCurrent(token)) {
+        if (ownsOperation) clearQualityOperation(token)
+        return { targetCount: 0, targetIds: [] as string[], ready: 0, exportReady: 0, changed: 0, retryable: 0, unresolved: 0, verification: {} as Record<string, unknown>, running: false }
+      }
       const res = state?.result || null
       const scan = state?.after_scan || res?.after_scan || state?.scan || res?.scan || null
       const ready = Number(res?.ready || scan?.ready || 0)
@@ -2444,6 +2645,7 @@ export default function LibraryPage() {
         message.info('No repairable library metadata found.')
       }
       await store.loadQualityOverview('all')
+      if (ownsOperation) clearQualityOperation(token)
       return { targetCount, targetIds: [] as string[], ready, exportReady, changed, retryable, unresolved, verification, running: Boolean(state?.running) }
     }
     let changed = 0
@@ -2453,7 +2655,11 @@ export default function LibraryPage() {
     let unresolved = 0
     let verification: Record<string, unknown> = {}
     for (const item of targets) {
-      const res = await repairQualityCaseShelfMetadata(item)
+      const res = await repairQualityCaseShelfMetadata(item, token)
+      if (!qualityOperationIsCurrent(token)) {
+        if (ownsOperation) clearQualityOperation(token)
+        return { targetCount: 0, targetIds: [] as string[], ready: 0, exportReady: 0, changed: 0, retryable: 0, unresolved: 0, verification: {} as Record<string, unknown>, running: false }
+      }
       changed += Number(res.changed || 0)
       ready += Number(res.ready || 0)
       exportReady += Number(res.exportReady || 0)
@@ -2467,6 +2673,7 @@ export default function LibraryPage() {
       message.info('No repairable citation metadata found in the current failed cases.')
     }
     await store.loadQualityOverview('all')
+    if (ownsOperation) clearQualityOperation(token)
     return { targetCount: targets.length, targetIds: targets.map((item) => normalizeTextValue(item.id)).filter(Boolean), ready, exportReady, changed, retryable, unresolved, verification, running: false }
   }
 
@@ -2476,10 +2683,13 @@ export default function LibraryPage() {
     return overview?.ok ? overview : null
   }
 
-  async function startShelfMetadataBackfill(options: { silent?: boolean } = {}) {
+  async function startShelfMetadataBackfill(options: { silent?: boolean; operationToken?: LibraryQualityOperationToken } = {}) {
+    const operationToken = options.operationToken || beginQualityOperation('shelf-metadata-backfill')
+    const ownsOperation = !options.operationToken
     setShelfMetadataBackfillRefreshing(true)
     try {
       const res = await referencesApi.startShelfMetadataBackfill(40, 240)
+      if (!qualityOperationIsCurrent(operationToken)) return null
       setShelfMetadataBackfillState(res.state)
       const state = res.state || null
       if (!options.silent) {
@@ -2493,16 +2703,20 @@ export default function LibraryPage() {
       }
       return state
     } catch (err) {
-      if (!options.silent) message.error(err instanceof Error ? err.message : 'Metadata backfill failed to start')
+      if (qualityOperationIsCurrent(operationToken) && !options.silent) {
+        message.error(err instanceof Error ? err.message : 'Metadata backfill failed to start')
+      }
       return null
     } finally {
-      setShelfMetadataBackfillRefreshing(false)
+      if (qualityOperationIsActive(operationToken)) setShelfMetadataBackfillRefreshing(false)
+      if (ownsOperation) clearQualityOperation(operationToken)
     }
   }
 
   const handleQualityFullChainStage = async (stage: LibraryQualityFullChainStage) => {
     const stageKey = normalizeTextValue(stage.key).toLowerCase()
     const action = normalizeTextValue(stage.action).toLowerCase()
+    const operationToken = beginQualityOperation(`full-chain:${stageKey}:${action}`)
     const caseTarget = firstQualityCaseForStage(stageKey)
     const beforeOverview = backendQualityOverview
     const beforeSnapshot = qualityOverviewStageSnapshot(beforeOverview, stageKey)
@@ -2515,6 +2729,7 @@ export default function LibraryPage() {
         verification?: Record<string, unknown>
       } = {},
     ) => {
+      if (!qualityOperationIsCurrent(operationToken)) return
       const latestOverview = meta.afterOverview
         || (useLibraryStore.getState().qualityOverview?.ok ? useLibraryStore.getState().qualityOverview : null)
         || backendQualityOverview
@@ -2536,18 +2751,25 @@ export default function LibraryPage() {
           const repair = await handleRepairRecommendedQuality({
             autoReindexImmediate: false,
             autoReindexQueued: false,
+            operationToken,
           })
+          if (!qualityOperationIsCurrent(operationToken)) return
           const completed = Number(repair?.queued || 0) > 0 ? await waitForLibraryConversionDone() : true
+          if (!qualityOperationIsCurrent(operationToken)) return
           const repaired = Number(repair?.repaired || 0)
           const queued = Number(repair?.queued || 0)
           const needsReindex = Boolean(repair?.needsReindex || repair?.impact?.needs_reindex)
-          const reindexed = completed && needsReindex ? await handleReindex() : false
+          const reindexed = completed && needsReindex ? await handleReindex(operationToken) : false
+          if (!qualityOperationIsCurrent(operationToken)) return
           if (repair?.impact && needsReindex) {
             setQualityRepairImpact({ ...repair.impact, reindexed })
           }
           if (reindexed) await store.loadFiles(scope)
-          const rerun = completed && (!needsReindex || reindexed) && caseTarget ? await runQualityFailureCaseRerun(caseTarget) : null
+          if (!qualityOperationIsCurrent(operationToken)) return
+          const rerun = completed && (!needsReindex || reindexed) && caseTarget ? await runQualityFailureCaseRerun(caseTarget, operationToken) : null
+          if (!qualityOperationIsCurrent(operationToken)) return
           const afterOverview = await refreshQualityOverviewSnapshot()
+          if (!qualityOperationIsCurrent(operationToken)) return
           const repairOk = Boolean(repair?.ok)
           const reindexFailed = Boolean(completed && needsReindex && !reindexed)
           recordStageResult({
@@ -2586,10 +2808,13 @@ export default function LibraryPage() {
         return
       }
       if (stageKey === 'retrieval' || action === 'rebuild_index') {
-        const ok = await handleReindex()
-        const rerun = ok && caseTarget ? await runQualityFailureCaseRerun(caseTarget) : null
+        const ok = await handleReindex(operationToken)
+        if (!qualityOperationIsCurrent(operationToken)) return
+        const rerun = ok && caseTarget ? await runQualityFailureCaseRerun(caseTarget, operationToken) : null
+        if (!qualityOperationIsCurrent(operationToken)) return
         if (ok && !rerun) await store.loadQualityOverview('all')
         const afterOverview = await refreshQualityOverviewSnapshot()
+        if (!qualityOperationIsCurrent(operationToken)) return
         const rerunPassed = Boolean(rerun?.quality_ok || rerun?.status === 'passed')
         recordStageResult({
           status: ok ? (rerun && !rerunPassed ? 'warning' : 'success') : 'error',
@@ -2609,9 +2834,12 @@ export default function LibraryPage() {
         return
       }
       if (stageKey === 'citations' || stageKey === 'shelf' || action === 'repair_citation_cards' || action === 'repair_shelf_metadata') {
-        const result = await repairQualityStageShelfMetadata(stageKey === 'citations' ? 'citations' : 'shelf')
-        const rerun = result.targetCount > 0 && caseTarget ? await runQualityFailureCaseRerun(caseTarget) : null
+        const result = await repairQualityStageShelfMetadata(stageKey === 'citations' ? 'citations' : 'shelf', operationToken)
+        if (!qualityOperationIsCurrent(operationToken)) return
+        const rerun = result.targetCount > 0 && caseTarget ? await runQualityFailureCaseRerun(caseTarget, operationToken) : null
+        if (!qualityOperationIsCurrent(operationToken)) return
         const afterOverview = await refreshQualityOverviewSnapshot()
+        if (!qualityOperationIsCurrent(operationToken)) return
         const rerunPassed = Boolean(rerun?.quality_ok || rerun?.status === 'passed')
         const shelfVerification = result.verification && Object.keys(result.verification).length ? result.verification : {}
         const qaVerification = qualityVerificationFromRerun(rerun)
@@ -2655,8 +2883,10 @@ export default function LibraryPage() {
       }
       if (stageKey === 'repair_loop' || action === 'rerun_failed_cases') {
         if (caseTarget) {
-          const rerun = await runQualityFailureCaseRerun(caseTarget)
+          const rerun = await runQualityFailureCaseRerun(caseTarget, operationToken)
+          if (!qualityOperationIsCurrent(operationToken)) return
           const afterOverview = await refreshQualityOverviewSnapshot()
+          if (!qualityOperationIsCurrent(operationToken)) return
           recordStageResult({
             status: rerun?.quality_ok || rerun?.status === 'passed' ? 'success' : 'warning',
             summary: rerun?.quality_ok || rerun?.status === 'passed'
@@ -2684,8 +2914,10 @@ export default function LibraryPage() {
       if (stageKey === 'research_qa' || action === 'fix_failed_qa_cases') {
         const plan = caseTarget?.repair_actions?.find((item) => item.kind === 'apply_repair_plan')
         if (caseTarget && plan) {
-          const result = await applyQualityFailureRepairPlan(caseTarget, plan)
+          const result = await applyQualityFailureRepairPlan(caseTarget, plan, operationToken)
+          if (!qualityOperationIsCurrent(operationToken)) return
           const afterOverview = await refreshQualityOverviewSnapshot()
+          if (!qualityOperationIsCurrent(operationToken)) return
           recordStageResult({
             status: result?.ok ? 'success' : 'warning',
             summary: result?.rerun?.quality_ok || result?.rerun?.status === 'passed'
@@ -2702,8 +2934,10 @@ export default function LibraryPage() {
             verification: qualityVerificationFromRerun(result?.rerun),
           })
         } else if (caseTarget) {
-          const rerun = await runQualityFailureCaseRerun(caseTarget)
+          const rerun = await runQualityFailureCaseRerun(caseTarget, operationToken)
+          if (!qualityOperationIsCurrent(operationToken)) return
           const afterOverview = await refreshQualityOverviewSnapshot()
+          if (!qualityOperationIsCurrent(operationToken)) return
           recordStageResult({
             status: rerun?.quality_ok || rerun?.status === 'passed' ? 'success' : 'warning',
             summary: rerun?.quality_ok || rerun?.status === 'passed'
@@ -2742,9 +2976,12 @@ export default function LibraryPage() {
         summary: 'No direct action available for this stage',
       })
     } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Quality stage action failed')
+      if (qualityOperationIsCurrent(operationToken)) {
+        message.error(err instanceof Error ? err.message : 'Quality stage action failed')
+      }
     } finally {
-      setQualityFullChainActionKey('')
+      if (qualityOperationIsActive(operationToken)) setQualityFullChainActionKey('')
+      clearQualityOperation(operationToken)
     }
   }
 
@@ -2805,16 +3042,23 @@ export default function LibraryPage() {
   }
 
   const handleDeleteOne = async (item: LibraryFileItem) => {
+    if (item.task_state !== 'idle') {
+      message.warning(S.lib_menu_delete_busy)
+      return
+    }
     const res = await store.deleteFile(item.name, true)
     if (res.ok) {
       message.success(S.lib_msg_deleted_name.replace('{name}', item.name))
+      if (Number(res.removed_queued || 0) > 0) {
+        message.info(S.lib_msg_delete_removed_queued.replace('{n}', String(res.removed_queued)))
+      }
       if (res.needs_reindex) {
         message.info(S.lib_msg_delete_suggest_reindex)
       }
       return
     }
     const warning = Array.isArray(res.warnings) && res.warnings.length > 0
-      ? `（${res.warnings.join('；')}）`
+      ? `: ${res.warnings.join('; ')}`
       : ''
     message.warning(S.lib_msg_delete_not_complete.replace('{warning}', warning))
   }
@@ -2822,7 +3066,13 @@ export default function LibraryPage() {
   const confirmDeleteOne = (item: LibraryFileItem) => {
     Modal.confirm({
       title: S.lib_menu_delete_confirm_title,
-      content: item.name,
+      content: (
+        <div className="kb-lib-delete-confirm">
+          <Text strong>{item.name}</Text>
+          <Text type="secondary">{S.lib_menu_delete_confirm_detail}</Text>
+          <Text type="secondary">{S.lib_menu_delete_confirm_index}</Text>
+        </div>
+      ),
       okText: S.lib_menu_delete_ok,
       okType: 'danger',
       cancelText: S.lib_menu_delete_cancel,
@@ -2832,13 +3082,21 @@ export default function LibraryPage() {
     })
   }
 
-  const handleReindex = async (): Promise<boolean> => {
+  const handleReindex = async (operationToken?: LibraryQualityOperationToken): Promise<boolean> => {
+    const token = operationToken || beginQualityOperation('reindex')
+    const ownsOperation = !operationToken
     const hide = message.loading(S.lib_msg_updating_kb, 0)
     try {
       const res = await store.reindex()
       hide()
+      if (!qualityOperationIsCurrent(token)) return false
       if (!res.ok) {
-        message.error(S.lib_msg_exec_fail)
+        const detail = [
+          res.structured_indices_error,
+          res.stderr,
+          res.refsync_error,
+        ].map((item) => String(item || '').trim()).find(Boolean)
+        message.error(detail ? `${S.lib_msg_exec_fail}: ${detail}` : S.lib_msg_exec_fail)
         return false
       }
       message.success(S.lib_msg_exec_done)
@@ -2850,12 +3108,17 @@ export default function LibraryPage() {
       return true
     } catch (err) {
       hide()
-      message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
+      if (qualityOperationIsCurrent(token)) {
+        message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
+      }
       return false
+    } finally {
+      if (ownsOperation) clearQualityOperation(token)
     }
   }
 
   const runConversionQualityBatch = async (repair: boolean) => {
+    const operationToken = beginQualityOperation(repair ? 'quality-batch-repair' : 'quality-batch-scan')
     const hide = message.loading(repair ? 'Repairing conversion quality...' : 'Scanning conversion source quality...', 0)
     setQualityBatchRunning(true)
     try {
@@ -2864,14 +3127,16 @@ export default function LibraryPage() {
         rebuild_indices: true,
         limit: 1000,
       })
-      setQualityBatchResult(res)
       hide()
+      if (!qualityOperationIsCurrent(operationToken)) return
+      setQualityBatchResult(res)
       if (!res.ok) {
         message.error(S.lib_msg_exec_fail)
         return
       }
       if (repair && res.needs_reindex) {
-        const reindexed = await handleReindex()
+        const reindexed = await handleReindex(operationToken)
+        if (!qualityOperationIsCurrent(operationToken)) return
         if (!reindexed) {
           message.warning('Conversion repair finished, but index refresh needs retry.')
         } else {
@@ -2883,12 +3148,16 @@ export default function LibraryPage() {
           : `Source scan finished: ${res.scanned} checked, ${res.ready} ready`)
       }
       await store.loadFiles(scope)
+      if (!qualityOperationIsCurrent(operationToken)) return
       await store.loadQualityOverview('all')
     } catch (err) {
       hide()
-      message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
+      if (qualityOperationIsCurrent(operationToken)) {
+        message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
+      }
     } finally {
-      setQualityBatchRunning(false)
+      if (qualityOperationIsActive(operationToken)) setQualityBatchRunning(false)
+      clearQualityOperation(operationToken)
     }
   }
 
@@ -2963,11 +3232,13 @@ export default function LibraryPage() {
   const handleAdvanceQualityRepairRun = async () => {
     const runId = normalizeTextValue(qualityRepairRun?.run_id)
     if (!runId) return
+    const operationToken = beginQualityOperation(`advance-repair-run:${runId}`)
     const hide = message.loading('Continuing repair run...', 0)
     setQualityRepairAdvancing(true)
     try {
       const res = await libraryApi.advanceQualityRepairRun(runId)
       hide()
+      if (!qualityOperationIsCurrent(operationToken)) return
       if (res.item) {
         setQualityRepairRun(res.item)
         const impact = res.item.impact
@@ -2988,12 +3259,16 @@ export default function LibraryPage() {
         message.info(S.lib_msg_refsync_started_bg)
       }
       await store.loadFiles(scope)
+      if (!qualityOperationIsCurrent(operationToken)) return
       await store.loadQualityOverview('all')
     } catch (err) {
       hide()
-      message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
+      if (qualityOperationIsCurrent(operationToken)) {
+        message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
+      }
     } finally {
-      setQualityRepairAdvancing(false)
+      if (qualityOperationIsActive(operationToken)) setQualityRepairAdvancing(false)
+      clearQualityOperation(operationToken)
     }
   }
 
@@ -3210,6 +3485,44 @@ export default function LibraryPage() {
     setBatchDrawerOpen(true)
   }
 
+  const confirmBatchEditorRisk = async (params: { paperCategory: string, removeTags: string[] }): Promise<boolean> => {
+    const willClearCategory = batchDraft.apply_paper_category && !params.paperCategory
+    const willClearStatus = batchDraft.apply_reading_status && !batchDraft.reading_status
+    const willRemoveTags = params.removeTags.length > 0
+    if (!willClearCategory && !willClearStatus && !willRemoveTags) return true
+
+    const previewTags = params.removeTags.slice(0, 8).join(', ')
+    const removeTagsText = params.removeTags.length > 8 ? `${previewTags}...` : previewTags
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const done = (value: boolean) => {
+        if (settled) return
+        settled = true
+        resolve(value)
+      }
+      Modal.confirm({
+        title: S.lib_batch_confirm_title,
+        icon: <ExclamationCircleOutlined />,
+        content: (
+          <div className="kb-lib-batch-confirm">
+            <Text>{S.lib_batch_confirm_detail.replace('{n}', String(selectedLibraryCount))}</Text>
+            {willClearCategory ? <Text type="warning">{S.lib_batch_confirm_clear_category}</Text> : null}
+            {willClearStatus ? <Text type="warning">{S.lib_batch_confirm_clear_status}</Text> : null}
+            {willRemoveTags ? (
+              <Text type="danger">{S.lib_batch_confirm_remove_tags.replace('{tags}', removeTagsText)}</Text>
+            ) : null}
+          </div>
+        ),
+        okText: S.lib_batch_confirm_ok,
+        cancelText: S.lib_batch_confirm_cancel,
+        okButtonProps: { danger: true },
+        onOk: () => done(true),
+        onCancel: () => done(false),
+        afterClose: () => done(false),
+      })
+    })
+  }
+
   const saveBatchEditor = async () => {
     if (!selectedLibraryCount) return
     const paperCategory = normalizeTextValue(batchDraft.paper_category)
@@ -3224,6 +3537,8 @@ export default function LibraryPage() {
       message.info(S.lib_msg_set_batch_content)
       return
     }
+    const confirmed = await confirmBatchEditorRisk({ paperCategory, removeTags })
+    if (!confirmed) return
     setBatchSaving(true)
     try {
       const updated = await store.batchUpdatePaperMeta({
@@ -3386,17 +3701,17 @@ export default function LibraryPage() {
             </div>
             <div className="kb-lib-file-submeta">
               <span className={`kb-lib-file-status-chip ${statusTone}`}>{tag.text}</span>
-              {SHOW_USER_QUALITY_DIAGNOSTICS && quality ? (
+              {QUALITY_STATUS_VISIBLE && quality ? (
                 <span
                   className={`kb-lib-file-quality-chip ${conversionQualityToneClass(quality)}`}
                   data-testid="library-file-quality-chip"
                   data-quality-status={conversionQualityStatus(quality)}
-                  title={quality.summary}
+                  title={QUALITY_DIAGNOSTICS_VISIBLE ? quality.summary : conversionQualityLabel(quality)}
                 >
                   {conversionQualityLabel(quality)}
                 </span>
               ) : null}
-              {SHOW_USER_QUALITY_DIAGNOSTICS ? (
+              {QUALITY_STATUS_VISIBLE ? (
                 <span
                   className={`kb-lib-source-readiness-chip is-${sourceReadiness.tone}`}
                   data-testid="library-file-source-readiness"
@@ -3456,7 +3771,7 @@ export default function LibraryPage() {
             </div>
           ) : null}
 
-          {SHOW_USER_QUALITY_DIAGNOSTICS && quality ? (
+          {QUALITY_DIAGNOSTICS_VISIBLE && quality ? (
             <div className="kb-lib-quality-line" data-testid="library-file-quality-line">
               <span className="kb-lib-quality-metric">pages {conversionMetric(quality, 'page_markers')}</span>
               <span
@@ -3567,7 +3882,7 @@ export default function LibraryPage() {
             </div>
           ) : null}
 
-          {SHOW_USER_QUALITY_DIAGNOSTICS && qualityRepairResult ? (
+          {QUALITY_DIAGNOSTICS_VISIBLE && qualityRepairResult ? (
             <div className="kb-lib-quality-repair-result" data-testid="library-quality-repair-result">
               {qualityRepairResult}
             </div>
@@ -3780,16 +4095,13 @@ export default function LibraryPage() {
 
     if (items.length < FILE_VIRTUAL_THRESHOLD) {
       return (
-        <List
-          className="kb-lib-file-list"
-          size="small"
-          dataSource={items}
-          renderItem={(item) => (
-            <List.Item className="kb-lib-file-item">
+        <div className="kb-lib-file-list" role="list">
+          {items.map((item) => (
+            <div key={item.name} className="kb-lib-file-item" role="listitem">
               {renderFileRow(item)}
-            </List.Item>
-          )}
-        />
+            </div>
+          ))}
+        </div>
       )
     }
 
@@ -3892,14 +4204,10 @@ export default function LibraryPage() {
       </div>
 
       {renameHasResults && renameHasVisibleItems && renameResultsOpen ? (
-        <List
-          className="kb-lib-rename-list"
-          size="small"
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.lib_empty_rename} /> }}
-          dataSource={renameVisible}
-          pagination={{ pageSize: 6, size: 'small', showSizeChanger: false }}
-          renderItem={(item) => (
-            <List.Item className="kb-lib-rename-list-item">
+        <div className="kb-lib-rename-list">
+          <div className="kb-lib-rename-list-body" role="list">
+            {pagedRenameVisible.map((item) => (
+              <div key={item.name} className="kb-lib-rename-list-item" role="listitem">
               <div className="kb-lib-rename-item">
                 <div className="kb-lib-rename-item-head">
                   <Checkbox
@@ -3930,9 +4238,21 @@ export default function LibraryPage() {
                   </Text>
                 ) : null}
               </div>
-            </List.Item>
-          )}
-        />
+              </div>
+            ))}
+          </div>
+          {renameVisible.length > RENAME_PAGE_SIZE ? (
+            <Pagination
+              className="kb-lib-list-pagination"
+              size="small"
+              current={renamePage}
+              pageSize={RENAME_PAGE_SIZE}
+              total={renameVisible.length}
+              showSizeChanger={false}
+              onChange={setRenamePage}
+            />
+          ) : null}
+        </div>
       ) : null}
       {renameHasResults && !renameHasVisibleItems ? (
         <Text type="secondary" className="kb-lib-section-note">
@@ -4070,6 +4390,7 @@ export default function LibraryPage() {
                 <Select
                   value={scope}
                   onChange={(value) => { setScope(value); void store.loadFiles(value) }}
+                  data-testid="library-process-scope"
                   className="kb-lib-process-scope"
                   options={SCOPE_OPTIONS(S)}
                 />
@@ -4116,8 +4437,8 @@ export default function LibraryPage() {
           <Button type="primary" loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(true) }}>{S.lib_btn_save_and_convert}</Button>
           <Button disabled={uploadLocked} onClick={selectFailedDrafts}>{S.lib_btn_select_failed}</Button>
           <Button disabled={uploadLocked || duplicateFailedDrafts.length === 0} onClick={showDuplicateFailedDrafts}>{S.lib_btn_view_dup_failed}</Button>
-          <Button loading={uploadSaving} disabled={uploadLocked || failedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(false) }}>{S.lib_btn_retry_failed}</Button>
-          <Button type="primary" loading={uploadSaving} disabled={uploadLocked || failedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(true) }}>{S.lib_btn_retry_and_convert}</Button>
+          <Button loading={uploadSaving || uploadInspecting} disabled={uploadLocked || retryableFailedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(false) }}>{S.lib_btn_retry_failed}</Button>
+          <Button type="primary" loading={uploadSaving || uploadInspecting} disabled={uploadLocked || retryableFailedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(true) }}>{S.lib_btn_retry_and_convert}</Button>
           <Button disabled={uploadLocked} onClick={() => setUploadDrafts((cur) => cur.filter((x) => x.status !== 'saved'))}>{S.lib_btn_clear_saved}</Button>
         </div>
 
@@ -4160,59 +4481,72 @@ export default function LibraryPage() {
           />
         ) : null}
 
-        <List
-          size="small"
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.lib_upload_empty} /> }}
-          dataSource={filteredUploadDrafts}
-          pagination={{ pageSize: 8, size: 'small', showSizeChanger: false }}
-          renderItem={(x) => {
-            const reasonKey = x.status === 'error'
-              ? classifyFailedReason(x.note) as Exclude<UploadErrorReason, 'all'>
-              : null
-            return (
-              <List.Item>
-                <div className="w-full space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Checkbox checked={x.selected} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, selected: e.target.checked } : t)))} />
-                    <Text className="min-w-0 flex-1 truncate text-sm">{x.name}</Text>
-                    <Tag color={x.status === 'saved' ? 'success' : x.status === 'error' ? 'error' : (x.status === 'saving' || x.status === 'inspecting') ? 'processing' : 'default'}>
-                      {DRAFT_STATUS_TEXT(S)[x.status]}
-                    </Tag>
-                    {reasonKey ? (
-                      <span className={`kb-lib-inline-reason-chip kb-lib-reason-tone is-${reasonKey}`}>
-                        {FAILED_REASON_META(S)[reasonKey].icon}
-                        <span>{FAILED_REASON_META(S)[reasonKey].label}</span>
-                      </span>
-                    ) : null}
+        {filteredUploadDrafts.length > 0 ? (
+          <div className="kb-lib-upload-draft-list">
+            <div className="kb-lib-upload-draft-list-body" role="list">
+              {pagedUploadDrafts.map((x) => {
+                const reasonKey = x.status === 'error'
+                  ? classifyFailedReason(x.note) as Exclude<UploadErrorReason, 'all'>
+                  : null
+                return (
+                  <div key={x.key} className="kb-lib-upload-draft-item" role="listitem">
+                    <div className="w-full space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Checkbox checked={x.selected} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, selected: e.target.checked } : t)))} />
+                        <Text className="min-w-0 flex-1 truncate text-sm">{x.name}</Text>
+                        <Tag color={x.status === 'saved' ? 'success' : x.status === 'error' ? 'error' : (x.status === 'saving' || x.status === 'inspecting') ? 'processing' : 'default'}>
+                          {DRAFT_STATUS_TEXT(S)[x.status]}
+                        </Tag>
+                        {reasonKey ? (
+                          <span className={`kb-lib-inline-reason-chip kb-lib-reason-tone is-${reasonKey}`}>
+                            {FAILED_REASON_META(S)[reasonKey].icon}
+                            <span>{FAILED_REASON_META(S)[reasonKey].label}</span>
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 pl-6">
+                        <Text type="secondary" className="text-xs">{S.lib_upload_suggest_name}</Text>
+                        <Input value={x.stem} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, stem: e.target.value } : t)))} className="w-[24rem] max-w-full" />
+                        <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'inspecting'} onClick={() => { inspectSingleDraft(x.key) }}>{S.lib_btn_scan}</Button>
+                        <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, false) }}>{S.lib_btn_save}</Button>
+                        <Button size="small" type="primary" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, true) }}>{S.lib_btn_save_and_convert}</Button>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 pl-6">
+                        <Text type="secondary" className="text-xs">{x.displayName}</Text>
+                        {x.suggestionBasisLabel ? (
+                          <Tag color={suggestionBasisTagColor({ match_method: x.suggestionMatchMethod, year_source: x.suggestionYearSource })}>
+                            {x.suggestionBasisLabel}
+                          </Tag>
+                        ) : null}
+                      </div>
+                      {x.suggestionBasisDetail ? (
+                        <Text type="secondary" className="block pl-6 text-xs">{x.suggestionBasisDetail}</Text>
+                      ) : null}
+                      {x.note ? (
+                        <Text type="secondary" className={`block pl-6 text-xs${reasonKey ? ' kb-lib-fail-note' : ''}`}>
+                          {x.note}
+                        </Text>
+                      ) : null}
+                    </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 pl-6">
-                    <Text type="secondary" className="text-xs">{S.lib_upload_suggest_name}</Text>
-                    <Input value={x.stem} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, stem: e.target.value } : t)))} className="w-[24rem] max-w-full" />
-                    <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'inspecting'} onClick={() => { inspectSingleDraft(x.key) }}>{S.lib_btn_scan}</Button>
-                    <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, false) }}>{S.lib_btn_save}</Button>
-                    <Button size="small" type="primary" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, true) }}>{S.lib_btn_save_and_convert}</Button>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 pl-6">
-                    <Text type="secondary" className="text-xs">{x.displayName}</Text>
-                    {x.suggestionBasisLabel ? (
-                      <Tag color={suggestionBasisTagColor({ match_method: x.suggestionMatchMethod, year_source: x.suggestionYearSource })}>
-                        {x.suggestionBasisLabel}
-                      </Tag>
-                    ) : null}
-                  </div>
-                  {x.suggestionBasisDetail ? (
-                    <Text type="secondary" className="block pl-6 text-xs">{x.suggestionBasisDetail}</Text>
-                  ) : null}
-                  {x.note ? (
-                    <Text type="secondary" className={`block pl-6 text-xs${reasonKey ? ' kb-lib-fail-note' : ''}`}>
-                      {x.note}
-                    </Text>
-                  ) : null}
-                </div>
-              </List.Item>
-            )
-          }}
-        />
+                )
+              })}
+            </div>
+            {filteredUploadDrafts.length > UPLOAD_DRAFT_PAGE_SIZE ? (
+              <Pagination
+                className="kb-lib-list-pagination"
+                size="small"
+                current={uploadDraftPage}
+                pageSize={UPLOAD_DRAFT_PAGE_SIZE}
+                total={filteredUploadDrafts.length}
+                showSizeChanger={false}
+                onChange={setUploadDraftPage}
+              />
+            ) : null}
+          </div>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.lib_upload_empty} />
+        )}
       </div>
     </Card>
   ) : null
@@ -4287,6 +4621,7 @@ export default function LibraryPage() {
             <Select
               value={scope}
               onChange={(value) => { setScope(value); void store.loadFiles(value) }}
+              data-testid="library-convert-scope"
               className="kb-lib-convert-scope"
               options={SCOPE_OPTIONS(S)}
             />
@@ -4361,7 +4696,7 @@ export default function LibraryPage() {
                 <Text type="secondary" className="kb-lib-refsync-meta">
                   {S.lib_refsync_hint
                     .replace('{docsDone}', String(store.refSync.docsDone))
-                    .replace('{docsTotal}', String(store.refSync.docsTotal || numericStat(refSyncStats, 'docs_total')))
+                    .replace('{docsTotal}', String(store.refSync.docsTotal ?? numericStat(refSyncStats, 'docs_total')))
                     .replace('{refsTotal}', String(numericStat(refSyncStats, 'refs_total')))}
                 </Text>
               </div>
@@ -4380,7 +4715,7 @@ export default function LibraryPage() {
         </WorkbenchPanel>
       ) : null}
 
-      {SHOW_USER_QUALITY_DIAGNOSTICS && (qualityReportStats.converted > 0 || qualityReportStats.assessed > 0) ? (
+      {QUALITY_DIAGNOSTICS_VISIBLE && (qualityReportStats.converted > 0 || qualityReportStats.assessed > 0) ? (
         <Card
           size="small"
           className={`kb-lib-card kb-lib-quality-report is-${qualityCenterTone}${qualityCenterOpen ? ' is-open' : ' is-compact'}`}
@@ -5321,7 +5656,7 @@ export default function LibraryPage() {
         </Card>
       ) : null}
 
-      {SHOW_USER_QUALITY_DIAGNOSTICS && qualityCenterOpen && qualityRepairHistoryList.length > 0 ? (
+      {QUALITY_DIAGNOSTICS_VISIBLE && qualityCenterOpen && qualityRepairHistoryList.length > 0 ? (
         <Card size="small" className="kb-lib-card kb-lib-quality-history" data-testid="library-quality-history">
           <div className="kb-lib-quality-history-head">
             <div>
@@ -5358,7 +5693,7 @@ export default function LibraryPage() {
                 >
                   {S.lib_quality_history_repair_recommended.replace('{n}', String(qualityRepairRecommendedNames.length))}
                 </Button>
-                {SHOW_USER_QUALITY_DIAGNOSTICS && qualityHistoryFocusNames.length > 0 ? (
+                {QUALITY_DIAGNOSTICS_VISIBLE && qualityHistoryFocusNames.length > 0 ? (
                   <Button
                     size="small"
                     className="kb-lib-action-quiet"
@@ -5520,7 +5855,7 @@ export default function LibraryPage() {
                 >
                   {S.lib_taxonomy_has_suggestions}
                 </button>
-                {SHOW_USER_QUALITY_DIAGNOSTICS ? (
+                {QUALITY_DIAGNOSTICS_VISIBLE ? (
                   <button
                     type="button"
                     className={`kb-lib-taxonomy-pill is-quality${onlyQualityIssues ? ' is-active' : ''}`}
@@ -5560,7 +5895,7 @@ export default function LibraryPage() {
             <div className="kb-lib-batch-actions">
               <Button onClick={selectCurrentListItems}>{S.lib_btn_select_current_list}</Button>
               <Button onClick={clearLibrarySelection} disabled={!selectedLibraryCount}>{S.lib_btn_clear_selection}</Button>
-              {SHOW_USER_QUALITY_DIAGNOSTICS && selectedQualityReviewNames.length > 0 ? (
+              {QUALITY_DIAGNOSTICS_VISIBLE && selectedQualityReviewNames.length > 0 ? (
                 <Button
                   icon={<ReloadOutlined />}
                   loading={selectedQualityReviewNames.some((name) => Boolean(qualityRepairingNames[name]))}
@@ -5600,7 +5935,7 @@ export default function LibraryPage() {
       <Drawer
         title={metaItem ? S.lib_meta_title.replace('{name}', metaItem.name) : S.lib_meta_title_fallback}
         open={metaDrawerOpen}
-        width={420}
+        size={420}
         onClose={() => setMetaDrawerOpen(false)}
         destroyOnClose={false}
       >
@@ -5830,7 +6165,7 @@ export default function LibraryPage() {
       <Drawer
         title={S.lib_batch_edit_count_format.replace('{n}', String(selectedLibraryCount))}
         open={batchDrawerOpen}
-        width={420}
+        size={420}
         onClose={() => setBatchDrawerOpen(false)}
         destroyOnClose={false}
       >
@@ -5844,11 +6179,25 @@ export default function LibraryPage() {
             </div>
             <Space wrap size={[6, 6]} className="kb-lib-meta-chip-row">
               <Tag color={selectedLibraryCount ? 'blue' : 'default'}>{S.lib_batch_selected_tag.replace('{n}', String(selectedLibraryCount))}</Tag>
-              {batchDraft.apply_paper_category && normalizeTextValue(batchDraft.paper_category) ? (
-                <Tag color="processing">{S.lib_batch_set_category_label.replace('{category}', normalizeTextValue(batchDraft.paper_category))}</Tag>
+              {batchDraft.apply_paper_category ? (
+                batchDraftWillClearCategory ? (
+                  <Tag color="warning">{S.lib_batch_clear_category_label}</Tag>
+                ) : (
+                  <Tag color="processing">{S.lib_batch_set_category_label.replace('{category}', batchDraftCategory)}</Tag>
+                )
               ) : null}
-              {batchDraft.add_tags.length ? (
-                <Tag color="green">{S.lib_batch_add_tag_count.replace('{n}', String(normalizeTextList(batchDraft.add_tags).length))}</Tag>
+              {batchDraft.apply_reading_status ? (
+                batchDraftWillClearStatus ? (
+                  <Tag color="warning">{S.lib_batch_clear_status_label}</Tag>
+                ) : (
+                  <Tag color="gold">{S.lib_batch_set_status_label.replace('{status}', batchDraftReadingLabel)}</Tag>
+                )
+              ) : null}
+              {batchDraftAddTags.length ? (
+                <Tag color="green">{S.lib_batch_add_tag_count.replace('{n}', String(batchDraftAddTags.length))}</Tag>
+              ) : null}
+              {batchDraftRemoveTags.length ? (
+                <Tag color="red">{S.lib_batch_remove_tag_count.replace('{n}', String(batchDraftRemoveTags.length))}</Tag>
               ) : null}
             </Space>
           </div>

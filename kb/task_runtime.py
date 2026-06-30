@@ -71,6 +71,8 @@ from kb.generation_message_runtime import (
 )
 from kb.generation_state_runtime import (
     _gen_get_task as _state_gen_get_task,
+    _gen_has_active_task_id as _state_gen_has_active_task_id,
+    _gen_has_running_for_conversation as _state_gen_has_running_for_conversation,
     _gen_mark_cancel as _state_gen_mark_cancel,
     _gen_store_paper_guide_contract_meta as _state_gen_store_paper_guide_contract_meta,
     _gen_should_cancel as _state_gen_should_cancel,
@@ -80,6 +82,7 @@ from kb.generation_state_runtime import (
     _gen_store_answer_provenance_async as _state_gen_store_answer_provenance_async,
     _gen_store_answer_provenance_fast as _state_gen_store_answer_provenance_fast,
     _gen_store_partial as _state_gen_store_partial,
+    _gen_task_blocks_conversation as _state_gen_task_blocks_conversation,
     _gen_update_task as _state_gen_update_task,
     _is_live_assistant_text as _state_is_live_assistant_text,
     _live_assistant_task_id as _state_live_assistant_task_id,
@@ -206,6 +209,10 @@ from kb.paper_guide_shared import (
     _source_name_from_md_path as _shared_source_name_from_md_path,
     _trim_paper_guide_prompt_field,
     _trim_paper_guide_prompt_snippet,
+)
+from kb.path_safety import (
+    chat_image_upload_roots,
+    resolve_verified_chat_image_upload_path,
 )
 from kb.reference_query_family import (
     prompt_explicitly_requests_multi_paper_list,
@@ -353,10 +360,26 @@ from kb.source_blocks import (
     normalize_match_text,
     split_answer_segments,
 )
-from ui.chat_widgets import _normalize_math_markdown
-from ui.strings import S
+from kb.markdown_rendering import _normalize_math_markdown
+from kb.localized_strings import S
 
 logger = logging.getLogger(__name__)
+
+GENERATION_START_FAILED_MESSAGE = "Generation could not be started. Please retry."
+GENERATION_START_FAILED_MESSAGE_ZH = "回答任务未能启动，请稍后重试。"
+GENERATION_INTERRUPTED_MESSAGE = "Answer was interrupted before completion. Please retry."
+GENERATION_INTERRUPTED_MESSAGE_ZH = "回答尚未完成就中断了，请重试。"
+
+
+def generation_start_failed_message(locale: object = "") -> str:
+    raw = str(locale or "").strip().lower()
+    return GENERATION_START_FAILED_MESSAGE_ZH if raw.startswith("zh") else GENERATION_START_FAILED_MESSAGE
+
+
+def generation_interrupted_message(locale: object = "") -> str:
+    raw = str(locale or "").strip().lower()
+    return GENERATION_INTERRUPTED_MESSAGE_ZH if raw.startswith("zh") else GENERATION_INTERRUPTED_MESSAGE
+
 
 _LIVE_ASSISTANT_PREFIX = "__KB_LIVE_TASK__:"
 _CITE_SINGLE_BRACKET_RE = re.compile(
@@ -539,6 +562,124 @@ def _refs_background_llm_polish_enabled() -> bool:
     return raw in {"1", "true", "on", "yes"}
 
 
+def _is_synthetic_research_basket_hit(hit: dict) -> bool:
+    if not isinstance(hit, dict):
+        return False
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    source_path = str((meta or {}).get("source_path") or "").strip()
+    return bool(
+        (meta or {}).get("research_basket_evidence")
+        and (
+            str((meta or {}).get("basket_source_role") or "").strip() == "synthetic_basket_item"
+            or source_path.startswith(_RESEARCH_BASKET_SYNTHETIC_SOURCE_PREFIX)
+        )
+    )
+
+
+def _compact_basket_refs_text(value: object, *, limit: int = 360) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) > limit:
+        text = text[: max(1, limit - 1)].rstrip() + "..."
+    return text
+
+
+def _build_synthetic_research_basket_refs_hit(hit: dict) -> dict:
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    source_path = str((meta or {}).get("source_path") or "").strip()
+    source_name = str((meta or {}).get("source_name") or "").strip()
+    title = str((meta or {}).get("title") or "").strip()
+    doi = str((meta or {}).get("doi") or "").strip()
+    year = str((meta or {}).get("year") or "").strip()
+    heading = str((meta or {}).get("heading_path") or "").strip()
+    display_name = source_name or (f"Research basket: {title}" if title else "Research basket item")
+    text = str(hit.get("text") or "").strip()
+    summary = _compact_basket_refs_text(
+        text
+        or "Selected research-basket metadata is available for this answer.",
+        limit=420,
+    )
+    why_bits = ["The user selected this item in the research basket for the current turn."]
+    if doi:
+        why_bits.append(f"DOI: {doi}.")
+    if year:
+        why_bits.append(f"Year: {year}.")
+    why = _compact_basket_refs_text(" ".join(why_bits), limit=360)
+    meta_out = dict(meta or {})
+    meta_out["ref_pack_state"] = "ready"
+    meta_out["ref_display_reason"] = str(meta_out.get("ref_display_reason") or "research_basket_evidence")
+    meta_out["source_kind"] = "research_basket"
+    ui_meta = {
+        "display_name": display_name,
+        "heading_path": heading,
+        "score": 9.2,
+        "score_pending": False,
+        "score_tier": "high",
+        "summary_line": summary,
+        "summary_kind": "research_basket",
+        "summary_label": "Research basket",
+        "summary_title": "Selected Context",
+        "summary_generation": "research_basket_context",
+        "summary_basis": "User-selected research basket item for this answer",
+        "why_line": why,
+        "why_generation": "research_basket_context",
+        "why_basis": "This card is retained because it was selected by the user, not because it resolves to a local PDF.",
+        "semantic_badges": [{"text": "Research basket", "score": 1.0}],
+        "can_open": False,
+        "citation_meta": {
+            "title": title,
+            "doi": doi,
+            "year": year,
+            "source_name": display_name,
+            "source_path": "",
+        },
+        "source_kind": "research_basket",
+        "source_path": "",
+        "reader_open": {},
+    }
+    ui_meta = {key: value for key, value in ui_meta.items() if value not in (None, "", [], {})}
+    return {
+        "text": summary,
+        "score": float(hit.get("score") or 0.0) or 9.2,
+        "meta": meta_out,
+        "ui_meta": ui_meta,
+    }
+
+
+def _append_synthetic_research_basket_refs_hits(payload: dict | None, basket_hits: list[dict]) -> dict | None:
+    if not basket_hits:
+        return payload
+    payload_out = dict(payload or {})
+    hits = [dict(item) for item in list(payload_out.get("hits") or []) if isinstance(item, dict)]
+    seen = {
+        str(((item.get("meta") if isinstance(item.get("meta"), dict) else {}) or {}).get("source_path") or "").strip()
+        for item in hits
+    }
+    added = 0
+    for raw_hit in basket_hits:
+        if not isinstance(raw_hit, dict):
+            continue
+        meta = raw_hit.get("meta") if isinstance(raw_hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or "").strip()
+        if source_path and source_path in seen:
+            continue
+        hits.append(_build_synthetic_research_basket_refs_hit(raw_hit))
+        if source_path:
+            seen.add(source_path)
+        added += 1
+    if added <= 0:
+        return payload_out
+    payload_out["hits"] = hits
+    payload_out["payload_mode"] = str(payload_out.get("payload_mode") or "full").strip() or "full"
+    payload_out["display_state"] = "ready"
+    payload_out.pop("suppression_reason", None)
+    payload_out.pop("suggestion", None)
+    debug = dict(payload_out.get("pipeline_debug") or {}) if isinstance(payload_out.get("pipeline_debug"), dict) else {}
+    debug["research_basket_synthetic_hit_count"] = int(added)
+    debug["final_hit_count"] = int(len(hits))
+    payload_out["pipeline_debug"] = debug
+    return payload_out
+
+
 def _build_precomputed_refs_render_payload(
     *,
     user_msg_id: int,
@@ -560,6 +701,22 @@ def _build_precomputed_refs_render_payload(
     docs = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
     if not docs:
         return None, ""
+    docs_with_scores: list[tuple[dict, float]] = []
+    for idx, doc in enumerate(docs):
+        try:
+            score = float(list(scores or [])[idx])
+        except Exception:
+            try:
+                score = float(doc.get("score") or 0.0)
+            except Exception:
+                score = 0.0
+        docs_with_scores.append((doc, score))
+    synthetic_basket_docs = [doc for doc, _score in docs_with_scores if _is_synthetic_research_basket_hit(doc)]
+    render_docs_with_scores = [
+        (doc, score)
+        for doc, score in docs_with_scores
+        if not _is_synthetic_research_basket_hit(doc)
+    ]
     for hit in docs:
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
         if str((meta or {}).get("ref_pack_state") or "").strip().lower() == "pending":
@@ -594,21 +751,45 @@ def _build_precomputed_refs_render_payload(
     except Exception:
         lib_store = None
     try:
-        payload_by_user = enrich_refs_payload(
-            {mid: pack},
-            pdf_root=pdf_root,
-            md_root=md_root,
-            lib_store=lib_store,
-            guide_mode=guide_mode,
-            guide_source_path=str(guide_source_path or "").strip(),
-            guide_source_name=str(guide_source_name or "").strip(),
-            render_variant="bounded_full",
-            allow_expensive_llm_for_ready=_refs_background_llm_polish_enabled(),
-            allow_exact_locate=True,
-        )
+        if render_docs_with_scores:
+            render_pack = dict(pack)
+            render_pack["hits"] = [doc for doc, _score in render_docs_with_scores]
+            render_pack["scores"] = [score for _doc, score in render_docs_with_scores]
+            payload_by_user = enrich_refs_payload(
+                {mid: render_pack},
+                pdf_root=pdf_root,
+                md_root=md_root,
+                lib_store=lib_store,
+                guide_mode=guide_mode,
+                guide_source_path=str(guide_source_path or "").strip(),
+                guide_source_name=str(guide_source_name or "").strip(),
+                render_variant="bounded_full",
+                allow_expensive_llm_for_ready=_refs_background_llm_polish_enabled(),
+                allow_exact_locate=True,
+            )
+            payload = payload_by_user.get(mid) if isinstance(payload_by_user, dict) else None
+        else:
+            payload = {
+                "user_msg_id": mid,
+                "prompt": str(prompt or "").strip(),
+                "answer": str(answer or "").strip(),
+                "prompt_sig": str(prompt_sig or "").strip(),
+                "hits": [],
+                "scores": [],
+                "used_query": str(used_query or "").strip(),
+                "used_translation": bool(used_translation),
+                "payload_mode": "full",
+                "display_state": "ready",
+                "pipeline_debug": {
+                    "raw_hit_count": int(len(docs)),
+                    "post_score_gate_hit_count": 0,
+                    "post_focus_filter_hit_count": 0,
+                    "post_llm_filter_hit_count": 0,
+                },
+            }
     except Exception:
         return None, ""
-    payload = payload_by_user.get(mid) if isinstance(payload_by_user, dict) else None
+    payload = _append_synthetic_research_basket_refs_hits(payload, synthetic_basket_docs)
     if not isinstance(payload, dict) or (not payload):
         return None, ""
     try:
@@ -1446,12 +1627,13 @@ def kickoff_paper_guide_prefetch(
     source_name: str = "",
     db_dir: Path | str | None = None,
     md_root: Path | str | None = None,
+    pdf_root: Path | str | None = None,
     library_db_path: Path | str | None = None,
 ) -> bool:
     raw_source = str(source_path or "").strip()
     if not raw_source:
         return False
-    md_path = _resolve_paper_guide_md_path(raw_source, md_root=md_root, db_dir=db_dir)
+    md_path = _resolve_paper_guide_md_path(raw_source, md_root=md_root, db_dir=db_dir, pdf_root=pdf_root)
     key = _normalize_fs_path_for_match(str(md_path) if md_path is not None else raw_source)
     if not key:
         return False
@@ -1819,11 +2001,17 @@ def _build_generation_prompt_bundle(
     )
 
 
-def _build_multimodal_user_content(user: str, image_attachments: list[dict] | None) -> str | list[dict]:
+def _build_multimodal_user_content(
+    user: str,
+    image_attachments: list[dict] | None,
+    *,
+    allowed_image_roots: list[Path | str] | None = None,
+) -> str | list[dict]:
     return _generation_build_multimodal_user_content(
         user,
         image_attachments,
         vision_image_mime_by_suffix=_VISION_IMAGE_MIME_BY_SUFFIX,
+        allowed_image_roots=allowed_image_roots,
     )
 
 
@@ -1851,6 +2039,15 @@ def _selected_research_context_items(value) -> list[dict]:
     return out
 
 
+def _selected_context_prompt_path_label(path_text: object) -> str:
+    text = str(path_text or "").strip()
+    if not text:
+        return ""
+    normalized = text.replace("\\", "/").rstrip("/")
+    label = normalized.rsplit("/", 1)[-1].strip()
+    return label or text
+
+
 def _format_selected_research_context_block(value) -> str:
     items = _selected_research_context_items(value)
     if not items:
@@ -1862,6 +2059,11 @@ def _format_selected_research_context_block(value) -> str:
         source_name = str(item.get("sourceName") or "").strip()
         location = str(item.get("locationLabel") or "").strip()
         doi = str(item.get("doi") or "").strip()
+        block_id = str(item.get("blockId") or item.get("block_id") or "").strip()
+        anchor_id = str(item.get("anchorId") or item.get("anchor_id") or "").strip()
+        heading_path = str(item.get("headingPath") or item.get("heading_path") or "").strip()
+        library_match_path = str(item.get("libraryMatchPath") or item.get("library_match_path") or "").strip()
+        library_match_status = str(item.get("libraryMatchStatus") or item.get("library_match_status") or "").strip()
         ref_num = item.get("refNum")
         head_bits = [f"[SHELF-{idx}]"]
         if kind:
@@ -1873,10 +2075,22 @@ def _format_selected_research_context_block(value) -> str:
             meta_bits.append(f"source={source_name[:220]}")
         if location:
             meta_bits.append(f"location={location[:220]}")
+        if heading_path and heading_path != location:
+            meta_bits.append(f"heading={heading_path[:220]}")
+        if block_id:
+            meta_bits.append(f"block={block_id[:120]}")
+        if anchor_id:
+            meta_bits.append(f"anchor={anchor_id[:120]}")
         if ref_num:
             meta_bits.append(f"ref={ref_num}")
         if doi:
             meta_bits.append(f"doi={doi[:180]}")
+        if library_match_path:
+            library_match_label = _selected_context_prompt_path_label(library_match_path)
+            match_label = f"library_match={library_match_label[:220]}"
+            if library_match_status:
+                match_label = f"{match_label} ({library_match_status[:40]})"
+            meta_bits.append(match_label)
         if meta_bits:
             lines.append("  " + "; ".join(meta_bits))
         summary = str(item.get("summary") or "").strip()
@@ -1892,6 +2106,494 @@ def _format_selected_research_context_block(value) -> str:
     if len(block) > 5200:
         block = block[:5199].rstrip() + "..."
     return block
+
+
+def _normalize_selected_context_doi(value: object) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", text)
+    return text.strip(" \t\r\n'\"`([{<.,;:)]}>")
+
+
+def _normalize_selected_context_title(value: object) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _selected_context_first_text(item: dict, *keys: str) -> str:
+    for key in keys:
+        text = str(item.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _selected_context_kind(item: dict) -> str:
+    raw = _selected_context_first_text(item, "kind", "shelfItemKind", "shelf_item_kind")
+    return re.sub(r"[\s-]+", "_", raw.strip().lower())
+
+
+def _selected_context_library_match_usable(item: dict) -> bool:
+    path = _selected_context_first_text(item, "libraryMatchPath", "library_match_path")
+    if not path:
+        return False
+    status = _selected_context_first_text(item, "libraryMatchStatus", "library_match_status").lower()
+    return status not in {"missing", "none", "not_found", "unmatched", "failed", "error"}
+
+
+_RESEARCH_BASKET_SYNTHETIC_SOURCE_PREFIX = "__research_basket__/"
+
+
+def _selected_context_stable_key(item: dict, idx: int) -> str:
+    explicit = _selected_context_first_text(item, "key", "id", "itemKey", "item_key")
+    if explicit:
+        return re.sub(r"[^a-zA-Z0-9_.-]+", "_", explicit).strip("_")[:80] or f"item_{idx}"
+    payload = "\n".join(
+        _selected_context_first_text(item, *keys)
+        for keys in (
+            ("libraryMatchDoi", "library_match_doi", "doi", "doiUrl", "doi_url"),
+            ("libraryMatchTitle", "library_match_title", "title", "main", "cardTitle", "card_title"),
+            ("sourcePath", "source_path"),
+            ("blockId", "block_id"),
+            ("anchorId", "anchor_id"),
+            ("excerpt", "shelfExcerpt", "shelf_excerpt", "summary", "note"),
+        )
+    )
+    digest = hashlib.sha1(payload.encode("utf-8", "ignore")).hexdigest()[:12] if payload.strip() else f"{idx:02d}"
+    return f"item_{idx}_{digest}"
+
+
+def _selected_context_evidence_text(item: dict, *, title: str, doi: str, year: str, library_match_path: str) -> str:
+    lines: list[str] = []
+    if title:
+        lines.append(f"Title: {title}")
+    if doi:
+        lines.append(f"DOI: {doi}")
+    if year:
+        lines.append(f"Year: {year}")
+    if library_match_path:
+        lines.append(f"Local library match: {library_match_path}")
+    for label, keys in (
+        ("Summary", ("summary",)),
+        ("Selected excerpt", ("excerpt", "shelfExcerpt", "shelf_excerpt", "evidenceQuote", "evidence_quote")),
+        ("User note", ("note", "userNote", "user_note")),
+    ):
+        text = _selected_context_first_text(item, *keys)
+        if text:
+            lines.append(f"{label}: {text}")
+    text = "\n".join(lines).strip()
+    if len(text) > 1600:
+        text = text[:1599].rstrip() + "..."
+    return text
+
+
+def _selected_research_context_evidence_hits(items: list[dict], *, max_hits: int = 4) -> list[dict]:
+    try:
+        limit = max(1, int(max_hits))
+    except Exception:
+        limit = 4
+    out: list[dict] = []
+    seen: set[str] = set()
+    for idx, item in enumerate(list(items or [])[:8], start=1):
+        if len(out) >= limit:
+            break
+        if not isinstance(item, dict):
+            continue
+        stable_key = _selected_context_stable_key(item, idx)
+        kind = _selected_context_kind(item)
+        original_source_path = _selected_context_first_text(item, "sourcePath", "source_path")
+        original_source_name = _selected_context_first_text(item, "sourceName", "source_name")
+        library_match_path = _selected_context_first_text(item, "libraryMatchPath", "library_match_path")
+        library_match_status = _selected_context_first_text(item, "libraryMatchStatus", "library_match_status")
+        library_match_title = _selected_context_first_text(item, "libraryMatchTitle", "library_match_title")
+        library_match_doi = _selected_context_first_text(item, "libraryMatchDoi", "library_match_doi")
+        library_match_year = _selected_context_first_text(item, "libraryMatchYear", "library_match_year")
+        has_usable_library_match = _selected_context_library_match_usable(item)
+        title = (
+            library_match_title
+            or _selected_context_first_text(item, "title", "main", "cardTitle", "card_title")
+        )
+        doi = library_match_doi or _selected_context_first_text(item, "doi", "doiUrl", "doi_url")
+        year = library_match_year or _selected_context_first_text(item, "year", "publishedYear", "published_year")
+        heading_path = _selected_context_first_text(item, "headingPath", "heading_path", "locationLabel", "location_label")
+        block_id = _selected_context_first_text(item, "blockId", "block_id")
+        anchor_id = _selected_context_first_text(item, "anchorId", "anchor_id", "anchor")
+        anchor_kind = _selected_context_first_text(item, "anchorKind", "anchor_kind")
+        if has_usable_library_match:
+            source_path = library_match_path
+            source_role = "matched_library_paper"
+        elif original_source_path:
+            source_path = original_source_path
+            source_role = "selected_source"
+        else:
+            source_path = f"{_RESEARCH_BASKET_SYNTHETIC_SOURCE_PREFIX}{stable_key}"
+            source_role = "synthetic_basket_item"
+        source_name = (
+            original_source_name
+            or title
+            or _selected_context_first_text(item, "locationLabel", "location_label")
+            or f"Research basket item {idx}"
+        )
+        if source_role == "synthetic_basket_item" and title:
+            source_name = f"Research basket: {title[:120]}"
+        text = _selected_context_evidence_text(
+            item,
+            title=title,
+            doi=doi,
+            year=year,
+            library_match_path=library_match_path if has_usable_library_match else "",
+        )
+        if not text:
+            continue
+        dedupe_key = "\n".join(
+            (
+                str(source_path or "").replace("\\", "/").casefold(),
+                str(block_id or "").casefold(),
+                str(anchor_id or "").casefold(),
+                _normalize_selected_context_doi(doi),
+                _normalize_selected_context_title(title),
+                hashlib.sha1(text[:320].encode("utf-8", "ignore")).hexdigest()[:12],
+            )
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        meta = {
+            "source_path": source_path,
+            "source_name": source_name,
+            "title": title,
+            "doi": doi,
+            "year": year,
+            "heading_path": heading_path,
+            "top_heading": _top_heading(heading_path),
+            "block_id": block_id,
+            "anchor_id": anchor_id,
+            "anchor_kind": anchor_kind,
+            "anchor_target_kind": anchor_kind,
+            "ref_pack_state": "ready",
+            "metadata_quality": "ready",
+            "source_kind": "research_basket",
+            "research_basket_evidence": True,
+            "basket_evidence": True,
+            "basket_item_index": idx,
+            "basket_item_key": stable_key,
+            "shelf_item_kind": kind,
+            "basket_source_role": source_role,
+            "selected_context_source_path": original_source_path,
+            "selected_context_source_name": original_source_name,
+            "library_match_path": library_match_path,
+            "library_match_status": library_match_status,
+            "library_match_title": library_match_title,
+            "library_match_doi": library_match_doi,
+            "library_match_year": library_match_year,
+            "citation_context_source": "research_basket",
+        }
+        meta = {key: value for key, value in meta.items() if value not in (None, "", [], {})}
+        out.append(
+            {
+                "text": text,
+                "score": 1000.0 - float(idx),
+                "meta": meta,
+                "ui_meta": {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "display_name": source_name,
+                    "heading_path": heading_path,
+                    "source_kind": "research_basket",
+                },
+            }
+        )
+    return out
+
+
+def _selected_context_hit_dedupe_key(hit: dict) -> tuple[str, str, str]:
+    if not isinstance(hit, dict):
+        return ("invalid", "", "")
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    source_path = str((meta or {}).get("source_path") or "").strip().replace("\\", "/").casefold()
+    block_id = str((meta or {}).get("block_id") or (meta or {}).get("ref_block_id") or "").strip().casefold()
+    anchor_id = str((meta or {}).get("anchor_id") or (meta or {}).get("ref_anchor_id") or "").strip().casefold()
+    doi = _normalize_selected_context_doi((meta or {}).get("doi") or (meta or {}).get("library_match_doi"))
+    title = _normalize_selected_context_title((meta or {}).get("title") or (meta or {}).get("library_match_title"))
+    if source_path and (block_id or anchor_id):
+        return ("loc", source_path, f"{block_id}|{anchor_id}")
+    if doi:
+        return ("doi", doi, "")
+    if source_path and title:
+        return ("title", source_path, title)
+    text = str(hit.get("text") or "").strip()
+    return ("text", source_path, hashlib.sha1(text[:320].encode("utf-8", "ignore")).hexdigest()[:12])
+
+
+def _merge_selected_research_context_evidence_hits(
+    answer_hits: list[dict],
+    basket_hits: list[dict],
+    *,
+    limit: int,
+) -> list[dict]:
+    try:
+        cap = max(1, int(limit))
+    except Exception:
+        cap = max(1, len(answer_hits or []) + len(basket_hits or []))
+    out: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for hit in list(basket_hits or []) + list(answer_hits or []):
+        if not isinstance(hit, dict):
+            continue
+        key = _selected_context_hit_dedupe_key(hit)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(hit)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _selected_research_context_evidence_contract(basket_hits: list[dict]) -> dict:
+    items: list[dict] = []
+    for hit in list(basket_hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        entry = {
+            "source_path": str((meta or {}).get("source_path") or "").strip(),
+            "source_name": str((meta or {}).get("source_name") or "").strip(),
+            "title": str((meta or {}).get("title") or "").strip(),
+            "doi": str((meta or {}).get("doi") or "").strip(),
+            "year": str((meta or {}).get("year") or "").strip(),
+            "heading_path": str((meta or {}).get("heading_path") or "").strip(),
+            "block_id": str((meta or {}).get("block_id") or "").strip(),
+            "anchor_id": str((meta or {}).get("anchor_id") or "").strip(),
+            "anchor_kind": str((meta or {}).get("anchor_kind") or "").strip(),
+            "basket_item_index": int((meta or {}).get("basket_item_index") or 0),
+            "basket_item_key": str((meta or {}).get("basket_item_key") or "").strip(),
+            "basket_source_role": str((meta or {}).get("basket_source_role") or "").strip(),
+            "shelf_item_kind": str((meta or {}).get("shelf_item_kind") or "").strip(),
+        }
+        items.append({key: value for key, value in entry.items() if value not in (None, "", [], {})})
+    if not items:
+        return {}
+    return {"version": 1, "count": len(items), "items": items}
+
+
+def _selected_research_context_filter_terms(items: list[dict]) -> dict[str, list]:
+    terms: dict[str, list] = {
+        "source_paths": [],
+        "source_names": [],
+        "dois": [],
+        "titles": [],
+        "item_constraints": [],
+    }
+    seen: dict[str, set[str]] = {key: set() for key in terms}
+
+    def add(key: str, value: object) -> None:
+        raw = str(value or "").strip()
+        if not raw:
+            return
+        if key == "dois":
+            raw = _normalize_selected_context_doi(raw)
+        elif key == "titles":
+            raw = _normalize_selected_context_title(raw)
+            if len(raw) < 16 or raw in {"untitled", "untitled excerpt", "reference entry", "selected text"}:
+                return
+        dedupe_key = raw.lower()
+        if (not raw) or dedupe_key in seen[key]:
+            return
+        seen[key].add(dedupe_key)
+        terms[key].append(raw)
+
+    def add_item_constraint(item: dict) -> None:
+        source_path = _selected_context_first_text(item, "sourcePath", "source_path")
+        source_name = _selected_context_first_text(item, "sourceName", "source_name")
+        if not (source_path or source_name):
+            return
+        constraint = {
+            "source_path": source_path,
+            "source_name": source_name,
+            "block_id": _selected_context_first_text(item, "blockId", "block_id"),
+            "anchor_id": _selected_context_first_text(item, "anchorId", "anchor_id", "anchor"),
+            "heading_path": _selected_context_first_text(item, "headingPath", "heading_path", "locationLabel", "location_label"),
+            "excerpt": _selected_context_first_text(
+                item,
+                "excerpt",
+                "shelfExcerpt",
+                "shelf_excerpt",
+                "evidenceQuote",
+                "evidence_quote",
+                "summary",
+            ),
+        }
+        if not any(str(constraint.get(key) or "").strip() for key in ("block_id", "anchor_id", "heading_path", "excerpt")):
+            return
+        key = "\n".join(
+            str(constraint.get(k) or "").strip().lower()
+            for k in ("source_path", "source_name", "block_id", "anchor_id", "heading_path", "excerpt")
+        )
+        if (not key.strip()) or key in seen["item_constraints"]:
+            return
+        seen["item_constraints"].add(key)
+        terms["item_constraints"].append(constraint)
+
+    for item in list(items or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        raw_doi = (
+            item.get("libraryMatchDoi")
+            or item.get("library_match_doi")
+            or item.get("doi")
+            or item.get("doiUrl")
+            or item.get("doi_url")
+        )
+        raw_title = (
+            item.get("libraryMatchTitle")
+            or item.get("library_match_title")
+            or item.get("title")
+            or item.get("main")
+            or item.get("cardTitle")
+            or item.get("card_title")
+        )
+        doi_term = _normalize_selected_context_doi(raw_doi)
+        title_term = _normalize_selected_context_title(raw_title)
+        has_bibliographic_identity = bool(
+            doi_term
+            or (
+                len(title_term) >= 16
+                and title_term not in {"untitled", "untitled excerpt", "reference entry", "selected text"}
+            )
+        )
+        kind = _selected_context_kind(item)
+        if kind == "reference":
+            if _selected_context_library_match_usable(item):
+                add("source_paths", item.get("libraryMatchPath") or item.get("library_match_path"))
+            elif not has_bibliographic_identity:
+                add_item_constraint(item)
+        else:
+            add_item_constraint(item)
+        if kind == "reference" or _selected_context_library_match_usable(item):
+            add("dois", raw_doi)
+            add("titles", raw_title)
+    return terms
+
+
+def _selected_research_context_terms_count(terms: dict[str, list]) -> int:
+    return sum(len(list(values or [])) for values in (terms or {}).values())
+
+
+def _hit_matches_selected_item_constraint(hit: dict, constraint: dict) -> bool:
+    if not isinstance(hit, dict):
+        return False
+    meta = hit.get("meta", {}) or {}
+    source_path = str(constraint.get("source_path") or "").strip()
+    source_name = str(constraint.get("source_name") or "").strip()
+    source_ok = True
+    if source_path or source_name:
+        source_ok = _is_hit_from_bound_source(
+            hit,
+            bound_source_path=source_path,
+            bound_source_name=source_name,
+        )
+    if not source_ok:
+        return False
+
+    block_id = str(constraint.get("block_id") or "").strip()
+    if block_id and block_id == str(meta.get("block_id") or "").strip():
+        return True
+    anchor_id = str(constraint.get("anchor_id") or "").strip()
+    if anchor_id and anchor_id == str(meta.get("anchor_id") or meta.get("anchor") or "").strip():
+        return True
+
+    heading = normalize_match_text(str(constraint.get("heading_path") or ""))
+    hit_heading = normalize_match_text(str(meta.get("heading_path") or meta.get("top_heading") or ""))
+    if heading and hit_heading and len(heading) >= 6:
+        if heading == hit_heading or heading in hit_heading or hit_heading in heading:
+            return True
+
+    excerpt = normalize_match_text(str(constraint.get("excerpt") or ""))
+    hit_text = normalize_match_text(str(hit.get("text") or ""))
+    if excerpt and hit_text and len(excerpt) >= 24:
+        if excerpt in hit_text or hit_text in excerpt:
+            return True
+        probe = hit_text[: max(240, min(900, len(excerpt) * 2))]
+        if SequenceMatcher(None, excerpt[:900], probe).ratio() >= 0.82:
+            return True
+        excerpt_tokens = {t for t in re.findall(r"[a-z0-9\u4e00-\u9fff]{2,}", excerpt) if len(t) >= 2}
+        hit_tokens = {t for t in re.findall(r"[a-z0-9\u4e00-\u9fff]{2,}", hit_text) if len(t) >= 2}
+        if excerpt_tokens and len(excerpt_tokens) >= 6:
+            overlap = len(excerpt_tokens & hit_tokens) / max(1, len(excerpt_tokens))
+            if overlap >= 0.58:
+                return True
+    return False
+
+
+def _hit_matches_selected_research_context(hit: dict, terms: dict[str, list]) -> bool:
+    if not isinstance(hit, dict):
+        return False
+    meta = hit.get("meta", {}) or {}
+    for source_path in terms.get("source_paths") or []:
+        if _is_hit_from_bound_source(hit, bound_source_path=str(source_path or ""), bound_source_name=""):
+            return True
+    for source_name in terms.get("source_names") or []:
+        if _is_hit_from_bound_source(hit, bound_source_path="", bound_source_name=str(source_name or "")):
+            return True
+
+    haystack = "\n".join(
+        str(part or "")
+        for part in (
+            hit.get("text"),
+            meta.get("doi"),
+            meta.get("title"),
+            meta.get("source_name"),
+            meta.get("source_path"),
+            meta.get("heading_path"),
+        )
+    )
+    haystack_doi = _normalize_selected_context_doi(haystack)
+    for doi in terms.get("dois") or []:
+        if doi and doi in haystack_doi:
+            return True
+
+    haystack_title = _normalize_selected_context_title(haystack)
+    for title in terms.get("titles") or []:
+        if title and (title in haystack_title or SequenceMatcher(None, title, haystack_title[: max(len(title) * 3, 240)]).ratio() >= 0.86):
+            return True
+    for constraint in terms.get("item_constraints") or []:
+        if isinstance(constraint, dict) and _hit_matches_selected_item_constraint(hit, constraint):
+            return True
+    return False
+
+
+def _filter_hits_for_selected_research_context(
+    hits_raw: list[dict],
+    selected_items: list[dict],
+) -> tuple[list[dict], dict[str, object]]:
+    terms = _selected_research_context_filter_terms(selected_items)
+    constraint_count = _selected_research_context_terms_count(terms)
+    if constraint_count <= 0:
+        return [], {
+            "active": True,
+            "mode": "selected_context_only",
+            "before": int(len(hits_raw or [])),
+            "after": 0,
+            "constraint_count": 0,
+        }
+    out = [
+        hit
+        for hit in list(hits_raw or [])
+        if isinstance(hit, dict) and _hit_matches_selected_research_context(hit, terms)
+    ]
+    return out, {
+        "active": True,
+        "mode": "matched_library_hits" if out else "no_matching_library_hits",
+        "before": int(len(hits_raw or [])),
+        "after": int(len(out)),
+        "constraint_count": int(constraint_count),
+        "source_path_count": int(len(terms.get("source_paths") or [])),
+        "source_name_count": int(len(terms.get("source_names") or [])),
+        "doi_count": int(len(terms.get("dois") or [])),
+        "title_count": int(len(terms.get("titles") or [])),
+        "item_constraint_count": int(len(terms.get("item_constraints") or [])),
+    }
 
 
 def _normalize_query_scope(value: object) -> str:
@@ -1931,8 +2633,8 @@ def _query_scope_prompt_block(*, scope: str, selected_count: int, current_source
         return (
             "QUERY SCOPE: Research basket.\n"
             f"- The user selected {max(0, int(selected_count or 0))} basket item(s) for this turn.\n"
-            "- Treat the selected basket excerpts as the primary working set.\n"
-            "- If retrieved library snippets add context, keep them secondary and do not override the selected excerpts without evidence."
+            "- Answer only from the selected basket excerpts and any retrieved snippets that match those selected sources or bibliographic identities.\n"
+            "- If the selected basket context is insufficient, say what is missing instead of bringing in unrelated library papers."
         )
     return (
         "QUERY SCOPE: Full library.\n"
@@ -2236,6 +2938,7 @@ def _finalize_generation_answer(
     paper_guide_candidate_refs_by_source: dict[str, list[int]] | None,
     paper_guide_support_slots: list[dict] | None,
     paper_guide_evidence_cards: list[dict] | None,
+    research_answer_plan: str = "",
     paper_guide_contracts_seed: dict | None = None,
     paper_guide_retrieval_confidence_hint: dict[str, object] | None = None,
     settings_obj=None,
@@ -2262,6 +2965,7 @@ def _finalize_generation_answer(
         answer_intent=answer_intent,
         answer_depth=answer_depth,
         answer_output_mode=answer_output_mode,
+        research_answer_plan=research_answer_plan,
         paper_guide_mode=paper_guide_mode,
         paper_guide_contract_enabled=paper_guide_contract_enabled,
         paper_guide_prompt_family=paper_guide_prompt_family,
@@ -2551,6 +3255,14 @@ def _gen_mark_cancel(session_id: str, task_id: str) -> bool:
     return _state_gen_mark_cancel(session_id, task_id, time_module=time)
 
 
+def _gen_has_running_for_conversation(conv_id: str, *, chat_db_path: object = None) -> bool:
+    return _state_gen_has_running_for_conversation(conv_id, chat_db_path=chat_db_path)
+
+
+def _gen_has_active_task_id(task_id: str) -> bool:
+    return _state_gen_has_active_task_id(task_id)
+
+
 def _gen_store_answer(task: dict, answer: str) -> None:
     return _state_gen_store_answer(task, answer, chat_store_cls=ChatStore)
 
@@ -2668,6 +3380,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         selected_research_context = task.get("selected_research_context") if isinstance(task.get("selected_research_context"), dict) else {}
         selected_research_context_items = _selected_research_context_items(selected_research_context)
         selected_research_context_block = _format_selected_research_context_block(selected_research_context)
+        selected_research_context_evidence_hits: list[dict] = []
         raw_image_atts = task.get("image_attachments") or []
         chat_db = Path(str(task.get("chat_db") or "")).expanduser()
         db_dir = Path(str(task.get("db_dir") or "")).expanduser()
@@ -2766,14 +3479,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             for it in raw_image_atts:
                 if not isinstance(it, dict):
                     continue
-                p0 = Path(str(it.get("path") or "")).expanduser()
-                if (not str(p0)) or (not p0.exists()) or (not p0.is_file()):
+                verified = resolve_verified_chat_image_upload_path(it.get("path"), db_dir=db_dir)
+                if verified is None:
                     continue
-                mime0 = str(it.get("mime") or "").strip().lower()
-                if not mime0.startswith("image/"):
-                    mime0 = _VISION_IMAGE_MIME_BY_SUFFIX.get(p0.suffix.lower(), "")
-                if not mime0.startswith("image/"):
-                    continue
+                p0, mime0 = verified
                 image_attachments.append(
                     {
                         "path": str(p0),
@@ -2791,10 +3500,20 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             raise RuntimeError("canceled")
         if paper_guide_source_scoped and paper_guide_bound_source_path:
             try:
+                try:
+                    from api.routers.library import _md_dir, _pdf_dir
+
+                    prefetch_md_root = _md_dir()
+                    prefetch_pdf_root = _pdf_dir()
+                except Exception:
+                    prefetch_md_root = None
+                    prefetch_pdf_root = None
                 kickoff_paper_guide_prefetch(
                     source_path=paper_guide_bound_source_path,
                     source_name=paper_guide_bound_source_name,
                     db_dir=db_dir,
+                    md_root=prefetch_md_root,
+                    pdf_root=prefetch_pdf_root,
                     library_db_path=getattr(settings_obj, "library_db_path", None),
                 )
             except Exception:
@@ -2965,6 +3684,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         refs_async_seed_docs: list[dict] = []
         prompt_multi_paper_list = False
         seed_refs_should_stay_pending = False
+        basket_filter_trace: dict[str, object] = {}
         if prompt and (not bypass_kb):
             _gen_update_task(session_id, task_id, stage="retrieve")
             t_ret0 = time.perf_counter()
@@ -3218,6 +3938,21 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     )
                 hits_raw = scoped_hits
                 scores_raw = [float(h.get("score", 0.0) or 0.0) for h in hits_raw]
+            if effective_query_scope == "basket":
+                basket_scoped_hits, basket_filter_trace = _filter_hits_for_selected_research_context(
+                    hits_raw,
+                    selected_research_context_items,
+                )
+                if len(basket_scoped_hits) != len(hits_raw):
+                    _perf_log(
+                        "gen.basket_scope",
+                        before=len(hits_raw),
+                        after=len(basket_scoped_hits),
+                        mode=str(basket_filter_trace.get("mode") or ""),
+                        constraints=int(basket_filter_trace.get("constraint_count") or 0),
+                    )
+                hits_raw = basket_scoped_hits
+                scores_raw = [float(h.get("score", 0.0) or 0.0) for h in hits_raw]
             _perf_log(
                 "gen.retrieve",
                 elapsed=time.perf_counter() - t_ret0,
@@ -3234,6 +3969,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     "raw_hit_count": int(len(hits_raw or [])),
                     "top_hits": _trace_summarize_hits(list(hits_raw or []), limit=6),
                     "paper_guide_cross_paper_refs": bool(paper_guide_cross_paper_refs),
+                    "basket_filter": dict(basket_filter_trace or {}),
                 },
             )
             _trace_event(
@@ -3791,6 +4527,29 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 heading_hits=list(hits or []),
                 top_n=answer_hit_limit,
             )
+        if selected_research_context_items:
+            selected_research_context_evidence_hits = _selected_research_context_evidence_hits(
+                selected_research_context_items,
+                max_hits=min(4, max(1, len(selected_research_context_items))),
+            )
+            if selected_research_context_evidence_hits:
+                merged_answer_hit_limit = max(
+                    answer_hit_limit,
+                    min(8, answer_hit_limit + len(selected_research_context_evidence_hits)),
+                )
+                answer_hits = _merge_selected_research_context_evidence_hits(
+                    answer_hits,
+                    selected_research_context_evidence_hits,
+                    limit=merged_answer_hit_limit,
+                )
+                _trace_section(
+                    "basket_context",
+                    {
+                        "evidence_hit_count": int(len(selected_research_context_evidence_hits)),
+                        "merged_answer_hit_count": int(len(answer_hits or [])),
+                        "evidence_sources": _trace_summarize_hits(list(selected_research_context_evidence_hits or []), limit=6),
+                    },
+                )
         anchor_grounded_answer = _has_anchor_grounded_answer_hits(answer_hits)
         answer_output_mode = _detect_answer_output_mode(
             prompt,
@@ -3807,7 +4566,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 intent=answer_intent,
                 explicit_hint=(answer_output_mode_hint or answer_mode_hint),
             )
-        locked_citation_source = _pick_locked_citation_source(list(answer_seed or answer_hits))
+        locked_source_candidates = list(answer_seed or answer_hits)
+        if effective_query_scope == "basket" and selected_research_context_evidence_hits:
+            locked_source_candidates = [*selected_research_context_evidence_hits, *locked_source_candidates]
+        locked_citation_source = _pick_locked_citation_source(locked_source_candidates)
         answer_hits = _ensure_locked_source_in_answer_hits(
             answer_hits,
             source_rec=locked_citation_source,
@@ -3891,6 +4653,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         paper_guide_candidate_refs_by_source = dict(paper_guide_prompt_context.get("paper_guide_candidate_refs_by_source") or {})
         paper_guide_support_slots = list(paper_guide_prompt_context.get("paper_guide_support_slots") or [])
         paper_guide_contracts_seed = dict(paper_guide_prompt_context.get("paper_guide_contracts_seed") or {})
+        selected_research_context_evidence_contract = _selected_research_context_evidence_contract(
+            selected_research_context_evidence_hits
+        )
+        if selected_research_context_evidence_contract:
+            paper_guide_contracts_seed["research_basket_evidence"] = dict(selected_research_context_evidence_contract)
         _trace_section(
             "citation_systems",
             {
@@ -3957,6 +4724,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         user = str(prompt_bundle.get("user") or "")
         prompt_for_user = str(prompt_bundle.get("prompt_for_user") or prompt or "[Image attachment only request]")
         paper_guide_contract_enabled = bool(prompt_bundle.get("paper_guide_contract_enabled"))
+        research_answer_plan = str(prompt_bundle.get("research_answer_plan") or "").strip()
+        if research_answer_plan:
+            _trace_section("answer", {"research_answer_plan": research_answer_plan})
+            if paper_guide_mode:
+                paper_guide_debug["research_answer_plan"] = research_answer_plan
         if query_scope_block:
             user = f"{user.rstrip()}\n\n{query_scope_block}".strip()
         if selected_research_context_block:
@@ -3984,7 +4756,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             has_current_images=bool(image_attachments),
         )
         hist = hist[-10:]
-        user_content = _build_multimodal_user_content(user, image_attachments)
+        user_content = _build_multimodal_user_content(
+            user,
+            image_attachments,
+            allowed_image_roots=chat_image_upload_roots(db_dir),
+        )
         messages = _build_generation_messages(system=system, hist=hist, user_content=user_content)
         ds = DeepSeekChat(settings_obj)
         direct_answer_override = _build_paper_guide_direct_answer_override(
@@ -4120,6 +4896,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             paper_guide_candidate_refs_by_source=paper_guide_candidate_refs_by_source,
             paper_guide_support_slots=paper_guide_support_slots,
             paper_guide_evidence_cards=paper_guide_evidence_cards,
+            research_answer_plan=research_answer_plan,
             paper_guide_contracts_seed=paper_guide_contracts_seed,
             paper_guide_retrieval_confidence_hint=paper_guide_retrieval_confidence_hint,
             settings_obj=settings_obj,
@@ -4130,6 +4907,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         paper_guide_contracts = dict(finalize_state.get("paper_guide_contracts") or {})
         if selected_research_context_items:
             paper_guide_contracts["selected_research_context"] = dict(selected_research_context or {})
+        if selected_research_context_evidence_contract:
+            paper_guide_contracts["research_basket_evidence"] = dict(selected_research_context_evidence_contract)
         doc_list_rendered_payload = None
         doc_list_rendered_payload_sig = ""
         if prompt_multi_paper_list:
@@ -4245,6 +5024,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 {
                     "final_answer_quality_family": str(answer_quality.get("prompt_family") or ""),
                     "final_contract_intent_family": str(contract_intent.get("family") or ""),
+                    "research_answer_plan": research_answer_plan,
                     "final_answer_prefix": str(answer or "")[:160],
                 }
             )
@@ -4453,6 +5233,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "chars": int(len(answer or "")),
                 "quality_minimum_ok": bool(answer_quality.get("minimum_ok")),
                 "quality_prompt_family": str(answer_quality.get("prompt_family") or ""),
+                "research_answer_plan": str(answer_quality.get("research_answer_plan") or research_answer_plan or ""),
             },
         )
         research_trace = _trace_finish(research_trace, status="done", total_elapsed_s=time.perf_counter() - worker_t0)
@@ -4477,8 +5258,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         _perf_log("gen.total", elapsed=time.perf_counter() - worker_t0, conv_id=conv_id)
 
     except Exception as e:
-        if str(e) == "canceled":
-            snap = _gen_get_task(session_id) or {}
+        snap = _gen_get_task(session_id) or {}
+        cancel_requested = str(e) == "canceled" or (
+            str(snap.get("id") or "") == str(task_id or "")
+            and bool(snap.get("cancel") or False)
+        )
+        if cancel_requested:
             partial = str(snap.get("partial") or "").strip()
             answer = (partial + "\n\n(Generation canceled)").strip() or "(Generation canceled)"
             try:
@@ -4532,15 +5317,34 @@ def _gen_start_task(task: dict) -> bool:
     tid = str(task.get("id") or "").strip()
     if (not sid) or (not tid):
         return False
+    conv_id = str(task.get("conv_id") or "").strip()
+    chat_db_path = task.get("chat_db")
+    chat_db_key = ""
+    if chat_db_path:
+        try:
+            chat_db_key = str(Path(str(chat_db_path or "")).expanduser().resolve()).lower()
+        except Exception:
+            chat_db_key = str(chat_db_path or "").strip().lower()
     RUNTIME.prune_generation_tasks(now=time.time())
     with RUNTIME.GEN_LOCK:
         cur = RUNTIME.GEN_TASKS.get(sid)
-        if (
-            isinstance(cur, dict)
-            and str(cur.get("status") or "") == "running"
-            and (not bool(cur.get("answer_ready") or False))
-        ):
+        if _state_gen_task_blocks_conversation(cur):
             return False
+        if conv_id:
+            for cur in RUNTIME.GEN_TASKS.values():
+                if not isinstance(cur, dict):
+                    continue
+                if str(cur.get("conv_id") or "").strip() != conv_id:
+                    continue
+                if chat_db_key:
+                    try:
+                        cur_db = str(Path(str(cur.get("chat_db") or "")).expanduser().resolve()).lower()
+                    except Exception:
+                        cur_db = str(cur.get("chat_db") or "").strip().lower()
+                    if cur_db and cur_db != chat_db_key:
+                        continue
+                if _state_gen_task_blocks_conversation(cur):
+                    return False
         item = dict(task)
         item.setdefault("status", "running")
         item.setdefault("stage", "starting")
@@ -4554,24 +5358,36 @@ def _gen_start_task(task: dict) -> bool:
         threading.Thread(target=_gen_worker, args=(sid, tid), daemon=True).start()
     except Exception:
         logger.exception("generation_thread_start_failed", extra={"session_id": sid, "task_id": tid})
+        failure_answer = generation_start_failed_message(task.get("ui_locale") or task.get("locale"))
+        try:
+            _gen_store_answer(task, failure_answer)
+        except Exception:
+            pass
         with RUNTIME.GEN_LOCK:
             cur = RUNTIME.GEN_TASKS.get(sid)
             if isinstance(cur, dict) and str(cur.get("id") or "") == tid:
+                now = time.time()
                 cur2 = dict(cur)
                 cur2["status"] = "error"
                 cur2["stage"] = "error"
-                cur2["answer"] = "线程启动失败"
-                cur2["finished_at"] = time.time()
+                cur2["error"] = "thread_start_failed"
+                cur2["answer"] = failure_answer
+                cur2["partial"] = failure_answer
+                cur2["char_count"] = len(failure_answer)
+                cur2["updated_at"] = now
+                cur2["finished_at"] = now
                 RUNTIME.GEN_TASKS[sid] = cur2
         return False
     return True
 
-def _bg_enqueue(task: dict) -> None:
+def _bg_enqueue(task: dict) -> bool:
     if "_tid" not in task:
         task = dict(task)
         task["_tid"] = uuid.uuid4().hex
-    bg_enqueue(_BG_STATE, _BG_LOCK, task)
-    _bg_ensure_started()
+    enqueued = bg_enqueue(_BG_STATE, _BG_LOCK, task)
+    if enqueued:
+        _bg_ensure_started()
+    return bool(enqueued)
 
 def _bg_remove_queued_tasks_for_pdf(pdf_path: Path) -> int:
     """
@@ -4612,6 +5428,63 @@ def _bg_target_worker_count() -> int:
 
 def _bg_ingest_py_path() -> Path:
     return Path(__file__).resolve().parent.parent / "ingest.py"
+
+
+def _bg_cancel_requested(cancel_cb) -> bool:
+    if not callable(cancel_cb):
+        return False
+    try:
+        return bool(cancel_cb())
+    except Exception:
+        return False
+
+
+def _bg_conversion_result_message(ok: bool, out_folder: object, cancel_cb, *, prefix: str = "") -> tuple[bool, object, str]:
+    if _bg_cancel_requested(cancel_cb):
+        return False, "cancelled", "CANCELLED"
+    if bool(ok):
+        return True, out_folder, f"OK{prefix}: {out_folder}"
+    txt = str(out_folder or "").strip().lower()
+    fail_prefix = "FAIL" + prefix
+    return False, out_folder, "CANCELLED" if txt == "cancelled" else f"{fail_prefix}: {out_folder}"
+
+
+def _bg_run_ingest_subprocess(args: list[str], cancel_cb) -> subprocess.CompletedProcess:
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        while proc.poll() is None:
+            if _bg_cancel_requested(cancel_cb):
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=4)
+                except Exception:
+                    pass
+                try:
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.wait(timeout=2)
+                except Exception:
+                    pass
+                try:
+                    stdout, stderr = proc.communicate(timeout=1)
+                except Exception:
+                    stdout, stderr = "", "cancelled"
+                return subprocess.CompletedProcess(args, -15, stdout or "", stderr or "cancelled")
+            time.sleep(0.2)
+        stdout, stderr = proc.communicate()
+        return subprocess.CompletedProcess(args, int(proc.returncode or 0), stdout or "", stderr or "")
+    except Exception:
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except Exception:
+            pass
+        raise
 
 
 def _bg_record_repair_attempt(md_path: Path | None, **payload) -> None:
@@ -4693,6 +5566,7 @@ def _bg_post_convert_quality_gate(
     md_path: Path,
     *,
     task_id: str = "",
+    repair_run_id: str = "",
     speed_mode: str = "",
     source_pdf_path: Path | str | None = None,
 ) -> dict:
@@ -4763,6 +5637,7 @@ def _bg_post_convert_quality_gate(
         speed_mode=speed_mode,
         issue_codes=list(assessment.get("issue_codes") or []),
         task_id=task_id,
+        repair_run_id=repair_run_id,
         source="post_convert_quality_gate",
         reason=str(assessment.get("reason") or ""),
         detail=detail,
@@ -4803,6 +5678,7 @@ def _bg_worker_loop() -> None:
         replace = bool(task.get("replace", False))
         speed_mode = str(task.get("speed_mode", "balanced"))
         repair_context = task.get("repair_context") if isinstance(task.get("repair_context"), dict) else {}
+        repair_run_id = str((repair_context or {}).get("repair_run_id") or "").strip()
         if speed_mode == "ultra_fast":
             # Keep VL/LLM path in ultra_fast; converter itself handles speed/quality tradeoff.
             # Forcing no_llm here causes a dramatic quality drop that does not match UI semantics.
@@ -4851,23 +5727,20 @@ def _bg_worker_loop() -> None:
                 speed_mode=speed_mode,
                 max_active_conversions=_bg_target_worker_count(),
             )
-            if ok:
-                msg = f"OK: {out_folder}"
-            else:
-                txt = str(out_folder or "").strip().lower()
-                msg = "CANCELLED" if txt == "cancelled" else f"FAIL: {out_folder}"
+            ok, out_folder, msg = _bg_conversion_result_message(ok, out_folder, _should_cancel)
 
             _, md_main, md_exists = _resolve_md_output_paths(out_root, pdf)
             if repair_context and md_exists:
                 _bg_record_repair_attempt(
                     md_main,
                     event="conversion_finished",
-                    status="success" if ok else "error",
+                    status="cancelled" if msg == "CANCELLED" else ("success" if ok else "error"),
                     action=str(repair_context.get("action") or "reconvert"),
                     scope=str(repair_context.get("scope") or ""),
                     speed_mode=speed_mode,
                     issue_codes=list(repair_context.get("issue_codes") or []),
                     task_id=task_id,
+                    repair_run_id=repair_run_id,
                     source=str(repair_context.get("source") or "background_conversion"),
                     reason=str(repair_context.get("reason") or ""),
                     detail=msg,
@@ -4875,7 +5748,7 @@ def _bg_worker_loop() -> None:
                 )
 
             post_convert_quality: dict = {}
-            if ok and md_exists:
+            if ok and md_exists and not _bg_cancel_requested(_should_cancel):
                 try:
                     _on_progress(
                         last_page_done,
@@ -4885,6 +5758,7 @@ def _bg_worker_loop() -> None:
                     post_convert_quality = _bg_post_convert_quality_gate(
                         md_main,
                         task_id=task_id,
+                        repair_run_id=repair_run_id,
                         speed_mode=speed_mode,
                         source_pdf_path=pdf,
                     )
@@ -4895,7 +5769,12 @@ def _bg_worker_loop() -> None:
                 except Exception:
                     post_convert_quality = {}
 
-            if ok and md_exists and _post_convert_source_retry_needed(post_convert_quality, already_retried=source_retry_done):
+            if (
+                ok
+                and md_exists
+                and not _bg_cancel_requested(_should_cancel)
+                and _post_convert_source_retry_needed(post_convert_quality, already_retried=source_retry_done)
+            ):
                 source_retry_done = True
                 retry_speed_mode = _post_convert_source_retry_speed_mode(post_convert_quality, speed_mode)
                 retry_issue_codes = _quality_assessment_issue_codes(post_convert_quality)
@@ -4912,6 +5791,7 @@ def _bg_worker_loop() -> None:
                         speed_mode=retry_speed_mode,
                         issue_codes=retry_issue_codes,
                         task_id=task_id,
+                        repair_run_id=repair_run_id,
                         source="post_convert_quality_gate",
                         reason=retry_reason,
                         detail="Quality gate requested an automatic source-level reconversion.",
@@ -4936,32 +5816,32 @@ def _bg_worker_loop() -> None:
                     speed_mode=retry_speed_mode,
                     max_active_conversions=_bg_target_worker_count(),
                 )
-                ok = bool(retry_ok)
-                out_folder = retry_out_folder
+                ok, out_folder, msg = _bg_conversion_result_message(
+                    retry_ok,
+                    retry_out_folder,
+                    _should_cancel,
+                    prefix="+SOURCE_RETRY",
+                )
                 effective_speed_mode = retry_speed_mode
-                if ok:
-                    msg = f"OK+SOURCE_RETRY: {out_folder}"
-                else:
-                    txt = str(out_folder or "").strip().lower()
-                    msg = "CANCELLED" if txt == "cancelled" else f"FAIL+SOURCE_RETRY: {out_folder}"
                 _, md_main, md_exists = _resolve_md_output_paths(out_root, pdf)
                 if md_exists:
                     _bg_record_repair_attempt(
                         md_main,
                         event="source_quality_retry_finished",
-                        status="success" if ok else "error",
+                        status="cancelled" if msg == "CANCELLED" else ("success" if ok else "error"),
                         action="reconvert",
                         scope=retry_scope,
                         speed_mode=retry_speed_mode,
                         issue_codes=retry_issue_codes,
                         task_id=task_id,
+                        repair_run_id=repair_run_id,
                         source="post_convert_quality_gate",
                         reason=retry_reason,
                         detail=msg,
                         extra={"requested_speed_mode": speed_mode, "retry_speed_mode": retry_speed_mode},
                     )
                 post_convert_quality = {}
-                if ok and md_exists:
+                if ok and md_exists and not _bg_cancel_requested(_should_cancel):
                     try:
                         _on_progress(
                             last_page_done,
@@ -4971,6 +5851,7 @@ def _bg_worker_loop() -> None:
                         post_convert_quality = _bg_post_convert_quality_gate(
                             md_main,
                             task_id=task_id,
+                            repair_run_id=repair_run_id,
                             speed_mode=effective_speed_mode,
                             source_pdf_path=pdf,
                         )
@@ -4985,7 +5866,12 @@ def _bg_worker_loop() -> None:
 
             # Auto-ingest can add noticeable latency in the conversion UI.
             # Skip it in ultra_fast mode to keep end-to-end time near the 5s target.
-            do_auto_ingest = ok and bool(db_dir) and (effective_speed_mode != "ultra_fast")
+            do_auto_ingest = (
+                ok
+                and bool(db_dir)
+                and (effective_speed_mode != "ultra_fast")
+                and not _bg_cancel_requested(_should_cancel)
+            )
             if do_auto_ingest and db_dir:
                 try:
                     ingest_py = _bg_ingest_py_path()
@@ -4995,22 +5881,24 @@ def _bg_worker_loop() -> None:
                             last_page_total,
                             "ingesting: updating knowledge base index",
                         )
-                        ingest_proc = subprocess.run(
-                            [
-                                os.sys.executable,
-                                str(ingest_py),
-                                "--src",
-                                str(md_main),
-                                "--db",
-                                str(db_dir),
-                                "--incremental",
-                                "--rebuild-structured-indices",
-                            ],
-                            check=False,
-                            capture_output=True,
-                            text=True,
+                        ingest_args = [
+                            os.sys.executable,
+                            str(ingest_py),
+                            "--src",
+                            str(md_main),
+                            "--db",
+                            str(db_dir),
+                            "--incremental",
+                            "--rebuild-structured-indices",
+                        ]
+                        ingest_proc = _bg_run_ingest_subprocess(
+                            ingest_args,
+                            _should_cancel,
                         )
-                        if int(getattr(ingest_proc, "returncode", 1) or 0) == 0:
+                        if _bg_cancel_requested(_should_cancel) or int(getattr(ingest_proc, "returncode", 1) or 0) == -15:
+                            msg = "CANCELLED"
+                            ingest_status = "cancelled"
+                        elif int(getattr(ingest_proc, "returncode", 1) or 0) == 0:
                             if post_convert_quality and not bool(post_convert_quality.get("indexable")):
                                 msg = f"OK+QUALITY_BLOCKED: {out_folder}"
                                 ingest_status = "blocked"
@@ -5033,6 +5921,7 @@ def _bg_worker_loop() -> None:
                                 speed_mode=effective_speed_mode,
                                 issue_codes=list(repair_context.get("issue_codes") or []),
                                 task_id=task_id,
+                                repair_run_id=repair_run_id,
                                 source="background_ingest",
                                 reason=str(repair_context.get("reason") or ""),
                                 detail=(
@@ -5053,6 +5942,7 @@ def _bg_worker_loop() -> None:
                             speed_mode=effective_speed_mode if "effective_speed_mode" in locals() else speed_mode,
                             issue_codes=list(repair_context.get("issue_codes") or []),
                             task_id=task_id,
+                            repair_run_id=repair_run_id,
                             source="background_ingest",
                             reason=str(repair_context.get("reason") or ""),
                             detail="background ingest failed after conversion",
@@ -5061,6 +5951,8 @@ def _bg_worker_loop() -> None:
         except Exception as e:
             msg = f"FAIL: {e}"
 
+        if bg_should_cancel(_BG_STATE, _BG_LOCK):
+            msg = "CANCELLED"
         bg_finish_task(_BG_STATE, _BG_LOCK, msg, task_id=task_id)
 
 def _bg_ensure_started() -> None:
@@ -5123,6 +6015,7 @@ def _build_bg_task(
             "scope": str(repair_context.get("scope") or ""),
             "reason": str(repair_context.get("reason") or ""),
             "source": str(repair_context.get("source") or ""),
+            "repair_run_id": str(repair_context.get("repair_run_id") or ""),
             "issue_codes": [str(item) for item in list(repair_context.get("issue_codes") or []) if str(item or "").strip()][:30],
         }
     return task

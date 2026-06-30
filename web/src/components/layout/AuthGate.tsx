@@ -30,14 +30,33 @@ const COPY = {
   },
 } as const
 
+function internalRoutesEnabled() {
+  return import.meta.env.VITE_ENABLE_INTERNAL_ROUTES === '1'
+}
+
 function isRegressionRoute() {
-  return typeof window !== 'undefined' && window.location.pathname.startsWith('/__')
+  return internalRoutesEnabled() && typeof window !== 'undefined' && window.location.pathname.startsWith('/__')
+}
+
+function tokenHelpText(locale: 'zh' | 'en', status: AuthStatusPayload | null) {
+  const production = Boolean(status?.production)
+  if (locale === 'en') {
+    if (production) {
+      return 'Use the access token provided by the deployment maintainer. It is configured on the server with KB_ACCESS_TOKEN or KB_ACCESS_TOKEN_SHA256.'
+    }
+    return 'This private instance was explicitly locked with KB_REQUIRE_AUTH=1. For public or local-only use, set KB_REQUIRE_AUTH=0 and restart.'
+  }
+  if (production) {
+    return '请输入部署维护者提供的访问令牌；它由服务端 KB_ACCESS_TOKEN 或 KB_ACCESS_TOKEN_SHA256 配置。'
+  }
+  return '这个私有实例已通过 KB_REQUIRE_AUTH=1 显式锁定；公开或仅本地使用时，可设置 KB_REQUIRE_AUTH=0 并重启来关闭此保护。'
 }
 
 export function AuthGate() {
   const locale = useSettingsStore(s => s.uiLocale)
   const loadSettings = useSettingsStore(s => s.load)
   const T = COPY[locale === 'en' ? 'en' : 'zh']
+  const copyLocale = locale === 'en' ? 'en' : 'zh'
   const [status, setStatus] = useState<AuthStatusPayload | null>(null)
   const [checked, setChecked] = useState(false)
   const [token, setToken] = useState('')
@@ -72,7 +91,6 @@ export function AuthGate() {
   useEffect(() => {
     void refreshStatus()
     const onAuthRequired = () => {
-      setStatus(current => current ? { ...current, required: true, authenticated: false } : current)
       setError('')
       void refreshStatus()
     }
@@ -114,6 +132,9 @@ export function AuthGate() {
         <div className="kb-auth-copy">
           <div className="kb-auth-title">{T.title}</div>
           <Text className="kb-auth-subtitle">{T.subtitle}</Text>
+          <Text className="kb-auth-help" data-testid="auth-gate-token-help">
+            {tokenHelpText(copyLocale, status)}
+          </Text>
         </div>
         {error ? <Alert type={!status || configured ? 'error' : 'warning'} showIcon message={error} /> : null}
         <form

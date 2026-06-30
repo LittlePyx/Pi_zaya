@@ -1,4 +1,4 @@
-from kb.rag import _format_context, build_messages
+from kb.rag import _compact_heading_path, _format_context, build_messages
 
 
 def _hit(**overrides):
@@ -23,7 +23,8 @@ def test_format_context_includes_doc_section_page_score_and_id():
     ctx = _format_context([_hit()])
 
     assert "[1] | doc: Demo Paper.pdf" in ctx
-    assert r"source: F:\papers\Demo Paper.en.md" in ctx
+    assert "source: Demo Paper.en.md" in ctx
+    assert r"F:\papers" not in ctx
     assert "section: Demo Paper / Methods / Adaptive pixel reassignment" in ctx
     assert "pages: 5-6" in ctx
     assert "score: 8.23" in ctx
@@ -65,3 +66,31 @@ def test_build_messages_without_hits_requires_no_hit_notice():
     assert "start with \"(No relevant snippets found in the knowledge base)\"" in system
     assert "write \"(No hits this time)\" under Referenced Sources" in system
     assert "Retrieved snippets:\n(No hits this time)" in user
+
+
+def test_build_messages_uses_clean_chinese_labels_for_chinese_questions():
+    messages = build_messages("这篇论文的方法有什么贡献？", history=[], hits=[])
+
+    system = messages[0]["content"]
+    user = messages[-1]["content"]
+    assert "answer in 中文" in system
+    assert "结论:" in system
+    assert "证据:" in system
+    assert "限制:" in system
+    assert "下一步:" in system
+    assert "可参考定位:" in system
+    assert "未命中知识库片段" in system
+    assert "问题:\n这篇论文的方法有什么贡献？" in user
+    assert "检索片段:\n（本次未命中）" in user
+    assert chr(0x6D93) not in system + user
+    assert chr(0x9225) not in system + user
+
+
+def test_rag_context_truncation_uses_plain_ellipsis():
+    compact = _compact_heading_path("Paper / " + ("very long section " * 20), max_chars=48)
+    assert compact.endswith("...")
+    assert chr(0x9225) not in compact
+
+    ctx = _format_context([_hit(text="APR " * 200)], max_chars=80)
+    assert ctx.endswith("...")
+    assert chr(0x9225) not in ctx

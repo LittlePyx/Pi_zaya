@@ -7,9 +7,20 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from api import deps
 from api.main import app
 from kb.library_store import LibraryStore
-from kb.store import compute_doc_id, save_docs_index, write_doc_chunks
+from kb.store import compute_doc_id, doc_chunks_path, load_docs_index, save_docs_index, write_doc_chunks
+
+
+@pytest.fixture(autouse=True)
+def _enable_internal_quality_api_for_sanity(monkeypatch):
+    monkeypatch.setenv("KB_REQUIRE_AUTH", "0")
+    monkeypatch.setenv("KB_ENABLE_INTERNAL_API", "1")
+    try:
+        deps.get_settings.cache_clear()
+    except Exception:
+        pass
 
 
 def test_library_files_route_classifies_queue_and_reconvert(monkeypatch, tmp_path: Path):
@@ -62,6 +73,98 @@ def test_library_files_route_classifies_queue_and_reconvert(monkeypatch, tmp_pat
     assert by_name["c.pdf"]["queue_pos"] == 1
     assert int((payload.get("counts") or {}).get("pending") or 0) == 3
     assert int((payload.get("counts") or {}).get("converted") or 0) == 0
+    assert bool((payload.get("queue") or {}).get("running")) is True
+    assert int((payload.get("queue") or {}).get("queued_count") or 0) == 2
+
+
+def test_convert_status_treats_queued_tasks_as_running(monkeypatch):
+    from api.routers import library as library_router
+
+    snapshots = [
+        {
+            "running": False,
+            "active_tasks": [],
+            "queue": [{"pdf": "queued.pdf", "name": "queued.pdf", "replace": True, "_tid": "q1"}],
+            "current": "",
+            "done": 0,
+            "total": 1,
+        },
+        {
+            "running": False,
+            "active_tasks": [],
+            "queue": [],
+            "current": "",
+            "done": 0,
+            "total": 1,
+        },
+    ]
+
+    def fake_snapshot():
+        if snapshots:
+            return snapshots.pop(0)
+        return {
+            "running": False,
+            "active_tasks": [],
+            "queue": [],
+            "current": "",
+            "done": 0,
+            "total": 1,
+        }
+
+    monkeypatch.setattr(
+        library_router,
+        "_bg_snapshot",
+        fake_snapshot,
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/library/convert/status")
+    assert response.status_code == 200
+    first_data = ""
+    for line in response.iter_lines():
+        if line.startswith("data: "):
+            first_data = line[len("data: "):]
+            break
+
+    payload = json.loads(first_data)
+    assert payload["running"] is True
+    assert payload["done"] is False
+    assert payload["queued_count"] == 1
+
+
+def test_convert_status_ignores_stale_total_without_active_or_queue(monkeypatch):
+    from api.routers import library as library_router
+
+    monkeypatch.setattr(
+        library_router,
+        "_bg_snapshot",
+        lambda: {
+            "running": False,
+            "active_tasks": [],
+            "queue": [],
+            "current": "",
+            "done": 0,
+            "total": 3,
+            "last": "Canceling queued background conversions",
+        },
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/library/convert/status")
+    assert response.status_code == 200
+    first_data = ""
+    for line in response.iter_lines():
+        if line.startswith("data: "):
+            first_data = line[len("data: "):]
+            break
+
+    payload = json.loads(first_data)
+    assert payload["running"] is False
+    assert payload["done"] is True
+    assert payload["queued_count"] == 0
+    assert payload["active_count"] == 0
+    assert payload["total"] == 3
+    assert payload["completed"] == 0
 
 
 def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_path: Path):
@@ -371,7 +474,7 @@ def test_figure_asset_refresh_queues_problem_markdown(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
     monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
     monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": [], "active_tasks": []})
-    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: queued.append(dict(task)))
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: queued.append(dict(task)) or True)
 
     client = TestClient(app)
     response = client.post("/api/library/quality/figure-assets/refresh", json={"limit": 10, "target_dpi": 320})
@@ -480,6 +583,7 @@ def test_library_files_route_exposes_authoritative_index_state(monkeypatch, tmp_
 def test_library_source_quality_route_resolves_pdf_and_md_sources(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
+    monkeypatch.setenv("KB_ENABLE_INTERNAL_API", "1")
     pdf_dir = tmp_path / "pdfs"
     md_dir = tmp_path / "md_output"
     pdf_dir.mkdir(parents=True, exist_ok=True)
@@ -1066,7 +1170,11 @@ def test_library_quality_repair_reindexes_reader_locate_failure_when_markdown_is
     )
     monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
     enqueued: list[dict] = []
-    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+    def fake_enqueue(task):
+        enqueued.append(dict(task or {}))
+        return True
+
+    monkeypatch.setattr(library_router, "_bg_enqueue", fake_enqueue)
     monkeypatch.setattr(
         library_router,
         "_run_library_reindex",
@@ -1175,7 +1283,7 @@ def test_library_quality_repair_ignores_reader_locate_failure_after_newer_exact_
     )
     monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
     enqueued: list[dict] = []
-    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})) or True)
 
     base_event = {
         "source_path": str(md),
@@ -1272,7 +1380,7 @@ def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp
         },
     )
     enqueued: list[dict] = []
-    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})) or True)
 
     client = TestClient(app)
     response = client.post(
@@ -1313,6 +1421,7 @@ def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp
     assert source_item["planned_no_llm"] is True
     assert source_item["repair_attempt"]["event"] == "reconvert_queued"
     assert source_item["repair_attempt"]["status"] == "queued"
+    assert source_item["repair_attempt"]["repair_run_id"] == payload["repair_run_id"]
     assert source_md.read_text(encoding="utf-8").lstrip().startswith("<!-- kb_page: 1 -->")
     assert len(enqueued) == 2
     assert {str(task.get("name") or "") for task in enqueued} == {"direct.pdf", "source.pdf"}
@@ -1366,7 +1475,7 @@ def test_library_quality_repair_route_autofixes_markdown_without_pdf(monkeypatch
     )
     monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
     enqueued: list[dict] = []
-    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})) or True)
 
     client = TestClient(app)
     response = client.post(
@@ -1419,6 +1528,190 @@ def test_library_quality_repair_route_autofixes_markdown_without_pdf(monkeypatch
     assert updated["status"] == "completed"
     assert updated["phase"] == "reindex_complete"
     assert updated["reindexed"] is True
+
+
+def test_library_quality_repair_runs_reads_tail_of_append_only_log(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    repair_runs_path = tmp_path / "repair_runs.jsonl"
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: repair_runs_path)
+
+    repair_runs_path.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "run_id": f"old-run-{idx}",
+                    "status": "completed",
+                    "phase": "repair_complete",
+                    "created_at": idx,
+                    "updated_at": idx,
+                    "requested": 1,
+                    "enqueued": 0,
+                    "repaired": 0,
+                    "failed": 0,
+                    "skipped_busy": 0,
+                    "needs_reindex": False,
+                    "target_names": [f"old-{idx}.pdf"],
+                    "target_sources": [f"old-{idx}.en.md"],
+                    "impact": {},
+                    "detail": "old repair run",
+                },
+                ensure_ascii=False,
+            )
+            for idx in range(1005)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    library_router._append_quality_repair_run(
+        {
+            "run_id": "tail-run",
+            "status": "completed",
+            "phase": "repair_complete",
+            "created_at": 2000,
+            "updated_at": 2000,
+            "requested": 1,
+            "enqueued": 0,
+            "repaired": 1,
+            "failed": 0,
+            "skipped_busy": 0,
+            "needs_reindex": False,
+            "target_names": ["tail.pdf"],
+            "target_sources": ["tail.en.md"],
+            "impact": {"repaired": 1},
+            "detail": "latest repair run",
+        }
+    )
+    for idx in range(250):
+        library_router._append_quality_repair_run(
+            {
+                "run_id": f"newer-run-{idx}",
+                "status": "completed",
+                "phase": "repair_complete",
+                "created_at": 3000 + idx,
+                "updated_at": 3000 + idx,
+                "requested": 1,
+                "enqueued": 0,
+                "repaired": 1,
+                "failed": 0,
+                "skipped_busy": 0,
+                "needs_reindex": False,
+                "target_names": [f"newer-{idx}.pdf"],
+                "target_sources": [f"newer-{idx}.en.md"],
+                "impact": {"repaired": 1},
+                "detail": "newer repair run",
+            }
+        )
+
+    client = TestClient(app)
+    response = client.get("/api/library/quality/repair-runs/tail-run")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["item"]["run_id"] == "tail-run"
+    assert payload["item"]["detail"] == "latest repair run"
+
+
+def test_library_quality_repair_run_update_keeps_terminal_state_against_stale_patch(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+    stale = library_router._append_quality_repair_run(
+        {
+            "run_id": "terminal-run",
+            "status": "queued",
+            "phase": "source_reconversion_queued",
+            "created_at": 100,
+            "updated_at": 100,
+            "requested": 1,
+            "enqueued": 1,
+            "repaired": 0,
+            "failed": 0,
+            "skipped_busy": 0,
+            "needs_reindex": True,
+            "target_names": ["terminal.pdf"],
+            "target_sources": ["terminal.en.md"],
+            "impact": {"enqueued": 1},
+            "detail": "source reconversion queued",
+        }
+    )
+    library_router._append_quality_repair_run(
+        {
+            "run_id": "terminal-run",
+            "status": "completed",
+            "phase": "verification_passed",
+            "created_at": 100,
+            "updated_at": 101,
+            "requested": 1,
+            "enqueued": 1,
+            "repaired": 1,
+            "failed": 0,
+            "skipped_busy": 0,
+            "needs_reindex": True,
+            "reindexed": True,
+            "target_names": ["terminal.pdf"],
+            "target_sources": ["terminal.en.md"],
+            "impact": {"reindexed": True},
+            "verification": {"type": "reader_locate_repair", "status": "passed", "quality_ok": True},
+            "detail": "verification passed",
+        }
+    )
+
+    row = library_router._quality_repair_run_update_record(
+        stale,
+        status="reindex_pending",
+        phase="reindex_pending",
+        detail="stale queued branch resumed",
+    )
+    assert row["status"] == "completed"
+    assert row["phase"] == "verification_passed"
+    assert row["detail"] == "verification passed"
+    assert library_router._quality_repair_run_by_id("terminal-run")["phase"] == "verification_passed"
+
+
+def test_library_quality_repair_run_advance_reports_in_flight_run_without_duplicate_reindex(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+    monkeypatch.setattr(
+        library_router,
+        "_run_library_reindex",
+        lambda: (_ for _ in ()).throw(AssertionError("duplicate reindex should not start")),
+    )
+    library_router._append_quality_repair_run(
+        {
+            "run_id": "in-flight-run",
+            "status": "reindex_pending",
+            "phase": "reindex_pending",
+            "created_at": 100,
+            "updated_at": 100,
+            "requested": 1,
+            "enqueued": 0,
+            "repaired": 1,
+            "failed": 0,
+            "skipped_busy": 0,
+            "needs_reindex": True,
+            "target_names": ["in-flight.pdf"],
+            "target_sources": ["in-flight.en.md"],
+            "impact": {"needs_reindex": True},
+            "detail": "index refresh is pending",
+        }
+    )
+
+    with library_router._QUALITY_REPAIR_RUN_LOCK:
+        library_router._QUALITY_REPAIR_ADVANCE_IN_FLIGHT.add("in-flight-run")
+    try:
+        client = TestClient(app)
+        response = client.post("/api/library/quality/repair-runs/in-flight-run/advance")
+    finally:
+        with library_router._QUALITY_REPAIR_RUN_LOCK:
+            library_router._QUALITY_REPAIR_ADVANCE_IN_FLIGHT.discard("in-flight-run")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["advanced"] is False
+    assert payload["waiting"] is True
+    assert payload["detail"] == "quality repair run advance is already running"
 
 
 def test_library_quality_repair_run_advance_reindexes_pending_run(monkeypatch, tmp_path: Path):
@@ -1521,7 +1814,15 @@ def test_library_quality_repair_run_advance_waits_for_conversion_then_reindexes(
             return {
                 "running": False,
                 "current": "",
-                "queue": [{"pdf": str(pdf_path), "name": "queued.pdf", "replace": True, "_tid": "task-1"}],
+                "queue": [
+                    {
+                        "pdf": str(pdf_path),
+                        "name": "queued.pdf",
+                        "replace": True,
+                        "_tid": "task-1",
+                        "repair_context": {"repair_run_id": "run-queued-advance"},
+                    }
+                ],
             }
         return {"running": False, "current": "", "queue": []}
 
@@ -1614,6 +1915,159 @@ def test_library_quality_repair_run_advance_waits_for_conversion_then_reindexes(
     assert resume_payload["item"]["verification"]["quality_ok"] is True
     assert resume_payload["item"]["verification"]["ready"] == 1
     assert resume_payload["reindex"]["ok"] is True
+
+
+def test_library_quality_repair_run_advance_blocks_reindex_when_queued_source_is_missing(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    pdf_dir = tmp_path / "pdfs"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_dir / "cancelled.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": [], "active_tasks": []})
+    monkeypatch.setattr(
+        library_router,
+        "_run_library_reindex",
+        lambda: (_ for _ in ()).throw(AssertionError("missing source should not trigger reindex")),
+    )
+
+    library_router._append_quality_repair_run({
+        "run_id": "run-cancelled-missing-source",
+        "status": "queued",
+        "phase": "source_reconversion_queued",
+        "requested": 1,
+        "enqueued": 1,
+        "repaired": 0,
+        "failed": 0,
+        "skipped_busy": 0,
+        "needs_reindex": True,
+        "target_names": ["cancelled.pdf"],
+        "target_sources": [str(pdf_path)],
+        "impact": {"requested": 1, "enqueued": 1, "needs_reindex": True},
+        "detail": "Source reconversion queued; index refresh should run after conversion.",
+    })
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/repair-runs/run-cancelled-missing-source/advance")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["advanced"] is True
+    assert payload["waiting"] is False
+    assert payload["reindex"] is None
+    assert payload["item"]["status"] == "warning"
+    assert payload["item"]["phase"] == "source_reconversion_missing"
+    assert payload["item"]["reindexed"] is False
+    verification = payload["item"]["verification"]
+    assert verification["type"] == "conversion_source_quality"
+    assert verification["status"] == "failed"
+    assert verification["target_count"] == 1
+    assert verification["reconvert"] == 1
+    assert verification["items"][0]["status"] == "missing_markdown"
+    assert "missing_markdown" in verification["items"][0]["issue_codes"]
+
+    retry_response = client.post("/api/library/quality/repair-runs/run-cancelled-missing-source/advance")
+    assert retry_response.status_code == 200
+    retry_payload = retry_response.json()
+    assert retry_payload["ok"] is False
+    assert retry_payload["advanced"] is False
+    assert retry_payload["waiting"] is False
+    assert retry_payload["reindex"] is None
+    assert retry_payload["item"]["phase"] == "source_reconversion_missing"
+
+
+def test_library_quality_repair_run_advance_ignores_active_conversion_for_other_run(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    pdf_dir = tmp_path / "pdfs"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_dir / "queued.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    md_path = md_dir / "queued" / "queued.en.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Queued Paper",
+                "",
+                "## Abstract",
+                "",
+                "This converted paper is ready for indexing and cites prior work [1].",
+                "",
+                "## Method",
+                "",
+                "The method section remains indexable after reconversion.",
+                "",
+                "## References",
+                "",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+    monkeypatch.setattr(library_router, "_dangerous_auto_snapshot", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(library_router, "_run_library_reindex", lambda: {"ok": True, "structured_indices": {"rebuilt": 1}})
+    monkeypatch.setattr(
+        library_router,
+        "_bg_snapshot",
+        lambda: {
+            "running": True,
+            "current": "queued.pdf",
+            "cur_task_id": "other-task",
+            "cur_task_replace": True,
+            "active_tasks": [
+                {
+                    "_tid": "other-task",
+                    "pdf": str(pdf_path),
+                    "name": "queued.pdf",
+                    "replace": True,
+                    "repair_context": {"repair_run_id": "other-run"},
+                }
+            ],
+            "queue": [],
+        },
+    )
+
+    library_router._append_quality_repair_run({
+        "run_id": "run-current",
+        "status": "queued",
+        "phase": "source_reconversion_queued",
+        "requested": 1,
+        "enqueued": 1,
+        "repaired": 0,
+        "failed": 0,
+        "skipped_busy": 0,
+        "needs_reindex": True,
+        "target_names": ["queued.pdf"],
+        "target_sources": [str(pdf_path)],
+        "impact": {"requested": 1, "enqueued": 1, "needs_reindex": True},
+        "detail": "Source reconversion queued; index refresh should run after conversion.",
+    })
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/repair-runs/run-current/advance")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["advanced"] is True
+    assert payload["waiting"] is False
+    assert payload["item"]["status"] == "completed"
+    assert payload["item"]["phase"] == "reindex_complete"
+    assert payload["item"]["reindexed"] is True
+    assert payload["reindex"]["ok"] is True
 
 
 def test_library_quality_repair_run_advance_verifies_matching_qa_case(monkeypatch, tmp_path: Path):
@@ -1753,7 +2207,7 @@ def test_library_quality_repair_route_skips_busy_pdf(monkeypatch, tmp_path: Path
         },
     )
     enqueued: list[dict] = []
-    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})) or True)
 
     client = TestClient(app)
     response = client.post("/api/library/quality/repair", json={"pdf_names": ["busy.pdf"]})
@@ -1807,7 +2261,7 @@ def test_convert_pending_enqueues_only_idle_pending(monkeypatch, tmp_path: Path)
     )
 
     enqueued: list[dict] = []
-    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})) or True)
 
     client = TestClient(app)
     response = client.post("/api/library/convert/pending", json={"speed_mode": "ultra_fast"})
@@ -1826,14 +2280,59 @@ def test_delete_library_file_route_deletes_pdf_and_md(monkeypatch, tmp_path: Pat
 
     pdf_dir = tmp_path / "pdfs"
     md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
     pdf_dir.mkdir(parents=True, exist_ok=True)
     md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
 
     pdf_d = pdf_dir / "d.pdf"
     pdf_d.write_bytes(b"%PDF-1.4 test")
     md_d = md_dir / "d" / "d.en.md"
     md_d.parent.mkdir(parents=True, exist_ok=True)
     md_d.write_text("# d\n", encoding="utf-8")
+    doc_id = compute_doc_id(md_d)
+    save_docs_index(
+        db_dir,
+        {
+            doc_id: {
+                "doc_id": doc_id,
+                "path": str(md_d),
+                "num_chunks": 1,
+                "index_status": "ready",
+            },
+            "other-doc": {
+                "doc_id": "other-doc",
+                "path": str(md_dir / "other" / "other.en.md"),
+                "num_chunks": 1,
+                "index_status": "ready",
+            },
+        },
+    )
+    write_doc_chunks(db_dir, doc_id, [{"text": "stale deleted source", "meta": {"source_path": str(md_d)}}])
+    write_doc_chunks(db_dir, "other-doc", [{"text": "keep", "meta": {"source_path": "other"}}])
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doc_count": 2,
+                "docs": {
+                    str(md_d.resolve()).lower(): {
+                        "path": str(md_d),
+                        "name": md_d.name,
+                        "refs": {"1": {"num": 1, "raw": "Deleted ref"}},
+                    },
+                    str((md_dir / "other" / "other.en.md").resolve()).lower(): {
+                        "path": str(md_dir / "other" / "other.en.md"),
+                        "name": "other.en.md",
+                        "refs": {},
+                    },
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
     class FakeStore:
         def __init__(self) -> None:
@@ -1848,6 +2347,11 @@ def test_delete_library_file_route_deletes_pdf_and_md(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
     monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
     monkeypatch.setattr(library_router, "_library_store", lambda: fake_store)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=db_dir),
+    )
     monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": ""})
     monkeypatch.setattr(library_router, "_bg_remove_queued_tasks_for_pdf", lambda path: 2)
 
@@ -1859,9 +2363,208 @@ def test_delete_library_file_route_deletes_pdf_and_md(monkeypatch, tmp_path: Pat
     assert payload["pdf_deleted"] is True
     assert payload["md_deleted"] is True
     assert payload["removed_queued"] == 2
+    assert payload["index_cleanup"]["docs_removed"] == 1
+    assert payload["index_cleanup"]["chunks_removed"] >= 1
+    assert payload["index_cleanup"]["reference_docs_removed"] == 1
     assert not pdf_d.exists()
     assert not md_d.parent.exists()
+    assert doc_id not in load_docs_index(db_dir)
+    assert not doc_chunks_path(db_dir, doc_id).exists()
+    ref_data = json.loads((db_dir / "references_index.json").read_text(encoding="utf-8"))
+    assert ref_data["doc_count"] == 1
+    assert all(str(doc.get("path") or "") != str(md_d) for doc in (ref_data.get("docs") or {}).values())
     assert fake_store.deleted == [str(pdf_d)]
+
+
+def test_delete_library_file_route_keeps_indices_when_md_is_kept(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_d = pdf_dir / "d.pdf"
+    pdf_d.write_bytes(b"%PDF-1.4 test")
+    md_d = md_dir / "d" / "d.en.md"
+    md_d.parent.mkdir(parents=True, exist_ok=True)
+    md_d.write_text("# d\n", encoding="utf-8")
+    doc_id = compute_doc_id(md_d)
+    save_docs_index(
+        db_dir,
+        {
+            doc_id: {
+                "doc_id": doc_id,
+                "path": str(md_d),
+                "num_chunks": 1,
+                "index_status": "ready",
+            }
+        },
+    )
+    write_doc_chunks(db_dir, doc_id, [{"text": "kept source", "meta": {"source_path": str(md_d)}}])
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doc_count": 1,
+                "docs": {
+                    str(md_d.resolve()).lower(): {
+                        "path": str(md_d),
+                        "name": md_d.name,
+                        "refs": {"1": {"num": 1, "raw": "Kept ref"}},
+                    },
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeStore:
+        def delete_by_path(self, path: Path) -> int:
+            return 1
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": ""})
+
+    client = TestClient(app)
+    response = client.post("/api/library/file/delete", json={"pdf_name": "d.pdf", "also_md": False})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["pdf_deleted"] is True
+    assert payload["md_deleted"] is False
+    assert payload["index_cleanup"]["docs_removed"] == 0
+    assert payload["index_cleanup"]["chunks_removed"] == 0
+    assert payload["index_cleanup"]["reference_docs_removed"] == 0
+    assert not pdf_d.exists()
+    assert md_d.exists()
+    assert doc_id in load_docs_index(db_dir)
+    assert doc_chunks_path(db_dir, doc_id).exists()
+    ref_data = json.loads((db_dir / "references_index.json").read_text(encoding="utf-8"))
+    assert ref_data["doc_count"] == 1
+    assert str(md_d.resolve()).lower() in ref_data["docs"]
+
+
+def test_purge_library_index_removes_stale_chunk_source_and_lowercase_ref_key(tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    md_path = md_dir / "CasePaper" / "CasePaper.en.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("# Case paper\n", encoding="utf-8")
+    legacy_doc_id = "legacy-doc"
+    keep_doc_id = "keep-doc"
+    keep_md = md_dir / "keep" / "keep.en.md"
+    keep_md.parent.mkdir(parents=True, exist_ok=True)
+    keep_md.write_text("# keep\n", encoding="utf-8")
+    save_docs_index(
+        db_dir,
+        {
+            legacy_doc_id: {
+                "doc_id": legacy_doc_id,
+                "path": str(md_dir / "stale" / "stale.en.md"),
+                "num_chunks": 1,
+                "index_status": "ready",
+            },
+            keep_doc_id: {
+                "doc_id": keep_doc_id,
+                "path": str(keep_md),
+                "num_chunks": 1,
+                "index_status": "ready",
+            },
+        },
+    )
+    write_doc_chunks(db_dir, legacy_doc_id, [{"text": "deleted source", "meta": {"source_path": str(md_path)}}])
+    write_doc_chunks(db_dir, keep_doc_id, [{"text": "keep source", "meta": {"source_path": str(keep_md)}}])
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doc_count": 2,
+                "docs": {
+                    str(md_path.resolve()).lower(): {
+                        "name": md_path.name,
+                        "refs": {"1": {"num": 1, "raw": "Deleted ref"}},
+                    },
+                    str(keep_md.resolve()).lower(): {
+                        "path": str(keep_md),
+                        "name": keep_md.name,
+                        "refs": {},
+                    },
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = library_router._purge_library_index_for_markdown(db_dir, md_path)
+
+    assert result["errors"] == []
+    assert result["docs_removed"] == 1
+    assert result["chunks_removed"] == 1
+    assert result["reference_docs_removed"] == 1
+    docs_index = load_docs_index(db_dir)
+    assert legacy_doc_id not in docs_index
+    assert keep_doc_id in docs_index
+    assert not doc_chunks_path(db_dir, legacy_doc_id).exists()
+    assert doc_chunks_path(db_dir, keep_doc_id).exists()
+    ref_data = json.loads((db_dir / "references_index.json").read_text(encoding="utf-8"))
+    assert ref_data["doc_count"] == 1
+    assert str(md_path.resolve()).lower() not in ref_data["docs"]
+    assert str(keep_md.resolve()).lower() in ref_data["docs"]
+
+
+def test_purge_library_index_removes_orphan_chunk_without_counting_doc_record(tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    md_path = md_dir / "deleted" / "deleted.en.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("# deleted\n", encoding="utf-8")
+    keep_md = md_dir / "keep" / "keep.en.md"
+    keep_md.parent.mkdir(parents=True, exist_ok=True)
+    keep_md.write_text("# keep\n", encoding="utf-8")
+    orphan_doc_id = "orphan-doc"
+    keep_doc_id = "keep-doc"
+    save_docs_index(
+        db_dir,
+        {
+            keep_doc_id: {
+                "doc_id": keep_doc_id,
+                "path": str(keep_md),
+                "num_chunks": 1,
+                "index_status": "ready",
+            },
+        },
+    )
+    write_doc_chunks(db_dir, orphan_doc_id, [{"text": "orphan deleted", "meta": {"source_path": str(md_path)}}])
+    write_doc_chunks(db_dir, keep_doc_id, [{"text": "keep source", "meta": {"source_path": str(keep_md)}}])
+
+    result = library_router._purge_library_index_for_markdown(db_dir, md_path)
+
+    assert result["errors"] == []
+    assert result["docs_removed"] == 0
+    assert result["chunks_removed"] == 1
+    assert result["reference_docs_removed"] == 0
+    assert keep_doc_id in load_docs_index(db_dir)
+    assert not doc_chunks_path(db_dir, orphan_doc_id).exists()
+    assert doc_chunks_path(db_dir, keep_doc_id).exists()
 
 
 def test_delete_library_file_route_blocks_any_active_task(monkeypatch, tmp_path: Path):
@@ -1942,6 +2645,25 @@ def test_open_library_file_route_opens_dir_without_pdf_name(monkeypatch, tmp_pat
     assert opened == [str(pdf_dir)]
 
 
+def test_open_library_file_route_rejects_missing_configured_dir(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "missing_pdfs"
+    md_dir = tmp_path / "md_output"
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    opened: list[str] = []
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "open_in_explorer", lambda path: opened.append(str(path)))
+
+    client = TestClient(app)
+    response = client.post("/api/library/file/open", json={"pdf_name": "", "target": "pdf_dir"})
+    assert response.status_code == 404
+    assert "pdf directory not found" in response.text
+    assert opened == []
+
+
 def test_open_quality_artifact_route_opens_latest_report(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
@@ -1967,6 +2689,71 @@ def test_open_quality_artifact_route_opens_latest_report(monkeypatch, tmp_path: 
     assert payload["target"] == "report"
     assert payload["path"] == str(report)
     assert opened == [str(report)]
+
+
+def test_open_quality_artifact_route_opens_citation_card_report_when_checks_exist(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    eval_root = tmp_path / "test_results" / "research_qa_eval"
+    run_dir = eval_root / "20260101-120000"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    summary = run_dir / "summary.json"
+    raw = run_dir / "raw_results.jsonl"
+    report = run_dir / "report.md"
+    summary.write_text(json.dumps({"total": 1, "passed": 0, "failed": 1}), encoding="utf-8")
+    raw.write_text(
+        json.dumps(
+            {
+                "id": "case-1",
+                "quality": {
+                    "checks": [
+                        {"name": "citation_card_quality", "ok": False},
+                        {"name": "citation_shelf_quality", "ok": True},
+                    ]
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    report.write_text("# report\n", encoding="utf-8")
+
+    opened: list[str] = []
+    monkeypatch.setattr(library_router, "_RESEARCH_QA_EVAL_ROOT", eval_root)
+    monkeypatch.setattr(library_router, "open_in_explorer", lambda path: opened.append(str(path)))
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/artifact/open", json={"domain": "citation_cards", "target": "report"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["domain"] == "citation_cards"
+    assert payload["target"] == "report"
+    assert payload["path"] == str(report)
+    assert opened == [str(report)]
+
+
+def test_open_quality_artifact_route_rejects_citation_card_report_without_checks(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    eval_root = tmp_path / "test_results" / "research_qa_eval"
+    run_dir = eval_root / "20260101-120000"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text(json.dumps({"total": 1, "passed": 1, "failed": 0}), encoding="utf-8")
+    (run_dir / "raw_results.jsonl").write_text(
+        json.dumps({"id": "case-1", "quality": {"checks": [{"name": "general_answer_quality", "ok": True}]}}) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "report.md").write_text("# report\n", encoding="utf-8")
+
+    opened: list[str] = []
+    monkeypatch.setattr(library_router, "_RESEARCH_QA_EVAL_ROOT", eval_root)
+    monkeypatch.setattr(library_router, "open_in_explorer", lambda path: opened.append(str(path)))
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/artifact/open", json={"domain": "citation_cards", "target": "report"})
+    assert response.status_code == 404
+    assert opened == []
 
 
 def test_quality_overview_includes_research_qa_failure_cases(monkeypatch, tmp_path: Path):
@@ -2411,7 +3198,7 @@ def test_start_convert_route_infers_no_llm_from_mode(monkeypatch, tmp_path: Path
         lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
     )
     monkeypatch.setattr(library_router, "_build_bg_task", fake_build_bg_task)
-    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})) or True)
 
     client = TestClient(app)
     response = client.post("/api/library/convert", json={"pdf_name": "z.pdf", "speed_mode": "no_llm"})
@@ -2419,6 +3206,37 @@ def test_start_convert_route_infers_no_llm_from_mode(monkeypatch, tmp_path: Path
     assert bool(captured.get("no_llm")) is True
     assert bool(captured.get("replace")) is True
     assert len(enqueued) == 1
+    assert response.json()["enqueued"] is True
+
+
+def test_start_convert_route_reports_duplicate_queue_skip(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    (pdf_dir / "z.pdf").write_bytes(b"%PDF-1.4 test")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router, "_build_bg_task", lambda **kwargs: {"_tid": "duplicate-task", "name": "z.pdf"})
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: False)
+
+    client = TestClient(app)
+    response = client.post("/api/library/convert", json={"pdf_name": "z.pdf", "speed_mode": "balanced"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enqueued"] is False
+    assert payload["skipped_busy"] is True
+    assert payload["task_id"] == ""
 
 
 def test_reindex_route_starts_reference_sync_on_success(monkeypatch, tmp_path: Path):
@@ -2480,6 +3298,95 @@ def test_reindex_route_starts_reference_sync_on_success(monkeypatch, tmp_path: P
     assert captured.get("pdf_root") == pdf_dir
     assert float(captured.get("crossref_time_budget_s") or 0.0) == 55.0
     assert int(captured.get("doi_prefetch_workers") or 0) == 8
+
+
+def test_reindex_route_reports_structured_index_exception_as_not_ok(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    pdf_dir = tmp_path / "pdfs"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    ingest_py = tmp_path / "ingest.py"
+    ingest_py.write_text("print('ok')\n", encoding="utf-8")
+
+    class FakeProc:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    refsync_calls: list[dict] = []
+
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_ingest_py_path", lambda: ingest_py)
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")))
+    monkeypatch.setattr(library_router.subprocess, "run", lambda *args, **kwargs: FakeProc())
+    monkeypatch.setattr(library_router, "start_reference_sync", lambda **kwargs: refsync_calls.append(kwargs) or {"started": True})
+    monkeypatch.setattr(
+        library_router,
+        "rebuild_structured_indices_for_root",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("anchor rebuild failed")),
+    )
+
+    client = TestClient(app)
+    response = client.post("/api/library/reindex")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["structured_indices"] is None
+    assert "anchor rebuild failed" in payload["structured_indices_error"]
+    assert payload["refsync"] is None
+    assert refsync_calls == []
+
+
+def test_reindex_route_reports_structured_index_failed_count_as_not_ok(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    pdf_dir = tmp_path / "pdfs"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    ingest_py = tmp_path / "ingest.py"
+    ingest_py.write_text("print('ok')\n", encoding="utf-8")
+
+    class FakeProc:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    refsync_calls: list[dict] = []
+
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_ingest_py_path", lambda: ingest_py)
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")))
+    monkeypatch.setattr(library_router.subprocess, "run", lambda *args, **kwargs: FakeProc())
+    monkeypatch.setattr(library_router, "start_reference_sync", lambda **kwargs: refsync_calls.append(kwargs) or {"started": True})
+    monkeypatch.setattr(
+        library_router,
+        "rebuild_structured_indices_for_root",
+        lambda *args, **kwargs: {
+            "version": 2,
+            "scanned": 2,
+            "rebuilt": 1,
+            "skipped": 0,
+            "failed": 1,
+            "citation_mention_count": 3,
+            "errors": [{"path": str(md_dir / "broken.en.md"), "error": "bad markdown"}],
+        },
+    )
+
+    client = TestClient(app)
+    response = client.post("/api/library/reindex")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["structured_indices"]["failed"] == 1
+    assert "structured index rebuild failed for 1 markdown file" in payload["structured_indices_error"]
+    assert "bad markdown" in payload["structured_indices_error"]
+    assert payload["refsync"] is None
+    assert refsync_calls == []
 
 
 def test_references_sync_route_passes_workers_and_budget(monkeypatch, tmp_path: Path):
@@ -2560,7 +3467,12 @@ def test_apply_rename_suggestions_route_runs_selected(monkeypatch, tmp_path: Pat
 
     def fake_auto_rename_saved_pdf_in_library(*, pdf_path, base_name="", use_llm=True, also_md=True):
         called.append((str(Path(pdf_path).name), str(base_name), bool(use_llm), bool(also_md)))
-        return {"ok": True, "renamed": True, "name": f"{Path(pdf_path).stem}-new.pdf"}
+        return {
+            "ok": True,
+            "renamed": True,
+            "name": f"{Path(pdf_path).stem}-new.pdf",
+            "index_cleanup": {"docs_removed": 1, "chunks_removed": 1, "reference_docs_removed": 1, "errors": []},
+        }
 
     monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
     monkeypatch.setattr(library_router, "auto_rename_saved_pdf_in_library", fake_auto_rename_saved_pdf_in_library)
@@ -2579,6 +3491,9 @@ def test_apply_rename_suggestions_route_runs_selected(monkeypatch, tmp_path: Pat
     payload = response.json()
     assert payload["renamed"] == 2
     assert payload["failed"] == 0
+    assert payload["index_cleanup"]["docs_removed"] == 2
+    assert payload["index_cleanup"]["chunks_removed"] == 2
+    assert payload["index_cleanup"]["reference_docs_removed"] == 2
     assert ("a.pdf", "a-custom", False, True) in called
     assert ("b.pdf", "", False, True) in called
 
@@ -2657,6 +3572,141 @@ def test_auto_rename_saved_pdf_rolls_back_when_md_sync_fails(monkeypatch, tmp_pa
     assert not (pdf_dir / "Nature-2024-New Paper.pdf").exists()
 
 
+def test_auto_rename_saved_pdf_purges_old_markdown_index(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf = pdf_dir / "old.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    old_md = md_dir / "old" / "old.en.md"
+    old_md.parent.mkdir(parents=True, exist_ok=True)
+    old_md.write_text("# old\n", encoding="utf-8")
+    old_doc_id = compute_doc_id(old_md)
+    save_docs_index(
+        db_dir,
+        {
+            old_doc_id: {
+                "doc_id": old_doc_id,
+                "path": str(old_md),
+                "num_chunks": 1,
+                "index_status": "ready",
+            },
+        },
+    )
+    write_doc_chunks(db_dir, old_doc_id, [{"text": "old indexed source", "meta": {"source_path": str(old_md)}}])
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doc_count": 1,
+                "docs": {
+                    str(old_md.resolve()).lower(): {
+                        "path": str(old_md),
+                        "name": old_md.name,
+                        "refs": {"1": {"num": 1, "raw": "Old ref"}},
+                    },
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeStore:
+        def __init__(self):
+            self.upserts = []
+
+        def upsert(self, sha1, path, citation_meta=None):
+            self.upserts.append((sha1, Path(path).name, dict(citation_meta or {})))
+
+    fake_store = FakeStore()
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: fake_store)
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(
+        library_router,
+        "extract_pdf_meta_suggestion",
+        lambda path, settings=None: SimpleNamespace(venue="Nature", year="2024", title="New Paper", crossref_meta={}),
+    )
+
+    result = library_router.auto_rename_saved_pdf_in_library(pdf_path=pdf, use_llm=False, also_md=True)
+
+    new_pdf = pdf_dir / "Nature-2024-New Paper.pdf"
+    new_md = md_dir / "Nature-2024-New Paper" / "Nature-2024-New Paper.en.md"
+    assert result["ok"] is True
+    assert result["renamed"] is True
+    assert result["index_cleanup"]["docs_removed"] == 1
+    assert result["index_cleanup"]["chunks_removed"] >= 1
+    assert result["index_cleanup"]["reference_docs_removed"] == 1
+    assert not pdf.exists()
+    assert new_pdf.exists()
+    assert not old_md.parent.exists()
+    assert new_md.exists()
+    assert old_doc_id not in load_docs_index(db_dir)
+    assert not doc_chunks_path(db_dir, old_doc_id).exists()
+    ref_data = json.loads((db_dir / "references_index.json").read_text(encoding="utf-8"))
+    assert ref_data["doc_count"] == 0
+    assert fake_store.upserts[-1][1] == new_pdf.name
+
+
+def test_auto_rename_saved_pdf_avoids_existing_markdown_target_folder(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf = pdf_dir / "old.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    old_md = md_dir / "old" / "old.en.md"
+    old_md.parent.mkdir(parents=True, exist_ok=True)
+    old_md.write_text("# old source\n", encoding="utf-8")
+    existing_main = md_dir / "Nature-2024-New Paper" / "Nature-2024-New Paper.en.md"
+    existing_main.parent.mkdir(parents=True, exist_ok=True)
+    existing_main.write_text("# existing source\n", encoding="utf-8")
+
+    class FakeStore:
+        def __init__(self):
+            self.upserts = []
+
+        def upsert(self, sha1, path, citation_meta=None):
+            self.upserts.append((sha1, Path(path).name, dict(citation_meta or {})))
+
+    fake_store = FakeStore()
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: fake_store)
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(
+        library_router,
+        "extract_pdf_meta_suggestion",
+        lambda path, settings=None: SimpleNamespace(venue="Nature", year="2024", title="New Paper", crossref_meta={}),
+    )
+
+    result = library_router.auto_rename_saved_pdf_in_library(pdf_path=pdf, use_llm=False, also_md=True)
+
+    new_pdf = pdf_dir / "Nature-2024-New Paper-2.pdf"
+    new_md = md_dir / "Nature-2024-New Paper-2" / "Nature-2024-New Paper-2.en.md"
+    assert result["ok"] is True
+    assert result["renamed"] is True
+    assert result["name"] == new_pdf.name
+    assert new_pdf.exists()
+    assert new_md.read_text(encoding="utf-8") == "# old source\n"
+    assert existing_main.read_text(encoding="utf-8") == "# existing source\n"
+    assert fake_store.upserts[-1][1] == new_pdf.name
+
+
 def test_sync_md_after_pdf_rename_merges_existing_target_folder(tmp_path: Path):
     from api.routers import library as library_router
 
@@ -2666,6 +3716,10 @@ def test_sync_md_after_pdf_rename_merges_existing_target_folder(tmp_path: Path):
     old_folder.mkdir(parents=True, exist_ok=True)
     new_folder.mkdir(parents=True, exist_ok=True)
     (old_folder / "old.en.md").write_text("# old\n", encoding="utf-8")
+    (old_folder / "assets").mkdir(parents=True, exist_ok=True)
+    (old_folder / "assets" / "old.png").write_bytes(b"old asset")
+    (new_folder / "assets").mkdir(parents=True, exist_ok=True)
+    (new_folder / "assets" / "existing.png").write_bytes(b"existing asset")
     (new_folder / "assets_manifest.md").write_text("asset\n", encoding="utf-8")
 
     result = library_router._sync_md_after_pdf_rename_basic(
@@ -2677,7 +3731,155 @@ def test_sync_md_after_pdf_rename_merges_existing_target_folder(tmp_path: Path):
     assert result["ok"] is True
     assert not old_folder.exists()
     assert (new_folder / "new.en.md").read_text(encoding="utf-8") == "# old\n"
+    assert (new_folder / "assets" / "old.png").read_bytes() == b"old asset"
+    assert (new_folder / "assets" / "existing.png").read_bytes() == b"existing asset"
     assert (new_folder / "assets_manifest.md").exists()
+
+
+def test_sync_md_after_pdf_rename_refuses_existing_target_main(tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    old_folder = md_dir / "old"
+    new_folder = md_dir / "new"
+    old_folder.mkdir(parents=True, exist_ok=True)
+    new_folder.mkdir(parents=True, exist_ok=True)
+    old_main = old_folder / "old.en.md"
+    new_main = new_folder / "new.en.md"
+    old_main.write_text("# old\n", encoding="utf-8")
+    new_main.write_text("# existing\n", encoding="utf-8")
+
+    result = library_router._sync_md_after_pdf_rename_basic(
+        md_root=md_dir,
+        src_pdf=tmp_path / "old.pdf",
+        dest_pdf=tmp_path / "new.pdf",
+    )
+
+    assert result["ok"] is False
+    assert "target main already exists" in result["msg"]
+    assert old_main.exists()
+    assert new_main.read_text(encoding="utf-8") == "# existing\n"
+
+
+def test_sync_md_after_pdf_rename_refuses_asset_conflicts(tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    old_folder = md_dir / "old"
+    new_folder = md_dir / "new"
+    old_asset = old_folder / "assets" / "figure.png"
+    new_asset = new_folder / "assets" / "figure.png"
+    old_folder.mkdir(parents=True, exist_ok=True)
+    new_folder.mkdir(parents=True, exist_ok=True)
+    old_asset.parent.mkdir(parents=True, exist_ok=True)
+    new_asset.parent.mkdir(parents=True, exist_ok=True)
+    (old_folder / "old.en.md").write_text("# old\n", encoding="utf-8")
+    old_asset.write_bytes(b"old-figure")
+    new_asset.write_bytes(b"existing-figure")
+
+    result = library_router._sync_md_after_pdf_rename_basic(
+        md_root=md_dir,
+        src_pdf=tmp_path / "old.pdf",
+        dest_pdf=tmp_path / "new.pdf",
+    )
+
+    assert result["ok"] is False
+    assert "overwrite or copy unsafe paths" in result["msg"]
+    assert "assets/figure.png" in result["msg"]
+    assert (old_folder / "old.en.md").exists()
+    assert old_asset.read_bytes() == b"old-figure"
+    assert new_asset.read_bytes() == b"existing-figure"
+
+
+def test_sync_md_after_pdf_rename_refuses_nested_symlink_merge(tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    old_folder = md_dir / "old"
+    new_folder = md_dir / "new"
+    outside = tmp_path / "outside"
+    old_folder.mkdir(parents=True, exist_ok=True)
+    new_folder.mkdir(parents=True, exist_ok=True)
+    outside.mkdir(parents=True, exist_ok=True)
+    (old_folder / "old.en.md").write_text("# old\n", encoding="utf-8")
+    (outside / "secret.txt").write_text("outside secret\n", encoding="utf-8")
+    link = old_folder / "assets" / "linked-secret.txt"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(outside / "secret.txt")
+    except OSError as exc:
+        pytest.skip(f"symlinks are unavailable in this environment: {exc}")
+
+    result = library_router._sync_md_after_pdf_rename_basic(
+        md_root=md_dir,
+        src_pdf=tmp_path / "old.pdf",
+        dest_pdf=tmp_path / "new.pdf",
+    )
+
+    assert result["ok"] is False
+    assert "overwrite or copy unsafe paths" in result["msg"]
+    assert "assets/linked-secret.txt" in result["msg"]
+    assert (outside / "secret.txt").read_text(encoding="utf-8") == "outside secret\n"
+    assert not (new_folder / "assets" / "linked-secret.txt").exists()
+
+
+def test_sync_md_after_pdf_rename_refuses_nested_symlink_move(tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    old_folder = md_dir / "old"
+    new_folder = md_dir / "new"
+    outside = tmp_path / "outside"
+    old_folder.mkdir(parents=True, exist_ok=True)
+    outside.mkdir(parents=True, exist_ok=True)
+    (old_folder / "old.en.md").write_text("# old\n", encoding="utf-8")
+    (outside / "secret.txt").write_text("outside secret\n", encoding="utf-8")
+    link = old_folder / "assets" / "linked-secret.txt"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(outside / "secret.txt")
+    except OSError as exc:
+        pytest.skip(f"symlinks are unavailable in this environment: {exc}")
+
+    result = library_router._sync_md_after_pdf_rename_basic(
+        md_root=md_dir,
+        src_pdf=tmp_path / "old.pdf",
+        dest_pdf=tmp_path / "new.pdf",
+    )
+
+    assert result["ok"] is False
+    assert "move would preserve unsafe paths" in result["msg"]
+    assert "assets/linked-secret.txt" in result["msg"]
+    assert old_folder.exists()
+    assert not new_folder.exists()
+    assert (outside / "secret.txt").read_text(encoding="utf-8") == "outside secret\n"
+
+
+def test_sync_md_after_pdf_rename_refuses_move_conflicts_before_rename(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    old_folder = md_dir / "old"
+    new_folder = md_dir / "new"
+    old_folder.mkdir(parents=True, exist_ok=True)
+    (old_folder / "old.en.md").write_text("# old\n", encoding="utf-8")
+    monkeypatch.setattr(
+        library_router,
+        "_dir_merge_conflicts",
+        lambda src_dir, dst_dir, limit=20: ["assets/linked-secret.txt"],
+    )
+
+    result = library_router._sync_md_after_pdf_rename_basic(
+        md_root=md_dir,
+        src_pdf=tmp_path / "old.pdf",
+        dest_pdf=tmp_path / "new.pdf",
+    )
+
+    assert result["ok"] is False
+    assert "move would preserve unsafe paths" in result["msg"]
+    assert "assets/linked-secret.txt" in result["msg"]
+    assert old_folder.exists()
+    assert not new_folder.exists()
 
 
 def test_rename_destination_preserves_dots_inside_base_name(tmp_path: Path):
@@ -2698,6 +3900,70 @@ def test_rename_destination_preserves_dots_inside_base_name(tmp_path: Path):
     )
 
     assert dest.name == "Long...Title.v2.pdf"
+
+
+def test_rename_destination_avoids_existing_markdown_folder(tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    (md_dir / "Paper").mkdir(parents=True, exist_ok=True)
+    current_pdf = pdf_dir / "old.pdf"
+    current_pdf.write_bytes(b"%PDF-1.4 test")
+
+    dest = library_router._suggest_dest_for_base(
+        pdf_dir=pdf_dir,
+        current_pdf=current_pdf,
+        base_name="Paper",
+        md_dir=md_dir,
+    )
+
+    assert dest.name == "Paper-2.pdf"
+
+
+def test_rename_destination_does_not_return_existing_path_after_suffix_limit(tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    current_pdf = pdf_dir / "current.pdf"
+    current_pdf.write_bytes(b"%PDF-1.4 current")
+    for name in ("Paper.pdf", "Paper-2.pdf", "Paper-3.pdf"):
+        (pdf_dir / name).write_bytes(b"%PDF-1.4 taken")
+
+    dest = library_router._suggest_dest_for_base(
+        pdf_dir=pdf_dir,
+        current_pdf=current_pdf,
+        base_name="Paper",
+        md_dir=md_dir,
+        max_suffix=3,
+    )
+
+    assert dest.name not in {"Paper.pdf", "Paper-2.pdf", "Paper-3.pdf"}
+    assert not dest.exists()
+
+
+def test_upload_temp_paths_are_unique_and_filename_safe(tmp_path: Path):
+    from kb.file_ops import _write_tmp_upload
+
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+
+    first = _write_tmp_upload(pdf_dir, "../bad:name?.pdf", b"%PDF-1.4 a")
+    second = _write_tmp_upload(pdf_dir, "../bad:name?.pdf", b"%PDF-1.4 b")
+
+    assert first.parent == pdf_dir
+    assert second.parent == pdf_dir
+    assert first != second
+    assert first.name.startswith("__upload__")
+    assert ".." not in first.name
+    assert ":" not in first.name
+    assert "?" not in first.name
+    assert first.exists()
+    assert second.exists()
 
 
 def test_upload_inspect_route_returns_suggestion(monkeypatch, tmp_path: Path):
@@ -2763,6 +4029,28 @@ def test_upload_inspect_route_rejects_oversized_pdf(monkeypatch, tmp_path: Path)
     assert response.status_code == 413
 
 
+def test_upload_inspect_route_rejects_embedded_pdf_marker(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/upload/inspect",
+        data={"use_llm": "false"},
+        files={"file": ("draft.pdf", b"not really a pdf, just mentions %PDF-1.4", "application/pdf")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid PDF file"
+
+
 def test_upload_commit_route_can_enqueue_convert(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
@@ -2780,7 +4068,7 @@ def test_upload_commit_route_can_enqueue_convert(monkeypatch, tmp_path: Path):
         "get_settings",
         lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
     )
-    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})) or True)
 
     client = TestClient(app)
     response = client.post(
@@ -2841,6 +4129,48 @@ def test_save_pdf_to_library_respects_explicit_base_name_even_with_llm_title(mon
     assert payload["name"] == "custom-upload-name.pdf"
     assert (pdf_dir / "custom-upload-name.pdf").exists()
     assert fake_store.saved
+
+
+def test_save_pdf_to_library_allow_duplicate_does_not_move_existing_sha1_record(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    store = LibraryStore(tmp_path / "library.db")
+    data = b"%PDF-1.4 same content"
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "extract_pdf_meta_suggestion",
+        lambda *args, **kwargs: SimpleNamespace(title="", venue="", year="", crossref_meta=None),
+    )
+
+    first = library_router.save_pdf_to_library(file_name="draft.pdf", data=data, base_name="first-copy")
+    second = library_router.save_pdf_to_library(
+        file_name="draft.pdf",
+        data=data,
+        base_name="second-copy",
+        allow_duplicate=True,
+    )
+    record = store.get_by_sha1(str(first["sha1"]))
+    ensured = store.ensure_record_for_path(second["path"])
+
+    assert first["duplicate"] is False
+    assert second["duplicate"] is False
+    assert Path(second["path"]).exists()
+    assert Path(str(record["path"])).name == "first-copy.pdf"
+    assert Path(str(ensured["path"])).name == "first-copy.pdf"
+    assert store.get_by_path(Path(second["path"])) is None
 
 
 def test_library_meta_update_route_persists_user_meta(monkeypatch, tmp_path: Path):

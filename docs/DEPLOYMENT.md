@@ -38,9 +38,11 @@ notepad .env
 Required production settings:
 
 - `KB_ENV=production`
-- `KB_ACCESS_TOKEN` or `KB_ACCESS_TOKEN_SHA256`
-- `KB_REQUIRE_AUTH=1`
+- `KB_PRIVATE_INSTANCE_AUTH=0`, `KB_ENABLE_AUTH_GATE=0`, `KB_REQUIRE_AUTH=0`, and `KB_ALLOW_LOCAL_AUTH_GATE=0` for public user-facing deployments; use `KB_PRIVATE_INSTANCE_AUTH=1`, `KB_ENABLE_AUTH_GATE=1`, and `KB_REQUIRE_AUTH=1` plus `KB_ACCESS_TOKEN` or `KB_ACCESS_TOKEN_SHA256` only for private/internal production instances
+- `KB_ENABLE_INTERNAL_API=0` for public user-facing deployments. Maintenance, diagnostics, backup/restore, and quality-collector inspection APIs stay server-side hidden unless the instance is private/authenticated or a local developer explicitly enables them.
 - `KB_API_ALLOW_ORIGINS` with explicit origins, not `*`
+- `KB_API_JSON_MAX_BODY_BYTES=1048576` for ordinary JSON API requests; upload endpoints keep their route-specific file limits
+- `KB_USER_ISSUES_LOCAL_RATE_LIMIT_PER_MIN=180` and `KB_USER_ISSUES_INGEST_RATE_LIMIT_PER_MIN=600` to keep quality-data collection from being spammed if an instance is exposed
 - `KB_STARTUP_PREFLIGHT=1`
 - `KB_DB_DIR`, `KB_CHAT_DB`, `KB_LIBRARY_DB`
 - `KB_BACKUP_DIR`, `KB_DIAGNOSTICS_DIR`
@@ -50,7 +52,9 @@ Required production settings:
 - At least one text model key: `DEEPSEEK_API_KEY`, `QWEN_API_KEY`, or `OPENAI_API_KEY`
 - A dedicated vision key, usually `QWEN_API_KEY`, for image/table/figure-heavy workflows
 
-For local HTTP testing, keep `KB_AUTH_COOKIE_SECURE=0`. Behind HTTPS, set `KB_AUTH_COOKIE_SECURE=1`.
+Ordinary users should not need an access token to open the app. API access protection is a developer-only opt-in: leave `KB_PRIVATE_INSTANCE_AUTH=0`, `KB_ENABLE_AUTH_GATE=0`, `KB_REQUIRE_AUTH=0`, and `KB_ALLOW_LOCAL_AUTH_GATE=0` for public deployments. Local `development` mode ignores the auth gate unless the private-instance marker and `KB_ALLOW_LOCAL_AUTH_GATE=1` are also set, so a cloned project is not locked by stray auth variables. Set `KB_PRIVATE_INSTANCE_AUTH=1`, `KB_ENABLE_AUTH_GATE=1`, and `KB_REQUIRE_AUTH=1` only when the whole production instance is meant to be private. For local HTTP testing of the private gate, additionally set `KB_ALLOW_LOCAL_AUTH_GATE=1` and keep `KB_AUTH_COOKIE_SECURE=0`. Behind HTTPS, set `KB_AUTH_COOKIE_SECURE=1`.
+
+Internal maintenance APIs are separate from the public app path. In production, use them through a private/authenticated instance (`KB_PRIVATE_INSTANCE_AUTH=1`, `KB_ENABLE_AUTH_GATE=1`, and `KB_REQUIRE_AUTH=1`) and pass the access token. For local development only, you can set `KB_ENABLE_INTERNAL_API=1` while `KB_ENV` is not production.
 
 Set `KB_STARTUP_STRICT=1` in deployment scripts when startup should stop immediately on blocking readiness errors.
 
@@ -59,9 +63,10 @@ Use GitHub Releases as the stable update source. Set `KB_APP_VERSION` to the shi
 Optional remote quality telemetry:
 
 - On your collector deployment, set `KB_USER_ISSUES_INGEST_TOKEN=<secret>` and expose `POST /api/user-issues/ingest`.
-- On user deployments that should send quality data back, set `KB_USER_ISSUES_REMOTE_ENABLED=1`, `KB_USER_ISSUES_REMOTE_URL=https://your-host/api/user-issues/ingest`, and `KB_USER_ISSUES_REMOTE_TOKEN=<secret>`.
+- On user deployments that should send quality data back, set `KB_USER_ISSUES_REMOTE_ENABLED=1`, `KB_USER_ISSUES_REMOTE_URL=https://your-host/api/user-issues/ingest`, and `KB_USER_ISSUES_REMOTE_TOKEN=<secret>`. The collector URL must be a full HTTPS URL without embedded `user:pass@host` credentials for real users; localhost HTTP is only accepted for local testing when `KB_USER_ISSUES_ALLOW_LOCAL_REMOTE=1`. Sender authentication is required by default; only private test collectors should set `KB_USER_ISSUES_ALLOW_UNAUTHENTICATED_REMOTE=1`.
 - Set `KB_USER_ISSUES_CLIENT_ID=<stable-id>` only when you need per-install aggregation; it is hashed before upload.
-- The reporter keeps the local `user_issues.sqlite3` behavior, sends in the background, and redacts local paths, email addresses, tokens, and sensitive path/key fields before upload.
+- Keep `KB_USER_ISSUES_INGEST_RATE_LIMIT_PER_MIN` enabled on the collector. It limits bad token attempts and noisy clients before anything is written to `user_issues.sqlite3`.
+- The reporter keeps the local `user_issues.sqlite3` behavior, sends in the background, caps each issue payload with `KB_USER_ISSUES_MAX_BODY_BYTES`, and redacts local paths, email addresses, tokens, and sensitive path/key fields before upload.
 
 ## 3. Start
 
@@ -79,7 +84,7 @@ Or run the ASGI app directly:
 python -m uvicorn server:app --host 127.0.0.1 --port 8000
 ```
 
-Visit `http://127.0.0.1:8000/`, enter the access token, then open Settings -> Connection -> Release readiness.
+Visit `http://127.0.0.1:8000/`, then open Settings -> Connection -> Release readiness. Public user-facing deployments should not show an access-token gate.
 
 ## 4. Readiness Checks
 
@@ -89,17 +94,19 @@ Public liveness:
 Invoke-RestMethod http://127.0.0.1:8000/api/health
 ```
 
-Protected production readiness:
+Production readiness:
 
 ```powershell
-python tools\check_production_readiness.py --base-url http://127.0.0.1:8000 --token $env:KB_ACCESS_TOKEN
+python tools\check_production_readiness.py --base-url http://127.0.0.1:8000
 ```
 
 Use JSON output when wiring this into deployment scripts:
 
 ```powershell
-python tools\check_production_readiness.py --json --base-url http://127.0.0.1:8000 --token $env:KB_ACCESS_TOKEN
+python tools\check_production_readiness.py --json --base-url http://127.0.0.1:8000
 ```
+
+When a private production instance has `KB_PRIVATE_INSTANCE_AUTH=1`, `KB_ENABLE_AUTH_GATE=1`, and `KB_REQUIRE_AUTH=1`, add `--token $env:KB_ACCESS_TOKEN` to the readiness command.
 
 Exit codes:
 
@@ -109,20 +116,23 @@ Exit codes:
 
 ## 5. Smoke Test
 
-Before announcing a release:
+Before announcing a public user-facing release:
 
-1. Open the app and confirm the login gate appears when auth is enabled.
-2. Log in with `KB_ACCESS_TOKEN`.
-3. Open Settings -> Version & updates and confirm update checks behave as expected.
-4. Open Settings -> Connection and confirm release readiness is `OK`.
-5. Upload or select a small known PDF.
-6. Run conversion and update the knowledge base.
-7. Ask one short question and verify `src` citation chips persist after refresh.
-8. Open Reader from the answer and verify references, figures, tables, and basket actions still work.
+1. Open the app and confirm no access-token gate appears.
+2. Open Settings -> Version & updates and confirm update checks behave as expected.
+3. Open Settings -> Connection and confirm release readiness is `OK`.
+4. Upload or select a small known PDF.
+5. Run conversion and update the knowledge base.
+6. Ask one short question and verify `src` citation chips persist after refresh.
+7. Open Reader from the answer and verify references, figures, tables, and basket actions still work.
+8. For private/internal production deployments only, set `KB_PRIVATE_INSTANCE_AUTH=1`, `KB_ENABLE_AUTH_GATE=1`, and `KB_REQUIRE_AUTH=1`, build the frontend with `VITE_PRIVATE_INSTANCE_AUTH=1` and `VITE_ENABLE_AUTH_GATE=1`, restart, and confirm the login gate accepts `KB_ACCESS_TOKEN`.
 
 ## 6. Backup and Restore
 
-In the UI, open Settings -> Maintenance to create a manual backup or export a diagnostic package.
+Backup, restore, diagnostics, and quality-collector inspection are internal maintenance operations. Public user-facing deployments keep these APIs hidden. Use one of these modes before running the commands below:
+
+- Private/internal production: set `KB_PRIVATE_INSTANCE_AUTH=1`, `KB_ENABLE_AUTH_GATE=1`, and `KB_REQUIRE_AUTH=1`, configure `KB_ACCESS_TOKEN`, restart, and pass `X-KB-Access-Token`.
+- Local developer diagnostics: set `KB_ENABLE_INTERNAL_API=1` while `KB_ENV` is not production, then restart.
 
 Manual backup API:
 
@@ -189,14 +199,18 @@ python server.py
 After restart, run:
 
 ```powershell
-python tools\check_production_readiness.py --base-url http://127.0.0.1:8000 --token $env:KB_ACCESS_TOKEN
+python tools\check_production_readiness.py --base-url http://127.0.0.1:8000
 ```
+
+If API access protection is enabled in a private production instance with all auth-gate switches, append `--token $env:KB_ACCESS_TOKEN`.
 
 ## 8. Troubleshooting
 
-`401 Unauthorized` on `/api/readiness`: pass `--token`, set `KB_ACCESS_TOKEN`, or log in through the UI.
+`401 Unauthorized` on `/api/readiness`: the production instance has `KB_PRIVATE_INSTANCE_AUTH=1`, `KB_ENABLE_AUTH_GATE=1`, and `KB_REQUIRE_AUTH=1`; pass `--token`, set `KB_ACCESS_TOKEN`, or log in through the private UI build.
 
-`api_auth` blocking readiness: production mode requires `KB_ACCESS_TOKEN` or `KB_ACCESS_TOKEN_SHA256`.
+Unexpected login gate for users: set `KB_PRIVATE_INSTANCE_AUTH=0`, `KB_ENABLE_AUTH_GATE=0`, `KB_REQUIRE_AUTH=0`, `KB_ALLOW_LOCAL_AUTH_GATE=0`, `VITE_PRIVATE_INSTANCE_AUTH=0`, and `VITE_ENABLE_AUTH_GATE=0`, rebuild/restart, and keep `KB_ACCESS_TOKEN` only for private/internal instances. In local development, restart with `.\run_new.ps1 -StopExisting`; it clears the auth gate for the process by default.
+
+`404 Not Found` on `/api/maintenance/*` or `/api/user-issues/remote/status`: those internal maintenance APIs are hidden. Use a private/authenticated instance, or set `KB_ENABLE_INTERNAL_API=1` for local non-production diagnostics.
 
 `frontend_build` blocking readiness: run `cd web; npm run build; cd ..`.
 

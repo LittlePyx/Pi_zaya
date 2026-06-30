@@ -9,19 +9,25 @@ import {
   type MessagePage,
   type Project,
   type RefsResponseMeta,
+  type SidebarSnapshot,
 } from '../api/chat'
-import { api, authFetch } from '../api/client'
+import { api, authFetch, responseError } from '../api/client'
 import { S as zh } from '../i18n/zh'
 import { S as en } from '../i18n/en'
 import { useSettingsStore } from './settingsStore'
+import { internalDebugEnabled } from '../utils/internalDebug'
+import { basenameFromSourcePath } from '../utils/sourcePath'
 
 let refsPollToken = 0
 let refsPollTimer: number | null = null
+let refsPollController: AbortController | null = null
 let messagePostprocessPollToken = 0
 let messagePostprocessPollTimer: number | null = null
 let uploadPollToken = 0
 let uploadPollTimer: number | null = null
 let conversationSwitchToken = 0
+const NEW_CONVERSATION_GENERATION_LOCK = '__new_conversation_generation__'
+const generationStartLocks = new Set<string>()
 type SwitchPerfStatus = 'same_conv' | 'success' | 'stale' | 'error'
 interface SwitchPerfEvent {
   ts: number
@@ -112,6 +118,9 @@ const CONVERSATION_OPEN_PHASE_LIMIT = 480
 const REFS_PERF_LIMIT = 720
 const SIDEBAR_CONVERSATION_LIMIT = 80
 const MESSAGE_PAGE_SIZE = 24
+const GENERATION_START_FAILED_CODE = 'generation_start_failed'
+const GENERATION_START_FAILED_MESSAGE_EN = 'Generation could not be started. Please retry.'
+const GENERATION_START_FAILED_MESSAGE_ZH = '回答任务未能启动，请稍后重试。'
 
 function conversationDraftTimestamp() {
   const d = new Date()
@@ -125,6 +134,145 @@ function conversationDraftTimestamp() {
 function buildDefaultConversationTitle(locale: string) {
   const prefix = locale.toLowerCase().startsWith('zh') ? '新会话' : 'New conversation'
   return `${prefix} · ${conversationDraftTimestamp()}`
+}
+
+function localizedGenerationStartFailedMessage(locale: string) {
+  return locale.toLowerCase().startsWith('zh')
+    ? zh.chat_generation_start_failed
+    : en.chat_generation_start_failed
+}
+
+function generationStartFailureDisplayMessage(error: string, locale: string) {
+  const raw = String(error || '').trim()
+  if (
+    raw === GENERATION_START_FAILED_CODE
+    || raw === GENERATION_START_FAILED_MESSAGE_EN
+    || raw === GENERATION_START_FAILED_MESSAGE_ZH
+  ) {
+    return localizedGenerationStartFailedMessage(locale)
+  }
+  return raw || localizedGenerationStartFailedMessage(locale)
+}
+
+function localizedGenerationStreamFailedMessage(locale: string) {
+  return locale.toLowerCase().startsWith('zh')
+    ? zh.chat_generation_stream_failed
+    : en.chat_generation_stream_failed
+}
+
+function localizedGenerationStreamIncompleteMessage(locale: string) {
+  return locale.toLowerCase().startsWith('zh')
+    ? zh.chat_generation_stream_incomplete
+    : en.chat_generation_stream_incomplete
+}
+
+function localizedGenerationRefreshFailedMessage(locale: string) {
+  return locale.toLowerCase().startsWith('zh')
+    ? zh.chat_generation_refresh_failed
+    : en.chat_generation_refresh_failed
+}
+
+function generationStreamFailureDisplayMessage(error: unknown, locale: string) {
+  const raw = error instanceof Error ? error.message.trim() : String(error || '').trim()
+  if (!raw) return localizedGenerationStreamFailedMessage(locale)
+  if (/generation stream did not return a readable body/i.test(raw)) {
+    return localizedGenerationStreamFailedMessage(locale)
+  }
+  if (/generation stream ended before completion/i.test(raw)) {
+    return localizedGenerationStreamIncompleteMessage(locale)
+  }
+  if (/^(?:408|429|5\d\d)\b/.test(raw)) {
+    return localizedGenerationStreamFailedMessage(locale)
+  }
+  if (/^generation stream failed\.?$/i.test(raw)) {
+    return localizedGenerationStreamFailedMessage(locale)
+  }
+  return raw
+}
+
+function generationRefreshFailureDisplayMessage(locale: string) {
+  return localizedGenerationRefreshFailedMessage(locale)
+}
+
+function isCanonicalGenerationStartFailureText(text: string) {
+  const raw = String(text || '').trim()
+  return (
+    raw === GENERATION_START_FAILED_CODE
+    || raw === GENERATION_START_FAILED_MESSAGE_EN
+    || raw === GENERATION_START_FAILED_MESSAGE_ZH
+  )
+}
+
+function localizeGenerationStartFailurePage(
+  page: MessagePage,
+  assistantMsgId: number,
+  message: string,
+): MessagePage {
+  const targetId = Number(assistantMsgId || 0)
+  if (!targetId || !Array.isArray(page?.messages)) return page
+  let changed = false
+  const messages = page.messages.map((item) => {
+    if (Number(item.id || 0) !== targetId || !isCanonicalGenerationStartFailureText(item.content)) return item
+    changed = true
+    return { ...item, content: message }
+  })
+  return changed ? { ...page, messages } : page
+}
+
+function generationFailureMessageContent(generation: GenerationState | null | undefined, failureMessage: string) {
+  const partial = String(generation?.partial || '').trim()
+  const message = String(failureMessage || '').trim()
+  if (!partial) return message
+  if (!message) return partial
+  if (partial.includes(message)) return partial
+  return `${partial}\n\n${message}`
+}
+
+function upsertGenerationFailureMessage(
+  messages: Message[],
+  generation: GenerationState | null | undefined,
+  failureMessage: string,
+): Message[] {
+  const content = generationFailureMessageContent(generation, failureMessage)
+  if (!content) return messages
+  const assistantMsgId = Number(generation?.assistantMsgId || 0)
+  const fallbackId = Number.isFinite(assistantMsgId) && assistantMsgId > 0
+    ? assistantMsgId
+    : Math.floor(Date.now())
+  const createdAt = Date.now() / 1000
+  const patchMessage = (message: Message): Message => ({
+    ...message,
+    role: 'assistant',
+    content,
+    created_at: Number.isFinite(Number(message.created_at)) ? message.created_at : createdAt,
+    meta: {
+      ...(message.meta || {}),
+      ...(generation?.traceId ? { trace_id: generation.traceId } : {}),
+      generation_status: 'failed',
+    },
+  })
+  if (assistantMsgId > 0) {
+    let found = false
+    const next = messages.map((message) => {
+      if (Number(message.id || 0) !== assistantMsgId) return message
+      found = true
+      return patchMessage(message)
+    })
+    if (found) return next
+  }
+  return [
+    ...messages,
+    {
+      id: fallbackId,
+      role: 'assistant',
+      content,
+      created_at: createdAt,
+      meta: {
+        ...(generation?.traceId ? { trace_id: generation.traceId } : {}),
+        generation_status: 'failed',
+      },
+    },
+  ]
 }
 
 function patchConversationTitle(list: Conversation[], convId: string, title: string): Conversation[] {
@@ -152,6 +300,79 @@ function patchProjectConversationTitle(
     if (patched !== conversations) changed = true
   }
   return changed ? next : grouped
+}
+
+function rehomeDeletedProjectLocally(
+  state: ChatState,
+  deletedProjectId: string,
+): Partial<ChatState> {
+  const projectId = String(deletedProjectId || '').trim()
+  if (!projectId) return {}
+  const nextProjects = state.projects.filter((project) => project.id !== projectId)
+  const nextProjectConversations: Record<string, Conversation[]> = {}
+  const rehomed: Conversation[] = []
+  for (const [pid, conversations] of Object.entries(state.projectConversations || {})) {
+    if (pid === projectId) {
+      rehomed.push(...(conversations || []).map((conversation) => ({ ...conversation, project_id: null })))
+      continue
+    }
+    nextProjectConversations[pid] = conversations || []
+  }
+  const nextRootConversations = [
+    ...state.rootConversations.map((conversation) => (
+      conversation.project_id === projectId ? { ...conversation, project_id: null } : conversation
+    )),
+    ...rehomed,
+  ]
+  const activeConversation = state.activeConversation?.project_id === projectId
+    ? { ...state.activeConversation, project_id: null }
+    : state.activeConversation
+  return {
+    projects: nextProjects,
+    projectConversations: nextProjectConversations,
+    rootConversations: nextRootConversations,
+    activeProjectId: state.activeProjectId === projectId ? null : state.activeProjectId,
+    activeConversation,
+  }
+}
+
+function moveConversationLocally(
+  state: ChatState,
+  convId: string,
+  projectId: string | null,
+): Partial<ChatState> {
+  const targetConvId = String(convId || '').trim()
+  if (!targetConvId) return {}
+  const targetProjectId = String(projectId || '').trim() || null
+  const source = findConversationInLists(state.rootConversations, state.projectConversations, targetConvId)
+    || (state.activeConversation?.id === targetConvId ? state.activeConversation : null)
+  if (!source) return {}
+  const moved: Conversation = { ...source, project_id: targetProjectId }
+  const nextRootConversations = state.rootConversations
+    .filter((conversation) => conversation.id !== targetConvId)
+  if (!targetProjectId) {
+    nextRootConversations.push(moved)
+  }
+  const nextProjectConversations: Record<string, Conversation[]> = {}
+  const projectIds = new Set([
+    ...Object.keys(state.projectConversations || {}),
+    ...(targetProjectId ? [targetProjectId] : []),
+  ])
+  for (const pid of projectIds) {
+    const existing = (state.projectConversations[pid] || [])
+      .filter((conversation) => conversation.id !== targetConvId)
+    nextProjectConversations[pid] = pid === targetProjectId
+      ? [...existing, moved]
+      : existing
+  }
+  return {
+    rootConversations: nextRootConversations,
+    projectConversations: nextProjectConversations,
+    activeProjectId: state.activeConvId === targetConvId ? targetProjectId : state.activeProjectId,
+    activeConversation: state.activeConversation?.id === targetConvId
+      ? { ...state.activeConversation, project_id: targetProjectId }
+      : state.activeConversation,
+  }
 }
 
 function nowMs() {
@@ -201,17 +422,104 @@ async function getMessagesPageWithFallback(
   try {
     const page = await chatApi.getMessagesPage(convId, opts)
     return { page, usedFallback: false }
-  } catch (error) {
+  } catch (pageError) {
     const beforeId = Number(opts?.beforeId || 0)
     if (beforeId > 0) {
-      throw error
+      throw pageError
     }
-    const messages = await chatApi.getMessages(convId, { renderPacketOnly: opts?.renderPacketOnly })
+    let messages: Message[]
+    try {
+      messages = await chatApi.getMessages(convId, { renderPacketOnly: opts?.renderPacketOnly })
+    } catch (fallbackError) {
+      const pageMessage = pageError instanceof Error ? pageError.message : String(pageError || 'messages page failed')
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError || 'messages fallback failed')
+      throw new Error(`${pageMessage}; fallback failed: ${fallbackMessage}`)
+    }
     return {
       page: buildFullMessagePage(Array.isArray(messages) ? messages : []),
       usedFallback: true,
     }
   }
+}
+
+function scheduleRefreshLatestMessagesAfterCancel(
+  convId: string,
+  generation: GenerationState,
+  set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+) {
+  const targetConvId = String(convId || '').trim()
+  const sessionId = String(generation.sessionId || '').trim()
+  const assistantMsgId = Number(generation.assistantMsgId || 0)
+  if (!targetConvId || !sessionId) return
+
+  const run = async (attempt: number) => {
+    try {
+      const { page } = await getMessagesPageWithFallback(targetConvId, { limit: MESSAGE_PAGE_SIZE })
+      const latestMessages = Array.isArray(page?.messages) ? page.messages : []
+      const hasCanceledAssistant = assistantMsgId > 0
+        ? latestMessages.some((item) => Number(item.id || 0) === assistantMsgId)
+        : true
+      if (!hasCanceledAssistant && attempt < 4) {
+        schedule(attempt + 1)
+        return
+      }
+      if (!hasCanceledAssistant) return
+
+      set((state) => {
+        const previousCache = state.conversationCacheById[targetConvId]
+        const visibleForRequest = state.activeConvId === targetConvId
+        const conversationStillKnown = visibleForRequest
+          || Boolean(previousCache)
+          || Boolean(findConversationInLists(state.rootConversations, state.projectConversations, targetConvId))
+        if (!conversationStillKnown) return {}
+        const currentGeneration = visibleForRequest ? state.generation : previousCache?.generation
+        if (currentGeneration && currentGeneration.sessionId !== sessionId) return {}
+        const baseMessages = visibleForRequest
+          ? state.messages
+          : (Array.isArray(previousCache?.messages) ? previousCache.messages : [])
+        const baseHasMoreBefore = visibleForRequest
+          ? state.messagesHasMoreBefore
+          : Boolean(previousCache?.messagesHasMoreBefore)
+        const merged = mergeLatestMessagePage(baseMessages, baseHasMoreBefore, page)
+        const nextCache = upsertConversationViewCache(state.conversationCacheById, targetConvId, {
+          messages: merged.messages,
+          refs: visibleForRequest
+            ? state.refs
+            : (previousCache?.refs && typeof previousCache.refs === 'object' ? previousCache.refs : {}),
+          messagesHasMoreBefore: merged.hasMoreBefore,
+          oldestLoadedMessageId: merged.oldestLoadedMessageId,
+          generation: currentGeneration && currentGeneration.sessionId === sessionId ? null : previousCache?.generation ?? null,
+          sseController: null,
+          cachedAt: Date.now(),
+        })
+        if (!visibleForRequest) {
+          return { conversationCacheById: nextCache }
+        }
+        return {
+          messages: merged.messages,
+          generation: currentGeneration && currentGeneration.sessionId === sessionId ? null : state.generation,
+          sseController: null,
+          conversationLoading: false,
+          messagesHasMoreBefore: merged.hasMoreBefore,
+          oldestLoadedMessageId: merged.oldestLoadedMessageId,
+          conversationCacheById: nextCache,
+        }
+      })
+    } catch {
+      if (attempt < 4) schedule(attempt + 1)
+    }
+  }
+
+  const schedule = (attempt: number) => {
+    const delay = attempt <= 1 ? 180 : attempt === 2 ? 420 : 900
+    if (typeof window === 'undefined') {
+      void run(attempt)
+      return
+    }
+    window.setTimeout(() => { void run(attempt) }, delay)
+  }
+
+  schedule(1)
 }
 
 function getSwitchPerfSummary(): SwitchPerfSummary {
@@ -287,12 +595,30 @@ function getRefsPerfSummary(): RefsPerfSummary {
   let fetchDuration = 0
   let lastMode = ''
   let lastCounts = ''
+  const inferredMode = (summary?: RefsPayloadSummary): string => {
+    if (!summary) return ''
+    if (summary.pendingPackCount > 0) return 'pending'
+    if (summary.fastPackCount > 0) return 'fast'
+    if (summary.readyPackCount > 0) return 'ready'
+    if (summary.packCount > 0) return 'empty'
+    return ''
+  }
+  const inferredCounts = (summary?: RefsPayloadSummary): string => {
+    if (!summary) return ''
+    return [
+      `packs=${summary.packCount}`,
+      `hits=${summary.hitCount}`,
+      `pending=${summary.pendingPackCount}`,
+      `fast=${summary.fastPackCount}`,
+      `ready=${summary.readyPackCount}`,
+    ].join(',')
+  }
   for (const event of refsPerfLog) {
     if (event.phase === 'fetch_success' || event.phase === 'poll_success') {
       fetchSuccess += 1
       fetchDuration += event.durationMs
-      lastMode = event.backendMode || lastMode
-      lastCounts = event.backendCounts || lastCounts
+      lastMode = event.backendMode || inferredMode(event.summary) || lastMode
+      lastCounts = event.backendCounts || inferredCounts(event.summary) || lastCounts
     } else if (event.phase === 'fetch_error' || event.phase === 'poll_error') {
       fetchError += 1
     } else if (event.phase === 'fetch_stale') {
@@ -312,6 +638,7 @@ function getRefsPerfSummary(): RefsPerfSummary {
 
 function ensureSwitchPerfApi() {
   if (typeof window === 'undefined') return
+  if (!internalDebugEnabled()) return
   const w = window as DebugWindow
   if (!w.__kbSwitchPerf) {
     w.__kbSwitchPerf = {
@@ -379,6 +706,8 @@ if (typeof window !== 'undefined') {
 
 function stopRefsPolling() {
   refsPollToken += 1
+  refsPollController?.abort()
+  refsPollController = null
   if (refsPollTimer !== null) {
     window.clearTimeout(refsPollTimer)
     refsPollTimer = null
@@ -453,6 +782,18 @@ function mergeUploadItems(current: ChatUploadItem[], incoming: ChatUploadItem[])
   return next
 }
 
+function replaceUploadItemsFromStatus(current: ChatUploadItem[], incoming: ChatUploadItem[]) {
+  const statuses = new Map(incoming.map((item) => [uploadItemKey(item), item]))
+  let changed = false
+  const next = current.map((item) => {
+    const replacement = statuses.get(uploadItemKey(item))
+    if (!replacement) return item
+    changed = true
+    return replacement
+  })
+  return { items: changed ? next : current, changed }
+}
+
 function isPdfUploadJobRunning(item: ChatUploadItem) {
   if (item.kind !== 'pdf') return false
   const ingestRunning = ['processing', 'renaming', 'converting', 'ingesting'].includes(String(item.ingest_status || ''))
@@ -460,10 +801,24 @@ function isPdfUploadJobRunning(item: ChatUploadItem) {
   return ingestRunning || qualityRunning
 }
 
-function needsUploadStatusPolling(uploadItems: ChatUploadItem[]) {
-  return uploadItems.some((item) =>
-    isPdfUploadJobRunning(item) && item.ingest_job_id,
-  )
+function collectUploadStatusJobIds(state: Pick<ChatState, 'uploadItems' | 'conversationCacheById'>) {
+  const seen = new Set<string>()
+  const collect = (items: ChatUploadItem[]) => {
+    for (const item of items || []) {
+      if (!isPdfUploadJobRunning(item) || !item.ingest_job_id) continue
+      const jobId = String(item.ingest_job_id || '').trim()
+      if (jobId) seen.add(jobId)
+    }
+  }
+  collect(state.uploadItems)
+  for (const view of Object.values(state.conversationCacheById || {})) {
+    collect(cachedUploadItems(view))
+  }
+  return [...seen]
+}
+
+function needsAnyUploadStatusPolling(state: Pick<ChatState, 'uploadItems' | 'conversationCacheById'>) {
+  return collectUploadStatusJobIds(state).length > 0
 }
 
 async function startUploadPolling(set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void, getState: () => ChatState) {
@@ -481,10 +836,7 @@ async function startUploadPolling(set: (patch: Partial<ChatState> | ((state: Cha
     if (token !== uploadPollToken) return
     tries += 1
     const state = getState()
-    const jobIds = state.uploadItems
-      .filter((item) => isPdfUploadJobRunning(item) && item.ingest_job_id)
-      .map((item) => String(item.ingest_job_id || '').trim())
-      .filter(Boolean)
+    const jobIds = collectUploadStatusJobIds(state)
     if (jobIds.length === 0) {
       uploadPollTimer = null
       return
@@ -494,11 +846,38 @@ async function startUploadPolling(set: (patch: Partial<ChatState> | ((state: Cha
       if (token !== uploadPollToken) return
       const items = Array.isArray(res.items) ? res.items : []
       set((cur) => {
-        const nextItems = mergeUploadItems(cur.uploadItems, items)
-        return { uploadItems: nextItems }
+        const activeUpdate = replaceUploadItemsFromStatus(cur.uploadItems, items)
+        let cacheChanged = false
+        let nextCache = cur.conversationCacheById
+        for (const [convId, view] of Object.entries(cur.conversationCacheById || {})) {
+          const cachedUpdate = replaceUploadItemsFromStatus(cachedUploadItems(view), items)
+          if (!cachedUpdate.changed) continue
+          if (!cacheChanged) {
+            nextCache = { ...nextCache }
+            cacheChanged = true
+          }
+          nextCache[convId] = {
+            ...view,
+            uploadItems: cachedUpdate.items,
+            cachedAt: Date.now(),
+          }
+        }
+        if (activeUpdate.changed && cur.activeConvId) {
+          nextCache = upsertConversationViewCache(nextCache, cur.activeConvId, {
+            uploadItems: activeUpdate.items,
+            pendingImages: cur.pendingImages,
+            cachedAt: Date.now(),
+          })
+          cacheChanged = true
+        }
+        if (!activeUpdate.changed && !cacheChanged) return {}
+        return {
+          ...(activeUpdate.changed ? { uploadItems: activeUpdate.items } : {}),
+          ...(cacheChanged ? { conversationCacheById: nextCache } : {}),
+        }
       })
       const nextState = getState()
-      if (!needsUploadStatusPolling(nextState.uploadItems) || tries >= maxTries) {
+      if (!needsAnyUploadStatusPolling(nextState) || tries >= maxTries) {
         uploadPollTimer = null
         return
       }
@@ -524,6 +903,14 @@ function mergeImageAttachments(current: ChatImageAttachment[], incoming: ChatIma
     next.push(item)
   }
   return next
+}
+
+function cachedUploadItems(view: ConversationViewCache | undefined): ChatUploadItem[] {
+  return Array.isArray(view?.uploadItems) ? view.uploadItems : []
+}
+
+function cachedPendingImages(view: ConversationViewCache | undefined): ChatImageAttachment[] {
+  return Array.isArray(view?.pendingImages) ? view.pendingImages : []
 }
 
 async function loadRefsForConversation(
@@ -584,7 +971,7 @@ async function loadRefsForConversation(
       summary: summarizeRefsPayload(refs),
     })
     if (needsEnrichment || keepPolling) {
-      void startRefsPolling(convId, set, shouldKeepPolling, `${reason}:followup`)
+      void startRefsPolling(convId, set, getActiveConvId, shouldKeepPolling, `${reason}:followup`)
     }
   } catch (err) {
     pushRefsPerf({
@@ -627,7 +1014,7 @@ async function loadRefsForConversation(
           cachedAt: Date.now(),
         }),
       }))
-      void startRefsPolling(convId, set, shouldKeepPolling, `${reason}:retry_after_error`)
+      void startRefsPolling(convId, set, getActiveConvId, shouldKeepPolling, `${reason}:retry_after_error`)
     }
   }
 }
@@ -674,6 +1061,7 @@ function scheduleLoadRefsForConversation(
 async function startRefsPolling(
   convId: string,
   set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+  getActiveConvId: () => string | null,
   shouldKeepPolling?: () => boolean,
   reason = 'poll',
 ) {
@@ -699,11 +1087,43 @@ async function startRefsPolling(
 
   const tick = async () => {
     if (token !== refsPollToken) return
+    if (getActiveConvId() !== convId) {
+      refsPollTimer = null
+      pushRefsPerf({
+        ts: Date.now(),
+        convId,
+        phase: 'poll_stop',
+        token,
+        durationMs: 0,
+        attempt: tries,
+        reason: 'inactive_conversation',
+      })
+      return
+    }
     tries += 1
     const startedAt = nowMs()
+    const ctrl = new AbortController()
+    refsPollController = ctrl
     try {
-      const { data: refs, meta } = await chatApi.getRefsWithMeta(convId)
+      const { data: refs, meta } = await chatApi.getRefsWithMeta(convId, { signal: ctrl.signal })
+      if (refsPollController === ctrl) refsPollController = null
       if (token !== refsPollToken) return
+      if (getActiveConvId() !== convId) {
+        refsPollTimer = null
+        pushRefsPerf({
+          ts: Date.now(),
+          convId,
+          phase: 'poll_stale',
+          token,
+          durationMs: Number((nowMs() - startedAt).toFixed(2)),
+          attempt: tries,
+          reason,
+          active: false,
+          ...refsBackendPerf(meta),
+          summary: summarizeRefsPayload(refs),
+        })
+        return
+      }
       set((state) => ({
         refs,
         conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
@@ -742,6 +1162,8 @@ async function startRefsPolling(
         return
       }
     } catch (err) {
+      if (refsPollController === ctrl) refsPollController = null
+      if (ctrl.signal.aborted || token !== refsPollToken) return
       pushRefsPerf({
         ts: Date.now(),
         convId,
@@ -765,6 +1187,20 @@ async function startRefsPolling(
         })
         return
       }
+    }
+    if (refsPollController === ctrl) refsPollController = null
+    if (getActiveConvId() !== convId) {
+      refsPollTimer = null
+      pushRefsPerf({
+        ts: Date.now(),
+        convId,
+        phase: 'poll_stop',
+        token,
+        durationMs: 0,
+        attempt: tries,
+        reason: 'inactive_conversation',
+      })
+      return
     }
     const delay = nextDelay()
     pushRefsPerf({
@@ -924,6 +1360,7 @@ async function startMessagePostprocessPolling(
 interface GenerationState {
   sessionId: string
   taskId: string
+  assistantMsgId?: number
   traceId?: string
   stage: string
   partial: string
@@ -941,6 +1378,10 @@ interface ConversationViewCache {
   refs: Record<string, unknown>
   messagesHasMoreBefore: boolean
   oldestLoadedMessageId: number | null
+  generation: GenerationState | null
+  sseController: AbortController | null
+  uploadItems: ChatUploadItem[]
+  pendingImages: ChatImageAttachment[]
   cachedAt: number
 }
 
@@ -965,6 +1406,18 @@ function upsertConversationViewCache(
       oldestLoadedMessageId: patch.oldestLoadedMessageId !== undefined
         ? patch.oldestLoadedMessageId ?? null
         : (prev?.oldestLoadedMessageId ?? null),
+      generation: patch.generation !== undefined
+        ? patch.generation
+        : (prev?.generation ?? null),
+      sseController: patch.sseController !== undefined
+        ? patch.sseController
+        : (prev?.sseController ?? null),
+      uploadItems: Array.isArray(patch.uploadItems)
+        ? patch.uploadItems
+        : cachedUploadItems(prev),
+      pendingImages: Array.isArray(patch.pendingImages)
+        ? patch.pendingImages
+        : cachedPendingImages(prev),
       cachedAt: Number.isFinite(Number(patch.cachedAt))
         ? Number(patch.cachedAt)
         : (prev?.cachedAt ?? Date.now()),
@@ -1022,17 +1475,177 @@ interface ChatState {
   clearGeneration: () => void
 }
 
-async function loadGroupedConversations(projects: Project[]) {
-  const rootConversations = await chatApi.listConversations(SIDEBAR_CONVERSATION_LIMIT, null)
-  const groupedEntries = await Promise.all(
-    projects.map(async (project) => {
-      const conversations = await chatApi.listConversations(SIDEBAR_CONVERSATION_LIMIT, project.id)
-      return [project.id, conversations] as const
-    }),
-  )
+function generationCancelUrl(generation: GenerationState) {
+  const sessionId = encodeURIComponent(String(generation.sessionId || ''))
+  const taskId = encodeURIComponent(String(generation.taskId || ''))
+  return `/api/generate/${sessionId}/cancel?task_id=${taskId}`
+}
+
+function generationForConversation(state: ChatState, convId: string): GenerationState | null {
+  const targetConvId = String(convId || '').trim()
+  if (!targetConvId) return null
+  const cached = state.conversationCacheById[targetConvId]?.generation ?? null
+  if (state.activeConvId === targetConvId) return state.generation || cached
+  return cached
+}
+
+function generationStartPendingOrRunning(state: ChatState, convId: string): boolean {
+  const targetConvId = String(convId || '').trim()
+  if (!targetConvId) return false
+  return generationStartLocks.has(targetConvId) || Boolean(generationForConversation(state, targetConvId))
+}
+
+function cancelConversationGeneration(
+  state: ChatState,
+  convId: string,
+  opts?: {
+    refreshMessages?: boolean
+    set?: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void
+  },
+) {
+  const targetConvId = String(convId || '').trim()
+  if (!targetConvId) return
+  const cachedView = state.conversationCacheById[targetConvId]
+  const active = state.activeConvId === targetConvId
+  const generation = active ? (state.generation || cachedView?.generation) : cachedView?.generation
+  if (!generation) return
+  const ctrl = active ? (state.sseController || cachedView?.sseController) : cachedView?.sseController
+  ctrl?.abort()
+  api.post(generationCancelUrl(generation))
+    .then(() => {
+      if (opts?.refreshMessages && opts.set) {
+        scheduleRefreshLatestMessagesAfterCancel(targetConvId, generation, opts.set)
+      }
+    })
+    .catch(() => {})
+}
+
+function runningUploadJobIdsForConversation(state: ChatState, convId: string) {
+  const targetConvId = String(convId || '').trim()
+  if (!targetConvId) return []
+  const cachedView = state.conversationCacheById[targetConvId]
+  const items = state.activeConvId === targetConvId
+    ? state.uploadItems
+    : cachedUploadItems(cachedView)
+  const seen = new Set<string>()
+  for (const item of items || []) {
+    if (!isPdfUploadJobRunning(item) || !item.ingest_job_id) continue
+    const jobId = String(item.ingest_job_id || '').trim()
+    if (jobId) seen.add(jobId)
+  }
+  return [...seen]
+}
+
+function cancelConversationUploadJobs(state: ChatState, convId: string) {
+  for (const jobId of runningUploadJobIdsForConversation(state, convId)) {
+    chatApi.cancelUploadJob(jobId).catch(() => {})
+  }
+}
+
+function finiteNumber(value: unknown, fallback = 0) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
+function normalizeProject(raw: unknown): Project | null {
+  if (!raw || typeof raw !== 'object') return null
+  const rec = raw as Partial<Project> & Record<string, unknown>
+  const id = String(rec.id || '').trim()
+  if (!id) return null
   return {
+    ...rec,
+    id,
+    name: String(rec.name || '').trim() || 'Untitled project',
+    created_at: finiteNumber(rec.created_at),
+    updated_at: finiteNumber(rec.updated_at),
+  }
+}
+
+function normalizeConversation(raw: unknown, fallbackProjectId?: string | null): Conversation | null {
+  if (!raw || typeof raw !== 'object') return null
+  const rec = raw as Partial<Conversation> & Record<string, unknown>
+  const id = String(rec.id || '').trim()
+  if (!id) return null
+  const projectId = String(rec.project_id ?? '').trim() || String(fallbackProjectId ?? '').trim()
+  return {
+    ...rec,
+    id,
+    title: String(rec.title || '').trim() || 'Untitled conversation',
+    created_at: finiteNumber(rec.created_at),
+    updated_at: finiteNumber(rec.updated_at),
+    project_id: projectId || null,
+  }
+}
+
+function normalizeSidebarSnapshot(snapshot: SidebarSnapshot) {
+  const projects: Project[] = []
+  const seenProjectIds = new Set<string>()
+  for (const rawProject of Array.isArray(snapshot.projects) ? snapshot.projects : []) {
+    const project = normalizeProject(rawProject)
+    if (!project || seenProjectIds.has(project.id)) continue
+    seenProjectIds.add(project.id)
+    projects.push(project)
+  }
+
+  const projectConversations: Record<string, Conversation[]> = Object.fromEntries(
+    projects.map((project) => [project.id, []]),
+  )
+  const rootConversations: Conversation[] = []
+  const seenConversationIds = new Set<string>()
+  const addConversation = (rawConversation: unknown, fallbackProjectId?: string | null) => {
+    const conversation = normalizeConversation(rawConversation, fallbackProjectId)
+    if (!conversation || seenConversationIds.has(conversation.id)) return
+    seenConversationIds.add(conversation.id)
+    const projectId = String(conversation.project_id || '').trim()
+    if (projectId && Object.prototype.hasOwnProperty.call(projectConversations, projectId)) {
+      projectConversations[projectId].push({ ...conversation, project_id: projectId })
+      return
+    }
+    rootConversations.push({ ...conversation, project_id: null })
+  }
+
+  const rootRaw = Array.isArray(snapshot.root_conversations)
+    ? snapshot.root_conversations
+    : Array.isArray(snapshot.rootConversations)
+      ? snapshot.rootConversations
+      : []
+  for (const rawConversation of rootRaw) {
+    addConversation(rawConversation, null)
+  }
+
+  const projectConversationsRaw = snapshot.project_conversations || snapshot.projectConversations || {}
+  for (const [projectId, conversations] of Object.entries(projectConversationsRaw)) {
+    const normalizedProjectId = String(projectId || '').trim()
+    if (!Array.isArray(conversations)) continue
+    for (const rawConversation of conversations) {
+      addConversation(rawConversation, normalizedProjectId)
+    }
+  }
+
+  return {
+    projects,
     rootConversations,
-    projectConversations: Object.fromEntries(groupedEntries) as Record<string, Conversation[]>,
+    projectConversations,
+  }
+}
+
+async function loadGroupedConversations() {
+  try {
+    return normalizeSidebarSnapshot(await chatApi.getSidebar(SIDEBAR_CONVERSATION_LIMIT))
+  } catch {
+    const projects = await chatApi.listProjects()
+    const rootConversations = await chatApi.listConversations(SIDEBAR_CONVERSATION_LIMIT, null)
+    const groupedEntries = await Promise.all(
+      projects.map(async (project) => {
+        const conversations = await chatApi.listConversations(SIDEBAR_CONVERSATION_LIMIT, project.id)
+        return [project.id, conversations] as const
+      }),
+    )
+    return normalizeSidebarSnapshot({
+      projects,
+      root_conversations: rootConversations,
+      project_conversations: Object.fromEntries(groupedEntries) as Record<string, Conversation[]>,
+    })
   }
 }
 
@@ -1086,8 +1699,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sseController: null,
 
   loadSidebarData: async () => {
-    const projects = await chatApi.listProjects()
-    const grouped = await loadGroupedConversations(projects)
+    const grouped = await loadGroupedConversations()
     set((state) => ({
       guideBindings: (() => {
         const next = { ...(state.guideBindings || {}) }
@@ -1104,14 +1716,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         return next
       })(),
-      activeConversation: state.activeConvId
-        ? findConversationInLists(grouped.rootConversations, grouped.projectConversations, state.activeConvId)
-        : null,
-      projects,
+      activeConversation: (() => {
+        if (!state.activeConvId) return null
+        const found = findConversationInLists(grouped.rootConversations, grouped.projectConversations, state.activeConvId)
+        if (found) return found
+        return state.activeConversation?.id === state.activeConvId ? state.activeConversation : null
+      })(),
+      projects: grouped.projects,
       projectConversations: grouped.projectConversations,
       rootConversations: grouped.rootConversations,
       activeProjectId:
-        state.activeProjectId && projects.some((project) => project.id === state.activeProjectId)
+        state.activeProjectId && grouped.projects.some((project) => project.id === state.activeProjectId)
           ? state.activeProjectId
           : null,
     }))
@@ -1134,17 +1749,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   deleteProject: async (id) => {
-    await chatApi.deleteProject(id)
-    const state = get()
-    if (state.activeProjectId === id) {
-      set({ activeProjectId: null })
-    }
-    await get().loadSidebarData()
+    const deletedProjectId = String(id || '').trim()
+    if (!deletedProjectId) return
+    await chatApi.deleteProject(deletedProjectId)
+    set((state) => rehomeDeletedProjectLocally(state, deletedProjectId))
+    await get().loadSidebarData().catch(() => {})
     const activeConvId = get().activeConvId
     if (activeConvId) {
       const conv = await chatApi.getConversation(activeConvId).catch(() => null)
       if (conv) {
-        set({ activeProjectId: conv.project_id ?? null })
+        set((current) => ({
+          activeProjectId: conv.project_id ?? null,
+          activeConversation: current.activeConvId === activeConvId
+            ? {
+                ...(current.activeConversation || conv),
+                ...conv,
+                project_id: conv.project_id ?? null,
+              }
+            : current.activeConversation,
+        }))
+      } else {
+        set((current) => {
+          if (String(current.activeConversation?.project_id || '').trim() !== deletedProjectId) {
+            return {}
+          }
+          return {
+            activeProjectId: null,
+            activeConversation: current.activeConversation
+              ? { ...current.activeConversation, project_id: null }
+              : current.activeConversation,
+          }
+        })
       }
     }
   },
@@ -1172,7 +1807,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     const myToken = ++conversationSwitchToken
     const cachedConv = findConversationInState(current, convId)
-    const cachedView = current.conversationCacheById[convId]
+    const cacheAfterLeaving = current.activeConvId
+      ? upsertConversationViewCache(current.conversationCacheById, current.activeConvId, {
+        messages: current.messages,
+        refs: current.refs,
+        messagesHasMoreBefore: current.messagesHasMoreBefore,
+        oldestLoadedMessageId: current.oldestLoadedMessageId,
+        generation: current.generation,
+        sseController: current.sseController,
+        uploadItems: current.uploadItems,
+        pendingImages: current.pendingImages,
+        cachedAt: Date.now(),
+      })
+      : current.conversationCacheById
+    const cachedView = cacheAfterLeaving[convId]
+    const restoredGeneration = cachedView?.generation ?? null
+    const restoredUploadItems = cachedUploadItems(cachedView)
+    const restoredPendingImages = cachedPendingImages(cachedView)
     stopRefsPolling()
     stopMessagePostprocessPolling()
     stopUploadPolling()
@@ -1185,11 +1836,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messagesLoadingMore: false,
       messagesHasMoreBefore: Boolean(cachedView?.messagesHasMoreBefore),
       oldestLoadedMessageId: cachedView?.oldestLoadedMessageId ?? null,
-      generation: null,
+      generation: restoredGeneration,
+      sseController: restoredGeneration ? (cachedView?.sseController ?? null) : null,
       refs: cachedView?.refs && typeof cachedView.refs === 'object' ? cachedView.refs : {},
-      uploadItems: [],
-      pendingImages: [],
+      uploadItems: restoredUploadItems,
+      pendingImages: restoredPendingImages,
+      conversationCacheById: cacheAfterLeaving,
     })
+    if (needsAnyUploadStatusPolling(get())) {
+      void startUploadPolling(set, get)
+    }
+    if (restoredGeneration) {
+      scheduleLoadRefsForConversation(
+        convId,
+        set,
+        () => get().activeConvId,
+        120,
+        () => {
+          const state = get()
+          return state.activeConvId === convId && state.generation?.sessionId === restoredGeneration.sessionId
+        },
+        'generation_resumed',
+      )
+    }
     pushConversationOpenPhase({
       ts: Date.now(),
       convId,
@@ -1347,9 +2016,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const defaultTitle = buildDefaultConversationTitle(locale)
     const { id } = await chatApi.createConversation(defaultTitle, projectId)
     await get().loadSidebarData()
-    stopMessagePostprocessPolling()
-    stopUploadPolling()
-    set({ generation: null, uploadItems: [], pendingImages: [] })
     await get().selectConversation(id)
     return id
   },
@@ -1358,7 +2024,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const sourcePath = String(opts.sourcePath || '').trim()
     if (!sourcePath) throw new Error('sourcePath required')
     const locale = useSettingsStore.getState().uiLocale
-    const sourceName = String(opts.sourceName || '').trim() || sourcePath.split(/[\\/]/).pop() || (locale === 'zh' ? zh.default_source_fallback : en.default_source_fallback)
+    const sourceName = String(opts.sourceName || '').trim() || basenameFromSourcePath(sourcePath) || (locale === 'zh' ? zh.default_source_fallback : en.default_source_fallback)
     const projectId = opts.projectId ?? get().activeProjectId
     const titleBase = String(opts.title || '').trim() || (locale === 'zh' ? zh.default_guide_title.replace('{name}', sourceName) : en.default_guide_title.replace('{name}', sourceName))
     const { id } = await chatApi.createConversation(titleBase, projectId, {
@@ -1378,12 +2044,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Backward compatible: old backend may not expose /guide.
     }
     await get().loadSidebarData()
-    stopMessagePostprocessPolling()
-    stopUploadPolling()
     set((state) => ({
-      generation: null,
-      uploadItems: [],
-      pendingImages: [],
       guideBindings: {
         ...(state.guideBindings || {}),
         [id]: { sourcePath, sourceName },
@@ -1408,21 +2069,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const nextTitle = String(title || '').trim()
     if (!nextTitle) return
     await chatApi.updateTitle(id, nextTitle)
+    set((state) => ({
+      activeConversation: state.activeConversation?.id === id
+        ? { ...state.activeConversation, title: nextTitle }
+        : state.activeConversation,
+      rootConversations: patchConversationTitle(state.rootConversations, id, nextTitle),
+      projectConversations: patchProjectConversationTitle(state.projectConversations, id, nextTitle),
+    }))
     await get().loadSidebarData()
   },
 
   deleteConversation: async (id) => {
-    stopRefsPolling()
-    stopMessagePostprocessPolling()
-    stopUploadPolling()
-    await chatApi.deleteConversation(id)
-    const state = get()
+    const targetId = String(id || '').trim()
+    if (!targetId) return
+    const wasActive = get().activeConvId === targetId
+    if (wasActive) {
+      conversationSwitchToken += 1
+      stopRefsPolling()
+      stopMessagePostprocessPolling()
+      stopUploadPolling()
+    }
+    const beforeDelete = get()
+    cancelConversationGeneration(beforeDelete, targetId)
+    cancelConversationUploadJobs(beforeDelete, targetId)
+    await chatApi.deleteConversation(targetId)
     set((cur) => {
       const nextBindings = { ...(cur.guideBindings || {}) }
       const nextCache = { ...(cur.conversationCacheById || {}) }
-      delete nextBindings[id]
-      delete nextCache[id]
-      if (state.activeConvId === id) {
+      delete nextBindings[targetId]
+      delete nextCache[targetId]
+      if (cur.activeConvId === targetId) {
         return {
           activeConvId: null,
           activeConversation: null,
@@ -1433,6 +2109,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           oldestLoadedMessageId: null,
           refs: {},
           generation: null,
+          sseController: null,
           uploadItems: [],
           pendingImages: [],
           guideBindings: nextBindings,
@@ -1445,17 +2122,43 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     })
     await get().loadSidebarData()
+    if (!needsAnyUploadStatusPolling(get())) {
+      stopUploadPolling()
+    }
+    if (wasActive) {
+      set((cur) => {
+        if (cur.activeConvId && cur.activeConvId !== targetId) return {}
+        const nextBindings = { ...(cur.guideBindings || {}) }
+        const nextCache = { ...(cur.conversationCacheById || {}) }
+        delete nextBindings[targetId]
+        delete nextCache[targetId]
+        return {
+          activeConvId: null,
+          activeConversation: null,
+          messages: [],
+          conversationLoading: false,
+          messagesLoadingMore: false,
+          messagesHasMoreBefore: false,
+          oldestLoadedMessageId: null,
+          refs: {},
+          generation: null,
+          sseController: null,
+          uploadItems: [],
+          pendingImages: [],
+          guideBindings: nextBindings,
+          conversationCacheById: nextCache,
+        }
+      })
+    }
   },
 
   moveConversation: async (convId, projectId) => {
-    await chatApi.updateConversationProject(convId, projectId)
-    await get().loadSidebarData()
-    if (get().activeConvId === convId) {
-      set((state) => ({
-        activeProjectId: projectId,
-        activeConversation: state.activeConversation ? { ...state.activeConversation, project_id: projectId } : state.activeConversation,
-      }))
-    }
+    const targetConvId = String(convId || '').trim()
+    const targetProjectId = String(projectId || '').trim() || null
+    if (!targetConvId) return
+    await chatApi.updateConversationProject(targetConvId, targetProjectId)
+    set((state) => moveConversationLocally(state, targetConvId, targetProjectId))
+    await get().loadSidebarData().catch(() => {})
   },
 
   loadOlderMessages: async () => {
@@ -1508,9 +2211,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   uploadFiles: async (files, opts) => {
     if (!files.length) return
     set({ uploading: true })
+    let convId = String(opts?.convId || '').trim()
     try {
       const hasPdf = files.some((file) => String(file.name || '').toLowerCase().endsWith('.pdf') || String(file.type || '').toLowerCase() === 'application/pdf')
-      let convId = String(opts?.convId || '').trim()
       if (!convId) {
         convId = String(get().activeConvId || '').trim()
       }
@@ -1523,21 +2226,54 @@ export const useChatStore = create<ChatState>((set, get) => ({
         .filter((item): item is ChatImageAttachment => Boolean(item && item.path))
       set((state) => ({
         uploading: false,
-        uploadItems: mergeUploadItems(state.uploadItems, res.items || []),
-        pendingImages: mergeImageAttachments(state.pendingImages, imageAttachments),
+        ...(() => {
+          const targetConvId = String(convId || '').trim()
+          const visibleForUpload = !targetConvId || state.activeConvId === targetConvId
+          const previousCache = targetConvId ? state.conversationCacheById[targetConvId] : undefined
+          const baseUploadItems = visibleForUpload ? state.uploadItems : cachedUploadItems(previousCache)
+          const basePendingImages = visibleForUpload ? state.pendingImages : cachedPendingImages(previousCache)
+          const nextUploadItems = mergeUploadItems(baseUploadItems, res.items || [])
+          const nextPendingImages = mergeImageAttachments(basePendingImages, imageAttachments)
+          return {
+            ...(visibleForUpload ? { uploadItems: nextUploadItems, pendingImages: nextPendingImages } : {}),
+            conversationCacheById: targetConvId
+              ? upsertConversationViewCache(state.conversationCacheById, targetConvId, {
+                uploadItems: nextUploadItems,
+                pendingImages: nextPendingImages,
+                cachedAt: Date.now(),
+              })
+              : state.conversationCacheById,
+          }
+        })(),
       }))
-      if (needsUploadStatusPolling(get().uploadItems)) {
+      if (needsAnyUploadStatusPolling(get())) {
         void startUploadPolling(set, get)
       }
     } catch {
       set((state) => ({
         uploading: false,
-        uploadItems: mergeUploadItems(state.uploadItems, [{
-          kind: 'unknown',
-          status: 'error',
-          name: 'upload',
-          error: 'upload failed',
-        }]),
+        ...(() => {
+          const targetConvId = String(convId || '').trim()
+          const visibleForUpload = !targetConvId || state.activeConvId === targetConvId
+          const previousCache = targetConvId ? state.conversationCacheById[targetConvId] : undefined
+          const baseUploadItems = visibleForUpload ? state.uploadItems : cachedUploadItems(previousCache)
+          const nextUploadItems = mergeUploadItems(baseUploadItems, [{
+            kind: 'unknown',
+            status: 'error',
+            name: 'upload',
+            error: 'upload failed',
+          }])
+          return {
+            ...(visibleForUpload ? { uploadItems: nextUploadItems } : {}),
+            conversationCacheById: targetConvId
+              ? upsertConversationViewCache(state.conversationCacheById, targetConvId, {
+                uploadItems: nextUploadItems,
+                pendingImages: visibleForUpload ? state.pendingImages : cachedPendingImages(previousCache),
+                cachedAt: Date.now(),
+              })
+              : state.conversationCacheById,
+          }
+        })(),
       }))
       throw new Error('upload failed')
     }
@@ -1546,6 +2282,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   retryUploadItem: async (key) => {
     const current = get().uploadItems.find((item) => uploadItemKey(item) === key)
     if (!current || current.kind !== 'pdf' || !current.ingest_job_id) return
+    const convId = String(get().activeConvId || '').trim()
     const shouldRetryQuality = (
       current.ready === true
       && String(current.ingest_status || '') === 'ready'
@@ -1556,12 +2293,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
       : await chatApi.retryUploadJob(current.ingest_job_id)
     const nextItem = res.item
     set((state) => ({
-      uploadItems: mergeUploadItems(
-        state.uploadItems.filter((item) => uploadItemKey(item) !== key),
-        nextItem ? [nextItem] : [],
-      ),
+      ...(() => {
+        const nextUploadItems = mergeUploadItems(
+          state.uploadItems.filter((item) => uploadItemKey(item) !== key),
+          nextItem ? [nextItem] : [],
+        )
+        return {
+          uploadItems: nextUploadItems,
+          conversationCacheById: convId
+            ? upsertConversationViewCache(state.conversationCacheById, convId, {
+              uploadItems: nextUploadItems,
+              pendingImages: state.pendingImages,
+              cachedAt: Date.now(),
+            })
+            : state.conversationCacheById,
+        }
+      })(),
     }))
-    if (needsUploadStatusPolling(get().uploadItems)) {
+    if (needsAnyUploadStatusPolling(get())) {
       void startUploadPolling(set, get)
     }
   },
@@ -1569,31 +2318,71 @@ export const useChatStore = create<ChatState>((set, get) => ({
   cancelUploadItem: async (key) => {
     const current = get().uploadItems.find((item) => uploadItemKey(item) === key)
     if (!current || current.kind !== 'pdf' || !current.ingest_job_id) return
+    const convId = String(get().activeConvId || '').trim()
     const res = await chatApi.cancelUploadJob(current.ingest_job_id)
     const nextItem = res.item
     set((state) => ({
-      uploadItems: mergeUploadItems(state.uploadItems, nextItem ? [nextItem] : []),
+      ...(() => {
+        const nextUploadItems = mergeUploadItems(state.uploadItems, nextItem ? [nextItem] : [])
+        return {
+          uploadItems: nextUploadItems,
+          conversationCacheById: convId
+            ? upsertConversationViewCache(state.conversationCacheById, convId, {
+              uploadItems: nextUploadItems,
+              pendingImages: state.pendingImages,
+              cachedAt: Date.now(),
+            })
+            : state.conversationCacheById,
+        }
+      })(),
     }))
-    if (!needsUploadStatusPolling(get().uploadItems)) {
+    if (!needsAnyUploadStatusPolling(get())) {
       stopUploadPolling()
     }
   },
 
   removePendingImage: (key) => {
+    const convId = String(get().activeConvId || '').trim()
     set((state) => ({
-      pendingImages: state.pendingImages.filter((item) => attachmentKey(item) !== key),
-      uploadItems: state.uploadItems.filter((item) => {
-        const attachment = item.attachment
-        return !attachment || attachmentKey(attachment) !== key
-      }),
+      ...(() => {
+        const nextPendingImages = state.pendingImages.filter((item) => attachmentKey(item) !== key)
+        const nextUploadItems = state.uploadItems.filter((item) => {
+          const attachment = item.attachment
+          return !attachment || attachmentKey(attachment) !== key
+        })
+        return {
+          pendingImages: nextPendingImages,
+          uploadItems: nextUploadItems,
+          conversationCacheById: convId
+            ? upsertConversationViewCache(state.conversationCacheById, convId, {
+              uploadItems: nextUploadItems,
+              pendingImages: nextPendingImages,
+              cachedAt: Date.now(),
+            })
+            : state.conversationCacheById,
+        }
+      })(),
     }))
   },
 
   dismissUploadItem: (key) => {
+    const convId = String(get().activeConvId || '').trim()
     set((state) => ({
-      uploadItems: state.uploadItems.filter((item) => uploadItemKey(item) !== key),
+      ...(() => {
+        const nextUploadItems = state.uploadItems.filter((item) => uploadItemKey(item) !== key)
+        return {
+          uploadItems: nextUploadItems,
+          conversationCacheById: convId
+            ? upsertConversationViewCache(state.conversationCacheById, convId, {
+              uploadItems: nextUploadItems,
+              pendingImages: state.pendingImages,
+              cachedAt: Date.now(),
+            })
+            : state.conversationCacheById,
+        }
+      })(),
     }))
-    if (!needsUploadStatusPolling(get().uploadItems)) {
+    if (!needsAnyUploadStatusPolling(get())) {
       stopUploadPolling()
     }
   },
@@ -1601,11 +2390,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sendMessage: async (prompt, opts) => {
     stopMessagePostprocessPolling()
     let convId = get().activeConvId
+    let provisionalNewConversationLock = false
     if (!convId) {
-      convId = await get().createConversation()
+      if (generationStartLocks.has(NEW_CONVERSATION_GENERATION_LOCK)) return
+      generationStartLocks.add(NEW_CONVERSATION_GENERATION_LOCK)
+      provisionalNewConversationLock = true
+      try {
+        convId = await get().createConversation()
+      } catch (err) {
+        generationStartLocks.delete(NEW_CONVERSATION_GENERATION_LOCK)
+        throw err
+      }
+    }
+    convId = String(convId || '').trim()
+    if (!convId) {
+      if (provisionalNewConversationLock) generationStartLocks.delete(NEW_CONVERSATION_GENERATION_LOCK)
+      return
     }
 
     const stateNow = get()
+    if (generationStartPendingOrRunning(stateNow, convId)) {
+      if (provisionalNewConversationLock) generationStartLocks.delete(NEW_CONVERSATION_GENERATION_LOCK)
+      return
+    }
+    generationStartLocks.add(convId)
+    if (provisionalNewConversationLock) {
+      generationStartLocks.delete(NEW_CONVERSATION_GENERATION_LOCK)
+      provisionalNewConversationLock = false
+    }
+    const releaseGenerationStartLock = () => {
+      generationStartLocks.delete(convId!)
+      if (provisionalNewConversationLock) generationStartLocks.delete(NEW_CONVERSATION_GENERATION_LOCK)
+    }
     const pendingImages = stateNow.pendingImages
     const localGuide = (convId ? stateNow.guideBindings?.[convId] : undefined)
     const boundSourcePath = String(stateNow.activeConversation?.bound_source_path || localGuide?.sourcePath || '').trim()
@@ -1622,33 +2438,47 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const preferredSourcesFinal = preferredSources.slice(0, 4)
     const trimmedPrompt = prompt.trim()
     const userStoreText = trimmedPrompt || `[Image attachment x${pendingImages.length}]`
-    const shouldKeepPollingRefs = () => {
-      const state = get()
-      return state.activeConvId === convId && Boolean(state.generation)
-    }
+    const sentImageKeys = new Set(pendingImages.map((item) => attachmentKey(item)))
+    const requestPaperGuideMode = Boolean(
+      stateNow.activeConversation?.mode === 'paper_guide'
+      || localGuide?.sourcePath
+      || boundSourcePath
+    )
 
-    const res = await api.post<{
+    let res: {
       session_id: string
       task_id: string
       trace_id?: string
       user_msg_id: number
       assistant_msg_id: number
       conversation_title?: string
-    }>('/api/generate', {
-      conv_id: convId,
-      prompt: trimmedPrompt,
-      image_attachments: pendingImages,
-      preferred_sources: preferredSourcesFinal,
-      source_lock_path: boundSourcePath,
-      source_lock_name: boundSourceName,
-      query_scope: opts.queryScope || undefined,
-      top_k: opts.topK,
-      temperature: opts.temperature,
-      max_tokens: opts.maxTokens,
-      deep_read: opts.deepRead,
-      prompt_context: opts.promptContext || undefined,
-    })
+      started?: boolean
+      start_error?: string
+    }
+    try {
+      res = await api.post<typeof res>('/api/generate', {
+        conv_id: convId,
+        prompt: trimmedPrompt,
+        image_attachments: pendingImages,
+        preferred_sources: preferredSourcesFinal,
+        source_lock_path: boundSourcePath,
+        source_lock_name: boundSourceName,
+        query_scope: opts.queryScope || undefined,
+        top_k: opts.topK,
+        temperature: opts.temperature,
+        max_tokens: opts.maxTokens,
+        deep_read: opts.deepRead,
+        prompt_context: opts.promptContext || undefined,
+      })
+    } catch (err) {
+      releaseGenerationStartLock()
+      throw err
+    }
     const conversationTitle = String(res.conversation_title || '').trim()
+    const uiLocale = useSettingsStore.getState().uiLocale
+    const generationStarted = res.started !== false
+    const generationStartError = String(res.start_error || '').trim()
+    const startFailureMessage = generationStartFailureDisplayMessage(generationStartError, uiLocale)
     const userMessage: Message = {
       id: res.user_msg_id,
       role: 'user',
@@ -1660,58 +2490,190 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...(opts.queryScope ? { query_scope: opts.queryScope } : {}),
       },
     }
+    const startFailureAssistantMessage: Message | null = generationStarted
+      ? null
+      : {
+          id: res.assistant_msg_id,
+          role: 'assistant',
+          content: startFailureMessage,
+          created_at: Date.now() / 1000,
+          meta: {
+            trace_id: res.trace_id,
+          },
+        }
+    const currentGeneration = {
+      sessionId: res.session_id,
+      taskId: res.task_id,
+      assistantMsgId: Number(res.assistant_msg_id || 0) || undefined,
+      traceId: res.trace_id,
+      stage: 'starting',
+      partial: '',
+      done: false,
+    }
+    const ctrl = new AbortController()
+    const shouldKeepPollingRefs = () => {
+      const state = get()
+      return state.activeConvId === convId && Boolean(state.generation)
+    }
+    const requestGenerationIsCurrent = () => {
+      const state = get()
+      const cachedGeneration = convId ? state.conversationCacheById[convId]?.generation : null
+      const candidate = state.activeConvId === convId ? state.generation : cachedGeneration
+      return candidate?.sessionId === res.session_id
+    }
 
-    set((state) => ({
-      messages: [...state.messages, userMessage],
-      pendingImages: [],
-      uploadItems: state.uploadItems.filter((item) => item.kind !== 'image'),
-      conversationLoading: false,
-      generation: {
-        sessionId: res.session_id,
-        taskId: res.task_id,
-        traceId: res.trace_id,
-        stage: 'starting',
-        partial: '',
-        done: false,
-      },
-      activeConversation: conversationTitle && state.activeConversation?.id === convId
-        ? { ...state.activeConversation, title: conversationTitle }
-        : state.activeConversation,
-      rootConversations: conversationTitle
-        ? patchConversationTitle(state.rootConversations, convId!, conversationTitle)
-        : state.rootConversations,
-      projectConversations: conversationTitle
-        ? patchProjectConversationTitle(state.projectConversations, convId!, conversationTitle)
-        : state.projectConversations,
-      conversationCacheById: convId
+    set((state) => {
+      const visibleForRequest = state.activeConvId === convId
+      const previousCache = convId ? state.conversationCacheById[convId] : undefined
+      const baseMessages = visibleForRequest
+        ? state.messages
+        : (Array.isArray(previousCache?.messages) ? previousCache.messages : [])
+      const nextMessages = startFailureAssistantMessage
+        ? [...baseMessages, userMessage, startFailureAssistantMessage]
+        : [...baseMessages, userMessage]
+      const basePendingImages = visibleForRequest ? state.pendingImages : cachedPendingImages(previousCache)
+      const baseUploadItems = visibleForRequest ? state.uploadItems : cachedUploadItems(previousCache)
+      const nextPendingImages = sentImageKeys.size > 0
+        ? basePendingImages.filter((item) => !sentImageKeys.has(attachmentKey(item)))
+        : basePendingImages
+      const nextUploadItems = sentImageKeys.size > 0
+        ? baseUploadItems.filter((item) => {
+          if (item.kind !== 'image') return true
+          const attachment = item.attachment
+          return !attachment || !sentImageKeys.has(attachmentKey(attachment))
+        })
+        : baseUploadItems
+      const nextCache = convId
         ? upsertConversationViewCache(state.conversationCacheById, convId, {
-          messages: [...state.messages, userMessage],
-          refs: state.refs,
-          messagesHasMoreBefore: state.messagesHasMoreBefore,
-          oldestLoadedMessageId: state.oldestLoadedMessageId,
+          messages: nextMessages,
+          refs: visibleForRequest
+            ? state.refs
+            : (previousCache?.refs && typeof previousCache.refs === 'object' ? previousCache.refs : {}),
+          messagesHasMoreBefore: visibleForRequest
+            ? state.messagesHasMoreBefore
+            : Boolean(previousCache?.messagesHasMoreBefore),
+          oldestLoadedMessageId: visibleForRequest
+            ? state.oldestLoadedMessageId
+            : (previousCache?.oldestLoadedMessageId ?? null),
+          generation: generationStarted ? currentGeneration : null,
+          sseController: generationStarted ? ctrl : null,
+          uploadItems: nextUploadItems,
+          pendingImages: nextPendingImages,
           cachedAt: Date.now(),
         })
-        : state.conversationCacheById,
-    }))
-      scheduleLoadRefsForConversation(
-        convId,
-        set,
-        () => get().activeConvId,
-        350,
-        shouldKeepPollingRefs,
-        'generation_started',
-      )
+        : state.conversationCacheById
+      return {
+        ...(visibleForRequest
+          ? {
+              messages: nextMessages,
+              conversationLoading: false,
+              generation: generationStarted ? currentGeneration : null,
+              sseController: generationStarted ? ctrl : null,
+              uploadItems: nextUploadItems,
+              pendingImages: nextPendingImages,
+            }
+          : {}),
+        activeConversation: conversationTitle && state.activeConversation?.id === convId
+          ? { ...state.activeConversation, title: conversationTitle }
+          : state.activeConversation,
+        rootConversations: conversationTitle
+          ? patchConversationTitle(state.rootConversations, convId!, conversationTitle)
+          : state.rootConversations,
+        projectConversations: conversationTitle
+          ? patchProjectConversationTitle(state.projectConversations, convId!, conversationTitle)
+          : state.projectConversations,
+        conversationCacheById: nextCache,
+      }
+    })
+    releaseGenerationStartLock()
 
-    const ctrl = new AbortController()
-    set({ sseController: ctrl })
+    if (!generationStarted) {
+      try {
+        const { page } = await getMessagesPageWithFallback(convId!, {
+          limit: MESSAGE_PAGE_SIZE,
+          renderPacketOnly: requestPaperGuideMode ? true : undefined,
+        })
+        const localizedPage = localizeGenerationStartFailurePage(
+          page,
+          Number(res.assistant_msg_id || 0),
+          startFailureMessage,
+        )
+        set((state) => {
+          const visibleForRequest = state.activeConvId === convId
+          const previousCache = state.conversationCacheById[convId!]
+          const baseMessages = visibleForRequest
+            ? state.messages
+            : (Array.isArray(previousCache?.messages) ? previousCache.messages : [])
+          const baseHasMoreBefore = visibleForRequest
+            ? state.messagesHasMoreBefore
+            : Boolean(previousCache?.messagesHasMoreBefore)
+          const merged = mergeLatestMessagePage(baseMessages, baseHasMoreBefore, localizedPage)
+          const nextCache = upsertConversationViewCache(state.conversationCacheById, convId!, {
+            messages: merged.messages,
+            refs: visibleForRequest
+              ? state.refs
+              : (previousCache?.refs && typeof previousCache.refs === 'object' ? previousCache.refs : {}),
+            messagesHasMoreBefore: merged.hasMoreBefore,
+            oldestLoadedMessageId: merged.oldestLoadedMessageId,
+            generation: null,
+            sseController: null,
+            cachedAt: Date.now(),
+          })
+          if (!visibleForRequest) {
+            return { conversationCacheById: nextCache }
+          }
+          return {
+            messages: merged.messages,
+            generation: null,
+            sseController: null,
+            conversationLoading: false,
+            messagesLoadingMore: false,
+            messagesHasMoreBefore: merged.hasMoreBefore,
+            oldestLoadedMessageId: merged.oldestLoadedMessageId,
+            conversationCacheById: nextCache,
+          }
+        })
+      } catch {
+        set((state) => {
+          const nextCache = convId
+            ? upsertConversationViewCache(state.conversationCacheById, convId, {
+              generation: null,
+              sseController: null,
+              cachedAt: Date.now(),
+            })
+            : state.conversationCacheById
+          return {
+            ...(state.activeConvId === convId ? { generation: null, sseController: null, conversationLoading: false } : {}),
+            ...(nextCache !== state.conversationCacheById ? { conversationCacheById: nextCache } : {}),
+          }
+        })
+      }
+      await get().loadSidebarData().catch(() => {})
+      throw new Error(startFailureMessage)
+    }
+    scheduleLoadRefsForConversation(
+      convId,
+      set,
+      () => get().activeConvId,
+      350,
+      shouldKeepPollingRefs,
+      'generation_started',
+    )
 
     try {
       const sseRes = await authFetch(`/api/generate/${res.session_id}/stream`, {
         signal: ctrl.signal,
       })
-      const reader = sseRes.body!.getReader()
+      if (!sseRes.ok) {
+        throw await responseError(sseRes)
+      }
+      if (!sseRes.body) {
+        throw new Error('Generation stream did not return a readable body.')
+      }
+      const reader = sseRes.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''
+      let streamDone = false
 
       while (true) {
         const { done, value } = await reader.read()
@@ -1722,93 +2684,209 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue
+          let data: Record<string, unknown>
           try {
-            const data = JSON.parse(line.slice(6))
-            set({
-              generation: {
-                sessionId: res.session_id,
-                taskId: res.task_id,
-                traceId: res.trace_id,
-                stage: data.stage || '',
-                partial: data.partial || '',
-                done: !!data.done,
-                researchTrace: data.research_trace && typeof data.research_trace === 'object'
-                  ? data.research_trace as Record<string, unknown>
-                  : undefined,
-              },
-            })
-            if (data.done) {
-              const { page } = await getMessagesPageWithFallback(convId!, {
+            data = JSON.parse(line.slice(6)) as Record<string, unknown>
+          } catch {
+            // ignore malformed SSE chunks
+            continue
+          }
+          const nextGeneration: GenerationState = {
+            sessionId: res.session_id,
+            taskId: res.task_id,
+            assistantMsgId: Number(res.assistant_msg_id || 0) || undefined,
+            traceId: res.trace_id,
+            stage: String(data.stage || ''),
+            partial: String(data.partial || ''),
+            done: !!data.done,
+            researchTrace: data.research_trace && typeof data.research_trace === 'object'
+              ? data.research_trace as Record<string, unknown>
+              : undefined,
+          }
+          set((state) => {
+            const cachedGeneration = convId ? state.conversationCacheById[convId]?.generation : null
+            const candidate = state.activeConvId === convId ? state.generation : cachedGeneration
+            if (candidate?.sessionId !== res.session_id) return {}
+            const nextCache = convId
+              ? upsertConversationViewCache(state.conversationCacheById, convId, {
+                generation: nextGeneration,
+                sseController: ctrl,
+                cachedAt: Date.now(),
+              })
+              : state.conversationCacheById
+            if (state.activeConvId !== convId || state.generation?.sessionId !== res.session_id) {
+              return { conversationCacheById: nextCache }
+            }
+            return {
+              generation: nextGeneration,
+              conversationCacheById: nextCache,
+            }
+          })
+          if (data.done) {
+            streamDone = true
+            if (!requestGenerationIsCurrent()) return
+            let page: MessagePage
+            try {
+              const result = await getMessagesPageWithFallback(convId!, {
                 limit: MESSAGE_PAGE_SIZE,
-                renderPacketOnly: get().activeConversation?.mode === 'paper_guide' ? true : undefined,
+                renderPacketOnly: requestPaperGuideMode ? true : undefined,
               })
-              set((state) => {
-                const merged = mergeLatestMessagePage(
-                  state.messages,
-                  state.messagesHasMoreBefore,
-                  page,
-                )
-                return {
-                  messages: merged.messages,
-                  generation: null,
-                  conversationLoading: false,
-                  messagesLoadingMore: false,
-                  messagesHasMoreBefore: merged.hasMoreBefore,
-                  oldestLoadedMessageId: merged.oldestLoadedMessageId,
-                  conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId!, {
-                    messages: merged.messages,
-                    refs: state.refs,
-                    messagesHasMoreBefore: merged.hasMoreBefore,
-                    oldestLoadedMessageId: merged.oldestLoadedMessageId,
-                    cachedAt: Date.now(),
-                  }),
-                }
-              })
-              scheduleLoadRefsForConversation(convId!, set, () => get().activeConvId, 120, undefined, 'generation_done')
-              const postprocessState = get()
-              const paperGuideMode = Boolean(
-                postprocessState.activeConversation?.mode === 'paper_guide'
-                || postprocessState.guideBindings?.[convId!]?.sourcePath
-                || boundSourcePath,
+              page = result.page
+            } catch {
+              throw new Error(generationRefreshFailureDisplayMessage(uiLocale))
+            }
+            let visibleAtCompletion = false
+            set((state) => {
+              const visibleForRequest = state.activeConvId === convId && (
+                state.generation?.sessionId === res.session_id
+                || state.conversationCacheById[convId!]?.generation?.sessionId === res.session_id
               )
-              const assistantMessage = postprocessState.messages.find(
-                (item) => Number(item.id || 0) === Number(res.assistant_msg_id || 0),
-              ) || null
-              if (paperGuideMode || messageNeedsPostprocessRefresh(assistantMessage, { paperGuideMode })) {
-                void startMessagePostprocessPolling(
-                  convId!,
-                  res.assistant_msg_id,
-                  set,
-                  get,
-                  { paperGuideMode, reason: 'generation_done' },
-                )
+              visibleAtCompletion = visibleForRequest
+              const previousCache = state.conversationCacheById[convId!]
+              const baseMessages = visibleForRequest
+                ? state.messages
+                : (Array.isArray(previousCache?.messages) ? previousCache.messages : [])
+              const baseHasMoreBefore = visibleForRequest
+                ? state.messagesHasMoreBefore
+                : Boolean(previousCache?.messagesHasMoreBefore)
+              const merged = mergeLatestMessagePage(
+                baseMessages,
+                baseHasMoreBefore,
+                page,
+              )
+              const nextCache = upsertConversationViewCache(state.conversationCacheById, convId!, {
+                messages: merged.messages,
+                refs: visibleForRequest
+                  ? state.refs
+                  : (previousCache?.refs && typeof previousCache.refs === 'object' ? previousCache.refs : {}),
+                messagesHasMoreBefore: merged.hasMoreBefore,
+                oldestLoadedMessageId: merged.oldestLoadedMessageId,
+                generation: null,
+                sseController: null,
+                cachedAt: Date.now(),
+              })
+              if (!visibleForRequest) {
+                return { conversationCacheById: nextCache }
               }
+              return {
+                messages: merged.messages,
+                generation: null,
+                conversationLoading: false,
+                messagesLoadingMore: false,
+                messagesHasMoreBefore: merged.hasMoreBefore,
+                oldestLoadedMessageId: merged.oldestLoadedMessageId,
+                conversationCacheById: nextCache,
+              }
+            })
+            if (visibleAtCompletion) {
+              scheduleLoadRefsForConversation(convId!, set, () => get().activeConvId, 120, undefined, 'generation_done')
+            }
+            const postprocessState = get()
+            if (!visibleAtCompletion || postprocessState.activeConvId !== convId) {
               await get().loadSidebarData()
               return
             }
-          } catch {
-            // ignore malformed SSE chunks
+            const paperGuideMode = Boolean(
+              requestPaperGuideMode
+              || postprocessState.activeConversation?.mode === 'paper_guide'
+              || postprocessState.guideBindings?.[convId!]?.sourcePath
+              || boundSourcePath,
+            )
+            const assistantMessage = postprocessState.messages.find(
+              (item) => Number(item.id || 0) === Number(res.assistant_msg_id || 0),
+            ) || null
+            if (paperGuideMode || messageNeedsPostprocessRefresh(assistantMessage, { paperGuideMode })) {
+              void startMessagePostprocessPolling(
+                convId!,
+                res.assistant_msg_id,
+                set,
+                get,
+                { paperGuideMode, reason: 'generation_done' },
+              )
+            }
+            await get().loadSidebarData()
+            return
           }
         }
       }
-    } catch {
-      // aborted or network error
+      if (!streamDone && !ctrl.signal.aborted) {
+        throw new Error('Generation stream ended before completion.')
+      }
+    } catch (err) {
+      if (ctrl.signal.aborted) return
+      const displayMessage = generationStreamFailureDisplayMessage(err, uiLocale)
+      set((state) => {
+        const activeMatches = state.activeConvId === convId && state.generation?.sessionId === res.session_id
+        const previousCache = convId ? state.conversationCacheById[convId] : undefined
+        const cachedMatches = Boolean(convId && previousCache?.generation?.sessionId === res.session_id)
+        const shouldPersistFailure = activeMatches || cachedMatches
+        const failureGeneration = activeMatches ? state.generation : previousCache?.generation
+        const baseMessages = activeMatches
+          ? state.messages
+          : (Array.isArray(previousCache?.messages) ? previousCache.messages : [])
+        const nextMessages = shouldPersistFailure
+          ? upsertGenerationFailureMessage(baseMessages, failureGeneration, displayMessage)
+          : baseMessages
+        const nextCache = shouldPersistFailure && convId
+          ? upsertConversationViewCache(state.conversationCacheById, convId, {
+            messages: nextMessages,
+            generation: null,
+            sseController: null,
+            cachedAt: Date.now(),
+          })
+          : state.conversationCacheById
+        return {
+          ...(activeMatches ? { messages: nextMessages, generation: null, conversationLoading: false } : {}),
+          ...(state.sseController === ctrl ? { sseController: null } : {}),
+          ...(nextCache !== state.conversationCacheById ? { conversationCacheById: nextCache } : {}),
+        }
+      })
+      throw new Error(displayMessage)
     } finally {
-      set({ sseController: null })
+      set((state) => {
+        const previousCache = convId ? state.conversationCacheById[convId] : undefined
+        const shouldClearCachedController = previousCache?.sseController === ctrl
+        const nextCache = shouldClearCachedController && convId
+          ? upsertConversationViewCache(state.conversationCacheById, convId, { sseController: null })
+          : state.conversationCacheById
+        return {
+          ...(state.sseController === ctrl ? { sseController: null } : {}),
+          ...(nextCache !== state.conversationCacheById ? { conversationCacheById: nextCache } : {}),
+        }
+      })
     }
   },
 
   cancelGeneration: () => {
     const state = get()
-    if (state.generation && state.sseController) {
-      state.sseController.abort()
-      api.post(`/api/generate/${state.generation.sessionId}/cancel?task_id=${state.generation.taskId}`)
-        .catch(() => {})
+    if (state.activeConvId) {
+      cancelConversationGeneration(state, state.activeConvId, {
+        refreshMessages: true,
+        set,
+      })
     }
     stopRefsPolling()
     stopMessagePostprocessPolling()
-    set({ generation: null, sseController: null })
+    set((current) => {
+      const convId = current.activeConvId
+      const nextCache = convId
+        ? upsertConversationViewCache(current.conversationCacheById, convId, {
+          generation: null,
+          sseController: null,
+        })
+        : current.conversationCacheById
+      return { generation: null, sseController: null, conversationCacheById: nextCache }
+    })
   },
 
-  clearGeneration: () => set({ generation: null }),
+  clearGeneration: () => set((state) => {
+    const convId = state.activeConvId
+    const nextCache = convId
+      ? upsertConversationViewCache(state.conversationCacheById, convId, {
+        generation: null,
+        sseController: null,
+      })
+      : state.conversationCacheById
+    return { generation: null, conversationCacheById: nextCache }
+  }),
 }))

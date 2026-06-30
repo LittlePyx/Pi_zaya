@@ -19,15 +19,9 @@ def test_quick_ingest_pdf_reports_progress(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=str(tmp_path / "db")))
     monkeypatch.setattr(library_router, "_md_dir", lambda: md_root)
     monkeypatch.setattr(library_router, "run_pdf_to_md", lambda **kwargs: (True, str(md_root / "paper")))
-    monkeypatch.setattr(library_router, "_resolve_md_output_paths", lambda *args, **kwargs: (None, md_main, True))
+    monkeypatch.setattr(library_router, "_resolve_library_md_output_paths", lambda *args, **kwargs: (md_root, md_main, True))
     monkeypatch.setattr(library_router, "_ingest_py_path", lambda: ingest_py)
-
-    class FakeCompletedProcess:
-        returncode = 0
-        stdout = "ok"
-        stderr = ""
-
-    monkeypatch.setattr(library_router.subprocess, "run", lambda *args, **kwargs: FakeCompletedProcess())
+    monkeypatch.setattr(library_router, "_ingest_markdown_incremental", lambda **kwargs: {"ready": True})
 
     stages: list[str] = []
     result = library_router.quick_ingest_pdf(

@@ -56,6 +56,7 @@ import {
 } from './citeShelfDisplay'
 import { useT } from '../../i18n'
 import { referencesApi } from '../../api/references'
+import { qualityDiagnosticsVisible } from '../../utils/qualityDiagnostics'
 
 interface Props {
   open: boolean
@@ -154,6 +155,9 @@ export function CiteShelf({
   const [slowTaskVisible, setSlowTaskVisible] = useState(false)
   const copyStateTimerRef = useRef<number | null>(null)
   const sourceRepairStreamRef = useRef<AbortController | null>(null)
+  const sourceRepairRunTokenRef = useRef(0)
+  const exportRepairRunTokenRef = useRef(0)
+  const exportRepairingKindRef = useRef<ShelfExportKind | ''>('')
   const autoSourceRepairKeysRef = useRef<Record<string, boolean>>({})
   const shelfPanelRef = useRef<HTMLElement | null>(null)
   const repairingKeySignature = useMemo(
@@ -166,6 +170,7 @@ export function CiteShelf({
   )
   const activeConversationKey = String(activeConvId || '').trim()
   const activeSourceKey = normalizeSourceIdentity(activeSourcePath)
+  const showSourceQualityDiagnostics = qualityDiagnosticsVisible()
   const shelfBackgroundBusy = Boolean(
     summaryLoadingKey
       || repairLoadingKey
@@ -200,11 +205,16 @@ export function CiteShelf({
     onBackgroundActivityChange?.(shelfBackgroundBusy)
   }, [onBackgroundActivityChange, shelfBackgroundBusy])
 
+  useEffect(() => {
+    exportRepairingKindRef.current = exportRepairingKind
+  }, [exportRepairingKind])
+
   useEffect(() => () => {
     onBackgroundActivityChange?.(false)
   }, [onBackgroundActivityChange])
 
   const sourceQualitySources = useMemo(() => {
+    if (!showSourceQualityDiagnostics) return []
     const seen = new Set<string>()
     const out: Array<{ source_path: string; source_name: string }> = []
     for (const item of items) {
@@ -217,7 +227,7 @@ export function CiteShelf({
       })
     }
     return out
-  }, [items])
+  }, [items, showSourceQualityDiagnostics])
 
   const sourceQualityKey = useMemo(
     () => sourceQualitySources.map((item) => `${item.source_path}\t${item.source_name}`).join('\n'),
@@ -321,6 +331,12 @@ export function CiteShelf({
     const surface = readerSurfaceFromAnchor(item, opts.shelfKind)
     const isReaderBlock = surface === 'figure' || surface === 'table' || surface === 'equation' || surface === 'selection'
     const fallbackTitle = cleanCitationDisplayText(String(opts.cardView.header.title || opts.display.main || item.main || item.title || '')).trim()
+    const contractEvidence = item.cardView && !isReaderBlock
+      ? opts.cardView.sections.find((section) => (
+        ['evidence', 'reference', 'context_summary', 'support'].includes(String(section.id || '').trim().toLowerCase())
+        && cleanCitationDisplayText(section.text)
+      ))
+      : null
     const title = isReaderBlock
       ? readerBlockTitle(surface, opts.shelfExcerpt, item, fallbackTitle, opts.shelfKindText)
       : fallbackTitle || opts.shelfKindText
@@ -341,11 +357,11 @@ export function CiteShelf({
       surface,
       title,
       sourceLabel,
-      excerpt: opts.shelfExcerpt,
-      excerptLabel: opts.shelfExcerptLabel,
+      excerpt: cleanCitationDisplayText(contractEvidence?.text || '') || opts.shelfExcerpt,
+      excerptLabel: cleanCitationDisplayText(contractEvidence?.label || '') || opts.shelfExcerptLabel,
       showAuthors: !isReaderBlock,
       showArticleSummary: !isReaderBlock,
-      showExcerptInDetails: Boolean(opts.shelfExcerpt),
+      showExcerptInDetails: Boolean(contractEvidence?.text || opts.shelfExcerpt),
     }
   }
 
@@ -465,6 +481,10 @@ export function CiteShelf({
   }
 
   useEffect(() => {
+    if (!showSourceQualityDiagnostics) {
+      setSourceQualityByPath({})
+      return
+    }
     if (!open || sourceQualitySources.length <= 0) return
     let cancelled = false
     libraryApi.sourceQuality(sourceQualitySources)
@@ -484,9 +504,12 @@ export function CiteShelf({
     return () => {
       cancelled = true
     }
-  }, [open, sourceQualityKey, sourceQualityRefreshToken, sourceQualitySources])
+  }, [open, showSourceQualityDiagnostics, sourceQualityKey, sourceQualityRefreshToken, sourceQualitySources])
 
   useEffect(() => () => {
+    exportRepairRunTokenRef.current += 1
+    exportRepairingKindRef.current = ''
+    sourceRepairRunTokenRef.current += 1
     sourceRepairStreamRef.current?.abort()
     sourceRepairStreamRef.current = null
   }, [])
@@ -658,18 +681,20 @@ export function CiteShelf({
     [items, selectedKeys],
   )
   const selectedReviewSources = useMemo(() => {
+    if (!showSourceQualityDiagnostics) return []
     const seen = new Set<string>()
     const out: Array<{ source_path: string; source_name: string }> = []
     for (const item of selectedItems) {
       const sourcePath = String(item.sourcePath || '').trim()
       if (!sourcePath || seen.has(sourcePath)) continue
+      const sourceQuality = sourceQualityForItem(item, sourceQualityByPath)
       const locateView = sourceOpenQualityView(
         item,
-        sourceQualityByPath[sourcePath]?.conversion_quality || null,
+        sourceQuality,
         S,
         readerLocateResults[item.key],
       )
-      if (!sourceQualityNeedsReview(sourceQualityByPath[sourcePath]?.conversion_quality) && !locateView.repairable) continue
+      if (!sourceQualityNeedsReview(sourceQuality) && !locateView.repairable) continue
       seen.add(sourcePath)
       out.push({
         source_path: sourcePath,
@@ -677,20 +702,22 @@ export function CiteShelf({
       })
     }
     return out
-  }, [S, readerLocateResults, selectedItems, sourceQualityByPath])
+  }, [S, readerLocateResults, selectedItems, showSourceQualityDiagnostics, sourceQualityByPath])
   const selectedReviewSourceKey = useMemo(
     () => sourceListKey(selectedReviewSources),
     [selectedReviewSources],
   )
   const locateRepairSources = useMemo(() => {
+    if (!showSourceQualityDiagnostics) return []
     const seen = new Set<string>()
     const out: Array<{ source_path: string; source_name: string }> = []
     for (const item of items) {
       const sourcePath = String(item.sourcePath || '').trim()
       if (!sourcePath || seen.has(sourcePath)) continue
+      const sourceQuality = sourceQualityForItem(item, sourceQualityByPath)
       const locateView = sourceOpenQualityView(
         item,
-        sourceQualityByPath[sourcePath]?.conversion_quality || null,
+        sourceQuality,
         S,
         readerLocateResults[item.key],
       )
@@ -702,7 +729,7 @@ export function CiteShelf({
       })
     }
     return out
-  }, [S, items, readerLocateResults, sourceQualityByPath])
+  }, [S, items, readerLocateResults, showSourceQualityDiagnostics, sourceQualityByPath])
   const locateRepairSourceKey = useMemo(
     () => sourceListKey(locateRepairSources),
     [locateRepairSources],
@@ -837,11 +864,29 @@ export function CiteShelf({
     return lines.join('\n').trim()
   }).join('\n\n')
 
+  const exportKindForClipboardRepair = (kind: 'gbt' | 'bibtex' | 'md'): ShelfExportKind => {
+    if (kind === 'bibtex') return 'bib'
+    if (kind === 'md') return 'md'
+    return 'csv'
+  }
+
   const copyShelfItemsAs = async (scope: ShelfExportScope, kind: 'gbt' | 'bibtex' | 'md') => {
-    const copyItems = exportItemsByScope(scope)
+    if (exportRepairingKindRef.current) return
+    let copyItems = exportItemsByScope(scope)
     if (copyItems.length <= 0) {
       message.warning(S.shelf_export_no_items)
       return
+    }
+    const reviewItems = copyItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
+    if (reviewItems.length > 0) {
+      const repairedItems = await repairMetadataBeforeExport(exportKindForClipboardRepair(kind), copyItems)
+      if (!repairedItems) return
+      copyItems = repairedItems.filter((item) => !shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
+      if (copyItems.length <= 0) {
+        if (scope === 'selected' && (kind === 'gbt' || kind === 'bibtex')) setTransientCopyState('error')
+        message.warning(S.shelf_export_preflight_no_healthy)
+        return
+      }
     }
     const text = kind === 'md'
       ? markdownForExportItems(copyItems)
@@ -865,15 +910,21 @@ export function CiteShelf({
     options: { silent?: boolean; repairKey?: string } = {},
   ) => {
     const silent = Boolean(options.silent)
+    if (!showSourceQualityDiagnostics) return
     if (sources.length <= 0) {
       if (!silent) message.info(S.shelf_source_quality_repair_none)
       return
     }
     const repairKey = options.repairKey || sourceListKey(sources)
     const repairSources = sources.map((item) => ({ ...item }))
+    const repairToken = sourceRepairRunTokenRef.current + 1
+    sourceRepairRunTokenRef.current = repairToken
+    const isCurrentRepair = () => sourceRepairRunTokenRef.current === repairToken
     const refreshRepairSources = async () => {
+      if (!isCurrentRepair()) return
       if (repairSources.length <= 0) return
       const res = await libraryApi.sourceQuality(repairSources)
+      if (!isCurrentRepair()) return
       const next: SourceQualityByPath = {}
       for (const item of Array.isArray(res.items) ? res.items : []) {
         const sourcePath = String(item.source_path || '').trim()
@@ -883,6 +934,7 @@ export function CiteShelf({
       setSourceQualityByPath((prev) => ({ ...prev, ...next }))
     }
     const refreshRepairRunAndSources = async (runId: string, needsReindex: boolean) => {
+      if (!isCurrentRepair()) return
       if (needsReindex) {
         let advanced = false
         if (runId) {
@@ -894,14 +946,17 @@ export function CiteShelf({
           }
         }
         try {
+          if (!isCurrentRepair()) return
           if (!advanced) await libraryApi.reindex()
         } catch {
           // Source quality will still be refreshed so the UI can show the latest diagnostics.
         }
       }
+      if (!isCurrentRepair()) return
       await refreshRepairSources()
     }
     const clearRepairing = () => {
+      if (!isCurrentRepair()) return
       setSourceRepairingKey((cur) => (cur === repairKey ? '' : cur))
     }
     setSourceRepairingKey(repairKey)
@@ -912,6 +967,7 @@ export function CiteShelf({
         speed_mode: 'balanced',
         replace: true,
       })
+      if (!isCurrentRepair()) return
       const runId = String(res.repair_run_id || res.repair_run?.run_id || '').trim()
       const queued = Number(res.enqueued || 0)
       const repaired = Number(res.repaired || 0)
@@ -920,17 +976,24 @@ export function CiteShelf({
         if (!silent) message.success(S.shelf_source_quality_repair_queued.replace('{n}', String(queued)))
         watchingConversion = true
         sourceRepairStreamRef.current?.abort()
-        sourceRepairStreamRef.current = libraryApi.streamConvertStatus(
+        let streamCtrl: AbortController | null = null
+        const clearStreamIfCurrent = () => {
+          if (!isCurrentRepair() || sourceRepairStreamRef.current !== streamCtrl) return false
+          sourceRepairStreamRef.current = null
+          return true
+        }
+        streamCtrl = libraryApi.streamConvertStatus(
           () => {},
           () => {
-            sourceRepairStreamRef.current = null
+            if (!clearStreamIfCurrent()) return
             void refreshRepairRunAndSources(runId, needsReindex).finally(clearRepairing)
           },
           () => {
-            sourceRepairStreamRef.current = null
+            if (!clearStreamIfCurrent()) return
             void refreshRepairRunAndSources(runId, needsReindex).finally(clearRepairing)
           },
         )
+        sourceRepairStreamRef.current = streamCtrl
       } else if (repaired > 0) {
         if (!silent) message.success(`Markdown repaired: ${repaired}`)
         await refreshRepairRunAndSources(runId, needsReindex)
@@ -941,11 +1004,11 @@ export function CiteShelf({
         await refreshRepairSources()
       }
     } catch (err) {
-      if (!silent) message.error(err instanceof Error ? err.message : S.shelf_source_quality_repair_fail)
+      if (isCurrentRepair() && !silent) message.error(err instanceof Error ? err.message : S.shelf_source_quality_repair_fail)
     } finally {
-      if (!watchingConversion) clearRepairing()
+      if (!watchingConversion && isCurrentRepair()) clearRepairing()
     }
-  }, [S])
+  }, [S, showSourceQualityDiagnostics])
 
   useEffect(() => {
     if (!open || selectedReviewSources.length <= 0 || sourceRepairingKey) return
@@ -1022,17 +1085,22 @@ export function CiteShelf({
   const repairMetaFromEntry = (entry: ShelfMetadataRepairItem): Record<string, unknown> => ({
     ...(entry.meta || {}),
     metadata_quality: entry.after || (entry.meta || {}).metadata_quality,
+    metadata_export_acceptance: entry.export_acceptance || (entry.meta || {}).metadata_export_acceptance,
     metadata_repair_status: entry.repair_status,
     metadata_changed_fields: entry.changed_fields || [],
     metadata_repair_sources: entry.repair_sources || [],
   })
 
-  const repairMetadataBeforeExport = async (kind: ShelfExportKind, exportItems: CiteShelfItem[]): Promise<CiteShelfItem[]> => {
+  const repairMetadataBeforeExport = async (kind: ShelfExportKind, exportItems: CiteShelfItem[]): Promise<CiteShelfItem[] | null> => {
     const candidates = exportItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
     if (candidates.length <= 0) return exportItems
 
     const payloads = candidates.flatMap((item) => repairPayloadsForExport(item))
     const noticeKey = `cite-shelf-export-repair-${kind}`
+    const repairToken = exportRepairRunTokenRef.current + 1
+    exportRepairRunTokenRef.current = repairToken
+    exportRepairingKindRef.current = kind
+    const isCurrentExportRepair = () => exportRepairRunTokenRef.current === repairToken
     setExportRepairingKind(kind)
     message.loading({
       key: noticeKey,
@@ -1041,6 +1109,7 @@ export function CiteShelf({
     })
     try {
       const res = await referencesApi.repairShelfMetadata(payloads, payloads.length)
+      if (!isCurrentExportRepair()) return null
       const metasByKey = new Map<string, Array<Record<string, unknown>>>()
       for (const entry of Array.isArray(res.items) ? res.items : []) {
         const meta = repairMetaFromEntry(entry)
@@ -1091,14 +1160,19 @@ export function CiteShelf({
       }
       return repairedItems
     } catch {
-      message.warning({
-        key: noticeKey,
-        content: S.shelf_export_repair_failed,
-        duration: 3,
-      })
-      return exportItems
+      if (isCurrentExportRepair()) {
+        message.warning({
+          key: noticeKey,
+          content: S.shelf_export_repair_failed,
+          duration: 3,
+        })
+      }
+      return isCurrentExportRepair() ? exportItems : null
     } finally {
-      setExportRepairingKind((current) => (current === kind ? '' : current))
+      if (isCurrentExportRepair()) {
+        exportRepairingKindRef.current = ''
+        setExportRepairingKind((current) => (current === kind ? '' : current))
+      }
     }
   }
 
@@ -1108,7 +1182,7 @@ export function CiteShelf({
       message.warning(S.shelf_export_no_items)
       return
     }
-    if (exportRepairingKind) return
+    if (exportRepairingKindRef.current) return
     const reviewItems = targetItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
     const reviewKeySet = new Set(reviewItems.map((item) => item.key))
     if (reviewItems.length > 0 && !options.skipPreflight) {
@@ -1124,7 +1198,9 @@ export function CiteShelf({
       return
     }
     if (options.autoRepair) {
-      exportItems = await repairMetadataBeforeExport(kind, exportItems)
+      const repairedExportItems = await repairMetadataBeforeExport(kind, exportItems)
+      if (!repairedExportItems) return
+      exportItems = repairedExportItems
     }
     try {
       const base = `cite_shelf_${scope}_${nowStamp()}`
@@ -1149,6 +1225,7 @@ export function CiteShelf({
         message.success(S.shelf_export_markdown.replace('{n}', String(exportItems.length)))
         return
       }
+      const includeSourceQualityColumns = showSourceQualityDiagnostics
       const headers = [
         'title',
         'authors',
@@ -1156,8 +1233,10 @@ export function CiteShelf({
         'venue',
         'doi',
         'source',
-        'source_quality_status',
-        'source_quality_issues',
+        ...(includeSourceQualityColumns ? [
+          'source_quality_status',
+          'source_quality_issues',
+        ] : []),
         'source_open_status',
         'source_open_precision',
         'source_open_reason',
@@ -1193,53 +1272,57 @@ export function CiteShelf({
         'summary_quality_score',
         'summary',
       ]
-      const rows = exportItems.map((item) => ([
-        sourceQualityForItem(item, sourceQualityByPath),
-        item,
-      ] as const)).map(([sourceQuality, item]) => ([
-        citationCardView(item).header.title || item.title || item.main,
-        item.authors,
-        item.year,
-        item.venue,
-        shelfItemDoiExportValue(item),
-        item.sourceName || item.sourcePath,
-        sourceQuality?.status || '',
-        (sourceQuality?.issues || []).map((issue) => issue.label || issue.code).filter(Boolean).join('; '),
-        sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).status,
-        sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).precision,
-        sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).reason,
-        item.shelfOrigin,
-        item.shelfItemKind,
-        item.sourcePath,
-        item.traceConvId,
-        item.traceAssistantMsgId,
-        item.traceAssistantOrder,
-        item.traceUserMsgId,
-        item.headingPath,
-        item.locationLabel,
-        item.pageStart || '',
-        item.pageEnd || '',
-        item.anchor,
-        cleanCitationDisplayText(item.shelfExcerpt || ''),
-        cleanCitationDisplayText(item.answerClaim || ''),
-        cleanCitationDisplayText(item.whyLine || item.supportRelation || item.upstreamWorkRole || ''),
-        item.note || '',
-        normalizeShelfTags(item.tags).join('; '),
-        item.libraryMatchStatus,
-        item.libraryMatchMethod,
-        item.libraryMatchPath,
-        item.num || '',
-        item.citationCount || 0,
-        item.journalIf,
-        item.journalQuartile,
-        item.conferenceTier,
-        item.conferenceCcf,
-        item.summarySource,
-        item.summaryProvider,
-        summaryQualityView(item, S).status,
-        summaryQualityView(item, S).score,
-        item.summaryLine || citationCardView(item).summary,
-      ].map((field) => csvEscape(field)).join(',')))
+      const rows = exportItems.map((item) => {
+        const sourceQuality = sourceQualityForItem(item, sourceQualityByPath)
+        const sourceOpen = sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key])
+        const summaryQuality = summaryQualityView(item, S)
+        return [
+          citationCardView(item).header.title || item.title || item.main,
+          item.authors,
+          item.year,
+          item.venue,
+          shelfItemDoiExportValue(item),
+          item.sourceName || item.sourcePath,
+          ...(includeSourceQualityColumns ? [
+            sourceQuality?.status || '',
+            (sourceQuality?.issues || []).map((issue) => issue.label || issue.code).filter(Boolean).join('; '),
+          ] : []),
+          sourceOpen.status,
+          sourceOpen.precision,
+          sourceOpen.reason,
+          item.shelfOrigin,
+          item.shelfItemKind,
+          item.sourcePath,
+          item.traceConvId,
+          item.traceAssistantMsgId,
+          item.traceAssistantOrder,
+          item.traceUserMsgId,
+          item.headingPath,
+          item.locationLabel,
+          item.pageStart || '',
+          item.pageEnd || '',
+          item.anchor,
+          cleanCitationDisplayText(item.shelfExcerpt || ''),
+          cleanCitationDisplayText(item.answerClaim || ''),
+          cleanCitationDisplayText(item.whyLine || item.supportRelation || item.upstreamWorkRole || ''),
+          item.note || '',
+          normalizeShelfTags(item.tags).join('; '),
+          item.libraryMatchStatus,
+          item.libraryMatchMethod,
+          item.libraryMatchPath,
+          item.num || '',
+          item.citationCount || 0,
+          item.journalIf,
+          item.journalQuartile,
+          item.conferenceTier,
+          item.conferenceCcf,
+          item.summarySource,
+          item.summaryProvider,
+          summaryQuality.status,
+          summaryQuality.score,
+          item.summaryLine || citationCardView(item).summary,
+        ].map((field) => csvEscape(field)).join(',')
+      })
       const csv = `${headers.join(',')}\n${rows.join('\n')}`
       downloadTextFile(`${base}.csv`, csv, 'text/csv;charset=utf-8')
       message.success(S.shelf_export_csv.replace('{n}', String(exportItems.length)))
@@ -1630,8 +1713,9 @@ export function CiteShelf({
                   <Button
                     size="small"
                     onClick={() => {
-                      void exportShelfItemsAs(preflightExportRequest.scope, preflightExportRequest.kind, { skipPreflight: true, onlyMetadataReady: true })
-                      setPreflightExportRequest(null)
+                      const request = preflightExportRequest
+                      void exportShelfItemsAs(request.scope, request.kind, { skipPreflight: true, onlyMetadataReady: true })
+                      setPreflightExportRequest((current) => (current === request ? null : current))
                     }}
                     disabled={Boolean(exportRepairingKind)}
                     data-testid="citation-shelf-export-preflight-healthy"
@@ -1641,8 +1725,9 @@ export function CiteShelf({
                   <Button
                     size="small"
                     onClick={async () => {
-                      await exportShelfItemsAs(preflightExportRequest.scope, preflightExportRequest.kind, { skipPreflight: true, autoRepair: true })
-                      setPreflightExportRequest(null)
+                      const request = preflightExportRequest
+                      await exportShelfItemsAs(request.scope, request.kind, { skipPreflight: true, autoRepair: true })
+                      setPreflightExportRequest((current) => (current === request ? null : current))
                     }}
                     loading={Boolean(exportRepairingKind)}
                     data-testid="citation-shelf-export-preflight-continue"
@@ -1990,12 +2075,12 @@ export function CiteShelf({
                       const shelfKind = normalizeShelfItemKind(item.shelfItemKind)
                       const shelfKindText = shelfItemKindLabel(shelfKind, S)
                       const shelfOriginText = shelfOriginLabel(item.shelfOrigin, S)
-                      const isDetailsExpanded = Boolean(expandedDetailKeys[item.key])
+                      const isFocused = item.key === focusedKey
+                      const isDetailsExpanded = Boolean(expandedDetailKeys[item.key]) || (isFocused && shelfKind === 'reference')
                       const duplicateCount = duplicateCountByIdentity[shelfItemPaperIdentity(item)] || 0
                       const itemTags = normalizeShelfTags(item.tags)
                       const quality = qualityHints(item, display)
                       const noteText = String(item.note || '').trim()
-                      const isFocused = item.key === focusedKey
                       const shelfSummary = shelfSummaryDisplay(item, cardView, S)
                       const shelfSummaryLine = shelfSummary.line
                       const shelfSummarySource = shelfSummary.sourceLabel
@@ -2039,9 +2124,11 @@ export function CiteShelf({
                       const showQuality = organizeOpen && shelfCard.showArticleSummary && Boolean(quality.needsRepair || isFocused)
                       const libraryMatch = libraryMatchView(item)
                       const sourceTrail = organizeOpen && isDetailsExpanded ? sourceTrailRows(item) : []
-                      const showSourceOpenBadge = organizeOpen && isDetailsExpanded && (itemSourceOpenQuality.tone === 'review'
+                      const showSourceOpenBadge = showSourceQualityDiagnostics && organizeOpen && isDetailsExpanded && (
+                        itemSourceOpenQuality.tone === 'review'
                         || itemSourceOpenQuality.tone === 'missing'
-                        || itemSourceOpenQuality.label === S.shelf_source_open_repaired_reopen)
+                        || itemSourceOpenQuality.label === S.shelf_source_open_repaired_reopen
+                      )
                       const showLibraryMatch = organizeOpen && isDetailsExpanded && shelfCard.showArticleSummary
                       const messageTargetId = Number(item.traceAssistantMsgId || item.traceUserMsgId || 0)
                       const canOpenMessage = Boolean(onOpenMessage && Number.isFinite(messageTargetId) && messageTargetId > 0)

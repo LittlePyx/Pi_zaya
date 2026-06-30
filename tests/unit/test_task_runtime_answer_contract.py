@@ -760,7 +760,7 @@ def test_apply_answer_contract_prefers_explicit_primary_evidence_over_weaker_ans
     raw = "This paper discusses Fourier single-pixel imaging."
     out = task_runtime._apply_answer_contract_v1(
         raw,
-        prompt="杩欑瘒璁烘枃閲屾槸鎬庝箞璁ㄨ Fourier single-pixel imaging 鐨勶紵",
+        prompt="这篇论文里是怎么讨论 Fourier single-pixel imaging 的？",
         has_hits=True,
         primary_evidence={
             "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",

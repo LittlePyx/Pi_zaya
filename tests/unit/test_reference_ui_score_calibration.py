@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import api.reference_card_locale as reference_card_locale
 import api.reference_ui as reference_ui
 from api.reference_ui import _effective_ui_score, build_hit_ui_meta, enrich_refs_payload, ensure_source_citation_meta
 
@@ -2018,8 +2019,8 @@ def test_enrich_refs_payload_direct_focus_query_drops_scattered_token_false_posi
 
 
 def test_basis_meta_auto_prefers_prompt_language_over_existing_card_language(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "auto")
-    monkeypatch.setattr(reference_ui, "_refs_card_ui_locale_pref", lambda: "")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "auto")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_ui_locale_pref", lambda: "")
 
     why_meta = reference_ui._build_ref_why_basis_meta(
         prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
@@ -2040,8 +2041,8 @@ def test_basis_meta_auto_prefers_prompt_language_over_existing_card_language(mon
 
 
 def test_basis_meta_auto_uses_ui_locale_when_no_card_language_signal(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "auto")
-    monkeypatch.setattr(reference_ui, "_refs_card_ui_locale_pref", lambda: "zh")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "auto")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_ui_locale_pref", lambda: "zh")
 
     why_meta = reference_ui._build_ref_why_basis_meta(
         prompt="",
@@ -2669,8 +2670,8 @@ def test_enrich_refs_payload_upgrades_generic_why_line_deterministically_without
 
 
 def test_build_prompt_aligned_ref_why_line_v3_makes_compare_requests_specific(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "auto")
-    monkeypatch.setattr(reference_ui, "_refs_card_ui_locale_pref", lambda: "")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "auto")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_ui_locale_pref", lambda: "")
     out = reference_ui._build_prompt_aligned_ref_why_line_v3(
         prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
         display_name="OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
@@ -2686,8 +2687,8 @@ def test_build_prompt_aligned_ref_why_line_v3_makes_compare_requests_specific(mo
 
 
 def test_build_prompt_aligned_ref_why_line_v3_keeps_english_for_strong_english_prompt(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "auto")
-    monkeypatch.setattr(reference_ui, "_refs_card_ui_locale_pref", lambda: "")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "auto")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_ui_locale_pref", lambda: "")
     out = reference_ui._build_prompt_aligned_ref_why_line_v3(
         prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
         display_name="OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
@@ -5845,7 +5846,7 @@ def test_enrich_refs_payload_skips_expensive_llm_refine_while_hits_are_pending(m
 
 
 def test_build_ref_summary_surface_meta_uses_guide_label_for_non_abstract_cards(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "zh")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
     out = reference_ui._build_ref_summary_surface_meta(
         prompt="这篇文章里 dynamic supersampling 是怎么定义的？",
         summary_kind="guide",
@@ -5855,8 +5856,8 @@ def test_build_ref_summary_surface_meta_uses_guide_label_for_non_abstract_cards(
 
 
 def test_build_ref_summary_surface_meta_auto_prefers_prompt_language(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "auto")
-    monkeypatch.setattr(reference_ui, "_refs_card_ui_locale_pref", lambda: "")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "auto")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_ui_locale_pref", lambda: "")
     out = reference_ui._build_ref_summary_surface_meta(
         prompt="Which paper in my library discusses dynamic supersampling?",
         summary_kind="guide",
@@ -5866,8 +5867,8 @@ def test_build_ref_summary_surface_meta_auto_prefers_prompt_language(monkeypatch
 
 
 def test_align_ref_card_copy_to_user_locale_prefers_chinese_prompt(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "auto")
-    monkeypatch.setattr(reference_ui, "_refs_card_ui_locale_pref", lambda: "")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "auto")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_ui_locale_pref", lambda: "")
     monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: f"中文概括：{text}")
 
     summary_line, why_line = reference_ui._align_ref_card_copy_to_user_locale(
@@ -5886,7 +5887,7 @@ def test_align_ref_card_copy_to_user_locale_prefers_chinese_prompt(monkeypatch):
 
 
 def test_metadata_summary_line_for_ref_card_explains_missing_abstract(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "en")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "en")
     out = reference_ui._metadata_summary_line_for_ref_card(
         {
             "title": "A Paper Without Abstract",
@@ -5901,7 +5902,7 @@ def test_metadata_summary_line_for_ref_card_explains_missing_abstract(monkeypatc
 
 
 def test_build_ref_summary_basis_meta_describes_llm_abstract(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "zh")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
     out = reference_ui._build_ref_summary_basis_meta(
         prompt="请总结这篇论文？",
         summary_kind="abstract",
@@ -5914,7 +5915,7 @@ def test_build_ref_summary_basis_meta_describes_llm_abstract(monkeypatch):
 
 
 def _legacy_mojibake_build_ref_why_basis_meta_describes_llm_grounded_reason(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "zh")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
     out = reference_ui._build_ref_why_basis_meta(
         prompt="为什么这篇文献和我的问题相关？",
         why_generation="llm_grounded",
@@ -5926,7 +5927,7 @@ def _legacy_mojibake_build_ref_why_basis_meta_describes_llm_grounded_reason(monk
 
 
 def test_build_ref_why_basis_meta_describes_llm_grounded_reason_utf8_safe(monkeypatch):
-    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "zh")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
     out = reference_ui._build_ref_why_basis_meta(
         prompt="\u4e3a\u4ec0\u4e48\u8fd9\u7bc7\u6587\u732e\u548c\u6211\u7684\u95ee\u9898\u76f8\u5173\uff1f",
         why_generation="llm_grounded",

@@ -113,6 +113,7 @@ def test_finalize_generation_answer_runs_postprocess_validate_and_quality(monkey
         paper_guide_candidate_refs_by_source={"demo.md": [35]},
         paper_guide_support_slots=[{"support_example": "[[SUPPORT:DOC-1]]"}],
         paper_guide_evidence_cards=[{"doc_idx": 1}],
+        research_answer_plan="method_explain",
         paper_guide_contracts_seed={"citation_plan": citation_plan},
         apply_paper_guide_answer_postprocess=lambda answer, **kwargs: (calls.append("postprocess") or (answer + " [post]", [{"line_index": 0}])),
         maybe_append_library_figure_markdown=_figure,
@@ -126,7 +127,9 @@ def test_finalize_generation_answer_runs_postprocess_validate_and_quality(monkey
     assert out["citation_validation"] == {"kept": 1}
     assert out["answer_quality"]["minimum_ok"] is True
     assert out["answer_quality"]["citation_plan"] == citation_plan
+    assert out["answer_quality"]["research_answer_plan"] == "method_explain"
     assert out["paper_guide_contracts"]["citation_plan"] == citation_plan
+    assert out["paper_guide_contracts"]["intent"]["research_answer_plan"] == "method_explain"
 
 
 def test_finalize_generation_answer_passes_shared_primary_evidence_into_answer_contract(monkeypatch):

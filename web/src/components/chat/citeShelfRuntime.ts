@@ -69,16 +69,140 @@ export function shouldMergeShelfItemsBySource(existing: CiteShelfItem, incoming:
 }
 
 export function dedupeShelfItems(items: CiteShelfItem[]): CiteShelfItem[] {
-  const seen = new Set<string>()
+  const indexByIdentity = new Map<string, number>()
+  const indexByKey = new Map<string, number>()
   const out: CiteShelfItem[] = []
   for (const item of items || []) {
-    const key = shelfPaperIdentity(item)
-    if (!key || seen.has(key)) continue
-    seen.add(key)
+    const identityKey = shelfPaperIdentity(item)
+    const itemKey = String(item.key || '').trim()
+    if (!identityKey && !itemKey) continue
+    const existingIndex = (identityKey ? indexByIdentity.get(identityKey) : undefined)
+      ?? (itemKey ? indexByKey.get(itemKey) : undefined)
+    if (existingIndex !== undefined) {
+      out[existingIndex] = mergeShelfItemWithLive(out[existingIndex], item)
+      const mergedIdentityKey = shelfPaperIdentity(out[existingIndex])
+      const mergedItemKey = String(out[existingIndex]?.key || '').trim()
+      if (mergedIdentityKey) indexByIdentity.set(mergedIdentityKey, existingIndex)
+      if (mergedItemKey) indexByKey.set(mergedItemKey, existingIndex)
+      if (identityKey) indexByIdentity.set(identityKey, existingIndex)
+      if (itemKey) indexByKey.set(itemKey, existingIndex)
+      continue
+    }
+    if (out.length >= SHELF_MAX_ITEMS) continue
+    if (identityKey) indexByIdentity.set(identityKey, out.length)
+    if (itemKey) indexByKey.set(itemKey, out.length)
     out.push(item)
-    if (out.length >= SHELF_MAX_ITEMS) break
   }
   return out
+}
+
+export interface ShelfItemsMergeResult {
+  nextItems: CiteShelfItem[]
+  focusKey: string
+  summaryTarget: CiteShelfItem
+}
+
+export function mergeCitationDetailIntoShelfItems(
+  currentItems: CiteShelfItem[],
+  detail: CiteDetail,
+): ShelfItemsMergeResult {
+  const item = toShelfItem(detail)
+  const identity = shelfPaperIdentity(item)
+  const existingSnapshot = currentItems.find((entry) => (
+    entry.key === item.key || shelfPaperIdentity(entry) === identity
+  ))
+  const summaryTarget = existingSnapshot ? mergeShelfItemWithLive(existingSnapshot, item) : item
+  const existing = currentItems.find((entry) => (
+    entry.key === item.key || shelfPaperIdentity(entry) === identity
+  ))
+  const mergedIncoming = existing ? mergeShelfItemWithLive(existing, item) : item
+  const next = [
+    {
+      ...mergedIncoming,
+      tags: normalizeShelfTags(existing?.tags || mergedIncoming.tags),
+      note: normalizeShelfNote(existing?.note || mergedIncoming.note),
+    },
+    ...currentItems.filter((entry) => entry.key !== item.key && shelfPaperIdentity(entry) !== identity),
+  ]
+  return {
+    nextItems: dedupeShelfItems(next).slice(0, SHELF_MAX_ITEMS),
+    focusKey: summaryTarget.key,
+    summaryTarget,
+  }
+}
+
+function mergeReaderSelectionNote(existing: string, next: string): string {
+  const current = normalizeShelfNote(existing)
+  const incoming = normalizeShelfNote(next)
+  if (!incoming) return current
+  if (!current) return incoming
+  if (current.includes(incoming)) return current
+  return `${current}\n\n${incoming}`.trim()
+}
+
+export function mergeReaderSelectionDetailIntoShelfItems(
+  currentItems: CiteShelfItem[],
+  detail: CiteDetail,
+  opts: {
+    text: string
+    note: string
+    headingPath?: string
+    blockId?: string
+    anchorId?: string
+    anchorKind?: string
+  },
+): ShelfItemsMergeResult {
+  const item = toShelfItem(detail)
+  const identity = shelfPaperIdentity(item)
+  const sourceIdentity = shelfSourceIdentity(item)
+  const existingSnapshot = currentItems.find((entry) => (
+    entry.key === item.key
+    || shelfPaperIdentity(entry) === identity
+    || shouldMergeShelfItemsBySource(entry, item, sourceIdentity)
+  ))
+  const summarySeed = existingSnapshot ? mergeShelfItemWithLive(existingSnapshot, item) : item
+  const focusKey = existingSnapshot?.key || summarySeed.key
+  const existing = currentItems.find((entry) => (
+    entry.key === item.key
+    || shelfPaperIdentity(entry) === identity
+    || shouldMergeShelfItemsBySource(entry, item, sourceIdentity)
+  ))
+  const mergedIncoming = existing ? mergeShelfItemWithLive(existing, item) : item
+  const nextItem: CiteShelfItem = {
+    ...mergedIncoming,
+    key: existing?.key || mergedIncoming.key,
+    tags: normalizeShelfTags(existing?.tags || mergedIncoming.tags),
+    note: mergeReaderSelectionNote(existing?.note || mergedIncoming.note, opts.note),
+    shelfItemKind: 'reader_selection',
+    shelfOrigin: 'reader_selection',
+    shelfExcerpt: preferRicherField('title', existing?.shelfExcerpt || '', opts.text) || mergedIncoming.shelfExcerpt,
+    shelfExcerptLabel: existing?.shelfExcerptLabel || mergedIncoming.shelfExcerptLabel,
+    evidenceQuote: preferRicherField('title', existing?.evidenceQuote || '', opts.text) || mergedIncoming.evidenceQuote,
+    evidenceSource: 'reader_selection',
+    headingPath: opts.headingPath || mergedIncoming.headingPath,
+    locationLabel: opts.headingPath || mergedIncoming.locationLabel,
+    blockId: opts.blockId || mergedIncoming.blockId,
+    anchorId: opts.anchorId || mergedIncoming.anchorId,
+    anchorKind: opts.anchorKind || mergedIncoming.anchorKind,
+  }
+  const next = [
+    nextItem,
+    ...currentItems.filter((entry) => (
+      entry.key !== item.key
+      && entry.key !== existing?.key
+      && shelfPaperIdentity(entry) !== identity
+      && !shouldMergeShelfItemsBySource(entry, item, sourceIdentity)
+    )),
+  ]
+  return {
+    nextItems: dedupeShelfItems(next).slice(0, SHELF_MAX_ITEMS),
+    focusKey,
+    summaryTarget: {
+      ...summarySeed,
+      key: focusKey,
+      note: mergeReaderSelectionNote(existingSnapshot?.note || summarySeed.note, opts.note),
+    },
+  }
 }
 
 export function isWeakTitle(text: string): boolean {
@@ -195,6 +319,7 @@ export function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.libraryMatchDoi === b.libraryMatchDoi
     && a.libraryMatchYear === b.libraryMatchYear
     && JSON.stringify(a.metadataQuality || null) === JSON.stringify(b.metadataQuality || null)
+    && JSON.stringify(a.metadataExportAcceptance || null) === JSON.stringify(b.metadataExportAcceptance || null)
     && a.metadataRepairStatus === b.metadataRepairStatus
     && JSON.stringify(a.metadataRepairSources || []) === JSON.stringify(b.metadataRepairSources || [])
     && JSON.stringify(a.metadataChangedFields || []) === JSON.stringify(b.metadataChangedFields || [])
@@ -274,7 +399,16 @@ export function preferStringArray(current: string[], incoming: string[], preferI
   return cur.length > 0 ? cur : inc
 }
 
-export function metadataQualityRecordReady(value: unknown): boolean {
+export function metadataExportAcceptanceRecordReady(value: unknown): boolean | null {
+  if (!value || typeof value !== 'object') return null
+  const rec = value as Record<string, unknown>
+  if (!('export_ready' in rec) && !('exportReady' in rec)) return null
+  return rec.export_ready === true || rec.exportReady === true
+}
+
+export function metadataQualityRecordReady(value: unknown, exportAcceptance?: unknown): boolean {
+  const acceptanceReady = metadataExportAcceptanceRecordReady(exportAcceptance)
+  if (acceptanceReady !== null) return acceptanceReady
   if (!value || typeof value !== 'object') return false
   const rec = value as Record<string, unknown>
   const status = String(rec.status || '').trim().toLowerCase()
@@ -284,11 +418,28 @@ export function metadataQualityRecordReady(value: unknown): boolean {
 export function preferMetadataQuality(
   current: Record<string, unknown> | null,
   incoming: Record<string, unknown> | null,
+  currentExportAcceptance?: Record<string, unknown> | null,
+  incomingExportAcceptance?: Record<string, unknown> | null,
 ): Record<string, unknown> | null {
-  const currentReady = metadataQualityRecordReady(current)
-  const incomingReady = metadataQualityRecordReady(incoming)
+  const currentReady = metadataQualityRecordReady(current, currentExportAcceptance)
+  const incomingReady = metadataQualityRecordReady(incoming, incomingExportAcceptance)
   if (currentReady || !incomingReady) return current || incoming || null
   return incoming
+}
+
+export function preferMetadataExportAcceptance(
+  current: Record<string, unknown> | null,
+  incoming: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const currentReady = metadataExportAcceptanceRecordReady(current)
+  const incomingReady = metadataExportAcceptanceRecordReady(incoming)
+  if (incomingReady === true && currentReady !== true) return incoming
+  if (currentReady === true && incomingReady !== true) return current
+  if (!current) return incoming || null
+  if (!incoming) return current
+  const currentMissing = Array.isArray(current.missing_fields) ? current.missing_fields.length : 0
+  const incomingMissing = Array.isArray(incoming.missing_fields) ? incoming.missing_fields.length : 0
+  return incomingMissing < currentMissing ? incoming : current
 }
 
 export function shelfItemHasMetadataHydrationSeed(item: CiteShelfItem): boolean {
@@ -339,6 +490,33 @@ export function shelfItemHasDisplayableArticleSummary(item: CiteShelfItem): bool
 export function shelfItemNeedsSummaryBackfill(item: CiteShelfItem): boolean {
   if (!shelfItemHasMetadataHydrationSeed(item)) return false
   return !shelfItemHasDisplayableArticleSummary(item)
+}
+
+function preferShelfSummaryBundle(
+  item: CiteShelfItem,
+  live: CiteShelfItem,
+): Pick<CiteShelfItem, 'summaryLine' | 'summarySource' | 'summaryProvider' | 'summaryQuality'> {
+  const currentReady = shelfItemHasDisplayableArticleSummary(item)
+  const incomingReady = shelfItemHasDisplayableArticleSummary(live)
+  const currentLine = String(item.summaryLine || '').trim()
+  const incomingLine = String(live.summaryLine || '').trim()
+  const summaryLine = preferRicherField('title', currentLine, incomingLine)
+  const lineCameFromIncoming = Boolean(incomingLine && summaryLine === incomingLine && summaryLine !== currentLine)
+  const preferIncoming = (incomingReady && !currentReady) || (!currentReady && lineCameFromIncoming)
+  if (preferIncoming) {
+    return {
+      summaryLine,
+      summarySource: preferExistingText(live.summarySource, item.summarySource),
+      summaryProvider: preferExistingText(live.summaryProvider, item.summaryProvider),
+      summaryQuality: live.summaryQuality || item.summaryQuality || null,
+    }
+  }
+  return {
+    summaryLine,
+    summarySource: preferExistingText(item.summarySource, live.summarySource),
+    summaryProvider: preferExistingText(item.summaryProvider, live.summaryProvider),
+    summaryQuality: item.summaryQuality || live.summaryQuality || null,
+  }
 }
 
 export function shelfMetadataHydrateAttemptKey(item: CiteShelfItem): string {
@@ -394,9 +572,19 @@ export function articleSummaryPatchFromMeta(meta: Record<string, unknown>): Part
 }
 
 export function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteShelfItem {
-  const incomingMetadataReady = metadataQualityRecordReady(live.metadataQuality)
-  const currentMetadataReady = metadataQualityRecordReady(item.metadataQuality)
-  const metadataQuality = preferMetadataQuality(item.metadataQuality, live.metadataQuality)
+  const incomingMetadataReady = metadataQualityRecordReady(live.metadataQuality, live.metadataExportAcceptance)
+  const currentMetadataReady = metadataQualityRecordReady(item.metadataQuality, item.metadataExportAcceptance)
+  const summary = preferShelfSummaryBundle(item, live)
+  const metadataExportAcceptance = preferMetadataExportAcceptance(
+    item.metadataExportAcceptance,
+    live.metadataExportAcceptance,
+  )
+  const metadataQuality = preferMetadataQuality(
+    item.metadataQuality,
+    live.metadataQuality,
+    item.metadataExportAcceptance,
+    live.metadataExportAcceptance,
+  )
   const preferIncomingMetadata = incomingMetadataReady && !currentMetadataReady
   const mergedLike = {
     ...item,
@@ -430,15 +618,16 @@ export function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem)
     conferenceCcfSource: preferExistingText(item.conferenceCcfSource, live.conferenceCcfSource),
     conferenceName: preferExistingText(item.conferenceName, live.conferenceName),
     conferenceAcronym: preferExistingText(item.conferenceAcronym, live.conferenceAcronym),
-    summaryLine: preferRicherField('title', item.summaryLine, live.summaryLine),
-    summarySource: preferExistingText(item.summarySource, live.summarySource),
-    summaryProvider: preferExistingText(item.summaryProvider, live.summaryProvider),
-    summaryQuality: item.summaryQuality || live.summaryQuality,
+    summaryLine: summary.summaryLine,
+    summarySource: summary.summarySource,
+    summaryProvider: summary.summaryProvider,
+    summaryQuality: summary.summaryQuality,
     shelfItemKind: preferExistingText(item.shelfItemKind, live.shelfItemKind),
     shelfOrigin: preferExistingText(item.shelfOrigin, live.shelfOrigin),
     shelfExcerpt: preferRicherField('title', item.shelfExcerpt, live.shelfExcerpt),
     shelfExcerptLabel: preferExistingText(item.shelfExcerptLabel, live.shelfExcerptLabel),
     metadataQuality,
+    metadataExportAcceptance,
     metadataRepairStatus: preferIncomingMetadata
       ? preferExistingText(live.metadataRepairStatus, item.metadataRepairStatus)
       : preferExistingText(item.metadataRepairStatus, live.metadataRepairStatus),
@@ -520,6 +709,7 @@ export function shelfRepairMetaFromEntry(entry: ShelfMetadataRepairItem): Record
   return {
     ...(entry.meta || {}),
     metadata_quality: entry.after || (entry.meta || {}).metadata_quality,
+    metadata_export_acceptance: entry.export_acceptance || (entry.meta || {}).metadata_export_acceptance,
     metadata_repair_status: entry.repair_status,
     metadata_changed_fields: entry.changed_fields || [],
     metadata_repair_sources: entry.repair_sources || [],

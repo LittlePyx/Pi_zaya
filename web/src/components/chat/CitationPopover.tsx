@@ -321,6 +321,8 @@ export function CitationPopover({
     const onPointerDown = (event: MouseEvent) => {
       const el = ref.current
       if (!el) return
+      const targetEl = event.target instanceof Element ? event.target : null
+      if (targetEl?.closest('.kb-md-locate-inline-btn, .kb-prov-locate-chip, [data-kb-locate-block-id]')) return
       if (event.target instanceof Node && !el.contains(event.target)) onClose()
     }
     document.addEventListener('keydown', onKeyDown)
@@ -342,7 +344,7 @@ export function CitationPopover({
     const maxTop = Math.max(margin, window.innerHeight - rect.height - margin)
     setStyle({
       left: Math.min(Math.max(margin, position.x + 10), maxLeft),
-      top: Math.min(Math.max(margin, position.y + 10), maxTop),
+      top: Math.min(Math.max(margin, position.y + 28), maxTop),
     })
   }, [detail, position])
 
@@ -595,7 +597,22 @@ export function CitationPopover({
   const systemBLocationLabel = systemBReferenceRowLocation ? S.cite_reference_entry : S.cite_location_current
   const systemBLocationText = systemBReferenceRowLocation || systemBMeaningfulLocation
   const systemBLocationHint = ''
-  const showSystemBLocation = false
+  const systemBLocationSourceIsWeak = [
+    'answer_context',
+    'answer_reference_mention',
+    'reader_references',
+  ].includes(systemBContextSource) || cardQualityFlags.some((flag) => [
+    'answer_context_only',
+    'reference_entry_only',
+    'weak_citation_context',
+    'missing_citation_context',
+  ].includes(flag))
+  const showSystemBLocation = Boolean(
+    isSystemB
+    && systemBMeaningfulLocation
+    && !systemBReferenceRowLocation
+    && !systemBLocationSourceIsWeak,
+  )
   const systemBSupportText = isSystemB
     && explicitSupportText
     && !substantiallySame(explicitSupportText, systemBCitationContextText)
@@ -609,12 +626,42 @@ export function CitationPopover({
     || doiLabel
     || metrics.length > 0
   )
-  const showSystemBReference = Boolean(
+  const systemBReferenceHasBibliographicContext = Boolean(
+    systemBReferenceText
+    && /\b(?:18|19|20)\d{2}\b/.test(systemBReferenceText)
+    && (
+      isReferenceEntryLikeText(systemBReferenceText)
+      || !systemBTitle
+      || systemBReferenceText.length > systemBTitle.length + 18
+    )
+  )
+  const systemBReferenceIsUsefulEntry = Boolean(
     systemBReferenceText
     && (
-      systemBTitleMissing
-      || cardQualityFlags.includes('missing_reference_title')
-      || (cardQualityFlags.includes('reference_entry_only') && !hasSystemBHeaderIdentity)
+      systemBReferenceHasBibliographicContext
+      || (
+        (!systemBTitle || !substantiallySame(systemBReferenceText, systemBTitle))
+        && (!headerSubtitle || !substantiallySame(systemBReferenceText, headerSubtitle))
+      )
+    )
+  )
+  const systemBReferenceEntryOnly = cardQualityFlags.includes('reference_entry_only')
+  const systemBReferenceTitleMissing = systemBTitleMissing || cardQualityFlags.includes('missing_reference_title')
+  const suppressSystemBReferenceEntry = [
+    'reader_occurrence',
+    'reader_reference_link',
+    'reader_references',
+  ].includes(systemBContextSource)
+    && !systemBReferenceEntryOnly
+    && !systemBReferenceTitleMissing
+  const showSystemBReference = Boolean(
+    systemBReferenceText
+    && !suppressSystemBReferenceEntry
+    && (
+      (isSystemB && systemBReferenceIsUsefulEntry && (showSystemBLocation || systemBReferenceEntryOnly || systemBReferenceTitleMissing || !hasSystemBHeaderIdentity))
+      || (systemBExplicitReferenceText && (systemBReferenceEntryOnly || systemBReferenceTitleMissing || !hasSystemBHeaderIdentity))
+      || systemBReferenceTitleMissing
+      || systemBReferenceEntryOnly
       || (!hasSystemBHeaderIdentity && !systemBPaperOverviewText)
     ),
   )

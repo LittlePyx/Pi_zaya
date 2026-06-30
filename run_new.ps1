@@ -4,6 +4,7 @@ param(
   [switch]$InstallBackendDeps,
   [switch]$InstallFrontendDeps,
   [switch]$NoBackendReload,
+  [switch]$AllowAuthGate,
   [string]$BackendHost = "127.0.0.1",
   [int]$BackendPort = 8000,
   [string]$FrontendHost = "127.0.0.1",
@@ -15,6 +16,12 @@ $ErrorActionPreference = "Stop"
 function Write-Info($msg) { Write-Host "[kb_chat:new-ui] $msg" -ForegroundColor Cyan }
 function Write-Warn($msg) { Write-Host "[kb_chat:new-ui] $msg" -ForegroundColor Yellow }
 function Write-Err($msg) { Write-Host "[kb_chat:new-ui] $msg" -ForegroundColor Red }
+
+function Test-EnvTruthy([string]$Name) {
+  $value = [Environment]::GetEnvironmentVariable($Name, "Process")
+  if ([string]::IsNullOrWhiteSpace($value)) { return $false }
+  return @("1", "true", "yes", "on") -contains $value.Trim().ToLowerInvariant()
+}
 
 function Test-PortListening([int]$Port) {
   try {
@@ -53,10 +60,63 @@ function Get-PortPids([int[]]$Ports) {
   return $out
 }
 
+function Get-ProjectDevPids([string]$Root, [int[]]$Ports) {
+  $ids = @(Get-PortPids -Ports $Ports)
+  try {
+    $procs = @(Get-CimInstance Win32_Process | Where-Object {
+      $_.CommandLine -and
+      $_.CommandLine.Contains($Root) -and
+      (
+        ($_.Name -match 'python' -and $_.CommandLine -match 'uvicorn|multiprocessing\.spawn') -or
+        ($_.Name -match 'node|cmd' -and $_.CommandLine -match 'vite|npm.*run dev')
+      )
+    })
+    $ids += @($procs | Select-Object -ExpandProperty ProcessId)
+    $ids += @(
+      $procs |
+        Where-Object { $_.CommandLine -match 'multiprocessing\.spawn|vite|npm.*run dev' } |
+        Select-Object -ExpandProperty ParentProcessId
+    )
+  } catch {
+    # Fall back to port-based stopping when process metadata is unavailable.
+  }
+  return @($ids | Where-Object { $_ -and $_ -ne $PID } | Sort-Object -Unique)
+}
+
 function Tail-IfExists([string]$Path, [int]$Lines = 60) {
   if (Test-Path $Path) {
     Write-Host "---- $Path ----" -ForegroundColor DarkGray
     Get-Content $Path -Tail $Lines
+  }
+}
+
+function Test-BackendDepsReady([string]$PythonExe) {
+  $code = @'
+import importlib.util
+required = ('fastapi', 'uvicorn')
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+raise SystemExit(1 if missing else 0)
+'@
+  & $PythonExe -c $code *> $null
+  return ($LASTEXITCODE -eq 0)
+}
+
+function Test-FrontendDepsReady([string]$WebDir) {
+  $viteCmd = Join-Path $WebDir "node_modules\.bin\vite.cmd"
+  $viteBin = Join-Path $WebDir "node_modules\vite"
+  return (Test-Path $viteCmd) -or (Test-Path $viteBin)
+}
+
+function Install-FrontendDeps([string]$WebDir, [string]$NpmExe) {
+  Push-Location $WebDir
+  try {
+    if (Test-Path (Join-Path $WebDir "package-lock.json")) {
+      & $NpmExe ci | Out-Host
+    } else {
+      & $NpmExe install | Out-Host
+    }
+  } finally {
+    Pop-Location
   }
 }
 
@@ -84,6 +144,31 @@ if (Test-Path $envPath) {
   }
 }
 
+if (-not $AllowAuthGate) {
+  if ((Test-EnvTruthy -Name "KB_REQUIRE_AUTH") -or (Test-EnvTruthy -Name "KB_ENABLE_AUTH_GATE") -or (Test-EnvTruthy -Name "KB_PRIVATE_INSTANCE_AUTH")) {
+    Write-Warn "Access-token gate settings detected. The local user app stays public by default, so this launcher is disabling the gate for this process. Use -AllowAuthGate only when testing a private access-token gate."
+  }
+  [Environment]::SetEnvironmentVariable("KB_REQUIRE_AUTH", "0", "Process")
+  [Environment]::SetEnvironmentVariable("KB_ENABLE_AUTH_GATE", "0", "Process")
+  [Environment]::SetEnvironmentVariable("KB_PRIVATE_INSTANCE_AUTH", "0", "Process")
+  [Environment]::SetEnvironmentVariable("KB_ALLOW_LOCAL_AUTH_GATE", "0", "Process")
+  [Environment]::SetEnvironmentVariable("VITE_ENABLE_AUTH_GATE", "0", "Process")
+  [Environment]::SetEnvironmentVariable("VITE_PRIVATE_INSTANCE_AUTH", "0", "Process")
+  [Environment]::SetEnvironmentVariable("VITE_ALLOW_LOCAL_AUTH_GATE", "0", "Process")
+} else {
+  [Environment]::SetEnvironmentVariable("KB_ENABLE_AUTH_GATE", "1", "Process")
+  [Environment]::SetEnvironmentVariable("KB_PRIVATE_INSTANCE_AUTH", "1", "Process")
+  [Environment]::SetEnvironmentVariable("KB_ALLOW_LOCAL_AUTH_GATE", "1", "Process")
+  [Environment]::SetEnvironmentVariable("VITE_ENABLE_AUTH_GATE", "1", "Process")
+  [Environment]::SetEnvironmentVariable("VITE_PRIVATE_INSTANCE_AUTH", "1", "Process")
+  [Environment]::SetEnvironmentVariable("VITE_ALLOW_LOCAL_AUTH_GATE", "1", "Process")
+}
+if ((Test-EnvTruthy -Name "KB_PRIVATE_INSTANCE_AUTH") -and (Test-EnvTruthy -Name "KB_ENABLE_AUTH_GATE") -and (Test-EnvTruthy -Name "KB_REQUIRE_AUTH")) {
+  Write-Warn "Access-token gate: ON for this local run."
+} else {
+  Write-Info "Access-token gate: OFF; users do not need a token."
+}
+
 $venvPython = Join-Path $here ".venv\Scripts\python.exe"
 if (Test-Path $venvPython) {
   $pythonExe = $venvPython
@@ -100,9 +185,12 @@ $npmExe = $npmCmd.Source
 
 $targetPorts = @($BackendPort, $FrontendPort)
 if ($StopExisting) {
-  $pids = Get-PortPids -Ports $targetPorts
-  if (@($pids).Count -gt 0) {
-    Write-Info "Stopping existing processes on ports $($targetPorts -join ', '): $($pids -join ', ')"
+  for ($i = 0; $i -lt 3; $i++) {
+    $pids = Get-ProjectDevPids -Root $here -Ports $targetPorts
+    if (@($pids).Count -eq 0) {
+      break
+    }
+    Write-Info "Stopping existing project dev processes on ports $($targetPorts -join ', '): $($pids -join ', ')"
     Stop-Process -Id $pids -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
   }
@@ -121,12 +209,15 @@ if ($InstallBackendDeps) {
 
 if ($InstallFrontendDeps) {
   Write-Info "Installing frontend dependencies in web/ ..."
-  Push-Location $webDir
-  try {
-    & $npmExe install | Out-Host
-  } finally {
-    Pop-Location
-  }
+  Install-FrontendDeps -WebDir $webDir -NpmExe $npmExe
+}
+
+if (-not (Test-BackendDepsReady -PythonExe $pythonExe)) {
+  throw "Backend dependencies are missing. Run .\run_new.ps1 -InstallBackendDeps -InstallFrontendDeps -StopExisting, or run: pip install -r requirements.txt"
+}
+
+if (-not (Test-FrontendDepsReady -WebDir $webDir)) {
+  throw "Frontend dependencies are missing. Run .\run_new.ps1 -InstallFrontendDeps -StopExisting, or run: cd web; npm ci"
 }
 
 $fastapiOut = Join-Path $here ".tmp_fastapi_stdout.log"
@@ -152,17 +243,25 @@ $backendProc = Start-Process `
   -FilePath $pythonExe `
   -ArgumentList $backendArgs `
   -WorkingDirectory $here `
+  -WindowStyle Hidden `
   -PassThru `
   -RedirectStandardOutput $fastapiOut `
   -RedirectStandardError $fastapiErr
 
 Write-Info "Starting frontend (vite) on http://$FrontendHost`:$FrontendPort ..."
-# Tell Vite proxy where the backend lives.
-$env:VITE_BACKEND_URL = "http://$BackendHost`:$BackendPort"
+# Keep the browser runtime on same-origin /api while telling Vite's dev proxy
+# where the backend lives. This avoids stale VITE_BACKEND_URL values from .env
+# making local clone users call an old or cross-origin backend.
+if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("VITE_BACKEND_URL", "Process"))) {
+  Write-Warn "VITE_BACKEND_URL detected. Local dev mode clears it so the browser uses same-origin /api; Vite proxy will target the backend below."
+}
+[Environment]::SetEnvironmentVariable("VITE_BACKEND_URL", "", "Process")
+[Environment]::SetEnvironmentVariable("VITE_BACKEND_PROXY_TARGET", "http://$BackendHost`:$BackendPort", "Process")
 $frontendProc = Start-Process `
   -FilePath $npmExe `
   -ArgumentList @('run', 'dev', '--', '--host', $FrontendHost, '--port', "$FrontendPort") `
   -WorkingDirectory $webDir `
+  -WindowStyle Hidden `
   -PassThru `
   -RedirectStandardOutput $viteOut `
   -RedirectStandardError $viteErr
@@ -173,8 +272,8 @@ $backendPostPids = Get-PortPids -Ports @($BackendPort)
 $frontendPostPids = Get-PortPids -Ports @($FrontendPort)
 $backendNewPids = @($backendPostPids | Where-Object { $backendPrePids -notcontains $_ })
 $frontendNewPids = @($frontendPostPids | Where-Object { $frontendPrePids -notcontains $_ })
-$backendOk = $backendListening -and ($backendNewPids.Count -gt 0)
-$frontendOk = $frontendListening -and ($frontendNewPids.Count -gt 0)
+$backendOk = $backendListening
+$frontendOk = $frontendListening
 
 Write-Host ""
 Write-Info "Backend PID:  $($backendProc.Id)  (port ${BackendPort}: $(if ($backendOk) { 'UP' } else { 'DOWN' }))"

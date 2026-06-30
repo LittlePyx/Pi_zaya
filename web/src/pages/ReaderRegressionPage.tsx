@@ -56,6 +56,8 @@ export default function ReaderRegressionPage() {
   const [locateResult, setLocateResult] = useState<ReaderLocateResult | null>(null)
   const [readerCitationShelf, setReaderCitationShelf] = useState<CiteDetail[]>([])
   const [readerSelectionShelf, setReaderSelectionShelf] = useState<ReaderSelectionShelfPayload[]>([])
+  const [readerOpen, setReaderOpen] = useState(() => params.get('startClosed') !== '1')
+  const [readerSourceEnabled, setReaderSourceEnabled] = useState(() => params.get('startEmpty') !== '1')
   const appendSelectionLog = useCallback((text: string) => {
     setAppendLog((current) => (current ? `${current}\n---\n${text}` : text))
   }, [])
@@ -136,6 +138,18 @@ export default function ReaderRegressionPage() {
             <span className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-black/55 dark:text-white/55" data-testid="reader-selection-shelf-count">
               {readerSelectionShelf.length} selections
             </span>
+            <span className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-black/55 dark:text-white/55" data-testid="reader-open-state">
+              {readerOpen ? 'open' : 'closed'}
+            </span>
+            <span className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-black/55 dark:text-white/55" data-testid="reader-source-state">
+              {readerSourceEnabled ? 'source' : 'empty'}
+            </span>
+            <Button size="small" data-testid="reader-toggle-open" onClick={() => setReaderOpen((current) => !current)}>
+              Toggle reader
+            </Button>
+            <Button size="small" data-testid="reader-toggle-source" onClick={() => setReaderSourceEnabled((current) => !current)}>
+              Toggle source
+            </Button>
             <Button size="small" onClick={() => setSessionHighlights([])}>
               Clear highlights
             </Button>
@@ -148,9 +162,9 @@ export default function ReaderRegressionPage() {
       <div className="flex min-h-0 flex-1 flex-col xl:grid xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-h-0 flex-1 border-r border-[var(--border)]">
           <PaperGuideReaderDrawer
-            open
-            payload={payload}
-            onClose={() => {}}
+            open={readerOpen}
+            payload={readerSourceEnabled ? payload : null}
+            onClose={() => setReaderOpen(false)}
             onAppendSelection={appendSelectionLog}
             presentation="inline"
             sessionHighlights={sessionHighlights}
@@ -158,7 +172,7 @@ export default function ReaderRegressionPage() {
             onUpdateSessionHighlight={updateSessionHighlight}
             onRemoveSessionHighlight={removeSessionHighlight}
             onLocateResult={recordLocateResult}
-            documentOverride={documentOverride}
+            documentOverride={readerSourceEnabled ? documentOverride : null}
             onAddCitationToShelf={addReaderCitationToShelf}
             onAddSelectionToShelf={addReaderSelectionToShelf}
           />

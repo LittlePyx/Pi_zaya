@@ -122,3 +122,105 @@ def test_chat_pdf_job_starts_background_quality_refine(monkeypatch, tmp_path: Pa
     assert isinstance(rec, dict)
     assert rec.get("ingest_status") == "ready"
     assert rec.get("quality_status") == "ready"
+
+
+def test_chat_pdf_job_marks_quality_error_when_ingest_fails(monkeypatch, tmp_path: Path):
+    from api.routers import chat as chat_router
+
+    src_pdf = tmp_path / "upload.pdf"
+    src_pdf.write_bytes(b"%PDF-1.4 test")
+
+    monkeypatch.setattr(
+        chat_router,
+        "auto_rename_saved_pdf_in_library",
+        lambda **kwargs: {
+            "ok": True,
+            "path": str(src_pdf),
+            "name": src_pdf.name,
+            "sha1": "sha1abc",
+            "renamed": False,
+        },
+    )
+    monkeypatch.setattr(
+        chat_router,
+        "quick_ingest_pdf",
+        lambda **kwargs: {"ready": False, "error": "conversion failed"},
+    )
+
+    job_id = chat_router._start_chat_pdf_ingest_job(
+        pdf_path=src_pdf,
+        speed_mode="ultra_fast",
+        display_name=src_pdf.name,
+        sha1="sha1abc",
+        conv_id="",
+    )
+
+    deadline = time.time() + 2.0
+    rec = None
+    while time.time() < deadline:
+        rec = chat_router._get_chat_pdf_ingest_job(job_id)
+        if isinstance(rec, dict) and str(rec.get("ingest_status") or "") == "error":
+            break
+        time.sleep(0.02)
+
+    assert isinstance(rec, dict)
+    assert rec.get("ingest_status") == "error"
+    assert rec.get("quality_status") == "error"
+    assert rec.get("quality_stage") == "error"
+    assert rec.get("quality_error") == "conversion failed"
+    assert chat_router._chat_upload_job_running(rec) is False
+
+
+def test_chat_pdf_job_marks_quality_error_when_refine_cannot_start(monkeypatch, tmp_path: Path):
+    from api.routers import chat as chat_router
+
+    src_pdf = tmp_path / "upload.pdf"
+    src_pdf.write_bytes(b"%PDF-1.4 test")
+    md_path = tmp_path / "paper" / "paper.en.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("# quick\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        chat_router,
+        "auto_rename_saved_pdf_in_library",
+        lambda **kwargs: {
+            "ok": True,
+            "path": str(src_pdf),
+            "name": src_pdf.name,
+            "sha1": "sha1abc",
+            "renamed": False,
+        },
+    )
+    monkeypatch.setattr(
+        chat_router,
+        "quick_ingest_pdf",
+        lambda **kwargs: {"ready": True, "md_path": str(md_path)},
+    )
+
+    def fail_quality_start(job_id: str) -> None:
+        raise AssertionError("quality refine should not start without an output folder")
+
+    monkeypatch.setattr(chat_router, "_start_chat_pdf_quality_refine", fail_quality_start)
+
+    job_id = chat_router._start_chat_pdf_ingest_job(
+        pdf_path=src_pdf,
+        speed_mode="ultra_fast",
+        display_name=src_pdf.name,
+        sha1="sha1abc",
+        conv_id="",
+    )
+
+    deadline = time.time() + 2.0
+    rec = None
+    while time.time() < deadline:
+        rec = chat_router._get_chat_pdf_ingest_job(job_id)
+        if isinstance(rec, dict) and str(rec.get("ingest_status") or "") == "ready":
+            break
+        time.sleep(0.02)
+
+    assert isinstance(rec, dict)
+    assert rec.get("ingest_status") == "ready"
+    assert rec.get("quality_status") == "error"
+    assert rec.get("quality_stage") == "error"
+    assert rec.get("quality_error") == "quality refine was not started after ingest"
+    assert chat_router._chat_upload_job_running(rec) is False

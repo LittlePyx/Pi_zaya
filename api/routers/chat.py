@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi import File, Form, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.chat_render import enrich_messages_with_reference_render
-from api.deps import get_chat_store, get_settings
+from api.deps import get_chat_store, get_settings, load_prefs
 from api.upload_limits import (
     is_probably_pdf,
     max_chat_upload_files,
@@ -24,6 +26,7 @@ from api.upload_limits import (
 )
 from api.routers.library import (
     _md_dir,
+    _pdf_dir,
     auto_rename_saved_pdf_in_library,
     quick_ingest_pdf,
     refine_pdf_with_full_llm_replace,
@@ -31,11 +34,70 @@ from api.routers.library import (
 )
 from kb.file_ops import _path_exists
 from kb.maintenance import create_auto_snapshot
+from kb.paper_guide_provenance import _resolve_paper_guide_md_path
+from kb.path_safety import (
+    clean_file_source_path_input,
+    image_ext_for_mime,
+    path_is_within_roots,
+    resolve_existing_file_under_roots,
+    resolve_verified_image_file_under_roots,
+    resolve_verified_pdf_file_under_roots,
+    resolved_path,
+    sniff_image_ext,
+    unique_resolved_roots,
+    verified_image_bytes_mime,
+)
 from kb.pdf_tools import ensure_dir
 from kb.reader_session_store import ReaderSessionStore
-from kb.task_runtime import kickoff_paper_guide_prefetch
+from kb.task_runtime import (
+    _gen_has_active_task_id,
+    _is_live_assistant_text,
+    _live_assistant_task_id,
+    generation_interrupted_message,
+    kickoff_paper_guide_prefetch,
+)
 
 router = APIRouter(prefix="/api", tags=["chat"])
+
+_CHAT_TITLE_MAX_CHARS = 240
+_CHAT_PROJECT_NAME_MAX_CHARS = 120
+_CHAT_MESSAGE_MAX_CHARS = 80_000
+_CHAT_SOURCE_PATH_MAX_CHARS = 1_200
+_CHAT_SOURCE_NAME_MAX_CHARS = 500
+_CHAT_READER_TITLE_MAX_CHARS = 240
+_CHAT_READER_CONVERSATION_ID_MAX_CHARS = 120
+_CHAT_READER_PAYLOAD_MAX_JSON_CHARS = 120_000
+_CHAT_STATE_MAX_JSON_CHARS = 160_000
+_CHAT_CITATION_SHELF_MAX_ITEMS = 120
+_CHAT_CITATION_SHELF_MAX_JSON_CHARS = 260_000
+_CHAT_CITATION_SHELF_ITEM_MAX_JSON_CHARS = 40_000
+
+
+def _bounded_json_size(value: Any, *, name: str, max_json_chars: int) -> Any:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
+    except Exception as exc:
+        raise ValueError(f"{name} must be JSON serializable") from exc
+    if len(encoded) > int(max_json_chars):
+        raise ValueError(f"{name} is too large; max {int(max_json_chars)} JSON chars")
+    return value
+
+
+def _bounded_dict(value: Any, *, name: str, max_json_chars: int) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    return _bounded_json_size(value, name=name, max_json_chars=max_json_chars)
+
+
+def _bounded_dict_list(value: Any, *, name: str, max_items: int, max_json_chars: int) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a list")
+    if len(value) > int(max_items):
+        raise ValueError(f"{name} has too many items; max {int(max_items)}")
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError(f"{name} items must be objects")
+    return _bounded_json_size(value, name=name, max_json_chars=max_json_chars)
 
 
 def _dangerous_auto_snapshot(action: str, *, label: str = "", metadata: dict | None = None) -> dict:
@@ -52,83 +114,153 @@ def _dangerous_auto_snapshot(action: str, *, label: str = "", metadata: dict | N
 
 
 class CreateConvBody(BaseModel):
-    title: str = "新会话"
-    project_id: str | None = None
-    mode: str = "normal"
-    bound_source_path: str = ""
-    bound_source_name: str = ""
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = Field("新会话", max_length=_CHAT_TITLE_MAX_CHARS)
+    project_id: str | None = Field(None, max_length=120)
+    mode: str = Field("normal", max_length=40)
+    bound_source_path: str = Field("", max_length=_CHAT_SOURCE_PATH_MAX_CHARS)
+    bound_source_name: str = Field("", max_length=_CHAT_SOURCE_NAME_MAX_CHARS)
     bound_source_ready: bool = False
 
 
 class CreateProjectBody(BaseModel):
-    name: str = "未命名项目"
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field("未命名项目", max_length=_CHAT_PROJECT_NAME_MAX_CHARS)
 
 
 class AppendMsgBody(BaseModel):
-    role: str = "user"
-    content: str
+    model_config = ConfigDict(extra="ignore")
+
+    role: str = Field("user", max_length=32)
+    content: str = Field(..., max_length=_CHAT_MESSAGE_MAX_CHARS)
 
 
 class UpdateMsgBody(BaseModel):
-    content: str
+    model_config = ConfigDict(extra="ignore")
+
+    content: str = Field(..., max_length=_CHAT_MESSAGE_MAX_CHARS)
 
 
 class UpdateTitleBody(BaseModel):
-    title: str
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = Field(..., max_length=_CHAT_TITLE_MAX_CHARS)
 
 
 class UpdateProjectBody(BaseModel):
-    project_id: str | None = None
+    model_config = ConfigDict(extra="ignore")
+
+    project_id: str | None = Field(None, max_length=120)
 
 
 class UpdateConversationGuideBody(BaseModel):
-    mode: str | None = None
-    bound_source_path: str | None = None
-    bound_source_name: str | None = None
+    model_config = ConfigDict(extra="ignore")
+
+    mode: str | None = Field(None, max_length=40)
+    bound_source_path: str | None = Field(None, max_length=_CHAT_SOURCE_PATH_MAX_CHARS)
+    bound_source_name: str | None = Field(None, max_length=_CHAT_SOURCE_NAME_MAX_CHARS)
     bound_source_ready: bool | None = None
 
 
 class RenameProjectBody(BaseModel):
-    name: str
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(..., max_length=_CHAT_PROJECT_NAME_MAX_CHARS)
 
 
 class UploadJobBody(BaseModel):
-    job_id: str
+    model_config = ConfigDict(extra="ignore")
+
+    job_id: str = Field(..., max_length=120)
 
 
 class ReaderSessionCreateBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     payload: dict[str, Any] = Field(default_factory=dict)
     state: dict[str, Any] = Field(default_factory=dict)
-    title: str = ""
-    conversation_id: str = ""
+    title: str = Field("", max_length=_CHAT_READER_TITLE_MAX_CHARS)
+    conversation_id: str = Field("", max_length=_CHAT_READER_CONVERSATION_ID_MAX_CHARS)
     message_id: int | None = None
+
+    @field_validator("payload")
+    @classmethod
+    def _check_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_dict(value, name="reader session payload", max_json_chars=_CHAT_READER_PAYLOAD_MAX_JSON_CHARS)
+
+    @field_validator("state")
+    @classmethod
+    def _check_state(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_dict(value, name="reader session state", max_json_chars=_CHAT_STATE_MAX_JSON_CHARS)
 
 
 class ReaderSessionStatePatchBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     state: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("state")
+    @classmethod
+    def _check_state(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_dict(value, name="reader session state", max_json_chars=_CHAT_STATE_MAX_JSON_CHARS)
 
 
 class ConversationReaderStatePatchBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     state: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("state")
+    @classmethod
+    def _check_state(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_dict(value, name="conversation reader state", max_json_chars=_CHAT_STATE_MAX_JSON_CHARS)
 
 
 class ConversationResearchStatePatchBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     state: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("state")
+    @classmethod
+    def _check_state(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_dict(value, name="conversation research state", max_json_chars=_CHAT_STATE_MAX_JSON_CHARS)
 
 
 class CitationShelfBody(BaseModel):
-    items: list[dict[str, Any]] = Field(default_factory=list)
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[dict[str, Any]] = Field(default_factory=list, max_length=_CHAT_CITATION_SHELF_MAX_ITEMS)
     open: bool = False
-    scope: str | None = None
-    project_id: str | None = None
+    scope: str | None = Field(None, max_length=40)
+    project_id: str | None = Field(None, max_length=120)
     allow_empty_overwrite: bool = False
+
+    @field_validator("items")
+    @classmethod
+    def _check_items(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return _bounded_dict_list(
+            value,
+            name="citation shelf items",
+            max_items=_CHAT_CITATION_SHELF_MAX_ITEMS,
+            max_json_chars=_CHAT_CITATION_SHELF_MAX_JSON_CHARS,
+        )
 
 
 class CitationShelfAppendBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     item: dict[str, Any] = Field(default_factory=dict)
     open: bool = True
-    scope: str | None = None
-    project_id: str | None = None
+    scope: str | None = Field(None, max_length=40)
+    project_id: str | None = Field(None, max_length=120)
+
+    @field_validator("item")
+    @classmethod
+    def _check_item(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_dict(value, name="citation shelf item", max_json_chars=_CHAT_CITATION_SHELF_ITEM_MAX_JSON_CHARS)
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -157,20 +289,54 @@ def _chat_image_dir() -> Path:
     return out
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _reader_markdown_roots() -> list[Path]:
+    try:
+        settings = get_settings()
+    except Exception:
+        settings = None
+    db_dir = getattr(settings, "db_dir", None) if settings is not None else None
+    return unique_resolved_roots([
+        _md_dir(),
+        _project_root() / "tmp",
+        db_dir,
+        (Path(db_dir).expanduser() / "db") if db_dir else None,
+        (Path(db_dir).expanduser().parent / "md_output") if db_dir else None,
+    ])
+
+
 def _reader_session_store() -> ReaderSessionStore:
     settings = get_settings()
     return ReaderSessionStore(Path(settings.db_dir) / "_reader_sessions.json")
 
 
-def _normalize_reader_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _normalize_reader_session_payload(payload: dict[str, Any], *, require_allowed_source: bool = False) -> dict[str, Any]:
     rec = dict(payload or {})
     source_path = str(rec.get("sourcePath") or rec.get("source_path") or "").strip()
     if source_path:
+        if require_allowed_source:
+            source_path = _resolve_allowed_reader_source_path(source_path)
         rec["sourcePath"] = source_path
+        rec.pop("source_path", None)
     source_name = str(rec.get("sourceName") or rec.get("source_name") or "").strip()
     if source_name:
         rec["sourceName"] = source_name
+        rec.pop("source_name", None)
     return rec
+
+
+def _resolve_reader_state_source_path(source_path: str) -> str:
+    raw = str(source_path or "").strip()
+    if not raw:
+        raise HTTPException(400, "source_path required")
+    return _resolve_allowed_reader_source_path(raw)
+
+
+def _clean_reader_source_path_input(source_path: str) -> str:
+    return clean_file_source_path_input(source_path)
 
 
 def _safe_upload_stem(name: str) -> str:
@@ -192,8 +358,25 @@ def _safe_upload_stem(name: str) -> str:
     return (out or "upload")[:72]
 
 
+def _safe_upload_display_name(raw_name: str, *, fallback: str = "upload") -> str:
+    clean = unquote(str(raw_name or ""), errors="replace")
+    clean = re.sub(r"[\x00-\x1f\x7f]+", " ", clean).strip().replace("\\", "/")
+    clean = clean.rsplit("/", 1)[-1].strip()
+    clean = re.sub(r"\s+", " ", clean).strip()
+    if clean in {"", ".", ".."}:
+        clean = str(fallback or "upload").strip() or "upload"
+    return clean[:160]
+
+
 def _chat_image_url(path: str) -> str:
-    return f"/api/chat/uploads/image?path={quote(str(path or '').strip(), safe='')}"
+    return f"/api/chat/uploads/image?path={quote(_chat_image_public_path(path), safe='')}"
+
+
+def _chat_image_public_path(path: str) -> str:
+    raw = clean_file_source_path_input(path)
+    if not raw:
+        return ""
+    return Path(raw.replace("\\", "/")).name
 
 
 def _normalize_chat_image_attachment(item: dict) -> dict:
@@ -213,6 +396,130 @@ def _normalize_message_attachments(message: dict) -> dict:
         attachments.append(_normalize_chat_image_attachment(item))
     rec["attachments"] = attachments
     return rec
+
+
+def _recover_stale_live_assistant_messages(messages: list[dict], store) -> list[dict]:
+    if not messages:
+        return messages
+    try:
+        locale = load_prefs().get("ui_locale")
+    except Exception:
+        locale = ""
+    replacement = generation_interrupted_message(locale)
+    for msg in messages:
+        if str(msg.get("role") or "") != "assistant":
+            continue
+        content = str(msg.get("content") or "")
+        if not _is_live_assistant_text(content):
+            continue
+        task_id = _live_assistant_task_id(content)
+        if task_id and _gen_has_active_task_id(task_id):
+            continue
+        try:
+            mid = int(msg.get("id") or 0)
+        except Exception:
+            mid = 0
+        if mid <= 0:
+            continue
+        meta = dict(msg.get("meta") or {})
+        meta.update({
+            "generation_status": "interrupted",
+            "generation_task_id": task_id,
+        })
+        try:
+            store.update_message_content(mid, replacement)
+            store.merge_message_meta(mid, meta)
+        except Exception:
+            pass
+        msg["content"] = replacement
+        msg["meta"] = meta
+    return messages
+
+
+def _resolve_allowed_paper_guide_source_path(source_path: str) -> str:
+    raw = _clean_reader_source_path_input(source_path)
+    if not raw:
+        return ""
+    try:
+        pdf_root = _pdf_dir()
+        md_root = _md_dir()
+    except Exception as exc:
+        raise HTTPException(500, "library directories unavailable") from exc
+
+    suffix = Path(raw).suffix.lower()
+    if suffix.endswith(".md"):
+        md_path = _resolve_paper_guide_md_path(raw, md_root=md_root, db_dir=getattr(get_settings(), "db_dir", None), pdf_root=pdf_root)
+        if md_path is None:
+            raise HTTPException(400, "source markdown must be within the configured markdown directory")
+        return str(md_path)
+
+    if suffix == ".pdf":
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path(pdf_root) / candidate
+        resolved = resolved_path(candidate)
+        if resolved is None or resolved.suffix.lower() != ".pdf":
+            raise HTTPException(400, "source path must point to a PDF")
+        if not path_is_within_roots(resolved, [pdf_root]):
+            raise HTTPException(400, "source PDF must be within the configured PDF directory")
+        if not resolved.is_file():
+            raise HTTPException(404, "source PDF not found")
+        return str(resolved)
+
+    raise HTTPException(400, "source path must point to a PDF or converted markdown")
+
+
+def _resolve_allowed_reader_source_path(source_path: str) -> str:
+    raw = _clean_reader_source_path_input(source_path)
+    if not raw:
+        raise HTTPException(400, "reader sourcePath required")
+    suffix = Path(raw).suffix.lower()
+    if suffix.endswith(".md"):
+        try:
+            pdf_root = _pdf_dir()
+            md_root = _md_dir()
+        except Exception as exc:
+            raise HTTPException(500, "library directories unavailable") from exc
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+        md_path = _resolve_paper_guide_md_path(raw, md_root=md_root, db_dir=getattr(settings, "db_dir", None), pdf_root=pdf_root)
+        if md_path is None:
+            md_path = resolve_existing_file_under_roots(raw, _reader_markdown_roots())
+        if md_path is None:
+            raise HTTPException(400, "source markdown must be within an allowed reader directory")
+        return str(md_path)
+    if suffix == ".pdf":
+        return _resolve_allowed_paper_guide_source_path(raw)
+    raise HTTPException(400, "source path must point to a PDF or converted markdown")
+
+
+def _resolve_chat_upload_pdf_path(path_raw: str) -> Path:
+    raw = str(path_raw or "").strip()
+    if not raw:
+        raise FileNotFoundError("pdf file not found")
+    try:
+        pdf_root = _pdf_dir()
+    except Exception as exc:
+        raise RuntimeError("library PDF directory is unavailable") from exc
+    resolved = resolve_verified_pdf_file_under_roots(raw, [pdf_root])
+    if resolved is not None:
+        return resolved
+    candidate = resolved_path(raw)
+    if candidate is None:
+        raise FileNotFoundError("pdf file not found")
+    if not path_is_within_roots(candidate, [pdf_root]):
+        raise ValueError("pdf file must be within the configured PDF directory")
+    if candidate.suffix.lower() != ".pdf":
+        raise ValueError("pdf file must be a PDF")
+    try:
+        exists = candidate.is_file()
+    except Exception:
+        exists = False
+    if exists:
+        raise ValueError("pdf file is not a valid PDF")
+    raise FileNotFoundError("pdf file not found")
 
 
 def _bind_pdf_source_to_conversation(*, conv_id: str, source_path: str, source_name: str = "") -> None:
@@ -251,11 +558,16 @@ def _kickoff_paper_guide_prefetch_if_needed(
     except Exception:
         md_root = None
     try:
+        pdf_root = _pdf_dir()
+    except Exception:
+        pdf_root = None
+    try:
         kickoff_paper_guide_prefetch(
             source_path=src,
             source_name=str(source_name or "").strip(),
             db_dir=(getattr(settings, "db_dir", None) if settings is not None else None),
             md_root=md_root,
+            pdf_root=pdf_root,
             library_db_path=(getattr(settings, "library_db_path", None) if settings is not None else None),
         )
     except Exception:
@@ -538,27 +850,48 @@ def _start_chat_pdf_ingest_job(
         except Exception as exc:
             result = {"ready": False, "error": str(exc)}
         if _chat_pdf_ingest_cancel_requested(job_id) or bool(result.get("cancelled")):
-            _set_chat_pdf_ingest_job(
-                job_id,
-                {
-                    "ready": False,
-                    "ingest_status": "cancelled",
-                    "error": "cancelled",
-                    "ingest_proc": None,
-                },
-            )
+            payload = {
+                "ready": False,
+                "ingest_status": "cancelled",
+                "error": "cancelled",
+                "ingest_proc": None,
+            }
+            if quality_pending:
+                payload.update({
+                    "quality_status": "cancelled",
+                    "quality_stage": "cancelled",
+                    "quality_error": "cancelled",
+                })
+            _set_chat_pdf_ingest_job(job_id, payload)
             return
+        ready = bool(result.get("ready"))
+        result_error = str(result.get("error") or "")
+        quality_update: dict[str, str] = {}
+        if quality_pending and not ready:
+            quality_update = {
+                "quality_status": "error",
+                "quality_stage": "error",
+                "quality_error": result_error or "ingest failed before quality refine",
+            }
+        elif quality_pending and ready and not bool(result.get("out_folder")):
+            quality_update = {
+                "quality_status": "error",
+                "quality_stage": "error",
+                "quality_error": "quality refine was not started after ingest",
+            }
+        payload = {
+            "ready": ready,
+            "ingest_status": "ready" if ready else "error",
+            "error": result_error,
+            "md_path": str(result.get("md_path") or ""),
+            "ingest_proc": None,
+        }
+        payload.update(quality_update)
         _set_chat_pdf_ingest_job(
             job_id,
-            {
-                "ready": bool(result.get("ready")),
-                "ingest_status": "ready" if bool(result.get("ready")) else "error",
-                "error": str(result.get("error") or ""),
-                "md_path": str(result.get("md_path") or ""),
-                "ingest_proc": None,
-            },
+            payload,
         )
-        if bool(result.get("ready")):
+        if ready:
             rec_done = _get_chat_pdf_ingest_job(job_id) or {}
             _bind_pdf_source_to_conversation(
                 conv_id=str(rec_done.get("conv_id") or ""),
@@ -608,9 +941,7 @@ def _retry_chat_pdf_ingest_job(job_id: str) -> dict | None:
     status = str(rec.get("ingest_status") or "")
     if status in {"processing", "renaming", "converting", "ingesting"}:
         raise RuntimeError("job still running")
-    pdf_path = Path(str(rec.get("path") or "")).expanduser()
-    if not _path_exists(pdf_path):
-        raise FileNotFoundError("pdf file not found")
+    pdf_path = _resolve_chat_upload_pdf_path(str(rec.get("path") or ""))
     new_job_id = _start_chat_pdf_ingest_job(
         pdf_path=pdf_path,
         speed_mode=str(rec.get("speed_mode") or "balanced"),
@@ -632,9 +963,7 @@ def _retry_chat_pdf_quality_refine_job(job_id: str) -> dict | None:
         raise RuntimeError("quality refine still running")
     if quality_status in {"none", ""}:
         raise RuntimeError("quality refine not enabled for this job")
-    pdf_path = Path(str(rec.get("path") or "")).expanduser()
-    if not _path_exists(pdf_path):
-        raise FileNotFoundError("pdf file not found")
+    _resolve_chat_upload_pdf_path(str(rec.get("path") or ""))
     _set_chat_pdf_ingest_job(
         job_id,
         {
@@ -648,77 +977,67 @@ def _retry_chat_pdf_quality_refine_job(job_id: str) -> dict | None:
     return _get_chat_pdf_ingest_job(job_id)
 
 
-def _detect_image_ext(raw_name: str, raw_mime: str, data: bytes) -> str:
-    suffix = Path(raw_name).suffix.lower()
+def _sniff_image_ext(data: bytes) -> str:
+    return sniff_image_ext(data)
+
+
+def _claimed_image_ext(raw_name: str, raw_mime: str) -> str:
+    suffix = Path(_safe_upload_display_name(raw_name)).suffix.lower()
     if suffix in IMAGE_EXTS:
         return suffix
-    ext = IMAGE_MIME_TO_EXT.get(str(raw_mime or "").strip().lower(), "")
-    if ext:
-        return ext
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return ".png"
-    if data[:3] == b"\xff\xd8\xff":
-        return ".jpg"
-    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
-        return ".gif"
-    if (len(data) >= 12) and (data[:4] == b"RIFF") and (data[8:12] == b"WEBP"):
-        return ".webp"
-    if data.startswith(b"BM"):
-        return ".bmp"
-    return ".png"
+    return IMAGE_MIME_TO_EXT.get(str(raw_mime or "").strip().lower(), "")
 
 
-def _save_chat_image(*, raw_name: str, raw_mime: str, data: bytes, sha1: str) -> dict:
+def _save_chat_image(*, raw_name: str, data: bytes, sha1: str) -> dict:
     img_dir = _chat_image_dir()
-    ext = _detect_image_ext(raw_name, raw_mime, data)
-    stem_seed = Path(raw_name).stem or f"pasted-{int(time.time())}"
+    mime = verified_image_bytes_mime(data)
+    if not mime:
+        raise ValueError("invalid image file")
+    ext = _sniff_image_ext(data) or image_ext_for_mime(mime)
+    if not ext:
+        raise ValueError("invalid image file")
+    display_name = _safe_upload_display_name(raw_name, fallback=f"pasted-{int(time.time())}{ext}")
+    stem_seed = Path(display_name).stem or f"pasted-{int(time.time())}"
     safe_stem = _safe_upload_stem(stem_seed)
     dest_img = img_dir / f"{safe_stem}-{sha1[:10]}{ext}"
-    duplicate = dest_img.exists()
+    duplicate = False
+    if dest_img.exists():
+        existing_mime = resolve_verified_image_file_under_roots(dest_img, [img_dir])
+        duplicate = bool(existing_mime and existing_mime[1] == mime)
     if not duplicate:
-        dest_img.write_bytes(data)
+        tmp = dest_img.with_name(f".{dest_img.name}.{uuid.uuid4().hex[:10]}.tmp")
+        try:
+            tmp.write_bytes(data)
+            tmp.replace(dest_img)
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
     return {
         "kind": "image",
         "status": "duplicate" if duplicate else "saved",
-        "name": raw_name or dest_img.name,
+        "name": display_name or dest_img.name,
         "sha1": sha1,
-        "mime": raw_mime or "image/*",
-        "path": str(dest_img),
+        "mime": mime,
+        "path": dest_img.name,
         "attachment": {
             "sha1": sha1,
-            "path": str(dest_img),
-            "name": raw_name or dest_img.name,
-            "mime": raw_mime or "image/*",
-            "url": _chat_image_url(str(dest_img)),
+            "path": dest_img.name,
+            "name": display_name or dest_img.name,
+            "mime": mime,
+            "url": _chat_image_url(dest_img.name),
         },
     }
 
 
 @router.get("/chat/uploads/image")
 def get_chat_upload_image(path: str):
-    root = _chat_image_dir().resolve()
-    try:
-        resolved = Path(str(path or "")).expanduser().resolve()
-    except Exception:
+    verified = resolve_verified_image_file_under_roots(path, [_chat_image_dir()])
+    if verified is None:
         raise HTTPException(404, "image not found")
-    if resolved != root and root not in resolved.parents:
-        raise HTTPException(404, "image not found")
-    if (not resolved.exists()) or (not resolved.is_file()):
-        raise HTTPException(404, "image not found")
-    media_type = IMAGE_MIME_TO_EXT.get("", "")
-    suffix = resolved.suffix.lower()
-    if suffix == ".png":
-        media_type = "image/png"
-    elif suffix in {".jpg", ".jpeg"}:
-        media_type = "image/jpeg"
-    elif suffix == ".webp":
-        media_type = "image/webp"
-    elif suffix == ".gif":
-        media_type = "image/gif"
-    elif suffix == ".bmp":
-        media_type = "image/bmp"
-    else:
-        media_type = "application/octet-stream"
+    resolved, media_type = verified
     return FileResponse(str(resolved), media_type=media_type, filename=resolved.name)
 
 
@@ -755,6 +1074,8 @@ def retry_chat_upload_job(body: UploadJobBody):
         rec = _retry_chat_pdf_ingest_job(job_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     except RuntimeError as exc:
         raise HTTPException(409, str(exc))
     if rec is None:
@@ -772,6 +1093,8 @@ def retry_chat_upload_quality_job(body: UploadJobBody):
         rec = _retry_chat_pdf_quality_refine_job(job_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     except RuntimeError as exc:
         raise HTTPException(409, str(exc))
     if rec is None:
@@ -801,7 +1124,7 @@ async def upload_chat_files(
         raw_mime = str(getattr(up, "content_type", "") or "").strip().lower()
         suffix = Path(raw_name).suffix.lower()
         claimed_pdf = bool((suffix == ".pdf") or (raw_mime == "application/pdf"))
-        claimed_image = bool(raw_mime.startswith("image/") or (suffix in IMAGE_EXTS))
+        claimed_image = bool(_claimed_image_ext(raw_name, raw_mime))
         read_limit = pdf_limit if claimed_pdf else (image_limit if claimed_image else max(pdf_limit, image_limit))
         try:
             data = await read_upload_limited(
@@ -840,11 +1163,23 @@ async def upload_chat_files(
         seen_sha1.add(sha1)
 
         is_pdf = bool(claimed_pdf or is_probably_pdf(data))
-        is_image = bool(raw_mime.startswith("image/") or (suffix in IMAGE_EXTS))
+        detected_image_ext = _sniff_image_ext(data)
+        is_image = bool(claimed_image or detected_image_ext)
 
         if is_image and (not is_pdf):
+            if (not claimed_image) and len(data) > image_limit:
+                raise HTTPException(413, f"{raw_name or 'image'} exceeds the {image_limit} byte upload limit")
+            if not detected_image_ext:
+                results.append({
+                    "kind": "image",
+                    "status": "error",
+                    "name": raw_name or "image",
+                    "sha1": sha1,
+                    "error": "invalid image file",
+                })
+                continue
             try:
-                results.append(_save_chat_image(raw_name=raw_name, raw_mime=raw_mime, data=data, sha1=sha1))
+                results.append(_save_chat_image(raw_name=raw_name, data=data, sha1=sha1))
             except Exception as exc:
                 results.append({
                     "kind": "image",
@@ -935,7 +1270,7 @@ async def upload_chat_files(
 
 @router.post("/reader/sessions")
 def create_reader_session(body: ReaderSessionCreateBody):
-    payload = _normalize_reader_session_payload(body.payload)
+    payload = _normalize_reader_session_payload(body.payload, require_allowed_source=True)
     source_path = str(payload.get("sourcePath") or "").strip()
     if not source_path:
         raise HTTPException(400, "reader sourcePath required")
@@ -967,13 +1302,21 @@ def update_reader_session_state(session_id: str, body: ReaderSessionStatePatchBo
 
 @router.get("/conversations/{conv_id}/reader-state")
 def get_conversation_reader_state(conv_id: str, source_path: str = Query("")):
-    src = str(source_path or "").strip()
-    if not src:
-        raise HTTPException(400, "source_path required")
+    raw_src = str(source_path or "").strip()
+    src = _resolve_reader_state_source_path(source_path)
     store = get_chat_store()
     if store.get_conversation(conv_id) is None:
         raise HTTPException(404, "conversation not found")
-    return store.get_conversation_reader_state(conv_id, src)
+    record = store.get_conversation_reader_state(conv_id, src)
+    if record and (record.get("state") or raw_src == src):
+        return record
+    if raw_src and raw_src != src:
+        legacy = store.get_conversation_reader_state(conv_id, raw_src)
+        legacy_state = legacy.get("state") if isinstance(legacy, dict) else {}
+        if isinstance(legacy_state, dict) and legacy_state:
+            migrated = store.patch_conversation_reader_state(conv_id, src, legacy_state)
+            return migrated or {**legacy, "source_path": src}
+    return record
 
 
 @router.patch("/conversations/{conv_id}/reader-state")
@@ -982,9 +1325,7 @@ def patch_conversation_reader_state(
     body: ConversationReaderStatePatchBody,
     source_path: str = Query(""),
 ):
-    src = str(source_path or "").strip()
-    if not src:
-        raise HTTPException(400, "source_path required")
+    src = _resolve_reader_state_source_path(source_path)
     record = get_chat_store().patch_conversation_reader_state(conv_id, src, body.state)
     if record is None:
         raise HTTPException(404, "conversation not found")
@@ -1012,6 +1353,12 @@ def list_projects():
     return get_chat_store().list_projects()
 
 
+@router.get("/sidebar")
+def get_sidebar(limit: int = 80, include_archived: bool = False):
+    lim = max(1, min(300, int(limit or 80)))
+    return get_chat_store().sidebar_snapshot(limit=lim, include_archived=bool(include_archived))
+
+
 @router.post("/projects")
 def create_project(body: CreateProjectBody):
     project_id = get_chat_store().create_project(body.name)
@@ -1028,12 +1375,17 @@ def rename_project(project_id: str, body: RenameProjectBody):
 
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: str):
+    store = get_chat_store()
+    if store.get_project(project_id) is None:
+        raise HTTPException(404, "project not found")
     auto_backup = _dangerous_auto_snapshot(
         "chat_project_delete",
         label=project_id,
         metadata={"project_id": project_id},
     )
-    get_chat_store().delete_project(project_id)
+    ok = store.delete_project(project_id)
+    if not ok:
+        raise HTTPException(404, "project not found")
     return {"ok": True, "auto_backup": auto_backup}
 
 
@@ -1102,12 +1454,15 @@ def delete_citation_shelf(
     project_id: str | None = Query(None),
     scope: str = Query("project"),
 ):
+    store = get_chat_store()
+    if conv_id and store.get_conversation(conv_id) is None:
+        raise HTTPException(404, "conversation not found")
     auto_backup = _dangerous_auto_snapshot(
         "chat_citation_shelf_delete",
         label=str(scope or "project"),
         metadata={"conv_id": conv_id or "", "project_id": project_id or "", "scope": scope},
     )
-    record = get_chat_store().delete_citation_shelf(
+    record = store.delete_citation_shelf(
         conv_id=conv_id,
         project_id=project_id,
         scope=scope,
@@ -1140,7 +1495,12 @@ def create_conversation(body: CreateConvBody):
     bound_source_path = str(body.bound_source_path or "").strip()
     bound_source_name = str(body.bound_source_name or "").strip()
     source_ready = bool(body.bound_source_ready)
-    conv_id = get_chat_store().create_conversation(
+    if bound_source_path:
+        bound_source_path = _resolve_allowed_paper_guide_source_path(bound_source_path)
+    store = get_chat_store()
+    if project_id and store.get_project(project_id) is None:
+        raise HTTPException(404, "project not found")
+    conv_id = store.create_conversation(
         body.title,
         project_id=project_id,
         mode=mode,
@@ -1202,12 +1562,17 @@ def _merge_cached_reference_render_payload(conv_id: str, refs_by_user: dict) -> 
 
 @router.delete("/conversations/{conv_id}")
 def delete_conversation(conv_id: str):
+    store = get_chat_store()
+    if store.get_conversation(conv_id) is None:
+        raise HTTPException(404, "conversation not found")
     auto_backup = _dangerous_auto_snapshot(
         "chat_conversation_delete",
         label=conv_id,
         metadata={"conv_id": conv_id},
     )
-    get_chat_store().delete_conversation(conv_id)
+    ok = store.delete_conversation(conv_id)
+    if not ok:
+        raise HTTPException(404, "conversation not found")
     return {"ok": True, "auto_backup": auto_backup}
 
 
@@ -1215,6 +1580,7 @@ def delete_conversation(conv_id: str):
 def get_messages(conv_id: str, limit: int | None = None, render_packet_only: int | None = None):
     store = get_chat_store()
     messages = [_normalize_message_attachments(msg) for msg in store.get_messages(conv_id, limit=limit)]
+    messages = _recover_stale_live_assistant_messages(messages, store)
     refs_by_user = _merge_cached_reference_render_payload(conv_id, store.list_message_refs(conv_id) or {})
     conv = store.get_conversation(conv_id) or {}
     mode = str(conv.get("mode") or "").strip().lower()
@@ -1251,7 +1617,7 @@ def get_messages_page(conv_id: str, limit: int = 24, before_id: int | None = Non
         else (mode == "paper_guide")
     )
     rendered = enrich_messages_with_reference_render(
-        [_normalize_message_attachments(msg) for msg in messages],
+        _recover_stale_live_assistant_messages([_normalize_message_attachments(msg) for msg in messages], store),
         refs_by_user,
         conv_id=conv_id,
         chat_store=store,
@@ -1276,7 +1642,7 @@ def append_message(conv_id: str, body: AppendMsgBody):
 
 @router.patch("/messages/{msg_id}")
 def update_message(msg_id: int, body: UpdateMsgBody):
-    ok = get_chat_store().update_message_content(msg_id, body.content)
+    ok = get_chat_store().update_message_content(msg_id, body.content, touch_conversation=True)
     if not ok:
         raise HTTPException(404, "message not found")
     return {"ok": True}
@@ -1284,12 +1650,15 @@ def update_message(msg_id: int, body: UpdateMsgBody):
 
 @router.delete("/messages/{msg_id}")
 def delete_message(msg_id: int):
+    store = get_chat_store()
+    if not store.message_exists(msg_id):
+        raise HTTPException(404, "message not found")
     auto_backup = _dangerous_auto_snapshot(
         "chat_message_delete",
         label=str(msg_id),
         metadata={"message_id": int(msg_id)},
     )
-    ok = get_chat_store().delete_message(msg_id)
+    ok = store.delete_message(msg_id)
     if not ok:
         raise HTTPException(404, "message not found")
     return {"ok": True, "auto_backup": auto_backup}
@@ -1316,7 +1685,12 @@ def update_conversation_project(conv_id: str, body: UpdateProjectBody):
     project_id = body.project_id
     if isinstance(project_id, str):
         project_id = project_id.strip() or None
-    ok = get_chat_store().set_conversation_project(conv_id, project_id)
+    store = get_chat_store()
+    if store.get_conversation(conv_id) is None:
+        raise HTTPException(404, "conversation not found")
+    if project_id and store.get_project(project_id) is None:
+        raise HTTPException(404, "project not found")
+    ok = store.set_conversation_project(conv_id, project_id)
     if not ok:
         raise HTTPException(404, "conversation not found")
     return {"ok": True}
@@ -1325,10 +1699,13 @@ def update_conversation_project(conv_id: str, body: UpdateProjectBody):
 @router.patch("/conversations/{conv_id}/guide")
 def update_conversation_guide(conv_id: str, body: UpdateConversationGuideBody):
     store = get_chat_store()
+    bound_source_path = body.bound_source_path
+    if isinstance(bound_source_path, str) and bound_source_path.strip():
+        bound_source_path = _resolve_allowed_paper_guide_source_path(bound_source_path)
     ok = store.set_conversation_guide(
         conv_id,
         mode=body.mode,
-        bound_source_path=body.bound_source_path,
+        bound_source_path=bound_source_path,
         bound_source_name=body.bound_source_name,
         bound_source_ready=body.bound_source_ready,
     )

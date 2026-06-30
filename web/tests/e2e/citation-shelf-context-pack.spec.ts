@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { installAppShellMocks, installEmptyCitationShelfMock } from './mockAppShell'
 
 const SHELF_ITEM = {
   key: 'ctx-ref-12',
@@ -7,6 +8,10 @@ const SHELF_ITEM = {
   anchor: 'ref-12',
   sourceName: 'Fixture Paper.pdf',
   sourcePath: 'db/Fixture/Fixture.en.md',
+  headingPath: 'References',
+  blockId: 'ref-block-12',
+  anchorId: 'ref-12',
+  anchorKind: 'reference',
   title: 'Sparse 3-D transform-domain filtering',
   authors: 'K Dabov, A Foi, V Katkovnik',
   venue: 'IEEE Trans. Image Process.',
@@ -17,6 +22,11 @@ const SHELF_ITEM = {
   shelfOrigin: 'reader_references',
   shelfExcerpt: 'This reference is a baseline method for image denoising comparisons.',
   locationLabel: 'References / [12]',
+  libraryMatchPath: 'db/Library/Sparse3D.en.md',
+  libraryMatchStatus: 'ready',
+  libraryMatchTitle: 'Sparse 3-D transform-domain filtering',
+  libraryMatchDoi: '10.1109/tip.2007.901238',
+  libraryMatchYear: '2007',
   main: 'Sparse 3-D transform-domain filtering',
   tags: [],
   note: '',
@@ -59,9 +69,27 @@ async function installBackend(page: Page) {
   let generatePayload: Record<string, unknown> | null = null
   let generated = false
   let researchState: Record<string, unknown> = {}
-  let resolveGenerate: (payload: Record<string, unknown>) => void = () => {}
-  const generateSeen = new Promise<Record<string, unknown>>((resolve) => {
-    resolveGenerate = resolve
+  const generatePayloads: Record<string, unknown>[] = []
+  const generateWaiters: Array<{
+    count: number
+    resolve: (payload: Record<string, unknown>) => void
+  }> = []
+  const waitForGenerateCount = (count: number) => {
+    if (generatePayloads.length >= count) {
+      return Promise.resolve(generatePayloads[count - 1])
+    }
+    return new Promise<Record<string, unknown>>((resolve) => {
+      generateWaiters.push({ count, resolve })
+    })
+  }
+  const generateSeen = waitForGenerateCount(1)
+
+  await installAppShellMocks(page, { rootConversations: [CONVERSATION] })
+  await installEmptyCitationShelfMock(page, {
+    scopeId: '__default__',
+    projectId: null,
+    initialItems: [SHELF_ITEM],
+    initialOpen: true,
   })
 
   await page.route('**/api/settings', async (route) => {
@@ -101,9 +129,6 @@ async function installBackend(page: Page) {
       },
       issues: [],
     })
-  })
-  await page.route('**/api/projects', async (route) => {
-    await fulfillJson(route, [])
   })
   await page.route(/\/api\/conversations(?:\?.*)?$/, async (route) => {
     if (route.request().method() === 'POST') {
@@ -172,23 +197,6 @@ async function installBackend(page: Page) {
   await page.route('**/api/references/conversation/**', async (route) => {
     await fulfillJson(route, {})
   })
-  await page.route('**/api/chat/citation-shelf**', async (route) => {
-    const request = route.request()
-    const body = request.method() === 'PATCH'
-      ? request.postDataJSON() as { items?: unknown[]; open?: boolean } | null
-      : null
-    await fulfillJson(route, {
-      version: 1,
-      scope: 'project',
-      scope_id: '__default__',
-      project_id: null,
-      items: Array.isArray(body?.items) ? body?.items : [SHELF_ITEM],
-      open: body?.open ?? true,
-      revision: 3,
-      created_at: 1,
-      updated_at: 2,
-    })
-  })
   await page.route('**/api/references/citation-meta', async (route) => {
     await fulfillJson(route, {})
   })
@@ -200,8 +208,14 @@ async function installBackend(page: Page) {
   })
   await page.route('**/api/generate', async (route) => {
     generatePayload = route.request().postDataJSON() as Record<string, unknown>
+    generatePayloads.push(generatePayload)
     generated = true
-    resolveGenerate(generatePayload)
+    for (let idx = generateWaiters.length - 1; idx >= 0; idx -= 1) {
+      const waiter = generateWaiters[idx]
+      if (generatePayloads.length < waiter.count) continue
+      generateWaiters.splice(idx, 1)
+      waiter.resolve(generatePayloads[waiter.count - 1])
+    }
     await fulfillJson(route, {
       session_id: 'session-context-pack',
       task_id: 'task-context-pack',
@@ -221,6 +235,7 @@ async function installBackend(page: Page) {
 
   return {
     generateSeen,
+    waitForGenerateCount,
     getResearchState: () => researchState,
   }
 }
@@ -277,6 +292,9 @@ test('selected citation shelf items are sent as next-turn prompt context', async
   expect(promptContext?.items?.[0]?.title).toBe('Sparse 3-D transform-domain filtering')
   expect(promptContext?.items?.[0]?.summary).toContain('denoising baseline')
   expect(promptContext?.items?.[0]?.refNum).toBe(12)
+  expect(promptContext?.items?.[0]?.blockId).toBe('ref-block-12')
+  expect(promptContext?.items?.[0]?.libraryMatchPath).toBe('db/Library/Sparse3D.en.md')
+  expect(payload.query_scope).toBe('basket')
   await expect(page.getByTestId('chat-context-pack')).toHaveCount(0)
   await expect.poll(() => Boolean(backend.getResearchState().selected_research_context)).toBe(false)
 
@@ -291,4 +309,11 @@ test('selected citation shelf items are sent as next-turn prompt context', async
   await page.getByTestId('research-context-receipt-followup').click()
   await expect(page.getByTestId('chat-context-pack')).toContainText('1 excerpts')
   await expect(page.locator('textarea.kb-chat-textarea')).toHaveValue(/Sparse 3-D transform-domain filtering/)
+
+  await page.getByRole('button', { name: 'Send' }).click()
+  const followupPayload = await backend.waitForGenerateCount(2)
+  const followupContext = followupPayload.prompt_context as { items?: Array<Record<string, unknown>> } | undefined
+  expect(followupPayload.query_scope).toBe('basket')
+  expect(followupContext?.items?.length).toBe(1)
+  expect(followupContext?.items?.[0]?.title).toBe('Sparse 3-D transform-domain filtering')
 })

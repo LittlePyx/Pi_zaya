@@ -13,6 +13,10 @@ from api.chat_render import (
 from tests._paper_guide_fixtures import build_scinerf_like_fixture
 
 
+MOJIBAKE_REFERENCE_LOCATOR = "\u9359\u509d\u20ac\u51a8\u757e\u6d63"
+MOJIBAKE_REFERENCE_SOURCE_PREFIX = "\u93c9\u30e8\u569c" + MOJIBAKE_REFERENCE_LOCATOR + "?#1\u951b\u6b5a"
+
+
 def test_equation_source_note_does_not_reference_removed_refs_ui():
     messages = [
         {"id": 1, "role": "user", "content": "NatPhoton 公式 8 是什么？"},
@@ -39,9 +43,56 @@ def test_equation_source_note_does_not_reference_removed_refs_ui():
     body = str(rendered[-1].get("rendered_body") or "")
 
     assert "Open/Page" not in body
-    assert "鍙傝€冨畾浣" not in body
+    assert MOJIBAKE_REFERENCE_LOCATOR not in body
     assert "库内文献" in body
     assert "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf" in body
+
+
+def test_research_basket_synthetic_citation_uses_friendly_non_openable_detail():
+    synthetic_path = "__research_basket__/item_1_deadbeef"
+    messages = [
+        {"id": 1, "role": "user", "content": "Use selected item"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": "This is supported by the selected item [1].",
+            "meta": {"canonical_hit_paths": [synthetic_path]},
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "Title: A hard to find preprint\nDOI: 10.1234/example.1\nSummary: selected metadata",
+                    "score": 999.0,
+                    "meta": {
+                        "source_path": synthetic_path,
+                        "source_name": "Research basket: A hard to find preprint",
+                        "title": "A hard to find preprint",
+                        "doi": "10.1234/example.1",
+                        "ref_pack_state": "ready",
+                        "research_basket_evidence": True,
+                        "basket_source_role": "synthetic_basket_item",
+                    },
+                    "ui_meta": {
+                        "display_name": "Research basket: A hard to find preprint",
+                        "can_open": False,
+                    },
+                }
+            ],
+            "display_state": "ready",
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="conv-basket")
+    detail = rendered[-1]["cite_details"][0]
+
+    assert detail["source_name"] == "Research basket: A hard to find preprint"
+    assert detail["source_path"] == ""
+    assert detail["citation_route"] == "research_basket"
+    assert detail["routing_reason"] == "research_basket_evidence"
+    assert detail["location_label"] == "Research basket"
+    assert "item_1_deadbeef" not in json.dumps(detail, ensure_ascii=False)
 
 
 def test_normalize_chat_markdown_cleans_empty_example_connectors_and_duplicate_terms():
@@ -77,12 +128,12 @@ def test_equation_source_note_is_not_added_without_hits():
 def test_normalize_equation_source_notes_strips_mojibake_prefix_from_pdf_label():
     raw = (
         "*（式(1) 对应命中的库内文献："
-        "`1) 鏉ヨ嚜鍙傝€冨畾浣?#1锛歚CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf`）*"
+        f"`1) {MOJIBAKE_REFERENCE_SOURCE_PREFIX}CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf`）*"
     )
 
     out = _normalize_equation_source_notes(raw)
 
-    assert "鍙傝€冨畾浣" not in out
+    assert MOJIBAKE_REFERENCE_LOCATOR not in out
     assert "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf" in out
     assert "`1) " not in out
 
@@ -1968,6 +2019,97 @@ def test_enrich_messages_rebuilds_degraded_numeric_citation_cache(tmp_path: Path
     assert len(persisted_cache.get("cite_details") or []) == 2
 
 
+def test_enrich_messages_rebuilds_degraded_structured_citation_cache(monkeypatch, tmp_path: Path):
+    from api import chat_render
+    from ui import refs_renderer
+
+    source_path = r"db\paper-one.en.md"
+    sid = chat_render._source_cite_id(source_path)
+    content = f"Prior work is cited as [[CITE:{sid}:35]]."
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("structured citation cache")
+    user_id = store.append_message(conv_id, "user", "which prior work is cited?")
+    assistant_id = store.append_message(conv_id, "assistant", content)
+    refs_by_user = {
+        user_id: {
+            "prompt_sig": "sig-structured-cache",
+            "updated_at": 1.0,
+            "used_query": "prior work cited",
+            "used_translation": False,
+            "hits": [
+                {
+                    "text": "The paper cites compressive sensing as prior work [35].",
+                    "meta": {
+                        "source_path": source_path,
+                        "heading_path": "Related work",
+                    },
+                }
+            ],
+        }
+    }
+
+    def fake_resolve(_index, src, ref_num, *, source_sha1=""):
+        del _index, source_sha1
+        if str(src) != source_path or int(ref_num) != 35:
+            return None
+        return {
+            "source_path": source_path,
+            "source_name": "paper-one.pdf",
+            "ref_num": 35,
+            "ref": {
+                "raw": "[35] Candes et al. Compressive sensing. 2006.",
+                "title": "Compressive sensing",
+                "authors": "Candes et al.",
+                "year": "2006",
+            },
+        }
+
+    monkeypatch.setattr(chat_render, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(chat_render, "resolve_reference_entry", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+
+    cache_key = chat_render._build_message_render_cache_key(
+        conv_id=conv_id,
+        msg_id=assistant_id,
+        role="assistant",
+        content=content,
+        refs_user_msg_id=user_id,
+        ref_pack=refs_by_user[user_id],
+        provenance=None,
+    )
+    store.merge_message_meta(
+        assistant_id,
+        {
+            "render_cache": chat_render._build_render_cache_payload(
+                cache_key=cache_key,
+                notice="",
+                rendered_body="Prior work is cited as .",
+                rendered_content="Prior work is cited as .",
+                copy_markdown="Prior work is cited as .",
+                copy_text="Prior work is cited as .",
+                cite_details=[],
+                refs_user_msg_id=user_id,
+                render_packet={"rendered_content": "Prior work is cited as .", "cite_details": []},
+            )
+        },
+    )
+
+    rendered = enrich_messages_with_reference_render(
+        store.get_messages(conv_id),
+        refs_by_user,
+        conv_id=conv_id,
+        chat_store=store,
+    )
+    msg = rendered[-1]
+    persisted_cache = ((store.get_messages(conv_id)[-1].get("meta") or {}).get("render_cache") or {})
+
+    assert "[35](#kb-cite-" in str(msg.get("rendered_content") or "")
+    assert len(msg.get("cite_details") or []) == 1
+    assert (msg.get("cite_details") or [{}])[0].get("is_inpaper") is True
+    assert len(persisted_cache.get("cite_details") or []) == 1
+
+
 def test_enrich_messages_ignores_previous_schema_render_cache(tmp_path: Path):
     from api import chat_render
 
@@ -3259,3 +3401,6 @@ def test_unlinked_reference_candidates_find_unique_venue_year(monkeypatch):
     assert candidates[0]["ref_num"] == 7
     assert candidates[0]["title"] == "Fast rotation-shearing single-pixel imaging"
     assert candidates[0]["cite_detail"]["citation_route"] == "system_b"
+    assert "answer_context_only" in candidates[0]["cite_detail"]["card_quality_flags"]
+    assert candidates[0]["cite_detail"]["system_b_trace_complete"] is False
+    assert "answer_context_only" in candidates[0]["cite_detail"]["system_b_trace_flags"]

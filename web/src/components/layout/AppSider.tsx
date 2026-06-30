@@ -44,12 +44,15 @@ import {
   settingsFocusTargetFromUnknown,
   type SettingsFocusTarget,
 } from './settingsEvents'
+import { internalDebugEnabled, internalSettingsToolsVisible } from '../../utils/internalDebug'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
 
 const SIDEBAR_WIDTH = 296
 const SIDEBAR_COLLAPSED_WIDTH = 68
+const ROOT_CONVERSATION_COLLAPSED_LIMIT = 32
+const MOVE_TO_UNGROUPED_KEY = '__ungrouped__'
 const LINKED_CONVERSATION_QUERY_KEYS = ['conversation', 'conversation_id', 'conv'] as const
 
 function linkedConversationIdFromSearch(search: string) {
@@ -157,7 +160,7 @@ function ConversationRow({
   onOpen: () => void
   onRename: () => void
   onDelete: () => void
-  onMove?: (targetProjectId: string) => void
+  onMove?: (targetProjectId: string | null) => void
   moveMenuItems?: MenuProps['items']
 }) {
   const S = useT()
@@ -204,7 +207,8 @@ function ConversationRow({
               return
             }
             if (String(key).startsWith('move:')) {
-              onMove?.(String(key).slice(5))
+              const target = String(key).slice(5)
+              onMove?.(target === MOVE_TO_UNGROUPED_KEY ? null : target)
               return
             }
             Modal.confirm({
@@ -242,6 +246,8 @@ function ProjectSection({
   onOpenConversation,
   onRenameConversation,
   onDeleteConversation,
+  onMoveConversation,
+  moveMenuItems,
   onRename,
   onDelete,
 }: {
@@ -255,6 +261,8 @@ function ProjectSection({
   onOpenConversation: (id: string) => void
   onRenameConversation: (conversation: Conversation) => void
   onDeleteConversation: (id: string) => void
+  onMoveConversation: (id: string, targetProjectId: string | null) => void
+  moveMenuItems?: MenuProps['items']
   onRename: () => void
   onDelete: () => void
 }) {
@@ -328,6 +336,8 @@ function ProjectSection({
                 onOpen={() => onOpenConversation(conversation.id)}
                 onRename={() => onRenameConversation(conversation)}
                 onDelete={() => onDeleteConversation(conversation.id)}
+                onMove={(targetProjectId) => onMoveConversation(conversation.id, targetProjectId)}
+                moveMenuItems={moveMenuItems}
               />
             ))
           ) : (
@@ -372,6 +382,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const refreshAppUpdate = useSettingsStore((s) => s.refreshAppUpdate)
   const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
   const visionUsesTextFallback = useSettingsStore((s) => s.visionUsesTextFallback)
+  const showInternalSettingsTools = internalSettingsToolsVisible()
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [projectModalOpen, setProjectModalOpen] = useState(false)
@@ -383,6 +394,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [conversationTitle, setConversationTitle] = useState('')
   const [keyword, setKeyword] = useState('')
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
+  const [rootConversationsExpanded, setRootConversationsExpanded] = useState(false)
   const [settingsFocusTarget, setSettingsFocusTarget] = useState<SettingsFocusTarget | ''>('')
 
   useEffect(() => {
@@ -409,9 +421,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }, [S.sidebar_load_failed, loadSidebarData])
 
   useEffect(() => {
+    if (!showInternalSettingsTools) return
     if (!settingsLoaded || appReadiness) return
-    void refreshAppReadiness()
-  }, [appReadiness, refreshAppReadiness, settingsLoaded])
+    void refreshAppReadiness().catch(() => {})
+  }, [appReadiness, refreshAppReadiness, settingsLoaded, showInternalSettingsTools])
 
   useEffect(() => {
     if (!settingsLoaded) return
@@ -488,10 +501,18 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
   const menuKey = loc.pathname === '/library' ? 'library' : 'chat'
   const normalizedKeyword = keyword.trim().toLowerCase()
-  const projectMoveMenuItems = useMemo<MenuProps['items']>(
-    () => projects.map((project) => ({ key: `move:${project.id}`, label: project.name })),
-    [projects],
-  )
+  const getConversationMoveMenuItems = useCallback((currentProjectId?: string | null): MenuProps['items'] => {
+    const current = String(currentProjectId || '').trim()
+    const items: NonNullable<MenuProps['items']> = []
+    if (current) {
+      items.push({ key: `move:${MOVE_TO_UNGROUPED_KEY}`, label: S.ungrouped_conversations })
+    }
+    for (const project of projects) {
+      if (project.id === current) continue
+      items.push({ key: `move:${project.id}`, label: project.name })
+    }
+    return items
+  }, [S.ungrouped_conversations, projects])
 
   const sortedRootConversations = useMemo(
     () => [...rootConversations].sort((a, b) => b.updated_at - a.updated_at),
@@ -515,10 +536,20 @@ export function AppLayout({ children }: { children: ReactNode }) {
           project,
           conversations: filteredConversations,
           show,
+          forceExpanded: normalizedKeyword
+            || project.id === activeProjectId
+            || allConversations.some((conversation) => conversation.id === activeConvId),
         }
       })
       .filter((item) => item.show)
-  }, [projects, projectConversations, normalizedKeyword])
+  }, [activeConvId, activeProjectId, projects, projectConversations, normalizedKeyword])
+
+  const displayedRootConversations = useMemo(() => {
+    if (normalizedKeyword || rootConversationsExpanded) return filteredRootConversations
+    return filteredRootConversations.slice(0, ROOT_CONVERSATION_COLLAPSED_LIMIT)
+  }, [filteredRootConversations, normalizedKeyword, rootConversationsExpanded])
+
+  const hiddenRootConversationCount = Math.max(0, filteredRootConversations.length - displayedRootConversations.length)
 
   const totalConversationCount = useMemo(
     () => rootConversations.length + Object.values(projectConversations).reduce((sum, items) => sum + items.length, 0),
@@ -539,6 +570,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }, [projectConversations, rootConversations])
 
   useEffect(() => {
+    if (!internalDebugEnabled()) return undefined
     const w = window as DebugWindow
     const base = w.__kbDebug || {}
     let running = false
@@ -618,8 +650,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
     }
   }, [allConversationIds, loc.search, nav, selectConv])
 
-  const toggleProjectCollapsed = useCallback((projectId: string) => {
-    setCollapsedProjects((cur) => ({ ...cur, [projectId]: !cur[projectId] }))
+  const setProjectCollapsed = useCallback((projectId: string, collapsed: boolean) => {
+    setCollapsedProjects((cur) => ({ ...cur, [projectId]: collapsed }))
   }, [])
 
   const toggleSidebarCollapsed = useCallback(() => {
@@ -645,6 +677,15 @@ export function AppLayout({ children }: { children: ReactNode }) {
       nav({ pathname: '/', search: conversationSearch(loc.search, '') }, { replace: true })
     }
   }, [activeConvId, deleteConv, loc.search, nav])
+
+  const moveConversationWithFeedback = useCallback(async (conversationId: string, targetProjectId: string | null) => {
+    try {
+      await moveConversation(conversationId, targetProjectId)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : (S.move_conversation_failed || S.sidebar_load_failed))
+      await loadSidebarData().catch(() => {})
+    }
+  }, [S.move_conversation_failed, S.sidebar_load_failed, loadSidebarData, moveConversation])
 
   const chooseProject = useCallback((projectId: string | null) => {
     selectProject(projectId)
@@ -713,7 +754,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const releaseItems = appReadiness?.items || []
   const releaseBlocking = releaseItems.filter((item) => item.severity === 'error').length
   const releaseWarnings = releaseItems.filter((item) => item.severity === 'warning').length
-  const showReleaseBanner = Boolean(appReadiness?.production && appReadiness.status !== 'ok')
+  const showReleaseBanner = Boolean(showInternalSettingsTools && appReadiness?.production && appReadiness.status !== 'ok')
   const releaseBannerTitle = appReadiness?.status === 'error'
     ? S.release_banner_blocked_title
     : S.release_banner_warning_title
@@ -864,25 +905,32 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         <div className="kb-sider-scroll flex-1 overflow-y-auto px-1.5 pb-1.5 space-y-0.5">
           {visibleProjects.length > 0 ? (
-            visibleProjects.map(({ project, conversations }) => (
-              <ProjectSection
-                key={project.id}
-                project={project}
-                selected={project.id === activeProjectId}
-                conversations={conversations}
-                activeConvId={activeConvId}
-                collapsed={Boolean(collapsedProjects[project.id])}
-                onToggleCollapsed={() => toggleProjectCollapsed(project.id)}
-                onSelect={() => chooseProject(project.id)}
-                onOpenConversation={openConversation}
-                onRenameConversation={openRenameConversation}
-                onDeleteConversation={removeConversation}
-                onRename={() => openRenameProject(project)}
-                onDelete={async () => {
-                  await deleteProject(project.id)
-                }}
-              />
-            ))
+            visibleProjects.map(({ project, conversations, forceExpanded }) => {
+              const collapsed = normalizedKeyword ? false : (collapsedProjects[project.id] ?? !forceExpanded)
+              return (
+                <ProjectSection
+                  key={project.id}
+                  project={project}
+                  selected={project.id === activeProjectId}
+                  conversations={conversations}
+                  activeConvId={activeConvId}
+                  collapsed={collapsed}
+                  onToggleCollapsed={() => setProjectCollapsed(project.id, !collapsed)}
+                  onSelect={() => chooseProject(project.id)}
+                  onOpenConversation={openConversation}
+                  onRenameConversation={openRenameConversation}
+                  onDeleteConversation={removeConversation}
+                  onMoveConversation={(conversationId, targetProjectId) => {
+                    void moveConversationWithFeedback(conversationId, targetProjectId)
+                  }}
+                  moveMenuItems={getConversationMoveMenuItems(project.id)}
+                  onRename={() => openRenameProject(project)}
+                  onDelete={async () => {
+                    await deleteProject(project.id)
+                  }}
+                />
+              )
+            })
           ) : (
             <div className="kb-sider-empty">
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<Text type="secondary">{S.no_matching_items}</Text>} />
@@ -900,7 +948,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             </button>
             <div className="kb-root-conversations px-1 py-1 space-y-0.5">
               {filteredRootConversations.length > 0 ? (
-                filteredRootConversations.map((conversation) => (
+                displayedRootConversations.map((conversation) => (
                   <ConversationRow
                     key={conversation.id}
                     conversation={conversation}
@@ -909,9 +957,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
                     onRename={() => openRenameConversation(conversation)}
                     onDelete={() => removeConversation(conversation.id)}
                     onMove={async (targetProjectId) => {
-                      await moveConversation(conversation.id, targetProjectId)
+                      await moveConversationWithFeedback(conversation.id, targetProjectId)
                     }}
-                    moveMenuItems={projectMoveMenuItems}
+                    moveMenuItems={getConversationMoveMenuItems(null)}
                   />
                 ))
               ) : (
@@ -919,6 +967,18 @@ export function AppLayout({ children }: { children: ReactNode }) {
                   <Text type="secondary" className="!text-xs">{S.no_ungrouped_conversations}</Text>
                 </div>
               )}
+              {!normalizedKeyword && filteredRootConversations.length > ROOT_CONVERSATION_COLLAPSED_LIMIT ? (
+                <Button
+                  type="text"
+                  size="small"
+                  className="kb-root-conversations-toggle"
+                  onClick={() => setRootConversationsExpanded((value) => !value)}
+                >
+                  {rootConversationsExpanded
+                    ? S.show_fewer_conversations
+                    : S.show_more_conversations.replace('{n}', String(hiddenRootConversationCount))}
+                </Button>
+              ) : null}
             </div>
           </div>
         </div>

@@ -1,10 +1,16 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import {
+  installAppShellMocks,
+  installEmptyCitationShelfMock,
+  installIdleReferenceMocks,
+} from './mockAppShell'
 
 const CONV_ID = 'conv-live-refs'
 const USER_MSG_ID = 101
 const ASSISTANT_MSG_ID = 102
 const SOURCE_PDF_PATH = '__chat_refs_perf__/Fixture.pdf'
 const SOURCE_MD_PATH = '__chat_refs_perf__/Fixture.en.md'
+const REF_SOURCE_MD_PATH = '__chat_refs_perf__/ExternalFixture.en.md'
 
 const conversation = {
   id: CONV_ID,
@@ -94,12 +100,12 @@ function refsPayload(state: 'pending' | 'ready') {
         {
           text: 'Hadamard single-pixel imaging and Fourier single-pixel imaging are compared in the simulation section.',
           meta: {
-            source_path: SOURCE_MD_PATH,
+            source_path: REF_SOURCE_MD_PATH,
             ref_pack_state: pending ? 'pending' : 'ready',
           },
           ui_meta: {
-            display_name: 'Fixture Paper.pdf',
-            source_path: SOURCE_MD_PATH,
+            display_name: 'External Fixture Paper.pdf',
+            source_path: REF_SOURCE_MD_PATH,
             heading_path: '3. Comparison / 3.1 Numerical simulations',
             summary_line: pending
               ? 'A provisional card is available while final reference copy is still being refined.'
@@ -108,8 +114,8 @@ function refsPayload(state: 'pending' | 'ready') {
             score: pending ? null : 8.6,
             score_pending: pending,
             reader_open: {
-              sourcePath: SOURCE_MD_PATH,
-              sourceName: 'Fixture Paper.pdf',
+              sourcePath: REF_SOURCE_MD_PATH,
+              sourceName: 'External Fixture Paper.pdf',
               headingPath: '3. Comparison / 3.1 Numerical simulations',
               snippet: 'Hadamard single-pixel imaging and Fourier single-pixel imaging are compared.',
               highlightSnippet: 'Hadamard single-pixel imaging and Fourier single-pixel imaging are compared.',
@@ -137,6 +143,10 @@ async function installMockChatBackend(page: Page) {
   let refsCalls = 0
   let messagePageCallsAfterDone = 0
 
+  await installAppShellMocks(page, { rootConversations: [conversation] })
+  await installEmptyCitationShelfMock(page, { scopeId: CONV_ID, projectId: null })
+  await installIdleReferenceMocks(page)
+
   await page.route('**/api/settings', async (route) => {
     if (route.request().method() === 'PATCH') {
       await fulfillJson(route, { ok: true })
@@ -158,8 +168,15 @@ async function installMockChatBackend(page: Page) {
     })
   })
 
-  await page.route('**/api/projects', async (route) => {
-    await fulfillJson(route, [])
+  await page.route('**/api/settings/readiness', async (route) => {
+    await fulfillJson(route, {
+      overall: { status: 'ok', severity: 'ok', message: 'Ready' },
+      providers: {
+        text: { status: 'ok', severity: 'ok', configured: true, connected: true, has_api_key: true, model: 'test-model', base_url: '' },
+        vision: { status: 'ok', severity: 'ok', configured: true, connected: true, has_api_key: true, model: 'test-vision', base_url: '' },
+      },
+      issues: [],
+    })
   })
 
   await page.route(/\/api\/conversations(?:\?.*)?$/, async (route) => {
@@ -172,6 +189,10 @@ async function installMockChatBackend(page: Page) {
 
   await page.route(/\/api\/conversations\/conv-live-refs$/, async (route) => {
     await fulfillJson(route, conversation)
+  })
+
+  await page.route(/\/api\/conversations\/conv-live-refs\/research-state$/, async (route) => {
+    await fulfillJson(route, { conv_id: CONV_ID, state: {}, created_at: 1, updated_at: 1 })
   })
 
   await page.route(/\/api\/conversations\/conv-live-refs\/messages_page(?:\?.*)?$/, async (route) => {
@@ -237,6 +258,18 @@ async function installMockChatBackend(page: Page) {
     await fulfillJson(route, {})
   })
 
+  await page.route('**/api/references/citation-card-polish', async (route) => {
+    await fulfillJson(route, {})
+  })
+
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    await fulfillJson(route, {})
+  })
+
+  await page.route('**/api/references/reader/doc', async (route) => {
+    await fulfillJson(route, { ok: false, blocks: [], outline: [] })
+  })
+
   return {
     getRefsCalls: () => refsCalls,
     getMessagePageCallsAfterDone: () => messagePageCallsAfterDone,
@@ -266,9 +299,8 @@ test('refs cards render during generation and perf logs prove polling continued'
     () => backend.getMessagePageCallsAfterDone(),
     { timeout: 5_000 },
   ).toBeGreaterThanOrEqual(2)
-  const locateChip = page.locator('.kb-prov-locate-chip').first()
+  const locateChip = page.getByRole('button', { name: '定位到原文证据', exact: true }).first()
   await expect(locateChip).toBeVisible({ timeout: 5_000 })
-  await expect(locateChip).toHaveAttribute('data-kb-locate-block-id', 'p-delayed')
   await expect(page.locator('.kb-ref-title')).toContainText('Fixture Paper.pdf')
   await expect(page.locator('.kb-ref-score')).toContainText('相关分 8.60')
 

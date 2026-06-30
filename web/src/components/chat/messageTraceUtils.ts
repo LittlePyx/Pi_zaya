@@ -4,6 +4,7 @@ import {
   type SelectedResearchContextItem,
   type SelectedResearchContextPack,
 } from './researchContextPack'
+import { internalDebugBrowserEnabled } from '../../utils/internalDebug'
 
 export function isImageOnlyPlaceholder(content: string) {
   return /^\[Image attachment x\d+\]$/i.test(String(content || '').trim())
@@ -70,6 +71,7 @@ interface ResearchTraceDebugWindow extends Window {
 }
 
 export function shouldShowResearchTracePanel(): boolean {
+  if (!internalDebugBrowserEnabled()) return false
   if (typeof window === 'undefined') return false
   const w = window as ResearchTraceDebugWindow
   if (w.__KB_SHOW_RESEARCH_TRACE__) return true

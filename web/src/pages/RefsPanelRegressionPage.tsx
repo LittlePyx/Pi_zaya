@@ -15,6 +15,7 @@ const REFS_PANEL_SCENARIOS = new Set([
   'polish-status',
   'card-view-contract',
   'pending-with-hits',
+  'research-basket-synthetic',
 ])
 
 const REFS_PANEL_PAYLOAD: Record<string, unknown> = {
@@ -186,6 +187,50 @@ const REFS_PANEL_PENDING_WITH_HITS_PAYLOAD: Record<string, unknown> = {
             highlightSnippet: 'SCINeRF uses neural radiance fields as the underlying scene representation.',
             strictLocate: false,
           },
+        },
+      },
+    ],
+  },
+}
+
+const REFS_PANEL_RESEARCH_BASKET_SYNTHETIC_PAYLOAD: Record<string, unknown> = {
+  7: {
+    prompt: 'Use the selected item from my literature basket.',
+    display_state: 'ready',
+    hits: [
+      {
+        text: 'Title: A hard to find preprint\nDOI: 10.1234/example.1\nSummary: selected metadata',
+        score: 999,
+        meta: {
+          source_path: '__research_basket__/item_1_deadbeef',
+          source_name: 'Research basket: A hard to find preprint',
+          title: 'A hard to find preprint',
+          doi: '10.1234/example.1',
+          ref_pack_state: 'ready',
+          research_basket_evidence: true,
+          basket_source_role: 'synthetic_basket_item',
+        },
+        ui_meta: {
+          display_name: 'Research basket: A hard to find preprint',
+          source_path: '',
+          heading_path: '',
+          score: 9.2,
+          score_pending: false,
+          score_tier: 'high',
+          summary_line: 'Title: A hard to find preprint DOI: 10.1234/example.1 Summary: selected metadata',
+          summary_label: 'Research basket',
+          summary_title: 'Selected Context',
+          why_line: 'The user selected this literature-basket item for the current turn.',
+          semantic_badges: [{ text: 'Research basket', score: 1 }],
+          can_open: false,
+          citation_meta: {
+            title: 'A hard to find preprint',
+            doi: '10.1234/example.1',
+            source_name: 'Research basket: A hard to find preprint',
+            source_path: '',
+          },
+          source_kind: 'research_basket',
+          reader_open: {},
         },
       },
     ],
@@ -494,6 +539,7 @@ export default function RefsPanelRegressionPage() {
     'polish-status': REFS_PANEL_POLISH_STATUS_PAYLOAD,
     'card-view-contract': REFS_PANEL_CARD_VIEW_PAYLOAD,
     'pending-with-hits': REFS_PANEL_PENDING_WITH_HITS_PAYLOAD,
+    'research-basket-synthetic': REFS_PANEL_RESEARCH_BASKET_SYNTHETIC_PAYLOAD,
   }
   const refs = refsByScenario[scenario] || REFS_PANEL_PAYLOAD
 

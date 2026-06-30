@@ -1,5 +1,6 @@
 import type { Conversation } from '../../api/chat'
 import type { LlmProviderReadiness, LlmReadinessPayload } from '../../api/settings'
+import { basenameFromSourcePath } from '../../utils/sourcePath'
 import { shelfProjectScopeId } from './citationState'
 import type { ReaderOpenPayload } from './reader/readerTypes'
 
@@ -70,7 +71,7 @@ interface BuildResearchContextInput {
 const cleanText = (value: unknown): string => String(value || '').trim()
 
 const sourceLabel = (sourceName: string, sourcePath: string): string =>
-  sourceName || sourcePath.split(/[\\/]/).filter(Boolean).pop() || sourcePath
+  sourceName || basenameFromSourcePath(sourcePath) || sourcePath
 
 const providerContext = (
   readiness: LlmProviderReadiness | undefined,

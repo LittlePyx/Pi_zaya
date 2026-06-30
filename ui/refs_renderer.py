@@ -40,6 +40,7 @@ from kb.reference_index import (
     resolve_reference_entry as _resolve_reference_entry_from_index,
 )
 from kb.pdf_tools import open_in_explorer
+from kb.path_safety import clean_file_source_path_input, path_is_within_roots, resolved_path, unique_resolved_roots
 from kb.source_blocks import normalize_inline_markdown
 from kb.tokenize import tokenize
 from ui.strings import S
@@ -119,6 +120,10 @@ def _lookup_pdf_by_stem(pdf_root: Path, stem: str) -> Path | None:
     stem = (stem or "").strip()
     if not stem:
         return None
+    pdf_roots = unique_resolved_roots([pdf_root])
+    if not pdf_roots:
+        return None
+    pdf_root = pdf_roots[0]
     if stem.endswith(".en"):
         stem = stem[: -3]
 
@@ -127,15 +132,17 @@ def _lookup_pdf_by_stem(pdf_root: Path, stem: str) -> Path | None:
         pdf_root / f"{stem}.PDF",
     ]
     for p in direct:
-        if p.exists():
-            return p
+        resolved = _existing_pdf_under_root(p, pdf_roots)
+        if resolved is not None:
+            return resolved
 
     # Fallback: scan by stem match.
     try:
         target = stem.lower()
         for p in pdf_root.glob("*.pdf"):
-            if p.stem.lower() == target:
-                return p
+            resolved = _existing_pdf_under_root(p, pdf_roots)
+            if resolved is not None and resolved.stem.lower() == target:
+                return resolved
     except Exception:
         pass
 
@@ -148,6 +155,9 @@ def _lookup_pdf_by_stem(pdf_root: Path, stem: str) -> Path | None:
     best_score = -1.0
     try:
         for p in pdf_root.glob("*.pdf"):
+            resolved = _existing_pdf_under_root(p, pdf_roots)
+            if resolved is None:
+                continue
             cand_year, cand_title_key = _parse_name_year_title_key(p.stem)
             if not cand_title_key:
                 continue
@@ -180,11 +190,23 @@ def _lookup_pdf_by_stem(pdf_root: Path, stem: str) -> Path | None:
 
             if score > best_score:
                 best_score = score
-                best_path = p
+                best_path = resolved
     except Exception:
         return None
 
     return best_path
+
+
+def _existing_pdf_under_root(path_obj: Path | str, roots: list[Path | str | None]) -> Path | None:
+    path = resolved_path(path_obj)
+    if path is None or not path_is_within_roots(path, roots):
+        return None
+    try:
+        if path.is_file() and path.suffix.lower() == ".pdf":
+            return path
+    except Exception:
+        return None
+    return None
 
 
 def _open_pdf(pdf_path: Path) -> tuple[bool, str]:
@@ -1605,12 +1627,20 @@ def _snippet(text: str, *, heading: str = "", max_chars: int = 260) -> str:
 
 
 def _resolve_pdf_for_source(pdf_root: Path | None, source_path: str) -> Path | None:
-    if not pdf_root:
+    pdf_roots = unique_resolved_roots([pdf_root])
+    if not pdf_roots:
         return None
-    stem = (Path(source_path).stem or "").strip()
+    raw = clean_file_source_path_input(source_path)
+    if not raw:
+        return None
+    src = Path(raw).expanduser()
+    if src.suffix.lower() == ".pdf":
+        candidate = src if src.is_absolute() else (pdf_roots[0] / src)
+        return _existing_pdf_under_root(candidate, pdf_roots)
+    stem = (src.stem or "").strip()
     if not stem:
         return None
-    return _lookup_pdf_by_stem(pdf_root, stem)
+    return _lookup_pdf_by_stem(pdf_roots[0], stem)
 
 
 # --- Citation Utilities ---
@@ -1642,7 +1672,7 @@ def _expand_venue_abbr(abbr: str) -> str:
 
 
 def _resolve_source_doc_path(source_path: str, *, md_root_hint: str = "") -> Path | None:
-    raw = (source_path or "").strip()
+    raw = clean_file_source_path_input(source_path)
     if not raw:
         return None
     p = Path(raw)
@@ -1881,13 +1911,7 @@ def _openalex_work_by_doi(doi: str) -> dict | None:
 
 
 def _lookup_journal_if(meta: dict) -> dict | None:
-    try:
-        logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
-        logging.getLogger("sqlalchemy.engine.Engine").setLevel(logging.WARNING)
-        logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
-        logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
-    except Exception:
-        pass
+    _quiet_sqlalchemy_logging()
     venue = str((meta or {}).get("venue") or "").strip()
     ox_venue = str((meta or {}).get("openalex_venue") or "").strip()
     issn = _normalize_issn(str((meta or {}).get("issn") or ""))
@@ -1906,68 +1930,111 @@ def _lookup_journal_if(meta: dict) -> dict | None:
         fa = Factor()
     except Exception:
         return None
+    _quiet_sqlalchemy_logging(fa)
 
-    recs = []
-    for cand in issn_candidates:
-        if recs:
-            break
-        try:
-            recs = fa.search(cand, key="issn") or []
-        except Exception:
-            recs = []
-        if recs:
-            break
-        try:
-            recs = fa.search(cand, key="eissn") or []
-        except Exception:
-            recs = []
-    if not recs:
-        for cand in venue_candidates:
+    try:
+        recs = []
+        for cand in issn_candidates:
+            if recs:
+                break
             try:
-                recs = fa.search(cand, key="journal") or []
+                recs = fa.search(cand, key="issn") or []
             except Exception:
                 recs = []
             if recs:
                 break
-    if not recs:
-        return None
+            try:
+                recs = fa.search(cand, key="eissn") or []
+            except Exception:
+                recs = []
+        if not recs:
+            for cand in venue_candidates:
+                try:
+                    recs = fa.search(cand, key="journal") or []
+                except Exception:
+                    recs = []
+                if recs:
+                    break
+        if not recs:
+            return None
 
-    best = None
-    best_sc = -1.0
-    for r in recs:
-        if not isinstance(r, dict):
-            continue
-        jname = str(r.get("journal") or "").strip()
-        r_issn = _normalize_issn(str(r.get("issn") or ""))
-        r_eissn = _normalize_issn(str(r.get("eissn") or ""))
-        sc = 0.0
-        for cand in venue_candidates:
-            if cand:
-                sc = max(sc, _text_sim(cand, jname))
-        if r_issn and (r_issn in issn_candidates):
-            sc += 1.6
-        if r_eissn and (r_eissn in issn_candidates):
-            sc += 1.3
-        if sc > best_sc:
-            best_sc = sc
-            best = r
-    if not isinstance(best, dict):
-        return None
-    if best_sc < 0.80:
-        return None
+        best = None
+        best_sc = -1.0
+        for r in recs:
+            if not isinstance(r, dict):
+                continue
+            jname = str(r.get("journal") or "").strip()
+            r_issn = _normalize_issn(str(r.get("issn") or ""))
+            r_eissn = _normalize_issn(str(r.get("eissn") or ""))
+            sc = 0.0
+            for cand in venue_candidates:
+                if cand:
+                    sc = max(sc, _text_sim(cand, jname))
+            if r_issn and (r_issn in issn_candidates):
+                sc += 1.6
+            if r_eissn and (r_eissn in issn_candidates):
+                sc += 1.3
+            if sc > best_sc:
+                best_sc = sc
+                best = r
+        if not isinstance(best, dict):
+            return None
+        if best_sc < 0.80:
+            return None
 
+        try:
+            factor = float(best.get("factor"))
+        except Exception:
+            return None
+        if factor <= 0:
+            return None
+        return {
+            "journal_if": round(factor, 3),
+            "journal_quartile": str(best.get("jcr") or "").strip(),
+            "journal_if_source": "JCR dataset (impact_factor)",
+            "journal_if_matched_journal": str(best.get("journal") or "").strip(),
+        }
+    finally:
+        _close_factor_manager(fa)
+
+
+def _close_factor_manager(factor_obj) -> None:
+    manager = getattr(factor_obj, "manager", None)
+    if manager is None:
+        return
+    session = getattr(manager, "session", None)
+    if session is not None:
+        try:
+            session.close()
+        except Exception:
+            pass
+    engine = getattr(manager, "engine", None)
+    if engine is not None:
+        try:
+            engine.dispose()
+        except Exception:
+            pass
+
+
+def _quiet_sqlalchemy_logging(factor_obj=None) -> None:
     try:
-        factor = float(best.get("factor"))
+        logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+        logging.getLogger("sqlalchemy.engine.Engine").setLevel(logging.WARNING)
+        logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
+        logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+        manager = getattr(factor_obj, "manager", None)
+        engine = getattr(manager, "engine", None)
+        engine_logger = getattr(engine, "logger", None)
+        if engine_logger is not None:
+            try:
+                engine_logger.setLevel(logging.WARNING)
+            except Exception:
+                try:
+                    engine_logger.level = logging.WARNING
+                except Exception:
+                    pass
     except Exception:
-        return None
-    if factor <= 0:
-        return None
-    return {
-        "journal_if": round(factor, 3),
-        "journal_quartile": str(best.get("jcr") or "").strip(),
-        "journal_if_source": "JCR dataset (impact_factor)",
-        "journal_if_matched_journal": str(best.get("journal") or "").strip(),
-    }
+        pass
 
 
 _CONF_ACR_STOP = {
@@ -4696,8 +4763,23 @@ def _annotate_inpaper_citations_with_hover_meta(
                 return cached
             meta_h = (hit or {}).get("meta", {}) or {}
             ui_meta_h = (hit or {}).get("ui_meta", {}) or {}
+            is_research_basket_synthetic = bool(
+                meta_h.get("research_basket_evidence")
+                and (
+                    str(meta_h.get("basket_source_role") or "").strip() == "synthetic_basket_item"
+                    or sp.replace("\\", "/").startswith("__research_basket__/")
+                )
+            )
             primary_evidence = _system_a_primary_evidence_from_ui_meta(ui_meta_h)
-            src_name = _display_source_name(sp)
+            if is_research_basket_synthetic:
+                src_name = (
+                    str(meta_h.get("source_name") or "").strip()
+                    or str(ui_meta_h.get("display_name") or "").strip()
+                    or str(meta_h.get("title") or "").strip()
+                    or _display_source_name(sp)
+                )
+            else:
+                src_name = _display_source_name(sp)
             default_heading = str(
                 primary_evidence.get("heading_path")
                 or primary_evidence.get("headingPath")
@@ -4753,6 +4835,90 @@ def _annotate_inpaper_citations_with_hover_meta(
                 evidence_source = "retrieval_hit"
             p0, p1 = _safe_page_range(meta_h)
             ref_rank = meta_h.get("ref_rank") if isinstance(meta_h.get("ref_rank"), dict) else {}
+            block_id = str(
+                primary_evidence.get("block_id")
+                or primary_evidence.get("blockId")
+                or meta_h.get("primary_block_id")
+                or meta_h.get("block_id")
+                or ""
+            ).strip()
+            anchor_id = str(
+                primary_evidence.get("anchor_id")
+                or primary_evidence.get("anchorId")
+                or meta_h.get("primary_anchor_id")
+                or meta_h.get("anchor_id")
+                or ""
+            ).strip()
+            anchor_kind = str(
+                primary_evidence.get("anchor_kind")
+                or primary_evidence.get("anchorKind")
+                or meta_h.get("anchor_kind")
+                or ""
+            ).strip()
+            if is_research_basket_synthetic:
+                basket_title = str(meta_h.get("title") or src_name or "").strip()
+                basket_heading = heading or str(ui_meta_h.get("heading_path") or "").strip()
+                basket_quote = evidence_quote or snippet or str(hit.get("text") or "").strip()
+                basket_support = str(
+                    meta_h.get("support_relation")
+                    or ui_meta_h.get("why_line")
+                    or "User-selected research basket evidence for this turn."
+                ).strip()
+                basket_fp = _system_a_evidence_fingerprint(
+                    source_path=sp,
+                    heading=basket_heading,
+                    evidence_quote=basket_quote,
+                    snippet=snippet,
+                    block_id=block_id,
+                    anchor_id=anchor_id,
+                    page_start=0,
+                    page_end=0,
+                )
+                existing = system_a_detail_by_fingerprint.get(basket_fp)
+                if isinstance(existing, dict):
+                    _system_a_add_linked_num(existing, int(n))
+                    _system_a_maybe_replace_claim(existing, answer_claim)
+                    detail_by_key[skey] = existing
+                    return existing
+                anchor = _build_inpaper_anchor(anchor_ns, int(n), source_name=src_name)
+                rec = {
+                    "num": int(n),
+                    "linked_nums": [int(n)],
+                    "anchor": anchor,
+                    "evidence_fingerprint": basket_fp,
+                    "citation_budget_key": basket_fp,
+                    "source_name": src_name,
+                    "source_path": "",
+                    "raw": basket_quote[:520],
+                    "title": basket_title or src_name,
+                    "is_inpaper": False,
+                    "citation_route": "research_basket",
+                    "routing_reason": "research_basket_evidence",
+                    "routing_confidence": 1.0,
+                    "heading_path": basket_heading,
+                    "summary_line": basket_quote[:360],
+                    "summary_source": "research_basket",
+                    "answer_claim": answer_claim[:420],
+                    "evidence_quote": basket_quote[:520],
+                    "evidence_source": "research_basket",
+                    "location_label": "Research basket",
+                    "support_relation": basket_support,
+                    "why_line": basket_support,
+                    "block_id": block_id,
+                    "anchor_id": anchor_id,
+                    "anchor_kind": anchor_kind,
+                    "page_start": 0,
+                    "page_end": 0,
+                    "score": 10.0,
+                    "binding_status": "grounded",
+                    "binding_confidence": 1.0,
+                    "binding_reason": basket_support,
+                    "binding_overlap_terms": [],
+                    "evidence_pick_score": float(evidence_pick.get("score") or 0.0) if evidence_pick else 0.0,
+                }
+                detail_by_key[skey] = rec
+                system_a_detail_by_fingerprint[basket_fp] = rec
+                return rec
             try:
                 score_value = float(
                     ref_rank.get("display_score")
@@ -4796,26 +4962,6 @@ def _annotate_inpaper_citations_with_hover_meta(
                     location_bits.append(f"pp. {int(min(p0, p1))}-{int(max(p0, p1))}")
                 else:
                     location_bits.append(f"p. {int(p0)}")
-            block_id = str(
-                primary_evidence.get("block_id")
-                or primary_evidence.get("blockId")
-                or meta_h.get("primary_block_id")
-                or meta_h.get("block_id")
-                or ""
-            ).strip()
-            anchor_id = str(
-                primary_evidence.get("anchor_id")
-                or primary_evidence.get("anchorId")
-                or meta_h.get("primary_anchor_id")
-                or meta_h.get("anchor_id")
-                or ""
-            ).strip()
-            anchor_kind = str(
-                primary_evidence.get("anchor_kind")
-                or primary_evidence.get("anchorKind")
-                or meta_h.get("anchor_kind")
-                or ""
-            ).strip()
             if anchor_kind:
                 location_bits.append(anchor_kind)
             why_line = str(ref_rank.get("why") or meta_h.get("why_line") or "").strip()[:320]
@@ -5412,7 +5558,7 @@ def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
 
     if (not net_data) and pending:
         st.markdown(
-            "<div class='citation-loading'>妫€绱腑...</div>",
+            "<div class='citation-loading'>检索中...</div>",
             unsafe_allow_html=True,
         )
         time.sleep(0.5)

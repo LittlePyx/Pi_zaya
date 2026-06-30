@@ -1468,11 +1468,32 @@ class LibraryStore:
         now = time.time()
         meta_json = json.dumps(citation_meta) if citation_meta else None
         with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO pdf_files (sha1, path, created_at, citation_meta) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(sha1) DO UPDATE SET path=excluded.path, citation_meta=excluded.citation_meta",
-                (sha1, path_s, now, meta_json),
-            )
+            row = conn.execute("SELECT path FROM pdf_files WHERE sha1 = ?", (sha1,)).fetchone()
+            if not row:
+                conn.execute(
+                    "INSERT INTO pdf_files (sha1, path, created_at, citation_meta) VALUES (?, ?, ?, ?)",
+                    (sha1, path_s, now, meta_json),
+                )
+                return
+
+            old_path_s = str(row["path"] or "")
+            same_path = False
+            try:
+                same_path = Path(old_path_s).resolve(strict=False) == Path(path_s).resolve(strict=False)
+            except Exception:
+                same_path = old_path_s == path_s
+
+            old_exists = False
+            try:
+                old_exists = bool(old_path_s and Path(old_path_s).exists())
+            except Exception:
+                old_exists = False
+
+            if same_path or not old_exists:
+                conn.execute(
+                    "UPDATE pdf_files SET path = ?, citation_meta = COALESCE(?, citation_meta) WHERE sha1 = ?",
+                    (path_s, meta_json, sha1),
+                )
 
     def ensure_record_for_path(self, path: Path | str) -> dict | None:
         path_obj = Path(path)
@@ -1483,6 +1504,15 @@ class LibraryStore:
             if not path_obj.exists() or not path_obj.is_file():
                 return None
             sha1 = compute_file_sha1(path_obj)
+            existing = self.get_by_sha1(sha1)
+            if existing:
+                existing_path = Path(str(existing.get("path") or ""))
+                try:
+                    if existing_path.exists() and existing_path.resolve(strict=False) != path_obj.resolve(strict=False):
+                        return existing
+                except Exception:
+                    if str(existing_path) != str(path_obj):
+                        return existing
             self.upsert(sha1, path_obj)
             return self.get_by_path(path_obj)
         except Exception:

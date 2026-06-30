@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from api.message_render_contract import (
     build_render_cache_payload,
     content_has_linkable_answer_citations,
@@ -51,6 +53,56 @@ def test_degraded_numeric_cache_requires_rendered_links_when_hits_are_linkable()
     assert render_payload_is_degraded_for_citations(
         cache,
         raw_content="Deep learning improves SPI [1].",
+        hits=hits,
+    )
+
+
+def test_degraded_structured_cache_requires_rendered_links_when_hits_are_linkable():
+    source_path = "paper-one.md"
+    sid = "s" + hashlib.sha1(source_path.encode("utf-8")).hexdigest()[:8]
+    hits = [{"meta": {"source_path": source_path}}]
+    raw = f"Prior work is cited as [[CITE:{sid}:35]]."
+    cache = build_render_cache_payload(
+        schema=5,
+        cache_key="abc",
+        notice="",
+        rendered_body="Prior work is cited as .",
+        rendered_content="Prior work is cited as .",
+        copy_markdown="Prior work is cited as .",
+        copy_text="Prior work is cited as .",
+        cite_details=[],
+        refs_user_msg_id=10,
+        render_packet={},
+    )
+
+    assert content_has_linkable_answer_citations(raw, hits)
+    assert render_payload_is_degraded_for_citations(
+        cache,
+        raw_content=raw,
+        hits=hits,
+    )
+
+
+def test_invalid_structured_cite_sid_does_not_make_cache_degraded():
+    hits = [{"meta": {"source_path": "paper-one.md"}}]
+    raw = "Prior work is cited as [[CITE:sdeadbeef:35]]."
+    cache = build_render_cache_payload(
+        schema=5,
+        cache_key="abc",
+        notice="",
+        rendered_body="Prior work is cited as .",
+        rendered_content="Prior work is cited as .",
+        copy_markdown="Prior work is cited as .",
+        copy_text="Prior work is cited as .",
+        cite_details=[],
+        refs_user_msg_id=10,
+        render_packet={},
+    )
+
+    assert not content_has_linkable_answer_citations(raw, hits)
+    assert not render_payload_is_degraded_for_citations(
+        cache,
+        raw_content=raw,
         hits=hits,
     )
 

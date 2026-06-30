@@ -918,7 +918,7 @@ def _compose_system_b_trace(
         flags.append("missing_answer_claim")
     if not context:
         flags.append("missing_citation_context")
-    if context_source == "answer_context":
+    if context_source in {"answer_context", "answer_reference_mention"}:
         flags.append("answer_context_only")
     if not reference:
         flags.append("missing_reference_entry")

@@ -1,4 +1,4 @@
-import { api, authFetch } from './client'
+import { api, authFetch, responseError, responseJson } from './client'
 
 export interface ConvertActiveTask {
   task_id: string
@@ -309,6 +309,7 @@ export interface LibraryFilesResponse {
   scope: string
   queue: {
     running: boolean
+    queued_count?: number
     active_count: number
     active_tasks: ConvertActiveTask[]
     current: string
@@ -352,6 +353,12 @@ export interface RenameApplyResponse {
   skipped: number
   failed: number
   needs_reindex: boolean
+  index_cleanup?: {
+    docs_removed?: number
+    chunks_removed?: number
+    reference_docs_removed?: number
+    errors?: string[]
+  }
   items: Array<Record<string, unknown>>
 }
 
@@ -384,6 +391,12 @@ export interface UploadCommitResponse {
   citation_meta?: Record<string, unknown>
   enqueued: boolean
   task_id: string
+}
+
+export interface LibraryUploadResponse {
+  name: string
+  duplicate?: boolean
+  existing?: string
 }
 
 export interface GuideSourceResponse {
@@ -1139,15 +1152,14 @@ export const libraryApi = {
     fd.append('file', file)
     if (baseName) fd.append('base_name', baseName)
     const res = await authFetch('/api/library/upload', { method: 'POST', body: fd })
-    return res.json()
+    return responseJson<LibraryUploadResponse>(res)
   },
   inspectUpload: async (file: File, useLlm = true) => {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('use_llm', String(useLlm))
     const res = await authFetch('/api/library/upload/inspect', { method: 'POST', body: fd })
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-    return res.json() as Promise<UploadInspectResponse>
+    return responseJson<UploadInspectResponse>(res)
   },
   commitUpload: async (
     file: File,
@@ -1160,8 +1172,7 @@ export const libraryApi = {
     fd.append('speed_mode', String(opts?.speedMode || 'balanced'))
     fd.append('allow_duplicate', String(Boolean(opts?.allowDuplicate)))
     const res = await authFetch('/api/library/upload/commit', { method: 'POST', body: fd })
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-    return res.json() as Promise<UploadCommitResponse>
+    return responseJson<UploadCommitResponse>(res)
   },
   convert: (pdfName: string, speedMode = 'balanced', opts?: { replace?: boolean }) =>
     api.post('/api/library/convert', {
@@ -1182,7 +1193,20 @@ export const libraryApi = {
       target,
     }),
   deleteFile: (pdfName: string, alsoMd = true) =>
-    api.post<{ ok: boolean; pdf_deleted: boolean; md_deleted: boolean; removed_queued: number; warnings: string[]; needs_reindex: boolean }>(
+    api.post<{
+      ok: boolean
+      pdf_deleted: boolean
+      md_deleted: boolean
+      removed_queued: number
+      index_cleanup?: {
+        docs_removed?: number
+        chunks_removed?: number
+        reference_docs_removed?: number
+        errors?: string[]
+      }
+      warnings: string[]
+      needs_reindex: boolean
+    }>(
       '/api/library/file/delete',
       {
         pdf_name: pdfName,
@@ -1258,6 +1282,8 @@ export const libraryApi = {
     ;(async () => {
       try {
         const res = await authFetch('/api/library/convert/status', { signal: ctrl.signal })
+        if (!res.ok) throw await responseError(res, 'conversion status failed')
+        if (!res.body) throw new Error('conversion status stream is empty')
         const reader = res.body!.getReader()
         const decoder = new TextDecoder()
         let buf = ''
@@ -1276,6 +1302,7 @@ export const libraryApi = {
             } catch { /* skip bad JSON */ }
           }
         }
+        throw new Error('conversion status stream ended before completion')
       } catch (err) {
         if (!ctrl.signal.aborted) onError?.(err)
       }

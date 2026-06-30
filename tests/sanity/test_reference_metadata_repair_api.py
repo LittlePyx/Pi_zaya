@@ -37,6 +37,49 @@ def _reset_backfill_state() -> None:
         )
 
 
+def test_reference_metadata_routes_reject_unbounded_payloads_before_work(monkeypatch):
+    def fail_repair(*args, **kwargs):
+        raise AssertionError("repair should not run for invalid request bodies")
+
+    def fail_backfill(*args, **kwargs):
+        raise AssertionError("backfill should not run for invalid request bodies")
+
+    def fail_polish(*args, **kwargs):
+        raise AssertionError("polish should not run for invalid request bodies")
+
+    monkeypatch.setattr(references_router, "repair_citation_metadata_batch", fail_repair)
+    monkeypatch.setattr(references_router, "backfill_reference_metadata", fail_backfill)
+    monkeypatch.setattr(references_router, "polish_citation_card_detail", fail_polish)
+
+    client = TestClient(app)
+    huge_bibliometrics = client.post(
+        "/api/references/bibliometrics",
+        json={"meta": {"title": "x" * 95_000}},
+    )
+    too_many_repair_items = client.post(
+        "/api/references/shelf/metadata/repair",
+        json={"items": [{"key": f"ref-{idx}", "title": "Demo"} for idx in range(121)]},
+    )
+    huge_repair_item = client.post(
+        "/api/references/shelf/metadata/repair",
+        json={"items": [{"key": "huge", "title": "x" * 45_000}]},
+    )
+    invalid_backfill_limit = client.post(
+        "/api/references/shelf/metadata/backfill",
+        json={"limit": 10_000},
+    )
+    huge_polish_meta = client.post(
+        "/api/references/citation-card-polish",
+        json={"meta": {"title": "x" * 95_000}},
+    )
+
+    assert huge_bibliometrics.status_code == 422
+    assert too_many_repair_items.status_code == 422
+    assert huge_repair_item.status_code == 422
+    assert invalid_backfill_limit.status_code == 422
+    assert huge_polish_meta.status_code == 422
+
+
 def test_shelf_metadata_repair_route_returns_quality_contract(tmp_path, monkeypatch):
     def fake_enrich(detail):
         return {
@@ -287,7 +330,9 @@ def test_bibliometrics_route_enriches_ready_metadata_when_summary_missing(tmp_pa
 def test_bibliometrics_route_prefers_local_markdown_abstract_for_shelf_summary(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
-    md_path = tmp_path / "paper.en.md"
+    md_dir = tmp_path / "md_output"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_path = md_dir / "paper.en.md"
     md_path.write_text(
         "\n".join(
             [
@@ -308,6 +353,7 @@ def test_bibliometrics_route_prefers_local_markdown_abstract_for_shelf_summary(t
         return dict(detail)
 
     monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(references_router, "_md_dir", lambda: md_dir)
     monkeypatch.setattr(references_router, "enrich_citation_detail_meta", fake_enrich)
 
     client = TestClient(app)
@@ -335,6 +381,47 @@ def test_bibliometrics_route_prefers_local_markdown_abstract_for_shelf_summary(t
     assert payload["summary_quality"]["status"] == "grounded"
     assert "frequency-division multiplexed illumination" in payload["summary_line"]
     assert payload["metadata_export_acceptance"]["summary_export_ready"] is True
+
+
+def test_bibliometrics_route_rejects_local_summary_outside_reference_asset_roots(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    md_dir = tmp_path / "md_output"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    outside_md = tmp_path / "project-not-library.md"
+    outside_md.write_text(
+        "# Internal note\n\n## Abstract\n\nThis private project note must not be exposed as citation summary.",
+        encoding="utf-8",
+    )
+
+    def fake_enrich(detail):
+        return dict(detail)
+
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(references_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(references_router, "enrich_citation_detail_meta", fake_enrich)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/bibliometrics",
+        json={
+            "meta": {
+                "key": "outside-local-summary",
+                "source_path": str(outside_md),
+                "title": "Internal note",
+                "authors": "Local User",
+                "venue": "Notebook",
+                "year": "2026",
+                "summary_line": "This citation supports the current answer.",
+                "summary_source": "citation_context",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("summary_provider") != "local_markdown"
+    assert "private project note" not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_bibliometrics_route_attaches_quality_contract_to_enriched_result(tmp_path, monkeypatch):

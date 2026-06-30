@@ -50,7 +50,7 @@ def test_build_multimodal_user_content_embeds_local_image(tmp_path: Path):
 
     out = _build_multimodal_user_content(
         "inspect this image",
-        [{"path": str(img), "mime": "image/png"}],
+        [{"path": str(img), "mime": "image/jpeg"}],
         vision_image_mime_by_suffix={".png": "image/png"},
     )
 
@@ -58,6 +58,20 @@ def test_build_multimodal_user_content_embeds_local_image(tmp_path: Path):
     assert out[0]["type"] == "text"
     assert out[1]["type"] == "image_url"
     assert str(out[1]["image_url"]["url"]).startswith("data:image/png;base64,")
+
+
+def test_build_multimodal_user_content_skips_invalid_image_signature(tmp_path: Path):
+    img = tmp_path / "not-image.png"
+    img.write_bytes(b"not really an image")
+
+    out = _build_multimodal_user_content(
+        "inspect this image",
+        [{"path": str(img), "mime": "image/png"}],
+        vision_image_mime_by_suffix={".png": "image/png"},
+        allowed_image_roots=[tmp_path],
+    )
+
+    assert out == "inspect this image"
 
 
 def test_build_generation_messages_wraps_system_history_and_user():

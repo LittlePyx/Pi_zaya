@@ -6,17 +6,19 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
-from collections import Counter
+from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
 from pydantic import BaseModel
 
 from api.deps import get_settings, load_prefs
+from api.internal_access import require_internal_api
 from api.library_path_utils import (
     path_is_within as _library_path_is_within,
     resolve_library_pdf_name_arg as _library_resolve_pdf_name_arg,
@@ -80,14 +82,24 @@ from kb.converter.structured_index_batch import rebuild_structured_indices_for_r
 from kb.library_store import LibraryStore
 from kb.maintenance import create_auto_snapshot
 from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf_to_md, open_in_explorer
+from kb.reference_index import INDEX_FILE_NAME as REFERENCE_INDEX_FILE_NAME
 from kb.reference_sync import start_reference_sync
-from kb.store import compute_doc_id, compute_file_sha1, doc_chunks_path, load_docs_index
+from kb.store import (
+    compute_doc_id,
+    compute_file_sha1,
+    delete_doc_chunks,
+    doc_chunks_path,
+    load_docs_index,
+    save_docs_index,
+)
 from kb.user_issue_store import record_library_quality_issues
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 _RENAME_SUGGEST_CACHE: dict[str, dict] = {}
 _CONVERSION_QUALITY_CACHE: dict[str, tuple[int, int, int, int, dict]] = {}
 _RESEARCH_QA_EVAL_ROOT = Path("test_results") / "research_qa_eval"
+_QUALITY_REPAIR_RUN_LOCK = threading.RLock()
+_QUALITY_REPAIR_ADVANCE_IN_FLIGHT: set[str] = set()
 
 
 def _user_issues_db_path() -> Path:
@@ -240,6 +252,40 @@ def _normalized_path_key(raw: str | Path) -> str:
         return s
 
 
+def _normalized_path_compare_key(raw: str | Path) -> str:
+    key = _normalized_path_key(raw)
+    if not key:
+        return ""
+    key = key.replace("\\", "/")
+    return key.casefold() if os.name == "nt" else key
+
+
+def _reference_index_path_key(raw: str | Path) -> str:
+    key = _normalized_path_key(raw)
+    return key.strip().lower() if key else ""
+
+
+def _task_repair_run_ids(info: dict | None) -> list[str]:
+    if not isinstance(info, dict):
+        return []
+    values: list[object] = []
+    raw_ids = info.get("repair_run_ids")
+    if isinstance(raw_ids, list):
+        values.extend(raw_ids)
+    values.append(info.get("repair_run_id"))
+    repair_context = info.get("repair_context") if isinstance(info.get("repair_context"), dict) else {}
+    values.append(repair_context.get("repair_run_id"))
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
 def _merge_task_map_entry(mapping: dict[str, dict], key: str, info: dict) -> None:
     k = str(key or "").strip()
     if not k:
@@ -261,6 +307,20 @@ def _merge_task_map_entry(mapping: dict[str, dict], key: str, info: dict) -> Non
     next_tid = str(info.get("task_id") or "").strip()
     if next_tid and (not str(prev.get("task_id") or "").strip()):
         merged["task_id"] = next_tid
+    repair_run_ids = _task_repair_run_ids(prev) + _task_repair_run_ids(info)
+    if repair_run_ids:
+        seen_repair_run_ids: set[str] = set()
+        merged_repair_run_ids: list[str] = []
+        for repair_run_id in repair_run_ids:
+            if repair_run_id in seen_repair_run_ids:
+                continue
+            seen_repair_run_ids.add(repair_run_id)
+            merged_repair_run_ids.append(repair_run_id)
+        merged["repair_run_ids"] = merged_repair_run_ids[:20]
+        if not str(merged.get("repair_run_id") or "").strip():
+            merged["repair_run_id"] = merged_repair_run_ids[0]
+    if (not isinstance(merged.get("repair_context"), dict)) and isinstance(info.get("repair_context"), dict):
+        merged["repair_context"] = dict(info.get("repair_context") or {})
     for field in ("cur_page_done", "cur_page_total", "cur_page_msg"):
         if field in info:
             merged[field] = info.get(field)
@@ -628,6 +688,134 @@ def _clear_conversion_quality_cache(md_path: str | Path) -> None:
         return
 
 
+def _purge_library_index_for_markdown(db_dir: Path, md_path: Path) -> dict:
+    """Best-effort removal of deleted library sources from retrieval/reference indices."""
+
+    out = {
+        "docs_removed": 0,
+        "chunks_removed": 0,
+        "reference_docs_removed": 0,
+        "errors": [],
+    }
+    db_root = Path(db_dir).expanduser()
+    source = Path(md_path).expanduser()
+    source_key = _normalized_path_key(source)
+    source_compare_key = _normalized_path_compare_key(source)
+    source_ref_key = _reference_index_path_key(source)
+    candidate_doc_ids: set[str] = {compute_doc_id(source)}
+    deleted_chunk_doc_ids: set[str] = set()
+
+    def _delete_chunks_for_doc(doc_id: str) -> None:
+        clean_id = str(doc_id or "").strip()
+        if not clean_id or clean_id in deleted_chunk_doc_ids:
+            return
+        deleted_chunk_doc_ids.add(clean_id)
+        try:
+            if delete_doc_chunks(db_root, clean_id):
+                out["chunks_removed"] = int(out["chunks_removed"]) + 1
+        except Exception as exc:
+            out["errors"].append(f"chunks:{clean_id}: {str(exc)[:200]}")
+
+    def _chunk_file_mentions_source(chunk_path: Path) -> bool:
+        try:
+            with chunk_path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        row = json.loads(raw)
+                    except Exception:
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    candidates = [
+                        row.get("source_path"),
+                        row.get("path"),
+                    ]
+                    meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+                    candidates.extend([meta.get("source_path"), meta.get("path")])
+                    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+                    candidates.extend([metadata.get("source_path"), metadata.get("path")])
+                    for cand in candidates:
+                        if source_compare_key and _normalized_path_compare_key(cand or "") == source_compare_key:
+                            return True
+        except Exception as exc:
+            out["errors"].append(f"chunks_scan:{chunk_path.stem}: {str(exc)[:200]}")
+        return False
+
+    def _chunk_doc_ids_for_source() -> set[str]:
+        ids: set[str] = set()
+        chunks_root = db_root / "chunks"
+        try:
+            if not chunks_root.exists():
+                return ids
+            for chunk_path in chunks_root.glob("*.jsonl"):
+                if _chunk_file_mentions_source(chunk_path):
+                    ids.add(str(chunk_path.stem or "").strip())
+        except Exception as exc:
+            out["errors"].append(f"chunks_scan: {str(exc)[:240]}")
+        return {item for item in ids if item}
+
+    try:
+        docs_index = load_docs_index(db_root)
+        if isinstance(docs_index, dict) and docs_index:
+            remove_ids: set[str] = set()
+            for doc_id, rec in list(docs_index.items()):
+                if not isinstance(rec, dict):
+                    continue
+                rec_key = _normalized_path_key(rec.get("path") or "")
+                rec_compare_key = _normalized_path_compare_key(rec.get("path") or "")
+                if (
+                    str(doc_id) in candidate_doc_ids
+                    or (source_key and rec_key == source_key)
+                    or (source_compare_key and rec_compare_key == source_compare_key)
+                ):
+                    remove_ids.add(str(doc_id))
+            remove_ids.update(_chunk_doc_ids_for_source())
+            docs_removed = 0
+            for doc_id in sorted(remove_ids):
+                if docs_index.pop(doc_id, None) is not None:
+                    docs_removed += 1
+                _delete_chunks_for_doc(doc_id)
+            if remove_ids:
+                save_docs_index(db_root, docs_index)
+                out["docs_removed"] = docs_removed
+    except Exception as exc:
+        out["errors"].append(f"docs_index: {str(exc)[:240]}")
+
+    for doc_id in _chunk_doc_ids_for_source():
+        _delete_chunks_for_doc(doc_id)
+    for doc_id in list(candidate_doc_ids):
+        _delete_chunks_for_doc(doc_id)
+
+    ref_index_path = db_root / REFERENCE_INDEX_FILE_NAME
+    try:
+        if ref_index_path.exists():
+            data = json.loads(ref_index_path.read_text(encoding="utf-8"))
+            docs = data.get("docs") if isinstance(data, dict) else None
+            if isinstance(docs, dict) and docs:
+                remove_keys: list[str] = []
+                for key, rec in list(docs.items()):
+                    rec_key = _reference_index_path_key((rec or {}).get("path") if isinstance(rec, dict) else "")
+                    key_match = bool(source_ref_key and _reference_index_path_key(str(key)) == source_ref_key)
+                    rec_match = bool(source_ref_key and rec_key == source_ref_key)
+                    if key_match or rec_match:
+                        remove_keys.append(str(key))
+                for key in remove_keys:
+                    docs.pop(key, None)
+                if remove_keys:
+                    data["docs"] = docs
+                    data["doc_count"] = len(docs)
+                    data["updated_at"] = time.time()
+                    ref_index_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    out["reference_docs_removed"] = len(remove_keys)
+    except Exception as exc:
+        out["errors"].append(f"reference_index: {str(exc)[:240]}")
+
+    return out
+
+
 def _path_is_within(path_obj: Path, roots: list[Path]) -> bool:
     return _library_path_is_within(path_obj, roots)
 
@@ -643,6 +831,25 @@ def _resolve_library_pdf_name_arg(pdf_name: str, *, require_exists: bool = False
         require_exists=require_exists,
         is_file=_path_is_file,
     )
+
+
+def _resolve_library_md_output_paths(md_root: Path, pdf_path: Path) -> tuple[Path, Path, bool]:
+    md_d = Path(md_root).expanduser().resolve(strict=False)
+    md_folder, md_main, md_exists = _resolve_md_output_paths(md_d, pdf_path)
+    if not _path_is_within(md_folder, [md_d]):
+        return md_folder, md_main, False
+    if not _path_is_within(md_main, [md_d]):
+        return md_folder, md_main, False
+    return md_folder, md_main, bool(md_exists)
+
+
+def _require_library_markdown_for_pdf(md_root: Path, pdf_path: Path) -> tuple[Path, Path]:
+    md_folder, md_main, md_exists = _resolve_library_md_output_paths(md_root, pdf_path)
+    if not _path_is_within(md_folder, [md_root]) or not _path_is_within(md_main, [md_root]):
+        raise HTTPException(400, "markdown path must be within the configured Markdown directory")
+    if (not md_exists) or (not _path_is_file(md_main)):
+        raise HTTPException(404, "markdown not found")
+    return md_folder, md_main
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:
@@ -738,8 +945,13 @@ def _resolve_quality_source(*, source_path: str, source_name: str = "") -> dict:
         if suffix == ".pdf":
             if not _path_is_within(candidate, roots):
                 continue
-            pdf_path = candidate
-            _, md_main, exists = _resolve_md_output_paths(md_d, candidate)
+            try:
+                candidate_exists = _path_is_file(candidate)
+            except Exception:
+                candidate_exists = candidate.exists() and candidate.is_file()
+            if candidate_exists or pdf_path is None:
+                pdf_path = candidate
+            _, md_main, exists = _resolve_library_md_output_paths(md_d, candidate)
             if exists:
                 md_path = md_main
                 md_exists = True
@@ -758,22 +970,47 @@ def _resolve_quality_source(*, source_path: str, source_name: str = "") -> dict:
     }
 
 
+def _compact_task_repair_context(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    issue_codes = [
+        str(item or "").strip()
+        for item in list(value.get("issue_codes") or [])
+        if str(item or "").strip()
+    ]
+    out = {
+        "action": str(value.get("action") or "").strip(),
+        "scope": str(value.get("scope") or "").strip(),
+        "reason": str(value.get("reason") or "").strip(),
+        "source": str(value.get("source") or "").strip(),
+        "repair_run_id": str(value.get("repair_run_id") or "").strip(),
+        "issue_codes": issue_codes[:30],
+    }
+    return {
+        key: item
+        for key, item in out.items()
+        if (item if not isinstance(item, list) else bool(item))
+    }
+
+
 def _compact_active_tasks(snap: dict) -> list[dict]:
     items: list[dict] = []
     for task in list((snap or {}).get("active_tasks") or []):
         if not isinstance(task, dict):
             continue
-        items.append(
-            {
-                "task_id": str(task.get("_tid") or ""),
-                "name": str(task.get("name") or ""),
-                "pdf": str(task.get("pdf") or ""),
-                "replace": bool(task.get("replace", False)),
-                "cur_page_done": int(task.get("cur_page_done", 0) or 0),
-                "cur_page_total": int(task.get("cur_page_total", 0) or 0),
-                "cur_page_msg": str(task.get("cur_page_msg") or ""),
-            }
-        )
+        item = {
+            "task_id": str(task.get("_tid") or ""),
+            "name": str(task.get("name") or ""),
+            "pdf": str(task.get("pdf") or ""),
+            "replace": bool(task.get("replace", False)),
+            "cur_page_done": int(task.get("cur_page_done", 0) or 0),
+            "cur_page_total": int(task.get("cur_page_total", 0) or 0),
+            "cur_page_msg": str(task.get("cur_page_msg") or ""),
+        }
+        repair_context = _compact_task_repair_context(task.get("repair_context"))
+        if repair_context:
+            item["repair_context"] = repair_context
+        items.append(item)
     return items
 
 
@@ -802,6 +1039,8 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
         if not task_pdf:
             continue
         task_name = str(task.get("name") or Path(task_pdf).name).strip()
+        repair_context = _compact_task_repair_context(task.get("repair_context"))
+        repair_run_id = str(repair_context.get("repair_run_id") or "").strip()
         info = {
             "queued": False,
             "running": True,
@@ -812,6 +1051,11 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
             "cur_page_total": int(task.get("cur_page_total", 0) or 0),
             "cur_page_msg": str(task.get("cur_page_msg") or ""),
         }
+        if repair_context:
+            info["repair_context"] = repair_context
+        if repair_run_id:
+            info["repair_run_id"] = repair_run_id
+            info["repair_run_ids"] = [repair_run_id]
         key = _normalized_path_key(task_pdf)
         if key:
             _merge_task_map_entry(by_path, key, info)
@@ -826,6 +1070,8 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
         if not task_pdf:
             continue
         task_name = str(task.get("name") or Path(task_pdf).name).strip()
+        repair_context = _compact_task_repair_context(task.get("repair_context"))
+        repair_run_id = str(repair_context.get("repair_run_id") or "").strip()
         info = {
             "queued": True,
             "running": False,
@@ -833,6 +1079,11 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
             "queue_pos": int(idx),
             "task_id": str(task.get("_tid") or ""),
         }
+        if repair_context:
+            info["repair_context"] = repair_context
+        if repair_run_id:
+            info["repair_run_id"] = repair_run_id
+            info["repair_run_ids"] = [repair_run_id]
         key = _normalized_path_key(task_pdf)
         if key:
             _merge_task_map_entry(by_path, key, info)
@@ -864,7 +1115,7 @@ def _library_file_item(
     docs_index_state: dict | None = None,
     meta_rec: dict | None = None,
 ) -> dict:
-    md_folder, md_main, md_exists = _resolve_md_output_paths(md_root, pdf)
+    md_folder, md_main, md_exists = _resolve_library_md_output_paths(md_root, pdf)
     key = _normalized_path_key(pdf)
     info = task_by_path.get(key) if key else None
     if not isinstance(info, dict):
@@ -956,6 +1207,9 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
     index_ready = sum(1 for item in items if str(item.get("index_state") or "") == "ready")
     index_quality_blocked = sum(1 for item in items if str(item.get("index_state") or "") == "quality_blocked")
     index_stale = sum(1 for item in items if str(item.get("index_state") or "") in {"index_stale", "not_indexed", "not_ready"})
+    active_tasks = list(snap.get("active_tasks") or [])
+    queued_tasks = list(snap.get("queue") or [])
+    queue_running = bool(snap.get("running", False)) or bool(active_tasks) or bool(queued_tasks)
 
     return {
         "items": items,
@@ -976,8 +1230,9 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
         "truncated": bool(limit > 0 and len(pdfs_all) > len(view)),
         "scope": "all" if limit <= 0 else str(limit),
         "queue": {
-            "running": bool(snap.get("running", False)) or bool(list(snap.get("active_tasks") or [])),
-            "active_count": int(snap.get("active_count", len(list(snap.get("active_tasks") or []))) or 0),
+            "running": queue_running,
+            "queued_count": len(queued_tasks),
+            "active_count": int(snap.get("active_count", len(active_tasks)) or 0),
             "current": str(snap.get("current", "")),
             "done": int(snap.get("done", 0) or 0),
             "total": int(snap.get("total", 0) or 0),
@@ -1043,14 +1298,21 @@ def _read_json_artifact(path: Path | None) -> dict:
         return {}
 
 
-def _read_jsonl_artifact(path: Path | None, *, limit: int = 10000) -> list[dict]:
+def _read_jsonl_artifact(path: Path | None, *, limit: int = 10000, tail: bool = False) -> list[dict]:
     if path is None:
         return []
+    try:
+        max_rows = max(0, int(limit))
+    except Exception:
+        max_rows = 10000
+    if max_rows <= 0:
+        return []
     rows: list[dict] = []
+    tail_rows: deque[dict] | None = deque(maxlen=max_rows) if tail else None
     try:
         with path.open("r", encoding="utf-8") as fh:
             for line in fh:
-                if len(rows) >= limit:
+                if not tail and len(rows) >= max_rows:
                     break
                 raw = line.strip()
                 if not raw:
@@ -1060,9 +1322,14 @@ def _read_jsonl_artifact(path: Path | None, *, limit: int = 10000) -> list[dict]
                 except Exception:
                     continue
                 if isinstance(row, dict):
-                    rows.append(row)
+                    if tail_rows is not None:
+                        tail_rows.append(row)
+                    else:
+                        rows.append(row)
     except Exception:
         return []
+    if tail_rows is not None:
+        return list(tail_rows)
     return rows
 
 
@@ -1984,7 +2251,7 @@ def _normalize_reader_locate_event(row: dict) -> dict:
 
 
 def _reader_locate_event_rows(*, limit: int = 1000) -> list[dict]:
-    rows = _read_jsonl_artifact(_reader_locate_events_path(), limit=max(1000, min(10000, int(limit or 1000) * 4)))
+    rows = _read_jsonl_artifact(_reader_locate_events_path(), limit=max(1000, min(10000, int(limit or 1000) * 4)), tail=True)
     latest_by_identity: dict[str, dict] = {}
     for raw in rows:
         row = _normalize_reader_locate_event(raw)
@@ -2188,7 +2455,7 @@ def _reader_locate_quality_summary(rows: list[dict] | None = None) -> dict:
 
 
 def _reader_locate_all_event_rows(*, limit: int = 4000) -> list[dict]:
-    rows = _read_jsonl_artifact(_reader_locate_events_path(), limit=max(1000, min(10000, int(limit or 4000))))
+    rows = _read_jsonl_artifact(_reader_locate_events_path(), limit=max(1000, min(10000, int(limit or 4000))), tail=True)
     out: list[dict] = []
     for raw in rows:
         row = _normalize_reader_locate_event(raw)
@@ -2514,7 +2781,7 @@ def _reader_locate_repair_verification(run: dict) -> dict:
 
 
 def _research_qa_rerun_history_rows(*, limit: int = 1000) -> list[dict]:
-    rows = _read_jsonl_artifact(_research_qa_rerun_history_path(), limit=limit)
+    rows = _read_jsonl_artifact(_research_qa_rerun_history_path(), limit=limit, tail=True)
     rows.sort(key=lambda item: (_safe_int(item.get("finished_at"), 0), _safe_int(item.get("started_at"), 0)), reverse=True)
     return rows
 
@@ -2681,7 +2948,7 @@ def _compact_json_value(value, *, limit: int = 40):
 
 
 def _quality_action_history_rows(*, limit: int = 40) -> list[dict]:
-    rows = _read_jsonl_artifact(_quality_action_history_path(), limit=1000)
+    rows = _read_jsonl_artifact(_quality_action_history_path(), limit=1000, tail=True)
     out: list[dict] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -2792,29 +3059,36 @@ def _normalize_quality_repair_run(row: dict) -> dict:
 
 
 def _quality_repair_run_rows(*, limit: int = 40) -> list[dict]:
-    rows = _read_jsonl_artifact(_quality_repair_runs_path(), limit=1000)
-    latest: dict[str, dict] = {}
-    for raw in rows:
-        row = _normalize_quality_repair_run(raw)
-        run_id = str(row.get("run_id") or "")
-        if not run_id:
-            continue
-        prev = latest.get(run_id)
-        if not prev or _safe_int(row.get("updated_at"), 0) >= _safe_int(prev.get("updated_at"), 0):
-            latest[run_id] = row
-    out = list(latest.values())
-    out.sort(key=lambda item: (_safe_int(item.get("updated_at"), 0), _safe_int(item.get("created_at"), 0)), reverse=True)
-    return out[: max(0, min(200, int(limit)))]
+    with _QUALITY_REPAIR_RUN_LOCK:
+        rows = _read_jsonl_artifact(_quality_repair_runs_path(), limit=1000, tail=True)
+        latest: dict[str, dict] = {}
+        for raw in rows:
+            row = _normalize_quality_repair_run(raw)
+            run_id = str(row.get("run_id") or "")
+            if not run_id:
+                continue
+            prev = latest.get(run_id)
+            if not prev or _safe_int(row.get("updated_at"), 0) >= _safe_int(prev.get("updated_at"), 0):
+                latest[run_id] = row
+        out = list(latest.values())
+        out.sort(key=lambda item: (_safe_int(item.get("updated_at"), 0), _safe_int(item.get("created_at"), 0)), reverse=True)
+        return out[: max(0, min(200, int(limit)))]
 
 
 def _quality_repair_run_by_id(run_id: str) -> dict:
     target = str(run_id or "").strip()
     if not target:
         return {}
-    for row in _quality_repair_run_rows(limit=200):
-        if str(row.get("run_id") or "") == target:
-            return row
-    return {}
+    with _QUALITY_REPAIR_RUN_LOCK:
+        best: dict = {}
+        rows = _read_jsonl_artifact(_quality_repair_runs_path(), limit=10000, tail=True)
+        for raw in rows:
+            row = _normalize_quality_repair_run(raw)
+            if str(row.get("run_id") or "") != target:
+                continue
+            if not best or _safe_int(row.get("updated_at"), 0) >= _safe_int(best.get("updated_at"), 0):
+                best = row
+        return best
 
 
 def _append_quality_repair_run(record: dict) -> dict:
@@ -2839,24 +3113,33 @@ def _append_quality_repair_run(record: dict) -> dict:
         "verification": record.get("verification") if isinstance(record.get("verification"), dict) else {},
         "detail": record.get("detail") or "",
     })
-    try:
-        path = _quality_repair_runs_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-    except Exception as exc:
-        raise HTTPException(500, f"failed to write quality repair run: {exc}") from exc
+    with _QUALITY_REPAIR_RUN_LOCK:
+        try:
+            path = _quality_repair_runs_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        except Exception as exc:
+            raise HTTPException(500, f"failed to write quality repair run: {exc}") from exc
     return row
 
 
 def _quality_repair_run_has_active_sources(run: dict) -> bool:
     snap = _bg_snapshot()
     task_by_path, task_by_name = _build_task_maps_from_snapshot(snap)
+    run_id = str((run or {}).get("run_id") or "").strip()
     target_names = {name.strip() for name in _list_strings((run or {}).get("target_names")) if name.strip()}
     target_sources = {source.strip() for source in _list_strings((run or {}).get("target_sources")) if source.strip()}
 
     def _task_active(info: dict | None) -> bool:
-        return isinstance(info, dict) and (bool(info.get("queued")) or bool(info.get("running")))
+        if not isinstance(info, dict) or not (bool(info.get("queued")) or bool(info.get("running"))):
+            return False
+        if not run_id:
+            return True
+        repair_run_ids = _task_repair_run_ids(info)
+        if repair_run_ids:
+            return run_id in repair_run_ids
+        return True
 
     for name in target_names:
         if _task_active(task_by_name.get(name)):
@@ -2874,15 +3157,42 @@ def _quality_repair_run_has_active_sources(run: dict) -> bool:
     return False
 
 
+def _quality_repair_run_is_terminal(run: dict) -> bool:
+    status = str((run or {}).get("status") or "").strip().lower()
+    phase = str((run or {}).get("phase") or "").strip().lower()
+    if status != "completed":
+        return False
+    if phase in {"repair_complete", "verification_passed", "shelf_metadata_verified"}:
+        return True
+    if phase == "reindex_complete" and isinstance((run or {}).get("verification"), dict) and bool((run or {}).get("verification")):
+        return True
+    return False
+
+
 def _quality_repair_run_update_record(current: dict, **patch) -> dict:
-    merged = dict(current or {})
-    merged.update({key: value for key, value in patch.items() if value is not None})
-    merged["updated_at"] = int(time.time())
-    if isinstance(merged.get("reindexed"), bool):
-        impact = dict(merged.get("impact") or {})
-        impact["reindexed"] = bool(merged.get("reindexed"))
-        merged["impact"] = impact
-    return _append_quality_repair_run(merged)
+    with _QUALITY_REPAIR_RUN_LOCK:
+        run_id = str((current or {}).get("run_id") or "").strip()
+        latest = _quality_repair_run_by_id(run_id) if run_id else {}
+        base = latest if latest else dict(current or {})
+        if latest and _quality_repair_run_is_terminal(latest):
+            patch_status = str(patch.get("status") or "").strip().lower()
+            patch_phase = str(patch.get("phase") or "").strip().lower()
+            patch_terminal = _quality_repair_run_is_terminal({
+                **latest,
+                "status": patch_status or latest.get("status"),
+                "phase": patch_phase or latest.get("phase"),
+                "verification": patch.get("verification") if patch.get("verification") is not None else latest.get("verification"),
+            })
+            if not patch_terminal:
+                return latest
+        merged = dict(base or {})
+        merged.update({key: value for key, value in patch.items() if value is not None})
+        merged["updated_at"] = int(time.time())
+        if isinstance(merged.get("reindexed"), bool):
+            impact = dict(merged.get("impact") or {})
+            impact["reindexed"] = bool(merged.get("reindexed"))
+            merged["impact"] = impact
+        return _append_quality_repair_run(merged)
 
 
 def _quality_repair_run_match_tokens(run: dict) -> set[str]:
@@ -3083,6 +3393,66 @@ def _quality_repair_run_source_verification(run: dict) -> dict:
             if quality_ok
             else f"Conversion source quality still has {target_count - ready}/{target_count} target(s) needing action."
         ),
+    }
+
+
+def _quality_repair_run_source_readiness_gate(run: dict) -> dict:
+    if _safe_int((run or {}).get("enqueued"), 0) <= 0 and str((run or {}).get("phase") or "").strip().lower() != "source_reconversion_queued":
+        return {"ready": True, "verification": {}}
+
+    source_inputs = _quality_repair_run_source_inputs(run)
+    verification = _quality_repair_run_source_verification(run)
+    target_count = _safe_int(verification.get("target_count"), 0)
+    if target_count <= 0:
+        if not source_inputs:
+            return {"ready": True, "verification": {}}
+        verification = {
+            "type": "conversion_source_quality",
+            "status": "unresolved",
+            "quality_ok": False,
+            "target_count": 0,
+            "ready": 0,
+            "autofix": 0,
+            "reconvert": 0,
+            "review": 0,
+            "issue_codes": [{"name": "source_unresolved", "count": len(source_inputs)}],
+            "items": [
+                {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "status": "source_unresolved",
+                    "score": 0,
+                    "issue_codes": ["source_unresolved"],
+                    "action": "reconvert",
+                }
+                for source_path, source_name in source_inputs[:20]
+            ],
+            "detail": "Source reconversion finished without a resolvable Markdown or PDF target.",
+        }
+        return {
+            "ready": False,
+            "status": "warning",
+            "phase": "source_reconversion_unresolved",
+            "verification": verification,
+            "detail": str(verification.get("detail") or "Source reconversion target could not be resolved."),
+        }
+
+    if bool(verification.get("quality_ok")):
+        return {"ready": True, "verification": verification}
+
+    items = _list_dict_items(verification.get("items"))
+    missing_markdown = any(
+        str(item.get("status") or "").strip().lower() == "missing_markdown"
+        or "missing_markdown" in {str(code or "").strip().lower() for code in list(item.get("issue_codes") or [])}
+        for item in items
+    )
+    phase = "source_reconversion_missing" if missing_markdown else "source_quality_failed"
+    return {
+        "ready": False,
+        "status": "warning",
+        "phase": phase,
+        "verification": verification,
+        "detail": str(verification.get("detail") or "Conversion source quality still needs attention."),
     }
 
 
@@ -4526,6 +4896,19 @@ def _same_path(a: Path | str, b: Path | str) -> bool:
         return str(Path(a)) == str(Path(b))
 
 
+def _rename_destination_conflicts(*, candidate: Path, current_pdf: Path, md_dir: Path | None = None) -> bool:
+    if _same_path(candidate, current_pdf):
+        return False
+    if _path_exists(candidate):
+        return True
+    if md_dir is not None:
+        target_md_dir = (Path(md_dir) / candidate.stem).expanduser()
+        current_md_dir = (Path(md_dir) / current_pdf.stem).expanduser()
+        if _path_exists(target_md_dir) and not _same_path(target_md_dir, current_md_dir):
+            return True
+    return False
+
+
 def _safe_move_path(src: Path, dst: Path) -> bool:
     if _same_path(src, dst):
         return True
@@ -4589,7 +4972,54 @@ def _copy_file_no_overwrite(src: str, dst: str) -> str:
     return shutil.copy2(src, dst)
 
 
+def _dir_merge_conflicts(src_dir: Path, dst_dir: Path, *, limit: int = 20) -> list[str]:
+    src_root = Path(src_dir)
+    dst_root = Path(dst_dir)
+    conflicts: list[str] = []
+    try:
+        for src in src_root.rglob("*"):
+            try:
+                rel = src.relative_to(src_root)
+            except Exception:
+                continue
+            try:
+                if src.is_symlink():
+                    conflicts.append(str(rel).replace("\\", "/"))
+                    if len(conflicts) >= int(limit):
+                        break
+                    continue
+            except Exception:
+                conflicts.append(str(rel).replace("\\", "/"))
+                if len(conflicts) >= int(limit):
+                    break
+                continue
+            dst = dst_root / rel
+            if not _path_exists(dst):
+                continue
+            try:
+                if dst.is_symlink():
+                    conflicts.append(str(rel).replace("\\", "/"))
+                    if len(conflicts) >= int(limit):
+                        break
+                    continue
+            except Exception:
+                conflicts.append(str(rel).replace("\\", "/"))
+                if len(conflicts) >= int(limit):
+                    break
+                continue
+            if _path_is_dir(src) and _path_is_dir(dst):
+                continue
+            conflicts.append(str(rel).replace("\\", "/"))
+            if len(conflicts) >= int(limit):
+                break
+    except Exception:
+        return ["<scan failed>"]
+    return conflicts
+
+
 def _merge_dir_no_overwrite(src_dir: Path, dst_dir: Path) -> bool:
+    if _dir_merge_conflicts(src_dir, dst_dir, limit=1):
+        return False
     src_os = _to_os_path(src_dir)
     dst_os = _to_os_path(dst_dir)
     try:
@@ -4675,33 +5105,30 @@ def _suggest_dest_for_base(
         md_dir=Path(md_dir) if md_dir is not None else _md_dir(),
     )
     cand = pdf_dir / f"{base}.pdf"
-    try:
-        if cand.resolve() == current_pdf.resolve():
-            return current_pdf
-    except Exception:
-        if str(cand) == str(current_pdf):
-            return current_pdf
-    if not cand.exists():
+    md_root = Path(md_dir) if md_dir is not None else None
+    if not _rename_destination_conflicts(candidate=cand, current_pdf=current_pdf, md_dir=md_root):
         return cand
     k = 2
     while k <= int(max_suffix):
         next_cand = pdf_dir / f"{base}-{k}.pdf"
-        try:
-            if next_cand.resolve() == current_pdf.resolve():
-                return current_pdf
-        except Exception:
-            if str(next_cand) == str(current_pdf):
-                return current_pdf
-        if not next_cand.exists():
+        if not _rename_destination_conflicts(candidate=next_cand, current_pdf=current_pdf, md_dir=md_root):
             return next_cand
         k += 1
-    return pdf_dir / f"{base}-{max_suffix + 1}.pdf"
+    fallback_suffix = int(max_suffix) + 1
+    for offset in range(1000):
+        next_cand = pdf_dir / f"{base}-{fallback_suffix + offset}.pdf"
+        if not _rename_destination_conflicts(candidate=next_cand, current_pdf=current_pdf, md_dir=md_root):
+            return next_cand
+    return pdf_dir / f"{base}-{uuid.uuid4().hex[:8]}.pdf"
 
 
 def _sync_md_after_pdf_rename_basic(*, md_root: Path, src_pdf: Path, dest_pdf: Path) -> dict:
     try:
-        old_dir = (Path(md_root) / src_pdf.stem).expanduser()
-        new_dir = (Path(md_root) / dest_pdf.stem).expanduser()
+        root = Path(md_root).expanduser().resolve(strict=False)
+        old_dir = (root / src_pdf.stem).expanduser()
+        new_dir = (root / dest_pdf.stem).expanduser()
+        if not _path_is_within(old_dir, [root]) or not _path_is_within(new_dir, [root]):
+            return {"ok": False, "msg": "md folder must be within the configured Markdown directory"}
         target_dir: Path | None = None
 
         old_exists = _path_is_dir(old_dir)
@@ -4709,11 +5136,25 @@ def _sync_md_after_pdf_rename_basic(*, md_root: Path, src_pdf: Path, dest_pdf: P
         if old_exists and new_exists and _same_path(old_dir, new_dir):
             target_dir = old_dir
         elif old_exists and (not new_exists):
+            conflicts = _dir_merge_conflicts(old_dir, new_dir)
+            if conflicts:
+                preview = ", ".join(conflicts[:5])
+                more = "" if len(conflicts) <= 5 else f" (+{len(conflicts) - 5} more)"
+                return {"ok": False, "msg": f"md folder move would preserve unsafe paths: {preview}{more}"}
             if not _safe_move_path(old_dir, new_dir):
                 if not _merge_dir_no_overwrite(old_dir, new_dir):
                     return {"ok": False, "msg": f"md folder move failed: {old_dir.name} -> {new_dir.name}"}
             target_dir = new_dir
         elif old_exists and new_exists:
+            new_main = new_dir / f"{dest_pdf.stem}.en.md"
+            old_main = _pick_md_main_candidate(old_dir, src_pdf.stem, dest_pdf.stem)
+            if old_main is not None and _path_is_file(new_main):
+                return {"ok": False, "msg": f"md target main already exists: {new_main.name}"}
+            conflicts = _dir_merge_conflicts(old_dir, new_dir)
+            if conflicts:
+                preview = ", ".join(conflicts[:5])
+                more = "" if len(conflicts) <= 5 else f" (+{len(conflicts) - 5} more)"
+                return {"ok": False, "msg": f"md folder merge would overwrite or copy unsafe paths: {preview}{more}"}
             if not _merge_dir_no_overwrite(old_dir, new_dir):
                 return {"ok": False, "msg": f"md folder merge failed: {old_dir.name} -> {new_dir.name}"}
             target_dir = new_dir
@@ -4724,13 +5165,19 @@ def _sync_md_after_pdf_rename_basic(*, md_root: Path, src_pdf: Path, dest_pdf: P
 
         if (target_dir is None) or (not _path_is_dir(target_dir)):
             return {"ok": False, "msg": "md target folder missing after sync"}
+        if not _path_is_within(target_dir, [root]):
+            return {"ok": False, "msg": "md target folder must be within the configured Markdown directory"}
 
         new_main = target_dir / f"{dest_pdf.stem}.en.md"
+        if not _path_is_within(new_main, [root]):
+            return {"ok": False, "msg": "md main must be within the configured Markdown directory"}
         if _path_is_file(new_main):
             return {"ok": True, "msg": f"md synced: {target_dir.name}"}
 
         cand = _pick_md_main_candidate(target_dir, src_pdf.stem, dest_pdf.stem)
         if cand is not None:
+            if not _path_is_within(cand, [root]):
+                return {"ok": False, "msg": "md main candidate must be within the configured Markdown directory"}
             if _safe_move_file(cand, new_main):
                 return {"ok": True, "msg": f"md main renamed: {cand.name} -> {new_main.name}"}
             return {"ok": False, "msg": f"md main rename failed: {cand.name} -> {new_main.name}"}
@@ -4772,7 +5219,7 @@ def _build_rename_suggestion_item(*, pdf_path: Path, pdf_dir: Path, md_dir: Path
         title=title,
         fallback_name=pdf_path.name,
     )
-    md_folder, md_main, md_exists = _resolve_md_output_paths(md_dir, pdf_path)
+    md_folder, md_main, md_exists = _resolve_library_md_output_paths(md_dir, pdf_path)
     out = {
         "name": pdf_path.name,
         "path": str(pdf_path),
@@ -4804,7 +5251,7 @@ def _existing_pdf_record(pdf_dir: Path, sha1: str, lib_store: LibraryStore | Non
 
     if isinstance(record, dict):
         existing_path = Path(str(record.get("path") or "")).expanduser()
-        if existing_path.exists() and existing_path.is_file():
+        if _path_is_within(existing_path, [pdf_dir]) and _path_is_file(existing_path):
             return {
                 "name": existing_path.name,
                 "path": str(existing_path),
@@ -4813,6 +5260,8 @@ def _existing_pdf_record(pdf_dir: Path, sha1: str, lib_store: LibraryStore | Non
 
     for existing in _list_pdf_paths_fast(pdf_dir):
         try:
+            if not _path_is_within(existing, [pdf_dir]):
+                continue
             if compute_file_sha1(existing) == sha1:
                 return {
                     "name": existing.name,
@@ -4913,8 +5362,13 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
     pdf_d = _pdf_dir()
     md_d = _md_dir()
     lib_store = _library_store()
-    src_pdf = Path(pdf_path).expanduser().resolve()
-    if (not src_pdf.exists()) or (not src_pdf.is_file()):
+    try:
+        src_pdf = Path(pdf_path).expanduser().resolve(strict=False)
+    except Exception:
+        src_pdf = Path(pdf_path).expanduser()
+    if not _path_is_within(src_pdf, [pdf_d]):
+        return {"ok": False, "error": "pdf must be within the configured PDF directory", "path": str(src_pdf), "name": src_pdf.name}
+    if (not _path_exists(src_pdf)) or (not _path_is_file(src_pdf)):
         return {"ok": False, "error": "pdf not found", "path": str(src_pdf), "name": src_pdf.name}
 
     try:
@@ -4944,7 +5398,10 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
             md_out_root=md_d,
         )
     dest_pdf = _suggest_dest_for_base(pdf_dir=pdf_d, current_pdf=src_pdf, base_name=base, md_dir=md_d)
+    if not _path_is_within(dest_pdf, [pdf_d]):
+        return {"ok": False, "error": "rename destination must be within the configured PDF directory", "path": str(src_pdf), "name": src_pdf.name}
     renamed = not _same_path(dest_pdf, src_pdf)
+    _, old_md_main, old_md_exists = _resolve_library_md_output_paths(md_d, src_pdf)
     if renamed:
         if dest_pdf.exists():
             return {
@@ -5003,6 +5460,22 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
                 "rollback": {"pdf": bool(rollback_pdf), "md": rollback_md},
             }
 
+    index_cleanup = {
+        "docs_removed": 0,
+        "chunks_removed": 0,
+        "reference_docs_removed": 0,
+        "errors": [],
+    }
+    if bool(also_md) and bool(renamed) and bool(old_md_exists):
+        try:
+            _clear_conversion_quality_cache(old_md_main)
+            _, new_md_main, new_md_exists = _resolve_library_md_output_paths(md_d, dest_pdf)
+            if new_md_exists:
+                _clear_conversion_quality_cache(new_md_main)
+            index_cleanup = _purge_library_index_for_markdown(settings.db_dir, old_md_main)
+        except Exception as exc:
+            index_cleanup["errors"] = [str(exc)[:240]]
+
     if sha1:
         lib_store.upsert(sha1, dest_pdf, citation_meta=citation_meta)
     else:
@@ -5020,6 +5493,7 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
         "citation_meta": citation_meta,
         "renamed": bool(renamed),
         "md_sync": md_sync,
+        "index_cleanup": index_cleanup,
     }
 
 
@@ -5061,7 +5535,7 @@ def quick_ingest_pdf(
             "cancelled": str(out_folder or "").strip().lower() == "cancelled",
         }
 
-    _, md_main, md_exists = _resolve_md_output_paths(md_d, Path(pdf_path))
+    _, md_main, md_exists = _resolve_library_md_output_paths(md_d, Path(pdf_path))
     if not md_exists:
         return {
             "ready": False,
@@ -5274,7 +5748,7 @@ def refine_pdf_with_full_llm_replace(
     finally:
         _cleanup_shadow()
 
-    _, target_md_main, target_exists = _resolve_md_output_paths(md_d, pdf)
+    _, target_md_main, target_exists = _resolve_library_md_output_paths(md_d, pdf)
     if (not target_exists) or (not target_md_main.exists()):
         _rollback_target()
         return {
@@ -5326,7 +5800,8 @@ def list_library_files(scope: str = "200"):
 
 
 @router.get("/quality/overview")
-def library_quality_overview(scope: str = "all"):
+def library_quality_overview(request: Request, scope: str = "all"):
+    require_internal_api(request)
     pdf_d = _pdf_dir()
     md_d = _md_dir()
     pdf_d.mkdir(parents=True, exist_ok=True)
@@ -5498,6 +5973,12 @@ def apply_rename_suggestions(body: RenameApplyBody):
     renamed = 0
     failed = 0
     skipped = 0
+    index_cleanup = {
+        "docs_removed": 0,
+        "chunks_removed": 0,
+        "reference_docs_removed": 0,
+        "errors": [],
+    }
     for name in names:
         src_pdf = _resolve_library_pdf_name_arg(name)
         if not _path_is_file(src_pdf):
@@ -5519,6 +6000,17 @@ def apply_rename_suggestions(body: RenameApplyBody):
             skipped += 1
         else:
             failed += 1
+        cleanup = result.get("index_cleanup")
+        if isinstance(cleanup, dict):
+            for field in ("docs_removed", "chunks_removed", "reference_docs_removed"):
+                try:
+                    index_cleanup[field] = int(index_cleanup.get(field) or 0) + int(cleanup.get(field) or 0)
+                except Exception:
+                    pass
+            for err in list(cleanup.get("errors") or []):
+                text = str(err or "").strip()
+                if text:
+                    index_cleanup["errors"].append(f"{name}: {text[:220]}")
         items.append({
             "name": name,
             **result,
@@ -5530,6 +6022,7 @@ def apply_rename_suggestions(body: RenameApplyBody):
         "skipped": int(skipped),
         "failed": int(failed),
         "needs_reindex": bool(renamed > 0),
+        "index_cleanup": index_cleanup,
         "auto_backup": auto_backup,
         "items": items,
     }
@@ -5580,8 +6073,10 @@ def convert_pending(body: ConvertPendingBody):
             replace=replace,
             speed_mode=str(body.speed_mode or "balanced"),
         )
-        _bg_enqueue(task)
-        enqueued += 1
+        if _bg_enqueue(task):
+            enqueued += 1
+        else:
+            skipped_busy += 1
         if limit > 0 and enqueued >= limit:
             break
 
@@ -5673,9 +6168,8 @@ async def commit_upload_pdf(
                 replace=True,
                 speed_mode=str(speed_mode or "balanced"),
             )
-            _bg_enqueue(task)
-            enqueued = True
-            task_id = str(task.get("_tid") or "")
+            enqueued = bool(_bg_enqueue(task))
+            task_id = str(task.get("_tid") or "") if enqueued else ""
     return {
         **saved,
         "enqueued": bool(enqueued),
@@ -5716,21 +6210,31 @@ def start_convert(body: ConvertBody):
         replace=body.replace,
         speed_mode=body.speed_mode,
     )
-    _bg_enqueue(task)
-    return {"ok": True, "task_id": task.get("_tid", ""), "auto_backup": auto_backup}
+    enqueued = bool(_bg_enqueue(task))
+    return {
+        "ok": True,
+        "enqueued": enqueued,
+        "skipped_busy": not enqueued,
+        "task_id": task.get("_tid", "") if enqueued else "",
+        "auto_backup": auto_backup,
+    }
 
 
 @router.get("/convert/status")
 async def convert_status():
     def poll():
         snap = _bg_snapshot()
+        active_tasks = list(snap.get("active_tasks") or [])
+        queued_tasks = list(snap.get("queue") or [])
+        running = bool(snap.get("running", False)) or bool(active_tasks) or bool(queued_tasks)
         return {
-            "running": bool(snap.get("running", False)) or bool(list(snap.get("active_tasks") or [])),
-            "done": (not bool(snap.get("running", False))) and (not bool(list(snap.get("active_tasks") or []))) and snap.get("total", 0) > 0,
+            "running": running,
+            "done": not running,
             "total": snap.get("total", 0),
             "completed": snap.get("done", 0),
             "current": snap.get("current", ""),
-            "active_count": int(snap.get("active_count", len(list(snap.get("active_tasks") or []))) or 0),
+            "queued_count": len(queued_tasks),
+            "active_count": int(snap.get("active_count", len(active_tasks)) or 0),
             "active_tasks": _compact_active_tasks(snap),
             "cur_page_done": snap.get("cur_page_done", 0),
             "cur_page_total": snap.get("cur_page_total", 0),
@@ -5817,9 +6321,13 @@ def open_library_file(body: OpenLibraryFileBody):
     md_d = _md_dir()
 
     if target == "pdf_dir":
+        if not _path_is_dir(pdf_d):
+            raise HTTPException(404, "pdf directory not found")
         open_in_explorer(pdf_d)
         return {"ok": True, "target": "pdf_dir", "path": str(pdf_d)}
     if target == "md_dir":
+        if not _path_is_dir(md_d):
+            raise HTTPException(404, "markdown directory not found")
         open_in_explorer(md_d)
         return {"ok": True, "target": "md_dir", "path": str(md_d)}
 
@@ -5832,9 +6340,7 @@ def open_library_file(body: OpenLibraryFileBody):
         open_in_explorer(pdf_path)
         return {"ok": True, "target": "pdf", "path": str(pdf_path)}
     if target == "md":
-        _, md_main, md_exists = _resolve_md_output_paths(md_d, pdf_path)
-        if (not md_exists) or (not _path_is_file(md_main)):
-            raise HTTPException(404, "markdown not found")
+        _, md_main = _require_library_markdown_for_pdf(md_d, pdf_path)
         open_in_explorer(md_main)
         return {"ok": True, "target": "md", "path": str(md_main)}
     raise HTTPException(400, "invalid target")
@@ -5856,6 +6362,8 @@ def _quality_artifact_path(domain: str, target: str) -> tuple[str, Path]:
     anchor = summary_path or raw_path
     if anchor is None:
         raise HTTPException(404, "quality artifact not found")
+    if domain_key == "citation_cards" and not bool(_latest_citation_card_quality_summary().get("available")):
+        raise HTTPException(404, "citation-card quality artifact not found")
 
     if target_key == "folder":
         return "folder", anchor.parent
@@ -5877,7 +6385,8 @@ def _quality_artifact_path(domain: str, target: str) -> tuple[str, Path]:
 
 
 @router.post("/quality/artifact/open")
-def open_quality_artifact(body: OpenQualityArtifactBody):
+def open_quality_artifact(request: Request, body: OpenQualityArtifactBody):
+    require_internal_api(request)
     target, path = _quality_artifact_path(body.domain, body.target)
     open_in_explorer(path)
     return {
@@ -5889,7 +6398,8 @@ def open_quality_artifact(body: OpenQualityArtifactBody):
 
 
 @router.get("/quality/action-history")
-def quality_action_history(limit: int = 20):
+def quality_action_history(request: Request, limit: int = 20):
+    require_internal_api(request)
     return {
         "ok": True,
         "items": _quality_action_history_rows(limit=limit),
@@ -5897,7 +6407,8 @@ def quality_action_history(limit: int = 20):
 
 
 @router.post("/quality/action-history")
-def append_quality_action_history(body: QualityActionHistoryBody):
+def append_quality_action_history(request: Request, body: QualityActionHistoryBody):
+    require_internal_api(request)
     row = _append_quality_action_history(body.model_dump() if hasattr(body, "model_dump") else body.dict())
     return {
         "ok": True,
@@ -5906,7 +6417,8 @@ def append_quality_action_history(body: QualityActionHistoryBody):
 
 
 @router.get("/quality/reader-locate")
-def quality_reader_locate_events(limit: int = 40):
+def quality_reader_locate_events(request: Request, limit: int = 40):
+    require_internal_api(request)
     rows = _reader_locate_event_rows(limit=max(1, min(200, int(limit or 40))))
     return {
         "ok": True,
@@ -5916,7 +6428,8 @@ def quality_reader_locate_events(limit: int = 40):
 
 
 @router.post("/quality/reader-locate")
-def record_quality_reader_locate(body: ReaderLocateQualityBody):
+def record_quality_reader_locate(request: Request, body: ReaderLocateQualityBody):
+    require_internal_api(request)
     row = _append_reader_locate_event(body.model_dump() if hasattr(body, "model_dump") else body.dict())
     return {
         "ok": True,
@@ -5926,7 +6439,8 @@ def record_quality_reader_locate(body: ReaderLocateQualityBody):
 
 
 @router.get("/quality/repair-runs")
-def quality_repair_runs(limit: int = 20):
+def quality_repair_runs(request: Request, limit: int = 20):
+    require_internal_api(request)
     return {
         "ok": True,
         "items": _quality_repair_run_rows(limit=limit),
@@ -5934,7 +6448,8 @@ def quality_repair_runs(limit: int = 20):
 
 
 @router.get("/quality/repair-runs/{run_id}")
-def quality_repair_run(run_id: str):
+def quality_repair_run(run_id: str, request: Request):
+    require_internal_api(request)
     row = _quality_repair_run_by_id(run_id)
     if not row:
         raise HTTPException(404, "quality repair run not found")
@@ -5945,7 +6460,8 @@ def quality_repair_run(run_id: str):
 
 
 @router.post("/quality/repair-runs/{run_id}")
-def update_quality_repair_run(run_id: str, body: QualityRepairRunUpdateBody):
+def update_quality_repair_run(run_id: str, request: Request, body: QualityRepairRunUpdateBody):
+    require_internal_api(request)
     current = _quality_repair_run_by_id(run_id)
     if not current:
         raise HTTPException(404, "quality repair run not found")
@@ -5969,10 +6485,22 @@ def update_quality_repair_run(run_id: str, body: QualityRepairRunUpdateBody):
 
 
 @router.post("/quality/repair-runs/{run_id}/advance")
-def advance_quality_repair_run(run_id: str, body: QualityRepairRunAdvanceBody = QualityRepairRunAdvanceBody()):
+def advance_quality_repair_run(run_id: str, request: Request, body: QualityRepairRunAdvanceBody = QualityRepairRunAdvanceBody()):
+    require_internal_api(request)
     current = _quality_repair_run_by_id(run_id)
     if not current:
         raise HTTPException(404, "quality repair run not found")
+    run_key = str(run_id or "").strip()
+    with _QUALITY_REPAIR_RUN_LOCK:
+        if run_key in _QUALITY_REPAIR_ADVANCE_IN_FLIGHT:
+            return {
+                "ok": True,
+                "advanced": False,
+                "waiting": True,
+                "item": current,
+                "reindex": None,
+                "detail": "quality repair run advance is already running",
+            }
 
     status = str(current.get("status") or "").strip().lower()
     phase = str(current.get("phase") or "").strip().lower()
@@ -6005,6 +6533,24 @@ def advance_quality_repair_run(run_id: str, body: QualityRepairRunAdvanceBody = 
                 "detail": "source reconversion is still active",
             }
         if bool(current.get("needs_reindex")):
+            source_gate = _quality_repair_run_source_readiness_gate(current)
+            if not bool(source_gate.get("ready")):
+                row = _quality_repair_run_update_record(
+                    current,
+                    status=str(source_gate.get("status") or "warning"),
+                    phase=str(source_gate.get("phase") or "source_quality_failed"),
+                    reindexed=False,
+                    verification=source_gate.get("verification") if isinstance(source_gate.get("verification"), dict) else {},
+                    detail=str(source_gate.get("detail") or "Source reconversion did not produce an index-ready Markdown source."),
+                )
+                return {
+                    "ok": False,
+                    "advanced": True,
+                    "waiting": False,
+                    "item": row,
+                    "reindex": None,
+                    "detail": str(row.get("detail") or "source reconversion is not ready for index refresh"),
+                }
             current = _quality_repair_run_update_record(
                 current,
                 status="reindex_pending",
@@ -6031,36 +6577,81 @@ def advance_quality_repair_run(run_id: str, body: QualityRepairRunAdvanceBody = 
                 "detail": "quality repair run completed",
             }
 
+    source_blocked_phases = {"source_reconversion_missing", "source_reconversion_unresolved", "source_quality_failed"}
+    if status == "warning" and phase in source_blocked_phases and bool(current.get("needs_reindex")):
+        source_gate = _quality_repair_run_source_readiness_gate(current)
+        if not bool(source_gate.get("ready")):
+            row = _quality_repair_run_update_record(
+                current,
+                status=str(source_gate.get("status") or "warning"),
+                phase=str(source_gate.get("phase") or phase or "source_quality_failed"),
+                reindexed=False,
+                verification=source_gate.get("verification") if isinstance(source_gate.get("verification"), dict) else {},
+                detail=str(source_gate.get("detail") or "Source reconversion did not produce an index-ready Markdown source."),
+            )
+            return {
+                "ok": False,
+                "advanced": False,
+                "waiting": False,
+                "item": row,
+                "reindex": None,
+                "detail": str(row.get("detail") or "source reconversion is not ready for index refresh"),
+            }
+        current = _quality_repair_run_update_record(
+            current,
+            status="reindex_pending",
+            phase="reindex_pending",
+            detail="Source quality is ready; index refresh is pending.",
+        )
+        status = "reindex_pending"
+        phase = "reindex_pending"
+        advanced = True
+
     needs_reindex = bool(current.get("needs_reindex")) and current.get("reindexed") is not True
     should_reindex = needs_reindex and (
         status in {"reindex_pending", "warning"}
         or phase in {"reindex_pending", "reindex_failed", "source_reconversion_queued"}
     )
     if should_reindex:
-        auto_backup = _dangerous_auto_snapshot(
-            "library_quality_repair_reindex",
-            label=run_id,
-            metadata={"repair_run_id": run_id},
-        )
-        result = _run_library_reindex()
-        if isinstance(result, dict):
-            result["auto_backup"] = auto_backup
-        ok = bool(result.get("ok"))
-        verification_patch = _quality_repair_run_verification_patch(current, body=body) if ok else {}
-        row = _quality_repair_run_update_record(
-            current,
-            status=verification_patch.get("status") or ("completed" if ok else "warning"),
-            phase=verification_patch.get("phase") or ("reindex_complete" if ok else "reindex_failed"),
-            reindexed=ok,
-            verification=verification_patch.get("verification"),
-            detail=(
-                verification_patch.get("detail")
-                if verification_patch.get("detail")
-                else "Index refresh completed after source repair."
-                if ok
-                else str(result.get("error") or result.get("stderr") or "Index refresh failed after source repair.")[:240]
-            ),
-        )
+        with _QUALITY_REPAIR_RUN_LOCK:
+            if run_key in _QUALITY_REPAIR_ADVANCE_IN_FLIGHT:
+                return {
+                    "ok": True,
+                    "advanced": False,
+                    "waiting": True,
+                    "item": _quality_repair_run_by_id(run_key) or current,
+                    "reindex": None,
+                    "detail": "quality repair run advance is already running",
+                }
+            _QUALITY_REPAIR_ADVANCE_IN_FLIGHT.add(run_key)
+        try:
+            auto_backup = _dangerous_auto_snapshot(
+                "library_quality_repair_reindex",
+                label=run_id,
+                metadata={"repair_run_id": run_id},
+            )
+            result = _run_library_reindex()
+            if isinstance(result, dict):
+                result["auto_backup"] = auto_backup
+            ok = bool(result.get("ok"))
+            verification_patch = _quality_repair_run_verification_patch(current, body=body) if ok else {}
+            row = _quality_repair_run_update_record(
+                current,
+                status=verification_patch.get("status") or ("completed" if ok else "warning"),
+                phase=verification_patch.get("phase") or ("reindex_complete" if ok else "reindex_failed"),
+                reindexed=ok,
+                verification=verification_patch.get("verification"),
+                detail=(
+                    verification_patch.get("detail")
+                    if verification_patch.get("detail")
+                    else "Index refresh completed after source repair."
+                    if ok
+                    else str(result.get("error") or result.get("stderr") or "Index refresh failed after source repair.")[:240]
+                ),
+            )
+        finally:
+            with _QUALITY_REPAIR_RUN_LOCK:
+                _QUALITY_REPAIR_ADVANCE_IN_FLIGHT.discard(run_key)
         return {
             "ok": bool(ok),
             "advanced": True,
@@ -6294,7 +6885,8 @@ def _run_research_qa_case(
 
 
 @router.post("/quality/research-qa/rerun")
-def rerun_research_qa_case(body: QualityResearchQaRerunBody):
+def rerun_research_qa_case(request: Request, body: QualityResearchQaRerunBody):
+    require_internal_api(request)
     return _run_research_qa_case(
         case_id=body.case_id,
         base_url=body.base_url,
@@ -6307,7 +6899,8 @@ def rerun_research_qa_case(body: QualityResearchQaRerunBody):
 
 
 @router.post("/quality/sources")
-def library_source_quality(body: QualitySourcesBody):
+def library_source_quality(request: Request, body: QualitySourcesBody):
+    require_internal_api(request)
     sources = list(body.sources or [])
     if len(sources) > 80:
         sources = sources[:80]
@@ -6433,7 +7026,8 @@ class LibrarySuggestionActionBody(BaseModel):
 
 
 @router.post("/quality/conversion/batch")
-def conversion_quality_batch(body: QualityConversionBatchBody):
+def conversion_quality_batch(request: Request, body: QualityConversionBatchBody):
+    require_internal_api(request)
     pdf_d = _pdf_dir()
     md_d = _md_dir()
     try:
@@ -6476,7 +7070,8 @@ def conversion_quality_batch(body: QualityConversionBatchBody):
 
 
 @router.post("/quality/figure-assets/scan")
-def figure_asset_quality_scan(body: FigureAssetQualityScanBody):
+def figure_asset_quality_scan(request: Request, body: FigureAssetQualityScanBody):
+    require_internal_api(request)
     pdf_d = _pdf_dir()
     md_d = _md_dir()
     try:
@@ -6500,7 +7095,8 @@ def figure_asset_quality_scan(body: FigureAssetQualityScanBody):
 
 
 @router.post("/quality/figure-assets/refresh")
-def refresh_figure_assets(body: FigureAssetRefreshBody):
+def refresh_figure_assets(request: Request, body: FigureAssetRefreshBody):
+    require_internal_api(request)
     settings = get_settings()
     pdf_d = _pdf_dir()
     md_d = _md_dir()
@@ -6529,7 +7125,7 @@ def refresh_figure_assets(body: FigureAssetRefreshBody):
         if not _path_is_file(pdf_path):
             errors.append({"name": pdf_name, "error": "pdf not found"})
             continue
-        _md_folder, md_main, md_exists = _resolve_md_output_paths(md_d, pdf_path)
+        _md_folder, md_main, md_exists = _resolve_library_md_output_paths(md_d, pdf_path)
         if not md_exists:
             errors.append({"name": pdf_name, "pdf_path": str(pdf_path), "error": "markdown not found"})
             continue
@@ -6644,8 +7240,12 @@ def refresh_figure_assets(body: FigureAssetRefreshBody):
                     "issue_codes": issue_codes,
                 },
             )
-            _bg_enqueue(task)
-            task_id = str(task.get("_tid") or "")
+            queued = bool(_bg_enqueue(task))
+            task_id = str(task.get("_tid") or "") if queued else ""
+            if not queued:
+                items.append({**base_item, "skipped_busy": True, "error": "already queued or running"})
+                skipped_busy += 1
+                continue
             try:
                 append_conversion_repair_attempt(
                     md_path,
@@ -6693,7 +7293,8 @@ def refresh_figure_assets(body: FigureAssetRefreshBody):
 
 
 @router.post("/quality/repair")
-def repair_library_quality(body: QualityRepairBody):
+def repair_library_quality(request: Request, body: QualityRepairBody):
+    require_internal_api(request)
     settings = get_settings()
     pdf_d = _pdf_dir()
     md_d = _md_dir()
@@ -6860,7 +7461,7 @@ def repair_library_quality(body: QualityRepairBody):
             md_path = Path(md_path_raw).expanduser()
             md_exists = _path_is_file(md_path)
         elif pdf_path is not None:
-            _md_folder, md_path, md_exists = _resolve_md_output_paths(md_d, pdf_path)
+            _md_folder, md_path, md_exists = _resolve_library_md_output_paths(md_d, pdf_path)
         else:
             md_path = Path()
             md_exists = False
@@ -6952,6 +7553,7 @@ def repair_library_quality(body: QualityRepairBody):
                         scope=str(active_plan.get("scope") or "markdown"),
                         speed_mode=str(active_plan.get("speed_mode") or ""),
                         issue_codes=before_issue_codes,
+                        repair_run_id=repair_run_id,
                         source="library_quality_repair",
                         reason=str(active_plan.get("reason") or ""),
                         detail=(
@@ -7042,6 +7644,7 @@ def repair_library_quality(body: QualityRepairBody):
                         scope="source_blocks" if reader_locate_reindex_required else str(active_plan.get("scope") or ""),
                         speed_mode=str(active_plan.get("speed_mode") or ""),
                         issue_codes=list(active_plan.get("issue_codes") or []),
+                        repair_run_id=repair_run_id,
                         source="reader_locate_quality" if reader_locate_reindex_required else "library_quality_repair",
                         reason=(
                             "Reader locate failure/degradation requires source index rebuild."
@@ -7097,8 +7700,12 @@ def repair_library_quality(body: QualityRepairBody):
                 speed_mode=queue_speed_mode,
                 repair_context=repair_context,
             )
-            _bg_enqueue(task)
-            task_id = str(task.get("_tid") or "")
+            queued = bool(_bg_enqueue(task))
+            task_id = str(task.get("_tid") or "") if queued else ""
+            if not queued:
+                items.append({**base_item, **repair_payload, "skipped_busy": True, "error": "already queued or running"})
+                skipped_busy += 1
+                continue
             if md_exists and _path_is_within(md_path, [md_d]):
                 try:
                     repair_payload["repair_attempt"] = append_conversion_repair_attempt(
@@ -7110,6 +7717,7 @@ def repair_library_quality(body: QualityRepairBody):
                         speed_mode=queue_speed_mode,
                         issue_codes=list(active_plan.get("issue_codes") or []),
                         task_id=task_id,
+                        repair_run_id=repair_run_id,
                         source="library_quality_repair",
                         reason=str(active_plan.get("reason") or ""),
                         detail="Source reconversion was queued from conversion-quality repair planning.",
@@ -7220,6 +7828,7 @@ def delete_library_file(body: DeleteLibraryFileBody):
     pdf_name = str(body.pdf_name or "").strip()
     md_d = _md_dir()
     pdf_path = _resolve_library_pdf_name_arg(pdf_name, require_exists=True)
+    _, md_main, md_exists_before = _resolve_library_md_output_paths(md_d, pdf_path)
 
     snap = _bg_snapshot()
     if _is_pdf_active_in_snapshot(snap=snap, pdf_path=pdf_path, pdf_name=pdf_name):
@@ -7261,16 +7870,33 @@ def delete_library_file(body: DeleteLibraryFileBody):
     except Exception:
         pass
 
+    index_cleanup = {
+        "docs_removed": 0,
+        "chunks_removed": 0,
+        "reference_docs_removed": 0,
+        "errors": [],
+    }
+    if bool(pdf_ok) and bool(body.also_md) and (bool(md_deleted) or not bool(md_exists_before)):
+        try:
+            _clear_conversion_quality_cache(md_main)
+            index_cleanup = _purge_library_index_for_markdown(get_settings().db_dir, md_main)
+        except Exception as exc:
+            index_cleanup["errors"] = [str(exc)[:240]]
+
     warnings: list[str] = []
     if (not pdf_ok) and pdf_err:
         warnings.append(f"pdf: {pdf_err}")
     if bool(body.also_md) and (not md_deleted) and md_warn:
         warnings.append(f"md: {md_warn}")
+    for err in list(index_cleanup.get("errors") or []):
+        if str(err or "").strip():
+            warnings.append(f"index: {str(err)[:240]}")
     return {
         "ok": bool(pdf_ok) and (not bool(body.also_md) or bool(md_deleted)),
         "pdf_deleted": bool(pdf_ok),
         "md_deleted": bool(md_deleted) if bool(body.also_md) else False,
         "removed_queued": int(removed_queued),
+        "index_cleanup": index_cleanup,
         "warnings": warnings,
         "needs_reindex": bool(pdf_ok),
         "auto_backup": auto_backup,
@@ -7471,7 +8097,7 @@ def resolve_library_guide_source(body: GuideSourceBody):
     md_d = _md_dir()
     pdf_path = _resolve_library_pdf_name_arg(pdf_name, require_exists=True)
 
-    _md_folder, md_main, md_exists = _resolve_md_output_paths(md_d, pdf_path)
+    _md_folder, md_main, md_exists = _resolve_library_md_output_paths(md_d, pdf_path)
     if (not md_exists) or (not _path_is_file(md_main)):
         raise HTTPException(400, "markdown not ready")
 
@@ -7512,8 +8138,21 @@ def _run_library_reindex() -> dict:
     if ok:
         try:
             structured_indices = rebuild_structured_indices_for_root(md_d, force=False)
+            failed = int((structured_indices or {}).get("failed") or 0)
+            if failed > 0:
+                first_error = ""
+                errors = (structured_indices or {}).get("errors")
+                if isinstance(errors, list) and errors:
+                    first = errors[0] if isinstance(errors[0], dict) else {}
+                    first_error = str(first.get("error") or "").strip()
+                structured_indices_error = (
+                    f"structured index rebuild failed for {failed} markdown file(s)"
+                    + (f": {first_error}" if first_error else "")
+                )
+                ok = False
         except Exception as exc:
             structured_indices_error = str(exc)
+            ok = False
     refsync: dict | None = None
     refsync_error = ""
     if ok:

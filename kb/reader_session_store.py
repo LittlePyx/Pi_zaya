@@ -13,6 +13,8 @@ _MAX_SESSIONS = 240
 _MAX_STRING_LEN = 12_000
 _MAX_LIST_ITEMS = 120
 _MAX_DICT_ITEMS = 120
+_MAX_TITLE_LEN = 240
+_MAX_ID_LEN = 120
 
 
 def _now() -> float:
@@ -41,6 +43,67 @@ def _json_safe(value: Any, *, depth: int = 0) -> Any:
             out[key[:120]] = _json_safe(raw_value, depth=depth + 1)
         return out
     return str(value)[:_MAX_STRING_LEN]
+
+
+def _safe_text(value: Any, *, limit: int = _MAX_STRING_LEN) -> str:
+    return str(value or "").replace("\x00", " ").strip()[:limit]
+
+
+def _safe_timestamp(value: Any, fallback: float) -> float:
+    try:
+        ts = float(value)
+    except Exception:
+        return fallback
+    if ts != ts or ts in (float("inf"), float("-inf")) or ts < 0:
+        return fallback
+    return ts
+
+
+def _safe_message_id(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        mid = int(value)
+    except Exception:
+        return None
+    return mid if mid >= 0 else None
+
+
+def _apply_state_patch(state: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    current = dict(state or {})
+    for raw_key, value in (patch or {}).items():
+        key = _safe_text(raw_key, limit=120)
+        if not key:
+            continue
+        if value is None:
+            current.pop(key, None)
+        else:
+            current[key] = value
+    safe_state = _json_safe(current)
+    return safe_state if isinstance(safe_state, dict) else {}
+
+
+def _sanitize_record(session_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    now = _now()
+    safe_payload = _json_safe(record.get("payload") if isinstance(record, dict) else {})
+    if not isinstance(safe_payload, dict):
+        safe_payload = {}
+    safe_state = _json_safe(record.get("state") if isinstance(record, dict) else {})
+    if not isinstance(safe_state, dict):
+        safe_state = {}
+    created_at = _safe_timestamp(record.get("created_at") if isinstance(record, dict) else None, now)
+    updated_at = _safe_timestamp(record.get("updated_at") if isinstance(record, dict) else None, created_at)
+    return {
+        "id": _safe_text(record.get("id") if isinstance(record, dict) else "", limit=_MAX_ID_LEN)
+        or _safe_text(session_id, limit=_MAX_ID_LEN),
+        "title": _safe_text(record.get("title") if isinstance(record, dict) else "", limit=_MAX_TITLE_LEN),
+        "conversation_id": _safe_text(record.get("conversation_id") if isinstance(record, dict) else "", limit=_MAX_ID_LEN),
+        "message_id": _safe_message_id(record.get("message_id") if isinstance(record, dict) else None),
+        "payload": safe_payload,
+        "state": safe_state,
+        "created_at": created_at,
+        "updated_at": max(created_at, updated_at),
+    }
 
 
 class ReaderSessionStore:
@@ -99,9 +162,9 @@ class ReaderSessionStore:
         now = _now()
         record = {
             "id": session_id,
-            "title": str(title or "").strip()[:240],
-            "conversation_id": str(conversation_id or "").strip()[:120],
-            "message_id": int(message_id) if isinstance(message_id, int) else None,
+            "title": _safe_text(title, limit=_MAX_TITLE_LEN),
+            "conversation_id": _safe_text(conversation_id, limit=_MAX_ID_LEN),
+            "message_id": _safe_message_id(message_id),
             "payload": safe_payload,
             "state": safe_state,
             "created_at": now,
@@ -130,7 +193,7 @@ class ReaderSessionStore:
             record = sessions.get(sid)
             if not isinstance(record, dict):
                 return None
-            return dict(record)
+            return _sanitize_record(sid, record)
 
     def update_state(self, session_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
         sid = str(session_id or "").strip()
@@ -147,10 +210,8 @@ class ReaderSessionStore:
             record = sessions.get(sid)
             if not isinstance(record, dict):
                 return None
-            state = record.get("state")
-            if not isinstance(state, dict):
-                state = {}
-            state.update(safe_patch)
+            record = _sanitize_record(sid, record)
+            state = _apply_state_patch(record.get("state") if isinstance(record.get("state"), dict) else {}, safe_patch)
             record["state"] = state
             record["updated_at"] = _now()
             sessions[sid] = record

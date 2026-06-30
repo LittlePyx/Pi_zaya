@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { appApi, type AppUpdateCheckOptions, type AppUpdateCheckPayload } from '../api/app'
-import { settingsApi, type AppReadinessPayload, type LlmReadinessPayload, type SettingsPatch } from '../api/settings'
+import { settingsApi, type AppReadinessPayload, type LlmReadinessPayload, type SettingsPatch, type SettingsUpdateResponse } from '../api/settings'
 
 const MAX_TOKENS_MIN = 512
 const MAX_TOKENS_MAX = 3072
@@ -15,6 +15,7 @@ type AppUpdateRefreshInput = boolean | (AppUpdateCheckOptions & { auto?: boolean
 
 let appUpdateInFlight: Promise<AppUpdateCheckPayload> | null = null
 let appUpdateInFlightKey = ''
+let settingsLoadRequestSeq = 0
 
 function readInitialTheme(): 'light' | 'dark' {
   try {
@@ -136,6 +137,12 @@ function clampMaxTokens(value: unknown): number {
   return Math.max(MAX_TOKENS_MIN, Math.min(MAX_TOKENS_MAX, Math.round(n)))
 }
 
+function messageFromError(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message
+  const text = String(err || '').trim()
+  return text || fallback
+}
+
 interface SettingsState {
   topK: number
   temperature: number
@@ -162,15 +169,22 @@ interface SettingsState {
   hasVisionApiKey: boolean
   visionUsesTextFallback: boolean
   autoRoute: boolean
+  qualityDataSharingEnabled: boolean
   llmReadiness: LlmReadinessPayload | null
   appReadiness: AppReadinessPayload | null
   appUpdate: AppUpdateCheckPayload | null
   loaded: boolean
+  loadPending: boolean
+  loadError: string
+  readinessPending: boolean
+  readinessError: string
+  appReadinessPending: boolean
+  appReadinessError: string
   load: () => Promise<void>
   refreshReadiness: () => Promise<void>
   refreshAppReadiness: () => Promise<void>
   refreshAppUpdate: (options?: AppUpdateRefreshInput) => Promise<void>
-  update: (patch: SettingsPatch) => Promise<void>
+  update: (patch: SettingsPatch) => Promise<SettingsUpdateResponse>
   toggleTheme: () => void
 }
 
@@ -200,14 +214,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   hasVisionApiKey: false,
   visionUsesTextFallback: false,
   autoRoute: false,
+  qualityDataSharingEnabled: false,
   llmReadiness: null,
   appReadiness: null,
   appUpdate: readCachedAppUpdate(),
   loaded: false,
+  loadPending: false,
+  loadError: '',
+  readinessPending: false,
+  readinessError: '',
+  appReadinessPending: false,
+  appReadinessError: '',
 
   load: async () => {
+    const requestId = ++settingsLoadRequestSeq
+    set({ loadPending: true, loadError: '' })
     try {
       const data = await settingsApi.get()
+      if (requestId !== settingsLoadRequestSeq) return
       const p = data.prefs || {}
       const nextTheme = (p.theme as 'light' | 'dark') || 'dark'
       const nextUiLocale = ((p.ui_locale as 'zh' | 'en') || 'zh')
@@ -245,24 +269,34 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         answerModeHint: String(p.answer_mode_hint || ''),
         answerOutputMode: String(p.answer_output_mode || ''),
         refsCardLocale: nextRefsCardLocale,
+        qualityDataSharingEnabled: Boolean(p.quality_data_sharing_enabled),
         pdfDir: String(p.pdf_dir || ''),
         mdDir: String(p.md_dir || ''),
         uiLocale: nextUiLocale,
         theme: nextTheme,
         sidebarCollapsed: Boolean(p.sidebar_collapsed),
         loaded: true,
+        loadPending: false,
+        loadError: '',
       })
       if (!String((p as Record<string, unknown>).ui_locale || '').trim()) {
         settingsApi.update({ uiLocale: nextUiLocale }).catch(() => {})
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      if (requestId !== settingsLoadRequestSeq) return
+      set({
+        loadPending: false,
+        loadError: err instanceof Error ? err.message : String(err || 'Failed to load settings'),
+      })
+    }
   },
 
   refreshReadiness: async () => {
+    set({ readinessPending: true, readinessError: '' })
     try {
       const readiness = await settingsApi.readiness()
-      const text = readiness.providers.text
-      const vision = readiness.providers.vision
+      const text = readiness.providers?.text
+      const vision = readiness.providers?.vision
       set({
         llmReadiness: readiness,
         hasTextApiKey: Boolean(text?.has_api_key),
@@ -274,15 +308,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         visionModel: String(vision?.model || ''),
         visionBaseUrl: String(vision?.base_url || ''),
         visionUsesTextFallback: Boolean(vision?.uses_text_fallback),
+        readinessPending: false,
+        readinessError: '',
       })
-    } catch { /* ignore */ }
+    } catch (err) {
+      const message = messageFromError(err, 'Failed to refresh model readiness')
+      set({ readinessPending: false, readinessError: message })
+      throw err instanceof Error ? err : new Error(message)
+    }
   },
 
   refreshAppReadiness: async () => {
+    set({ appReadinessPending: true, appReadinessError: '' })
     try {
       const appReadiness = await settingsApi.appReadiness()
-      set({ appReadiness })
-    } catch { /* ignore */ }
+      set({ appReadiness, appReadinessPending: false, appReadinessError: '' })
+    } catch (err) {
+      const message = messageFromError(err, 'Failed to refresh app readiness')
+      set({ appReadinessPending: false, appReadinessError: message })
+      throw err instanceof Error ? err : new Error(message)
+    }
   },
 
   refreshAppUpdate: async (input = {}) => {
@@ -318,6 +363,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   update: async (patch: SettingsPatch) => {
+    const previous = get()
     const patchToSend: SettingsPatch = { ...patch }
     const localPatch: Partial<SettingsState> = {}
     if (patch.topK !== undefined) localPatch.topK = patch.topK
@@ -334,6 +380,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (patch.answerModeHint !== undefined) localPatch.answerModeHint = patch.answerModeHint
     if (patch.answerOutputMode !== undefined) localPatch.answerOutputMode = patch.answerOutputMode
     if (patch.refsCardLocale !== undefined) localPatch.refsCardLocale = patch.refsCardLocale
+    if (patch.qualityDataSharingEnabled !== undefined) localPatch.qualityDataSharingEnabled = patch.qualityDataSharingEnabled
     if (patch.theme !== undefined) {
       localPatch.theme = patch.theme
       persistTheme(patch.theme)
@@ -357,14 +404,32 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       localPatch.hasVisionApiKey = true
       localPatch.visionUsesTextFallback = false
     }
+    const rollbackKeys = Object.keys(localPatch) as Array<keyof SettingsState>
     set(localPatch)
-    await settingsApi.update(patchToSend).catch(() => {})
+    try {
+      return await settingsApi.update(patchToSend)
+    } catch (err) {
+      const rollbackTheme = localPatch.theme !== undefined && get().theme === localPatch.theme
+      set((current) => {
+        const rollbackPatch: Partial<SettingsState> = {}
+        const currentRecord = current as unknown as Record<string, unknown>
+        const localRecord = localPatch as unknown as Record<string, unknown>
+        const previousRecord = previous as unknown as Record<string, unknown>
+        const rollbackRecord = rollbackPatch as unknown as Record<string, unknown>
+        for (const key of rollbackKeys) {
+          if (currentRecord[key] === localRecord[key]) {
+            rollbackRecord[key] = previousRecord[key]
+          }
+        }
+        return rollbackPatch
+      })
+      if (rollbackTheme) persistTheme(previous.theme)
+      throw err
+    }
   },
 
   toggleTheme: () => {
     const next = get().theme === 'dark' ? 'light' : 'dark'
-    persistTheme(next)
-    set({ theme: next })
-    settingsApi.update({ theme: next }).catch(() => {})
+    void get().update({ theme: next }).catch(() => {})
   },
 }))

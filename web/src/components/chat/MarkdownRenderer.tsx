@@ -543,13 +543,10 @@ function expandPlainCitationBody(body: string, byNum: Map<number, CiteDetail[]>)
   }))
   if (!tokens.length) return { text: rawBody, changed: false }
 
-  let out = ''
-  let last = 0
-  let changed = false
+  const pieces: Array<{ text: string; linked: boolean }> = []
   for (let idx = 0; idx < tokens.length; idx += 1) {
     const token = tokens[idx]
     const next = tokens[idx + 1]
-    out += rawBody.slice(last, token.start)
 
     const sep = next ? rawBody.slice(token.end, next.start) : ''
     const rangeSep = Boolean(next && /^\s*[-–—−]\s*$/.test(sep))
@@ -569,21 +566,18 @@ function expandPlainCitationBody(body: string, byNum: Map<number, CiteDetail[]>)
     ) {
       for (let num = startNum; num <= endNum; num += 1) {
         const rendered = citationLinkMarkdownForToken(`${rangePrefix}${num}`, byNum)
-        out += rendered.text
-        changed = changed || rendered.linked
+        pieces.push(rendered)
       }
       idx += 1
-      last = next.end
       continue
     }
 
     const rendered = citationLinkMarkdownForToken(token.raw, byNum)
-    out += rendered.linked ? rendered.text : token.raw
-    changed = changed || rendered.linked
-    last = token.end
+    pieces.push(rendered)
   }
-  out += rawBody.slice(last)
-  return { text: out, changed }
+  const linkedPieces = pieces.filter((piece) => piece.linked)
+  if (!linkedPieces.length) return { text: rawBody, changed: false }
+  return { text: linkedPieces.map((piece) => piece.text).join(''), changed: true }
 }
 
 function linkifyPlainCitationSegment(segment: string, byNum: Map<number, CiteDetail[]>): string {
@@ -688,6 +682,7 @@ interface Props {
   onLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => void
   canLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => boolean
   locateTitleResolver?: (snippet: string) => string
+  locateButtonAttrsResolver?: (snippet: string, meta?: LocateRenderMeta) => LocateButtonAttrs | null | undefined
   inlineLocateTokenPolicy?: Partial<Record<InlineLocateTokenKind, boolean>>
   inlineTextLocateEnabled?: boolean
   inlineTextTailLocateEnabled?: boolean
@@ -711,6 +706,14 @@ type LocateSurfaceKind = 'paragraph' | 'list_item' | 'quote' | 'blockquote' | 'e
 interface LocateRenderMeta {
   kind: LocateSurfaceKind
   order: number
+}
+interface LocateButtonAttrs {
+  className?: string
+  focus?: string
+  blockId?: string
+  anchorId?: string
+  anchorKind?: string
+  heading?: string
 }
 type InlineLocateTokenKind = 'quote' | 'figure_ref' | 'equation_ref' | 'table_ref'
 interface InlineLocateToken {
@@ -1472,6 +1475,7 @@ function buildMarkdownComponents(
   onLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => void,
   canLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => boolean,
   locateTitleResolver?: (snippet: string) => string,
+  locateButtonAttrsResolver?: (snippet: string, meta?: LocateRenderMeta) => LocateButtonAttrs | null | undefined,
   inlineLocateTokenPolicy?: Partial<Record<InlineLocateTokenKind, boolean>>,
   inlineTextLocateEnabled: boolean = true,
   inlineTextTailLocateEnabled: boolean = false,
@@ -1531,6 +1535,8 @@ function buildMarkdownComponents(
     const label = S?.locate_label || '定位到原文证据'
     const title = String(locateTitleResolver?.(snippet) || '').trim() || label
     const kind = meta?.kind || 'paragraph'
+    const locateAttrs = locateButtonAttrsResolver?.(snippet, meta) || {}
+    const extraClassName = String(locateAttrs.className || '').trim()
     const badgeText = kind === 'equation'
       ? (S?.locate_badge_eq || '式')
       : kind === 'quote'
@@ -1543,10 +1549,15 @@ function buildMarkdownComponents(
     return (
       <button
         type="button"
-        className={`kb-md-locate-inline-btn kb-md-locate-inline-btn-${kind}`}
+        className={`kb-md-locate-inline-btn kb-md-locate-inline-btn-${kind}${extraClassName ? ` ${extraClassName}` : ''}`}
         aria-label={label}
         title={title || label}
         data-locate-kind={kind}
+        data-kb-locate-focus={locateAttrs.focus || undefined}
+        data-kb-locate-block-id={locateAttrs.blockId || undefined}
+        data-kb-locate-anchor-id={locateAttrs.anchorId || undefined}
+        data-kb-locate-anchor-kind={locateAttrs.anchorKind || undefined}
+        data-kb-locate-heading={locateAttrs.heading || undefined}
         onClick={(event) => {
           event.preventDefault()
           event.stopPropagation()
@@ -2153,6 +2164,7 @@ export function MarkdownRenderer({
   onLocateSnippet,
   canLocateSnippet,
   locateTitleResolver,
+  locateButtonAttrsResolver,
   inlineLocateTokenPolicy,
   inlineTextLocateEnabled = true,
   inlineTextTailLocateEnabled = false,
@@ -2202,6 +2214,7 @@ export function MarkdownRenderer({
     onLocateSnippet,
     canLocateSnippet,
     locateTitleResolver,
+    locateButtonAttrsResolver,
     inlineLocateTokenPolicy,
     inlineTextLocateEnabled,
     inlineTextTailLocateEnabled,

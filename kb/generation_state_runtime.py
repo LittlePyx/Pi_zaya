@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -90,20 +91,89 @@ def _gen_mark_cancel(session_id: str, task_id: str, *, time_module=time) -> bool
         return True
 
 
+def _gen_task_blocks_conversation(task: dict) -> bool:
+    if not isinstance(task, dict):
+        return False
+    if str(task.get("status") or "") != "running":
+        return False
+    if bool(task.get("answer_ready") or False):
+        return False
+    return not bool(task.get("cancel") or False)
+
+
+def _chat_db_key(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        return str(Path(raw).expanduser().resolve()).lower()
+    except Exception:
+        return raw.lower()
+
+
+def _gen_has_running_for_conversation(conv_id: str, *, chat_db_path: object = None) -> bool:
+    cid = str(conv_id or "").strip()
+    if not cid:
+        return False
+    db_key = _chat_db_key(chat_db_path)
+    RUNTIME.prune_generation_tasks(now=time.time())
+    with RUNTIME.GEN_LOCK:
+        for task in RUNTIME.GEN_TASKS.values():
+            if not isinstance(task, dict):
+                continue
+            if str(task.get("conv_id") or "").strip() != cid:
+                continue
+            if db_key:
+                task_db_key = _chat_db_key(task.get("chat_db"))
+                if task_db_key and task_db_key != db_key:
+                    continue
+            if _gen_task_blocks_conversation(task):
+                return True
+    return False
+
+
+def _gen_has_active_task_id(task_id: str) -> bool:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return False
+    RUNTIME.prune_generation_tasks(now=time.time())
+    with RUNTIME.GEN_LOCK:
+        for task in RUNTIME.GEN_TASKS.values():
+            if not isinstance(task, dict):
+                continue
+            if str(task.get("id") or "").strip() != tid:
+                continue
+            if _gen_task_blocks_conversation(task):
+                return True
+    return False
+
+
+def _strip_internal_generation_markers(text: str) -> str:
+    """Remove internal grounding markers before text reaches user-visible storage."""
+    s = str(text or "")
+    if not s:
+        return s
+    s = re.sub(r"\[\[\s*SUPPORT\s*:[^\]]+\]\]", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"[ \t]{2,}", " ", s)
+    s = re.sub(r"\n{3,}", "\n\n", s).strip()
+    return s
+
+
 def _gen_store_answer(task: dict, answer: str, *, chat_store_cls=ChatStore) -> None:
     conv_id = str(task.get("conv_id") or "")
     chat_db = Path(str(task.get("chat_db") or "")).expanduser()
     chat_store = chat_store_cls(chat_db)
+    safe_answer = _strip_internal_generation_markers(answer)
     try:
         amid = int(task.get("assistant_msg_id") or 0)
     except Exception:
         amid = 0
     if amid > 0:
-        ok = chat_store.update_message_content(amid, answer)
+        ok = chat_store.update_message_content(amid, safe_answer)
         if not ok:
-            chat_store.append_message(conv_id, "assistant", answer)
+            chat_store.append_message(conv_id, "assistant", safe_answer)
     else:
-        chat_store.append_message(conv_id, "assistant", answer)
+        chat_store.append_message(conv_id, "assistant", safe_answer)
 
 
 def _gen_store_partial(task: dict, partial: str, *, chat_store_cls=ChatStore) -> None:
@@ -115,7 +185,7 @@ def _gen_store_partial(task: dict, partial: str, *, chat_store_cls=ChatStore) ->
         amid = 0
     if amid <= 0:
         return
-    txt = str(partial or "").strip()
+    txt = _strip_internal_generation_markers(partial)
     if not txt:
         return
     try:

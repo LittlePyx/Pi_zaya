@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   libraryApi,
   type ConvertActiveTask,
+  type LibraryFilesResponse,
   type LibraryFileItem,
   type LibraryQualityOverviewResponse,
   type LibrarySuggestionActionBody,
@@ -11,7 +12,8 @@ import {
   type LibraryMetaUpdateBody,
   type LibrarySuggestionRegenerateBody,
 } from '../api/library'
-import { referencesApi, type ReferenceSyncStats } from '../api/references'
+import { referencesApi, type ReferenceSyncStatusEvent, type ReferenceSyncStats } from '../api/references'
+import { qualityDiagnosticsVisible } from '../utils/qualityDiagnostics'
 
 interface ConvertProgressState {
   total: number
@@ -124,6 +126,82 @@ function normalizeRefSyncStats(value: unknown): ReferenceSyncStats {
   return out
 }
 
+const REF_SYNC_TOP_LEVEL_STAT_KEYS = [
+  'docs_total',
+  'docs_indexed',
+  'refs_total',
+  'refs_with_doi',
+  'refs_with_title',
+  'refs_with_authors',
+  'refs_with_venue',
+  'refs_metadata_ready',
+  'refs_metadata_user_ready',
+  'refs_missing_doi',
+  'refs_missing_title',
+  'refs_missing_authors',
+  'refs_missing_venue',
+  'refs_unresolved',
+  'refs_crossref_ok',
+  'refs_source_map_ok',
+] as const
+
+function normalizeRefSyncEventStats(data: ReferenceSyncStatusEvent): ReferenceSyncStats {
+  const out = normalizeRefSyncStats(data.stats)
+  for (const key of REF_SYNC_TOP_LEVEL_STAT_KEYS) {
+    const raw = data[key]
+    if (
+      raw === null
+      || raw === undefined
+      || typeof raw === 'number'
+      || typeof raw === 'string'
+      || typeof raw === 'boolean'
+    ) {
+      out[key] = raw
+    }
+  }
+  if (out.docs_indexed === undefined && data.docs_done !== undefined) out.docs_indexed = data.docs_done
+  return out
+}
+
+function numberValue(value: unknown): number {
+  const n = Number(value || 0)
+  return Number.isFinite(n) ? n : 0
+}
+
+function queueSnapshotRunning(queue: LibraryFilesResponse['queue'] | null | undefined): boolean {
+  if (!queue) return false
+  const activeTasks = Array.isArray(queue.active_tasks) ? queue.active_tasks : []
+  return Boolean(
+    queue.running
+    || activeTasks.length > 0
+    || numberValue(queue.active_count) > 0
+    || numberValue(queue.queued_count) > 0
+  )
+}
+
+function progressFromQueueSnapshot(queue: LibraryFilesResponse['queue'] | null | undefined): ConvertProgressState | null {
+  if (!queue) return null
+  const activeTasks = Array.isArray(queue.active_tasks) ? queue.active_tasks : []
+  const primary = activeTasks[0] || null
+  return {
+    total: numberValue(queue.total),
+    completed: numberValue(queue.done),
+    current: String(queue.current || primary?.name || ''),
+    activeCount: numberValue(queue.active_count) || activeTasks.length,
+    activeTasks,
+    curPageDone: numberValue(primary?.cur_page_done),
+    curPageTotal: numberValue(primary?.cur_page_total),
+    curPageMsg: String(primary?.cur_page_msg || ''),
+    last: '',
+  }
+}
+
+let filesLoadRequestSeq = 0
+let qualityOverviewRequestSeq = 0
+let convertProgressStreamSeq = 0
+let refSyncStreamSeq = 0
+let latestRequestedFileScope = '200'
+
 export const useLibraryStore = create<LibraryState>((set, get) => ({
   pdfs: [],
   files: [],
@@ -145,43 +223,84 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   loadFiles: async (scope = '200') => {
-    set({ qualityOverviewLoading: true, qualityOverviewError: '' })
+    const filesRequestId = filesLoadRequestSeq + 1
+    const overviewRequestId = qualityOverviewRequestSeq + 1
+    const shouldLoadQualityOverview = qualityDiagnosticsVisible()
+    filesLoadRequestSeq = filesRequestId
+    qualityOverviewRequestSeq = overviewRequestId
+    latestRequestedFileScope = scope
+    set({
+      qualityOverview: shouldLoadQualityOverview ? get().qualityOverview : null,
+      qualityOverviewLoading: shouldLoadQualityOverview,
+      qualityOverviewError: '',
+    })
     const [viewResult, overviewResult] = await Promise.allSettled([
       libraryApi.listFiles(scope),
-      libraryApi.qualityOverview('all'),
+      shouldLoadQualityOverview ? libraryApi.qualityOverview('all') : Promise.resolve(null),
     ])
     if (viewResult.status === 'rejected') {
-      set({ qualityOverviewLoading: false })
+      if (filesRequestId !== filesLoadRequestSeq) return
+      if (overviewRequestId === qualityOverviewRequestSeq) {
+        set({ qualityOverviewLoading: false })
+      }
       throw viewResult.reason
     }
+    if (filesRequestId !== filesLoadRequestSeq) return
     const view = viewResult.value
     const files = Array.isArray(view.items) ? view.items : []
-    const overviewPatch = overviewResult.status === 'fulfilled'
-      ? {
+    const queueRunning = queueSnapshotRunning(view.queue)
+    const queueProgress = progressFromQueueSnapshot(view.queue)
+    let overviewPatch: Partial<LibraryState>
+    if (!shouldLoadQualityOverview) {
+      overviewPatch = {
+        qualityOverview: null,
+        qualityOverviewLoading: false,
+        qualityOverviewError: '',
+      }
+    } else if (overviewResult.status === 'fulfilled') {
+      overviewPatch = {
         qualityOverview: overviewResult.value,
         qualityOverviewLoading: false,
         qualityOverviewError: '',
       }
-      : {
+    } else {
+      overviewPatch = {
         qualityOverview: null,
         qualityOverviewLoading: false,
         qualityOverviewError: overviewResult.reason instanceof Error ? overviewResult.reason.message : String(overviewResult.reason || 'quality overview failed'),
       }
-    set({
+    }
+    const patch: Partial<LibraryState> = {
       viewScope: scope,
       files,
       fileCounts: view.counts || null,
       pdfs: files.map((item) => ({ name: item.name, path: item.path })),
-      ...overviewPatch,
-    })
+      converting: queueRunning,
+      progress: queueRunning ? queueProgress : null,
+    }
+    if (overviewRequestId === qualityOverviewRequestSeq) {
+      Object.assign(patch, overviewPatch)
+    }
+    set(patch)
+    if (queueRunning && !get().sseController) {
+      get().startProgressStream()
+    }
   },
 
   loadQualityOverview: async (scope = 'all') => {
+    const requestId = qualityOverviewRequestSeq + 1
+    qualityOverviewRequestSeq = requestId
+    if (!qualityDiagnosticsVisible()) {
+      set({ qualityOverview: null, qualityOverviewLoading: false, qualityOverviewError: '' })
+      return
+    }
     set({ qualityOverviewLoading: true, qualityOverviewError: '' })
     try {
       const overview = await libraryApi.qualityOverview(scope)
+      if (requestId !== qualityOverviewRequestSeq) return
       set({ qualityOverview: overview, qualityOverviewLoading: false, qualityOverviewError: '' })
     } catch (err) {
+      if (requestId !== qualityOverviewRequestSeq) return
       set({
         qualityOverview: null,
         qualityOverviewLoading: false,
@@ -323,9 +442,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   cancelConvert: async () => {
-    get().stopProgressStream()
     await libraryApi.cancelConvert()
-    set({ converting: false, progress: null })
+    get().startProgressStream()
+    await get().loadFiles(get().viewScope || '200')
   },
 
   reindex: async () => {
@@ -344,9 +463,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
   startProgressStream: () => {
     get().stopProgressStream()
+    const streamId = convertProgressStreamSeq + 1
+    convertProgressStreamSeq = streamId
+    const streamIsCurrent = () => streamId === convertProgressStreamSeq
 
     const ctrl = libraryApi.streamConvertStatus(
       (data) => {
+        if (!streamIsCurrent()) return
         set({
           converting: data.running,
           progress: {
@@ -363,9 +486,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         })
       },
       () => {
+        if (!streamIsCurrent()) return
         const shouldReindex = get().pendingRepairReindex
         const repairRunIds = get().pendingRepairRunIds
-        const scope = get().viewScope || '200'
         set({ converting: false, progress: null, sseController: null, pendingRepairReindex: false, pendingRepairRunIds: [] })
         if (shouldReindex) {
           void (async () => {
@@ -375,41 +498,81 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
                 for (const runId of repairRunIds) {
                   try {
                     const res = await libraryApi.advanceQualityRepairRun(runId)
+                    if (!streamIsCurrent()) return
                     advanced = true
                     if (res.reindex?.ok) get().startRefSyncStream()
                   } catch {
                     // Fall back to a plain index refresh below if no repair run could advance.
                   }
                 }
-                if (!advanced) await get().reindex()
+                if (!advanced) {
+                  await get().reindex()
+                  if (!streamIsCurrent()) return
+                }
               } else {
                 await get().reindex()
+                if (!streamIsCurrent()) return
               }
             } catch {
               // A failed automatic refresh should not leave the conversion stream stuck.
             }
-            await get().loadFiles(scope)
+            if (!streamIsCurrent()) return
+            await get().loadFiles(latestRequestedFileScope || get().viewScope || '200')
           })()
         } else {
-          void get().loadFiles(scope)
+          void get().loadFiles(latestRequestedFileScope || get().viewScope || '200')
         }
       },
       () => {
-        set({ converting: false, progress: null, sseController: null })
+        if (!streamIsCurrent()) return
+        set({ sseController: null })
+        void (async () => {
+          try {
+            await get().loadFiles(latestRequestedFileScope || get().viewScope || '200')
+            if (!streamIsCurrent()) return
+            if (get().pendingRepairReindex && !get().converting) {
+              const repairRunIds = get().pendingRepairRunIds
+              set({ pendingRepairReindex: false, pendingRepairRunIds: [] })
+              let advanced = false
+              for (const runId of repairRunIds) {
+                try {
+                  const res = await libraryApi.advanceQualityRepairRun(runId)
+                  if (!streamIsCurrent()) return
+                  advanced = true
+                  if (res.reindex?.ok) get().startRefSyncStream()
+                } catch {
+                  // Fall back to a plain index refresh below if no repair run could advance.
+                }
+              }
+              if (!advanced) await get().reindex()
+              if (!streamIsCurrent()) return
+              await get().loadFiles(latestRequestedFileScope || get().viewScope || '200')
+            }
+          } catch {
+            if (!streamIsCurrent()) return
+            set({ converting: false, progress: null, sseController: null })
+          }
+        })()
       },
     )
     set({ sseController: ctrl })
   },
 
   stopProgressStream: () => {
+    convertProgressStreamSeq += 1
     get().sseController?.abort()
     set({ sseController: null })
   },
 
   startRefSyncStream: () => {
     get().stopRefSyncStream()
+    const streamId = refSyncStreamSeq + 1
+    refSyncStreamSeq = streamId
+    const streamIsCurrent = () => streamId === refSyncStreamSeq
+
     const ctrl = referencesApi.streamSyncStatus(
       (data) => {
+        if (!streamIsCurrent()) return
         const status = String(data.status || '')
         const running = Boolean(data.running)
         set({
@@ -423,11 +586,12 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             docsDone: Number(data.docs_done || 0),
             docsTotal: Number(data.docs_total || 0),
             runId: Number(data.run_id || 0),
-            stats: normalizeRefSyncStats(data.stats),
+            stats: normalizeRefSyncEventStats(data),
           },
         })
       },
       () => {
+        if (!streamIsCurrent()) return
         set((state) => ({
           refSyncController: null,
           refSync: state.refSync
@@ -435,14 +599,33 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             : state.refSync,
         }))
       },
-      () => {
-        set({ refSyncController: null })
+      (err) => {
+        if (!streamIsCurrent()) return
+        const error = err instanceof Error ? err.message : 'Reference sync stream failed'
+        set((state) => ({
+          refSyncController: null,
+          refSync: state.refSync
+            ? { ...state.refSync, running: false, status: 'error', error }
+            : {
+              running: false,
+              status: 'error',
+              stage: '',
+              message: '',
+              error,
+              current: '',
+              docsDone: 0,
+              docsTotal: 0,
+              runId: 0,
+              stats: {},
+            },
+        }))
       },
     )
     set({ refSyncController: ctrl })
   },
 
   stopRefSyncStream: () => {
+    refSyncStreamSeq += 1
     get().refSyncController?.abort()
     set({ refSyncController: null })
   },

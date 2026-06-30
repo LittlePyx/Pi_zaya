@@ -39,6 +39,12 @@ async function fulfillJson(route: Route, body: unknown) {
   })
 }
 
+async function enableInternalSettingsTools(page: Page) {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem('kb.internal.showSettingsDiagnostics', '1')
+  })
+}
+
 function provider(target: 'text' | 'vision', overrides: Partial<ProviderStatus> = {}) {
   const hasKey = overrides.has_api_key ?? true
   const status = overrides.status || (hasKey ? 'ok' : 'missing')
@@ -61,11 +67,42 @@ async function installMinimalBackend(
     text?: Partial<ProviderStatus>
     vision?: Partial<ProviderStatus>
     restoreReview?: boolean
+    authRequired?: boolean
+    failAnswerDepthPatch?: boolean
+    failQualityDataSharingPatch?: boolean
+    failQualityDataCleanup?: boolean
+    failSettingsReloadAfterQualityPatch?: boolean
+    qualityCollectorLocal?: boolean
+    qualityCollectorInsecure?: boolean
+    qualityCollectorCredentials?: boolean
+    qualityCollectorInvalidPort?: boolean
+    qualityCollectorMissingToken?: boolean
+    qualityCollectorStatusFails?: boolean
   } = {},
 ) {
   const text = provider('text', options.text)
   const vision = provider('vision', options.vision)
   let autoBackupEnabled = true
+  let qualityDataSharingEnabled = false
+  let authenticated = Boolean(options.authRequired)
+  let logoutCalls = 0
+  let qualityCollectorPending = 2
+  let qualityCollectorTests = 0
+  let qualityCollectorFlushes = 0
+  let failNextSettingsGet = false
+  const qualityCollectorHost = options.qualityCollectorLocal
+    ? '127.0.0.1:9000'
+    : options.qualityCollectorInvalidPort
+      ? 'collector.example:bad'
+      : 'collector.example'
+  const qualityCollectorBlocked = Boolean(
+    options.qualityCollectorLocal
+    || options.qualityCollectorInsecure
+    || options.qualityCollectorCredentials
+    || options.qualityCollectorInvalidPort
+    || options.qualityCollectorMissingToken,
+  )
+  const settingsPatches: Array<Record<string, unknown>> = []
   const readiness = {
     providers: { text, vision },
     overall: text.severity === 'error'
@@ -185,21 +222,89 @@ async function installMinimalBackend(
   })
   await page.route('**/api/auth/status', async (route) => {
     await fulfillJson(route, {
-      required: false,
-      configured: false,
-      authenticated: false,
+      required: Boolean(options.authRequired),
+      configured: Boolean(options.authRequired),
+      authenticated,
       env: 'test',
       production: false,
+    })
+  })
+  await page.route('**/api/auth/logout', async (route) => {
+    logoutCalls += 1
+    authenticated = false
+    await fulfillJson(route, { ok: true })
+  })
+  await page.route('**/api/sidebar**', async (route) => {
+    await fulfillJson(route, {
+      projects: [],
+      root_conversations: [],
+      project_conversations: {},
+    })
+  })
+  await page.route('**/api/app/update-check**', async (route) => {
+    await fulfillJson(route, {
+      enabled: false,
+      status: 'disabled',
+      checked_at: 1780748500,
+      current: { name: 'Pi_zaya', version: 'test' },
+      latest: null,
+      update_available: false,
+      instructions: [],
     })
   })
   await page.route('**/api/settings', async (route) => {
     if (route.request().method() === 'PATCH') {
       const raw = route.request().postData() || '{}'
-      const patch = JSON.parse(raw) as { auto_backup_enabled?: boolean }
+      const patch = JSON.parse(raw) as {
+        answer_depth_auto?: boolean
+        auto_backup_enabled?: boolean
+        quality_data_sharing_enabled?: boolean
+      }
+      settingsPatches.push(patch)
+      if (typeof patch.answer_depth_auto === 'boolean' && options.failAnswerDepthPatch) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'preference save failed' }),
+        })
+        return
+      }
+      if (typeof patch.quality_data_sharing_enabled === 'boolean' && options.failQualityDataSharingPatch) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'quality sharing save failed' }),
+        })
+        return
+      }
       if (typeof patch.auto_backup_enabled === 'boolean') {
         autoBackupEnabled = patch.auto_backup_enabled
       }
-      await fulfillJson(route, { ok: true })
+      if (typeof patch.quality_data_sharing_enabled === 'boolean') {
+        qualityDataSharingEnabled = patch.quality_data_sharing_enabled
+        if (options.failSettingsReloadAfterQualityPatch) {
+          failNextSettingsGet = true
+        }
+      }
+      await fulfillJson(route, {
+        ok: true,
+        ...(patch.quality_data_sharing_enabled === false
+          ? {
+              quality_data_cleanup: options.failQualityDataCleanup
+                ? { ok: false, removed: 0, error: 'database locked' }
+                : { ok: true, removed: qualityCollectorPending, error: '' },
+            }
+          : {}),
+      })
+      return
+    }
+    if (failNextSettingsGet) {
+      failNextSettingsGet = false
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'settings reload failed after quality sharing save' }),
+      })
       return
     }
     await fulfillJson(route, {
@@ -226,6 +331,7 @@ async function installMinimalBackend(
         max_tokens: 1216,
         deep_read: false,
         auto_backup_enabled: autoBackupEnabled,
+        quality_data_sharing_enabled: qualityDataSharingEnabled,
       },
     })
   })
@@ -379,6 +485,87 @@ async function installMinimalBackend(
       body: 'zip',
     })
   })
+  await page.route('**/api/user-issues/remote/status', async (route) => {
+    if (options.qualityCollectorStatusFails) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'collector status failed' }),
+      })
+      return
+    }
+    await fulfillJson(route, {
+      ok: true,
+      enabled: qualityDataSharingEnabled && !qualityCollectorBlocked,
+      remote_enabled: true,
+      remote_url_configured: true,
+      remote_url_host: qualityCollectorHost,
+      remote_url_scheme: options.qualityCollectorInsecure ? 'http' : 'https',
+      remote_url_has_valid_scheme: true,
+      remote_url_has_valid_port: !options.qualityCollectorInvalidPort,
+      remote_url_has_credentials: Boolean(options.qualityCollectorCredentials),
+      remote_url_is_local: Boolean(options.qualityCollectorLocal),
+      remote_url_local_allowed: false,
+      remote_url_secure: !options.qualityCollectorInsecure,
+      remote_url_allowed: !qualityCollectorBlocked,
+      remote_block_reason: options.qualityCollectorLocal
+        ? 'local_remote_url'
+        : options.qualityCollectorInsecure
+          ? 'insecure_remote_url'
+          : options.qualityCollectorCredentials
+            ? 'remote_url_credentials'
+            : options.qualityCollectorInvalidPort
+              ? 'invalid_remote_url'
+              : options.qualityCollectorMissingToken
+                ? 'missing_remote_token'
+              : '',
+      remote_token_configured: !options.qualityCollectorMissingToken,
+      remote_token_required: true,
+      remote_unauthenticated_allowed: false,
+      quality_data_sharing_enabled: qualityDataSharingEnabled,
+      outbox: {
+        total: qualityDataSharingEnabled ? qualityCollectorPending : 0,
+        pending: qualityDataSharingEnabled ? qualityCollectorPending : 0,
+        retryable: qualityDataSharingEnabled ? qualityCollectorPending : 0,
+        sent: 0,
+        latest_error: '',
+        latest_attempts: 0,
+        next_attempt_at: 0,
+      },
+    })
+  })
+  await page.route('**/api/user-issues/remote/test', async (route) => {
+    qualityCollectorTests += 1
+    await fulfillJson(route, {
+      ok: qualityDataSharingEnabled && !options.qualityCollectorLocal,
+      enabled: qualityDataSharingEnabled && !options.qualityCollectorLocal,
+      status_code: qualityDataSharingEnabled && !options.qualityCollectorLocal ? 200 : 0,
+      error: qualityDataSharingEnabled && !options.qualityCollectorLocal ? '' : 'remote reporting is disabled',
+      outbox: {
+        total: qualityCollectorPending,
+        pending: qualityCollectorPending,
+        retryable: qualityCollectorPending,
+        sent: 0,
+      },
+    })
+  })
+  await page.route('**/api/user-issues/outbox/flush**', async (route) => {
+    qualityCollectorFlushes += 1
+    const sent = qualityDataSharingEnabled ? qualityCollectorPending : 0
+    qualityCollectorPending = 0
+    await fulfillJson(route, {
+      ok: qualityDataSharingEnabled,
+      enabled: qualityDataSharingEnabled,
+      sent,
+      failed: 0,
+      summary: {
+        total: 0,
+        pending: 0,
+        retryable: 0,
+        sent,
+      },
+    })
+  })
   await page.route('**/api/projects', async (route) => {
     await fulfillJson(route, [])
   })
@@ -391,6 +578,12 @@ async function installMinimalBackend(
   await page.route('**/api/chat/citation-shelf**', async (route) => {
     await fulfillJson(route, { version: 1, scope: 'project', items: [], revision: 1, updated_at: 0 })
   })
+  return {
+    settingsPatches,
+    getLogoutCalls: () => logoutCalls,
+    getQualityCollectorTests: () => qualityCollectorTests,
+    getQualityCollectorFlushes: () => qualityCollectorFlushes,
+  }
 }
 
 test('text API block opens settings focused on the text provider', async ({ page }) => {
@@ -434,20 +627,26 @@ test('settings shows compact connection status without admin maintenance tools',
   })
   await page.goto('/')
 
+  await expect(page.getByTestId('release-readiness-banner')).toHaveCount(0)
   await page.locator('button[aria-label="Open settings"]').click()
 
   const readiness = page.getByTestId('settings-release-readiness')
   await expect(readiness).toContainText('Connection status')
   await expect(readiness).toContainText('API availability')
   await expect(readiness).toContainText('Blocked')
+  await expect(page.locator('.kb-settings-drawer')).not.toContainText('Release readiness')
   await expect(readiness).not.toContainText('Data protection')
   await expect(readiness).not.toContainText('Restore review')
   await expect(readiness).not.toContainText('CORS origins')
   await expect(page.getByTestId('settings-admin-tools-summary')).toHaveCount(0)
   await expect(page.getByTestId('settings-release-readiness-details')).toHaveCount(0)
+  await expect(page.getByTestId('settings-quality-collector-status')).toHaveCount(0)
+  await page.locator('.kb-settings-advanced > summary').click()
+  await expect(page.getByTestId('settings-auto-backup-switch')).toHaveCount(0)
 })
 
-test('release readiness banner opens the settings readiness panel', async ({ page }) => {
+test('internal release readiness banner opens the settings readiness panel', async ({ page }) => {
+  await enableInternalSettingsTools(page)
   await installMinimalBackend(page, {
     text: { has_api_key: false, status: 'missing', severity: 'error' },
   })
@@ -462,7 +661,21 @@ test('release readiness banner opens the settings readiness panel', async ({ pag
   await expect(page.getByTestId('settings-release-readiness')).toContainText('Connection status')
 })
 
-test('settings can acknowledge a recent restore review', async ({ page }) => {
+test('restore review notice stays hidden from ordinary users', async ({ page }) => {
+  await installMinimalBackend(page, { restoreReview: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const readiness = page.getByTestId('settings-release-readiness')
+  await expect(readiness).not.toContainText('Restore review needed')
+  await expect(readiness).not.toContainText('A restore was recorded recently')
+  await expect(readiness.getByRole('button', { name: 'Confirm restarted and reviewed' })).toHaveCount(0)
+  await expect(page.getByTestId('settings-admin-tools-summary')).toHaveCount(0)
+})
+
+test('internal settings can acknowledge a recent restore review', async ({ page }) => {
+  await enableInternalSettingsTools(page)
   await installMinimalBackend(page, { restoreReview: true })
   await page.goto('/')
 
@@ -475,10 +688,10 @@ test('settings can acknowledge a recent restore review', async ({ page }) => {
 
   await expect(readiness).not.toContainText('Restore review needed')
   await expect(readiness).not.toContainText('Confirm restarted and reviewed')
-  await expect(page.getByTestId('settings-admin-tools-summary')).toHaveCount(0)
 })
 
 test('settings can toggle automatic backup preference', async ({ page }) => {
+  await enableInternalSettingsTools(page)
   await installMinimalBackend(page)
   await page.goto('/')
 
@@ -493,4 +706,260 @@ test('settings can toggle automatic backup preference', async ({ page }) => {
 
   await toggle.click()
   await expect(toggle).toBeChecked()
+})
+
+test('settings can opt in to developer quality data sharing', async ({ page }) => {
+  const backend = await installMinimalBackend(page)
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await expect(toggle).not.toBeChecked()
+  await expect(page.locator('.kb-settings-drawer')).toContainText('Share anonymous quality data with the developer')
+  await expect(page.getByTestId('settings-quality-collector-status')).toHaveCount(0)
+
+  await toggle.click()
+  await expect(toggle).toBeChecked()
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+  await expect(page.getByTestId('settings-quality-collector-status')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Test collector' })).toHaveCount(0)
+  await expect.poll(() => backend.getQualityCollectorTests()).toBe(0)
+})
+
+test('settings keeps quality data sharing state after opt-in save even if reload fails', async ({ page }) => {
+  const backend = await installMinimalBackend(page, { failSettingsReloadAfterQualityPatch: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await expect(toggle).not.toBeChecked()
+  await toggle.click()
+
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+  await expect(toggle).toBeChecked()
+  await expect(page.getByText('settings reload failed after quality sharing save')).toHaveCount(0)
+  await expect(page.getByTestId('settings-quality-collector-status')).toHaveCount(0)
+})
+
+test('settings warns if opt-out cannot clear pending quality reports', async ({ page }) => {
+  const backend = await installMinimalBackend(page, { failQualityDataCleanup: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await toggle.click()
+  await expect(toggle).toBeChecked()
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+
+  await toggle.click()
+  await expect(toggle).not.toBeChecked()
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === false)).toBe(true)
+  await expect(page.getByText('Quality data sharing is off, but clearing unsent remote reports failed: database locked')).toBeVisible()
+})
+
+test('settings rolls back lightweight preferences when saving fails', async ({ page }) => {
+  const backend = await installMinimalBackend(page, { failAnswerDepthPatch: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-answer-depth-auto-switch')
+  await expect(toggle).toBeChecked()
+
+  await toggle.click()
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.answer_depth_auto === false)).toBe(true)
+  await expect(toggle).toBeChecked()
+  await expect(page.getByText('500 Internal Server Error: preference save failed')).toBeVisible()
+  await expect(page.getByText('{"detail":"preference save failed"}')).toHaveCount(0)
+})
+
+test('internal settings tools can inspect and flush quality collector status', async ({ page }) => {
+  await enableInternalSettingsTools(page)
+  const backend = await installMinimalBackend(page)
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await expect(toggle).not.toBeChecked()
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('Off')
+
+  await toggle.click()
+  await expect(toggle).toBeChecked()
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('Ready')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('collector.example')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('2')
+
+  await page.getByRole('button', { name: 'Test collector' }).click()
+  await expect.poll(() => backend.getQualityCollectorTests()).toBe(1)
+
+  await page.getByRole('button', { name: 'Send pending' }).click()
+  await expect.poll(() => backend.getQualityCollectorFlushes()).toBe(1)
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('0')
+})
+
+test('settings warns when quality collector is not HTTPS', async ({ page }) => {
+  await enableInternalSettingsTools(page)
+  const backend = await installMinimalBackend(page, { qualityCollectorInsecure: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await toggle.click()
+
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('Needs setup')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('collector.example')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('not using HTTPS')
+  await expect(page.getByRole('button', { name: 'Test collector' })).toBeDisabled()
+})
+
+test('settings warns when quality collector points at localhost', async ({ page }) => {
+  await enableInternalSettingsTools(page)
+  const backend = await installMinimalBackend(page, { qualityCollectorLocal: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await toggle.click()
+
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('Needs setup')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('127.0.0.1:9000')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('public HTTPS collector')
+  await expect(page.getByRole('button', { name: 'Test collector' })).toBeDisabled()
+})
+
+test('settings warns when quality collector URL contains credentials', async ({ page }) => {
+  await enableInternalSettingsTools(page)
+  const backend = await installMinimalBackend(page, { qualityCollectorCredentials: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await toggle.click()
+
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('Needs setup')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('credentials in the URL')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('KB_USER_ISSUES_REMOTE_TOKEN')
+  await expect(page.getByRole('button', { name: 'Test collector' })).toBeDisabled()
+})
+
+test('settings warns when quality collector sender token is missing', async ({ page }) => {
+  await enableInternalSettingsTools(page)
+  const backend = await installMinimalBackend(page, { qualityCollectorMissingToken: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await toggle.click()
+
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('Needs setup')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('KB_USER_ISSUES_REMOTE_TOKEN')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('collector.example')
+  await expect(page.getByRole('button', { name: 'Test collector' })).toBeDisabled()
+})
+
+test('settings warns when quality collector URL has an invalid port', async ({ page }) => {
+  await enableInternalSettingsTools(page)
+  const backend = await installMinimalBackend(page, { qualityCollectorInvalidPort: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await toggle.click()
+
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('Needs setup')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('collector.example:bad')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('not a valid HTTP(S) endpoint')
+  await expect(page.getByRole('button', { name: 'Test collector' })).toBeDisabled()
+})
+
+test('settings reports quality collector status check failures separately', async ({ page }) => {
+  await enableInternalSettingsTools(page)
+  const backend = await installMinimalBackend(page, { qualityCollectorStatusFails: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await toggle.click()
+
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('Check failed')
+  await expect(page.getByTestId('settings-quality-collector-status')).toContainText('collector status failed')
+  await expect(page.getByTestId('settings-quality-collector-status')).not.toContainText('Remote collection is disabled')
+  await expect(page.getByRole('button', { name: 'Test collector' })).toBeDisabled()
+})
+
+test('settings keeps quality data sharing off when saving the opt-in fails', async ({ page }) => {
+  const backend = await installMinimalBackend(page, { failQualityDataSharingPatch: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const toggle = page.getByTestId('settings-quality-data-sharing-switch')
+  await expect(toggle).not.toBeChecked()
+  await toggle.click()
+
+  await expect.poll(() => backend.settingsPatches.some((patch) => patch.quality_data_sharing_enabled === true)).toBe(true)
+  await expect(toggle).not.toBeChecked()
+  await expect(page.getByTestId('settings-quality-collector-status')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Test collector' })).toHaveCount(0)
+  await expect.poll(() => backend.getQualityCollectorTests()).toBe(0)
+})
+
+test('user-facing settings hides the access-token session controls by default', async ({ page }) => {
+  test.skip(
+    process.env.VITE_ENABLE_AUTH_GATE === '1'
+      && process.env.VITE_PRIVATE_INSTANCE_AUTH === '1'
+      && process.env.VITE_ALLOW_LOCAL_AUTH_GATE === '1',
+    'this assertion covers the default user-facing build',
+  )
+
+  const backend = await installMinimalBackend(page, { authRequired: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const lockButton = page.getByTestId('settings-auth-lock-button')
+  await expect(lockButton).toHaveCount(0)
+  await expect(page.locator('.kb-settings-drawer')).not.toContainText('Access token session')
+  await expect.poll(() => backend.getLogoutCalls()).toBe(0)
+})
+
+test('settings can lock the current access-token session when the auth gate is enabled', async ({ page }) => {
+  test.skip(
+    process.env.VITE_ENABLE_AUTH_GATE !== '1'
+      || process.env.VITE_PRIVATE_INSTANCE_AUTH !== '1'
+      || process.env.VITE_ALLOW_LOCAL_AUTH_GATE !== '1',
+    'access-token session controls are hidden in the user-facing build',
+  )
+
+  const backend = await installMinimalBackend(page, { authRequired: true })
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const lockButton = page.getByTestId('settings-auth-lock-button')
+  await expect(lockButton).toBeVisible()
+  await expect(page.locator('.kb-settings-drawer')).toContainText('Access token session')
+
+  await lockButton.click()
+  await page.getByRole('button', { name: 'OK' }).click()
+
+  await expect.poll(() => backend.getLogoutCalls()).toBe(1)
+  await expect(page.locator('.kb-auth-gate')).toContainText('Access Token Required')
 })

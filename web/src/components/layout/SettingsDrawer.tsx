@@ -1,15 +1,23 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Alert, Button, Drawer, Input, Popconfirm, Select, Segmented, Slider, Switch, Typography, message } from 'antd'
+import { Alert, Button, Drawer, Input, Popconfirm, Select, Segmented, Slider, Space, Switch, Typography, message } from 'antd'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { settingsApi } from '../../api/settings'
+import { settingsApi, type SettingsPatch } from '../../api/settings'
+import { userIssuesApi, type UserIssueRemoteStatus } from '../../api/userIssues'
+import { authGateBuildEnabled } from '../../api/authGate'
+import { AUTH_REQUIRED_EVENT, setAccessToken } from '../../api/client'
 import { maintenanceApi, type MaintenanceStatus } from '../../api/maintenance'
 import { useT } from '../../i18n'
 import type { SettingsFocusTarget } from './settingsEvents'
 import { SettingsUpdatePanel } from './SettingsUpdatePanel'
+import { internalSettingsToolsVisible } from '../../utils/internalDebug'
 
 const { Text } = Typography
 type LocalTestResult = { ok: boolean; checked_at: number; error_type?: string; transient: boolean }
+
+function authGateEnabled() {
+  return authGateBuildEnabled()
+}
 
 function appReadinessActionLabel(S: Record<string, string>, action: string | undefined) {
   const clean = String(action || '').trim()
@@ -135,8 +143,30 @@ export function SettingsDrawer({
   const [autoBackupSaving, setAutoBackupSaving] = useState(false)
   const [restoreReviewAcking, setRestoreReviewAcking] = useState(false)
   const [diagnosticsExporting, setDiagnosticsExporting] = useState(false)
+  const [authStatus, setAuthStatus] = useState<{ required?: boolean; configured?: boolean; authenticated?: boolean } | null>(null)
+  const [authLocking, setAuthLocking] = useState(false)
+  const [qualityCollectorStatus, setQualityCollectorStatus] = useState<UserIssueRemoteStatus | null>(null)
+  const [qualityCollectorLoading, setQualityCollectorLoading] = useState(false)
+  const [qualityCollectorError, setQualityCollectorError] = useState('')
+  const [qualityCollectorTesting, setQualityCollectorTesting] = useState(false)
+  const [qualityCollectorFlushing, setQualityCollectorFlushing] = useState(false)
+  const [qualitySharingSaving, setQualitySharingSaving] = useState(false)
+  const lastPreferenceErrorAtRef = useRef(0)
   const appReadiness = s.appReadiness
   const appUpdate = s.appUpdate
+  const readinessError = s.readinessError
+  const updateSettingsPreference = s.update
+  const showInternalSettingsTools = internalSettingsToolsVisible()
+  const showAuthGateTools = authGateEnabled()
+
+  const savePreference = useCallback((patch: SettingsPatch) => {
+    void updateSettingsPreference(patch).catch((err) => {
+      const now = Date.now()
+      if (now - lastPreferenceErrorAtRef.current < 1500) return
+      lastPreferenceErrorAtRef.current = now
+      message.error(err instanceof Error ? err.message : S.settings_save_preferences_failed)
+    })
+  }, [S.settings_save_preferences_failed, updateSettingsPreference])
 
   const refreshMaintenanceStatus = useCallback(async () => {
     setMaintenanceStatusLoading(true)
@@ -176,6 +206,20 @@ export function SettingsDrawer({
     }
   }, [S.settings_update_check_failed, refreshAppUpdateStore])
 
+  const refreshQualityCollectorStatus = useCallback(async () => {
+    setQualityCollectorLoading(true)
+    setQualityCollectorError('')
+    try {
+      const payload = await userIssuesApi.remoteStatus()
+      setQualityCollectorStatus(payload)
+    } catch (err) {
+      setQualityCollectorStatus(null)
+      setQualityCollectorError(err instanceof Error ? err.message : S.settings_quality_collector_status_failed.replace('{error}', S.settings_test_unknown_error))
+    } finally {
+      setQualityCollectorLoading(false)
+    }
+  }, [S.settings_quality_collector_status_failed, S.settings_test_unknown_error])
+
   useEffect(() => {
     if (!open) return
     setTextApiKey('')
@@ -190,9 +234,25 @@ export function SettingsDrawer({
   useEffect(() => {
     if (!open) return
     void refreshAppReadiness()
-    void refreshMaintenanceStatus()
-    void refreshReadinessStore()
-  }, [open, refreshAppReadiness, refreshMaintenanceStatus, refreshReadinessStore])
+    void refreshReadinessStore().catch(() => {})
+    if (showInternalSettingsTools) {
+      void refreshMaintenanceStatus()
+      void refreshQualityCollectorStatus()
+    }
+    if (showAuthGateTools) {
+      settingsApi.authStatus().then(setAuthStatus).catch(() => setAuthStatus(null))
+    } else {
+      setAuthStatus(null)
+    }
+  }, [
+    open,
+    refreshAppReadiness,
+    refreshMaintenanceStatus,
+    refreshQualityCollectorStatus,
+    refreshReadinessStore,
+    showAuthGateTools,
+    showInternalSettingsTools,
+  ])
 
   useEffect(() => {
     if (!open) return
@@ -274,8 +334,10 @@ export function SettingsDrawer({
             : Boolean(visionApiKey.trim() || visionBaseUrl.trim() !== s.visionBaseUrl || visionModel.trim() !== s.visionModel),
         },
       }))
-      await s.refreshReadiness()
-      await s.refreshAppReadiness()
+      await Promise.all([
+        s.refreshReadiness().catch(() => {}),
+        s.refreshAppReadiness().catch(() => {}),
+      ])
     } finally {
       setTestingTarget(null)
     }
@@ -308,6 +370,82 @@ export function SettingsDrawer({
     }
   }
 
+  const updateQualityDataSharing = async (enabled: boolean) => {
+    setQualitySharingSaving(true)
+    try {
+      const result = await updateSettingsPreference({ qualityDataSharingEnabled: enabled })
+      await s.load().catch(() => {})
+      if (showInternalSettingsTools) await refreshQualityCollectorStatus()
+      const cleanup = result?.quality_data_cleanup
+      if (!enabled && cleanup && cleanup.ok === false) {
+        message.warning(
+          S.settings_quality_data_cleanup_failed_msg
+            .replace('{error}', cleanup.error || S.settings_test_unknown_error),
+        )
+      } else {
+        message.success(enabled ? S.settings_quality_data_sharing_enabled_msg : S.settings_quality_data_sharing_disabled_msg)
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.settings_quality_data_sharing_update_failed)
+    } finally {
+      setQualitySharingSaving(false)
+    }
+  }
+
+  const testQualityCollector = async () => {
+    setQualityCollectorTesting(true)
+    try {
+      const result = await userIssuesApi.testRemote()
+      await refreshQualityCollectorStatus()
+      if (result.ok) {
+        message.success(S.settings_quality_collector_test_ok)
+      } else {
+        message.error(S.settings_quality_collector_test_failed.replace('{error}', String(result.error || result.status_code || S.settings_test_unknown_error)))
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.settings_quality_collector_test_failed.replace('{error}', S.settings_test_unknown_error))
+    } finally {
+      setQualityCollectorTesting(false)
+    }
+  }
+
+  const flushQualityCollectorOutbox = async () => {
+    setQualityCollectorFlushing(true)
+    try {
+      const result = await userIssuesApi.flushOutbox(20)
+      await refreshQualityCollectorStatus()
+      if (result.enabled === false) {
+        message.warning(S.settings_quality_collector_disabled)
+      } else if (result.failed > 0) {
+        message.warning(S.settings_quality_collector_flush_partial
+          .replace('{sent}', String(result.sent || 0))
+          .replace('{failed}', String(result.failed || 0)))
+      } else {
+        message.success(S.settings_quality_collector_flush_ok.replace('{sent}', String(result.sent || 0)))
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.settings_quality_collector_flush_failed)
+    } finally {
+      setQualityCollectorFlushing(false)
+    }
+  }
+
+  const lockAccessSession = async () => {
+    setAuthLocking(true)
+    try {
+      await settingsApi.authLogout()
+      setAccessToken('')
+      const next = await settingsApi.authStatus().catch(() => null)
+      setAuthStatus(next)
+      message.success(S.settings_auth_locked)
+      window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT))
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.settings_auth_lock_failed)
+    } finally {
+      setAuthLocking(false)
+    }
+  }
+
   const acknowledgeRestoreReview = async () => {
     setRestoreReviewAcking(true)
     try {
@@ -328,8 +466,8 @@ export function SettingsDrawer({
   const refreshStatusOverview = async () => {
     await Promise.all([
       refreshAppReadiness(),
-      refreshMaintenanceStatus(),
-      refreshReadinessStore(),
+      ...(showInternalSettingsTools ? [refreshMaintenanceStatus(), refreshQualityCollectorStatus()] : []),
+      refreshReadinessStore().catch(() => {}),
     ])
   }
 
@@ -390,7 +528,7 @@ export function SettingsDrawer({
     const restoreItem = (appReadiness?.items || []).find((item) => item.key === 'recent_restore')
     const restorePending = Boolean(restoreItem && appReadiness?.restore?.acknowledged !== true)
     const restoreAction = appReadinessActionLabel(S, restoreItem?.action)
-    const restoreNoticeAction = restorePending && restoreItem?.action === 'restart_and_check' ? (
+    const restoreNoticeAction = showInternalSettingsTools && restorePending && restoreItem?.action === 'restart_and_check' ? (
       <Popconfirm
         title={S.settings_restore_review_ack_confirm}
         okText={S.confirm_ok}
@@ -401,7 +539,7 @@ export function SettingsDrawer({
           {restoreAction || S.settings_release_action_restart_and_check}
         </Button>
       </Popconfirm>
-    ) : restorePending ? (
+    ) : showInternalSettingsTools && restorePending ? (
       <Button size="small" loading={diagnosticsExporting} onClick={() => { void exportDiagnostics() }}>
         {S.settings_maintenance_diag_export}
       </Button>
@@ -431,7 +569,7 @@ export function SettingsDrawer({
             description={apiDescription}
           />
         </div>
-        {restorePending ? (
+        {showInternalSettingsTools && restorePending ? (
           <Alert
             className="kb-settings-restore-notice"
             type="warning"
@@ -463,6 +601,99 @@ export function SettingsDrawer({
       ? S.settings_auto_backup_locked_desc
       : S.settings_auto_backup_desc
   const autoBackupDisabled = autoBackupLocked || maintenanceStatusLoading || autoBackupSaving || Boolean(maintenanceStatusError)
+  const qualityCollectorPending = Number(qualityCollectorStatus?.outbox?.pending || 0)
+  const qualityCollectorHost = String(qualityCollectorStatus?.remote_url_host || S.settings_quality_collector_host_missing)
+  const qualityCollectorOff = !s.qualityDataSharingEnabled || qualityCollectorStatus?.quality_data_sharing_enabled === false
+  const qualityCollectorLoadFailed = Boolean(qualityCollectorError)
+  const qualityCollectorLocalBlocked = Boolean(
+    qualityCollectorStatus?.remote_url_is_local
+    && !qualityCollectorStatus?.remote_url_local_allowed,
+  )
+  const qualityCollectorCredentials = Boolean(
+    qualityCollectorStatus?.remote_url_configured
+    && qualityCollectorStatus.remote_url_has_credentials,
+  )
+  const qualityCollectorInvalidUrl = Boolean(
+    qualityCollectorStatus?.remote_url_configured
+    && (
+      qualityCollectorStatus.remote_url_has_valid_scheme === false
+      || qualityCollectorStatus.remote_url_has_valid_port === false
+    ),
+  )
+  const qualityCollectorInsecure = Boolean(
+    qualityCollectorStatus?.remote_url_configured
+    && !qualityCollectorLocalBlocked
+    && qualityCollectorStatus.remote_url_secure === false,
+  )
+  const qualityCollectorMissingToken = Boolean(
+    qualityCollectorStatus?.remote_url_configured
+    && qualityCollectorStatus.remote_token_required !== false
+    && !qualityCollectorStatus.remote_token_configured,
+  )
+  const qualityCollectorSafetyBlocked = Boolean(
+    qualityCollectorStatus?.remote_url_configured
+    && qualityCollectorStatus.remote_url_allowed === false
+    && !qualityCollectorCredentials
+    && !qualityCollectorInvalidUrl
+    && !qualityCollectorInsecure
+    && !qualityCollectorLocalBlocked
+    && !qualityCollectorMissingToken,
+  )
+  const qualityCollectorNeedsSetup = !qualityCollectorOff && (
+    !qualityCollectorLoadFailed
+    && (!qualityCollectorStatus
+    || !qualityCollectorStatus.remote_enabled
+    || !qualityCollectorStatus.remote_url_configured
+    || qualityCollectorCredentials
+    || qualityCollectorLocalBlocked
+    || qualityCollectorInvalidUrl
+    || qualityCollectorInsecure
+    || qualityCollectorMissingToken
+    || qualityCollectorSafetyBlocked)
+  )
+  const qualityCollectorTone = qualityCollectorOff
+    ? 'warn'
+    : qualityCollectorLoadFailed || qualityCollectorNeedsSetup
+      ? 'error'
+      : qualityCollectorStatus?.enabled
+        ? 'ok'
+        : 'warn'
+  const qualityCollectorBadge = qualityCollectorLoading
+    ? S.settings_status_checking
+    : qualityCollectorOff
+      ? S.settings_quality_collector_off
+      : qualityCollectorLoadFailed
+        ? S.settings_update_status_unavailable
+      : qualityCollectorNeedsSetup
+        ? S.settings_quality_collector_needs_setup
+        : qualityCollectorStatus?.enabled
+          ? S.settings_quality_collector_ready
+          : S.settings_status_review
+  const qualityCollectorDescription = qualityCollectorOff
+    ? S.settings_quality_collector_off_desc
+    : qualityCollectorLoadFailed
+      ? S.settings_quality_collector_status_failed.replace('{error}', qualityCollectorError)
+    : !qualityCollectorStatus?.remote_enabled
+      ? S.settings_quality_collector_env_off_desc
+    : !qualityCollectorStatus?.remote_url_configured
+      ? S.settings_quality_collector_missing_url_desc
+      : qualityCollectorCredentials
+        ? S.settings_quality_collector_credentials_desc.replace('{host}', qualityCollectorHost)
+      : qualityCollectorInvalidUrl
+        ? S.settings_quality_collector_invalid_url_desc.replace('{host}', qualityCollectorHost)
+      : qualityCollectorInsecure
+        ? S.settings_quality_collector_insecure_url_desc.replace('{host}', qualityCollectorHost)
+      : qualityCollectorMissingToken
+        ? S.settings_quality_collector_missing_token_desc.replace('{host}', qualityCollectorHost)
+      : qualityCollectorLocalBlocked
+        ? S.settings_quality_collector_local_url_desc.replace('{host}', qualityCollectorHost)
+        : qualityCollectorSafetyBlocked
+          ? S.settings_quality_collector_blocked_desc
+            .replace('{host}', qualityCollectorHost)
+            .replace('{reason}', String(qualityCollectorStatus?.remote_block_reason || S.settings_test_unknown_error))
+        : S.settings_quality_collector_ready_desc
+          .replace('{host}', qualityCollectorHost)
+          .replace('{pending}', String(qualityCollectorPending))
 
   return (
     <>
@@ -485,7 +716,7 @@ export function SettingsDrawer({
             <Select
               className="kb-settings-select"
               value={s.uiLocale}
-              onChange={(v) => { void s.update({ uiLocale: v as 'zh' | 'en' }) }}
+              onChange={(v) => { savePreference({ uiLocale: v as 'zh' | 'en' }) }}
               options={[
                 { label: S.lang_zh, value: 'zh' },
                 { label: S.lang_en, value: 'en' },
@@ -496,13 +727,78 @@ export function SettingsDrawer({
             <Segmented
               className="kb-settings-segmented"
               value={s.theme}
-              onChange={(v) => { void s.update({ theme: v as 'light' | 'dark' }) }}
+              onChange={(v) => { savePreference({ theme: v as 'light' | 'dark' }) }}
               options={[
                 { label: S.theme_light, value: 'light' },
                 { label: S.theme_dark, value: 'dark' },
               ]}
             />
           </SettingsRow>
+        </SettingsSection>
+
+        <SettingsSection title={S.settings_section_privacy}>
+          {showAuthGateTools && authStatus?.required ? (
+            <SettingsRow title={S.settings_auth_lock_title} description={S.settings_auth_lock_desc}>
+              <Popconfirm
+                title={S.settings_auth_lock_confirm}
+                okText={S.confirm_ok}
+                cancelText={S.confirm_cancel}
+                onConfirm={() => { void lockAccessSession() }}
+              >
+                <Button
+                  data-testid="settings-auth-lock-button"
+                  loading={authLocking}
+                >
+                  {S.settings_auth_lock_action}
+                </Button>
+              </Popconfirm>
+            </SettingsRow>
+          ) : null}
+          <SettingsRow title={S.settings_quality_data_sharing_title} description={S.settings_quality_data_sharing_desc}>
+            <Switch
+              data-testid="settings-quality-data-sharing-switch"
+              checked={s.qualityDataSharingEnabled}
+              loading={qualitySharingSaving}
+              onChange={(v) => { void updateQualityDataSharing(v) }}
+            />
+          </SettingsRow>
+          {showInternalSettingsTools ? (
+          <div data-testid="settings-quality-collector-status">
+            <SettingsStatusCard
+              tone={qualityCollectorTone}
+              title={S.settings_quality_collector_title}
+              status={qualityCollectorBadge}
+              description={qualityCollectorDescription}
+            >
+              <Space size={6} wrap>
+                <Button
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  loading={qualityCollectorLoading}
+                  onClick={() => { void refreshQualityCollectorStatus() }}
+                >
+                  {S.settings_release_refresh}
+                </Button>
+                <Button
+                  size="small"
+                  loading={qualityCollectorTesting}
+                  disabled={!qualityCollectorStatus?.enabled}
+                  onClick={() => { void testQualityCollector() }}
+                >
+                  {S.settings_quality_collector_test}
+                </Button>
+                <Button
+                  size="small"
+                  loading={qualityCollectorFlushing}
+                  disabled={!qualityCollectorStatus?.enabled || qualityCollectorPending <= 0}
+                  onClick={() => { void flushQualityCollectorOutbox() }}
+                >
+                  {S.settings_quality_collector_flush}
+                </Button>
+              </Space>
+            </SettingsStatusCard>
+          </div>
+          ) : null}
         </SettingsSection>
 
         <SettingsUpdatePanel
@@ -518,7 +814,7 @@ export function SettingsDrawer({
             <Select
               className="kb-settings-select"
               value={s.answerModeHint || ''}
-              onChange={(v) => { void s.update({ answerModeHint: String(v || '') }) }}
+              onChange={(v) => { savePreference({ answerModeHint: String(v || '') }) }}
               options={[
                 { label: S.mode_auto, value: '' },
                 { label: S.mode_reading, value: 'reading' },
@@ -534,7 +830,7 @@ export function SettingsDrawer({
             <Select
               className="kb-settings-select"
               value={s.answerOutputMode || ''}
-              onChange={(v) => { void s.update({ answerOutputMode: String(v || '') }) }}
+              onChange={(v) => { savePreference({ answerOutputMode: String(v || '') }) }}
               options={[
                 { label: S.settings_shape_auto, value: '' },
                 { label: S.settings_shape_reading_guide, value: 'reading_guide' },
@@ -544,13 +840,17 @@ export function SettingsDrawer({
             />
           </SettingsRow>
           <SettingsRow title={S.settings_auto_depth} description={S.settings_auto_depth_desc}>
-            <Switch checked={s.answerDepthAuto} onChange={(v) => { void s.update({ answerDepthAuto: v }) }} />
+            <Switch
+              data-testid="settings-answer-depth-auto-switch"
+              checked={s.answerDepthAuto}
+              onChange={(v) => { savePreference({ answerDepthAuto: v }) }}
+            />
           </SettingsRow>
           <SettingsRow title={S.settings_citation_language} description={S.settings_citation_language_desc}>
             <Segmented
               className="kb-settings-segmented"
               value={s.refsCardLocale}
-              onChange={(v) => { void s.update({ refsCardLocale: v as 'auto' | 'zh' | 'en' }) }}
+              onChange={(v) => { savePreference({ refsCardLocale: v as 'auto' | 'zh' | 'en' }) }}
               options={[
                 { label: S.settings_citation_auto, value: 'auto' },
                 { label: S.settings_citation_zh, value: 'zh' },
@@ -563,6 +863,14 @@ export function SettingsDrawer({
         <SettingsSection title={S.settings_section_connection}>
           {renderStatusOverview()}
           <div className="kb-settings-connection-alerts">
+            {readinessError ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={S.settings_status_refresh_failed}
+                description={readinessError}
+              />
+            ) : null}
             {!s.hasTextApiKey ? (
               <Alert
                 type="warning"
@@ -683,6 +991,7 @@ export function SettingsDrawer({
             <Text>{S.settings_advanced_desc}</Text>
           </summary>
           <div className="kb-settings-advanced-body">
+            {showInternalSettingsTools ? (
             <SettingsRow title={S.settings_auto_backup_title} description={autoBackupDescription}>
               <Switch
                 data-testid="settings-auto-backup-switch"
@@ -692,17 +1001,18 @@ export function SettingsDrawer({
                 onChange={(v) => { void updateAutoBackup(v) }}
               />
             </SettingsRow>
+            ) : null}
             <SettingsRow title={`${S.top_k}: ${s.topK}`} description={S.settings_top_k_desc}>
-              <Slider min={2} max={20} value={s.topK} onChange={(v) => { void s.update({ topK: v }) }} />
+              <Slider min={2} max={20} value={s.topK} onChange={(v) => { savePreference({ topK: v }) }} />
             </SettingsRow>
             <SettingsRow title={`${S.temp}: ${s.temperature}`} description={S.settings_temperature_desc}>
-              <Slider min={0} max={1} step={0.05} value={s.temperature} onChange={(v) => { void s.update({ temperature: v }) }} />
+              <Slider min={0} max={1} step={0.05} value={s.temperature} onChange={(v) => { savePreference({ temperature: v }) }} />
             </SettingsRow>
             <SettingsRow title={`${S.max_tokens}: ${s.maxTokens}`} description={S.settings_max_tokens_desc}>
-              <Slider min={512} max={3072} step={128} value={s.maxTokens} onChange={(v) => { void s.update({ maxTokens: v }) }} />
+              <Slider min={512} max={3072} step={128} value={s.maxTokens} onChange={(v) => { savePreference({ maxTokens: v }) }} />
             </SettingsRow>
             <SettingsRow title={S.answer_contract} description={S.settings_structured_answer_desc}>
-              <Switch checked={s.answerContractV1} onChange={(v) => { void s.update({ answerContractV1: v }) }} />
+              <Switch checked={s.answerContractV1} onChange={(v) => { savePreference({ answerContractV1: v }) }} />
             </SettingsRow>
           </div>
         </details>

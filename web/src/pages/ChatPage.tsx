@@ -20,6 +20,19 @@ import {
   type ReaderSelectionShelfPayload,
   type ReaderSessionHighlight,
 } from '../components/chat/reader/readerTypes'
+import {
+  normalizeReaderSourcePathForMatch,
+  normalizeReaderLocateRequestId,
+  readerSourcePathsMatch,
+  readerLocateRepairRunMatchesActiveRequest,
+  readerLocateResultMatchesActiveRequest,
+  type ReaderLocateRequestGuard,
+} from '../components/chat/reader/readerLocateGuard'
+import {
+  sanitizeReaderLocateCandidates,
+  sanitizeReaderLocateTarget,
+} from '../components/chat/reader/readerOpenPayloadUtils'
+import { readerHighlightsSignature } from '../components/chat/reader/readerSessionState'
 import { buildResearchContext } from '../components/chat/researchContext'
 import {
   normalizeSelectedResearchContextPack,
@@ -29,6 +42,10 @@ import { dispatchOpenSettings, type ApiSettingsTarget } from '../components/layo
 import { chatApi, type ChatUploadItem, type Message, type QueryScope } from '../api/chat'
 import { libraryApi } from '../api/library'
 import { useT } from '../i18n'
+import { internalDebugBrowserEnabled } from '../utils/internalDebug'
+import { qualityDiagnosticsVisible } from '../utils/qualityDiagnostics'
+import { basenameFromSourcePath } from '../utils/sourcePath'
+import { reportUserIssue } from '../userIssueReporter'
 
 const { Text } = Typography
 
@@ -46,6 +63,9 @@ const RIGHT_DOCK_WIDTH_STORAGE_KEY = 'kb:chat-side-dock-width'
 const RIGHT_DOCK_COLLAPSED_STORAGE_KEY = 'kb:chat-side-dock-collapsed'
 const SELECTED_RESEARCH_CONTEXT_STORAGE_PREFIX = 'kb:chat:selected-research-context:v1'
 const SELECTED_RESEARCH_CONTEXT_STATE_KEY = 'selected_research_context'
+const SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY = 'selected_research_context_scope'
+const SELECTED_RESEARCH_CONTEXT_PROJECT_STATE_KEY = 'selected_research_context_project_id'
+const SELECTED_RESEARCH_CONTEXT_CLEARED_AT_STATE_KEY = 'selected_research_context_cleared_at'
 const READER_LOCATE_AUTO_REPAIR_RETRY_MS = 60_000
 const showLegacyUiBlocks = false
 
@@ -143,13 +163,48 @@ function selectedResearchContextFromState(state: Record<string, unknown> | undef
   return normalizeSelectedResearchContextPack(raw)
 }
 
+function researchContextStateMatchesShelf(
+  state: Record<string, unknown> | undefined | null,
+  shelfScope?: string | null,
+  shelfProjectId?: string | null,
+) {
+  if (!state || typeof state !== 'object') return true
+  const storedScope = String(state[SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY] || '').trim()
+  const currentScope = String(shelfScope || '').trim()
+  if (storedScope && currentScope && storedScope !== currentScope) return false
+  const storedProjectId = String(state[SELECTED_RESEARCH_CONTEXT_PROJECT_STATE_KEY] || '').trim()
+  const currentProjectId = String(shelfProjectId || '').trim()
+  if (storedProjectId && storedProjectId !== currentProjectId) return false
+  return true
+}
+
 function isModelConnectionError(err: unknown) {
   const text = err instanceof Error ? err.message : String(err || '')
   return /api key|authentication|unauthorized|forbidden|401|403|connection|network|timeout|timed out|base_url|model/i.test(text)
 }
 
+function chatSendFailureKind(messageText: string, labels: Record<string, string>) {
+  const text = String(messageText || '').trim()
+  const low = text.toLowerCase()
+  if (text === labels.chat_generation_start_failed) return 'generation_start_failed'
+  if (text === labels.chat_generation_stream_failed) return 'generation_stream_failed'
+  if (text === labels.chat_generation_stream_incomplete) return 'generation_stream_incomplete'
+  if (text === labels.chat_generation_refresh_failed) return 'generation_refresh_failed'
+  if (/generation_start_failed|未能启动/.test(text)) return 'generation_start_failed'
+  if (/interrupted before completion|尚未完成|ended before completion/.test(low) || /尚未完成|中断/.test(text)) return 'generation_stream_incomplete'
+  if (/stream failed|stream temporarily unavailable|readable body|回答连接/.test(low) || /回答连接/.test(text)) return 'generation_stream_failed'
+  if (/latest message|messages page|messages fallback|最新消息/.test(low) || /最新消息/.test(text)) return 'generation_refresh_failed'
+  if (/401|403|api key|authentication|unauthorized|forbidden|connection|network|timeout|base_url|model/i.test(text)) return 'model_connection'
+  return 'chat_send_failed'
+}
+
+function httpStatusFromError(messageText: string) {
+  const match = String(messageText || '').trim().match(/^(\d{3})\b/)
+  return match ? Number(match[1]) : 0
+}
+
 function readerHighlightScopeKey(convId: string | null | undefined, sourcePath: string) {
-  const path = String(sourcePath || '').trim().toLowerCase()
+  const path = normalizeReaderSourcePathForMatch(sourcePath)
   if (!path) return ''
   const conv = String(convId || '__detached__').trim().toLowerCase()
   return `${conv}::${path}`
@@ -167,17 +222,6 @@ function normalizeReaderSessionHighlights(value: unknown): ReaderSessionHighligh
   return value
     .filter((item): item is ReaderSessionHighlight => Boolean(item) && typeof item === 'object')
     .filter((item) => Boolean(String(item.id || '').trim() && String(item.text || '').trim()))
-}
-
-function readerHighlightsSignature(items: ReaderSessionHighlight[]) {
-  return items
-    .map((item) => [
-      String(item.id || '').trim(),
-      String(item.updatedAt || item.createdAt || ''),
-      String(item.feedback || ''),
-      String(item.text || '').length,
-    ].join(':'))
-    .join('|')
 }
 
 interface TimelineItem {
@@ -235,15 +279,7 @@ function summarizeRefsActivity(refs: Record<string, unknown>): RefsActivitySumma
 }
 
 function loadChatDebugPanelEnabled() {
-  if (typeof window === 'undefined') return false
-  try {
-    const search = new URLSearchParams(window.location.search)
-    return search.get('debug') === '1'
-      || search.get('perf') === '1'
-      || window.localStorage.getItem('kb:chat-perf-panel') === '1'
-  } catch {
-    return false
-  }
+  return internalDebugBrowserEnabled()
 }
 
 function safeNumber(value: unknown) {
@@ -317,8 +353,10 @@ export default function ChatPage() {
   const [selectedResearchContext, setSelectedResearchContext] = useState<SelectedResearchContextPack | null>(null)
   const [queryScope, setQueryScope] = useState<QueryScope>('library')
   const [selectedResearchContextLoadedKey, setSelectedResearchContextLoadedKey] = useState('')
+  const [selectedResearchContextOwnerKey, setSelectedResearchContextOwnerKey] = useState('')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
   const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
+  const [qualityDiagnosticsEnabled] = useState(qualityDiagnosticsVisible)
   const [debugSnapshot, setDebugSnapshot] = useState<ChatPerfSnapshot>(() => collectChatPerfSnapshot())
   const [openShelfSignal, setOpenShelfSignal] = useState(0)
   const [rightDockPanel, setRightDockPanel] = useState<RightDockPanel>('timeline')
@@ -337,10 +375,13 @@ export default function ChatPage() {
   const readerPayloadRef = useRef<ReaderOpenPayload | null>(null)
   const readerOpenRef = useRef(readerOpen)
   const readerPayloadByFeedbackKeyRef = useRef<Record<string, ReaderOpenPayload>>({})
+  const readerLocateGuardByFeedbackKeyRef = useRef<Record<string, ReaderLocateRequestGuard>>({})
+  const activeConvIdRef = useRef(String(activeConvId || '').trim())
   const activeReaderSessionHighlightsRef = useRef<ReaderSessionHighlight[]>([])
   const readerStateHydratedKeysRef = useRef<Set<string>>(new Set())
   const readerStateSaveTimersRef = useRef<Record<string, number>>({})
   const readerLocateSourceRepairStreamRef = useRef<AbortController | null>(null)
+  const readerLocateSourceRepairRunTokenRef = useRef(0)
   const splitLayoutRef = useRef<HTMLDivElement | null>(null)
   const rightDockResizeGuideRef = useRef<HTMLDivElement | null>(null)
   const rightDockResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
@@ -387,18 +428,22 @@ export default function ChatPage() {
     () => selectedResearchContextStorageKey(activeConvId, shelfProjectScope),
     [activeConvId, shelfProjectScope],
   )
+  const currentSelectedResearchContext = selectedResearchContextOwnerKey === selectedResearchContextDraftKey
+    ? selectedResearchContext
+    : null
   const previousShelfProjectScopeRef = useRef(shelfProjectScope)
   const selectedResearchContextKeys = useMemo(() => {
     const out: Record<string, boolean> = {}
-    for (const item of selectedResearchContext?.items || []) {
+    for (const item of currentSelectedResearchContext?.items || []) {
       if (item.key) out[item.key] = true
     }
     return out
-  }, [selectedResearchContext])
+  }, [currentSelectedResearchContext])
   const handleResearchContextPackChange = useCallback((pack: SelectedResearchContextPack | null) => {
+    setSelectedResearchContextOwnerKey(selectedResearchContextDraftKey)
     setSelectedResearchContext(pack)
     if (pack?.items?.length) setQueryScope('basket')
-  }, [])
+  }, [selectedResearchContextDraftKey])
   const openApiSettings = useCallback((target: ApiSettingsTarget | '' = '') => {
     dispatchOpenSettings(target)
   }, [])
@@ -410,6 +455,7 @@ export default function ChatPage() {
     selectedResearchContextLoadSeqRef.current = loadSeq
     const localPack = loadStoredSelectedResearchContext(draftKey)
     setSelectedResearchContextLoadedKey('')
+    setSelectedResearchContextOwnerKey(draftKey)
     setSelectedResearchContext(localPack)
     if (localPack?.items?.length) setQueryScope('basket')
     if (!draftKey || !convId) {
@@ -419,11 +465,20 @@ export default function ChatPage() {
     let cancelled = false
     void chatApi.getConversationResearchState(convId).then((record) => {
       if (cancelled || selectedResearchContextLoadSeqRef.current !== loadSeq) return
-      const backendPack = selectedResearchContextFromState(record?.state)
-      const nextPack = backendPack || localPack
+      const state = record?.state && typeof record.state === 'object' ? record.state : {}
+      const backendMatchesShelf = researchContextStateMatchesShelf(state, shelfProjectScope, shelfProjectId)
+      const backendPack = backendMatchesShelf ? selectedResearchContextFromState(state) : null
+      const backendTouched = Boolean(
+        Object.prototype.hasOwnProperty.call(state, SELECTED_RESEARCH_CONTEXT_STATE_KEY)
+        || Object.prototype.hasOwnProperty.call(state, SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY)
+        || Object.prototype.hasOwnProperty.call(state, SELECTED_RESEARCH_CONTEXT_PROJECT_STATE_KEY)
+        || Object.prototype.hasOwnProperty.call(state, SELECTED_RESEARCH_CONTEXT_CLEARED_AT_STATE_KEY)
+      )
+      const nextPack = backendTouched ? backendPack : localPack
+      setSelectedResearchContextOwnerKey(draftKey)
       setSelectedResearchContext(nextPack)
       if (nextPack?.items?.length) setQueryScope('basket')
-      if (backendPack) {
+      if (backendTouched) {
         saveStoredSelectedResearchContext(draftKey, backendPack)
       }
       setSelectedResearchContextLoadedKey(draftKey)
@@ -434,22 +489,36 @@ export default function ChatPage() {
     return () => {
       cancelled = true
     }
-  }, [activeConvId, selectedResearchContextDraftKey])
+  }, [activeConvId, selectedResearchContextDraftKey, shelfProjectId, shelfProjectScope])
 
   useEffect(() => {
     if (selectedResearchContextLoadedKey !== selectedResearchContextDraftKey) return
-    saveStoredSelectedResearchContext(selectedResearchContextDraftKey, selectedResearchContext)
+    const packForCurrentScope = selectedResearchContextOwnerKey === selectedResearchContextDraftKey
+      ? selectedResearchContext
+      : null
+    saveStoredSelectedResearchContext(selectedResearchContextDraftKey, packForCurrentScope)
     const convId = String(activeConvId || '').trim()
     if (!convId) return undefined
     const timer = window.setTimeout(() => {
       void chatApi.patchConversationResearchState(convId, {
-        [SELECTED_RESEARCH_CONTEXT_STATE_KEY]: selectedResearchContext || null,
+        [SELECTED_RESEARCH_CONTEXT_STATE_KEY]: packForCurrentScope || null,
+        [SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY]: packForCurrentScope ? shelfProjectScope : null,
+        [SELECTED_RESEARCH_CONTEXT_PROJECT_STATE_KEY]: packForCurrentScope ? shelfProjectId : null,
+        [SELECTED_RESEARCH_CONTEXT_CLEARED_AT_STATE_KEY]: packForCurrentScope ? null : Date.now(),
       }).catch(() => {
         // The local draft remains the fallback if the backend is temporarily unavailable.
       })
     }, 160)
     return () => window.clearTimeout(timer)
-  }, [activeConvId, selectedResearchContext, selectedResearchContextDraftKey, selectedResearchContextLoadedKey])
+  }, [
+    activeConvId,
+    selectedResearchContext,
+    selectedResearchContextDraftKey,
+    selectedResearchContextLoadedKey,
+    selectedResearchContextOwnerKey,
+    shelfProjectId,
+    shelfProjectScope,
+  ])
 
   useEffect(() => {
     if (!debugPanelEnabled || typeof window === 'undefined') return undefined
@@ -465,12 +534,12 @@ export default function ChatPage() {
   }, [])
 
   const handleResearchContextFollowUp = useCallback((pack: SelectedResearchContextPack, promptText: string) => {
-    setSelectedResearchContext(pack)
+    handleResearchContextPackChange(pack)
     setAppendSignal({
       token: nextEventToken(),
       text: promptText,
     })
-  }, [nextEventToken])
+  }, [handleResearchContextPackChange, nextEventToken])
 
   const nextReaderLocateRequestId = useCallback(() => {
     readerLocateRequestRef.current += 1
@@ -502,6 +571,8 @@ export default function ChatPage() {
     setReaderPayload(null)
     readerPayloadRef.current = null
     readerPayloadByFeedbackKeyRef.current = {}
+    readerLocateGuardByFeedbackKeyRef.current = {}
+    readerLocateSourceRepairRunTokenRef.current += 1
     readerLocateSourceRepairStreamRef.current?.abort()
     readerLocateSourceRepairStreamRef.current = null
     if (projectChanged) {
@@ -516,16 +587,17 @@ export default function ChatPage() {
 
   useEffect(() => {
     const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
-    const hasBasket = Boolean(selectedResearchContext?.items?.length)
+    const hasBasket = Boolean(currentSelectedResearchContext?.items?.length)
     setQueryScope((current) => {
       if (current === 'library') return current
       return resolveQueryScope(current, { hasCurrentPaper, hasBasket })
     })
-  }, [researchContext.activeSource.ready, selectedResearchContext])
+  }, [researchContext.activeSource.ready, currentSelectedResearchContext])
 
   useEffect(() => () => {
     Object.values(dismissTimerRef.current).forEach((timer) => window.clearTimeout(timer))
     dismissTimerRef.current = {}
+    readerLocateSourceRepairRunTokenRef.current += 1
     readerLocateSourceRepairStreamRef.current?.abort()
     readerLocateSourceRepairStreamRef.current = null
   }, [])
@@ -533,6 +605,10 @@ export default function ChatPage() {
   useEffect(() => {
     readerOpenRef.current = readerOpen
   }, [readerOpen])
+
+  useEffect(() => {
+    activeConvIdRef.current = String(activeConvId || '').trim()
+  }, [activeConvId])
 
   useEffect(() => {
     readerPayloadRef.current = readerPayload
@@ -702,9 +778,9 @@ export default function ChatPage() {
       return
     }
     const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
-    const hasBasket = Boolean(selectedResearchContext?.items?.length)
+    const hasBasket = Boolean(currentSelectedResearchContext?.items?.length)
     const resolvedScope = resolveQueryScope(queryScope, { hasCurrentPaper, hasBasket })
-    const contextPackForSend = resolvedScope === 'basket' ? selectedResearchContext : null
+    const contextPackForSend = resolvedScope === 'basket' ? currentSelectedResearchContext : null
     void sendMessage(text, {
       topK: settings.topK,
       temperature: settings.temperature,
@@ -719,9 +795,43 @@ export default function ChatPage() {
       ))
     }).catch((err: unknown) => {
       const fallback = err instanceof Error ? err.message : String(err || '')
+      const failureKind = chatSendFailureKind(fallback, S)
+      reportUserIssue({
+        source: 'frontend',
+        domain: 'chat_generation',
+        severity: 'error',
+        summary: `Chat send failed: ${failureKind}`,
+        detail: fallback || S.settings_test_unknown_error,
+        route: '/',
+        context: {
+          ui_locale: settings.uiLocale,
+          query_scope: resolvedScope,
+          active_conversation: Boolean(activeConvId),
+          active_project: Boolean(activeProjectId),
+          paper_guide_mode: Boolean(
+            activeConversation?.mode === 'paper_guide'
+            || activeConversation?.bound_source_path
+            || guideBindings?.[String(activeConvId || '')]?.sourcePath,
+          ),
+          message_count: messages.length,
+          pending_image_count: pendingImages.length,
+          upload_item_count: uploadItems.length,
+          ready_upload_count: uploadItems.filter((item) => item.kind === 'pdf' && item.ready).length,
+          running_upload_count: uploadItems.filter((item) => item.kind === 'pdf' && !item.ready && item.status !== 'error').length,
+          selected_context: Boolean(contextPackForSend),
+          selected_context_item_count: Array.isArray(contextPackForSend?.items) ? contextPackForSend.items.length : 0,
+          prompt_length: text.trim().length,
+          prompt_empty: text.trim().length === 0,
+        },
+        payload: {
+          error_kind: failureKind,
+          http_status: httpStatusFromError(fallback),
+        },
+        fingerprint: `chat-send:${failureKind}:${resolvedScope}:${settings.uiLocale}`,
+      })
       if (isModelConnectionError(err)) {
         message.error(S.chat_api_connection_failed.replace('{error}', fallback || S.settings_test_unknown_error))
-        void settings.refreshReadiness()
+        void settings.refreshReadiness().catch(() => {})
         openApiSettings('text')
         return
       }
@@ -861,32 +971,7 @@ export default function ChatPage() {
       return
     }
     const locateRequestId = nextReaderLocateRequestId()
-    const locateTarget = (payload.locateTarget && typeof payload.locateTarget === 'object')
-      ? {
-        segmentId: String(payload.locateTarget.segmentId || '').trim() || undefined,
-        sourceSegmentId: String(payload.locateTarget.sourceSegmentId || '').trim() || undefined,
-        headingPath: String(payload.locateTarget.headingPath || '').trim() || undefined,
-        snippet: String(payload.locateTarget.snippet || '').trim() || undefined,
-        highlightSnippet: String(payload.locateTarget.highlightSnippet || '').trim() || undefined,
-        evidenceQuote: String(payload.locateTarget.evidenceQuote || '').trim() || undefined,
-        anchorText: String(payload.locateTarget.anchorText || '').trim() || undefined,
-        blockId: String(payload.locateTarget.blockId || '').trim() || undefined,
-        anchorId: String(payload.locateTarget.anchorId || '').trim() || undefined,
-        anchorKind: String(payload.locateTarget.anchorKind || '').trim() || undefined,
-        anchorNumber: Number.isFinite(Number(payload.locateTarget.anchorNumber))
-          ? Number(payload.locateTarget.anchorNumber)
-          : undefined,
-        claimType: String(payload.locateTarget.claimType || '').trim() || undefined,
-        locatePolicy: String(payload.locateTarget.locatePolicy || '').trim() || undefined,
-        locateSurfacePolicy: String(payload.locateTarget.locateSurfacePolicy || '').trim() || undefined,
-        snippetAliases: Array.isArray(payload.locateTarget.snippetAliases)
-          ? payload.locateTarget.snippetAliases.map((item) => String(item || '').trim()).filter(Boolean)
-          : undefined,
-        relatedBlockIds: Array.isArray(payload.locateTarget.relatedBlockIds)
-          ? payload.locateTarget.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
-          : undefined,
-      }
-      : undefined
+    const locateTarget = sanitizeReaderLocateTarget(payload.locateTarget)
     const claimGroup = (payload.claimGroup && typeof payload.claimGroup === 'object')
       ? {
         id: String(payload.claimGroup.id || '').trim() || undefined,
@@ -896,6 +981,17 @@ export default function ChatPage() {
           ? Number(payload.claimGroup.distance)
           : undefined,
       }
+      : undefined
+    const alternatives = sanitizeReaderLocateCandidates(payload.alternatives)
+    const visibleAlternatives = sanitizeReaderLocateCandidates(payload.visibleAlternatives)
+    const evidenceAlternatives = sanitizeReaderLocateCandidates(payload.evidenceAlternatives)
+    const initialAltCandidateCount = evidenceAlternatives.length || visibleAlternatives.length || alternatives.length
+    const initialAltIndexRaw = Number(payload.initialAltIndex)
+    const initialAltIndex = Number.isFinite(initialAltIndexRaw)
+      ? Math.min(
+        Math.max(0, Math.floor(initialAltIndexRaw)),
+        Math.max(0, initialAltCandidateCount - 1),
+      )
       : undefined
     const nextPayload: ReaderOpenPayload = {
       sourcePath,
@@ -917,53 +1013,26 @@ export default function ChatPage() {
       locateTarget,
       claimGroup,
       locateRequestId,
-      alternatives: Array.isArray(payload.alternatives)
-        ? payload.alternatives.map((item) => ({
-          headingPath: String(item?.headingPath || '').trim(),
-          snippet: String(item?.snippet || '').trim(),
-          highlightSnippet: String(item?.highlightSnippet || '').trim(),
-          blockId: String(item?.blockId || '').trim() || undefined,
-          anchorId: String(item?.anchorId || '').trim() || undefined,
-          anchorKind: String(item?.anchorKind || '').trim() || undefined,
-          anchorNumber: Number.isFinite(Number(item?.anchorNumber))
-            ? Number(item?.anchorNumber)
-            : undefined,
-        }))
+      alternatives: alternatives.length > 0
+        ? alternatives
         : undefined,
-      visibleAlternatives: Array.isArray(payload.visibleAlternatives)
-        ? payload.visibleAlternatives.map((item) => ({
-          headingPath: String(item?.headingPath || '').trim(),
-          snippet: String(item?.snippet || '').trim(),
-          highlightSnippet: String(item?.highlightSnippet || '').trim(),
-          blockId: String(item?.blockId || '').trim() || undefined,
-          anchorId: String(item?.anchorId || '').trim() || undefined,
-          anchorKind: String(item?.anchorKind || '').trim() || undefined,
-          anchorNumber: Number.isFinite(Number(item?.anchorNumber))
-            ? Number(item?.anchorNumber)
-            : undefined,
-        }))
+      visibleAlternatives: visibleAlternatives.length > 0
+        ? visibleAlternatives
         : undefined,
-      evidenceAlternatives: Array.isArray(payload.evidenceAlternatives)
-        ? payload.evidenceAlternatives.map((item) => ({
-          headingPath: String(item?.headingPath || '').trim(),
-          snippet: String(item?.snippet || '').trim(),
-          highlightSnippet: String(item?.highlightSnippet || '').trim(),
-          blockId: String(item?.blockId || '').trim() || undefined,
-          anchorId: String(item?.anchorId || '').trim() || undefined,
-          anchorKind: String(item?.anchorKind || '').trim() || undefined,
-          anchorNumber: Number.isFinite(Number(item?.anchorNumber))
-            ? Number(item?.anchorNumber)
-            : undefined,
-        }))
+      evidenceAlternatives: evidenceAlternatives.length > 0
+        ? evidenceAlternatives
         : undefined,
-      initialAltIndex: Number.isFinite(Number(payload.initialAltIndex))
-        ? Number(payload.initialAltIndex)
-        : undefined,
+      initialAltIndex,
       locateFeedbackKey: String(payload.locateFeedbackKey || '').trim() || undefined,
     }
     const feedbackKey = String(nextPayload.locateFeedbackKey || '').trim()
     if (feedbackKey) {
       readerPayloadByFeedbackKeyRef.current[feedbackKey] = nextPayload
+      readerLocateGuardByFeedbackKeyRef.current[feedbackKey] = {
+        locateRequestId,
+        sourcePath,
+        conversationId: String(activeConvId || '').trim(),
+      }
     }
     readerPayloadRef.current = nextPayload
     setReaderPayload(nextPayload)
@@ -980,7 +1049,7 @@ export default function ChatPage() {
       return
     }
     const sourceName = String(payload.sourceName || '').trim()
-      || sourcePath.split(/[\\/]/).pop()
+      || basenameFromSourcePath(sourcePath)
       || S.side_dock_reader
     let popup: Window | null = null
     try {
@@ -1089,12 +1158,18 @@ export default function ChatPage() {
     const currentPayload = readerPayloadRef.current
     if (!currentPayload) return
     if (String(currentPayload.locateFeedbackKey || '').trim() !== key) return
-    if (path && String(currentPayload.sourcePath || '').trim() !== path) return
+    if (path && !readerSourcePathsMatch(currentPayload.sourcePath, path)) return
+    const locateRequestId = nextReaderLocateRequestId()
     const nextPayload: ReaderOpenPayload = {
       ...currentPayload,
-      locateRequestId: nextReaderLocateRequestId(),
+      locateRequestId,
     }
     readerPayloadByFeedbackKeyRef.current[key] = nextPayload
+    readerLocateGuardByFeedbackKeyRef.current[key] = {
+      locateRequestId,
+      sourcePath: String(nextPayload.sourcePath || '').trim(),
+      conversationId: String(activeConvIdRef.current || '').trim(),
+    }
     readerPayloadRef.current = nextPayload
     setReaderPayload(nextPayload)
     setRightDockPanel('reader')
@@ -1109,8 +1184,10 @@ export default function ChatPage() {
       shouldRetryLocate: boolean
       feedbackKey: string
       sourcePath: string
+      isCurrentRepair?: () => boolean
     },
   ) => {
+    if (options.isCurrentRepair && !options.isCurrentRepair()) return
     let waiting = false
     if (runId && options.needsReindex) {
       try {
@@ -1120,6 +1197,7 @@ export default function ChatPage() {
         waiting = false
       }
     }
+    if (options.isCurrentRepair && !options.isCurrentRepair()) return
     refreshShelfSourceQuality()
     if (!waiting && options.shouldRetryLocate) {
       retryReaderLocateAfterRepair(options.feedbackKey, options.sourcePath)
@@ -1131,21 +1209,34 @@ export default function ChatPage() {
     if (!feedbackKey) return
     const sourcePath = String(result.sourcePath || '').trim()
     const sourceName = String(result.sourceName || '').trim()
+    const locateRequestId = normalizeReaderLocateRequestId(result.locateRequestId)
+    const guard = readerLocateGuardByFeedbackKeyRef.current[feedbackKey]
+    const currentPayload = readerPayloadRef.current
+    const currentConversationId = String(activeConvIdRef.current || '').trim()
+    if (!readerLocateResultMatchesActiveRequest({
+      result: { ...result, locateRequestId },
+      guard,
+      currentPayload,
+      currentConversationId,
+      readerOpen: readerOpenRef.current,
+    })) {
+      return
+    }
     const submitKey = [
       feedbackKey,
-      result.locateRequestId,
+      locateRequestId,
       result.status,
       result.precision,
       result.hint,
       result.reason,
     ].join('|')
-    if (!readerLocateQualitySubmittedRef.current.has(submitKey)) {
+    if (qualityDiagnosticsEnabled && !readerLocateQualitySubmittedRef.current.has(submitKey)) {
       readerLocateQualitySubmittedRef.current.add(submitKey)
       libraryApi.recordReaderLocateQuality({
         source_path: sourcePath,
         source_name: sourceName,
         locate_feedback_key: feedbackKey,
-        locate_request_id: result.locateRequestId,
+        locate_request_id: locateRequestId,
         status: result.status,
         precision: result.precision,
         ok: result.ok,
@@ -1169,12 +1260,26 @@ export default function ChatPage() {
         || (result.strictLocate && !['exact', 'block'].includes(locateStatus))
       ),
     )
-    if (needsSourceRepair) {
+    if (qualityDiagnosticsEnabled && needsSourceRepair) {
       const repairKey = sourcePath || sourceName
       const now = Date.now()
       const last = Number(readerLocateSourceRepairAtRef.current[repairKey] || 0)
       if (repairKey && now - last >= READER_LOCATE_AUTO_REPAIR_RETRY_MS) {
         readerLocateSourceRepairAtRef.current[repairKey] = now
+        const repairToken = readerLocateSourceRepairRunTokenRef.current + 1
+        readerLocateSourceRepairRunTokenRef.current = repairToken
+        const repairResult: ReaderLocateResult = { ...result, locateRequestId }
+        const isCurrentSourceRepair = () => (
+          readerLocateRepairRunMatchesActiveRequest({
+            expectedRunToken: repairToken,
+            currentRunToken: readerLocateSourceRepairRunTokenRef.current,
+            result: repairResult,
+            guard: readerLocateGuardByFeedbackKeyRef.current[feedbackKey],
+            currentPayload: readerPayloadRef.current,
+            currentConversationId: activeConvIdRef.current,
+            readerOpen: readerOpenRef.current,
+          })
+        )
         libraryApi.repairQuality({
           sources: [{ source_path: sourcePath, source_name: sourceName }],
           speed_mode: 'balanced',
@@ -1182,6 +1287,7 @@ export default function ChatPage() {
           md_autofix: true,
         })
           .then((res) => {
+            if (!isCurrentSourceRepair()) return undefined
             const runId = String(res.repair_run_id || res.repair_run?.run_id || '').trim()
             const queued = Number(res.enqueued || 0)
             const needsReindex = Boolean(res.needs_reindex || res.impact?.needs_reindex)
@@ -1194,28 +1300,37 @@ export default function ChatPage() {
               || (res.items || []).some((item) => Boolean(item.reader_locate_reindex_required)),
             )
             if (!runId) {
+              if (!isCurrentSourceRepair()) return undefined
               refreshShelfSourceQuality()
               if (shouldRetryLocate) retryReaderLocateAfterRepair(feedbackKey, sourcePath)
               return undefined
             }
             if (queued > 0) {
               readerLocateSourceRepairStreamRef.current?.abort()
-              readerLocateSourceRepairStreamRef.current = libraryApi.streamConvertStatus(
+              let streamCtrl: AbortController | null = null
+              const clearStreamIfCurrent = () => {
+                if (!isCurrentSourceRepair() || readerLocateSourceRepairStreamRef.current !== streamCtrl) return false
+                readerLocateSourceRepairStreamRef.current = null
+                return true
+              }
+              streamCtrl = libraryApi.streamConvertStatus(
                 () => {},
                 () => {
-                  readerLocateSourceRepairStreamRef.current = null
+                  if (!clearStreamIfCurrent()) return
                   void completeReaderLocateSourceRepair(runId, {
                     needsReindex,
                     shouldRetryLocate,
                     feedbackKey,
                     sourcePath,
+                    isCurrentRepair: isCurrentSourceRepair,
                   })
                 },
                 () => {
-                  readerLocateSourceRepairStreamRef.current = null
+                  if (!clearStreamIfCurrent()) return
                   refreshShelfSourceQuality()
                 },
               )
+              readerLocateSourceRepairStreamRef.current = streamCtrl
               return undefined
             }
             return completeReaderLocateSourceRepair(runId, {
@@ -1223,10 +1338,11 @@ export default function ChatPage() {
               shouldRetryLocate,
               feedbackKey,
               sourcePath,
+              isCurrentRepair: isCurrentSourceRepair,
             })
           })
           .catch(() => {
-            delete readerLocateSourceRepairAtRef.current[repairKey]
+            if (isCurrentSourceRepair()) delete readerLocateSourceRepairAtRef.current[repairKey]
           })
       }
     }
@@ -1234,16 +1350,16 @@ export default function ChatPage() {
       const prev = current[feedbackKey]
       if (
         prev
-        && prev.locateRequestId === result.locateRequestId
+        && prev.locateRequestId === locateRequestId
         && prev.status === result.status
         && prev.precision === result.precision
         && prev.hint === result.hint
       ) {
         return current
       }
-      return { ...current, [feedbackKey]: result }
+      return { ...current, [feedbackKey]: { ...result, locateRequestId } }
     })
-  }, [completeReaderLocateSourceRepair, refreshShelfSourceQuality, retryReaderLocateAfterRepair])
+  }, [completeReaderLocateSourceRepair, qualityDiagnosticsEnabled, refreshShelfSourceQuality, retryReaderLocateAfterRepair])
 
   const appendReaderSelection = (text: string) => {
     const raw = String(text || '')
@@ -1531,7 +1647,7 @@ export default function ChatPage() {
   }
   const chatComposer = (
     <>
-      {selectedResearchContext ? (
+      {currentSelectedResearchContext ? (
         <div className="kb-chat-context-pack-wrap" data-testid="chat-context-pack">
           <div className="kb-chat-context-pack">
             <div className="kb-chat-context-pack-main">
@@ -1540,8 +1656,8 @@ export default function ChatPage() {
               </span>
               <span className="kb-chat-context-pack-text">
                 {(S.research_context_pack_summary || '{n} excerpts · ~{tokens} tokens')
-                  .replace('{n}', String(selectedResearchContext.items.length))
-                  .replace('{tokens}', String(selectedResearchContext.tokenEstimate))}
+                  .replace('{n}', String(currentSelectedResearchContext.items.length))
+                  .replace('{tokens}', String(currentSelectedResearchContext.tokenEstimate))}
               </span>
             </div>
             <button
@@ -1571,11 +1687,11 @@ export default function ChatPage() {
         appendSignal={appendSignal}
         queryScope={resolveQueryScope(queryScope, {
           hasCurrentPaper: Boolean(researchContext.activeSource.ready),
-          hasBasket: Boolean(selectedResearchContext?.items?.length),
+          hasBasket: Boolean(currentSelectedResearchContext?.items?.length),
         })}
         queryScopeOptions={[
           { value: 'current_paper', disabled: !researchContext.activeSource.ready },
-          { value: 'basket', disabled: !selectedResearchContext?.items?.length },
+          { value: 'basket', disabled: !currentSelectedResearchContext?.items?.length },
           { value: 'library' },
         ]}
         onQueryScopeChange={setQueryScope}

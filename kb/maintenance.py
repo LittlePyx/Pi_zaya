@@ -13,7 +13,7 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from kb import runtime_state
 from kb.bg_queue_state import snapshot as bg_snapshot
@@ -25,20 +25,34 @@ SECRET_FIELD_NAMES = {
     "api_key",
     "access_token",
     "auth_token",
+    "authorization",
+    "bearer_token",
+    "client_secret",
+    "cookie",
     "deepseek_api_key",
+    "ingest_token",
     "openai_api_key",
+    "password",
     "qwen_api_key",
+    "quality_data_client_id",
+    "remote_token",
+    "secret",
     "text_api_key",
+    "token",
     "vision_api_key",
     "kb_access_token",
     "kb_access_token_sha256",
     "kb_api_token",
     "kb_auth_token",
+    "kb_user_issues_ingest_token",
+    "kb_user_issues_remote_token",
 }
 SECRET_ENV_PATTERNS = ("KEY", "TOKEN", "SECRET", "PASSWORD")
 _AUTO_BACKUP_LOCK = threading.Lock()
 _AUTO_BACKUP_LAST: dict[str, float] = {}
 _RESTORE_AUDIT_LOCK = threading.Lock()
+_RESTORE_EXTRACT_MAX_FILES = 200_000
+_RESTORE_EXTRACT_MAX_BYTES = 10 * 1024 * 1024 * 1024
 
 
 def _now_stamp() -> str:
@@ -131,32 +145,72 @@ def _write_json(zf: zipfile.ZipFile, name: str, payload: object) -> None:
     zf.writestr(name, _json_bytes(payload))
 
 
+_LOG_SECRET_RE = re.compile(
+    r"(?i)\b([A-Za-z0-9_.-]*(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|authorization|cookie|bearer)[A-Za-z0-9_.-]*)\b"
+    r"\s*[:= ]+\s*([A-Za-z0-9._:\-/+=]{8,})"
+)
+_TOKEN_RE = re.compile(r"\b(sk-[A-Za-z0-9._-]{8,}|Bearer\s+[A-Za-z0-9._\-=]{8,})\b")
+_URL_CREDENTIAL_RE = re.compile(r"\b(https?://)([^/\s:@]+):([^/\s@]+)@", flags=re.IGNORECASE)
+_SENSITIVE_KEY_RE = re.compile(
+    r"(?:^|[_.-])("
+    r"api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|passphrase|"
+    r"authorization|cookie|credential|private[_-]?key|client[_-]?secret|quality[_-]?data[_-]?client[_-]?id"
+    r")(?:$|[_.-])",
+    flags=re.IGNORECASE,
+)
+
+
+def _key_is_sensitive(key: object) -> bool:
+    lower = str(key or "").strip().lower()
+    if not lower:
+        return False
+    return lower in SECRET_FIELD_NAMES or bool(_SENSITIVE_KEY_RE.search(lower))
+
+
 def _redact_value(key: str, value: object) -> object:
-    lower = str(key or "").lower()
-    if lower in SECRET_FIELD_NAMES or any(part.lower() in lower for part in ("api_key", "access_token", "auth_token")):
+    if _key_is_sensitive(key):
         return "<redacted>" if str(value or "").strip() else ""
+    if isinstance(value, str):
+        return redact_text(value)
     return value
 
 
+def _redact_payload(value: object, *, key: str = "", depth: int = 0) -> object:
+    if depth > 8:
+        return "<redacted-depth-limit>"
+    if _key_is_sensitive(key):
+        return "<redacted>" if str(value or "").strip() else ""
+    if isinstance(value, Mapping):
+        out: dict[str, Any] = {}
+        for raw_key, raw_value in value.items():
+            clean_key = str(raw_key)
+            out[clean_key] = _redact_payload(raw_value, key=clean_key, depth=depth + 1)
+        return out
+    if isinstance(value, list):
+        return [_redact_payload(item, depth=depth + 1) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_payload(item, depth=depth + 1) for item in value]
+    return _redact_value(key, value)
+
+
 def redact_mapping(data: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for key, value in dict(data or {}).items():
-        if isinstance(value, dict):
-            out[key] = redact_mapping(value)
-        else:
-            out[key] = _redact_value(key, value)
-    return out
-
-
-_LOG_SECRET_RE = re.compile(
-    r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|authorization|bearer)\b\s*[:= ]+\s*([A-Za-z0-9._:\-/+=]{8,})"
-)
-_TOKEN_RE = re.compile(r"\b(sk-[A-Za-z0-9._-]{8,}|Bearer\s+[A-Za-z0-9._\-=]{8,})\b")
+    payload = _redact_payload(data if isinstance(data, Mapping) else {})
+    return dict(payload) if isinstance(payload, dict) else {}
 
 
 def redact_text(text: str) -> str:
-    redacted = _LOG_SECRET_RE.sub(lambda m: f"{m.group(1)}=<redacted>", str(text or ""))
+    redacted = _URL_CREDENTIAL_RE.sub(r"\1<redacted>@", str(text or ""))
+    redacted = _LOG_SECRET_RE.sub(lambda m: f"{m.group(1)}=<redacted>", redacted)
     return _TOKEN_RE.sub("<redacted>", redacted)
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        resolved = Path(path).resolve()
+        resolved_root = Path(root).resolve()
+    except OSError:
+        return False
+    return resolved == resolved_root or resolved_root in resolved.parents
 
 
 def _path_stats(path: Path) -> dict[str, Any]:
@@ -164,13 +218,15 @@ def _path_stats(path: Path) -> dict[str, Any]:
     exists = p.exists()
     if not exists:
         return {"path": str(p), "exists": False, "is_dir": False, "size_bytes": 0, "file_count": 0}
+    if p.is_symlink():
+        return {"path": str(p), "exists": True, "is_dir": p.is_dir(), "is_symlink": True, "size_bytes": 0, "file_count": 0}
     if p.is_file():
         return {"path": str(p), "exists": True, "is_dir": False, "size_bytes": p.stat().st_size, "file_count": 1}
     file_count = 0
     size = 0
     suffix_counts: dict[str, int] = {}
     for item in p.rglob("*"):
-        if not item.is_file():
+        if item.is_symlink() or not item.is_file() or not _path_is_within(item, p):
             continue
         file_count += 1
         try:
@@ -295,13 +351,13 @@ def _candidate_log_files(limit: int = 12) -> list[Path]:
     ]
     candidates: list[Path] = [ROOT / name for name in names]
     for folder in (ROOT / ".logs", ROOT / ".runtime", ROOT / "logs"):
-        if folder.exists():
+        if folder.exists() and not folder.is_symlink() and _path_is_within(folder, ROOT):
             candidates.extend(sorted(folder.glob("*.log"), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True))
     seen: set[str] = set()
     out: list[Path] = []
     for path in candidates:
         key = str(path.resolve())
-        if key in seen or not path.exists() or not path.is_file():
+        if key in seen or not path.exists() or path.is_symlink() or not path.is_file() or not _path_is_within(path, ROOT):
             continue
         seen.add(key)
         out.append(path)
@@ -451,7 +507,15 @@ def _add_file(zf: zipfile.ZipFile, path: Path, arcname: str) -> None:
 def _iter_dir_files(root: Path) -> list[Path]:
     if not root.exists() or not root.is_dir():
         return []
-    return [path for path in root.rglob("*") if path.is_file()]
+    root_resolved = root.resolve()
+    files: list[Path] = []
+    for path in root.rglob("*"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if not _path_is_within(path, root_resolved):
+            continue
+        files.append(path)
+    return files
 
 
 def create_backup_archive(settings: Settings, *, label: str = "") -> dict[str, Any]:
@@ -604,18 +668,38 @@ def _safe_archive_rel(name: str) -> Path:
     return Path(*parts)
 
 
+def _zipinfo_is_symlink(info: zipfile.ZipInfo) -> bool:
+    return ((int(info.external_attr or 0) >> 16) & 0o170000) == 0o120000
+
+
 def _safe_extract_zip(zf: zipfile.ZipFile, root: Path) -> list[Path]:
     root_resolved = Path(root).resolve()
+    max_files = max(1, _env_int("KB_RESTORE_MAX_EXTRACT_FILES", _RESTORE_EXTRACT_MAX_FILES))
+    max_bytes = max(1, _env_int("KB_RESTORE_MAX_EXTRACT_BYTES", _RESTORE_EXTRACT_MAX_BYTES))
+    seen: set[Path] = set()
     extracted: list[Path] = []
+    total_size = 0
     for info in zf.infolist():
         if info.is_dir():
             continue
+        if _zipinfo_is_symlink(info):
+            raise ValueError(f"archive symlink entries are not supported: {info.filename}")
         rel = _safe_archive_rel(info.filename)
         target = (root_resolved / rel).resolve()
         if target != root_resolved and root_resolved not in target.parents:
             raise ValueError(f"unsafe archive path: {info.filename}")
+        if target in seen:
+            raise ValueError(f"duplicate archive path: {info.filename}")
+        seen.add(target)
+        if len(seen) > max_files:
+            raise ValueError(f"backup archive contains too many files: {len(seen)} > {max_files}")
+        file_size = int(info.file_size or 0)
+        total_size += file_size
+        if total_size > max_bytes:
+            raise ValueError(f"backup archive expands beyond the restore size limit: {total_size} > {max_bytes} bytes")
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(zf.read(info))
+        with zf.open(info, "r") as src, target.open("wb") as dest:
+            shutil.copyfileobj(src, dest, length=1024 * 1024)
         extracted.append(target)
     return extracted
 
@@ -826,9 +910,61 @@ def _remove_sqlite_sidecars(path: Path) -> list[str]:
     return warnings
 
 
-def _copy_file_atomic(source: Path, target: Path, *, sqlite_sidecars: bool = False) -> dict[str, Any]:
+def _restore_target_raw(target: object) -> str:
+    return str(target or "").strip()
+
+
+def _restore_target_display(target: object) -> str:
+    raw = _restore_target_raw(target)
+    return str(Path(raw).expanduser()) if raw else ""
+
+
+def _target_uses_symlink(path: Path) -> bool:
+    try:
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        chain = [candidate, *candidate.parents]
+    except OSError:
+        return True
+    for item in reversed(chain):
+        try:
+            if item.is_symlink():
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _validate_restore_file_target(target: object) -> Path:
+    raw = _restore_target_raw(target)
+    if not raw:
+        raise ValueError("refusing to restore into empty file target")
+    raw_path = Path(raw).expanduser()
+    if _target_uses_symlink(raw_path):
+        raise ValueError(f"refusing to restore through symlink file target: {raw_path}")
+    dest = raw_path.resolve()
+    if not dest.name or str(dest) == str(dest.anchor) or (dest.exists() and dest.is_dir()):
+        raise ValueError(f"refusing to restore into unsafe file target: {dest}")
+    return dest
+
+
+def _validate_restore_directory_target(target: object) -> Path:
+    raw = _restore_target_raw(target)
+    if not raw:
+        raise ValueError("refusing to restore into empty directory target")
+    raw_path = Path(raw).expanduser()
+    if _target_uses_symlink(raw_path):
+        raise ValueError(f"refusing to restore through symlink directory target: {raw_path}")
+    dest = raw_path.resolve()
+    if not dest.name or str(dest) == str(dest.anchor) or (dest.exists() and not dest.is_dir()):
+        raise ValueError(f"refusing to restore into unsafe directory target: {dest}")
+    return dest
+
+
+def _copy_file_atomic(source: Path, target: object, *, sqlite_sidecars: bool = False) -> dict[str, Any]:
     src = Path(source)
-    dest = Path(target).expanduser()
+    dest = _validate_restore_file_target(target)
     if not src.exists() or not src.is_file():
         raise FileNotFoundError(str(src))
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -856,14 +992,7 @@ def _copy_file_atomic(source: Path, target: Path, *, sqlite_sidecars: bool = Fal
     }
 
 
-def _validate_restore_directory_target(target: Path) -> Path:
-    dest = Path(target).expanduser().resolve()
-    if not dest.name or str(dest) == str(dest.anchor):
-        raise ValueError(f"refusing to restore into unsafe directory target: {dest}")
-    return dest
-
-
-def _replace_directory_atomic(source: Path, target: Path) -> dict[str, Any]:
+def _replace_directory_atomic(source: Path, target: object) -> dict[str, Any]:
     src = Path(source)
     if not src.exists() or not src.is_dir():
         raise FileNotFoundError(str(src))
@@ -996,26 +1125,46 @@ def verify_backup_archive(path: Path) -> dict[str, Any]:
     }
 
 
-def _restore_file_destination(extracted_root: Path, archive_name: str, target: Path, label: str) -> dict[str, Any]:
+def _restore_file_destination(extracted_root: Path, archive_name: str, target: object, label: str) -> dict[str, Any]:
     source = extracted_root / _safe_archive_rel(archive_name)
     source_exists = source.exists() and source.is_file()
-    target_path = Path(target).expanduser()
+    target_error = ""
+    target_path: Path | None = None
+    try:
+        target_path = _validate_restore_file_target(target)
+    except ValueError as exc:
+        target_error = str(exc)
+        target_display = _restore_target_display(target)
+        if target_display:
+            target_path = Path(target_display)
+    target_exists = bool(target_path and target_path.exists())
     return {
         "kind": "file",
         "label": label,
         "archive": archive_name,
-        "target": str(target_path),
+        "target": str(target_path) if target_path else "",
+        "target_safe": not target_error,
+        "target_error": target_error,
         "source_exists": bool(source_exists),
-        "target_exists": target_path.exists(),
+        "target_exists": target_exists,
         "source_size_bytes": source.stat().st_size if source_exists else 0,
-        "target_size_bytes": target_path.stat().st_size if target_path.exists() and target_path.is_file() else 0,
-        "action": "replace" if target_path.exists() else "create",
+        "target_size_bytes": target_path.stat().st_size if target_path and target_path.exists() and target_path.is_file() else 0,
+        "action": "replace" if target_exists else "create",
     }
 
 
-def _restore_db_dir_destination(extracted_root: Path, target: Path) -> dict[str, Any]:
+def _restore_db_dir_destination(extracted_root: Path, target: object) -> dict[str, Any]:
     source = extracted_root / "db"
-    target_path = Path(target).expanduser()
+    target_error = ""
+    target_path: Path | None = None
+    try:
+        target_path = _validate_restore_directory_target(target)
+    except ValueError as exc:
+        target_error = str(exc)
+        target_display = _restore_target_display(target)
+        if target_display:
+            target_path = Path(target_display)
+    target_exists = bool(target_path and target_path.exists())
     files = [path for path in source.rglob("*") if path.is_file()] if source.exists() and source.is_dir() else []
     size = 0
     suffix_counts: dict[str, int] = {}
@@ -1036,15 +1185,17 @@ def _restore_db_dir_destination(extracted_root: Path, target: Path) -> dict[str,
         "kind": "directory",
         "label": "knowledge base directory",
         "archive": "db/",
-        "target": str(target_path),
+        "target": str(target_path) if target_path else "",
+        "target_safe": not target_error,
+        "target_error": target_error,
         "source_exists": source.exists() and source.is_dir(),
-        "target_exists": target_path.exists(),
+        "target_exists": target_exists,
         "source_file_count": len(files),
         "source_size_bytes": size,
         "source_suffix_counts": dict(sorted(suffix_counts.items())),
         "chunk_file_count": chunk_count,
         "key_files": key_files,
-        "action": "replace_directory_contents" if target_path.exists() else "create_directory",
+        "action": "replace_directory_contents" if target_exists else "create_directory",
     }
 
 
@@ -1076,17 +1227,22 @@ def restore_dry_run_backup_archive(settings: Settings, path: Path) -> dict[str, 
                 chat_dest = _restore_file_destination(
                     extracted_root,
                     "chat.sqlite3",
-                    Path(str(getattr(settings, "chat_db_path", "") or "")),
+                    getattr(settings, "chat_db_path", ""),
                     "chat database",
                 )
                 library_dest = _restore_file_destination(
                     extracted_root,
                     "library.sqlite3",
-                    Path(str(getattr(settings, "library_db_path", "") or "")),
+                    getattr(settings, "library_db_path", ""),
                     "library database",
                 )
-                db_dest = _restore_db_dir_destination(extracted_root, Path(str(getattr(settings, "db_dir", "") or "")))
+                db_dest = _restore_db_dir_destination(extracted_root, getattr(settings, "db_dir", ""))
                 destinations = [chat_dest, library_dest, db_dest]
+
+                for item in destinations:
+                    target_error = str(item.get("target_error") or "").strip()
+                    if target_error:
+                        errors.append(f"{item.get('label') or item.get('archive')} target is unsafe: {target_error}")
 
                 for item in (chat_dest, library_dest):
                     if not bool(item.get("source_exists")):
@@ -1201,11 +1357,14 @@ def restore_backup_archive(
         return finish("blocked")
 
     if bool(selected.get("db")):
-        db_target = Path(str(getattr(settings, "db_dir", "") or "")).expanduser().resolve()
         try:
+            db_target = _validate_restore_directory_target(getattr(settings, "db_dir", ""))
             if db_target in p.resolve().parents:
                 result["errors"].append("backup archive is inside the target db directory; move it outside before restore")
                 return finish("blocked")
+        except ValueError as exc:
+            result["errors"].append(str(exc))
+            return finish("blocked")
         except Exception:
             pass
 
@@ -1222,18 +1381,18 @@ def restore_backup_archive(
             warnings: list[str] = []
 
             if bool(selected.get("db")):
-                restored.append(_replace_directory_atomic(extracted_root / "db", Path(str(getattr(settings, "db_dir", "") or ""))))
+                restored.append(_replace_directory_atomic(extracted_root / "db", getattr(settings, "db_dir", "")))
             if bool(selected.get("chat")):
                 item = _copy_file_atomic(
                     extracted_root / "chat.sqlite3",
-                    Path(str(getattr(settings, "chat_db_path", "") or "")),
+                    getattr(settings, "chat_db_path", ""),
                     sqlite_sidecars=True,
                 )
                 restored.append(item)
             if bool(selected.get("library")):
                 item = _copy_file_atomic(
                     extracted_root / "library.sqlite3",
-                    Path(str(getattr(settings, "library_db_path", "") or "")),
+                    getattr(settings, "library_db_path", ""),
                     sqlite_sidecars=True,
                 )
                 restored.append(item)
@@ -1259,8 +1418,11 @@ def list_backup_archives() -> list[dict[str, Any]]:
 
 
 def resolve_backup_archive(name: str) -> Path:
-    clean = Path(str(name or "")).name
-    if not clean.startswith("backup-") or not clean.endswith(".zip"):
+    raw = str(name or "").strip()
+    clean = Path(raw).name
+    if clean != raw or "/" in raw or "\\" in raw:
+        raise FileNotFoundError(clean or raw)
+    if not re.fullmatch(r"backup-[A-Za-z0-9._-]+\.zip", clean or ""):
         raise FileNotFoundError(clean)
     path = (backup_dir() / clean).resolve()
     root = backup_dir().resolve()

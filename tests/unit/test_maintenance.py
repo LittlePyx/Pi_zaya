@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from kb import maintenance
 
@@ -52,12 +55,31 @@ def test_diagnostics_archive_contains_only_redacted_summaries(monkeypatch, tmp_p
     monkeypatch.setenv("KB_DIAGNOSTICS_DIR", str(tmp_path / "diagnostics"))
     settings = _settings(tmp_path)
     (tmp_path / "server.log").write_text("Authorization: Bearer sk-secret-text\nnormal line", encoding="utf-8")
+    (tmp_path / "user_prefs.json").write_text(
+        json.dumps(
+            {
+                "theme": "light",
+                "max_tokens": 2048,
+                "quality_data_client_id": "client-id-should-not-leak",
+                "remote_token": "remote-token-should-not-leak",
+                "nested": {
+                    "client_secret": "client-secret-should-not-leak",
+                    "notes": ["plain", "contains sk-nestedsecretvalue"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
     archive = maintenance.create_diagnostics_archive(settings, readiness_payload={"status": "error"})
 
     raw = archive.read_bytes()
     assert b"sk-secret-text" not in raw
     assert b"secret-access-token" not in raw
+    assert b"client-id-should-not-leak" not in raw
+    assert b"remote-token-should-not-leak" not in raw
+    assert b"client-secret-should-not-leak" not in raw
+    assert b"sk-nestedsecretvalue" not in raw
     with zipfile.ZipFile(archive, "r") as zf:
         names = set(zf.namelist())
         assert "diagnostics.json" in names
@@ -66,8 +88,32 @@ def test_diagnostics_archive_contains_only_redacted_summaries(monkeypatch, tmp_p
         assert payload["readiness"]["status"] == "error"
         assert payload["sqlite"]["chat_db"]["tables"]["messages"] == 1
         assert payload["config"]["model"]["has_text_key"] is True
+        assert payload["prefs"]["theme"] == "light"
+        assert payload["prefs"]["max_tokens"] == 2048
+        assert payload["prefs"]["quality_data_client_id"] == "<redacted>"
+        assert payload["prefs"]["remote_token"] == "<redacted>"
+        assert payload["prefs"]["nested"]["client_secret"] == "<redacted>"
+        assert payload["prefs"]["nested"]["notes"] == ["plain", "contains <redacted>"]
         assert "<redacted>" in zf.read("logs/server.log.tail.txt").decode("utf-8")
         assert "chat.sqlite3" not in names
+
+
+def test_redact_mapping_handles_nested_lists_and_generic_sensitive_keys() -> None:
+    payload = {
+        "max_tokens": 2048,
+        "remote_token": "remote-token-should-not-leak",
+        "headers": [{"Authorization": "Bearer sk-authsecretvalue"}],
+        "notes": "callback=https://user:pass@example.test/path token=plainsecretvalue",
+    }
+
+    redacted = maintenance.redact_mapping(payload)
+
+    assert redacted["max_tokens"] == 2048
+    assert redacted["remote_token"] == "<redacted>"
+    assert redacted["headers"][0]["Authorization"] == "<redacted>"
+    assert "user:pass" not in redacted["notes"]
+    assert "plainsecretvalue" not in redacted["notes"]
+    assert "<redacted>" in redacted["notes"]
 
 
 def test_backup_archive_includes_recoverable_data_but_redacts_prefs(monkeypatch, tmp_path: Path) -> None:
@@ -104,6 +150,28 @@ def test_backup_archive_includes_recoverable_data_but_redacts_prefs(monkeypatch,
         conn.close()
 
 
+def test_backup_archive_skips_db_symlink_escape(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(maintenance, "ROOT", tmp_path)
+    monkeypatch.setenv("KB_BACKUP_DIR", str(tmp_path / "backups"))
+    settings = _settings(tmp_path)
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("outside secret should not enter backup", encoding="utf-8")
+    link = Path(settings.db_dir) / "outside-secret.txt"
+    try:
+        os.symlink(outside, link)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
+
+    info = maintenance.create_backup_archive(settings, label="symlink escape")
+
+    archive = Path(info["path"])
+    raw = archive.read_bytes()
+    assert b"outside secret should not enter backup" not in raw
+    with zipfile.ZipFile(archive, "r") as zf:
+        assert "db/outside-secret.txt" not in zf.namelist()
+        assert "db/docs.json" in zf.namelist()
+
+
 def test_backup_listing_and_resolution(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(maintenance, "ROOT", tmp_path)
     monkeypatch.setenv("KB_BACKUP_DIR", str(tmp_path / "backups"))
@@ -114,6 +182,29 @@ def test_backup_listing_and_resolution(monkeypatch, tmp_path: Path) -> None:
 
     assert [item["name"] for item in items] == [info["name"]]
     assert maintenance.resolve_backup_archive(info["name"]).name == info["name"]
+
+
+def test_backup_resolution_accepts_only_plain_backup_filenames(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(maintenance, "ROOT", tmp_path)
+    monkeypatch.setenv("KB_BACKUP_DIR", str(tmp_path / "backups"))
+    settings = _settings(tmp_path)
+
+    info = maintenance.create_backup_archive(settings)
+
+    unsafe_names = [
+        f"../{info['name']}",
+        f"nested/{info['name']}",
+        str(tmp_path / "backups" / info["name"]),
+        "diagnostics-20260101-000000-deadbeef.zip",
+        "backup-20260101-000000-deadbeef.zip.bak",
+    ]
+    for unsafe in unsafe_names:
+        try:
+            maintenance.resolve_backup_archive(unsafe)
+        except FileNotFoundError:
+            pass
+        else:
+            raise AssertionError(f"unsafe backup name was accepted: {unsafe}")
 
 
 def test_auto_snapshot_defaults_to_production_and_rate_limits(monkeypatch, tmp_path: Path) -> None:
@@ -264,6 +355,119 @@ def test_restore_dry_run_reports_targets_without_overwriting(monkeypatch, tmp_pa
     assert destinations["library.sqlite3"]["source_exists"] is True
     assert destinations["db/"]["source_file_count"] >= 1
     assert report["sqlite"]["chat.sqlite3"]["tables"]["messages"] == 1
+
+
+def test_restore_dry_run_rejects_unsafe_configured_file_targets(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(maintenance, "ROOT", tmp_path)
+    monkeypatch.setenv("KB_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("KB_RESTORE_AUDIT_PATH", str(tmp_path / "restore_audit.jsonl"))
+    settings = _settings(tmp_path)
+    info = maintenance.create_backup_archive(settings, label="unsafe-target")
+    unsafe_chat_target = tmp_path / "chat-target-dir"
+    unsafe_chat_target.mkdir()
+    settings.chat_db_path = unsafe_chat_target
+
+    report = maintenance.restore_dry_run_backup_archive(settings, Path(info["path"]))
+
+    assert report["ok"] is False
+    assert report["can_restore"] is False
+    destinations = {item["archive"]: item for item in report["destinations"]}
+    assert destinations["chat.sqlite3"]["target_safe"] is False
+    assert "unsafe file target" in destinations["chat.sqlite3"]["target_error"]
+    assert any("chat database target is unsafe" in error for error in report["errors"])
+
+    result = maintenance.restore_backup_archive(
+        settings,
+        Path(info["path"]),
+        confirm=f"RESTORE {info['name']}",
+        create_pre_restore_backup=False,
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "dry_run_failed"
+    assert any("chat database target is unsafe" in error for error in result["errors"])
+
+
+def test_restore_dry_run_rejects_symlink_file_targets(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(maintenance, "ROOT", tmp_path)
+    monkeypatch.setenv("KB_BACKUP_DIR", str(tmp_path / "backups"))
+    settings = _settings(tmp_path)
+    info = maintenance.create_backup_archive(settings, label="symlink-file-target")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / "chat.sqlite3"
+    target.write_bytes(Path(settings.chat_db_path).read_bytes())
+    link = tmp_path / "chat-link.sqlite3"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
+    settings.chat_db_path = link
+
+    report = maintenance.restore_dry_run_backup_archive(settings, Path(info["path"]))
+
+    assert report["ok"] is False
+    destinations = {item["archive"]: item for item in report["destinations"]}
+    assert destinations["chat.sqlite3"]["target_safe"] is False
+    assert "symlink file target" in destinations["chat.sqlite3"]["target_error"]
+    assert any("chat database target is unsafe" in error for error in report["errors"])
+
+
+def test_restore_target_validators_reject_detected_symlink(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(maintenance, "_target_uses_symlink", lambda _path: True)
+
+    with pytest.raises(ValueError, match="symlink file target"):
+        maintenance._validate_restore_file_target(tmp_path / "chat.sqlite3")
+    with pytest.raises(ValueError, match="symlink directory target"):
+        maintenance._validate_restore_directory_target(tmp_path / "db")
+
+
+def test_restore_dry_run_rejects_symlink_directory_targets(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(maintenance, "ROOT", tmp_path)
+    monkeypatch.setenv("KB_BACKUP_DIR", str(tmp_path / "backups"))
+    settings = _settings(tmp_path)
+    info = maintenance.create_backup_archive(settings, label="symlink-directory-target")
+    outside = tmp_path / "outside-db"
+    outside.mkdir()
+    link = tmp_path / "db-link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+    settings.db_dir = link
+
+    report = maintenance.restore_dry_run_backup_archive(settings, Path(info["path"]))
+
+    assert report["ok"] is False
+    destinations = {item["archive"]: item for item in report["destinations"]}
+    assert destinations["db/"]["target_safe"] is False
+    assert "symlink directory target" in destinations["db/"]["target_error"]
+    assert any("knowledge base directory target is unsafe" in error for error in report["errors"])
+
+
+def test_restore_dry_run_rejects_archives_over_extract_size_limit(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(maintenance, "ROOT", tmp_path)
+    monkeypatch.setenv("KB_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("KB_RESTORE_MAX_EXTRACT_BYTES", "1")
+    settings = _settings(tmp_path)
+    info = maintenance.create_backup_archive(settings, label="size-limit")
+
+    report = maintenance.restore_dry_run_backup_archive(settings, Path(info["path"]))
+
+    assert report["ok"] is False
+    assert report["can_restore"] is False
+    assert any("restore size limit" in error for error in report["errors"])
+
+
+def test_safe_extract_rejects_duplicate_archive_paths(tmp_path: Path) -> None:
+    archive = tmp_path / "duplicate.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("db/docs.json", "{}")
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            zf.writestr("db/docs.json", "[]")
+
+    with zipfile.ZipFile(archive, "r") as zf, pytest.raises(ValueError, match="duplicate archive path"):
+        maintenance._safe_extract_zip(zf, tmp_path / "out")
 
 
 def test_restore_backup_archive_restores_files_with_pre_restore_snapshot(monkeypatch, tmp_path: Path) -> None:

@@ -133,6 +133,16 @@ export interface SettingsPatch {
   visionBaseUrl?: string
   visionModel?: string
   autoBackupEnabled?: boolean
+  qualityDataSharingEnabled?: boolean
+}
+
+export interface SettingsUpdateResponse {
+  ok: boolean
+  quality_data_cleanup?: {
+    ok: boolean
+    removed: number
+    error?: string
+  }
 }
 
 export interface PickDirResponse {
@@ -170,13 +180,14 @@ function toServerPatch(patch: SettingsPatch) {
   if (patch.visionBaseUrl !== undefined) out.vision_base_url = patch.visionBaseUrl
   if (patch.visionModel !== undefined) out.vision_model = patch.visionModel
   if (patch.autoBackupEnabled !== undefined) out.auto_backup_enabled = patch.autoBackupEnabled
+  if (patch.qualityDataSharingEnabled !== undefined) out.quality_data_sharing_enabled = patch.qualityDataSharingEnabled
   return out
 }
 
 export const settingsApi = {
   get: () => api.get<SettingsPayload>('/api/settings'),
   update: (patch: SettingsPatch) =>
-    api.patch('/api/settings', toServerPatch(patch)),
+    api.patch<SettingsUpdateResponse>('/api/settings', toServerPatch(patch)),
   pickDir: (target: 'pdf' | 'md', initialDir?: string) =>
     api.post<PickDirResponse>('/api/settings/pick-dir', {
       target,

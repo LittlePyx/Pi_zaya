@@ -5,6 +5,8 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 
+from kb.path_safety import is_probably_pdf_bytes
+
 
 DEFAULT_MAX_PDF_UPLOAD_BYTES = 80 * 1024 * 1024
 DEFAULT_MAX_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024
@@ -67,8 +69,7 @@ def max_chat_upload_files(settings: object | None = None) -> int:
 
 
 def is_probably_pdf(data: bytes) -> bool:
-    head = bytes(data or b"")[:1024]
-    return b"%PDF" in head
+    return is_probably_pdf_bytes(data)
 
 
 def ensure_pdf_upload(data: bytes, *, file_name: str = "", content_type: str = "") -> None:

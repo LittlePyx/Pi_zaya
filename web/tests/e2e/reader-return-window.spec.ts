@@ -3,6 +3,7 @@ import {
   CHAT_MAIN_WINDOW_NAME,
   READER_STANDALONE_WINDOW_NAME,
 } from '../../src/components/chat/reader/readerTypes'
+import { installAppShellMocks } from './mockAppShell'
 
 const SESSION_ID = 'reader-return-session'
 const CONV_ID = 'reader-return-conv'
@@ -17,6 +18,7 @@ async function fulfillJson(route: Route, body: unknown) {
 }
 
 async function installReaderBackend(page: Page) {
+  await installAppShellMocks(page)
   await page.route('**/api/settings', async (route) => {
     await fulfillJson(route, {
       model: 'test-model',

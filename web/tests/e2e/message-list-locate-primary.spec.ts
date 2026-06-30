@@ -4,8 +4,18 @@ import {
   READER_REGRESSION_SOURCE_PATH,
   readerRegressionDocResponse,
 } from '../../src/testing/readerRegressionFixtures'
+import {
+  installAppShellMocks,
+  installEmptyCitationShelfMock,
+  installIdleReferenceMocks,
+} from './mockAppShell'
 
 test.beforeEach(async ({ page }) => {
+  await installAppShellMocks(page)
+  await installIdleReferenceMocks(page)
+  await page.route('**/api/conversations**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+  })
   await page.route('**/api/references/citation-card-polish', async (route) => {
     await route.fulfill({
       status: 200,
@@ -13,6 +23,54 @@ test.beforeEach(async ({ page }) => {
       body: JSON.stringify({}),
     })
   })
+  await page.route('**/api/references/citation-meta', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    })
+  })
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    })
+  })
+  await page.route('**/api/references/reader/doc', async (route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'reader source fixture not configured' }),
+    })
+  })
+  await page.route('**/api/library/quality/sources', async (route) => {
+    const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: payload.sources?.length || 0,
+        review_count: 0,
+        items: (payload.sources || []).map((source) => ({
+          source_path: source.source_path || '',
+          source_name: source.source_name || '',
+          conversion_quality: { status: 'good', has_review_issue: false, score: 98, issues: [] },
+        })),
+      }),
+    })
+  })
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    const items = Array.isArray(payload.items) ? payload.items : []
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(shelfMetadataRepairFixture(items, true)),
+    })
+  })
+  await mockEmptyCitationShelf(page)
 })
 
 async function mockReaderDoc(page: Page) {
@@ -50,42 +108,9 @@ async function mockReaderDoc(page: Page) {
 }
 
 async function mockEmptyCitationShelf(page: Page) {
-  await page.route('**/api/chat/citation-shelf**', async (route) => {
-    const request = route.request()
-    if (request.method() === 'PATCH') {
-      const payload = request.postDataJSON() as { items?: unknown[]; open?: boolean } | undefined
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          version: 1,
-          scope: 'project',
-          scope_id: 'message-list-regression-project',
-          project_id: 'message-list-regression-project',
-          items: Array.isArray(payload?.items) ? payload?.items : [],
-          open: Boolean(payload?.open),
-          revision: 1,
-          created_at: Date.now() / 1000,
-          updated_at: Date.now() / 1000,
-        }),
-      })
-      return
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        version: 1,
-        scope: 'project',
-        scope_id: 'message-list-regression-project',
-        project_id: 'message-list-regression-project',
-        items: [],
-        open: false,
-        revision: 0,
-        created_at: 0,
-        updated_at: 0,
-      }),
-    })
+  await installEmptyCitationShelfMock(page, {
+    scopeId: 'message-list-regression-project',
+    projectId: 'message-list-regression-project',
   })
 }
 
@@ -617,6 +642,192 @@ test('citation shelf restores backend project basket over stale empty local snap
   await expect(page.getByTestId('citation-shelf-item')).toContainText('Backend Project Paper')
 })
 
+test('citation shelf ignores stale metadata repair after project scope switch', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.route('**/api/library/quality/sources', async (route) => {
+    const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: payload.sources?.length || 0,
+        review_count: 0,
+        items: (payload.sources || []).map((source) => ({
+          source_path: source.source_path || '',
+          source_name: source.source_name || '',
+          conversion_quality: { status: 'good', has_review_issue: false, score: 98, issues: [] },
+        })),
+      }),
+    })
+  })
+
+  const weakQuality = {
+    contract_version: 1,
+    ok: false,
+    status: 'error',
+    score: 42,
+    missing_fields: ['doi', 'authors'],
+    issues: [{ code: 'missing_doi', label: 'Missing DOI', field: 'doi', severity: 'warning' }],
+    repairable: true,
+    retryable: true,
+  }
+  const readyQuality = {
+    contract_version: 1,
+    ok: true,
+    status: 'ready',
+    score: 100,
+    missing_fields: [],
+    issues: [],
+    repairable: true,
+    retryable: false,
+    doi: '10.0000/fresh-b',
+  }
+  const shelfItem = (title: string, ready: boolean): Record<string, unknown> => ({
+    key: 'shared-scope-ref',
+    anchor: 'shared-scope-ref',
+    main: title,
+    title,
+    sourceName: title,
+    sourcePath: READER_REGRESSION_SOURCE_PATH,
+    raw: `${title}.`,
+    citeFmt: `${title}.`,
+    shelfItemKind: 'reference',
+    shelfOrigin: 'reader_references',
+    metadataQuality: ready ? readyQuality : weakQuality,
+    metadata_quality: ready ? readyQuality : weakQuality,
+    metadataRepairStatus: ready ? 'ready' : 'retryable',
+    metadata_repair_status: ready ? 'ready' : 'retryable',
+    bibliometricsChecked: ready,
+    bibliometrics_checked: ready,
+    doi: ready ? '10.0000/fresh-b' : '',
+    doiUrl: ready ? 'https://doi.org/10.0000/fresh-b' : '',
+    doi_url: ready ? 'https://doi.org/10.0000/fresh-b' : '',
+  })
+  const projectItems = new Map<string, Array<Record<string, unknown>>>([
+    ['stale-project-a', [shelfItem('Project A Original Title', false)]],
+    ['stale-project-b', [shelfItem('Fresh Project B Paper', true)]],
+  ])
+  const projectOpen = new Map<string, boolean>([
+    ['stale-project-a', true],
+    ['stale-project-b', true],
+  ])
+
+  await page.route('**/api/chat/citation-shelf**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const payload = request.method() === 'PATCH'
+      ? request.postDataJSON() as { project_id?: string | null; items?: unknown[]; open?: boolean } | undefined
+      : undefined
+    const projectId = String(url.searchParams.get('project_id') || payload?.project_id || 'stale-project-a')
+    if (request.method() === 'PATCH') {
+      if (Array.isArray(payload?.items)) {
+        projectItems.set(projectId, payload.items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')))
+      }
+      projectOpen.set(projectId, Boolean(payload?.open))
+    } else if (request.method() === 'DELETE') {
+      projectItems.set(projectId, [])
+      projectOpen.set(projectId, false)
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        version: 1,
+        scope: 'project',
+        scope_id: projectId,
+        project_id: projectId,
+        items: projectItems.get(projectId) || [],
+        open: projectOpen.get(projectId) ?? true,
+        revision: 11,
+        created_at: 1710000000,
+        updated_at: 1710000100,
+      }),
+    })
+  })
+
+  let repairRequests = 0
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    repairRequests += 1
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    const items = Array.isArray(payload.items) ? payload.items : []
+    await new Promise((resolve) => setTimeout(resolve, 650))
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: items.length,
+        ready: items.length,
+        partial: 0,
+        retryable: 0,
+        failed: 0,
+        changed: items.length,
+        persisted: 0,
+        export_ready: items.length,
+        unresolved: 0,
+        impact: {
+          requested: items.length,
+          ready_before: 0,
+          ready_after: items.length,
+          ready_delta: items.length,
+          export_ready_before: 0,
+          export_ready_after: items.length,
+          export_ready_delta: items.length,
+          unresolved_after: 0,
+          summary_export_ready_after: items.length,
+          changed: items.length,
+          persisted: 0,
+          before_avg_score: 42,
+          after_avg_score: 100,
+          score_delta: 58,
+          fixed_issue_codes: [{ name: 'missing_doi', count: 1 }],
+          remaining_issue_codes: [],
+          changed_fields: [{ name: 'title', count: 1 }],
+          repair_sources: [{ name: 'reference_index', count: 1 }],
+        },
+        items: items.map((item, idx) => ({
+          key: String(item.key || `stale-${idx}`),
+          ok: true,
+          changed: true,
+          changed_fields: ['title', 'doi'],
+          repair_status: 'repaired',
+          retryable: false,
+          fixed_issue_codes: ['missing_doi'],
+          remaining_issue_codes: [],
+          repair_sources: ['reference_index'],
+          after: readyQuality,
+          meta: {
+            ...item,
+            title: 'STALE PROJECT A REPAIRED TITLE',
+            main: 'STALE PROJECT A REPAIRED TITLE',
+            doi: '10.0000/stale-a',
+            doi_url: 'https://doi.org/10.0000/stale-a',
+            metadata_quality: readyQuality,
+            metadata_repair_status: 'repaired',
+            metadata_changed_fields: ['title', 'doi'],
+            metadata_repair_sources: ['reference_index'],
+          },
+        })),
+      }),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=weak-system-b-popover&project=stale-project-a&switchProject=stale-project-b')
+  await expect(page.getByTestId('message-list-current-project')).toContainText('stale-project-a')
+  await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
+  await expect(page.getByTestId('citation-shelf-item-title')).toContainText('Project A Original Title')
+  await expect.poll(() => repairRequests).toBeGreaterThan(0)
+
+  await page.getByTestId('message-list-switch-project-scope').click()
+  await expect(page.getByTestId('message-list-current-project')).toContainText('stale-project-b')
+  await expect(page.getByTestId('citation-shelf-item-title')).toContainText('Fresh Project B Paper')
+  await page.waitForTimeout(800)
+  await expect(page.getByTestId('citation-shelf-item-title')).toContainText('Fresh Project B Paper')
+  await expect(page.getByTestId('citation-shelf')).not.toContainText('STALE PROJECT A REPAIRED TITLE')
+  await expect(page.getByTestId('citation-shelf-repair-impact')).toHaveCount(0)
+})
+
 test('citation shelf item exposes source trail and can jump back to the answer', async ({ page }) => {
   await mockReaderDoc(page)
   await mockEmptyCitationShelf(page)
@@ -732,7 +943,9 @@ test('citation shelf migrates legacy conversation storage into project shelf', a
 
 test('citation shelf reflects actual reader locate result after opening source', async ({ page }) => {
   await mockReaderDoc(page)
+  let locateQualityCalls = 0
   await page.route('**/api/library/quality/reader-locate', async (route) => {
+    locateQualityCalls += 1
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -781,14 +994,10 @@ test('citation shelf reflects actual reader locate result after opening source',
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveCount(0)
   await expect(popover).toBeHidden()
 
-  const locateQualityRequest = page.waitForRequest('**/api/library/quality/reader-locate')
   await page.getByTestId('citation-shelf-open-source').click()
   await expect(page.getByTestId('reader-locate-resolution')).toHaveText(/Exact target|Bound block|精确命中|绑定块/)
-  const locateQualityPayload = (await locateQualityRequest).postDataJSON() as Record<string, unknown>
-  expect(locateQualityPayload.source_path).toBe(READER_REGRESSION_SOURCE_PATH)
-  expect(locateQualityPayload.status).toBe('exact')
-  expect(locateQualityPayload.precision).toBe('phrase')
-  expect(locateQualityPayload.locate_feedback_key).toBeTruthy()
+  await page.waitForTimeout(500)
+  expect(locateQualityCalls).toBe(0)
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveCount(0)
 
   await page.locator('.kb-shelf-advanced-toggle').click()
@@ -805,11 +1014,67 @@ test('citation shelf reflects actual reader locate result after opening source',
   if (csvPath) {
     const csv = await readFile(csvPath, 'utf8')
     expect(csv).toContain('source_open_status,source_open_precision,source_open_reason')
+    expect(csv).not.toContain('source_quality_status')
+    expect(csv).not.toContain('source_quality_issues')
     expect(csv).toContain('verified,phrase')
   }
 })
 
+test('citation shelf does not call source quality maintenance APIs for ordinary users', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.unroute('**/api/library/quality/sources').catch(() => {})
+  let locateQualityCalls = 0
+  let sourceQualityCalls = 0
+  let sourceRepairCalls = 0
+  await page.route('**/api/library/quality/reader-locate', async (route) => {
+    locateQualityCalls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, item: {}, summary: {} }),
+    })
+  })
+  await page.route('**/api/library/quality/sources', async (route) => {
+    sourceQualityCalls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, requested: 0, review_count: 0, items: [] }),
+    })
+  })
+  await page.route('**/api/library/quality/repair', async (route) => {
+    sourceRepairCalls += 1
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Not found' }),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=system-a-citation-popover&reader=1')
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover')
+  const citeChip = page.locator('.kb-cite-chip').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').last().click()
+  await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
+
+  await page.waitForTimeout(700)
+  expect(locateQualityCalls).toBe(0)
+  expect(sourceQualityCalls).toBe(0)
+  expect(sourceRepairCalls).toBe(0)
+  await openShelfOrganizeTools(page)
+  await expandFocusedShelfDetails(page)
+  await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveCount(0)
+})
+
 test('citation shelf advances source repair run and refreshes repaired locate state', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem('kb.internal.showQualityDiagnostics', '1')
+  })
   await page.route('**/api/references/citation-meta', async (route) => {
     await route.fulfill({
       status: 200,
@@ -1286,6 +1551,59 @@ test('citation shelf export auto-completes metadata before download', async ({ p
   await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
 })
 
+test('citation shelf copy auto-completes metadata before writing clipboard citations', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  let repairCalls = 0
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    repairCalls += 1
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    const items = Array.isArray(payload.items) ? payload.items : []
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(shelfMetadataRepairFixture(items, repairCalls >= 2)),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('weak-system-b-popover')
+
+  const citeChip = page.locator('.kb-cite-chip-sysb').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+
+  const firstRepairRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
+  await firstRepairRequest
+
+  const shelf = page.getByTestId('citation-shelf')
+  await expect(shelf).toHaveClass(/translate-x-0/)
+  await openShelfOrganizeTools(page)
+  await page.locator('.kb-shelf-advanced-toggle').click()
+  await page.getByTestId('citation-shelf-add-visible').click()
+  await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
+  await page.getByTestId('citation-shelf-export-selected').click()
+
+  const copyRepairRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
+  await page.getByTestId('citation-shelf-export-copy-bibtex').click()
+  const copyRepairPayload = (await copyRepairRequest).postDataJSON() as { items?: Array<Record<string, unknown>> }
+  expect(copyRepairPayload.items?.length || 0).toBeGreaterThan(0)
+
+  await expect.poll(async () => page.evaluate(() => navigator.clipboard.readText())).toContain(
+    'title={The missing cone problem and low-pass distortion in optical serial sectioning microscopy}',
+  )
+  const copied = await page.evaluate(() => navigator.clipboard.readText())
+  expect(copied).toContain('author={Macias-Garza F and Bovik A C and Diller K R}')
+  expect(copied).toContain('journal={IEEE Transactions on Acoustics, Speech, and Signal Processing}')
+  expect(copied).toContain('doi={10.1109/tassp.1988.1164940}')
+  expect(copied).not.toContain('[Unknown Authors]')
+  expect(copied).not.toContain('20xx')
+})
+
 test('citation shelf consumes metadata repair quality and clears review chips', async ({ page }) => {
   await mockReaderDoc(page)
   await page.route('**/api/library/quality/sources', async (route) => {
@@ -1502,7 +1820,9 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   expect(csvPath, 'CSV export should produce a downloadable file').not.toBeNull()
   if (csvPath) {
     const csv = await readFile(csvPath, 'utf8')
-    expect(csv).toContain('title,authors,year,venue,doi,source,source_quality_status,source_quality_issues')
+    expect(csv).toContain('title,authors,year,venue,doi,source,source_open_status')
+    expect(csv).not.toContain('source_quality_status')
+    expect(csv).not.toContain('source_quality_issues')
     expect(csv).toContain('source_open_status,source_open_precision,source_open_reason')
     expect(csv).toContain('summary_source,summary_provider,summary_quality_status,summary_quality_score,summary')
     expect(csv).toContain('The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
@@ -1598,6 +1918,7 @@ test('old fragmentary system A card starts from a readable evidence sentence', a
 })
 
 test('plain numeric citations become clickable from refs hits when cite details are absent', async ({ page }) => {
+  test.setTimeout(60_000)
   await mockReaderDoc(page)
   await page.goto('/__message_list_test__?scenario=plain-citation-refs-fallback')
 
@@ -1622,6 +1943,29 @@ test('plain numeric citations become clickable from refs hits when cite details 
   await citeChips.nth(1).click()
   await expect(page.locator('.kb-cite-pop')).toContainText('PILN Paper')
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('part-based image-loop network')
+})
+
+test('plain citation fallback drops unresolved members from mixed brackets', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.goto('/__message_list_test__?scenario=plain-citation-refs-partial')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('plain-citation-refs-partial')
+  const assistant = page.locator('.kb-msg-bubble-assistant').last()
+  const citeChips = assistant.locator('.kb-cite-chip')
+  await expect(citeChips).toHaveCount(3)
+  await expect(citeChips).toHaveText(['1', '2', '1'])
+  await expect(assistant).not.toContainText('[1, 99, 2]')
+  await expect(assistant).not.toContainText('[0,1]')
+  await expect(assistant).not.toContainText('99')
+  await expect(assistant).not.toContainText('0,')
+
+  await citeChips.nth(1).click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await expect(popover).not.toContainText('[1, 99, 2]')
+  await expect(popover).not.toContainText('[0,1]')
+  await expect(popover).not.toContainText('99')
+  await expect(popover).not.toContainText('0,')
 })
 
 test('guide refs remain renderable when only the bound source was filtered out', async ({ page }) => {

@@ -11,9 +11,27 @@ SOURCE_ROOTS = (
 
 SOURCE_EXTS = {".py", ".ts", ".tsx"}
 
+EXTRA_SOURCE_FILES = (
+    "tests/unit/test_task_runtime_answer_contract.py",
+    "tests/unit/test_chat_render_reference_notes.py",
+)
+
 FORBIDDEN_FRAGMENTS = (
     "\ufffd",
     "????????",
+    "\u95c1\u7a3f\u6d5a",
+    "\u95c1\u641e\u5133",
+    "\u95b8\u5fe3\u5259",
+    "\u95b8\u30e7\u6597",
+    "\u934b\u6ec4",
+    "\u59dd\uff45\u6e6a\u9359\u6828\u79f7",
+    "\u95b8\u5b2b\u7c8d",
+    "\u6769\u6b11\u7612",
+    "\u95c7\u20ac\u7455",
+    "\u6769\u6b11\u4edc",
+    "\u7481\u5757\u68f6",
+    "\u8292\u9227\ue0e0?",
+    "\u9225?",
     "浣犳槸",
     "鍙傝€",
     "鏂囩尞",
@@ -46,6 +64,10 @@ def _iter_source_files() -> list[Path]:
         for path in root.rglob("*"):
             if path.suffix.lower() in SOURCE_EXTS:
                 files.append(path)
+    for rel_path in EXTRA_SOURCE_FILES:
+        path = ROOT / rel_path
+        if path.exists():
+            files.append(path)
     return sorted(files)
 
 

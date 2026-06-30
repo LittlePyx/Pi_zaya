@@ -55,6 +55,7 @@ const QUESTION_OFFSET_RAW = Number(process.env.PW_QUESTION_OFFSET || 0)
 const QUESTION_OFFSET = Number.isFinite(QUESTION_OFFSET_RAW) && QUESTION_OFFSET_RAW > 0
   ? Math.max(0, Math.floor(QUESTION_OFFSET_RAW))
   : 0
+const RUN_RECORDED_FLOW = process.env.PW_RUN_PAPER_GUIDE_RECORDED === '1'
 const ACTIVE_QUESTIONS = (() => {
   const sliced = GOLDEN_CASES.slice(QUESTION_OFFSET)
   return QUESTION_LIMIT > 0 ? sliced.slice(0, QUESTION_LIMIT) : sliced
@@ -207,6 +208,7 @@ async function collectLocateTargets(locateBtns: ReturnType<Page['locator']>): Pr
 }
 
 test.describe.serial('paper guide locate flow (recorded)', () => {
+  test.skip(!RUN_RECORDED_FLOW, 'Set PW_RUN_PAPER_GUIDE_RECORDED=1 with a live backend and local NatPhoton-2019 library data to run this recorded flow.')
   // Full end-to-end (12 natural questions + strict locate clicks) can take a long time when deep-read is enabled.
   test.setTimeout(90 * 60_000)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from ui.refs_renderer import _parse_filename_meta
+from api.reference_rendering import _parse_filename_meta
 
 
 def _source_filename(source_path: str) -> str:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tests._paper_guide_fixtures import build_scinerf_like_fixture
 
 
@@ -20,6 +22,99 @@ def test_resolve_paper_guide_md_path_accepts_db_dir_as_md_root(tmp_path: Path):
 
     assert resolved is not None
     assert resolved.resolve(strict=False) == md_main.resolve(strict=False)
+
+
+def test_resolve_paper_guide_md_path_accepts_direct_md_within_root(tmp_path: Path):
+    from kb import task_runtime
+
+    md_root = tmp_path / "md_output"
+    md_dir = md_root / "DemoPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    md_main.write_text("# Demo\n\nParagraph evidence.", encoding="utf-8")
+
+    resolved = task_runtime._resolve_paper_guide_md_path(str(md_main), md_root=md_root, db_dir=tmp_path / "db")
+
+    assert resolved is not None
+    assert resolved.resolve(strict=False) == md_main.resolve(strict=False)
+
+
+def test_resolve_paper_guide_md_path_rejects_direct_md_outside_roots(tmp_path: Path):
+    from kb import task_runtime
+
+    outside_md = tmp_path / "outside" / "secret.md"
+    outside_md.parent.mkdir(parents=True, exist_ok=True)
+    outside_md.write_text("# Secret\n\nOutside content.", encoding="utf-8")
+
+    resolved = task_runtime._resolve_paper_guide_md_path(
+        str(outside_md),
+        md_root=tmp_path / "md_output",
+        db_dir=tmp_path / "db",
+    )
+
+    assert resolved is None
+
+
+def test_resolve_paper_guide_md_path_rejects_pdf_outside_pdf_root_sibling_md(tmp_path: Path):
+    from kb import task_runtime
+
+    outside = tmp_path / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    source_pdf = outside / "DemoPaper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4")
+    md_dir = outside / "DemoPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    (md_dir / "DemoPaper.en.md").write_text("# Secret\n\nOutside sibling content.", encoding="utf-8")
+
+    resolved = task_runtime._resolve_paper_guide_md_path(
+        str(source_pdf),
+        md_root=tmp_path / "md_output",
+        db_dir=tmp_path / "db",
+        pdf_root=tmp_path / "pdfs",
+    )
+
+    assert resolved is None
+
+
+def test_resolve_first_existing_md_candidate_under_roots_skips_outside_candidate(tmp_path: Path):
+    from kb.paper_guide_provenance import _resolve_first_existing_md_candidate_under_roots
+
+    root = tmp_path / "db"
+    inside = root / "DemoPaper" / "DemoPaper.en.md"
+    outside = tmp_path / "outside" / "DemoPaper.en.md"
+    inside.parent.mkdir(parents=True, exist_ok=True)
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    inside.write_text("# Demo\n\nAllowed content.", encoding="utf-8")
+    outside.write_text("# Secret\n\nOutside content.", encoding="utf-8")
+
+    assert _resolve_first_existing_md_candidate_under_roots([outside], [root]) is None
+
+    resolved = _resolve_first_existing_md_candidate_under_roots([outside, inside], [root])
+
+    assert resolved is not None
+    assert resolved.resolve(strict=False) == inside.resolve(strict=False)
+
+
+def test_resolve_paper_guide_md_path_rejects_matching_folder_symlink_outside_root(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "uploads" / "DemoPaper.pdf"
+    source_pdf.parent.mkdir(parents=True, exist_ok=True)
+    source_pdf.write_bytes(b"%PDF-1.4")
+    db_root = tmp_path / "db"
+    db_root.mkdir(parents=True, exist_ok=True)
+    outside_dir = tmp_path / "outside" / "DemoPaper"
+    outside_dir.mkdir(parents=True, exist_ok=True)
+    (outside_dir / "DemoPaper.en.md").write_text("# Secret\n\nOutside content.", encoding="utf-8")
+    link_dir = db_root / "DemoPaper"
+    try:
+        link_dir.symlink_to(outside_dir, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("directory symlinks are unavailable in this environment")
+
+    resolved = task_runtime._resolve_paper_guide_md_path(str(source_pdf), db_dir=db_root)
+
+    assert resolved is None
 
 
 def test_resolve_paper_guide_md_path_falls_back_to_matching_db_folder_identity(tmp_path: Path):

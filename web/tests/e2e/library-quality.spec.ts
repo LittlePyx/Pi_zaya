@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { installAppShellMocks } from './mockAppShell'
 
 async function expectNoHorizontalOverflow(page: Page) {
   const metrics = await page.evaluate(() => ({
@@ -37,6 +38,26 @@ test.beforeEach(async ({ page }) => {
   const repairCompletedNames = new Set<string>()
   const isRepairing = (name: string) => repairRequestedNames.has(name) && !repairCompletedNames.has(name)
   let latestRepairRun: Record<string, unknown> | null = null
+  let shelfItems: Array<Record<string, unknown>> = []
+  let shelfOpen = false
+  let shelfRevision = 0
+  const fulfillShelf = async (route: import('@playwright/test').Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        version: 1,
+        scope: 'project',
+        scope_id: 'research-qa-replay-project',
+        project_id: 'research-qa-replay-project',
+        items: shelfItems,
+        open: shelfOpen,
+        revision: shelfRevision,
+        created_at: 1,
+        updated_at: 2 + shelfRevision,
+      }),
+    })
+  }
   let shelfMetadataBackfillState: Record<string, unknown> = {
     ok: true,
     job_id: 'shelf-meta-fixture',
@@ -96,7 +117,9 @@ test.beforeEach(async ({ page }) => {
   }
   await page.addInitScript(() => {
     window.localStorage.removeItem('kb.library.qualityRepairHistory.v1')
+    window.sessionStorage.setItem('kb.internal.showQualityDiagnostics', '1')
   })
+  await installAppShellMocks(page)
   await page.route('**/api/settings', async (route) => {
     await route.fulfill({
       status: 200,
@@ -115,9 +138,6 @@ test.beforeEach(async ({ page }) => {
       }),
     })
   })
-  await page.route('**/api/projects', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
-  })
   await page.route('**/api/conversations**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
   })
@@ -126,6 +146,59 @@ test.beforeEach(async ({ page }) => {
       status: 200,
       contentType: 'text/event-stream',
       body: 'data: {"running":false,"done":true,"status":"idle","stage":"","message":"","current":"","docs_done":0,"docs_total":0}\n\n',
+    })
+  })
+  await page.route('**/api/chat/citation-shelf**', async (route) => {
+    const request = route.request()
+    const method = request.method()
+    if (method === 'POST' && new URL(request.url()).pathname.endsWith('/items')) {
+      const payload = request.postDataJSON() as { item?: Record<string, unknown>; open?: boolean } | undefined
+      if (payload?.item && typeof payload.item === 'object') {
+        shelfItems = [payload.item, ...shelfItems]
+        shelfRevision += 1
+      }
+      shelfOpen = payload?.open ?? true
+      await fulfillShelf(route)
+      return
+    }
+    if (method === 'PATCH') {
+      const payload = request.postDataJSON() as { items?: unknown[]; open?: boolean } | undefined
+      if (Array.isArray(payload?.items)) {
+        shelfItems = payload.items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        shelfRevision += 1
+      }
+      shelfOpen = Boolean(payload?.open)
+      await fulfillShelf(route)
+      return
+    }
+    if (method === 'DELETE') {
+      shelfItems = []
+      shelfOpen = false
+      shelfRevision += 1
+      await fulfillShelf(route)
+      return
+    }
+    await fulfillShelf(route)
+  })
+  await page.route('**/api/references/citation-meta', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    })
+  })
+  await page.route('**/api/references/citation-card-polish', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    })
+  })
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ bibliometrics_checked: true }),
     })
   })
   await page.route('**/api/references/shelf/metadata/backfill/status', async (route) => {
@@ -1533,7 +1606,32 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
+test('library page shows structured index detail when reindex fails', async ({ page }) => {
+  await page.route('**/api/library/reindex', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: false,
+        stdout: 'ingest ok',
+        stderr: '',
+        structured_indices: null,
+        structured_indices_error: 'anchor rebuild failed',
+        refsync: null,
+        refsync_error: '',
+      }),
+    })
+  })
+
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/library')
+  await page.getByRole('button', { name: /更新知识库|Update KB/ }).click()
+
+  await expect(page.locator('.ant-message-notice').filter({ hasText: 'anchor rebuild failed' })).toBeVisible()
+})
+
 test('library page surfaces conversion quality and filters review items', async ({ page }) => {
+  test.setTimeout(90_000)
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/library')
 
@@ -1780,4 +1878,545 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('research-qa-diagnostic-missing-docs')).toContainText('scigs')
   await expect(page.getByTestId('research-qa-diagnostic-citations')).toContainText('SCINeRF citation')
   await expect(page.getByTestId('research-qa-diagnostic-refs')).toContainText('SCINeRF ref card')
+})
+
+test('library delete action requires an explicit destructive confirmation', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/library')
+
+  const row = page.getByTestId('library-file-row').filter({ hasText: 'Optica-2024-Broken conversion.pdf' })
+  await row.locator('.kb-lib-file-more-btn').click()
+  await page.getByRole('menuitem', { name: /删除文献|Delete paper/ }).click()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText('Optica-2024-Broken conversion.pdf')
+  await expect(dialog).toContainText(/PDF/)
+  await expect(dialog).toContainText(/Markdown/)
+  await expect(dialog).toContainText(/知识库|knowledge base/)
+  await dialog.getByRole('button', { name: /取\s*消|Cancel/ }).click()
+  await expect(dialog).toHaveCount(0)
+})
+
+test('library restores running conversion and keeps cancellation visible', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+
+  let cancelCalled = false
+  let statusCalls = 0
+  const runningName = 'Pending paper.pdf'
+  const runningItem = {
+    ...baseItem,
+    name: runningName,
+    path: `F:\\kb\\pdfs\\${runningName}`,
+    md_exists: false,
+    md_path: '',
+    md_folder: 'F:\\kb\\md\\pending',
+    category: 'pending',
+    status: 'running',
+    task_state: 'running',
+    paper_category: '',
+    reading_status: '',
+    user_tags: [],
+    index_state: 'not_converted',
+    index_status: '',
+    index_ready: false,
+    index_doc_id: '',
+    index_num_chunks: 0,
+    index_chunk_exists: false,
+    conversion_quality: null,
+    cur_page_done: 1,
+    cur_page_total: 3,
+    cur_page_msg: 'page 1/3',
+  }
+
+  await page.route('**/api/library/files**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [runningItem],
+        counts: {
+          total_view: 1,
+          total_all: 1,
+          pending: 1,
+          converted: 0,
+          queued: 0,
+          running: 1,
+          reconverting: 0,
+          quality_review: 0,
+          quality_ready: 0,
+        },
+        truncated: false,
+        scope: '200',
+        queue: {
+          running: true,
+          queued_count: 0,
+          active_count: 1,
+          active_tasks: [{
+            task_id: 'task-running',
+            name: runningName,
+            pdf: `F:\\kb\\pdfs\\${runningName}`,
+            replace: true,
+            cur_page_done: 1,
+            cur_page_total: 3,
+            cur_page_msg: cancelCalled ? 'Canceling current background conversion' : 'page 1/3',
+          }],
+          current: runningName,
+          done: 0,
+          total: 1,
+        },
+      }),
+    })
+  })
+  await page.route('**/api/library/convert/status', async (route) => {
+    statusCalls += 1
+    const curPageMsg = cancelCalled ? 'Canceling current background conversion' : 'page 1/3'
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        running: true,
+        done: false,
+        total: 1,
+        completed: 0,
+        current: runningName,
+        active_count: 1,
+        active_tasks: [{
+          task_id: 'task-running',
+          name: runningName,
+          pdf: `F:\\kb\\pdfs\\${runningName}`,
+          replace: true,
+          cur_page_done: 1,
+          cur_page_total: 3,
+          cur_page_msg: curPageMsg,
+        }],
+        cur_page_done: 1,
+        cur_page_total: 3,
+        cur_page_msg: curPageMsg,
+        last: '',
+      })}\n\n`,
+    })
+  })
+  await page.route('**/api/library/convert/cancel', async (route) => {
+    cancelCalled = true
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
+  })
+
+  await page.goto('/library')
+  await expect(page.getByRole('button', { name: /停止|Stop/ }).first()).toBeVisible()
+  await expect.poll(() => statusCalls).toBeGreaterThan(0)
+
+  await page.getByRole('button', { name: /停止|Stop/ }).first().click()
+  await expect.poll(() => cancelCalled).toBe(true)
+  await expect(page.getByText(/正在取消转换|Cancelling conversion/).first()).toBeVisible()
+})
+
+test('library resyncs conversion state from files snapshot after status stream failure', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.unroute('**/api/library/files**')
+
+  let fileCalls = 0
+  let statusCalls = 0
+  let streamRequested = false
+  const paperName = 'Recovered conversion state.pdf'
+  const makeItem = (running: boolean) => ({
+    ...baseItem,
+    name: paperName,
+    path: `F:\\kb\\pdfs\\${paperName}`,
+    md_exists: !running,
+    md_path: running ? '' : 'F:\\kb\\md\\recovered\\paper.en.md',
+    md_folder: 'F:\\kb\\md\\recovered',
+    category: running ? 'pending' : 'converted',
+    status: running ? 'running' : 'converted',
+    task_state: running ? 'running' : 'idle',
+    paper_category: '',
+    reading_status: '',
+    user_tags: [],
+    index_state: running ? 'not_converted' : 'ready',
+    index_status: running ? '' : 'ready',
+    index_ready: !running,
+    index_doc_id: running ? '' : 'recovered',
+    index_num_chunks: running ? 0 : 3,
+    index_chunk_exists: !running,
+    conversion_quality: null,
+    cur_page_done: running ? 1 : 0,
+    cur_page_total: running ? 4 : 0,
+    cur_page_msg: running ? 'page 1/4' : '',
+  })
+
+  await page.route('**/api/library/files**', async (route) => {
+    fileCalls += 1
+    const running = !streamRequested
+    const items = [makeItem(running)]
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items,
+        counts: {
+          total_view: 1,
+          total_all: 1,
+          pending: running ? 1 : 0,
+          converted: running ? 0 : 1,
+          queued: 0,
+          running: running ? 1 : 0,
+          reconverting: 0,
+          quality_review: 0,
+          quality_ready: 0,
+        },
+        truncated: false,
+        scope: '200',
+        queue: {
+          running,
+          queued_count: 0,
+          active_count: running ? 1 : 0,
+          active_tasks: running
+            ? [{
+                task_id: 'task-stream-failure',
+                name: paperName,
+                pdf: `F:\\kb\\pdfs\\${paperName}`,
+                replace: true,
+                cur_page_done: 1,
+                cur_page_total: 4,
+                cur_page_msg: 'page 1/4',
+              }]
+            : [],
+          current: running ? paperName : '',
+          done: running ? 0 : 1,
+          total: 1,
+        },
+      }),
+    })
+  })
+  await page.route('**/api/library/convert/status', async (route) => {
+    statusCalls += 1
+    streamRequested = true
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    await route.fulfill({
+      status: 503,
+      contentType: 'text/plain',
+      body: 'temporary stream failure',
+    })
+  })
+
+  await page.goto('/library')
+  await expect.poll(() => statusCalls).toBeGreaterThan(0)
+  await expect.poll(() => fileCalls).toBeGreaterThan(1)
+  await expect(page.getByRole('button', { name: /停止|Stop/ })).toHaveCount(0)
+  await expect(page.getByTestId('library-file-row').filter({ hasText: paperName })).toBeVisible()
+})
+
+test('batch metadata edit confirms destructive clear actions before saving', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  let batchUpdateCalled = 0
+  await page.route('**/api/library/meta/batch_update', async (route) => {
+    batchUpdateCalled += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, updated: 1, items: [] }),
+    })
+  })
+  await page.goto('/library')
+
+  const row = page.getByTestId('library-file-row').filter({ hasText: 'Optica-2024-Broken conversion.pdf' })
+  await row.locator('.kb-lib-file-select').click()
+  await page.getByRole('button', { name: /批量编辑|Batch Edit/ }).click()
+  await page.getByRole('checkbox', { name: /批量设置主分类|Set main category/ }).check()
+
+  await expect(page.getByText(/将清空分类|Will clear category/)).toBeVisible()
+  await page.getByRole('button', { name: /应用到已选文献|Apply to Selected/ }).click()
+
+  const confirm = page.getByRole('dialog').filter({ hasText: /确认应用这些批量修改|Apply batch changes/ })
+  await expect(confirm).toContainText(/分类会被清空|Category will be cleared/)
+  await confirm.getByRole('button', { name: /再检查一下|Review again/ }).click()
+  await expect(confirm).toHaveCount(0)
+  expect(batchUpdateCalled).toBe(0)
+
+  const updateRequest = page.waitForRequest('**/api/library/meta/batch_update')
+  await page.getByRole('button', { name: /应用到已选文献|Apply to Selected/ }).click()
+  await page.getByRole('dialog').filter({ hasText: /确认应用这些批量修改|Apply batch changes/ })
+    .getByRole('button', { name: /应用修改|Apply changes/ })
+    .click()
+  const payload = (await updateRequest).postDataJSON() as {
+    pdf_names?: string[]
+    apply_paper_category?: boolean
+    paper_category?: string
+  }
+  expect(payload.pdf_names).toContain('Optica-2024-Broken conversion.pdf')
+  expect(payload.apply_paper_category).toBe(true)
+  expect(payload.paper_category).toBe('')
+})
+
+test('quality center ignores stale full-chain metadata result after starting another quality action', async ({ page }) => {
+  await page.unroute('**/api/references/shelf/metadata/repair')
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    await new Promise((resolve) => setTimeout(resolve, 650))
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: payload.items?.length || 0,
+        ready: payload.items?.length || 0,
+        export_ready: payload.items?.length || 0,
+        partial: 0,
+        retryable: 0,
+        failed: 0,
+        unresolved: 0,
+        changed: 1,
+        verification: {
+          type: 'shelf_metadata_repair',
+          status: 'passed',
+          quality_ok: true,
+          target_count: payload.items?.length || 0,
+          metadata_ready_after: payload.items?.length || 0,
+          export_ready_after: payload.items?.length || 0,
+          changed: 1,
+        },
+        items: (payload.items || []).map((item, idx) => ({
+          key: item.key || `slow-meta-${idx}`,
+          ok: true,
+          changed: idx === 0,
+          repair_status: 'repaired',
+          retryable: false,
+          after: { contract_version: 1, ok: true, status: 'ready', score: 100, missing_fields: [], issues: [], repairable: true, retryable: false },
+          meta: { ...item, doi: '10.1561/slow-stale', authors: 'Slow Metadata' },
+        })),
+      }),
+    })
+  })
+  await page.route('**/api/library/quality/conversion/batch', async (route) => {
+    const payload = route.request().postDataJSON() as { repair?: boolean }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        repair: Boolean(payload.repair),
+        scanned: 3,
+        ready: 3,
+        review: 0,
+        autofix: 0,
+        reconvert: 0,
+        changed: 0,
+        failed: 0,
+        needs_reindex: false,
+        changed_paths: [],
+        reconvert_paths: [],
+        errors: [],
+      }),
+    })
+  })
+
+  await page.goto('/library')
+  await page.getByTestId('library-quality-center-toggle').click()
+  const shelfStage = page.getByTestId('library-quality-full-chain-stage').filter({ hasText: 'Literature basket' })
+  const slowMetadataRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
+  await shelfStage.getByTestId('library-quality-full-chain-stage-action').click()
+  await slowMetadataRequest
+  await expect(shelfStage.getByTestId('library-quality-full-chain-stage-action')).toContainText('Working')
+
+  const sourceScanRequest = page.waitForRequest('**/api/library/quality/conversion/batch')
+  await page.getByTestId('library-quality-scan-source').click()
+  await sourceScanRequest
+  await expect(page.getByTestId('library-quality-batch-result')).toContainText('Ready')
+  await page.waitForTimeout(800)
+
+  await expect(shelfStage.getByTestId('library-quality-full-chain-stage-action')).not.toContainText('Working')
+  await expect(shelfStage.getByTestId('library-quality-full-chain-stage-result')).toHaveCount(0)
+  await expect(page.getByTestId('library-quality-batch-result')).toContainText('3')
+})
+
+test('library file scope ignores stale list response after a newer scope load', async ({ page }) => {
+  await page.unroute('**/api/library/files**')
+
+  const requestScopes: string[] = []
+  const makeScopedItem = (scopeValue: string) => ({
+    ...baseItem,
+    name: `Scope ${scopeValue} visible.pdf`,
+    path: `F:\\kb\\pdfs\\Scope ${scopeValue} visible.pdf`,
+    md_exists: true,
+    md_path: `F:\\kb\\md\\scope-${scopeValue}\\paper.en.md`,
+    md_folder: `F:\\kb\\md\\scope-${scopeValue}`,
+    category: 'converted',
+    index_state: 'ready',
+    index_status: 'ready',
+    index_ready: true,
+    index_doc_id: `scope-${scopeValue}`,
+    index_num_chunks: 3,
+    index_chunk_exists: true,
+    conversion_quality: null,
+  })
+  await page.route('**/api/library/files**', async (route) => {
+    const url = new URL(route.request().url())
+    const scopeValue = url.searchParams.get('scope') || '200'
+    requestScopes.push(scopeValue)
+    if (scopeValue === 'all') {
+      await new Promise((resolve) => setTimeout(resolve, 650))
+    }
+    const items = [makeScopedItem(scopeValue)]
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items,
+        counts: {
+          total_view: items.length,
+          total_all: items.length,
+          pending: 0,
+          converted: 1,
+          queued: 0,
+          running: 0,
+          reconverting: 0,
+          quality_review: 0,
+          quality_ready: 0,
+        },
+        truncated: false,
+        scope: scopeValue,
+        queue: {
+          running: false,
+          active_count: 0,
+          active_tasks: [],
+          current: '',
+          done: 0,
+          total: 0,
+        },
+      }),
+    })
+  })
+
+  await page.goto('/library')
+  await expect(page.getByTestId('library-file-row')).toContainText('Scope 200 visible.pdf')
+
+  await page.getByTestId('library-process-scope').click()
+  await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').getByText(/全部|All/).click()
+  await expect.poll(() => requestScopes.includes('all')).toBe(true)
+
+  await page.getByTestId('library-process-scope').click()
+  await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').getByText(/最近 200|Recent 200/).click()
+  await expect(page.getByTestId('library-file-row')).toContainText('Scope 200 visible.pdf')
+  await page.waitForTimeout(800)
+
+  await expect(page.getByTestId('library-file-row')).toContainText('Scope 200 visible.pdf')
+  await expect(page.getByTestId('library-file-row')).not.toContainText('Scope all visible.pdf')
+})
+
+test('conversion completion refresh keeps the latest selected library scope', async ({ page }) => {
+  await page.unroute('**/api/library/files**')
+  await page.unroute('**/api/library/quality/repair-runs**')
+
+  const makeScopedItem = (scopeValue: string) => ({
+    ...baseItem,
+    name: `Stream scope ${scopeValue}.pdf`,
+    path: `F:\\kb\\pdfs\\Stream scope ${scopeValue}.pdf`,
+    md_exists: true,
+    md_path: `F:\\kb\\md\\stream-${scopeValue}\\paper.en.md`,
+    md_folder: `F:\\kb\\md\\stream-${scopeValue}`,
+    category: 'converted',
+    index_state: 'ready',
+    index_status: 'ready',
+    index_ready: true,
+    index_doc_id: `stream-${scopeValue}`,
+    index_num_chunks: 3,
+    index_chunk_exists: true,
+    conversion_quality: null,
+  })
+  await page.route('**/api/library/files**', async (route) => {
+    const url = new URL(route.request().url())
+    const scopeValue = url.searchParams.get('scope') || '200'
+    const items = [makeScopedItem(scopeValue)]
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items,
+        counts: {
+          total_view: items.length,
+          total_all: items.length,
+          pending: 0,
+          converted: 1,
+          queued: 0,
+          running: 0,
+          reconverting: 0,
+          quality_review: 0,
+          quality_ready: 0,
+        },
+        truncated: false,
+        scope: scopeValue,
+        queue: {
+          running: false,
+          active_count: 0,
+          active_tasks: [],
+          current: '',
+          done: 0,
+          total: 0,
+        },
+      }),
+    })
+  })
+
+  await page.route('**/api/library/quality/repair-runs**', async (route) => {
+    const url = route.request().url()
+    const method = route.request().method()
+    if (method === 'POST' && url.includes('/advance')) {
+      await new Promise((resolve) => setTimeout(resolve, 650))
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          advanced: true,
+          waiting: false,
+          item: {
+            run_id: 'run-repair-1',
+            status: 'completed',
+            phase: 'verification_passed',
+            created_at: 1790000400,
+            updated_at: 1790000600,
+            requested: 1,
+            enqueued: 1,
+            repaired: 1,
+            failed: 0,
+            skipped_busy: 0,
+            needs_reindex: true,
+            reindexed: true,
+            target_names: ['Optica-2024-Broken conversion.pdf'],
+            target_sources: [],
+            detail: 'Slow verification passed.',
+          },
+          reindex: {
+            ok: true,
+            stdout: 'ingest ok',
+            stderr: '',
+            structured_indices: null,
+            structured_indices_error: '',
+            refsync: { started: false, reason: 'test' },
+            refsync_error: '',
+          },
+        }),
+      })
+      return
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, items: [] }),
+    })
+  })
+
+  await page.goto('/library')
+  await expect(page.getByTestId('library-file-row')).toContainText('Stream scope 200.pdf')
+
+  const advanceRequest = page.waitForRequest('**/api/library/quality/repair-runs/**/advance')
+  await page.getByTestId('library-quality-report-repair-recommended').click()
+  await advanceRequest
+
+  await page.getByTestId('library-process-scope').click()
+  await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').getByText(/全部|All/).click()
+  await expect(page.getByTestId('library-file-row')).toContainText('Stream scope all.pdf')
+  await page.waitForTimeout(850)
+
+  await expect(page.getByTestId('library-file-row')).toContainText('Stream scope all.pdf')
+  await expect(page.getByTestId('library-file-row')).not.toContainText('Stream scope 200.pdf')
 })

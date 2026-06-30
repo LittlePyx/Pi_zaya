@@ -55,6 +55,25 @@ def test_chat_store_manual_title_update_renames_non_default(tmp_path: Path):
     assert store.get_conversation(conv_id)["title"] == "Manual rename"
 
 
+def test_chat_store_title_updates_do_not_reorder_conversations(tmp_path: Path):
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    older_id = store.create_conversation("old conversation")
+    newer_id = store.create_conversation("new conversation")
+    draft_id = store.create_conversation("新会话 · 06/05 14:21")
+    with store._connect() as conn:
+        conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (10, older_id))
+        conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (20, newer_id))
+        conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (5, draft_id))
+
+    assert store.set_title(older_id, "renamed old conversation") is True
+    assert store.set_title_if_default(draft_id, "auto title") is True
+
+    rows = store.list_conversations(limit=10)
+    assert [row["id"] for row in rows] == [newer_id, older_id, draft_id]
+    assert store.get_conversation(older_id)["updated_at"] == 10
+    assert store.get_conversation(draft_id)["updated_at"] == 5
+
+
 def test_chat_store_persists_message_meta_and_provenance(tmp_path: Path):
     store = ChatStore(tmp_path / "chat.sqlite3")
     conv_id = store.create_conversation()
@@ -104,6 +123,31 @@ def test_chat_store_merge_message_meta_keeps_previous_fields(tmp_path: Path):
     assert messages[0]["meta"]["trace_id"] == "t-1"
     assert messages[0]["meta"]["stage"] == "merged"
     assert messages[0]["provenance"]["status"] == "ready"
+
+
+def test_chat_store_background_message_updates_do_not_reorder_conversations(tmp_path: Path):
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    older_id = store.create_conversation("old")
+    newer_id = store.create_conversation("new")
+    older_msg = store.append_message(older_id, "assistant", "draft")
+    store.append_message(newer_id, "assistant", "fresh")
+    with store._connect() as conn:
+        conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (10, older_id))
+        conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (20, newer_id))
+
+    assert store.update_message_content(older_msg, "final answer") is True
+    assert store.update_message_meta(older_msg, {"quality": "ready"}) is True
+    assert store.merge_message_meta(older_msg, {"provenance": {"status": "ready"}}) is True
+    assert store.set_message_render_cache(older_msg, {"key": "cache"}) is True
+
+    rows = store.list_conversations(limit=10)
+    assert [row["id"] for row in rows] == [newer_id, older_id]
+    assert store.get_conversation(older_id)["updated_at"] == 10
+
+    assert store.update_message_content(older_msg, "manual edit", touch_conversation=True) is True
+    rows_after_touch = store.list_conversations(limit=10)
+    assert rows_after_touch[0]["id"] == older_id
+    assert store.get_conversation(older_id)["updated_at"] > store.get_conversation(newer_id)["updated_at"]
 
 
 def test_chat_store_get_messages_page_returns_recent_slice(tmp_path: Path):

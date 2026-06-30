@@ -3661,6 +3661,29 @@ def build_reference_index(
         if not callable(progress_cb):
             return
         try:
+            metadata_missing_doi = max(0, refs_total - refs_with_doi)
+            metadata_missing_title = max(0, refs_total - refs_with_title)
+            metadata_missing_authors = max(0, refs_total - refs_with_authors)
+            metadata_missing_venue = max(0, refs_total - refs_with_venue)
+            progress_stats: dict[str, Any] = {
+                **dict(crossref_stats),
+                "docs_total": int(max(0, total_docs)),
+                "docs_indexed": int(max(0, len(docs_out))),
+                "refs_total": int(max(0, refs_total)),
+                "refs_with_doi": int(max(0, refs_with_doi)),
+                "refs_with_title": int(max(0, refs_with_title)),
+                "refs_with_authors": int(max(0, refs_with_authors)),
+                "refs_with_venue": int(max(0, refs_with_venue)),
+                "refs_metadata_ready": int(max(0, refs_metadata_ready)),
+                "refs_metadata_user_ready": int(max(0, refs_metadata_user_ready)),
+                "refs_missing_doi": int(metadata_missing_doi),
+                "refs_missing_title": int(metadata_missing_title),
+                "refs_missing_authors": int(metadata_missing_authors),
+                "refs_missing_venue": int(metadata_missing_venue),
+                "refs_unresolved": int(max(0, refs_unresolved)),
+                "refs_crossref_ok": int(max(0, refs_crossref_ok)),
+                "refs_source_map_ok": int(max(0, refs_source_map_ok)),
+            }
             progress_cb(
                 {
                     "stage": str(stage or "").strip(),
@@ -3668,11 +3691,15 @@ def build_reference_index(
                     "docs_done": int(max(0, docs_done)),
                     "docs_total": int(max(0, total_docs)),
                     "refs_total": int(max(0, refs_total)),
+                    "refs_metadata_ready": int(max(0, refs_metadata_ready)),
                     "refs_metadata_user_ready": int(max(0, refs_metadata_user_ready)),
                     "refs_with_doi": int(max(0, refs_with_doi)),
+                    "refs_with_title": int(max(0, refs_with_title)),
+                    "refs_with_authors": int(max(0, refs_with_authors)),
+                    "refs_with_venue": int(max(0, refs_with_venue)),
                     "refs_crossref_ok": int(max(0, refs_crossref_ok)),
                     "refs_source_map_ok": int(max(0, refs_source_map_ok)),
-                    "stats": dict(crossref_stats),
+                    "stats": progress_stats,
                 }
             )
         except Exception:

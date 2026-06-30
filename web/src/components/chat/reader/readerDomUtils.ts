@@ -52,6 +52,10 @@ export function normalizeText(input: string) {
   return String(input || '').replace(/\s+/g, ' ').trim().toLowerCase()
 }
 
+function normalizeAnchorDigits(input: string): string {
+  return String(input || '').replace(/[０-９]/g, (char) => String(char.charCodeAt(0) - 0xff10))
+}
+
 export function tokenizeText(input: string): string[] {
   const src = normalizeText(input)
   if (!src) return []
@@ -268,12 +272,12 @@ export function compactLocateHintLabel(input: string): string {
 }
 
 export function extractEquationNumbers(text: string): number[] {
-  const src = String(text || '')
+  const src = normalizeAnchorDigits(String(text || ''))
   if (!src) return []
   const out: number[] = []
   const seen = new Set<number>()
   const push = (raw: string) => {
-    const num = Number(raw)
+    const num = Number(normalizeAnchorDigits(raw))
     if (!Number.isFinite(num) || num <= 0) return
     const n = Math.floor(num)
     if (seen.has(n)) return
@@ -283,7 +287,13 @@ export function extractEquationNumbers(text: string): number[] {
   for (const m of src.matchAll(/\b(?:eq|equation)\s*[#(]?\s*(\d{1,4})\s*[)]?/gi)) {
     push(String(m[1] || ''))
   }
-  for (const m of src.matchAll(/\((\d{1,4})\)/g)) {
+  for (const m of src.matchAll(/(?:公式|方程|等式|式)\s*[#第]?\s*(\d{1,4})\b/g)) {
+    push(String(m[1] || ''))
+  }
+  for (const m of src.matchAll(/第\s*(\d{1,4})\s*(?:式|公式|方程|等式)/g)) {
+    push(String(m[1] || ''))
+  }
+  for (const m of src.matchAll(/[（(]\s*(\d{1,4})\s*[）)]/g)) {
     push(String(m[1] || ''))
   }
   return out
@@ -291,25 +301,26 @@ export function extractEquationNumbers(text: string): number[] {
 
 export function equationNumberMatchScore(blockText: string, numbers: number[]): number {
   if (numbers.length <= 0) return 0
-  const text = normalizeText(blockText)
+  const text = normalizeText(normalizeAnchorDigits(blockText))
   if (!text) return 0
   let best = 0
   for (const num of numbers) {
     if (new RegExp(`\\(\\s*${num}\\s*\\)`).test(text)) best = Math.max(best, 1.0)
     if (new RegExp(`\\[\\s*${num}\\s*\\]`).test(text)) best = Math.max(best, 0.92)
     if (new RegExp(`\\beq(?:uation)?\\s*\\.?\\s*${num}\\b`, 'i').test(text)) best = Math.max(best, 0.9)
-    if (new RegExp(`\\b閸忣剙绱\\s*${num}\\b`).test(text)) best = Math.max(best, 0.92)
+    if (new RegExp(`(?:公式|方程|等式|式)\\s*[#第]?\\s*${num}\\b`).test(text)) best = Math.max(best, 0.92)
+    if (new RegExp(`第\\s*${num}\\s*(?:式|公式|方程|等式)`).test(text)) best = Math.max(best, 0.92)
   }
   return best
 }
 
 export function extractFigureNumbers(text: string): number[] {
-  const src = String(text || '')
+  const src = normalizeAnchorDigits(String(text || ''))
   if (!src) return []
   const out: number[] = []
   const seen = new Set<number>()
   const push = (raw: string) => {
-    const num = Number(raw)
+    const num = Number(normalizeAnchorDigits(raw))
     if (!Number.isFinite(num) || num <= 0) return
     const n = Math.floor(num)
     if (seen.has(n)) return
@@ -319,7 +330,10 @@ export function extractFigureNumbers(text: string): number[] {
   for (const m of src.matchAll(/\bfig(?:ure)?\.?\s*#?\s*(\d{1,4})\b/gi)) {
     push(String(m[1] || ''))
   }
-  for (const m of src.matchAll(/閸ョ斗s*(\d{1,4})\b/g)) {
+  for (const m of src.matchAll(/(?:图|图表|图像|图示|图版)\s*[#第]?\s*(\d{1,4})\b/g)) {
+    push(String(m[1] || ''))
+  }
+  for (const m of src.matchAll(/第\s*(\d{1,4})\s*(?:图|图表|图像|图示|图版)/g)) {
     push(String(m[1] || ''))
   }
   return out
@@ -809,13 +823,17 @@ export function buildHighlightQueries(text: string, opts?: { anchorKind?: string
   const anchorNumber = Number.isFinite(Number(opts?.anchorNumber)) ? Math.floor(Number(opts?.anchorNumber)) : 0
   if (anchorKind === 'equation' && anchorNumber > 0) {
     push(`equation ${anchorNumber}`)
-    push(`閸忣剙绱?${anchorNumber}`)
-    push(`閸忣剙绱?${anchorNumber})`)
+    push(`公式 ${anchorNumber}`)
+    push(`公式(${anchorNumber})`)
+    push(`公式（${anchorNumber}）`)
+    push(`第 ${anchorNumber} 式`)
   }
   if (anchorKind === 'figure' && anchorNumber > 0) {
     push(`Figure ${anchorNumber}`)
     push(`Fig. ${anchorNumber}`)
-    push(`閸?{anchorNumber}`)
+    push(`图 ${anchorNumber}`)
+    push(`图${anchorNumber}`)
+    push(`第 ${anchorNumber} 图`)
   }
   return out
 }

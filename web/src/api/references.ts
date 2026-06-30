@@ -1,4 +1,5 @@
-import { api, authFetch } from './client'
+import { api, authFetch, responseError } from './client'
+import { normalizeSourcePathForMatch } from '../utils/sourcePath'
 
 const citationMetaCache = new Map<string, Promise<Record<string, unknown>>>()
 const bibliometricsCache = new Map<string, Promise<Record<string, unknown>>>()
@@ -241,9 +242,19 @@ export type ReferenceSyncStatKey =
   | 'docs_total'
   | 'docs_indexed'
   | 'refs_total'
+  | 'refs_with_doi'
+  | 'refs_with_title'
+  | 'refs_with_authors'
+  | 'refs_with_venue'
   | 'refs_metadata_ready'
   | 'refs_metadata_user_ready'
+  | 'refs_missing_doi'
+  | 'refs_missing_title'
+  | 'refs_missing_authors'
+  | 'refs_missing_venue'
+  | 'refs_unresolved'
   | 'refs_crossref_ok'
+  | 'refs_source_map_ok'
   | 'refs_metadata_status_complete'
   | 'refs_metadata_status_crossref_enriched'
   | 'refs_metadata_status_bibliographic_ready'
@@ -313,6 +324,10 @@ function withCache(
   return pending
 }
 
+export function referenceSourcePathCacheKey(sourcePath: unknown): string {
+  return normalizeSourcePathForMatch(sourcePath) || String(sourcePath || '').trim()
+}
+
 export const referencesApi = {
   startSync: () =>
     api.post<{ started: boolean; reason?: string; run_id?: number }>('/api/references/sync'),
@@ -325,6 +340,8 @@ export const referencesApi = {
     ;(async () => {
       try {
         const res = await authFetch('/api/references/sync/status', { signal: ctrl.signal })
+        if (!res.ok) throw await responseError(res, 'reference sync status failed')
+        if (!res.body) throw new Error('reference sync status stream is empty')
         const reader = res.body!.getReader()
         const decoder = new TextDecoder()
         let buf = ''
@@ -343,6 +360,7 @@ export const referencesApi = {
             } catch { /* skip bad JSON */ }
           }
         }
+        throw new Error('reference sync status stream ended before completion')
       } catch (err) {
         if (!ctrl.signal.aborted) onError?.(err)
       }
@@ -361,7 +379,7 @@ export const referencesApi = {
   citationMetaCached: (sourcePath: string) =>
     withCache(
       citationMetaCache,
-      String(sourcePath || '').trim(),
+      referenceSourcePathCacheKey(sourcePath),
       () => api.post<Record<string, unknown>>('/api/references/citation-meta', {
         source_path: sourcePath,
       }),
@@ -431,8 +449,8 @@ export const referencesApi = {
     citationCardPolishCache.set(key, pending)
     return pending
   },
-  readerDoc: (sourcePath: string) =>
+  readerDoc: (sourcePath: string, init?: RequestInit) =>
     api.post<ReaderDocResponse>('/api/references/reader/doc', {
       source_path: sourcePath,
-    }),
+    }, init),
 }

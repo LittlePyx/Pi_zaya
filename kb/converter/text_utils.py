@@ -17,7 +17,8 @@ LIGATURES = {
 def _build_mojibake_repl() -> dict[str, str]:
     """
     Build replacements for strings where UTF-8 bytes were decoded as cp1252/latin1.
-    Example: 鈥?-> 芒鈧?
+    Mojibake keys are generated below from canonical Unicode punctuation so the
+    repair table does not need unreadable hand-written samples.
     """
     canonical: dict[str, str] = {
         "\u201c": "\"",   # left double quote

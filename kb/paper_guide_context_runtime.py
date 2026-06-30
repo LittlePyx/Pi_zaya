@@ -154,7 +154,7 @@ def _build_paper_guide_context_records(
         src = _hit_source_path(hit)
         if src and src not in doc_first_idx:
             doc_first_idx[src] = i
-        src_name = _source_name_from_md_path(src) if src else "unknown"
+        src_name = str(meta.get("source_name") or "").strip() or (_source_name_from_md_path(src) if src else "unknown")
         focus_heading = (
             str(meta.get("ref_best_heading_path") or "").strip()
             or str(meta.get("top_heading") or "").strip()

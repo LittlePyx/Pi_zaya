@@ -4,10 +4,20 @@ import hashlib
 import os
 import shutil
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
 from kb.source_filters import is_excluded_source_path
+
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 try:
     import tkinter as tk
@@ -120,6 +130,18 @@ def _would_hit_windows_path_limit(path_obj: Path, *, safe_limit: int = 245) -> b
     except Exception:
         return False
 
+
+def _safe_pdf_stem(name: str, *, fallback: str = "paper", max_len: int = 120) -> str:
+    raw_name = str(name or fallback).replace("\\", "/").rsplit("/", 1)[-1]
+    stem = (Path(raw_name).stem if raw_name.lower().endswith(".pdf") else raw_name).strip() or fallback
+    stem = "".join("-" if ch in '<>:"/\\|?*' or ord(ch) < 32 else ch for ch in stem)
+    stem = " ".join(stem.split()).strip(" .-_") or fallback
+    reserved_probe, dot, rest = stem.partition(".")
+    if reserved_probe.upper() in _WINDOWS_RESERVED_NAMES:
+        stem = f"{reserved_probe}-paper{dot}{rest}" if dot else f"{stem}-paper"
+    return (stem[: int(max(8, max_len))].strip(" .-_") or fallback)
+
+
 def _resolve_md_output_paths(out_root: Path, pdf_path: Path) -> tuple[Path, Path, bool]:
     pdf = Path(pdf_path)
     md_folder = Path(out_root) / pdf.stem
@@ -155,13 +177,21 @@ def _resolve_md_output_paths(out_root: Path, pdf_path: Path) -> tuple[Path, Path
     return md_folder, canonical, False
 
 def _next_pdf_dest_path(pdf_dir: Path, base_name: str, *, max_suffix: int = 100) -> Path:
-    dest_pdf = Path(pdf_dir) / f"{base_name}.pdf"
-    if not dest_pdf.exists():
+    safe_base = _safe_pdf_stem(base_name, fallback="paper", max_len=120)
+    dest_pdf = Path(pdf_dir) / f"{safe_base}.pdf"
+    if not _path_exists(dest_pdf):
         return dest_pdf
     k = 2
-    while (Path(pdf_dir) / f"{base_name}-{k}.pdf").exists() and k < int(max_suffix):
+    while k <= int(max_suffix):
+        cand = Path(pdf_dir) / f"{safe_base}-{k}.pdf"
+        if not _path_exists(cand):
+            return cand
         k += 1
-    return Path(pdf_dir) / f"{base_name}-{k}.pdf"
+    for _ in range(16):
+        cand = Path(pdf_dir) / f"{safe_base}-{uuid.uuid4().hex[:8]}.pdf"
+        if not _path_exists(cand):
+            return cand
+    return Path(pdf_dir) / f"{safe_base}-{int(time.time())}-{uuid.uuid4().hex[:8]}.pdf"
 
 def _persist_upload_pdf(tmp_path: Path, dest_pdf: Path, data: bytes) -> None:
     try:
@@ -173,8 +203,8 @@ def _persist_upload_pdf(tmp_path: Path, dest_pdf: Path, data: bytes) -> None:
     dest_pdf.write_bytes(data)
 
 def _write_tmp_upload(pdf_dir: Path, filename: str, data: bytes) -> Path:
-    stem = (Path(filename).stem or "upload").strip() or "upload"
-    tmp = pdf_dir / f"__upload__{stem}.pdf"
+    stem = _safe_pdf_stem(filename, fallback="upload", max_len=80)
+    tmp = pdf_dir / f"__upload__{stem}-{uuid.uuid4().hex[:10]}.pdf"
     tmp.write_bytes(data)
     return tmp
 

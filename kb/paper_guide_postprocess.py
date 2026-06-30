@@ -53,7 +53,7 @@ def _strip_model_ref_section(answer: str) -> str:
         return answer
     for marker in ("Reference locate", "参考定位"):
         idx = answer.find(marker)
-        if idx > 0:
+        if idx >= 0:
             return answer[:idx].rstrip()
     return answer
 

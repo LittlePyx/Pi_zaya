@@ -58,7 +58,16 @@ export function useReaderDocument({
   }, [onBeforeLoad])
 
   useEffect(() => {
-    if (!open || !sourcePath) return
+    if (!open || !sourcePath) {
+      setLoading(false)
+      setError('')
+      setMarkdown('')
+      setReaderAnchors([])
+      setReaderBlocks([])
+      setCiteDetails([])
+      setResolvedName('')
+      return
+    }
     let cancelled = false
     beforeLoadRef.current?.()
     setLoading(true)
@@ -78,7 +87,8 @@ export function useReaderDocument({
         cancelled = true
       }
     }
-    referencesApi.readerDoc(sourcePath)
+    const ctrl = new AbortController()
+    referencesApi.readerDoc(sourcePath, { signal: ctrl.signal })
       .then((res) => {
         if (cancelled) return
         setMarkdown(String(res.markdown || ''))
@@ -100,6 +110,7 @@ export function useReaderDocument({
       })
     return () => {
       cancelled = true
+      ctrl.abort()
     }
   }, [documentOverride, open, sourceName, sourcePath])
 

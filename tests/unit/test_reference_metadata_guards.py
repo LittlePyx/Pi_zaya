@@ -1,3 +1,7 @@
+import sys
+import types
+from pathlib import Path
+
 import api.reference_ui as reference_ui
 from api.reference_ui import _ensure_summary_line, _merge_meta_prefer_richer, enrich_citation_detail_meta
 from ui.chat_widgets import _normalize_math_markdown
@@ -15,6 +19,21 @@ def test_normalize_math_markdown_protects_table_inline_math_pipes():
     # Table structure should remain intact.
     assert out.count("\n") == src.count("\n")
     assert "| ours |" in out
+
+
+def test_resolve_pdf_for_source_accepts_library_pdf_and_rejects_outside(tmp_path: Path):
+    pdf_root = tmp_path / "pdfs"
+    pdf_root.mkdir(parents=True)
+    paper = pdf_root / "Paper.pdf"
+    paper.write_bytes(b"%PDF-1.4\n")
+    outside = tmp_path / "outside" / "Paper.pdf"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b"%PDF-1.4\n")
+
+    assert refs_renderer._resolve_pdf_for_source(pdf_root, str(paper)) == paper.resolve(strict=False)
+    assert refs_renderer._resolve_pdf_for_source(pdf_root, "Paper.pdf") == paper.resolve(strict=False)
+    assert refs_renderer._resolve_pdf_for_source(pdf_root, str(outside)) is None
+    assert refs_renderer._resolve_pdf_for_source(pdf_root, "../outside/Paper.pdf") is None
 
 
 def test_merge_meta_prefer_richer_keeps_existing_data_on_doi_conflict():
@@ -117,6 +136,62 @@ def test_reference_index_loader_falls_back_to_default_db_outside_streamlit(monke
     data = refs_renderer._load_reference_index_cached()
     assert isinstance(data, dict)
     assert "docs" in data
+
+
+def test_lookup_journal_if_closes_impact_factor_resources(monkeypatch):
+    closed: list[str] = []
+    disposed: list[str] = []
+    logger_levels: list[int] = []
+
+    class FakeSession:
+        def close(self):
+            closed.append("session")
+
+    class FakeLogger:
+        def setLevel(self, level):
+            logger_levels.append(level)
+
+    class FakeEngine:
+        logger = FakeLogger()
+
+        def dispose(self):
+            disposed.append("engine")
+
+    class FakeFactor:
+        def __init__(self):
+            self.manager = types.SimpleNamespace(session=FakeSession(), engine=FakeEngine())
+
+        def search(self, value, key=None):
+            if key == "issn" and value == "1094-4087":
+                return [
+                    {
+                        "journal": "Optics Express",
+                        "issn": "1094-4087",
+                        "eissn": "",
+                        "factor": "3.8",
+                        "jcr": "Q2",
+                    }
+                ]
+            return []
+
+    fake_pkg = types.ModuleType("impact_factor")
+    fake_pkg.__path__ = []
+    fake_core = types.ModuleType("impact_factor.core")
+    fake_core.Factor = FakeFactor
+    monkeypatch.setitem(sys.modules, "impact_factor", fake_pkg)
+    monkeypatch.setitem(sys.modules, "impact_factor.core", fake_core)
+
+    out = refs_renderer._lookup_journal_if({"venue": "Optics Express", "issn": "1094-4087"})
+
+    assert out == {
+        "journal_if": 3.8,
+        "journal_quartile": "Q2",
+        "journal_if_source": "JCR dataset (impact_factor)",
+        "journal_if_matched_journal": "Optics Express",
+    }
+    assert closed == ["session"]
+    assert disposed == ["engine"]
+    assert logger_levels
 
 
 def test_normalize_reference_for_popup_recovers_sparse_conference_reference():

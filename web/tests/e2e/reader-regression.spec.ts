@@ -4,6 +4,11 @@ import {
   buildReaderRegressionDocResponse,
   type ReaderRegressionScenario,
 } from '../../src/testing/readerRegressionFixtures'
+import {
+  installAppShellMocks,
+  installEmptyCitationShelfMock,
+  installIdleReferenceMocks,
+} from './mockAppShell'
 
 const STRICT_LOCATE_LABEL_RE = /^(Strict locate|Evidence locate|证据定位)$/
 const EXACT_TARGET_LABEL_RE = /^(Exact target|精确命中)$/
@@ -13,6 +18,14 @@ const AUTO_SWITCHED_LABEL_RE = /^(Auto-switched|已自动切换)$/
 const ONE_HIGHLIGHT_LABEL_RE = /^1 (highlight|highlights|条高亮)$/
 const REQUESTED_LABEL_RE = /Requested|请求/
 const RESOLVED_LABEL_RE = /Resolved|已解析/
+
+test.describe.configure({ timeout: 60_000 })
+
+test.beforeEach(async ({ page }) => {
+  await installAppShellMocks(page)
+  await installEmptyCitationShelfMock(page, { scopeId: 'reader-regression-project' })
+  await installIdleReferenceMocks(page)
+})
 
 async function mockReaderDoc(page: Page, scenario: ReaderRegressionScenario = 'strict-quote') {
   await page.route('**/api/references/reader/doc', async (route) => {
@@ -36,7 +49,7 @@ async function mockReaderDoc(page: Page, scenario: ReaderRegressionScenario = 's
 
 async function openHarness(page: Page, scenario: ReaderRegressionScenario) {
   await mockReaderDoc(page, scenario)
-  await page.goto(`/__reader_test__?scenario=${scenario}`)
+  await page.goto(`/__reader_test__?scenario=${scenario}`, { waitUntil: 'domcontentloaded' })
   const expectedTitle = scenario === 'citation-links'
     ? 'Citation Fixture'
     : scenario === 'render-polish'
@@ -49,7 +62,7 @@ async function openHarness(page: Page, scenario: ReaderRegressionScenario) {
 
 async function openSplitHarness(page: Page) {
   await mockReaderDoc(page)
-  await page.goto('/__reader_split_test__')
+  await page.goto('/__reader_split_test__', { waitUntil: 'domcontentloaded' })
   await expect(page.getByTestId('split-reader-pane')).toBeVisible()
 }
 
@@ -138,6 +151,19 @@ test('strict quote locate keeps the exact phrase target', async ({ page }) => {
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "exact"')
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"ok": true')
   await expect(page.locator('.kb-reader-inline-hit')).toContainText('SCI compresses a short video into one coded measurement.')
+})
+
+test('reader clears rendered markdown when the source payload becomes empty', async ({ page }) => {
+  await openHarness(page, 'strict-quote')
+  await expect(page.getByTestId('reader-content')).toContainText('Fixture Paper')
+
+  await page.getByTestId('reader-toggle-source').click()
+  await expect(page.getByTestId('reader-source-state')).toHaveText('empty')
+  await expect(page.getByTestId('reader-content')).toHaveCount(0)
+
+  await page.getByTestId('reader-toggle-source').click()
+  await expect(page.getByTestId('reader-source-state')).toHaveText('source')
+  await expect(page.getByTestId('reader-content')).toContainText('Fixture Paper')
 })
 
 test('multi-panel caption locate highlights the combined target snippet', async ({ page }) => {

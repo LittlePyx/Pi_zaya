@@ -61,8 +61,24 @@ jobs:
         working-directory: web
         run: npm run build
 
+      - name: Install Playwright browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run frontend E2E smoke
+        working-directory: web
+        env:
+          PW_WORKERS: "2"
+          VITE_ENABLE_AUTH_GATE: "1"
+          VITE_ALLOW_LOCAL_AUTH_GATE: "1"
+          VITE_PRIVATE_INSTANCE_AUTH: "0"
+        run: npm run test:e2e:smoke
+
       - name: Run backend unit tests
         run: python -m pytest tests/unit -q
+
+      - name: Run backend sanity tests
+        run: python -m pytest tests/sanity -q
 
       - name: Check research QA regression fixture
         run: python tools/research_qa/run_research_qa_eval.py --dry-run

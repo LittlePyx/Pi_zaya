@@ -32,3 +32,10 @@ def test_ref_card_user_locale_infers_prompt_language(monkeypatch):
 def test_prompt_strongly_prefers_english_requires_latin_text_only():
     assert _prompt_strongly_prefers_english("Compare these papers") is True
     assert _prompt_strongly_prefers_english("比较 these papers") is False
+
+
+def test_reference_ui_reuses_shared_locale_policy():
+    from api import reference_ui
+
+    assert reference_ui._ref_card_user_locale is reference_card_locale._ref_card_user_locale
+    assert reference_ui._prefer_zh_ref_card_locale is reference_card_locale._prefer_zh_ref_card_locale

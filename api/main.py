@@ -1,16 +1,136 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
+from starlette.types import Receive, Scope, Send
 
 from api.routers import app as app_router
 from api.routers import auth, chat, generate, library, maintenance, references, settings, user_issues
 from api.security import auth_settings, auth_token_configured, is_public_api_path, request_is_authenticated
+from kb.user_issue_store import start_remote_outbox_worker
 
-app = FastAPI(title="Pi-zaya API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        start_remote_outbox_worker(user_issues._issue_db_path())
+    except Exception:
+        pass
+    yield
+
+
+app = FastAPI(title="Pi-zaya API", lifespan=lifespan)
+
+_CORS_EXPOSE_HEADERS = [
+    "Content-Disposition",
+    "Server-Timing",
+    "X-KB-Refs-Counts",
+    "X-KB-Refs-Mode",
+]
+_BODY_GUARD_METHODS = {"POST", "PUT", "PATCH"}
+_USER_ISSUE_BODY_GUARD_PATHS = {"/api/user-issues", "/api/user-issues/ingest"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except Exception:
+        return int(default)
+
+
+def _bounded_env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    value = _env_int(name, default)
+    return max(min_value, min(max_value, value))
+
+
+def _content_type_is_json(raw: str | None) -> bool:
+    media_type = str(raw or "").split(";", 1)[0].strip().lower()
+    return media_type == "application/json" or media_type.endswith("+json")
+
+
+def _user_issue_body_size_limit() -> int:
+    return _bounded_env_int("KB_USER_ISSUES_MAX_BODY_BYTES", 65_536, min_value=1024, max_value=1_048_576)
+
+
+def _api_json_body_size_limit() -> int:
+    return _bounded_env_int("KB_API_JSON_MAX_BODY_BYTES", 1_048_576, min_value=65_536, max_value=20 * 1024 * 1024)
+
+
+def _scope_header(scope: Scope, name: bytes) -> str:
+    target = name.lower()
+    for key, value in scope.get("headers") or []:
+        if bytes(key).lower() == target:
+            try:
+                return bytes(value).decode("latin-1").strip()
+            except Exception:
+                return ""
+    return ""
+
+
+def _request_body_limit_for_scope(scope: Scope) -> tuple[int, str]:
+    method = str(scope.get("method") or "").upper()
+    path = str(scope.get("path") or "")
+    if method not in _BODY_GUARD_METHODS:
+        return 0, ""
+    if path in _USER_ISSUE_BODY_GUARD_PATHS:
+        max_bytes = _user_issue_body_size_limit()
+        return max_bytes, f"user issue payload is too large; max {max_bytes} bytes"
+    if path.startswith("/api") and _content_type_is_json(_scope_header(scope, b"content-type")):
+        max_bytes = _api_json_body_size_limit()
+        return max_bytes, f"JSON request body is too large; max {max_bytes} bytes"
+    return 0, ""
+
+
+class RequestBodySizeGuardMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        max_bytes, detail = _request_body_limit_for_scope(scope)
+        if max_bytes <= 0:
+            await self.app(scope, receive, send)
+            return
+
+        raw_length = _scope_header(scope, b"content-length")
+        if raw_length:
+            try:
+                content_length = max(0, int(raw_length))
+            except Exception:
+                content_length = 0
+            if content_length > max_bytes:
+                await JSONResponse({"detail": detail}, status_code=413)(scope, receive, send)
+                return
+
+        total = 0
+        replay: list[dict] = []
+        while True:
+            message = await receive()
+            replay.append(message)
+            if message.get("type") == "http.request":
+                chunk = message.get("body", b"") or b""
+                total += len(chunk)
+                if total > max_bytes:
+                    await JSONResponse({"detail": detail}, status_code=413)(scope, receive, send)
+                    return
+                if not message.get("more_body", False):
+                    break
+            else:
+                break
+
+        async def replay_receive():
+            if replay:
+                return replay.pop(0)
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await self.app(scope, replay_receive, send)
 
 
 def _split_env_list(raw: str) -> list[str]:
@@ -38,7 +158,9 @@ app.add_middleware(
     allow_origin_regex=_cors["allow_origin_regex"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=_CORS_EXPOSE_HEADERS,
 )
+app.add_middleware(RequestBodySizeGuardMiddleware)
 
 
 @app.middleware("http")

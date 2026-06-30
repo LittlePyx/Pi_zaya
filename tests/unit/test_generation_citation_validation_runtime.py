@@ -410,11 +410,12 @@ def test_validate_freeform_out_of_range():
     """[n] where n > len(answer_hits) is dropped."""
     hits = [{"text": "doc 1"}, {"text": "doc 2"}, {"text": "doc 3"}]
     answer, stats = _validate_freeform_numeric_citations(
-        "Claim from [1] and [5] which is hallucinated.",
+        "Claim from [1] and [5].",
         answer_hits=hits,
     )
-    assert " [5] " not in answer
+    assert " [5]" not in answer
     assert "[1]" in answer
+    assert answer.endswith("and.")
     assert stats["raw_count"] == 2
     assert stats["out_of_range"] == 1
     assert stats["dropped"] == 1
@@ -466,6 +467,55 @@ def test_validate_freeform_mixed():
     assert stats["out_of_range"] == 1
     assert stats["dropped"] == 1
     assert stats["kept"] == 2
+
+
+def test_validate_freeform_partially_rewrites_range_with_out_of_range_member():
+    """A partly valid range keeps the usable hit citations instead of dropping all evidence."""
+    hits = [{"text": "doc 1"}, {"text": "doc 2"}]
+    dash = chr(0x2013)
+    answer, stats = _validate_freeform_numeric_citations(
+        f"Range evidence [{1}{dash}{3}] should retain the in-range hits.",
+        answer_hits=hits,
+    )
+
+    assert f"[1{dash}3]" not in answer
+    assert "[1,2]" in answer
+    assert stats["raw_count"] == 1
+    assert stats["valid_count"] == 1
+    assert stats["out_of_range"] == 1
+    assert stats["dropped"] == 0
+    assert stats["kept"] == 1
+    assert stats["rewritten"] == 1
+
+
+def test_validate_freeform_partially_rewrites_comma_list_with_out_of_range_member():
+    hits = [{"text": "doc 1"}, {"text": "doc 2"}]
+    answer, stats = _validate_freeform_numeric_citations(
+        "Mixed evidence [1, 99, 2] should not lose valid citations.",
+        answer_hits=hits,
+    )
+
+    assert "[1, 99, 2]" not in answer
+    assert "[1,2]" in answer
+    assert stats["out_of_range"] == 1
+    assert stats["dropped"] == 0
+    assert stats["kept"] == 1
+    assert stats["rewritten"] == 1
+
+
+def test_validate_freeform_partially_rewrites_zero_mixed_with_valid_member():
+    hits = [{"text": "doc 1"}]
+    answer, stats = _validate_freeform_numeric_citations(
+        "Mixed zero citation [0,1] should keep only the valid hit.",
+        answer_hits=hits,
+    )
+
+    assert "[0,1]" not in answer
+    assert "[1]" in answer
+    assert stats["out_of_range"] == 0
+    assert stats["dropped"] == 0
+    assert stats["kept"] == 1
+    assert stats["rewritten"] == 1
 
 
 def test_validate_freeform_no_markers():

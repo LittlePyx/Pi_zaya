@@ -92,6 +92,7 @@ export type UploadDraft = {
   selected: boolean
   stem: string
   status: 'queued' | 'inspecting' | 'ready' | 'saving' | 'saved' | 'error'
+  failureStage?: 'inspect' | 'save' | 'duplicate' | ''
   displayName: string
   note: string
   savedName?: string

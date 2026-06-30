@@ -7,10 +7,7 @@ import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
 import { CiteShelf } from './CiteShelf'
 import type {
-  ReaderLocateCandidate,
-  ReaderLocateClaimGroup,
   ReaderLocateResult,
-  ReaderLocateTarget,
   ReaderOpenPayload,
 } from './reader/readerTypes'
 import {
@@ -20,6 +17,53 @@ import {
   READER_SELECTION_SHELF_EVENT,
 } from './reader/readerTypes'
 import { buildBasicReaderOpenPayload } from './reader/readerOpenPayloadUtils'
+import {
+  buildGuideLocateCandidates,
+  buildRefsLocateCandidatesAll,
+  coerceStringArray,
+  dedupeLocateCandidates,
+  hasFormulaSignal,
+  normalizeLocateText,
+  overlapScore,
+  stripMarkdownInline,
+  stripProvenanceNoise,
+  type LocateCandidate,
+  type RefHitLite,
+} from './reader/messageLocateCandidates'
+import {
+  buildHeuristicReaderOpenPayload,
+  buildLocateCandidateFromReaderLocateCandidate,
+  buildStructuredEntryReaderOpenPayload,
+  coerceReaderLocateTarget,
+  coerceReaderOpenPayload,
+  toPositiveIntOrUndefined,
+} from './reader/messageReaderLocatePayload'
+import {
+  buildStructuredProvenanceLocateEntries,
+  isLikelyRhetoricalLocateShell,
+  listStructuredProvenanceSegments,
+  mergeStructuredSnippetAliases,
+  normalizeStructuredLocateSnippet,
+  shortSegmentLabel,
+  shouldSuppressNegativeLocateSurface,
+  type ProvenanceLocateEntry,
+  type StructuredProvenanceSegment,
+} from './reader/messageStructuredProvenance'
+import {
+  buildStructuredRenderLocateSlotMap,
+  createStructuredInlineLocateResolver,
+  isEquationLocateCandidate,
+  type StructuredRenderLocateSlot,
+} from './reader/messageStructuredInlineLocate'
+import {
+  extractEquationNumbersFromText,
+  extractFigureNumbersFromText,
+  isPreferredStrictFigureRefSnippet,
+  normalizeStructuredLocateKind,
+  panelLetterMatchScore,
+  scoreLocateCandidate,
+  scoreProvenanceSegment,
+} from './reader/messageStructuredLocateScoring'
 import {
   citationDisplay,
   cleanCitationDisplayText,
@@ -41,8 +85,9 @@ import {
   articleSummaryPatchFromMeta,
   dedupeShelfItems,
   looksLowValueShelfSummary,
+  mergeCitationDetailIntoShelfItems,
+  mergeReaderSelectionDetailIntoShelfItems,
   mergeShelfItemWithLive,
-  preferRicherField,
   sameShelfItem,
   sameShelfItems,
   shelfItemHasDisplayableArticleSummary,
@@ -53,9 +98,7 @@ import {
   shelfPaperIdentity,
   shelfRepairMetaFromEntry,
   shelfRepairPayloads,
-  shelfSourceIdentity,
   shelfSummaryBackfillAttemptKey,
-  shouldMergeShelfItemsBySource,
   shouldRequestCitationCardPolish,
   snapshotDiffCounts,
 } from './citeShelfRuntime'
@@ -77,7 +120,6 @@ import {
 } from './citeShelfStorage'
 import {
   citeDetailFromReaderSelection,
-  mergeSelectionNote,
   normalizeReaderCitationShelfPayload,
   normalizeReaderSelectionShelfPayload,
   readerSelectionNote,
@@ -85,9 +127,10 @@ import {
 import { RefsPanel } from '../refs/RefsPanel'
 import { hasRefsPanelContent } from '../refs/refsPanelDisplay'
 import { chatApi, type Message } from '../../api/chat'
-import { referencesApi, type ReaderDocAnchor, type ShelfMetadataRepairImpact } from '../../api/references'
+import { referencesApi, type ShelfMetadataRepairImpact } from '../../api/references'
 import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
+import { basenameFromSourcePath, normalizeSourcePathForMatch as normalizeSourcePathForMatchShared } from '../../utils/sourcePath'
 import { useSettingsStore } from '../../stores/settingsStore'
 import {
   getMessageCiteDetailRecords,
@@ -128,6 +171,11 @@ const SHELF_METADATA_HYDRATE_BATCH_SIZE = 8
 const SHELF_METADATA_HYDRATE_RETRY_MS = 15000
 const SHELF_SUMMARY_BACKFILL_BATCH_SIZE = 4
 const SHELF_SUMMARY_BACKFILL_RETRY_MS = 60000
+
+type ShelfAsyncScopeToken = {
+  epoch: number
+  storageKey: string
+}
 
 function bibliometricsLocalePatch(): Record<string, string> {
   const settings = useSettingsStore.getState()
@@ -191,36 +239,6 @@ interface Props {
   selectedResearchContextKeys?: Record<string, boolean>
   onResearchContextPackChange?: (pack: SelectedResearchContextPack | null) => void
   onResearchContextFollowUp?: (pack: SelectedResearchContextPack, promptText: string) => void
-}
-
-interface RefUiMetaLite {
-  display_name?: string
-  heading_path?: string
-  section_label?: string
-  subsection_label?: string
-  summary_line?: string
-  why_line?: string
-  source_path?: string
-  anchor_target_kind?: string
-  anchor_target_number?: number
-}
-
-interface RefMetaLite {
-  source_path?: string
-  heading_path?: string
-  ref_best_heading_path?: string
-  ref_headings?: unknown
-  ref_locs?: unknown
-  ref_show_snippets?: unknown
-  ref_overview_snippets?: unknown
-  ref_snippets?: unknown
-}
-
-interface RefHitLite {
-  score?: number
-  text?: string
-  ui_meta?: RefUiMetaLite
-  meta?: RefMetaLite
 }
 
 interface RefEntryLite {
@@ -302,106 +320,6 @@ function createEmptyAssistantLocatePrep(bodyContent: string, refsUserMsgId = 0):
   }
 }
 
-interface LocateCandidate {
-  sourcePath: string
-  sourceName: string
-  headingPath: string
-  focusSnippet: string
-  matchText: string
-  sourceType: 'guide' | 'refs'
-  blockId?: string
-  anchorId?: string
-  anchorKind?: string
-  anchorNumber?: number
-}
-
-interface ProvenanceLocateEntry {
-  segmentId: string
-  label: string
-  segmentText: string
-  evidenceQuote: string
-  locateTarget?: ReaderLocateTarget
-  readerOpen?: ReaderOpenPayload
-  hitLevel?: string
-  claimType?: string
-  mustLocate?: boolean
-  locatePolicy?: string
-  locateSurfacePolicy?: string
-  claimGroupId?: string
-  claimGroupKind?: string
-  formulaOrigin?: string
-  anchorKind?: string
-  anchorText?: string
-  equationNumber?: number
-  supportFigureNumber?: number
-  supportPanelLetters?: string[]
-  snippetKey: string
-  snippetAliases: string[]
-  primary: LocateCandidate
-  alternatives: LocateCandidate[]
-  relatedBlockIds?: string[]
-  sourceSegmentId?: string
-  groupLeadText?: string
-  groupDistance?: number
-}
-
-type StructuredLocateKind = 'paragraph' | 'list_item' | 'quote' | 'blockquote' | 'equation' | 'figure'
-
-interface StructuredRenderSegment {
-  order: number
-  kind: StructuredLocateKind
-  text: string
-  snippetKey: string
-}
-
-interface StructuredProvenanceSegment {
-  index: number
-  segmentId: string
-  kind: string
-  segmentType: string
-  evidenceMode: string
-  hitLevel: string
-  claimType: string
-  mustLocate: boolean
-  locatePolicy: string
-  locateSurfacePolicy: string
-  claimGroupId: string
-  claimGroupKind: string
-  claimGroupTargetSegmentId: string
-  claimGroupTargetDistance: number
-  claimGroupLeadText: string
-  formulaOrigin: string
-  anchorKind: string
-  anchorText: string
-  equationNumber: number
-  text: string
-  snippetKey: string
-  snippetAliases: string[]
-}
-
-interface StructuredRenderLocateSlot {
-  order: number
-  kind: StructuredLocateKind
-  renderText: string
-  renderSnippetKey: string
-  entry: ProvenanceLocateEntry
-  provenanceIndex: number
-  score: number
-}
-
-interface StructuredLocateResolution {
-  entry: ProvenanceLocateEntry
-  order: number
-  fallback: boolean
-}
-
-interface LocateRenderMetaLite {
-  kind?: string
-  order?: number
-}
-
-const GUIDE_LOCATE_CANDIDATE_LIMIT = 1600
-const REF_LOCATE_CANDIDATE_LIMIT = 900
 const LOW_CONF_REASON_MAP_EN: Record<string, string> = {
   empty_hits: 'no scoped evidence was retrieved',
   target_miss: 'the requested target section was not matched directly',
@@ -411,259 +329,6 @@ const LOW_CONF_REASON_MAP_EN: Record<string, string> = {
   strict_family_weak_overlap: 'strict question type has weak lexical overlap',
   strict_family_sparse_hits: 'strict question type has sparse evidence hits',
   broad_family_weak_overlap: 'broad summary question has weak evidence overlap',
-}
-
-function stripMarkdownInline(input: string): string {
-  return String(input || '')
-    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/~~([^~]+)~~/g, '$1')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function normalizeStrictAnchorText(input: string): string {
-  return stripMarkdownInline(String(input || ''))
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function inferStrictAnchorKind(
-  rawKind: string,
-  claimType: string,
-): string {
-  const kind = String(rawKind || '').trim().toLowerCase()
-  if (kind) return kind
-  const claim = String(claimType || '').trim().toLowerCase()
-  if (claim === 'formula_claim' || claim === 'inline_formula_claim' || claim === 'equation_explanation_claim') {
-    return 'equation'
-  }
-  if (claim === 'figure_claim' || claim === 'figure_panel') return 'figure'
-  if (claim === 'quote_claim') return 'quote'
-  if (claim === 'blockquote_claim') return 'blockquote'
-  if (
-    claim === 'shell_sentence'
-    || claim === 'critical_fact_claim'
-    || claim === 'method_detail'
-    || claim === 'prior_work'
-    || claim === 'doc_map'
-  ) {
-    return 'paragraph'
-  }
-  return ''
-}
-
-function hasSegmentStrictLocateIdentity(
-  segment: Record<string, unknown> | null | undefined,
-  currentSegment?: StructuredProvenanceSegment | null,
-): boolean {
-  const readerOpen = coerceReaderOpenPayload(segment?.reader_open)
-  const locateTarget = coerceReaderLocateTarget(segment?.locate_target) || readerOpen?.locateTarget || null
-  const primaryBlockId = String(segment?.primary_block_id || locateTarget?.blockId || '').trim()
-  const evidenceBlockIds = Array.isArray(segment?.evidence_block_ids)
-    ? segment?.evidence_block_ids.map((item) => String(item || '').trim()).filter(Boolean)
-    : []
-  const effectiveEvidenceBlockIds = evidenceBlockIds.length > 0
-    ? evidenceBlockIds
-    : coerceStringArray(locateTarget?.blockId, 1, 120)
-  const anchorKindRaw = String(segment?.anchor_kind || locateTarget?.anchorKind || currentSegment?.anchorKind || '').trim().toLowerCase()
-  const claimType = String(segment?.claim_type || currentSegment?.claimType || '').trim().toLowerCase()
-  const anchorKind = inferStrictAnchorKind(anchorKindRaw, claimType)
-  const anchorText = normalizeStrictAnchorText(String(segment?.anchor_text || locateTarget?.anchorText || currentSegment?.anchorText || ''))
-  const evidenceQuote = normalizeStrictAnchorText(String(segment?.evidence_quote || locateTarget?.evidenceQuote || ''))
-  if (!(primaryBlockId && effectiveEvidenceBlockIds.length > 0)) return false
-  if (anchorKindRaw && (anchorText || evidenceQuote)) return true
-  const locatePolicy = String(segment?.locate_policy || currentSegment?.locatePolicy || '').trim().toLowerCase()
-  const mustLocate = Boolean(segment?.must_locate ?? currentSegment?.mustLocate)
-  if (!(mustLocate || locatePolicy === 'required')) return false
-  const segmentText = normalizeStrictAnchorText(String(segment?.text || locateTarget?.snippet || currentSegment?.text || ''))
-  return Boolean(anchorKind && (anchorText || evidenceQuote || segmentText))
-}
-
-function isFormulaBundleLocateEntry(entry: Pick<ProvenanceLocateEntry, 'claimGroupKind' | 'claimGroupId' | 'anchorKind' | 'claimType' | 'primary'>): boolean {
-  const groupKind = String(entry.claimGroupKind || '').trim().toLowerCase()
-  if (groupKind !== 'formula_bundle') return false
-  const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
-  const claimType = String(entry.claimType || '').trim().toLowerCase()
-  if (anchorKind === 'equation') return true
-  return claimType === 'formula_claim' || claimType === 'equation_explanation_claim'
-}
-
-function formulaBundleLocateGroupKey(entry: Pick<ProvenanceLocateEntry, 'claimGroupKind' | 'claimGroupId' | 'anchorKind' | 'claimType' | 'primary'>): string {
-  if (!isFormulaBundleLocateEntry(entry)) return ''
-  const claimGroupId = String(entry.claimGroupId || '').trim()
-  if (claimGroupId) return claimGroupId
-  const sourcePath = String(entry.primary?.sourcePath || '').trim()
-  const targetId = String(entry.primary?.blockId || entry.primary?.anchorId || '').trim()
-  return (sourcePath && targetId) ? `${sourcePath}::${targetId}` : ''
-}
-
-function formulaBundleRepresentativeScore(entry: ProvenanceLocateEntry): number {
-  let score = 0
-  const claimType = String(entry.claimType || '').trim().toLowerCase()
-  const locateSurfacePolicy = String(entry.locateSurfacePolicy || '').trim().toLowerCase()
-  const formulaOrigin = String(entry.formulaOrigin || '').trim().toLowerCase()
-  if (locateSurfacePolicy === 'primary') score += 4.5
-  else if (locateSurfacePolicy === 'secondary') score += 1.25
-  if (formulaOrigin === 'source') score += 1.8
-  else if (formulaOrigin === 'explanation') score += 0.6
-  else if (formulaOrigin === 'derived') score -= 2.4
-  if (claimType === 'formula_claim') score += 4
-  else if (claimType === 'inline_formula_claim') score += 1.2
-  else if (claimType === 'equation_explanation_claim') score += 2
-  const anchorRaw = String(entry.anchorText || entry.evidenceQuote || entry.segmentText || '').trim()
-  if (/\$\$[\s\S]{8,}\$\$/.test(anchorRaw)) score += 1.4
-  else if (hasFormulaSignal(anchorRaw)) score += 0.7
-  if (String(entry.primary?.anchorId || '').trim()) score += 0.4
-  if (String(entry.primary?.blockId || '').trim()) score += 0.3
-  score -= Math.min(1, Math.max(0, Number(entry.groupDistance || 0)) * 0.08)
-  return score
-}
-
-function buildGuideLocateCandidates(
-  markdown: string,
-  sourcePath: string,
-  sourceName: string,
-  sourceType: 'guide' | 'refs' = 'guide',
-  readerAnchors?: ReaderDocAnchor[],
-): LocateCandidate[] {
-  const out: LocateCandidate[] = []
-  const seen = new Set<string>()
-  const pushCandidate = (
-    headingPathRaw: string,
-    snippetRaw: string,
-    extra?: { blockId?: string; anchorId?: string; anchorKind?: string; anchorNumber?: number },
-  ) => {
-    const headingPath = stripMarkdownInline(headingPathRaw)
-    const text = stripMarkdownInline(snippetRaw)
-    const formulaLike = hasFormulaSignal(text)
-    if (text.length < 24 && !formulaLike) return
-    if (formulaLike && text.length < 6) return
-    const blockId = String(extra?.blockId || '').trim()
-    const anchorId = String(extra?.anchorId || '').trim()
-    const anchorKind = String(extra?.anchorKind || '').trim().toLowerCase()
-    const anchorNumber = Number(extra?.anchorNumber || 0)
-    const key = `${normalizeLocateText(sourcePath)}::${blockId.toLowerCase()}::${anchorId.toLowerCase()}::${normalizeLocateText(headingPath)}::${normalizeLocateText(text).slice(0, 260)}`
-    if (seen.has(key)) return
-    seen.add(key)
-    out.push({
-      sourcePath,
-      sourceName,
-      headingPath,
-      focusSnippet: text,
-      matchText: [headingPath, text].filter(Boolean).join('\n'),
-      sourceType,
-      blockId: blockId || undefined,
-      anchorId: anchorId || undefined,
-      anchorKind: anchorKind || undefined,
-      anchorNumber: Number.isFinite(anchorNumber) && anchorNumber > 0 ? Math.floor(anchorNumber) : undefined,
-    })
-  }
-
-  const pushSentenceCandidates = (
-    headingPath: string,
-    text: string,
-    extra?: { blockId?: string; anchorId?: string; anchorKind?: string; anchorNumber?: number },
-  ) => {
-    const src = stripMarkdownInline(text)
-    if (src.length < 24 && !hasFormulaSignal(src)) return
-    const sentenceList = src
-      .split(/(?<=[\u3002\uff01\uff1f.!;:\uff1b\uff1a])\s+/)
-      .map((item) => item.trim())
-      .filter((item) => item.length >= 16)
-      .slice(0, 14)
-    for (let i = 0; i < sentenceList.length; i += 1) {
-      const sentence = sentenceList[i]
-      if (sentence.length >= 24) pushCandidate(headingPath, sentence, extra)
-      const pair = [sentence, sentenceList[i + 1] || ''].filter(Boolean).join(' ').trim()
-      if (pair.length >= 30 && pair.length <= 260) {
-        pushCandidate(headingPath, pair, extra)
-      }
-    }
-  }
-
-  const anchorList = Array.isArray(readerAnchors) ? readerAnchors : []
-  if (anchorList.length > 0) {
-    for (const item of anchorList) {
-      const blockId = String(item?.block_id || '').trim()
-      const anchorId = String(item?.anchor_id || '').trim()
-      const headingPath = String(item?.heading_path || '').trim()
-      const kind = String(item?.kind || '').trim().toLowerCase()
-      const number = Number(item?.number || 0)
-      const text = String(item?.text || '').trim()
-      if (!text) continue
-      pushCandidate(headingPath, text, {
-        blockId,
-        anchorId,
-        anchorKind: kind,
-        anchorNumber: number,
-      })
-      pushSentenceCandidates(headingPath, text, {
-        blockId,
-        anchorId,
-        anchorKind: kind,
-        anchorNumber: number,
-      })
-    }
-    return out.slice(0, GUIDE_LOCATE_CANDIDATE_LIMIT)
-  }
-
-  const lines = String(markdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
-  const headingStack: Array<{ level: number; text: string }> = []
-  let bucket: string[] = []
-
-  const flush = () => {
-    if (bucket.length <= 0) return
-    const text = stripMarkdownInline(bucket.join(' ').trim())
-    bucket = []
-    if (text.length < 24) return
-    const headingPath = headingStack.map((item) => item.text).filter(Boolean).join(' / ')
-    pushCandidate(headingPath, text)
-    pushSentenceCandidates(headingPath, text)
-  }
-
-  for (const raw of lines) {
-    const line = String(raw || '')
-    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/)
-    if (heading) {
-      flush()
-      const level = heading[1].length
-      const text = stripMarkdownInline(heading[2] || '')
-      if (text) {
-        while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
-          headingStack.pop()
-        }
-        headingStack.push({ level, text })
-      }
-      continue
-    }
-    if (/^\s*([-*_]\s*){3,}\s*$/.test(line) || /^\s*```/.test(line) || /^\s*~~~/.test(line)) {
-      flush()
-      continue
-    }
-    if (!line.trim()) {
-      flush()
-      continue
-    }
-    if (/^\s*\|/.test(line) || /^\s*>/.test(line)) {
-      flush()
-      const text = stripMarkdownInline(line.replace(/^\s*[>|]+\s*/, ''))
-      if (text.length >= 24) {
-        const headingPath = headingStack.map((item) => item.text).filter(Boolean).join(' / ')
-        pushCandidate(headingPath, text)
-      }
-      continue
-    }
-    bucket.push(line)
-  }
-  flush()
-  if (out.length <= 0) return out
-  // Keep a practical upper bound for runtime matching cost.
-  return out.slice(0, GUIDE_LOCATE_CANDIDATE_LIMIT)
 }
 
 function hasRenderableRefsForGuide(
@@ -683,43 +348,6 @@ function toPositiveInt(input: unknown): number {
 
 function hasCjkText(input: string): boolean {
   return /[\u4e00-\u9fff]/.test(String(input || ''))
-}
-
-function isNegativeLocateSurfaceText(input: string): boolean {
-  const raw = String(input || '').trim()
-  if (!raw) return false
-  return /\b(?:not stated|not mentioned|does not mention|doesn't mention|does not specify|doesn't specify|cannot be determined|not found|no external paper matched|no other papers matched|does not include)\b/i.test(raw)
-}
-
-function shouldSuppressNegativeLocateSurface(input: {
-  claimType?: string
-  anchorKind?: string
-  segmentText?: string
-  evidenceQuote?: string
-  anchorText?: string
-  snippet?: string
-  highlightSnippet?: string
-}): boolean {
-  const anchorKind = String(input.anchorKind || '').trim().toLowerCase()
-  if (anchorKind === 'equation' || anchorKind === 'figure' || anchorKind === 'quote' || anchorKind === 'blockquote' || anchorKind === 'inline_formula') {
-    return false
-  }
-  const claimType = String(input.claimType || '').trim().toLowerCase()
-  const texts = [
-    String(input.snippet || '').trim(),
-    String(input.highlightSnippet || '').trim(),
-    String(input.evidenceQuote || '').trim(),
-    String(input.anchorText || '').trim(),
-    String(input.segmentText || '').trim(),
-  ].filter(Boolean)
-  const hasNegativeSurface = texts.some((text) => isNegativeLocateSurfaceText(text))
-  if (!hasNegativeSurface) return false
-  return (
-    !claimType
-    || claimType === 'evidence_note_claim'
-    || claimType === 'shell_sentence'
-    || claimType === 'critical_fact_claim'
-  )
 }
 
 function resolveLowConfidenceMeta(
@@ -794,139 +422,6 @@ function stripLeadingLowConfidenceNotice(body: string): string {
   return String(split[1] || '').trimStart()
 }
 
-function normalizeLocateText(input: string): string {
-  return String(input || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase()
-}
-
-function stripProvenanceNoise(input: string): string {
-  return String(input || '')
-    .replace(/\[\d{1,3}(?:\s*[-,\u2013\u2014]\s*\d{1,3})*\]/g, ' ')
-    .replace(/\(\s*\d{1,3}(?:\s*[-,\u2013\u2014]\s*\d{1,3})*\s*\)/g, ' ')
-    .replace(/(?:see|\u53C2\u89C1)\s*\[\d{1,3}(?:\s*[-,\u2013\u2014]\s*\d{1,3})*\]/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function isLikelyRhetoricalLocateShell(input: string): boolean {
-  const raw = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
-    .replace(/^\s{0,3}#{1,6}\s+/g, ' ')
-    .replace(/^[^\u4e00-\u9fffA-Za-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!raw) return true
-  const normalized = normalizeLocateText(raw)
-  if (!normalized) return true
-  if (/^(?:直接证据|间接证据|唯一且明确|延伸思考题|高价值问题|研究问题|讨论题|思考题)(?:\s*[(:：\uff08][^)\uff09:：]{0,48}[)\uff09]?)?\s*[:\uFF1A]?$/.test(raw)) {
-    return true
-  }
-  if (/^(?:\u8bf4\u660e|\u8868\u660e|\u53ef\u89c1|\u56e0\u6b64|\u6240\u4ee5|\u603b\u4e4b|\u7efc\u4e0a|\u7531\u6b64\u53ef\u89c1|\u8fdb\u4e00\u6b65\u8bf4\u660e|\u8fdb\u4e00\u6b65\u8868\u660e|\u8fdb\u4e00\u6b65\u8bc1\u5b9e|\u63d0\u793a)\s*[:\uFF1A]?$/.test(raw)) {
-    return true
-  }
-  if (/^(?:\u6587\u4e2d\u63d0\u5230|\u6587\u4e2d\u6307\u51fa|\u4f5c\u8005\u6307\u51fa|\u5b9e\u9a8c\u7ed3\u679c\u663e\u793a|\u7ed3\u679c\u663e\u793a|\u8868\u683c\u6807\u9898\u4e0e\u65b9\u6cd5\u547d\u540d\u660e\u786e\u4e3a).{0,160}(?:\u8bf4\u660e|\u8868\u660e|\u610f\u5473\u7740|\u63d0\u793a|\u53ef\u89c1|\u8bc1\u5b9e)\s*[:\uFF1A]$/.test(raw)) {
-    return true
-  }
-  if (/[:\uFF1A]$/.test(raw)) {
-    const informativeTail = raw
-      .replace(/[:\uFF1A]\s*$/, '')
-      .replace(/["'\u201c\u201d\u2018\u2019\u300a\u300b\u3008\u3009\u300c\u300d\u300e\u300f]/g, ' ')
-      .replace(/\b(?:we|our|method|paper|table|figure|fig)\b/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-    if (informativeTail.length <= 32) return true
-    if (/(?:\u8bf4\u660e|\u8868\u660e|\u610f\u5473\u7740|\u63d0\u793a|\u53ef\u89c1|\u8bc1\u5b9e)\s*$/.test(informativeTail)) return true
-  }
-  return false
-}
-
-function scoreLocateContentCore(
-  input: string,
-  opts?: {
-    kind?: string
-    segmentType?: string
-    evidenceMode?: string
-  },
-): number {
-  const raw = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!raw) return 0
-  if (isLikelyRhetoricalLocateShell(raw)) return 0.04
-  let score = 0.18
-  const length = raw.length
-  if (length >= 18) score += 0.12
-  if (length >= 28) score += 0.12
-  if (length >= 46) score += 0.08
-  if (/[“"'`]/.test(raw)) score += 0.12
-  if (/[()（）=]/.test(raw)) score += 0.08
-  if (/\d/.test(raw)) score += 0.08
-  if (/[A-Z][A-Za-z0-9+-]{1,}/.test(raw)) score += 0.08
-  if (/\b(?:gt|ground[ -]?truth|pose|camera|train|training|input|output|pipeline|rendering|volume)\b/i.test(raw)) score += 0.08
-  if (/(?:使用|采用|输入|输出|恢复|重建|估计|固定|训练|生成|表征|渲染|约束|对比|利用|先用|再将|来自|对应)/.test(raw)) score += 0.12
-
-  const kind = String(opts?.kind || '').trim().toLowerCase()
-  const segmentType = String(opts?.segmentType || '').trim().toLowerCase()
-  const evidenceMode = String(opts?.evidenceMode || '').trim().toLowerCase()
-  if (kind === 'list_item') score += 0.08
-  if (segmentType === 'bullet' || segmentType === 'evidence' || segmentType === 'equation_explanation') score += 0.08
-  if (evidenceMode === 'direct') score += 0.06
-  if (/[:\uFF1A]$/.test(raw)) score -= 0.18
-  return Math.max(0, Math.min(1.2, score))
-}
-
-function isLikelyClaimGroupLead(
-  input: string,
-  opts?: {
-    kind?: string
-    segmentType?: string
-  },
-): boolean {
-  const raw = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!raw) return false
-  if (isLikelyRhetoricalLocateShell(raw)) return true
-  if (/[:\uFF1A]$/.test(raw)) return true
-  const kind = String(opts?.kind || '').trim().toLowerCase()
-  const segmentType = String(opts?.segmentType || '').trim().toLowerCase()
-  if ((kind === 'list_item' || segmentType === 'bullet') && /(?:如下|包括|分为|步骤|流程|表明|说明|可见|因此)$/.test(raw)) {
-    return true
-  }
-  return false
-}
-
-function isLikelySectionBoundarySegment(segment: StructuredProvenanceSegment | null): boolean {
-  if (!segment) return true
-  const segmentType = String(segment.segmentType || '').trim().toLowerCase()
-  if (segmentType === 'claim' || segmentType === 'next_step') return true
-  const text = stripProvenanceNoise(stripMarkdownInline(String(segment.text || '')))
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!text) return true
-  return /^(?:\u7ed3\u8bba|\u6838\u5fc3\u7ed3\u8bba|\u4f9d\u636e|\u8bc1\u636e|\u539f\u6587|\u4e0b\u4e00\u6b65|\u5efa\u8bae|\u98ce\u9669|\u9650\u5236)\s*[:\uFF1A]?/.test(text)
-}
-
-void isLikelyClaimGroupLead
-void isLikelySectionBoundarySegment
-
-function mergeStructuredSnippetAliases(...groups: Array<string[] | null | undefined>): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const group of groups) {
-    if (!Array.isArray(group)) continue
-    for (const item of group) {
-      const norm = normalizeStructuredLocateSnippet(String(item || ''))
-      if (!norm || seen.has(norm)) continue
-      seen.add(norm)
-      out.push(norm)
-      if (out.length >= 10) return out
-    }
-  }
-  return out
-}
-
 function extractQuotedSpans(input: string, minLen = 10): string[] {
   const src = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
   if (!src) return []
@@ -989,344 +484,6 @@ function quoteMatchStats(quoteSpans: string[], ...texts: string[]): { hits: numb
   return { hits, score }
 }
 
-function tokenizeLocateText(input: string): string[] {
-  const src = normalizeLocateText(input)
-  if (!src) return []
-  const out: string[] = []
-  const latin = src.match(/[a-z0-9]{2,}/g) || []
-  out.push(...latin)
-  const cjkSeq = src.match(/[\u4e00-\u9fff]{1,}/g) || []
-  for (const seq of cjkSeq) {
-    if (seq.length <= 2) {
-      out.push(seq)
-      continue
-    }
-    for (let i = 0; i < seq.length - 1; i += 1) {
-      out.push(seq.slice(i, i + 2))
-    }
-  }
-  return out
-}
-
-function overlapScore(a: string, b: string): number {
-  const ta = tokenizeLocateText(a)
-  const tb = tokenizeLocateText(b)
-  if (ta.length === 0 || tb.length === 0) return 0
-  const sa = new Set(ta)
-  const sb = new Set(tb)
-  let overlap = 0
-  for (const token of sa) {
-    if (sb.has(token)) overlap += 1
-  }
-  const denom = Math.sqrt(Math.max(1, sa.size) * Math.max(1, sb.size))
-  return overlap / denom
-}
-
-function coerceStringArray(input: unknown, maxItems = 8, maxChars = 2200): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
-  const push = (value: unknown) => {
-    if (out.length >= maxItems) return
-    const text = String(value || '').replace(/\s+/g, ' ').trim()
-    if (!text) return
-    const normalized = normalizeLocateText(text)
-    if (!normalized || seen.has(normalized)) return
-    seen.add(normalized)
-    out.push(text.length > maxChars ? `${text.slice(0, maxChars).trimEnd()}...` : text)
-  }
-  if (Array.isArray(input)) {
-    for (const value of input) {
-      if (out.length >= maxItems) break
-      push(value)
-    }
-    return out
-  }
-  push(input)
-  return out
-}
-
-function coerceReaderLocateTarget(input: unknown): ReaderLocateTarget | null {
-  if (!input || typeof input !== 'object') return null
-  const raw = input as Record<string, unknown>
-  const anchorNumberRaw = Number(raw.anchorNumber || 0)
-  const target: ReaderLocateTarget = {
-    segmentId: String(raw.segmentId || '').trim() || undefined,
-    sourceSegmentId: String(raw.sourceSegmentId || '').trim() || undefined,
-    headingPath: String(raw.headingPath || '').trim() || undefined,
-    snippet: String(raw.snippet || '').trim() || undefined,
-    highlightSnippet: String(raw.highlightSnippet || '').trim() || undefined,
-    evidenceQuote: String(raw.evidenceQuote || '').trim() || undefined,
-    anchorText: String(raw.anchorText || '').trim() || undefined,
-    hitLevel: String(raw.hitLevel || '').trim().toLowerCase() || undefined,
-    blockId: String(raw.blockId || '').trim() || undefined,
-    anchorId: String(raw.anchorId || '').trim() || undefined,
-    anchorKind: String(raw.anchorKind || '').trim().toLowerCase() || undefined,
-    anchorNumber: Number.isFinite(anchorNumberRaw) && anchorNumberRaw > 0
-      ? Math.floor(anchorNumberRaw)
-      : undefined,
-    claimType: String(raw.claimType || '').trim() || undefined,
-    locatePolicy: String(raw.locatePolicy || '').trim() || undefined,
-    locateSurfacePolicy: String(raw.locateSurfacePolicy || '').trim() || undefined,
-    snippetAliases: coerceStringArray(raw.snippetAliases, 8, 360),
-    relatedBlockIds: coerceStringArray(raw.relatedBlockIds, 8, 180),
-  }
-  if (!Object.values(target).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value))) {
-    return null
-  }
-  return target
-}
-
-function coerceReaderLocateClaimGroup(input: unknown): ReaderLocateClaimGroup | null {
-  if (!input || typeof input !== 'object') return null
-  const raw = input as Record<string, unknown>
-  const distanceRaw = Number(raw.distance || 0)
-  const claimGroup: ReaderLocateClaimGroup = {
-    id: String(raw.id || '').trim() || undefined,
-    kind: String(raw.kind || '').trim() || undefined,
-    leadText: String(raw.leadText || '').trim() || undefined,
-    distance: Number.isFinite(distanceRaw) && distanceRaw > 0
-      ? Math.floor(distanceRaw)
-      : undefined,
-  }
-  if (!Object.values(claimGroup).some(Boolean)) return null
-  return claimGroup
-}
-
-function coerceReaderLocateCandidateArray(input: unknown, maxItems = 6): ReaderLocateCandidate[] {
-  if (!Array.isArray(input) || input.length <= 0) return []
-  const out: ReaderLocateCandidate[] = []
-  const seen = new Set<string>()
-  for (const item of input) {
-    if (!item || typeof item !== 'object') continue
-    const raw = item as Record<string, unknown>
-    const anchorNumberRaw = Number(raw.anchorNumber || 0)
-    const candidate: ReaderLocateCandidate = {
-      headingPath: String(raw.headingPath || '').trim() || undefined,
-      snippet: String(raw.snippet || '').trim() || undefined,
-      highlightSnippet: String(raw.highlightSnippet || '').trim() || undefined,
-      anchorId: String(raw.anchorId || '').trim() || undefined,
-      blockId: String(raw.blockId || '').trim() || undefined,
-      anchorKind: String(raw.anchorKind || '').trim().toLowerCase() || undefined,
-      anchorNumber: Number.isFinite(anchorNumberRaw) && anchorNumberRaw > 0
-        ? Math.floor(anchorNumberRaw)
-        : undefined,
-    }
-    const key = [
-      String(candidate.blockId || '').trim().toLowerCase(),
-      String(candidate.anchorId || '').trim().toLowerCase(),
-      String(candidate.anchorKind || '').trim().toLowerCase(),
-      Number.isFinite(Number(candidate.anchorNumber || 0)) ? Math.floor(Number(candidate.anchorNumber || 0)) : 0,
-      String(candidate.headingPath || '').trim().toLowerCase(),
-      String(candidate.highlightSnippet || '').trim().toLowerCase().slice(0, 180),
-      String(candidate.snippet || '').trim().toLowerCase().slice(0, 180),
-    ].join('::')
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(candidate)
-    if (out.length >= maxItems) break
-  }
-  return out
-}
-
-function readerLocateCandidateIdentityKey(item: Partial<ReaderLocateCandidate> | null | undefined): string {
-  return [
-    String(item?.blockId || '').trim().toLowerCase(),
-    String(item?.anchorId || '').trim().toLowerCase(),
-    String(item?.anchorKind || '').trim().toLowerCase(),
-    Number.isFinite(Number(item?.anchorNumber || 0)) ? Math.floor(Number(item?.anchorNumber || 0)) : 0,
-    String(item?.headingPath || '').trim().toLowerCase(),
-    String(item?.highlightSnippet || '').trim().toLowerCase().slice(0, 180),
-    String(item?.snippet || '').trim().toLowerCase().slice(0, 180),
-  ].join('::')
-}
-
-function toPositiveIntOrUndefined(value: unknown): number | undefined {
-  const n = Number(value || 0)
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined
-}
-
-function dedupeReaderLocateCandidates(
-  candidates: Array<ReaderLocateCandidate | null | undefined>,
-  maxItems = 6,
-): ReaderLocateCandidate[] {
-  const out: ReaderLocateCandidate[] = []
-  const seen = new Set<string>()
-  for (const item of candidates) {
-    if (!item || typeof item !== 'object') continue
-    const key = readerLocateCandidateIdentityKey(item)
-    if (!key || seen.has(key)) continue
-    seen.add(key)
-    out.push(item)
-    if (out.length >= maxItems) break
-  }
-  return out
-}
-
-function buildReaderLocateCandidateFromLocateCandidate(
-  cand: LocateCandidate | null | undefined,
-  opts: {
-    snippet: string
-    highlightSnippet: string
-    anchorKind?: string
-    anchorNumber?: number
-  },
-): ReaderLocateCandidate | null {
-  if (!cand) return null
-  const snippet = String(opts.snippet || cand.focusSnippet || '').trim()
-  const highlightSnippet = String(opts.highlightSnippet || snippet || cand.focusSnippet || '').trim()
-  const anchorNumber = toPositiveIntOrUndefined(opts.anchorNumber || cand.anchorNumber || 0)
-  const candidate: ReaderLocateCandidate = {
-    headingPath: String(cand.headingPath || '').trim() || undefined,
-    snippet: snippet || undefined,
-    highlightSnippet: highlightSnippet || undefined,
-    blockId: String(cand.blockId || '').trim() || undefined,
-    anchorId: String(cand.anchorId || '').trim() || undefined,
-    anchorKind: String(opts.anchorKind || cand.anchorKind || '').trim().toLowerCase() || undefined,
-    anchorNumber,
-  }
-  return readerLocateCandidateIdentityKey(candidate) ? candidate : null
-}
-
-function buildReaderCandidateCollections(
-  primaryCandidate: ReaderLocateCandidate | null,
-  secondaryCandidates: Array<ReaderLocateCandidate | null | undefined>,
-  opts?: {
-    visibleCandidates?: Array<ReaderLocateCandidate | null | undefined>
-    evidenceCandidates?: Array<ReaderLocateCandidate | null | undefined>
-    maxItems?: number
-  },
-): Pick<ReaderOpenPayload, 'alternatives' | 'visibleAlternatives' | 'evidenceAlternatives'> {
-  const maxItems = Number.isFinite(Number(opts?.maxItems || 6))
-    ? Math.max(1, Math.floor(Number(opts?.maxItems || 6)))
-    : 6
-  const alternatives = dedupeReaderLocateCandidates(secondaryCandidates, maxItems)
-  const visibleAlternatives = dedupeReaderLocateCandidates(
-    [
-      primaryCandidate,
-      ...((opts?.visibleCandidates && opts.visibleCandidates.length > 0)
-        ? opts.visibleCandidates
-        : alternatives),
-    ],
-    maxItems,
-  )
-  const evidenceAlternatives = dedupeReaderLocateCandidates(
-    [
-      primaryCandidate,
-      ...((opts?.evidenceCandidates && opts.evidenceCandidates.length > 0)
-        ? opts.evidenceCandidates
-        : alternatives),
-    ],
-    maxItems,
-  )
-  return {
-    alternatives: alternatives.length > 0 ? alternatives : undefined,
-    visibleAlternatives: visibleAlternatives.length > 1 ? visibleAlternatives : undefined,
-    evidenceAlternatives: evidenceAlternatives.length > 1 ? evidenceAlternatives : undefined,
-  }
-}
-
-function coerceReaderOpenPayload(input: unknown): ReaderOpenPayload | null {
-  if (!input || typeof input !== 'object') return null
-  const raw = input as Record<string, unknown>
-  const anchorNumberRaw = Number(raw.anchorNumber || 0)
-  const initialAltIndexRaw = Number(raw.initialAltIndex || 0)
-  const locateTarget = coerceReaderLocateTarget(raw.locateTarget)
-  const claimGroup = coerceReaderLocateClaimGroup(raw.claimGroup)
-  const payload: ReaderOpenPayload = {
-    sourcePath: String(raw.sourcePath || '').trim(),
-    sourceName: String(raw.sourceName || '').trim() || undefined,
-    headingPath: String(raw.headingPath || '').trim() || undefined,
-    snippet: String(raw.snippet || '').trim() || undefined,
-    highlightSnippet: String(raw.highlightSnippet || '').trim() || undefined,
-    anchorId: String(raw.anchorId || '').trim() || undefined,
-    blockId: String(raw.blockId || '').trim() || undefined,
-    relatedBlockIds: coerceStringArray(raw.relatedBlockIds, 8, 180),
-    anchorKind: String(raw.anchorKind || '').trim().toLowerCase() || undefined,
-    anchorNumber: Number.isFinite(anchorNumberRaw) && anchorNumberRaw > 0
-      ? Math.floor(anchorNumberRaw)
-      : undefined,
-    strictLocate: raw.strictLocate === undefined ? undefined : Boolean(raw.strictLocate),
-    locateTarget: locateTarget || undefined,
-    claimGroup: claimGroup || undefined,
-    alternatives: coerceReaderLocateCandidateArray(raw.alternatives, 6),
-    visibleAlternatives: coerceReaderLocateCandidateArray(raw.visibleAlternatives, 6),
-    evidenceAlternatives: coerceReaderLocateCandidateArray(raw.evidenceAlternatives, 6),
-    initialAltIndex: Number.isFinite(initialAltIndexRaw)
-      ? Math.max(0, Math.floor(initialAltIndexRaw))
-      : undefined,
-  }
-  if (!Object.values(payload).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value))) {
-    return null
-  }
-  return payload
-}
-
-function pickFirstRefText(loc: Record<string, unknown>): string {
-  const keys = ['snippet', 'text', 'quote', 'content', 'summary', 'why']
-  for (const key of keys) {
-    const value = String(loc[key] || '').trim()
-    if (value) return value
-  }
-  return ''
-}
-
-function formulaTokens(text: string): string[] {
-  const src = String(text || '')
-  if (!src) return []
-  const out: string[] = []
-  const texCmds = src.match(/\\[a-zA-Z]{2,}/g) || []
-  out.push(...texCmds.map((item) => item.toLowerCase()))
-  const symbols = src.match(/[A-Za-z](?:_[A-Za-z0-9]+)?(?:\^[A-Za-z0-9]+)?/g) || []
-  out.push(...symbols.map((item) => item.toLowerCase()))
-  const numbers = src.match(/\b\d{1,4}\b/g) || []
-  out.push(...numbers)
-  return out
-}
-
-function hasFormulaSignal(text: string): boolean {
-  const src = String(text || '')
-  if (!src) return false
-  if (/[=^_]/.test(src)) return true
-  if (/\\[a-zA-Z]{2,}/.test(src)) return true
-  if (/\$[^$]{1,80}\$/.test(src) || /\$\$[^]{1,200}\$\$/.test(src)) return true
-  return false
-}
-
-function formulaOverlapScore(a: string, b: string): number {
-  const ta = new Set(formulaTokens(a))
-  const tb = new Set(formulaTokens(b))
-  if (ta.size <= 0 || tb.size <= 0) return 0
-  let overlap = 0
-  for (const token of ta) {
-    if (tb.has(token)) overlap += 1
-  }
-  return overlap / Math.sqrt(ta.size * tb.size)
-}
-
-function hasDisplayFormulaSignal(text: string): boolean {
-  const src = String(text || '')
-  if (!src) return false
-  if (/\$\$[^]{1,400}\$\$/.test(src)) return true
-  if (/\\begin\{(?:equation|align|gather|multline|eqnarray)\*?\}/i.test(src)) return true
-  const hasMathCore = /=/.test(src) || /\\tag\{\s*\d{1,4}\s*\}/.test(src)
-  const hasMathToken = /\\[a-zA-Z]{2,}/.test(src) || /\$[^$]{1,220}\$/.test(src)
-  return Boolean(hasMathCore && hasMathToken)
-}
-
-function isEquationLocateCandidate(cand: LocateCandidate | null): boolean {
-  if (!cand) return false
-  const kind = String(cand.anchorKind || '').trim().toLowerCase()
-  if (kind === 'equation') return true
-  return hasDisplayFormulaSignal(String(cand.focusSnippet || cand.matchText || ''))
-}
-
-function shortSegmentLabel(input: string, maxLen = 84): string {
-  const text = stripMarkdownInline(String(input || '')).replace(/\s+/g, ' ').trim()
-  if (!text) return ''
-  if (text.length <= maxLen) return text
-  return `${text.slice(0, Math.max(18, maxLen - 3)).trimEnd()}...`
-}
-
 function compactHeadingPath(input: string, maxLen = 56): string {
   const raw = String(input || '').replace(/\s+/g, ' ').trim()
   if (!raw) return ''
@@ -1340,7 +497,7 @@ function compactHeadingPath(input: string, maxLen = 56): string {
 }
 
 function normalizeSourcePathForMatch(input: string): string {
-  return String(input || '').trim().replace(/\\/g, '/').toLowerCase()
+  return normalizeSourcePathForMatchShared(input)
 }
 
 function sourceDocumentIdentityKey(input: string): string {
@@ -1368,7 +525,7 @@ function sourcePathsReferToSameDocument(left: string, right: string): boolean {
 }
 
 function sourcePathLookupKeys(input: string): string[] {
-  const exact = String(input || '').trim()
+  const exact = normalizeSourcePathForMatch(input)
   const identity = sourceDocumentIdentityKey(exact)
   return Array.from(new Set([exact, identity].filter(Boolean)))
 }
@@ -1382,539 +539,6 @@ function lookupGuideCandidatesBySourcePath(
     if (hit && hit.length > 0) return hit
   }
   return []
-}
-
-function buildStructuredProvenanceLocateEntries(
-  messageProvenance: Record<string, unknown> | null,
-  opts: {
-    guideSourcePath: string
-    fallbackSourceName: string
-    maxEntries?: number
-    minConfidence?: number
-  },
-): ProvenanceLocateEntry[] {
-  const guideSourcePath = String(opts?.guideSourcePath || '').trim()
-  const fallbackSourceName = String(opts?.fallbackSourceName || '').trim()
-  const maxEntriesRaw = Number(opts?.maxEntries || 3)
-  const maxEntries = Number.isFinite(maxEntriesRaw) && maxEntriesRaw > 0 ? Math.floor(maxEntriesRaw) : 3
-  const minConfidenceRaw = Number(
-    opts?.minConfidence === undefined
-      ? 0.62
-      : opts?.minConfidence,
-  )
-  const minConfidence = Number.isFinite(minConfidenceRaw) ? Math.max(0, minConfidenceRaw) : 0.62
-  if (!messageProvenance || typeof messageProvenance !== 'object') return []
-  const strictIdentityReady = Boolean(messageProvenance.strict_identity_ready)
-  const sourcePath = String(messageProvenance.source_path || '').trim()
-  if (!sourcePath) return []
-  if (guideSourcePath) {
-    const guideNorm = normalizeSourcePathForMatch(guideSourcePath)
-    const sourceNorm = normalizeSourcePathForMatch(sourcePath)
-    if (guideNorm && sourceNorm && !sourcePathsReferToSameDocument(guideNorm, sourceNorm)) return []
-  }
-  const sourceName = String(messageProvenance.source_name || '').trim()
-    || String(fallbackSourceName || '').trim()
-    || sourcePath.split(/[\\/]/).pop()
-    || 'paper'
-  const blockMap = (messageProvenance.block_map && typeof messageProvenance.block_map === 'object')
-    ? messageProvenance.block_map as Record<string, Record<string, unknown>>
-    : {}
-  const segmentsRaw = Array.isArray(messageProvenance.segments) ? messageProvenance.segments : []
-  const segmentsAll = listStructuredProvenanceSegments(messageProvenance)
-  if (segmentsRaw.length <= 0 || segmentsAll.length <= 0) return []
-  const provenanceById = new Map(segmentsAll.map((segment) => [segment.segmentId, segment]))
-
-  const scoredEntries: Array<{
-    entry: ProvenanceLocateEntry
-    score: number
-    idx: number
-  }> = []
-  const seenSegment = new Set<string>()
-  const seenContent = new Set<string>()
-  for (let idx = 0; idx < segmentsAll.length; idx += 1) {
-    const segment = segmentsRaw[idx] as Record<string, unknown> | null
-    if (!segment || typeof segment !== 'object') continue
-    const currentSegment = segmentsAll[idx] || null
-    if (!currentSegment) continue
-    const rawReaderOpen = coerceReaderOpenPayload((segment as Record<string, unknown>).reader_open)
-    const rawLocateTarget = coerceReaderLocateTarget((segment as Record<string, unknown>).locate_target)
-      || rawReaderOpen?.locateTarget
-      || null
-    const evidenceMode = String(segment.evidence_mode || '').trim().toLowerCase()
-    const primaryBlockId = String(segment.primary_block_id || rawLocateTarget?.blockId || '').trim()
-    const primaryAnchorId = String(segment.primary_anchor_id || rawLocateTarget?.anchorId || '').trim()
-    const supportBlockIdsRaw = Array.isArray(segment.support_block_ids) ? segment.support_block_ids : []
-    const evidenceBlockIdsRaw = Array.isArray(segment.evidence_block_ids) ? segment.evidence_block_ids : []
-    const claimType = String(segment.claim_type || currentSegment.claimType || '').trim().toLowerCase()
-    const mustLocate = Boolean(segment.must_locate ?? currentSegment.mustLocate)
-    const locatePolicy = String(segment.locate_policy || currentSegment.locatePolicy || '').trim().toLowerCase()
-    const locateSurfacePolicy = String(segment.locate_surface_policy || currentSegment.locateSurfacePolicy || '').trim().toLowerCase()
-    const claimGroupId = String(segment.claim_group_id || rawReaderOpen?.claimGroup?.id || currentSegment.claimGroupId || '').trim()
-    const claimGroupKind = String(segment.claim_group_kind || rawReaderOpen?.claimGroup?.kind || currentSegment.claimGroupKind || '').trim().toLowerCase()
-    const formulaOrigin = String(segment.formula_origin || currentSegment.formulaOrigin || '').trim().toLowerCase()
-    const segmentAnchorKind = String(segment.anchor_kind || rawLocateTarget?.anchorKind || currentSegment.anchorKind || '').trim().toLowerCase()
-    const segmentAnchorText = normalizeStrictAnchorText(
-      String(segment.anchor_text || rawLocateTarget?.anchorText || currentSegment.anchorText || ''),
-    )
-    const segmentEquationNumber = Number.isFinite(Number(
-      segment.equation_number
-      || (segmentAnchorKind === 'equation' ? rawLocateTarget?.anchorNumber : 0)
-      || currentSegment.equationNumber
-      || 0,
-    ))
-      ? Math.max(0, Math.floor(Number(
-        segment.equation_number
-        || (segmentAnchorKind === 'equation' ? rawLocateTarget?.anchorNumber : 0)
-        || currentSegment.equationNumber
-        || 0,
-      )))
-      : 0
-    const supportFigureNumber = Number.isFinite(Number(
-      segment.support_slot_figure_number
-      || (segmentAnchorKind === 'figure' ? rawLocateTarget?.anchorNumber : 0)
-      || 0,
-    ))
-      ? Math.max(0, Math.floor(Number(
-        segment.support_slot_figure_number
-        || (segmentAnchorKind === 'figure' ? rawLocateTarget?.anchorNumber : 0)
-        || 0,
-      )))
-      : 0
-    const supportPanelLetters = Array.isArray(segment.support_slot_panel_letters)
-      ? Array.from(
-        new Set(
-          segment.support_slot_panel_letters
-            .map((item) => String(item || '').trim().toLowerCase())
-            .filter((item) => /^[a-z]$/.test(item)),
-        ),
-      )
-      : []
-    const blockIdsRaw = [
-      ...[primaryBlockId].filter(Boolean),
-      ...supportBlockIdsRaw.map((item) => String(item || '').trim()).filter(Boolean),
-      ...evidenceBlockIdsRaw.map((item) => String(item || '').trim()).filter(Boolean),
-      ...coerceStringArray(rawLocateTarget?.blockId, 1, 120),
-    ]
-    const allowHiddenRequiredEvidence = Boolean(
-      locatePolicy === 'hidden'
-      && strictIdentityReady
-      && mustLocate
-      && evidenceMode === 'direct'
-      && blockIdsRaw.length > 0
-    )
-    if (locatePolicy === 'hidden' && !allowHiddenRequiredEvidence) continue
-    if (evidenceMode !== 'direct' || blockIdsRaw.length <= 0) continue
-    if (claimType === 'shell_sentence' && !mustLocate) continue
-
-    const sourceSegmentId = String(segment.segment_id || '').trim() || `seg_${idx + 1}`
-    const evidenceQuote = normalizeStrictAnchorText(String(segment.evidence_quote || rawLocateTarget?.evidenceQuote || segmentAnchorText || ''))
-    const headingLikeQuote = claimType === 'quote_claim' && isHeadingLikeQuotedAnchor(segmentAnchorText || evidenceQuote || currentSegment.text)
-    if (headingLikeQuote) continue
-    const hasStrictIdentity = hasSegmentStrictLocateIdentity(segment, currentSegment)
-    if (!hasStrictIdentity) continue
-    const isRequiredPolicy = locatePolicy === 'required'
-    const effectiveMustLocate = strictIdentityReady && (mustLocate || isRequiredPolicy) && !headingLikeQuote
-    if (claimGroupKind === 'formula_bundle' && (locateSurfacePolicy === 'hidden' || formulaOrigin === 'derived')) {
-      continue
-    }
-    const keepSelfTarget = effectiveMustLocate || ['quote_claim', 'blockquote_claim', 'formula_claim', 'inline_formula_claim', 'equation_explanation_claim', 'figure_claim', 'figure_panel'].includes(claimType)
-    const targetSegmentId = String(
-      segment.claim_group_target_segment_id
-      || currentSegment.claimGroupTargetSegmentId
-      || currentSegment.segmentId
-      || sourceSegmentId,
-    ).trim() || sourceSegmentId
-    const targetDistanceRaw = Number(
-      segment.claim_group_target_distance
-      ?? rawReaderOpen?.claimGroup?.distance
-      ?? currentSegment.claimGroupTargetDistance
-      ?? 0,
-    )
-    const targetDistance = Number.isFinite(targetDistanceRaw) && targetDistanceRaw > 0
-      ? Math.max(0, Math.floor(targetDistanceRaw))
-      : 0
-    const targetSegment = provenanceById.get(targetSegmentId) || currentSegment
-    const segmentId = String(targetSegment.segmentId || sourceSegmentId).trim() || sourceSegmentId
-    if (seenSegment.has(segmentId)) continue
-
-    const sourceSegmentText = stripMarkdownInline(String(segment.text || '')).trim()
-    const segmentText = stripMarkdownInline(
-      String(
-        (keepSelfTarget && segmentAnchorText)
-        || rawLocateTarget?.snippet
-        || targetSegment.anchorText
-        || targetSegment.text
-        || sourceSegmentText
-        || '',
-      ),
-    ).trim()
-    if (!segmentText) continue
-    const targetSnippetAliases = Array.isArray(targetSegment.snippetAliases) ? targetSegment.snippetAliases : []
-    const sourceSnippetAliases = Array.isArray(segment.snippet_aliases)
-      ? segment.snippet_aliases.map((item) => String(item || ''))
-      : []
-    const snippetKey = normalizeStructuredLocateSnippet(
-      String(targetSegment.snippetKey || segment.snippet_key || rawLocateTarget?.snippet || segmentText).trim(),
-    )
-    const snippetAliases = mergeStructuredSnippetAliases(
-      targetSnippetAliases,
-      [...sourceSnippetAliases, ...coerceStringArray(rawLocateTarget?.snippetAliases, 8, 360)],
-      [segmentAnchorText],
-      [segmentText, String(rawLocateTarget?.snippet || '')],
-    )
-    const candidates: LocateCandidate[] = []
-    const seenBlock = new Set<string>()
-    for (const blockIdRaw of blockIdsRaw.slice(0, 5)) {
-      const blockId = String(blockIdRaw || '').trim()
-      if (!blockId || seenBlock.has(blockId)) continue
-      const block = blockMap[blockId]
-      if (!block || typeof block !== 'object') continue
-      seenBlock.add(blockId)
-      const blockText = stripMarkdownInline(String(block.text || '')).trim()
-      const headingPath = String(block.heading_path || '').trim()
-      const anchorId = String(block.anchor_id || '').trim()
-      const blockKind = String(block.kind || '').trim().toLowerCase()
-      let anchorKind = String(segmentAnchorKind || blockKind || '').trim().toLowerCase()
-      if (blockKind === 'equation') anchorKind = 'equation'
-      if (blockKind === 'figure') anchorKind = 'figure'
-      const anchorNumberRaw = Number(
-        segmentEquationNumber
-        || supportFigureNumber
-        || rawLocateTarget?.anchorNumber
-        || block.number
-        || 0,
-      )
-      const focusSnippet = segmentAnchorText || evidenceQuote || rawLocateTarget?.highlightSnippet || blockText || segmentText || headingPath
-      if (!focusSnippet) continue
-      candidates.push({
-        sourcePath,
-        sourceName,
-        headingPath,
-        focusSnippet,
-        matchText: [headingPath, segmentAnchorText || evidenceQuote || '', blockText || segmentText].filter(Boolean).join('\n'),
-        sourceType: 'guide',
-        blockId,
-        anchorId: anchorId || undefined,
-        anchorKind: anchorKind || undefined,
-        anchorNumber: Number.isFinite(anchorNumberRaw) && anchorNumberRaw > 0
-          ? Math.floor(anchorNumberRaw)
-          : undefined,
-      })
-    }
-    if (candidates.length <= 0) continue
-
-    const rankedCandidates = [...candidates].sort((a, b) => {
-      const scoreB = scoreStructuredPrimaryCandidate(b, {
-        claimType,
-        anchorKind: segmentAnchorKind,
-        anchorText: segmentAnchorText,
-        evidenceQuote,
-        segmentText,
-        equationNumber: segmentEquationNumber,
-        supportFigureNumber,
-        primaryBlockId,
-        primaryAnchorId,
-      })
-      const scoreA = scoreStructuredPrimaryCandidate(a, {
-        claimType,
-        anchorKind: segmentAnchorKind,
-        anchorText: segmentAnchorText,
-        evidenceQuote,
-        segmentText,
-        equationNumber: segmentEquationNumber,
-        supportFigureNumber,
-        primaryBlockId,
-        primaryAnchorId,
-      })
-      if (scoreB !== scoreA) return scoreB - scoreA
-      return candidates.indexOf(a) - candidates.indexOf(b)
-    })
-
-    const primary = rankedCandidates[0]
-    const alternatives = [
-      primary,
-      ...rankedCandidates.filter((cand) => cand !== primary),
-    ]
-    const entry: ProvenanceLocateEntry = {
-      segmentId,
-      label: shortSegmentLabel(segmentAnchorText || evidenceQuote || segmentText || primary.focusSnippet),
-      segmentText,
-      evidenceQuote,
-      readerOpen: rawReaderOpen || undefined,
-      locateTarget: rawLocateTarget || undefined,
-      hitLevel: String(segment.hit_level || rawLocateTarget?.hitLevel || currentSegment.hitLevel || '').trim().toLowerCase(),
-      claimType,
-      mustLocate: effectiveMustLocate,
-      locatePolicy: locatePolicy || (effectiveMustLocate ? 'required' : ''),
-      locateSurfacePolicy,
-      claimGroupId,
-      claimGroupKind,
-      formulaOrigin,
-      anchorKind: segmentAnchorKind || primary.anchorKind || '',
-      anchorText: segmentAnchorText || evidenceQuote || '',
-      equationNumber: segmentEquationNumber || primary.anchorNumber || 0,
-      supportFigureNumber,
-      supportPanelLetters,
-      snippetKey,
-      snippetAliases,
-      primary,
-      alternatives,
-      relatedBlockIds: Array.from(new Set([
-        ...coerceStringArray((segment as Record<string, unknown>).related_block_ids, 8, 180),
-        ...coerceStringArray(rawLocateTarget?.relatedBlockIds, 8, 180),
-      ])),
-      sourceSegmentId: String(rawLocateTarget?.sourceSegmentId || sourceSegmentId).trim() || sourceSegmentId,
-      groupLeadText: targetDistance > 0
-        ? String(segment.claim_group_lead_text || rawReaderOpen?.claimGroup?.leadText || currentSegment.claimGroupLeadText || sourceSegmentText || '').trim() || undefined
-        : undefined,
-      groupDistance: targetDistance,
-    }
-    if (shouldSuppressNegativeLocateSurface({
-      claimType,
-      anchorKind: segmentAnchorKind || primary.anchorKind || '',
-      segmentText,
-      evidenceQuote,
-      anchorText: segmentAnchorText || '',
-      snippet: primary.focusSnippet || segmentText,
-      highlightSnippet: primary.focusSnippet || evidenceQuote || segmentText,
-    })) {
-      continue
-    }
-    const contentKey = normalizeLocateText(segmentAnchorText || evidenceQuote || segmentText || primary.focusSnippet).slice(0, 220)
-    if (contentKey && seenContent.has(contentKey)) continue
-    if (contentKey) seenContent.add(contentKey)
-    const evidenceConfidenceRaw = Number(segment.evidence_confidence || 0)
-    const evidenceConfidence = Number.isFinite(evidenceConfidenceRaw) ? evidenceConfidenceRaw : 0
-    const segmentFormula = hasFormulaSignal(segmentText)
-    const contentCoreScore = scoreLocateContentCore(segmentText, {
-      kind: targetSegment.kind,
-      segmentType: targetSegment.segmentType,
-      evidenceMode: targetSegment.evidenceMode,
-    })
-    const score = evidenceConfidence
-      + (segmentFormula ? 0.03 : 0)
-      + Math.min(0.18, contentCoreScore * 0.16)
-      - Math.min(0.16, targetDistance * 0.06)
-      + (effectiveMustLocate ? 0.42 : 0)
-      + (claimType === 'formula_claim' ? 0.18 : 0)
-      + (claimType === 'inline_formula_claim' ? 0.17 : 0)
-      + (claimType === 'equation_explanation_claim' ? 0.16 : 0)
-      + (claimType === 'figure_claim' ? 0.16 : 0)
-      + (claimType === 'figure_panel' ? 0.2 : 0)
-      + ((claimType === 'quote_claim' || claimType === 'blockquote_claim') ? 0.14 : 0)
-      + (locateSurfacePolicy === 'primary' ? 0.18 : 0)
-      + (locateSurfacePolicy === 'secondary' ? 0.08 : 0)
-      + (formulaOrigin === 'source' ? 0.12 : 0)
-      - (formulaOrigin === 'derived' ? 0.32 : 0)
-      + ((segmentAnchorText || evidenceQuote).length >= 18 ? 0.05 : 0)
-    scoredEntries.push({ entry, score, idx })
-    seenSegment.add(segmentId)
-  }
-  if (scoredEntries.length <= 0) return []
-  let ranked = scoredEntries
-    .filter((item) => {
-      if (item.score >= minConfidence) return true
-      return Boolean(item.entry.mustLocate || item.entry.locatePolicy === 'required')
-    })
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score
-      return a.idx - b.idx
-    })
-  if (ranked.length <= 0) {
-    ranked = [...scoredEntries].sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score
-      return a.idx - b.idx
-    })
-  }
-  const bestFormulaBundleByKey = new Map<string, (typeof ranked)[number]>()
-  for (const item of ranked) {
-    const groupKey = formulaBundleLocateGroupKey(item.entry)
-    if (!groupKey) continue
-    const prev = bestFormulaBundleByKey.get(groupKey)
-    if (!prev) {
-      bestFormulaBundleByKey.set(groupKey, item)
-      continue
-    }
-    const itemRepScore = formulaBundleRepresentativeScore(item.entry)
-    const prevRepScore = formulaBundleRepresentativeScore(prev.entry)
-    if (itemRepScore !== prevRepScore) {
-      if (itemRepScore > prevRepScore) bestFormulaBundleByKey.set(groupKey, item)
-      continue
-    }
-    if (item.score !== prev.score) {
-      if (item.score > prev.score) bestFormulaBundleByKey.set(groupKey, item)
-      continue
-    }
-    if (item.idx < prev.idx) bestFormulaBundleByKey.set(groupKey, item)
-  }
-  if (bestFormulaBundleByKey.size > 0) {
-    ranked = ranked.filter((item) => {
-      const groupKey = formulaBundleLocateGroupKey(item.entry)
-      if (!groupKey) return true
-      return bestFormulaBundleByKey.get(groupKey) === item
-    })
-  }
-  const mustLocateEntries = ranked.filter((item) => item.entry.mustLocate || item.entry.locatePolicy === 'required')
-  const optionalEntries = ranked.filter((item) => !(item.entry.mustLocate || item.entry.locatePolicy === 'required'))
-  const limited = [
-    ...mustLocateEntries,
-    ...optionalEntries.slice(0, Math.max(0, maxEntries - mustLocateEntries.length)),
-  ]
-
-  // Deduplicate by primary evidence block id to avoid repeating the same source block across multiple segments.
-  // Prefer required/must-locate entries; otherwise prefer higher score.
-  const bestByBlock = new Map<string, (typeof limited)[number]>()
-  for (const item of limited) {
-    const blockId = String(item.entry?.primary?.blockId || '').trim()
-    const anchorId = String(item.entry?.primary?.anchorId || '').trim()
-    const key = blockId || (anchorId ? `${item.entry.primary.sourcePath}::${anchorId}` : '')
-    if (!key) continue
-    const prev = bestByBlock.get(key)
-    if (!prev) {
-      bestByBlock.set(key, item)
-      continue
-    }
-    const prevRequired = Boolean(prev.entry.mustLocate || prev.entry.locatePolicy === 'required')
-    const curRequired = Boolean(item.entry.mustLocate || item.entry.locatePolicy === 'required')
-    if (curRequired && !prevRequired) {
-      bestByBlock.set(key, item)
-      continue
-    }
-    if (curRequired === prevRequired) {
-      if (item.score > prev.score + 1e-6) {
-        bestByBlock.set(key, item)
-        continue
-      }
-      if (Math.abs(item.score - prev.score) <= 1e-6 && item.idx < prev.idx) {
-        bestByBlock.set(key, item)
-        continue
-      }
-    }
-  }
-  const deduped = Array.from(bestByBlock.values())
-  return deduped
-    .sort((a, b) => a.idx - b.idx)
-    .map((item) => item.entry)
-}
-
-function normalizeStructuredLocateKind(input: string): StructuredLocateKind | '' {
-  const raw = String(input || '').trim().toLowerCase()
-  if (!raw) return ''
-  if (raw === 'equation' || raw === 'math') return 'equation'
-  if (raw === 'figure' || raw === 'fig' || raw === 'image' || raw === 'img') return 'figure'
-  if (raw === 'list_item' || raw === 'list-item' || raw === 'li') return 'list_item'
-  if (raw === 'quote' || raw === 'quoted_text') return 'quote'
-  if (raw === 'blockquote' || raw === 'bq') return 'blockquote'
-  if (raw === 'paragraph' || raw === 'p') return 'paragraph'
-  return ''
-}
-
-function buildRefsLocateCandidatesAll(refHits: RefHitLite[]): LocateCandidate[] {
-  const out: LocateCandidate[] = []
-  const seen = new Set<string>()
-  const push = (candidate: LocateCandidate | null) => {
-    if (!candidate) return
-    if (out.length >= REF_LOCATE_CANDIDATE_LIMIT) return
-    const sourcePath = String(candidate.sourcePath || '').trim()
-    const matchText = String(candidate.matchText || '').trim()
-    if (!sourcePath || !matchText) return
-    const key = `${normalizeLocateText(sourcePath)}::${normalizeLocateText(candidate.headingPath || '')}::${normalizeLocateText(matchText).slice(0, 220)}`
-    if (seen.has(key)) return
-    seen.add(key)
-    out.push(candidate)
-  }
-
-  for (const hit of refHits) {
-    const ui = hit?.ui_meta || {}
-    const meta = hit?.meta || {}
-    const sourcePath = String(ui.source_path || meta.source_path || '').trim()
-    if (!sourcePath) continue
-    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || 'paper'
-
-    const headingCandidates = new Set<string>([
-      String(ui.heading_path || '').trim(),
-      String(ui.section_label || '').trim(),
-      String(ui.subsection_label || '').trim(),
-      String(meta.ref_best_heading_path || '').trim(),
-      String(meta.heading_path || '').trim(),
-    ].filter(Boolean))
-    const anchorKind = String(ui.anchor_target_kind || '').trim().toLowerCase()
-    const anchorNum = Number(ui.anchor_target_number || 0)
-    for (const heading of coerceStringArray(meta.ref_headings, 8, 160)) {
-      headingCandidates.add(String(heading || '').trim())
-    }
-
-    const refLocs = Array.isArray(meta.ref_locs) ? meta.ref_locs : []
-    for (const loc0 of refLocs.slice(0, 10)) {
-      const loc = (loc0 || {}) as Record<string, unknown>
-      const headingPath = String(loc.heading_path || loc.heading || '').trim()
-      if (headingPath) headingCandidates.add(headingPath)
-      const locText = pickFirstRefText(loc)
-      const locAnchorId = String(loc.anchor_id || loc.anchorId || '').trim()
-      const locAnchorKind = String(loc.anchor_kind || loc.kind || anchorKind || '').trim().toLowerCase()
-      const locAnchorNumber = Number(loc.anchor_number || loc.number || anchorNum || 0)
-      if (locText) {
-        push({
-          sourcePath,
-          sourceName,
-          headingPath: headingPath || String(ui.heading_path || '').trim(),
-          focusSnippet: locText,
-          matchText: [headingPath, locText].filter(Boolean).join('\n'),
-          sourceType: 'refs',
-          anchorId: locAnchorId || undefined,
-          anchorKind: locAnchorKind || undefined,
-          anchorNumber: Number.isFinite(locAnchorNumber) && locAnchorNumber > 0 ? Math.floor(locAnchorNumber) : undefined,
-        })
-      }
-    }
-
-    const snippetSeeds = [
-      ...coerceStringArray(ui.summary_line, 1, 360),
-      ...coerceStringArray(ui.why_line, 1, 360),
-      ...coerceStringArray(meta.ref_show_snippets, 4, 2600),
-      ...coerceStringArray(meta.ref_snippets, 4, 2600),
-      ...coerceStringArray(meta.ref_overview_snippets, 2, 2600),
-    ]
-    if (anchorKind === 'equation' && Number.isFinite(anchorNum) && anchorNum > 0) {
-      snippetSeeds.push(
-        `equation ${anchorNum}`,
-        `eq ${anchorNum}`,
-        `(${anchorNum})`,
-      )
-    }
-    const headingFallback = Array.from(headingCandidates).find(Boolean) || ''
-    for (const seed of snippetSeeds) {
-      const pieces = buildGuideLocateCandidates(seed, sourcePath, sourceName, 'refs')
-      if (pieces.length > 0) {
-        for (const piece of pieces.slice(0, 40)) push(piece)
-        continue
-      }
-      push({
-        sourcePath,
-        sourceName,
-        headingPath: headingFallback,
-        focusSnippet: seed,
-        matchText: [headingFallback, seed].filter(Boolean).join('\n'),
-        sourceType: 'refs',
-        anchorKind: anchorKind || undefined,
-        anchorNumber: Number.isFinite(anchorNum) && anchorNum > 0 ? Math.floor(anchorNum) : undefined,
-      })
-    }
-
-    for (const headingPath of headingCandidates) {
-      push({
-        sourcePath,
-        sourceName,
-        headingPath,
-        focusSnippet: headingPath,
-        matchText: headingPath,
-        sourceType: 'refs',
-        anchorKind: anchorKind || undefined,
-        anchorNumber: Number.isFinite(anchorNum) && anchorNum > 0 ? Math.floor(anchorNum) : undefined,
-      })
-    }
-  }
-  return out
 }
 
 function citationNumbersInMarkdown(content: string): number[] {
@@ -1937,11 +561,37 @@ function citationNumbersInMarkdown(content: string): number[] {
   return out
 }
 
+const PLAIN_CITATION_BRACKET_RE = /\[([Rr]?\d{1,4}(?:\s*[,，、;；\-–—−]\s*[Rr]?\d{1,4})*)\](?!\()/gi
+
+function plainCitationBracketContainsNum(body: string, num: number): boolean {
+  const target = Number(num || 0)
+  if (!Number.isFinite(target) || target <= 0) return false
+  for (const token of String(body || '').matchAll(/[Rr]?(\d{1,4})/g)) {
+    if (Number(token[1] || 0) === target) return true
+  }
+  return false
+}
+
+function plainCitationMarkerIndex(text: string, num: number): number {
+  const exact = new RegExp(`\\[(?:R)?${num}\\]`, 'i')
+  const exactIndex = text.search(exact)
+  if (exactIndex >= 0) return exactIndex
+  for (const match of text.matchAll(PLAIN_CITATION_BRACKET_RE)) {
+    if (plainCitationBracketContainsNum(String(match[1] || ''), num)) {
+      return match.index ?? -1
+    }
+  }
+  return -1
+}
+
+function stripPlainCitationBrackets(text: string): string {
+  return String(text || '').replace(PLAIN_CITATION_BRACKET_RE, ' ')
+}
+
 function answerClaimAroundCitation(content: string, num: number): string {
   const text = stripMarkdownInline(String(content || '')).replace(/\s+/g, ' ').trim()
   if (!text) return ''
-  const marker = new RegExp(`\\[(?:R)?${num}\\]`, 'i')
-  const idx = text.search(marker)
+  const idx = plainCitationMarkerIndex(text, num)
   if (idx < 0) return text.slice(0, 240)
   const before = text.slice(0, idx)
   const after = text.slice(idx)
@@ -1957,7 +607,7 @@ function answerClaimAroundCitation(content: string, num: number): string {
   const sentenceStart = start >= 0 ? start + 1 : (idx > 260 ? Math.max(0, idx - 180) : 0)
   const sentence = text.slice(sentenceStart, end).trim()
   const markerInSentence = Math.max(0, idx - sentenceStart)
-  let snippet = sentence.replace(/\s*\[(?:R)?\d{1,4}]\s*/gi, ' ').replace(/\s+/g, ' ').trim()
+  let snippet = stripPlainCitationBrackets(sentence).replace(/\s+/g, ' ').trim()
   snippet = snippet.replace(/^\s*(?:\d{1,3}[.)、．]|[-*•])\s*/, '').trim()
   const maxLen = 180
   if (snippet.length <= maxLen) return snippet
@@ -2013,7 +663,7 @@ function buildFallbackCiteDetailsFromRefHits(opts: {
     const meta = hit.meta || {}
     const sourcePath = String(ui.source_path || meta.source_path || '').trim()
     if (!sourcePath) continue
-    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || 'paper'
+    const sourceName = String(ui.display_name || '').trim() || basenameFromSourcePath(sourcePath) || 'paper'
     const headingPath = String(
       ui.heading_path
       || ui.section_label
@@ -2192,7 +842,7 @@ function enrichCiteDetailsWithVisibleRefContext(details: CiteDetail[], refEntry:
     const displayNum = index + 1
     const summaryLine = cleanCitationDisplayText(String(ui.summary_line || ''))
     const sourcePath = String(ui.source_path || meta.source_path || '').trim()
-    const sourceName = String(ui.display_name || sourcePath.split(/[\\/]/).pop() || '').trim()
+    const sourceName = String(ui.display_name || basenameFromSourcePath(sourcePath) || '').trim()
     const row = { displayNum, summaryLine }
     const pathKey = refDisplaySourceKey(sourcePath)
     if (pathKey && !bySourcePath.has(pathKey)) bySourcePath.set(pathKey, row)
@@ -2233,545 +883,6 @@ function enrichCiteDetailsWithVisibleRefContext(details: CiteDetail[], refEntry:
   })
 }
 
-function isPreferredStrictFigureRefSnippet(input: string): boolean {
-  const raw = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!raw) return false
-  if (/^(?:figure|图)\s*#?\s*\d{1,4}$/i.test(raw)) return true
-  return false
-}
-
-function isHeadingLikeQuotedAnchor(text: string): boolean {
-  const raw = stripProvenanceNoise(stripMarkdownInline(String(text || '')))
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!raw) return true
-  if (/[。！？!?;；:：]/.test(raw)) return false
-  const latin = raw.match(/[A-Za-z]{3,}/g) || []
-  if (latin.length > 0 && latin.length <= 8 && raw.length <= 80) {
-    const verbLike = /\b(?:is|are|was|were|be|been|being|can|cannot|could|should|would|will|use|used|using|estimate|estimated|show|shown|train|training|feed|feeding|make|making|exploit|provide|compare)\b/i
-    if (!verbLike.test(raw)) return true
-  }
-  return raw.length <= 28 && !/\d/.test(raw)
-}
-
-function scoreStructuredAnchorCompatibility(
-  renderKindInput: string,
-  entry: Pick<ProvenanceLocateEntry, 'anchorKind' | 'claimType' | 'mustLocate'> | null | undefined,
-): number {
-  const renderKind = normalizeStructuredLocateKind(renderKindInput)
-  const anchorKind = String(entry?.anchorKind || '').trim().toLowerCase()
-  const claimType = String(entry?.claimType || '').trim().toLowerCase()
-  if (!renderKind) return 0
-  if (claimType === 'equation_explanation_claim') {
-    if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.66
-    if (renderKind === 'blockquote') return 0.18
-    if (renderKind === 'equation') return 0.12
-    return -0.4
-  }
-  if (claimType === 'inline_formula_claim' || anchorKind === 'inline_formula') {
-    if (renderKind === 'equation') return 0.74
-    if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.58
-    if (renderKind === 'blockquote') return 0.2
-    return -0.28
-  }
-  if (anchorKind === 'blockquote' || claimType === 'blockquote_claim') {
-    return renderKind === 'blockquote' ? 0.72 : -1.2
-  }
-  if (anchorKind === 'equation' || claimType === 'formula_claim') {
-    if (renderKind === 'equation') return 0.86
-    return -1.05
-  }
-  if (claimType === 'figure_panel') {
-    if (renderKind === 'figure') return 0.86
-    if (renderKind === 'blockquote') return 0.64
-    if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.52
-    return -0.54
-  }
-  if (anchorKind === 'figure' || claimType === 'figure_claim') {
-    if (renderKind === 'figure') return 0.8
-    if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.08
-    return -0.92
-  }
-  if (anchorKind === 'quote' || claimType === 'quote_claim') {
-    if (renderKind === 'quote') return 0.88
-    if (renderKind === 'blockquote') return 0.58
-    if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.28
-    return -0.5
-  }
-  return 0
-}
-
-function splitAnswerRenderSegments(answerMarkdown: string): StructuredRenderSegment[] {
-  const lines = String(answerMarkdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
-  const segments: StructuredRenderSegment[] = []
-  let buf: string[] = []
-  let quoteBuf: string[] = []
-  let inFence = false
-  let inDisplayMath = false
-  let mathBuf: string[] = []
-  let order = 0
-
-  const push = (kind: StructuredLocateKind, rawText: string) => {
-    const text = stripMarkdownInline(String(rawText || '')).replace(/\s+/g, ' ').trim()
-    if (text.length < 10) return
-    order += 1
-    segments.push({
-      order,
-      kind,
-      text: text.slice(0, 1600),
-      snippetKey: normalizeLocateText(text.slice(0, 360)),
-    })
-  }
-
-  const flushParagraph = () => {
-    if (buf.length <= 0) return
-    push('paragraph', buf.join('\n'))
-    buf = []
-  }
-
-  const flushBlockquote = () => {
-    if (quoteBuf.length <= 0) return
-    push('blockquote', quoteBuf.join('\n'))
-    quoteBuf = []
-  }
-
-  const flushDisplayMath = () => {
-    if (mathBuf.length <= 0) return
-    push('equation', mathBuf.join('\n'))
-    mathBuf = []
-  }
-
-  for (const raw of lines) {
-    const line = String(raw || '')
-    if (/^\s*(```+|~~~+)\s*$/.test(line)) {
-      if (inFence) {
-        inFence = false
-        flushParagraph()
-        flushBlockquote()
-        flushDisplayMath()
-      } else {
-        flushParagraph()
-        flushBlockquote()
-        inFence = true
-      }
-      continue
-    }
-    if (inFence) continue
-    const trimmed = line.trim()
-    const imageMatch = trimmed.match(/^!\[([^\]]*)\]\([^)]+\)\s*$/)
-    if (imageMatch) {
-      flushParagraph()
-      flushBlockquote()
-      flushDisplayMath()
-      push('figure', String(imageMatch[1] || '').trim() || trimmed)
-      continue
-    }
-    const eqStart = /^\s*(?:\$\$|\\\[|\\begin\{(?:equation|align|gather|multline|eqnarray)\*?\})/.test(line)
-    const eqEnd = /(?:\$\$|\\\]|\\end\{(?:equation|align|gather|multline|eqnarray)\*?\})\s*$/.test(line)
-    if (inDisplayMath) {
-      mathBuf.push(line)
-      if (eqEnd) {
-        inDisplayMath = false
-        flushDisplayMath()
-      }
-      continue
-    }
-    if (eqStart) {
-      flushParagraph()
-      flushBlockquote()
-      mathBuf = [line]
-      if (eqEnd && !/^\s*(?:\$\$|\\\[)\s*$/.test(line)) {
-        flushDisplayMath()
-      } else {
-        inDisplayMath = true
-      }
-      continue
-    }
-    if (!line.trim()) {
-      flushParagraph()
-      flushBlockquote()
-      flushDisplayMath()
-      continue
-    }
-    if (/^\s{0,3}#{1,6}\s+/.test(line)) {
-      flushParagraph()
-      flushBlockquote()
-      flushDisplayMath()
-      continue
-    }
-    const listMatch = line.match(/^\s*(?:[-*+]|\d+[.)])\s+(.*)$/)
-    if (listMatch) {
-      flushParagraph()
-      flushBlockquote()
-      flushDisplayMath()
-      push('list_item', String(listMatch[1] || ''))
-      continue
-    }
-    if (/^\s*\|.*\|\s*$/.test(line)) {
-      flushParagraph()
-      flushBlockquote()
-      flushDisplayMath()
-      continue
-    }
-    const quoteMatch = line.match(/^\s*>\s?(.*)$/)
-    if (quoteMatch) {
-      flushParagraph()
-      flushDisplayMath()
-      quoteBuf.push(String(quoteMatch[1] || ''))
-      continue
-    }
-    flushBlockquote()
-    buf.push(line)
-  }
-  flushParagraph()
-  flushBlockquote()
-  flushDisplayMath()
-  return segments
-}
-
-function listStructuredProvenanceSegments(
-  messageProvenance: Record<string, unknown> | null,
-): StructuredProvenanceSegment[] {
-  if (!messageProvenance || typeof messageProvenance !== 'object') return []
-  const segmentsRaw = Array.isArray(messageProvenance.segments) ? messageProvenance.segments : []
-  const out: StructuredProvenanceSegment[] = []
-  for (let idx = 0; idx < segmentsRaw.length; idx += 1) {
-    const segment = segmentsRaw[idx] as Record<string, unknown> | null
-    if (!segment || typeof segment !== 'object') continue
-    const segmentId = String(segment.segment_id || '').trim() || `seg_${idx + 1}`
-    const text = stripMarkdownInline(String(segment.text || '')).replace(/\s+/g, ' ').trim()
-    const snippetKeyRaw = String(segment.snippet_key || '').trim()
-    const snippetAliases = Array.isArray(segment.snippet_aliases)
-      ? segment.snippet_aliases
-        .map((item) => normalizeStructuredLocateSnippet(String(item || '').trim()))
-        .filter(Boolean)
-        .slice(0, 8)
-      : []
-    out.push({
-      index: idx,
-      segmentId,
-      kind: String(segment.kind || '').trim().toLowerCase(),
-      segmentType: String(segment.segment_type || '').trim().toLowerCase(),
-      evidenceMode: String(segment.evidence_mode || '').trim().toLowerCase(),
-      hitLevel: String(segment.hit_level || '').trim().toLowerCase(),
-      claimType: String(segment.claim_type || '').trim().toLowerCase(),
-      mustLocate: Boolean(segment.must_locate),
-      locatePolicy: String(segment.locate_policy || '').trim().toLowerCase(),
-      locateSurfacePolicy: String(segment.locate_surface_policy || '').trim().toLowerCase(),
-      claimGroupId: String(segment.claim_group_id || '').trim(),
-      claimGroupKind: String(segment.claim_group_kind || '').trim().toLowerCase(),
-      claimGroupTargetSegmentId: String(segment.claim_group_target_segment_id || '').trim(),
-      claimGroupTargetDistance: Number.isFinite(Number(segment.claim_group_target_distance || 0))
-        ? Math.max(0, Math.floor(Number(segment.claim_group_target_distance || 0)))
-        : 0,
-      claimGroupLeadText: stripMarkdownInline(String(segment.claim_group_lead_text || '')).replace(/\s+/g, ' ').trim(),
-      formulaOrigin: String(segment.formula_origin || '').trim().toLowerCase(),
-      anchorKind: String(segment.anchor_kind || '').trim().toLowerCase(),
-      anchorText: stripMarkdownInline(String(segment.anchor_text || '')).replace(/\s+/g, ' ').trim(),
-      equationNumber: Number.isFinite(Number(segment.equation_number || 0))
-        ? Math.max(0, Math.floor(Number(segment.equation_number || 0)))
-        : 0,
-      text,
-      snippetKey: normalizeStructuredLocateSnippet(snippetKeyRaw || text.slice(0, 360)),
-      snippetAliases,
-    })
-  }
-  return out
-}
-
-function scoreStructuredRenderBinding(
-  renderSegment: StructuredRenderSegment,
-  entry: ProvenanceLocateEntry,
-  provenanceSegment: StructuredProvenanceSegment | null,
-  targetOrder: number,
-): number {
-  const segText = String(provenanceSegment?.text || entry.segmentText || '').trim()
-  const segKey = String(provenanceSegment?.snippetKey || entry.snippetKey || '').trim()
-  let score = Math.max(
-    scoreProvenanceSegment(renderSegment.text, segText, segKey),
-    overlapScore(renderSegment.text, segText),
-  )
-  if (segKey && renderSegment.snippetKey === normalizeLocateText(segKey)) {
-    score += 0.42
-  }
-  if (Array.isArray(entry.snippetAliases) && entry.snippetAliases.length > 0) {
-    const aliasScore = entry.snippetAliases.reduce((acc, alias) => {
-      return Math.max(acc, overlapScore(renderSegment.text, String(alias || '')))
-    }, 0)
-    score += 0.22 * aliasScore
-  }
-  if (Array.isArray(provenanceSegment?.snippetAliases) && provenanceSegment.snippetAliases.length > 0) {
-    const aliasScore = provenanceSegment.snippetAliases.reduce((acc, alias) => {
-      return Math.max(acc, overlapScore(renderSegment.text, String(alias || '')))
-    }, 0)
-    score += 0.14 * aliasScore
-  }
-  const figureNumbers = extractFigureNumbersFromText(
-    `${entry.anchorText} ${entry.segmentText} ${provenanceSegment?.text || ''}`,
-  )
-  if (figureNumbers.length > 0) {
-    score += 0.56 * figureNumberMatchScore(renderSegment.text, figureNumbers)
-  }
-  const renderKind = normalizeStructuredLocateKind(renderSegment.kind)
-  const segKind = normalizeStructuredLocateKind(String(provenanceSegment?.kind || ''))
-  const anchorCompat = scoreStructuredAnchorCompatibility(renderKind, entry)
-  if (anchorCompat <= -0.9) return anchorCompat
-  score += anchorCompat
-  if (renderKind && segKind && renderKind === segKind) {
-    score += 0.18
-  }
-  if (targetOrder > 0) {
-    const distance = Math.abs(renderSegment.order - targetOrder)
-    if (distance === 0) score += 0.26
-    else score -= Math.min(0.48, distance * 0.1)
-    if (distance <= 1) score += 0.05
-  }
-  return score
-}
-
-function buildStructuredRenderLocateSlotMap(
-  answerMarkdown: string,
-  messageProvenance: Record<string, unknown> | null,
-  provenanceLocateEntries: ProvenanceLocateEntry[],
-): Map<number, StructuredRenderLocateSlot> {
-  const renderSegments = splitAnswerRenderSegments(answerMarkdown)
-  const provenanceSegments = listStructuredProvenanceSegments(messageProvenance)
-  if (renderSegments.length <= 0 || provenanceSegments.length <= 0 || provenanceLocateEntries.length <= 0) {
-    return new Map()
-  }
-
-  const provenanceById = new Map(provenanceSegments.map((segment) => [segment.segmentId, segment]))
-  const renderableOrdinalBySegmentId = new Map<string, number>()
-  let renderableOrdinal = 0
-  for (const segment of provenanceSegments) {
-    if (normalizeStructuredLocateKind(segment.kind)) {
-      renderableOrdinal += 1
-      renderableOrdinalBySegmentId.set(segment.segmentId, renderableOrdinal)
-    }
-  }
-
-  const slotMap = new Map<number, StructuredRenderLocateSlot>()
-  const assignedOrders = new Set<number>()
-  const orderedEntries = provenanceLocateEntries
-    .map((entry, entryIndex) => ({
-      entry,
-      provenanceSegment: provenanceById.get(entry.segmentId) || null,
-      entryIndex,
-    }))
-    .sort((a, b) => {
-      const aIndex = a.provenanceSegment?.index ?? a.entryIndex
-      const bIndex = b.provenanceSegment?.index ?? b.entryIndex
-      return aIndex - bIndex
-    })
-
-  for (const item of orderedEntries) {
-    const { entry, provenanceSegment } = item
-    const targetOrder = Number(renderableOrdinalBySegmentId.get(entry.segmentId) || 0)
-    const formulaQuery = hasFormulaSignal(entry.segmentText || provenanceSegment?.text || '')
-  const figureQuery = String(entry.anchorKind || '').trim().toLowerCase() === 'figure'
-      || String(entry.claimType || '').trim().toLowerCase() === 'figure_claim'
-      || String(entry.claimType || '').trim().toLowerCase() === 'figure_panel'
-    let bestSegment: StructuredRenderSegment | null = null
-    let bestScore = Number.NEGATIVE_INFINITY
-    for (const renderSegment of renderSegments) {
-      if (assignedOrders.has(renderSegment.order)) continue
-      const score = scoreStructuredRenderBinding(renderSegment, entry, provenanceSegment, targetOrder)
-      if (score > bestScore) {
-        bestScore = score
-        bestSegment = renderSegment
-      }
-    }
-    if (!bestSegment) continue
-    const distance = targetOrder > 0 ? Math.abs(bestSegment.order - targetOrder) : 0
-    let floor = formulaQuery ? 0.3 : (figureQuery ? 0.26 : 0.44)
-    if (targetOrder > 0 && distance === 0) floor -= 0.14
-    else if (targetOrder > 0 && distance <= 1) floor -= 0.08
-    if (bestScore < floor) continue
-    assignedOrders.add(bestSegment.order)
-    slotMap.set(bestSegment.order, {
-      order: bestSegment.order,
-      kind: bestSegment.kind,
-      renderText: bestSegment.text,
-      renderSnippetKey: bestSegment.snippetKey,
-      entry,
-      provenanceIndex: provenanceSegment?.index ?? item.entryIndex,
-      score: bestScore,
-    })
-  }
-  return slotMap
-}
-
-function resolveStructuredRenderLocateSlot(
-  snippet: string,
-  meta: LocateRenderMetaLite | undefined,
-  slotMap: Map<number, StructuredRenderLocateSlot>,
-): StructuredRenderLocateSlot | null {
-  if (!(slotMap instanceof Map) || slotMap.size <= 0) return null
-  const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || ''))).trim()
-  const targetOrderRaw = Number(meta?.order || 0)
-  const targetOrder = Number.isFinite(targetOrderRaw) && targetOrderRaw > 0 ? Math.floor(targetOrderRaw) : 0
-  const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
-
-  const scoreSlot = (slot: StructuredRenderLocateSlot): number => {
-    const compat = scoreStructuredAnchorCompatibility(targetKind || slot.kind, slot.entry)
-    if (targetKind && compat <= -0.9) return Number.NEGATIVE_INFINITY
-    let score = 0
-    if (raw) {
-      score = Math.max(
-        scoreProvenanceSegment(raw, slot.renderText, slot.renderSnippetKey),
-        scoreProvenanceSegment(raw, slot.entry.segmentText, slot.entry.snippetKey),
-        overlapScore(raw, slot.renderText),
-      )
-      if (Array.isArray(slot.entry.snippetAliases) && slot.entry.snippetAliases.length > 0) {
-        const aliasScore = slot.entry.snippetAliases.reduce((acc, alias) => {
-          return Math.max(acc, overlapScore(raw, String(alias || '')))
-        }, 0)
-        score += 0.18 * aliasScore
-      }
-    }
-    const figureNumbers = extractFigureNumbersFromText(`${raw} ${slot.entry.anchorText} ${slot.entry.segmentText}`)
-    if (figureNumbers.length > 0) {
-      score += 0.62 * Math.max(
-        figureNumberMatchScore(raw, figureNumbers),
-        figureNumberMatchScore(slot.renderText, figureNumbers),
-      )
-    }
-    if (targetKind && slot.kind === targetKind) score += 0.12
-    score += Math.max(-0.6, compat)
-    if (targetOrder > 0) {
-      const distance = Math.abs(slot.order - targetOrder)
-      if (distance === 0) score += 0.5
-      else score -= Math.min(0.44, distance * 0.18)
-    }
-    return score
-  }
-
-  if (targetOrder > 0) {
-    const direct = slotMap.get(targetOrder)
-    if (direct) {
-      const directScore = scoreSlot(direct)
-      const directFloor = raw ? (hasFormulaSignal(raw) ? 0.16 : 0.1) : -1
-      if ((!targetKind || direct.kind === targetKind) && directScore >= directFloor) {
-        return direct
-      }
-    }
-  }
-
-  let best: StructuredRenderLocateSlot | null = null
-  let bestScore = Number.NEGATIVE_INFINITY
-  for (const slot of slotMap.values()) {
-    const score = scoreSlot(slot)
-    if (score > bestScore) {
-      best = slot
-      bestScore = score
-    }
-  }
-  if (!best) return null
-  if (targetKind) {
-    const compat = scoreStructuredAnchorCompatibility(targetKind, best.entry)
-    if (compat <= -0.9) return null
-  }
-  const floor = raw ? (hasFormulaSignal(raw) ? 0.34 : 0.48) : 0.22
-  return bestScore >= floor ? best : null
-}
-
-function resolveStructuredFallbackLocateEntry(
-  snippet: string,
-  meta: LocateRenderMetaLite | undefined,
-  provenanceLocateEntries: ProvenanceLocateEntry[],
-): ProvenanceLocateEntry | null {
-  const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || ''))).trim()
-  const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
-  if (!raw || provenanceLocateEntries.length <= 0) return null
-
-  let best: ProvenanceLocateEntry | null = null
-  let bestScore = Number.NEGATIVE_INFINITY
-  for (const entry of provenanceLocateEntries) {
-    const compat = scoreStructuredAnchorCompatibility(
-      targetKind || normalizeStructuredLocateKind(String(entry.anchorKind || '')),
-      entry,
-    )
-    if (targetKind && compat <= -0.9) continue
-    let score = Math.max(
-      scoreProvenanceSegment(raw, entry.segmentText, entry.snippetKey),
-      overlapScore(raw, entry.anchorText || entry.segmentText),
-    )
-    if (Array.isArray(entry.snippetAliases) && entry.snippetAliases.length > 0) {
-      const aliasScore = entry.snippetAliases.reduce((acc, alias) => {
-        return Math.max(acc, overlapScore(raw, String(alias || '')))
-      }, 0)
-      score += 0.18 * aliasScore
-    }
-    const figureNumbers = extractFigureNumbersFromText(`${raw} ${entry.anchorText} ${entry.segmentText}`)
-    if (figureNumbers.length > 0) {
-      score += 0.72 * figureNumberMatchScore(`${entry.anchorText} ${entry.segmentText}`, figureNumbers)
-    }
-    if (targetKind && normalizeStructuredLocateKind(String(entry.anchorKind || '')) === targetKind) {
-      score += 0.14
-    }
-    if (entry.mustLocate || entry.locatePolicy === 'required') {
-      score += 0.08
-    }
-    score += Math.max(-0.4, compat)
-    if (score > bestScore) {
-      best = entry
-      bestScore = score
-    }
-  }
-  if (!best) return null
-  const targetIsFigure = targetKind === 'figure'
-  const floor = targetIsFigure ? 0.34 : (hasFormulaSignal(raw) ? 0.38 : 0.56)
-  return bestScore >= floor ? best : null
-}
-
-function normalizeStructuredLocateSnippet(input: string): string {
-  const raw = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!raw) return ''
-  const trimmed = raw
-    .replace(/\.{3,}\s*$/, '')
-    .replace(/\u2026+\s*$/, '')
-    .trim()
-  return normalizeLocateText(trimmed)
-}
-
-function buildLocateCandidateFromReaderLocateCandidate(
-  raw: Partial<ReaderLocateCandidate> | null | undefined,
-  opts: {
-    sourcePath: string
-    sourceName: string
-    sourceType?: 'guide' | 'refs'
-  },
-): LocateCandidate | null {
-  if (!raw) return null
-  const sourcePath = String(opts.sourcePath || '').trim()
-  if (!sourcePath) return null
-  const snippet = String(raw.snippet || raw.highlightSnippet || '').trim()
-  const highlightSnippet = String(raw.highlightSnippet || snippet).trim()
-  const headingPath = String(raw.headingPath || '').trim()
-  const blockId = String(raw.blockId || '').trim()
-  const anchorId = String(raw.anchorId || '').trim()
-  const anchorKind = String(raw.anchorKind || '').trim().toLowerCase()
-  const anchorNumber = toPositiveIntOrUndefined(raw.anchorNumber || 0)
-  const focusSnippet = String(highlightSnippet || snippet || headingPath).trim()
-  if (!(focusSnippet || blockId || anchorId || headingPath)) return null
-  return {
-    sourcePath,
-    sourceName: String(opts.sourceName || '').trim(),
-    headingPath,
-    focusSnippet,
-    matchText: [headingPath, snippet || highlightSnippet].filter(Boolean).join('\n') || focusSnippet,
-    sourceType: opts.sourceType || 'guide',
-    blockId: blockId || undefined,
-    anchorId: anchorId || undefined,
-    anchorKind: anchorKind || undefined,
-    anchorNumber,
-  }
-}
-
 function buildRenderPacketLocateEntry(
   message: Message,
   packet: MessageRenderPacketLite | null,
@@ -2794,7 +905,7 @@ function buildRenderPacketLocateEntry(
   const sourceName = String(
     readerOpen?.sourceName
     || opts.fallbackSourceName
-    || sourcePath.split(/[\\/]/).pop()
+    || basenameFromSourcePath(sourcePath)
     || 'paper',
   ).trim()
   const snippet = String(
@@ -3008,297 +1119,6 @@ function messageLocatePayloadSignature(message: Message, renderPacketValue: unkn
   })()
 
   return `${provenanceSig}::${renderPacketSig}`
-}
-
-function extractFigureNumbersFromText(text: string): number[] {
-  const src = String(text || '')
-  if (!src) return []
-  const out: number[] = []
-  const seen = new Set<number>()
-  const push = (raw: string) => {
-    const n = Number(raw)
-    if (!Number.isFinite(n) || n <= 0) return
-    const k = Math.floor(n)
-    if (seen.has(k)) return
-    seen.add(k)
-    out.push(k)
-  }
-  for (const m of src.matchAll(/\b(?:fig(?:ure)?\.?\s*#?\s*(\d{1,4})|图\s*(\d{1,4}))\b/gi)) {
-    push(String(m[1] || m[2] || ''))
-  }
-  return out
-}
-
-function extractPanelLettersFromText(text: string): string[] {
-  const src = String(text || '')
-  if (!src) return []
-  const out: string[] = []
-  const seen = new Set<string>()
-  const push = (raw: string) => {
-    const ch = String(raw || '').trim().toLowerCase()
-    if (!/^[a-z]$/.test(ch)) return
-    if (seen.has(ch)) return
-    seen.add(ch)
-    out.push(ch)
-  }
-  for (const m of src.matchAll(/\bpanel\s*[([]?\s*([a-z])\s*[\])]?/gi)) {
-    push(String(m[1] || ''))
-  }
-  for (const m of src.matchAll(/(?:^|[\s,;:])\(\s*([a-z])\s*\)(?=[\s,;:.]|$)/gi)) {
-    push(String(m[1] || ''))
-  }
-  const lead = src.match(/^\s*([a-z])\s+(?:the|an|a)\b/i)
-  if (lead) push(String(lead[1] || ''))
-  return out
-}
-
-function panelLetterMatchScore(text: string, letters: string[]): number {
-  const target = Array.from(new Set((letters || []).map((item) => String(item || '').trim().toLowerCase()).filter((item) => /^[a-z]$/.test(item))))
-  if (target.length <= 0) return 0
-  const candidate = new Set(extractPanelLettersFromText(text))
-  if (candidate.size <= 0) return 0
-  let overlap = 0
-  for (const item of target) {
-    if (candidate.has(item)) overlap += 1
-  }
-  if (overlap <= 0) return 0
-  return overlap / Math.max(1, target.length)
-}
-
-function figureNumberMatchScore(text: string, numbers: number[]): number {
-  const src = String(text || '')
-  if (!src || numbers.length <= 0) return 0
-  let best = 0
-  for (const num of numbers) {
-    if (new RegExp(`\\bfig(?:ure)?\\.?\\s*#?\\s*${num}\\b`, 'i').test(src)) best = Math.max(best, 1.0)
-    if (new RegExp(`图\\s*${num}\\b`).test(src)) best = Math.max(best, 1.0)
-  }
-  return best
-}
-
-function scoreProvenanceSegment(snippet: string, segmentText: string, segmentKey: string): number {
-  const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || '')))
-  const query = normalizeLocateText(raw)
-  const segNorm = normalizeLocateText(stripProvenanceNoise(String(segmentText || '')))
-  const keyNorm = normalizeLocateText(stripProvenanceNoise(String(segmentKey || '')))
-  if (!query || (!segNorm && !keyNorm)) return 0
-
-  let score = 0
-  if (keyNorm) {
-    if (keyNorm === query) score += 1.2
-    if (keyNorm.includes(query)) score += 0.92
-    if (query.includes(keyNorm) && keyNorm.length >= 20) score += 0.78
-  }
-  if (segNorm) {
-    if (segNorm === query) score += 1.15
-    if (segNorm.includes(query)) score += 0.86
-    const segHead = segNorm.slice(0, Math.min(220, segNorm.length))
-    if (query.includes(segHead) && segHead.length >= 20) score += 0.72
-  }
-
-  score += 0.82 * Math.max(
-    overlapScore(raw, segmentText),
-    overlapScore(query, segNorm),
-    overlapScore(query, keyNorm),
-  )
-
-  if (hasFormulaSignal(raw) || hasFormulaSignal(segmentText)) {
-    score += 0.72 * formulaOverlapScore(raw, segmentText)
-  }
-  return score
-}
-
-function extractEquationNumbersFromText(text: string): number[] {
-  const src = String(text || '')
-  if (!src) return []
-  const out: number[] = []
-  const seen = new Set<number>()
-  const push = (raw: string) => {
-    const n = Number(raw)
-    if (!Number.isFinite(n) || n <= 0) return
-    const k = Math.floor(n)
-    if (seen.has(k)) return
-    seen.add(k)
-    out.push(k)
-  }
-  for (const m of src.matchAll(/\b(?:eq|equation|\u516C\u5F0F)\s*[#(\uFF08]?\s*(\d{1,4})\s*[)\uFF09]?/gi)) {
-    push(String(m[1] || ''))
-  }
-  for (const m of src.matchAll(/\((\d{1,4})\)/g)) {
-    push(String(m[1] || ''))
-  }
-  return out
-}
-
-function scoreLocateCandidate(snippet: string, cand: LocateCandidate): number {
-  const query = String(snippet || '').trim()
-  if (!query) return 0
-  const qNorm = normalizeLocateText(query)
-  const focusText = String(cand.focusSnippet || '').trim()
-  const matchText = String(cand.matchText || focusText).trim()
-  if (!matchText) return 0
-  const mNorm = normalizeLocateText(matchText)
-  const fNorm = normalizeLocateText(focusText)
-
-  let score = Math.max(
-    overlapScore(query, matchText),
-    overlapScore(query, focusText) * 1.08,
-  )
-
-  if (qNorm && mNorm) {
-    if (mNorm.includes(qNorm)) score += 0.7
-    const qHead = qNorm.slice(0, Math.min(64, qNorm.length))
-    if (qHead.length >= 18 && mNorm.includes(qHead)) score += 0.26
-    const mHead = mNorm.slice(0, Math.min(64, mNorm.length))
-    if (mHead.length >= 18 && qNorm.includes(mHead)) score += 0.18
-  }
-  if (qNorm && fNorm) {
-    if (fNorm.includes(qNorm)) score += 0.2
-    const qHead = qNorm.slice(0, Math.min(48, qNorm.length))
-    if (qHead.length >= 16 && fNorm.includes(qHead)) score += 0.14
-  }
-
-  const tokenSet = new Set(tokenizeLocateText(matchText))
-  const keyTokens = Array.from(new Set(tokenizeLocateText(query))).filter((token) => token.length >= 3)
-  let hitCount = 0
-  for (const token of keyTokens) {
-    if (tokenSet.has(token)) hitCount += 1
-  }
-  if (hitCount > 0) {
-    score += Math.min(0.36, 0.03 * hitCount)
-  }
-  if (query.length >= 80 && focusText.length >= 80) {
-    score += 0.05
-  }
-  if (hasFormulaSignal(query) || hasFormulaSignal(matchText)) {
-    score += 0.72 * formulaOverlapScore(query, matchText)
-  }
-  const qEqNumbers = extractEquationNumbersFromText(query)
-  const candEqNo = Number(cand.anchorNumber || 0)
-  const candKind = String(cand.anchorKind || '').trim().toLowerCase()
-  if (qEqNumbers.length > 0) {
-    if (candEqNo > 0 && qEqNumbers.includes(candEqNo)) score += 1.05
-    if (candKind === 'equation') score += 0.18
-  }
-  if (hasFormulaSignal(query) && candKind === 'equation') {
-    score += 0.22
-  }
-  if (cand.anchorId) {
-    score += 0.04
-  }
-  if (cand.sourceType === 'guide') {
-    score += 0.07
-  }
-  return score
-}
-
-function scoreStructuredPrimaryCandidate(
-  cand: LocateCandidate,
-  opts: {
-    claimType?: string
-    anchorKind?: string
-    anchorText?: string
-    evidenceQuote?: string
-    segmentText?: string
-    equationNumber?: number
-    supportFigureNumber?: number
-    primaryBlockId?: string
-    primaryAnchorId?: string
-  },
-): number {
-  const claimType = String(opts.claimType || '').trim().toLowerCase()
-  const anchorKind = String(opts.anchorKind || '').trim().toLowerCase()
-  const anchorText = String(opts.anchorText || '').trim()
-  const evidenceQuote = String(opts.evidenceQuote || '').trim()
-  const segmentText = String(opts.segmentText || '').trim()
-  const seed = anchorText || evidenceQuote || segmentText || String(cand.focusSnippet || '').trim()
-  let score = scoreLocateCandidate(seed, cand)
-
-  const candKind = String(cand.anchorKind || '').trim().toLowerCase()
-  const candHeading = String(cand.headingPath || '').trim().toLowerCase()
-  const candNumber = Number.isFinite(Number(cand.anchorNumber || 0))
-    ? Math.max(0, Math.floor(Number(cand.anchorNumber || 0)))
-    : 0
-  const equationNumber = Number.isFinite(Number(opts.equationNumber || 0))
-    ? Math.max(0, Math.floor(Number(opts.equationNumber || 0)))
-    : 0
-  const figureNumber = Number.isFinite(Number(opts.supportFigureNumber || 0))
-    ? Math.max(0, Math.floor(Number(opts.supportFigureNumber || 0)))
-    : 0
-
-  if (opts.primaryBlockId && String(cand.blockId || '').trim() === String(opts.primaryBlockId || '').trim()) {
-    score += 0.12
-  }
-  if (opts.primaryAnchorId && String(cand.anchorId || '').trim() === String(opts.primaryAnchorId || '').trim()) {
-    score += 0.08
-  }
-  if (anchorKind && candKind === anchorKind) {
-    score += 0.42
-  }
-
-  if (claimType === 'formula_claim') {
-    if (candKind === 'equation') score += 1.55
-    else if (candKind) score -= 0.72
-    if (equationNumber > 0 && candNumber === equationNumber) score += 0.95
-    if (candHeading.includes('figure')) score -= 0.26
-  } else if (claimType === 'inline_formula_claim') {
-    if (candKind === 'equation') score += 1.1
-    else if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.58
-  } else if (claimType === 'equation_explanation_claim') {
-    const equationScoped = anchorKind === 'equation' || equationNumber > 0
-    if (equationScoped) {
-      if (candKind === 'equation') score += 0.96
-      else if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.26
-      else if (candKind) score -= 0.24
-    } else {
-      if (candKind === 'equation') score -= 0.62
-      if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.74
-    }
-    if (equationNumber > 0 && candNumber === equationNumber) score += 0.18
-  } else if (claimType === 'figure_claim') {
-    if (candKind === 'figure') score += 1.18
-    else if (candKind) score -= 0.34
-    if (figureNumber > 0 && candNumber === figureNumber) score += 0.88
-    else if (figureNumber > 0 && candNumber > 0) score -= 0.22
-  } else if (claimType === 'figure_panel') {
-    if (candKind === 'figure') score += 1.36
-    else if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.34
-    else if (candKind) score -= 0.24
-    if (candHeading.includes('figure')) score += 0.22
-    if (figureNumber > 0 && candNumber === figureNumber) score += 1.04
-    else if (figureNumber > 0 && candNumber > 0) score -= 0.3
-  } else if (claimType === 'quote_claim') {
-    if (candKind === 'quote') score += 1.02
-    else if (candKind === 'blockquote') score += 0.48
-    else if (candKind) score -= 0.2
-  } else if (claimType === 'blockquote_claim') {
-    if (candKind === 'blockquote') score += 1.0
-    else if (candKind === 'quote') score += 0.42
-    else if (candKind) score -= 0.18
-  } else if (claimType === 'method_detail' || claimType === 'prior_work' || claimType === 'doc_map') {
-    if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.34
-    if (candKind === 'equation' || candKind === 'figure') score -= 0.28
-  }
-
-  return score
-}
-
-function dedupeLocateCandidates(candidates: LocateCandidate[]): LocateCandidate[] {
-  const out: LocateCandidate[] = []
-  const seen = new Set<string>()
-  for (const cand of candidates) {
-    if (!cand || typeof cand !== 'object') continue
-    const sourcePath = String(cand.sourcePath || '').trim()
-    const blockId = String(cand.blockId || '').trim()
-    const anchorId = String(cand.anchorId || '').trim()
-    const headingPath = normalizeLocateText(String(cand.headingPath || ''))
-    const snippet = normalizeLocateText(String(cand.focusSnippet || cand.matchText || '')).slice(0, 220)
-    const key = `${normalizeLocateText(sourcePath)}::${blockId.toLowerCase()}::${anchorId.toLowerCase()}::${headingPath}::${snippet}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(cand)
-  }
-  return out
 }
 
 function getStructuredEntryRemapTarget(
@@ -3533,192 +1353,6 @@ function remapStructuredEntryToGuideAnchors(
   }
 }
 
-function buildStructuredEntryReaderOpenPayload(
-  entry: ProvenanceLocateEntry,
-  fallbackSnippet: string,
-): ReaderOpenPayload | null {
-  const primary = entry.primary
-  if (!primary) return null
-  const baseReaderOpen = entry.readerOpen || null
-  const baseLocateTarget = entry.locateTarget || baseReaderOpen?.locateTarget || null
-  const sourcePath = String(baseReaderOpen?.sourcePath || primary.sourcePath || '').trim()
-  if (!sourcePath) return null
-  const queryRaw = stripProvenanceNoise(
-    stripMarkdownInline(String(entry.evidenceQuote || fallbackSnippet || entry.segmentText || entry.label || '')),
-  ).trim()
-  const structuredSnippet = String(
-    queryRaw
-    || baseReaderOpen?.snippet
-    || baseLocateTarget?.snippet
-    || primary.focusSnippet
-    || fallbackSnippet,
-  ).trim()
-  const structuredHighlight = String(
-    entry.evidenceQuote
-    || baseReaderOpen?.highlightSnippet
-    || baseLocateTarget?.highlightSnippet
-    || queryRaw
-    || primary.focusSnippet
-    || fallbackSnippet,
-  ).trim()
-  const structuredAnchorKind = String(
-    entry.anchorKind
-    || baseReaderOpen?.anchorKind
-    || primary.anchorKind
-    || '',
-  ).trim()
-  const structuredAnchorNumber = toPositiveIntOrUndefined(
-    entry.equationNumber
-    || entry.supportFigureNumber
-    || baseReaderOpen?.anchorNumber
-    || primary.anchorNumber
-    || 0,
-  )
-  const groupDistance = toPositiveIntOrUndefined(entry.groupDistance || 0)
-  const baseClaimGroup = baseReaderOpen?.claimGroup || null
-  const locateTarget: ReaderLocateTarget = {
-    ...baseLocateTarget,
-    segmentId: String(entry.segmentId || baseLocateTarget?.segmentId || '').trim() || undefined,
-    sourceSegmentId: String(entry.sourceSegmentId || baseLocateTarget?.sourceSegmentId || '').trim() || undefined,
-    headingPath: String(primary.headingPath || baseReaderOpen?.headingPath || baseLocateTarget?.headingPath || '').trim() || undefined,
-    snippet: structuredSnippet || undefined,
-    highlightSnippet: structuredHighlight || undefined,
-    evidenceQuote: String(entry.evidenceQuote || '').trim() || undefined,
-    anchorText: String(entry.anchorText || '').trim() || undefined,
-    hitLevel: String(entry.hitLevel || '').trim() || undefined,
-    blockId: String(primary.blockId || '').trim() || undefined,
-    anchorId: String(primary.anchorId || '').trim() || undefined,
-    anchorKind: structuredAnchorKind || undefined,
-    anchorNumber: structuredAnchorNumber,
-    claimType: String(entry.claimType || '').trim() || undefined,
-    locatePolicy: String(entry.locatePolicy || '').trim() || undefined,
-    locateSurfacePolicy: String(entry.locateSurfacePolicy || '').trim() || undefined,
-    snippetAliases: Array.isArray(entry.snippetAliases)
-      ? entry.snippetAliases.map((item) => String(item || '').trim()).filter(Boolean)
-      : undefined,
-    relatedBlockIds: Array.isArray(entry.relatedBlockIds)
-      ? entry.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
-      : undefined,
-  }
-  const claimGroup: ReaderLocateClaimGroup | undefined = (
-    entry.claimGroupId
-    || entry.claimGroupKind
-    || baseClaimGroup?.id
-    || baseClaimGroup?.kind
-    || entry.groupLeadText
-    || baseClaimGroup?.leadText
-    || groupDistance
-    || toPositiveIntOrUndefined(baseClaimGroup?.distance || 0)
-  )
-    ? {
-      id: String(entry.claimGroupId || baseClaimGroup?.id || '').trim() || undefined,
-      kind: String(entry.claimGroupKind || baseClaimGroup?.kind || '').trim() || undefined,
-      leadText: String(entry.groupLeadText || baseClaimGroup?.leadText || '').trim() || undefined,
-      distance: groupDistance || toPositiveIntOrUndefined(baseClaimGroup?.distance || 0),
-    }
-    : undefined
-  const primaryReaderCandidate = buildReaderLocateCandidateFromLocateCandidate(primary, {
-    snippet: structuredSnippet,
-    highlightSnippet: structuredHighlight,
-    anchorKind: structuredAnchorKind,
-    anchorNumber: structuredAnchorNumber,
-  })
-  const primaryCandidateIdentity = readerLocateCandidateIdentityKey(primaryReaderCandidate)
-  const filterWithoutPrimary = (items: ReaderLocateCandidate[] | undefined): ReaderLocateCandidate[] => {
-    return dedupeReaderLocateCandidates(
-      (items || []).filter((item) => readerLocateCandidateIdentityKey(item) !== primaryCandidateIdentity),
-      6,
-    )
-  }
-  const backendAlternatives = filterWithoutPrimary(baseReaderOpen?.alternatives)
-  const backendVisibleAlternatives = filterWithoutPrimary(baseReaderOpen?.visibleAlternatives)
-  const backendEvidenceAlternatives = filterWithoutPrimary(baseReaderOpen?.evidenceAlternatives)
-  const fallbackAlternatives = dedupeReaderLocateCandidates(
-    (entry.alternatives || [])
-      .filter((item) => Boolean(item) && item !== primary)
-      .map((item) => buildReaderLocateCandidateFromLocateCandidate(item, {
-        snippet: String(item.focusSnippet || structuredSnippet).trim(),
-        highlightSnippet: structuredHighlight || String(item.focusSnippet || structuredSnippet).trim(),
-        anchorKind: String(item.anchorKind || structuredAnchorKind).trim(),
-        anchorNumber: toPositiveIntOrUndefined(item.anchorNumber || structuredAnchorNumber || 0),
-      })),
-    6,
-  )
-  const openAlternatives = backendAlternatives.length > 0 ? backendAlternatives : fallbackAlternatives
-  const candidateCollections = buildReaderCandidateCollections(
-    primaryReaderCandidate,
-    openAlternatives,
-    {
-      visibleCandidates: backendVisibleAlternatives.length > 0 ? backendVisibleAlternatives : undefined,
-      evidenceCandidates: backendEvidenceAlternatives.length > 0 ? backendEvidenceAlternatives : undefined,
-    },
-  )
-  return {
-    sourcePath,
-    sourceName: String(baseReaderOpen?.sourceName || primary.sourceName || '').trim() || undefined,
-    headingPath: String(primary.headingPath || baseReaderOpen?.headingPath || '').trim() || undefined,
-    snippet: structuredSnippet || undefined,
-    highlightSnippet: structuredHighlight || undefined,
-    blockId: String(primary.blockId || '').trim() || undefined,
-    anchorId: String(primary.anchorId || '').trim() || undefined,
-    relatedBlockIds: locateTarget.relatedBlockIds || baseReaderOpen?.relatedBlockIds,
-    anchorKind: structuredAnchorKind || undefined,
-    anchorNumber: structuredAnchorNumber,
-    strictLocate: baseReaderOpen?.strictLocate ?? true,
-    locateTarget,
-    claimGroup,
-    ...candidateCollections,
-    initialAltIndex: Number.isFinite(Number(baseReaderOpen?.initialAltIndex))
-      ? Math.max(0, Math.floor(Number(baseReaderOpen?.initialAltIndex)))
-      : 0,
-  }
-}
-
-function buildHeuristicReaderOpenPayload(
-  pickedList: LocateCandidate[],
-  snippet: string,
-  opts?: { strictLocate?: boolean; highlightSnippet?: string; relatedBlockIds?: string[] },
-): ReaderOpenPayload | null {
-  const picked = pickedList[0] || null
-  if (!picked) return null
-  const sourcePath = String(picked.sourcePath || '').trim()
-  if (!sourcePath) return null
-  const highlightSnippet = String(opts?.highlightSnippet || snippet).trim()
-  const primarySnippet = String(picked.focusSnippet || snippet).trim()
-  const primaryHighlight = String(highlightSnippet || picked.focusSnippet || snippet).trim()
-  const primaryCandidate = buildReaderLocateCandidateFromLocateCandidate(picked, {
-    snippet: primarySnippet,
-    highlightSnippet: primaryHighlight,
-    anchorKind: picked.anchorKind,
-    anchorNumber: picked.anchorNumber,
-  })
-  const secondaryCandidates = pickedList.slice(1).map((item) => buildReaderLocateCandidateFromLocateCandidate(item, {
-    snippet: String(item.focusSnippet || snippet).trim(),
-    highlightSnippet: String(highlightSnippet || item.focusSnippet || snippet).trim(),
-    anchorKind: item.anchorKind,
-    anchorNumber: item.anchorNumber,
-  }))
-  const candidateCollections = buildReaderCandidateCollections(primaryCandidate, secondaryCandidates)
-  return {
-    sourcePath,
-    sourceName: String(picked.sourceName || '').trim() || undefined,
-    headingPath: String(picked.headingPath || '').trim() || undefined,
-    snippet: primarySnippet || undefined,
-    highlightSnippet: primaryHighlight || undefined,
-    blockId: String(picked.blockId || '').trim() || undefined,
-    anchorId: String(picked.anchorId || '').trim() || undefined,
-    anchorKind: String(picked.anchorKind || '').trim() || undefined,
-    anchorNumber: toPositiveIntOrUndefined(picked.anchorNumber || 0),
-    strictLocate: Boolean(opts?.strictLocate),
-    locateMode: 'heuristic',
-    relatedBlockIds: Array.isArray(opts?.relatedBlockIds)
-      ? opts.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
-      : undefined,
-    ...candidateCollections,
-    initialAltIndex: 0,
-  }
-}
-
 function AssistantAvatar() {
   return (
     <div className="kb-msg-avatar kb-msg-avatar-assistant">
@@ -3793,6 +1427,7 @@ export function MessageList({
   const shelfBackendHydratedKeysRef = useRef(new Set<string>())
   const shelfEmptyBackendSaveIntentRef = useRef<Record<string, number>>({})
   const shelfBackendHydrateSeqRef = useRef(0)
+  const shelfAsyncScopeEpochRef = useRef(0)
   const shelfStateTouchedAtRef = useRef(Date.now())
   const latestShelfStateRef = useRef<{ convId?: string | null; projectId?: string | null; open: boolean; items: CiteShelfItem[] }>({
     convId: activeConvId,
@@ -3817,6 +1452,27 @@ export function MessageList({
     shelfAutoRepairingKeySetRef.current = nextSet
     setShelfAutoRepairingKeys(Array.from(nextSet))
   }, [])
+  const captureShelfAsyncScope = useCallback((): ShelfAsyncScopeToken => ({
+    epoch: shelfAsyncScopeEpochRef.current,
+    storageKey: shelfStorageKey(shelfScopeId),
+  }), [shelfScopeId])
+  const shelfAsyncScopeIsCurrent = useCallback((token: ShelfAsyncScopeToken): boolean => (
+    shelfAsyncScopeEpochRef.current === token.epoch
+    && shelfStorageKey(latestShelfStateRef.current.projectId) === token.storageKey
+  ), [])
+  const currentShelfItemForAsync = useCallback((
+    token: ShelfAsyncScopeToken,
+    itemKey: string,
+    expectedRepairFingerprint?: string,
+  ): CiteShelfItem | null => {
+    if (!shelfAsyncScopeIsCurrent(token)) return null
+    const key = String(itemKey || '').trim()
+    if (!key) return null
+    const current = latestShelfStateRef.current.items.find((entry) => entry.key === key)
+    if (!current) return null
+    if (expectedRepairFingerprint && shelfItemRepairFingerprint(current) !== expectedRepairFingerprint) return null
+    return current
+  }, [shelfAsyncScopeIsCurrent])
 
   const persistShelfLocalNow = useCallback((items: CiteShelfItem[], open: boolean) => {
     const storageKey = shelfStorageKey(shelfScopeId)
@@ -3896,6 +1552,7 @@ export function MessageList({
   }, [onShelfActivityChange, shelfAutoRepairingKeys.length, shelfBackgroundBusy, shelfRepairLoadingKey, shelfSummaryLoadingKey])
 
   useEffect(() => () => {
+    shelfAsyncScopeEpochRef.current += 1
     onShelfActivityChange?.({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
   }, [onShelfActivityChange])
 
@@ -3946,7 +1603,8 @@ export function MessageList({
       return
     }
     let cancelled = false
-    referencesApi.readerDoc(sourcePath)
+    const ctrl = new AbortController()
+    referencesApi.readerDoc(sourcePath, { signal: ctrl.signal })
       .then((res) => {
         if (cancelled) return
         const markdown = String(res.markdown || '')
@@ -3971,6 +1629,7 @@ export function MessageList({
       })
     return () => {
       cancelled = true
+      ctrl.abort()
     }
   }, [paperGuideSourcePath, paperGuideSourceName])
 
@@ -4145,6 +1804,7 @@ export function MessageList({
   }, [messages, onTrackedMessageActive, trackedMessageIds])
 
   useEffect(() => {
+    shelfAsyncScopeEpochRef.current += 1
     const nextStorageKey = shelfStorageKey(shelfScopeId)
     const nextSavedStorageKey = shelfSavedStorageKey(shelfScopeId)
     const legacyKeys = legacyShelfStorageKeys(activeConvId)
@@ -4173,6 +1833,9 @@ export function MessageList({
       shelfSummaryBackfillTimerRef.current = null
     }
     setShelfAutoRepairingKeySet(new Set())
+    setShelfSummaryLoadingKey('')
+    setShelfRepairLoadingKey('')
+    setShelfRepairImpact(null)
     shelfAutoRepairFingerprintsRef.current = {}
     shelfAutoRepairRetryAfterRef.current = {}
     shelfMetadataHydrateInFlightRef.current = new Set()
@@ -4624,6 +2287,7 @@ export function MessageList({
     const lowValueSummary = Boolean(summaryLine && looksLowValueShelfSummary(summaryLine))
     if (!options?.force && shelfItemHasDisplayableArticleSummary(item)) return
     const itemIdentity = shelfPaperIdentity(item)
+    const scopeToken = captureShelfAsyncScope()
     const requestItem = (lowValueSummary || options?.force)
       ? {
         ...item,
@@ -4643,6 +2307,7 @@ export function MessageList({
       : referencesApi.bibliometricsCached
     loadBibliometrics(withBibliometricsLocale(requestItem as unknown as Record<string, unknown>))
       .then((meta) => {
+        if (!currentShelfItemForAsync(scopeToken, item.key)) return
         if (!meta || Object.keys(meta).length === 0) return
         const articleSummaryPatch = articleSummaryPatchFromMeta(meta)
         setShelfItems((current) => current.map((entry) => {
@@ -4658,6 +2323,7 @@ export function MessageList({
         }))
       })
       .finally(() => {
+        if (!shelfAsyncScopeIsCurrent(scopeToken)) return
         setShelfSummaryLoadingKey((current) => (current === item.key ? '' : current))
       })
   }
@@ -4690,6 +2356,7 @@ export function MessageList({
       }
       shelfSummaryBackfillInFlightRef.current = inFlight
       setShelfSummaryLoadingKey((current) => current || targets[0]?.item.key || '')
+      const scopeToken = captureShelfAsyncScope()
 
       void Promise.all(targets.map(({ item }) => (
         referencesApi.bibliometrics(withBibliometricsLocale({
@@ -4706,9 +2373,11 @@ export function MessageList({
           .catch(() => ({}))
           .then((meta) => ({ key: item.key, meta }))
       ))).then((results) => {
+        if (!shelfAsyncScopeIsCurrent(scopeToken)) return
         const usable = results.filter((entry) => entry.meta && Object.keys(entry.meta).length > 0)
         if (usable.length <= 0) return
         setShelfItems((current) => current.map((entry) => {
+          if (!currentShelfItemForAsync(scopeToken, entry.key)) return entry
           const result = usable.find((item) => item.key === entry.key)
           if (!result) return entry
           const merged = mergeCiteMeta(entry, result.meta)
@@ -4722,6 +2391,7 @@ export function MessageList({
           }
         }))
       }).finally(() => {
+        if (!shelfAsyncScopeIsCurrent(scopeToken)) return
         const nextInFlight = new Set(shelfSummaryBackfillInFlightRef.current)
         for (const target of targets) nextInFlight.delete(target.item.key)
         shelfSummaryBackfillInFlightRef.current = nextInFlight
@@ -4736,7 +2406,7 @@ export function MessageList({
         shelfSummaryBackfillTimerRef.current = null
       }
     }
-  }, [shelfItems, shelfOpen])
+  }, [captureShelfAsyncScope, currentShelfItemForAsync, shelfAsyncScopeIsCurrent, shelfItems, shelfOpen])
 
   const applyShelfMetadataRepairCandidates = useCallback((
     updates: Array<{ key: string; metas: Array<Record<string, unknown>> }>,
@@ -4771,22 +2441,29 @@ export function MessageList({
   const repairShelfItemMeta = (item: CiteShelfItem, options?: { silent?: boolean }) => {
     if (shelfRepairLoadingKey === item.key) return
     const silent = Boolean(options?.silent)
+    const scopeToken = captureShelfAsyncScope()
+    const requestedFingerprint = shelfItemRepairFingerprint(item)
     setShelfRepairLoadingKey(item.key)
     const payloads = shelfRepairPayloads(item)
     const loadRepairCandidates = referencesApi.repairShelfMetadata(payloads, payloads.length)
       .then((res) => {
+        if (!currentShelfItemForAsync(scopeToken, item.key, requestedFingerprint)) return []
         setShelfRepairImpact(res.impact || null)
         const repaired = Array.isArray(res.items) ? res.items : []
         return repaired
           .map(shelfRepairMetaFromEntry)
           .filter((meta) => meta && Object.keys(meta).length > 0)
       })
-      .catch(() => Promise.all([
-        ...payloads.map((payload) => referencesApi.bibliometrics(withBibliometricsLocale(payload)).catch(() => ({}))),
-      ]))
+      .catch(() => {
+        if (!currentShelfItemForAsync(scopeToken, item.key, requestedFingerprint)) return []
+        return Promise.all([
+          ...payloads.map((payload) => referencesApi.bibliometrics(withBibliometricsLocale(payload)).catch(() => ({}))),
+        ])
+      })
 
     loadRepairCandidates
       .then((metas) => {
+        if (!currentShelfItemForAsync(scopeToken, item.key, requestedFingerprint)) return
         const candidates = metas.filter((meta) => meta && Object.keys(meta).length > 0)
         const didUpdate = applyShelfMetadataRepairCandidates([{ key: item.key, metas: candidates }])
         if (!silent) {
@@ -4795,9 +2472,11 @@ export function MessageList({
         }
       })
       .catch(() => {
+        if (!currentShelfItemForAsync(scopeToken, item.key, requestedFingerprint)) return
         if (!silent) message.error('Repair failed, please retry.')
       })
       .finally(() => {
+        if (!shelfAsyncScopeIsCurrent(scopeToken)) return
         setShelfRepairLoadingKey((current) => (current === item.key ? '' : current))
       })
   }
@@ -4814,6 +2493,7 @@ export function MessageList({
     }
     if (uniqueTargets.length <= 0) return
 
+    const scopeToken = captureShelfAsyncScope()
     const inFlight = new Set(shelfAutoRepairingKeySetRef.current)
     for (const item of uniqueTargets) {
       inFlight.add(item.key)
@@ -4827,36 +2507,44 @@ export function MessageList({
     try {
       const payloads = uniqueTargets.flatMap(shelfRepairPayloads)
       const res = await referencesApi.repairShelfMetadata(payloads, payloads.length)
-      setShelfRepairImpact(res.impact || null)
-      const metasByKey = new Map<string, Array<Record<string, unknown>>>()
-      for (const entry of Array.isArray(res.items) ? res.items : []) {
-        const meta = shelfRepairMetaFromEntry(entry)
-        if (!meta || Object.keys(meta).length <= 0) continue
-        const key = String(entry.key || meta.key || '').trim()
-        if (!key) continue
-        metasByKey.set(key, [...(metasByKey.get(key) || []), meta])
-      }
-      applyShelfMetadataRepairCandidates(
-        Array.from(metasByKey.entries()).map(([key, metas]) => ({ key, metas })),
-      )
-      for (const item of uniqueTargets) {
-        const fingerprint = requestedFingerprints.get(item.key)
-        if (fingerprint) shelfAutoRepairFingerprintsRef.current[item.key] = fingerprint
-        delete shelfAutoRepairRetryAfterRef.current[item.key]
+      if (shelfAsyncScopeIsCurrent(scopeToken)) {
+        setShelfRepairImpact(res.impact || null)
+        const metasByKey = new Map<string, Array<Record<string, unknown>>>()
+        for (const entry of Array.isArray(res.items) ? res.items : []) {
+          const meta = shelfRepairMetaFromEntry(entry)
+          if (!meta || Object.keys(meta).length <= 0) continue
+          const key = String(entry.key || meta.key || '').trim()
+          if (!key) continue
+          metasByKey.set(key, [...(metasByKey.get(key) || []), meta])
+        }
+        const updates = Array.from(metasByKey.entries())
+          .filter(([key]) => currentShelfItemForAsync(scopeToken, key, requestedFingerprints.get(key) || ''))
+          .map(([key, metas]) => ({ key, metas }))
+        applyShelfMetadataRepairCandidates(updates)
+        for (const item of uniqueTargets) {
+          if (!currentShelfItemForAsync(scopeToken, item.key, requestedFingerprints.get(item.key) || '')) continue
+          const fingerprint = requestedFingerprints.get(item.key)
+          if (fingerprint) shelfAutoRepairFingerprintsRef.current[item.key] = fingerprint
+          delete shelfAutoRepairRetryAfterRef.current[item.key]
+        }
       }
     } catch {
-      const retryAt = Date.now() + SHELF_AUTO_REPAIR_RETRY_MS
-      for (const item of uniqueTargets) {
-        shelfAutoRepairRetryAfterRef.current[item.key] = retryAt
+      if (shelfAsyncScopeIsCurrent(scopeToken)) {
+        const retryAt = Date.now() + SHELF_AUTO_REPAIR_RETRY_MS
+        for (const item of uniqueTargets) {
+          shelfAutoRepairRetryAfterRef.current[item.key] = retryAt
+        }
       }
     } finally {
-      const nextInFlight = new Set(shelfAutoRepairingKeySetRef.current)
-      for (const item of uniqueTargets) {
-        nextInFlight.delete(item.key)
+      if (shelfAsyncScopeIsCurrent(scopeToken)) {
+        const nextInFlight = new Set(shelfAutoRepairingKeySetRef.current)
+        for (const item of uniqueTargets) {
+          nextInFlight.delete(item.key)
+        }
+        setShelfAutoRepairingKeySet(nextInFlight)
       }
-      setShelfAutoRepairingKeySet(nextInFlight)
     }
-  }, [applyShelfMetadataRepairCandidates, setShelfAutoRepairingKeySet])
+  }, [applyShelfMetadataRepairCandidates, captureShelfAsyncScope, currentShelfItemForAsync, setShelfAutoRepairingKeySet, shelfAsyncScopeIsCurrent])
 
   useEffect(() => {
     if (shelfMetadataHydrateTimerRef.current !== null) {
@@ -4887,18 +2575,26 @@ export function MessageList({
         shelfMetadataHydrateAttemptedAtRef.current[target.attemptKey] = now
       }
       shelfMetadataHydrateInFlightRef.current = inFlight
+      const scopeToken = captureShelfAsyncScope()
+      const requestedFingerprints = new Map(targets.map((target) => [
+        target.item.key,
+        shelfItemRepairFingerprint(target.item),
+      ]))
       void Promise.all(targets.map(({ item }) => (
         referencesApi.bibliometrics(withBibliometricsLocale(item as unknown as Record<string, unknown>))
           .catch(() => ({}))
           .then((meta) => ({ key: item.key, meta }))
       ))).then((results) => {
+        if (!shelfAsyncScopeIsCurrent(scopeToken)) return
         const updates = results
           .filter((entry) => entry.meta && Object.keys(entry.meta).length > 0)
+          .filter((entry) => currentShelfItemForAsync(scopeToken, entry.key, requestedFingerprints.get(entry.key) || ''))
           .map((entry) => ({ key: entry.key, metas: [entry.meta] }))
         if (updates.length > 0) {
           applyShelfMetadataRepairCandidates(updates)
         }
       }).finally(() => {
+        if (!shelfAsyncScopeIsCurrent(scopeToken)) return
         const nextInFlight = new Set(shelfMetadataHydrateInFlightRef.current)
         for (const target of targets) nextInFlight.delete(target.item.key)
         shelfMetadataHydrateInFlightRef.current = nextInFlight
@@ -4910,7 +2606,7 @@ export function MessageList({
         shelfMetadataHydrateTimerRef.current = null
       }
     }
-  }, [applyShelfMetadataRepairCandidates, shelfItems, shelfOpen, shelfRepairLoadingKey])
+  }, [applyShelfMetadataRepairCandidates, captureShelfAsyncScope, currentShelfItemForAsync, shelfAsyncScopeIsCurrent, shelfItems, shelfOpen, shelfRepairLoadingKey])
 
   useEffect(() => {
     if (shelfAutoRepairTimerRef.current !== null) {
@@ -5125,30 +2821,10 @@ export function MessageList({
   }
 
   const addToShelf = (detail: CiteDetail) => {
-    const item = toShelfItem(detail)
-    const identity = shelfPaperIdentity(item)
     const currentItems = latestShelfStateRef.current.items
-    const existingSnapshot = currentItems.find((entry) => entry.key === item.key || shelfPaperIdentity(entry) === identity)
-    const summaryTarget = existingSnapshot ? mergeShelfItemWithLive(existingSnapshot, item) : item
-    const buildNextItems = (current: CiteShelfItem[]) => {
-      const existing = current.find((entry) => entry.key === item.key || shelfPaperIdentity(entry) === identity)
-      const mergedIncoming = existing ? mergeShelfItemWithLive(existing, item) : item
-      const next = [
-        {
-          ...mergedIncoming,
-          tags: normalizeShelfTags(existing?.tags || mergedIncoming.tags),
-          note: normalizeShelfNote(existing?.note || mergedIncoming.note),
-        },
-        ...current.filter((entry) => entry.key !== item.key && shelfPaperIdentity(entry) !== identity),
-      ]
-      const deduped = dedupeShelfItems(next)
-      if (deduped.length > SHELF_MAX_ITEMS) return deduped.slice(0, SHELF_MAX_ITEMS)
-      if (deduped.length === next.length) return deduped.slice(0, SHELF_MAX_ITEMS)
-      return deduped
-    }
-    const nextItems = buildNextItems(currentItems)
+    const { nextItems, focusKey, summaryTarget } = mergeCitationDetailIntoShelfItems(currentItems, detail)
     setShelfItems(nextItems)
-    setFocusedShelfKey(summaryTarget.key)
+    setFocusedShelfKey(focusKey)
     setShelfOpen(true)
     persistShelfLocalNow(nextItems, true)
     window.setTimeout(() => {
@@ -5203,64 +2879,22 @@ export function MessageList({
     if (payloadProjectId && shelfProjectScopeId(payloadProjectId) !== shelfScopeId) return
     const detail = citeDetailFromReaderSelection(payload, payload.conversationId || activeConvId)
     if (!detail) return
-    const item = toShelfItem(detail)
-    const identity = shelfPaperIdentity(item)
-    const sourceIdentity = shelfSourceIdentity(item)
     const note = readerSelectionNote(payload, S)
     const currentItems = latestShelfStateRef.current.items
-    const existingSnapshot = currentItems.find((entry) => (
-      entry.key === item.key
-      || shelfPaperIdentity(entry) === identity
-      || shouldMergeShelfItemsBySource(entry, item, sourceIdentity)
-    ))
-    const summaryTarget = existingSnapshot ? mergeShelfItemWithLive(existingSnapshot, item) : item
-    const focusKey = existingSnapshot?.key || summaryTarget.key
-    const buildNextItems = (current: CiteShelfItem[]) => {
-      const existing = current.find((entry) => (
-        entry.key === item.key
-        || shelfPaperIdentity(entry) === identity
-        || shouldMergeShelfItemsBySource(entry, item, sourceIdentity)
-      ))
-      const mergedIncoming = existing ? mergeShelfItemWithLive(existing, item) : item
-      const nextItem: CiteShelfItem = {
-        ...mergedIncoming,
-        key: existing?.key || mergedIncoming.key,
-        tags: normalizeShelfTags(existing?.tags || mergedIncoming.tags),
-        note: mergeSelectionNote(existing?.note || mergedIncoming.note, note),
-        shelfItemKind: 'reader_selection',
-        shelfOrigin: 'reader_selection',
-        shelfExcerpt: preferRicherField('title', existing?.shelfExcerpt || '', payload.text) || mergedIncoming.shelfExcerpt,
-        shelfExcerptLabel: existing?.shelfExcerptLabel || mergedIncoming.shelfExcerptLabel,
-        evidenceQuote: preferRicherField('title', existing?.evidenceQuote || '', payload.text) || mergedIncoming.evidenceQuote,
-        evidenceSource: 'reader_selection',
-        headingPath: payload.headingPath || mergedIncoming.headingPath,
-        locationLabel: payload.headingPath || mergedIncoming.locationLabel,
-        blockId: payload.blockId || mergedIncoming.blockId,
-        anchorId: payload.anchorId || mergedIncoming.anchorId,
-        anchorKind: payload.anchorKind || mergedIncoming.anchorKind,
-      }
-      const next = [
-        nextItem,
-        ...current.filter((entry) => (
-          entry.key !== item.key
-          && entry.key !== existing?.key
-          && shelfPaperIdentity(entry) !== identity
-          && !shouldMergeShelfItemsBySource(entry, item, sourceIdentity)
-        )),
-      ]
-      return dedupeShelfItems(next).slice(0, SHELF_MAX_ITEMS)
-    }
-    const nextItems = buildNextItems(currentItems)
+    const { nextItems, focusKey, summaryTarget } = mergeReaderSelectionDetailIntoShelfItems(currentItems, detail, {
+      text: payload.text,
+      note,
+      headingPath: payload.headingPath,
+      blockId: payload.blockId,
+      anchorId: payload.anchorId,
+      anchorKind: payload.anchorKind,
+    })
     setShelfItems(nextItems)
     setFocusedShelfKey(focusKey)
     setShelfOpen(true)
     persistShelfLocalNow(nextItems, true)
     window.setTimeout(() => {
-      fetchShelfSummaryForItem({
-        ...summaryTarget,
-        key: focusKey,
-        note: mergeSelectionNote(existingSnapshot?.note || summaryTarget.note, note),
-      }, { force: true })
+      fetchShelfSummaryForItem(summaryTarget, { force: true })
     }, 420)
   }
   const addReaderSelectionToShelfRef = useRef(addReaderSelectionToShelf)
@@ -5301,7 +2935,7 @@ export function MessageList({
       message.info(isInPaperReference ? S.reader_pdf_not_ready : S.reader_missing_path)
       return
     }
-    const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || S.default_source_fallback
+    const sourceName = String(detail.sourceName || detail.title || '').trim() || basenameFromSourcePath(sourcePath) || S.default_source_fallback
     setPopoverGuideLoading(true)
     try {
       await createPaperGuideConversation({
@@ -5583,11 +3217,17 @@ export function MessageList({
         : []
       const provenanceStrictIdentityReady = Boolean(messageProvenance?.strict_identity_ready)
       const hasStrictMustLocateEntries = provenanceLocateEntries.some((entry) => Boolean(entry.mustLocate || entry.locatePolicy === 'required'))
+      const hasRenderPacketStrictLocateEntry = Boolean(
+        renderPacketLocateEntry
+        && (renderPacketLocateEntry.mustLocate || renderPacketLocateEntry.locatePolicy === 'required'),
+      )
       const strictStructuredLocateOnly = Boolean(
         strictProvenanceLocate
-        && hasStructuredProvenance
-        && provenanceStrictIdentityReady
-        && hasStrictMustLocateEntries,
+        && hasStrictMustLocateEntries
+        && (
+          (hasStructuredProvenance && provenanceStrictIdentityReady)
+          || hasRenderPacketStrictLocateEntry
+        ),
       )
       const strictStructuredInlineLocate = Boolean(strictStructuredLocateOnly)
       const provenanceMappingMode = String(messageProvenance?.mapping_mode || '').trim().toLowerCase()
@@ -6011,409 +3651,24 @@ export function MessageList({
             const structuredRenderSlotMap = prep?.structuredRenderSlotMap || new Map<number, StructuredRenderLocateSlot>()
             const structuredLocateOrderBySegmentId = prep?.structuredLocateOrderBySegmentId || new Map<string, number>()
             const allowedStructuredRenderOrders = prep?.allowedStructuredRenderOrders || new Set<number>()
-            const resolveStructuredFigureEntry = (snippet: string): ProvenanceLocateEntry | null => {
-              const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || ''))).trim()
-              const figureNumbers = extractFigureNumbersFromText(raw)
-              const panelLetters = extractPanelLettersFromText(raw)
-              const pureFigureRef = isPreferredStrictFigureRefSnippet(raw) && panelLetters.length <= 0
-              const figureEntries = provenanceLocateEntries.filter((entry) => {
-                const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
-                const claimType = String(entry.claimType || '').trim().toLowerCase()
-                return anchorKind === 'figure' || claimType === 'figure_claim' || claimType === 'figure_panel'
-              })
-              if (!raw || figureEntries.length <= 0) return null
-              const hasFigurePanelEntries = figureEntries.some((entry) => (
-                String(entry.claimType || '').trim().toLowerCase() === 'figure_panel'
-              ))
-              let best: ProvenanceLocateEntry | null = null
-              let bestScore = Number.NEGATIVE_INFINITY
-              let bestFigureClaim: ProvenanceLocateEntry | null = null
-              let bestFigureClaimScore = Number.NEGATIVE_INFINITY
-              for (const entry of figureEntries) {
-                const claimType = String(entry.claimType || '').trim().toLowerCase()
-                const primaryAnchorKind = String(entry.primary?.anchorKind || '').trim().toLowerCase()
-                const entryFigureText = `${entry.primary?.headingPath || ''} ${entry.anchorText || ''} ${entry.segmentText || ''}`
-                const entryFigureNumbers = Array.from(new Set([
-                  ...extractFigureNumbersFromText(entryFigureText),
-                  ...(Number.isFinite(Number(entry.supportFigureNumber || 0)) && Number(entry.supportFigureNumber || 0) > 0
-                    ? [Math.floor(Number(entry.supportFigureNumber || 0))]
-                    : []),
-                ]))
-                const entryPanelLetters = Array.from(new Set([
-                  ...((Array.isArray(entry.supportPanelLetters) ? entry.supportPanelLetters : [])
-                    .map((item) => String(item || '').trim().toLowerCase())
-                    .filter((item) => /^[a-z]$/.test(item))),
-                  ...extractPanelLettersFromText(`${entry.anchorText || ''} ${entry.segmentText || ''}`),
-                ]))
-                let score = Math.max(
-                  scoreProvenanceSegment(raw, entry.segmentText, entry.snippetKey),
-                  overlapScore(raw, entry.anchorText || entry.segmentText),
-                )
-                if (figureNumbers.length > 0) {
-                  score += 0.92 * figureNumberMatchScore(entryFigureText, figureNumbers)
-                  const entryHasFigureMatch = entryFigureNumbers.some((num) => figureNumbers.includes(num))
-                  if (entryFigureNumbers.length > 0 && !entryHasFigureMatch) {
-                    score -= 0.42
-                  }
-                }
-                if (panelLetters.length > 0) {
-                  const panelScore = panelLetterMatchScore(
-                    `${entry.anchorText || ''} ${entry.segmentText || ''} ${entry.primary?.headingPath || ''} ${entryPanelLetters.join(' ')}`,
-                    panelLetters,
-                  )
-                  if (panelScore > 0) {
-                    score += 1.34 * panelScore
-                  } else if (entryPanelLetters.length > 0) {
-                    score -= 1.18
-                  } else if (claimType === 'figure_claim') {
-                    score -= 0.56
-                  }
-                }
-                if (pureFigureRef) {
-                  if (claimType === 'figure_claim') score += 1.12
-                  else if (claimType === 'figure_panel') score -= 1.02
-                  if (primaryAnchorKind === 'figure') score += 0.24
-                  else if (primaryAnchorKind) score -= 0.28
-                } else if (hasFigurePanelEntries) {
-                  if (claimType === 'figure_panel') score += 0.2
-                  else if (claimType === 'figure_claim') score -= 0.18
-                }
-                if (entry.mustLocate || entry.locatePolicy === 'required') {
-                  score += 0.08
-                }
-                if (score > bestScore) {
-                  best = entry
-                  bestScore = score
-                }
-                if (claimType === 'figure_claim' && score > bestFigureClaimScore) {
-                  bestFigureClaim = entry
-                  bestFigureClaimScore = score
-                }
-              }
-              if (
-                pureFigureRef
-                && best
-                && String(best.claimType || '').trim().toLowerCase() === 'figure_panel'
-                && bestFigureClaim
-                && bestFigureClaimScore >= (bestScore - 0.38)
-              ) {
-                best = bestFigureClaim
-                bestScore = bestFigureClaimScore
-              }
-              if (bestScore >= 0.26) return best
-              if (!messageProvenance || !Array.isArray(messageProvenance?.segments)) return null
-              const rawSegments = Array.isArray(messageProvenance.segments) ? messageProvenance.segments : []
-              let rawBest: ProvenanceLocateEntry | null = null
-              let rawBestScore = Number.NEGATIVE_INFINITY
-              let rawBestFigureClaim: ProvenanceLocateEntry | null = null
-              let rawBestFigureClaimScore = Number.NEGATIVE_INFINITY
-              for (let idx = 0; idx < rawSegments.length; idx += 1) {
-                const segment = rawSegments[idx] as unknown as Record<string, unknown> | null
-                const currentSegment = structuredProvenanceSegmentsAll[idx] || null
-                if (!segment || !currentSegment) continue
-                const claimType = String(segment.claim_type || currentSegment.claimType || '').trim().toLowerCase()
-                const locatePolicy = String(segment.locate_policy || currentSegment.locatePolicy || '').trim().toLowerCase()
-                if ((claimType !== 'figure_claim' && claimType !== 'figure_panel') || locatePolicy === 'hidden') continue
-                if (!hasSegmentStrictLocateIdentity(segment, currentSegment)) continue
-                const primaryBlockId = String(segment.primary_block_id || '').trim()
-                const supportBlockIds = Array.isArray(segment.support_block_ids) ? segment.support_block_ids : []
-                const evidenceBlockIds = Array.isArray(segment.evidence_block_ids) ? segment.evidence_block_ids : []
-                const blockIds = [
-                  ...[primaryBlockId].filter(Boolean),
-                  ...supportBlockIds.map((item) => String(item || '').trim()).filter(Boolean),
-                  ...evidenceBlockIds.map((item) => String(item || '').trim()).filter(Boolean),
-                ]
-                const candidates: LocateCandidate[] = []
-                const seenBlock = new Set<string>()
-                for (const blockIdRaw of blockIds) {
-                  const blockId = String(blockIdRaw || '').trim()
-                  if (!blockId || seenBlock.has(blockId)) continue
-                  const block = provenanceBlockMap[blockId]
-                  if (!block || typeof block !== 'object') continue
-                  seenBlock.add(blockId)
-                  const headingPath = String(block.heading_path || '').trim()
-                  const blockText = stripMarkdownInline(String(block.text || '')).trim()
-                  const anchorId = String(block.anchor_id || '').trim()
-                  const anchorText = normalizeStrictAnchorText(String(segment.anchor_text || currentSegment.anchorText || ''))
-                  const evidenceQuote = normalizeStrictAnchorText(String(segment.evidence_quote || anchorText || ''))
-                  const focusSnippet = anchorText || evidenceQuote || blockText || currentSegment.text || headingPath
-                  if (!focusSnippet) continue
-                  candidates.push({
-                    sourcePath: provenanceSourcePath || effectiveGuideSourcePath,
-                    sourceName: provenanceSourceName || locateSourceName || (provenanceSourcePath.split(/[\\/]/).pop() || 'paper'),
-                    headingPath,
-                    focusSnippet,
-                    matchText: [headingPath, anchorText || evidenceQuote || '', blockText || currentSegment.text].filter(Boolean).join('\n'),
-                    sourceType: 'guide',
-                    blockId,
-                    anchorId: anchorId || undefined,
-                    anchorKind: 'figure',
-                  })
-                }
-                if (candidates.length <= 0) continue
-                const entry: ProvenanceLocateEntry = {
-                  segmentId: String(segment.segment_id || currentSegment.segmentId || `seg_${idx + 1}`).trim(),
-                  label: shortSegmentLabel(String(segment.anchor_text || currentSegment.anchorText || currentSegment.text || '')),
-                  segmentText: String(currentSegment.text || '').trim(),
-                  evidenceQuote: normalizeStrictAnchorText(String(segment.evidence_quote || segment.anchor_text || '')),
-                  hitLevel: String(segment.hit_level || currentSegment.hitLevel || '').trim().toLowerCase(),
-                  claimType,
-                  mustLocate: Boolean(segment.must_locate || locatePolicy === 'required'),
-                  locatePolicy,
-                  claimGroupId: String(segment.claim_group_id || currentSegment.claimGroupId || '').trim(),
-                  claimGroupKind: String(segment.claim_group_kind || currentSegment.claimGroupKind || '').trim().toLowerCase(),
-                  anchorKind: 'figure',
-                  anchorText: normalizeStrictAnchorText(String(segment.anchor_text || currentSegment.anchorText || '')),
-                  equationNumber: 0,
-                  supportFigureNumber: Number.isFinite(Number(segment.support_slot_figure_number || 0))
-                    ? Math.max(0, Math.floor(Number(segment.support_slot_figure_number || 0)))
-                    : 0,
-                  supportPanelLetters: Array.isArray(segment.support_slot_panel_letters)
-                    ? Array.from(new Set(
-                      segment.support_slot_panel_letters
-                        .map((item) => String(item || '').trim().toLowerCase())
-                        .filter((item) => /^[a-z]$/.test(item)),
-                    ))
-                    : [],
-                  snippetKey: normalizeStructuredLocateSnippet(String(currentSegment.snippetKey || currentSegment.text || '').trim()),
-                  snippetAliases: Array.isArray(currentSegment.snippetAliases) ? currentSegment.snippetAliases : [],
-                  primary: candidates[0],
-                  alternatives: candidates,
-                  sourceSegmentId: String(segment.segment_id || '').trim() || undefined,
-                }
-                let score = Math.max(
-                  scoreProvenanceSegment(raw, entry.segmentText, entry.snippetKey),
-                  overlapScore(raw, entry.anchorText || entry.segmentText),
-                )
-                if (figureNumbers.length > 0) {
-                  score += 0.92 * figureNumberMatchScore(`${entry.anchorText} ${entry.segmentText}`, figureNumbers)
-                }
-                if (panelLetters.length > 0) {
-                  const panelScore = panelLetterMatchScore(
-                    `${entry.anchorText || ''} ${entry.segmentText || ''} ${entry.primary?.headingPath || ''} ${(entry.supportPanelLetters || []).join(' ')}`,
-                    panelLetters,
-                  )
-                  if (panelScore > 0) score += 1.28 * panelScore
-                  else if (Array.isArray(entry.supportPanelLetters) && entry.supportPanelLetters.length > 0) score -= 1.05
-                }
-                if (pureFigureRef) {
-                  if (claimType === 'figure_claim') score += 1.08
-                  else if (claimType === 'figure_panel') score -= 0.92
-                }
-                if (score > rawBestScore) {
-                  rawBest = entry
-                  rawBestScore = score
-                }
-                if (claimType === 'figure_claim' && score > rawBestFigureClaimScore) {
-                  rawBestFigureClaim = entry
-                  rawBestFigureClaimScore = score
-                }
-              }
-              if (
-                pureFigureRef
-                && rawBest
-                && String(rawBest.claimType || '').trim().toLowerCase() === 'figure_panel'
-                && rawBestFigureClaim
-                && rawBestFigureClaimScore >= (rawBestScore - 0.38)
-              ) {
-                rawBest = rawBestFigureClaim
-                rawBestScore = rawBestFigureClaimScore
-              }
-              return rawBestScore >= 0.26 ? rawBest : null
-            }
-            const resolveStructuredEquationEntry = (
-              snippet: string,
-            ): StructuredLocateResolution | null => {
-              const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || ''))).trim()
-              if (!raw) return null
-              const eqNumbers = extractEquationNumbersFromText(raw)
-              const equationEntries = provenanceLocateEntries.filter((entry) => {
-                const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
-                const claimType = String(entry.claimType || '').trim().toLowerCase()
-                return anchorKind === 'equation' || claimType === 'formula_claim'
-              })
-              if (equationEntries.length <= 0) return null
-              let best: ProvenanceLocateEntry | null = null
-              let bestScore = Number.NEGATIVE_INFINITY
-              for (const entry of equationEntries) {
-                const claimType = String(entry.claimType || '').trim().toLowerCase()
-                const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
-                const formulaOrigin = String(entry.formulaOrigin || '').trim().toLowerCase()
-                const locateSurfacePolicy = String(entry.locateSurfacePolicy || '').trim().toLowerCase()
-                const entryText = [
-                  entry.anchorText,
-                  entry.evidenceQuote,
-                  entry.segmentText,
-                  entry.primary?.focusSnippet,
-                  entry.primary?.headingPath,
-                ].filter(Boolean).join(' ')
-                const entryNumbers = Array.from(new Set([
-                  Number(entry.equationNumber || 0),
-                  Number(entry.primary?.anchorNumber || 0),
-                  ...extractEquationNumbersFromText(entryText),
-                ].filter((item) => Number.isFinite(Number(item)) && Number(item) > 0)
-                  .map((item) => Math.floor(Number(item)))))
-                let score = Math.max(
-                  scoreProvenanceSegment(raw, entry.segmentText, entry.snippetKey),
-                  overlapScore(raw, entry.anchorText || entry.segmentText),
-                  overlapScore(raw, entry.evidenceQuote || entry.segmentText),
-                )
-                if (eqNumbers.length > 0) {
-                  const matchedNumber = entryNumbers.some((num) => eqNumbers.includes(num))
-                  if (matchedNumber) score += 1.65
-                  else if (entryNumbers.length > 0) score -= 0.95
-                }
-                if (claimType === 'formula_claim') score += 0.46
-                if (anchorKind === 'equation') score += 0.42
-                if (formulaOrigin === 'source') score += 0.22
-                if (locateSurfacePolicy === 'primary') score += 0.18
-                if (entry.mustLocate || entry.locatePolicy === 'required') score += 0.08
-                if (score > bestScore) {
-                  best = entry
-                  bestScore = score
-                }
-              }
-              const floor = eqNumbers.length > 0 ? 0.72 : 0.5
-              if (!best || bestScore < floor) return null
-              const order = Number(structuredLocateOrderBySegmentId.get(String(best.segmentId || '').trim()) || 0)
-              return {
-                entry: best,
-                order: order > 0
-                  ? order
-                  : 10000 + Math.max(0, provenanceLocateEntries.findIndex((item) => item.segmentId === best.segmentId)),
-                fallback: !(order > 0),
-              }
-            }
-            const resolveStructuredQuoteEntry = (
-              snippet: string,
-              targetKindInput?: string,
-            ): StructuredLocateResolution | null => {
-              const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || ''))).trim()
-              const targetKind = normalizeStructuredLocateKind(String(targetKindInput || ''))
-              if (!raw) return null
-              const quoteEntries = provenanceLocateEntries.filter((entry) => {
-                const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
-                const claimType = String(entry.claimType || '').trim().toLowerCase()
-                if (targetKind === 'quote') {
-                  return anchorKind === 'quote' || claimType === 'quote_claim'
-                }
-                if (targetKind === 'blockquote') {
-                  return anchorKind === 'blockquote' || claimType === 'blockquote_claim' || claimType === 'quote_claim'
-                }
-                return anchorKind === 'quote' || anchorKind === 'blockquote' || claimType === 'quote_claim' || claimType === 'blockquote_claim'
-              })
-              if (quoteEntries.length <= 0) return null
-
-              let best: ProvenanceLocateEntry | null = null
-              let bestScore = Number.NEGATIVE_INFINITY
-              for (const entry of quoteEntries) {
-                const anchorKind = normalizeStructuredLocateKind(String(entry.anchorKind || ''))
-                const compat = scoreStructuredAnchorCompatibility(targetKind || anchorKind, entry)
-                if (targetKind && compat <= -0.9) continue
-                let score = Math.max(
-                  scoreProvenanceSegment(raw, entry.segmentText, entry.snippetKey),
-                  overlapScore(raw, entry.anchorText || entry.segmentText),
-                )
-                if (Array.isArray(entry.snippetAliases) && entry.snippetAliases.length > 0) {
-                  const aliasScore = entry.snippetAliases.reduce((acc, alias) => {
-                    return Math.max(acc, overlapScore(raw, String(alias || '')))
-                  }, 0)
-                  score += 0.18 * aliasScore
-                }
-                if (entry.mustLocate || entry.locatePolicy === 'required') {
-                  score += 0.08
-                }
-                if (targetKind && anchorKind === targetKind) {
-                  score += 0.16
-                }
-                score += Math.max(-0.4, compat)
-                if (score > bestScore) {
-                  best = entry
-                  bestScore = score
-                }
-              }
-              const floor = targetKind === 'quote' ? 0.46 : 0.44
-              if (!best || bestScore < floor) return null
-              const order = Number(structuredLocateOrderBySegmentId.get(String(best.segmentId || '').trim()) || 0)
-              return {
-                entry: best,
-                order: order > 0 ? order : 10000 + Math.max(0, provenanceLocateEntries.findIndex((item) => item.segmentId === best.segmentId)),
-                fallback: !(order > 0),
-              }
-            }
-            const isStrictStructuredTargetCompatible = (
-              entry: ProvenanceLocateEntry | null | undefined,
-              targetKindInput?: string,
-            ): boolean => {
-              const targetKind = normalizeStructuredLocateKind(String(targetKindInput || ''))
-              if (!entry) return false
-              if (!targetKind) return true
-              const claimType = String(entry.claimType || '').trim().toLowerCase()
-              const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
-              if (targetKind === 'quote') {
-                return anchorKind === 'quote' || claimType === 'quote_claim'
-              }
-              if (targetKind === 'blockquote') {
-                return anchorKind === 'blockquote' || claimType === 'blockquote_claim' || claimType === 'quote_claim'
-              }
-              if (targetKind === 'figure') {
-                return anchorKind === 'figure' || claimType === 'figure_claim' || claimType === 'figure_panel'
-              }
-              if (targetKind === 'equation') {
-                return anchorKind === 'equation' && claimType === 'formula_claim'
-              }
-              return true
-            }
-            const resolveStructuredInlineResolution = (
-              snippet: string,
-              meta?: LocateRenderMetaLite,
-            ): StructuredLocateResolution | null => {
-              if (!strictStructuredInlineLocate) return null
-              const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
-              const quoteEntry = (targetKind === 'quote' || targetKind === 'blockquote')
-                ? resolveStructuredQuoteEntry(snippet, targetKind)
-                : null
-              if (quoteEntry) return quoteEntry
-              if (targetKind === 'figure') {
-                const figureEntry = resolveStructuredFigureEntry(snippet)
-                if (!figureEntry || !isStrictStructuredTargetCompatible(figureEntry, targetKind)) return null
-                const order = Number(structuredLocateOrderBySegmentId.get(String(figureEntry.segmentId || '').trim()) || 0)
-                return {
-                  entry: figureEntry,
-                  order: order > 0
-                    ? order
-                    : 10000 + Math.max(0, provenanceLocateEntries.findIndex((item) => item.segmentId === figureEntry.segmentId)),
-                  fallback: !(order > 0),
-                }
-              }
-              const slot = resolveStructuredRenderLocateSlot(snippet, meta, structuredRenderSlotMap)
-              if (slot && isStrictStructuredTargetCompatible(slot.entry, targetKind)) {
-                return {
-                  entry: slot.entry,
-                  order: slot.order,
-                  fallback: false,
-                }
-              }
-              if (targetKind === 'equation') return resolveStructuredEquationEntry(snippet)
-              const fallbackEntry = resolveStructuredFallbackLocateEntry(snippet, meta, provenanceLocateEntries)
-              const finalEntry = fallbackEntry
-              if (!finalEntry || !isStrictStructuredTargetCompatible(finalEntry, targetKind)) return null
-              return {
-                entry: finalEntry,
-                order: 10000 + Math.max(0, provenanceLocateEntries.findIndex((item) => item.segmentId === finalEntry.segmentId)),
-                fallback: true,
-              }
-            }
-            const resolveExactStructuredInlineResolution = (
-              snippet: string,
-              meta?: LocateRenderMetaLite,
-            ): StructuredLocateResolution | null => {
-              const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
-              const resolved = resolveStructuredInlineResolution(snippet, meta)
-              if (!resolved) return null
-              if (resolved.fallback && targetKind !== 'figure') return null
-              return resolved
-            }
+            const structuredInlineLocateResolver = createStructuredInlineLocateResolver({
+              strictStructuredInlineLocate,
+              provenanceLocateEntries,
+              structuredRenderSlotMap,
+              structuredLocateOrderBySegmentId,
+              messageProvenance,
+              structuredProvenanceSegmentsAll,
+              provenanceBlockMap,
+              provenanceSourcePath,
+              effectiveGuideSourcePath,
+              provenanceSourceName,
+              locateSourceName,
+            })
+            const {
+              resolveExactStructuredInlineResolution,
+              resolveStrictParagraphEntry,
+              isStrictStructuredTargetCompatible,
+            } = structuredInlineLocateResolver
             const resolveProvenanceLocateCandidates = (snippet: string, limit = 4): LocateCandidate[] => {
               const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || '')))
               const key = normalizeLocateText(raw).slice(0, 360)
@@ -6846,7 +4101,8 @@ export function MessageList({
                             if (targetKind === 'paragraph' || targetKind === 'list_item') {
                               const raw = String(snippet || '').trim()
                               if (raw.length < 18) return false
-                              const picked = resolveProvenanceLocateCandidates(snippet, 1)[0] || null
+                              const structured = resolveStrictParagraphEntry(snippet, meta)
+                              const picked = structured?.entry?.primary || resolveProvenanceLocateCandidates(snippet, 1)[0] || null
                               if (!picked) return false
                               const keyBase = locateCandidateKey(picked)
                               const snippetKey = normalizeLocateText(raw).slice(0, 96)
@@ -6927,6 +4183,12 @@ export function MessageList({
                               if (!strictStructuredInlineLocate) return
                               const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
                               if (targetKind === 'paragraph' || targetKind === 'list_item') {
+                                const structured = resolveStrictParagraphEntry(snippet, meta)
+                                const entry = structured?.entry || null
+                                if (entry) {
+                                  openReaderByStructuredEntry(entry, snippet)
+                                  return
+                                }
                                 const pickedList = resolveProvenanceLocateCandidates(snippet, 6)
                                 if (pickedList.length <= 0) return
                                 openReaderByCandidates(pickedList, snippet, { strictLocate: true })
@@ -6972,6 +4234,33 @@ export function MessageList({
                           if (!picked) return '\u5b9a\u4f4d\u5230\u539f\u6587'
                           const heading = String(picked.headingPath || '').trim()
                           return heading ? `\u5b9a\u4f4d\u5230\u539f\u6587\uff1a${heading}` : '\u5b9a\u4f4d\u5230\u539f\u6587'
+                        }) : undefined}
+                        locateButtonAttrsResolver={enableLocateUi ? ((snippet, meta) => {
+                          if (!strictStructuredLocateOnly) return null
+                          const toAttrs = (candidate: LocateCandidate | null | undefined) => {
+                            if (!candidate) return null
+                            return {
+                              className: 'kb-prov-locate-chip',
+                              focus: String(candidate.focusSnippet || candidate.matchText || snippet || '').trim().slice(0, 220),
+                              blockId: String(candidate.blockId || '').trim(),
+                              anchorId: String(candidate.anchorId || '').trim(),
+                              anchorKind: String(candidate.anchorKind || '').trim(),
+                              heading: String(candidate.headingPath || '').trim(),
+                            }
+                          }
+                          const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
+                          if (targetKind === 'paragraph' || targetKind === 'list_item') {
+                            const structured = resolveStrictParagraphEntry(snippet, meta)
+                            return toAttrs(structured?.entry?.primary || resolveProvenanceLocateCandidates(snippet, 1)[0] || null)
+                          }
+                          const resolved = resolveExactStructuredInlineResolution(snippet, meta)
+                            || (targetKind === 'figure' || isPreferredStrictFigureRefSnippet(snippet)
+                              ? resolveExactStructuredInlineResolution(snippet, { kind: 'figure', order: Number(meta?.order || 0) })
+                              : null)
+                          const entry = resolved?.entry || null
+                          if (!entry) return null
+                          if (targetKind !== 'figure' && !allowedStructuredRenderOrders.has(Number(resolved?.order || 0))) return null
+                          return toAttrs(entry.primary)
                         }) : undefined}
                       />
                       <ResearchContextReceipt

@@ -339,7 +339,7 @@ def build_system_b_evidence_pack(
         weak_context = True
 
     source_key = str(citation_context_source or "").strip().lower()
-    answer_context_only = bool(context and source_key == "answer_context")
+    answer_context_only = source_key in {"answer_context", "answer_reference_mention"}
     reference_entry = _reference_entry(raw_reference, max_len=900)
     support = clean_display_text(relation_hint, max_len=420) or clean_display_text(role_hint, max_len=420)
     if not support and context and claim:

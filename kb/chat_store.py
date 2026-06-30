@@ -4,10 +4,60 @@ import sqlite3
 import time
 import uuid
 import json
+import math
 import re
 from pathlib import Path
 
+from kb.path_safety import clean_file_source_path_input
+
 DEFAULT_ACTIVE_CONVERSATION_LIMIT = 400
+MAX_CITATION_SHELF_ITEMS = 120
+MAX_PROJECT_NAME_LEN = 120
+_SHELF_MAX_ITEM_KEYS = 80
+_SHELF_MAX_DICT_KEYS = 32
+_SHELF_MAX_LIST_ITEMS = 32
+_SHELF_MAX_VALUE_DEPTH = 3
+_SHELF_DEFAULT_STRING_LIMIT = 700
+_SHELF_TEXT_LIMIT_BY_KEY = {
+    "abstract": 1600,
+    "anchor": 800,
+    "anchorid": 800,
+    "blockid": 800,
+    "cardcontextsummary": 1600,
+    "cardevidence": 1600,
+    "cardreferenceentry": 2000,
+    "cardtakeaway": 1000,
+    "cardtitle": 500,
+    "citationcontext": 1600,
+    "citefmt": 1600,
+    "doi": 400,
+    "doiurl": 400,
+    "evidencequote": 1600,
+    "evidencesource": 120,
+    "headingpath": 800,
+    "key": 500,
+    "locationlabel": 500,
+    "main": 500,
+    "note": 4000,
+    "raw": 1600,
+    "shelfexcerpt": 1600,
+    "shelfexcerptlabel": 120,
+    "shelforigin": 120,
+    "source": 500,
+    "sourcename": 500,
+    "sourcepath": 800,
+    "summaryline": 1000,
+    "title": 800,
+    "venue": 500,
+    "whyline": 1000,
+    "year": 40,
+}
+_STATE_MAX_TOP_LEVEL_KEYS = 80
+_STATE_MAX_DICT_KEYS = 120
+_STATE_MAX_LIST_ITEMS = 500
+_STATE_MAX_VALUE_DEPTH = 6
+_STATE_MAX_STRING_LIMIT = 4000
+_STATE_MAX_KEY_LIMIT = 120
 
 
 _DEFAULT_CONVERSATION_TITLE_RE = re.compile(
@@ -22,6 +72,164 @@ def _shelf_text(value: object, limit: int = 2000) -> str:
     text = str(value).replace("\x00", " ").strip()
     text = re.sub(r"\s+", " ", text)
     return text[:limit]
+
+
+def _normalize_reader_source_path_key(value: object) -> str:
+    text = clean_file_source_path_input(value)
+    if not text:
+        return ""
+    text = text.replace("\\", "/")
+    unc_prefix = text.startswith("//")
+    absolute_prefix = (not unc_prefix) and text.startswith("/")
+    parts: list[str] = []
+    for raw_part in text.split("/"):
+        part = raw_part.strip()
+        if not part or part == ".":
+            continue
+        if part == "..":
+            prev = parts[-1] if parts else ""
+            if prev and prev != ".." and not re.match(r"^[A-Za-z]:$", prev):
+                parts.pop()
+            else:
+                parts.append(part)
+            continue
+        parts.append(part)
+    out = "/".join(parts)
+    if unc_prefix and out:
+        out = f"//{out}"
+    elif absolute_prefix and out:
+        out = f"/{out}"
+    out = re.sub(r"^/([A-Za-z]:)(/|$)", r"\1\2", out)
+    return out.rstrip("/").lower()
+
+
+def _shelf_key_norm(key: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(key or "").lower())
+
+
+def _shelf_string_limit(key: object) -> int:
+    return _SHELF_TEXT_LIMIT_BY_KEY.get(_shelf_key_norm(key), _SHELF_DEFAULT_STRING_LIMIT)
+
+
+def _shelf_value_is_empty(value: object) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _sanitize_citation_shelf_value(value: object, *, key: str = "", depth: int = _SHELF_MAX_VALUE_DEPTH) -> object:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _shelf_text(value, limit=_shelf_string_limit(key))
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+    if depth <= 0:
+        return _shelf_text(value, limit=_SHELF_DEFAULT_STRING_LIMIT)
+    if isinstance(value, dict):
+        out: dict[str, object] = {}
+        for raw_key, raw_value in value.items():
+            clean_key = _shelf_text(raw_key, limit=120)
+            if not clean_key or clean_key in out:
+                continue
+            clean_value = _sanitize_citation_shelf_value(raw_value, key=clean_key, depth=depth - 1)
+            if _shelf_value_is_empty(clean_value):
+                continue
+            out[clean_key] = clean_value
+            if len(out) >= _SHELF_MAX_DICT_KEYS:
+                break
+        return out
+    if isinstance(value, (list, tuple)):
+        out_list: list[object] = []
+        for entry in value:
+            clean_value = _sanitize_citation_shelf_value(entry, key=key, depth=depth - 1)
+            if _shelf_value_is_empty(clean_value):
+                continue
+            out_list.append(clean_value)
+            if len(out_list) >= _SHELF_MAX_LIST_ITEMS:
+                break
+        return out_list
+    return _shelf_text(value, limit=_shelf_string_limit(key))
+
+
+def _sanitize_citation_shelf_item_payload(item: dict) -> dict:
+    out: dict[str, object] = {}
+    for raw_key, raw_value in item.items():
+        clean_key = _shelf_text(raw_key, limit=120)
+        if not clean_key or clean_key in out:
+            continue
+        clean_value = _sanitize_citation_shelf_value(raw_value, key=clean_key)
+        if _shelf_value_is_empty(clean_value):
+            continue
+        out[clean_key] = clean_value
+        if len(out) >= _SHELF_MAX_ITEM_KEYS:
+            break
+    return out
+
+
+def _state_text(value: object, limit: int = _STATE_MAX_STRING_LIMIT) -> str:
+    return str(value).replace("\x00", " ")[:limit]
+
+
+def _sanitize_json_state_value(value: object, *, depth: int = _STATE_MAX_VALUE_DEPTH) -> object:
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return _state_text(value)
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+    if depth <= 0:
+        return _state_text(value)
+    if isinstance(value, dict):
+        out: dict[str, object] = {}
+        for raw_key, raw_value in value.items():
+            clean_key = _state_text(raw_key, limit=_STATE_MAX_KEY_LIMIT).strip()
+            if not clean_key or clean_key in out:
+                continue
+            out[clean_key] = _sanitize_json_state_value(raw_value, depth=depth - 1)
+            if len(out) >= _STATE_MAX_DICT_KEYS:
+                break
+        return out
+    if isinstance(value, (list, tuple)):
+        out_list: list[object] = []
+        for entry in value:
+            out_list.append(_sanitize_json_state_value(entry, depth=depth - 1))
+            if len(out_list) >= _STATE_MAX_LIST_ITEMS:
+                break
+        return out_list
+    return _state_text(value)
+
+
+def _sanitize_json_state_dict(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, object] = {}
+    for raw_key, raw_value in value.items():
+        clean_key = _state_text(raw_key, limit=_STATE_MAX_KEY_LIMIT).strip()
+        if not clean_key or clean_key in out:
+            continue
+        out[clean_key] = _sanitize_json_state_value(raw_value)
+        if len(out) >= _STATE_MAX_TOP_LEVEL_KEYS:
+            break
+    return out
+
+
+def _apply_json_state_patch(current: object, patch: object) -> dict:
+    state = _sanitize_json_state_dict(current)
+    patch_dict = _sanitize_json_state_dict(patch)
+    for key, value in patch_dict.items():
+        clean_key = str(key or "").strip()
+        if not clean_key:
+            continue
+        if value is None:
+            state.pop(clean_key, None)
+        else:
+            state[clean_key] = value
+    return _sanitize_json_state_dict(state)
 
 
 def _shelf_first_text(item: dict, *keys: str, limit: int = 2000) -> str:
@@ -93,8 +301,65 @@ def _shelf_item_identity(item: dict) -> str:
     return f"key:{key}" if key else ""
 
 
+def _shelf_item_stable_key(item: dict) -> str:
+    return _shelf_first_text(item, "key", limit=500)
+
+
+def _shelf_text_is_weak(value: object) -> bool:
+    text = _shelf_text(value, limit=500).lower()
+    return text in {
+        "untitled",
+        "untitled excerpt",
+        "reference entry",
+        "selected text",
+        "excerpt",
+        "unknown",
+    }
+
+
+def _shelf_quality_status_rank(value: object) -> int:
+    status = _shelf_text(value, limit=120).lower().replace("-", "_")
+    if status in {"ready", "repaired", "verified", "ok", "complete"}:
+        return 5
+    if status in {"enriched", "crossref", "matched", "external_ready"}:
+        return 4
+    if status in {"pending", "syncing", "checking", "queued"}:
+        return 3
+    if status in {"needs_review", "partial", "incomplete"}:
+        return 2
+    if status in {"missing", "not_found", "failed", "error", "invalid"}:
+        return 1
+    return 0
+
+
+def _shelf_metadata_quality_rank(value: object) -> int:
+    if not isinstance(value, dict):
+        return 0
+    if value.get("ok") is True:
+        return 5
+    return _shelf_quality_status_rank(value.get("status") or value.get("repair_status") or value.get("state"))
+
+
+def _merge_shelf_metadata_quality(current: object, incoming: object) -> dict:
+    current_dict = dict(current) if isinstance(current, dict) else {}
+    incoming_dict = dict(incoming) if isinstance(incoming, dict) else {}
+    if not current_dict:
+        return incoming_dict
+    if not incoming_dict:
+        return current_dict
+    current_rank = _shelf_metadata_quality_rank(current_dict)
+    incoming_rank = _shelf_metadata_quality_rank(incoming_dict)
+    if incoming_rank >= current_rank:
+        merged = dict(current_dict)
+        merged.update(incoming_dict)
+        return merged
+    merged = dict(incoming_dict)
+    merged.update(current_dict)
+    return merged
+
+
 def _normalize_citation_shelf_item(item: dict) -> dict:
-    out = dict(item)
+    out = _sanitize_citation_shelf_item_payload(item)
     kind = _shelf_item_kind(out)
     origin = _shelf_first_text(out, "shelfOrigin", "shelf_origin", "evidenceSource", "evidence_source", limit=120)
     if not origin:
@@ -134,6 +399,97 @@ def _normalize_citation_shelf_item(item: dict) -> dict:
     return out
 
 
+def _merge_citation_shelf_item(existing: dict, incoming: dict) -> dict:
+    base = _normalize_citation_shelf_item(existing)
+    new = _normalize_citation_shelf_item(incoming)
+    out = dict(base)
+    rich_text_keys = {
+        "shelfExcerpt",
+        "shelf_excerpt",
+        "evidenceQuote",
+        "evidence_quote",
+        "citationContext",
+        "citation_context",
+        "cardEvidence",
+        "card_evidence",
+        "cardReferenceEntry",
+        "card_reference_entry",
+        "summaryLine",
+        "summary_line",
+        "cardTakeaway",
+        "card_takeaway",
+        "cardContextSummary",
+        "card_context_summary",
+        "whyLine",
+        "why_line",
+        "headingPath",
+        "heading_path",
+        "locationLabel",
+        "location_label",
+    }
+    status_keys = {
+        "metadataRepairStatus",
+        "metadata_repair_status",
+        "externalMetadataStatus",
+        "external_metadata_status",
+        "libraryMatchStatus",
+        "library_match_status",
+    }
+    metadata_quality_keys = {"metadataQuality", "metadata_quality"}
+    for key, value in new.items():
+        if key in {"tags", "note"}:
+            continue
+        if isinstance(value, str):
+            incoming_text = _shelf_text(value, limit=4000)
+            if not incoming_text:
+                continue
+            current_text = _shelf_text(out.get(key), limit=4000)
+            if key in status_keys:
+                if (not current_text) or _shelf_quality_status_rank(incoming_text) >= _shelf_quality_status_rank(current_text):
+                    out[key] = value
+                continue
+            should_replace = (
+                (not current_text)
+                or _shelf_text_is_weak(current_text)
+                or (
+                    key in rich_text_keys
+                    and len(incoming_text) > len(current_text)
+                    and (len(current_text) < 120 or current_text.lower() in incoming_text.lower())
+                )
+            )
+            if should_replace:
+                out[key] = value
+        elif isinstance(value, dict):
+            if key in metadata_quality_keys:
+                out[key] = _merge_shelf_metadata_quality(out.get(key), value)
+                continue
+            current = out.get(key) if isinstance(out.get(key), dict) else {}
+            merged = dict(current or {})
+            for sub_key, sub_value in value.items():
+                if sub_value in (None, "", [], {}):
+                    continue
+                merged[sub_key] = sub_value
+            if merged:
+                out[key] = merged
+        elif isinstance(value, list):
+            if not isinstance(out.get(key), list) or not out.get(key):
+                out[key] = value
+    existing_note = _shelf_text(base.get("note"), limit=4000)
+    incoming_note = _shelf_text(new.get("note"), limit=4000)
+    out["note"] = existing_note or incoming_note
+    merged_tags: list[str] = []
+    seen_tags: set[str] = set()
+    for tag in list(base.get("tags") or []) + list(new.get("tags") or []):
+        clean = _shelf_text(tag, limit=60)
+        tag_key = clean.lower()
+        if not clean or tag_key in seen_tags:
+            continue
+        seen_tags.add(tag_key)
+        merged_tags.append(clean)
+    out["tags"] = merged_tags
+    return _normalize_citation_shelf_item(out)
+
+
 def _normalize_citation_shelf_items(items: list[dict]) -> list[dict]:
     seen = set()
     out: list[dict] = []
@@ -146,7 +502,7 @@ def _normalize_citation_shelf_items(items: list[dict]) -> list[dict]:
             continue
         seen.add(identity)
         out.append(item)
-        if len(out) >= 120:
+        if len(out) >= MAX_CITATION_SHELF_ITEMS:
             break
     return out
 
@@ -156,6 +512,20 @@ def _normalize_conversation_mode(mode: str) -> str:
     if m in {"paper_guide", "normal"}:
         return m
     return "normal"
+
+
+def _clean_project_name(name: object, *, default: str = "") -> str:
+    text = str(name or "").replace("\x00", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text and default:
+        text = default
+    return text[:MAX_PROJECT_NAME_LEN]
+
+
+def _project_record(row: sqlite3.Row | dict) -> dict:
+    rec = dict(row)
+    rec["name"] = _clean_project_name(rec.get("name"), default="未命名项目")
+    return rec
 
 
 def _is_default_conversation_title(title: str) -> bool:
@@ -195,6 +565,16 @@ class ChatStore:
         except Exception:
             pass
         return conn
+
+    def _begin_immediate(self, conn: sqlite3.Connection) -> None:
+        conn.execute("BEGIN IMMEDIATE")
+
+    def _project_exists(self, conn: sqlite3.Connection, project_id: str | None) -> bool:
+        pid = str(project_id or "").strip()
+        if not pid:
+            return False
+        row = conn.execute("SELECT 1 FROM projects WHERE id = ? LIMIT 1", (pid,)).fetchone()
+        return row is not None
 
     def _init_db(self) -> None:
         with self._connect() as conn:
@@ -350,11 +730,16 @@ class ChatStore:
                   source_name TEXT NOT NULL,
                   created_at REAL NOT NULL,
                   updated_at REAL NOT NULL,
-                  UNIQUE(conv_id, source_path)
+                  UNIQUE(conv_id, source_path),
+                  FOREIGN KEY(conv_id) REFERENCES conversations(id)
                 );
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_sources_conv_id ON conversation_sources(conv_id);")
+            conn.execute(
+                "DELETE FROM conversation_sources "
+                "WHERE conv_id NOT IN (SELECT id FROM conversations)"
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversation_reader_states (
@@ -373,6 +758,10 @@ class ChatStore:
                 "ON conversation_reader_states(conv_id, updated_at DESC);"
             )
             conn.execute(
+                "DELETE FROM conversation_reader_states "
+                "WHERE conv_id NOT IN (SELECT id FROM conversations)"
+            )
+            conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversation_research_states (
                   conv_id TEXT PRIMARY KEY,
@@ -386,6 +775,10 @@ class ChatStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_conversation_research_states_updated "
                 "ON conversation_research_states(updated_at DESC);"
+            )
+            conn.execute(
+                "DELETE FROM conversation_research_states "
+                "WHERE conv_id NOT IN (SELECT id FROM conversations)"
             )
             conn.execute(
                 """
@@ -404,6 +797,20 @@ class ChatStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_citation_shelves_updated "
                 "ON citation_shelves(updated_at DESC);"
+            )
+            conn.execute(
+                "DELETE FROM citation_shelves "
+                "WHERE scope = 'conversation' AND scope_id NOT IN (SELECT id FROM conversations)"
+            )
+            conn.execute(
+                "DELETE FROM message_refs "
+                "WHERE NOT EXISTS (SELECT 1 FROM conversations WHERE conversations.id = message_refs.conv_id) "
+                "OR NOT EXISTS ("
+                "  SELECT 1 FROM messages "
+                "  WHERE messages.id = message_refs.user_msg_id "
+                "    AND messages.conv_id = message_refs.conv_id "
+                "    AND messages.role = 'user'"
+                ")"
             )
 
     def _archive_excess_conversations(
@@ -446,6 +853,41 @@ class ChatStore:
         )
         return len(ids)
 
+    def _archive_excess_conversations_all_scopes(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        active_limit: int = DEFAULT_ACTIVE_CONVERSATION_LIMIT,
+    ) -> int:
+        keep_n = max(1, int(active_limit))
+        rows = conn.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY project_id
+                        ORDER BY updated_at DESC, created_at DESC, id DESC
+                    ) AS rn
+                FROM conversations
+                WHERE COALESCE(archived, 0) = 0
+            )
+            SELECT id
+            FROM ranked
+            WHERE rn > ?
+            """,
+            (keep_n,),
+        ).fetchall()
+        ids = [str(r["id"] or "").strip() for r in rows if str(r["id"] or "").strip()]
+        if not ids:
+            return 0
+        now = time.time()
+        conn.executemany(
+            "UPDATE conversations SET archived = 1, archived_at = ? WHERE id = ?",
+            [(now, cid) for cid in ids],
+        )
+        return len(ids)
+
     def _touch_conversation_active(self, conn: sqlite3.Connection, conv_id: str, now: float) -> str | None:
         row = conn.execute("SELECT project_id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
         if not row:
@@ -460,7 +902,7 @@ class ChatStore:
     def create_project(self, name: str) -> str:
         pid = uuid.uuid4().hex
         now = time.time()
-        name = (name or "").strip() or "未命名项目"
+        name = _clean_project_name(name, default="未命名项目")
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
@@ -473,7 +915,7 @@ class ChatStore:
             rows = conn.execute(
                 "SELECT id, name, created_at, updated_at FROM projects ORDER BY updated_at DESC"
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [_project_record(r) for r in rows]
 
     def get_project(self, project_id: str) -> dict | None:
         if not (project_id or "").strip():
@@ -483,12 +925,12 @@ class ChatStore:
                 "SELECT id, name, created_at, updated_at FROM projects WHERE id = ?",
                 (project_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return _project_record(row) if row else None
 
     def rename_project(self, project_id: str, name: str) -> bool:
         if not (project_id or "").strip():
             return False
-        name = (name or "").strip()
+        name = _clean_project_name(name)
         if not name:
             return False
         now = time.time()
@@ -499,13 +941,16 @@ class ChatStore:
             )
         return cur.rowcount > 0
 
-    def delete_project(self, project_id: str) -> None:
+    def delete_project(self, project_id: str) -> bool:
         if not (project_id or "").strip():
-            return
+            return False
         with self._connect() as conn:
+            self._begin_immediate(conn)
             conn.execute("UPDATE conversations SET project_id = NULL WHERE project_id = ?", (project_id,))
+            self._archive_excess_conversations(conn, project_id=None)
             conn.execute("DELETE FROM citation_shelves WHERE scope = 'project' AND scope_id = ?", (project_id,))
-            conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+            cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        return cur.rowcount > 0
 
     def create_conversation(
         self,
@@ -523,7 +968,10 @@ class ChatStore:
         source_path = str(bound_source_path or "").strip()
         source_name = str(bound_source_name or "").strip()
         source_ready = 1 if bool(bound_source_ready and source_path) else 0
+        project_id_norm = str(project_id or "").strip() or None
         with self._connect() as conn:
+            if project_id_norm and not self._project_exists(conn, project_id_norm):
+                project_id_norm = None
             conn.execute(
                 "INSERT INTO conversations ("
                 "id, title, created_at, updated_at, project_id, archived, archived_at, "
@@ -534,7 +982,7 @@ class ChatStore:
                     title.strip() or "新会话",
                     now,
                     now,
-                    project_id,
+                    project_id_norm,
                     mode_norm,
                     source_path,
                     source_name,
@@ -551,7 +999,7 @@ class ChatStore:
                     """,
                     (conv_id, source_path, source_name or Path(source_path).name, now, now),
                 )
-            self._archive_excess_conversations(conn, project_id=project_id)
+            self._archive_excess_conversations(conn, project_id=project_id_norm)
         return conv_id
 
     def list_conversations(
@@ -593,6 +1041,59 @@ class ChatStore:
                     (project_id, int(limit)),
                 ).fetchall()
         return [dict(r) for r in rows]
+
+    def sidebar_snapshot(self, limit: int = 80, *, include_archived: bool = False) -> dict:
+        lim = max(1, min(300, int(limit or 80)))
+        conversation_columns = (
+            "id, title, created_at, updated_at, project_id, "
+            "COALESCE(archived, 0) AS archived, archived_at, "
+            "COALESCE(mode, 'normal') AS mode, "
+            "COALESCE(bound_source_path, '') AS bound_source_path, "
+            "COALESCE(bound_source_name, '') AS bound_source_name, "
+            "COALESCE(bound_source_ready, 0) AS bound_source_ready "
+        )
+        archive_filter = "" if include_archived else "AND COALESCE(archived, 0) = 0 "
+        with self._connect() as conn:
+            project_rows = conn.execute(
+                "SELECT id, name, created_at, updated_at FROM projects ORDER BY updated_at DESC"
+            ).fetchall()
+            projects = [_project_record(r) for r in project_rows]
+            project_ids = [str(project.get("id") or "").strip() for project in projects if str(project.get("id") or "").strip()]
+            if not bool(include_archived):
+                self._archive_excess_conversations_all_scopes(conn)
+            rows = conn.execute(
+                "WITH ranked AS ("
+                "SELECT "
+                + conversation_columns
+                + ", ROW_NUMBER() OVER ("
+                "PARTITION BY project_id "
+                "ORDER BY updated_at DESC, created_at DESC, id DESC"
+                ") AS group_rank "
+                "FROM conversations "
+                "WHERE (project_id IS NULL OR project_id IN (SELECT id FROM projects)) "
+                + archive_filter
+                + ") "
+                "SELECT id, title, created_at, updated_at, project_id, "
+                "archived, archived_at, mode, bound_source_path, bound_source_name, bound_source_ready "
+                "FROM ranked "
+                "WHERE group_rank <= ? "
+                "ORDER BY project_id IS NOT NULL, project_id, updated_at DESC, created_at DESC, id DESC",
+                (lim,),
+            ).fetchall()
+            project_conversations: dict[str, list[dict]] = {project_id: [] for project_id in project_ids}
+            root_conversations: list[dict] = []
+            for row in rows:
+                rec = dict(row)
+                project_id = str(rec.get("project_id") or "").strip()
+                if project_id and project_id in project_conversations:
+                    project_conversations[project_id].append(rec)
+                else:
+                    root_conversations.append(rec)
+        return {
+            "projects": projects,
+            "root_conversations": root_conversations,
+            "project_conversations": project_conversations,
+        }
 
     def get_conversation(self, conv_id: str, *, timeout_s: float | None = None) -> dict | None:
         conv_id = (conv_id or "").strip()
@@ -677,30 +1178,37 @@ class ChatStore:
         conv_id = (conv_id or "").strip()
         if not conv_id:
             return False
+        project_id_norm = str(project_id or "").strip() or None
         now = time.time()
         with self._connect() as conn:
+            self._begin_immediate(conn)
             old = conn.execute("SELECT project_id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
             if not old:
+                return False
+            if project_id_norm and not self._project_exists(conn, project_id_norm):
                 return False
             old_project_id = old["project_id"]
             cur = conn.execute(
                 "UPDATE conversations SET project_id = ?, updated_at = ?, archived = 0, archived_at = NULL WHERE id = ?",
-                (project_id, now, conv_id),
+                (project_id_norm, now, conv_id),
             )
             old_pid = str(old_project_id).strip() if isinstance(old_project_id, str) and old_project_id.strip() else None
-            self._archive_excess_conversations(conn, project_id=project_id)
-            if old_pid != project_id:
+            self._archive_excess_conversations(conn, project_id=project_id_norm)
+            if old_pid != project_id_norm:
                 self._archive_excess_conversations(conn, project_id=old_pid)
         return cur.rowcount > 0
 
-    def delete_conversation(self, conv_id: str) -> None:
+    def delete_conversation(self, conv_id: str) -> bool:
         with self._connect() as conn:
+            self._begin_immediate(conn)
             conn.execute("DELETE FROM conversation_reader_states WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM conversation_research_states WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM conversation_sources WHERE conv_id = ?", (conv_id,))
+            conn.execute("DELETE FROM citation_shelves WHERE scope = 'conversation' AND scope_id = ?", (conv_id,))
             conn.execute("DELETE FROM message_refs WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM messages WHERE conv_id = ?", (conv_id,))
-            conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
+            cur = conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
+        return cur.rowcount > 0
 
     def bind_conversation_source(self, conv_id: str, source_path: str, source_name: str = "") -> bool:
         cid = str(conv_id or "").strip()
@@ -710,6 +1218,9 @@ class ChatStore:
         name = str(source_name or "").strip() or Path(src).name
         now = time.time()
         with self._connect() as conn:
+            self._begin_immediate(conn)
+            if not conn.execute("SELECT 1 FROM conversations WHERE id = ?", (cid,)).fetchone():
+                return False
             conn.execute(
                 """
                 INSERT INTO conversation_sources (conv_id, source_path, source_name, created_at, updated_at)
@@ -751,7 +1262,8 @@ class ChatStore:
     def get_conversation_reader_state(self, conv_id: str, source_path: str) -> dict | None:
         cid = str(conv_id or "").strip()
         src = str(source_path or "").strip()
-        if (not cid) or (not src):
+        src_key = _normalize_reader_source_path_key(src)
+        if (not cid) or (not src_key):
             return None
         with self._connect() as conn:
             row = conn.execute(
@@ -760,8 +1272,22 @@ class ChatStore:
                 FROM conversation_reader_states
                 WHERE conv_id = ? AND source_path = ?
                 """,
-                (cid, src),
+                (cid, src_key),
             ).fetchone()
+            if not row:
+                candidates = conn.execute(
+                    """
+                    SELECT conv_id, source_path, state_json, created_at, updated_at
+                    FROM conversation_reader_states
+                    WHERE conv_id = ?
+                    ORDER BY updated_at DESC
+                    """,
+                    (cid,),
+                ).fetchall()
+                for candidate in candidates:
+                    if _normalize_reader_source_path_key(candidate["source_path"]) == src_key:
+                        row = candidate
+                        break
         if not row:
             return {
                 "conv_id": cid,
@@ -774,11 +1300,10 @@ class ChatStore:
             state = json.loads(row["state_json"] or "{}")
         except Exception:
             state = {}
-        if not isinstance(state, dict):
-            state = {}
+        state = _sanitize_json_state_dict(state)
         return {
             "conv_id": str(row["conv_id"] or ""),
-            "source_path": str(row["source_path"] or ""),
+            "source_path": src,
             "state": state,
             "created_at": float(row["created_at"] or 0.0),
             "updated_at": float(row["updated_at"] or 0.0),
@@ -787,11 +1312,13 @@ class ChatStore:
     def patch_conversation_reader_state(self, conv_id: str, source_path: str, patch: dict) -> dict | None:
         cid = str(conv_id or "").strip()
         src = str(source_path or "").strip()
-        if (not cid) or (not src):
+        src_key = _normalize_reader_source_path_key(src)
+        if (not cid) or (not src_key):
             return None
-        patch_dict = dict(patch or {})
+        patch_dict = _sanitize_json_state_dict(patch)
         now = time.time()
         with self._connect() as conn:
+            self._begin_immediate(conn)
             conv = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid,)).fetchone()
             if not conv:
                 return None
@@ -801,22 +1328,38 @@ class ChatStore:
                 FROM conversation_reader_states
                 WHERE conv_id = ? AND source_path = ?
                 """,
-                (cid, src),
+                (cid, src_key),
             ).fetchone()
+            legacy_source_path = ""
+            if not row:
+                candidates = conn.execute(
+                    """
+                    SELECT source_path, state_json, created_at
+                    FROM conversation_reader_states
+                    WHERE conv_id = ?
+                    ORDER BY updated_at DESC
+                    """,
+                    (cid,),
+                ).fetchall()
+                for candidate in candidates:
+                    candidate_source = str(candidate["source_path"] or "")
+                    if _normalize_reader_source_path_key(candidate_source) == src_key:
+                        row = candidate
+                        legacy_source_path = candidate_source
+                        break
             if row:
                 try:
                     current = json.loads(row["state_json"] or "{}")
                 except Exception:
                     current = {}
-                if not isinstance(current, dict):
-                    current = {}
+                current = _sanitize_json_state_dict(current)
                 created_at = float(row["created_at"] or now)
             else:
                 current = {}
                 created_at = now
-            current.update(patch_dict)
+            current = _apply_json_state_patch(current, patch_dict)
             try:
-                state_json = json.dumps(current, ensure_ascii=False, default=str)
+                state_json = json.dumps(current, ensure_ascii=False, allow_nan=False, default=str)
             except Exception:
                 state_json = "{}"
                 current = {}
@@ -827,8 +1370,13 @@ class ChatStore:
                 ON CONFLICT(conv_id, source_path)
                 DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at
                 """,
-                (cid, src, state_json, created_at, now),
+                (cid, src_key, state_json, created_at, now),
             )
+            if legacy_source_path and legacy_source_path != src_key:
+                conn.execute(
+                    "DELETE FROM conversation_reader_states WHERE conv_id = ? AND source_path = ?",
+                    (cid, legacy_source_path),
+                )
         return {
             "conv_id": cid,
             "source_path": src,
@@ -864,8 +1412,7 @@ class ChatStore:
             state = json.loads(row["state_json"] or "{}")
         except Exception:
             state = {}
-        if not isinstance(state, dict):
-            state = {}
+        state = _sanitize_json_state_dict(state)
         return {
             "conv_id": str(row["conv_id"] or ""),
             "state": state,
@@ -877,9 +1424,10 @@ class ChatStore:
         cid = str(conv_id or "").strip()
         if not cid:
             return None
-        patch_dict = dict(patch or {})
+        patch_dict = _sanitize_json_state_dict(patch)
         now = time.time()
         with self._connect() as conn:
+            self._begin_immediate(conn)
             conv = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid,)).fetchone()
             if not conv:
                 return None
@@ -896,22 +1444,14 @@ class ChatStore:
                     current = json.loads(row["state_json"] or "{}")
                 except Exception:
                     current = {}
-                if not isinstance(current, dict):
-                    current = {}
+                current = _sanitize_json_state_dict(current)
                 created_at = float(row["created_at"] or now)
             else:
                 current = {}
                 created_at = now
-            for key, value in patch_dict.items():
-                clean_key = str(key or "").strip()
-                if not clean_key:
-                    continue
-                if value is None:
-                    current.pop(clean_key, None)
-                else:
-                    current[clean_key] = value
+            current = _apply_json_state_patch(current, patch_dict)
             try:
-                state_json = json.dumps(current, ensure_ascii=False, default=str)
+                state_json = json.dumps(current, ensure_ascii=False, allow_nan=False, default=str)
             except Exception:
                 state_json = "{}"
                 current = {}
@@ -1003,7 +1543,7 @@ class ChatStore:
             "scope": str(row["scope"] or scope),
             "scope_id": str(row["scope_id"] or scope_id),
             "project_id": project_id,
-            "items": [item for item in items if isinstance(item, dict)][:120],
+            "items": _normalize_citation_shelf_items([item for item in items if isinstance(item, dict)]),
             "open": bool(int(row["open"] or 0)),
             "revision": int(row["revision"] or 0),
             "created_at": float(row["created_at"] or 0.0),
@@ -1061,6 +1601,7 @@ class ChatStore:
         open_int = 1 if bool(open) else 0
         now = time.time()
         with self._connect() as conn:
+            self._begin_immediate(conn)
             resolved = self._resolve_citation_shelf_scope(
                 conn,
                 conv_id=conv_id,
@@ -1138,6 +1679,7 @@ class ChatStore:
             return self.get_citation_shelf(conv_id=conv_id, project_id=project_id, scope=scope)
         new_item = normalized_new[0]
         with self._connect() as conn:
+            self._begin_immediate(conn)
             resolved = self._resolve_citation_shelf_scope(
                 conn,
                 conv_id=conv_id,
@@ -1163,16 +1705,20 @@ class ChatStore:
             )
             current_items = [entry for entry in list(current.get("items") or []) if isinstance(entry, dict)]
             new_identity = _shelf_item_identity(new_item)
+            new_stable_key = _shelf_item_stable_key(new_item)
             existing_index = next(
                 (
                     idx
                     for idx, existing in enumerate(current_items)
-                    if new_identity and _shelf_item_identity(existing) == new_identity
+                    if (
+                        (new_identity and _shelf_item_identity(existing) == new_identity)
+                        or (new_stable_key and _shelf_item_stable_key(existing) == new_stable_key)
+                    )
                 ),
                 -1,
             )
             if existing_index >= 0:
-                existing_item = current_items[existing_index]
+                existing_item = _merge_citation_shelf_item(current_items[existing_index], new_item)
                 next_items = _normalize_citation_shelf_items([
                     existing_item,
                     *current_items[:existing_index],
@@ -1227,6 +1773,7 @@ class ChatStore:
         scope: str = "project",
     ) -> dict | None:
         with self._connect() as conn:
+            self._begin_immediate(conn)
             resolved = self._resolve_citation_shelf_scope(
                 conn,
                 conv_id=conv_id,
@@ -1301,6 +1848,17 @@ class ChatStore:
         newest_loaded_id = int(out[-1]["id"]) if out else None
         return out, has_more_before, oldest_loaded_id, newest_loaded_id
 
+    def message_exists(self, message_id: int) -> bool:
+        try:
+            mid = int(message_id or 0)
+        except Exception:
+            return False
+        if mid <= 0:
+            return False
+        with self._connect() as conn:
+            row = conn.execute("SELECT 1 FROM messages WHERE id = ?", (mid,)).fetchone()
+        return row is not None
+
     def _hydrate_message_rows(self, rows: list[sqlite3.Row]) -> list[dict]:
         out: list[dict] = []
         for row in rows:
@@ -1359,12 +1917,11 @@ class ChatStore:
             except Exception:
                 return 0
 
-    def update_message_content(self, message_id: int, content: str) -> bool:
+    def update_message_content(self, message_id: int, content: str, *, touch_conversation: bool = False) -> bool:
         mid = int(message_id or 0)
         if mid <= 0:
             return False
         text = (content or "").strip()
-        now = time.time()
         with self._connect() as conn:
             row = conn.execute("SELECT conv_id, meta_json FROM messages WHERE id = ?", (mid,)).fetchone()
             if not row:
@@ -1381,11 +1938,13 @@ class ChatStore:
             except Exception:
                 meta_json = "{}"
             conn.execute("UPDATE messages SET content = ?, meta_json = ? WHERE id = ?", (text, meta_json, mid))
-            project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
-            self._archive_excess_conversations(conn, project_id=project_id)
+            if touch_conversation:
+                now = time.time()
+                project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
+                self._archive_excess_conversations(conn, project_id=project_id)
         return True
 
-    def update_message_meta(self, message_id: int, meta: dict) -> bool:
+    def update_message_meta(self, message_id: int, meta: dict, *, touch_conversation: bool = False) -> bool:
         mid = int(message_id or 0)
         if mid <= 0:
             return False
@@ -1393,22 +1952,22 @@ class ChatStore:
             meta_json = json.dumps(dict(meta or {}), ensure_ascii=False, default=str)
         except Exception:
             meta_json = "{}"
-        now = time.time()
         with self._connect() as conn:
             row = conn.execute("SELECT conv_id FROM messages WHERE id = ?", (mid,)).fetchone()
             if not row:
                 return False
             conn.execute("UPDATE messages SET meta_json = ? WHERE id = ?", (meta_json, mid))
-            project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
-            self._archive_excess_conversations(conn, project_id=project_id)
+            if touch_conversation:
+                now = time.time()
+                project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
+                self._archive_excess_conversations(conn, project_id=project_id)
         return True
 
-    def merge_message_meta(self, message_id: int, patch: dict) -> bool:
+    def merge_message_meta(self, message_id: int, patch: dict, *, touch_conversation: bool = False) -> bool:
         mid = int(message_id or 0)
         if mid <= 0:
             return False
         patch_dict = dict(patch or {})
-        now = time.time()
         with self._connect() as conn:
             row = conn.execute("SELECT conv_id, meta_json FROM messages WHERE id = ?", (mid,)).fetchone()
             if not row:
@@ -1425,8 +1984,10 @@ class ChatStore:
             except Exception:
                 meta_json = "{}"
             conn.execute("UPDATE messages SET meta_json = ? WHERE id = ?", (meta_json, mid))
-            project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
-            self._archive_excess_conversations(conn, project_id=project_id)
+            if touch_conversation:
+                now = time.time()
+                project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
+                self._archive_excess_conversations(conn, project_id=project_id)
         return True
 
     def set_message_render_cache(self, message_id: int, cache_payload: dict | None) -> bool:
@@ -1470,6 +2031,23 @@ class ChatStore:
             conn.execute("DELETE FROM messages WHERE id = ?", (mid,))
             project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
             self._archive_excess_conversations(conn, project_id=project_id)
+        return True
+
+    def _message_refs_owner_exists(self, conn: sqlite3.Connection, *, user_msg_id: int, conv_id: str) -> bool:
+        mid = int(user_msg_id or 0)
+        cid = (conv_id or "").strip()
+        if mid <= 0 or not cid:
+            return False
+        row = conn.execute(
+            "SELECT 1 FROM messages WHERE id = ? AND conv_id = ? AND role = 'user'",
+            (mid, cid),
+        ).fetchone()
+        return row is not None
+
+    def _delete_message_refs_if_orphaned(self, conn: sqlite3.Connection, *, user_msg_id: int, conv_id: str) -> bool:
+        if self._message_refs_owner_exists(conn, user_msg_id=user_msg_id, conv_id=conv_id):
+            return False
+        conn.execute("DELETE FROM message_refs WHERE user_msg_id = ?", (int(user_msg_id or 0),))
         return True
 
     def upsert_message_refs(
@@ -1524,6 +2102,9 @@ class ChatStore:
             query_variants_json = "[]"
         rendered_sig = str(rendered_payload_sig or "").strip() if rendered_payload_json else ""
         with self._connect() as conn:
+            if not self._message_refs_owner_exists(conn, user_msg_id=mid, conv_id=conv_id):
+                conn.execute("DELETE FROM message_refs WHERE user_msg_id = ?", (mid,))
+                return False
             row = conn.execute(
                 """
                 SELECT user_msg_id, created_at, render_status, render_error, render_error_detail,
@@ -1661,7 +2242,7 @@ class ChatStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT user_msg_id, render_status, render_error, render_error_detail,
+                SELECT user_msg_id, conv_id, render_status, render_error, render_error_detail,
                        render_built_at, render_attempts, render_evidence_sig, render_locale
                 FROM message_refs
                 WHERE user_msg_id = ?
@@ -1669,6 +2250,8 @@ class ChatStore:
                 (mid,),
             ).fetchone()
             if not row:
+                return False
+            if self._delete_message_refs_if_orphaned(conn, user_msg_id=mid, conv_id=str(row["conv_id"] or "")):
                 return False
             next_render_status = str(render_status).strip() if render_status is not None else str(row["render_status"] or "").strip()
             next_render_error = str(render_error).strip() if render_error is not None else str(row["render_error"] or "").strip()
@@ -1737,7 +2320,7 @@ class ChatStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT user_msg_id, render_status, render_error, render_error_detail,
+                SELECT user_msg_id, conv_id, render_status, render_error, render_error_detail,
                        render_built_at, render_attempts, render_evidence_sig, render_locale
                 FROM message_refs
                 WHERE user_msg_id = ?
@@ -1745,6 +2328,8 @@ class ChatStore:
                 (mid,),
             ).fetchone()
             if not row:
+                return False
+            if self._delete_message_refs_if_orphaned(conn, user_msg_id=mid, conv_id=str(row["conv_id"] or "")):
                 return False
             next_render_status = str(render_status).strip() if render_status is not None else str(row["render_status"] or "").strip()
             next_render_error = str(render_error).strip() if render_error is not None else str(row["render_error"] or "").strip()
@@ -1796,14 +2381,18 @@ class ChatStore:
         with self._connect(timeout_s=timeout_s) as conn:
             rows = conn.execute(
                 """
-                SELECT user_msg_id, conv_id, prompt, prompt_sig, hits_json, scores_json,
-                       rendered_payload_json, rendered_payload_sig,
-                       render_status, render_error, render_error_detail,
-                       render_built_at, render_attempts, render_evidence_sig, render_locale,
-                       used_query, used_translation, query_variants_json, created_at, updated_at
-                FROM message_refs
-                WHERE conv_id = ?
-                ORDER BY user_msg_id ASC
+                SELECT mr.user_msg_id, mr.conv_id, mr.prompt, mr.prompt_sig, mr.hits_json, mr.scores_json,
+                       mr.rendered_payload_json, mr.rendered_payload_sig,
+                       mr.render_status, mr.render_error, mr.render_error_detail,
+                       mr.render_built_at, mr.render_attempts, mr.render_evidence_sig, mr.render_locale,
+                       mr.used_query, mr.used_translation, mr.query_variants_json, mr.created_at, mr.updated_at
+                FROM message_refs AS mr
+                JOIN messages AS m
+                  ON m.id = mr.user_msg_id
+                 AND m.conv_id = mr.conv_id
+                 AND m.role = 'user'
+                WHERE mr.conv_id = ?
+                ORDER BY mr.user_msg_id ASC
                 """,
                 (conv_id,),
             ).fetchall()
@@ -1870,13 +2459,10 @@ class ChatStore:
                 return False
             if not _is_default_conversation_title(str(row["title"] or "")):
                 return False
-            now = time.time()
             conn.execute(
-                "UPDATE conversations SET title = ?, updated_at = ?, archived = 0, archived_at = NULL WHERE id = ?",
-                (new_title, now, conv_id),
+                "UPDATE conversations SET title = ? WHERE id = ?",
+                (new_title, conv_id),
             )
-            project_id = self._touch_conversation_active(conn, conv_id, now)
-            self._archive_excess_conversations(conn, project_id=project_id)
         return True
 
     def set_title(self, conv_id: str, new_title: str) -> bool:
@@ -1884,15 +2470,12 @@ class ChatStore:
         title = (new_title or "").replace("\n", " ").strip()[:80]
         if not cid or not title:
             return False
-        now = time.time()
         with self._connect() as conn:
-            row = conn.execute("SELECT project_id FROM conversations WHERE id = ?", (cid,)).fetchone()
+            row = conn.execute("SELECT 1 FROM conversations WHERE id = ?", (cid,)).fetchone()
             if not row:
                 return False
             conn.execute(
-                "UPDATE conversations SET title = ?, updated_at = ?, archived = 0, archived_at = NULL WHERE id = ?",
-                (title, now, cid),
+                "UPDATE conversations SET title = ? WHERE id = ?",
+                (title, cid),
             )
-            project_id = str(row["project_id"] or "").strip() or None
-            self._archive_excess_conversations(conn, project_id=project_id)
         return True

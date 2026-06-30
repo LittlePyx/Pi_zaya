@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-import mimetypes
 import os
 import re
 import sqlite3
 import threading
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
+from typing import Any
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.deps import get_chat_store, get_settings, load_prefs
 from api.reference_ui import (
@@ -53,6 +53,13 @@ from kb.citation_card_polish import (
 from kb.citation_card import compose_citation_card
 from kb.file_ops import _resolve_md_output_paths
 from kb.library_store import LibraryStore
+from kb.path_safety import (
+    clean_file_source_path_input,
+    path_is_within_roots,
+    resolve_existing_file_under_roots,
+    resolve_verified_image_file_under_roots,
+    verified_image_file_mime,
+)
 from kb.reference_query_family import (
     prompt_explicitly_requests_multi_paper_list,
     prompt_reference_focus_action,
@@ -90,6 +97,38 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
 _REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 10
+_REFS_SOURCE_PATH_MAX_CHARS = 1_200
+_REFS_LOCALE_MAX_CHARS = 24
+_REFS_META_MAX_JSON_CHARS = 90_000
+_REFS_SHELF_REPAIR_MAX_ITEMS = 120
+_REFS_SHELF_REPAIR_MAX_JSON_CHARS = 260_000
+_REFS_SHELF_REPAIR_ITEM_MAX_JSON_CHARS = 40_000
+
+
+def _bounded_json(value: Any, *, name: str, max_json_chars: int) -> Any:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
+    except Exception as exc:
+        raise ValueError(f"{name} must be JSON serializable") from exc
+    if len(encoded) > int(max_json_chars):
+        raise ValueError(f"{name} is too large; max {int(max_json_chars)} JSON chars")
+    return value
+
+
+def _bounded_dict(value: Any, *, name: str, max_json_chars: int) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    return _bounded_json(value, name=name, max_json_chars=max_json_chars)
+
+
+def _bounded_dict_list(value: Any, *, name: str, max_items: int, max_json_chars: int, item_max_json_chars: int) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a list")
+    if len(value) > int(max_items):
+        raise ValueError(f"{name} has too many items; max {int(max_items)}")
+    for item in value:
+        _bounded_dict(item, name=f"{name} item", max_json_chars=item_max_json_chars)
+    return _bounded_json(value, name=name, max_json_chars=max_json_chars)
 
 
 def _md_dir() -> Path:
@@ -178,14 +217,7 @@ def _reference_asset_roots() -> list[Path]:
 
 
 def _path_within_roots(path_obj: Path, roots: list[Path]) -> bool:
-    p = Path(path_obj)
-    for root in roots:
-        try:
-            p.relative_to(root)
-            return True
-        except Exception:
-            continue
-    return False
+    return path_is_within_roots(path_obj, roots)
 
 
 def _refs_conversation_cache_ttl_s() -> float:
@@ -1664,38 +1696,73 @@ def get_refs_diagnose(conv_id: str):
 
 
 class OpenReferenceBody(BaseModel):
-    source_path: str
-    page: int | None = None
+    model_config = ConfigDict(extra="ignore")
+
+    source_path: str = Field(..., max_length=_REFS_SOURCE_PATH_MAX_CHARS)
+    page: int | None = Field(None, ge=1, le=20_000)
 
 
 class CitationMetaBody(BaseModel):
-    source_path: str
+    model_config = ConfigDict(extra="ignore")
+
+    source_path: str = Field(..., max_length=_REFS_SOURCE_PATH_MAX_CHARS)
 
 
 class BibliometricsBody(BaseModel):
-    meta: dict
-    refs_card_locale: str | None = None
-    ui_locale: str | None = None
-    target_locale: str | None = None
+    model_config = ConfigDict(extra="ignore")
+
+    meta: dict[str, Any]
+    refs_card_locale: str | None = Field(None, max_length=_REFS_LOCALE_MAX_CHARS)
+    ui_locale: str | None = Field(None, max_length=_REFS_LOCALE_MAX_CHARS)
+    target_locale: str | None = Field(None, max_length=_REFS_LOCALE_MAX_CHARS)
+
+    @field_validator("meta")
+    @classmethod
+    def _check_meta(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_dict(value, name="bibliometrics meta", max_json_chars=_REFS_META_MAX_JSON_CHARS)
 
 
 class ShelfMetadataRepairBody(BaseModel):
-    items: list[dict]
-    limit: int | None = None
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[dict[str, Any]] = Field(..., max_length=_REFS_SHELF_REPAIR_MAX_ITEMS)
+    limit: int | None = Field(None, ge=1, le=500)
+
+    @field_validator("items")
+    @classmethod
+    def _check_items(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return _bounded_dict_list(
+            value,
+            name="shelf metadata repair items",
+            max_items=_REFS_SHELF_REPAIR_MAX_ITEMS,
+            max_json_chars=_REFS_SHELF_REPAIR_MAX_JSON_CHARS,
+            item_max_json_chars=_REFS_SHELF_REPAIR_ITEM_MAX_JSON_CHARS,
+        )
 
 
 class ShelfMetadataBackfillBody(BaseModel):
-    limit: int | None = None
-    scan_limit: int | None = None
+    model_config = ConfigDict(extra="ignore")
+
+    limit: int | None = Field(None, ge=1, le=500)
+    scan_limit: int | None = Field(None, ge=1, le=2_000)
 
 
 class CitationCardPolishBody(BaseModel):
-    meta: dict
-    wait_s: float | None = None
+    model_config = ConfigDict(extra="ignore")
+
+    meta: dict[str, Any]
+    wait_s: float | None = Field(None, ge=0.0, le=10.0)
+
+    @field_validator("meta")
+    @classmethod
+    def _check_meta(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_dict(value, name="citation card polish meta", max_json_chars=_REFS_META_MAX_JSON_CHARS)
 
 
 class ReaderDocBody(BaseModel):
-    source_path: str
+    model_config = ConfigDict(extra="ignore")
+
+    source_path: str = Field(..., max_length=_REFS_SOURCE_PATH_MAX_CHARS)
 
 
 def _bibliometrics_requested_locale(body: BibliometricsBody, meta: dict | None) -> str:
@@ -1852,7 +1919,16 @@ def _record_shelf_metadata_quality_run(*, result: dict, items: list[dict]) -> di
 
 
 _ASSET_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_MD_IMAGE_RE = re.compile(
+    r"!\[([^\]]*)\]\("
+    r"("
+    r"<[^>\n]+>(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?"
+    r"|"
+    r"(?:\\.|[^()\n]|\([^()\n]*\))+"
+    r")"
+    r"\)"
+)
+_MD_LINK_TITLE_SUFFIX_RE = re.compile(r"""\s+(?:"[^"]*"|'[^']*'|\([^)]*\))\s*$""")
 _MD_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
 _MD_LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*)$")
 _MD_BLOCKQUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
@@ -1994,7 +2070,7 @@ def _localize_local_summary(summary: str, *, target_locale: str) -> str:
 
 
 def _resolve_local_summary_md_path(source_path: str) -> Path | None:
-    raw = str(source_path or "").strip()
+    raw = clean_file_source_path_input(source_path)
     if not raw:
         return None
     src = Path(raw).expanduser()
@@ -2006,12 +2082,6 @@ def _resolve_local_summary_md_path(source_path: str) -> Path | None:
         except Exception:
             return None
         roots = list(_reference_asset_roots())
-        try:
-            project_root = _project_root()
-            if project_root not in roots:
-                roots.append(project_root)
-        except Exception:
-            pass
         if not _path_within_roots(resolved, roots):
             return None
         return resolved
@@ -2991,53 +3061,62 @@ def polish_citation_card(body: CitationCardPolishBody):
 
 
 def _resolve_reader_md_path(source_path: str) -> Path | None:
-    raw = str(source_path or "").strip()
+    raw = _clean_reader_source_path_input(source_path)
     if not raw:
         return None
     src = Path(raw).expanduser()
     if src.suffix.lower().endswith(".md"):
-        try:
-            if src.exists() and src.is_file():
-                resolved = src.resolve(strict=False)
-                if not _path_within_roots(resolved, _reference_asset_roots()):
-                    return None
-                return resolved
-        except Exception:
-            return None
-        return None
+        return resolve_existing_file_under_roots(src, _reference_asset_roots())
 
     pdf_root = _pdf_dir()
     md_root = _md_dir()
 
     pdf_candidate = src
     try:
-        if (not pdf_candidate.is_absolute()) and (Path(pdf_candidate).name == str(pdf_candidate)):
+        if not pdf_candidate.is_absolute():
             pdf_candidate = pdf_root / pdf_candidate
     except Exception:
         pass
 
-    try:
-        if not (pdf_candidate.exists() and pdf_candidate.is_file()):
-            return None
-    except Exception:
+    resolved_pdf = resolve_existing_file_under_roots(pdf_candidate, [pdf_root])
+    if resolved_pdf is None or resolved_pdf.suffix.lower() != ".pdf":
         return None
 
     try:
-        _md_folder, md_main, md_exists = _resolve_md_output_paths(md_root, pdf_candidate)
+        _md_folder, md_main, md_exists = _resolve_md_output_paths(md_root, resolved_pdf)
     except Exception:
         return None
-    if (not md_exists) or (not md_main.exists()) or (not md_main.is_file()):
+    if not md_exists:
         return None
-    try:
-        return md_main.resolve(strict=False)
-    except Exception:
-        return md_main
+    return resolve_existing_file_under_roots(md_main, _reference_asset_roots())
+
+
+def _clean_reader_source_path_input(source_path: str) -> str:
+    return clean_file_source_path_input(source_path)
 
 
 def _rewrite_md_asset_links(md_text: str, *, md_path: Path, asset_roots: list[Path]) -> str:
     text = str(md_text or "")
     if not text:
         return text
+
+    def _markdown_image_destination(raw: str) -> str:
+        src = str(raw or "").strip()
+        if not src:
+            return ""
+        def _clean_destination(value: str) -> str:
+            out = str(value or "").strip().replace("\\ ", " ")
+            try:
+                out = unquote(out)
+            except Exception:
+                pass
+            return out.strip()
+        if src.startswith("<"):
+            end = src.find(">")
+            if end > 0:
+                return _clean_destination(src[1:end])
+            return ""
+        return _clean_destination(_MD_LINK_TITLE_SUFFIX_RE.sub("", src))
 
     def _asset_cache_version(path: Path) -> str:
         try:
@@ -3051,7 +3130,7 @@ def _rewrite_md_asset_links(md_text: str, *, md_path: Path, asset_roots: list[Pa
         raw = str(m.group(2) or "").strip()
         if not raw:
             return m.group(0)
-        url = raw.strip().strip("<>").split()[0].strip()
+        url = _markdown_image_destination(raw)
         low = url.lower()
         if low.startswith(("http://", "https://", "data:", "#", "/api/")):
             return m.group(0)
@@ -3063,7 +3142,11 @@ def _rewrite_md_asset_links(md_text: str, *, md_path: Path, asset_roots: list[Pa
                 cand = cand.resolve(strict=False)
             if (not cand.exists()) or (not cand.is_file()):
                 return m.group(0)
+            if cand.suffix.lower() not in _ASSET_IMAGE_EXTS:
+                return m.group(0)
             if not _path_within_roots(cand, asset_roots):
+                return m.group(0)
+            if not verified_image_file_mime(cand):
                 return m.group(0)
             version = _asset_cache_version(cand)
             version_part = f"&v={quote(version, safe='')}" if version else ""
@@ -3475,19 +3558,14 @@ def get_reader_doc(body: ReaderDocBody):
 @router.get("/asset")
 def get_reference_asset(path: str):
     raw = str(path or "").strip()
-    if not raw:
+    if not raw or len(raw) > _REFS_SOURCE_PATH_MAX_CHARS:
         raise HTTPException(404, "asset not found")
-    try:
-        resolved = Path(raw).expanduser().resolve()
-    except Exception:
+    verified = resolve_verified_image_file_under_roots(raw, _reference_asset_roots())
+    if verified is None:
         raise HTTPException(404, "asset not found")
-    if (not resolved.exists()) or (not resolved.is_file()):
-        raise HTTPException(404, "asset not found")
+    resolved, media_type = verified
     if resolved.suffix.lower() not in _ASSET_IMAGE_EXTS:
         raise HTTPException(404, "asset not found")
-    if not _path_within_roots(resolved, _reference_asset_roots()):
-        raise HTTPException(404, "asset not found")
-    media_type = str(mimetypes.guess_type(str(resolved))[0] or "application/octet-stream")
     return FileResponse(
         str(resolved),
         media_type=media_type,

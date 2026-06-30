@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 
 _VISIBLE_NUMERIC_CITE_RE = re.compile(r"\[\d{1,4}(?:\s*(?:-|\u2013|\u2014|,)\s*\d{1,4})*\]")
+_STRUCTURED_CITE_RE = re.compile(
+    r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*\d{1,4}\s*\]\]",
+    re.IGNORECASE,
+)
 
 LEGACY_RENDER_FIELDS = (
     "notice",
@@ -145,6 +150,25 @@ def count_linkable_source_hits(hits: list[dict] | None) -> int:
     return count
 
 
+def _source_cite_id(source_path: str) -> str:
+    raw = str(source_path or "").strip()
+    if not raw:
+        return ""
+    return "s" + hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()[:8]
+
+
+def _linkable_source_sids(hits: list[dict] | None) -> set[str]:
+    sids: set[str] = set()
+    for hit in list(hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        sid = _source_cite_id(str(meta.get("source_path") or "").strip()).lower()
+        if sid:
+            sids.add(sid)
+    return sids
+
+
 def content_has_linkable_answer_citations(content: str, hits: list[dict] | None) -> bool:
     raw = str(content or "")
     if not raw or "[" not in raw:
@@ -152,6 +176,9 @@ def content_has_linkable_answer_citations(content: str, hits: list[dict] | None)
     hit_count = count_linkable_source_hits(hits)
     if hit_count <= 0:
         return False
+    structured_sids = {str(match.group(1) or "").strip().lower() for match in _STRUCTURED_CITE_RE.finditer(raw)}
+    if structured_sids and structured_sids.intersection(_linkable_source_sids(hits)):
+        return True
     return any(1 <= int(n) <= hit_count for n in iter_numeric_citation_numbers(raw))
 
 

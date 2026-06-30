@@ -996,6 +996,9 @@ def _contract_source_name_from_hit(hit: dict) -> str:
     if not isinstance(hit, dict):
         return ""
     meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    source_name = str((meta or {}).get("source_name") or "").strip()
+    if source_name:
+        return source_name
     source_path = str((meta or {}).get("source_path") or "").strip()
     if not source_path:
         return ""
