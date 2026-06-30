@@ -105,8 +105,11 @@ returns retrieved evidence notes plus a trace instead of crashing the app.
 
 ### Enable Agent Mode
 
-In the React chat UI, toggle the `Agent` button in the composer before sending a
-question. The setting is persisted locally and only affects newly sent turns.
+In the React chat UI, toggle the `Normal` / `Agent` button in the composer before
+sending a question. The setting is persisted per conversation and only affects
+newly sent turns, so ordinary chat stays unchanged unless the user explicitly
+enables Agent Mode. For explicit test or deep-link entry, open the app with
+`/?agent_mode=1`.
 
 API options:
 

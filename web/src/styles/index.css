@@ -1512,6 +1512,7 @@ body.kb-reader-resizing .kb-reader-content {
 
 .kb-agent-mode-btn.ant-btn {
   border-radius: 8px;
+  min-width: 92px;
 }
 
 .kb-agent-mode-btn.is-active.ant-btn {

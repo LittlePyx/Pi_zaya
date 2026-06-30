@@ -37,6 +37,18 @@ def _normalize_query_scope(value: object) -> str:
     return ""
 
 
+def _generation_user_meta(prompt_context: object, query_scope: str, agent_mode: bool) -> dict[str, object]:
+    meta: dict[str, object] = {}
+    if prompt_context:
+        meta["prompt_context"] = prompt_context
+    if query_scope:
+        meta["query_scope"] = query_scope
+    if agent_mode:
+        meta["agent_mode"] = "research_agent"
+        meta["agent_mode_requested"] = True
+    return meta
+
+
 def _strip_internal_structured_markers(text: str) -> str:
     """Final safety net: never leak internal grounding markers in /api/generate output.
 
@@ -380,13 +392,7 @@ def start_generation(body: GenerateBody):
 
     user_store_text = prompt if prompt else f"[Image attachment x{len(image_attachments)}]"
     agent_mode = bool(body.agent_mode)
-    user_meta: dict[str, object] = {}
-    if prompt_context:
-        user_meta["prompt_context"] = prompt_context
-    if query_scope:
-        user_meta["query_scope"] = query_scope
-    if agent_mode:
-        user_meta["agent_mode"] = "research_agent"
+    user_meta = _generation_user_meta(prompt_context, query_scope, agent_mode)
     user_msg_id = chat_store.append_message(
         body.conv_id,
         "user",

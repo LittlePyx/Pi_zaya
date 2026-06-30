@@ -61,7 +61,7 @@ const DESKTOP_DOCK_COLLAPSED_WIDTH = 48
 const DESKTOP_DOCK_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
 const RIGHT_DOCK_WIDTH_STORAGE_KEY = 'kb:chat-side-dock-width'
 const RIGHT_DOCK_COLLAPSED_STORAGE_KEY = 'kb:chat-side-dock-collapsed'
-const AGENT_MODE_STORAGE_KEY = 'kb:chat-research-agent-mode'
+const AGENT_MODE_STORAGE_PREFIX = 'kb:chat-research-agent-mode:v1'
 const SELECTED_RESEARCH_CONTEXT_STORAGE_PREFIX = 'kb:chat:selected-research-context:v1'
 const SELECTED_RESEARCH_CONTEXT_STATE_KEY = 'selected_research_context'
 const SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY = 'selected_research_context_scope'
@@ -118,17 +118,43 @@ function loadStoredRightDockCollapsed() {
   return window.localStorage.getItem(RIGHT_DOCK_COLLAPSED_STORAGE_KEY) === '1'
 }
 
-function loadStoredAgentMode() {
-  if (typeof window === 'undefined') return false
+function readAgentModeUrlOverride(): boolean | null {
+  if (typeof window === 'undefined') return null
   try {
     const params = new URLSearchParams(window.location.search)
     const queryValue = String(params.get('agent_mode') || params.get('research_agent') || '').trim().toLowerCase()
     if (['1', 'true', 'yes', 'on'].includes(queryValue)) return true
+    if (['0', 'false', 'no', 'off'].includes(queryValue)) return false
   } catch { /* ignore */ }
+  return null
+}
+
+function agentModeStorageKey(conversationId?: string | null) {
+  const conv = String(conversationId || '').trim()
+  return conv ? `${AGENT_MODE_STORAGE_PREFIX}:${encodeURIComponent(conv)}` : ''
+}
+
+function loadStoredAgentModeForConversation(conversationId?: string | null) {
+  const urlOverride = readAgentModeUrlOverride()
+  if (urlOverride !== null) return urlOverride
+  if (typeof window === 'undefined') return false
+  const key = agentModeStorageKey(conversationId)
+  if (!key) return false
   try {
-    return window.localStorage.getItem(AGENT_MODE_STORAGE_KEY) === '1'
+    return window.localStorage.getItem(key) === '1'
   } catch {
     return false
+  }
+}
+
+function saveStoredAgentModeForConversation(conversationId: string, enabled: boolean) {
+  if (typeof window === 'undefined') return
+  const key = agentModeStorageKey(conversationId)
+  if (!key) return
+  try {
+    window.localStorage.setItem(key, enabled ? '1' : '0')
+  } catch {
+    // Storage can fail in private mode; the in-memory toggle still works.
   }
 }
 
@@ -367,7 +393,8 @@ export default function ChatPage() {
   const [citationShelfCount, setCitationShelfCount] = useState(0)
   const [selectedResearchContext, setSelectedResearchContext] = useState<SelectedResearchContextPack | null>(null)
   const [queryScope, setQueryScope] = useState<QueryScope>('library')
-  const [agentMode, setAgentMode] = useState(loadStoredAgentMode)
+  const [agentMode, setAgentMode] = useState(() => loadStoredAgentModeForConversation(null))
+  const [agentModeOwnerConversationId, setAgentModeOwnerConversationId] = useState('')
   const [selectedResearchContextLoadedKey, setSelectedResearchContextLoadedKey] = useState('')
   const [selectedResearchContextOwnerKey, setSelectedResearchContextOwnerKey] = useState('')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
@@ -404,6 +431,7 @@ export default function ChatPage() {
   const rightDockActivePointerIdRef = useRef<number | null>(null)
   const rightDockResizeFocusRestoreRef = useRef<HTMLElement | null>(null)
   const selectedResearchContextLoadSeqRef = useRef(0)
+  const pendingAgentModeForNewConversationRef = useRef<boolean | null>(null)
   const rightDockWidthLiveRef = useRef(rightDockWidth)
   const rightDockResizePreviewWidthRef = useRef(rightDockWidth)
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
@@ -650,10 +678,28 @@ export default function ChatPage() {
   }, [rightDockCollapsed])
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(AGENT_MODE_STORAGE_KEY, agentMode ? '1' : '0')
-    } catch { /* ignore */ }
-  }, [agentMode])
+    const convId = String(activeConvId || '').trim()
+    if (!convId) {
+      setAgentModeOwnerConversationId('')
+      return
+    }
+    const pending = pendingAgentModeForNewConversationRef.current
+    if (pending !== null) {
+      pendingAgentModeForNewConversationRef.current = null
+      setAgentMode(pending)
+      setAgentModeOwnerConversationId(convId)
+      saveStoredAgentModeForConversation(convId, pending)
+      return
+    }
+    setAgentMode(loadStoredAgentModeForConversation(convId))
+    setAgentModeOwnerConversationId(convId)
+  }, [activeConvId])
+
+  useEffect(() => {
+    const convId = String(activeConvId || '').trim()
+    if (!convId || agentModeOwnerConversationId !== convId) return
+    saveStoredAgentModeForConversation(convId, agentMode)
+  }, [activeConvId, agentMode, agentModeOwnerConversationId])
 
   useEffect(() => {
     rightDockWidthLiveRef.current = rightDockWidth
@@ -787,6 +833,16 @@ export default function ChatPage() {
       }
     }
   }, [dismissUploadItem, S.upload_pdf_cancelled, S.upload_pdf_duplicate, S.upload_pdf_error, S.upload_pdf_ready, uploadItems])
+
+  const handleAgentModeChange = useCallback((enabled: boolean) => {
+    const convId = String(activeConvId || '').trim()
+    if (!convId) {
+      pendingAgentModeForNewConversationRef.current = enabled
+    } else {
+      setAgentModeOwnerConversationId(convId)
+    }
+    setAgentMode(enabled)
+  }, [activeConvId])
 
   const onSend = (text: string) => {
     if (researchContext.api.sendBlockTarget === 'text') {
@@ -1720,7 +1776,7 @@ export default function ChatPage() {
         ]}
         onQueryScopeChange={setQueryScope}
         agentMode={agentMode}
-        onAgentModeChange={setAgentMode}
+        onAgentModeChange={handleAgentModeChange}
       />
     </>
   )

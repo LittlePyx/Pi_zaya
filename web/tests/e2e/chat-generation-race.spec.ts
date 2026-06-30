@@ -102,6 +102,7 @@ async function installBackend(
   let generationStartFailed = false
   let convADonePageLoads = 0
   let generationStreamCalls = 0
+  const generatePayloads: Array<Record<string, unknown>> = []
   const userIssueReports: ReportedIssue[] = []
   let uploadReady = false
   let uploadStatusCalls = 0
@@ -330,6 +331,7 @@ async function installBackend(
 
   await page.route('**/api/generate', async (route) => {
     const body = route.request().postDataJSON() as { conv_id?: string } | null
+    generatePayloads.push(body || {})
     expect(body?.conv_id).toBe(CONV_A_ID)
     if (opts?.generateStartFailure) {
       generationStartFailed = true
@@ -417,6 +419,7 @@ async function installBackend(
     releaseStream: () => releaseStream?.(),
     getConvADonePageLoads: () => convADonePageLoads,
     getGenerationStreamCalls: () => generationStreamCalls,
+    getGeneratePayloads: () => generatePayloads.slice(),
     getUserIssueReports: () => userIssueReports.slice(),
     markUploadReady: () => {
       uploadReady = true
@@ -426,6 +429,85 @@ async function installBackend(
     getGenerationCancelCalls: () => generationCancelCalls,
   }
 }
+
+test('default chat send does not request research agent mode', async ({ page }) => {
+  const backend = await installBackend(page)
+  const prompt = 'Plain default question'
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+  await expect(page.locator('button.kb-agent-mode-btn')).toContainText('Normal')
+
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill(prompt)
+  await page.locator('button.kb-send-btn').click()
+
+  await expect.poll(() => backend.getGeneratePayloads().length, { timeout: 5_000 }).toBe(1)
+  const payload = backend.getGeneratePayloads()[0]
+  expect(payload.agent_mode).toBeUndefined()
+
+  const userMeta = await page.evaluate(async (content) => {
+    const { useChatStore } = await import('/src/stores/chatStore.ts')
+    const message = useChatStore.getState().messages.find((item) => item.role === 'user' && item.content === content)
+    return message?.meta || null
+  }, prompt)
+  expect(userMeta).not.toHaveProperty('agent_mode')
+  expect(userMeta).not.toHaveProperty('agent_mode_requested')
+
+  backend.releaseStream()
+  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+})
+
+test('agent mode URL parameter enables the composer toggle and request flag', async ({ page }) => {
+  const backend = await installBackend(page)
+  const prompt = 'Agent URL question'
+
+  await page.goto('/?agent_mode=1')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+  await expect(page.locator('button.kb-agent-mode-btn')).toContainText('Agent')
+
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill(prompt)
+  await page.locator('button.kb-send-btn').click()
+
+  await expect.poll(() => backend.getGeneratePayloads().length, { timeout: 5_000 }).toBe(1)
+  const payload = backend.getGeneratePayloads()[0]
+  expect(payload.agent_mode).toBe(true)
+
+  const userMeta = await page.evaluate(async (content) => {
+    const { useChatStore } = await import('/src/stores/chatStore.ts')
+    const message = useChatStore.getState().messages.find((item) => item.role === 'user' && item.content === content)
+    return message?.meta || null
+  }, prompt)
+  expect(userMeta).toMatchObject({
+    agent_mode: 'research_agent',
+    agent_mode_requested: true,
+  })
+
+  backend.releaseStream()
+  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+})
+
+test('agent mode toggle is remembered per conversation without leaking across switches', async ({ page }) => {
+  await installBackend(page)
+  const agentButton = page.locator('button.kb-agent-mode-btn')
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+  await expect(agentButton).toContainText('Normal')
+
+  await agentButton.click()
+  await expect(agentButton).toContainText('Agent')
+
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race B' }).click()
+  await expect(page.locator('body')).toContainText(B_STABLE_ANSWER)
+  await expect(agentButton).toContainText('Normal')
+
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+  await expect(agentButton).toContainText('Agent')
+})
 
 test('stale generation stream cannot overwrite the active conversation after switching', async ({ page }) => {
   const backend = await installBackend(page)

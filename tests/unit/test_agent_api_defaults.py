@@ -1,4 +1,4 @@
-from api.routers.generate import GenerateBody
+from api.routers.generate import GenerateBody, _generation_user_meta
 from api.routers.chat import ResearchAgentBody
 
 
@@ -12,6 +12,21 @@ def test_generate_body_accepts_agent_mode_without_requiring_it():
     body = GenerateBody(conv_id="conv-1", prompt="Compare papers", agent_mode=True)
 
     assert body.agent_mode is True
+
+
+def test_generation_user_meta_omits_agent_fields_by_default():
+    meta = _generation_user_meta(None, "library", False)
+
+    assert meta == {"query_scope": "library"}
+
+
+def test_generation_user_meta_records_explicit_agent_request():
+    meta = _generation_user_meta({"items": []}, "basket", True)
+
+    assert meta["agent_mode"] == "research_agent"
+    assert meta["agent_mode_requested"] is True
+    assert meta["query_scope"] == "basket"
+    assert meta["prompt_context"] == {"items": []}
 
 
 def test_research_agent_body_accepts_scope_without_requiring_it():

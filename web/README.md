@@ -48,8 +48,10 @@ the backend and frontend with the expected ports.
 
 ## Research Agent Mode
 
-The composer has an `Agent` toggle. When enabled for a turn, the frontend sends
-`agent_mode: true` to `/api/generate` and renders the returned `agent_trace`
-inside a collapsible Research Agent Trace panel.
+The composer has a compact `Normal` / `Agent` toggle. When enabled for a turn,
+the frontend sends `agent_mode: true` to `/api/generate` and renders the returned
+`agent_trace` inside a collapsible Research Agent Trace panel.
 
-The default chat flow is unchanged when the toggle is off.
+The toggle is remembered per conversation, and the default chat flow is
+unchanged when it is off. For explicit test or deep-link entry, use
+`/?agent_mode=1`.

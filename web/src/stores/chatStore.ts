@@ -2490,7 +2490,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       meta: {
         ...(opts.promptContext ? { prompt_context: opts.promptContext } : {}),
         ...(opts.queryScope ? { query_scope: opts.queryScope } : {}),
-        ...(opts.agentMode ? { agent_mode: 'research_agent' } : {}),
+        ...(opts.agentMode ? { agent_mode: 'research_agent', agent_mode_requested: true } : {}),
       },
     }
     const startFailureAssistantMessage: Message | null = generationStarted

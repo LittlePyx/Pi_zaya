@@ -439,11 +439,11 @@ export function ChatInput({
                   icon={<RobotOutlined />}
                   type={agentMode ? 'primary' : 'default'}
                   aria-pressed={agentMode}
-                  title="Research Agent Mode"
+                  title={agentMode ? 'Research Agent Mode is on' : 'Normal chat mode'}
                   disabled={generating}
                   onClick={() => onAgentModeChange(!agentMode)}
                 >
-                  Agent
+                  {agentMode ? 'Agent' : 'Normal'}
                 </Button>
               </div>
               <div className="kb-chat-toolbar-right">
