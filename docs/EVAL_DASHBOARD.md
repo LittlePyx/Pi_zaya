@@ -201,6 +201,7 @@ python tools\research_qa\review_research_agent_samples.py prepare --samples test
 # - optionally add expected_source_keywords and should_use_local_evidence
 python tools\research_qa\review_research_agent_samples.py merge --samples test_results\research_agent_answer_samples.jsonl --labels test_results\research_agent_answer_labels.jsonl --out test_results\research_agent_answer_reviewed.jsonl
 python tools\research_qa\run_agent_trace_eval.py --real-samples test_results\research_agent_answer_reviewed.jsonl --json-out test_results\agent_trace_real_reviewed_eval.json
+python tools\research_qa\run_reviewed_replay_eval.py
 ```
 
 Reviewed replay samples become stricter eval cases because the merge step only
@@ -208,6 +209,13 @@ includes labels marked `accepted`. Accepted labels must include
 `expected_source_blend` and at least one `expected_answer_points` item by default.
 Keep these files local unless the prompts, answers, and evidence snippets have
 been reviewed for privacy and publication suitability.
+
+`run_reviewed_replay_eval.py` is the CI-friendly quality gate. It checks
+`docs/research_agent_reviewed_replay.jsonl` for a future committed, de-identified
+fixture and `test_results/research_agent_answer_reviewed.jsonl` for local private
+reviewed samples. Missing or empty reviewed datasets are skipped successfully.
+If reviewed cases exist, the gate requires the file to contain only accepted
+reviewed cases and runs the strict answer-quality evaluator.
 
 To print the legacy summary shape only:
 

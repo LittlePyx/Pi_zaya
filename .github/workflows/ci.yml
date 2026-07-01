@@ -84,5 +84,8 @@ jobs:
       - name: Check research QA regression fixture
         run: python tools/research_qa/run_research_qa_eval.py --dry-run
 
+      - name: Check optional reviewed Research Agent replay fixture
+        run: python tools/research_qa/run_reviewed_replay_eval.py
+
       - name: Check converter quality regression manifest
         run: python tools/converter_quality/run_converter_quality_eval.py --dry-run
