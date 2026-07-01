@@ -7,15 +7,16 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList, type ShelfActivityState } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
-import { ChatActivityStrip, type ChatActivityItem } from '../components/chat/ChatActivityStrip'
+import { ChatActivityStrip } from '../components/chat/ChatActivityStrip'
 import { ReaderWorkspaceDock } from '../components/chat/ReaderWorkspaceDock'
 import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
 import { useAgentMode } from '../components/chat/useAgentMode'
 import { resolveQueryScope, useChatSendFlow } from '../components/chat/useChatSendFlow'
 import { useChatTimeline } from '../components/chat/useChatTimeline'
 import { useChatUploadFlow } from '../components/chat/useChatUploadFlow'
+import { useChatActivityItems, useChatWorkspaceChrome } from '../components/chat/useChatWorkspaceChrome'
 import { useReaderWorkspaceActions } from '../components/chat/useReaderWorkspaceActions'
-import { useReaderDock, type RightDockPanel } from '../components/chat/useReaderDock'
+import { useReaderDock } from '../components/chat/useReaderDock'
 import { useSelectedResearchContext } from '../components/chat/useSelectedResearchContext'
 import { useReaderSessionHighlights } from '../components/chat/reader/useReaderSessionHighlights'
 import { useReaderLocateRepair } from '../components/chat/reader/useReaderLocateRepair'
@@ -30,29 +31,6 @@ const { Text } = Typography
 
 const HISTORY_PAGE_SIZE = 24
 const LIVE_WINDOW = 16
-
-interface RefsActivitySummary {
-  packCount: number
-  pendingPackCount: number
-  hitCount: number
-}
-
-function summarizeRefsActivity(refs: Record<string, unknown>): RefsActivitySummary {
-  const summary: RefsActivitySummary = { packCount: 0, pendingPackCount: 0, hitCount: 0 }
-  for (const value of Object.values(refs || {})) {
-    if (!value || typeof value !== 'object') continue
-    const rec = value as { hits?: unknown[]; enrichment_pending?: boolean; payload_mode?: string; display_state?: string }
-    const hits = Array.isArray(rec.hits) ? rec.hits : []
-    const mode = String(rec.payload_mode || '').trim().toLowerCase()
-    const displayState = String(rec.display_state || '').trim().toLowerCase()
-    summary.packCount += 1
-    summary.hitCount += hits.length
-    if (mode === 'pending' || displayState === 'pending' || Boolean(rec.enrichment_pending)) {
-      summary.pendingPackCount += 1
-    }
-  }
-  return summary
-}
 
 function loadChatDebugPanelEnabled() {
   return internalDebugBrowserEnabled()
@@ -352,37 +330,32 @@ export default function ChatPage() {
     ))
   }, [])
 
-  const timelineUiReady = !conversationLoading && timelineItems.length > 0
-  const dockTimelineAvailable = timelineUiReady && timelineItems.length > 1
-  const dockShelfAvailable = citationShelfOpen || citationShelfCount > 0
-  const dockReaderAvailable = readerOpen
-  const showRightDock = desktopReaderEligible && (dockTimelineAvailable || dockShelfAvailable || dockReaderAvailable)
-  const activeRightDockPanel: RightDockPanel | null = showRightDock
-    ? (
-      rightDockPanel === 'reader' && dockReaderAvailable
-        ? 'reader'
-        : rightDockPanel === 'shelf' && (dockShelfAvailable || citationShelfOpen)
-          ? 'shelf'
-          : rightDockPanel === 'timeline' && dockTimelineAvailable
-            ? 'timeline'
-            : dockReaderAvailable
-              ? 'reader'
-              : dockShelfAvailable
-                ? 'shelf'
-                : dockTimelineAvailable
-                  ? 'timeline'
-                  : null
-  )
-    : null
-  const desktopReaderVisible = readerOpen && desktopReaderEligible
-  const rightDockExpanded = showRightDock && !rightDockCollapsed
-  const showDesktopTimeline = false
-  const showInlineTimelineToggle = timelineUiReady && !desktopReaderEligible
-  const showConversationMeta = !conversationLoading && (timelineUiReady || researchContext.mode === 'paper_guide')
-  const hideConversationMetaOnDesktop = showRightDock && researchContext.mode !== 'paper_guide'
-  const guideSourceLabel = researchContext.guideSource.label || S.guide_unbound
-  const guideSourceReady = researchContext.guideSource.ready
-  const guideStatusLabel = guideSourceReady ? S.timeline_guide_ready : S.timeline_guide_pending
+  const {
+    dockTimelineAvailable,
+    dockReaderAvailable,
+    showRightDock,
+    activeRightDockPanel,
+    desktopReaderVisible,
+    rightDockExpanded,
+    showDesktopTimeline,
+    showInlineTimelineToggle,
+    showConversationMeta,
+    hideConversationMetaOnDesktop,
+    guideSourceLabel,
+    guideSourceReady,
+    guideStatusLabel,
+  } = useChatWorkspaceChrome({
+    labels: S,
+    researchContext,
+    conversationLoading,
+    timelineItemCount: timelineItems.length,
+    citationShelfOpen,
+    citationShelfCount,
+    readerOpen,
+    desktopReaderEligible,
+    rightDockPanel,
+    rightDockCollapsed,
+  })
   const chatComposer = (
     <>
       {currentSelectedResearchContext ? (
@@ -462,63 +435,18 @@ export default function ChatPage() {
       />
     </div>
   ) : null
-  const refsActivity = useMemo(() => summarizeRefsActivity(deferredRefs), [deferredRefs])
-  const chatActivityItems = useMemo(() => {
-    const items: ChatActivityItem[] = []
-    if (conversationLoading || messagesLoadingMore) {
-      items.push({ key: 'messages', label: S.chat_activity_messages, tone: 'active' })
-    }
-    if (liveRunning) {
-      const stage = String(generation?.stage || '').trim()
-      items.push({
-        key: 'generation',
-        label: stage ? `${S.chat_activity_generation} · ${stage}` : S.chat_activity_generation,
-        tone: 'active',
-      })
-    }
-    if (uploading) {
-      items.push({ key: 'upload', label: S.chat_activity_upload, tone: 'active' })
-    }
-    if (refsActivity.pendingPackCount > 0) {
-      items.push({
-        key: 'refs',
-        label: S.chat_activity_refs.replace('{n}', String(refsActivity.pendingPackCount)),
-        tone: 'active',
-      })
-    }
-    if (shelfActivity.count > 0) {
-      items.push({
-        key: 'shelf',
-        label: S.chat_activity_shelf.replace('{n}', String(shelfActivity.count)),
-        tone: 'active',
-      })
-    }
-    if (researchContext.reader.open && researchContext.mode === 'paper_guide') {
-      items.push({ key: 'reader', label: S.chat_activity_reader, tone: 'ready' })
-    }
-    if (apiConnectionAlertTarget && items.length > 0) {
-      items.push({ key: 'api', label: S.chat_activity_api_attention, tone: 'warning' })
-    }
-    return items
-  }, [
-    S.chat_activity_api_attention,
-    S.chat_activity_generation,
-    S.chat_activity_messages,
-    S.chat_activity_reader,
-    S.chat_activity_refs,
-    S.chat_activity_shelf,
-    S.chat_activity_upload,
+  const chatActivityItems = useChatActivityItems({
+    labels: S,
+    refs: deferredRefs,
     conversationLoading,
-    generation?.stage,
-    liveRunning,
     messagesLoadingMore,
-    researchContext.mode,
-    researchContext.reader.open,
-    refsActivity.pendingPackCount,
-    shelfActivity.count,
-    apiConnectionAlertTarget,
+    liveRunning,
+    generationStage: generation?.stage,
     uploading,
-  ])
+    shelfActivity,
+    researchContext,
+    apiConnectionAlertTarget,
+  })
   const chatActivityStrip = (
     <ChatActivityStrip
       items={chatActivityItems}
