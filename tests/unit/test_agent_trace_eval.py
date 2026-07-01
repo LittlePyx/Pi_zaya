@@ -16,6 +16,7 @@ def test_agent_trace_eval_report_marks_unmeasured_metrics_null():
     assert report["commit"] == "test-commit"
     assert report["num_cases"] == summary["case_count"]
     assert report["num_real_replay_cases"] == 0
+    assert report["num_real_reviewed_cases"] == 0
     assert report["planner_validation_ok"] is True
     assert report["retrieval_recall_at_5"] is None
     assert report["citation_precision"] is None

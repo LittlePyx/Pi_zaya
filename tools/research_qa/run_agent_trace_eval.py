@@ -296,6 +296,7 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
     required_notice_total = 0
     required_notice_ok = 0
     real_replay_case_count = 0
+    real_reviewed_case_count = 0
 
     for case in cases:
         case_id = str(case.get("id") or f"line:{case.get('_line_no')}")
@@ -311,6 +312,8 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         sample_kind = str(case.get("sample_kind") or "").strip()
         if sample_kind == "real_chat_replay" or case.get("replay_unlabeled") is True:
             real_replay_case_count += 1
+        if sample_kind == "real_chat_reviewed":
+            real_reviewed_case_count += 1
 
         if source_blend:
             source_blend_status_counts[source_blend] += 1
@@ -448,6 +451,7 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         "ok": not errors,
         "case_count": len(cases),
         "real_replay_case_count": real_replay_case_count,
+        "real_reviewed_case_count": real_reviewed_case_count,
         "errors": errors,
         "retrieval_hit_rate": _ratio(retrieval_hit_count, retrieval_expected_total),
         "expected_source_hit_rate": _ratio(expected_source_hit_count, expected_source_total),
@@ -515,6 +519,7 @@ def build_eval_report(
     unnecessary_notice_rate = quality.get("unnecessary_notice_rate")
     required_notice_accuracy = quality.get("required_notice_accuracy")
     real_replay_count = int(quality.get("real_replay_case_count") or 0) if quality else 0
+    real_reviewed_count = int(quality.get("real_reviewed_case_count") or 0) if quality else 0
     if not quality:
         retrieval_recall_at_5 = None
         citation_precision = None
@@ -533,6 +538,7 @@ def build_eval_report(
         "num_cases": int(summary.get("case_count") or 0),
         "num_quality_cases": int(quality.get("case_count") or 0),
         "num_real_replay_cases": real_replay_count,
+        "num_real_reviewed_cases": real_reviewed_count,
         "planner_validation_ok": bool(summary.get("ok")),
         "quality_eval_ok": bool(quality.get("ok")) if quality else None,
         "planner_error_count": len(list(summary.get("planning_errors") or [])),
@@ -560,6 +566,9 @@ def build_eval_report(
         "p95_latency_ms": None,
         "cost_per_query_usd": None,
         "notes": (
+            "Quality metrics include human-reviewed real chat replay samples plus fixture checks."
+            if real_reviewed_count
+            else
             "Quality metrics include unlabeled real chat replay samples; use them as semi-automated regression checks, not correctness scores."
             if real_replay_count
             else "Quality metrics are fixture-based over recorded eval cases; latency and cost remain null until live runs are instrumented."
