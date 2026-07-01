@@ -423,6 +423,9 @@ def _format_agent_notes(agent_notes: dict[str, Any] | None) -> str:
         compact["evidence_gate"] = {
             "evidence_status": str(gate.get("evidence_status") or "").strip(),
             "answer_mode": str(gate.get("answer_mode") or "").strip(),
+            "source_blend": str(gate.get("source_blend") or "").strip(),
+            "source_policy": str(gate.get("source_policy") or "").strip(),
+            "source_notice": str(gate.get("source_notice") or "").strip(),
             "evidence_hit_count": _positive_int(gate.get("evidence_hit_count")),
             "candidate_hit_count": _positive_int(gate.get("candidate_hit_count")),
             "retrieval_confidence": str(gate.get("retrieval_confidence") or "").strip(),
@@ -649,6 +652,25 @@ def _answer_mode(agent_notes: dict[str, Any] | None) -> str:
     return str(gate.get("answer_mode") or "").strip()
 
 
+def _source_blend(agent_notes: dict[str, Any] | None) -> str:
+    if not isinstance(agent_notes, dict):
+        return ""
+    gate = agent_notes.get("evidence_gate")
+    if not isinstance(gate, dict):
+        return ""
+    blend = str(gate.get("source_blend") or "").strip()
+    if blend:
+        return blend
+    mode = str(gate.get("answer_mode") or "").strip()
+    if mode == "evidence_grounded":
+        return "local_grounded"
+    if mode == "external_academic_llm":
+        return "external_academic"
+    if mode in {"hybrid_local_external", "general_llm"}:
+        return mode
+    return ""
+
+
 def _is_hybrid_answer_mode(agent_notes: dict[str, Any] | None) -> bool:
     return _answer_mode(agent_notes) == "hybrid_local_external"
 
@@ -832,7 +854,7 @@ def _claim_has_any_local_support(claim: Any, hits: list[dict[str, Any]], agent_n
 
 
 def _source_notice_required(answer_mode: str) -> bool:
-    return str(answer_mode or "").strip() in {"hybrid_local_external", "external_academic_llm", "general_llm"}
+    return str(answer_mode or "").strip() in {"hybrid_local_external", "external_academic_llm"}
 
 
 def _local_quality_gate_required(answer_mode: str, hits: list[dict[str, Any]]) -> bool:
@@ -1059,6 +1081,7 @@ def generate_grounded_answer(
     temperature: float = 0.2,
     max_tokens: int = 1200,
 ) -> dict[str, Any]:
+    source_blend = _source_blend(agent_notes)
     if not hits:
         if _is_general_llm_mode(agent_notes):
             mode = _answer_mode(agent_notes)
@@ -1078,6 +1101,7 @@ def generate_grounded_answer(
                             "answer": answer,
                             "llm_used": True,
                             "answer_mode": mode,
+                            "source_blend": source_blend or "external_academic",
                             "web_search_used": True,
                             "web_citations": list(web_result.get("annotations") or [])[:12],
                             "web_search_model": str(web_result.get("model") or ""),
@@ -1091,6 +1115,7 @@ def generate_grounded_answer(
                     "answer": answer,
                     "llm_used": False,
                     "answer_mode": mode or "general_llm",
+                    "source_blend": source_blend or ("external_academic" if academic else "general_llm"),
                     "web_search_used": False,
                     "observation": "Could not call an external LLM answer because no text API key is configured.",
                 }
@@ -1107,16 +1132,23 @@ def generate_grounded_answer(
                         "answer": answer,
                         "llm_used": False,
                         "answer_mode": mode or "general_llm",
+                        "source_blend": source_blend or ("external_academic" if academic else "general_llm"),
                         "web_search_used": False,
                         "observation": "External LLM returned empty text; used fallback answer.",
                     }
-                answer = _prepend_external_notice(answer, query, web_used=False)
+                if academic:
+                    answer = _prepend_external_notice(answer, query, web_used=False)
                 return {
                     "answer": answer,
                     "llm_used": True,
                     "answer_mode": mode or "general_llm",
+                    "source_blend": source_blend or ("external_academic" if academic else "general_llm"),
                     "web_search_used": False,
-                    "observation": "Generated an external LLM answer because no local evidence was retrieved.",
+                    "observation": (
+                        "Generated an external academic LLM answer because no local evidence was retrieved."
+                        if academic
+                        else "Generated a general LLM answer without using local evidence."
+                    ),
                 }
             except Exception as exc:
                 answer = _fallback_general_answer(query, reason=str(exc)[:160], academic=academic)
@@ -1124,12 +1156,20 @@ def generate_grounded_answer(
                     "answer": answer,
                     "llm_used": False,
                     "answer_mode": mode or "general_llm",
+                    "source_blend": source_blend or ("external_academic" if academic else "general_llm"),
                     "web_search_used": False,
                     "error": str(exc)[:240],
                     "observation": "External LLM generation failed; used fallback answer.",
                 }
         answer = _fallback_grounded_answer(query, hits, reason="no retrieved evidence", agent_notes=agent_notes)
-        return {"answer": answer, "llm_used": False, "observation": "Skipped LLM answer because no indexed evidence was retrieved."}
+        return {
+            "answer": answer,
+            "llm_used": False,
+            "answer_mode": "evidence_grounded",
+            "source_blend": source_blend or "local_grounded",
+            "web_search_used": False,
+            "observation": "Skipped LLM answer because no indexed evidence was retrieved.",
+        }
     hybrid = _is_hybrid_answer_mode(agent_notes)
     if hybrid and _web_search_configured(settings):
         try:
@@ -1159,6 +1199,7 @@ def generate_grounded_answer(
                     "answer": finalized["answer"],
                     "llm_used": True,
                     "answer_mode": "hybrid_local_external",
+                    "source_blend": source_blend or "hybrid_local_external",
                     "web_search_used": True,
                     "web_citations": list(web_result.get("annotations") or [])[:12],
                     "web_search_model": str(web_result.get("model") or ""),
@@ -1169,7 +1210,14 @@ def generate_grounded_answer(
             pass
     if not getattr(settings, "text_api_key", None):
         answer = _fallback_grounded_answer(query, hits, reason="missing text API key", agent_notes=agent_notes)
-        return {"answer": answer, "llm_used": False, "observation": "Generated degraded-mode answer without an LLM."}
+        return {
+            "answer": answer,
+            "llm_used": False,
+            "answer_mode": "hybrid_local_external" if hybrid else "evidence_grounded",
+            "source_blend": source_blend or ("hybrid_local_external" if hybrid else "local_grounded"),
+            "web_search_used": False,
+            "observation": "Generated degraded-mode answer without an LLM.",
+        }
     try:
         notes_text = _format_agent_notes(agent_notes)
         answer_query = query
@@ -1194,7 +1242,14 @@ def generate_grounded_answer(
         answer = clean_assistant_answer_presentation_text(answer).strip()
         if not answer:
             answer = _fallback_grounded_answer(query, hits, reason="empty LLM response", agent_notes=agent_notes)
-            return {"answer": answer, "llm_used": False, "observation": "LLM returned empty text; used fallback answer."}
+            return {
+                "answer": answer,
+                "llm_used": False,
+                "answer_mode": "hybrid_local_external" if hybrid else "evidence_grounded",
+                "source_blend": source_blend or ("hybrid_local_external" if hybrid else "local_grounded"),
+                "web_search_used": False,
+                "observation": "LLM returned empty text; used fallback answer.",
+            }
         answer_mode = "hybrid_local_external" if hybrid else "evidence_grounded"
         finalized = _finalize_grounded_answer(
             query,
@@ -1212,6 +1267,7 @@ def generate_grounded_answer(
             "answer": finalized["answer"],
             "llm_used": True,
             "answer_mode": answer_mode,
+            "source_blend": source_blend or ("hybrid_local_external" if hybrid else "local_grounded"),
             "web_search_used": False,
             "quality_gate": finalized["quality_gate"],
             "observation": (
@@ -1225,6 +1281,9 @@ def generate_grounded_answer(
         return {
             "answer": answer,
             "llm_used": False,
+            "answer_mode": "hybrid_local_external" if hybrid else "evidence_grounded",
+            "source_blend": source_blend or ("hybrid_local_external" if hybrid else "local_grounded"),
+            "web_search_used": False,
             "error": str(exc)[:240],
             "observation": "LLM generation failed; used fallback answer.",
         }

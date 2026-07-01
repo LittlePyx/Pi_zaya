@@ -152,8 +152,9 @@ def test_generate_grounded_answer_allows_general_llm_without_evidence(monkeypatc
 
     assert result["llm_used"] is True
     assert result["answer_mode"] == "general_llm"
-    assert "not a knowledge-base-grounded answer" in result["answer"]
-    assert "Python lists are mutable ordered sequences." in result["answer"]
+    assert result["source_blend"] == "general_llm"
+    assert result["answer"] == "Python lists are mutable ordered sequences."
+    assert "knowledge-base-grounded answer" not in result["answer"]
     assert "Retrieved snippets" not in captured["messages"][-1]["content"]
 
 
@@ -187,6 +188,7 @@ def test_generate_grounded_answer_uses_web_search_for_external_academic_no_hit(m
     assert result["llm_used"] is True
     assert result["web_search_used"] is True
     assert result["answer_mode"] == "external_academic_llm"
+    assert result["source_blend"] == "external_academic"
     assert "not a knowledge-base-grounded answer" in result["answer"]
     assert result["web_citations"][0]["url"] == "https://example.org/paper"
 
@@ -220,6 +222,7 @@ def test_generate_grounded_answer_uses_web_search_for_hybrid_answer(monkeypatch)
 
     assert result["llm_used"] is True
     assert result["answer_mode"] == "hybrid_local_external"
+    assert result["source_blend"] == "hybrid_local_external"
     assert result["web_search_used"] is True
     assert "external model and web context" in result["answer"]
     assert result["web_citations"][0]["url"] == "https://example.org/rag"

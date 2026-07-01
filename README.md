@@ -138,6 +138,10 @@ model answer. External fallback and hybrid answers are visibly marked so users
 can tell which claims are knowledge-base grounded and which parts are model/web
 background; no-hit fallback uses `not_applicable` for local citation
 verification.
+The source blend is explicit in the trace: `local_grounded`,
+`hybrid_local_external`, `external_academic`, or `general_llm`. General
+non-library questions can use the normal text API without adding a knowledge-base
+miss notice to the answer.
 After generation, a lightweight answer-quality gate checks citation presence,
 source disclosure, evidence overlap, and trace/debug leakage. If the answer
 fails, the runtime makes one repair attempt; if it still cannot pass, it returns

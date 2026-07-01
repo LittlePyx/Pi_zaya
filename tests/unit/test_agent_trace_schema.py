@@ -28,6 +28,7 @@ def test_agent_trace_schema_accepts_completed_trace():
     assert trace["summary"]["research_run_status"] == "verified"
     assert trace["summary"]["source_policy"] == "local_only"
     assert trace["summary"]["evidence_matrix_rows"] == 1
+    assert trace["summary"]["answer_source_blend"] == ""
     assert trace["summary"]["quality_gate_status"] == ""
     assert trace["summary"]["quality_gate_reasons"] == []
 
@@ -81,7 +82,12 @@ def test_agent_trace_schema_reports_invalid_fields():
                 },
             ],
             "verification": {"total_claims": "x", "supported_claims": 0, "unsupported_claims": 0, "evidence_status": "mystery"},
-            "summary": {"tool_call_count": "many", "evidence_status": "mystery", "quality_gate_status": "maybe"},
+            "summary": {
+                "tool_call_count": "many",
+                "evidence_status": "mystery",
+                "answer_source_blend": "mystery",
+                "quality_gate_status": "maybe",
+            },
             "status": "done",
             "errors": [],
         }
@@ -93,5 +99,6 @@ def test_agent_trace_schema_reports_invalid_fields():
     assert any("tool" in error for error in validation["errors"])
     assert any("evidence_status" in error for error in validation["errors"])
     assert any("summary.tool_call_count" in error for error in validation["errors"])
+    assert any("summary.answer_source_blend" in error for error in validation["errors"])
     assert any("quality_gate.status" in error for error in validation["errors"])
     assert any("summary.quality_gate_status" in error for error in validation["errors"])

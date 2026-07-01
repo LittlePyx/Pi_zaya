@@ -213,6 +213,8 @@ class AgentTrace:
             "planner_confidence": round(max(0.0, min(1.0, planner_confidence)), 4),
             "evidence_need": str(planner_intent.get("evidence_need") or self.context.get("evidence_need") or ""),
             "retrieval_confidence": str(self.context.get("retrieval_confidence") or ""),
+            "answer_source_blend": str(self.context.get("answer_source_blend") or ""),
+            "answer_mode": str(self.context.get("answer_mode") or ""),
             "usable_hit_count": int(self.context.get("usable_hit_count") or 0),
             "total_claims": total_claims,
             "supported_claims": supported_claims,

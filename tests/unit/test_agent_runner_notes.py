@@ -57,6 +57,9 @@ def test_runner_passes_structured_comparison_notes_to_answer_tool(monkeypatch, t
     assert captured["agent_notes"]["evidence_matrix"][0]["paper"] == "Paper A"
     assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "needs_review"
     assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "hybrid_local_external"
+    assert captured["agent_notes"]["evidence_gate"]["source_blend"] == "hybrid_local_external"
+    assert captured["agent_notes"]["evidence_gate"]["source_policy"] == "local_plus_external_background"
+    assert result["agent_trace"]["summary"]["answer_source_blend"] == "hybrid_local_external"
     assert result["agent_trace"]["summary"]["quality_gate_status"] == "repaired"
     assert result["agent_trace"]["summary"]["quality_gate_reasons"] == ["missing_local_citation"]
 
@@ -128,6 +131,8 @@ def test_runner_marks_academic_no_hit_as_external_answer(monkeypatch, tmp_path):
 
     assert "external model answer" in result["answer"]
     assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "external_academic_llm"
+    assert captured["agent_notes"]["evidence_gate"]["source_blend"] == "external_academic"
+    assert captured["agent_notes"]["evidence_gate"]["source_notice"] == "external"
     assert "not_based_on_local_knowledge_base" in captured["agent_notes"]["evidence_gate"]["reasons"]
     assert result["agent_trace"]["verification"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["summary"]["evidence_status"] == "not_applicable"
@@ -157,6 +162,8 @@ def test_runner_allows_general_llm_answer_when_query_is_not_about_library(monkey
 
     assert result["answer"] == "Python lists are mutable ordered sequences."
     assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "general_llm"
+    assert captured["agent_notes"]["evidence_gate"]["source_blend"] == "general_llm"
+    assert captured["agent_notes"]["evidence_gate"]["source_notice"] == "none"
     assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["verification"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["summary"]["evidence_status"] == "not_applicable"
@@ -181,6 +188,7 @@ def test_runner_uses_external_academic_mode_for_academic_no_hit(monkeypatch, tmp
 
     assert result["answer"] == "External academic answer."
     assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "external_academic_llm"
+    assert captured["agent_notes"]["evidence_gate"]["source_blend"] == "external_academic"
     assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "not_applicable"
     assert result["agent_trace"]["steps"][-1]["status"] == "skipped"
 
@@ -218,6 +226,7 @@ def test_runner_filters_low_confidence_hits_before_external_academic_answer(monk
     gate = captured["agent_notes"]["evidence_gate"]
     assert captured["hits"] == []
     assert gate["answer_mode"] == "external_academic_llm"
+    assert gate["source_blend"] == "external_academic"
     assert gate["evidence_status"] == "not_applicable"
     assert gate["candidate_hit_count"] == 2
     assert gate["retrieval_confidence"] == "low"

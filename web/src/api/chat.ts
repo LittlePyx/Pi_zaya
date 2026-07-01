@@ -98,6 +98,8 @@ export interface AgentTraceSummary {
   query_scope?: string
   requested_query_scope?: string
   retrieval_confidence?: string
+  answer_source_blend?: string
+  answer_mode?: string
   usable_hit_count?: number
   total_claims?: number
   supported_claims?: number

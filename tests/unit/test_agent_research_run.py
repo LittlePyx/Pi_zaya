@@ -55,6 +55,21 @@ def test_research_run_marks_external_policy_when_no_local_hits():
     assert policy == "external_allowed_with_notice"
 
 
+def test_research_run_prefers_explicit_source_policy_from_gate():
+    policy = infer_source_policy(
+        hits=[{"text": "Local evidence", "meta": {"source_name": "Paper A"}}],
+        agent_notes={
+            "evidence_gate": {
+                "answer_mode": "hybrid_local_external",
+                "source_blend": "hybrid_local_external",
+                "source_policy": "local_plus_external_background",
+            }
+        },
+    )
+
+    assert policy == "local_plus_external_background"
+
+
 def test_build_evidence_matrix_can_be_used_before_answer_generation():
     matrix = build_evidence_matrix(
         hits=[

@@ -8,6 +8,7 @@ from typing import Any
 
 from .planner import plan_research_intent, plan_research_question
 from .research_run import build_research_run
+from .source_policy import decide_answer_source
 from .tools import (
     build_reading_guide,
     compare_papers,
@@ -506,93 +507,19 @@ def _pre_generation_evidence_gate(
         if str(reason or "").strip()
     ]
     candidate_hit_count = int(confidence.get("candidate_hit_count") or hit_count or 0)
-    if hit_count <= 0:
-        if _looks_like_academic_question(query, question_type=question_type):
-            local_grounding_requested = _looks_like_research_grounding_request(
-                query,
-                scope_context=scope_context or {},
-                question_type=question_type,
-            )
-            reasons = (
-                ["no_evidence_hits"]
-                if candidate_hit_count <= 0
-                else ["low_retrieval_confidence", "no_usable_local_evidence"]
-            )
-            reasons.append("not_based_on_local_knowledge_base")
-            if local_grounding_requested:
-                reasons.append("local_grounding_requested")
-            return {
-                "evidence_status": "not_applicable",
-                "answer_mode": "external_academic_llm",
-                "evidence_hit_count": 0,
-                "candidate_hit_count": candidate_hit_count,
-                "retrieval_confidence": confidence_level or ("none" if candidate_hit_count <= 0 else "low"),
-                "reasons": [*reasons, *[r for r in confidence_reasons if r not in reasons]][:8],
-                "instruction": (
-                    "Use an external academic model answer. Clearly state that reliable local indexed evidence was not found; "
-                    "do not claim the answer is grounded in the knowledge base."
-                ),
-            }
-        if not _looks_like_research_grounding_request(
+    decision = decide_answer_source(
+        hit_count=hit_count,
+        candidate_hit_count=candidate_hit_count,
+        retrieval_confidence=confidence_level,
+        retrieval_reasons=confidence_reasons,
+        academic_question=_looks_like_academic_question(query, question_type=question_type),
+        local_grounding_requested=_looks_like_research_grounding_request(
             query,
             scope_context=scope_context or {},
             question_type=question_type,
-        ):
-            return {
-                "evidence_status": "not_applicable",
-                "answer_mode": "general_llm",
-                "evidence_hit_count": 0,
-                "candidate_hit_count": candidate_hit_count,
-                "retrieval_confidence": confidence_level or ("none" if candidate_hit_count <= 0 else "low"),
-                "reasons": ["general_question_no_indexed_evidence_required", *confidence_reasons][:8],
-                "instruction": "Answer as a normal LLM response without inventing citations or paper evidence.",
-            }
-        reasons = (
-            ["no_evidence_hits"]
-            if candidate_hit_count <= 0
-            else ["low_retrieval_confidence", "no_usable_local_evidence"]
-        )
-        return {
-            "evidence_status": "insufficient",
-            "answer_mode": "evidence_grounded",
-            "evidence_hit_count": 0,
-            "candidate_hit_count": candidate_hit_count,
-            "retrieval_confidence": confidence_level or ("none" if candidate_hit_count <= 0 else "low"),
-            "reasons": [*reasons, *[r for r in confidence_reasons if r not in reasons]][:8],
-            "instruction": "Do not infer an answer. Say that indexed evidence is insufficient.",
-        }
-    if hit_count < 2:
-        reasons = ["low_evidence_count", "external_background_allowed"]
-        reasons.extend(r for r in confidence_reasons if r not in reasons)
-        return {
-            "evidence_status": "needs_review",
-            "answer_mode": "hybrid_local_external",
-            "evidence_hit_count": hit_count,
-            "candidate_hit_count": candidate_hit_count,
-            "retrieval_confidence": confidence_level or "medium",
-            "reasons": reasons[:8],
-            "instruction": (
-                "Use the retrieved snippet as local authority. External academic background may clarify context, "
-                "but paper-specific claims must stay tied to local evidence."
-            ),
-        }
-    answer_mode = "hybrid_local_external" if _looks_like_academic_question(query, question_type=question_type) else "evidence_grounded"
-    reasons = ["external_background_allowed"] if answer_mode == "hybrid_local_external" else []
-    reasons.extend(r for r in confidence_reasons if r not in reasons)
-    return {
-        "evidence_status": "grounded",
-        "answer_mode": answer_mode,
-        "evidence_hit_count": hit_count,
-        "candidate_hit_count": candidate_hit_count,
-        "retrieval_confidence": confidence_level or "high",
-        "reasons": reasons[:8],
-        "instruction": (
-            "Prioritize retrieved evidence for paper-specific claims. External background may improve framing, "
-            "but it must not be presented as local knowledge-base evidence."
-            if answer_mode == "hybrid_local_external"
-            else "Answer only from retrieved evidence and cite supported claims."
         ),
-    }
+    )
+    return decision.to_evidence_gate()
 
 
 def _is_general_answer_mode(agent_notes: dict[str, Any] | None) -> bool:
@@ -763,6 +690,11 @@ def run_research_agent(
                 question_type=question_type,
                 retrieval_confidence=retrieval_confidence,
             )
+            gate = context["agent_notes"]["evidence_gate"]
+            if isinstance(gate, dict):
+                trace.context["answer_source_blend"] = str(gate.get("source_blend") or "")
+                trace.context["answer_mode"] = str(gate.get("answer_mode") or "")
+                trace.context["source_policy"] = str(gate.get("source_policy") or "")
         elif plan_step.tool == "retrieve_references":
             result = _run_step(
                 trace,

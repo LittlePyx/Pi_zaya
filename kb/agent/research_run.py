@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .source_policy import source_policy_from_gate
 from .types import (
     EvidenceMatrixRow,
     EvidenceStatus,
@@ -65,26 +66,12 @@ def _first_sentence(value: Any, limit: int = 220) -> str:
     return _clip(match.group(1) if match else text, limit=limit)
 
 
-def _answer_mode(agent_notes: dict[str, Any] | None) -> str:
-    if not isinstance(agent_notes, dict):
-        return ""
-    gate = agent_notes.get("evidence_gate")
-    if not isinstance(gate, dict):
-        return ""
-    return str(gate.get("answer_mode") or "").strip()
-
-
 def infer_source_policy(
     *,
     hits: list[dict[str, Any]],
     agent_notes: dict[str, Any] | None,
 ) -> SourcePolicy:
-    mode = _answer_mode(agent_notes)
-    if mode == "hybrid_local_external":
-        return "local_plus_external_background"
-    if mode in {"external_academic_llm", "general_llm"} or not hits:
-        return "external_allowed_with_notice"
-    return "local_only"
+    return source_policy_from_gate(agent_notes, has_hits=bool(hits))
 
 
 def _support_status(has_quote: bool, verification_status: EvidenceStatus) -> EvidenceStatus:

@@ -10,6 +10,7 @@ VALID_STATUSES = set(StepStatus.__args__)
 VALID_TOOLS = set(ToolName.__args__)
 VALID_EVIDENCE_STATUSES = set(EvidenceStatus.__args__)
 VALID_QUALITY_GATE_STATUSES = {"passed", "repaired", "fallback"}
+VALID_SOURCE_BLENDS = {"", "local_grounded", "hybrid_local_external", "external_academic", "general_llm"}
 
 
 def _is_int_like(value: Any) -> bool:
@@ -203,6 +204,10 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
         errors.append(f"summary.evidence_status must be one of {sorted(VALID_EVIDENCE_STATUSES)}")
     if isinstance(summary, dict) and "evidence_hit_count" in summary and not _is_int_like(summary.get("evidence_hit_count", 0)):
         errors.append("summary.evidence_hit_count must be an integer")
+    if isinstance(summary, dict) and "answer_source_blend" in summary:
+        blend = str(summary.get("answer_source_blend") or "")
+        if blend not in VALID_SOURCE_BLENDS:
+            errors.append("summary.answer_source_blend is invalid")
     if isinstance(summary, dict) and "quality_gate_status" in summary:
         quality_gate_status = str(summary.get("quality_gate_status") or "")
         if quality_gate_status and quality_gate_status not in VALID_QUALITY_GATE_STATUSES:
@@ -232,6 +237,7 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
             "evidence_hit_count": int(verification.get("evidence_hit_count") or summary.get("evidence_hit_count") or 0)
             if _is_int_like(verification.get("evidence_hit_count", summary.get("evidence_hit_count", 0)))
             else 0,
+            "answer_source_blend": str(summary.get("answer_source_blend") or "") if isinstance(summary, dict) else "",
             "research_run_status": str(research_run.get("status") or "") if isinstance(research_run, dict) else "",
             "evidence_matrix_rows": len(research_run.get("evidence_matrix") or []) if isinstance(research_run, dict) and isinstance(research_run.get("evidence_matrix"), list) else 0,
             "tool_call_count": len(steps),
