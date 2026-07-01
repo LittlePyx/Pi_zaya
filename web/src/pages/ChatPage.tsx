@@ -18,22 +18,15 @@ import {
   READER_CITATION_SHELF_EVENT,
   READER_SELECTION_SHELF_EVENT,
   READER_STANDALONE_WINDOW_NAME,
-  type ReaderLocateResult,
   type ReaderOpenPayload,
   type ReaderSelectionShelfPayload,
 } from '../components/chat/reader/readerTypes'
 import { useReaderSessionHighlights } from '../components/chat/reader/useReaderSessionHighlights'
 import {
-  normalizeReaderLocateRequestId,
-  readerSourcePathsMatch,
-  readerLocateRepairRunMatchesActiveRequest,
-  readerLocateResultMatchesActiveRequest,
-  type ReaderLocateRequestGuard,
-} from '../components/chat/reader/readerLocateGuard'
-import {
   sanitizeReaderLocateCandidates,
   sanitizeReaderLocateTarget,
 } from '../components/chat/reader/readerOpenPayloadUtils'
+import { useReaderLocateRepair } from '../components/chat/reader/useReaderLocateRepair'
 import { buildResearchContext } from '../components/chat/researchContext'
 import {
   normalizeSelectedResearchContextPack,
@@ -41,10 +34,8 @@ import {
 } from '../components/chat/researchContextPack'
 import { dispatchOpenSettings, type ApiSettingsTarget } from '../components/layout/settingsEvents'
 import { chatApi, type ChatUploadItem, type QueryScope } from '../api/chat'
-import { libraryApi } from '../api/library'
 import { useT } from '../i18n'
 import { internalDebugBrowserEnabled } from '../utils/internalDebug'
-import { qualityDiagnosticsVisible } from '../utils/qualityDiagnostics'
 import { basenameFromSourcePath } from '../utils/sourcePath'
 import { reportUserIssue } from '../userIssueReporter'
 
@@ -59,7 +50,6 @@ const SELECTED_RESEARCH_CONTEXT_STATE_KEY = 'selected_research_context'
 const SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY = 'selected_research_context_scope'
 const SELECTED_RESEARCH_CONTEXT_PROJECT_STATE_KEY = 'selected_research_context_project_id'
 const SELECTED_RESEARCH_CONTEXT_CLEARED_AT_STATE_KEY = 'selected_research_context_cleared_at'
-const READER_LOCATE_AUTO_REPAIR_RETRY_MS = 60_000
 
 function resolveQueryScope(scope: QueryScope, opts: { hasCurrentPaper: boolean; hasBasket: boolean }): QueryScope {
   if (scope === 'current_paper' && !opts.hasCurrentPaper) return 'library'
@@ -256,8 +246,19 @@ export default function ChatPage() {
     activeConversationId: activeConvId,
     readerPayload,
   })
-  const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
-  const [sourceQualityRefreshToken, setSourceQualityRefreshToken] = useState(0)
+  const {
+    readerLocateResults,
+    sourceQualityRefreshToken,
+    nextReaderLocateRequestId,
+    registerReaderLocateRequest,
+    resetReaderLocateRepair,
+    handleReaderLocateResult,
+  } = useReaderLocateRepair({
+    activeConversationId: activeConvId,
+    readerOpenRef,
+    readerPayloadRef,
+    openReaderDock,
+  })
   const [citationShelfOpen, setCitationShelfOpen] = useState(false)
   const [citationShelfCount, setCitationShelfCount] = useState(0)
   const [selectedResearchContext, setSelectedResearchContext] = useState<SelectedResearchContextPack | null>(null)
@@ -266,7 +267,6 @@ export default function ChatPage() {
   const [selectedResearchContextOwnerKey, setSelectedResearchContextOwnerKey] = useState('')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
   const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
-  const [qualityDiagnosticsEnabled] = useState(qualityDiagnosticsVisible)
   const debugSnapshot = useChatPerfSnapshot(debugPanelEnabled)
   const [openShelfSignal, setOpenShelfSignal] = useState(0)
   const [shelfDockTarget, setShelfDockTarget] = useState<HTMLDivElement | null>(null)
@@ -274,14 +274,6 @@ export default function ChatPage() {
   const uploadNoticeRef = useRef<Record<string, string>>({})
   const dismissTimerRef = useRef<Record<string, number>>({})
   const eventTokenRef = useRef(1)
-  const readerLocateRequestRef = useRef(1)
-  const readerLocateQualitySubmittedRef = useRef<Set<string>>(new Set())
-  const readerLocateSourceRepairAtRef = useRef<Record<string, number>>({})
-  const readerPayloadByFeedbackKeyRef = useRef<Record<string, ReaderOpenPayload>>({})
-  const readerLocateGuardByFeedbackKeyRef = useRef<Record<string, ReaderLocateRequestGuard>>({})
-  const activeConvIdRef = useRef(String(activeConvId || '').trim())
-  const readerLocateSourceRepairStreamRef = useRef<AbortController | null>(null)
-  const readerLocateSourceRepairRunTokenRef = useRef(0)
   const selectedResearchContextLoadSeqRef = useRef(0)
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
   const activeGuideBinding = useMemo(() => {
@@ -426,11 +418,6 @@ export default function ChatPage() {
     })
   }, [handleResearchContextPackChange, nextEventToken])
 
-  const nextReaderLocateRequestId = useCallback(() => {
-    readerLocateRequestRef.current += 1
-    return readerLocateRequestRef.current
-  }, [])
-
   const captureTimelineScrollTop = useCallback(() => {
     const scrollHost = splitLayoutRef.current?.querySelector<HTMLElement>('.kb-main-scroll')
     timelineScrollRestoreTopRef.current = scrollHost ? scrollHost.scrollTop : null
@@ -466,11 +453,7 @@ export default function ChatPage() {
     previousShelfProjectScopeRef.current = shelfProjectScope
     resetTimeline()
     resetReaderDock()
-    readerPayloadByFeedbackKeyRef.current = {}
-    readerLocateGuardByFeedbackKeyRef.current = {}
-    readerLocateSourceRepairRunTokenRef.current += 1
-    readerLocateSourceRepairStreamRef.current?.abort()
-    readerLocateSourceRepairStreamRef.current = null
+    resetReaderLocateRepair()
     if (projectChanged) {
       setCitationShelfOpen(false)
       setCitationShelfCount(0)
@@ -479,7 +462,7 @@ export default function ChatPage() {
       setRightDockPanel((current) => (current === 'reader' ? 'timeline' : current))
     }
     setAppendSignal(null)
-  }, [activeConvId, resetReaderDock, resetTimeline, setRightDockPanel, shelfProjectScope])
+  }, [activeConvId, resetReaderDock, resetReaderLocateRepair, resetTimeline, setRightDockPanel, shelfProjectScope])
 
   useEffect(() => {
     const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
@@ -493,14 +476,7 @@ export default function ChatPage() {
   useEffect(() => () => {
     Object.values(dismissTimerRef.current).forEach((timer) => window.clearTimeout(timer))
     dismissTimerRef.current = {}
-    readerLocateSourceRepairRunTokenRef.current += 1
-    readerLocateSourceRepairStreamRef.current?.abort()
-    readerLocateSourceRepairStreamRef.current = null
   }, [])
-
-  useEffect(() => {
-    activeConvIdRef.current = String(activeConvId || '').trim()
-  }, [activeConvId])
 
   useLayoutEffect(() => {
     const targetTop = timelineScrollRestoreTopRef.current
@@ -775,12 +751,12 @@ export default function ChatPage() {
     }
     const feedbackKey = String(nextPayload.locateFeedbackKey || '').trim()
     if (feedbackKey) {
-      readerPayloadByFeedbackKeyRef.current[feedbackKey] = nextPayload
-      readerLocateGuardByFeedbackKeyRef.current[feedbackKey] = {
+      registerReaderLocateRequest({
+        feedbackKey,
         locateRequestId,
         sourcePath,
-        conversationId: String(activeConvId || '').trim(),
-      }
+        payload: nextPayload,
+      })
     }
     openReaderDock(nextPayload)
   }
@@ -889,223 +865,6 @@ export default function ChatPage() {
       return
     }
   }, [openTimeline, showDockPanel])
-
-  const refreshShelfSourceQuality = useCallback(() => {
-    setSourceQualityRefreshToken((value) => value + 1)
-  }, [])
-
-  const retryReaderLocateAfterRepair = useCallback((feedbackKey: string, sourcePath: string) => {
-    const key = String(feedbackKey || '').trim()
-    const path = String(sourcePath || '').trim()
-    if (!key || !readerOpenRef.current) return
-    const currentPayload = readerPayloadRef.current
-    if (!currentPayload) return
-    if (String(currentPayload.locateFeedbackKey || '').trim() !== key) return
-    if (path && !readerSourcePathsMatch(currentPayload.sourcePath, path)) return
-    const locateRequestId = nextReaderLocateRequestId()
-    const nextPayload: ReaderOpenPayload = {
-      ...currentPayload,
-      locateRequestId,
-    }
-    readerPayloadByFeedbackKeyRef.current[key] = nextPayload
-    readerLocateGuardByFeedbackKeyRef.current[key] = {
-      locateRequestId,
-      sourcePath: String(nextPayload.sourcePath || '').trim(),
-      conversationId: String(activeConvIdRef.current || '').trim(),
-    }
-    openReaderDock(nextPayload)
-  }, [nextReaderLocateRequestId, openReaderDock, readerOpenRef, readerPayloadRef])
-
-  const completeReaderLocateSourceRepair = useCallback(async (
-    runId: string,
-    options: {
-      needsReindex: boolean
-      shouldRetryLocate: boolean
-      feedbackKey: string
-      sourcePath: string
-      isCurrentRepair?: () => boolean
-    },
-  ) => {
-    if (options.isCurrentRepair && !options.isCurrentRepair()) return
-    let waiting = false
-    if (runId && options.needsReindex) {
-      try {
-        const advanced = await libraryApi.advanceQualityRepairRun(runId)
-        waiting = Boolean(advanced.waiting)
-      } catch {
-        waiting = false
-      }
-    }
-    if (options.isCurrentRepair && !options.isCurrentRepair()) return
-    refreshShelfSourceQuality()
-    if (!waiting && options.shouldRetryLocate) {
-      retryReaderLocateAfterRepair(options.feedbackKey, options.sourcePath)
-    }
-  }, [refreshShelfSourceQuality, retryReaderLocateAfterRepair])
-
-  const handleReaderLocateResult = useCallback((result: ReaderLocateResult) => {
-    const feedbackKey = String(result.locateFeedbackKey || '').trim()
-    if (!feedbackKey) return
-    const sourcePath = String(result.sourcePath || '').trim()
-    const sourceName = String(result.sourceName || '').trim()
-    const locateRequestId = normalizeReaderLocateRequestId(result.locateRequestId)
-    const guard = readerLocateGuardByFeedbackKeyRef.current[feedbackKey]
-    const currentPayload = readerPayloadRef.current
-    const currentConversationId = String(activeConvIdRef.current || '').trim()
-    if (!readerLocateResultMatchesActiveRequest({
-      result: { ...result, locateRequestId },
-      guard,
-      currentPayload,
-      currentConversationId,
-      readerOpen: readerOpenRef.current,
-    })) {
-      return
-    }
-    const submitKey = [
-      feedbackKey,
-      locateRequestId,
-      result.status,
-      result.precision,
-      result.hint,
-      result.reason,
-    ].join('|')
-    if (qualityDiagnosticsEnabled && !readerLocateQualitySubmittedRef.current.has(submitKey)) {
-      readerLocateQualitySubmittedRef.current.add(submitKey)
-      libraryApi.recordReaderLocateQuality({
-        source_path: sourcePath,
-        source_name: sourceName,
-        locate_feedback_key: feedbackKey,
-        locate_request_id: locateRequestId,
-        status: result.status,
-        precision: result.precision,
-        ok: result.ok,
-        repairable: result.repairable,
-        strict_locate: result.strictLocate,
-        hint: result.hint,
-        reason: result.reason,
-        active_alt_index: result.activeAltIndex,
-        block_id: result.blockId,
-        anchor_id: result.anchorId,
-        anchor_kind: result.anchorKind,
-        heading_path: result.headingPath,
-      }).catch(() => {})
-    }
-    const locateStatus = String(result.status || '').trim().toLowerCase()
-    const needsSourceRepair = Boolean(
-      sourcePath
-      && (
-        result.repairable
-        || locateStatus === 'failed'
-        || (result.strictLocate && !['exact', 'block'].includes(locateStatus))
-      ),
-    )
-    if (qualityDiagnosticsEnabled && needsSourceRepair) {
-      const repairKey = sourcePath || sourceName
-      const now = Date.now()
-      const last = Number(readerLocateSourceRepairAtRef.current[repairKey] || 0)
-      if (repairKey && now - last >= READER_LOCATE_AUTO_REPAIR_RETRY_MS) {
-        readerLocateSourceRepairAtRef.current[repairKey] = now
-        const repairToken = readerLocateSourceRepairRunTokenRef.current + 1
-        readerLocateSourceRepairRunTokenRef.current = repairToken
-        const repairResult: ReaderLocateResult = { ...result, locateRequestId }
-        const isCurrentSourceRepair = () => (
-          readerLocateRepairRunMatchesActiveRequest({
-            expectedRunToken: repairToken,
-            currentRunToken: readerLocateSourceRepairRunTokenRef.current,
-            result: repairResult,
-            guard: readerLocateGuardByFeedbackKeyRef.current[feedbackKey],
-            currentPayload: readerPayloadRef.current,
-            currentConversationId: activeConvIdRef.current,
-            readerOpen: readerOpenRef.current,
-          })
-        )
-        libraryApi.repairQuality({
-          sources: [{ source_path: sourcePath, source_name: sourceName }],
-          speed_mode: 'balanced',
-          replace: true,
-          md_autofix: true,
-        })
-          .then((res) => {
-            if (!isCurrentSourceRepair()) return undefined
-            const runId = String(res.repair_run_id || res.repair_run?.run_id || '').trim()
-            const queued = Number(res.enqueued || 0)
-            const needsReindex = Boolean(res.needs_reindex || res.impact?.needs_reindex)
-            const repaired = Number(res.repaired || res.impact?.repaired || 0)
-            const readerLocateReindex = Number(res.impact?.reader_locate_reindex || 0)
-            const shouldRetryLocate = Boolean(
-              needsReindex
-              || repaired > 0
-              || readerLocateReindex > 0
-              || (res.items || []).some((item) => Boolean(item.reader_locate_reindex_required)),
-            )
-            if (!runId) {
-              if (!isCurrentSourceRepair()) return undefined
-              refreshShelfSourceQuality()
-              if (shouldRetryLocate) retryReaderLocateAfterRepair(feedbackKey, sourcePath)
-              return undefined
-            }
-            if (queued > 0) {
-              readerLocateSourceRepairStreamRef.current?.abort()
-              let streamCtrl: AbortController | null = null
-              const clearStreamIfCurrent = () => {
-                if (!isCurrentSourceRepair() || readerLocateSourceRepairStreamRef.current !== streamCtrl) return false
-                readerLocateSourceRepairStreamRef.current = null
-                return true
-              }
-              streamCtrl = libraryApi.streamConvertStatus(
-                () => {},
-                () => {
-                  if (!clearStreamIfCurrent()) return
-                  void completeReaderLocateSourceRepair(runId, {
-                    needsReindex,
-                    shouldRetryLocate,
-                    feedbackKey,
-                    sourcePath,
-                    isCurrentRepair: isCurrentSourceRepair,
-                  })
-                },
-                () => {
-                  if (!clearStreamIfCurrent()) return
-                  refreshShelfSourceQuality()
-                },
-              )
-              readerLocateSourceRepairStreamRef.current = streamCtrl
-              return undefined
-            }
-            return completeReaderLocateSourceRepair(runId, {
-              needsReindex,
-              shouldRetryLocate,
-              feedbackKey,
-              sourcePath,
-              isCurrentRepair: isCurrentSourceRepair,
-            })
-          })
-          .catch(() => {
-            if (isCurrentSourceRepair()) delete readerLocateSourceRepairAtRef.current[repairKey]
-          })
-      }
-    }
-    setReaderLocateResults((current) => {
-      const prev = current[feedbackKey]
-      if (
-        prev
-        && prev.locateRequestId === locateRequestId
-        && prev.status === result.status
-        && prev.precision === result.precision
-        && prev.hint === result.hint
-      ) {
-        return current
-      }
-      return { ...current, [feedbackKey]: { ...result, locateRequestId } }
-    })
-  }, [
-    completeReaderLocateSourceRepair,
-    qualityDiagnosticsEnabled,
-    readerOpenRef,
-    readerPayloadRef,
-    refreshShelfSourceQuality,
-    retryReaderLocateAfterRepair,
-  ])
 
   const appendReaderSelection = (text: string) => {
     const raw = String(text || '')
