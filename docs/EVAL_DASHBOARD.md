@@ -109,6 +109,7 @@ presented as live LLM quality scores.
 | Trace scope reproducibility | Automated/manual | Inspect `agent_trace.context.query_scope`, `requested_query_scope`, and selected/current-source fields for scoped questions. | TBD |
 | Evidence matrix completeness | Automated/manual | Inspect `agent_trace.research_run.evidence_matrix` rows for paper, method, result, limitation, evidence quote, and support status on comparison/reference prompts. | TBD |
 | Pre-answer matrix use | Automated/manual | Confirm generated-answer prompts receive `agent_notes.evidence_matrix` and instruct synthesis from the matrix before free-form summarization. | TBD |
+| Answer quality repair rate | Semi-automated | Count generated answers whose quality gate status is `passed`, `repaired`, or `fallback` in tool outputs. | TBD |
 | Source policy disclosure | Automated/manual | Confirm `agent_trace.research_run.source_policy` distinguishes local-only, local+external background, and external-with-notice answers. | TBD |
 | Trace summary readability | Automated/manual | Confirm `agent_trace.summary` exposes claim support, scope, tool-call count, and error status, while plan/tool logs remain behind the UI's Execution Details disclosure. | TBD |
 | Trace audit replay | Automated/manual | Use `GET /api/messages/{message_id}/agent-trace` to confirm stored traces can be re-opened without adding default answer clutter. | TBD |

@@ -16,12 +16,13 @@ def test_generate_grounded_answer_cleans_llm_trace_suffix(monkeypatch):
 
     result = tools.generate_grounded_answer(
         "What is supported?",
-        [{"text": "Evidence supports the answer.", "meta": {"source_name": "Paper A"}}],
+        [{"text": "Grounded answer. Evidence supports the answer.", "meta": {"source_name": "Paper A"}}],
         settings=_Settings(),
     )
 
     assert result["llm_used"] is True
     assert result["answer"] == "Grounded answer [1]."
+    assert result["quality_gate"]["status"] == "passed"
 
 
 def test_generate_grounded_answer_can_blend_local_evidence_with_external_context(monkeypatch):
@@ -67,6 +68,7 @@ def test_generate_grounded_answer_can_blend_local_evidence_with_external_context
 
     assert result["llm_used"] is True
     assert result["answer_mode"] == "hybrid_local_external"
+    assert result["quality_gate"]["status"] == "passed"
     assert "local citations [n] come from the knowledge base" in result["answer"]
     assert "Local evidence says retrieval is used [1]." in result["answer"]
     assert "Hybrid answer source policy" in captured["messages"][-1]["content"]
@@ -75,6 +77,38 @@ def test_generate_grounded_answer_can_blend_local_evidence_with_external_context
     assert "latency not evaluated" in captured["messages"][-1]["content"]
     assert "Compact answer shape" in captured["messages"][-1]["content"]
     assert "External context" in captured["messages"][-1]["content"]
+
+
+def test_generate_grounded_answer_repairs_missing_local_citation(monkeypatch):
+    captured = {"calls": 0}
+
+    class _Settings:
+        text_api_key = "test-key"
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def chat(self, messages, *, temperature=0.2, max_tokens=1200):
+            captured["calls"] += 1
+            captured["messages"] = messages
+            if captured["calls"] == 1:
+                return "The paper uses retrieval before generation."
+            return "The paper uses retrieval before generation [1]."
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+
+    result = tools.generate_grounded_answer(
+        "How does the paper use retrieval?",
+        [{"text": "The paper uses retrieval before generation.", "meta": {"source_name": "Paper A"}}],
+        settings=_Settings(),
+    )
+
+    assert captured["calls"] == 2
+    assert result["answer"] == "The paper uses retrieval before generation [1]."
+    assert result["quality_gate"]["status"] == "repaired"
+    assert "missing_local_citation" in result["quality_gate"]["reasons"]
+    assert "Quality gate reasons" in captured["messages"][-1]["content"]
 
 
 def test_generate_grounded_answer_skips_llm_without_evidence(monkeypatch):

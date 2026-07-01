@@ -28,6 +28,47 @@ _LIMITATION_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}")
+_ANSWER_DEBUG_RE = re.compile(
+    r"\b(?:agent_trace|agentTrace|Research Agent Trace|retrieve_evidence|retrieve_references|"
+    r"build_reading_guide|compare_papers|generate_grounded_answer|verify_answer_citations|"
+    r"supported_claims|unsupported_claims|total_claims|question_type)\b",
+    flags=re.IGNORECASE,
+)
+_QUALITY_STOPWORDS = {
+    "about",
+    "answer",
+    "background",
+    "based",
+    "before",
+    "between",
+    "citation",
+    "claim",
+    "come",
+    "comes",
+    "context",
+    "does",
+    "evidence",
+    "external",
+    "from",
+    "general",
+    "grounded",
+    "knowledge",
+    "local",
+    "method",
+    "paper",
+    "papers",
+    "retrieved",
+    "says",
+    "show",
+    "shows",
+    "snippet",
+    "snippets",
+    "source",
+    "that",
+    "this",
+    "uses",
+    "with",
+}
 
 
 def _clip(text: Any, limit: int = 180) -> str:
@@ -756,6 +797,258 @@ def _hybrid_answer_query(query: str, notes_text: str, *, prefer_web: bool = Fals
     return f"{query}\n\n{policy}"
 
 
+def _quality_terms(value: Any) -> set[str]:
+    return {
+        token.lower()
+        for token in _TOKEN_RE.findall(str(value or ""))
+        if token.lower() not in _QUALITY_STOPWORDS
+    }
+
+
+def _quality_support_terms(hits: list[dict[str, Any]], agent_notes: dict[str, Any] | None) -> set[str]:
+    parts: list[str] = []
+    for hit in list(hits or [])[:8]:
+        if not isinstance(hit, dict):
+            continue
+        meta = _hit_meta(hit)
+        parts.extend(
+            [
+                str(hit.get("text") or ""),
+                str(meta.get("source_name") or ""),
+                str(meta.get("heading_path") or meta.get("top_heading") or ""),
+            ]
+        )
+    if isinstance(agent_notes, dict):
+        for row in _compact_evidence_matrix_rows(agent_notes.get("evidence_matrix")):
+            parts.extend(str(row.get(key) or "") for key in ("paper", "method", "key_result", "limitation", "evidence_quote"))
+    return _quality_terms(" ".join(parts))
+
+
+def _claim_has_any_local_support(claim: Any, hits: list[dict[str, Any]], agent_notes: dict[str, Any] | None) -> bool:
+    claim_terms = _quality_terms(claim)
+    if not claim_terms:
+        return False
+    return bool(claim_terms & _quality_support_terms(hits, agent_notes))
+
+
+def _source_notice_required(answer_mode: str) -> bool:
+    return str(answer_mode or "").strip() in {"hybrid_local_external", "external_academic_llm", "general_llm"}
+
+
+def _local_quality_gate_required(answer_mode: str, hits: list[dict[str, Any]]) -> bool:
+    mode = str(answer_mode or "").strip()
+    return bool(hits) and mode not in {"external_academic_llm", "general_llm"}
+
+
+def _answer_quality_gate(
+    answer: str,
+    hits: list[dict[str, Any]],
+    *,
+    agent_notes: dict[str, Any] | None = None,
+    answer_mode: str = "",
+    raw_answer: str = "",
+) -> dict[str, Any]:
+    clean = clean_assistant_answer_presentation_text(answer).strip()
+    raw = str(raw_answer if raw_answer else answer or "")
+    verification = _verify_answer_citations(clean, hits, answer_mode=answer_mode)
+    hard_reasons: list[str] = []
+    warnings: list[str] = []
+    if raw.strip() and raw.strip() != clean:
+        warnings.append("trace_debug_removed")
+    if _ANSWER_DEBUG_RE.search(clean):
+        hard_reasons.append("debug_content_in_answer")
+    if _source_notice_required(answer_mode) and verification.source_notice_count <= 0:
+        hard_reasons.append("missing_source_notice")
+    if _local_quality_gate_required(answer_mode, hits):
+        if verification.total_claims <= 0:
+            hard_reasons.append("missing_local_evidence_claim")
+        for claim in verification.claims:
+            if not isinstance(claim, dict) or str(claim.get("claim_kind") or "") != "local_claim":
+                continue
+            if not bool(claim.get("citation_present") or claim.get("has_citation")):
+                hard_reasons.append("missing_local_citation")
+                continue
+            if str(claim.get("unsupported_reason") or "") == "missing_evidence_overlap" and not _claim_has_any_local_support(
+                claim.get("claim_text") or claim.get("text"),
+                hits,
+                agent_notes,
+            ):
+                hard_reasons.append("unsupported_local_claim")
+    deduped = list(dict.fromkeys(hard_reasons))
+    return {
+        "ok": not deduped,
+        "answer": clean,
+        "reasons": deduped,
+        "warnings": list(dict.fromkeys(warnings)),
+        "verification": verification.to_dict(),
+    }
+
+
+def _answer_repair_query(
+    query: str,
+    *,
+    candidate_answer: str,
+    gate: dict[str, Any],
+    notes_text: str,
+    answer_mode: str,
+) -> str:
+    reasons = ", ".join(str(item) for item in list(gate.get("reasons") or []) if str(item or "").strip()) or "quality gate failed"
+    policy = (
+        "Revise the candidate answer so it passes the Research Agent answer quality gate.\n"
+        "Return only the user-facing answer. Do not include trace JSON, tool calls, plan steps, verification statistics, or analysis.\n"
+        "Every local paper-specific claim must use local citation markers like [1] or [2].\n"
+        "Do not keep any local claim that is not supported by the retrieved snippets or evidence matrix.\n"
+        "If evidence is thin, say the limitation briefly instead of inventing details.\n"
+    )
+    if answer_mode == "hybrid_local_external":
+        policy += (
+            "Keep local evidence separate from external/background context. "
+            "External background must stay short and must not use local citation markers.\n"
+        )
+    return (
+        f"User question:\n{query}\n\n"
+        f"Quality gate reasons:\n{reasons}\n\n"
+        f"{policy}\n"
+        f"Candidate answer:\n{candidate_answer}\n\n"
+        f"Structured evidence notes:\n{notes_text or '(none)'}"
+    )
+
+
+def _repair_answer_once(
+    query: str,
+    answer: str,
+    hits: list[dict[str, Any]],
+    *,
+    settings: Any,
+    history: list[dict[str, Any]] | None,
+    agent_notes: dict[str, Any] | None,
+    answer_mode: str,
+    gate: dict[str, Any],
+    temperature: float,
+    max_tokens: int,
+) -> str:
+    if not getattr(settings, "text_api_key", None):
+        return ""
+    notes_text = _format_agent_notes(agent_notes)
+    repair_query = _answer_repair_query(
+        query,
+        candidate_answer=answer,
+        gate=gate,
+        notes_text=notes_text,
+        answer_mode=answer_mode,
+    )
+    messages = build_messages(repair_query, list(history or []), list(hits or []))
+    repaired = DeepSeekChat(settings).chat(
+        messages=messages,
+        temperature=min(float(temperature or 0.2), 0.2),
+        max_tokens=max(256, min(4096, int(max_tokens or 1200))),
+    )
+    return clean_assistant_answer_presentation_text(repaired).strip()
+
+
+def _fallback_quality_gate_answer(
+    query: str,
+    hits: list[dict[str, Any]],
+    *,
+    reason: str = "",
+    agent_notes: dict[str, Any] | None = None,
+) -> str:
+    if not hits:
+        return _fallback_general_answer(query, reason=reason, academic=True)
+    prefer_zh = _has_cjk(query)
+    if prefer_zh:
+        lines = ["\u6839\u636e\u5f53\u524d\u547d\u4e2d\u7684\u77e5\u8bc6\u5e93\u8bc1\u636e\uff0c\u6211\u53ea\u80fd\u53ef\u9760\u5730\u603b\u7ed3\u4e3a\uff1a"]
+    else:
+        lines = ["Based on the retrieved knowledge-base evidence, I can safely say:"]
+    for idx, hit in enumerate(list(hits or [])[:4], start=1):
+        meta = _hit_meta(hit)
+        source = _source_name(hit) or f"Source {idx}"
+        heading = str(meta.get("heading_path") or meta.get("top_heading") or "").strip()
+        location = f" / {heading}" if heading else ""
+        lines.append(f"- [{idx}] {source}{location}: {_clip(hit.get('text'), 260)}")
+    if isinstance(agent_notes, dict) and _compact_evidence_matrix_rows(agent_notes.get("evidence_matrix")):
+        if prefer_zh:
+            lines.append("\u9650\u5236\uff1a\u4e0a\u9762\u7684\u603b\u7ed3\u53ea\u4fdd\u7559\u8bc1\u636e\u77e9\u9635\u548c\u68c0\u7d22\u7247\u6bb5\u80fd\u652f\u6301\u7684\u5185\u5bb9\u3002")
+        else:
+            lines.append("Limit: this keeps only claims supported by the evidence matrix and retrieved snippets.")
+    elif reason:
+        lines.append(("\u9650\u5236\uff1a" if prefer_zh else "Limit: ") + _clip(reason, 180))
+    return "\n".join(lines).strip()
+
+
+def _finalize_grounded_answer(
+    query: str,
+    answer: str,
+    hits: list[dict[str, Any]],
+    *,
+    settings: Any,
+    history: list[dict[str, Any]] | None,
+    agent_notes: dict[str, Any] | None,
+    answer_mode: str,
+    web_used: bool = False,
+    temperature: float = 0.2,
+    max_tokens: int = 1200,
+) -> dict[str, Any]:
+    raw_clean = clean_assistant_answer_presentation_text(answer).strip()
+    debug_removed = bool(str(answer or "").strip() and str(answer or "").strip() != raw_clean)
+    clean = raw_clean
+    if answer_mode == "hybrid_local_external":
+        clean = _prepend_hybrid_notice(clean, query, web_used=web_used)
+    gate = _answer_quality_gate(clean, hits, agent_notes=agent_notes, answer_mode=answer_mode, raw_answer=clean)
+    if debug_removed:
+        gate["warnings"] = list(dict.fromkeys(list(gate.get("warnings") or []) + ["trace_debug_removed"]))
+    if gate["ok"]:
+        return {"answer": gate["answer"], "quality_gate": {"status": "passed", **{k: gate[k] for k in ("reasons", "warnings")}}}
+    repaired = ""
+    repair_error = ""
+    try:
+        repaired = _repair_answer_once(
+            query,
+            gate["answer"],
+            hits,
+            settings=settings,
+            history=history,
+            agent_notes=agent_notes,
+            answer_mode=answer_mode,
+            gate=gate,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except Exception as exc:
+        repair_error = str(exc)[:240]
+    if repaired:
+        if answer_mode == "hybrid_local_external":
+            repaired = _prepend_hybrid_notice(repaired, query, web_used=web_used)
+        repaired_gate = _answer_quality_gate(repaired, hits, agent_notes=agent_notes, answer_mode=answer_mode, raw_answer=repaired)
+        if repaired_gate["ok"]:
+            return {
+                "answer": repaired_gate["answer"],
+                "quality_gate": {
+                    "status": "repaired",
+                    "reasons": list(gate.get("reasons") or []),
+                    "warnings": list(dict.fromkeys(list(gate.get("warnings") or []) + list(repaired_gate.get("warnings") or []))),
+                },
+            }
+        gate = repaired_gate
+    fallback = _fallback_quality_gate_answer(
+        query,
+        hits,
+        reason=", ".join(str(item) for item in list(gate.get("reasons") or [])[:3]),
+        agent_notes=agent_notes,
+    )
+    if answer_mode == "hybrid_local_external":
+        fallback = _prepend_hybrid_notice(fallback, query, web_used=web_used)
+    return {
+        "answer": fallback,
+        "quality_gate": {
+            "status": "fallback",
+            "reasons": list(gate.get("reasons") or []),
+            "warnings": list(gate.get("warnings") or []),
+            "repair_error": repair_error,
+        },
+    }
+
+
 def generate_grounded_answer(
     query: str,
     hits: list[dict[str, Any]],
@@ -850,14 +1143,26 @@ def generate_grounded_answer(
             )
             answer = clean_assistant_answer_presentation_text(str(web_result.get("content") or "")).strip()
             if answer:
-                answer = _prepend_hybrid_notice(answer, query, web_used=True)
+                finalized = _finalize_grounded_answer(
+                    query,
+                    answer,
+                    hits,
+                    settings=settings,
+                    history=history,
+                    agent_notes=agent_notes,
+                    answer_mode="hybrid_local_external",
+                    web_used=True,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
                 return {
-                    "answer": answer,
+                    "answer": finalized["answer"],
                     "llm_used": True,
                     "answer_mode": "hybrid_local_external",
                     "web_search_used": True,
                     "web_citations": list(web_result.get("annotations") or [])[:12],
                     "web_search_model": str(web_result.get("model") or ""),
+                    "quality_gate": finalized["quality_gate"],
                     "observation": "Generated a hybrid answer from local evidence plus external API web context.",
                 }
         except Exception:
@@ -890,13 +1195,25 @@ def generate_grounded_answer(
         if not answer:
             answer = _fallback_grounded_answer(query, hits, reason="empty LLM response", agent_notes=agent_notes)
             return {"answer": answer, "llm_used": False, "observation": "LLM returned empty text; used fallback answer."}
-        if hybrid:
-            answer = _prepend_hybrid_notice(answer, query, web_used=False)
+        answer_mode = "hybrid_local_external" if hybrid else "evidence_grounded"
+        finalized = _finalize_grounded_answer(
+            query,
+            answer,
+            hits,
+            settings=settings,
+            history=history,
+            agent_notes=agent_notes,
+            answer_mode=answer_mode,
+            web_used=False,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
         return {
-            "answer": answer,
+            "answer": finalized["answer"],
             "llm_used": True,
-            "answer_mode": "hybrid_local_external" if hybrid else "evidence_grounded",
+            "answer_mode": answer_mode,
             "web_search_used": False,
+            "quality_gate": finalized["quality_gate"],
             "observation": (
                 "Generated a hybrid answer from local evidence plus external model context."
                 if hybrid

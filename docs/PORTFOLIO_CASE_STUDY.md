@@ -100,6 +100,8 @@ measured until a reproducible run exists:
   only on unstructured retrieved snippets.
 - Source-aware answer generation that separates local evidence from external
   background.
+- A lightweight post-generation answer-quality gate can repair one bad draft or
+  fall back to a conservative evidence-only answer.
 - Claim-level verification summaries rather than only final text.
 - Evaluation docs that mark unmeasured metrics as `TBD` instead of presenting
   fabricated benchmark numbers.
