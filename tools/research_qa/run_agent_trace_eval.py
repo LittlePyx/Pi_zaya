@@ -36,6 +36,13 @@ DEFAULT_FORBIDDEN_ANSWER_TERMS = [
     "verification statistics",
 ]
 QUALITY_GATE_STATUSES = {"passed", "repaired", "fallback"}
+VALID_SOURCE_BLENDS = {"local_grounded", "hybrid_local_external", "external_academic", "general_llm"}
+ANSWER_MODE_TO_SOURCE_BLEND = {
+    "evidence_grounded": "local_grounded",
+    "hybrid_local_external": "hybrid_local_external",
+    "external_academic_llm": "external_academic",
+    "general_llm": "general_llm",
+}
 
 
 def _synthetic_hit(case: dict[str, Any]) -> dict[str, Any]:
@@ -156,6 +163,33 @@ def _answer_has_notice(answer: str, notice_type: str) -> bool:
     return False
 
 
+def _answer_has_kb_miss_notice(answer: str) -> bool:
+    text = _norm(answer)
+    return any(
+        term in text
+        for term in (
+            "no matching local knowledge-base evidence",
+            "not a knowledge-base-grounded answer",
+            "local paper library does not contain enough evidence",
+            "no supporting local snippets",
+            "未命中知识库",
+            "本地知识库没有命中",
+            "不代表当前知识库结论",
+        )
+    )
+
+
+def _source_blend_notice_ok(answer: str, source_blend: str, notice_type: str) -> bool:
+    expected_notice = str(notice_type or "none").strip()
+    if expected_notice != "none":
+        return _answer_has_notice(answer, expected_notice)
+    if source_blend == "hybrid_local_external":
+        return _answer_has_notice(answer, "hybrid_notice")
+    if source_blend == "external_academic":
+        return _answer_has_notice(answer, "external_not_local") or _answer_has_notice(answer, "insufficient_local_evidence")
+    return True
+
+
 def _trace_clutter_free(answer: str, case: dict[str, Any]) -> bool:
     terms = [
         str(term or "")
@@ -163,6 +197,29 @@ def _trace_clutter_free(answer: str, case: dict[str, Any]) -> bool:
         if str(term or "").strip()
     ]
     return not any(_contains(answer, term) for term in terms)
+
+
+def _source_blend(case: dict[str, Any]) -> str:
+    blend = str(case.get("source_blend") or case.get("answer_source_blend") or "").strip().lower()
+    trace = case.get("agent_trace")
+    if not blend and isinstance(trace, dict):
+        summary = trace.get("summary")
+        if isinstance(summary, dict):
+            blend = str(summary.get("answer_source_blend") or summary.get("source_blend") or "").strip().lower()
+        context = trace.get("context")
+        if not blend and isinstance(context, dict):
+            blend = str(context.get("answer_source_blend") or context.get("source_blend") or "").strip().lower()
+        for step in list(trace.get("steps") or []):
+            if blend:
+                break
+            if not isinstance(step, dict):
+                continue
+            output = step.get("output")
+            if isinstance(output, dict):
+                blend = str(output.get("source_blend") or output.get("answer_source_blend") or "").strip().lower()
+    if not blend:
+        blend = ANSWER_MODE_TO_SOURCE_BLEND.get(str(case.get("answer_mode") or "").strip(), "")
+    return blend if blend in VALID_SOURCE_BLENDS else ""
 
 
 def _quality_gate_status(case: dict[str, Any]) -> str:
@@ -200,6 +257,11 @@ def _validate_quality_case(case: dict[str, Any]) -> list[str]:
         errors.append(f"{case_id}: evidence_hits must be a list")
     if not isinstance(case.get("expected_answer_points", []), list):
         errors.append(f"{case_id}: expected_answer_points must be a list")
+    for field in ("source_blend", "expected_source_blend"):
+        if field in case:
+            blend = str(case.get(field) or "").strip()
+            if blend and blend not in VALID_SOURCE_BLENDS:
+                errors.append(f"{case_id}: {field} must be one of {', '.join(sorted(VALID_SOURCE_BLENDS))}")
     return errors
 
 
@@ -226,6 +288,13 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
     trace_clutter_ok = 0
     quality_gate_observed_total = 0
     quality_gate_status_counts = {status: 0 for status in sorted(QUALITY_GATE_STATUSES)}
+    source_blend_expected_total = 0
+    source_blend_hit_count = 0
+    source_blend_status_counts = {status: 0 for status in sorted(VALID_SOURCE_BLENDS)}
+    unnecessary_notice_total = 0
+    unnecessary_notice_count = 0
+    required_notice_total = 0
+    required_notice_ok = 0
 
     for case in cases:
         case_id = str(case.get("id") or f"line:{case.get('_line_no')}")
@@ -233,9 +302,38 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         answer = str(case.get("answer") or "")
         hits = [hit for hit in list(case.get("evidence_hits") or []) if isinstance(hit, dict)]
         answer_mode = str(case.get("answer_mode") or "").strip()
+        source_blend = _source_blend(case)
+        expected_source_blend = str(case.get("expected_source_blend") or "").strip()
         expected_retrieval_hit = bool(case.get("expected_retrieval_hit"))
         should_use_local = bool(case.get("should_use_local_evidence"))
         notice_type = str(case.get("expected_user_notice") or "none").strip()
+
+        if source_blend:
+            source_blend_status_counts[source_blend] += 1
+        if expected_source_blend:
+            source_blend_expected_total += 1
+            if source_blend == expected_source_blend:
+                source_blend_hit_count += 1
+            else:
+                errors.append(
+                    f"{case_id}: source_blend {source_blend or '(missing)'} did not match expected {expected_source_blend}"
+                )
+
+        has_kb_miss_notice = _answer_has_kb_miss_notice(answer)
+        general_notice_case = expected_source_blend == "general_llm" or (
+            not expected_source_blend and source_blend == "general_llm"
+        )
+        if general_notice_case:
+            unnecessary_notice_total += 1
+            if has_kb_miss_notice:
+                unnecessary_notice_count += 1
+                errors.append(f"{case_id}: general LLM answer includes unnecessary knowledge-base miss notice")
+        if (expected_source_blend or source_blend) in {"hybrid_local_external", "external_academic"}:
+            required_notice_total += 1
+            if _source_blend_notice_ok(answer, expected_source_blend or source_blend, notice_type):
+                required_notice_ok += 1
+            else:
+                errors.append(f"{case_id}: source blend {expected_source_blend or source_blend} did not disclose source mode")
 
         retrieval_hit_ok = bool(hits) == expected_retrieval_hit
         if expected_retrieval_hit:
@@ -321,6 +419,15 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
                 "expected_answer_point_total": len(expected_points),
                 "notice_ok": notice_ok,
                 "trace_clutter_free": clutter_free,
+                "source_blend": source_blend or None,
+                "expected_source_blend": expected_source_blend or None,
+                "source_blend_ok": source_blend == expected_source_blend if expected_source_blend else None,
+                "unnecessary_notice": has_kb_miss_notice if general_notice_case else None,
+                "required_notice_ok": (
+                    _source_blend_notice_ok(answer, expected_source_blend or source_blend, notice_type)
+                    if (expected_source_blend or source_blend) in {"hybrid_local_external", "external_academic"}
+                    else None
+                ),
                 "local_evidence_evaluated": should_use_local,
                 "supported_claims": int(verification.supported_claims or 0) if should_use_local else None,
                 "unsupported_claims": int(verification.unsupported_claims or 0) if should_use_local else None,
@@ -345,6 +452,13 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         "no_evidence_refusal_accuracy": _ratio(no_evidence_notice_ok, no_evidence_notice_total),
         "external_fallback_disclosure_accuracy": _ratio(fallback_notice_ok, fallback_notice_total),
         "trace_clutter_free_rate": _ratio(trace_clutter_ok, trace_clutter_total),
+        "source_blend_accuracy": _ratio(source_blend_hit_count, source_blend_expected_total),
+        "source_blend_expected_count": source_blend_expected_total,
+        "source_blend_status_counts": source_blend_status_counts,
+        "unnecessary_notice_rate": _ratio(unnecessary_notice_count, unnecessary_notice_total),
+        "unnecessary_notice_count": unnecessary_notice_count,
+        "required_notice_accuracy": _ratio(required_notice_ok, required_notice_total),
+        "required_notice_count": required_notice_total,
         "quality_gate_observed_count": quality_gate_observed_total,
         "quality_gate_passed_rate": _ratio(quality_gate_status_counts["passed"], quality_gate_observed_total),
         "quality_gate_repaired_rate": _ratio(quality_gate_status_counts["repaired"], quality_gate_observed_total),
@@ -391,6 +505,9 @@ def build_eval_report(
     quality_gate_passed_rate = quality.get("quality_gate_passed_rate")
     quality_gate_repaired_rate = quality.get("quality_gate_repaired_rate")
     quality_gate_fallback_rate = quality.get("quality_gate_fallback_rate")
+    source_blend_accuracy = quality.get("source_blend_accuracy")
+    unnecessary_notice_rate = quality.get("unnecessary_notice_rate")
+    required_notice_accuracy = quality.get("required_notice_accuracy")
     if not quality:
         retrieval_recall_at_5 = None
         citation_precision = None
@@ -400,6 +517,9 @@ def build_eval_report(
         quality_gate_passed_rate = None
         quality_gate_repaired_rate = None
         quality_gate_fallback_rate = None
+        source_blend_accuracy = None
+        unnecessary_notice_rate = None
+        required_notice_accuracy = None
     return {
         "commit": str(commit if commit is not None else _git_commit()),
         "date": str(date or datetime.now(timezone.utc).isoformat()),
@@ -420,6 +540,10 @@ def build_eval_report(
         "no_evidence_refusal_accuracy": no_evidence_refusal_accuracy,
         "external_fallback_disclosure_accuracy": quality.get("external_fallback_disclosure_accuracy") if quality else None,
         "trace_clutter_free_rate": quality.get("trace_clutter_free_rate") if quality else None,
+        "source_blend_accuracy": source_blend_accuracy,
+        "source_blend_expected_count": quality.get("source_blend_expected_count") if quality else 0,
+        "unnecessary_notice_rate": unnecessary_notice_rate,
+        "required_notice_accuracy": required_notice_accuracy,
         "quality_gate_observed_count": quality.get("quality_gate_observed_count") if quality else 0,
         "quality_gate_passed_rate": quality_gate_passed_rate,
         "quality_gate_repaired_rate": quality_gate_repaired_rate,
