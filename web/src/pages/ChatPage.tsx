@@ -13,6 +13,7 @@ import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
 import { useAgentMode } from '../components/chat/useAgentMode'
 import { useChatTimeline } from '../components/chat/useChatTimeline'
 import { useReaderDock, type RightDockPanel } from '../components/chat/useReaderDock'
+import { useSelectedResearchContext } from '../components/chat/useSelectedResearchContext'
 import type { CiteDetail } from '../components/chat/citationState'
 import {
   READER_CITATION_SHELF_EVENT,
@@ -28,10 +29,7 @@ import {
 } from '../components/chat/reader/readerOpenPayloadUtils'
 import { useReaderLocateRepair } from '../components/chat/reader/useReaderLocateRepair'
 import { buildResearchContext } from '../components/chat/researchContext'
-import {
-  normalizeSelectedResearchContextPack,
-  type SelectedResearchContextPack,
-} from '../components/chat/researchContextPack'
+import type { SelectedResearchContextPack } from '../components/chat/researchContextPack'
 import { dispatchOpenSettings, type ApiSettingsTarget } from '../components/layout/settingsEvents'
 import { chatApi, type ChatUploadItem, type QueryScope } from '../api/chat'
 import { useT } from '../i18n'
@@ -45,11 +43,6 @@ const HISTORY_PAGE_SIZE = 24
 const LIVE_WINDOW = 16
 const READY_DISMISS_MS = 2600
 const DUPLICATE_DISMISS_MS = 3600
-const SELECTED_RESEARCH_CONTEXT_STORAGE_PREFIX = 'kb:chat:selected-research-context:v1'
-const SELECTED_RESEARCH_CONTEXT_STATE_KEY = 'selected_research_context'
-const SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY = 'selected_research_context_scope'
-const SELECTED_RESEARCH_CONTEXT_PROJECT_STATE_KEY = 'selected_research_context_project_id'
-const SELECTED_RESEARCH_CONTEXT_CLEARED_AT_STATE_KEY = 'selected_research_context_cleared_at'
 
 function resolveQueryScope(scope: QueryScope, opts: { hasCurrentPaper: boolean; hasBasket: boolean }): QueryScope {
   if (scope === 'current_paper' && !opts.hasCurrentPaper) return 'library'
@@ -70,67 +63,6 @@ function stripSourceExt(name: string) {
     .replace(/\.md$/i, '')
     .replace(/\.pdf$/i, '')
     .trim()
-}
-
-function selectedResearchContextStorageKey(conversationId?: string | null, shelfScope?: string | null) {
-  const conv = String(conversationId || '').trim()
-  if (!conv) return ''
-  const scope = String(shelfScope || '__default__').trim() || '__default__'
-  return `${SELECTED_RESEARCH_CONTEXT_STORAGE_PREFIX}:${encodeURIComponent(conv)}:${encodeURIComponent(scope)}`
-}
-
-function loadStoredSelectedResearchContext(storageKey: string): SelectedResearchContextPack | null {
-  if (!storageKey || typeof window === 'undefined') return null
-  try {
-    const raw = window.localStorage.getItem(storageKey)
-    if (!raw) return null
-    const pack = normalizeSelectedResearchContextPack(JSON.parse(raw))
-    if (!pack) {
-      window.localStorage.removeItem(storageKey)
-      return null
-    }
-    return pack
-  } catch {
-    try {
-      window.localStorage.removeItem(storageKey)
-    } catch {
-      // Best-effort cleanup only.
-    }
-    return null
-  }
-}
-
-function saveStoredSelectedResearchContext(storageKey: string, pack: SelectedResearchContextPack | null) {
-  if (!storageKey || typeof window === 'undefined') return
-  try {
-    if (!pack) {
-      window.localStorage.removeItem(storageKey)
-      return
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(pack))
-  } catch {
-    // Storage can fail in private mode or under quota pressure; the in-memory state still works.
-  }
-}
-
-function selectedResearchContextFromState(state: Record<string, unknown> | undefined | null): SelectedResearchContextPack | null {
-  const raw = state && typeof state === 'object' ? state[SELECTED_RESEARCH_CONTEXT_STATE_KEY] : null
-  return normalizeSelectedResearchContextPack(raw)
-}
-
-function researchContextStateMatchesShelf(
-  state: Record<string, unknown> | undefined | null,
-  shelfScope?: string | null,
-  shelfProjectId?: string | null,
-) {
-  if (!state || typeof state !== 'object') return true
-  const storedScope = String(state[SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY] || '').trim()
-  const currentScope = String(shelfScope || '').trim()
-  if (storedScope && currentScope && storedScope !== currentScope) return false
-  const storedProjectId = String(state[SELECTED_RESEARCH_CONTEXT_PROJECT_STATE_KEY] || '').trim()
-  const currentProjectId = String(shelfProjectId || '').trim()
-  if (storedProjectId && storedProjectId !== currentProjectId) return false
-  return true
 }
 
 function isModelConnectionError(err: unknown) {
@@ -261,10 +193,7 @@ export default function ChatPage() {
   })
   const [citationShelfOpen, setCitationShelfOpen] = useState(false)
   const [citationShelfCount, setCitationShelfCount] = useState(0)
-  const [selectedResearchContext, setSelectedResearchContext] = useState<SelectedResearchContextPack | null>(null)
   const [queryScope, setQueryScope] = useState<QueryScope>('library')
-  const [selectedResearchContextLoadedKey, setSelectedResearchContextLoadedKey] = useState('')
-  const [selectedResearchContextOwnerKey, setSelectedResearchContextOwnerKey] = useState('')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
   const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
   const debugSnapshot = useChatPerfSnapshot(debugPanelEnabled)
@@ -274,7 +203,6 @@ export default function ChatPage() {
   const uploadNoticeRef = useRef<Record<string, string>>({})
   const dismissTimerRef = useRef<Record<string, number>>({})
   const eventTokenRef = useRef(1)
-  const selectedResearchContextLoadSeqRef = useRef(0)
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
   const activeGuideBinding = useMemo(() => {
     const convId = String(activeConvId || '').trim()
@@ -309,101 +237,25 @@ export default function ChatPage() {
   ])
   const shelfProjectId = researchContext.shelfProjectId || null
   const shelfProjectScope = researchContext.shelfScope
-  const selectedResearchContextDraftKey = useMemo(
-    () => selectedResearchContextStorageKey(activeConvId, shelfProjectScope),
-    [activeConvId, shelfProjectScope],
-  )
-  const currentSelectedResearchContext = selectedResearchContextOwnerKey === selectedResearchContextDraftKey
-    ? selectedResearchContext
-    : null
+  const switchToBasketScope = useCallback(() => {
+    setQueryScope('basket')
+  }, [])
+  const {
+    currentSelectedResearchContext,
+    selectedResearchContextKeys,
+    handleResearchContextPackChange,
+    clearSelectedResearchContext,
+    clearSelectedResearchContextIfCurrent,
+  } = useSelectedResearchContext({
+    activeConversationId: activeConvId,
+    shelfProjectId,
+    shelfScope: shelfProjectScope,
+    onBasketContextReady: switchToBasketScope,
+  })
   const previousShelfProjectScopeRef = useRef(shelfProjectScope)
-  const selectedResearchContextKeys = useMemo(() => {
-    const out: Record<string, boolean> = {}
-    for (const item of currentSelectedResearchContext?.items || []) {
-      if (item.key) out[item.key] = true
-    }
-    return out
-  }, [currentSelectedResearchContext])
-  const handleResearchContextPackChange = useCallback((pack: SelectedResearchContextPack | null) => {
-    setSelectedResearchContextOwnerKey(selectedResearchContextDraftKey)
-    setSelectedResearchContext(pack)
-    if (pack?.items?.length) setQueryScope('basket')
-  }, [selectedResearchContextDraftKey])
   const openApiSettings = useCallback((target: ApiSettingsTarget | '' = '') => {
     dispatchOpenSettings(target)
   }, [])
-
-  useEffect(() => {
-    const draftKey = selectedResearchContextDraftKey
-    const convId = String(activeConvId || '').trim()
-    const loadSeq = selectedResearchContextLoadSeqRef.current + 1
-    selectedResearchContextLoadSeqRef.current = loadSeq
-    const localPack = loadStoredSelectedResearchContext(draftKey)
-    setSelectedResearchContextLoadedKey('')
-    setSelectedResearchContextOwnerKey(draftKey)
-    setSelectedResearchContext(localPack)
-    if (localPack?.items?.length) setQueryScope('basket')
-    if (!draftKey || !convId) {
-      setSelectedResearchContextLoadedKey(draftKey)
-      return undefined
-    }
-    let cancelled = false
-    void chatApi.getConversationResearchState(convId).then((record) => {
-      if (cancelled || selectedResearchContextLoadSeqRef.current !== loadSeq) return
-      const state = record?.state && typeof record.state === 'object' ? record.state : {}
-      const backendMatchesShelf = researchContextStateMatchesShelf(state, shelfProjectScope, shelfProjectId)
-      const backendPack = backendMatchesShelf ? selectedResearchContextFromState(state) : null
-      const backendTouched = Boolean(
-        Object.prototype.hasOwnProperty.call(state, SELECTED_RESEARCH_CONTEXT_STATE_KEY)
-        || Object.prototype.hasOwnProperty.call(state, SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY)
-        || Object.prototype.hasOwnProperty.call(state, SELECTED_RESEARCH_CONTEXT_PROJECT_STATE_KEY)
-        || Object.prototype.hasOwnProperty.call(state, SELECTED_RESEARCH_CONTEXT_CLEARED_AT_STATE_KEY)
-      )
-      const nextPack = backendTouched ? backendPack : localPack
-      setSelectedResearchContextOwnerKey(draftKey)
-      setSelectedResearchContext(nextPack)
-      if (nextPack?.items?.length) setQueryScope('basket')
-      if (backendTouched) {
-        saveStoredSelectedResearchContext(draftKey, backendPack)
-      }
-      setSelectedResearchContextLoadedKey(draftKey)
-    }).catch(() => {
-      if (cancelled || selectedResearchContextLoadSeqRef.current !== loadSeq) return
-      setSelectedResearchContextLoadedKey(draftKey)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [activeConvId, selectedResearchContextDraftKey, shelfProjectId, shelfProjectScope])
-
-  useEffect(() => {
-    if (selectedResearchContextLoadedKey !== selectedResearchContextDraftKey) return
-    const packForCurrentScope = selectedResearchContextOwnerKey === selectedResearchContextDraftKey
-      ? selectedResearchContext
-      : null
-    saveStoredSelectedResearchContext(selectedResearchContextDraftKey, packForCurrentScope)
-    const convId = String(activeConvId || '').trim()
-    if (!convId) return undefined
-    const timer = window.setTimeout(() => {
-      void chatApi.patchConversationResearchState(convId, {
-        [SELECTED_RESEARCH_CONTEXT_STATE_KEY]: packForCurrentScope || null,
-        [SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY]: packForCurrentScope ? shelfProjectScope : null,
-        [SELECTED_RESEARCH_CONTEXT_PROJECT_STATE_KEY]: packForCurrentScope ? shelfProjectId : null,
-        [SELECTED_RESEARCH_CONTEXT_CLEARED_AT_STATE_KEY]: packForCurrentScope ? null : Date.now(),
-      }).catch(() => {
-        // The local draft remains the fallback if the backend is temporarily unavailable.
-      })
-    }, 160)
-    return () => window.clearTimeout(timer)
-  }, [
-    activeConvId,
-    selectedResearchContext,
-    selectedResearchContextDraftKey,
-    selectedResearchContextLoadedKey,
-    selectedResearchContextOwnerKey,
-    shelfProjectId,
-    shelfProjectScope,
-  ])
 
   const nextEventToken = useCallback(() => {
     eventTokenRef.current += 1
@@ -579,9 +431,7 @@ export default function ChatPage() {
       agentMode,
     }).then(() => {
       if (!contextPackForSend) return
-      setSelectedResearchContext((current) => (
-        current?.id === contextPackForSend.id ? null : current
-      ))
+      clearSelectedResearchContextIfCurrent(contextPackForSend.id)
     }).catch((err: unknown) => {
       const fallback = err instanceof Error ? err.message : String(err || '')
       const failureKind = chatSendFailureKind(fallback, S)
@@ -965,7 +815,7 @@ export default function ChatPage() {
             <button
               type="button"
               className="kb-chat-context-pack-clear"
-              onClick={() => setSelectedResearchContext(null)}
+              onClick={clearSelectedResearchContext}
               data-testid="chat-context-pack-clear"
             >
               {S.research_context_pack_clear || 'Clear'}
