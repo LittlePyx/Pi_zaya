@@ -14,29 +14,17 @@ import { useAgentMode } from '../components/chat/useAgentMode'
 import { resolveQueryScope, useChatSendFlow } from '../components/chat/useChatSendFlow'
 import { useChatTimeline } from '../components/chat/useChatTimeline'
 import { useChatUploadFlow } from '../components/chat/useChatUploadFlow'
+import { useReaderWorkspaceActions } from '../components/chat/useReaderWorkspaceActions'
 import { useReaderDock, type RightDockPanel } from '../components/chat/useReaderDock'
 import { useSelectedResearchContext } from '../components/chat/useSelectedResearchContext'
-import type { CiteDetail } from '../components/chat/citationState'
-import {
-  READER_CITATION_SHELF_EVENT,
-  READER_SELECTION_SHELF_EVENT,
-  READER_STANDALONE_WINDOW_NAME,
-  type ReaderOpenPayload,
-  type ReaderSelectionShelfPayload,
-} from '../components/chat/reader/readerTypes'
 import { useReaderSessionHighlights } from '../components/chat/reader/useReaderSessionHighlights'
-import {
-  sanitizeReaderLocateCandidates,
-  sanitizeReaderLocateTarget,
-} from '../components/chat/reader/readerOpenPayloadUtils'
 import { useReaderLocateRepair } from '../components/chat/reader/useReaderLocateRepair'
 import { buildResearchContext } from '../components/chat/researchContext'
 import type { SelectedResearchContextPack } from '../components/chat/researchContextPack'
 import { dispatchOpenSettings, type ApiSettingsTarget } from '../components/layout/settingsEvents'
-import { chatApi, type QueryScope } from '../api/chat'
+import type { QueryScope } from '../api/chat'
 import { useT } from '../i18n'
 import { internalDebugBrowserEnabled } from '../utils/internalDebug'
-import { basenameFromSourcePath } from '../utils/sourcePath'
 
 const { Text } = Typography
 
@@ -138,15 +126,11 @@ export default function ChatPage() {
     readerPayloadRef,
     openReaderDock,
   })
-  const [citationShelfOpen, setCitationShelfOpen] = useState(false)
-  const [citationShelfCount, setCitationShelfCount] = useState(0)
   const [queryScope, setQueryScope] = useState<QueryScope>('library')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
   const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
   const debugSnapshot = useChatPerfSnapshot(debugPanelEnabled)
-  const [openShelfSignal, setOpenShelfSignal] = useState(0)
   const [shelfDockTarget, setShelfDockTarget] = useState<HTMLDivElement | null>(null)
-  const [appendSignal, setAppendSignal] = useState<{ token: number; text: string } | null>(null)
   const eventTokenRef = useRef(1)
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
   const activeGuideBinding = useMemo(() => {
@@ -207,14 +191,6 @@ export default function ChatPage() {
     return eventTokenRef.current
   }, [])
 
-  const handleResearchContextFollowUp = useCallback((pack: SelectedResearchContextPack, promptText: string) => {
-    handleResearchContextPackChange(pack)
-    setAppendSignal({
-      token: nextEventToken(),
-      text: promptText,
-    })
-  }, [handleResearchContextPackChange, nextEventToken])
-
   const captureTimelineScrollTop = useCallback(() => {
     const scrollHost = splitLayoutRef.current?.querySelector<HTMLElement>('.kb-main-scroll')
     timelineScrollRestoreTopRef.current = scrollHost ? scrollHost.scrollTop : null
@@ -245,6 +221,41 @@ export default function ChatPage() {
     onBeforeToggle: captureTimelineScrollTop,
   })
 
+  const {
+    citationShelfOpen,
+    citationShelfCount,
+    openShelfSignal,
+    appendSignal,
+    resetReaderWorkspaceTransientState,
+    openReader,
+    openReaderStandalone,
+    handleCitationShelfOpenChange,
+    handleCitationShelfStateChange,
+    activateDockPanel,
+    appendReaderSelection,
+    addReaderSelectionToShelf,
+    addReaderCitationToShelf,
+    openReaderCitationShelf,
+  } = useReaderWorkspaceActions({
+    labels: S,
+    activeConversationId: activeConvId,
+    shelfProjectId,
+    desktopReaderEligible,
+    readerPayloadRef,
+    activeReaderSessionHighlightsRef,
+    nextEventToken,
+    nextReaderLocateRequestId,
+    registerReaderLocateRequest,
+    openReaderDock,
+    showDockPanel,
+    openTimeline,
+  })
+
+  const handleResearchContextFollowUp = useCallback((pack: SelectedResearchContextPack, promptText: string) => {
+    handleResearchContextPackChange(pack)
+    appendReaderSelection(promptText)
+  }, [appendReaderSelection, handleResearchContextPackChange])
+
   useEffect(() => {
     const projectChanged = previousShelfProjectScopeRef.current !== shelfProjectScope
     previousShelfProjectScopeRef.current = shelfProjectScope
@@ -252,14 +263,20 @@ export default function ChatPage() {
     resetReaderDock()
     resetReaderLocateRepair()
     if (projectChanged) {
-      setCitationShelfOpen(false)
-      setCitationShelfCount(0)
       setRightDockPanel('timeline')
     } else {
       setRightDockPanel((current) => (current === 'reader' ? 'timeline' : current))
     }
-    setAppendSignal(null)
-  }, [activeConvId, resetReaderDock, resetReaderLocateRepair, resetTimeline, setRightDockPanel, shelfProjectScope])
+    resetReaderWorkspaceTransientState(projectChanged)
+  }, [
+    activeConvId,
+    resetReaderDock,
+    resetReaderLocateRepair,
+    resetReaderWorkspaceTransientState,
+    resetTimeline,
+    setRightDockPanel,
+    shelfProjectScope,
+  ])
 
   useEffect(() => {
     const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
@@ -323,159 +340,6 @@ export default function ChatPage() {
     return { sourcePath, sourceName }
   }, [researchContext.guideSource.sourceName, researchContext.guideSource.sourcePath])
 
-  const openReader = (payload: ReaderOpenPayload) => {
-    const sourcePath = String(payload?.sourcePath || '').trim()
-    if (!sourcePath) {
-      message.info(S.reader_missing_path)
-      return
-    }
-    const locateRequestId = nextReaderLocateRequestId()
-    const locateTarget = sanitizeReaderLocateTarget(payload.locateTarget)
-    const claimGroup = (payload.claimGroup && typeof payload.claimGroup === 'object')
-      ? {
-        id: String(payload.claimGroup.id || '').trim() || undefined,
-        kind: String(payload.claimGroup.kind || '').trim() || undefined,
-        leadText: String(payload.claimGroup.leadText || '').trim() || undefined,
-        distance: Number.isFinite(Number(payload.claimGroup.distance))
-          ? Number(payload.claimGroup.distance)
-          : undefined,
-      }
-      : undefined
-    const alternatives = sanitizeReaderLocateCandidates(payload.alternatives)
-    const visibleAlternatives = sanitizeReaderLocateCandidates(payload.visibleAlternatives)
-    const evidenceAlternatives = sanitizeReaderLocateCandidates(payload.evidenceAlternatives)
-    const initialAltCandidateCount = evidenceAlternatives.length || visibleAlternatives.length || alternatives.length
-    const initialAltIndexRaw = Number(payload.initialAltIndex)
-    const initialAltIndex = Number.isFinite(initialAltIndexRaw)
-      ? Math.min(
-        Math.max(0, Math.floor(initialAltIndexRaw)),
-        Math.max(0, initialAltCandidateCount - 1),
-      )
-      : undefined
-    const nextPayload: ReaderOpenPayload = {
-      sourcePath,
-      sourceName: String(payload.sourceName || '').trim(),
-      headingPath: String(payload.headingPath || '').trim(),
-      snippet: String(payload.snippet || '').trim(),
-      highlightSnippet: String(payload.highlightSnippet || '').trim(),
-      blockId: String(payload.blockId || '').trim() || undefined,
-      anchorId: String(payload.anchorId || '').trim() || undefined,
-      relatedBlockIds: Array.isArray(payload.relatedBlockIds)
-        ? payload.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
-        : undefined,
-      anchorKind: String(payload.anchorKind || '').trim() || undefined,
-      anchorNumber: Number.isFinite(Number(payload.anchorNumber))
-        ? Number(payload.anchorNumber)
-        : undefined,
-      strictLocate: Boolean(payload.strictLocate),
-      locateMode: payload.locateMode === 'heuristic' ? 'heuristic' : undefined,
-      locateTarget,
-      claimGroup,
-      locateRequestId,
-      alternatives: alternatives.length > 0
-        ? alternatives
-        : undefined,
-      visibleAlternatives: visibleAlternatives.length > 0
-        ? visibleAlternatives
-        : undefined,
-      evidenceAlternatives: evidenceAlternatives.length > 0
-        ? evidenceAlternatives
-        : undefined,
-      initialAltIndex,
-      locateFeedbackKey: String(payload.locateFeedbackKey || '').trim() || undefined,
-    }
-    const feedbackKey = String(nextPayload.locateFeedbackKey || '').trim()
-    if (feedbackKey) {
-      registerReaderLocateRequest({
-        feedbackKey,
-        locateRequestId,
-        sourcePath,
-        payload: nextPayload,
-      })
-    }
-    openReaderDock(nextPayload)
-  }
-
-  const openReaderStandalone = useCallback(async (payloadInput?: ReaderOpenPayload | null) => {
-    const payload = payloadInput || readerPayloadRef.current
-    const sourcePath = String(payload?.sourcePath || '').trim()
-    if (!payload || !sourcePath) {
-      message.info(S.reader_missing_path)
-      return
-    }
-    const sourceName = String(payload.sourceName || '').trim()
-      || basenameFromSourcePath(sourcePath)
-      || S.side_dock_reader
-    let popup: Window | null = null
-    try {
-      popup = window.open('', READER_STANDALONE_WINDOW_NAME)
-      if (popup) {
-        popup.document.title = sourceName
-        popup.document.body.style.margin = '0'
-        popup.document.body.style.fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-        popup.document.body.innerHTML = `<div style="display:grid;place-items:center;min-height:100vh;color:#64748b;font-size:14px;">${S.reader_opening_window || 'Opening reader...'}</div>`
-        popup.focus()
-      }
-    } catch {
-      popup = null
-    }
-    try {
-      const session = await chatApi.createReaderSession(payload, {
-        title: sourceName,
-        conversationId: activeConvId,
-        state: {
-          sourcePath,
-          conversationId: activeConvId || '',
-          projectId: shelfProjectId || '',
-          highlights: activeReaderSessionHighlightsRef.current,
-          evidenceNotes: activeReaderSessionHighlightsRef.current,
-        },
-      })
-      const linkedConversationId = String(session.conversation_id || activeConvId || '').trim()
-      const readerUrl = new URL(`/reader/session/${encodeURIComponent(session.id)}`, window.location.origin)
-      if (linkedConversationId) readerUrl.searchParams.set('conversation', linkedConversationId)
-      const url = readerUrl.toString()
-      if (popup && !popup.closed) {
-        popup.location.href = url
-        popup.focus()
-      } else {
-        const opened = window.open(url, READER_STANDALONE_WINDOW_NAME)
-        opened?.focus()
-        if (!opened) message.info(S.reader_window_blocked || 'The browser blocked the reader window.')
-      }
-    } catch (err) {
-      if (popup && !popup.closed) {
-        popup.close()
-      }
-      message.error(err instanceof Error ? err.message : (S.reader_open_window_failed || 'Failed to open reader window'))
-    }
-  }, [
-    S.reader_missing_path,
-    S.reader_open_window_failed,
-    S.reader_opening_window,
-    S.reader_window_blocked,
-    S.side_dock_reader,
-    activeConvId,
-    activeReaderSessionHighlightsRef,
-    readerPayloadRef,
-    shelfProjectId,
-  ])
-
-  const handleCitationShelfOpenChange = useCallback((open: boolean) => {
-    setCitationShelfOpen(open)
-    if (open && desktopReaderEligible) {
-      showDockPanel('shelf')
-    }
-  }, [desktopReaderEligible, showDockPanel])
-
-  const handleCitationShelfStateChange = useCallback((state: { open: boolean; count: number }) => {
-    setCitationShelfCount(Math.max(0, Math.floor(Number(state.count || 0))))
-    setCitationShelfOpen(Boolean(state.open))
-    if (state.open && desktopReaderEligible) {
-      showDockPanel('shelf')
-    }
-  }, [desktopReaderEligible, showDockPanel])
-
   const handleShelfActivityChange = useCallback((state: ShelfActivityState) => {
     setShelfActivity((current) => (
       current.summary === state.summary
@@ -487,69 +351,6 @@ export default function ChatPage() {
         : state
     ))
   }, [])
-
-  const activateDockPanel = useCallback((panel: RightDockPanel) => {
-    showDockPanel(panel)
-    if (panel === 'timeline') {
-      openTimeline()
-      return
-    }
-    if (panel === 'shelf') {
-      setOpenShelfSignal((value) => value + 1)
-      setCitationShelfOpen(true)
-      return
-    }
-  }, [openTimeline, showDockPanel])
-
-  const appendReaderSelection = (text: string) => {
-    const raw = String(text || '')
-    if (!raw.trim()) return
-    setAppendSignal({
-      token: nextEventToken(),
-      text: raw,
-    })
-  }
-
-  const addReaderSelectionToShelf = useCallback((payload: ReaderSelectionShelfPayload) => {
-    const text = String(payload?.text || '').trim()
-    const sourcePath = String(payload?.sourcePath || '').trim()
-    if (!text || !sourcePath) return
-    const detail: ReaderSelectionShelfPayload = {
-      ...payload,
-      text,
-      sourcePath,
-      conversationId: activeConvId || payload.conversationId || '',
-      projectId: shelfProjectId || payload.projectId || '',
-      createdAt: Number(payload.createdAt || Date.now()),
-    }
-    window.dispatchEvent(new CustomEvent(READER_SELECTION_SHELF_EVENT, { detail }))
-    setOpenShelfSignal((value) => value + 1)
-    setCitationShelfOpen(true)
-    showDockPanel('shelf')
-    message.success(S.reader_added_to_shelf || 'Added to citation shelf')
-  }, [S.reader_added_to_shelf, activeConvId, shelfProjectId, showDockPanel])
-
-  const addReaderCitationToShelf = useCallback((detail: CiteDetail) => {
-    if (!detail) return
-    const payload = {
-      type: 'reader-citation-shelf',
-      detail: detail as unknown as Record<string, unknown>,
-      conversationId: activeConvId || '',
-      projectId: shelfProjectId || '',
-      createdAt: Date.now(),
-    }
-    window.dispatchEvent(new CustomEvent(READER_CITATION_SHELF_EVENT, { detail: payload }))
-    setOpenShelfSignal((value) => value + 1)
-    setCitationShelfOpen(true)
-    showDockPanel('shelf')
-    message.success(S.reader_added_to_shelf || 'Added to citation shelf')
-  }, [S.reader_added_to_shelf, activeConvId, shelfProjectId, showDockPanel])
-
-  const openReaderCitationShelf = useCallback(() => {
-    setOpenShelfSignal((value) => value + 1)
-    setCitationShelfOpen(true)
-    showDockPanel('shelf')
-  }, [showDockPanel])
 
   const timelineUiReady = !conversationLoading && timelineItems.length > 0
   const dockTimelineAvailable = timelineUiReady && timelineItems.length > 1
