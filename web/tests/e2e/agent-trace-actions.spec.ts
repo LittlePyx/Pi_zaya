@@ -8,6 +8,17 @@ import {
   installIdleReferenceMocks,
 } from './mockAppShell'
 
+const SOURCE_PANEL_RE = /Sources & evidence|依据与来源/
+const NEEDS_REVIEW_RE = /Needs review|需要核对/
+const REVIEW_FRACTION_RE = /Review 1\/2|需核对 1\/2/
+const CHECKED_FRACTION_RE = /Checked 1\/1|已核对 1\/1/
+const GROUNDED_RE = /Evidence grounded|文献证据充分/
+const ANSWER_QUALITY_RE = /Answer quality|回答质量/
+const REPAIRED_RE = /Repaired|已修正/
+const EVIDENCE_MAP_RE = /Evidence map|证据地图/
+const MISMATCH_RE = /Citation does not match retrieved evidence|引用与检索证据不匹配/
+const DIAGNOSTICS_RE = /Diagnostics|诊断信息/
+
 test.beforeEach(async ({ page }) => {
   await installAppShellMocks(page)
   await installIdleReferenceMocks(page)
@@ -22,23 +33,25 @@ test('research agent trace references can open and enter the literature basket',
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-reference-actions')
   const traceSummary = page.locator('.kb-agent-trace > summary').first()
-  await expect(traceSummary).toContainText('Research Agent Trace')
-  await expect(traceSummary).toContainText('Needs review')
-  await expect(traceSummary).toContainText('Review 1/2')
+  await expect(traceSummary).toContainText(SOURCE_PANEL_RE)
+  await expect(traceSummary).toContainText(NEEDS_REVIEW_RE)
+  await expect(traceSummary).toContainText(REVIEW_FRACTION_RE)
   await expect(traceSummary).not.toContainText('reference_followup')
   await expect(traceSummary).not.toContainText('done')
-  await expect(traceSummary).not.toContainText('Answer Quality')
-  await page.getByText('Research Agent Trace').click()
-  await expect(page.getByTestId('agent-trace-evidence-status')).toContainText('Needs review')
-  await expect(page.getByTestId('agent-trace-quality-gate')).toContainText('Answer Quality')
-  await expect(page.getByTestId('agent-trace-quality-gate')).toContainText('Repaired')
-  await expect(page.getByTestId('agent-evidence-matrix')).toContainText('Evidence Matrix')
+  await expect(traceSummary).not.toContainText(ANSWER_QUALITY_RE)
+  await expect(page.getByText('Research Agent Trace')).toHaveCount(0)
+  await expect(page.getByText('Tool Calls')).toHaveCount(0)
+  await page.getByText(SOURCE_PANEL_RE).click()
+  await expect(page.getByTestId('agent-trace-evidence-status')).toContainText(NEEDS_REVIEW_RE)
+  await expect(page.getByTestId('agent-trace-quality-gate')).toContainText(ANSWER_QUALITY_RE)
+  await expect(page.getByTestId('agent-trace-quality-gate')).toContainText(REPAIRED_RE)
+  await expect(page.getByTestId('agent-evidence-matrix')).toContainText(EVIDENCE_MAP_RE)
   await expect(page.getByTestId('agent-evidence-matrix-row').first()).toContainText('Fast hyperspectral single-pixel imaging')
   await expect(page.getByTestId('agent-evidence-matrix-row').first()).toContainText('frequency-division multiplexed illumination')
   await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('fully solves every downstream limitation')
-  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('Citation does not match retrieved evidence')
+  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText(MISMATCH_RE)
   await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeHidden()
-  await page.getByText('Execution Details').click()
+  await page.getByText(DIAGNOSTICS_RE).click()
   await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeVisible()
 
   const ref = page.getByTestId('agent-trace-reference').first()
@@ -115,15 +128,17 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-lazy-audit')
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
-  await page.getByText('Research Agent Trace').click()
+  await page.getByText(SOURCE_PANEL_RE).click()
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
-  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText('Evidence grounded')
-  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText('Checked 1/1')
-  await expect(page.getByTestId('agent-trace-evidence-status')).toContainText('Evidence grounded')
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(GROUNDED_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(CHECKED_FRACTION_RE)
+  await expect(page.getByTestId('agent-trace-evidence-status')).toContainText(GROUNDED_RE)
   await expect(page.locator('.kb-agent-trace-summary strong', { hasText: '1/1' })).toBeVisible()
   await expect(page.locator('.kb-agent-trace-summary strong', { hasText: 'library' })).toBeVisible()
   await expect(page.getByText('3/9')).toHaveCount(0)
-  await page.getByText('Execution Details').click()
+  await expect(page.getByText('Research Agent Trace')).toHaveCount(0)
+  await expect(page.getByText('Tool Calls')).toHaveCount(0)
+  await page.getByText(DIAGNOSTICS_RE).click()
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeVisible()
   expect(requested).toBe(true)
 })

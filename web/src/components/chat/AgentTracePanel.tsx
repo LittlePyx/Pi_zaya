@@ -1,7 +1,20 @@
 import { useState } from 'react'
 import type { AgentTraceAuditResponse } from '../../api/chat'
+import { useT, type StringMap } from '../../i18n'
 import { normalizeCiteDetail, type CiteDetail } from './citationState'
 import { asTraceRecord, traceNum } from './messageTraceUtils'
+
+function tx(labels: Partial<StringMap> | undefined, key: string, fallback: string): string {
+  return String(labels?.[key] || fallback)
+}
+
+function txFmt(labels: Partial<StringMap> | undefined, key: string, fallback: string, values: Record<string, string | number>): string {
+  let text = tx(labels, key, fallback)
+  for (const [name, value] of Object.entries(values)) {
+    text = text.replaceAll(`{${name}}`, String(value))
+  }
+  return text
+}
 
 function records(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
@@ -42,12 +55,12 @@ function referenceMeta(ref: Record<string, unknown>): string {
     .join(' / ')
 }
 
-function unsupportedReasonText(value: unknown): string {
+function unsupportedReasonText(value: unknown, labels?: Partial<StringMap>): string {
   const reason = String(value || '').trim()
-  if (reason === 'missing_citation') return 'Missing citation'
-  if (reason === 'no_evidence_hits') return 'No evidence hits'
-  if (reason === 'missing_evidence_overlap') return 'Citation does not match retrieved evidence'
-  return reason || 'Unsupported'
+  if (reason === 'missing_citation') return tx(labels, 'agent_trace_missing_citation', 'Missing citation')
+  if (reason === 'no_evidence_hits') return tx(labels, 'agent_trace_no_evidence_hits', 'No evidence hits')
+  if (reason === 'missing_evidence_overlap') return tx(labels, 'agent_trace_missing_evidence_overlap', 'Citation does not match retrieved evidence')
+  return reason || tx(labels, 'agent_trace_unsupported', 'Unsupported')
 }
 
 function compactStringList(value: unknown, limit = 4): string[] {
@@ -56,20 +69,24 @@ function compactStringList(value: unknown, limit = 4): string[] {
     : []
 }
 
-function questionTypeLabel(value: unknown): string {
+function questionTypeLabel(value: unknown, labels?: Partial<StringMap>): string {
   const text = String(value || '').trim().toLowerCase()
-  if (text === 'single_paper_qa') return 'Single paper'
-  if (text === 'multi_paper_comparison') return 'Comparison'
-  if (text === 'reading_guide') return 'Reading guide'
-  if (text === 'reference_followup') return 'Reference follow-up'
-  return 'General'
+  if (text === 'single_paper_qa') return tx(labels, 'agent_trace_type_single', 'Single paper')
+  if (text === 'multi_paper_comparison') return tx(labels, 'agent_trace_type_comparison', 'Comparison')
+  if (text === 'reading_guide') return tx(labels, 'agent_trace_type_reading_guide', 'Reading guide')
+  if (text === 'reference_followup') return tx(labels, 'agent_trace_type_reference_followup', 'Reference follow-up')
+  return tx(labels, 'agent_trace_type_general', 'General')
 }
 
-function verificationHeaderText(totalClaims: number, supportedClaims: number, unsupportedClaims: number, hasErrors: boolean): string {
-  if (hasErrors) return 'Needs check'
-  if (totalClaims > 0 && unsupportedClaims > 0) return `Review ${unsupportedClaims}/${totalClaims}`
-  if (totalClaims > 0) return `Checked ${supportedClaims}/${totalClaims}`
-  return 'Trace available'
+function verificationHeaderText(totalClaims: number, supportedClaims: number, unsupportedClaims: number, hasErrors: boolean, labels?: Partial<StringMap>): string {
+  if (hasErrors) return tx(labels, 'agent_trace_needs_check', 'Needs check')
+  if (totalClaims > 0 && unsupportedClaims > 0) {
+    return txFmt(labels, 'agent_trace_review_fraction', 'Review {unsupported}/{total}', { unsupported: unsupportedClaims, total: totalClaims })
+  }
+  if (totalClaims > 0) {
+    return txFmt(labels, 'agent_trace_checked_fraction', 'Checked {supported}/{total}', { supported: supportedClaims, total: totalClaims })
+  }
+  return tx(labels, 'agent_trace_available', 'Source check available')
 }
 
 function evidenceStatusValue(value: unknown): 'grounded' | 'needs_review' | 'insufficient' | 'not_applicable' | '' {
@@ -78,12 +95,12 @@ function evidenceStatusValue(value: unknown): 'grounded' | 'needs_review' | 'ins
   return ''
 }
 
-function evidenceStatusLabel(value: unknown): string {
+function evidenceStatusLabel(value: unknown, labels?: Partial<StringMap>): string {
   const status = evidenceStatusValue(value)
-  if (status === 'grounded') return 'Evidence grounded'
-  if (status === 'needs_review') return 'Needs review'
-  if (status === 'insufficient') return 'Insufficient evidence'
-  if (status === 'not_applicable') return 'Not from KB'
+  if (status === 'grounded') return tx(labels, 'agent_trace_evidence_grounded', 'Evidence grounded')
+  if (status === 'needs_review') return tx(labels, 'agent_trace_evidence_needs_review', 'Needs review')
+  if (status === 'insufficient') return tx(labels, 'agent_trace_evidence_insufficient', 'Insufficient evidence')
+  if (status === 'not_applicable') return tx(labels, 'agent_trace_evidence_not_from_kb', 'Not from KB')
   return ''
 }
 
@@ -95,11 +112,11 @@ function evidenceStatusClass(value: unknown): string {
   return ''
 }
 
-function qualityGateLabel(value: unknown): string {
+function qualityGateLabel(value: unknown, labels?: Partial<StringMap>): string {
   const text = String(value || '').trim().toLowerCase()
-  if (text === 'passed') return 'Passed'
-  if (text === 'repaired') return 'Repaired'
-  if (text === 'fallback') return 'Fallback'
+  if (text === 'passed') return tx(labels, 'agent_trace_quality_passed', 'Passed')
+  if (text === 'repaired') return tx(labels, 'agent_trace_quality_repaired', 'Repaired')
+  if (text === 'fallback') return tx(labels, 'agent_trace_quality_fallback', 'Fallback')
   return ''
 }
 
@@ -111,12 +128,12 @@ function qualityGateClass(value: unknown): string {
   return ''
 }
 
-function sourcePolicyLabel(value: unknown): string {
+function sourcePolicyLabel(value: unknown, labels?: Partial<StringMap>): string {
   const text = String(value || '').trim()
-  if (text === 'local_only') return 'Local only'
-  if (text === 'local_plus_external_background') return 'Local + external'
-  if (text === 'external_allowed_with_notice') return 'External allowed'
-  if (text === 'trusted_sites_only') return 'Trusted sites'
+  if (text === 'local_only') return tx(labels, 'agent_trace_source_local_only', 'Local KB')
+  if (text === 'local_plus_external_background') return tx(labels, 'agent_trace_source_local_external', 'Local + external')
+  if (text === 'external_allowed_with_notice') return tx(labels, 'agent_trace_source_external_allowed', 'External allowed')
+  if (text === 'trusted_sites_only') return tx(labels, 'agent_trace_source_trusted_sites', 'Trusted sites')
   return text
 }
 
@@ -192,6 +209,7 @@ export function AgentTracePanel({
   onOpenReference?: (detail: CiteDetail, ref: Record<string, unknown>) => void
   onAddReferenceToShelf?: (detail: CiteDetail, ref: Record<string, unknown>) => void
 }) {
+  const S = useT()
   const initialTrace = asTraceRecord(trace)
   const [loadedState, setLoadedState] = useState<{
     messageId: number
@@ -234,20 +252,20 @@ export function AgentTracePanel({
 
   if (!hasTrace) {
     const note = loadStatus === 'loading'
-      ? 'Loading stored trace...'
+      ? tx(S, 'agent_trace_loading_stored', 'Loading saved source check...')
       : loadStatus === 'error'
-        ? 'Stored trace could not be loaded.'
+        ? tx(S, 'agent_trace_load_failed', 'Saved source check could not be loaded.')
         : loadStatus === 'empty'
-          ? 'No stored trace is available.'
-          : 'Open to load stored trace.'
+          ? tx(S, 'agent_trace_no_stored', 'No saved source check is available.')
+          : tx(S, 'agent_trace_open_to_load', 'Open to load saved source check.')
     return (
       <details className="kb-agent-trace" onToggle={(event) => {
         if ((event.currentTarget as HTMLDetailsElement).open) void loadArchivedTrace()
       }}>
         <summary>
-          <span>Research Agent Trace</span>
-          <span>Stored trace</span>
-          <span>{loadStatus === 'loading' ? 'loading' : 'open to load'}</span>
+          <span>{tx(S, 'agent_trace_title', 'Sources & evidence')}</span>
+          <span>{tx(S, 'agent_trace_stored', 'Saved check')}</span>
+          <span>{loadStatus === 'loading' ? tx(S, 'agent_trace_loading', 'loading') : tx(S, 'agent_trace_open_load', 'open to load')}</span>
         </summary>
         <div className="kb-agent-trace-empty">{note}</div>
       </details>
@@ -281,13 +299,13 @@ export function AgentTracePanel({
   const queryScope = String(summary.query_scope || context.query_scope || context.queryScope || '').trim()
   const requestedScope = String(summary.requested_query_scope || context.requested_query_scope || context.requestedQueryScope || '').trim()
   const evidenceStatus = evidenceStatusValue(summary.evidence_status || verification.evidence_status)
-  const evidenceLabel = evidenceStatusLabel(evidenceStatus)
+  const evidenceLabel = evidenceStatusLabel(evidenceStatus, S)
   const qualityGateStatus = String(summary.quality_gate_status || '').trim().toLowerCase()
   const qualityGateTitle = [
     ...compactStringList(summary.quality_gate_reasons),
     ...compactStringList(summary.quality_gate_warnings),
   ].join(' / ')
-  const taskLabel = evidenceStatus === 'not_applicable' ? 'General' : questionTypeLabel(questionType)
+  const taskLabel = evidenceStatus === 'not_applicable' ? tx(S, 'agent_trace_type_general', 'General') : questionTypeLabel(questionType, S)
   const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
   const currentSource = shortText(context.current_source_name || context.currentSourceName || context.current_source_path || context.currentSourcePath, 90)
   const scopeBits = [
@@ -297,106 +315,106 @@ export function AgentTracePanel({
     queryScope === 'current_paper' && currentSource ? currentSource : '',
   ].filter(Boolean)
   const scopeSummary = scopeBits.join(' / ')
-  const claimSummary = verificationHeaderText(totalClaims, supportedClaims, unsupportedClaims, hasErrors)
+  const claimSummary = verificationHeaderText(totalClaims, supportedClaims, unsupportedClaims, hasErrors, S)
   const headerEvidence = evidenceLabel || claimSummary
   const headerContext = totalClaims > 0 && evidenceLabel ? claimSummary : (scopeSummary ? shortText(scopeSummary, 42) : taskLabel)
 
   return (
     <details className="kb-agent-trace" onToggle={(event) => {
       if ((event.currentTarget as HTMLDetailsElement).open) void loadArchivedTrace()
-    }}>
+      }}>
       <summary>
-        <span>Research Agent Trace</span>
+        <span>{tx(S, 'agent_trace_title', 'Sources & evidence')}</span>
         <span>{headerEvidence}</span>
         <span>{headerContext}</span>
       </summary>
       <div className="kb-agent-trace-summary">
         {evidenceLabel ? (
           <div className={`kb-agent-trace-evidence-status ${evidenceStatusClass(evidenceStatus)}`} data-testid="agent-trace-evidence-status">
-            <span>Evidence</span>
+            <span>{tx(S, 'agent_trace_label_evidence', 'Evidence')}</span>
             <strong>{evidenceLabel}</strong>
           </div>
         ) : null}
         {totalClaims > 0 ? (
           <div>
-            <span>Claims</span>
+            <span>{tx(S, 'agent_trace_label_claims', 'Claims')}</span>
             <strong>{supportedClaims}/{totalClaims}</strong>
           </div>
         ) : null}
         {unsupportedClaims > 0 ? (
           <div className="is-warning">
-            <span>Needs Review</span>
+            <span>{tx(S, 'agent_trace_label_needs_review', 'Needs review')}</span>
             <strong>{unsupportedClaims}</strong>
           </div>
         ) : null}
-        {qualityGateLabel(qualityGateStatus) ? (
+        {qualityGateLabel(qualityGateStatus, S) ? (
           <div className={qualityGateClass(qualityGateStatus)} data-testid="agent-trace-quality-gate">
-            <span>Answer Quality</span>
-            <strong title={qualityGateTitle}>{qualityGateLabel(qualityGateStatus)}</strong>
+            <span>{tx(S, 'agent_trace_label_answer_quality', 'Answer quality')}</span>
+            <strong title={qualityGateTitle}>{qualityGateLabel(qualityGateStatus, S)}</strong>
           </div>
         ) : null}
         <div>
-          <span>Task</span>
+          <span>{tx(S, 'agent_trace_label_task', 'Task')}</span>
           <strong>{taskLabel}</strong>
         </div>
         {scopeSummary ? (
           <div>
-            <span>Scope</span>
+            <span>{tx(S, 'agent_trace_label_scope', 'Scope')}</span>
             <strong title={scopeSummary}>{shortText(scopeSummary, 72)}</strong>
           </div>
         ) : null}
         {hasErrors ? (
           <div className="is-warning">
-            <span>Run</span>
-            <strong>errors</strong>
+            <span>{tx(S, 'agent_trace_label_run', 'Run')}</span>
+            <strong>{tx(S, 'agent_trace_label_errors', 'errors')}</strong>
           </div>
         ) : null}
         {researchRunStatus || evidenceMatrixRows > 0 ? (
           <div>
-            <span>Research Run</span>
+            <span>{tx(S, 'agent_trace_label_research_run', 'Research run')}</span>
             <strong>
-              {[researchRunStatus || 'ready', evidenceMatrixRows > 0 ? `${evidenceMatrixRows} rows` : ''].filter(Boolean).join(' / ')}
+              {[researchRunStatus || tx(S, 'agent_trace_ready', 'ready'), evidenceMatrixRows > 0 ? txFmt(S, 'agent_trace_rows', '{n} rows', { n: evidenceMatrixRows }) : ''].filter(Boolean).join(' / ')}
             </strong>
           </div>
         ) : null}
         {sourcePolicy ? (
           <div>
-            <span>Source Policy</span>
-            <strong>{sourcePolicyLabel(sourcePolicy)}</strong>
+            <span>{tx(S, 'agent_trace_label_source_policy', 'Source policy')}</span>
+            <strong>{sourcePolicyLabel(sourcePolicy, S)}</strong>
           </div>
         ) : null}
       </div>
       {evidenceMatrix.length > 0 ? (
         <div className="kb-agent-trace-section kb-agent-matrix" data-testid="agent-evidence-matrix">
           <div className="kb-agent-trace-heading">
-            Evidence Matrix
-            {subtaskCount > 0 ? <span>{subtaskCount} subtasks</span> : null}
+            {tx(S, 'agent_trace_evidence_map', 'Evidence map')}
+            {subtaskCount > 0 ? <span>{txFmt(S, 'agent_trace_subtasks', '{n} subtasks', { n: subtaskCount })}</span> : null}
           </div>
           <div className="kb-agent-matrix-scroll">
             <table>
               <thead>
                 <tr>
-                  <th>Paper</th>
-                  <th>Method</th>
-                  <th>Result</th>
-                  <th>Limitation</th>
-                  <th>Evidence</th>
+                  <th>{tx(S, 'agent_trace_col_paper', 'Paper')}</th>
+                  <th>{tx(S, 'agent_trace_col_method', 'Method')}</th>
+                  <th>{tx(S, 'agent_trace_col_result', 'Result')}</th>
+                  <th>{tx(S, 'agent_trace_col_limitation', 'Limitation')}</th>
+                  <th>{tx(S, 'agent_trace_col_evidence', 'Evidence')}</th>
                 </tr>
               </thead>
               <tbody>
                 {evidenceMatrix.slice(0, 8).map((row, idx) => {
-                  const supportStatus = evidenceStatusLabel(row.support_status) || shortText(row.support_status, 40)
+                  const supportStatus = evidenceStatusLabel(row.support_status, S) || shortText(row.support_status, 40)
                   return (
                     <tr key={`${String(row.source_path || row.source_name || row.paper || 'row')}-${idx}`} data-testid="agent-evidence-matrix-row">
                       <td>
-                        <strong>{shortText(row.paper || row.source_name || 'Source', 90)}</strong>
+                        <strong>{shortText(row.paper || row.source_name || tx(S, 'agent_trace_source_fallback', 'Source'), 90)}</strong>
                         {row.heading_path ? <span>{shortText(row.heading_path, 90)}</span> : null}
                       </td>
-                      <td>{shortText(row.method, 140) || 'Not identified'}</td>
-                      <td>{shortText(row.key_result, 140) || 'Not identified'}</td>
-                      <td>{shortText(row.limitation, 140) || 'Not identified'}</td>
+                      <td>{shortText(row.method, 140) || tx(S, 'agent_trace_not_identified', 'Not identified')}</td>
+                      <td>{shortText(row.key_result, 140) || tx(S, 'agent_trace_not_identified', 'Not identified')}</td>
+                      <td>{shortText(row.limitation, 140) || tx(S, 'agent_trace_not_identified', 'Not identified')}</td>
                       <td>
-                        <span>{shortText(row.evidence_quote, 160) || 'No quote'}</span>
+                        <span>{shortText(row.evidence_quote, 160) || tx(S, 'agent_trace_no_quote', 'No quote')}</span>
                         <em>{[row.citation, supportStatus].filter(Boolean).join(' / ')}</em>
                       </td>
                     </tr>
@@ -409,13 +427,13 @@ export function AgentTracePanel({
       ) : null}
       {unsupportedClaimRows.length > 0 ? (
         <div className="kb-agent-trace-section kb-agent-trace-unsupported">
-          <div className="kb-agent-trace-heading">Needs Review</div>
+          <div className="kb-agent-trace-heading">{tx(S, 'agent_trace_label_needs_review', 'Needs review')}</div>
           {unsupportedClaimRows.map((claim, idx) => (
             <div className="kb-agent-trace-claim" key={`${String(claim.index || 'claim')}-${idx}`} data-testid="agent-trace-unsupported-claim">
               <strong>{shortText(claim.claim_text || claim.text, 240)}</strong>
               <span>
-                Needs Review: {unsupportedReasonText(claim.unsupported_reason)}
-                {traceNum(claim.matched_evidence_count) > 0 ? ` / ${traceNum(claim.matched_evidence_count)} evidence match(es)` : ''}
+                {tx(S, 'agent_trace_label_needs_review', 'Needs review')}: {unsupportedReasonText(claim.unsupported_reason, S)}
+                {traceNum(claim.matched_evidence_count) > 0 ? ` / ${txFmt(S, 'agent_trace_evidence_matches', '{n} evidence match(es)', { n: traceNum(claim.matched_evidence_count) })}` : ''}
               </span>
             </div>
           ))}
@@ -424,13 +442,13 @@ export function AgentTracePanel({
       {plan.length > 0 || steps.length > 0 ? (
         <details className="kb-agent-trace-details" data-testid="agent-trace-execution-details">
           <summary>
-            <span>Execution Details</span>
-            <span>{planStepCount} plan</span>
-            <span>{toolCallCount} tools</span>
+            <span>{tx(S, 'agent_trace_diagnostics', 'Diagnostics')}</span>
+            <span>{txFmt(S, 'agent_trace_plan_count', '{n} plan', { n: planStepCount })}</span>
+            <span>{txFmt(S, 'agent_trace_check_count', '{n} checks', { n: toolCallCount })}</span>
           </summary>
           {plan.length > 0 ? (
             <div className="kb-agent-trace-section">
-              <div className="kb-agent-trace-heading">Plan</div>
+              <div className="kb-agent-trace-heading">{tx(S, 'agent_trace_plan', 'Plan')}</div>
               {plan.map((step, idx) => (
                 <div className="kb-agent-trace-row" key={`${String(step.tool || 'plan')}-${idx}`}>
                   <span className={`kb-agent-trace-status ${statusClass(step.status)}`}>{String(step.status || 'pending')}</span>
@@ -442,7 +460,7 @@ export function AgentTracePanel({
           ) : null}
           {steps.length > 0 ? (
             <div className="kb-agent-trace-section">
-              <div className="kb-agent-trace-heading">Tool Calls</div>
+              <div className="kb-agent-trace-heading">{tx(S, 'agent_trace_check_activity', 'Check activity')}</div>
               {steps.map((step, idx) => {
                 const output = asTraceRecord(step.output)
                 const refs = records(output.references).slice(0, 3)

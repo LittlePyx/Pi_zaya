@@ -68,7 +68,6 @@ const SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY = 'selected_research_context_sco
 const SELECTED_RESEARCH_CONTEXT_PROJECT_STATE_KEY = 'selected_research_context_project_id'
 const SELECTED_RESEARCH_CONTEXT_CLEARED_AT_STATE_KEY = 'selected_research_context_cleared_at'
 const READER_LOCATE_AUTO_REPAIR_RETRY_MS = 60_000
-const showLegacyUiBlocks = false
 
 function resolveQueryScope(scope: QueryScope, opts: { hasCurrentPaper: boolean; hasBasket: boolean }): QueryScope {
   if (scope === 'current_paper' && !opts.hasCurrentPaper) return 'library'
@@ -1927,34 +1926,6 @@ export default function ChatPage() {
         <>
           {connectionAlert}
           {chatActivityStrip}
-          {showLegacyUiBlocks ? (
-            <div className="border-b border-[var(--border)] bg-[var(--panel)]/60 px-4 py-3">
-              <div className="mx-auto flex max-w-5xl items-center gap-3">
-                <Button size="small" loading={messagesLoadingMore} onClick={() => { void loadOlderMessages() }}>
-                  {S.show_older.replace('{n}', String(Math.min(HISTORY_PAGE_SIZE, hiddenCount)))}
-                </Button>
-                <Button size="small" onClick={() => {}}>
-                  展开全部
-                </Button>
-                <Text type="secondary" className="text-xs">
-                  为了打开更快，当前先显示最近 {visibleMessages.length} 条消息，较早消息 {hiddenCount} 条已折叠。
-                </Text>
-              </div>
-            </div>
-          ) : null}
-
-          {showLegacyUiBlocks ? (
-            <div className="border-b border-[var(--border)] bg-[var(--panel)]/40 px-4 py-2">
-              <div className="mx-auto flex max-w-5xl items-center gap-3">
-                <Button size="small" onClick={() => {}}>
-                  收起较早消息
-                </Button>
-                <Text type="secondary" className="text-xs">
-                  当前已展开 {visibleMessages.length} 条消息。
-                </Text>
-              </div>
-            </div>
-          ) : null}
 
           {!liveRunning && messagesHasMoreBefore ? (
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/60 px-4 py-3">
@@ -2041,56 +2012,6 @@ export default function ChatPage() {
                     </div>
                   ) : null}
                 </section>
-              </div>
-            </div>
-          ) : null}
-
-          {showLegacyUiBlocks ? (
-            <div className="border-b border-[var(--border)] bg-[var(--panel)]/30 px-4 py-2">
-              <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-                <Text type="secondary" className="text-xs">
-                  会话时间线：{timelineItems.length} 个提问节点
-                </Text>
-                <Button size="small" onClick={() => setTimelineOpen((v) => !v)}>
-                  {timelineOpen ? '收起时间线' : '打开时间线'}
-                </Button>
-              </div>
-            </div>
-          ) : null}
-
-          {showLegacyUiBlocks ? (
-            <div className="border-b border-[var(--border)] bg-[var(--panel)]/20 px-3 py-2 lg:hidden">
-              <div className="flex gap-2 overflow-x-auto">
-                {timelineItems.map((item) => (
-                  <button
-                    key={`m-timeline-mobile-${item.userMsgId}-${item.order}`}
-                    type="button"
-                    className={`shrink-0 rounded-full border px-3 py-1 text-xs ${
-                      activeTimelineUserMsgId === item.userMsgId
-                        ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
-                        : 'border-[var(--border)] bg-[var(--panel)] text-black/70 dark:text-white/70'
-                    }`}
-                    onClick={() => jumpToTimelineItem(item)}
-                  >
-                    Q{item.order}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {showLegacyUiBlocks ? (
-            <div className="border-b border-[var(--border)] bg-[var(--panel)]/40 px-4 py-2">
-              <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-                <Text className="text-xs">
-                  阅读指导模式：
-                  <span className="ml-1 font-medium">
-                    {guideSourceLabel}
-                  </span>
-                </Text>
-                <Text type="secondary" className="text-xs">
-                  {guideStatusLabel}
-                </Text>
               </div>
             </div>
           ) : null}
