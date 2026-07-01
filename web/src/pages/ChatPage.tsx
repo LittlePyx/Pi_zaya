@@ -11,6 +11,7 @@ import { ChatActivityStrip, type ChatActivityItem } from '../components/chat/Cha
 import { ReaderWorkspaceDock } from '../components/chat/ReaderWorkspaceDock'
 import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
 import { useAgentMode } from '../components/chat/useAgentMode'
+import { resolveQueryScope, useChatSendFlow } from '../components/chat/useChatSendFlow'
 import { useChatTimeline } from '../components/chat/useChatTimeline'
 import { useReaderDock, type RightDockPanel } from '../components/chat/useReaderDock'
 import { useSelectedResearchContext } from '../components/chat/useSelectedResearchContext'
@@ -35,7 +36,6 @@ import { chatApi, type ChatUploadItem, type QueryScope } from '../api/chat'
 import { useT } from '../i18n'
 import { internalDebugBrowserEnabled } from '../utils/internalDebug'
 import { basenameFromSourcePath } from '../utils/sourcePath'
-import { reportUserIssue } from '../userIssueReporter'
 
 const { Text } = Typography
 
@@ -43,12 +43,6 @@ const HISTORY_PAGE_SIZE = 24
 const LIVE_WINDOW = 16
 const READY_DISMISS_MS = 2600
 const DUPLICATE_DISMISS_MS = 3600
-
-function resolveQueryScope(scope: QueryScope, opts: { hasCurrentPaper: boolean; hasBasket: boolean }): QueryScope {
-  if (scope === 'current_paper' && !opts.hasCurrentPaper) return 'library'
-  if (scope === 'basket' && !opts.hasBasket) return opts.hasCurrentPaper ? 'current_paper' : 'library'
-  return scope
-}
 
 function uploadItemKey(item: ChatUploadItem) {
   if (item.kind === 'pdf' && item.ingest_job_id) {
@@ -63,31 +57,6 @@ function stripSourceExt(name: string) {
     .replace(/\.md$/i, '')
     .replace(/\.pdf$/i, '')
     .trim()
-}
-
-function isModelConnectionError(err: unknown) {
-  const text = err instanceof Error ? err.message : String(err || '')
-  return /api key|authentication|unauthorized|forbidden|401|403|connection|network|timeout|timed out|base_url|model/i.test(text)
-}
-
-function chatSendFailureKind(messageText: string, labels: Record<string, string>) {
-  const text = String(messageText || '').trim()
-  const low = text.toLowerCase()
-  if (text === labels.chat_generation_start_failed) return 'generation_start_failed'
-  if (text === labels.chat_generation_stream_failed) return 'generation_stream_failed'
-  if (text === labels.chat_generation_stream_incomplete) return 'generation_stream_incomplete'
-  if (text === labels.chat_generation_refresh_failed) return 'generation_refresh_failed'
-  if (/generation_start_failed|未能启动/.test(text)) return 'generation_start_failed'
-  if (/interrupted before completion|尚未完成|ended before completion/.test(low) || /尚未完成|中断/.test(text)) return 'generation_stream_incomplete'
-  if (/stream failed|stream temporarily unavailable|readable body|回答连接/.test(low) || /回答连接/.test(text)) return 'generation_stream_failed'
-  if (/latest message|messages page|messages fallback|最新消息/.test(low) || /最新消息/.test(text)) return 'generation_refresh_failed'
-  if (/401|403|api key|authentication|unauthorized|forbidden|connection|network|timeout|base_url|model/i.test(text)) return 'model_connection'
-  return 'chat_send_failed'
-}
-
-function httpStatusFromError(messageText: string) {
-  const match = String(messageText || '').trim().match(/^(\d{3})\b/)
-  return match ? Number(match[1]) : 0
 }
 
 interface RefsActivitySummary {
@@ -138,7 +107,6 @@ export default function ChatPage() {
   const cancelUploadItem = useChatStore((s) => s.cancelUploadItem)
   const removePendingImage = useChatStore((s) => s.removePendingImage)
   const dismissUploadItem = useChatStore((s) => s.dismissUploadItem)
-  const sendMessage = useChatStore((s) => s.sendMessage)
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const cancelGen = useChatStore((s) => s.cancelGeneration)
   const settings = useSettingsStore()
@@ -406,78 +374,15 @@ export default function ChatPage() {
     }
   }, [dismissUploadItem, S.upload_pdf_cancelled, S.upload_pdf_duplicate, S.upload_pdf_error, S.upload_pdf_ready, uploadItems])
 
-  const onSend = (text: string) => {
-    if (researchContext.api.sendBlockTarget === 'text') {
-      message.warning(S.chat_api_missing_toast)
-      openApiSettings('text')
-      return
-    }
-    if (researchContext.api.sendBlockTarget === 'vision') {
-      message.warning(S.chat_vision_api_missing_toast)
-      openApiSettings('vision')
-      return
-    }
-    const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
-    const hasBasket = Boolean(currentSelectedResearchContext?.items?.length)
-    const resolvedScope = resolveQueryScope(queryScope, { hasCurrentPaper, hasBasket })
-    const contextPackForSend = resolvedScope === 'basket' ? currentSelectedResearchContext : null
-    void sendMessage(text, {
-      topK: settings.topK,
-      temperature: settings.temperature,
-      maxTokens: settings.maxTokens,
-      deepRead: true,
-      promptContext: contextPackForSend,
-      queryScope: resolvedScope,
-      agentMode,
-    }).then(() => {
-      if (!contextPackForSend) return
-      clearSelectedResearchContextIfCurrent(contextPackForSend.id)
-    }).catch((err: unknown) => {
-      const fallback = err instanceof Error ? err.message : String(err || '')
-      const failureKind = chatSendFailureKind(fallback, S)
-      reportUserIssue({
-        source: 'frontend',
-        domain: 'chat_generation',
-        severity: 'error',
-        summary: `Chat send failed: ${failureKind}`,
-        detail: fallback || S.settings_test_unknown_error,
-        route: '/',
-        context: {
-          ui_locale: settings.uiLocale,
-          query_scope: resolvedScope,
-          active_conversation: Boolean(activeConvId),
-          active_project: Boolean(activeProjectId),
-          paper_guide_mode: Boolean(
-            activeConversation?.mode === 'paper_guide'
-            || activeConversation?.bound_source_path
-            || guideBindings?.[String(activeConvId || '')]?.sourcePath,
-          ),
-          message_count: messages.length,
-          pending_image_count: pendingImages.length,
-          upload_item_count: uploadItems.length,
-          ready_upload_count: uploadItems.filter((item) => item.kind === 'pdf' && item.ready).length,
-          running_upload_count: uploadItems.filter((item) => item.kind === 'pdf' && !item.ready && item.status !== 'error').length,
-          selected_context: Boolean(contextPackForSend),
-          selected_context_item_count: Array.isArray(contextPackForSend?.items) ? contextPackForSend.items.length : 0,
-          agent_mode: agentMode,
-          prompt_length: text.trim().length,
-          prompt_empty: text.trim().length === 0,
-        },
-        payload: {
-          error_kind: failureKind,
-          http_status: httpStatusFromError(fallback),
-        },
-        fingerprint: `chat-send:${failureKind}:${resolvedScope}:${settings.uiLocale}`,
-      })
-      if (isModelConnectionError(err)) {
-        message.error(S.chat_api_connection_failed.replace('{error}', fallback || S.settings_test_unknown_error))
-        void settings.refreshReadiness().catch(() => {})
-        openApiSettings('text')
-        return
-      }
-      message.error(fallback || S.upload_failed_generic)
-    })
-  }
+  const onSend = useChatSendFlow({
+    labels: S,
+    researchContext,
+    queryScope,
+    selectedResearchContext: currentSelectedResearchContext,
+    agentMode,
+    onOpenApiSettings: openApiSettings,
+    onSelectedResearchContextConsumed: clearSelectedResearchContextIfCurrent,
+  })
 
   const onUpload = async (files: File[]) => {
     try {
