@@ -13,6 +13,7 @@ import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
 import { useAgentMode } from '../components/chat/useAgentMode'
 import { resolveQueryScope, useChatSendFlow } from '../components/chat/useChatSendFlow'
 import { useChatTimeline } from '../components/chat/useChatTimeline'
+import { useChatUploadFlow } from '../components/chat/useChatUploadFlow'
 import { useReaderDock, type RightDockPanel } from '../components/chat/useReaderDock'
 import { useSelectedResearchContext } from '../components/chat/useSelectedResearchContext'
 import type { CiteDetail } from '../components/chat/citationState'
@@ -32,7 +33,7 @@ import { useReaderLocateRepair } from '../components/chat/reader/useReaderLocate
 import { buildResearchContext } from '../components/chat/researchContext'
 import type { SelectedResearchContextPack } from '../components/chat/researchContextPack'
 import { dispatchOpenSettings, type ApiSettingsTarget } from '../components/layout/settingsEvents'
-import { chatApi, type ChatUploadItem, type QueryScope } from '../api/chat'
+import { chatApi, type QueryScope } from '../api/chat'
 import { useT } from '../i18n'
 import { internalDebugBrowserEnabled } from '../utils/internalDebug'
 import { basenameFromSourcePath } from '../utils/sourcePath'
@@ -41,23 +42,6 @@ const { Text } = Typography
 
 const HISTORY_PAGE_SIZE = 24
 const LIVE_WINDOW = 16
-const READY_DISMISS_MS = 2600
-const DUPLICATE_DISMISS_MS = 3600
-
-function uploadItemKey(item: ChatUploadItem) {
-  if (item.kind === 'pdf' && item.ingest_job_id) {
-    return `pdf-job:${item.ingest_job_id}`
-  }
-  return [item.kind, item.sha1 || '', item.path || '', item.name].join(':')
-}
-
-function stripSourceExt(name: string) {
-  return String(name || '')
-    .replace(/\.en\.md$/i, '')
-    .replace(/\.md$/i, '')
-    .replace(/\.pdf$/i, '')
-    .trim()
-}
 
 interface RefsActivitySummary {
   packCount: number
@@ -102,12 +86,7 @@ export default function ChatPage() {
   const uploadItems = useChatStore((s) => s.uploadItems)
   const pendingImages = useChatStore((s) => s.pendingImages)
   const uploading = useChatStore((s) => s.uploading)
-  const uploadFiles = useChatStore((s) => s.uploadFiles)
-  const retryUploadItem = useChatStore((s) => s.retryUploadItem)
-  const cancelUploadItem = useChatStore((s) => s.cancelUploadItem)
   const removePendingImage = useChatStore((s) => s.removePendingImage)
-  const dismissUploadItem = useChatStore((s) => s.dismissUploadItem)
-  const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const cancelGen = useChatStore((s) => s.cancelGeneration)
   const settings = useSettingsStore()
   const liveRunning = Boolean(generation)
@@ -168,8 +147,6 @@ export default function ChatPage() {
   const [openShelfSignal, setOpenShelfSignal] = useState(0)
   const [shelfDockTarget, setShelfDockTarget] = useState<HTMLDivElement | null>(null)
   const [appendSignal, setAppendSignal] = useState<{ token: number; text: string } | null>(null)
-  const uploadNoticeRef = useRef<Record<string, string>>({})
-  const dismissTimerRef = useRef<Record<string, number>>({})
   const eventTokenRef = useRef(1)
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
   const activeGuideBinding = useMemo(() => {
@@ -293,11 +270,6 @@ export default function ChatPage() {
     })
   }, [researchContext.activeSource.ready, currentSelectedResearchContext])
 
-  useEffect(() => () => {
-    Object.values(dismissTimerRef.current).forEach((timer) => window.clearTimeout(timer))
-    dismissTimerRef.current = {}
-  }, [])
-
   useLayoutEffect(() => {
     const targetTop = timelineScrollRestoreTopRef.current
     if (targetTop == null) return
@@ -320,59 +292,13 @@ export default function ChatPage() {
     }
   }, [desktopReaderEligible, readerOpen, rightDockCollapsed, splitLayoutRef, timelineOpen])
 
-  useEffect(() => {
-    const liveKeys = new Set<string>()
-    for (const item of uploadItems) {
-      if (item.kind !== 'pdf') continue
-      const key = uploadItemKey(item)
-      liveKeys.add(key)
-      const terminalState =
-        item.status === 'duplicate'
-          ? 'duplicate'
-          : item.ingest_status === 'cancelled'
-            ? 'cancelled'
-            : (item.status === 'error' || item.ingest_status === 'error')
-            ? 'error'
-            : (item.ready || item.ingest_status === 'ready')
-              ? 'ready'
-              : ''
-      if (!terminalState || uploadNoticeRef.current[key] === terminalState) {
-        continue
-      }
-      uploadNoticeRef.current[key] = terminalState
-      if (terminalState === 'ready') {
-        message.success(`${S.upload_pdf_ready}: ${item.name}`)
-        if (dismissTimerRef.current[key] == null) {
-          dismissTimerRef.current[key] = window.setTimeout(() => {
-            dismissUploadItem(key)
-            delete dismissTimerRef.current[key]
-          }, READY_DISMISS_MS)
-        }
-      } else if (terminalState === 'duplicate') {
-        message.info(`${S.upload_pdf_duplicate}: ${item.name}`)
-        if (dismissTimerRef.current[key] == null) {
-          dismissTimerRef.current[key] = window.setTimeout(() => {
-            dismissUploadItem(key)
-            delete dismissTimerRef.current[key]
-          }, DUPLICATE_DISMISS_MS)
-        }
-      } else if (terminalState === 'cancelled') {
-        message.info(`${S.upload_pdf_cancelled}: ${item.name}`)
-      } else if (terminalState === 'error') {
-        message.error(`${S.upload_pdf_error}: ${item.name}`)
-      }
-    }
-
-    for (const key of Object.keys(uploadNoticeRef.current)) {
-      if (liveKeys.has(key)) continue
-      delete uploadNoticeRef.current[key]
-      const timer = dismissTimerRef.current[key]
-      if (timer != null) {
-        window.clearTimeout(timer)
-        delete dismissTimerRef.current[key]
-      }
-    }
-  }, [dismissUploadItem, S.upload_pdf_cancelled, S.upload_pdf_duplicate, S.upload_pdf_error, S.upload_pdf_ready, uploadItems])
+  const {
+    onUpload,
+    onRetryUpload,
+    onCancelUpload,
+    onDismissUploadItem,
+    onStartGuideFromUpload,
+  } = useChatUploadFlow(S)
 
   const onSend = useChatSendFlow({
     labels: S,
@@ -383,52 +309,6 @@ export default function ChatPage() {
     onOpenApiSettings: openApiSettings,
     onSelectedResearchContextConsumed: clearSelectedResearchContextIfCurrent,
   })
-
-  const onUpload = async (files: File[]) => {
-    try {
-      await uploadFiles(files, { quickIngest: true, speedMode: 'balanced' })
-    } catch {
-      message.error(S.upload_failed_generic)
-    }
-  }
-
-  const onRetryUpload = async (key: string) => {
-    try {
-      await retryUploadItem(key)
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : S.retry_ingest_failed)
-    }
-  }
-
-  const onCancelUpload = async (key: string) => {
-    try {
-      await cancelUploadItem(key)
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : S.cancel_ingest_failed)
-    }
-  }
-
-  const onStartGuideFromUpload = async (item: ChatUploadItem) => {
-    const sourcePath = String(item.md_path || '').trim()
-    if (!sourcePath) {
-      message.info(S.reader_pdf_not_ready)
-      return
-    }
-    const sourceName = stripSourceExt(item.name) || item.name
-    const hide = message.loading(S.reader_creating_guide, 0)
-    try {
-      await createPaperGuideConversation({
-        sourcePath,
-        sourceName,
-        title: S.default_guide_title.replace('{name}', sourceName),
-      })
-      hide()
-      message.success(S.reader_entered_guide)
-    } catch (err) {
-      hide()
-      message.error(err instanceof Error ? err.message : S.reader_create_guide_failed)
-    }
-  }
 
   const visibleMessages = liveRunning
     ? messages.slice(-Math.min(messages.length, LIVE_WINDOW))
@@ -735,7 +615,7 @@ export default function ChatPage() {
         onRetryUploadItem={onRetryUpload}
         onCancelUploadItem={onCancelUpload}
         onRemoveImage={removePendingImage}
-        onDismissUploadItem={dismissUploadItem}
+        onDismissUploadItem={onDismissUploadItem}
         onStartGuideFromUpload={onStartGuideFromUpload}
         uploadItems={uploadItems}
         pendingImages={pendingImages}
