@@ -14,19 +14,16 @@ import { useAgentMode } from '../components/chat/useAgentMode'
 import { useChatTimeline } from '../components/chat/useChatTimeline'
 import { useReaderDock, type RightDockPanel } from '../components/chat/useReaderDock'
 import type { CiteDetail } from '../components/chat/citationState'
-import { sameHighlightTarget } from '../components/chat/reader/readerDomUtils'
 import {
   READER_CITATION_SHELF_EVENT,
   READER_SELECTION_SHELF_EVENT,
-  READER_SESSION_SYNC_CHANNEL,
   READER_STANDALONE_WINDOW_NAME,
   type ReaderLocateResult,
   type ReaderOpenPayload,
   type ReaderSelectionShelfPayload,
-  type ReaderSessionHighlight,
 } from '../components/chat/reader/readerTypes'
+import { useReaderSessionHighlights } from '../components/chat/reader/useReaderSessionHighlights'
 import {
-  normalizeReaderSourcePathForMatch,
   normalizeReaderLocateRequestId,
   readerSourcePathsMatch,
   readerLocateRepairRunMatchesActiveRequest,
@@ -37,7 +34,6 @@ import {
   sanitizeReaderLocateCandidates,
   sanitizeReaderLocateTarget,
 } from '../components/chat/reader/readerOpenPayloadUtils'
-import { readerHighlightsSignature } from '../components/chat/reader/readerSessionState'
 import { buildResearchContext } from '../components/chat/researchContext'
 import {
   normalizeSelectedResearchContextPack,
@@ -172,27 +168,6 @@ function httpStatusFromError(messageText: string) {
   return match ? Number(match[1]) : 0
 }
 
-function readerHighlightScopeKey(convId: string | null | undefined, sourcePath: string) {
-  const path = normalizeReaderSourcePathForMatch(sourcePath)
-  if (!path) return ''
-  const conv = String(convId || '__detached__').trim().toLowerCase()
-  return `${conv}::${path}`
-}
-
-function sameReaderSessionHighlight(
-  left: Pick<ReaderSessionHighlight, 'text' | 'startOffset' | 'endOffset' | 'blockId' | 'anchorId' | 'occurrence' | 'readableIndex' | 'documentOccurrence' | 'startReadableIndex' | 'endReadableIndex'>,
-  right: Pick<ReaderSessionHighlight, 'text' | 'startOffset' | 'endOffset' | 'blockId' | 'anchorId' | 'occurrence' | 'readableIndex' | 'documentOccurrence' | 'startReadableIndex' | 'endReadableIndex'>,
-) {
-  return sameHighlightTarget(left, right)
-}
-
-function normalizeReaderSessionHighlights(value: unknown): ReaderSessionHighlight[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .filter((item): item is ReaderSessionHighlight => Boolean(item) && typeof item === 'object')
-    .filter((item) => Boolean(String(item.id || '').trim() && String(item.text || '').trim()))
-}
-
 interface RefsActivitySummary {
   packCount: number
   pendingPackCount: number
@@ -271,7 +246,16 @@ export default function ChatPage() {
     commitRightDockResize,
     cancelRightDockResize,
   } = useReaderDock()
-  const [readerSessionHighlights, setReaderSessionHighlights] = useState<Record<string, ReaderSessionHighlight[]>>({})
+  const {
+    activeReaderSessionHighlights,
+    activeReaderSessionHighlightsRef,
+    addReaderSessionHighlight,
+    removeReaderSessionHighlight,
+    updateReaderSessionHighlight,
+  } = useReaderSessionHighlights({
+    activeConversationId: activeConvId,
+    readerPayload,
+  })
   const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
   const [sourceQualityRefreshToken, setSourceQualityRefreshToken] = useState(0)
   const [citationShelfOpen, setCitationShelfOpen] = useState(false)
@@ -296,9 +280,6 @@ export default function ChatPage() {
   const readerPayloadByFeedbackKeyRef = useRef<Record<string, ReaderOpenPayload>>({})
   const readerLocateGuardByFeedbackKeyRef = useRef<Record<string, ReaderLocateRequestGuard>>({})
   const activeConvIdRef = useRef(String(activeConvId || '').trim())
-  const activeReaderSessionHighlightsRef = useRef<ReaderSessionHighlight[]>([])
-  const readerStateHydratedKeysRef = useRef<Set<string>>(new Set())
-  const readerStateSaveTimersRef = useRef<Record<string, number>>({})
   const readerLocateSourceRepairStreamRef = useRef<AbortController | null>(null)
   const readerLocateSourceRepairRunTokenRef = useRef(0)
   const selectedResearchContextLoadSeqRef = useRef(0)
@@ -864,6 +845,7 @@ export default function ChatPage() {
     S.reader_window_blocked,
     S.side_dock_reader,
     activeConvId,
+    activeReaderSessionHighlightsRef,
     readerPayloadRef,
     shelfProjectId,
   ])
@@ -1174,159 +1156,6 @@ export default function ChatPage() {
     setCitationShelfOpen(true)
     showDockPanel('shelf')
   }, [showDockPanel])
-
-  const activeReaderSourcePath = useMemo(() => String(readerPayload?.sourcePath || '').trim(), [readerPayload?.sourcePath])
-  const activeReaderHighlightScope = useMemo(
-    () => readerHighlightScopeKey(activeConvId, activeReaderSourcePath),
-    [activeConvId, activeReaderSourcePath],
-  )
-  const activeReaderSessionHighlights = useMemo(
-    () => (activeReaderHighlightScope ? readerSessionHighlights[activeReaderHighlightScope] || [] : []),
-    [activeReaderHighlightScope, readerSessionHighlights],
-  )
-  useEffect(() => {
-    activeReaderSessionHighlightsRef.current = activeReaderSessionHighlights
-  }, [activeReaderSessionHighlights])
-
-  const persistReaderHighlights = useCallback((convId: string, sourcePath: string, highlights: ReaderSessionHighlight[]) => {
-    const cid = String(convId || '').trim()
-    const src = String(sourcePath || '').trim()
-    if (!cid || !src) return
-    void chatApi.updateConversationReaderState(cid, src, {
-      highlights,
-      evidenceNotes: highlights,
-      updatedAt: Date.now(),
-    }).catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    const convId = String(activeConvId || '').trim()
-    const sourcePath = String(activeReaderSourcePath || '').trim()
-    const scopeKey = activeReaderHighlightScope
-    if (!convId || !sourcePath || !scopeKey) return undefined
-    let cancelled = false
-    readerStateHydratedKeysRef.current.delete(scopeKey)
-    chatApi.getConversationReaderState(convId, sourcePath)
-      .then((record) => {
-        if (cancelled) return
-        const highlights = normalizeReaderSessionHighlights(record.state?.highlights || record.state?.evidenceNotes)
-        setReaderSessionHighlights((current) => {
-          const prev = current[scopeKey] || []
-          if (readerHighlightsSignature(prev) === readerHighlightsSignature(highlights)) return current
-          if (highlights.length === 0 && prev.length > 0) return current
-          return { ...current, [scopeKey]: highlights }
-        })
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) readerStateHydratedKeysRef.current.add(scopeKey)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [activeConvId, activeReaderHighlightScope, activeReaderSourcePath])
-
-  useEffect(() => {
-    const convId = String(activeConvId || '').trim()
-    const sourcePath = String(activeReaderSourcePath || '').trim()
-    const scopeKey = activeReaderHighlightScope
-    if (!convId || !sourcePath || !scopeKey) return undefined
-    if (!readerStateHydratedKeysRef.current.has(scopeKey)) return undefined
-    const highlights = activeReaderSessionHighlights
-    const previousTimer = readerStateSaveTimersRef.current[scopeKey]
-    if (previousTimer) window.clearTimeout(previousTimer)
-    const timer = window.setTimeout(() => {
-      if (readerStateSaveTimersRef.current[scopeKey] === timer) {
-        delete readerStateSaveTimersRef.current[scopeKey]
-      }
-      persistReaderHighlights(convId, sourcePath, highlights)
-    }, 700)
-    readerStateSaveTimersRef.current[scopeKey] = timer
-    return undefined
-  }, [
-    activeConvId,
-    activeReaderHighlightScope,
-    activeReaderSessionHighlights,
-    activeReaderSourcePath,
-    persistReaderHighlights,
-  ])
-
-  useEffect(() => {
-    if (typeof BroadcastChannel === 'undefined') return undefined
-    const channel = new BroadcastChannel(READER_SESSION_SYNC_CHANNEL)
-    channel.onmessage = (event) => {
-      const data = (event?.data && typeof event.data === 'object')
-        ? event.data as Record<string, unknown>
-        : {}
-      if (String(data.type || '') !== 'reader-session-state') return
-      const sourcePath = String(data.sourcePath || '').trim()
-      if (!sourcePath) return
-      const conversationId = String(data.conversationId || '').trim()
-      if (conversationId && activeConvId && conversationId !== activeConvId) return
-      const highlights = Array.isArray(data.highlights)
-        ? data.highlights.filter((item): item is ReaderSessionHighlight => Boolean(item) && typeof item === 'object')
-        : null
-      if (!highlights) return
-      const scopeKey = readerHighlightScopeKey(activeConvId, sourcePath)
-      if (!scopeKey) return
-      readerStateHydratedKeysRef.current.add(scopeKey)
-      setReaderSessionHighlights((current) => {
-        const prev = current[scopeKey] || []
-        if (readerHighlightsSignature(prev) === readerHighlightsSignature(highlights)) return current
-        return { ...current, [scopeKey]: highlights }
-      })
-    }
-    return () => {
-      channel.close()
-    }
-  }, [activeConvId])
-  const addReaderSessionHighlight = (highlight: ReaderSessionHighlight) => {
-    const scopeKey = activeReaderHighlightScope
-    if (!scopeKey) return
-    setReaderSessionHighlights((current) => {
-      const list = Array.isArray(current[scopeKey]) ? current[scopeKey] : []
-      if (list.some((item) => sameReaderSessionHighlight(item, highlight))) {
-        return current
-      }
-      return {
-        ...current,
-        [scopeKey]: [...list, highlight],
-      }
-    })
-  }
-  const removeReaderSessionHighlight = (highlightId: string) => {
-    const scopeKey = activeReaderHighlightScope
-    const targetId = String(highlightId || '').trim()
-    if (!scopeKey || !targetId) return
-    setReaderSessionHighlights((current) => {
-      const list = Array.isArray(current[scopeKey]) ? current[scopeKey] : []
-      const next = list.filter((item) => String(item.id || '').trim() !== targetId)
-      if (next.length === list.length) return current
-      return {
-        ...current,
-        [scopeKey]: next,
-      }
-    })
-  }
-  const updateReaderSessionHighlight = (highlight: ReaderSessionHighlight) => {
-    const scopeKey = activeReaderHighlightScope
-    const targetId = String(highlight?.id || '').trim()
-    if (!scopeKey || !targetId) return
-    setReaderSessionHighlights((current) => {
-      const list = Array.isArray(current[scopeKey]) ? current[scopeKey] : []
-      let changed = false
-      const next = list.map((item) => {
-        if (String(item.id || '').trim() !== targetId) return item
-        changed = true
-        return { ...item, ...highlight }
-      })
-      if (!changed) return current
-      return {
-        ...current,
-        [scopeKey]: next,
-      }
-    })
-  }
 
   const timelineUiReady = !conversationLoading && timelineItems.length > 0
   const dockTimelineAvailable = timelineUiReady && timelineItems.length > 1
