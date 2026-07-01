@@ -50,6 +50,12 @@ function unsupportedReasonText(value: unknown): string {
   return reason || 'Unsupported'
 }
 
+function compactStringList(value: unknown, limit = 4): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => shortText(item, 90)).filter(Boolean).slice(0, limit)
+    : []
+}
+
 function questionTypeLabel(value: unknown): string {
   const text = String(value || '').trim().toLowerCase()
   if (text === 'single_paper_qa') return 'Single paper'
@@ -86,6 +92,22 @@ function evidenceStatusClass(value: unknown): string {
   if (status === 'grounded') return 'is-grounded'
   if (status === 'needs_review') return 'is-warning'
   if (status === 'insufficient') return 'is-danger'
+  return ''
+}
+
+function qualityGateLabel(value: unknown): string {
+  const text = String(value || '').trim().toLowerCase()
+  if (text === 'passed') return 'Passed'
+  if (text === 'repaired') return 'Repaired'
+  if (text === 'fallback') return 'Fallback'
+  return ''
+}
+
+function qualityGateClass(value: unknown): string {
+  const text = String(value || '').trim().toLowerCase()
+  if (text === 'passed') return 'is-grounded'
+  if (text === 'repaired') return 'is-warning'
+  if (text === 'fallback') return 'is-danger'
   return ''
 }
 
@@ -260,6 +282,11 @@ export function AgentTracePanel({
   const requestedScope = String(summary.requested_query_scope || context.requested_query_scope || context.requestedQueryScope || '').trim()
   const evidenceStatus = evidenceStatusValue(summary.evidence_status || verification.evidence_status)
   const evidenceLabel = evidenceStatusLabel(evidenceStatus)
+  const qualityGateStatus = String(summary.quality_gate_status || '').trim().toLowerCase()
+  const qualityGateTitle = [
+    ...compactStringList(summary.quality_gate_reasons),
+    ...compactStringList(summary.quality_gate_warnings),
+  ].join(' / ')
   const taskLabel = evidenceStatus === 'not_applicable' ? 'General' : questionTypeLabel(questionType)
   const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
   const currentSource = shortText(context.current_source_name || context.currentSourceName || context.current_source_path || context.currentSourcePath, 90)
@@ -300,6 +327,12 @@ export function AgentTracePanel({
           <div className="is-warning">
             <span>Needs Review</span>
             <strong>{unsupportedClaims}</strong>
+          </div>
+        ) : null}
+        {qualityGateLabel(qualityGateStatus) ? (
+          <div className={qualityGateClass(qualityGateStatus)} data-testid="agent-trace-quality-gate">
+            <span>Answer Quality</span>
+            <strong title={qualityGateTitle}>{qualityGateLabel(qualityGateStatus)}</strong>
           </div>
         ) : null}
         <div>

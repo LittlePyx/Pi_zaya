@@ -109,6 +109,9 @@ export interface AgentTraceSummary {
   evidence_status?: 'grounded' | 'needs_review' | 'insufficient' | 'not_applicable' | string
   evidence_hit_count?: number
   evidence_status_reasons?: string[]
+  quality_gate_status?: string
+  quality_gate_reasons?: string[]
+  quality_gate_warnings?: string[]
   plan_step_count?: number
   tool_call_count?: number
   has_errors?: boolean

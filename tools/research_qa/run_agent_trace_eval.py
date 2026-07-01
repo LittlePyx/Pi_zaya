@@ -35,6 +35,7 @@ DEFAULT_FORBIDDEN_ANSWER_TERMS = [
     "tool calls",
     "verification statistics",
 ]
+QUALITY_GATE_STATUSES = {"passed", "repaired", "fallback"}
 
 
 def _synthetic_hit(case: dict[str, Any]) -> dict[str, Any]:
@@ -164,6 +165,31 @@ def _trace_clutter_free(answer: str, case: dict[str, Any]) -> bool:
     return not any(_contains(answer, term) for term in terms)
 
 
+def _quality_gate_status(case: dict[str, Any]) -> str:
+    status = str(case.get("quality_gate_status") or "").strip().lower()
+    if not status and isinstance(case.get("quality_gate"), dict):
+        status = str(case["quality_gate"].get("status") or "").strip().lower()
+
+    trace = case.get("agent_trace")
+    if not status and isinstance(trace, dict):
+        summary = trace.get("summary")
+        if isinstance(summary, dict):
+            status = str(summary.get("quality_gate_status") or "").strip().lower()
+        for step in list(trace.get("steps") or []):
+            if status:
+                break
+            if not isinstance(step, dict):
+                continue
+            output = step.get("output")
+            if not isinstance(output, dict):
+                continue
+            gate = output.get("quality_gate")
+            if isinstance(gate, dict):
+                status = str(gate.get("status") or "").strip().lower()
+
+    return status if status in QUALITY_GATE_STATUSES else ""
+
+
 def _validate_quality_case(case: dict[str, Any]) -> list[str]:
     case_id = str(case.get("id") or f"line:{case.get('_line_no')}")
     errors: list[str] = []
@@ -198,6 +224,8 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
     fallback_notice_ok = 0
     trace_clutter_total = 0
     trace_clutter_ok = 0
+    quality_gate_observed_total = 0
+    quality_gate_status_counts = {status: 0 for status in sorted(QUALITY_GATE_STATUSES)}
 
     for case in cases:
         case_id = str(case.get("id") or f"line:{case.get('_line_no')}")
@@ -279,6 +307,11 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         else:
             errors.append(f"{case_id}: answer includes trace/tool/debug clutter")
 
+        quality_gate_status = _quality_gate_status(case)
+        if quality_gate_status:
+            quality_gate_observed_total += 1
+            quality_gate_status_counts[quality_gate_status] += 1
+
         case_results.append(
             {
                 "id": case_id,
@@ -292,6 +325,7 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
                 "supported_claims": int(verification.supported_claims or 0) if should_use_local else None,
                 "unsupported_claims": int(verification.unsupported_claims or 0) if should_use_local else None,
                 "evidence_status": verification.evidence_status if should_use_local else "not_applicable",
+                "quality_gate_status": quality_gate_status or None,
             }
         )
 
@@ -311,6 +345,11 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         "no_evidence_refusal_accuracy": _ratio(no_evidence_notice_ok, no_evidence_notice_total),
         "external_fallback_disclosure_accuracy": _ratio(fallback_notice_ok, fallback_notice_total),
         "trace_clutter_free_rate": _ratio(trace_clutter_ok, trace_clutter_total),
+        "quality_gate_observed_count": quality_gate_observed_total,
+        "quality_gate_passed_rate": _ratio(quality_gate_status_counts["passed"], quality_gate_observed_total),
+        "quality_gate_repaired_rate": _ratio(quality_gate_status_counts["repaired"], quality_gate_observed_total),
+        "quality_gate_fallback_rate": _ratio(quality_gate_status_counts["fallback"], quality_gate_observed_total),
+        "quality_gate_status_counts": quality_gate_status_counts,
         "local_claim_count": local_claim_total,
         "supported_claim_count": supported_claim_total,
         "unsupported_claim_count": unsupported_claim_total,
@@ -349,12 +388,18 @@ def build_eval_report(
     claim_support_rate = quality.get("claim_support_rate")
     unsupported_claim_rate = quality.get("unsupported_claim_rate")
     no_evidence_refusal_accuracy = quality.get("no_evidence_refusal_accuracy")
+    quality_gate_passed_rate = quality.get("quality_gate_passed_rate")
+    quality_gate_repaired_rate = quality.get("quality_gate_repaired_rate")
+    quality_gate_fallback_rate = quality.get("quality_gate_fallback_rate")
     if not quality:
         retrieval_recall_at_5 = None
         citation_precision = None
         claim_support_rate = None
         unsupported_claim_rate = None
         no_evidence_refusal_accuracy = None
+        quality_gate_passed_rate = None
+        quality_gate_repaired_rate = None
+        quality_gate_fallback_rate = None
     return {
         "commit": str(commit if commit is not None else _git_commit()),
         "date": str(date or datetime.now(timezone.utc).isoformat()),
@@ -375,6 +420,10 @@ def build_eval_report(
         "no_evidence_refusal_accuracy": no_evidence_refusal_accuracy,
         "external_fallback_disclosure_accuracy": quality.get("external_fallback_disclosure_accuracy") if quality else None,
         "trace_clutter_free_rate": quality.get("trace_clutter_free_rate") if quality else None,
+        "quality_gate_observed_count": quality.get("quality_gate_observed_count") if quality else 0,
+        "quality_gate_passed_rate": quality_gate_passed_rate,
+        "quality_gate_repaired_rate": quality_gate_repaired_rate,
+        "quality_gate_fallback_rate": quality_gate_fallback_rate,
         "p50_latency_ms": None,
         "p95_latency_ms": None,
         "cost_per_query_usd": None,

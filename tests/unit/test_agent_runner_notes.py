@@ -36,7 +36,11 @@ def test_runner_passes_structured_comparison_notes_to_answer_tool(monkeypatch, t
 
     def fake_generate_grounded_answer(query, hits, *, settings=None, history=None, agent_notes=None, temperature=0.2, max_tokens=1200):
         captured["agent_notes"] = agent_notes
-        return {"answer": "Paper A uses retrieval [1].", "observation": "answered"}
+        return {
+            "answer": "Paper A uses retrieval [1].",
+            "observation": "answered",
+            "quality_gate": {"status": "repaired", "reasons": ["missing_local_citation"], "warnings": []},
+        }
 
     monkeypatch.setattr(runner, "retrieve_evidence", fake_retrieve_evidence)
     monkeypatch.setattr(runner, "compare_papers", fake_compare_papers)
@@ -53,6 +57,8 @@ def test_runner_passes_structured_comparison_notes_to_answer_tool(monkeypatch, t
     assert captured["agent_notes"]["evidence_matrix"][0]["paper"] == "Paper A"
     assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "needs_review"
     assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "hybrid_local_external"
+    assert result["agent_trace"]["summary"]["quality_gate_status"] == "repaired"
+    assert result["agent_trace"]["summary"]["quality_gate_reasons"] == ["missing_local_citation"]
 
 
 def test_runner_passes_reference_notes_to_answer_tool(monkeypatch, tmp_path):

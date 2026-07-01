@@ -34,6 +34,10 @@ def test_agent_quality_eval_runs_on_recorded_fixture():
     assert quality["no_evidence_refusal_accuracy"] == 1.0
     assert quality["external_fallback_disclosure_accuracy"] == 1.0
     assert quality["trace_clutter_free_rate"] == 1.0
+    assert quality["quality_gate_observed_count"] == 0
+    assert quality["quality_gate_passed_rate"] is None
+    assert quality["quality_gate_repaired_rate"] is None
+    assert quality["quality_gate_fallback_rate"] is None
 
 
 def test_agent_trace_eval_report_includes_quality_metrics():
@@ -53,3 +57,26 @@ def test_agent_trace_eval_report_includes_quality_metrics():
     assert report["unsupported_claim_rate"] == 0.0
     assert report["external_fallback_disclosure_accuracy"] == 1.0
     assert report["trace_clutter_free_rate"] == 1.0
+    assert report["quality_gate_observed_count"] == 0
+    assert report["quality_gate_passed_rate"] is None
+
+
+def test_agent_trace_eval_counts_recorded_quality_gate_statuses(tmp_path):
+    fixture = tmp_path / "quality.jsonl"
+    fixture.write_text(
+        "\n".join(
+            [
+                '{"id":"passed","query":"What method?","answer_mode":"evidence_grounded","answer":"Paper A uses retrieval [1].","evidence_hits":[{"text":"Paper A uses retrieval.","score":3,"meta":{"source_path":"paper-a.md"}}],"expected_retrieval_hit":true,"should_use_local_evidence":true,"external_fallback_allowed":false,"expected_answer_points":["retrieval"],"expected_user_notice":"none","quality_gate_status":"passed"}',
+                '{"id":"fallback","query":"What limitation?","answer_mode":"evidence_grounded","answer":"Paper A reports a limitation [1].","evidence_hits":[{"text":"Paper A reports a limitation.","score":3,"meta":{"source_path":"paper-a.md"}}],"expected_retrieval_hit":true,"should_use_local_evidence":true,"external_fallback_allowed":false,"expected_answer_points":["limitation"],"expected_user_notice":"none","agent_trace":{"summary":{"quality_gate_status":"fallback"}}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    quality = evaluate_quality_cases(fixture)
+
+    assert quality["ok"] is True, quality["errors"]
+    assert quality["quality_gate_observed_count"] == 2
+    assert quality["quality_gate_passed_rate"] == 0.5
+    assert quality["quality_gate_fallback_rate"] == 0.5

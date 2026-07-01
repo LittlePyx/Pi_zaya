@@ -150,6 +150,37 @@ class AgentTrace:
     status: StepStatus = "pending"
     errors: list[str] = field(default_factory=list)
 
+    def _quality_gate_summary(self) -> dict[str, Any]:
+        valid_statuses = {"passed", "repaired", "fallback"}
+        status = ""
+        reasons: list[str] = []
+        warnings: list[str] = []
+        for step in reversed(self.steps):
+            if step.tool != "generate_grounded_answer" or not isinstance(step.output, dict):
+                continue
+            gate = step.output.get("quality_gate")
+            if not isinstance(gate, dict):
+                continue
+            candidate_status = str(gate.get("status") or "").strip().lower()
+            if candidate_status in valid_statuses:
+                status = candidate_status
+            reasons = [
+                str(item).strip()
+                for item in list(gate.get("reasons") or [])
+                if str(item).strip()
+            ][:4]
+            warnings = [
+                str(item).strip()
+                for item in list(gate.get("warnings") or [])
+                if str(item).strip()
+            ][:4]
+            break
+        return {
+            "quality_gate_status": status,
+            "quality_gate_reasons": reasons,
+            "quality_gate_warnings": warnings,
+        }
+
     def summary_dict(self) -> dict[str, Any]:
         total_claims = int(self.verification.total_claims or 0)
         supported_claims = int(self.verification.supported_claims or 0)
@@ -166,6 +197,7 @@ class AgentTrace:
             planner_confidence = 0.0
         research_run = self.research_run.to_dict() if self.research_run is not None else {}
         metrics = research_run.get("metrics") if isinstance(research_run.get("metrics"), dict) else {}
+        quality_gate = self._quality_gate_summary()
         return {
             "question_type": self.question_type,
             "status": self.status,
@@ -192,6 +224,7 @@ class AgentTrace:
             "plan_step_count": len(self.plan),
             "tool_call_count": len(self.steps),
             "has_errors": bool(self.errors),
+            **quality_gate,
         }
 
     def to_dict(self) -> dict[str, Any]:

@@ -9,6 +9,7 @@ VALID_QUESTION_TYPES = set(QuestionType.__args__)
 VALID_STATUSES = set(StepStatus.__args__)
 VALID_TOOLS = set(ToolName.__args__)
 VALID_EVIDENCE_STATUSES = set(EvidenceStatus.__args__)
+VALID_QUALITY_GATE_STATUSES = {"passed", "repaired", "fallback"}
 
 
 def _is_int_like(value: Any) -> bool:
@@ -32,6 +33,10 @@ def _check_mapping_list(value: Any, *, name: str, errors: list[str]) -> list[dic
             continue
         out.append(item)
     return out
+
+
+def _list_len(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
 
 
 def validate_agent_trace(trace: Any) -> dict[str, Any]:
@@ -102,6 +107,18 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
             errors.append(f"steps[{idx}].status is invalid")
         if "output" in step and not isinstance(step.get("output"), dict):
             errors.append(f"steps[{idx}].output must be an object")
+        output = step.get("output")
+        if isinstance(output, dict) and "quality_gate" in output:
+            gate = output.get("quality_gate")
+            if not isinstance(gate, dict):
+                errors.append(f"steps[{idx}].output.quality_gate must be an object")
+            else:
+                gate_status = str(gate.get("status") or "")
+                if gate_status not in VALID_QUALITY_GATE_STATUSES:
+                    errors.append(f"steps[{idx}].output.quality_gate.status is invalid")
+                for field in ("reasons", "warnings"):
+                    if field in gate and not isinstance(gate.get(field), list):
+                        errors.append(f"steps[{idx}].output.quality_gate.{field} must be a list")
 
     verification = trace.get("verification")
     if not isinstance(verification, dict):
@@ -186,6 +203,14 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
         errors.append(f"summary.evidence_status must be one of {sorted(VALID_EVIDENCE_STATUSES)}")
     if isinstance(summary, dict) and "evidence_hit_count" in summary and not _is_int_like(summary.get("evidence_hit_count", 0)):
         errors.append("summary.evidence_hit_count must be an integer")
+    if isinstance(summary, dict) and "quality_gate_status" in summary:
+        quality_gate_status = str(summary.get("quality_gate_status") or "")
+        if quality_gate_status and quality_gate_status not in VALID_QUALITY_GATE_STATUSES:
+            errors.append("summary.quality_gate_status is invalid")
+    if isinstance(summary, dict):
+        for field in ("quality_gate_reasons", "quality_gate_warnings"):
+            if field in summary and not isinstance(summary.get(field), list):
+                errors.append(f"summary.{field} must be a list")
 
     return {
         "ok": not errors,
@@ -212,5 +237,7 @@ def validate_agent_trace(trace: Any) -> dict[str, Any]:
             "tool_call_count": len(steps),
             "has_errors": bool(trace.get("errors")) if isinstance(trace.get("errors"), list) else False,
             "has_context": isinstance(context, dict) and bool(context),
+            "quality_gate_status": str(summary.get("quality_gate_status") or "") if isinstance(summary, dict) else "",
+            "quality_gate_reason_count": _list_len(summary.get("quality_gate_reasons")) if isinstance(summary, dict) else 0,
         },
     }
