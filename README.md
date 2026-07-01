@@ -393,6 +393,8 @@ Useful commands:
 python -m pytest tests/unit -q
 python tools\research_qa\validate_research_agent_golden.py
 python tools\research_qa\run_agent_trace_eval.py --json-out test_results\agent_trace_eval.json
+python tools\research_qa\export_research_agent_samples.py --db chat.sqlite3 --out test_results\research_agent_answer_samples.jsonl --limit 50
+python tools\research_qa\run_agent_trace_eval.py --real-samples test_results\research_agent_answer_samples.jsonl --json-out test_results\agent_trace_real_replay_eval.json
 python tools\research_qa\run_research_qa_eval.py --dry-run
 python tools\converter_quality\run_converter_quality_eval.py --dry-run
 

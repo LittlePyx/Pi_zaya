@@ -295,6 +295,7 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
     unnecessary_notice_count = 0
     required_notice_total = 0
     required_notice_ok = 0
+    real_replay_case_count = 0
 
     for case in cases:
         case_id = str(case.get("id") or f"line:{case.get('_line_no')}")
@@ -307,6 +308,9 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         expected_retrieval_hit = bool(case.get("expected_retrieval_hit"))
         should_use_local = bool(case.get("should_use_local_evidence"))
         notice_type = str(case.get("expected_user_notice") or "none").strip()
+        sample_kind = str(case.get("sample_kind") or "").strip()
+        if sample_kind == "real_chat_replay" or case.get("replay_unlabeled") is True:
+            real_replay_case_count += 1
 
         if source_blend:
             source_blend_status_counts[source_blend] += 1
@@ -413,6 +417,7 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         case_results.append(
             {
                 "id": case_id,
+                "sample_kind": sample_kind or None,
                 "retrieval_hit_ok": retrieval_hit_ok,
                 "expected_source_hit_ok": source_hit_ok,
                 "expected_answer_point_hits": len(point_hits),
@@ -442,6 +447,7 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
     return {
         "ok": not errors,
         "case_count": len(cases),
+        "real_replay_case_count": real_replay_case_count,
         "errors": errors,
         "retrieval_hit_rate": _ratio(retrieval_hit_count, retrieval_expected_total),
         "expected_source_hit_rate": _ratio(expected_source_hit_count, expected_source_total),
@@ -468,7 +474,7 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         "supported_claim_count": supported_claim_total,
         "unsupported_claim_count": unsupported_claim_total,
         "metrics_note": (
-            "Fixture-based answer quality checks over recorded cases; not a live model benchmark."
+            "Fixture-based checks plus optional real chat replay; real replay is unlabeled and not a live model benchmark."
         ),
         "cases": case_results,
     }
@@ -508,6 +514,7 @@ def build_eval_report(
     source_blend_accuracy = quality.get("source_blend_accuracy")
     unnecessary_notice_rate = quality.get("unnecessary_notice_rate")
     required_notice_accuracy = quality.get("required_notice_accuracy")
+    real_replay_count = int(quality.get("real_replay_case_count") or 0) if quality else 0
     if not quality:
         retrieval_recall_at_5 = None
         citation_precision = None
@@ -525,6 +532,7 @@ def build_eval_report(
         "date": str(date or datetime.now(timezone.utc).isoformat()),
         "num_cases": int(summary.get("case_count") or 0),
         "num_quality_cases": int(quality.get("case_count") or 0),
+        "num_real_replay_cases": real_replay_count,
         "planner_validation_ok": bool(summary.get("ok")),
         "quality_eval_ok": bool(quality.get("ok")) if quality else None,
         "planner_error_count": len(list(summary.get("planning_errors") or [])),
@@ -552,7 +560,9 @@ def build_eval_report(
         "p95_latency_ms": None,
         "cost_per_query_usd": None,
         "notes": (
-            "Quality metrics are fixture-based over recorded eval cases; latency and cost remain null until live runs are instrumented."
+            "Quality metrics include unlabeled real chat replay samples; use them as semi-automated regression checks, not correctness scores."
+            if real_replay_count
+            else "Quality metrics are fixture-based over recorded eval cases; latency and cost remain null until live runs are instrumented."
             if quality
             else "Quality metrics are null until the eval suite is run on a labeled dataset with expected evidence and human-reviewed answers."
         ),
@@ -569,6 +579,11 @@ def main() -> int:
         default=str(DEFAULT_QUALITY_DATASET),
         help="JSONL answer-quality fixture path.",
     )
+    parser.add_argument(
+        "--real-samples",
+        default="",
+        help="Use exported real Research Agent answer replay JSONL as the quality dataset.",
+    )
     parser.add_argument("--skip-quality", action="store_true", help="Skip fixture answer-quality checks.")
     parser.add_argument("--json-out", default="", help="Optional path for the portfolio/eval JSON report.")
     parser.add_argument(
@@ -578,7 +593,8 @@ def main() -> int:
     )
     args = parser.parse_args()
     summary = evaluate_cases(args.path)
-    quality_summary = None if args.skip_quality else evaluate_quality_cases(args.quality_path)
+    quality_path = args.real_samples or args.quality_path
+    quality_summary = None if args.skip_quality else evaluate_quality_cases(quality_path)
     report = build_eval_report(summary, quality_summary=quality_summary)
     if args.json_out:
         target = Path(args.json_out)

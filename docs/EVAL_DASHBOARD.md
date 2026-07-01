@@ -177,6 +177,19 @@ This command validates both `docs/research_agent_golden_v0.jsonl` and
 `docs/research_agent_eval_v1.jsonl` by default. Use `--skip-quality` to run only
 planner/schema validation.
 
+Real Research Agent answer replay:
+
+```powershell
+python tools\research_qa\export_research_agent_samples.py --db chat.sqlite3 --out test_results\research_agent_answer_samples.jsonl --limit 50
+python tools\research_qa\run_agent_trace_eval.py --real-samples test_results\research_agent_answer_samples.jsonl --json-out test_results\agent_trace_real_replay_eval.json
+```
+
+The exported replay file is semi-automated and unlabeled by default. It is useful
+for checking source-mode disclosure, trace/tool clutter in user-facing answers,
+and routing regressions on real conversations. It is not a correctness benchmark.
+Use `--check-local-support` on the export command only after reviewing that the
+exported snippets are suitable for claim-support checks.
+
 To print the legacy summary shape only:
 
 ```powershell
@@ -217,6 +230,8 @@ Manual Research Agent review:
 - Some metrics remain manual until curated gold datasets and grading rubrics are added.
 - The answer-quality fixture is a deterministic regression suite, not a live
   benchmark of model quality across arbitrary papers.
+- Real chat replay samples are unlabeled unless a reviewer adds expected answer
+  points and source labels to the exported JSONL.
 - Trace usefulness should be reviewed by researchers, not judged only by schema validity.
 
 ## Future Work

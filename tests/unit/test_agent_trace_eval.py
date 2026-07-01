@@ -15,6 +15,7 @@ def test_agent_trace_eval_report_marks_unmeasured_metrics_null():
 
     assert report["commit"] == "test-commit"
     assert report["num_cases"] == summary["case_count"]
+    assert report["num_real_replay_cases"] == 0
     assert report["planner_validation_ok"] is True
     assert report["retrieval_recall_at_5"] is None
     assert report["citation_precision"] is None
@@ -37,6 +38,7 @@ def test_agent_quality_eval_runs_on_recorded_fixture():
     assert quality["no_evidence_refusal_accuracy"] == 1.0
     assert quality["external_fallback_disclosure_accuracy"] == 1.0
     assert quality["trace_clutter_free_rate"] == 1.0
+    assert quality["real_replay_case_count"] == 0
     assert quality["source_blend_accuracy"] == 1.0
     assert quality["source_blend_expected_count"] == quality["case_count"]
     assert quality["unnecessary_notice_rate"] == 0.0
