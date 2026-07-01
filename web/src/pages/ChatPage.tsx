@@ -1,13 +1,17 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { Alert, Button, message, Typography } from 'antd'
-import { BookOutlined, BugOutlined, ClockCircleOutlined, LoadingOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined } from '@ant-design/icons'
+import { BookOutlined, ClockCircleOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined } from '@ant-design/icons'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList, type ShelfActivityState } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
+import { ChatActivityStrip, type ChatActivityItem } from '../components/chat/ChatActivityStrip'
+import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
+import { useAgentMode } from '../components/chat/useAgentMode'
+import { useChatTimeline } from '../components/chat/useChatTimeline'
 import type { CiteDetail } from '../components/chat/citationState'
 import { sameHighlightTarget } from '../components/chat/reader/readerDomUtils'
 import {
@@ -39,7 +43,7 @@ import {
   type SelectedResearchContextPack,
 } from '../components/chat/researchContextPack'
 import { dispatchOpenSettings, type ApiSettingsTarget } from '../components/layout/settingsEvents'
-import { chatApi, type ChatUploadItem, type Message, type QueryScope } from '../api/chat'
+import { chatApi, type ChatUploadItem, type QueryScope } from '../api/chat'
 import { libraryApi } from '../api/library'
 import { useT } from '../i18n'
 import { internalDebugBrowserEnabled } from '../utils/internalDebug'
@@ -61,7 +65,6 @@ const DESKTOP_DOCK_COLLAPSED_WIDTH = 48
 const DESKTOP_DOCK_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
 const RIGHT_DOCK_WIDTH_STORAGE_KEY = 'kb:chat-side-dock-width'
 const RIGHT_DOCK_COLLAPSED_STORAGE_KEY = 'kb:chat-side-dock-collapsed'
-const AGENT_MODE_STORAGE_PREFIX = 'kb:chat-research-agent-mode:v1'
 const SELECTED_RESEARCH_CONTEXT_STORAGE_PREFIX = 'kb:chat:selected-research-context:v1'
 const SELECTED_RESEARCH_CONTEXT_STATE_KEY = 'selected_research_context'
 const SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY = 'selected_research_context_scope'
@@ -80,17 +83,6 @@ function uploadItemKey(item: ChatUploadItem) {
     return `pdf-job:${item.ingest_job_id}`
   }
   return [item.kind, item.sha1 || '', item.path || '', item.name].join(':')
-}
-
-function compactTimelineText(content: string, maxLen = 68, txt?: Record<string, string>) {
-  const raw = String(content || '').replace(/\s+/g, ' ').trim()
-  if (!raw) return txt?.timeline_blank_question || '空白提问'
-  const imgOnly = raw.match(/^\[Image attachment x(\d+)\]$/i)
-  if (imgOnly) {
-    return (txt?.timeline_image_question || '图片提问 x{n}').replace('{n}', imgOnly[1] || '1')
-  }
-  if (raw.length <= maxLen) return raw
-  return `${raw.slice(0, Math.max(8, maxLen - 1)).trimEnd()}...`
 }
 
 function stripSourceExt(name: string) {
@@ -115,46 +107,6 @@ function loadStoredRightDockWidth() {
 function loadStoredRightDockCollapsed() {
   if (typeof window === 'undefined') return false
   return window.localStorage.getItem(RIGHT_DOCK_COLLAPSED_STORAGE_KEY) === '1'
-}
-
-function readAgentModeUrlOverride(): boolean | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const params = new URLSearchParams(window.location.search)
-    const queryValue = String(params.get('agent_mode') || params.get('research_agent') || '').trim().toLowerCase()
-    if (['1', 'true', 'yes', 'on'].includes(queryValue)) return true
-    if (['0', 'false', 'no', 'off'].includes(queryValue)) return false
-  } catch { /* ignore */ }
-  return null
-}
-
-function agentModeStorageKey(conversationId?: string | null) {
-  const conv = String(conversationId || '').trim()
-  return conv ? `${AGENT_MODE_STORAGE_PREFIX}:${encodeURIComponent(conv)}` : ''
-}
-
-function loadStoredAgentModeForConversation(conversationId?: string | null) {
-  const urlOverride = readAgentModeUrlOverride()
-  if (urlOverride !== null) return urlOverride
-  if (typeof window === 'undefined') return false
-  const key = agentModeStorageKey(conversationId)
-  if (!key) return false
-  try {
-    return window.localStorage.getItem(key) === '1'
-  } catch {
-    return false
-  }
-}
-
-function saveStoredAgentModeForConversation(conversationId: string, enabled: boolean) {
-  if (typeof window === 'undefined') return
-  const key = agentModeStorageKey(conversationId)
-  if (!key) return
-  try {
-    window.localStorage.setItem(key, enabled ? '1' : '0')
-  } catch {
-    // Storage can fail in private mode; the in-memory toggle still works.
-  }
 }
 
 function selectedResearchContextStorageKey(conversationId?: string | null, shelfScope?: string | null) {
@@ -264,41 +216,12 @@ function normalizeReaderSessionHighlights(value: unknown): ReaderSessionHighligh
     .filter((item) => Boolean(String(item.id || '').trim() && String(item.text || '').trim()))
 }
 
-interface TimelineItem {
-  order: number
-  userMsgId: number
-  targetMsgId: number
-  questionPreview: string
-  hasAnswer: boolean
-}
-
 type RightDockPanel = 'timeline' | 'shelf' | 'reader'
 
 interface RefsActivitySummary {
   packCount: number
   pendingPackCount: number
   hitCount: number
-}
-
-interface ChatPerfSnapshot {
-  switchTotal: number
-  switchAvgMs: number
-  refsTotal: number
-  refsAvgMs: number
-  openPhases: number
-  messagePrep: number
-}
-
-interface ChatDebugApi {
-  getLogs?: () => unknown[]
-  summary?: () => Record<string, unknown>
-}
-
-interface ChatDebugWindow extends Window {
-  __kbSwitchPerf?: ChatDebugApi
-  __kbRefsPerf?: ChatDebugApi
-  __kbConversationOpenPerf?: ChatDebugApi
-  __kbMessageListPerf?: ChatDebugApi
 }
 
 function summarizeRefsActivity(refs: Record<string, unknown>): RefsActivitySummary {
@@ -320,37 +243,6 @@ function summarizeRefsActivity(refs: Record<string, unknown>): RefsActivitySumma
 
 function loadChatDebugPanelEnabled() {
   return internalDebugBrowserEnabled()
-}
-
-function safeNumber(value: unknown) {
-  const num = Number(value)
-  return Number.isFinite(num) ? num : 0
-}
-
-function safeLogCount(api?: ChatDebugApi) {
-  try {
-    const logs = api?.getLogs?.()
-    return Array.isArray(logs) ? logs.length : 0
-  } catch {
-    return 0
-  }
-}
-
-function collectChatPerfSnapshot(): ChatPerfSnapshot {
-  if (typeof window === 'undefined') {
-    return { switchTotal: 0, switchAvgMs: 0, refsTotal: 0, refsAvgMs: 0, openPhases: 0, messagePrep: 0 }
-  }
-  const w = window as ChatDebugWindow
-  const switchSummary = w.__kbSwitchPerf?.summary?.() || {}
-  const refsSummary = w.__kbRefsPerf?.summary?.() || {}
-  return {
-    switchTotal: safeNumber(switchSummary.total),
-    switchAvgMs: safeNumber(switchSummary.avgSuccessMs),
-    refsTotal: safeNumber(refsSummary.total),
-    refsAvgMs: safeNumber(refsSummary.avgFetchMs),
-    openPhases: safeLogCount(w.__kbConversationOpenPerf),
-    messagePrep: safeLogCount(w.__kbMessageListPerf),
-  }
 }
 
 export default function ChatPage() {
@@ -378,9 +270,8 @@ export default function ChatPage() {
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const cancelGen = useChatStore((s) => s.cancelGeneration)
   const settings = useSettingsStore()
-  const [timelineOpen, setTimelineOpen] = useState(true)
-  const [timelineJump, setTimelineJump] = useState<{ messageId: number; token: number } | null>(null)
-  const [activeTimelineUserMsgId, setActiveTimelineUserMsgId] = useState<number | null>(null)
+  const liveRunning = Boolean(generation)
+  const { agentMode, setAgentMode: handleAgentModeChange } = useAgentMode(activeConvId)
   const [readerOpen, setReaderOpen] = useState(false)
   const [readerPayload, setReaderPayload] = useState<ReaderOpenPayload | null>(null)
   const [rightDockCollapsed, setRightDockCollapsed] = useState(loadStoredRightDockCollapsed)
@@ -392,14 +283,12 @@ export default function ChatPage() {
   const [citationShelfCount, setCitationShelfCount] = useState(0)
   const [selectedResearchContext, setSelectedResearchContext] = useState<SelectedResearchContextPack | null>(null)
   const [queryScope, setQueryScope] = useState<QueryScope>('library')
-  const [agentMode, setAgentMode] = useState(() => loadStoredAgentModeForConversation(null))
-  const [agentModeOwnerConversationId, setAgentModeOwnerConversationId] = useState('')
   const [selectedResearchContextLoadedKey, setSelectedResearchContextLoadedKey] = useState('')
   const [selectedResearchContextOwnerKey, setSelectedResearchContextOwnerKey] = useState('')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
   const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
   const [qualityDiagnosticsEnabled] = useState(qualityDiagnosticsVisible)
-  const [debugSnapshot, setDebugSnapshot] = useState<ChatPerfSnapshot>(() => collectChatPerfSnapshot())
+  const debugSnapshot = useChatPerfSnapshot(debugPanelEnabled)
   const [openShelfSignal, setOpenShelfSignal] = useState(0)
   const [rightDockPanel, setRightDockPanel] = useState<RightDockPanel>('timeline')
   const [shelfDockTarget, setShelfDockTarget] = useState<HTMLDivElement | null>(null)
@@ -410,7 +299,7 @@ export default function ChatPage() {
   const [appendSignal, setAppendSignal] = useState<{ token: number; text: string } | null>(null)
   const uploadNoticeRef = useRef<Record<string, string>>({})
   const dismissTimerRef = useRef<Record<string, number>>({})
-  const timelineJumpTokenRef = useRef(1)
+  const eventTokenRef = useRef(1)
   const readerLocateRequestRef = useRef(1)
   const readerLocateQualitySubmittedRef = useRef<Set<string>>(new Set())
   const readerLocateSourceRepairAtRef = useRef<Record<string, number>>({})
@@ -430,7 +319,6 @@ export default function ChatPage() {
   const rightDockActivePointerIdRef = useRef<number | null>(null)
   const rightDockResizeFocusRestoreRef = useRef<HTMLElement | null>(null)
   const selectedResearchContextLoadSeqRef = useRef(0)
-  const pendingAgentModeForNewConversationRef = useRef<boolean | null>(null)
   const rightDockWidthLiveRef = useRef(rightDockWidth)
   const rightDockResizePreviewWidthRef = useRef(rightDockWidth)
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
@@ -563,17 +451,9 @@ export default function ChatPage() {
     shelfProjectScope,
   ])
 
-  useEffect(() => {
-    if (!debugPanelEnabled || typeof window === 'undefined') return undefined
-    const update = () => setDebugSnapshot(collectChatPerfSnapshot())
-    update()
-    const timer = window.setInterval(update, 1000)
-    return () => window.clearInterval(timer)
-  }, [debugPanelEnabled])
-
   const nextEventToken = useCallback(() => {
-    timelineJumpTokenRef.current += 1
-    return timelineJumpTokenRef.current
+    eventTokenRef.current += 1
+    return eventTokenRef.current
   }, [])
 
   const handleResearchContextFollowUp = useCallback((pack: SelectedResearchContextPack, promptText: string) => {
@@ -589,27 +469,40 @@ export default function ChatPage() {
     return readerLocateRequestRef.current
   }, [])
 
-  const clearTimelineSelection = () => {
-    setTimelineJump(null)
-    setActiveTimelineUserMsgId(null)
-  }
-
-  const captureTimelineScrollTop = () => {
+  const captureTimelineScrollTop = useCallback(() => {
     const scrollHost = splitLayoutRef.current?.querySelector<HTMLElement>('.kb-main-scroll')
     timelineScrollRestoreTopRef.current = scrollHost ? scrollHost.scrollTop : null
-  }
+  }, [])
 
-  const toggleTimelineOpen = () => {
-    captureTimelineScrollTop()
-    clearTimelineSelection()
-    setTimelineOpen((value) => !value)
-  }
+  const handleTimelineBlockedJump = useCallback(() => {
+    message.info(S.timeline_jump_blocked)
+  }, [S.timeline_jump_blocked])
+
+  const {
+    timelineOpen,
+    timelineItems,
+    timelineJump,
+    timelineTrackedMessageIds,
+    activeTimelineUserMsgId,
+    toggleTimelineOpen,
+    resetTimeline,
+    openTimeline,
+    jumpToTimelineItem,
+    handleTimelineJumpHandled,
+    handleTrackedMessageActive,
+  } = useChatTimeline({
+    messages,
+    labels: S,
+    liveRunning,
+    onBlockedJump: handleTimelineBlockedJump,
+    nextToken: nextEventToken,
+    onBeforeToggle: captureTimelineScrollTop,
+  })
 
   useEffect(() => {
     const projectChanged = previousShelfProjectScopeRef.current !== shelfProjectScope
     previousShelfProjectScopeRef.current = shelfProjectScope
-    setTimelineOpen(true)
-    clearTimelineSelection()
+    resetTimeline()
     setReaderOpen(false)
     setReaderPayload(null)
     readerPayloadRef.current = null
@@ -626,7 +519,7 @@ export default function ChatPage() {
       setRightDockPanel((current) => (current === 'reader' ? 'timeline' : current))
     }
     setAppendSignal(null)
-  }, [activeConvId, shelfProjectScope])
+  }, [activeConvId, resetTimeline, shelfProjectScope])
 
   useEffect(() => {
     const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
@@ -675,30 +568,6 @@ export default function ChatPage() {
   useEffect(() => {
     window.localStorage.setItem(RIGHT_DOCK_COLLAPSED_STORAGE_KEY, rightDockCollapsed ? '1' : '0')
   }, [rightDockCollapsed])
-
-  useEffect(() => {
-    const convId = String(activeConvId || '').trim()
-    if (!convId) {
-      setAgentModeOwnerConversationId('')
-      return
-    }
-    const pending = pendingAgentModeForNewConversationRef.current
-    if (pending !== null) {
-      pendingAgentModeForNewConversationRef.current = null
-      setAgentMode(pending)
-      setAgentModeOwnerConversationId(convId)
-      saveStoredAgentModeForConversation(convId, pending)
-      return
-    }
-    setAgentMode(loadStoredAgentModeForConversation(convId))
-    setAgentModeOwnerConversationId(convId)
-  }, [activeConvId])
-
-  useEffect(() => {
-    const convId = String(activeConvId || '').trim()
-    if (!convId || agentModeOwnerConversationId !== convId) return
-    saveStoredAgentModeForConversation(convId, agentMode)
-  }, [activeConvId, agentMode, agentModeOwnerConversationId])
 
   useEffect(() => {
     rightDockWidthLiveRef.current = rightDockWidth
@@ -833,16 +702,6 @@ export default function ChatPage() {
     }
   }, [dismissUploadItem, S.upload_pdf_cancelled, S.upload_pdf_duplicate, S.upload_pdf_error, S.upload_pdf_ready, uploadItems])
 
-  const handleAgentModeChange = useCallback((enabled: boolean) => {
-    const convId = String(activeConvId || '').trim()
-    if (!convId) {
-      pendingAgentModeForNewConversationRef.current = enabled
-    } else {
-      setAgentModeOwnerConversationId(convId)
-    }
-    setAgentMode(enabled)
-  }, [activeConvId])
-
   const onSend = (text: string) => {
     if (researchContext.api.sendBlockTarget === 'text') {
       message.warning(S.chat_api_missing_toast)
@@ -964,84 +823,18 @@ export default function ChatPage() {
     }
   }
 
-  const liveRunning = Boolean(generation)
   const visibleMessages = liveRunning
     ? messages.slice(-Math.min(messages.length, LIVE_WINDOW))
     : messages
-  const deferredTimelineMessages = useDeferredValue(messages)
   const deferredRefs = useDeferredValue(refs)
   const hiddenCount = liveRunning
     ? Math.max(0, messages.length - visibleMessages.length)
     : 0
-  const messageIndexById = useMemo(() => {
-    const map = new Map<number, number>()
-    messages.forEach((msg, idx) => {
-      map.set(msg.id, idx)
-    })
-    return map
-  }, [messages])
-  const timelineItems = useMemo(() => {
-    const out: TimelineItem[] = []
-    let pendingUser: Message | null = null
-    let order = 0
-    for (const msg of deferredTimelineMessages) {
-      if (msg.role === 'user') {
-        pendingUser = msg
-        continue
-      }
-      if (msg.role !== 'assistant' || !pendingUser) continue
-      order += 1
-      out.push({
-        order,
-        userMsgId: pendingUser.id,
-        targetMsgId: msg.id,
-        questionPreview: compactTimelineText(pendingUser.content, 68, S),
-        hasAnswer: true,
-      })
-      pendingUser = null
-    }
-    if (pendingUser) {
-      order += 1
-      out.push({
-        order,
-        userMsgId: pendingUser.id,
-        targetMsgId: pendingUser.id,
-        questionPreview: compactTimelineText(pendingUser.content, 68, S),
-        hasAnswer: false,
-      })
-    }
-    return out
-  }, [S, deferredTimelineMessages])
-  const timelineTrackedMessageIds = useMemo(
-    () => timelineItems.map((item) => item.targetMsgId),
-    [timelineItems],
-  )
-  const timelineUserMsgIdByTargetMsgId = useMemo(() => {
-    const map = new Map<number, number>()
-    timelineItems.forEach((item) => {
-      map.set(item.targetMsgId, item.userMsgId)
-    })
-    return map
-  }, [timelineItems])
   const effectiveGuide = useMemo(() => {
     const sourcePath = researchContext.guideSource.sourcePath
     const sourceName = researchContext.guideSource.sourceName
     return { sourcePath, sourceName }
   }, [researchContext.guideSource.sourceName, researchContext.guideSource.sourcePath])
-
-  const jumpToTimelineItem = (item: TimelineItem) => {
-    if (liveRunning) {
-      message.info(S.timeline_jump_blocked)
-      return
-    }
-    const idx = messageIndexById.get(item.targetMsgId)
-    if (idx == null) return
-    setActiveTimelineUserMsgId(null)
-    const token = nextEventToken()
-    window.setTimeout(() => {
-      setTimelineJump({ messageId: item.targetMsgId, token })
-    }, 0)
-  }
 
   const openReader = (payload: ReaderOpenPayload) => {
     const sourcePath = String(payload?.sourcePath || '').trim()
@@ -1216,7 +1009,7 @@ export default function ChatPage() {
     setRightDockPanel(panel)
     setRightDockCollapsed(false)
     if (panel === 'timeline') {
-      setTimelineOpen(true)
+      openTimeline()
       return
     }
     if (panel === 'shelf') {
@@ -1224,7 +1017,7 @@ export default function ChatPage() {
       setCitationShelfOpen(true)
       return
     }
-  }, [])
+  }, [openTimeline])
 
   const refreshShelfSourceQuality = useCallback(() => {
     setSourceQualityRefreshToken((value) => value + 1)
@@ -1805,7 +1598,7 @@ export default function ChatPage() {
   ) : null
   const refsActivity = useMemo(() => summarizeRefsActivity(deferredRefs), [deferredRefs])
   const chatActivityItems = useMemo(() => {
-    const items: Array<{ key: string; label: string; tone: 'active' | 'ready' | 'warning' }> = []
+    const items: ChatActivityItem[] = []
     if (conversationLoading || messagesLoadingMore) {
       items.push({ key: 'messages', label: S.chat_activity_messages, tone: 'active' })
     }
@@ -1860,32 +1653,14 @@ export default function ChatPage() {
     apiConnectionAlertTarget,
     uploading,
   ])
-  const showActivityStrip = debugPanelEnabled || chatActivityItems.length > 0
-  const chatActivityStrip = showActivityStrip ? (
-    <div className="kb-chat-activity-shell">
-      <div className="kb-chat-activity-strip" data-testid="chat-activity-strip" aria-live="polite">
-        {chatActivityItems.map((item) => (
-          <span
-            key={item.key}
-            className={`kb-chat-activity-pill is-${item.tone}`}
-            data-testid={`chat-activity-${item.key}`}
-          >
-            {item.tone === 'active' ? <LoadingOutlined spin /> : <span className="kb-chat-activity-dot" aria-hidden="true" />}
-            <span>{item.label}</span>
-          </span>
-        ))}
-        {debugPanelEnabled ? (
-          <span className="kb-chat-debug-strip" data-testid="chat-perf-panel">
-            <BugOutlined />
-            <span>{S.chat_debug_switch.replace('{n}', String(debugSnapshot.switchTotal)).replace('{ms}', String(debugSnapshot.switchAvgMs))}</span>
-            <span>{S.chat_debug_refs.replace('{n}', String(debugSnapshot.refsTotal)).replace('{ms}', String(debugSnapshot.refsAvgMs))}</span>
-            <span>{S.chat_debug_open.replace('{n}', String(debugSnapshot.openPhases))}</span>
-            <span>{S.chat_debug_prep.replace('{n}', String(debugSnapshot.messagePrep))}</span>
-          </span>
-        ) : null}
-      </div>
-    </div>
-  ) : null
+  const chatActivityStrip = (
+    <ChatActivityStrip
+      items={chatActivityItems}
+      debugEnabled={debugPanelEnabled}
+      debugSnapshot={debugSnapshot}
+      labels={S}
+    />
+  )
   const researchContextAttrs = {
     'data-research-conversation-id': researchContext.conversationId,
     'data-research-project-id': researchContext.projectId,
@@ -2044,25 +1819,9 @@ export default function ChatPage() {
                     generationTrace={generation?.researchTrace}
                     generationAgentTrace={generation?.agentTrace}
                     jumpTarget={timelineJump}
-                    onJumpHandled={(handled) => {
-                      setTimelineJump((current) => (
-                        current?.token === handled.token && current?.messageId === handled.messageId
-                          ? null
-                          : current
-                      ))
-                      setActiveTimelineUserMsgId(null)
-                    }}
+                    onJumpHandled={handleTimelineJumpHandled}
                     trackedMessageIds={timelineTrackedMessageIds}
-                    onTrackedMessageActive={(messageId) => {
-                      const nextUserMsgId = messageId != null
-                        ? (timelineUserMsgIdByTargetMsgId.get(messageId) ?? null)
-                        : null
-                      startTransition(() => {
-                        setActiveTimelineUserMsgId((current) => (
-                          current === nextUserMsgId ? current : nextUserMsgId
-                        ))
-                      })
-                    }}
+                    onTrackedMessageActive={handleTrackedMessageActive}
                     onOpenReader={openReader}
                     readerLocateResults={readerLocateResults}
                     onShelfOpenChange={handleCitationShelfOpenChange}

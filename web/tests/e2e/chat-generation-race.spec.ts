@@ -437,7 +437,7 @@ test('default chat send does not request research agent mode', async ({ page }) 
   await page.goto('/')
   await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
   await expect(page.locator('body')).toContainText('Existing answer A')
-  await expect(page.locator('button.kb-agent-mode-btn')).toContainText('Normal')
+  await expect(page.locator('button.kb-agent-mode-btn')).toContainText('Standard')
 
   await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill(prompt)
   await page.locator('button.kb-send-btn').click()
@@ -465,7 +465,7 @@ test('agent mode URL parameter enables the composer toggle and request flag', as
   await page.goto('/?agent_mode=1')
   await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
   await expect(page.locator('body')).toContainText('Existing answer A')
-  await expect(page.locator('button.kb-agent-mode-btn')).toContainText('Agent')
+  await expect(page.locator('button.kb-agent-mode-btn')).toContainText('Research')
 
   await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill(prompt)
   await page.locator('button.kb-send-btn').click()
@@ -495,18 +495,18 @@ test('agent mode toggle is remembered per conversation without leaking across sw
   await page.goto('/')
   await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
   await expect(page.locator('body')).toContainText('Existing answer A')
-  await expect(agentButton).toContainText('Normal')
+  await expect(agentButton).toContainText('Standard')
 
   await agentButton.click()
-  await expect(agentButton).toContainText('Agent')
+  await expect(agentButton).toContainText('Research')
 
   await page.locator('.kb-conv-row', { hasText: 'Generation Race B' }).click()
   await expect(page.locator('body')).toContainText(B_STABLE_ANSWER)
-  await expect(agentButton).toContainText('Normal')
+  await expect(agentButton).toContainText('Standard')
 
   await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
   await expect(page.locator('body')).toContainText('Existing answer A')
-  await expect(agentButton).toContainText('Agent')
+  await expect(agentButton).toContainText('Research')
 })
 
 test('stale generation stream cannot overwrite the active conversation after switching', async ({ page }) => {
