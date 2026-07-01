@@ -143,7 +143,7 @@ export function useChatActivityItems({
       const stage = String(generationStage || '').trim()
       items.push({
         key: 'generation',
-        label: stage ? `${labels.chat_activity_generation} · ${stage}` : labels.chat_activity_generation,
+        label: stage ? `${labels.chat_activity_generation} - ${stage}` : labels.chat_activity_generation,
         tone: 'active',
       })
     }

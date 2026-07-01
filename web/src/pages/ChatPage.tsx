@@ -1,13 +1,14 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, message, Typography } from 'antd'
+import { Button, message, Typography } from 'antd'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList, type ShelfActivityState } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import { ChatActivityStrip } from '../components/chat/ChatActivityStrip'
+import { ChatConnectionAlert } from '../components/chat/ChatWorkspaceStatus'
 import { ReaderWorkspaceDock } from '../components/chat/ReaderWorkspaceDock'
 import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
 import { useAgentMode } from '../components/chat/useAgentMode'
@@ -21,6 +22,7 @@ import { useSelectedResearchContext } from '../components/chat/useSelectedResear
 import { useReaderSessionHighlights } from '../components/chat/reader/useReaderSessionHighlights'
 import { useReaderLocateRepair } from '../components/chat/reader/useReaderLocateRepair'
 import { buildResearchContext } from '../components/chat/researchContext'
+import { useResearchContextAttrs } from '../components/chat/researchContextAttrs'
 import type { SelectedResearchContextPack } from '../components/chat/researchContextPack'
 import { dispatchOpenSettings, type ApiSettingsTarget } from '../components/layout/settingsEvents'
 import type { QueryScope } from '../api/chat'
@@ -412,29 +414,13 @@ export default function ChatPage() {
     </>
   )
   const apiConnectionAlertTarget = researchContext.api.connectionAlertTarget
-  const apiConnectionProvider = apiConnectionAlertTarget === 'vision'
-    ? researchContext.api.vision
-    : researchContext.api.text
-  const apiConnectionAlertDesc = apiConnectionAlertTarget === 'vision'
-    ? S.settings_missing_vision_api_desc
-    : apiConnectionProvider.status === 'failed' && (apiConnectionProvider.lastError || apiConnectionProvider.reason)
-      ? S.chat_api_failed_desc.replace('{error}', apiConnectionProvider.lastError || apiConnectionProvider.reason)
-      : S.chat_api_missing_desc
-  const connectionAlert = apiConnectionAlertTarget ? (
-    <div className="kb-chat-connection-alert">
-      <Alert
-        type="warning"
-        showIcon
-        message={apiConnectionAlertTarget === 'vision' ? S.settings_missing_vision_api_title : S.chat_api_missing_title}
-        description={apiConnectionAlertDesc}
-        action={(
-          <Button size="small" onClick={() => openApiSettings(apiConnectionAlertTarget)}>
-            {S.chat_open_api_settings}
-          </Button>
-        )}
-      />
-    </div>
-  ) : null
+  const connectionAlert = (
+    <ChatConnectionAlert
+      labels={S}
+      researchContext={researchContext}
+      onOpenSettings={openApiSettings}
+    />
+  )
   const chatActivityItems = useChatActivityItems({
     labels: S,
     refs: deferredRefs,
@@ -455,19 +441,7 @@ export default function ChatPage() {
       labels={S}
     />
   )
-  const researchContextAttrs = {
-    'data-research-conversation-id': researchContext.conversationId,
-    'data-research-project-id': researchContext.projectId,
-    'data-research-mode': researchContext.mode,
-    'data-research-task-mode': researchContext.taskMode,
-    'data-research-source-kind': researchContext.activeSource.kind,
-    'data-research-source-ready': researchContext.activeSource.ready ? '1' : '0',
-    'data-research-reader-linked': researchContext.reader.linkedToConversation ? '1' : '0',
-    'data-research-shelf-scope': researchContext.shelfScope,
-    'data-research-api-text': researchContext.api.text.status,
-    'data-research-api-vision': researchContext.api.vision.status,
-    'data-research-api-block-target': researchContext.api.sendBlockTarget,
-  } as const
+  const researchContextAttrs = useResearchContextAttrs(researchContext)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
