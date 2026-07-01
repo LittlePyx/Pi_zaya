@@ -1,6 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, message, Typography } from 'antd'
 import { BookOutlined, ClockCircleOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined } from '@ant-design/icons'
 import { useChatStore } from '../stores/chatStore'
@@ -12,6 +12,7 @@ import { ChatActivityStrip, type ChatActivityItem } from '../components/chat/Cha
 import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
 import { useAgentMode } from '../components/chat/useAgentMode'
 import { useChatTimeline } from '../components/chat/useChatTimeline'
+import { useReaderDock, type RightDockPanel } from '../components/chat/useReaderDock'
 import type { CiteDetail } from '../components/chat/citationState'
 import { sameHighlightTarget } from '../components/chat/reader/readerDomUtils'
 import {
@@ -57,14 +58,6 @@ const HISTORY_PAGE_SIZE = 24
 const LIVE_WINDOW = 16
 const READY_DISMISS_MS = 2600
 const DUPLICATE_DISMISS_MS = 3600
-const DESKTOP_READER_BREAKPOINT = 1280
-const DESKTOP_DOCK_DEFAULT_WIDTH = 392
-const DESKTOP_DOCK_MIN_WIDTH = 320
-const DESKTOP_DOCK_MAX_WIDTH = 760
-const DESKTOP_DOCK_COLLAPSED_WIDTH = 48
-const DESKTOP_DOCK_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
-const RIGHT_DOCK_WIDTH_STORAGE_KEY = 'kb:chat-side-dock-width'
-const RIGHT_DOCK_COLLAPSED_STORAGE_KEY = 'kb:chat-side-dock-collapsed'
 const SELECTED_RESEARCH_CONTEXT_STORAGE_PREFIX = 'kb:chat:selected-research-context:v1'
 const SELECTED_RESEARCH_CONTEXT_STATE_KEY = 'selected_research_context'
 const SELECTED_RESEARCH_CONTEXT_SCOPE_STATE_KEY = 'selected_research_context_scope'
@@ -91,22 +84,6 @@ function stripSourceExt(name: string) {
     .replace(/\.md$/i, '')
     .replace(/\.pdf$/i, '')
     .trim()
-}
-
-function clampRightDockWidth(value: number) {
-  if (!Number.isFinite(value)) return DESKTOP_DOCK_DEFAULT_WIDTH
-  return Math.max(DESKTOP_DOCK_MIN_WIDTH, Math.min(DESKTOP_DOCK_MAX_WIDTH, Math.round(value)))
-}
-
-function loadStoredRightDockWidth() {
-  if (typeof window === 'undefined') return DESKTOP_DOCK_DEFAULT_WIDTH
-  const raw = Number(window.localStorage.getItem(RIGHT_DOCK_WIDTH_STORAGE_KEY) || 0)
-  return clampRightDockWidth(raw || DESKTOP_DOCK_DEFAULT_WIDTH)
-}
-
-function loadStoredRightDockCollapsed() {
-  if (typeof window === 'undefined') return false
-  return window.localStorage.getItem(RIGHT_DOCK_COLLAPSED_STORAGE_KEY) === '1'
 }
 
 function selectedResearchContextStorageKey(conversationId?: string | null, shelfScope?: string | null) {
@@ -216,8 +193,6 @@ function normalizeReaderSessionHighlights(value: unknown): ReaderSessionHighligh
     .filter((item) => Boolean(String(item.id || '').trim() && String(item.text || '').trim()))
 }
 
-type RightDockPanel = 'timeline' | 'shelf' | 'reader'
-
 interface RefsActivitySummary {
   packCount: number
   pendingPackCount: number
@@ -272,10 +247,30 @@ export default function ChatPage() {
   const settings = useSettingsStore()
   const liveRunning = Boolean(generation)
   const { agentMode, setAgentMode: handleAgentModeChange } = useAgentMode(activeConvId)
-  const [readerOpen, setReaderOpen] = useState(false)
-  const [readerPayload, setReaderPayload] = useState<ReaderOpenPayload | null>(null)
-  const [rightDockCollapsed, setRightDockCollapsed] = useState(loadStoredRightDockCollapsed)
-  const [rightDockWidth, setRightDockWidth] = useState(loadStoredRightDockWidth)
+  const {
+    readerOpen,
+    readerPayload,
+    readerOpenRef,
+    readerPayloadRef,
+    openReaderDock,
+    closeReader,
+    resetReaderDock,
+    rightDockCollapsed,
+    rightDockPanel,
+    setRightDockPanel,
+    showDockPanel,
+    collapseRightDock,
+    toggleRightDockCollapsed,
+    desktopReaderEligible,
+    rightDockResizing,
+    rightDockStyle,
+    splitLayoutRef,
+    rightDockResizeGuideRef,
+    beginRightDockResize,
+    handleRightDockResizeMove,
+    commitRightDockResize,
+    cancelRightDockResize,
+  } = useReaderDock()
   const [readerSessionHighlights, setReaderSessionHighlights] = useState<Record<string, ReaderSessionHighlight[]>>({})
   const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
   const [sourceQualityRefreshToken, setSourceQualityRefreshToken] = useState(0)
@@ -290,12 +285,7 @@ export default function ChatPage() {
   const [qualityDiagnosticsEnabled] = useState(qualityDiagnosticsVisible)
   const debugSnapshot = useChatPerfSnapshot(debugPanelEnabled)
   const [openShelfSignal, setOpenShelfSignal] = useState(0)
-  const [rightDockPanel, setRightDockPanel] = useState<RightDockPanel>('timeline')
   const [shelfDockTarget, setShelfDockTarget] = useState<HTMLDivElement | null>(null)
-  const [desktopReaderEligible, setDesktopReaderEligible] = useState(
-    () => (typeof window !== 'undefined' ? window.innerWidth >= DESKTOP_READER_BREAKPOINT : false),
-  )
-  const [rightDockResizing, setRightDockResizing] = useState(false)
   const [appendSignal, setAppendSignal] = useState<{ token: number; text: string } | null>(null)
   const uploadNoticeRef = useRef<Record<string, string>>({})
   const dismissTimerRef = useRef<Record<string, number>>({})
@@ -303,8 +293,6 @@ export default function ChatPage() {
   const readerLocateRequestRef = useRef(1)
   const readerLocateQualitySubmittedRef = useRef<Set<string>>(new Set())
   const readerLocateSourceRepairAtRef = useRef<Record<string, number>>({})
-  const readerPayloadRef = useRef<ReaderOpenPayload | null>(null)
-  const readerOpenRef = useRef(readerOpen)
   const readerPayloadByFeedbackKeyRef = useRef<Record<string, ReaderOpenPayload>>({})
   const readerLocateGuardByFeedbackKeyRef = useRef<Record<string, ReaderLocateRequestGuard>>({})
   const activeConvIdRef = useRef(String(activeConvId || '').trim())
@@ -313,14 +301,7 @@ export default function ChatPage() {
   const readerStateSaveTimersRef = useRef<Record<string, number>>({})
   const readerLocateSourceRepairStreamRef = useRef<AbortController | null>(null)
   const readerLocateSourceRepairRunTokenRef = useRef(0)
-  const splitLayoutRef = useRef<HTMLDivElement | null>(null)
-  const rightDockResizeGuideRef = useRef<HTMLDivElement | null>(null)
-  const rightDockResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
-  const rightDockActivePointerIdRef = useRef<number | null>(null)
-  const rightDockResizeFocusRestoreRef = useRef<HTMLElement | null>(null)
   const selectedResearchContextLoadSeqRef = useRef(0)
-  const rightDockWidthLiveRef = useRef(rightDockWidth)
-  const rightDockResizePreviewWidthRef = useRef(rightDockWidth)
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
   const activeGuideBinding = useMemo(() => {
     const convId = String(activeConvId || '').trim()
@@ -472,7 +453,7 @@ export default function ChatPage() {
   const captureTimelineScrollTop = useCallback(() => {
     const scrollHost = splitLayoutRef.current?.querySelector<HTMLElement>('.kb-main-scroll')
     timelineScrollRestoreTopRef.current = scrollHost ? scrollHost.scrollTop : null
-  }, [])
+  }, [splitLayoutRef])
 
   const handleTimelineBlockedJump = useCallback(() => {
     message.info(S.timeline_jump_blocked)
@@ -503,9 +484,7 @@ export default function ChatPage() {
     const projectChanged = previousShelfProjectScopeRef.current !== shelfProjectScope
     previousShelfProjectScopeRef.current = shelfProjectScope
     resetTimeline()
-    setReaderOpen(false)
-    setReaderPayload(null)
-    readerPayloadRef.current = null
+    resetReaderDock()
     readerPayloadByFeedbackKeyRef.current = {}
     readerLocateGuardByFeedbackKeyRef.current = {}
     readerLocateSourceRepairRunTokenRef.current += 1
@@ -519,7 +498,7 @@ export default function ChatPage() {
       setRightDockPanel((current) => (current === 'reader' ? 'timeline' : current))
     }
     setAppendSignal(null)
-  }, [activeConvId, resetTimeline, shelfProjectScope])
+  }, [activeConvId, resetReaderDock, resetTimeline, setRightDockPanel, shelfProjectScope])
 
   useEffect(() => {
     const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
@@ -539,42 +518,8 @@ export default function ChatPage() {
   }, [])
 
   useEffect(() => {
-    readerOpenRef.current = readerOpen
-  }, [readerOpen])
-
-  useEffect(() => {
     activeConvIdRef.current = String(activeConvId || '').trim()
   }, [activeConvId])
-
-  useEffect(() => {
-    readerPayloadRef.current = readerPayload
-  }, [readerPayload])
-
-  useEffect(() => {
-    const syncLayout = () => {
-      setDesktopReaderEligible(window.innerWidth >= DESKTOP_READER_BREAKPOINT)
-    }
-    syncLayout()
-    window.addEventListener('resize', syncLayout)
-    return () => {
-      window.removeEventListener('resize', syncLayout)
-    }
-  }, [])
-
-  useEffect(() => {
-    window.localStorage.setItem(RIGHT_DOCK_WIDTH_STORAGE_KEY, String(clampRightDockWidth(rightDockWidth)))
-  }, [rightDockWidth])
-
-  useEffect(() => {
-    window.localStorage.setItem(RIGHT_DOCK_COLLAPSED_STORAGE_KEY, rightDockCollapsed ? '1' : '0')
-  }, [rightDockCollapsed])
-
-  useEffect(() => {
-    rightDockWidthLiveRef.current = rightDockWidth
-    if (!rightDockResizing) {
-      rightDockResizePreviewWidthRef.current = rightDockWidth
-    }
-  }, [rightDockResizing, rightDockWidth])
 
   useLayoutEffect(() => {
     const targetTop = timelineScrollRestoreTopRef.current
@@ -596,57 +541,7 @@ export default function ChatPage() {
       window.cancelAnimationFrame(frameA)
       window.cancelAnimationFrame(frameB)
     }
-  }, [timelineOpen, desktopReaderEligible, readerOpen, rightDockCollapsed])
-
-  const restoreRightDockResizeFocus = () => {
-    const target = rightDockResizeFocusRestoreRef.current
-    rightDockResizeFocusRestoreRef.current = null
-    if (!target || !target.isConnected) return
-    try {
-      target.focus({ preventScroll: true })
-    } catch {
-      target.focus()
-    }
-  }
-
-  const clearRightDockResizeSession = () => {
-    rightDockResizeRef.current = null
-    rightDockActivePointerIdRef.current = null
-    rightDockResizePreviewWidthRef.current = rightDockWidthLiveRef.current
-    document.body.classList.remove('kb-right-dock-resizing')
-    document.body.style.removeProperty('cursor')
-    document.body.style.removeProperty('user-select')
-    const guide = rightDockResizeGuideRef.current
-    if (guide) {
-      guide.style.removeProperty('left')
-    }
-  }
-
-  useEffect(() => () => {
-    clearRightDockResizeSession()
-  }, [])
-
-  const updateRightDockResizeGuide = (nextWidth: number) => {
-    const guide = rightDockResizeGuideRef.current
-    const layout = splitLayoutRef.current
-    const clampedWidth = clampRightDockWidth(nextWidth)
-    rightDockResizePreviewWidthRef.current = clampedWidth
-    if (!guide || !layout || rightDockCollapsed) return
-    const nextLeft = Math.max(0, layout.clientWidth - clampedWidth)
-    guide.style.left = `${Math.round(nextLeft)}px`
-  }
-
-  const finishRightDockResize = (commit: boolean) => {
-    const finalWidth = clampRightDockWidth(
-      commit ? rightDockResizePreviewWidthRef.current || rightDockWidthLiveRef.current : rightDockWidthLiveRef.current,
-    )
-    clearRightDockResizeSession()
-    setRightDockResizing(false)
-    if (commit && !rightDockCollapsed) {
-      setRightDockWidth(finalWidth)
-    }
-    window.requestAnimationFrame(restoreRightDockResizeFocus)
-  }
+  }, [desktopReaderEligible, readerOpen, rightDockCollapsed, splitLayoutRef, timelineOpen])
 
   useEffect(() => {
     const liveKeys = new Set<string>()
@@ -906,11 +801,7 @@ export default function ChatPage() {
         conversationId: String(activeConvId || '').trim(),
       }
     }
-    readerPayloadRef.current = nextPayload
-    setReaderPayload(nextPayload)
-    setRightDockPanel('reader')
-    setRightDockCollapsed(false)
-    setReaderOpen(true)
+    openReaderDock(nextPayload)
   }
 
   const openReaderStandalone = useCallback(async (payloadInput?: ReaderOpenPayload | null) => {
@@ -973,25 +864,24 @@ export default function ChatPage() {
     S.reader_window_blocked,
     S.side_dock_reader,
     activeConvId,
+    readerPayloadRef,
     shelfProjectId,
   ])
 
   const handleCitationShelfOpenChange = useCallback((open: boolean) => {
     setCitationShelfOpen(open)
     if (open && desktopReaderEligible) {
-      setRightDockPanel('shelf')
-      setRightDockCollapsed(false)
+      showDockPanel('shelf')
     }
-  }, [desktopReaderEligible])
+  }, [desktopReaderEligible, showDockPanel])
 
   const handleCitationShelfStateChange = useCallback((state: { open: boolean; count: number }) => {
     setCitationShelfCount(Math.max(0, Math.floor(Number(state.count || 0))))
     setCitationShelfOpen(Boolean(state.open))
     if (state.open && desktopReaderEligible) {
-      setRightDockPanel('shelf')
-      setRightDockCollapsed(false)
+      showDockPanel('shelf')
     }
-  }, [desktopReaderEligible])
+  }, [desktopReaderEligible, showDockPanel])
 
   const handleShelfActivityChange = useCallback((state: ShelfActivityState) => {
     setShelfActivity((current) => (
@@ -1006,8 +896,7 @@ export default function ChatPage() {
   }, [])
 
   const activateDockPanel = useCallback((panel: RightDockPanel) => {
-    setRightDockPanel(panel)
-    setRightDockCollapsed(false)
+    showDockPanel(panel)
     if (panel === 'timeline') {
       openTimeline()
       return
@@ -1017,7 +906,7 @@ export default function ChatPage() {
       setCitationShelfOpen(true)
       return
     }
-  }, [openTimeline])
+  }, [openTimeline, showDockPanel])
 
   const refreshShelfSourceQuality = useCallback(() => {
     setSourceQualityRefreshToken((value) => value + 1)
@@ -1042,12 +931,8 @@ export default function ChatPage() {
       sourcePath: String(nextPayload.sourcePath || '').trim(),
       conversationId: String(activeConvIdRef.current || '').trim(),
     }
-    readerPayloadRef.current = nextPayload
-    setReaderPayload(nextPayload)
-    setRightDockPanel('reader')
-    setRightDockCollapsed(false)
-    setReaderOpen(true)
-  }, [nextReaderLocateRequestId])
+    openReaderDock(nextPayload)
+  }, [nextReaderLocateRequestId, openReaderDock, readerOpenRef, readerPayloadRef])
 
   const completeReaderLocateSourceRepair = useCallback(async (
     runId: string,
@@ -1231,7 +1116,14 @@ export default function ChatPage() {
       }
       return { ...current, [feedbackKey]: { ...result, locateRequestId } }
     })
-  }, [completeReaderLocateSourceRepair, qualityDiagnosticsEnabled, refreshShelfSourceQuality, retryReaderLocateAfterRepair])
+  }, [
+    completeReaderLocateSourceRepair,
+    qualityDiagnosticsEnabled,
+    readerOpenRef,
+    readerPayloadRef,
+    refreshShelfSourceQuality,
+    retryReaderLocateAfterRepair,
+  ])
 
   const appendReaderSelection = (text: string) => {
     const raw = String(text || '')
@@ -1257,10 +1149,9 @@ export default function ChatPage() {
     window.dispatchEvent(new CustomEvent(READER_SELECTION_SHELF_EVENT, { detail }))
     setOpenShelfSignal((value) => value + 1)
     setCitationShelfOpen(true)
-    setRightDockPanel('shelf')
-    setRightDockCollapsed(false)
+    showDockPanel('shelf')
     message.success(S.reader_added_to_shelf || 'Added to citation shelf')
-  }, [S.reader_added_to_shelf, activeConvId, shelfProjectId])
+  }, [S.reader_added_to_shelf, activeConvId, shelfProjectId, showDockPanel])
 
   const addReaderCitationToShelf = useCallback((detail: CiteDetail) => {
     if (!detail) return
@@ -1274,17 +1165,15 @@ export default function ChatPage() {
     window.dispatchEvent(new CustomEvent(READER_CITATION_SHELF_EVENT, { detail: payload }))
     setOpenShelfSignal((value) => value + 1)
     setCitationShelfOpen(true)
-    setRightDockPanel('shelf')
-    setRightDockCollapsed(false)
+    showDockPanel('shelf')
     message.success(S.reader_added_to_shelf || 'Added to citation shelf')
-  }, [S.reader_added_to_shelf, activeConvId, shelfProjectId])
+  }, [S.reader_added_to_shelf, activeConvId, shelfProjectId, showDockPanel])
 
   const openReaderCitationShelf = useCallback(() => {
     setOpenShelfSignal((value) => value + 1)
     setCitationShelfOpen(true)
-    setRightDockPanel('shelf')
-    setRightDockCollapsed(false)
-  }, [])
+    showDockPanel('shelf')
+  }, [showDockPanel])
 
   const activeReaderSourcePath = useMemo(() => String(readerPayload?.sourcePath || '').trim(), [readerPayload?.sourcePath])
   const activeReaderHighlightScope = useMemo(
@@ -1470,53 +1359,6 @@ export default function ChatPage() {
   const guideSourceLabel = researchContext.guideSource.label || S.guide_unbound
   const guideSourceReady = researchContext.guideSource.ready
   const guideStatusLabel = guideSourceReady ? S.timeline_guide_ready : S.timeline_guide_pending
-  const beginRightDockResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!rightDockExpanded || !event.isPrimary) return
-    const currentWidth = clampRightDockWidth(rightDockWidthLiveRef.current)
-    rightDockResizeRef.current = {
-      startX: event.clientX,
-      startWidth: currentWidth,
-    }
-    rightDockActivePointerIdRef.current = event.pointerId
-    rightDockResizePreviewWidthRef.current = currentWidth
-    updateRightDockResizeGuide(currentWidth)
-    const activeElement = document.activeElement
-    if (
-      activeElement instanceof HTMLElement
-      && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')
-    ) {
-      rightDockResizeFocusRestoreRef.current = activeElement
-      activeElement.blur()
-    } else {
-      rightDockResizeFocusRestoreRef.current = null
-    }
-    setRightDockResizing(true)
-    document.body.classList.add('kb-right-dock-resizing')
-    document.body.style.setProperty('cursor', 'col-resize')
-    document.body.style.setProperty('user-select', 'none')
-    event.currentTarget.setPointerCapture(event.pointerId)
-    event.preventDefault()
-  }
-
-  const handleRightDockResizeMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (rightDockActivePointerIdRef.current !== event.pointerId) return
-    const state = rightDockResizeRef.current
-    if (!state) return
-    updateRightDockResizeGuide(state.startWidth + (state.startX - event.clientX))
-    event.preventDefault()
-  }
-
-  const commitRightDockResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (rightDockActivePointerIdRef.current !== event.pointerId) return
-    finishRightDockResize(true)
-    event.preventDefault()
-  }
-
-  const cancelRightDockResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (rightDockActivePointerIdRef.current !== event.pointerId) return
-    finishRightDockResize(false)
-    event.preventDefault()
-  }
   const chatComposer = (
     <>
       {currentSelectedResearchContext ? (
@@ -1866,10 +1708,7 @@ export default function ChatPage() {
             {showRightDock ? (
               <aside
                 className={`kb-chat-side-dock is-${activeRightDockPanel || 'empty'} ${rightDockCollapsed ? 'is-collapsed' : ''} ${rightDockResizing ? 'is-resizing' : ''}`}
-                style={{
-                  width: rightDockCollapsed ? `${DESKTOP_DOCK_COLLAPSED_WIDTH}px` : `${rightDockWidth}px`,
-                  transition: rightDockResizing ? 'none' : DESKTOP_DOCK_WIDTH_TRANSITION,
-                }}
+                style={rightDockStyle}
               >
                 <div className="kb-chat-side-workspace-head">
                   <span>{S.side_dock_workspace || 'Research workspace'}</span>
@@ -1880,7 +1719,7 @@ export default function ChatPage() {
                     className="kb-chat-side-collapse-btn"
                     aria-label={rightDockCollapsed ? (S.side_dock_expand || 'Expand right sidebar') : (S.side_dock_collapse || 'Collapse right sidebar')}
                     title={rightDockCollapsed ? (S.side_dock_expand || 'Expand right sidebar') : (S.side_dock_collapse || 'Collapse right sidebar')}
-                    onClick={() => setRightDockCollapsed((value) => !value)}
+                    onClick={toggleRightDockCollapsed}
                   >
                     {rightDockCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
                   </button>
@@ -1968,10 +1807,10 @@ export default function ChatPage() {
                       <PaperGuideReaderDrawer
                         open={readerOpen}
                         payload={readerPayload}
-                        onClose={() => setReaderOpen(false)}
+                        onClose={closeReader}
                         onAppendSelection={appendReaderSelection}
                         presentation="inline"
-                        onCollapse={() => setRightDockCollapsed(true)}
+                        onCollapse={collapseRightDock}
                         onOpenStandalone={() => { void openReaderStandalone(readerPayload) }}
                         conversationId={activeConvId || ''}
                         sessionHighlights={activeReaderSessionHighlights}
@@ -1995,7 +1834,7 @@ export default function ChatPage() {
         <PaperGuideReaderDrawer
           open={readerOpen}
           payload={readerPayload}
-          onClose={() => setReaderOpen(false)}
+          onClose={closeReader}
           onAppendSelection={appendReaderSelection}
           onOpenStandalone={() => { void openReaderStandalone(readerPayload) }}
           conversationId={activeConvId || ''}
