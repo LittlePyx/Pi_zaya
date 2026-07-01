@@ -48,6 +48,9 @@ def test_runner_passes_structured_comparison_notes_to_answer_tool(monkeypatch, t
     assert result["agent_trace"]["research_run"]["source_policy"] == "local_plus_external_background"
     assert result["agent_trace"]["research_run"]["metrics"]["evidence_matrix_rows"] == 1
     assert captured["agent_notes"]["comparisons"][0]["paper"] == "Paper A"
+    assert captured["agent_notes"]["research_run"]["status"] == "synthesizing"
+    assert captured["agent_notes"]["research_run"]["source_policy"] == "local_plus_external_background"
+    assert captured["agent_notes"]["evidence_matrix"][0]["paper"] == "Paper A"
     assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "needs_review"
     assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "hybrid_local_external"
 
@@ -125,6 +128,9 @@ def test_runner_marks_academic_no_hit_as_external_answer(monkeypatch, tmp_path):
     assert result["agent_trace"]["summary"]["evidence_hit_count"] == 0
     assert result["agent_trace"]["research_run"]["source_policy"] == "external_allowed_with_notice"
     assert result["agent_trace"]["summary"]["evidence_matrix_rows"] == 0
+    assert captured["agent_notes"]["research_run"]["status"] == "synthesizing"
+    assert captured["agent_notes"]["research_run"]["source_policy"] == "external_allowed_with_notice"
+    assert captured["agent_notes"]["evidence_matrix"] == []
     assert result["agent_trace"]["steps"][-1]["status"] == "skipped"
 
 

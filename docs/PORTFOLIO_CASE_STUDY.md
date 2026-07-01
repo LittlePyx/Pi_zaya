@@ -95,6 +95,9 @@ measured until a reproducible run exists:
 - Literature basket and scoped research context.
 - Explicit Research Agent Mode with planner intent, source policy, evidence
   matrix, and tool traces.
+- Evidence matrix rows are built before answer generation, giving the model a
+  compact paper/method/result/limitation/evidence scaffold instead of relying
+  only on unstructured retrieved snippets.
 - Source-aware answer generation that separates local evidence from external
   background.
 - Claim-level verification summaries rather than only final text.

@@ -1,4 +1,4 @@
-from kb.agent.research_run import build_research_run, infer_source_policy
+from kb.agent.research_run import build_evidence_matrix, build_research_run, infer_source_policy
 
 
 def test_research_run_builds_evidence_matrix_from_comparison_notes():
@@ -53,3 +53,32 @@ def test_research_run_marks_external_policy_when_no_local_hits():
     )
 
     assert policy == "external_allowed_with_notice"
+
+
+def test_build_evidence_matrix_can_be_used_before_answer_generation():
+    matrix = build_evidence_matrix(
+        hits=[
+            {
+                "text": "The method uses sparse coded illumination and reports faster capture.",
+                "score": 4.0,
+                "meta": {
+                    "source_name": "Paper B",
+                    "source_path": "paper-b.md",
+                    "heading_path": "Results",
+                },
+            }
+        ],
+        verification_status="needs_review",
+    )
+    run = build_research_run(
+        "Summarize Paper B.",
+        question_type="single_paper_qa",
+        hits=[],
+        agent_notes={"evidence_gate": {"answer_mode": "hybrid_local_external"}},
+        verification_status="needs_review",
+        status="synthesizing",
+    )
+
+    assert matrix[0].paper == "Paper B"
+    assert matrix[0].support_status == "needs_review"
+    assert run.status == "synthesizing"

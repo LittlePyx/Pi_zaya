@@ -44,7 +44,25 @@ def test_generate_grounded_answer_can_blend_local_evidence_with_external_context
         "How does the paper use retrieval?",
         [{"text": "The paper uses retrieval before generation.", "meta": {"source_name": "Paper A"}}],
         settings=_Settings(),
-        agent_notes={"evidence_gate": {"answer_mode": "hybrid_local_external"}},
+        agent_notes={
+            "evidence_gate": {"answer_mode": "hybrid_local_external"},
+            "research_run": {
+                "status": "synthesizing",
+                "source_policy": "local_plus_external_background",
+                "metrics": {"evidence_matrix_rows": 1, "local_evidence_hit_count": 1},
+            },
+            "evidence_matrix": [
+                {
+                    "paper": "Paper A",
+                    "method": "retrieval before generation",
+                    "key_result": "improves grounding",
+                    "limitation": "latency not evaluated",
+                    "evidence_quote": "The paper uses retrieval before generation.",
+                    "citation": "[1]",
+                    "support_status": "needs_review",
+                }
+            ],
+        },
     )
 
     assert result["llm_used"] is True
@@ -52,6 +70,9 @@ def test_generate_grounded_answer_can_blend_local_evidence_with_external_context
     assert "local citations [n] come from the knowledge base" in result["answer"]
     assert "Local evidence says retrieval is used [1]." in result["answer"]
     assert "Hybrid answer source policy" in captured["messages"][-1]["content"]
+    assert "`evidence_matrix` as the synthesis scaffold" in captured["messages"][-1]["content"]
+    assert '"evidence_matrix"' in captured["messages"][-1]["content"]
+    assert "latency not evaluated" in captured["messages"][-1]["content"]
     assert "Compact answer shape" in captured["messages"][-1]["content"]
     assert "External context" in captured["messages"][-1]["content"]
 

@@ -117,7 +117,10 @@ For reference-followup answers, resolved upstream references in the trace can be
 opened in the reader or added to the literature basket from the chat UI.
 For comparison and evidence-heavy answers, the trace can include a compact
 evidence matrix so reviewers can scan which source supports which method,
-result, or limitation without exposing raw tool logs in the main answer.
+result, or limitation without exposing raw tool logs in the main answer. The
+same matrix is also attached to the pre-answer structured notes, so answer
+generation can synthesize from the paper/method/result/limitation/evidence cells
+instead of treating the matrix as UI-only audit metadata.
 Historical agent traces can also be read through the compact audit endpoint
 `GET /api/messages/{message_id}/agent-trace`. The React UI keeps this as a
 collapsed, on-demand trace panel so ordinary answers are not crowded with

@@ -330,10 +330,47 @@ def _relation_to_question(query: str, hits: list[dict[str, Any]]) -> str:
     return "Retrieved as a candidate source for this comparison; no strong lexical overlap was isolated."
 
 
+def _compact_evidence_matrix_rows(rows: Any, *, limit: int = 8) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in rows[: max(1, int(limit or 8))]:
+        if not isinstance(row, dict):
+            continue
+        compact = {
+            "paper": _clip(row.get("paper") or row.get("source_name"), 140),
+            "source_name": _clip(row.get("source_name"), 120),
+            "source_path": _clip(row.get("source_path"), 180),
+            "method": _clip(row.get("method"), 220),
+            "dataset_or_experiment": _clip(row.get("dataset_or_experiment"), 180),
+            "key_result": _clip(row.get("key_result"), 220),
+            "limitation": _clip(row.get("limitation"), 220),
+            "evidence_quote": _clip(row.get("evidence_quote"), 260),
+            "citation": _clip(row.get("citation"), 24),
+            "heading_path": _clip(row.get("heading_path"), 180),
+            "support_status": _clip(row.get("support_status"), 40),
+        }
+        out.append({key: value for key, value in compact.items() if value})
+    return out
+
+
 def _format_agent_notes(agent_notes: dict[str, Any] | None) -> str:
     if not isinstance(agent_notes, dict) or not agent_notes:
         return ""
     compact: dict[str, Any] = {}
+    if isinstance(agent_notes.get("research_run"), dict):
+        run = agent_notes.get("research_run") or {}
+        metrics = run.get("metrics") if isinstance(run.get("metrics"), dict) else {}
+        compact["research_run"] = {
+            "status": str(run.get("status") or "").strip(),
+            "source_policy": str(run.get("source_policy") or "").strip(),
+            "query_scope": str(run.get("query_scope") or "").strip(),
+            "evidence_matrix_rows": _positive_int(metrics.get("evidence_matrix_rows")),
+            "local_evidence_hit_count": _positive_int(metrics.get("local_evidence_hit_count")),
+        }
+    matrix_rows = _compact_evidence_matrix_rows(agent_notes.get("evidence_matrix"))
+    if matrix_rows:
+        compact["evidence_matrix"] = matrix_rows
     if isinstance(agent_notes.get("comparisons"), list):
         compact["comparisons"] = list(agent_notes.get("comparisons") or [])[:6]
     if isinstance(agent_notes.get("guide"), list):
@@ -695,6 +732,7 @@ def _hybrid_answer_query(query: str, notes_text: str, *, prefer_web: bool = Fals
     policy = (
         "Hybrid answer source policy:\n"
         "- Treat retrieved knowledge-base snippets as authoritative for paper-specific claims.\n"
+        "- Use `evidence_matrix` as the synthesis scaffold: cover paper, method, result, limitation, and evidence cells when present.\n"
         "- Cite every local paper-specific claim with the retrieved snippet marker like [1] or [2].\n"
         "- Put external academic background only under a short 'External context'/'Background' line when it helps.\n"
         "- Do not cite external background with local snippet markers, and do not claim it came from the knowledge base.\n"
@@ -836,7 +874,8 @@ def generate_grounded_answer(
             answer_query = (
                 f"{query}\n\n"
                 "Research Agent structured notes. Use these as an evidence map for the answer; "
-                "do not add claims that are not supported by the retrieved snippets. "
+                "when `evidence_matrix` is present, synthesize from its paper/method/result/limitation/evidence cells first. "
+                "Do not add claims that are not supported by the retrieved snippets. "
                 "Return only the user-facing answer; do not include Research Agent Trace, "
                 "plan steps, tool calls, verification statistics, or JSON:\n"
                 f"{notes_text}"

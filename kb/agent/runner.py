@@ -16,7 +16,7 @@ from .tools import (
     retrieve_references,
     verify_answer_citations,
 )
-from .types import AgentExecutionStep, AgentTrace, AgentVerification, QuestionType
+from .types import AgentExecutionStep, AgentTrace, AgentVerification, EvidenceStatus, QuestionType
 from .verifier import verify_answer_citations as verify_completed_answer
 
 
@@ -614,6 +614,49 @@ def _answer_mode(agent_notes: dict[str, Any] | None) -> str:
     return str(gate.get("answer_mode") or "").strip()
 
 
+def _pre_answer_evidence_status(agent_notes: dict[str, Any] | None, hits: list[dict[str, Any]]) -> EvidenceStatus:
+    gate = agent_notes.get("evidence_gate") if isinstance(agent_notes, dict) else {}
+    status = str(gate.get("evidence_status") or "").strip() if isinstance(gate, dict) else ""
+    if status in {"grounded", "needs_review", "insufficient", "not_applicable"}:
+        return status  # type: ignore[return-value]
+    return "needs_review" if hits else "not_applicable"
+
+
+def _attach_pre_answer_research_context(
+    context: dict[str, Any],
+    *,
+    query: str,
+    question_type: QuestionType,
+    scope_context: dict[str, Any],
+) -> None:
+    notes = context.get("agent_notes")
+    if not isinstance(notes, dict):
+        notes = {}
+        context["agent_notes"] = notes
+    hits = [hit for hit in list(context.get("hits") or []) if isinstance(hit, dict)]
+    pre_status = _pre_answer_evidence_status(notes, hits)
+    run = build_research_run(
+        query,
+        question_type=question_type,
+        hits=hits,
+        agent_notes=notes,
+        scope_context=scope_context,
+        verification_status=pre_status,
+        status="synthesizing",
+    )
+    payload = run.to_dict()
+    notes["evidence_matrix"] = list(payload.get("evidence_matrix") or [])
+    notes["research_run"] = {
+        "run_id": str(payload.get("run_id") or ""),
+        "status": str(payload.get("status") or ""),
+        "source_policy": str(payload.get("source_policy") or ""),
+        "query_scope": str(payload.get("query_scope") or ""),
+        "metrics": dict(payload.get("metrics") or {}),
+    }
+    scope_context["pre_answer_evidence_matrix_rows"] = len(notes["evidence_matrix"])
+    scope_context["pre_answer_source_policy"] = notes["research_run"]["source_policy"]
+
+
 def _general_answer_verification() -> AgentVerification:
     return AgentVerification(
         evidence_status="not_applicable",
@@ -742,6 +785,12 @@ def run_research_agent(
             if isinstance(result.get("comparisons"), list):
                 context["agent_notes"]["comparisons"] = result["comparisons"]
         elif plan_step.tool == "generate_grounded_answer":
+            _attach_pre_answer_research_context(
+                context,
+                query=query,
+                question_type=question_type,
+                scope_context=scope_context,
+            )
             result = _run_step(
                 trace,
                 idx,

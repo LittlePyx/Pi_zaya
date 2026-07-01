@@ -10,6 +10,7 @@ from .types import (
     EvidenceStatus,
     QuestionType,
     ResearchRun,
+    ResearchRunStatus,
     ResearchSubtask,
     SourcePolicy,
 )
@@ -166,6 +167,22 @@ def _hit_rows(
     return rows
 
 
+def build_evidence_matrix(
+    *,
+    hits: list[dict[str, Any]],
+    agent_notes: dict[str, Any] | None = None,
+    verification_status: EvidenceStatus = "needs_review",
+) -> list[EvidenceMatrixRow]:
+    local_hits = [hit for hit in list(hits or []) if isinstance(hit, dict)]
+    comparisons = []
+    if isinstance(agent_notes, dict) and isinstance(agent_notes.get("comparisons"), list):
+        comparisons = [item for item in list(agent_notes.get("comparisons") or []) if isinstance(item, dict)]
+    return _comparison_rows(comparisons, verification_status=verification_status) if comparisons else _hit_rows(
+        local_hits,
+        verification_status=verification_status,
+    )
+
+
 def _subtasks(
     *,
     question_type: QuestionType,
@@ -234,13 +251,12 @@ def build_research_run(
     scope_context: dict[str, Any] | None = None,
     verification_status: EvidenceStatus = "insufficient",
     failed: bool = False,
+    status: ResearchRunStatus | None = None,
 ) -> ResearchRun:
     local_hits = [hit for hit in list(hits or []) if isinstance(hit, dict)]
-    comparisons = []
-    if isinstance(agent_notes, dict) and isinstance(agent_notes.get("comparisons"), list):
-        comparisons = [item for item in list(agent_notes.get("comparisons") or []) if isinstance(item, dict)]
-    matrix = _comparison_rows(comparisons, verification_status=verification_status) if comparisons else _hit_rows(
-        local_hits,
+    matrix = build_evidence_matrix(
+        hits=local_hits,
+        agent_notes=agent_notes,
         verification_status=verification_status,
     )
     source_policy = infer_source_policy(hits=local_hits, agent_notes=agent_notes)
@@ -260,7 +276,7 @@ def build_research_run(
         ]
     )
     run_id = f"rr_{hashlib.sha1(run_seed.encode('utf-8', errors='ignore')).hexdigest()[:12]}"
-    status = "failed" if failed else "verified"
+    run_status = status or ("failed" if failed else "verified")
     metrics = {
         "subtask_count": len(subtasks),
         "evidence_matrix_rows": len(matrix),
@@ -269,7 +285,7 @@ def build_research_run(
     }
     return ResearchRun(
         run_id=run_id,
-        status=status,
+        status=run_status,
         source_policy=source_policy,
         query_scope=str((scope_context or {}).get("query_scope") or ""),
         question=_clip(query, 500),
