@@ -68,6 +68,33 @@ def test_generation_agent_notes_allow_external_academic_fallback_when_no_hits():
     assert bridge["context"]["answer_source_blend"] == "external_academic"
 
 
+def test_generation_agent_notes_recommend_hybrid_for_thin_local_evidence():
+    bridge = build_generation_agent_notes(
+        "How does the paper use retrieval augmented generation?",
+        evidence_hits=[
+            {
+                "text": "The paper uses retrieval before generation to improve grounding.",
+                "score": 3.0,
+                "meta": {
+                    "source_name": "Paper A",
+                    "source_path": "paper-a.md",
+                    "heading_path": "Method",
+                },
+            }
+        ],
+        candidate_hits=[],
+        scope_context={"query_scope": "library", "scope_source": "test"},
+    )
+
+    gate = bridge["agent_notes"]["evidence_gate"]
+    assert gate["answer_mode"] == "hybrid_local_external"
+    assert gate["source_policy"] == "local_plus_external_background"
+    assert bridge["hybrid_generation_recommended"] is True
+    assert bridge["context"]["hybrid_generation_recommended"] is True
+    assert bridge["agent_notes"]["research_run"]["source_policy"] == "local_plus_external_background"
+    assert len(bridge["agent_notes"]["evidence_matrix"]) == 1
+
+
 def test_completed_trace_marks_external_answer_verification_not_applicable():
     query = "In the literature, how does retrieval augmented generation improve academic question answering?"
     bridge = build_generation_agent_notes(
@@ -93,3 +120,53 @@ def test_completed_trace_marks_external_answer_verification_not_applicable():
     assert trace["verification"]["evidence_status"] == "not_applicable"
     assert trace["summary"]["evidence_status"] == "not_applicable"
     assert trace["research_run"]["source_policy"] == "external_allowed_with_notice"
+
+
+def test_completed_trace_preserves_hybrid_generation_quality_gate():
+    query = "How does the paper use retrieval augmented generation?"
+    bridge = build_generation_agent_notes(
+        query,
+        evidence_hits=[
+            {
+                "text": "The paper uses retrieval before generation to improve grounding.",
+                "score": 3.0,
+                "meta": {
+                    "source_name": "Paper A",
+                    "source_path": "paper-a.md",
+                    "heading_path": "Method",
+                },
+            }
+        ],
+        candidate_hits=[],
+        scope_context={"query_scope": "library", "scope_source": "test"},
+    )
+
+    trace = build_agent_trace_for_completed_answer(
+        query,
+        (
+            "Note: local citations [n] come from the knowledge base; uncited background may use external model context.\n\n"
+            "Local evidence: the paper uses retrieval before generation [1].\n"
+            "External context: RAG commonly uses retrieved context to reduce unsupported generation."
+        ),
+        evidence_hits=[
+            {
+                "text": "The paper uses retrieval before generation to improve grounding.",
+                "score": 3.0,
+                "meta": {"source_name": "Paper A", "source_path": "paper-a.md"},
+            }
+        ],
+        scope_context=bridge["context"],
+        agent_notes=bridge["agent_notes"],
+        answer_mode="hybrid_local_external",
+        generation_output={
+            "answer_mode": "hybrid_local_external",
+            "source_blend": "hybrid_local_external",
+            "quality_gate": {"status": "passed", "reasons": [], "warnings": []},
+            "observation": "Generated a hybrid answer from local evidence plus external model context.",
+        },
+    )
+
+    assert trace["research_run"]["source_policy"] == "local_plus_external_background"
+    assert trace["summary"]["answer_source_blend"] == "hybrid_local_external"
+    assert trace["summary"]["quality_gate_status"] == "passed"
+    assert trace["steps"][1]["output"]["quality_gate"]["status"] == "passed"

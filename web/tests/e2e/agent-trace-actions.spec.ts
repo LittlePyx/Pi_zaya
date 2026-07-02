@@ -20,6 +20,7 @@ const MISMATCH_RE = /Citation does not match retrieved evidence|引用与检索�
 const DIAGNOSTICS_RE = /Diagnostics|诊断信息/
 
 const NOT_FROM_KB_RE = /Not from KB|非本地文献库|闈炴湰鍦版枃鐚簱/
+const LOCAL_EXTERNAL_RE = /Local \+ external|文献库 \+ 外部补充|鏂囩尞搴?.*澶栭儴琛ュ厖/
 
 test.beforeEach(async ({ page }) => {
   await installAppShellMocks(page)
@@ -164,6 +165,18 @@ test('external source notice is compacted outside the answer body', async ({ pag
   await expect(page.getByText('no matching local knowledge-base evidence was found')).toHaveCount(0)
   await expect(page.locator('.kb-markdown-chat')).not.toContainText('knowledge-base-grounded answer')
   await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(NOT_FROM_KB_RE)
+})
+
+test('hybrid source notice is compacted outside the answer body', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-hybrid-notice')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-hybrid-notice')
+  await expect(page.getByText('Local evidence: the paper uses retrieval before generation')).toBeVisible()
+  await expect(page.getByText('External context: RAG often uses retrieved context')).toBeVisible()
+  await expect(page.getByTestId('assistant-source-notice')).toContainText(LOCAL_EXTERNAL_RE)
+  await expect(page.getByText('local citations [n] come from the knowledge base')).toHaveCount(0)
+  await expect(page.locator('.kb-markdown-chat')).not.toContainText('uncited background may use external model context')
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(NEEDS_REVIEW_RE)
 })
 
 test('streaming research agent partial hides appended trace json', async ({ page }) => {

@@ -1510,6 +1510,85 @@ const agentTraceExternalNoticeMessages: Message[] = [
   },
 ]
 
+const agentTraceHybridNoticeMessages: Message[] = [
+  {
+    id: 9601,
+    role: 'assistant',
+    content: [
+      'Note: local citations [n] come from the knowledge base; uncited background may use external model context.',
+      '',
+      'Local evidence: the paper uses retrieval before generation [1].',
+      'External context: RAG often uses retrieved context to reduce unsupported generation.',
+    ].join('\n'),
+    rendered_body: [
+      'Note: local citations [n] come from the knowledge base; uncited background may use external model context.',
+      '',
+      'Local evidence: the paper uses retrieval before generation [1].',
+      'External context: RAG often uses retrieved context to reduce unsupported generation.',
+    ].join('\n'),
+    copy_text: [
+      'Note: local citations [n] come from the knowledge base; uncited background may use external model context.',
+      '',
+      'Local evidence: the paper uses retrieval before generation [1].',
+      'External context: RAG often uses retrieved context to reduce unsupported generation.',
+    ].join('\n'),
+    copy_markdown: [
+      'Note: local citations [n] come from the knowledge base; uncited background may use external model context.',
+      '',
+      'Local evidence: the paper uses retrieval before generation [1].',
+      'External context: RAG often uses retrieved context to reduce unsupported generation.',
+    ].join('\n'),
+    created_at: Date.now(),
+    meta: {
+      agent_mode: 'research_agent',
+      agent_trace: {
+        mode: 'research_agent',
+        question_type: 'single_paper_qa',
+        status: 'done',
+        context: {
+          query_scope: 'library',
+          answer_mode: 'hybrid_local_external',
+          answer_source_blend: 'hybrid_local_external',
+          source_policy: 'local_plus_external_background',
+        },
+        plan: [],
+        steps: [],
+        verification: {
+          total_claims: 1,
+          supported_claims: 1,
+          unsupported_claims: 0,
+          evidence_status: 'needs_review',
+          evidence_hit_count: 1,
+          source_notice_count: 1,
+          claims: [],
+        },
+        research_run: {
+          status: 'done',
+          source_policy: 'local_plus_external_background',
+          query_scope: 'library',
+          metrics: { evidence_matrix_rows: 1 },
+        },
+        summary: {
+          question_type: 'single_paper_qa',
+          status: 'done',
+          source_policy: 'local_plus_external_background',
+          answer_mode: 'hybrid_local_external',
+          answer_source_blend: 'hybrid_local_external',
+          evidence_status: 'needs_review',
+          evidence_hit_count: 1,
+          total_claims: 1,
+          supported_claims: 1,
+          unsupported_claims: 0,
+          source_notice_count: 1,
+          tool_call_count: 2,
+          has_errors: false,
+          query_scope: 'library',
+        },
+      },
+    },
+  },
+]
+
 const agentTraceStreamingPartial = [
   'Note: no matching local knowledge-base evidence was found; this is an external model answer, not a knowledge-base-grounded answer.',
   '',
@@ -1546,6 +1625,7 @@ type RegressionScenario =
   | 'agent-trace-lazy-audit'
   | 'agent-trace-clean-answer'
   | 'agent-trace-external-notice'
+  | 'agent-trace-hybrid-notice'
   | 'agent-trace-streaming-clean'
 
 export default function MessageListRegressionPage() {
@@ -1578,6 +1658,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'agent-trace-lazy-audit') return 'agent-trace-lazy-audit'
     if (scenarioParam === 'agent-trace-clean-answer') return 'agent-trace-clean-answer'
     if (scenarioParam === 'agent-trace-external-notice') return 'agent-trace-external-notice'
+    if (scenarioParam === 'agent-trace-hybrid-notice') return 'agent-trace-hybrid-notice'
     if (scenarioParam === 'agent-trace-streaming-clean') return 'agent-trace-streaming-clean'
     return 'structured-primary-rerank'
   })()
@@ -1606,6 +1687,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'agent-trace-lazy-audit') return agentTraceLazyAuditMessages
     if (scenario === 'agent-trace-clean-answer') return agentTraceCleanAnswerMessages
     if (scenario === 'agent-trace-external-notice') return agentTraceExternalNoticeMessages
+    if (scenario === 'agent-trace-hybrid-notice') return agentTraceHybridNoticeMessages
     if (scenario === 'agent-trace-streaming-clean') return []
     return structuredPrimaryRerankMessages
   })()

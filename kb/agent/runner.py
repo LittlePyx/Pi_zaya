@@ -592,6 +592,35 @@ def _general_answer_verification() -> AgentVerification:
     )
 
 
+def _hybrid_generation_recommended(
+    gate: dict[str, Any],
+    confidence: dict[str, Any],
+    hits: list[dict[str, Any]],
+) -> bool:
+    if str(gate.get("answer_mode") or "").strip() != "hybrid_local_external":
+        return False
+    if str(gate.get("source_policy") or "").strip() != "local_plus_external_background":
+        return False
+    reasons = {
+        str(item or "").strip()
+        for item in [*list(gate.get("reasons") or []), *list(confidence.get("reasons") or [])]
+        if str(item or "").strip()
+    }
+    if len([hit for hit in list(hits or []) if isinstance(hit, dict)]) < 2:
+        return True
+    if str(confidence.get("level") or "").strip() in {"low", "none"}:
+        return True
+    return bool(
+        reasons
+        & {
+            "low_evidence_count",
+            "low_retrieval_confidence",
+            "filtered_low_confidence_hits",
+            "no_usable_local_evidence",
+        }
+    )
+
+
 def build_generation_agent_notes(
     query: str,
     *,
@@ -624,11 +653,32 @@ def build_generation_agent_notes(
         retrieval_confidence=retrieval_confidence,
     )
     public_confidence = _public_retrieval_confidence(retrieval_confidence)
+    agent_notes: dict[str, Any] = {"evidence_gate": gate}
+    research_run = build_research_run(
+        query,
+        question_type=question_type,
+        hits=hits,
+        agent_notes=agent_notes,
+        scope_context=scoped_context,
+        verification_status=_pre_answer_evidence_status(agent_notes, hits),
+        status="synthesizing",
+    )
+    research_run_payload = research_run.to_dict()
+    agent_notes["evidence_matrix"] = list(research_run_payload.get("evidence_matrix") or [])
+    agent_notes["research_run"] = {
+        "run_id": str(research_run_payload.get("run_id") or ""),
+        "status": str(research_run_payload.get("status") or ""),
+        "source_policy": str(research_run_payload.get("source_policy") or ""),
+        "query_scope": str(research_run_payload.get("query_scope") or ""),
+        "metrics": dict(research_run_payload.get("metrics") or {}),
+    }
+    hybrid_generation = _hybrid_generation_recommended(gate, public_confidence, hits)
     return {
         "question_type": question_type,
         "planner_intent": intent.to_dict(),
-        "agent_notes": {"evidence_gate": gate},
+        "agent_notes": agent_notes,
         "retrieval_confidence": public_confidence,
+        "hybrid_generation_recommended": bool(hybrid_generation),
         "context": {
             "planner_intent": intent.to_dict(),
             "planner_confidence": intent.confidence,
@@ -639,6 +689,9 @@ def build_generation_agent_notes(
             "answer_source_blend": str(gate.get("source_blend") or ""),
             "answer_mode": str(gate.get("answer_mode") or ""),
             "source_policy": str(gate.get("source_policy") or ""),
+            "hybrid_generation_recommended": bool(hybrid_generation),
+            "pre_answer_evidence_matrix_rows": len(agent_notes["evidence_matrix"]),
+            "pre_answer_source_policy": agent_notes["research_run"]["source_policy"],
         },
     }
 
@@ -841,6 +894,7 @@ def build_agent_trace_for_completed_answer(
     scope_context: dict[str, Any] | None = None,
     agent_notes: dict[str, Any] | None = None,
     answer_mode: str = "",
+    generation_output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     intent = plan_research_intent(query)
     question_type, plan = plan_research_question(query)
@@ -887,8 +941,18 @@ def build_agent_trace_for_completed_answer(
         AgentExecutionStep(
             tool="generate_grounded_answer",
             status="done" if str(status or "done") == "done" else "error",
-            observation="Existing RAG generation produced the answer; agent trace was attached as an explicit wrapper.",
-            output={"answer_chars": len(str(answer or ""))},
+            observation=str(
+                (generation_output or {}).get("observation")
+                or "Existing RAG generation produced the answer; agent trace was attached as an explicit wrapper."
+            ),
+            output={
+                "answer_chars": len(str(answer or "")),
+                **{
+                    key: value
+                    for key, value in dict(generation_output or {}).items()
+                    if key not in {"answer", "hits"}
+                },
+            },
         )
     )
     trace.steps.append(

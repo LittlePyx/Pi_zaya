@@ -3426,6 +3426,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
     agent_scope_context: dict = {}
     agent_notes_for_trace: dict = {}
     agent_answer_mode = ""
+    agent_generation_result_for_trace: dict = {}
     prompt = ""
     settings_obj = None
 
@@ -4672,23 +4673,30 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 )
                 agent_bridge_context = dict(agent_bridge.get("context") or {})
                 if answer_hits:
-                    agent_answer_mode = "evidence_grounded"
-                    agent_notes_for_trace = {}
-                    agent_scope_context.update(
-                        {
-                            "planner_intent": agent_bridge_context.get("planner_intent") or {},
-                            "planner_confidence": str(agent_bridge_context.get("planner_confidence") or ""),
-                            "evidence_need": str(agent_bridge_context.get("evidence_need") or ""),
-                            "retrieved_hit_count": int(
-                                agent_bridge_context.get("retrieved_hit_count") or len(hits_raw or answer_hits or [])
-                            ),
-                            "usable_hit_count": int(len(answer_hits or [])),
-                            "retrieval_confidence": str(agent_bridge_context.get("retrieval_confidence") or ""),
-                            "answer_source_blend": "local_grounded",
-                            "answer_mode": agent_answer_mode,
-                            "source_policy": "local_only",
-                        }
-                    )
+                    hybrid_recommended = bool(agent_bridge.get("hybrid_generation_recommended")) and not bool(paper_guide_source_scoped)
+                    if hybrid_recommended:
+                        agent_notes_for_trace = dict(agent_bridge.get("agent_notes") or {})
+                        agent_scope_context.update(agent_bridge_context)
+                        agent_answer_mode = str(agent_scope_context.get("answer_mode") or "hybrid_local_external")
+                    else:
+                        agent_answer_mode = "evidence_grounded"
+                        agent_notes_for_trace = {}
+                        agent_scope_context.update(
+                            {
+                                "planner_intent": agent_bridge_context.get("planner_intent") or {},
+                                "planner_confidence": str(agent_bridge_context.get("planner_confidence") or ""),
+                                "evidence_need": str(agent_bridge_context.get("evidence_need") or ""),
+                                "retrieved_hit_count": int(
+                                    agent_bridge_context.get("retrieved_hit_count") or len(hits_raw or answer_hits or [])
+                                ),
+                                "usable_hit_count": int(len(answer_hits or [])),
+                                "retrieval_confidence": str(agent_bridge_context.get("retrieval_confidence") or ""),
+                                "answer_source_blend": "local_grounded",
+                                "answer_mode": agent_answer_mode,
+                                "source_policy": "local_only",
+                                "hybrid_generation_recommended": False,
+                            }
+                        )
                 else:
                     agent_notes_for_trace = dict(agent_bridge.get("agent_notes") or {})
                     agent_scope_context.update(agent_bridge_context)
@@ -4702,6 +4710,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         "answer_source_blend": str(agent_scope_context.get("answer_source_blend") or ""),
                         "retrieval_confidence": str(agent_scope_context.get("retrieval_confidence") or ""),
                         "usable_hit_count": int(agent_scope_context.get("usable_hit_count") or 0),
+                        "hybrid_generation_recommended": bool(agent_scope_context.get("hybrid_generation_recommended")),
                     },
                 )
             except Exception as exc:
@@ -4886,17 +4895,25 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         ds = None
         agent_direct_answer_override = ""
         agent_generation_result: dict = {}
-        if (
+        agent_generation_hits = list(answer_hits or []) if agent_answer_mode == "hybrid_local_external" else []
+        agent_generation_enabled = bool(
             bool(task.get("agent_mode"))
             and prompt
             and not image_attachments
-            and not answer_hits
-            and agent_answer_mode in {"general_llm", "external_academic_llm"}
-        ):
+            and (
+                (not answer_hits and agent_answer_mode in {"general_llm", "external_academic_llm"})
+                or (
+                    bool(agent_generation_hits)
+                    and agent_answer_mode == "hybrid_local_external"
+                    and bool(agent_scope_context.get("hybrid_generation_recommended"))
+                )
+            )
+        )
+        if agent_generation_enabled:
             try:
                 agent_generation_result = agent_generate_grounded_answer(
                     prompt,
-                    [],
+                    agent_generation_hits,
                     settings=settings_obj,
                     history=hist,
                     agent_notes=agent_notes_for_trace,
@@ -4905,19 +4922,32 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 )
                 agent_direct_answer_override = str(agent_generation_result.get("answer") or "").strip()
                 if agent_direct_answer_override:
+                    agent_generation_result_for_trace = {
+                        key: value
+                        for key, value in dict(agent_generation_result or {}).items()
+                        if key not in {"answer", "hits"}
+                    }
                     agent_scope_context["agent_llm_used"] = bool(agent_generation_result.get("llm_used"))
                     agent_scope_context["web_search_used"] = bool(agent_generation_result.get("web_search_used"))
                     if agent_generation_result.get("answer_mode"):
                         agent_answer_mode = str(agent_generation_result.get("answer_mode") or agent_answer_mode)
                         agent_scope_context["answer_mode"] = agent_answer_mode
+                    if agent_generation_result.get("source_blend"):
+                        agent_scope_context["answer_source_blend"] = str(agent_generation_result.get("source_blend") or "")
+                    if agent_answer_mode == "hybrid_local_external":
+                        agent_scope_context["source_policy"] = "local_plus_external_background"
                     _trace_section(
                         "agent",
                         {
                             "mode": "research_agent",
                             "fallback_generation": True,
+                            "hybrid_generation": bool(agent_generation_hits),
                             "answer_mode": str(agent_answer_mode or ""),
                             "llm_used": bool(agent_generation_result.get("llm_used")),
                             "web_search_used": bool(agent_generation_result.get("web_search_used")),
+                            "quality_gate": dict(agent_generation_result.get("quality_gate") or {})
+                            if isinstance(agent_generation_result.get("quality_gate"), dict)
+                            else {},
                             "observation": str(agent_generation_result.get("observation") or "")[:240],
                         },
                     )
@@ -5418,6 +5448,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 scope_context=agent_scope_context,
                 agent_notes=agent_notes_for_trace,
                 answer_mode=agent_answer_mode,
+                generation_output=agent_generation_result_for_trace,
             )
             _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
         _gen_update_task(
