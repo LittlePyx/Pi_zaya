@@ -592,6 +592,57 @@ def _general_answer_verification() -> AgentVerification:
     )
 
 
+def build_generation_agent_notes(
+    query: str,
+    *,
+    evidence_hits: list[dict[str, Any]] | None = None,
+    candidate_hits: list[dict[str, Any]] | None = None,
+    scope_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the agent evidence gate used by the legacy streaming generator.
+
+    This keeps `/api/generate` on the existing RAG path while giving it the
+    same source-policy decision that the standalone research-agent endpoint
+    uses before answer generation.
+    """
+    intent = plan_research_intent(query)
+    question_type, _plan = plan_research_question(query)
+    scoped_context = dict(scope_context or {})
+    hits = [hit for hit in list(evidence_hits or []) if isinstance(hit, dict)]
+    candidates = [hit for hit in list(candidate_hits or []) if isinstance(hit, dict)]
+    confidence_source = hits if hits else candidates
+    retrieval_confidence = _assess_retrieval_confidence(
+        query,
+        confidence_source,
+        scope_context=scoped_context,
+    )
+    gate = _pre_generation_evidence_gate(
+        hits,
+        query=query,
+        scope_context=scoped_context,
+        question_type=question_type,
+        retrieval_confidence=retrieval_confidence,
+    )
+    public_confidence = _public_retrieval_confidence(retrieval_confidence)
+    return {
+        "question_type": question_type,
+        "planner_intent": intent.to_dict(),
+        "agent_notes": {"evidence_gate": gate},
+        "retrieval_confidence": public_confidence,
+        "context": {
+            "planner_intent": intent.to_dict(),
+            "planner_confidence": intent.confidence,
+            "evidence_need": intent.evidence_need,
+            "retrieved_hit_count": int(len(candidates)),
+            "usable_hit_count": int(len(hits)),
+            "retrieval_confidence": str(public_confidence.get("level") or ""),
+            "answer_source_blend": str(gate.get("source_blend") or ""),
+            "answer_mode": str(gate.get("answer_mode") or ""),
+            "source_policy": str(gate.get("source_policy") or ""),
+        },
+    }
+
+
 def _run_step(trace: AgentTrace, index: int, tool_fn, *args, **kwargs) -> dict[str, Any]:
     step = trace.plan[index]
     step.status = "running"
@@ -788,11 +839,17 @@ def build_agent_trace_for_completed_answer(
     evidence_hits: list[dict[str, Any]] | None = None,
     status: str = "done",
     scope_context: dict[str, Any] | None = None,
+    agent_notes: dict[str, Any] | None = None,
+    answer_mode: str = "",
 ) -> dict[str, Any]:
     intent = plan_research_intent(query)
     question_type, plan = plan_research_question(query)
     hits = [h for h in list(evidence_hits or []) if isinstance(h, dict)]
-    verification = verify_completed_answer(answer, hits)
+    resolved_answer_mode = str(answer_mode or _answer_mode(agent_notes) or "").strip()
+    if resolved_answer_mode in {"general_llm", "external_academic_llm"}:
+        verification = _general_answer_verification()
+    else:
+        verification = verify_completed_answer(answer, hits, answer_mode=resolved_answer_mode)
     final_status = str(status or "done").strip().lower()
     if final_status not in {"done", "error", "canceled"}:
         final_status = "done"
@@ -811,7 +868,7 @@ def build_agent_trace_for_completed_answer(
         query,
         question_type=question_type,
         hits=hits,
-        agent_notes={},
+        agent_notes=agent_notes or {},
         scope_context=context,
         verification_status=verification.evidence_status,
         failed=final_status == "error",

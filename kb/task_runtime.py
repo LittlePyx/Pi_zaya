@@ -48,7 +48,8 @@ from kb.answer_quality import (
     _gen_answer_quality_summary,
     _gen_record_answer_quality,
 )
-from kb.agent.runner import build_agent_trace_for_completed_answer
+from kb.agent.runner import build_agent_trace_for_completed_answer, build_generation_agent_notes
+from kb.agent.tools import generate_grounded_answer as agent_generate_grounded_answer
 from kb.generation_citation_validation_runtime import (
     _source_refs_from_index as _citation_validation_source_refs_from_index,
     _validate_freeform_numeric_citations as _citation_validation_validate_freeform_numeric_citations,
@@ -3423,6 +3424,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
     _gen_update_task(session_id, task_id, status="running", stage="starting", started_at=time.time())
     research_trace: dict = {}
     agent_scope_context: dict = {}
+    agent_notes_for_trace: dict = {}
+    agent_answer_mode = ""
     prompt = ""
     settings_obj = None
 
@@ -3619,6 +3622,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     evidence_hits=[],
                     status="done",
                     scope_context=agent_scope_context,
+                    agent_notes=agent_notes_for_trace,
+                    answer_mode=agent_answer_mode,
                 )
                 _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
             _gen_update_task(
@@ -4657,6 +4662,51 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "output_mode": str(answer_output_mode or ""),
             },
         )
+        if bool(task.get("agent_mode")):
+            try:
+                agent_bridge = build_generation_agent_notes(
+                    prompt,
+                    evidence_hits=list(answer_hits or []),
+                    candidate_hits=list(hits_raw or hits or answer_hits or []),
+                    scope_context=agent_scope_context,
+                )
+                agent_bridge_context = dict(agent_bridge.get("context") or {})
+                if answer_hits:
+                    agent_answer_mode = "evidence_grounded"
+                    agent_notes_for_trace = {}
+                    agent_scope_context.update(
+                        {
+                            "planner_intent": agent_bridge_context.get("planner_intent") or {},
+                            "planner_confidence": str(agent_bridge_context.get("planner_confidence") or ""),
+                            "evidence_need": str(agent_bridge_context.get("evidence_need") or ""),
+                            "retrieved_hit_count": int(
+                                agent_bridge_context.get("retrieved_hit_count") or len(hits_raw or answer_hits or [])
+                            ),
+                            "usable_hit_count": int(len(answer_hits or [])),
+                            "retrieval_confidence": str(agent_bridge_context.get("retrieval_confidence") or ""),
+                            "answer_source_blend": "local_grounded",
+                            "answer_mode": agent_answer_mode,
+                            "source_policy": "local_only",
+                        }
+                    )
+                else:
+                    agent_notes_for_trace = dict(agent_bridge.get("agent_notes") or {})
+                    agent_scope_context.update(agent_bridge_context)
+                    agent_answer_mode = str(agent_scope_context.get("answer_mode") or "")
+                _trace_section(
+                    "agent",
+                    {
+                        "mode": "research_agent",
+                        "answer_mode": str(agent_scope_context.get("answer_mode") or agent_answer_mode or ""),
+                        "source_policy": str(agent_scope_context.get("source_policy") or ""),
+                        "answer_source_blend": str(agent_scope_context.get("answer_source_blend") or ""),
+                        "retrieval_confidence": str(agent_scope_context.get("retrieval_confidence") or ""),
+                        "usable_hit_count": int(agent_scope_context.get("usable_hit_count") or 0),
+                    },
+                )
+            except Exception as exc:
+                agent_scope_context["agent_bridge_error"] = str(exc)[:180]
+                _trace_section("agent", {"mode": "research_agent", "bridge_error": str(exc)[:180]})
         paper_guide_context_records = _build_paper_guide_context_records(
             answer_hits,
             paper_guide_mode=bool(paper_guide_source_scoped),
@@ -4833,25 +4883,72 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             allowed_image_roots=chat_image_upload_roots(db_dir),
         )
         messages = _build_generation_messages(system=system, hist=hist, user_content=user_content)
-        ds = DeepSeekChat(settings_obj)
-        direct_answer_override = _build_paper_guide_direct_answer_override(
-            paper_guide_mode=bool(paper_guide_source_scoped),
-            prompt_family=paper_guide_prompt_family,
-            prompt_for_user=prompt_for_user,
-            paper_guide_focus_source_path=paper_guide_focus_source_path,
-            paper_guide_direct_source_path=paper_guide_direct_source_path,
-            paper_guide_bound_source_path=paper_guide_bound_source_path,
-            answer_hits=answer_hits,
-            special_focus_block=paper_guide_special_focus_block,
-            db_dir=db_dir,
-            llm=ds,
-        )
+        ds = None
+        agent_direct_answer_override = ""
+        agent_generation_result: dict = {}
+        if (
+            bool(task.get("agent_mode"))
+            and prompt
+            and not image_attachments
+            and not answer_hits
+            and agent_answer_mode in {"general_llm", "external_academic_llm"}
+        ):
+            try:
+                agent_generation_result = agent_generate_grounded_answer(
+                    prompt,
+                    [],
+                    settings=settings_obj,
+                    history=hist,
+                    agent_notes=agent_notes_for_trace,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                agent_direct_answer_override = str(agent_generation_result.get("answer") or "").strip()
+                if agent_direct_answer_override:
+                    agent_scope_context["agent_llm_used"] = bool(agent_generation_result.get("llm_used"))
+                    agent_scope_context["web_search_used"] = bool(agent_generation_result.get("web_search_used"))
+                    if agent_generation_result.get("answer_mode"):
+                        agent_answer_mode = str(agent_generation_result.get("answer_mode") or agent_answer_mode)
+                        agent_scope_context["answer_mode"] = agent_answer_mode
+                    _trace_section(
+                        "agent",
+                        {
+                            "mode": "research_agent",
+                            "fallback_generation": True,
+                            "answer_mode": str(agent_answer_mode or ""),
+                            "llm_used": bool(agent_generation_result.get("llm_used")),
+                            "web_search_used": bool(agent_generation_result.get("web_search_used")),
+                            "observation": str(agent_generation_result.get("observation") or "")[:240],
+                        },
+                    )
+            except Exception as exc:
+                agent_scope_context["agent_generation_error"] = str(exc)[:180]
+                _trace_section("agent", {"mode": "research_agent", "generation_error": str(exc)[:180]})
+        direct_answer_override = ""
+        if not agent_direct_answer_override:
+            ds = DeepSeekChat(settings_obj)
+            direct_answer_override = _build_paper_guide_direct_answer_override(
+                paper_guide_mode=bool(paper_guide_source_scoped),
+                prompt_family=paper_guide_prompt_family,
+                prompt_for_user=prompt_for_user,
+                paper_guide_focus_source_path=paper_guide_focus_source_path,
+                paper_guide_direct_source_path=paper_guide_direct_source_path,
+                paper_guide_bound_source_path=paper_guide_bound_source_path,
+                answer_hits=answer_hits,
+                special_focus_block=paper_guide_special_focus_block,
+                db_dir=db_dir,
+                llm=ds,
+            )
         if paper_guide_mode:
             paper_guide_debug.update(
                 {
                     "prompt_for_user": str(prompt_for_user or ""),
-                    "direct_answer_override_used": bool(str(direct_answer_override or "").strip()),
-                    "direct_answer_override_prefix": str(direct_answer_override or "").strip()[:120],
+                    "direct_answer_override_used": bool(
+                        str(agent_direct_answer_override or direct_answer_override or "").strip()
+                    ),
+                    "direct_answer_override_prefix": str(
+                        agent_direct_answer_override or direct_answer_override or ""
+                    ).strip()[:120],
                 }
             )
             _gen_update_task(
@@ -4864,12 +4961,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         last_store_ts = 0.0
         last_store_len = 0
         t_answer0 = time.perf_counter()
-        if direct_answer_override:
-            partial = str(direct_answer_override or "").strip()
+        if agent_direct_answer_override or direct_answer_override:
+            partial = str(agent_direct_answer_override or direct_answer_override or "").strip()
             _gen_update_task(session_id, task_id, stage="answer", partial=partial, char_count=len(partial))
             _gen_store_partial(task, partial)
         else:
             try:
+                if ds is None:
+                    ds = DeepSeekChat(settings_obj)
                 for piece in ds.chat_stream(messages=messages, temperature=temperature, max_tokens=max_tokens):
                     if _gen_should_cancel(session_id, task_id):
                         raise RuntimeError("canceled")
@@ -5317,6 +5416,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 evidence_hits=answer_hits,
                 status="done",
                 scope_context=agent_scope_context,
+                agent_notes=agent_notes_for_trace,
+                answer_mode=agent_answer_mode,
             )
             _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
         _gen_update_task(
@@ -5363,6 +5464,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     evidence_hits=[],
                     status="canceled",
                     scope_context=agent_scope_context,
+                    agent_notes=agent_notes_for_trace,
+                    answer_mode=agent_answer_mode,
                 )
                 _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
             _gen_update_task(
@@ -5400,6 +5503,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 evidence_hits=[],
                 status="error",
                 scope_context=agent_scope_context,
+                agent_notes=agent_notes_for_trace,
+                answer_mode=agent_answer_mode,
             )
             _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
         _gen_update_task(

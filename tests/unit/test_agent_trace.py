@@ -1,4 +1,4 @@
-from kb.agent.runner import build_agent_trace_for_completed_answer
+from kb.agent.runner import build_agent_trace_for_completed_answer, build_generation_agent_notes
 
 
 def test_agent_trace_serializes_completed_rag_answer():
@@ -51,3 +51,45 @@ def test_agent_trace_marks_no_evidence_as_insufficient():
     assert trace["verification"]["evidence_status"] == "insufficient"
     assert trace["summary"]["evidence_status"] == "insufficient"
     assert trace["summary"]["evidence_hit_count"] == 0
+
+
+def test_generation_agent_notes_allow_external_academic_fallback_when_no_hits():
+    bridge = build_generation_agent_notes(
+        "In the literature, how does retrieval augmented generation improve academic question answering?",
+        evidence_hits=[],
+        candidate_hits=[],
+        scope_context={"query_scope": "library", "scope_source": "test"},
+    )
+
+    gate = bridge["agent_notes"]["evidence_gate"]
+    assert gate["answer_mode"] == "external_academic_llm"
+    assert gate["source_policy"] == "external_allowed_with_notice"
+    assert gate["evidence_status"] == "not_applicable"
+    assert bridge["context"]["answer_source_blend"] == "external_academic"
+
+
+def test_completed_trace_marks_external_answer_verification_not_applicable():
+    query = "In the literature, how does retrieval augmented generation improve academic question answering?"
+    bridge = build_generation_agent_notes(
+        query,
+        evidence_hits=[],
+        candidate_hits=[],
+        scope_context={"query_scope": "library", "scope_source": "test"},
+    )
+
+    trace = build_agent_trace_for_completed_answer(
+        query,
+        (
+            "Note: no matching local knowledge-base evidence was found; this is an external model answer, "
+            "not a knowledge-base-grounded answer.\n\n"
+            "RAG can improve answer grounding by retrieving relevant context before generation."
+        ),
+        evidence_hits=[],
+        scope_context=bridge["context"],
+        agent_notes=bridge["agent_notes"],
+        answer_mode=bridge["context"]["answer_mode"],
+    )
+
+    assert trace["verification"]["evidence_status"] == "not_applicable"
+    assert trace["summary"]["evidence_status"] == "not_applicable"
+    assert trace["research_run"]["source_policy"] == "external_allowed_with_notice"
