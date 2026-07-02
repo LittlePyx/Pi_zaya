@@ -48,6 +48,17 @@ def test_reviewed_replay_eval_skips_missing_default_paths(tmp_path):
     assert summary["skipped"][0]["reason"] == "missing"
 
 
+def test_reviewed_replay_eval_runs_committed_deidentified_fixture():
+    summary = run_reviewed_replay_eval()
+
+    assert summary["ok"] is True, summary["errors"]
+    assert summary["reviewed_case_count"] >= 2
+    assert any(
+        item["path"].replace("\\", "/") == "docs/research_agent_reviewed_replay.jsonl"
+        for item in summary["evaluated"]
+    )
+
+
 def test_reviewed_replay_eval_can_require_reviewed_cases(tmp_path):
     summary = run_reviewed_replay_eval(paths=[tmp_path / "missing.jsonl"], require_reviewed=True)
 

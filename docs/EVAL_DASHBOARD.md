@@ -224,11 +224,11 @@ includes labels marked `accepted`. Accepted labels must include
 Keep these files local unless the prompts, answers, and evidence snippets have
 been reviewed for privacy and publication suitability.
 
-`run_reviewed_replay_eval.py` is the CI-friendly quality gate. It checks
-`docs/research_agent_reviewed_replay.jsonl` for a future committed, de-identified
-fixture and `test_results/research_agent_answer_reviewed.jsonl` for local private
-reviewed samples. Missing or empty reviewed datasets are skipped successfully.
-If reviewed cases exist, the gate requires the file to contain only accepted
+`run_reviewed_replay_eval.py` is the CI-friendly quality gate. It checks the
+committed `docs/research_agent_reviewed_replay.jsonl` de-identified smoke fixture
+and `test_results/research_agent_answer_reviewed.jsonl` for local private
+reviewed samples. Missing local reviewed datasets are skipped successfully. If
+reviewed cases exist, the gate requires the file to contain only accepted
 reviewed cases and runs the strict answer-quality evaluator.
 
 To print the legacy summary shape only:
