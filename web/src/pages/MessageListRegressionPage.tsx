@@ -1436,7 +1436,83 @@ const agentTraceCleanAnswerMessages: Message[] = [
   },
 ]
 
+const agentTraceExternalNoticeMessages: Message[] = [
+  {
+    id: 9501,
+    role: 'assistant',
+    content: [
+      'Note: no matching local knowledge-base evidence was found; this is an external model answer, not a knowledge-base-grounded answer.',
+      '',
+      'External context can still explain the concept clearly without pretending that it came from the local library.',
+    ].join('\n'),
+    rendered_body: [
+      'Note: no matching local knowledge-base evidence was found; this is an external model answer, not a knowledge-base-grounded answer.',
+      '',
+      'External context can still explain the concept clearly without pretending that it came from the local library.',
+    ].join('\n'),
+    copy_text: [
+      'Note: no matching local knowledge-base evidence was found; this is an external model answer, not a knowledge-base-grounded answer.',
+      '',
+      'External context can still explain the concept clearly without pretending that it came from the local library.',
+    ].join('\n'),
+    copy_markdown: [
+      'Note: no matching local knowledge-base evidence was found; this is an external model answer, not a knowledge-base-grounded answer.',
+      '',
+      'External context can still explain the concept clearly without pretending that it came from the local library.',
+    ].join('\n'),
+    created_at: Date.now(),
+    meta: {
+      agent_mode: 'research_agent',
+      agent_trace: {
+        mode: 'research_agent',
+        question_type: 'single_paper_qa',
+        status: 'done',
+        context: {
+          query_scope: 'library',
+          answer_mode: 'external_academic_llm',
+          answer_source_blend: 'external_academic',
+          source_policy: 'external_allowed_with_notice',
+        },
+        plan: [],
+        steps: [],
+        verification: {
+          total_claims: 0,
+          supported_claims: 0,
+          unsupported_claims: 0,
+          evidence_status: 'not_applicable',
+          evidence_hit_count: 0,
+          evidence_status_reasons: ['not_based_on_local_knowledge_base'],
+          claims: [],
+        },
+        research_run: {
+          status: 'done',
+          source_policy: 'external_allowed_with_notice',
+          query_scope: 'library',
+          metrics: { evidence_matrix_rows: 0 },
+        },
+        summary: {
+          question_type: 'single_paper_qa',
+          status: 'done',
+          source_policy: 'external_allowed_with_notice',
+          answer_mode: 'external_academic_llm',
+          answer_source_blend: 'external_academic',
+          evidence_status: 'not_applicable',
+          evidence_hit_count: 0,
+          total_claims: 0,
+          supported_claims: 0,
+          unsupported_claims: 0,
+          tool_call_count: 2,
+          has_errors: false,
+          query_scope: 'library',
+        },
+      },
+    },
+  },
+]
+
 const agentTraceStreamingPartial = [
+  'Note: no matching local knowledge-base evidence was found; this is an external model answer, not a knowledge-base-grounded answer.',
+  '',
   'Streaming answer stays focused on the conclusion.',
   '',
   '```json',
@@ -1469,6 +1545,7 @@ type RegressionScenario =
   | 'agent-trace-reference-actions'
   | 'agent-trace-lazy-audit'
   | 'agent-trace-clean-answer'
+  | 'agent-trace-external-notice'
   | 'agent-trace-streaming-clean'
 
 export default function MessageListRegressionPage() {
@@ -1500,6 +1577,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'agent-trace-reference-actions') return 'agent-trace-reference-actions'
     if (scenarioParam === 'agent-trace-lazy-audit') return 'agent-trace-lazy-audit'
     if (scenarioParam === 'agent-trace-clean-answer') return 'agent-trace-clean-answer'
+    if (scenarioParam === 'agent-trace-external-notice') return 'agent-trace-external-notice'
     if (scenarioParam === 'agent-trace-streaming-clean') return 'agent-trace-streaming-clean'
     return 'structured-primary-rerank'
   })()
@@ -1527,6 +1605,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'agent-trace-reference-actions') return agentTraceReferenceActionMessages
     if (scenario === 'agent-trace-lazy-audit') return agentTraceLazyAuditMessages
     if (scenario === 'agent-trace-clean-answer') return agentTraceCleanAnswerMessages
+    if (scenario === 'agent-trace-external-notice') return agentTraceExternalNoticeMessages
     if (scenario === 'agent-trace-streaming-clean') return []
     return structuredPrimaryRerankMessages
   })()

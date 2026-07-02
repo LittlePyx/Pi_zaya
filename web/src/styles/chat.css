@@ -1861,6 +1861,28 @@
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
+.kb-assistant-source-notice {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  color: color-mix(in srgb, var(--text-main) 54%, transparent);
+  font-size: 11.5px;
+  font-weight: 680;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.kb-assistant-source-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 48%, var(--muted-text));
+  opacity: 0.82;
+}
+
 .kb-copy-bar {
   display: flex;
   gap: 2px;

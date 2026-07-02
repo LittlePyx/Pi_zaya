@@ -105,6 +105,7 @@ import {
   getMessageCopyTextValue,
   getMessageRenderedBodyContent,
   getMessageRenderPacket,
+  splitLeadingAssistantSourceNotice,
 } from './messageRenderPacket'
 import { remapStructuredEntryToGuideAnchors } from './messageStructuredLocateRemap'
 import {
@@ -134,7 +135,7 @@ import { buildMessageMarkdownLocateProps } from './messageMarkdownLocateProps'
 import { MessageProvenanceChips } from './MessageProvenanceChips'
 import { MessageReferenceCandidates } from './MessageReferenceCandidates'
 import { UserMessageBubble } from './UserMessageBubble'
-import { AssistantMessageNotices } from './AssistantMessageNotices'
+import { AssistantMessageNotices, AssistantSourceNotice } from './AssistantMessageNotices'
 import {
   lookupGuideCandidatesBySourcePath,
   sourcePathLookupKeys,
@@ -2132,6 +2133,8 @@ export function MessageList({
   const cleanGenerationPartial = generationPartial !== undefined && generationPartial !== null
     ? cleanAssistantAnswerPresentationText(generationPartial)
     : ''
+  const generationSourceNotice = splitLeadingAssistantSourceNotice(cleanGenerationPartial)
+  const visibleGenerationPartial = generationSourceNotice.notice ? generationSourceNotice.body : cleanGenerationPartial
 
   return (
     <>
@@ -2439,9 +2442,12 @@ export function MessageList({
                     </Text>
                   </div>
                 ) : null}
-                {cleanGenerationPartial ? (
+                {generationSourceNotice.notice ? (
+                  <AssistantSourceNotice noticeText={generationSourceNotice.notice} S={S} />
+                ) : null}
+                {visibleGenerationPartial ? (
                   <div className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--text)]">
-                    {cleanGenerationPartial}
+                    {visibleGenerationPartial}
                   </div>
                 ) : (
                   <div className="flex items-center gap-1 py-1">

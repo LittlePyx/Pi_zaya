@@ -28,6 +28,41 @@ const AGENT_TRACE_JSON_RE = /"(?:agent_trace|agentTrace)"\s*:/i
 const AGENT_TRACE_DEBUG_SECTION_RE = /^(?:#{1,6}\s*)?(?:[*_`~\s]*)?(?:plan|tool\s+calls?|tools?|execution\s+details|verification|claim\s+verification)(?:[*_`~\s]*)?:?\s*$/i
 const AGENT_TRACE_DEBUG_LOOKAHEAD_RE = /\b(?:retrieve_evidence|retrieve_references|build_reading_guide|compare_papers|generate_grounded_answer|verify_answer_citations|agent_trace|agentTrace|supported_claims|unsupported_claims|total_claims|question_type)\b/i
 
+export function isAssistantSourceNoticeText(value: unknown): boolean {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!text) return false
+  if (/^Note:\s*no matching local knowledge-base evidence was found; this is an external model answer/i.test(text)) return true
+  if (/^Note:\s*local citations\s*\[n\]\s*come from the knowledge base/i.test(text)) return true
+  if (/^(?:注意|注)[:：]\s*本地知识库没有命中相关证据/.test(text)) return true
+  if (/^(?:注意|注)[:：]\s*带\s*\[n\]\s*的内容来自本地知识库/.test(text)) return true
+  return false
+}
+
+export function splitLeadingAssistantSourceNotice(value: unknown): { notice: string; body: string } {
+  const text = String(value || '')
+  if (!text.trim()) return { notice: '', body: text }
+  const normalized = text.replace(/\r\n?/g, '\n')
+  const lines = normalized.split('\n')
+  const firstContentIndex = lines.findIndex((line) => Boolean(String(line || '').trim()))
+  if (firstContentIndex < 0) return { notice: '', body: text }
+  const firstLine = String(lines[firstContentIndex] || '').trim()
+  if (!isAssistantSourceNoticeText(firstLine)) return { notice: '', body: text }
+  const nextLines = [
+    ...lines.slice(0, firstContentIndex),
+    ...lines.slice(firstContentIndex + 1),
+  ]
+  while (nextLines.length > 0 && !String(nextLines[0] || '').trim()) nextLines.shift()
+  return {
+    notice: firstLine,
+    body: nextLines.join('\n').trimStart(),
+  }
+}
+
+function stripLeadingAssistantSourceNotice(value: unknown): string {
+  const split = splitLeadingAssistantSourceNotice(value)
+  return split.notice ? split.body : String(value || '')
+}
+
 function lineLooksLikeAgentTraceBoundary(line: string): boolean {
   const text = String(line || '').trim()
   if (!text) return false
@@ -122,7 +157,7 @@ export function getMessageRenderPacket(message: Pick<Message, 'meta'>): MessageR
 
 export function getMessageRenderedBodyContent(message: Message): string {
   const packet = getMessageRenderPacket(message)
-  return cleanMessagePresentationText(message, (
+  const clean = cleanMessagePresentationText(message, (
     packet?.renderedBody
     || packet?.renderedContent
     || packet?.answerMarkdown
@@ -131,6 +166,7 @@ export function getMessageRenderedBodyContent(message: Message): string {
     || message.content
     || ''
   ))
+  return message.role === 'assistant' ? stripLeadingAssistantSourceNotice(clean) : clean
 }
 
 export function getMessageCiteDetailRecords(message: Message): Array<Record<string, unknown>> {
@@ -168,5 +204,17 @@ export function getMessageCopyMarkdownValue(message: Message): string | undefine
 export function getMessageNoticeValue(message: Message): string | undefined {
   const packet = getMessageRenderPacket(message)
   const value = String(packet?.notice || message.notice || '').trim()
-  return value || undefined
+  if (value) return value
+  if (message.role !== 'assistant') return undefined
+  const rendered = cleanMessagePresentationText(message, (
+    packet?.renderedBody
+    || packet?.renderedContent
+    || packet?.answerMarkdown
+    || message.rendered_body
+    || message.rendered_content
+    || message.content
+    || ''
+  ))
+  const split = splitLeadingAssistantSourceNotice(rendered)
+  return split.notice || undefined
 }

@@ -19,6 +19,8 @@ const EVIDENCE_MAP_RE = /Evidence map|证据地图/
 const MISMATCH_RE = /Citation does not match retrieved evidence|引用与检索证据不匹配/
 const DIAGNOSTICS_RE = /Diagnostics|诊断信息/
 
+const NOT_FROM_KB_RE = /Not from KB|非本地文献库|闈炴湰鍦版枃鐚簱/
+
 test.beforeEach(async ({ page }) => {
   await installAppShellMocks(page)
   await installIdleReferenceMocks(page)
@@ -153,11 +155,24 @@ test('research agent debug sections stay out of the answer body', async ({ page 
   await expect(page.getByText('supported_claims: 1')).toHaveCount(0)
 })
 
+test('external source notice is compacted outside the answer body', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-external-notice')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-external-notice')
+  await expect(page.getByText('External context can still explain the concept clearly')).toBeVisible()
+  await expect(page.getByTestId('assistant-source-notice')).toContainText(NOT_FROM_KB_RE)
+  await expect(page.getByText('no matching local knowledge-base evidence was found')).toHaveCount(0)
+  await expect(page.locator('.kb-markdown-chat')).not.toContainText('knowledge-base-grounded answer')
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(NOT_FROM_KB_RE)
+})
+
 test('streaming research agent partial hides appended trace json', async ({ page }) => {
   await page.goto('/__message_list_test__?scenario=agent-trace-streaming-clean')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-streaming-clean')
   await expect(page.getByText('Streaming answer stays focused on the conclusion.')).toBeVisible()
+  await expect(page.getByTestId('assistant-source-notice')).toContainText(NOT_FROM_KB_RE)
+  await expect(page.getByText('no matching local knowledge-base evidence was found')).toHaveCount(0)
   await expect(page.getByText('stream trace leaked')).toHaveCount(0)
   await expect(page.getByText('agent_trace')).toHaveCount(0)
 })
