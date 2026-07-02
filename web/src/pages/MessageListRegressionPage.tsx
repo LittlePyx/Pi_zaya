@@ -1436,6 +1436,33 @@ const agentTraceCleanAnswerMessages: Message[] = [
   },
 ]
 
+const agentSourceSummaryLocalMessages: Message[] = [
+  {
+    id: 9451,
+    role: 'assistant',
+    content: 'The local paper reports that retrieval happens before generation [1].',
+    rendered_body: 'The local paper reports that retrieval happens before generation [1].',
+    copy_text: 'The local paper reports that retrieval happens before generation [1].',
+    copy_markdown: 'The local paper reports that retrieval happens before generation [1].',
+    created_at: Date.now(),
+    meta: {
+      agent_mode: 'research_agent',
+      agent_source_summary: {
+        kind: 'local_kb',
+        label_key: 'agent_trace_source_local_only',
+        label: 'Local KB',
+        detail: 'Answer uses local knowledge-base evidence.',
+        confidence: 'high',
+        evidence_status: 'grounded',
+        evidence_hit_count: 1,
+        support_ratio: 1,
+        unsupported_claims: 0,
+        should_show: true,
+      },
+    },
+  },
+]
+
 const agentTraceExternalNoticeMessages: Message[] = [
   {
     id: 9501,
@@ -1624,6 +1651,7 @@ type RegressionScenario =
   | 'agent-trace-reference-actions'
   | 'agent-trace-lazy-audit'
   | 'agent-trace-clean-answer'
+  | 'agent-source-summary-local'
   | 'agent-trace-external-notice'
   | 'agent-trace-hybrid-notice'
   | 'agent-trace-streaming-clean'
@@ -1657,6 +1685,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'agent-trace-reference-actions') return 'agent-trace-reference-actions'
     if (scenarioParam === 'agent-trace-lazy-audit') return 'agent-trace-lazy-audit'
     if (scenarioParam === 'agent-trace-clean-answer') return 'agent-trace-clean-answer'
+    if (scenarioParam === 'agent-source-summary-local') return 'agent-source-summary-local'
     if (scenarioParam === 'agent-trace-external-notice') return 'agent-trace-external-notice'
     if (scenarioParam === 'agent-trace-hybrid-notice') return 'agent-trace-hybrid-notice'
     if (scenarioParam === 'agent-trace-streaming-clean') return 'agent-trace-streaming-clean'
@@ -1686,6 +1715,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'agent-trace-reference-actions') return agentTraceReferenceActionMessages
     if (scenario === 'agent-trace-lazy-audit') return agentTraceLazyAuditMessages
     if (scenario === 'agent-trace-clean-answer') return agentTraceCleanAnswerMessages
+    if (scenario === 'agent-source-summary-local') return agentSourceSummaryLocalMessages
     if (scenario === 'agent-trace-external-notice') return agentTraceExternalNoticeMessages
     if (scenario === 'agent-trace-hybrid-notice') return agentTraceHybridNoticeMessages
     if (scenario === 'agent-trace-streaming-clean') return []

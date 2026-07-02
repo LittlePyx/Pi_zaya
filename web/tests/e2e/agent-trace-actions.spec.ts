@@ -7,6 +7,7 @@ import {
   installEmptyCitationShelfMock,
   installIdleReferenceMocks,
 } from './mockAppShell'
+const LOCAL_KB_RE = /Local KB|本地文献库|鏈湴鏂囩尞搴?/
 
 const SOURCE_PANEL_RE = /Sources & evidence|依据与来源/
 const NEEDS_REVIEW_RE = /Needs review|需要核对/
@@ -154,6 +155,16 @@ test('research agent debug sections stay out of the answer body', async ({ page 
   await expect(page.getByText('retrieve_evidence debug detail leaked')).toHaveCount(0)
   await expect(page.getByText('verify_answer_citations debug detail leaked')).toHaveCount(0)
   await expect(page.getByText('supported_claims: 1')).toHaveCount(0)
+})
+
+test('agent source summary shows a compact local source badge', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-source-summary-local')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-source-summary-local')
+  await expect(page.getByText('The local paper reports that retrieval happens before generation')).toBeVisible()
+  await expect(page.getByTestId('assistant-source-notice')).toContainText(LOCAL_KB_RE)
+  await expect(page.getByText('agent_trace')).toHaveCount(0)
+  await expect(page.getByText('tool calls')).toHaveCount(0)
 })
 
 test('external source notice is compacted outside the answer body', async ({ page }) => {

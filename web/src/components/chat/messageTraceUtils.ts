@@ -36,6 +36,12 @@ export function getMessageAgentTrace(message: Message): Record<string, unknown> 
   return Object.keys(trace).length > 0 ? trace : null
 }
 
+export function getMessageAgentSourceSummary(message: Message): Record<string, unknown> | null {
+  const meta = asTraceRecord(message.meta)
+  const summary = asTraceRecord(meta.agent_source_summary || meta.agentSourceSummary)
+  return Object.keys(summary).length > 0 ? summary : null
+}
+
 export function messageHasAgentTraceHint(message: Message): boolean {
   if (getMessageAgentTrace(message)) return true
   const meta = asTraceRecord(message.meta)

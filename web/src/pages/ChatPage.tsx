@@ -586,6 +586,7 @@ export default function ChatPage() {
                     generationStage={generation?.stage}
                     generationTrace={generation?.researchTrace}
                     generationAgentTrace={generation?.agentTrace}
+                    generationAgentSourceSummary={generation?.agentSourceSummary}
                     jumpTarget={timelineJump}
                     onJumpHandled={handleTimelineJumpHandled}
                     trackedMessageIds={timelineTrackedMessageIds}

@@ -1,6 +1,7 @@
 import { Typography } from 'antd'
 import type { Message } from '../../api/chat'
 import { getMessageNoticeValue, isAssistantSourceNoticeText } from './messageRenderPacket'
+import { getMessageAgentSourceSummary } from './messageTraceUtils'
 import type { LowConfidenceMetaLite } from './messageLowConfidence'
 
 const { Text } = Typography
@@ -21,25 +22,78 @@ function shouldShowProvenanceModeLabel(): boolean {
 }
 
 function sourceNoticeLabel(noticeText: string, S: Record<string, string>): string {
-  if (/local citations\s*\[n\]\s*come from the knowledge base/i.test(noticeText) || /带\s*\[n\]\s*的内容来自本地知识库/.test(noticeText)) {
+  const mentionsLocalKb = /local citations\s*\[n\]\s*come from the knowledge base/i.test(noticeText)
+    || (/[\u672c\u5730\u77e5\u8bc6\u6587\u732e\u5e93]/.test(noticeText) && /\[n\]/.test(noticeText))
+  if (mentionsLocalKb) {
     return S.agent_trace_source_local_external || 'Local + external'
   }
   return S.agent_trace_evidence_not_from_kb || 'Not from KB'
 }
 
+function sourceSummaryLabel(summary: Record<string, unknown>, S: Record<string, string>): string {
+  const labelKey = String(summary.label_key || summary.labelKey || '').trim()
+  if (labelKey && S[labelKey]) return S[labelKey]
+  const kind = String(summary.kind || '').trim()
+  if (kind === 'local_kb') return S.agent_trace_source_local_only || 'Local KB'
+  if (kind === 'local_plus_external') return S.agent_trace_source_local_external || 'Local + external'
+  if (kind === 'external_not_kb' || kind === 'general_api') return S.agent_trace_evidence_not_from_kb || 'Not from KB'
+  return String(summary.label || '').trim() || S.agent_trace_source_fallback || 'Source'
+}
+
+function shouldShowSourceSummary(summary: Record<string, unknown> | null): summary is Record<string, unknown> {
+  if (!summary) return false
+  if (summary.should_show === false || summary.shouldShow === false) return false
+  const kind = String(summary.kind || '').trim()
+  if (kind && kind !== 'unknown') return true
+  return Boolean(String(summary.label || summary.label_key || summary.labelKey || '').trim())
+}
+
+function sourceSummaryTitle(summary: Record<string, unknown>, fallbackNotice: string): string {
+  const detail = String(summary.detail || '').trim()
+  if (detail) return detail
+  return fallbackNotice || String(summary.label || '').trim()
+}
+
 export function AssistantSourceNotice({
   noticeText,
   S,
+  labelText,
+  titleText,
 }: {
   noticeText: string
   S: Record<string, string>
+  labelText?: string
+  titleText?: string
 }) {
   if (!noticeText) return null
   return (
-    <div className="kb-assistant-source-notice" title={noticeText} data-testid="assistant-source-notice">
+    <div className="kb-assistant-source-notice" title={titleText || noticeText} data-testid="assistant-source-notice">
       <span className="kb-assistant-source-dot" />
-      <span>{sourceNoticeLabel(noticeText, S)}</span>
+      <span>{labelText || sourceNoticeLabel(noticeText, S)}</span>
     </div>
+  )
+}
+
+export function AssistantSourceSummaryNotice({
+  sourceSummary,
+  fallbackNoticeText = '',
+  S,
+}: {
+  sourceSummary: Record<string, unknown> | null | undefined
+  fallbackNoticeText?: string
+  S: Record<string, string>
+}) {
+  const summary = sourceSummary || null
+  if (!shouldShowSourceSummary(summary)) return null
+  const label = sourceSummaryLabel(summary, S)
+  const title = sourceSummaryTitle(summary, fallbackNoticeText) || label
+  return (
+    <AssistantSourceNotice
+      noticeText={title}
+      titleText={title}
+      labelText={label}
+      S={S}
+    />
   )
 }
 
@@ -50,16 +104,21 @@ export function AssistantMessageNotices({
   S,
 }: AssistantMessageNoticesProps) {
   const noticeText = getMessageNoticeValue(message)
-  const sourceNotice = noticeText && isAssistantSourceNoticeText(noticeText)
+  const sourceNotice = Boolean(noticeText && isAssistantSourceNoticeText(noticeText))
+  const sourceSummary = getMessageAgentSourceSummary(message)
+  const showSourceSummary = shouldShowSourceSummary(sourceSummary)
   const showProvenanceLabel = shouldShowProvenanceModeLabel() && Boolean(provenanceModeLabel)
 
-  if (!noticeText && !lowConfidenceMeta && !showProvenanceLabel) return null
+  if (!noticeText && !showSourceSummary && !lowConfidenceMeta && !showProvenanceLabel) return null
 
   return (
     <>
-      {noticeText && sourceNotice ? (
+      {showSourceSummary ? (
+        <AssistantSourceSummaryNotice sourceSummary={sourceSummary} fallbackNoticeText={noticeText || ''} S={S} />
+      ) : noticeText && sourceNotice ? (
         <AssistantSourceNotice noticeText={noticeText} S={S} />
-      ) : noticeText ? (
+      ) : null}
+      {noticeText && !sourceNotice ? (
         <div className="mb-4 rounded-2xl border border-[var(--border)] bg-black/[0.03] px-4 py-3 text-sm text-black/70 dark:bg-white/[0.04] dark:text-white/70">
           {noticeText}
         </div>

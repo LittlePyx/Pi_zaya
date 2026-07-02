@@ -121,6 +121,25 @@ export interface AgentTraceSummary {
   [key: string]: unknown
 }
 
+export interface AgentSourceSummary {
+  kind?: 'local_kb' | 'local_plus_external' | 'external_not_kb' | 'general_api' | 'unknown' | string
+  label_key?: string
+  label?: string
+  detail?: string
+  confidence?: 'high' | 'medium' | 'low' | 'external' | 'unknown' | string
+  source_blend?: string
+  source_policy?: string
+  evidence_status?: string
+  retrieval_confidence?: string
+  support_ratio?: number
+  evidence_hit_count?: number
+  unsupported_claims?: number
+  source_notice_count?: number
+  quality_gate_status?: string
+  should_show?: boolean
+  [key: string]: unknown
+}
+
 export interface EvidenceMatrixRow {
   paper?: string
   source_name?: string
@@ -175,6 +194,7 @@ export interface MessageMeta {
   provenance?: MessageProvenance
   answer_quality?: Record<string, unknown>
   agent_trace?: AgentTrace | Record<string, unknown>
+  agent_source_summary?: AgentSourceSummary | Record<string, unknown>
   paper_guide_contracts?: MessagePaperGuideContracts
   render_cache?: Record<string, unknown>
   [key: string]: unknown

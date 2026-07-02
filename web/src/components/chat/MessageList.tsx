@@ -135,7 +135,7 @@ import { buildMessageMarkdownLocateProps } from './messageMarkdownLocateProps'
 import { MessageProvenanceChips } from './MessageProvenanceChips'
 import { MessageReferenceCandidates } from './MessageReferenceCandidates'
 import { UserMessageBubble } from './UserMessageBubble'
-import { AssistantMessageNotices, AssistantSourceNotice } from './AssistantMessageNotices'
+import { AssistantMessageNotices, AssistantSourceNotice, AssistantSourceSummaryNotice } from './AssistantMessageNotices'
 import {
   lookupGuideCandidatesBySourcePath,
   sourcePathLookupKeys,
@@ -185,6 +185,7 @@ interface Props {
   generationStage?: string
   generationTrace?: Record<string, unknown>
   generationAgentTrace?: Record<string, unknown>
+  generationAgentSourceSummary?: Record<string, unknown>
   jumpTarget?: { messageId: number; token: number } | null
   onJumpHandled?: (jumpTarget: { messageId: number; token: number }) => void
   trackedMessageIds?: number[]
@@ -240,6 +241,7 @@ export function MessageList({
   generationStage,
   generationTrace,
   generationAgentTrace,
+  generationAgentSourceSummary,
   jumpTarget,
   onJumpHandled,
   trackedMessageIds,
@@ -2135,6 +2137,9 @@ export function MessageList({
     : ''
   const generationSourceNotice = splitLeadingAssistantSourceNotice(cleanGenerationPartial)
   const visibleGenerationPartial = generationSourceNotice.notice ? generationSourceNotice.body : cleanGenerationPartial
+  const hasGenerationAgentSourceSummary = Boolean(
+    generationAgentSourceSummary && Object.keys(generationAgentSourceSummary).length > 0,
+  )
 
   return (
     <>
@@ -2442,7 +2447,13 @@ export function MessageList({
                     </Text>
                   </div>
                 ) : null}
-                {generationSourceNotice.notice ? (
+                {hasGenerationAgentSourceSummary ? (
+                  <AssistantSourceSummaryNotice
+                    sourceSummary={generationAgentSourceSummary}
+                    fallbackNoticeText={generationSourceNotice.notice}
+                    S={S}
+                  />
+                ) : generationSourceNotice.notice ? (
                   <AssistantSourceNotice noticeText={generationSourceNotice.notice} S={S} />
                 ) : null}
                 {visibleGenerationPartial ? (

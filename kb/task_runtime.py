@@ -49,6 +49,7 @@ from kb.answer_quality import (
     _gen_record_answer_quality,
 )
 from kb.agent.runner import build_agent_trace_for_completed_answer, build_generation_agent_notes
+from kb.agent.source_summary import build_agent_source_summary
 from kb.agent.tools import generate_grounded_answer as agent_generate_grounded_answer
 from kb.generation_citation_validation_runtime import (
     _source_refs_from_index as _citation_validation_source_refs_from_index,
@@ -3326,6 +3327,13 @@ def _gen_compact_agent_trace(agent_trace: dict | None) -> dict:
     return trace
 
 
+def _gen_agent_source_summary(agent_trace: dict | None) -> dict:
+    try:
+        return build_agent_source_summary(agent_trace)
+    except Exception:
+        return {}
+
+
 def _gen_store_agent_trace_meta(task: dict, *, agent_trace: dict | None) -> None:
     if not bool(task.get("agent_mode")):
         return
@@ -3341,7 +3349,11 @@ def _gen_store_agent_trace_meta(task: dict, *, agent_trace: dict | None) -> None
     if amid <= 0:
         return
     try:
-        chat_store.merge_message_meta(amid, {"agent_trace": trace, "agent_mode": "research_agent"})
+        meta = {"agent_trace": trace, "agent_mode": "research_agent"}
+        source_summary = _gen_agent_source_summary(trace)
+        if source_summary:
+            meta["agent_source_summary"] = source_summary
+        chat_store.merge_message_meta(amid, meta)
     except Exception:
         pass
 
@@ -3627,6 +3639,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     answer_mode=agent_answer_mode,
                 )
                 _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
+            agent_source_summary = _gen_agent_source_summary(agent_trace)
             _gen_update_task(
                 session_id,
                 task_id,
@@ -3641,6 +3654,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 answer_contract_v1=bool(answer_contract_v1),
                 research_trace=research_trace,
                 agent_trace=agent_trace,
+                agent_source_summary=agent_source_summary,
                 finished_at=time.time(),
             )
             return
@@ -5451,6 +5465,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 generation_output=agent_generation_result_for_trace,
             )
             _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
+        agent_source_summary = _gen_agent_source_summary(agent_trace)
         _gen_update_task(
             session_id,
             task_id,
@@ -5466,6 +5481,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             citation_validation=citation_validation,
             research_trace=research_trace,
             agent_trace=agent_trace,
+            agent_source_summary=agent_source_summary,
             finished_at=time.time(),
         )
         _perf_log("gen.answer", elapsed=time.perf_counter() - t_answer0, chars=len(answer))
@@ -5499,6 +5515,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     answer_mode=agent_answer_mode,
                 )
                 _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
+            agent_source_summary = _gen_agent_source_summary(agent_trace)
             _gen_update_task(
                 session_id,
                 task_id,
@@ -5509,6 +5526,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 char_count=len(answer),
                 research_trace=research_trace,
                 agent_trace=agent_trace,
+                agent_source_summary=agent_source_summary,
                 finished_at=time.time(),
             )
             return
@@ -5538,6 +5556,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 answer_mode=agent_answer_mode,
             )
             _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
+        agent_source_summary = _gen_agent_source_summary(agent_trace)
         _gen_update_task(
             session_id,
             task_id,
@@ -5549,6 +5568,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             char_count=len(err),
             research_trace=research_trace,
             agent_trace=agent_trace,
+            agent_source_summary=agent_source_summary,
             finished_at=time.time(),
         )
 
