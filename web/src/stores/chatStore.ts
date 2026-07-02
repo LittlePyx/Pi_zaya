@@ -28,22 +28,19 @@ import {
   attachmentKey,
   cachedPendingImages,
   cachedUploadItems,
-  collectUploadStatusJobIds,
   isPdfUploadJobRunning,
   mergeImageAttachments,
   mergeUploadItems,
   needsAnyUploadStatusPolling,
-  replaceUploadItemsFromStatus,
   uploadItemKey,
 } from './chatStoreUploads'
+import { startUploadPolling, stopUploadPolling } from './chatStoreUploadPolling'
 
 let refsPollToken = 0
 let refsPollTimer: number | null = null
 let refsPollController: AbortController | null = null
 let messagePostprocessPollToken = 0
 let messagePostprocessPollTimer: number | null = null
-let uploadPollToken = 0
-let uploadPollTimer: number | null = null
 let conversationSwitchToken = 0
 const NEW_CONVERSATION_GENERATION_LOCK = '__new_conversation_generation__'
 const generationStartLocks = new Set<string>()
@@ -443,14 +440,6 @@ function stopMessagePostprocessPolling() {
   }
 }
 
-function stopUploadPolling() {
-  uploadPollToken += 1
-  if (uploadPollTimer !== null) {
-    window.clearTimeout(uploadPollTimer)
-    uploadPollTimer = null
-  }
-}
-
 function needsRefsEnrichment(refs: Record<string, unknown>) {
   for (const value of Object.values(refs || {})) {
     const rec = value as {
@@ -474,78 +463,6 @@ function needsRefsEnrichment(refs: Record<string, unknown>) {
     }
   }
   return false
-}
-
-async function startUploadPolling(set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void, getState: () => ChatState) {
-  stopUploadPolling()
-  const token = ++uploadPollToken
-  let tries = 0
-  const maxTries = 240
-  const nextDelay = () => {
-    if (tries <= 10) return 500
-    if (tries <= 40) return 1000
-    return 1800
-  }
-
-  const tick = async () => {
-    if (token !== uploadPollToken) return
-    tries += 1
-    const state = getState()
-    const jobIds = collectUploadStatusJobIds(state)
-    if (jobIds.length === 0) {
-      uploadPollTimer = null
-      return
-    }
-    try {
-      const res = await chatApi.getUploadStatuses(jobIds)
-      if (token !== uploadPollToken) return
-      const items = Array.isArray(res.items) ? res.items : []
-      set((cur) => {
-        const activeUpdate = replaceUploadItemsFromStatus(cur.uploadItems, items)
-        let cacheChanged = false
-        let nextCache = cur.conversationCacheById
-        for (const [convId, view] of Object.entries(cur.conversationCacheById || {})) {
-          const cachedUpdate = replaceUploadItemsFromStatus(cachedUploadItems(view), items)
-          if (!cachedUpdate.changed) continue
-          if (!cacheChanged) {
-            nextCache = { ...nextCache }
-            cacheChanged = true
-          }
-          nextCache[convId] = {
-            ...view,
-            uploadItems: cachedUpdate.items,
-            cachedAt: Date.now(),
-          }
-        }
-        if (activeUpdate.changed && cur.activeConvId) {
-          nextCache = upsertConversationViewCache(nextCache, cur.activeConvId, {
-            uploadItems: activeUpdate.items,
-            pendingImages: cur.pendingImages,
-            cachedAt: Date.now(),
-          })
-          cacheChanged = true
-        }
-        if (!activeUpdate.changed && !cacheChanged) return {}
-        return {
-          ...(activeUpdate.changed ? { uploadItems: activeUpdate.items } : {}),
-          ...(cacheChanged ? { conversationCacheById: nextCache } : {}),
-        }
-      })
-      const nextState = getState()
-      if (!needsAnyUploadStatusPolling(nextState) || tries >= maxTries) {
-        uploadPollTimer = null
-        return
-      }
-    } catch {
-      if (tries >= maxTries) {
-        uploadPollTimer = null
-        return
-      }
-    }
-    uploadPollTimer = window.setTimeout(tick, nextDelay())
-  }
-
-  void tick()
 }
 
 async function loadRefsForConversation(
@@ -1480,7 +1397,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conversationCacheById: cacheAfterLeaving,
     })
     if (needsAnyUploadStatusPolling(get())) {
-      void startUploadPolling(set, get)
+      void startUploadPolling(set, get, upsertConversationViewCache)
     }
     if (restoredGeneration) {
       scheduleLoadRefsForConversation(
@@ -1883,7 +1800,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })(),
       }))
       if (needsAnyUploadStatusPolling(get())) {
-        void startUploadPolling(set, get)
+        void startUploadPolling(set, get, upsertConversationViewCache)
       }
     } catch {
       set((state) => ({
@@ -1947,7 +1864,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })(),
     }))
     if (needsAnyUploadStatusPolling(get())) {
-      void startUploadPolling(set, get)
+      void startUploadPolling(set, get, upsertConversationViewCache)
     }
   },
 
