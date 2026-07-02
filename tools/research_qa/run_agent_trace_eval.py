@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +44,51 @@ ANSWER_MODE_TO_SOURCE_BLEND = {
     "external_academic_llm": "external_academic",
     "general_llm": "general_llm",
 }
+VALID_ANSWER_PROFILES = {
+    "local_evidence_grounded",
+    "hybrid_synthesis",
+    "external_academic",
+    "general_api",
+    "insufficient_local_evidence",
+}
+ANSWER_PROFILE_CONTRACTS: dict[str, dict[str, Any]] = {
+    "local_evidence_grounded": {
+        "source_blend": "local_grounded",
+        "notice": "none",
+        "min_local_citations": 1,
+        "max_answer_chars": 900,
+        "max_source_notice_lines": 0,
+    },
+    "hybrid_synthesis": {
+        "source_blend": "hybrid_local_external",
+        "notice": "hybrid_notice",
+        "min_local_citations": 1,
+        "max_answer_chars": 1200,
+        "max_source_notice_lines": 1,
+    },
+    "external_academic": {
+        "source_blend": "external_academic",
+        "notice": "external_not_local",
+        "min_local_citations": 0,
+        "max_answer_chars": 1200,
+        "max_source_notice_lines": 1,
+    },
+    "general_api": {
+        "source_blend": "general_llm",
+        "notice": "none",
+        "min_local_citations": 0,
+        "max_answer_chars": 800,
+        "max_source_notice_lines": 0,
+    },
+    "insufficient_local_evidence": {
+        "source_blend": "external_academic",
+        "notice": "insufficient_local_evidence",
+        "min_local_citations": 0,
+        "max_answer_chars": 900,
+        "max_source_notice_lines": 1,
+    },
+}
+_CITATION_RE = re.compile(r"(?:\[[0-9][0-9,\-\s]*\]|\[\[CITE:[^\]]+\]\])")
 
 
 def _synthetic_hit(case: dict[str, Any]) -> dict[str, Any]:
@@ -179,6 +225,55 @@ def _answer_has_kb_miss_notice(answer: str) -> bool:
     )
 
 
+def _citation_count(answer: str) -> int:
+    return len(_CITATION_RE.findall(str(answer or "")))
+
+
+def _source_notice_line_count(answer: str) -> int:
+    count = 0
+    for raw_line in str(answer or "").splitlines():
+        line = _norm(raw_line)
+        if not line:
+            continue
+        if line.startswith("note:") or line.startswith("注意:") or line.startswith("注意：") or line.startswith("注:"):
+            count += 1
+            continue
+        if (
+            "no matching local knowledge-base evidence" in line
+            or "does not contain enough evidence" in line
+            or "no supporting local snippets" in line
+            or "not a knowledge-base-grounded answer" in line
+        ):
+            count += 1
+    return count
+
+
+def _answer_profile(case: dict[str, Any]) -> str:
+    profile = str(case.get("answer_profile") or "").strip()
+    return profile if profile in VALID_ANSWER_PROFILES else ""
+
+
+def _profile_contract(case: dict[str, Any]) -> dict[str, Any]:
+    profile = _answer_profile(case)
+    base = dict(ANSWER_PROFILE_CONTRACTS.get(profile) or {})
+    if "max_answer_chars" in case:
+        try:
+            base["max_answer_chars"] = int(case.get("max_answer_chars") or 0)
+        except Exception:
+            base["max_answer_chars"] = 0
+    if "min_local_citations" in case:
+        try:
+            base["min_local_citations"] = int(case.get("min_local_citations") or 0)
+        except Exception:
+            base["min_local_citations"] = 0
+    if "max_source_notice_lines" in case:
+        try:
+            base["max_source_notice_lines"] = int(case.get("max_source_notice_lines") or 0)
+        except Exception:
+            base["max_source_notice_lines"] = 0
+    return base
+
+
 def _source_blend_notice_ok(answer: str, source_blend: str, notice_type: str) -> bool:
     expected_notice = str(notice_type or "none").strip()
     if expected_notice != "none":
@@ -257,6 +352,10 @@ def _validate_quality_case(case: dict[str, Any]) -> list[str]:
         errors.append(f"{case_id}: evidence_hits must be a list")
     if not isinstance(case.get("expected_answer_points", []), list):
         errors.append(f"{case_id}: expected_answer_points must be a list")
+    if case.get("answer_profile") is not None and not _answer_profile(case):
+        errors.append(
+            f"{case_id}: answer_profile must be one of {', '.join(sorted(VALID_ANSWER_PROFILES))}"
+        )
     for field in ("source_blend", "expected_source_blend"):
         if field in case:
             blend = str(case.get(field) or "").strip()
@@ -297,6 +396,15 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
     required_notice_ok = 0
     real_replay_case_count = 0
     real_reviewed_case_count = 0
+    answer_profile_expected_total = 0
+    answer_profile_hit_count = 0
+    answer_profile_status_counts = {profile: 0 for profile in sorted(VALID_ANSWER_PROFILES)}
+    answer_compact_total = 0
+    answer_compact_ok = 0
+    local_citation_contract_total = 0
+    local_citation_contract_ok = 0
+    source_notice_shape_total = 0
+    source_notice_shape_ok = 0
 
     for case in cases:
         case_id = str(case.get("id") or f"line:{case.get('_line_no')}")
@@ -310,10 +418,79 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         should_use_local = bool(case.get("should_use_local_evidence"))
         notice_type = str(case.get("expected_user_notice") or "none").strip()
         sample_kind = str(case.get("sample_kind") or "").strip()
+        answer_profile = _answer_profile(case)
+        profile_contract = _profile_contract(case)
         if sample_kind == "real_chat_replay" or case.get("replay_unlabeled") is True:
             real_replay_case_count += 1
         if sample_kind == "real_chat_reviewed":
             real_reviewed_case_count += 1
+
+        profile_ok: bool | None = None
+        profile_compact_ok: bool | None = None
+        profile_citation_ok: bool | None = None
+        profile_notice_shape_ok: bool | None = None
+        if answer_profile:
+            answer_profile_expected_total += 1
+            answer_profile_status_counts[answer_profile] += 1
+            expected_profile_blend = str(profile_contract.get("source_blend") or "").strip()
+            expected_profile_notice = str(profile_contract.get("notice") or "none").strip()
+            max_chars = int(profile_contract.get("max_answer_chars") or 0)
+            min_citations = int(profile_contract.get("min_local_citations") or 0)
+            max_notice_lines = int(profile_contract.get("max_source_notice_lines") or 0)
+            answer_chars = len(answer.strip())
+            citation_count = _citation_count(answer)
+            notice_line_count = _source_notice_line_count(answer)
+
+            profile_source_blend_ok = not expected_profile_blend or source_blend == expected_profile_blend
+            profile_notice_ok = (
+                True
+                if expected_profile_notice == "none"
+                else _answer_has_notice(answer, expected_profile_notice)
+            )
+            profile_compact_ok = max_chars <= 0 or answer_chars <= max_chars
+            profile_citation_ok = citation_count >= min_citations
+            profile_notice_shape_ok = notice_line_count <= max_notice_lines
+            profile_ok = bool(
+                profile_source_blend_ok
+                and profile_notice_ok
+                and profile_compact_ok
+                and profile_citation_ok
+                and profile_notice_shape_ok
+            )
+            if profile_ok:
+                answer_profile_hit_count += 1
+            else:
+                if not profile_source_blend_ok:
+                    errors.append(
+                        f"{case_id}: answer_profile {answer_profile} expected source_blend {expected_profile_blend}"
+                    )
+                if not profile_notice_ok:
+                    errors.append(
+                        f"{case_id}: answer_profile {answer_profile} expected notice {expected_profile_notice}"
+                    )
+                if not profile_compact_ok:
+                    errors.append(
+                        f"{case_id}: answer_profile {answer_profile} answer too long ({answer_chars}>{max_chars})"
+                    )
+                if not profile_citation_ok:
+                    errors.append(
+                        f"{case_id}: answer_profile {answer_profile} expected at least {min_citations} citation(s)"
+                    )
+                if not profile_notice_shape_ok:
+                    errors.append(
+                        f"{case_id}: answer_profile {answer_profile} has too many source notice lines "
+                        f"({notice_line_count}>{max_notice_lines})"
+                    )
+
+            answer_compact_total += 1
+            if profile_compact_ok:
+                answer_compact_ok += 1
+            local_citation_contract_total += 1
+            if profile_citation_ok:
+                local_citation_contract_ok += 1
+            source_notice_shape_total += 1
+            if profile_notice_shape_ok:
+                source_notice_shape_ok += 1
 
         if source_blend:
             source_blend_status_counts[source_blend] += 1
@@ -430,6 +607,11 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
                 "source_blend": source_blend or None,
                 "expected_source_blend": expected_source_blend or None,
                 "source_blend_ok": source_blend == expected_source_blend if expected_source_blend else None,
+                "answer_profile": answer_profile or None,
+                "answer_profile_ok": profile_ok,
+                "answer_profile_compact_ok": profile_compact_ok,
+                "answer_profile_citation_ok": profile_citation_ok,
+                "answer_profile_notice_shape_ok": profile_notice_shape_ok,
                 "unnecessary_notice": has_kb_miss_notice if general_notice_case else None,
                 "required_notice_ok": (
                     _source_blend_notice_ok(answer, expected_source_blend or source_blend, notice_type)
@@ -469,6 +651,12 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         "unnecessary_notice_count": unnecessary_notice_count,
         "required_notice_accuracy": _ratio(required_notice_ok, required_notice_total),
         "required_notice_count": required_notice_total,
+        "answer_profile_accuracy": _ratio(answer_profile_hit_count, answer_profile_expected_total),
+        "answer_profile_expected_count": answer_profile_expected_total,
+        "answer_profile_status_counts": answer_profile_status_counts,
+        "answer_compactness_rate": _ratio(answer_compact_ok, answer_compact_total),
+        "local_citation_contract_accuracy": _ratio(local_citation_contract_ok, local_citation_contract_total),
+        "source_notice_shape_accuracy": _ratio(source_notice_shape_ok, source_notice_shape_total),
         "quality_gate_observed_count": quality_gate_observed_total,
         "quality_gate_passed_rate": _ratio(quality_gate_status_counts["passed"], quality_gate_observed_total),
         "quality_gate_repaired_rate": _ratio(quality_gate_status_counts["repaired"], quality_gate_observed_total),
@@ -518,6 +706,10 @@ def build_eval_report(
     source_blend_accuracy = quality.get("source_blend_accuracy")
     unnecessary_notice_rate = quality.get("unnecessary_notice_rate")
     required_notice_accuracy = quality.get("required_notice_accuracy")
+    answer_profile_accuracy = quality.get("answer_profile_accuracy")
+    answer_compactness_rate = quality.get("answer_compactness_rate")
+    local_citation_contract_accuracy = quality.get("local_citation_contract_accuracy")
+    source_notice_shape_accuracy = quality.get("source_notice_shape_accuracy")
     real_replay_count = int(quality.get("real_replay_case_count") or 0) if quality else 0
     real_reviewed_count = int(quality.get("real_reviewed_case_count") or 0) if quality else 0
     if not quality:
@@ -532,6 +724,10 @@ def build_eval_report(
         source_blend_accuracy = None
         unnecessary_notice_rate = None
         required_notice_accuracy = None
+        answer_profile_accuracy = None
+        answer_compactness_rate = None
+        local_citation_contract_accuracy = None
+        source_notice_shape_accuracy = None
     return {
         "commit": str(commit if commit is not None else _git_commit()),
         "date": str(date or datetime.now(timezone.utc).isoformat()),
@@ -558,6 +754,11 @@ def build_eval_report(
         "source_blend_expected_count": quality.get("source_blend_expected_count") if quality else 0,
         "unnecessary_notice_rate": unnecessary_notice_rate,
         "required_notice_accuracy": required_notice_accuracy,
+        "answer_profile_accuracy": answer_profile_accuracy,
+        "answer_profile_expected_count": quality.get("answer_profile_expected_count") if quality else 0,
+        "answer_compactness_rate": answer_compactness_rate,
+        "local_citation_contract_accuracy": local_citation_contract_accuracy,
+        "source_notice_shape_accuracy": source_notice_shape_accuracy,
         "quality_gate_observed_count": quality.get("quality_gate_observed_count") if quality else 0,
         "quality_gate_passed_rate": quality_gate_passed_rate,
         "quality_gate_repaired_rate": quality_gate_repaired_rate,

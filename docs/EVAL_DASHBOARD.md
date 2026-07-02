@@ -50,10 +50,20 @@ It covers:
 - knowledge-base-unrelated general API answers
 - paper-specific insufficient-evidence disclosure
 
+Each fixture row can also declare an `answer_profile`. Current profiles are:
+
+- `local_evidence_grounded`: local-only answer, at least one local citation, no source-mode notice.
+- `hybrid_synthesis`: local citation plus concise external-background disclosure.
+- `external_academic`: no-hit academic answer with an explicit not-from-KB notice.
+- `general_api`: unrelated/general API answer with no knowledge-base miss notice.
+- `insufficient_local_evidence`: paper-specific no-hit answer that clearly marks the local evidence gap.
+
 These cases are intentionally small and deterministic. They verify source
 disclosure, expected answer points, citation support on local claims, and that
 trace/tool/debug content stays out of the main answer. They should not be
-presented as live LLM quality scores.
+presented as live LLM quality scores. Profile metrics check shape and product
+contracts only: answer compactness, local citation presence when required, and
+whether source notices are present but not repeated.
 
 ## Research QA Metrics
 
@@ -63,6 +73,8 @@ presented as live LLM quality scores.
 | Answer completeness | Manual | Check whether required aspects of the question are addressed. | TBD |
 | Groundedness | Manual/semi-automated | Count answer claims that are supported by retrieved evidence. | TBD |
 | Expected answer point coverage | Semi-automated fixture | Count expected answer points found in `docs/research_agent_eval_v1.jsonl` recorded answers. | Fixture-only |
+| Answer profile accuracy | Semi-automated fixture | Check recorded answers against profile contracts for source blend, citation shape, compactness, and source-notice count. | Fixture-only |
+| Answer compactness | Semi-automated fixture/manual | Check fixture answers stay within profile-specific max length; review real answers manually for relevance and readability. | Fixture-only |
 | Retrieval relevance | Semi-automated/manual | Inspect top retrieved chunks for relevance to the query. | TBD |
 | Multi-paper comparison usefulness | Manual | Check whether comparison claims are source-specific and not merged vaguely. | TBD |
 | Structured comparison completeness | Semi-automated/manual | For comparison prompts, inspect `compare_papers` output for `paper`, `method`, `evidence`, `limitation`, and `relation_to_question`. | TBD |
@@ -79,6 +91,8 @@ presented as live LLM quality scores.
 | Hybrid answer rate | Semi-automated | Count traces where `generate_grounded_answer.answer_mode` is `hybrid_local_external`, split by `web_search_used`. | TBD |
 | No-hit external fallback rate | Semi-automated | Count no-hit traces where `generate_grounded_answer.answer_mode` is `external_academic_llm` and whether `web_search_used` is true. | TBD |
 | External fallback disclosure accuracy | Semi-automated fixture/manual | Check whether external or hybrid answers visibly disclose that non-local content is not knowledge-base-grounded. | Fixture-only |
+| Source notice shape accuracy | Semi-automated fixture/manual | Check that local/general answers do not show unnecessary KB-miss notices and hybrid/external answers show at most one concise source notice. | Fixture-only |
+| Local citation contract accuracy | Semi-automated fixture/manual | Check that profiles requiring local evidence include at least one local citation marker. | Fixture-only |
 | Unsupported claim diagnostics | Semi-automated/manual | Inspect `agent_trace.verification.claims[*].unsupported_reason` and matched evidence source summaries. | TBD |
 | Evidence locate success | Manual/semi-automated | Open citation/locate targets and confirm they land near supporting text. | TBD |
 | Source-card accuracy | Manual | Check title, source, DOI/reference metadata, and displayed evidence quote. | TBD |
