@@ -27,7 +27,6 @@ import {
   buildStructuredEntryReaderOpenPayload,
 } from './reader/messageReaderLocatePayload'
 import {
-  shortSegmentLabel,
   type ProvenanceLocateEntry,
 } from './reader/messageStructuredProvenance'
 import {
@@ -35,7 +34,6 @@ import {
   type StructuredRenderLocateSlot,
 } from './reader/messageStructuredInlineLocate'
 import {
-  citationDisplay,
   mergeCiteMeta,
   normalizeCiteDetail,
   normalizeShelfNote,
@@ -132,9 +130,10 @@ import {
 } from './messageCitationViews'
 import { buildFallbackCiteDetailsFromRefHits } from './messageFallbackCitations'
 import { resolveLowConfidenceMeta, stripLeadingLowConfidenceNotice } from './messageLowConfidence'
-import { compactHeadingPath } from './messageQuoteUtils'
 import { createMessageLocateResolvers } from './messageLocateResolvers'
 import { buildMessageMarkdownLocateProps } from './messageMarkdownLocateProps'
+import { MessageProvenanceChips } from './MessageProvenanceChips'
+import { MessageReferenceCandidates } from './MessageReferenceCandidates'
 import {
   lookupGuideCandidatesBySourcePath,
   sourcePathLookupKeys,
@@ -2458,96 +2457,19 @@ export function MessageList({
                         onFollowUp={onResearchContextFollowUp ? useReceiptItemAsFollowUp : undefined}
                         S={S}
                       />
-                      {unlinkedReferenceViews.length > 0 ? (
-                        <div className="kb-unlinked-ref-strip" data-testid={`unlinked-reference-candidates-${message.id}`}>
-                          <div className="kb-unlinked-ref-head">
-                            <span>{S.msg_reference_candidates_title || 'Possible cited papers'}</span>
-                            <span>{S.msg_reference_candidates_note || 'Found in this paper bibliography'}</span>
-                          </div>
-                          <div className="kb-unlinked-ref-list">
-                            {unlinkedReferenceViews.map((view) => {
-                              const display = citationDisplay(view.detail)
-                              const title = display.main || view.detail.title || view.detail.raw || S.default_source_fallback
-                              const metaText = [
-                                display.authors,
-                                display.venueYear || display.venue,
-                              ].filter(Boolean).join(' · ')
-                              const key = String((view.candidate as Record<string, unknown>).id || view.detail.anchor || title)
-                              return (
-                                <div className="kb-unlinked-ref-row" key={key}>
-                                  <div className="kb-unlinked-ref-main">
-                                    <div className="kb-unlinked-ref-title">{title}</div>
-                                    {metaText ? <div className="kb-unlinked-ref-meta">{metaText}</div> : null}
-                                  </div>
-                                  <span className="kb-unlinked-ref-reason">{view.label}</span>
-                                  <div className="kb-unlinked-ref-actions">
-                                    {onOpenReader && view.detail.sourcePath ? (
-                                      <button
-                                        type="button"
-                                        className="kb-unlinked-ref-action"
-                                        onClick={() => openReaderFromDetail(view.detail)}
-                                      >
-                                        {S.msg_reference_candidate_open || 'Open'}
-                                      </button>
-                                    ) : null}
-                                    <button
-                                      type="button"
-                                      className="kb-unlinked-ref-action is-primary"
-                                      onClick={() => addToShelf(view.detail)}
-                                    >
-                                      {S.msg_reference_candidate_add || 'Add'}
-                                    </button>
-                                  </div>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      ) : null}
-                      {showProvenanceLocateChips ? (
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {provenanceLocateEntries.map((entry, idx) => {
-                            const heading = String(entry.primary?.headingPath || '').trim()
-                            const label = String(entry.label || '').trim()
-                            const snippet = shortSegmentLabel(
-                              String(entry.anchorText || entry.evidenceQuote || entry.segmentText || label || ''),
-                              72,
-                            )
-                            const headingLite = compactHeadingPath(heading, 56)
-                            const text = snippet
-                              || label
-                              || headingLite
-                              || '\u539f\u6587\u8bc1\u636e'
-                            const seedSnippet = String(
-                              entry.evidenceQuote
-                              || entry.anchorText
-                              || entry.segmentText
-                              || entry.label
-                              || '',
-                            ).trim()
-                            const focusSnippet = String(entry.primary?.focusSnippet || entry.primary?.matchText || seedSnippet || '').trim()
-                            return (
-                              <button
-                                key={`${message.id}::prov::${String(entry.segmentId || idx)}::${idx}`}
-                                type="button"
-                                className="kb-prov-locate-chip"
-                                aria-label={'\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e'}
-                                title={heading
-                                  ? `\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e\uff1a${heading}`
-                                  : (headingLite ? `\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e\uff1a${headingLite}` : '\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e')}
-                                data-kb-locate-focus={focusSnippet.slice(0, 220)}
-                                data-kb-locate-block-id={String(entry.primary?.blockId || '').trim()}
-                                data-kb-locate-anchor-id={String(entry.primary?.anchorId || '').trim()}
-                                data-kb-locate-heading={String(entry.primary?.headingPath || '').trim()}
-                                onClick={() => openReaderByStructuredEntry(entry, seedSnippet)}
-                              >
-                                <span className="kb-prov-locate-chip-num">{`\u8bc1\u636e${idx + 1}`}</span>
-                                <span className="kb-prov-locate-chip-text">{text}</span>
-                              </button>
-                            )
-                          })}
-                        </div>
-                      ) : null}
+                      <MessageReferenceCandidates
+                        views={unlinkedReferenceViews}
+                        messageId={message.id}
+                        canOpenReader={Boolean(onOpenReader)}
+                        onOpenReader={openReaderFromDetail}
+                        onAddToShelf={addToShelf}
+                        S={S}
+                      />
+                      <MessageProvenanceChips
+                        entries={showProvenanceLocateChips ? provenanceLocateEntries : []}
+                        messageId={message.id}
+                        onOpenEntry={openReaderByStructuredEntry}
+                      />
                       <AgentTracePanel
                         trace={agentTrace}
                         messageId={message.id}
