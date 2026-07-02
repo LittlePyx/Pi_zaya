@@ -134,6 +134,7 @@ import { createMessageLocateResolvers } from './messageLocateResolvers'
 import { buildMessageMarkdownLocateProps } from './messageMarkdownLocateProps'
 import { MessageProvenanceChips } from './MessageProvenanceChips'
 import { MessageReferenceCandidates } from './MessageReferenceCandidates'
+import { UserMessageBubble } from './UserMessageBubble'
 import {
   lookupGuideCandidatesBySourcePath,
   sourcePathLookupKeys,
@@ -2351,10 +2352,6 @@ export function MessageList({
               openReaderByCandidates,
               openReaderByStructuredEntry,
             })
-            const bubbleClass = isUser
-              ? `kb-msg-bubble kb-msg-bubble-user ${isImageOnlyUserMessage ? 'is-image-only' : ''}`
-              : 'kb-msg-bubble kb-msg-bubble-assistant'
-
             return (
               <div
                 key={message.id}
@@ -2362,54 +2359,15 @@ export function MessageList({
                 className={`kb-message-row ${isUser ? 'is-user' : 'is-assistant'} ${shelfMessageFlashId === message.id ? 'is-shelf-jump' : ''}`}
               >
                 {!isUser ? <AssistantAvatar /> : null}
-                <div className={bubbleClass}>
-                  {isUser ? (
-                    <>
-                      {imageAttachments.length > 0 ? (
-                        <div
-                          className={`${
-                            showUserText ? 'mb-3' : ''
-                          } grid ${
-                            imageAttachments.length === 1 ? 'max-w-[18rem] grid-cols-1' : 'max-w-[38rem] grid-cols-2 sm:grid-cols-3'
-                          } gap-2`}
-                        >
-                          {imageAttachments.map((item) => {
-                            const src = String(item.url || '').trim()
-                            const key = `${item.sha1 || item.path}-${item.name}`
-                            const frameClass = 'block overflow-hidden rounded-2xl border border-[var(--border)] bg-white/70'
-                            if (src) {
-                              return (
-                                <a
-                                  key={key}
-                                  href={src}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className={frameClass}
-                                >
-                                  <img
-                                    src={src}
-                                    alt={item.name}
-                                    className="block h-32 w-full object-cover"
-                                    loading="lazy"
-                                  />
-                                </a>
-                              )
-                            }
-                            return (
-                              <div key={key} className={frameClass}>
-                                <div className="flex h-32 items-center justify-center px-3 text-center text-xs text-black/45">
-                                  {item.name}
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      ) : null}
-                      {showUserText ? (
-                        <Text className="whitespace-pre-wrap">{message.content}</Text>
-                      ) : null}
-                    </>
-                  ) : (
+                {isUser ? (
+                  <UserMessageBubble
+                    content={message.content}
+                    imageAttachments={imageAttachments}
+                    showText={showUserText}
+                    imageOnly={isImageOnlyUserMessage}
+                  />
+                ) : (
+                  <div className="kb-msg-bubble kb-msg-bubble-assistant">
                     <>
                       {(() => {
                         const noticeText = getMessageNoticeValue(message)
@@ -2484,8 +2442,8 @@ export function MessageList({
                         markdown={getMessageCopyMarkdownValue(message)}
                       />
                     </>
-                  )}
-                </div>
+                  </div>
+                )}
                 {isUser ? (
                   <div className="kb-msg-avatar kb-msg-avatar-user">
                     <UserOutlined className="text-xs" />
