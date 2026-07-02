@@ -1,6 +1,6 @@
 import { useSettingsStore } from '../../stores/settingsStore'
 
-interface LowConfidenceMetaLite {
+export interface LowConfidenceMetaLite {
   isZh: boolean
   reasonCode: string
   reasonText: string
