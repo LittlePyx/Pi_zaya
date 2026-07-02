@@ -19,7 +19,6 @@ import {
 import { buildBasicReaderOpenPayload } from './reader/readerOpenPayloadUtils'
 import {
   buildGuideLocateCandidates,
-  buildRefsLocateCandidatesAll,
   hasFormulaSignal,
   normalizeLocateText,
   stripMarkdownInline,
@@ -32,14 +31,11 @@ import {
   buildStructuredEntryReaderOpenPayload,
 } from './reader/messageReaderLocatePayload'
 import {
-  buildStructuredProvenanceLocateEntries,
   isLikelyRhetoricalLocateShell,
-  listStructuredProvenanceSegments,
   shortSegmentLabel,
   type ProvenanceLocateEntry,
 } from './reader/messageStructuredProvenance'
 import {
-  buildStructuredRenderLocateSlotMap,
   createStructuredInlineLocateResolver,
   isEquationLocateCandidate,
   type StructuredRenderLocateSlot,
@@ -126,7 +122,6 @@ import {
   getMessageRenderedBodyContent,
   getMessageRenderPacket,
 } from './messageRenderPacket'
-import { buildRenderPacketLocateEntry } from './messageRenderPacketLocate'
 import { remapStructuredEntryToGuideAnchors } from './messageStructuredLocateRemap'
 import {
   buildSelectedResearchContextPack,
@@ -135,13 +130,11 @@ import {
   type SelectedResearchContextItem,
 } from './researchContextPack'
 import {
-  messageListPerfNow,
   pushMessageListPrepPerf,
   type MessageListPrepPerfEvent,
 } from './messageListPerf'
 import {
-  createEmptyAssistantLocatePrep,
-  messageLocatePayloadSignature,
+  buildAssistantLocatePrepByMsgId,
   shouldSuppressLooseInlineLocate,
   type AssistantLocatePrep,
 } from './messageLocatePrep'
@@ -156,7 +149,6 @@ import { compactHeadingPath, extractQuotedSpans, quoteMatchStats } from './messa
 import {
   lookupGuideCandidatesBySourcePath,
   sourcePathLookupKeys,
-  sourcePathsReferToSameDocument,
 } from './messageSourceIdentity'
 import {
   contextItemTitle,
@@ -1935,288 +1927,23 @@ export function MessageList({
   }, [guideDocCandidates])
 
   const assistantLocatePrepByMsgId = useMemo(() => {
-    const nextCache = new Map<string, AssistantLocatePrep>()
-    const out = new Map<number, AssistantLocatePrep>()
-    const guideSourcePath = String(paperGuideSourcePath || '').trim()
-    const guideSourceName = String(paperGuideSourceName || '').trim()
-    const prepStartedAt = messageListPerfNow()
-    let assistantCount = 0
-    let heavyCount = 0
-    let lightCount = 0
-    let cacheHits = 0
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue
-      assistantCount += 1
-      const trace = assistantTraceByMsgId.get(message.id)
-      const renderPacket = getMessageRenderPacket(message)
-      const locatePayloadSig = messageLocatePayloadSignature(message, renderPacket)
-      const rawBodyContent = getMessageRenderedBodyContent(message)
-      const lowConfidenceMeta = resolveLowConfidenceMeta(
-        (message.meta && typeof message.meta === 'object')
-          ? message.meta as Record<string, unknown>
-          : null,
-        String(rawBodyContent || ''),
-        S,
-      )
-      const bodyContent = lowConfidenceMeta
-        ? stripLeadingLowConfidenceNotice(rawBodyContent)
-        : rawBodyContent
-      const refsUserMsgId = Number(message.refs_user_msg_id || trace?.userMsgId || 0)
-      const refEntry = refsUserMsgId > 0 ? (refs[String(refsUserMsgId)] as RefEntryLite | undefined) : undefined
-      const refHits = Array.isArray(refEntry?.hits) ? refEntry.hits : []
-      const rawCiteDetails = getMessageCiteDetailRecords(message)
-      const hasRawCiteDetails = rawCiteDetails.length > 0
-      const hasProvenancePayload = Boolean(message.provenance && typeof message.provenance === 'object')
-      const hasRenderPacketLocate = Boolean(renderPacket?.readerOpen || renderPacket?.locateTarget)
-      const shouldBuildLocatePrep = Boolean(onOpenReader) && (
-        Boolean(guideSourcePath)
-        || hasRawCiteDetails
-        || refHits.length > 0
-        || hasProvenancePayload
-        || hasRenderPacketLocate
-      )
-      if (!shouldBuildLocatePrep) {
-        const prepKey = [
-          message.id,
-          String(message.render_cache_key || ''),
-          locatePayloadSig,
-          'light',
-          refsUserMsgId,
-        ].join('::')
-        const cached = assistantLocatePrepCacheRef.current.get(prepKey)
-        if (cached) {
-          cacheHits += 1
-          nextCache.set(prepKey, cached)
-          out.set(message.id, cached)
-          continue
-        }
-        const prep = createEmptyAssistantLocatePrep(bodyContent, refsUserMsgId)
-        lightCount += 1
-        nextCache.set(prepKey, prep)
-        out.set(message.id, prep)
-        continue
-      }
-      const citeDetails = rawCiteDetails
-        .map(normalizeCiteDetail)
-        .filter((detail): detail is CiteDetail => Boolean(detail))
-        .map((detail) => ({
-          ...detail,
-          traceConvId: String(activeConvId || ''),
-          traceAssistantMsgId: message.id,
-          traceAssistantOrder: Number(trace?.answerOrder || 0),
-          traceUserMsgId: Number(trace?.userMsgId || 0),
-        }))
-      const uniqueSourcePaths = Array.from(
-        new Set(
-          citeDetails
-            .map((detail) => String(detail.sourcePath || '').trim())
-            .filter(Boolean),
-        ),
-      )
-      const guideDocAvailable = Boolean(guideSourcePath && guideSourcePathSet.has(guideSourcePath))
-      const guideCandidateCount = guideSourcePath
-        ? lookupGuideCandidatesBySourcePath(guideDocCandidatesBySourcePath, guideSourcePath).length
-        : 0
-      const locateSourcePath = (
-        guideSourcePath && guideDocAvailable
-          ? guideSourcePath
-          : (uniqueSourcePaths.length === 1 ? uniqueSourcePaths[0] : guideSourcePath)
-      )
-      const locateSourceName = (
-        (guideSourcePath && guideDocAvailable ? guideSourceName : '')
-        || (citeDetails.find((detail) => String(detail.sourcePath || '').trim() === locateSourcePath)?.sourceName || '')
-        || guideSourceName
-      )
-      const refSig = `${refsUserMsgId}:${String((refEntry as { prompt_sig?: string } | undefined)?.prompt_sig || '')}:${Number((refEntry as { updated_at?: number } | undefined)?.updated_at || 0)}:${refHits.length}`
-      const prepKey = [
-        message.id,
-        String(message.render_cache_key || ''),
-        locatePayloadSig,
-        guideSourcePath,
-        guideCandidateCount,
-        locateSourcePath,
-        refSig,
-      ].join('::')
-      const cached = assistantLocatePrepCacheRef.current.get(prepKey)
-      if (cached) {
-        cacheHits += 1
-        nextCache.set(prepKey, cached)
-        out.set(message.id, cached)
-        continue
-      }
-
-      const refsLocateCandidatesAll = buildRefsLocateCandidatesAll(refHits)
-      const guideSourceCandidates = guideSourcePath
-        ? lookupGuideCandidatesBySourcePath(guideDocCandidatesBySourcePath, guideSourcePath)
-        : []
-      const refsScopedCandidates = guideSourcePath
-        ? refsLocateCandidatesAll.filter((item) => sourcePathsReferToSameDocument(item.sourcePath, guideSourcePath))
-        : refsLocateCandidatesAll
-      const messageProvenance = (message.provenance && typeof message.provenance === 'object')
-        ? message.provenance as Record<string, unknown>
-        : null
-      const provenanceSourcePath = String(messageProvenance?.source_path || '').trim()
-      const provenanceSourceName = String(messageProvenance?.source_name || '').trim()
-      const provenanceBlockMap = (messageProvenance?.block_map && typeof messageProvenance.block_map === 'object')
-        ? messageProvenance.block_map as Record<string, Record<string, unknown>>
-        : {}
-      const provenanceDirectSegments = Array.isArray(messageProvenance?.segments)
-        ? messageProvenance.segments.filter((segment) => {
-          if (!segment || typeof segment !== 'object') return false
-          const evidenceMode = String(segment.evidence_mode || '').trim().toLowerCase()
-          const locatePolicy = String(segment.locate_policy || '').trim().toLowerCase()
-          const evidenceIds = Array.isArray(segment.evidence_block_ids) ? segment.evidence_block_ids : []
-          return evidenceMode === 'direct' && locatePolicy !== 'hidden' && evidenceIds.length > 0
-        }) as Array<Record<string, unknown>>
-        : []
-      const hasDirectProvenance = Boolean(provenanceSourcePath) && provenanceDirectSegments.length > 0
-      const hasStructuredProvenance = Boolean(
-        provenanceSourcePath
-        && Array.isArray(messageProvenance?.segments),
-      )
-      const effectiveGuideSourcePath = String(
-        guideSourcePath
-        || provenanceSourcePath
-        || locateSourcePath
-        || '',
-      ).trim()
-      const strictProvenanceLocate = Boolean(effectiveGuideSourcePath)
-      const structuredLocateButtonCap = 12
-      const effectiveGuideCandidates = effectiveGuideSourcePath
-        ? lookupGuideCandidatesBySourcePath(guideDocCandidatesBySourcePath, effectiveGuideSourcePath)
-        : []
-      const renderPacketLocateEntry = buildRenderPacketLocateEntry(message, renderPacket, {
-        fallbackSourcePath: effectiveGuideSourcePath || provenanceSourcePath || locateSourcePath || '',
-        fallbackSourceName: locateSourceName || provenanceSourceName || guideSourceName,
-      }, S)
-      const provenanceLocateEntries = buildStructuredProvenanceLocateEntries(
-        messageProvenance,
-        {
-          guideSourcePath: effectiveGuideSourcePath,
-          fallbackSourceName: locateSourceName,
-          maxEntries: structuredLocateButtonCap,
-          minConfidence: 0.62,
-        },
-      ).map((entry) => remapStructuredEntryToGuideAnchors(entry, effectiveGuideCandidates))
-      if (provenanceLocateEntries.length <= 0 && renderPacketLocateEntry) {
-        provenanceLocateEntries.push(renderPacketLocateEntry)
-      }
-      const structuredProvenanceSegmentsAll = messageProvenance
-        ? listStructuredProvenanceSegments(messageProvenance)
-        : []
-      const provenanceStrictIdentityReady = Boolean(messageProvenance?.strict_identity_ready)
-      const hasStrictMustLocateEntries = provenanceLocateEntries.some((entry) => Boolean(entry.mustLocate || entry.locatePolicy === 'required'))
-      const hasRenderPacketStrictLocateEntry = Boolean(
-        renderPacketLocateEntry
-        && (renderPacketLocateEntry.mustLocate || renderPacketLocateEntry.locatePolicy === 'required'),
-      )
-      const strictStructuredLocateOnly = Boolean(
-        strictProvenanceLocate
-        && hasStrictMustLocateEntries
-        && (
-          (hasStructuredProvenance && provenanceStrictIdentityReady)
-          || hasRenderPacketStrictLocateEntry
-        ),
-      )
-      const strictStructuredInlineLocate = Boolean(strictStructuredLocateOnly)
-      const provenanceMappingMode = String(messageProvenance?.mapping_mode || '').trim().toLowerCase()
-      const provenanceLlmCallsRaw = Number(messageProvenance?.llm_rerank_calls || 0)
-      const provenanceLlmCalls = Number.isFinite(provenanceLlmCallsRaw) && provenanceLlmCallsRaw > 0
-        ? Math.floor(provenanceLlmCallsRaw)
-        : 0
-      const provenanceModeLabel = (() => {
-        if (!strictStructuredLocateOnly) return ''
-        if (provenanceMappingMode === 'llm_refined') {
-          if (provenanceLlmCalls > 0) return `\u5b9a\u4f4d\u6620\u5c04\uff1aLLM\u7cbe\u4fee\uff08${provenanceLlmCalls} \u6b21\uff09`
-          return '\u5b9a\u4f4d\u6620\u5c04\uff1aLLM\u7cbe\u4fee'
-        }
-        if (provenanceMappingMode === 'fast') return '\u5b9a\u4f4d\u6620\u5c04\uff1a\u5feb\u901f\u6620\u5c04'
-        if (hasStructuredProvenance) return '\u5b9a\u4f4d\u6620\u5c04\uff1a\u7ed3\u6784\u5316\u6620\u5c04'
-        return ''
-      })()
-      const structuredRenderSlotMap = buildStructuredRenderLocateSlotMap(
-        String(bodyContent || ''),
-        messageProvenance,
-        provenanceLocateEntries,
-      )
-      const structuredLocateOrderBySegmentId = (() => {
-        const map = new Map<string, number>()
-        for (const slot of structuredRenderSlotMap.values()) {
-          const segmentId = String(slot.entry.segmentId || '').trim()
-          if (!segmentId || map.has(segmentId)) continue
-          map.set(segmentId, Number(slot.order || 0))
-        }
-        return map
-      })()
-      const allowedStructuredRenderOrders = (() => {
-        const ordered = Array.from(structuredRenderSlotMap.values()).sort((a, b) => a.order - b.order)
-        const allowed = new Set<number>()
-        let optionalCount = 0
-        for (const slot of ordered) {
-          if (slot.entry.mustLocate || slot.entry.locatePolicy === 'required') {
-            allowed.add(slot.order)
-            continue
-          }
-          if (optionalCount >= structuredLocateButtonCap) continue
-          allowed.add(slot.order)
-          optionalCount += 1
-        }
-        return allowed
-      })()
-      const locateCandidates = (() => {
-        if (guideSourceCandidates.length > 0) return [...guideSourceCandidates, ...refsScopedCandidates]
-        if (refsScopedCandidates.length > 0) return refsScopedCandidates
-        if (refsLocateCandidatesAll.length > 0) return refsLocateCandidatesAll
-        if (guideSourcePath) return guideDocCandidates
-        return []
-      })()
-
-      const prep: AssistantLocatePrep = {
-        bodyContent,
-        refsUserMsgId,
-        locateSourcePath,
-        locateSourceName,
-        refsLocateCandidatesAll,
-        guideLocateCandidates: guideSourceCandidates,
-        refsScopedCandidates,
-        messageProvenance,
-        provenanceSourcePath,
-        provenanceSourceName,
-        provenanceBlockMap,
-        provenanceDirectSegments,
-        hasDirectProvenance,
-        hasStructuredProvenance,
-        effectiveGuideSourcePath,
-        strictProvenanceLocate,
-        structuredLocateButtonCap,
-        provenanceLocateEntries,
-        structuredProvenanceSegmentsAll,
-        provenanceStrictIdentityReady,
-        hasStrictMustLocateEntries,
-        strictStructuredLocateOnly,
-        strictStructuredInlineLocate,
-        provenanceModeLabel,
-        structuredRenderSlotMap,
-        structuredLocateOrderBySegmentId,
-        allowedStructuredRenderOrders,
-        locateCandidates,
-      }
-      heavyCount += 1
-      nextCache.set(prepKey, prep)
-      out.set(message.id, prep)
-    }
-    assistantLocatePrepCacheRef.current = nextCache
-    assistantLocatePrepPerfRef.current = {
-      ts: Date.now(),
-      convId: String(activeConvId || ''),
-      messageCount: messages.length,
-      assistantCount,
-      heavyCount,
-      lightCount,
-      cacheHits,
-      durationMs: Number((messageListPerfNow() - prepStartedAt).toFixed(2)),
-    }
-    return out
+    const result = buildAssistantLocatePrepByMsgId({
+      activeConvId,
+      messages,
+      refs,
+      assistantTraceByMsgId,
+      guideDocCandidates,
+      guideDocCandidatesBySourcePath,
+      guideSourcePathSet,
+      paperGuideSourcePath,
+      paperGuideSourceName,
+      onOpenReaderAvailable: Boolean(onOpenReader),
+      previousCache: assistantLocatePrepCacheRef.current,
+      S,
+    })
+    assistantLocatePrepCacheRef.current = result.nextCache
+    assistantLocatePrepPerfRef.current = result.perf
+    return result.prepByMsgId
   }, [
     activeConvId,
     assistantTraceByMsgId,
