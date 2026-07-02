@@ -37,7 +37,6 @@ import {
   listStructuredProvenanceSegments,
   shortSegmentLabel,
   type ProvenanceLocateEntry,
-  type StructuredProvenanceSegment,
 } from './reader/messageStructuredProvenance'
 import {
   buildStructuredRenderLocateSlotMap,
@@ -141,8 +140,10 @@ import {
   type MessageListPrepPerfEvent,
 } from './messageListPerf'
 import {
+  createEmptyAssistantLocatePrep,
   messageLocatePayloadSignature,
   shouldSuppressLooseInlineLocate,
+  type AssistantLocatePrep,
 } from './messageLocatePrep'
 import { withBibliometricsLocale } from './bibliometricsLocale'
 import {
@@ -230,70 +231,6 @@ interface RefEntryLite {
   suppression_reason?: string
   suggestion?: string
   guide_filter?: { hidden_self_source?: boolean; filtered_hit_count?: number }
-}
-
-interface AssistantLocatePrep {
-  bodyContent: string
-  refsUserMsgId: number
-  locateSourcePath: string
-  locateSourceName: string
-  refsLocateCandidatesAll: LocateCandidate[]
-  guideLocateCandidates: LocateCandidate[]
-  refsScopedCandidates: LocateCandidate[]
-  messageProvenance: Record<string, unknown> | null
-  provenanceSourcePath: string
-  provenanceSourceName: string
-  provenanceBlockMap: Record<string, Record<string, unknown>>
-  provenanceDirectSegments: Array<Record<string, unknown>>
-  hasDirectProvenance: boolean
-  hasStructuredProvenance: boolean
-  effectiveGuideSourcePath: string
-  strictProvenanceLocate: boolean
-  structuredLocateButtonCap: number
-  provenanceLocateEntries: ProvenanceLocateEntry[]
-  structuredProvenanceSegmentsAll: StructuredProvenanceSegment[]
-  provenanceStrictIdentityReady: boolean
-  hasStrictMustLocateEntries: boolean
-  strictStructuredLocateOnly: boolean
-  strictStructuredInlineLocate: boolean
-  provenanceModeLabel: string
-  structuredRenderSlotMap: Map<number, StructuredRenderLocateSlot>
-  structuredLocateOrderBySegmentId: Map<string, number>
-  allowedStructuredRenderOrders: Set<number>
-  locateCandidates: LocateCandidate[]
-}
-
-function createEmptyAssistantLocatePrep(bodyContent: string, refsUserMsgId = 0): AssistantLocatePrep {
-  return {
-    bodyContent,
-    refsUserMsgId,
-    locateSourcePath: '',
-    locateSourceName: '',
-    refsLocateCandidatesAll: [],
-    guideLocateCandidates: [],
-    refsScopedCandidates: [],
-    messageProvenance: null,
-    provenanceSourcePath: '',
-    provenanceSourceName: '',
-    provenanceBlockMap: {},
-    provenanceDirectSegments: [],
-    hasDirectProvenance: false,
-    hasStructuredProvenance: false,
-    effectiveGuideSourcePath: '',
-    strictProvenanceLocate: false,
-    structuredLocateButtonCap: 12,
-    provenanceLocateEntries: [],
-    structuredProvenanceSegmentsAll: [],
-    provenanceStrictIdentityReady: false,
-    hasStrictMustLocateEntries: false,
-    strictStructuredLocateOnly: false,
-    strictStructuredInlineLocate: false,
-    provenanceModeLabel: '',
-    structuredRenderSlotMap: new Map<number, StructuredRenderLocateSlot>(),
-    structuredLocateOrderBySegmentId: new Map<string, number>(),
-    allowedStructuredRenderOrders: new Set<number>(),
-    locateCandidates: [],
-  }
 }
 
 function hasRenderableRefsForGuide(
