@@ -19,8 +19,6 @@ import {
 import { buildBasicReaderOpenPayload } from './reader/readerOpenPayloadUtils'
 import {
   buildGuideLocateCandidates,
-  hasFormulaSignal,
-  normalizeLocateText,
   type LocateCandidate,
   type RefHitLite,
 } from './reader/messageLocateCandidates'
@@ -34,13 +32,8 @@ import {
 } from './reader/messageStructuredProvenance'
 import {
   createStructuredInlineLocateResolver,
-  isEquationLocateCandidate,
   type StructuredRenderLocateSlot,
 } from './reader/messageStructuredInlineLocate'
-import {
-  isPreferredStrictFigureRefSnippet,
-  normalizeStructuredLocateKind,
-} from './reader/messageStructuredLocateScoring'
 import {
   citationDisplay,
   mergeCiteMeta,
@@ -141,6 +134,7 @@ import { buildFallbackCiteDetailsFromRefHits } from './messageFallbackCitations'
 import { resolveLowConfidenceMeta, stripLeadingLowConfidenceNotice } from './messageLowConfidence'
 import { compactHeadingPath } from './messageQuoteUtils'
 import { createMessageLocateResolvers } from './messageLocateResolvers'
+import { buildMessageMarkdownLocateProps } from './messageMarkdownLocateProps'
 import {
   lookupGuideCandidatesBySourcePath,
   sourcePathLookupKeys,
@@ -2318,9 +2312,6 @@ export function MessageList({
               hasStrictMustLocateEntries,
               hasDirectProvenance,
             })
-            const locateButtonShownKeys = new Set<string>()
-            const locateButtonCap = 5
-            let optionalLocateButtonCount = 0
             const openReaderByCandidates = (
               pickedList: LocateCandidate[],
               snippet: string,
@@ -2344,6 +2335,23 @@ export function MessageList({
               if (!payload) return
               onOpenReader(payload)
             }
+            const markdownLocateProps = buildMessageMarkdownLocateProps({
+              enableLocateUi,
+              guideSourcePath,
+              guideInlineTextTailLocate,
+              strictStructuredInlineLocate,
+              suppressLooseInlineLocate,
+              strictStructuredLocateOnly,
+              allowedStructuredRenderOrders,
+              resolveStrictParagraphEntry,
+              resolveExactStructuredInlineResolution,
+              isStrictStructuredTargetCompatible,
+              resolveProvenanceLocateCandidates,
+              resolveLocateCandidates,
+              locateCandidateKey,
+              openReaderByCandidates,
+              openReaderByStructuredEntry,
+            })
             const bubbleClass = isUser
               ? `kb-msg-bubble kb-msg-bubble-user ${isImageOnlyUserMessage ? 'is-image-only' : ''}`
               : 'kb-msg-bubble kb-msg-bubble-assistant'
@@ -2442,187 +2450,7 @@ export function MessageList({
                         onCitationClick={openCitation}
                         onCitationHover={previewCitation}
                         onCitationLeave={scheduleCitationPreviewClose}
-                        inlineLocateTokenPolicy={enableLocateUi && guideSourcePath ? { quote: true, figure_ref: true } : undefined}
-                        inlineTextLocateEnabled={enableLocateUi ? ((!guideSourcePath || strictStructuredInlineLocate) && !suppressLooseInlineLocate) : false}
-                        inlineTextTailLocateEnabled={enableLocateUi ? guideInlineTextTailLocate : false}
-                        locateSurfacePolicy={enableLocateUi && guideSourcePath
-                          ? {
-                            paragraph: guideInlineTextTailLocate,
-                            list_item: guideInlineTextTailLocate,
-                            quote: true,
-                            blockquote: true,
-                            equation: true,
-                            figure: true,
-                          }
-                          : undefined}
-                        canLocateSnippet={enableLocateUi ? ((snippet, meta) => {
-                          if (strictStructuredLocateOnly) {
-                            if (!strictStructuredInlineLocate) return false
-                            const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
-                            if (targetKind === 'paragraph' || targetKind === 'list_item') {
-                              const raw = String(snippet || '').trim()
-                              if (raw.length < 18) return false
-                              const structured = resolveStrictParagraphEntry(snippet, meta)
-                              const picked = structured?.entry?.primary || resolveProvenanceLocateCandidates(snippet, 1)[0] || null
-                              if (!picked) return false
-                              const keyBase = locateCandidateKey(picked)
-                              const snippetKey = normalizeLocateText(raw).slice(0, 96)
-                              const key = keyBase ? `${keyBase}::${snippetKey}` : snippetKey
-                              if (!key) return false
-                              if (locateButtonShownKeys.has(key)) return false
-                              if (optionalLocateButtonCount >= locateButtonCap) return false
-                              locateButtonShownKeys.add(key)
-                              optionalLocateButtonCount += 1
-                              return true
-                            }
-                            if (!['quote', 'blockquote', 'equation', 'figure'].includes(targetKind)) {
-                              return false
-                            }
-                            const resolved = resolveExactStructuredInlineResolution(snippet, meta)
-                            const entry = resolved?.entry || null
-                            if (!entry) return false
-                            const order = Number(resolved?.order || 0)
-                            if (targetKind !== 'figure' && !allowedStructuredRenderOrders.has(order)) return false
-                            if (!isStrictStructuredTargetCompatible(entry, targetKind)) {
-                              return false
-                            }
-                            const claimType = String(entry.claimType || '').trim().toLowerCase()
-                            const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
-                            const formulaOrigin = String(entry.formulaOrigin || '').trim().toLowerCase()
-                            const locateSurfacePolicy = String(entry.locateSurfacePolicy || '').trim().toLowerCase()
-                            if ((anchorKind === 'quote' || claimType === 'quote_claim') && targetKind !== 'quote') {
-                              return false
-                            }
-                            if ((anchorKind === 'blockquote' || claimType === 'blockquote_claim') && targetKind !== 'blockquote') {
-                              return false
-                            }
-                            if ((anchorKind === 'figure' || claimType === 'figure_claim' || claimType === 'figure_panel') && targetKind !== 'figure') {
-                              return false
-                            }
-                            if (targetKind === 'equation') {
-                              if (claimType !== 'formula_claim' || anchorKind !== 'equation') {
-                                return false
-                              }
-                              if (formulaOrigin !== 'source' || locateSurfacePolicy !== 'primary') {
-                                return false
-                              }
-                            }
-                            if (targetKind === 'figure') {
-                              return isPreferredStrictFigureRefSnippet(snippet)
-                            }
-                            return true
-                          }
-                          const raw = String(snippet || '').trim()
-                          const formulaSnippet = hasFormulaSignal(raw)
-                          if (!formulaSnippet && raw.length < 18) return false
-                          const directPickedList = resolveProvenanceLocateCandidates(snippet, 1)
-                          const directPicked = formulaSnippet
-                            ? (directPickedList.find((item) => isEquationLocateCandidate(item)) || directPickedList[0] || null)
-                            : (directPickedList[0] || null)
-                          const pickedList = directPicked
-                            ? directPickedList
-                            : resolveLocateCandidates(snippet, 1)
-                          const picked = formulaSnippet
-                            ? (pickedList.find((item) => isEquationLocateCandidate(item)) || pickedList[0] || null)
-                            : (pickedList[0] || null)
-                          if (!picked) return false
-                          const keyBase = locateCandidateKey(picked)
-                          const snippetKey = normalizeLocateText(raw).slice(0, 96)
-                          const key = keyBase
-                            ? `${keyBase}::${snippetKey}`
-                            : snippetKey
-                          if (!key) return false
-                          if (locateButtonShownKeys.has(key)) return false
-                          if (!directPicked && optionalLocateButtonCount >= locateButtonCap) return false
-                          locateButtonShownKeys.add(key)
-                          if (!directPicked) optionalLocateButtonCount += 1
-                          return true
-                        }) : undefined}
-                        onLocateSnippet={enableLocateUi && onOpenReader
-                          ? (snippet, meta) => {
-                            if (strictStructuredLocateOnly) {
-                              if (!strictStructuredInlineLocate) return
-                              const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
-                              if (targetKind === 'paragraph' || targetKind === 'list_item') {
-                                const structured = resolveStrictParagraphEntry(snippet, meta)
-                                const entry = structured?.entry || null
-                                if (entry) {
-                                  openReaderByStructuredEntry(entry, snippet)
-                                  return
-                                }
-                                const pickedList = resolveProvenanceLocateCandidates(snippet, 6)
-                                if (pickedList.length <= 0) return
-                                openReaderByCandidates(pickedList, snippet, { strictLocate: true })
-                                return
-                              }
-                              const resolved = resolveExactStructuredInlineResolution(snippet, meta)
-                              const entry = resolved?.entry || null
-                              if (!entry) return
-                              if (targetKind !== 'figure' && !allowedStructuredRenderOrders.has(Number(resolved?.order || 0))) return
-                              openReaderByStructuredEntry(entry, snippet)
-                              return
-                            }
-                            const raw = String(snippet || '').trim()
-                            const formulaSnippet = hasFormulaSignal(raw)
-                            const pickedListRaw = resolveLocateCandidates(snippet, 6)
-                            const pickedList = formulaSnippet
-                              ? [
-                                ...pickedListRaw.filter((item) => isEquationLocateCandidate(item)),
-                                ...pickedListRaw.filter((item) => !isEquationLocateCandidate(item)),
-                              ]
-                              : pickedListRaw
-                            if (pickedList.length <= 0) return
-                            openReaderByCandidates(pickedList, snippet)
-                          }
-                          : undefined}
-                        locateTitleResolver={enableLocateUi ? ((snippet) => {
-                          if (strictStructuredLocateOnly) {
-                            const resolved = resolveExactStructuredInlineResolution(snippet)
-                              || (isPreferredStrictFigureRefSnippet(snippet)
-                                ? resolveExactStructuredInlineResolution(snippet, { kind: 'figure', order: 0 })
-                                : null)
-                            const entry = resolved?.entry || null
-                            if (entry) {
-                              const heading = String(entry.primary.headingPath || '').trim()
-                              return heading ? `\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e\uff1a${heading}` : '\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e'
-                            }
-                          }
-                          const formulaSnippet = hasFormulaSignal(String(snippet || ''))
-                          const pickedList = resolveLocateCandidates(snippet, formulaSnippet ? 2 : 1)
-                          const picked = formulaSnippet
-                            ? (pickedList.find((item) => isEquationLocateCandidate(item)) || pickedList[0] || null)
-                            : (pickedList[0] || null)
-                          if (!picked) return '\u5b9a\u4f4d\u5230\u539f\u6587'
-                          const heading = String(picked.headingPath || '').trim()
-                          return heading ? `\u5b9a\u4f4d\u5230\u539f\u6587\uff1a${heading}` : '\u5b9a\u4f4d\u5230\u539f\u6587'
-                        }) : undefined}
-                        locateButtonAttrsResolver={enableLocateUi ? ((snippet, meta) => {
-                          if (!strictStructuredLocateOnly) return null
-                          const toAttrs = (candidate: LocateCandidate | null | undefined) => {
-                            if (!candidate) return null
-                            return {
-                              className: 'kb-prov-locate-chip',
-                              focus: String(candidate.focusSnippet || candidate.matchText || snippet || '').trim().slice(0, 220),
-                              blockId: String(candidate.blockId || '').trim(),
-                              anchorId: String(candidate.anchorId || '').trim(),
-                              anchorKind: String(candidate.anchorKind || '').trim(),
-                              heading: String(candidate.headingPath || '').trim(),
-                            }
-                          }
-                          const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
-                          if (targetKind === 'paragraph' || targetKind === 'list_item') {
-                            const structured = resolveStrictParagraphEntry(snippet, meta)
-                            return toAttrs(structured?.entry?.primary || resolveProvenanceLocateCandidates(snippet, 1)[0] || null)
-                          }
-                          const resolved = resolveExactStructuredInlineResolution(snippet, meta)
-                            || (targetKind === 'figure' || isPreferredStrictFigureRefSnippet(snippet)
-                              ? resolveExactStructuredInlineResolution(snippet, { kind: 'figure', order: Number(meta?.order || 0) })
-                              : null)
-                          const entry = resolved?.entry || null
-                          if (!entry) return null
-                          if (targetKind !== 'figure' && !allowedStructuredRenderOrders.has(Number(resolved?.order || 0))) return null
-                          return toAttrs(entry.primary)
-                        }) : undefined}
+                        {...markdownLocateProps}
                       />
                       <ResearchContextReceipt
                         pack={selectedResearchContextPack}
