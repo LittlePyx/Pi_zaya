@@ -171,6 +171,12 @@ Backend unit tests:
 python -m pytest tests/unit -q
 ```
 
+Visible Research Agent answer contract tests:
+
+```powershell
+python -m pytest tests/unit/test_agent_answer_runtime_e2e.py -q
+```
+
 Research QA dry run:
 
 ```powershell

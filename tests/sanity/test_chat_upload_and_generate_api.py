@@ -1364,6 +1364,44 @@ def test_generate_stream_exposes_answer_probe_fields(monkeypatch):
     assert payload["research_trace"] == {}
 
 
+def test_generate_stream_keeps_agent_runtime_check_out_of_visible_answer(monkeypatch):
+    from api.routers import generate as generate_router
+
+    raw_visible = "Useful final answer.\n\nResearch Agent Trace\nPlan\n- retrieve_evidence debug"
+    monkeypatch.setattr(
+        generate_router,
+        "_gen_get_task",
+        lambda session_id: {
+            "stage": "done",
+            "partial": raw_visible,
+            "char_count": len(raw_visible),
+            "status": "done",
+            "answer": raw_visible,
+            "agent_mode": True,
+            "agent_trace": {"mode": "research_agent", "summary": {"answer_source_blend": "general_llm"}},
+            "agent_source_summary": {"kind": "general_api", "label": "Not from KB", "should_show": True},
+            "answer_runtime_check": {
+                "status": "passed",
+                "repair": {"changed": True, "reasons": ["debug_content_removed"]},
+            },
+        },
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/generate/sid-agent-visible/stream")
+    assert response.status_code == 200
+    lines = [ln for ln in response.text.splitlines() if ln.startswith("data: ")]
+    assert lines
+    payload = json.loads(lines[-1][6:])
+
+    assert payload["done"] is True
+    assert payload["answer"] == "Useful final answer."
+    assert payload["partial"] == "Useful final answer."
+    assert payload["answer_runtime_check"]["repair"]["changed"] is True
+    assert "Research Agent Trace" not in payload["answer"]
+    assert "answer_runtime_check" not in payload["answer"]
+
+
 def test_generate_stream_exposes_internal_trace_only_when_internal_api_is_enabled(monkeypatch):
     from api.routers import generate as generate_router
 
