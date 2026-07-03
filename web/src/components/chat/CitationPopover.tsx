@@ -13,6 +13,7 @@ import {
 import { CitationPopoverActions } from './CitationPopoverActions'
 import { SystemAEvidenceCard, SystemBLiteratureCard } from './CitationPopoverCards'
 import { CitationPopoverHeader, type CompactMetaItem } from './CitationPopoverHeader'
+import { CitationPopoverMetaPanels } from './CitationPopoverMetaPanels'
 import { buildEvidenceCardViewModel, previewClaimText, previewEvidenceText } from './evidenceCardViewModel'
 
 import { useT } from '../../i18n'
@@ -861,45 +862,17 @@ export function CitationPopover({
           supportText={systemBSupportText}
         />
       )}
-      {showMetaGrid ? (
-        <div className="kb-cite-pop-meta-grid">
-          {metaRows.map((item) => (
-            <div key={item.label} className="kb-cite-pop-meta-item">
-              <span className="kb-cite-pop-meta-label">{item.label}</span>
-              <span className="kb-cite-pop-meta-value">{item.value}</span>
-            </div>
-          ))}
-          {doiLabel ? (
-            <div className="kb-cite-pop-meta-item">
-              <span className="kb-cite-pop-meta-label">DOI</span>
-              {doiHref ? (
-                <a className="kb-cite-pop-meta-value kb-cite-pop-link" href={doiHref} rel="noreferrer" target="_blank">
-                  {doiLabel}
-                </a>
-              ) : (
-                <span className="kb-cite-pop-meta-value">{doiLabel}</span>
-              )}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-      {loading && !isSystemB ? <div className="kb-cite-pop-sub">{S.cite_loading}</div> : null}
-      {!loading && showMetrics ? (
-        <div className="kb-cite-pop-metrics">
-          {isSystemB && doiLabel ? (
-            doiHref ? (
-              <a className="kb-cite-pop-metric kb-cite-pop-link" href={doiHref} rel="noreferrer" target="_blank">
-                DOI {doiLabel}
-              </a>
-            ) : (
-              <span className="kb-cite-pop-metric">DOI {doiLabel}</span>
-            )
-          ) : null}
-          {metrics.map((item) => (
-            <span key={item} className="kb-cite-pop-metric">{item}</span>
-          ))}
-        </div>
-      ) : null}
+      <CitationPopoverMetaPanels
+        showMetaGrid={showMetaGrid}
+        metaRows={metaRows}
+        doiLabel={doiLabel}
+        doiHref={doiHref}
+        loading={loading}
+        isSystemB={isSystemB}
+        loadingLabel={S.cite_loading}
+        showMetrics={showMetrics}
+        metrics={metrics}
+      />
 
       <CitationPopoverActions
         detail={detail}
