@@ -140,6 +140,21 @@ export interface AgentSourceSummary {
   [key: string]: unknown
 }
 
+export interface AnswerRuntimeCheck {
+  schema_version?: number
+  status?: 'passed' | 'needs_review' | string
+  checks?: Record<string, unknown>
+  summary?: {
+    failed?: string[]
+    needs_review_count?: number
+    profile?: string
+    source_blend?: string
+    answer_mode?: string
+    [key: string]: unknown
+  }
+  [key: string]: unknown
+}
+
 export interface EvidenceMatrixRow {
   paper?: string
   source_name?: string
@@ -193,6 +208,7 @@ export interface AgentTraceAuditResponse {
 export interface MessageMeta {
   provenance?: MessageProvenance
   answer_quality?: Record<string, unknown>
+  answer_runtime_check?: AnswerRuntimeCheck | Record<string, unknown>
   agent_trace?: AgentTrace | Record<string, unknown>
   agent_source_summary?: AgentSourceSummary | Record<string, unknown>
   paper_guide_contracts?: MessagePaperGuideContracts

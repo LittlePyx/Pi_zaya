@@ -240,6 +240,29 @@ def _gen_store_answer_quality_meta(
         pass
 
 
+def _gen_store_answer_runtime_check_meta(
+    task: dict,
+    *,
+    answer_runtime_check: dict | None,
+    chat_store_cls=ChatStore,
+) -> None:
+    check = dict(answer_runtime_check or {})
+    if not check:
+        return
+    chat_db = Path(str(task.get("chat_db") or "")).expanduser()
+    chat_store = chat_store_cls(chat_db)
+    try:
+        amid = int(task.get("assistant_msg_id") or 0)
+    except Exception:
+        amid = 0
+    if amid <= 0:
+        return
+    try:
+        chat_store.merge_message_meta(amid, {"answer_runtime_check": check})
+    except Exception:
+        pass
+
+
 def _gen_store_paper_guide_contract_meta(
     task: dict,
     *,

@@ -48,6 +48,7 @@ from kb.answer_quality import (
     _gen_answer_quality_summary,
     _gen_record_answer_quality,
 )
+from kb.answer_runtime_check import build_answer_runtime_check
 from kb.agent.runner import build_agent_trace_for_completed_answer, build_generation_agent_notes
 from kb.agent.source_summary import build_agent_source_summary
 from kb.agent.tools import generate_grounded_answer as agent_generate_grounded_answer
@@ -81,6 +82,7 @@ from kb.generation_state_runtime import (
     _gen_should_cancel as _state_gen_should_cancel,
     _gen_store_answer as _state_gen_store_answer,
     _gen_store_answer_quality_meta as _state_gen_store_answer_quality_meta,
+    _gen_store_answer_runtime_check_meta as _state_gen_store_answer_runtime_check_meta,
     _gen_store_answer_provenance as _state_gen_store_answer_provenance,
     _gen_store_answer_provenance_async as _state_gen_store_answer_provenance_async,
     _gen_store_answer_provenance_fast as _state_gen_store_answer_provenance_fast,
@@ -3281,6 +3283,14 @@ def _gen_store_answer_quality_meta(task: dict, *, answer_quality: dict | None) -
     )
 
 
+def _gen_store_answer_runtime_check_meta(task: dict, *, answer_runtime_check: dict | None) -> None:
+    return _state_gen_store_answer_runtime_check_meta(
+        task,
+        answer_runtime_check=answer_runtime_check,
+        chat_store_cls=ChatStore,
+    )
+
+
 def _gen_store_research_trace_meta(task: dict, *, research_trace: dict | None) -> None:
     trace = _trace_compact(dict(research_trace or {}))
     if not trace:
@@ -3330,6 +3340,29 @@ def _gen_compact_agent_trace(agent_trace: dict | None) -> dict:
 def _gen_agent_source_summary(agent_trace: dict | None) -> dict:
     try:
         return build_agent_source_summary(agent_trace)
+    except Exception:
+        return {}
+
+
+def _gen_answer_runtime_check(
+    task: dict,
+    *,
+    answer: str,
+    answer_quality: dict | None = None,
+    agent_trace: dict | None = None,
+    agent_source_summary: dict | None = None,
+    answer_mode: str = "",
+) -> dict:
+    if not bool(task.get("agent_mode")):
+        return {}
+    try:
+        return build_answer_runtime_check(
+            answer=answer,
+            answer_quality=answer_quality,
+            agent_trace=agent_trace,
+            agent_source_summary=agent_source_summary,
+            answer_mode=answer_mode,
+        )
     except Exception:
         return {}
 
@@ -3640,6 +3673,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 )
                 _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
             agent_source_summary = _gen_agent_source_summary(agent_trace)
+            answer_runtime_check = _gen_answer_runtime_check(
+                task,
+                answer=quick_answer,
+                answer_quality={},
+                agent_trace=agent_trace,
+                agent_source_summary=agent_source_summary,
+                answer_mode=agent_answer_mode,
+            )
+            _gen_store_answer_runtime_check_meta(task, answer_runtime_check=answer_runtime_check)
             _gen_update_task(
                 session_id,
                 task_id,
@@ -3655,6 +3697,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 research_trace=research_trace,
                 agent_trace=agent_trace,
                 agent_source_summary=agent_source_summary,
+                answer_runtime_check=answer_runtime_check,
                 finished_at=time.time(),
             )
             return
@@ -5466,6 +5509,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             )
             _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
         agent_source_summary = _gen_agent_source_summary(agent_trace)
+        answer_runtime_check = _gen_answer_runtime_check(
+            task,
+            answer=answer,
+            answer_quality=answer_quality,
+            agent_trace=agent_trace,
+            agent_source_summary=agent_source_summary,
+            answer_mode=agent_answer_mode,
+        )
+        _gen_store_answer_runtime_check_meta(task, answer_runtime_check=answer_runtime_check)
         _gen_update_task(
             session_id,
             task_id,
@@ -5482,6 +5534,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             research_trace=research_trace,
             agent_trace=agent_trace,
             agent_source_summary=agent_source_summary,
+            answer_runtime_check=answer_runtime_check,
             finished_at=time.time(),
         )
         _perf_log("gen.answer", elapsed=time.perf_counter() - t_answer0, chars=len(answer))

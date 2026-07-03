@@ -4,6 +4,7 @@ from kb.generation_state_runtime import (
     _gen_store_answer,
     _gen_store_answer_provenance,
     _gen_store_answer_quality_meta,
+    _gen_store_answer_runtime_check_meta,
     _gen_store_paper_guide_contract_meta,
     _gen_store_partial,
     _gen_store_answer_provenance_async,
@@ -420,6 +421,60 @@ def test_gen_store_answer_quality_meta_skips_empty_payload():
             "assistant_msg_id": 9,
         },
         answer_quality={},
+        chat_store_cls=_FakeChatStore,
+    )
+
+    assert called["merge"] == 0
+
+
+def test_gen_store_answer_runtime_check_meta_merges_payload():
+    captured: dict[str, object] = {}
+
+    class _FakeChatStore:
+        def __init__(self, db_path):
+            captured["db_path"] = str(db_path)
+
+        def merge_message_meta(self, message_id: int, patch: dict) -> bool:
+            captured["message_id"] = int(message_id)
+            captured["patch"] = dict(patch)
+            return True
+
+    _gen_store_answer_runtime_check_meta(
+        {
+            "chat_db": "/tmp/chat.db",
+            "assistant_msg_id": 13,
+        },
+        answer_runtime_check={
+            "schema_version": 1,
+            "status": "passed",
+            "summary": {"failed": [], "needs_review_count": 0},
+        },
+        chat_store_cls=_FakeChatStore,
+    )
+
+    assert captured["message_id"] == 13
+    patch = captured["patch"]
+    assert isinstance(patch, dict)
+    assert patch["answer_runtime_check"]["status"] == "passed"
+
+
+def test_gen_store_answer_runtime_check_meta_skips_empty_payload():
+    called = {"merge": 0}
+
+    class _FakeChatStore:
+        def __init__(self, _db_path):
+            pass
+
+        def merge_message_meta(self, message_id: int, patch: dict) -> bool:
+            called["merge"] += 1
+            return True
+
+    _gen_store_answer_runtime_check_meta(
+        {
+            "chat_db": "/tmp/chat.db",
+            "assistant_msg_id": 13,
+        },
+        answer_runtime_check={},
         chat_store_cls=_FakeChatStore,
     )
 
