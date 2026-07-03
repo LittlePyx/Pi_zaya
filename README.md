@@ -410,7 +410,8 @@ npm run test:e2e:smoke
 
 GitHub Actions runs these as separate `frontend`, `backend`, and
 `quality_gates` jobs, with `build_and_test` kept as a final summary check for
-branch-protection compatibility.
+branch-protection compatibility. Shared backend CI setup lives in
+`.github/actions/setup-backend-python`.
 
 ## Data Files
 

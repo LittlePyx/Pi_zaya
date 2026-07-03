@@ -12,7 +12,8 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Checkout public repository without Actions token
+      - &checkout_public_repository
+        name: Checkout public repository without Actions token
         shell: bash
         env:
           REPOSITORY: ${{ github.repository }}
@@ -69,37 +70,10 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Checkout public repository without Actions token
-        shell: bash
-        env:
-          REPOSITORY: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          cd "$GITHUB_WORKSPACE"
-          git remote add origin "https://github.com/${REPOSITORY}.git"
-          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "${PR_NUMBER}" ]; then
-            git fetch --depth=1 origin "pull/${PR_NUMBER}/merge"
-          else
-            git fetch --depth=1 origin "$SHA"
-          fi
-          git checkout --detach FETCH_HEAD
+      - *checkout_public_repository
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.10.11"
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: Install backend dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest
+      - name: Setup backend Python
+        uses: ./.github/actions/setup-backend-python
 
       - name: Run backend unit tests
         run: python -m pytest tests/unit -q --ignore=tests/unit/test_agent_answer_runtime_e2e.py
@@ -113,37 +87,10 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout public repository without Actions token
-        shell: bash
-        env:
-          REPOSITORY: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          cd "$GITHUB_WORKSPACE"
-          git remote add origin "https://github.com/${REPOSITORY}.git"
-          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "${PR_NUMBER}" ]; then
-            git fetch --depth=1 origin "pull/${PR_NUMBER}/merge"
-          else
-            git fetch --depth=1 origin "$SHA"
-          fi
-          git checkout --detach FETCH_HEAD
+      - *checkout_public_repository
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.10.11"
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: Install backend dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest
+      - name: Setup backend Python
+        uses: ./.github/actions/setup-backend-python
 
       - name: Check visible Research Agent answer contract
         run: python -m pytest tests/unit/test_agent_answer_runtime_e2e.py -q

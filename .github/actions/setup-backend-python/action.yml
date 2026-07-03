@@ -1,0 +1,32 @@
+name: Setup backend Python
+description: Configure Python and install backend test dependencies.
+
+inputs:
+  python-version:
+    description: Python version used by backend CI jobs.
+    required: false
+    default: "3.10.11"
+  requirements-file:
+    description: Backend requirements file used for pip cache and install.
+    required: false
+    default: requirements.txt
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: pip
+        cache-dependency-path: ${{ inputs.requirements-file }}
+
+    - name: Install backend dependencies
+      shell: bash
+      env:
+        REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip
+        pip install -r "${REQUIREMENTS_FILE}"
+        pip install pytest
