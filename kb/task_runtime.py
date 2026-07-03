@@ -48,7 +48,7 @@ from kb.answer_quality import (
     _gen_answer_quality_summary,
     _gen_record_answer_quality,
 )
-from kb.answer_runtime_check import build_answer_runtime_check
+from kb.answer_runtime_check import build_answer_runtime_check, repair_answer_for_runtime_contract
 from kb.agent.runner import build_agent_trace_for_completed_answer, build_generation_agent_notes
 from kb.agent.source_summary import build_agent_source_summary
 from kb.agent.tools import generate_grounded_answer as agent_generate_grounded_answer
@@ -3352,19 +3352,71 @@ def _gen_answer_runtime_check(
     agent_trace: dict | None = None,
     agent_source_summary: dict | None = None,
     answer_mode: str = "",
+    source_blend: str = "",
+    runtime_repair: dict | None = None,
 ) -> dict:
     if not bool(task.get("agent_mode")):
         return {}
     try:
-        return build_answer_runtime_check(
+        check = build_answer_runtime_check(
             answer=answer,
             answer_quality=answer_quality,
             agent_trace=agent_trace,
             agent_source_summary=agent_source_summary,
             answer_mode=answer_mode,
+            source_blend=source_blend,
         )
+        repair = dict(runtime_repair or {})
+        if repair.get("changed") or repair.get("reasons"):
+            check["repair"] = {
+                "changed": bool(repair.get("changed")),
+                "reasons": list(repair.get("reasons") or [])[:8],
+                "before": dict(repair.get("before") or {}),
+                "after": dict(repair.get("after") or {}),
+            }
+        return check
     except Exception:
         return {}
+
+
+def _gen_repair_answer_runtime(
+    task: dict,
+    *,
+    prompt: str,
+    answer: str,
+    answer_quality: dict | None = None,
+    agent_trace: dict | None = None,
+    agent_source_summary: dict | None = None,
+    answer_mode: str = "",
+    source_blend: str = "",
+) -> dict:
+    if not bool(task.get("agent_mode")):
+        return {"answer": str(answer or ""), "changed": False, "reasons": []}
+    try:
+        return repair_answer_for_runtime_contract(
+            answer=answer,
+            query=prompt,
+            answer_quality=answer_quality,
+            agent_trace=agent_trace,
+            agent_source_summary=agent_source_summary,
+            answer_mode=answer_mode,
+            source_blend=source_blend,
+        )
+    except Exception:
+        return {"answer": str(answer or ""), "changed": False, "reasons": ["runtime_repair_error"]}
+
+
+def _sync_runtime_repaired_answer_contracts(paper_guide_contracts: dict | None, *, answer: str) -> dict:
+    contracts = dict(paper_guide_contracts or {})
+    packet = contracts.get("render_packet") if isinstance(contracts.get("render_packet"), dict) else {}
+    if not packet:
+        return contracts
+    packet = dict(packet)
+    for key in ("answer_markdown", "rendered_body", "rendered_content", "copy_markdown", "copy_text"):
+        if key in packet:
+            packet[key] = str(answer or "").strip()
+    contracts["render_packet"] = packet
+    return contracts
 
 
 def _gen_store_agent_trace_meta(task: dict, *, agent_trace: dict | None) -> None:
@@ -3650,16 +3702,6 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     )
                 except Exception:
                     pass
-            _gen_store_answer(task, quick_answer)
-            try:
-                _gen_store_answer_provenance_fast(task, answer=quick_answer, answer_hits=[])
-            except Exception as exc:
-                _perf_log("gen.provenance_inline_fast", ok=0, err=str(exc)[:120])
-            _perf_log("gen.quick_answer", total=time.perf_counter() - worker_t0, conv_id=conv_id)
-            _trace_section("retrieval", {"bypassed": True, "bypass_reason": "quick_answer"})
-            _trace_section("answer", {"chars": len(quick_answer), "quick_answer": True})
-            research_trace = _trace_finish(research_trace, status="done", total_elapsed_s=time.perf_counter() - worker_t0)
-            _gen_store_research_trace_meta(task, research_trace=research_trace)
             agent_trace = {}
             if bool(task.get("agent_mode")):
                 agent_trace = build_agent_trace_for_completed_answer(
@@ -3671,6 +3713,46 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     agent_notes=agent_notes_for_trace,
                     answer_mode=agent_answer_mode,
                 )
+            agent_source_summary = _gen_agent_source_summary(agent_trace)
+            runtime_repair = _gen_repair_answer_runtime(
+                task,
+                prompt=prompt,
+                answer=quick_answer,
+                answer_quality={},
+                agent_trace=agent_trace,
+                agent_source_summary=agent_source_summary,
+                answer_mode=agent_answer_mode,
+                source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
+            )
+            if runtime_repair.get("changed"):
+                quick_answer = str(runtime_repair.get("answer") or quick_answer).strip()
+                agent_trace = build_agent_trace_for_completed_answer(
+                    prompt,
+                    quick_answer,
+                    evidence_hits=[],
+                    status="done",
+                    scope_context=agent_scope_context,
+                    agent_notes=agent_notes_for_trace,
+                    answer_mode=agent_answer_mode,
+                )
+                _trace_section(
+                    "answer",
+                    {
+                        "runtime_repair": True,
+                        "runtime_repair_reasons": list(runtime_repair.get("reasons") or [])[:8],
+                    },
+                )
+            _gen_store_answer(task, quick_answer)
+            try:
+                _gen_store_answer_provenance_fast(task, answer=quick_answer, answer_hits=[])
+            except Exception as exc:
+                _perf_log("gen.provenance_inline_fast", ok=0, err=str(exc)[:120])
+            _perf_log("gen.quick_answer", total=time.perf_counter() - worker_t0, conv_id=conv_id)
+            _trace_section("retrieval", {"bypassed": True, "bypass_reason": "quick_answer"})
+            _trace_section("answer", {"chars": len(quick_answer), "quick_answer": True})
+            research_trace = _trace_finish(research_trace, status="done", total_elapsed_s=time.perf_counter() - worker_t0)
+            _gen_store_research_trace_meta(task, research_trace=research_trace)
+            if bool(task.get("agent_mode")):
                 _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
             agent_source_summary = _gen_agent_source_summary(agent_trace)
             answer_runtime_check = _gen_answer_runtime_check(
@@ -3680,6 +3762,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 agent_trace=agent_trace,
                 agent_source_summary=agent_source_summary,
                 answer_mode=agent_answer_mode,
+                source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
+                runtime_repair=runtime_repair,
             )
             _gen_store_answer_runtime_check_meta(task, answer_runtime_check=answer_runtime_check)
             _gen_update_task(
@@ -5285,6 +5369,46 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     "final_answer_prefix": str(answer or "")[:160],
                 }
             )
+        runtime_repair = {"answer": answer, "changed": False, "reasons": []}
+        if bool(task.get("agent_mode")):
+            pre_repair_agent_trace = build_agent_trace_for_completed_answer(
+                prompt,
+                answer,
+                evidence_hits=answer_hits,
+                status="done",
+                scope_context=agent_scope_context,
+                agent_notes=agent_notes_for_trace,
+                answer_mode=agent_answer_mode,
+                generation_output=agent_generation_result_for_trace,
+            )
+            pre_repair_source_summary = _gen_agent_source_summary(pre_repair_agent_trace)
+            runtime_repair = _gen_repair_answer_runtime(
+                task,
+                prompt=prompt,
+                answer=answer,
+                answer_quality=answer_quality,
+                agent_trace=pre_repair_agent_trace,
+                agent_source_summary=pre_repair_source_summary,
+                answer_mode=agent_answer_mode,
+                source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
+            )
+            if runtime_repair.get("changed"):
+                repaired_answer = str(runtime_repair.get("answer") or "").strip()
+                if repaired_answer:
+                    answer = repaired_answer
+                    paper_guide_contracts = _sync_runtime_repaired_answer_contracts(
+                        paper_guide_contracts,
+                        answer=answer,
+                    )
+                    if paper_guide_mode:
+                        paper_guide_debug["runtime_repair_reasons"] = list(runtime_repair.get("reasons") or [])[:8]
+                    _trace_section(
+                        "answer",
+                        {
+                            "runtime_repair": True,
+                            "runtime_repair_reasons": list(runtime_repair.get("reasons") or [])[:8],
+                        },
+                    )
         _gen_store_answer(task, answer)
         _gen_store_answer_quality_meta(task, answer_quality=answer_quality)
         # Store canonical answer_hits source_paths so the renderer resolves [n]
@@ -5516,6 +5640,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             agent_trace=agent_trace,
             agent_source_summary=agent_source_summary,
             answer_mode=agent_answer_mode,
+            source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
+            runtime_repair=runtime_repair,
         )
         _gen_store_answer_runtime_check_meta(task, answer_runtime_check=answer_runtime_check)
         _gen_update_task(
