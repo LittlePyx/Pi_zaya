@@ -187,6 +187,11 @@ test('answer contract source badge wins over legacy source summary', async ({ pa
   await expect(page.getByTestId('evidence-drawer')).not.toContainText('needs_review_count')
   await page.getByTestId('evidence-open-source').click()
   await expect(page.getByTestId('message-list-open-payload')).toContainText(READER_REGRESSION_SOURCE_PATH)
+  await page.locator('.kb-evidence-drawer .ant-drawer-close').click()
+  await page.locator('.kb-cite-chip').first().click()
+  await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('frequency-division multiplexed illumination')
+  await expect(page.locator('.kb-cite-pop')).toContainText('Fixture Paper')
+  await expect(page.locator('.kb-cite-pop')).toContainText('Method')
 })
 
 test('external source notice is compacted outside the answer body', async ({ page }) => {

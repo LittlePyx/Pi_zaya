@@ -1,11 +1,8 @@
 import { Button, Drawer, Empty, Typography } from 'antd'
 import { BookOutlined, PlusOutlined } from '@ant-design/icons'
 import type { AnswerSourceNoticeViewModel } from './answerContractViewModel'
-import {
-  citationInlineLabel,
-  cleanCitationDisplayText,
-  type CiteDetail,
-} from './citationState'
+import { buildEvidenceCardViewModel } from './evidenceCardViewModel'
+import type { CiteDetail } from './citationState'
 
 const { Text } = Typography
 
@@ -17,20 +14,6 @@ interface EvidenceDrawerProps {
   onOpenReader?: (detail: CiteDetail) => void
   onAddToShelf?: (detail: CiteDetail) => void
   S: Record<string, string>
-}
-
-function text(...values: unknown[]): string {
-  for (const value of values) {
-    const cleaned = cleanCitationDisplayText(String(value || ''))
-    if (cleaned) return cleaned
-  }
-  return ''
-}
-
-function shortText(value: string, limit: number): string {
-  const cleaned = text(value)
-  if (!cleaned || cleaned.length <= limit) return cleaned
-  return `${cleaned.slice(0, limit - 1).trim()}...`
 }
 
 function dedupeDetails(details: CiteDetail[]): CiteDetail[] {
@@ -103,34 +86,36 @@ export function EvidenceDrawer({
         {visibleDetails.length > 0 ? (
           <div className="kb-evidence-list">
             {visibleDetails.map((detail, index) => {
-              const label = citationInlineLabel(detail) || `[${index + 1}]`
-              const source = text(detail.cardTitle, detail.title, detail.sourceName, detail.sourcePath)
-              const claim = text(detail.cardClaim, detail.answerClaim, detail.cardTakeaway)
-              const evidence = text(detail.cardEvidence, detail.evidenceQuote, detail.citationContext, detail.summaryLine, detail.raw)
-              const location = text(detail.headingPath, detail.cardLocator, detail.locationLabel)
-              const support = text(detail.cardSupportExplanation, detail.supportRelation, detail.whyLine, detail.bindingReason)
+              const card = buildEvidenceCardViewModel(detail, {
+                S,
+                fallbackLabel: `[${index + 1}]`,
+                evidenceLimit: 320,
+                claimLimit: 220,
+                supportLimit: 160,
+                includeRawFallback: true,
+              })
               return (
                 <article className="kb-evidence-item" key={`${detail.anchor || detail.num || index}-${index}`} data-testid="evidence-drawer-item">
                   <div className="kb-evidence-item-head">
-                    <span className="kb-evidence-cite-label">{label}</span>
-                    <span className="kb-evidence-source-name">{source || S.cite_meta_source || 'Source'}</span>
+                    <span className="kb-evidence-cite-label">{card.label}</span>
+                    <span className="kb-evidence-source-name">{card.source || S.cite_meta_source || 'Source'}</span>
                   </div>
-                  {claim ? (
+                  {card.claim ? (
                     <div className="kb-evidence-block">
-                      <div className="kb-evidence-block-label">{S.cite_answer_point || 'Answer claim'}</div>
-                      <div className="kb-evidence-block-text">{shortText(claim, 220)}</div>
+                      <div className="kb-evidence-block-label">{card.claimLabel}</div>
+                      <div className="kb-evidence-block-text">{card.claimPreview}</div>
                     </div>
                   ) : null}
-                  {evidence ? (
+                  {card.evidence ? (
                     <div className="kb-evidence-block">
-                      <div className="kb-evidence-block-label">{S.cite_original_evidence || 'Evidence'}</div>
-                      <blockquote>{shortText(evidence, 320)}</blockquote>
+                      <div className="kb-evidence-block-label">{card.evidenceLabel}</div>
+                      <blockquote>{card.evidencePreview}</blockquote>
                     </div>
                   ) : null}
-                  {location || support ? (
+                  {card.location || card.support ? (
                     <div className="kb-evidence-meta">
-                      {location ? <span>{location}</span> : null}
-                      {support ? <span>{shortText(support, 160)}</span> : null}
+                      {card.location ? <span>{card.location}</span> : null}
+                      {card.support ? <span>{card.supportPreview}</span> : null}
                     </div>
                   ) : null}
                   <div className="kb-evidence-actions">

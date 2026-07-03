@@ -10,6 +10,7 @@ import {
   cleanCitationDisplayText,
   looksLowValueCitationContext,
 } from './citationState'
+import { buildEvidenceCardViewModel, previewClaimText, previewEvidenceText } from './evidenceCardViewModel'
 
 import { useT } from '../../i18n'
 
@@ -220,31 +221,11 @@ function anchorKindLabel(
 }
 
 function evidencePreview(value: string, maxLen = 260): string {
-  const text = compact(value).replace(/\s+/g, ' ')
-  if (!text || text.length <= maxLen) return text
-  const head = text.slice(0, maxLen).replace(/[，,；;:：]\s*$/g, '').trim()
-  return `${head}...`
+  return previewEvidenceText(value, maxLen)
 }
 
 function answerPointPreview(value: string, maxLen = 140): string {
-  const text = compact(value)
-    .replace(/\s*\[[Rr]?\d{1,4}]\s*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/^\s*(?:\d{1,3}[.)、．]|[-*•])\s*/, '')
-    .trim()
-  if (!text || text.length <= maxLen) return text
-  const head = text.slice(0, maxLen)
-  const cut = Math.max(
-    head.lastIndexOf('。'),
-    head.lastIndexOf('！'),
-    head.lastIndexOf('？'),
-    head.lastIndexOf('；'),
-    head.lastIndexOf(';'),
-    head.lastIndexOf('，'),
-    head.lastIndexOf(','),
-  )
-  if (cut >= 40) return `${head.slice(0, cut).trim()}...`
-  return `${head.slice(0, maxLen - 1).trim()}...`
+  return previewClaimText(value, maxLen)
 }
 
 export function CitationPopover({
@@ -410,22 +391,29 @@ export function CitationPopover({
   const cardFlow = Array.isArray(detail.cardFlow)
     ? detail.cardFlow.map((item) => compact(item)).filter(Boolean)
     : []
-  const rawSystemAClaimText = cleanCitationDisplayText(
-    compact(claimSection?.text || '') || compact(detail.cardClaim) || compact(detail.answerClaim),
-  )
-  const systemAClaimText = looksNarrativeMetadataText(rawSystemAClaimText, detail) ? '' : rawSystemAClaimText
-  const systemAClaimPreview = answerPointPreview(systemAClaimText)
-  const systemAClaimLabel = cardClaimLabel && !/^(?:答案中的话|对应回答)$/.test(cardClaimLabel)
-    ? cardClaimLabel
-    : S.cite_answer_point
   const suppressRawSystemAEvidenceFallback = !isSystemB
     && (
       cardQualityFlags.includes('evidence_quote_filtered')
       || cardQualityFlags.includes('missing_evidence_quote')
     )
-  const systemAEvidenceText = cleanCitationDisplayText(evidenceSection?.text || detail.cardEvidence)
-    || (!suppressRawSystemAEvidenceFallback ? cleanCitationDisplayText(detail.evidenceQuote) : '')
-    || (!suppressRawSystemAEvidenceFallback ? cleanCitationDisplayText(detail.summaryLine) : '')
+  const systemAEvidenceCard = buildEvidenceCardViewModel(detail, {
+    S,
+    evidenceOverride: evidenceSection?.text || detail.cardEvidence,
+    evidenceLabelOverride: cardEvidenceLabel,
+    claimOverride: claimSection?.text || detail.cardClaim || detail.answerClaim,
+    claimLabelOverride: cardClaimLabel,
+    supportOverride: supportSection?.text || detail.cardSupportExplanation || detail.supportRelation || detail.whyLine || detail.bindingReason,
+    supportLabelOverride: cardSupportLabel,
+    includeCitationFallback: !suppressRawSystemAEvidenceFallback,
+    includeRawFallback: false,
+  })
+  const rawSystemAClaimText = systemAEvidenceCard.claim
+  const systemAClaimText = looksNarrativeMetadataText(rawSystemAClaimText, detail) ? '' : rawSystemAClaimText
+  const systemAClaimPreview = answerPointPreview(systemAClaimText)
+  const systemAClaimLabel = cardClaimLabel && !/^(?:答案中的话|对应回答)$/.test(cardClaimLabel)
+    ? cardClaimLabel
+    : S.cite_answer_point
+  const systemAEvidenceText = systemAEvidenceCard.evidence
   const systemATakeawayText = !isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemAEvidenceText)
     ? cardTakeaway
     : ''
