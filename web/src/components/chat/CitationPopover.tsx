@@ -14,6 +14,7 @@ import { CitationPopoverActions } from './CitationPopoverActions'
 import { SystemAEvidenceCard, SystemBLiteratureCard } from './CitationPopoverCards'
 import { CitationPopoverHeader, type CompactMetaItem } from './CitationPopoverHeader'
 import { CitationPopoverMetaPanels } from './CitationPopoverMetaPanels'
+import { CitationPopoverStatusPanels } from './CitationPopoverStatusPanels'
 import { buildEvidenceCardViewModel, previewClaimText, previewEvidenceText } from './evidenceCardViewModel'
 
 import { useT } from '../../i18n'
@@ -780,37 +781,21 @@ export function CitationPopover({
           ))}
         </div>
       ) : null}
-      {bindingState ? (
-        <div
-          className={`kb-cite-pop-binding kb-cite-pop-binding-${bindingState.tone}`}
-          data-testid="citation-popover-binding-status"
-        >
-          <span className="kb-cite-pop-binding-label">{bindingState.label}</span>
-          {bindingOverlapText ? <span className="kb-cite-pop-binding-terms">{bindingOverlapText}</span> : null}
-          {showBindingReason ? <span className="kb-cite-pop-binding-reason">{bindingReason}</span> : null}
-        </div>
-      ) : null}
-      {showCardQuality ? (
-        <div
-          className="kb-cite-pop-quality"
-          data-testid="citation-popover-card-quality"
-          title={cardQualityFlags.join(' / ')}
-        >
-          <span className="kb-cite-pop-quality-label">{cardQualityLabel}</span>
-          {cardQualityScore > 0 ? <span className="kb-cite-pop-quality-score">{Math.round(cardQualityScore * 100)}%</span> : null}
-        </div>
-      ) : null}
-      {showCardWarning ? (
-        <div className="kb-cite-pop-warning" data-testid="citation-popover-card-warning">
-          {cardWarning}
-        </div>
-      ) : null}
-      {showExternalMetadataWarning ? (
-        <div className="kb-cite-pop-warning" data-testid="citation-popover-external-metadata-warning">
-          {externalMetadataWarningText}
-          {externalMetadataTitleHint ? <span className="kb-cite-pop-warning-sub">{externalMetadataTitleHint}</span> : null}
-        </div>
-      ) : null}
+      <CitationPopoverStatusPanels
+        bindingState={bindingState}
+        bindingOverlapText={bindingOverlapText}
+        showBindingReason={showBindingReason}
+        bindingReason={bindingReason}
+        showCardQuality={showCardQuality}
+        cardQualityFlags={cardQualityFlags}
+        cardQualityLabel={cardQualityLabel}
+        cardQualityScore={cardQualityScore}
+        showCardWarning={showCardWarning}
+        cardWarning={cardWarning}
+        showExternalMetadataWarning={showExternalMetadataWarning}
+        externalMetadataWarningText={externalMetadataWarningText}
+        externalMetadataTitleHint={externalMetadataTitleHint}
+      />
       {!isSystemB ? (
         <SystemAEvidenceCard
           showTakeaway={showSystemATakeaway}
