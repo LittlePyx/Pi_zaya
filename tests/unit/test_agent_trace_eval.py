@@ -24,6 +24,10 @@ def test_agent_trace_eval_report_marks_unmeasured_metrics_null():
     assert report["unsupported_claim_rate"] is None
     assert report["no_evidence_refusal_accuracy"] is None
     assert report["source_blend_accuracy"] is None
+    assert report["source_summary_accuracy"] is None
+    assert report["source_summary_expected_count"] == 0
+    assert report["source_summary_present_rate"] is None
+    assert report["source_summary_shape_accuracy"] is None
     assert report["unnecessary_notice_rate"] is None
     assert report["required_notice_accuracy"] is None
     assert report["answer_profile_accuracy"] is None
@@ -47,6 +51,10 @@ def test_agent_quality_eval_runs_on_recorded_fixture():
     assert quality["real_replay_case_count"] == 0
     assert quality["source_blend_accuracy"] == 1.0
     assert quality["source_blend_expected_count"] == quality["case_count"]
+    assert quality["source_summary_accuracy"] == 1.0
+    assert quality["source_summary_expected_count"] == quality["case_count"]
+    assert quality["source_summary_present_rate"] == 1.0
+    assert quality["source_summary_shape_accuracy"] == 1.0
     assert quality["unnecessary_notice_rate"] == 0.0
     assert quality["required_notice_accuracy"] == 1.0
     assert quality["answer_profile_accuracy"] == 1.0
@@ -79,6 +87,10 @@ def test_agent_trace_eval_report_includes_quality_metrics():
     assert report["trace_clutter_free_rate"] == 1.0
     assert report["source_blend_accuracy"] == 1.0
     assert report["source_blend_expected_count"] == quality["case_count"]
+    assert report["source_summary_accuracy"] == 1.0
+    assert report["source_summary_expected_count"] == quality["case_count"]
+    assert report["source_summary_present_rate"] == 1.0
+    assert report["source_summary_shape_accuracy"] == 1.0
     assert report["unnecessary_notice_rate"] == 0.0
     assert report["required_notice_accuracy"] == 1.0
     assert report["answer_profile_accuracy"] == 1.0
@@ -133,6 +145,29 @@ def test_agent_trace_eval_detects_source_blend_and_notice_regressions(tmp_path):
     assert quality["required_notice_accuracy"] == 0.0
     assert any("unnecessary knowledge-base miss notice" in error for error in quality["errors"])
     assert any("did not match expected external_academic" in error for error in quality["errors"])
+
+
+def test_agent_trace_eval_detects_source_summary_regressions(tmp_path):
+    fixture = tmp_path / "quality.jsonl"
+    fixture.write_text(
+        "\n".join(
+            [
+                '{"id":"local-summary-ok","query":"What method?","answer_mode":"evidence_grounded","source_blend":"local_grounded","expected_source_blend":"local_grounded","answer":"Paper A uses retrieval [1].","evidence_hits":[{"text":"Paper A uses retrieval.","score":3,"meta":{"source_path":"paper-a.md"}}],"expected_retrieval_hit":true,"should_use_local_evidence":true,"external_fallback_allowed":false,"expected_answer_points":["retrieval"],"expected_user_notice":"none","agent_source_summary":{"kind":"local_kb","label_key":"agent_trace_source_local_only","detail":"Answer uses local knowledge-base evidence.","should_show":true}}',
+                '{"id":"local-summary-wrong","query":"What limitation?","answer_mode":"evidence_grounded","source_blend":"local_grounded","expected_source_blend":"local_grounded","answer":"Paper A reports a limitation [1].","evidence_hits":[{"text":"Paper A reports a limitation.","score":3,"meta":{"source_path":"paper-a.md"}}],"expected_retrieval_hit":true,"should_use_local_evidence":true,"external_fallback_allowed":false,"expected_answer_points":["limitation"],"expected_user_notice":"none","agent_source_summary":{"kind":"general_api","label_key":"agent_trace_evidence_not_from_kb","detail":"Wrong source summary.","should_show":true,"steps":[]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    quality = evaluate_quality_cases(fixture)
+
+    assert quality["ok"] is False
+    assert quality["source_summary_accuracy"] == 0.5
+    assert quality["source_summary_present_rate"] == 1.0
+    assert quality["source_summary_shape_accuracy"] == 0.5
+    assert any("agent_source_summary kind general_api did not match expected local_kb" in error for error in quality["errors"])
+    assert any("agent_source_summary is missing, verbose, or leaks trace detail" in error for error in quality["errors"])
 
 
 def test_agent_trace_eval_detects_answer_profile_regressions(tmp_path):

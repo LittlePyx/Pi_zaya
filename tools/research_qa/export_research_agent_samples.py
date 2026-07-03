@@ -7,6 +7,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from kb.agent.source_summary import build_agent_source_summary
+
 
 DEFAULT_DB_PATH = Path(os.getenv("KB_CHAT_DB") or "chat.sqlite3")
 DEFAULT_OUT_PATH = Path("test_results/research_agent_answer_samples.jsonl")
@@ -73,6 +75,16 @@ def _agent_trace_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
     if isinstance(trace, dict):
         return trace
     return {}
+
+
+def _agent_source_summary_from_meta(meta: dict[str, Any], trace: dict[str, Any]) -> dict[str, Any]:
+    summary = meta.get("agent_source_summary")
+    if isinstance(summary, dict):
+        return summary
+    summary = meta.get("agentSourceSummary")
+    if isinstance(summary, dict):
+        return summary
+    return build_agent_source_summary(trace)
 
 
 def _previous_user_message(
@@ -320,6 +332,7 @@ def _sample_from_message(
     should_check_local = (
         check_local_support and source_blend in {"local_grounded", "hybrid_local_external"} and bool(hits)
     )
+    source_summary = _agent_source_summary_from_meta(meta, trace)
 
     return {
         "id": f"chat-{row['id']}",
@@ -332,6 +345,7 @@ def _sample_from_message(
         "answer": answer,
         "answer_mode": answer_mode,
         "source_blend": source_blend,
+        "agent_source_summary": source_summary,
         "agent_trace": _compact_trace(trace, source_blend, answer_mode),
         "evidence_hits": hits,
         "expected_retrieval_hit": bool(hits),

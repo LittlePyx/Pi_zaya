@@ -86,6 +86,7 @@ def test_export_research_agent_samples_can_be_replayed_by_quality_eval(tmp_path)
     rows = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines()]
     assert rows[0]["sample_kind"] == "real_chat_replay"
     assert rows[0]["source_blend"] == "hybrid_local_external"
+    assert rows[0]["agent_source_summary"]["kind"] == "local_plus_external"
     assert rows[0]["should_use_local_evidence"] is False
     assert rows[0]["evidence_hits"][0]["meta"]["source_path"] == "paper-a.md"
 
@@ -96,6 +97,7 @@ def test_export_research_agent_samples_can_be_replayed_by_quality_eval(tmp_path)
     assert quality["real_replay_case_count"] == 1
     assert quality["required_notice_accuracy"] == 1.0
     assert quality["source_blend_accuracy"] is None
+    assert quality["source_summary_accuracy"] == 1.0
 
 
 def test_export_research_agent_samples_uses_message_refs_fallback(tmp_path):

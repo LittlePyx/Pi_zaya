@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from kb.agent.runner import build_agent_trace_for_completed_answer
 from kb.agent.schema import validate_agent_trace
+from kb.agent.source_summary import build_agent_source_summary
 from kb.agent.verifier import verify_answer_citations
 from tools.research_qa.validate_research_agent_golden import DEFAULT_DATASET, load_cases, validate_case
 
@@ -38,6 +39,13 @@ DEFAULT_FORBIDDEN_ANSWER_TERMS = [
 ]
 QUALITY_GATE_STATUSES = {"passed", "repaired", "fallback"}
 VALID_SOURCE_BLENDS = {"local_grounded", "hybrid_local_external", "external_academic", "general_llm"}
+VALID_SOURCE_SUMMARY_KINDS = {"local_kb", "local_plus_external", "external_not_kb", "general_api"}
+SOURCE_BLEND_TO_SUMMARY_KIND = {
+    "local_grounded": "local_kb",
+    "hybrid_local_external": "local_plus_external",
+    "external_academic": "external_not_kb",
+    "general_llm": "general_api",
+}
 ANSWER_MODE_TO_SOURCE_BLEND = {
     "evidence_grounded": "local_grounded",
     "hybrid_local_external": "hybrid_local_external",
@@ -317,6 +325,56 @@ def _source_blend(case: dict[str, Any]) -> str:
     return blend if blend in VALID_SOURCE_BLENDS else ""
 
 
+def _agent_source_summary(case: dict[str, Any]) -> dict[str, Any]:
+    summary = case.get("agent_source_summary")
+    if isinstance(summary, dict):
+        return summary
+    trace = case.get("agent_trace")
+    if isinstance(trace, dict):
+        return build_agent_source_summary(trace)
+    return {}
+
+
+def _source_summary_kind(summary: dict[str, Any]) -> str:
+    kind = str(summary.get("kind") or "").strip()
+    return kind if kind in VALID_SOURCE_SUMMARY_KINDS else ""
+
+
+def _expected_source_summary_kind(case: dict[str, Any], *, expected_blend: str, observed_blend: str) -> str:
+    has_explicit = (
+        "expected_agent_source_summary_kind" in case
+        or "expected_source_summary_kind" in case
+    )
+    kind = str(
+        case.get("expected_agent_source_summary_kind")
+        or case.get("expected_source_summary_kind")
+        or ""
+    ).strip()
+    if kind:
+        return kind
+    if not has_explicit and "agent_source_summary" not in case:
+        if not isinstance(case.get("agent_trace"), dict):
+            return ""
+        if not _source_summary_kind(_agent_source_summary(case)):
+            return ""
+    return SOURCE_BLEND_TO_SUMMARY_KIND.get(expected_blend or observed_blend, "")
+
+
+def _source_summary_shape_ok(summary: dict[str, Any]) -> bool:
+    if not summary:
+        return False
+    if _source_summary_kind(summary) == "":
+        return False
+    if summary.get("should_show") is False:
+        return False
+    if not str(summary.get("label_key") or summary.get("label") or "").strip():
+        return False
+    if len(str(summary.get("detail") or "")) > 220:
+        return False
+    forbidden_keys = {"agent_trace", "plan", "steps", "claims", "verification", "tool_calls"}
+    return not any(key in summary for key in forbidden_keys)
+
+
 def _quality_gate_status(case: dict[str, Any]) -> str:
     status = str(case.get("quality_gate_status") or "").strip().lower()
     if not status and isinstance(case.get("quality_gate"), dict):
@@ -361,6 +419,13 @@ def _validate_quality_case(case: dict[str, Any]) -> list[str]:
             blend = str(case.get(field) or "").strip()
             if blend and blend not in VALID_SOURCE_BLENDS:
                 errors.append(f"{case_id}: {field} must be one of {', '.join(sorted(VALID_SOURCE_BLENDS))}")
+    if case.get("agent_source_summary") is not None and not isinstance(case.get("agent_source_summary"), dict):
+        errors.append(f"{case_id}: agent_source_summary must be an object")
+    for field in ("expected_agent_source_summary_kind", "expected_source_summary_kind"):
+        if field in case:
+            kind = str(case.get(field) or "").strip()
+            if kind and kind not in VALID_SOURCE_SUMMARY_KINDS:
+                errors.append(f"{case_id}: {field} must be one of {', '.join(sorted(VALID_SOURCE_SUMMARY_KINDS))}")
     return errors
 
 
@@ -390,6 +455,11 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
     source_blend_expected_total = 0
     source_blend_hit_count = 0
     source_blend_status_counts = {status: 0 for status in sorted(VALID_SOURCE_BLENDS)}
+    source_summary_expected_total = 0
+    source_summary_hit_count = 0
+    source_summary_present_count = 0
+    source_summary_shape_ok_count = 0
+    source_summary_kind_counts = {kind: 0 for kind in sorted(VALID_SOURCE_SUMMARY_KINDS)}
     unnecessary_notice_total = 0
     unnecessary_notice_count = 0
     required_notice_total = 0
@@ -503,6 +573,34 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
                     f"{case_id}: source_blend {source_blend or '(missing)'} did not match expected {expected_source_blend}"
                 )
 
+        source_summary = _agent_source_summary(case)
+        source_summary_kind = _source_summary_kind(source_summary)
+        expected_source_summary_kind = _expected_source_summary_kind(
+            case,
+            expected_blend=expected_source_blend,
+            observed_blend=source_blend,
+        )
+        source_summary_kind_ok: bool | None = None
+        source_summary_shape_ok: bool | None = None
+        if expected_source_summary_kind:
+            source_summary_expected_total += 1
+            if source_summary_kind:
+                source_summary_present_count += 1
+                source_summary_kind_counts[source_summary_kind] += 1
+            source_summary_kind_ok = source_summary_kind == expected_source_summary_kind
+            if source_summary_kind_ok:
+                source_summary_hit_count += 1
+            else:
+                errors.append(
+                    f"{case_id}: agent_source_summary kind {source_summary_kind or '(missing)'} "
+                    f"did not match expected {expected_source_summary_kind}"
+                )
+            source_summary_shape_ok = _source_summary_shape_ok(source_summary)
+            if source_summary_shape_ok:
+                source_summary_shape_ok_count += 1
+            else:
+                errors.append(f"{case_id}: agent_source_summary is missing, verbose, or leaks trace detail")
+
         has_kb_miss_notice = _answer_has_kb_miss_notice(answer)
         general_notice_case = expected_source_blend == "general_llm" or (
             not expected_source_blend and source_blend == "general_llm"
@@ -607,6 +705,10 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
                 "source_blend": source_blend or None,
                 "expected_source_blend": expected_source_blend or None,
                 "source_blend_ok": source_blend == expected_source_blend if expected_source_blend else None,
+                "agent_source_summary_kind": source_summary_kind or None,
+                "expected_agent_source_summary_kind": expected_source_summary_kind or None,
+                "agent_source_summary_kind_ok": source_summary_kind_ok,
+                "agent_source_summary_shape_ok": source_summary_shape_ok,
                 "answer_profile": answer_profile or None,
                 "answer_profile_ok": profile_ok,
                 "answer_profile_compact_ok": profile_compact_ok,
@@ -647,6 +749,11 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         "source_blend_accuracy": _ratio(source_blend_hit_count, source_blend_expected_total),
         "source_blend_expected_count": source_blend_expected_total,
         "source_blend_status_counts": source_blend_status_counts,
+        "source_summary_accuracy": _ratio(source_summary_hit_count, source_summary_expected_total),
+        "source_summary_expected_count": source_summary_expected_total,
+        "source_summary_present_rate": _ratio(source_summary_present_count, source_summary_expected_total),
+        "source_summary_shape_accuracy": _ratio(source_summary_shape_ok_count, source_summary_expected_total),
+        "source_summary_kind_counts": source_summary_kind_counts,
         "unnecessary_notice_rate": _ratio(unnecessary_notice_count, unnecessary_notice_total),
         "unnecessary_notice_count": unnecessary_notice_count,
         "required_notice_accuracy": _ratio(required_notice_ok, required_notice_total),
@@ -704,6 +811,9 @@ def build_eval_report(
     quality_gate_repaired_rate = quality.get("quality_gate_repaired_rate")
     quality_gate_fallback_rate = quality.get("quality_gate_fallback_rate")
     source_blend_accuracy = quality.get("source_blend_accuracy")
+    source_summary_accuracy = quality.get("source_summary_accuracy")
+    source_summary_present_rate = quality.get("source_summary_present_rate")
+    source_summary_shape_accuracy = quality.get("source_summary_shape_accuracy")
     unnecessary_notice_rate = quality.get("unnecessary_notice_rate")
     required_notice_accuracy = quality.get("required_notice_accuracy")
     answer_profile_accuracy = quality.get("answer_profile_accuracy")
@@ -722,6 +832,9 @@ def build_eval_report(
         quality_gate_repaired_rate = None
         quality_gate_fallback_rate = None
         source_blend_accuracy = None
+        source_summary_accuracy = None
+        source_summary_present_rate = None
+        source_summary_shape_accuracy = None
         unnecessary_notice_rate = None
         required_notice_accuracy = None
         answer_profile_accuracy = None
@@ -752,6 +865,10 @@ def build_eval_report(
         "trace_clutter_free_rate": quality.get("trace_clutter_free_rate") if quality else None,
         "source_blend_accuracy": source_blend_accuracy,
         "source_blend_expected_count": quality.get("source_blend_expected_count") if quality else 0,
+        "source_summary_accuracy": source_summary_accuracy,
+        "source_summary_expected_count": quality.get("source_summary_expected_count") if quality else 0,
+        "source_summary_present_rate": source_summary_present_rate,
+        "source_summary_shape_accuracy": source_summary_shape_accuracy,
         "unnecessary_notice_rate": unnecessary_notice_rate,
         "required_notice_accuracy": required_notice_accuracy,
         "answer_profile_accuracy": answer_profile_accuracy,
