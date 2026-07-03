@@ -75,6 +75,9 @@ jobs:
           VITE_PRIVATE_INSTANCE_AUTH: "0"
         run: npm run test:e2e:smoke
 
+      - name: Check visible Research Agent answer contract
+        run: python -m pytest tests/unit/test_agent_answer_runtime_e2e.py -q
+
       - name: Run backend unit tests
         run: python -m pytest tests/unit -q
 

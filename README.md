@@ -391,6 +391,7 @@ Useful commands:
 
 ```powershell
 python -m pytest tests/unit -q
+python -m pytest tests/unit/test_agent_answer_runtime_e2e.py -q
 python tools\research_qa\validate_research_agent_golden.py
 python tools\research_qa\run_agent_trace_eval.py --json-out test_results\agent_trace_eval.json
 python tools\research_qa\export_research_agent_samples.py --db chat.sqlite3 --out test_results\research_agent_answer_samples.jsonl --limit 50

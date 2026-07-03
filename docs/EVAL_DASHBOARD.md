@@ -177,6 +177,11 @@ Visible Research Agent answer contract tests:
 python -m pytest tests/unit/test_agent_answer_runtime_e2e.py -q
 ```
 
+CI runs this as the named gate `Check visible Research Agent answer contract`.
+It protects the user-facing answer from leaked trace JSON, plan logs, tool-call
+debug output, duplicate source notices, and unnecessary knowledge-base miss
+warnings.
+
 Research QA dry run:
 
 ```powershell
