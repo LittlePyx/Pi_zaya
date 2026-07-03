@@ -28,6 +28,9 @@ def test_agent_trace_eval_report_marks_unmeasured_metrics_null():
     assert report["source_summary_expected_count"] == 0
     assert report["source_summary_present_rate"] is None
     assert report["source_summary_shape_accuracy"] is None
+    assert report["source_policy_payload_accuracy"] is None
+    assert report["source_policy_payload_expected_count"] == 0
+    assert report["source_policy_payload_present_rate"] is None
     assert report["unnecessary_notice_rate"] is None
     assert report["required_notice_accuracy"] is None
     assert report["answer_profile_accuracy"] is None
@@ -55,6 +58,9 @@ def test_agent_quality_eval_runs_on_recorded_fixture():
     assert quality["source_summary_expected_count"] == quality["case_count"]
     assert quality["source_summary_present_rate"] == 1.0
     assert quality["source_summary_shape_accuracy"] == 1.0
+    assert quality["source_policy_payload_accuracy"] == 1.0
+    assert quality["source_policy_payload_expected_count"] == quality["case_count"]
+    assert quality["source_policy_payload_present_rate"] == 1.0
     assert quality["unnecessary_notice_rate"] == 0.0
     assert quality["required_notice_accuracy"] == 1.0
     assert quality["answer_profile_accuracy"] == 1.0
@@ -91,6 +97,9 @@ def test_agent_trace_eval_report_includes_quality_metrics():
     assert report["source_summary_expected_count"] == quality["case_count"]
     assert report["source_summary_present_rate"] == 1.0
     assert report["source_summary_shape_accuracy"] == 1.0
+    assert report["source_policy_payload_accuracy"] == 1.0
+    assert report["source_policy_payload_expected_count"] == quality["case_count"]
+    assert report["source_policy_payload_present_rate"] == 1.0
     assert report["unnecessary_notice_rate"] == 0.0
     assert report["required_notice_accuracy"] == 1.0
     assert report["answer_profile_accuracy"] == 1.0
@@ -168,6 +177,26 @@ def test_agent_trace_eval_detects_source_summary_regressions(tmp_path):
     assert quality["source_summary_shape_accuracy"] == 0.5
     assert any("agent_source_summary kind general_api did not match expected local_kb" in error for error in quality["errors"])
     assert any("agent_source_summary is missing, verbose, or leaks trace detail" in error for error in quality["errors"])
+
+
+def test_agent_trace_eval_detects_source_policy_payload_regressions(tmp_path):
+    fixture = tmp_path / "quality.jsonl"
+    fixture.write_text(
+        "\n".join(
+            [
+                '{"id":"general-policy-wrong","query":"Compare Python lists and tuples.","answer_mode":"general_llm","source_blend":"general_llm","expected_source_blend":"general_llm","answer":"Python lists are mutable.","evidence_hits":[],"expected_retrieval_hit":false,"should_use_local_evidence":false,"external_fallback_allowed":true,"expected_answer_points":["mutable"],"expected_user_notice":"none","agent_source_summary":{"kind":"general_api","label_key":"agent_trace_evidence_not_from_kb","detail":"This answer does not use local knowledge-base evidence.","should_show":true,"source_policy_payload":{"schema_version":1,"kind":"general_api","source_blend":"general_llm","uses_local_knowledge_base":false,"uses_external_model":true,"requires_user_notice":true,"notice_kind":"external_not_kb","citation_policy":"not_applicable","badge":{"label_key":"agent_trace_evidence_not_from_kb","label":"Not from KB","detail":"This answer does not use local knowledge-base evidence.","should_show":true}}}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    quality = evaluate_quality_cases(fixture)
+
+    assert quality["ok"] is False
+    assert quality["source_policy_payload_accuracy"] == 0.0
+    assert quality["source_policy_payload_present_rate"] == 1.0
+    assert any("source_policy_payload mismatch" in error for error in quality["errors"])
 
 
 def test_agent_trace_eval_detects_answer_profile_regressions(tmp_path):

@@ -46,6 +46,36 @@ SOURCE_BLEND_TO_SUMMARY_KIND = {
     "external_academic": "external_not_kb",
     "general_llm": "general_api",
 }
+SOURCE_SUMMARY_POLICY_CONTRACTS: dict[str, dict[str, Any]] = {
+    "local_kb": {
+        "uses_local_knowledge_base": True,
+        "uses_external_model": False,
+        "requires_user_notice": False,
+        "notice_kind": "none",
+        "citation_policy": "local_citations_required",
+    },
+    "local_plus_external": {
+        "uses_local_knowledge_base": True,
+        "uses_external_model": True,
+        "requires_user_notice": True,
+        "notice_kind": "local_plus_external",
+        "citation_policy": "local_citations_required",
+    },
+    "external_not_kb": {
+        "uses_local_knowledge_base": False,
+        "uses_external_model": True,
+        "requires_user_notice": True,
+        "notice_kind": "external_not_kb",
+        "citation_policy": "not_applicable",
+    },
+    "general_api": {
+        "uses_local_knowledge_base": False,
+        "uses_external_model": True,
+        "requires_user_notice": False,
+        "notice_kind": "none",
+        "citation_policy": "not_applicable",
+    },
+}
 ANSWER_MODE_TO_SOURCE_BLEND = {
     "evidence_grounded": "local_grounded",
     "hybrid_local_external": "hybrid_local_external",
@@ -375,6 +405,54 @@ def _source_summary_shape_ok(summary: dict[str, Any]) -> bool:
     return not any(key in summary for key in forbidden_keys)
 
 
+def _record(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _source_policy_payload(summary: dict[str, Any]) -> dict[str, Any]:
+    return _record(summary.get("source_policy_payload") or summary.get("sourcePolicyPayload"))
+
+
+def _source_policy_payload_ok(
+    summary: dict[str, Any],
+    *,
+    expected_kind: str,
+    expected_blend: str,
+) -> tuple[bool | None, list[str]]:
+    if not expected_kind:
+        return None, []
+    payload = _source_policy_payload(summary)
+    reasons: list[str] = []
+    if not payload:
+        return False, ["missing_source_policy_payload"]
+    try:
+        schema_version = int(payload.get("schema_version") or 0)
+    except Exception:
+        schema_version = 0
+    if schema_version != 1:
+        reasons.append("source_policy_payload_schema_version")
+    kind = str(payload.get("kind") or "").strip()
+    if kind != expected_kind:
+        reasons.append("source_policy_payload_kind")
+    source_blend = str(payload.get("source_blend") or "").strip()
+    if expected_blend and source_blend != expected_blend:
+        reasons.append("source_policy_payload_source_blend")
+    contract = SOURCE_SUMMARY_POLICY_CONTRACTS.get(expected_kind) or {}
+    for key, expected in contract.items():
+        actual = payload.get(key)
+        if isinstance(expected, bool):
+            if actual is not expected:
+                reasons.append(f"source_policy_payload_{key}")
+        elif str(actual or "").strip() != str(expected):
+            reasons.append(f"source_policy_payload_{key}")
+    badge = _record(payload.get("badge"))
+    if badge.get("should_show") is False:
+        reasons.append("source_policy_payload_badge_hidden")
+    if not str(badge.get("label_key") or badge.get("label") or "").strip():
+        reasons.append("source_policy_payload_badge_label")
+    return not reasons, reasons
+
+
 def _quality_gate_status(case: dict[str, Any]) -> str:
     status = str(case.get("quality_gate_status") or "").strip().lower()
     if not status and isinstance(case.get("quality_gate"), dict):
@@ -460,6 +538,9 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
     source_summary_present_count = 0
     source_summary_shape_ok_count = 0
     source_summary_kind_counts = {kind: 0 for kind in sorted(VALID_SOURCE_SUMMARY_KINDS)}
+    source_policy_payload_expected_total = 0
+    source_policy_payload_present_count = 0
+    source_policy_payload_hit_count = 0
     unnecessary_notice_total = 0
     unnecessary_notice_count = 0
     required_notice_total = 0
@@ -582,6 +663,8 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         )
         source_summary_kind_ok: bool | None = None
         source_summary_shape_ok: bool | None = None
+        source_policy_payload_ok: bool | None = None
+        source_policy_payload_reasons: list[str] = []
         if expected_source_summary_kind:
             source_summary_expected_total += 1
             if source_summary_kind:
@@ -600,6 +683,21 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
                 source_summary_shape_ok_count += 1
             else:
                 errors.append(f"{case_id}: agent_source_summary is missing, verbose, or leaks trace detail")
+            source_policy_payload_expected_total += 1
+            if _source_policy_payload(source_summary):
+                source_policy_payload_present_count += 1
+            source_policy_payload_ok, source_policy_payload_reasons = _source_policy_payload_ok(
+                source_summary,
+                expected_kind=expected_source_summary_kind,
+                expected_blend=expected_source_blend or source_blend,
+            )
+            if source_policy_payload_ok:
+                source_policy_payload_hit_count += 1
+            else:
+                errors.append(
+                    f"{case_id}: agent_source_summary source_policy_payload mismatch "
+                    f"({', '.join(source_policy_payload_reasons)})"
+                )
 
         has_kb_miss_notice = _answer_has_kb_miss_notice(answer)
         general_notice_case = expected_source_blend == "general_llm" or (
@@ -709,6 +807,8 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
                 "expected_agent_source_summary_kind": expected_source_summary_kind or None,
                 "agent_source_summary_kind_ok": source_summary_kind_ok,
                 "agent_source_summary_shape_ok": source_summary_shape_ok,
+                "source_policy_payload_ok": source_policy_payload_ok,
+                "source_policy_payload_reasons": source_policy_payload_reasons,
                 "answer_profile": answer_profile or None,
                 "answer_profile_ok": profile_ok,
                 "answer_profile_compact_ok": profile_compact_ok,
@@ -754,6 +854,15 @@ def evaluate_quality_cases(path: str | Path = DEFAULT_QUALITY_DATASET) -> dict[s
         "source_summary_present_rate": _ratio(source_summary_present_count, source_summary_expected_total),
         "source_summary_shape_accuracy": _ratio(source_summary_shape_ok_count, source_summary_expected_total),
         "source_summary_kind_counts": source_summary_kind_counts,
+        "source_policy_payload_accuracy": _ratio(
+            source_policy_payload_hit_count,
+            source_policy_payload_expected_total,
+        ),
+        "source_policy_payload_expected_count": source_policy_payload_expected_total,
+        "source_policy_payload_present_rate": _ratio(
+            source_policy_payload_present_count,
+            source_policy_payload_expected_total,
+        ),
         "unnecessary_notice_rate": _ratio(unnecessary_notice_count, unnecessary_notice_total),
         "unnecessary_notice_count": unnecessary_notice_count,
         "required_notice_accuracy": _ratio(required_notice_ok, required_notice_total),
@@ -814,6 +923,8 @@ def build_eval_report(
     source_summary_accuracy = quality.get("source_summary_accuracy")
     source_summary_present_rate = quality.get("source_summary_present_rate")
     source_summary_shape_accuracy = quality.get("source_summary_shape_accuracy")
+    source_policy_payload_accuracy = quality.get("source_policy_payload_accuracy")
+    source_policy_payload_present_rate = quality.get("source_policy_payload_present_rate")
     unnecessary_notice_rate = quality.get("unnecessary_notice_rate")
     required_notice_accuracy = quality.get("required_notice_accuracy")
     answer_profile_accuracy = quality.get("answer_profile_accuracy")
@@ -835,6 +946,8 @@ def build_eval_report(
         source_summary_accuracy = None
         source_summary_present_rate = None
         source_summary_shape_accuracy = None
+        source_policy_payload_accuracy = None
+        source_policy_payload_present_rate = None
         unnecessary_notice_rate = None
         required_notice_accuracy = None
         answer_profile_accuracy = None
@@ -869,6 +982,9 @@ def build_eval_report(
         "source_summary_expected_count": quality.get("source_summary_expected_count") if quality else 0,
         "source_summary_present_rate": source_summary_present_rate,
         "source_summary_shape_accuracy": source_summary_shape_accuracy,
+        "source_policy_payload_accuracy": source_policy_payload_accuracy,
+        "source_policy_payload_expected_count": quality.get("source_policy_payload_expected_count") if quality else 0,
+        "source_policy_payload_present_rate": source_policy_payload_present_rate,
         "unnecessary_notice_rate": unnecessary_notice_rate,
         "required_notice_accuracy": required_notice_accuracy,
         "answer_profile_accuracy": answer_profile_accuracy,
