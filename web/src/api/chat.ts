@@ -137,6 +137,39 @@ export interface AgentSourceSummary {
   source_notice_count?: number
   quality_gate_status?: string
   should_show?: boolean
+  source_policy_payload?: AgentSourcePolicyPayload | Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface AgentSourcePolicyPayload {
+  schema_version?: number
+  kind?: 'local_kb' | 'local_plus_external' | 'external_not_kb' | 'general_api' | 'unknown' | string
+  source_blend?: string
+  source_policy?: string
+  answer_mode?: string
+  evidence_status?: string
+  retrieval_confidence?: string
+  confidence?: 'high' | 'medium' | 'low' | 'external' | 'unknown' | string
+  uses_local_knowledge_base?: boolean
+  uses_external_model?: boolean
+  requires_user_notice?: boolean
+  notice_kind?: 'none' | 'local_plus_external' | 'external_not_kb' | string
+  citation_policy?: 'local_citations_required' | 'not_applicable' | string
+  badge?: {
+    label_key?: string
+    label?: string
+    detail?: string
+    should_show?: boolean
+    [key: string]: unknown
+  }
+  support?: {
+    support_ratio?: number
+    evidence_hit_count?: number
+    unsupported_claims?: number
+    source_notice_count?: number
+    quality_gate_status?: string
+    [key: string]: unknown
+  }
   [key: string]: unknown
 }
 

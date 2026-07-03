@@ -22,6 +22,14 @@ def test_agent_source_summary_marks_local_kb_without_trace_details():
     assert summary["kind"] == "local_kb"
     assert summary["label_key"] == "agent_trace_source_local_only"
     assert summary["should_show"] is True
+    policy = summary["source_policy_payload"]
+    assert policy["schema_version"] == 1
+    assert policy["kind"] == "local_kb"
+    assert policy["uses_local_knowledge_base"] is True
+    assert policy["uses_external_model"] is False
+    assert policy["requires_user_notice"] is False
+    assert policy["citation_policy"] == "local_citations_required"
+    assert policy["badge"]["label_key"] == "agent_trace_source_local_only"
     assert "plan" not in summary
     assert "steps" not in summary
     assert "claims" not in summary
@@ -65,6 +73,10 @@ def test_agent_source_summary_marks_hybrid_local_external():
     assert summary["kind"] == "local_plus_external"
     assert summary["label_key"] == "agent_trace_source_local_external"
     assert summary["source_policy"] == "local_plus_external_background"
+    assert summary["source_policy_payload"]["uses_local_knowledge_base"] is True
+    assert summary["source_policy_payload"]["uses_external_model"] is True
+    assert summary["source_policy_payload"]["requires_user_notice"] is True
+    assert summary["source_policy_payload"]["notice_kind"] == "local_plus_external"
 
 
 def test_agent_source_summary_marks_external_answer_as_not_from_kb():
@@ -94,6 +106,34 @@ def test_agent_source_summary_marks_external_answer_as_not_from_kb():
     assert summary["label_key"] == "agent_trace_evidence_not_from_kb"
     assert summary["confidence"] == "external"
     assert summary["evidence_hit_count"] == 0
+    assert summary["source_policy_payload"]["uses_local_knowledge_base"] is False
+    assert summary["source_policy_payload"]["uses_external_model"] is True
+    assert summary["source_policy_payload"]["requires_user_notice"] is True
+    assert summary["source_policy_payload"]["notice_kind"] == "external_not_kb"
+
+
+def test_agent_source_summary_marks_general_api_without_required_notice():
+    trace = build_agent_trace_for_completed_answer(
+        "Compare Python lists and tuples.",
+        "Lists are mutable; tuples are immutable.",
+        evidence_hits=[],
+        scope_context={
+            "query_scope": "library",
+            "answer_source_blend": "general_llm",
+            "answer_mode": "general_llm",
+            "source_policy": "external_allowed_without_notice",
+        },
+        answer_mode="general_llm",
+    )
+
+    summary = build_agent_source_summary(trace)
+
+    assert summary["kind"] == "general_api"
+    assert summary["source_policy_payload"]["uses_local_knowledge_base"] is False
+    assert summary["source_policy_payload"]["uses_external_model"] is True
+    assert summary["source_policy_payload"]["requires_user_notice"] is False
+    assert summary["source_policy_payload"]["notice_kind"] == "none"
+    assert summary["source_policy_payload"]["citation_policy"] == "not_applicable"
 
 
 def test_agent_source_summary_handles_missing_trace():

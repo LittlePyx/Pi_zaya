@@ -30,28 +30,48 @@ function sourceNoticeLabel(noticeText: string, S: Record<string, string>): strin
   return S.agent_trace_evidence_not_from_kb || 'Not from KB'
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function sourcePolicyPayload(summary: Record<string, unknown>): Record<string, unknown> {
+  return asRecord(summary.source_policy_payload || summary.sourcePolicyPayload)
+}
+
+function sourcePolicyBadge(summary: Record<string, unknown>): Record<string, unknown> {
+  return asRecord(sourcePolicyPayload(summary).badge)
+}
+
 function sourceSummaryLabel(summary: Record<string, unknown>, S: Record<string, string>): string {
-  const labelKey = String(summary.label_key || summary.labelKey || '').trim()
+  const policy = sourcePolicyPayload(summary)
+  const badge = sourcePolicyBadge(summary)
+  const labelKey = String(badge.label_key || badge.labelKey || summary.label_key || summary.labelKey || '').trim()
   if (labelKey && S[labelKey]) return S[labelKey]
-  const kind = String(summary.kind || '').trim()
+  const kind = String(policy.kind || summary.kind || '').trim()
   if (kind === 'local_kb') return S.agent_trace_source_local_only || 'Local KB'
   if (kind === 'local_plus_external') return S.agent_trace_source_local_external || 'Local + external'
   if (kind === 'external_not_kb' || kind === 'general_api') return S.agent_trace_evidence_not_from_kb || 'Not from KB'
-  return String(summary.label || '').trim() || S.agent_trace_source_fallback || 'Source'
+  return String(badge.label || summary.label || '').trim() || S.agent_trace_source_fallback || 'Source'
 }
 
 function shouldShowSourceSummary(summary: Record<string, unknown> | null): summary is Record<string, unknown> {
   if (!summary) return false
+  const badge = sourcePolicyBadge(summary)
+  if (badge.should_show === false || badge.shouldShow === false) return false
   if (summary.should_show === false || summary.shouldShow === false) return false
-  const kind = String(summary.kind || '').trim()
+  const policy = sourcePolicyPayload(summary)
+  const kind = String(policy.kind || summary.kind || '').trim()
   if (kind && kind !== 'unknown') return true
-  return Boolean(String(summary.label || summary.label_key || summary.labelKey || '').trim())
+  return Boolean(String(badge.label || badge.label_key || badge.labelKey || summary.label || summary.label_key || summary.labelKey || '').trim())
 }
 
 function sourceSummaryTitle(summary: Record<string, unknown>, fallbackNotice: string): string {
-  const detail = String(summary.detail || '').trim()
+  const badge = sourcePolicyBadge(summary)
+  const detail = String(badge.detail || summary.detail || '').trim()
   if (detail) return detail
-  return fallbackNotice || String(summary.label || '').trim()
+  return fallbackNotice || String(badge.label || summary.label || '').trim()
 }
 
 export function AssistantSourceNotice({
