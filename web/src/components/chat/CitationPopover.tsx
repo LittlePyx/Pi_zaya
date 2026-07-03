@@ -11,6 +11,7 @@ import {
   looksLowValueCitationContext,
 } from './citationState'
 import { SystemAEvidenceCard, SystemBLiteratureCard } from './CitationPopoverCards'
+import { CitationPopoverHeader, type CompactMetaItem } from './CitationPopoverHeader'
 import { buildEvidenceCardViewModel, previewClaimText, previewEvidenceText } from './evidenceCardViewModel'
 
 import { useT } from '../../i18n'
@@ -43,8 +44,6 @@ interface Props {
   showOpenReaderAction?: boolean
   showStartGuideAction?: boolean
 }
-
-type CompactMetaItem = { key: string; label: string; value: string; href?: string; tone: string }
 
 function compact(value: string) {
   return String(value || '').trim()
@@ -748,7 +747,6 @@ export function CitationPopover({
       ].filter(Boolean) as CompactMetaItem[])
     : []
   const compactMetaItems = isSystemB ? systemBCompactMetaItems : systemACompactMetaItems
-  const showCompactMeta = compactMetaItems.length > 0
 
   return (
     <div
@@ -759,52 +757,15 @@ export function CitationPopover({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      <div className="kb-cite-pop-head">
-        <div className="kb-cite-pop-head-copy">
-          <div className="kb-cite-pop-kicker">
-            <span className="kb-cite-pop-kind">{kindLabel}</span>
-            <span className="kb-cite-pop-badge">{badgeLabel}</span>
-          </div>
-          <div className="kb-cite-pop-title">{isSystemB ? systemBTitle : systemATitle}</div>
-          {headerSubtitle ? <div className="kb-cite-pop-title-sub">{headerSubtitle}</div> : null}
-          {showCompactMeta ? (
-            <div
-              className="kb-cite-pop-compact-meta"
-              data-testid={isSystemB ? 'citation-popover-system-b-compact-meta' : 'citation-popover-system-a-compact-meta'}
-            >
-              {compactMetaItems.map((item) => (
-                item.href ? (
-                  <a
-                    className={`kb-cite-pop-compact-pill kb-cite-pop-compact-${item.tone} kb-cite-pop-link`}
-                    data-compact-key={item.key}
-                    href={item.href}
-                    key={item.key}
-                    rel="noreferrer"
-                    target="_blank"
-                    title={item.value}
-                  >
-                    {item.label ? <><span className="kb-cite-pop-compact-label">{item.label}</span>{' '}</> : null}
-                    <span className="kb-cite-pop-compact-value">{item.value}</span>
-                  </a>
-                ) : (
-                  <span
-                    className={`kb-cite-pop-compact-pill kb-cite-pop-compact-${item.tone}`}
-                    data-compact-key={item.key}
-                    key={item.key}
-                    title={item.value}
-                  >
-                    {item.label ? <><span className="kb-cite-pop-compact-label">{item.label}</span>{' '}</> : null}
-                    <span className="kb-cite-pop-compact-value">{item.value}</span>
-                  </span>
-                )
-              ))}
-            </div>
-          ) : null}
-        </div>
-        <button className="kb-cite-pop-close" onClick={onClose} type="button" aria-label="Close">
-          ×
-        </button>
-      </div>
+      <CitationPopoverHeader
+        isSystemB={isSystemB}
+        kindLabel={kindLabel}
+        badgeLabel={badgeLabel}
+        title={isSystemB ? systemBTitle : systemATitle}
+        subtitle={headerSubtitle}
+        compactMetaItems={compactMetaItems}
+        onClose={onClose}
+      />
 
       {explainText ? <div className="kb-cite-pop-explain" data-testid="citation-popover-explain">{explainText}</div> : null}
       {flowSteps.length > 0 ? (
