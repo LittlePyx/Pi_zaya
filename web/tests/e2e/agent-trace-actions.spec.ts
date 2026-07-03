@@ -167,6 +167,18 @@ test('agent source summary shows a compact local source badge', async ({ page })
   await expect(page.getByText('tool calls')).toHaveCount(0)
 })
 
+test('answer contract source badge wins over legacy source summary', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-answer-contract-source-precedence')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-answer-contract-source-precedence')
+  await expect(page.getByText('The contract-backed answer keeps the visible response focused on the paper evidence')).toBeVisible()
+  await expect(page.getByTestId('assistant-source-notice')).toContainText(LOCAL_KB_RE)
+  await expect(page.getByTestId('assistant-source-notice')).not.toContainText(NOT_FROM_KB_RE)
+  await expect(page.getByText('Legacy external source')).toHaveCount(0)
+  await expect(page.getByText('runtime_check')).toHaveCount(0)
+  await expect(page.getByText('needs_review_count')).toHaveCount(0)
+})
+
 test('external source notice is compacted outside the answer body', async ({ page }) => {
   await page.goto('/__message_list_test__?scenario=agent-trace-external-notice')
 

@@ -1,8 +1,12 @@
 import { Typography } from 'antd'
 import type { Message } from '../../api/chat'
 import { getMessageNoticeValue, isAssistantSourceNoticeText } from './messageRenderPacket'
-import { getMessageAgentSourceSummary } from './messageTraceUtils'
+import { getMessageAgentSourceSummary, getMessageAnswerContract } from './messageTraceUtils'
 import type { LowConfidenceMetaLite } from './messageLowConfidence'
+import {
+  buildAnswerSourceNoticeViewModel,
+  labelForSourceNoticeText,
+} from './answerContractViewModel'
 
 const { Text } = Typography
 
@@ -21,59 +25,6 @@ function shouldShowProvenanceModeLabel(): boolean {
   return Boolean((globalThis as ProvenanceModeDebugWindow).__KB_SHOW_PROVENANCE_MODE_LABEL__)
 }
 
-function sourceNoticeLabel(noticeText: string, S: Record<string, string>): string {
-  const mentionsLocalKb = /local citations\s*\[n\]\s*come from the knowledge base/i.test(noticeText)
-    || (/[\u672c\u5730\u77e5\u8bc6\u6587\u732e\u5e93]/.test(noticeText) && /\[n\]/.test(noticeText))
-  if (mentionsLocalKb) {
-    return S.agent_trace_source_local_external || 'Local + external'
-  }
-  return S.agent_trace_evidence_not_from_kb || 'Not from KB'
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
-function sourcePolicyPayload(summary: Record<string, unknown>): Record<string, unknown> {
-  return asRecord(summary.source_policy_payload || summary.sourcePolicyPayload)
-}
-
-function sourcePolicyBadge(summary: Record<string, unknown>): Record<string, unknown> {
-  return asRecord(sourcePolicyPayload(summary).badge)
-}
-
-function sourceSummaryLabel(summary: Record<string, unknown>, S: Record<string, string>): string {
-  const policy = sourcePolicyPayload(summary)
-  const badge = sourcePolicyBadge(summary)
-  const labelKey = String(badge.label_key || badge.labelKey || summary.label_key || summary.labelKey || '').trim()
-  if (labelKey && S[labelKey]) return S[labelKey]
-  const kind = String(policy.kind || summary.kind || '').trim()
-  if (kind === 'local_kb') return S.agent_trace_source_local_only || 'Local KB'
-  if (kind === 'local_plus_external') return S.agent_trace_source_local_external || 'Local + external'
-  if (kind === 'external_not_kb' || kind === 'general_api') return S.agent_trace_evidence_not_from_kb || 'Not from KB'
-  return String(badge.label || summary.label || '').trim() || S.agent_trace_source_fallback || 'Source'
-}
-
-function shouldShowSourceSummary(summary: Record<string, unknown> | null): summary is Record<string, unknown> {
-  if (!summary) return false
-  const badge = sourcePolicyBadge(summary)
-  if (badge.should_show === false || badge.shouldShow === false) return false
-  if (summary.should_show === false || summary.shouldShow === false) return false
-  const policy = sourcePolicyPayload(summary)
-  const kind = String(policy.kind || summary.kind || '').trim()
-  if (kind && kind !== 'unknown') return true
-  return Boolean(String(badge.label || badge.label_key || badge.labelKey || summary.label || summary.label_key || summary.labelKey || '').trim())
-}
-
-function sourceSummaryTitle(summary: Record<string, unknown>, fallbackNotice: string): string {
-  const badge = sourcePolicyBadge(summary)
-  const detail = String(badge.detail || summary.detail || '').trim()
-  if (detail) return detail
-  return fallbackNotice || String(badge.label || summary.label || '').trim()
-}
-
 export function AssistantSourceNotice({
   noticeText,
   S,
@@ -89,29 +40,34 @@ export function AssistantSourceNotice({
   return (
     <div className="kb-assistant-source-notice" title={titleText || noticeText} data-testid="assistant-source-notice">
       <span className="kb-assistant-source-dot" />
-      <span>{labelText || sourceNoticeLabel(noticeText, S)}</span>
+      <span>{labelText || labelForSourceNoticeText(noticeText, S)}</span>
     </div>
   )
 }
 
 export function AssistantSourceSummaryNotice({
+  answerContract,
   sourceSummary,
   fallbackNoticeText = '',
   S,
 }: {
+  answerContract?: Record<string, unknown> | null | undefined
   sourceSummary: Record<string, unknown> | null | undefined
   fallbackNoticeText?: string
   S: Record<string, string>
 }) {
-  const summary = sourceSummary || null
-  if (!shouldShowSourceSummary(summary)) return null
-  const label = sourceSummaryLabel(summary, S)
-  const title = sourceSummaryTitle(summary, fallbackNoticeText) || label
+  const viewModel = buildAnswerSourceNoticeViewModel({
+    answerContract,
+    legacySourceSummary: sourceSummary,
+    fallbackNoticeText,
+    S,
+  })
+  if (!viewModel) return null
   return (
     <AssistantSourceNotice
-      noticeText={title}
-      titleText={title}
-      labelText={label}
+      noticeText={viewModel.title}
+      titleText={viewModel.title}
+      labelText={viewModel.label}
       S={S}
     />
   )
@@ -125,16 +81,28 @@ export function AssistantMessageNotices({
 }: AssistantMessageNoticesProps) {
   const noticeText = getMessageNoticeValue(message)
   const sourceNotice = Boolean(noticeText && isAssistantSourceNoticeText(noticeText))
+  const answerContract = getMessageAnswerContract(message)
   const sourceSummary = getMessageAgentSourceSummary(message)
-  const showSourceSummary = shouldShowSourceSummary(sourceSummary)
+  const sourceNoticeViewModel = buildAnswerSourceNoticeViewModel({
+    answerContract,
+    legacySourceSummary: sourceSummary,
+    fallbackNoticeText: noticeText || '',
+    allowFallbackNotice: sourceNotice,
+    S,
+  })
   const showProvenanceLabel = shouldShowProvenanceModeLabel() && Boolean(provenanceModeLabel)
 
-  if (!noticeText && !showSourceSummary && !lowConfidenceMeta && !showProvenanceLabel) return null
+  if (!noticeText && !sourceNoticeViewModel && !lowConfidenceMeta && !showProvenanceLabel) return null
 
   return (
     <>
-      {showSourceSummary ? (
-        <AssistantSourceSummaryNotice sourceSummary={sourceSummary} fallbackNoticeText={noticeText || ''} S={S} />
+      {sourceNoticeViewModel ? (
+        <AssistantSourceNotice
+          noticeText={sourceNoticeViewModel.title}
+          titleText={sourceNoticeViewModel.title}
+          labelText={sourceNoticeViewModel.label}
+          S={S}
+        />
       ) : noticeText && sourceNotice ? (
         <AssistantSourceNotice noticeText={noticeText} S={S} />
       ) : null}

@@ -149,8 +149,8 @@ import {
   imageAttachmentsOf,
   isImageOnlyPlaceholder,
   messageHasAgentTraceHint,
-  sourceSummaryFromAnswerContract,
 } from './messageTraceUtils'
+import { sourceSummaryFromAnswerContract } from './answerContractViewModel'
 import { AgentTracePanel } from './AgentTracePanel'
 import { ResearchTracePanel } from './ResearchTracePanel'
 import { ResearchContextReceipt } from './ResearchContextReceipt'
@@ -2142,8 +2142,12 @@ export function MessageList({
   const visibleGenerationPartial = generationSourceNotice.notice ? generationSourceNotice.body : cleanGenerationPartial
   const generationContractSourceSummary = sourceSummaryFromAnswerContract(generationAnswerContract)
   const effectiveGenerationSourceSummary = generationContractSourceSummary || generationAgentSourceSummary
+  const hasGenerationAnswerContract = Boolean(
+    generationAnswerContract && Object.keys(generationAnswerContract).length > 0,
+  )
   const hasGenerationAgentSourceSummary = Boolean(
-    effectiveGenerationSourceSummary && Object.keys(effectiveGenerationSourceSummary).length > 0,
+    hasGenerationAnswerContract
+      || (effectiveGenerationSourceSummary && Object.keys(effectiveGenerationSourceSummary).length > 0),
   )
 
   return (
@@ -2454,6 +2458,7 @@ export function MessageList({
                 ) : null}
                 {hasGenerationAgentSourceSummary ? (
                   <AssistantSourceSummaryNotice
+                    answerContract={generationAnswerContract}
                     sourceSummary={effectiveGenerationSourceSummary}
                     fallbackNoticeText={generationSourceNotice.notice}
                     S={S}

@@ -1482,6 +1482,57 @@ const agentSourceSummaryLocalMessages: Message[] = [
   },
 ]
 
+const agentAnswerContractSourcePrecedenceMessages: Message[] = [
+  {
+    id: 9471,
+    role: 'assistant',
+    content: 'The contract-backed answer keeps the visible response focused on the paper evidence [1].',
+    rendered_body: 'The contract-backed answer keeps the visible response focused on the paper evidence [1].',
+    copy_text: 'The contract-backed answer keeps the visible response focused on the paper evidence [1].',
+    copy_markdown: 'The contract-backed answer keeps the visible response focused on the paper evidence [1].',
+    created_at: Date.now(),
+    meta: {
+      agent_mode: 'research_agent',
+      agent_source_summary: {
+        kind: 'general_api',
+        label: 'Legacy external source',
+        detail: 'Legacy source summary should not win over answer_contract.',
+        should_show: true,
+      },
+      answer_contract: {
+        schema_version: 1,
+        answer_profile: 'local_evidence_grounded',
+        source_summary: {
+          kind: 'unknown',
+          label: 'Legacy-compatible source',
+          should_show: true,
+          source_policy_payload: {
+            schema_version: 1,
+            kind: 'local_kb',
+            source_blend: 'local_grounded',
+            source_policy: 'local_only',
+            answer_mode: 'evidence_grounded',
+            uses_local_knowledge_base: true,
+            uses_external_model: false,
+            requires_user_notice: false,
+            badge: {
+              label_key: 'agent_trace_source_local_only',
+              label: 'Local KB',
+              detail: 'Answer uses local knowledge-base evidence.',
+              should_show: true,
+            },
+          },
+        },
+        runtime_check: {
+          status: 'passed',
+          failed: [],
+          needs_review_count: 0,
+        },
+      },
+    },
+  },
+]
+
 const agentTraceExternalNoticeMessages: Message[] = [
   {
     id: 9501,
@@ -1671,6 +1722,7 @@ type RegressionScenario =
   | 'agent-trace-lazy-audit'
   | 'agent-trace-clean-answer'
   | 'agent-source-summary-local'
+  | 'agent-answer-contract-source-precedence'
   | 'agent-trace-external-notice'
   | 'agent-trace-hybrid-notice'
   | 'agent-trace-streaming-clean'
@@ -1705,6 +1757,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'agent-trace-lazy-audit') return 'agent-trace-lazy-audit'
     if (scenarioParam === 'agent-trace-clean-answer') return 'agent-trace-clean-answer'
     if (scenarioParam === 'agent-source-summary-local') return 'agent-source-summary-local'
+    if (scenarioParam === 'agent-answer-contract-source-precedence') return 'agent-answer-contract-source-precedence'
     if (scenarioParam === 'agent-trace-external-notice') return 'agent-trace-external-notice'
     if (scenarioParam === 'agent-trace-hybrid-notice') return 'agent-trace-hybrid-notice'
     if (scenarioParam === 'agent-trace-streaming-clean') return 'agent-trace-streaming-clean'
@@ -1735,6 +1788,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'agent-trace-lazy-audit') return agentTraceLazyAuditMessages
     if (scenario === 'agent-trace-clean-answer') return agentTraceCleanAnswerMessages
     if (scenario === 'agent-source-summary-local') return agentSourceSummaryLocalMessages
+    if (scenario === 'agent-answer-contract-source-precedence') return agentAnswerContractSourcePrecedenceMessages
     if (scenario === 'agent-trace-external-notice') return agentTraceExternalNoticeMessages
     if (scenario === 'agent-trace-hybrid-notice') return agentTraceHybridNoticeMessages
     if (scenario === 'agent-trace-streaming-clean') return []

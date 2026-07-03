@@ -5,6 +5,7 @@ import {
   type SelectedResearchContextPack,
 } from './researchContextPack'
 import { internalDebugBrowserEnabled } from '../../utils/internalDebug'
+import { sourceSummaryFromAnswerContract } from './answerContractViewModel'
 
 export function isImageOnlyPlaceholder(content: string) {
   return /^\[Image attachment x\d+\]$/i.test(String(content || '').trim())
@@ -34,13 +35,6 @@ export function getMessageAgentTrace(message: Message): Record<string, unknown> 
   const meta = asTraceRecord(message.meta)
   const trace = asTraceRecord(meta.agent_trace)
   return Object.keys(trace).length > 0 ? trace : null
-}
-
-export function sourceSummaryFromAnswerContract(answerContract: unknown): Record<string, unknown> | null {
-  const contract = asTraceRecord(answerContract)
-  if (Object.keys(contract).length <= 0) return null
-  const summary = asTraceRecord(contract.source_summary || contract.sourceSummary)
-  return Object.keys(summary).length > 0 ? summary : null
 }
 
 export function getMessageAnswerContract(message: Message): Record<string, unknown> | null {
