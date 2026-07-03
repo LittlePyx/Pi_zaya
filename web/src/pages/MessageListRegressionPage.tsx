@@ -1491,6 +1491,24 @@ const agentAnswerContractSourcePrecedenceMessages: Message[] = [
     copy_text: 'The contract-backed answer keeps the visible response focused on the paper evidence [1].',
     copy_markdown: 'The contract-backed answer keeps the visible response focused on the paper evidence [1].',
     created_at: Date.now(),
+    cite_details: [
+      {
+        num: 1,
+        anchor: 'kb-cite-contract-evidence-1',
+        source_name: READER_REGRESSION_SOURCE_NAME,
+        source_path: READER_REGRESSION_SOURCE_PATH,
+        title: 'Fast hyperspectral single-pixel imaging',
+        answer_claim: 'The contract-backed answer keeps the visible response focused on the paper evidence.',
+        evidence_quote: 'The fixture paper reports frequency-division multiplexed illumination for fast hyperspectral single-pixel imaging.',
+        heading_path: 'Fixture Paper / Method',
+        support_relation: 'This passage supports the answer claim about evidence-backed imaging method details.',
+        binding_status: 'grounded',
+        card_claim: 'The answer is supported by the local fixture paper.',
+        card_evidence: 'The fixture paper reports frequency-division multiplexed illumination for fast hyperspectral single-pixel imaging.',
+        card_locator: 'Fixture Paper / Method',
+        card_support_explanation: 'The cited local passage is the support for the answer sentence.',
+      },
+    ],
     meta: {
       agent_mode: 'research_agent',
       agent_source_summary: {

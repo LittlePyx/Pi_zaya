@@ -177,6 +177,16 @@ test('answer contract source badge wins over legacy source summary', async ({ pa
   await expect(page.getByText('Legacy external source')).toHaveCount(0)
   await expect(page.getByText('runtime_check')).toHaveCount(0)
   await expect(page.getByText('needs_review_count')).toHaveCount(0)
+  await page.getByTestId('assistant-source-notice').click()
+  await expect(page.getByTestId('evidence-drawer')).toBeVisible()
+  await expect(page.getByTestId('evidence-source-summary')).toContainText(LOCAL_KB_RE)
+  await expect(page.getByTestId('evidence-drawer-item')).toContainText('The answer is supported by the local fixture paper')
+  await expect(page.getByTestId('evidence-drawer-item')).toContainText('frequency-division multiplexed illumination')
+  await expect(page.getByTestId('evidence-drawer-item')).toContainText('Fixture Paper / Method')
+  await expect(page.getByTestId('evidence-drawer')).not.toContainText('runtime_check')
+  await expect(page.getByTestId('evidence-drawer')).not.toContainText('needs_review_count')
+  await page.getByTestId('evidence-open-source').click()
+  await expect(page.getByTestId('message-list-open-payload')).toContainText(READER_REGRESSION_SOURCE_PATH)
 })
 
 test('external source notice is compacted outside the answer body', async ({ page }) => {

@@ -4,6 +4,7 @@ import { getMessageNoticeValue, isAssistantSourceNoticeText } from './messageRen
 import { getMessageAgentSourceSummary, getMessageAnswerContract } from './messageTraceUtils'
 import type { LowConfidenceMetaLite } from './messageLowConfidence'
 import {
+  type AnswerSourceNoticeViewModel,
   buildAnswerSourceNoticeViewModel,
   labelForSourceNoticeText,
 } from './answerContractViewModel'
@@ -15,6 +16,7 @@ interface AssistantMessageNoticesProps {
   lowConfidenceMeta: LowConfidenceMetaLite | null
   provenanceModeLabel: string
   S: Record<string, string>
+  onOpenEvidence?: (sourceNotice: AnswerSourceNoticeViewModel) => void
 }
 
 interface ProvenanceModeDebugWindow {
@@ -30,17 +32,38 @@ export function AssistantSourceNotice({
   S,
   labelText,
   titleText,
+  onClick,
 }: {
   noticeText: string
   S: Record<string, string>
   labelText?: string
   titleText?: string
+  onClick?: () => void
 }) {
   if (!noticeText) return null
-  return (
-    <div className="kb-assistant-source-notice" title={titleText || noticeText} data-testid="assistant-source-notice">
+  const className = `kb-assistant-source-notice${onClick ? ' is-clickable' : ''}`
+  const content = (
+    <>
       <span className="kb-assistant-source-dot" />
       <span>{labelText || labelForSourceNoticeText(noticeText, S)}</span>
+    </>
+  )
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        className={className}
+        title={titleText || noticeText}
+        onClick={onClick}
+        data-testid="assistant-source-notice"
+      >
+        {content}
+      </button>
+    )
+  }
+  return (
+    <div className={className} title={titleText || noticeText} data-testid="assistant-source-notice">
+      {content}
     </div>
   )
 }
@@ -50,11 +73,13 @@ export function AssistantSourceSummaryNotice({
   sourceSummary,
   fallbackNoticeText = '',
   S,
+  onOpenEvidence,
 }: {
   answerContract?: Record<string, unknown> | null | undefined
   sourceSummary: Record<string, unknown> | null | undefined
   fallbackNoticeText?: string
   S: Record<string, string>
+  onOpenEvidence?: (sourceNotice: AnswerSourceNoticeViewModel) => void
 }) {
   const viewModel = buildAnswerSourceNoticeViewModel({
     answerContract,
@@ -68,6 +93,7 @@ export function AssistantSourceSummaryNotice({
       noticeText={viewModel.title}
       titleText={viewModel.title}
       labelText={viewModel.label}
+      onClick={onOpenEvidence ? () => onOpenEvidence(viewModel) : undefined}
       S={S}
     />
   )
@@ -78,6 +104,7 @@ export function AssistantMessageNotices({
   lowConfidenceMeta,
   provenanceModeLabel,
   S,
+  onOpenEvidence,
 }: AssistantMessageNoticesProps) {
   const noticeText = getMessageNoticeValue(message)
   const sourceNotice = Boolean(noticeText && isAssistantSourceNoticeText(noticeText))
@@ -101,6 +128,7 @@ export function AssistantMessageNotices({
           noticeText={sourceNoticeViewModel.title}
           titleText={sourceNoticeViewModel.title}
           labelText={sourceNoticeViewModel.label}
+          onClick={onOpenEvidence ? () => onOpenEvidence(sourceNoticeViewModel) : undefined}
           S={S}
         />
       ) : noticeText && sourceNotice ? (

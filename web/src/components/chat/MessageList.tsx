@@ -150,10 +150,14 @@ import {
   isImageOnlyPlaceholder,
   messageHasAgentTraceHint,
 } from './messageTraceUtils'
-import { sourceSummaryFromAnswerContract } from './answerContractViewModel'
+import {
+  sourceSummaryFromAnswerContract,
+  type AnswerSourceNoticeViewModel,
+} from './answerContractViewModel'
 import { AgentTracePanel } from './AgentTracePanel'
 import { ResearchTracePanel } from './ResearchTracePanel'
 import { ResearchContextReceipt } from './ResearchContextReceipt'
+import { EvidenceDrawer } from './EvidenceDrawer'
 
 const { Text } = Typography
 const SHELF_BACKEND_PERSIST_MS = 320
@@ -273,6 +277,8 @@ export function MessageList({
   const [popoverLoading, setPopoverLoading] = useState(false)
   const [popoverGuideLoading, setPopoverGuideLoading] = useState(false)
   const [popoverPinned, setPopoverPinned] = useState(false)
+  const [evidenceDrawerSource, setEvidenceDrawerSource] = useState<AnswerSourceNoticeViewModel | null>(null)
+  const [evidenceDrawerCiteDetails, setEvidenceDrawerCiteDetails] = useState<CiteDetail[]>([])
   const citationHoverOpenTimerRef = useRef<number | null>(null)
   const citationHoverCloseTimerRef = useRef<number | null>(null)
   const citationPolishRetryTimerRef = useRef<number | null>(null)
@@ -1691,6 +1697,17 @@ export function MessageList({
     setPopoverGuideLoading(false)
   }
 
+  const closeEvidenceDrawer = () => {
+    setEvidenceDrawerSource(null)
+    setEvidenceDrawerCiteDetails([])
+  }
+
+  const openEvidenceDrawer = (sourceNotice: AnswerSourceNoticeViewModel, details: CiteDetail[]) => {
+    closeCitationPopover()
+    setEvidenceDrawerSource(sourceNotice)
+    setEvidenceDrawerCiteDetails(details)
+  }
+
   const openCitationShelfFromPopover = () => {
     setShelfOpen(true)
     closeCitationPopover()
@@ -2390,6 +2407,7 @@ export function MessageList({
                         message={message}
                         lowConfidenceMeta={lowConfidenceMeta}
                         provenanceModeLabel={provenanceModeLabel}
+                        onOpenEvidence={(sourceNotice) => openEvidenceDrawer(sourceNotice, effectiveCiteDetails)}
                         S={S}
                       />
                       <MarkdownRenderer
@@ -2461,6 +2479,7 @@ export function MessageList({
                     answerContract={generationAnswerContract}
                     sourceSummary={effectiveGenerationSourceSummary}
                     fallbackNoticeText={generationSourceNotice.notice}
+                    onOpenEvidence={(sourceNotice) => openEvidenceDrawer(sourceNotice, [])}
                     S={S}
                   />
                 ) : generationSourceNotice.notice ? (
@@ -2505,6 +2524,15 @@ export function MessageList({
         onStartGuide={startPaperGuideFromDetail}
         onMouseEnter={keepCitationPreviewOpen}
         onMouseLeave={scheduleCitationPreviewClose}
+      />
+      <EvidenceDrawer
+        open={Boolean(evidenceDrawerSource)}
+        sourceNotice={evidenceDrawerSource}
+        citeDetails={evidenceDrawerCiteDetails}
+        onClose={closeEvidenceDrawer}
+        onOpenReader={onOpenReader ? openReaderFromDetail : undefined}
+        onAddToShelf={addToShelf}
+        S={S}
       />
       {renderedShelfNode}
     </>

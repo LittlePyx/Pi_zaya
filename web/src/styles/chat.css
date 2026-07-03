@@ -1874,6 +1874,29 @@
   overflow-wrap: anywhere;
 }
 
+button.kb-assistant-source-notice {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+}
+
+.kb-assistant-source-notice.is-clickable {
+  cursor: pointer;
+  transition: color 0.16s ease, opacity 0.16s ease;
+}
+
+.kb-assistant-source-notice.is-clickable:hover,
+.kb-assistant-source-notice.is-clickable:focus-visible {
+  color: color-mix(in srgb, var(--text-main) 76%, var(--accent));
+  outline: none;
+}
+
+.kb-assistant-source-notice.is-clickable:focus-visible {
+  border-radius: 7px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
 .kb-assistant-source-dot {
   width: 6px;
   height: 6px;
@@ -1881,6 +1904,145 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 48%, var(--muted-text));
   opacity: 0.82;
+}
+
+.kb-evidence-drawer-root .ant-drawer-content-wrapper {
+  width: min(420px, calc(100vw - 20px)) !important;
+}
+
+.kb-evidence-drawer .ant-drawer-header {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding: 14px 16px;
+}
+
+.kb-evidence-drawer .ant-drawer-body {
+  padding: 0;
+  background: color-mix(in srgb, var(--panel) 98%, var(--bg));
+}
+
+.kb-evidence-drawer-title {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kb-evidence-drawer-subtitle {
+  color: color-mix(in srgb, var(--muted-text) 84%, transparent) !important;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.kb-evidence-drawer-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.kb-evidence-source-summary {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  padding: 0 0 12px;
+}
+
+.kb-evidence-source-label {
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.kb-evidence-source-detail {
+  margin-top: 4px;
+  color: color-mix(in srgb, var(--text-main) 62%, transparent);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.kb-evidence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kb-evidence-item {
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+  padding: 11px;
+}
+
+.kb-evidence-item-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.kb-evidence-cite-label {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: color-mix(in srgb, var(--accent) 74%, var(--text-main));
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 740;
+}
+
+.kb-evidence-source-name {
+  min-width: 0;
+  color: var(--text-main);
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.kb-evidence-block {
+  margin-top: 9px;
+}
+
+.kb-evidence-block-label {
+  margin-bottom: 3px;
+  color: color-mix(in srgb, var(--muted-text) 86%, transparent);
+  font-size: 10.5px;
+  font-weight: 720;
+  text-transform: uppercase;
+}
+
+.kb-evidence-block-text,
+.kb-evidence-item blockquote {
+  color: color-mix(in srgb, var(--text-main) 78%, transparent);
+  font-size: 12px;
+  line-height: 1.58;
+}
+
+.kb-evidence-item blockquote {
+  margin: 0;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  padding-left: 9px;
+}
+
+.kb-evidence-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+  color: color-mix(in srgb, var(--muted-text) 88%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.kb-evidence-meta span {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-main) 4%, transparent);
+  padding: 2px 7px;
+}
+
+.kb-evidence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
 }
 
 .kb-copy-bar {

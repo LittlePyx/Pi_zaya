@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Evidence Drawer E2E Record</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #667085;
+      --border: #d8dee9;
+      --accent: #2f6fed;
+      --ok: #157f3f;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111318;
+        --panel: #181b22;
+        --text: #edf0f5;
+        --muted: #aab2c0;
+        --border: #303745;
+        --accent: #7aa2ff;
+        --ok: #56c986;
+      }
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 40px 20px 64px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 28px 0 10px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 0 0 12px;
+      color: var(--muted);
+    }
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 18px;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--ok);
+      font-weight: 700;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--ok);
+    }
+    code, pre {
+      font-family: Consolas, "SFMono-Regular", Menlo, monospace;
+      font-size: 13px;
+    }
+    pre {
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 70%, var(--bg));
+      padding: 12px;
+    }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 650;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+    li {
+      margin: 6px 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Evidence Drawer E2E Record</h1>
+    <p>This record verifies that a normal user sees a quiet source badge first, then opens evidence details on demand.</p>
+
+    <section class="panel">
+      <div class="status"><span class="dot"></span><span>Passed locally on 2026-07-03</span></div>
+      <p>Scope: answer contract source badge, Evidence Drawer, evidence card content, and open-source payload.</p>
+    </section>
+
+    <h2>Fixture Page</h2>
+    <p>
+      Open the live regression fixture:
+      <a href="/__message_list_test__?scenario=agent-answer-contract-source-precedence">agent-answer-contract-source-precedence</a>
+    </p>
+
+    <h2>Command</h2>
+    <pre>cd web
+npm run test:e2e:smoke -- agent-trace-actions.spec.ts</pre>
+
+    <h2>Assertions Covered</h2>
+    <ul>
+      <li>The answer body stays focused on the response, not trace/runtime internals.</li>
+      <li>The source badge uses <code>answer_contract</code> ahead of legacy <code>agent_source_summary</code>.</li>
+      <li>Clicking the source badge opens <code>Evidence Drawer</code>.</li>
+      <li>The drawer shows source policy, answer claim, evidence quote, and paper location.</li>
+      <li>The drawer does not expose <code>runtime_check</code> or <code>needs_review_count</code>.</li>
+      <li>The drawer's Open source action emits the expected reader payload.</li>
+    </ul>
+  </main>
+</body>
+</html>
