@@ -10,6 +10,7 @@ import {
   cleanCitationDisplayText,
   looksLowValueCitationContext,
 } from './citationState'
+import { SystemAEvidenceCard, SystemBLiteratureCard } from './CitationPopoverCards'
 import { buildEvidenceCardViewModel, previewClaimText, previewEvidenceText } from './evidenceCardViewModel'
 
 import { useT } from '../../i18n'
@@ -848,119 +849,55 @@ export function CitationPopover({
         </div>
       ) : null}
       {!isSystemB ? (
-        <div className="kb-cite-pop-evidence-map">
-          {showSystemATakeaway ? (
-            <div className="kb-cite-pop-insight kb-cite-pop-takeaway" data-testid="citation-popover-system-a-takeaway">
-              <span className="kb-cite-pop-section-title">{cardTakeawayLabel || S.cite_evidence_focus}</span>
-              <div className="kb-cite-pop-main">{systemATakeawayText}</div>
-            </div>
-          ) : null}
-          {showSystemAClaim ? (
-            <div className="kb-cite-pop-claim" data-testid="citation-popover-system-a-claim">
-              <span className="kb-cite-pop-section-title">{systemAClaimLabel}</span>
-              <div className="kb-cite-pop-main">{systemAClaimPreview}</div>
-            </div>
-          ) : null}
-          {systemAEvidenceText ? (
-            <div className="kb-cite-pop-quote" data-testid="citation-popover-system-a-evidence">
-              <div className="kb-cite-pop-section-line">
-                <span className="kb-cite-pop-section-title">{cardEvidenceLabel || S.cite_original_evidence}</span>
-                {systemAEvidencePreview !== systemAEvidenceText ? <span className="kb-cite-pop-section-hint">{S.cite_excerpt}</span> : null}
-              </div>
-              <blockquote>{systemAEvidencePreview}</blockquote>
-            </div>
-          ) : null}
-          {showSystemASupport ? (
-            <div className="kb-cite-pop-why" data-testid="citation-popover-system-a-support">
-              <span className="kb-cite-pop-section-title">{cardSupportLabel || S.cite_reliability}</span>
-              <div className="kb-cite-pop-main">{supportText}</div>
-            </div>
-          ) : null}
-        </div>
+        <SystemAEvidenceCard
+          showTakeaway={showSystemATakeaway}
+          takeawayLabel={cardTakeawayLabel || S.cite_evidence_focus}
+          takeawayText={systemATakeawayText}
+          showClaim={showSystemAClaim}
+          claimLabel={systemAClaimLabel}
+          claimPreview={systemAClaimPreview}
+          evidenceText={systemAEvidenceText}
+          evidencePreview={systemAEvidencePreview}
+          evidenceLabel={cardEvidenceLabel || S.cite_original_evidence}
+          excerptLabel={S.cite_excerpt}
+          showSupport={showSystemASupport}
+          supportLabel={cardSupportLabel || S.cite_reliability}
+          supportText={supportText}
+        />
       ) : (
-        <div className="kb-cite-pop-evidence-map kb-cite-pop-literature-card" data-testid="citation-popover-system-b-card">
-          {showSystemBTrace ? (
-            <div
-              className={`kb-cite-pop-trace kb-cite-pop-trace-${systemBTraceStatus.tone}`}
-              data-testid="citation-popover-system-b-trace"
-            >
-              <div className="kb-cite-pop-trace-head">
-                <span className="kb-cite-pop-section-title">{S.cite_evidence_chain}</span>
-                <span className="kb-cite-pop-trace-status">{systemBTraceStatus.label}</span>
-                {systemBTraceScore > 0 ? (
-                  <span className="kb-cite-pop-trace-score">{Math.round(systemBTraceScore * 100)}%</span>
-                ) : null}
-              </div>
-              {systemBTraceSteps.length > 0 ? (
-                <div className="kb-cite-pop-trace-steps" aria-label="System B evidence chain">
-                  {systemBTraceSteps.map((step, index) => (
-                    <span className="kb-cite-pop-trace-step-wrap" key={`${step}-${index}`}>
-                      <span className="kb-cite-pop-trace-step">{step}</span>
-                      {index < systemBTraceSteps.length - 1 ? <span className="kb-cite-pop-trace-arrow">→</span> : null}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-              {systemBTraceReason ? <div className="kb-cite-pop-trace-reason">{systemBTraceReason}</div> : null}
-            </div>
-          ) : null}
-          {systemBPaperOverviewText ? (
-            <div className="kb-cite-pop-insight kb-cite-pop-paper-overview" data-testid="citation-popover-system-b-overview">
-              <span className="kb-cite-pop-section-title">{systemBPaperOverviewLabel}</span>
-              <div className="kb-cite-pop-main">{systemBPaperOverviewPreview}</div>
-            </div>
-          ) : null}
-          {showSystemBOverviewLoading ? (
-            <div className="kb-cite-pop-sub kb-cite-pop-system-b-loading" data-testid="citation-popover-system-b-overview-loading">
-              {S.cite_loading_summary || S.cite_loading}
-            </div>
-          ) : null}
-          {showSystemBOverviewUnavailable ? (
-            <div className="kb-cite-pop-sub kb-cite-pop-system-b-empty" data-testid="citation-popover-system-b-overview-empty">
-              {S.cite_summary_unavailable}
-            </div>
-          ) : null}
-          {systemBTakeawayText ? (
-            <div className="kb-cite-pop-insight kb-cite-pop-takeaway" data-testid="citation-popover-system-b-takeaway">
-              <span className="kb-cite-pop-section-title">{systemBTakeawayLabel}</span>
-              <div className="kb-cite-pop-main">{systemBTakeawayText}</div>
-            </div>
-          ) : null}
-          {showSystemBLocation ? (
-            <div className="kb-cite-pop-locator" data-testid="citation-popover-system-b-location">
-              <span className="kb-cite-pop-section-title">{systemBLocationLabel}</span>
-              <span className="kb-cite-pop-locator-text">{systemBLocationText}</span>
-              {systemBLocationHint ? <span className="kb-cite-pop-anchor-meta">{systemBLocationHint}</span> : null}
-            </div>
-          ) : null}
-          {systemBContextSummaryText ? (
-            <div className="kb-cite-pop-context-summary" data-testid="citation-popover-system-b-context-summary">
-              <span className="kb-cite-pop-section-title">{systemBContextSummaryLabel}</span>
-              <div className="kb-cite-pop-main">{systemBContextSummaryText}</div>
-            </div>
-          ) : null}
-          {systemBCitationContextText ? (
-            <div className="kb-cite-pop-quote" data-testid="citation-popover-system-b-context">
-              <div className="kb-cite-pop-section-line">
-                <span className="kb-cite-pop-section-title">{systemBCitationContextLabel}</span>
-                {systemBCitationContextPreview !== systemBCitationContextText ? <span className="kb-cite-pop-section-hint">{S.cite_excerpt}</span> : null}
-              </div>
-              <blockquote>{systemBCitationContextPreview}</blockquote>
-            </div>
-          ) : null}
-          {showSystemBReference ? (
-            <div className="kb-cite-pop-evidence" data-testid="citation-popover-system-b-reference">
-              <div className="kb-cite-pop-section-title">{cardReferenceLabel || systemBReferenceLabel}</div>
-              <div className="kb-cite-pop-main">{systemBReferencePreview}</div>
-            </div>
-          ) : null}
-          {showSystemBSupport ? (
-            <div className="kb-cite-pop-why" data-testid="citation-popover-system-b-support">
-              <span className="kb-cite-pop-section-title">{cardSupportLabel || S.cite_note}</span>
-              <div className="kb-cite-pop-main">{systemBSupportText}</div>
-            </div>
-          ) : null}
-        </div>
+        <SystemBLiteratureCard
+          showTrace={showSystemBTrace}
+          traceStatus={systemBTraceStatus}
+          traceScore={systemBTraceScore}
+          traceSteps={systemBTraceSteps}
+          traceReason={systemBTraceReason}
+          traceLabel={S.cite_evidence_chain}
+          paperOverviewText={systemBPaperOverviewText}
+          paperOverviewLabel={systemBPaperOverviewLabel}
+          paperOverviewPreview={systemBPaperOverviewPreview}
+          showOverviewLoading={showSystemBOverviewLoading}
+          overviewLoadingLabel={S.cite_loading_summary || S.cite_loading}
+          showOverviewUnavailable={showSystemBOverviewUnavailable}
+          overviewUnavailableLabel={S.cite_summary_unavailable}
+          takeawayText={systemBTakeawayText}
+          takeawayLabel={systemBTakeawayLabel}
+          showLocation={showSystemBLocation}
+          locationLabel={systemBLocationLabel}
+          locationText={systemBLocationText}
+          locationHint={systemBLocationHint}
+          contextSummaryText={systemBContextSummaryText}
+          contextSummaryLabel={systemBContextSummaryLabel}
+          citationContextText={systemBCitationContextText}
+          citationContextPreview={systemBCitationContextPreview}
+          citationContextLabel={systemBCitationContextLabel}
+          excerptLabel={S.cite_excerpt}
+          showReference={showSystemBReference}
+          referenceLabel={cardReferenceLabel || systemBReferenceLabel}
+          referencePreview={systemBReferencePreview}
+          showSupport={showSystemBSupport}
+          supportLabel={cardSupportLabel || S.cite_note}
+          supportText={systemBSupportText}
+        />
       )}
       {showMetaGrid ? (
         <div className="kb-cite-pop-meta-grid">
