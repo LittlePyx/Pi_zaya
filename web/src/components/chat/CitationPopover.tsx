@@ -10,6 +10,7 @@ import {
   cleanCitationDisplayText,
   looksLowValueCitationContext,
 } from './citationState'
+import { CitationPopoverActions } from './CitationPopoverActions'
 import { SystemAEvidenceCard, SystemBLiteratureCard } from './CitationPopoverCards'
 import { CitationPopoverHeader, type CompactMetaItem } from './CitationPopoverHeader'
 import { buildEvidenceCardViewModel, previewClaimText, previewEvidenceText } from './evidenceCardViewModel'
@@ -900,38 +901,24 @@ export function CitationPopover({
         </div>
       ) : null}
 
-      <div className="kb-cite-pop-actions">
-        {showOpenReaderAction ? (
-          <button
-            className="kb-cite-pop-open-shelf kb-cite-pop-action-primary"
-            type="button"
-            disabled={!canOpenReader}
-            onClick={() => onOpenReader(detail)}
-          >
-            {primaryActionLabel}
-          </button>
-        ) : null}
-        {showStartGuideAction ? (
-          <button
-            className="kb-cite-pop-open-shelf"
-            type="button"
-            onClick={() => onStartGuide(detail)}
-            disabled={guideLoading}
-          >
-            {guideLoading ? S.cite_starting_guide : S.cite_start_guide}
-          </button>
-        ) : null}
-        <button className="kb-cite-pop-open-shelf" type="button" onClick={onOpenShelf}>
-          {S.cite_open_shelf}
-        </button>
-        <button
-          className={`kb-cite-pop-add ${inShelf ? 'kb-added' : ''}`}
-          type="button"
-          onClick={() => onAddToShelf(detail)}
-        >
-          {inShelf ? S.cite_in_shelf : S.cite_add_to_shelf}
-        </button>
-      </div>
+      <CitationPopoverActions
+        detail={detail}
+        showOpenReaderAction={showOpenReaderAction}
+        canOpenReader={canOpenReader}
+        openReaderLabel={primaryActionLabel}
+        onOpenReader={onOpenReader}
+        showStartGuideAction={showStartGuideAction}
+        guideLoading={guideLoading}
+        startGuideLabel={S.cite_start_guide}
+        startingGuideLabel={S.cite_starting_guide}
+        onStartGuide={onStartGuide}
+        openShelfLabel={S.cite_open_shelf}
+        onOpenShelf={onOpenShelf}
+        inShelf={inShelf}
+        addToShelfLabel={S.cite_add_to_shelf}
+        inShelfLabel={S.cite_in_shelf}
+        onAddToShelf={onAddToShelf}
+      />
     </div>
   )
 }
