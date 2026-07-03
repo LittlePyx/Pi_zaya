@@ -408,6 +408,10 @@ npm run build
 npm run test:e2e:smoke
 ```
 
+GitHub Actions runs these as separate `frontend`, `backend`, and
+`quality_gates` jobs, with `build_and_test` kept as a final summary check for
+branch-protection compatibility.
+
 ## Data Files
 
 Local runtime data is not intended for Git commits:
