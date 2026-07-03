@@ -52,11 +52,15 @@ def test_reviewed_replay_eval_runs_committed_deidentified_fixture():
     summary = run_reviewed_replay_eval()
 
     assert summary["ok"] is True, summary["errors"]
-    assert summary["reviewed_case_count"] >= 2
-    assert any(
-        item["path"].replace("\\", "/") == "docs/research_agent_reviewed_replay.jsonl"
+    assert summary["reviewed_case_count"] >= 5
+    committed = next(
+        item
         for item in summary["evaluated"]
+        if item["path"].replace("\\", "/") == "docs/research_agent_reviewed_replay.jsonl"
     )
+    assert committed["reviewed_case_count"] >= 5
+    assert committed["report"]["source_summary_accuracy"] == 1.0
+    assert committed["report"]["source_summary_expected_count"] >= 5
 
 
 def test_reviewed_replay_eval_can_require_reviewed_cases(tmp_path):

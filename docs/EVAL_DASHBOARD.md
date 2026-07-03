@@ -231,6 +231,9 @@ and `test_results/research_agent_answer_reviewed.jsonl` for local private
 reviewed samples. Missing local reviewed datasets are skipped successfully. If
 reviewed cases exist, the gate requires the file to contain only accepted
 reviewed cases and runs the strict answer-quality evaluator.
+The committed fixture intentionally covers local evidence, local+external,
+external academic fallback, general API answers, and paper-specific insufficient
+evidence so routing and source-summary regressions are caught in CI.
 
 To print the legacy summary shape only:
 
