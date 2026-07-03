@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from kb.generation_state_runtime import (
     _gen_store_answer,
+    _gen_store_answer_contract_meta,
     _gen_store_answer_provenance,
     _gen_store_answer_quality_meta,
     _gen_store_answer_runtime_check_meta,
@@ -479,6 +480,36 @@ def test_gen_store_answer_runtime_check_meta_skips_empty_payload():
     )
 
     assert called["merge"] == 0
+
+
+def test_gen_store_answer_contract_meta_merges_payload():
+    captured: dict[str, object] = {}
+
+    class _FakeChatStore:
+        def __init__(self, db_path):
+            captured["db_path"] = str(db_path)
+
+        def merge_message_meta(self, message_id: int, patch: dict) -> bool:
+            captured["message_id"] = int(message_id)
+            captured["patch"] = dict(patch)
+            return True
+
+    _gen_store_answer_contract_meta(
+        {
+            "chat_db": "/tmp/chat.db",
+            "assistant_msg_id": 17,
+        },
+        answer_contract={
+            "schema_version": 1,
+            "source_summary": {"kind": "general_api"},
+        },
+        chat_store_cls=_FakeChatStore,
+    )
+
+    assert captured["message_id"] == 17
+    patch = captured["patch"]
+    assert isinstance(patch, dict)
+    assert patch["answer_contract"]["source_summary"]["kind"] == "general_api"
 
 
 def test_gen_store_paper_guide_contract_meta_merges_payload():

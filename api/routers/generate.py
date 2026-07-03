@@ -509,6 +509,7 @@ async def stream_generation(session_id: str, request: Request):
                 "agent_trace": {},
                 "agent_source_summary": {},
                 "answer_runtime_check": {},
+                "answer_contract": {},
             }
         partial = _strip_internal_structured_markers(str(t.get("partial", "") or ""))
         answer = _strip_internal_structured_markers(str(t.get("answer", "") or ""))
@@ -535,6 +536,7 @@ async def stream_generation(session_id: str, request: Request):
             "agent_trace": t.get("agent_trace", {}) if bool(t.get("agent_mode")) else {},
             "agent_source_summary": t.get("agent_source_summary", {}) if bool(t.get("agent_mode")) else {},
             "answer_runtime_check": t.get("answer_runtime_check", {}) if bool(t.get("agent_mode")) else {},
+            "answer_contract": t.get("answer_contract", {}) if bool(t.get("agent_mode")) else {},
         }
 
     return sse_response(sse_generator(poll, interval=0.15))

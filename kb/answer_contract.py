@@ -2080,3 +2080,150 @@ def _enhance_kb_miss_fallback(
     step_lines = "\n".join(f"{i}. {s}" for i, s in enumerate(steps, start=1))
     next_steps_title = "下一步建议" if prefer_zh else "Next Steps"
     return f"{notice}\n\n{body}\n\n{next_steps_title}:\n{step_lines}".strip()
+
+
+def _contract_payload_record(value: object) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _contract_payload_text(*values: object) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _contract_payload_bool(value: object, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _contract_payload_int(value: object, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _contract_payload_str_list(value: object, *, limit: int = 8) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _contract_payload_compact(value: object) -> object:
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            compact = _contract_payload_compact(item)
+            if compact in ("", None, [], {}):
+                continue
+            out[key] = compact
+        return out
+    if isinstance(value, list):
+        out = [_contract_payload_compact(item) for item in value]
+        return [item for item in out if item not in ("", None, [], {})]
+    return value
+
+
+def build_answer_contract_payload(
+    *,
+    answer_quality: dict | None = None,
+    agent_source_summary: dict | None = None,
+    answer_runtime_check: dict | None = None,
+) -> dict:
+    """Build the stable backend-to-frontend answer metadata contract.
+
+    This payload keeps visible UI data compact while preserving the older
+    detailed meta fields separately for backward compatibility.
+    """
+    quality = _contract_payload_record(answer_quality)
+    source_summary = _contract_payload_record(agent_source_summary)
+    runtime_check_raw = _contract_payload_record(answer_runtime_check)
+    if not (quality or source_summary or runtime_check_raw):
+        return {}
+
+    runtime_summary = _contract_payload_record(runtime_check_raw.get("summary"))
+    source_policy_payload = _contract_payload_record(
+        source_summary.get("source_policy_payload") or source_summary.get("sourcePolicyPayload")
+    )
+    policy_badge = _contract_payload_record(source_policy_payload.get("badge"))
+    policy_support = _contract_payload_record(source_policy_payload.get("support"))
+    repair = _contract_payload_record(runtime_check_raw.get("repair"))
+
+    answer_profile = _contract_payload_text(
+        quality.get("answer_profile"),
+        quality.get("profile"),
+        runtime_summary.get("profile"),
+    )
+    source_blend = _contract_payload_text(
+        source_policy_payload.get("source_blend"),
+        source_summary.get("source_blend"),
+        runtime_summary.get("source_blend"),
+    )
+    answer_mode = _contract_payload_text(
+        source_policy_payload.get("answer_mode"),
+        runtime_summary.get("answer_mode"),
+    )
+    runtime_check = {
+        "status": _contract_payload_text(runtime_check_raw.get("status")),
+        "failed": _contract_payload_str_list(runtime_summary.get("failed")),
+        "needs_review_count": _contract_payload_int(runtime_summary.get("needs_review_count")),
+        "profile": _contract_payload_text(runtime_summary.get("profile"), answer_profile),
+        "source_blend": _contract_payload_text(runtime_summary.get("source_blend"), source_blend),
+        "answer_mode": _contract_payload_text(runtime_summary.get("answer_mode"), answer_mode),
+    }
+    if repair:
+        runtime_check["repair"] = {
+            "changed": _contract_payload_bool(repair.get("changed")),
+            "reasons": _contract_payload_str_list(repair.get("reasons")),
+        }
+
+    ui_badge = {
+        "label_key": _contract_payload_text(policy_badge.get("label_key"), source_summary.get("label_key")),
+        "label": _contract_payload_text(policy_badge.get("label"), source_summary.get("label")),
+        "detail": _contract_payload_text(policy_badge.get("detail"), source_summary.get("detail")),
+        "should_show": _contract_payload_bool(
+            policy_badge.get("should_show", source_summary.get("should_show")),
+            default=True,
+        ),
+    }
+    quality_payload = {
+        "minimum_ok": quality.get("minimum_ok") if "minimum_ok" in quality else None,
+        "prompt_family": _contract_payload_text(quality.get("prompt_family")),
+        "quality_gate_status": _contract_payload_text(
+            source_summary.get("quality_gate_status"),
+            policy_support.get("quality_gate_status"),
+        ),
+    }
+
+    payload = {
+        "schema_version": 1,
+        "answer_profile": answer_profile,
+        "source_blend": source_blend,
+        "answer_mode": answer_mode,
+        "source_summary": source_summary,
+        "source_policy_payload": source_policy_payload,
+        "answer_runtime_check": runtime_check,
+        "runtime_check": runtime_check,
+        "quality": quality_payload,
+        "ui": {"source_badge": ui_badge},
+    }
+    return _contract_payload_compact(payload)

@@ -1384,6 +1384,14 @@ def test_generate_stream_keeps_agent_runtime_check_out_of_visible_answer(monkeyp
                 "status": "passed",
                 "repair": {"changed": True, "reasons": ["debug_content_removed"]},
             },
+            "answer_contract": {
+                "schema_version": 1,
+                "source_summary": {"kind": "general_api", "label": "Not from KB", "should_show": True},
+                "runtime_check": {
+                    "status": "passed",
+                    "repair": {"changed": True, "reasons": ["debug_content_removed"]},
+                },
+            },
         },
     )
 
@@ -1398,6 +1406,8 @@ def test_generate_stream_keeps_agent_runtime_check_out_of_visible_answer(monkeyp
     assert payload["answer"] == "Useful final answer."
     assert payload["partial"] == "Useful final answer."
     assert payload["answer_runtime_check"]["repair"]["changed"] is True
+    assert payload["answer_contract"]["source_summary"]["kind"] == "general_api"
+    assert payload["answer_contract"]["runtime_check"]["repair"]["changed"] is True
     assert "Research Agent Trace" not in payload["answer"]
     assert "answer_runtime_check" not in payload["answer"]
 

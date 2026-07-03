@@ -36,8 +36,23 @@ export function getMessageAgentTrace(message: Message): Record<string, unknown> 
   return Object.keys(trace).length > 0 ? trace : null
 }
 
+export function sourceSummaryFromAnswerContract(answerContract: unknown): Record<string, unknown> | null {
+  const contract = asTraceRecord(answerContract)
+  if (Object.keys(contract).length <= 0) return null
+  const summary = asTraceRecord(contract.source_summary || contract.sourceSummary)
+  return Object.keys(summary).length > 0 ? summary : null
+}
+
+export function getMessageAnswerContract(message: Message): Record<string, unknown> | null {
+  const meta = asTraceRecord(message.meta)
+  const contract = asTraceRecord(meta.answer_contract || meta.answerContract)
+  return Object.keys(contract).length > 0 ? contract : null
+}
+
 export function getMessageAgentSourceSummary(message: Message): Record<string, unknown> | null {
   const meta = asTraceRecord(message.meta)
+  const contractSummary = sourceSummaryFromAnswerContract(meta.answer_contract || meta.answerContract)
+  if (contractSummary) return contractSummary
   const summary = asTraceRecord(meta.agent_source_summary || meta.agentSourceSummary)
   return Object.keys(summary).length > 0 ? summary : null
 }

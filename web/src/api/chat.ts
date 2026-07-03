@@ -188,6 +188,20 @@ export interface AnswerRuntimeCheck {
   [key: string]: unknown
 }
 
+export interface AnswerContract {
+  schema_version?: number
+  answer_profile?: string
+  source_blend?: string
+  answer_mode?: string
+  source_summary?: AgentSourceSummary | Record<string, unknown>
+  source_policy_payload?: AgentSourcePolicyPayload | Record<string, unknown>
+  answer_runtime_check?: AnswerRuntimeCheck | Record<string, unknown>
+  runtime_check?: AnswerRuntimeCheck | Record<string, unknown>
+  quality?: Record<string, unknown>
+  ui?: Record<string, unknown>
+  [key: string]: unknown
+}
+
 export interface EvidenceMatrixRow {
   paper?: string
   source_name?: string
@@ -242,6 +256,7 @@ export interface MessageMeta {
   provenance?: MessageProvenance
   answer_quality?: Record<string, unknown>
   answer_runtime_check?: AnswerRuntimeCheck | Record<string, unknown>
+  answer_contract?: AnswerContract | Record<string, unknown>
   agent_trace?: AgentTrace | Record<string, unknown>
   agent_source_summary?: AgentSourceSummary | Record<string, unknown>
   paper_guide_contracts?: MessagePaperGuideContracts

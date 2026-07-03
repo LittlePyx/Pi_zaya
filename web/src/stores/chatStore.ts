@@ -920,6 +920,7 @@ interface GenerationState {
   researchTrace?: Record<string, unknown>
   agentTrace?: Record<string, unknown>
   agentSourceSummary?: Record<string, unknown>
+  answerContract?: Record<string, unknown>
 }
 
 interface GuideBinding {
@@ -2257,6 +2258,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const parsedAgentSourceSummary = data.agent_source_summary && typeof data.agent_source_summary === 'object'
             ? data.agent_source_summary as Record<string, unknown>
             : undefined
+          const parsedAnswerContract = data.answer_contract && typeof data.answer_contract === 'object'
+            ? data.answer_contract as Record<string, unknown>
+            : undefined
           const nextGeneration: GenerationState = {
             sessionId: res.session_id,
             taskId: res.task_id,
@@ -2268,6 +2272,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             researchTrace: parsedResearchTrace,
             agentTrace: parsedAgentTrace,
             agentSourceSummary: parsedAgentSourceSummary,
+            answerContract: parsedAnswerContract,
           }
           set((state) => {
             const cachedGeneration = convId ? state.conversationCacheById[convId]?.generation : null
@@ -2278,6 +2283,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               researchTrace: parsedResearchTrace || candidate.researchTrace,
               agentTrace: parsedAgentTrace || candidate.agentTrace,
               agentSourceSummary: parsedAgentSourceSummary || candidate.agentSourceSummary,
+              answerContract: parsedAnswerContract || candidate.answerContract,
             }
             const nextCache = convId
               ? upsertConversationViewCache(state.conversationCacheById, convId, {

@@ -149,6 +149,7 @@ import {
   imageAttachmentsOf,
   isImageOnlyPlaceholder,
   messageHasAgentTraceHint,
+  sourceSummaryFromAnswerContract,
 } from './messageTraceUtils'
 import { AgentTracePanel } from './AgentTracePanel'
 import { ResearchTracePanel } from './ResearchTracePanel'
@@ -186,6 +187,7 @@ interface Props {
   generationTrace?: Record<string, unknown>
   generationAgentTrace?: Record<string, unknown>
   generationAgentSourceSummary?: Record<string, unknown>
+  generationAnswerContract?: Record<string, unknown>
   jumpTarget?: { messageId: number; token: number } | null
   onJumpHandled?: (jumpTarget: { messageId: number; token: number }) => void
   trackedMessageIds?: number[]
@@ -242,6 +244,7 @@ export function MessageList({
   generationTrace,
   generationAgentTrace,
   generationAgentSourceSummary,
+  generationAnswerContract,
   jumpTarget,
   onJumpHandled,
   trackedMessageIds,
@@ -2137,8 +2140,10 @@ export function MessageList({
     : ''
   const generationSourceNotice = splitLeadingAssistantSourceNotice(cleanGenerationPartial)
   const visibleGenerationPartial = generationSourceNotice.notice ? generationSourceNotice.body : cleanGenerationPartial
+  const generationContractSourceSummary = sourceSummaryFromAnswerContract(generationAnswerContract)
+  const effectiveGenerationSourceSummary = generationContractSourceSummary || generationAgentSourceSummary
   const hasGenerationAgentSourceSummary = Boolean(
-    generationAgentSourceSummary && Object.keys(generationAgentSourceSummary).length > 0,
+    effectiveGenerationSourceSummary && Object.keys(effectiveGenerationSourceSummary).length > 0,
   )
 
   return (
@@ -2449,7 +2454,7 @@ export function MessageList({
                 ) : null}
                 {hasGenerationAgentSourceSummary ? (
                   <AssistantSourceSummaryNotice
-                    sourceSummary={generationAgentSourceSummary}
+                    sourceSummary={effectiveGenerationSourceSummary}
                     fallbackNoticeText={generationSourceNotice.notice}
                     S={S}
                   />

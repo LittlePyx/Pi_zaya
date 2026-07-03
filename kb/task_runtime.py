@@ -43,6 +43,7 @@ from kb.answer_contract import (
     _prefer_zh_locale,
     _reconcile_kb_notice,
     _split_kb_miss_notice,
+    build_answer_contract_payload,
 )
 from kb.answer_quality import (
     _gen_answer_quality_summary,
@@ -81,6 +82,7 @@ from kb.generation_state_runtime import (
     _gen_store_paper_guide_contract_meta as _state_gen_store_paper_guide_contract_meta,
     _gen_should_cancel as _state_gen_should_cancel,
     _gen_store_answer as _state_gen_store_answer,
+    _gen_store_answer_contract_meta as _state_gen_store_answer_contract_meta,
     _gen_store_answer_quality_meta as _state_gen_store_answer_quality_meta,
     _gen_store_answer_runtime_check_meta as _state_gen_store_answer_runtime_check_meta,
     _gen_store_answer_provenance as _state_gen_store_answer_provenance,
@@ -3291,6 +3293,14 @@ def _gen_store_answer_runtime_check_meta(task: dict, *, answer_runtime_check: di
     )
 
 
+def _gen_store_answer_contract_meta(task: dict, *, answer_contract: dict | None) -> None:
+    return _state_gen_store_answer_contract_meta(
+        task,
+        answer_contract=answer_contract,
+        chat_store_cls=ChatStore,
+    )
+
+
 def _gen_store_research_trace_meta(task: dict, *, research_trace: dict | None) -> None:
     trace = _trace_compact(dict(research_trace or {}))
     if not trace:
@@ -3375,6 +3385,25 @@ def _gen_answer_runtime_check(
                 "after": dict(repair.get("after") or {}),
             }
         return check
+    except Exception:
+        return {}
+
+
+def _gen_answer_contract(
+    task: dict,
+    *,
+    answer_quality: dict | None = None,
+    agent_source_summary: dict | None = None,
+    answer_runtime_check: dict | None = None,
+) -> dict:
+    if not bool(task.get("agent_mode")):
+        return {}
+    try:
+        return build_answer_contract_payload(
+            answer_quality=answer_quality,
+            agent_source_summary=agent_source_summary,
+            answer_runtime_check=answer_runtime_check,
+        )
     except Exception:
         return {}
 
@@ -3765,7 +3794,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
                 runtime_repair=runtime_repair,
             )
+            answer_contract = _gen_answer_contract(
+                task,
+                answer_quality={},
+                agent_source_summary=agent_source_summary,
+                answer_runtime_check=answer_runtime_check,
+            )
             _gen_store_answer_runtime_check_meta(task, answer_runtime_check=answer_runtime_check)
+            _gen_store_answer_contract_meta(task, answer_contract=answer_contract)
             _gen_update_task(
                 session_id,
                 task_id,
@@ -3782,6 +3818,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 agent_trace=agent_trace,
                 agent_source_summary=agent_source_summary,
                 answer_runtime_check=answer_runtime_check,
+                answer_contract=answer_contract,
                 finished_at=time.time(),
             )
             return
@@ -5643,7 +5680,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
             runtime_repair=runtime_repair,
         )
+        answer_contract = _gen_answer_contract(
+            task,
+            answer_quality=answer_quality,
+            agent_source_summary=agent_source_summary,
+            answer_runtime_check=answer_runtime_check,
+        )
         _gen_store_answer_runtime_check_meta(task, answer_runtime_check=answer_runtime_check)
+        _gen_store_answer_contract_meta(task, answer_contract=answer_contract)
         _gen_update_task(
             session_id,
             task_id,
@@ -5661,6 +5705,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             agent_trace=agent_trace,
             agent_source_summary=agent_source_summary,
             answer_runtime_check=answer_runtime_check,
+            answer_contract=answer_contract,
             finished_at=time.time(),
         )
         _perf_log("gen.answer", elapsed=time.perf_counter() - t_answer0, chars=len(answer))
