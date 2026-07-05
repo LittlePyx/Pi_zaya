@@ -80,6 +80,8 @@ import {
   type WorkbenchMetricItem,
   type WorkbenchTone,
 } from '../components/library/WorkbenchPrimitives'
+import { LibraryMetadataDrawer } from './library/LibraryMetadataDrawer'
+import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -4716,72 +4718,24 @@ export default function LibraryPage() {
       ) : null}
 
       {QUALITY_DIAGNOSTICS_VISIBLE && (qualityReportStats.converted > 0 || qualityReportStats.assessed > 0) ? (
-        <Card
-          size="small"
-          className={`kb-lib-card kb-lib-quality-report is-${qualityCenterTone}${qualityCenterOpen ? ' is-open' : ' is-compact'}`}
-          data-testid="library-quality-report"
+        <LibraryQualityCenter
+          open={qualityCenterOpen}
+          tone={qualityCenterTone}
+          S={S}
+          stats={qualityReportStats}
+          statusLabel={qualityCenterStatusLabel}
+          nextAction={qualityCenterNextAction}
+          summary={qualityCenterSummary}
+          signals={qualityCenterSignals}
+          recommendedRepairCount={qualityRepairRecommendedNames.length}
+          recommendedRepairBusy={qualityRepairRecommendedNames.some((name) => Boolean(qualityRepairingNames[name]))}
+          onToggleOpen={() => setQualityCenterOpen((value) => !value)}
+          onFocusReview={handleFocusQualityReview}
+          onRepairRecommended={() => {
+            setQualityCenterOpen(true)
+            void handleRepairRecommendedQuality()
+          }}
         >
-          <div className="kb-lib-quality-report-head">
-            <div className="kb-lib-quality-report-copy">
-              <Text className="kb-lib-quality-report-title">{S.lib_quality_report_title}</Text>
-              <Text type="secondary" className="kb-lib-quality-report-hint">
-                {S.lib_quality_report_hint
-                  .replace('{assessed}', String(qualityReportStats.assessed))
-                  .replace('{converted}', String(qualityReportStats.converted))
-                  .replace('{review}', String(qualityReportStats.review))
-                  .replace('{avg}', String(qualityReportStats.avgScore))}
-              </Text>
-            </div>
-            <div className="kb-lib-quality-report-actions">
-              <Button
-                size="small"
-                className="kb-lib-action-quiet"
-                data-testid="library-quality-center-toggle"
-                onClick={() => setQualityCenterOpen((value) => !value)}
-              >
-                {qualityCenterOpen ? S.lib_quality_center_toggle_hide : S.lib_quality_center_toggle_show}
-              </Button>
-              {qualityReportStats.review > 0 ? (
-                <Button
-                  size="small"
-                  className="kb-lib-action-quiet"
-                  data-testid="library-quality-report-focus-review"
-                  onClick={handleFocusQualityReview}
-                >
-                  {S.lib_quality_report_focus_review}
-                </Button>
-              ) : null}
-              {qualityRepairRecommendedNames.length > 0 ? (
-                <Button
-                  size="small"
-                  type="primary"
-                  loading={qualityRepairRecommendedNames.some((name) => Boolean(qualityRepairingNames[name]))}
-                  data-testid="library-quality-report-repair-recommended"
-                  onClick={() => {
-                    setQualityCenterOpen(true)
-                    void handleRepairRecommendedQuality()
-                  }}
-                >
-                  {S.lib_quality_report_repair_top.replace('{n}', String(qualityRepairRecommendedNames.length))}
-                </Button>
-              ) : null}
-            </div>
-          </div>
-          <div className="kb-lib-quality-center-summary" data-testid="library-quality-center-summary">
-            <div className="kb-lib-quality-center-state">
-              <span className={`kb-lib-quality-center-status is-${qualityCenterTone}`}>{qualityCenterStatusLabel}</span>
-              <strong>{qualityCenterNextAction}</strong>
-              <p>{qualityCenterSummary}</p>
-            </div>
-            <div className="kb-lib-quality-center-signals">
-              {qualityCenterSignals.map((item) => (
-                <span key={item.key} className={`kb-lib-quality-center-signal is-${item.key}`}>
-                  <em>{item.label}</em>
-                  <strong>{item.value}</strong>
-                </span>
-              ))}
-            </div>
-          </div>
           {qualityCenterOpen ? (
             <div className="kb-lib-quality-center-details" data-testid="library-quality-center-details">
               <div className="kb-lib-quality-center-tools">
@@ -5653,7 +5607,7 @@ export default function LibraryPage() {
           </div>
             </div>
           ) : null}
-        </Card>
+        </LibraryQualityCenter>
       ) : null}
 
       {QUALITY_DIAGNOSTICS_VISIBLE && qualityCenterOpen && qualityRepairHistoryList.length > 0 ? (
@@ -5932,235 +5886,27 @@ export default function LibraryPage() {
         </Card>
       )}
 
-      <Drawer
-        title={metaItem ? S.lib_meta_title.replace('{name}', metaItem.name) : S.lib_meta_title_fallback}
+      <LibraryMetadataDrawer
         open={metaDrawerOpen}
-        size={420}
+        item={metaItem}
+        draft={metaDraft}
+        draftCategory={metaDraftCategory}
+        draftTags={metaDraftTags}
+        suggestionCount={metaSuggestionCount}
+        saving={metaSaving}
+        suggestionSaving={metaSuggestionSaving}
+        S={S}
+        paperCategoryOptions={paperCategoryOptions}
+        paperTagOptions={paperTagOptions}
+        readingStatusOptions={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
+        tagInputSeparators={TAG_INPUT_SEPARATORS}
         onClose={() => setMetaDrawerOpen(false)}
-        destroyOnClose={false}
-      >
-        <div className="kb-lib-meta-drawer">
-          {metaItem ? (
-            <div className="kb-lib-meta-hero">
-              <div className="kb-lib-meta-hero-copy">
-                <Text className="kb-lib-meta-hero-title">{stripKnownSourceExt(metaItem.name) || metaItem.name}</Text>
-                <Text type="secondary" className="kb-lib-meta-hero-note">
-                  {S.lib_meta_hero_hint}
-                </Text>
-              </div>
-              <Space wrap size={[6, 6]} className="kb-lib-meta-chip-row">
-                <Tag color={metaDraftCategory ? 'blue' : 'default'}>{metaDraftCategory || S.lib_category_unclassified}</Tag>
-                {metaDraft.reading_status ? (
-                  <Tag color="gold">{readingStatusLabel(metaDraft.reading_status, S)}</Tag>
-                ) : (
-                  <Tag>{S.lib_meta_status_not_set}</Tag>
-                )}
-                <Tag color={metaSuggestionCount ? 'processing' : 'default'}>
-                  {metaSuggestionCount ? S.lib_meta_suggestions.replace('{n}', String(metaSuggestionCount)) : S.lib_meta_no_suggestions}
-                </Tag>
-              </Space>
-              {metaDraftTags.length ? (
-                <div className="kb-lib-meta-chip-row">
-                  {metaDraftTags.slice(0, 8).map((tagValue) => (
-                    <Tag key={`meta-current-${tagValue}`}>{tagValue}</Tag>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          <section className="kb-lib-meta-section">
-            <div className="kb-lib-meta-section-head">
-              <div className="kb-lib-meta-section-copy">
-                <Text className="kb-lib-meta-section-title">{S.lib_meta_section_my_org}</Text>
-                <Text type="secondary" className="kb-lib-meta-section-note">
-                  {S.lib_meta_org_hint}
-                </Text>
-              </div>
-            </div>
-
-            <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_category}</Text>
-              <AutoComplete
-                value={metaDraft.paper_category}
-                allowClear
-                options={paperCategoryOptions}
-                placeholder={S.lib_meta_category_placeholder}
-                filterOption={optionMatchesInput}
-                onChange={(value) => setMetaDraft((cur) => ({ ...cur, paper_category: String(value || '') }))}
-                onBlur={() => setMetaDraft((cur) => ({ ...cur, paper_category: normalizeTextValue(cur.paper_category) }))}
-              />
-              <Text type="secondary" className="kb-lib-meta-help">
-                {S.lib_meta_category_hint}
-              </Text>
-            </div>
-
-            <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_status}</Text>
-              <Select
-                value={metaDraft.reading_status || undefined}
-                allowClear
-                placeholder={S.lib_meta_reading_placeholder}
-                options={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
-                onChange={(value) => setMetaDraft((cur) => ({ ...cur, reading_status: String(value || '') as ReadingStatusValue }))}
-              />
-            </div>
-
-            <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_tags}</Text>
-              <Select
-                mode="tags"
-                value={metaDraft.user_tags}
-                showSearch
-                maxTagCount="responsive"
-                tokenSeparators={TAG_INPUT_SEPARATORS}
-                placeholder={S.lib_meta_tag_placeholder}
-                options={paperTagOptions}
-                optionFilterProp="label"
-                onChange={(value) => setMetaDraft((cur) => ({ ...cur, user_tags: normalizeTextList(value as unknown[]) }))}
-              />
-              <Text type="secondary" className="kb-lib-meta-help">
-                {S.lib_meta_tags_hint}
-              </Text>
-            </div>
-
-            <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_note}</Text>
-              <Input.TextArea
-                autoSize={{ minRows: 5, maxRows: 9 }}
-                value={metaDraft.note}
-                placeholder={S.lib_meta_note_placeholder}
-                onChange={(event) => setMetaDraft((cur) => ({ ...cur, note: event.target.value }))}
-              />
-            </div>
-          </section>
-
-          <section className="kb-lib-meta-section kb-lib-meta-section-suggest">
-            <div className="kb-lib-suggest-head">
-              <div className="kb-lib-meta-section-copy">
-                <Text className="kb-lib-meta-section-title">{S.lib_meta_section_system}</Text>
-                <Text type="secondary" className="kb-lib-meta-section-note">
-                  {S.lib_meta_system_hint}
-                </Text>
-              </div>
-              <Space size={8} wrap>
-                <Button size="small" loading={metaSuggestionSaving} onClick={() => { void regenerateMetaSuggestions() }}>
-                  {S.lib_btn_refresh_suggestions}
-                </Button>
-                {metaItem?.has_suggestions ? (
-                  <>
-                    <Button
-                      size="small"
-                      type="primary"
-                      ghost
-                      loading={metaSuggestionSaving}
-                      onClick={() => {
-                        void applyMetaSuggestionAction({
-                          category_action: metaItem?.suggested_category ? 'accept' : '',
-                          accept_all_tags: true,
-                        })
-                      }}
-                    >
-                      {S.lib_btn_accept_all}
-                    </Button>
-                    <Button
-                      size="small"
-                      loading={metaSuggestionSaving}
-                      onClick={() => {
-                        void applyMetaSuggestionAction({
-                          category_action: metaItem?.suggested_category ? 'dismiss' : '',
-                          dismiss_all_tags: true,
-                        })
-                      }}
-                    >
-                      {S.lib_btn_dismiss_all}
-                    </Button>
-                  </>
-                ) : null}
-              </Space>
-            </div>
-
-            {metaItem?.has_suggestions ? (
-              <div className="kb-lib-suggest-list">
-                {metaItem.suggested_category ? (
-                  <div className="kb-lib-suggest-item">
-                    <div className="kb-lib-suggest-copy">
-                      <Text className="kb-lib-suggest-title">{S.lib_meta_suggest_category}</Text>
-                      <div className="kb-lib-meta-chip-row">
-                        <Tag color="blue">{metaItem.suggested_category}</Tag>
-                      </div>
-                    </div>
-                    <Space size={8}>
-                      <Button
-                        size="small"
-                        type="primary"
-                        ghost
-                        loading={metaSuggestionSaving}
-                        onClick={() => { void applyMetaSuggestionAction({ category_action: 'accept' }) }}
-                      >
-                        {S.lib_btn_accept}
-                      </Button>
-                      <Button
-                        size="small"
-                        loading={metaSuggestionSaving}
-                        onClick={() => { void applyMetaSuggestionAction({ category_action: 'dismiss' }) }}
-                      >
-                        {S.lib_btn_dismiss}
-                      </Button>
-                    </Space>
-                  </div>
-                ) : null}
-
-                {(metaItem?.suggested_tags || []).map((tagValue) => (
-                  <div key={`meta-suggest-${tagValue}`} className="kb-lib-suggest-item">
-                    <div className="kb-lib-suggest-copy">
-                      <Text className="kb-lib-suggest-title">{S.lib_meta_suggest_tags}</Text>
-                      <div className="kb-lib-meta-chip-row">
-                        <Tag>{tagValue}</Tag>
-                      </div>
-                    </div>
-                    <Space size={8}>
-                      <Button
-                        size="small"
-                        type="primary"
-                        ghost
-                        loading={metaSuggestionSaving}
-                        onClick={() => { void applyMetaSuggestionAction({ accept_tags: [tagValue] }) }}
-                      >
-                        {S.lib_btn_accept}
-                      </Button>
-                      <Button
-                        size="small"
-                        loading={metaSuggestionSaving}
-                        onClick={() => { void applyMetaSuggestionAction({ dismiss_tags: [tagValue] }) }}
-                      >
-                        {S.lib_btn_dismiss}
-                      </Button>
-                    </Space>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <Alert
-                type="info"
-                showIcon
-                className="kb-lib-suggest-empty"
-                message={S.lib_meta_no_suggestions_msg}
-                description={S.lib_batch_hint}
-              />
-            )}
-          </section>
-
-          <div className="kb-lib-meta-actions">
-            <Button onClick={() => setMetaDrawerOpen(false)}>
-              {S.lib_btn_cancel}
-            </Button>
-            <Button type="primary" loading={metaSaving} onClick={() => { void saveMetaEditor() }}>
-              {S.lib_btn_save}
-            </Button>
-          </div>
-        </div>
-      </Drawer>
+        onDraftChange={setMetaDraft}
+        onSave={() => { void saveMetaEditor() }}
+        onRegenerateSuggestions={() => { void regenerateMetaSuggestions() }}
+        onApplySuggestionAction={(body) => { void applyMetaSuggestionAction(body) }}
+        readingStatusLabel={readingStatusLabel}
+      />
 
       <Drawer
         title={S.lib_batch_edit_count_format.replace('{n}', String(selectedLibraryCount))}

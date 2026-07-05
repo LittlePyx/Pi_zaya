@@ -1,0 +1,193 @@
+.kb-lib-meta-drawer {
+  display: grid;
+  gap: 14px;
+}
+
+.kb-lib-meta-hero {
+  display: grid;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--msg-user-bg) 44%, transparent), transparent 56%),
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 99%, white 1%), color-mix(in srgb, var(--panel) 96%, transparent));
+  padding: 14px;
+}
+
+.kb-lib-meta-hero-batch {
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--ok) 16%, transparent), transparent 54%),
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 99%, white 1%), color-mix(in srgb, var(--panel) 96%, transparent));
+}
+
+.kb-lib-meta-hero-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.kb-lib-meta-hero-title.ant-typography {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.kb-lib-meta-hero-note.ant-typography {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.kb-lib-meta-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kb-lib-meta-section {
+  display: grid;
+  gap: 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 99%, white 1%);
+  padding: 14px;
+}
+
+.kb-lib-meta-section-suggest {
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%),
+    color-mix(in srgb, var(--panel) 99%, white 1%);
+}
+
+.kb-lib-meta-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.kb-lib-meta-section-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.kb-lib-meta-section-title.ant-typography {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.kb-lib-meta-section-note.ant-typography,
+.kb-lib-meta-help.ant-typography {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.kb-lib-meta-field {
+  display: grid;
+  gap: 8px;
+}
+
+.kb-lib-meta-field.is-muted {
+  opacity: 0.72;
+}
+
+.kb-lib-meta-label {
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+.kb-lib-meta-section .ant-select-selector,
+.kb-lib-meta-section .ant-input,
+.kb-lib-meta-section textarea.ant-input,
+.kb-lib-meta-section .ant-input-affix-wrapper,
+.kb-lib-meta-section .ant-select-multiple .ant-select-selector {
+  border-radius: 12px;
+}
+
+.kb-lib-meta-section .ant-select-single .ant-select-selector,
+.kb-lib-meta-section .ant-select-multiple .ant-select-selector,
+.kb-lib-meta-section .ant-input,
+.kb-lib-meta-section textarea.ant-input {
+  min-height: 42px;
+}
+
+.kb-lib-meta-section textarea.ant-input {
+  padding-top: 10px;
+}
+
+.kb-lib-meta-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.kb-lib-suggest-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.kb-lib-suggest-list {
+  display: grid;
+  gap: 10px;
+}
+
+.kb-lib-suggest-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 14px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--panel) 99%, white 1%),
+    color-mix(in srgb, var(--panel) 96%, transparent)
+  );
+}
+
+.kb-lib-suggest-copy {
+  min-width: 0;
+  flex: 1 1 180px;
+  display: grid;
+  gap: 8px;
+}
+
+.kb-lib-suggest-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--muted-text) 86%, transparent);
+}
+
+.kb-lib-suggest-empty.ant-alert {
+  border-radius: 14px;
+}
+
+@media (max-width: 760px) {
+  .kb-lib-meta-hero,
+  .kb-lib-meta-section {
+    padding: 12px;
+  }
+
+  .kb-lib-meta-actions {
+    flex-direction: column-reverse;
+  }
+
+  .kb-lib-meta-actions .ant-btn {
+    width: 100%;
+  }
+
+  .kb-lib-suggest-item {
+    flex-direction: column;
+  }
+}
