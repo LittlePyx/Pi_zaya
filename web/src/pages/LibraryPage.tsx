@@ -20,7 +20,6 @@ import {
   Checkbox,
   Alert,
   Tooltip,
-  Dropdown,
   Modal,
   Segmented,
 } from 'antd'
@@ -29,12 +28,10 @@ import {
   ReloadOutlined,
   StopOutlined,
   FolderOpenOutlined,
-  DeleteOutlined,
   SaveOutlined,
   SearchOutlined,
   CheckOutlined,
   ClearOutlined,
-  MoreOutlined,
   CopyOutlined,
   LockOutlined,
   ApiOutlined,
@@ -92,6 +89,7 @@ import { LibraryQualityStatusPanels } from './library/LibraryQualityStatusPanels
 import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { LibraryFileQualityChips, LibraryFileQualityLine } from './library/LibraryFileQualityLine'
+import { LibraryFileActions } from './library/LibraryFileActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -3583,7 +3581,6 @@ export default function LibraryPage() {
     const categoryActive = !onlyUnclassified && paperCategoryFilter && String(item.paper_category || '') === paperCategoryFilter
     const statusActive = readingStatusFilter && item.reading_status === readingStatusFilter
     const isSelected = Boolean(selectedLibraryNames[item.name])
-    const showPrimaryConvertAction = !item.md_exists
     const itemProgress = derivePageProgress(item.cur_page_done, item.cur_page_total, item.cur_page_msg)
     const itemProgressPercent = itemProgress.total > 0
       ? Math.round((itemProgress.done / Math.max(1, itemProgress.total)) * 100)
@@ -3688,66 +3685,16 @@ export default function LibraryPage() {
           ) : null}
         </div>
 
-        <div className={`kb-lib-file-actions${showPrimaryConvertAction ? ' has-convert' : ' is-compact'}`}>
-          <Button className="kb-lib-file-action-main" size="small" onClick={() => openMetaEditor(item)}>
-            {S.lib_btn_categorize}
-          </Button>
-          {item.md_exists ? (
-            <Button
-              className="kb-lib-file-action-link"
-              type="text"
-              size="small"
-              disabled={!item.md_path}
-              onClick={() => { void handleStartPaperGuide(item) }}
-            >
-              {S.lib_btn_read}
-            </Button>
-          ) : null}
-          {showPrimaryConvertAction ? (
-            <Button
-              className="kb-lib-file-action-link is-accent"
-              type="text"
-              size="small"
-              disabled={item.task_state !== 'idle'}
-              onClick={() => { void handleConvertOne(item) }}
-            >
-              {S.lib_btn_convert}
-            </Button>
-          ) : null}
-          <Button className="kb-lib-file-action-link" type="text" size="small" onClick={() => { void store.openFile(item.name, 'pdf') }}>
-            PDF
-          </Button>
-          <div className="kb-lib-file-more">
-            <Dropdown
-              trigger={['click']}
-              menu={{
-                items: [
-                  ...(item.md_exists
-                    ? [{ key: 'reconvert', label: S.lib_btn_reconvert, disabled: item.task_state !== 'idle', icon: <ReloadOutlined /> }]
-                    : []),
-                  { key: 'open-md', label: S.lib_btn_open_md, disabled: !item.md_exists },
-                  { type: 'divider' },
-                  { key: 'delete', label: S.lib_btn_delete, danger: true, disabled: item.task_state !== 'idle', icon: <DeleteOutlined /> },
-                ],
-                onClick: ({ key }) => {
-                  if (key === 'reconvert') {
-                    void handleConvertOne(item)
-                    return
-                  }
-                  if (key === 'open-md') {
-                    void store.openFile(item.name, 'md')
-                    return
-                  }
-                  if (key === 'delete') {
-                    confirmDeleteOne(item)
-                  }
-                },
-              }}
-            >
-              <Button size="small" className="kb-lib-file-more-btn" icon={<MoreOutlined />} />
-            </Dropdown>
-          </div>
-        </div>
+        <LibraryFileActions
+          S={S}
+          item={item}
+          onOpenMeta={() => openMetaEditor(item)}
+          onStartPaperGuide={() => { void handleStartPaperGuide(item) }}
+          onConvert={() => { void handleConvertOne(item) }}
+          onOpenPdf={() => { void store.openFile(item.name, 'pdf') }}
+          onOpenMarkdown={() => { void store.openFile(item.name, 'md') }}
+          onDelete={() => confirmDeleteOne(item)}
+        />
       </div>
     )
   }

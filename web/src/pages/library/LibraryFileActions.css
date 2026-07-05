@@ -1,0 +1,108 @@
+.kb-lib-file-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  width: auto;
+  max-width: 100%;
+  justify-self: end;
+}
+
+.kb-lib-file-actions .ant-btn {
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--kb-lib-surface) 74%, transparent);
+  box-shadow: none;
+}
+
+.kb-lib-file-action-main.ant-btn {
+  min-width: 0;
+  flex: 0 0 auto;
+  font-weight: 600;
+  padding-inline: 9px;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--text-main) 84%, transparent);
+  background: color-mix(in srgb, var(--kb-lib-surface) 80%, transparent);
+}
+
+.kb-lib-file-action-main.ant-btn:hover,
+.kb-lib-file-action-main.ant-btn:focus-visible {
+  background: var(--kb-lib-hover);
+  color: var(--text-main);
+}
+
+.kb-lib-file-action-link.ant-btn {
+  min-width: 0;
+  padding-inline: 7px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--muted-text) 88%, var(--text-main));
+  background: transparent;
+}
+
+.kb-lib-file-action-link.ant-btn:hover,
+.kb-lib-file-action-link.ant-btn:focus-visible {
+  background: var(--kb-lib-hover);
+  color: var(--text-main);
+}
+
+.kb-lib-file-action-link.is-accent.ant-btn {
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-main));
+}
+
+.kb-lib-file-action-link.is-accent.ant-btn:hover,
+.kb-lib-file-action-link.is-accent.ant-btn:focus-visible {
+  background: var(--kb-lib-hover-strong);
+  color: color-mix(in srgb, var(--accent) 92%, var(--text-main));
+}
+
+.kb-lib-file-more {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.kb-lib-file-more .ant-dropdown-trigger {
+  display: flex;
+}
+
+.kb-lib-file-more-btn.ant-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding-inline: 0;
+}
+
+@media (max-width: 1024px) {
+  .kb-lib-file-actions {
+    grid-column: auto;
+    justify-self: end;
+    flex-wrap: nowrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .kb-lib-file-actions {
+    display: grid;
+    grid-column: auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .kb-lib-file-more {
+    grid-column: auto;
+    width: 100%;
+  }
+
+  .kb-lib-file-action-main.ant-btn {
+    min-width: 0;
+  }
+
+  .kb-lib-file-more .ant-dropdown-trigger,
+  .kb-lib-file-more-btn.ant-btn {
+    width: 100%;
+    min-width: 0;
+  }
+}
