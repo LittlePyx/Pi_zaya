@@ -88,6 +88,7 @@ import { LibraryQualityChainPanels } from './library/LibraryQualityChainPanels'
 import { LibraryQualityIssuePanels } from './library/LibraryQualityIssuePanels'
 import { LibraryQualityReportPanels } from './library/LibraryQualityReportPanels'
 import { LibraryQualityHistoryPanel } from './library/LibraryQualityHistoryPanel'
+import { LibraryQualityStatusPanels } from './library/LibraryQualityStatusPanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
@@ -107,7 +108,6 @@ import {
   fileTag,
   formatSeconds,
   formatQualityRepairRecordSummary,
-  formatSignedNumber,
   hasConversionQualityIssue,
   isUploadDraftConverted,
   libraryDocumentTypeView,
@@ -119,17 +119,11 @@ import {
   numericStat,
   optionMatchesInput,
   qualityActionDeltaText,
-  qualityBatchIndexText,
-  qualityBatchStatusText,
   qualityBuildActionDelta,
   qualityDomainNumber,
   qualityDomainStatus,
   qualityFailureCaseMatchesStage,
   qualityOverviewStageSnapshot,
-  qualityRepairImpactIndexText,
-  qualityRepairRunCanAdvance,
-  qualityRepairRunStatusText,
-  qualityRepairRunTagColor,
   qualityStatusText,
   qualityTopFailureText,
   qualityVerificationFromRerun,
@@ -4776,181 +4770,21 @@ export default function LibraryPage() {
               <span>{S.lib_quality_report_avg.replace('{score}', String(qualityReportStats.avgScore))}</span>
             </span>
           </div>
-          {qualityBatchResult ? (
-            <div className="kb-lib-quality-batch-result" data-testid="library-quality-batch-result">
-              <div className="kb-lib-quality-repair-impact-head">
-                <Text className="kb-lib-quality-report-section-title">{qualityBatchStatusText(qualityBatchResult)}</Text>
-                <Tag color={qualityBatchResult.failed > 0 ? 'warning' : (qualityBatchResult.needs_reindex ? 'processing' : 'success')}>
-                  {qualityBatchIndexText(qualityBatchResult)}
-                </Tag>
-              </div>
-              <div className="kb-lib-quality-repair-impact-grid">
-                <span>
-                  <em>Ready</em>
-                  <strong>{qualityBatchResult.ready}</strong>
-                </span>
-                <span>
-                  <em>Autofix</em>
-                  <strong>{qualityBatchResult.autofix}</strong>
-                </span>
-                <span>
-                  <em>Reconvert</em>
-                  <strong>{qualityBatchResult.reconvert}</strong>
-                </span>
-                <span>
-                  <em>Review</em>
-                  <strong>{qualityBatchResult.review}</strong>
-                </span>
-              </div>
-              {(qualityBatchResult.changed_paths || []).length > 0 || (qualityBatchResult.reconvert_paths || []).length > 0 || (qualityBatchResult.errors || []).length > 0 ? (
-                <div className="kb-lib-quality-repair-impact-issues">
-                  {(qualityBatchResult.changed_paths || []).slice(0, 4).map((path) => (
-                    <span key={`batch-changed-${path}`} className="is-fixed" title={path}>changed: {path.split(/[\\/]/).pop()}</span>
-                  ))}
-                  {(qualityBatchResult.reconvert_paths || []).slice(0, 3).map((path) => (
-                    <span key={`batch-reconvert-${path}`} className="is-remaining" title={path}>reconvert: {path.split(/[\\/]/).pop()}</span>
-                  ))}
-                  {(qualityBatchResult.errors || []).slice(0, 2).map((item) => (
-                    <span key={`batch-error-${item.path}`} className="is-remaining" title={item.error}>failed: {item.path.split(/[\\/]/).pop()}</span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {qualityRepairImpact ? (
-            <div className="kb-lib-quality-repair-impact" data-testid="library-quality-repair-impact">
-              <div className="kb-lib-quality-repair-impact-head">
-                <Text className="kb-lib-quality-report-section-title">Repair impact</Text>
-                <Tag color={qualityRepairImpact.reindexed === true ? 'success' : (qualityRepairImpact.needs_reindex ? (qualityRepairImpact.reindexed === false ? 'warning' : 'processing') : 'success')}>
-                  {qualityRepairImpactIndexText(qualityRepairImpact)}
-                </Tag>
-              </div>
-              {qualityRepairRun ? (
-                <div className="kb-lib-quality-repair-run" data-testid="library-quality-repair-run">
-                  <Tag color={qualityRepairRunTagColor(qualityRepairRun)}>
-                    {qualityRepairRunStatusText(qualityRepairRun)}
-                  </Tag>
-                  <span>{qualityRepairRun.run_id.slice(0, 8)}</span>
-                  {qualityRepairRun.detail ? <em>{qualityRepairRun.detail}</em> : null}
-                  {qualityVerificationText(qualityRepairRun.verification as Record<string, unknown> | undefined) ? (
-                    <em className="kb-lib-quality-repair-run-verification">
-                      {qualityVerificationText(qualityRepairRun.verification as Record<string, unknown> | undefined)}
-                    </em>
-                  ) : null}
-                  {qualityRepairRunCanAdvance(qualityRepairRun) ? (
-                    <Button
-                      size="small"
-                      icon={<ReloadOutlined />}
-                      loading={qualityRepairAdvancing}
-                      data-testid="library-quality-repair-run-advance"
-                      onClick={() => { void handleAdvanceQualityRepairRun() }}
-                    >
-                      Continue
-                    </Button>
-                  ) : null}
-                </div>
-              ) : null}
-              <div className="kb-lib-quality-repair-impact-grid">
-                <span>
-                  <em>Repaired</em>
-                  <strong>{qualityRepairImpact.repaired}</strong>
-                </span>
-                <span>
-                  <em>Queued</em>
-                  <strong>{qualityRepairImpact.enqueued}</strong>
-                </span>
-                <span>
-                  <em>Improved</em>
-                  <strong>{qualityRepairImpact.improved}</strong>
-                </span>
-                <span>
-                  <em>Score</em>
-                  <strong>Q{qualityRepairImpact.before_avg_score} -&gt; Q{qualityRepairImpact.after_avg_score} ({formatSignedNumber(qualityRepairImpact.score_delta)})</strong>
-                </span>
-              </div>
-              {(qualityRepairImpact.fixed_issue_codes || []).length > 0 || (qualityRepairImpact.remaining_issue_codes || []).length > 0 ? (
-                <div className="kb-lib-quality-repair-impact-issues">
-                  {(qualityRepairImpact.fixed_issue_codes || []).slice(0, 5).map((issue) => (
-                    <span key={`fixed-${issue.name}`} className="is-fixed">{issue.name} x{issue.count}</span>
-                  ))}
-                  {(qualityRepairImpact.remaining_issue_codes || []).slice(0, 3).map((issue) => (
-                    <span key={`remaining-${issue.name}`} className="is-remaining">{issue.name} x{issue.count}</span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          <div className="kb-lib-quality-domain-section">
-            <Text className="kb-lib-quality-report-section-title">{S.lib_quality_domains_title}</Text>
-            <div className="kb-lib-quality-domain-grid" data-testid="library-quality-domains">
-              {qualityDomainViews.map((domain) => {
-                const artifactDomain = domain.key === 'citation_cards' ? 'citation_cards' : 'research_qa'
-                return (
-                  <div
-                    key={domain.key}
-                    className={`kb-lib-quality-domain-card is-${domain.status}`}
-                    data-quality-domain={domain.key}
-                  >
-                    <div className="kb-lib-quality-domain-head">
-                      <span>{domain.label}</span>
-                      <Tag color={domain.status === 'good' ? 'success' : domain.status === 'error' ? 'error' : domain.status === 'warning' ? 'warning' : 'default'}>
-                        {domain.statusLabel}
-                      </Tag>
-                    </div>
-                    <strong>{domain.countText}</strong>
-                    {domain.detailText ? <span>{domain.detailText}</span> : null}
-                    {domain.failureText ? <em>{domain.failureText}</em> : null}
-                    <div className="kb-lib-quality-domain-actions">
-                      {domain.key === 'conversion' ? (
-                        <Button
-                          size="small"
-                          className="kb-lib-quality-domain-action"
-                          disabled={qualityReportStats.review <= 0}
-                          onClick={handleFocusQualityReview}
-                        >
-                          {S.lib_quality_report_focus_review}
-                        </Button>
-                      ) : domain.key === 'reader_locate' ? (
-                        <Button
-                          size="small"
-                          className="kb-lib-quality-domain-action"
-                          disabled={qualityReaderLocateRecommendedSources.length <= 0}
-                          onClick={() => { void repairReaderLocateSources() }}
-                        >
-                          {domain.status === 'good' ? 'Verified' : 'Repair sources'}
-                        </Button>
-                      ) : (
-                        <>
-                          <Button
-                            size="small"
-                            className="kb-lib-quality-domain-action"
-                            loading={qualityArtifactOpening === `${artifactDomain}:${domain.available ? 'report' : 'runbook'}`}
-                            onClick={() => {
-                              void openQualityArtifact(artifactDomain, domain.available ? 'report' : 'runbook')
-                            }}
-                          >
-                            {domain.available ? S.lib_quality_artifact_open_report : S.lib_quality_artifact_open_runbook}
-                          </Button>
-                          {domain.available ? (
-                            <Button
-                              size="small"
-                              className="kb-lib-quality-domain-action"
-                              loading={qualityArtifactOpening === `${artifactDomain}:folder`}
-                              onClick={() => {
-                                void openQualityArtifact(artifactDomain, 'folder')
-                              }}
-                            >
-                              {S.lib_quality_artifact_open_folder}
-                            </Button>
-                          ) : null}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          <LibraryQualityStatusPanels
+            S={S}
+            batchResult={qualityBatchResult}
+            repairImpact={qualityRepairImpact}
+            repairRun={qualityRepairRun}
+            repairAdvancing={qualityRepairAdvancing}
+            domains={qualityDomainViews}
+            reviewCount={qualityReportStats.review}
+            readerLocateRepairCount={qualityReaderLocateRecommendedSources.length}
+            artifactOpening={qualityArtifactOpening}
+            onFocusReview={handleFocusQualityReview}
+            onRepairReaderLocateSources={() => { void repairReaderLocateSources() }}
+            onAdvanceRepairRun={() => { void handleAdvanceQualityRepairRun() }}
+            onOpenArtifact={(domain, target) => { void openQualityArtifact(domain, target) }}
+          />
           <LibraryQualityMetadataBackfillPanel
             S={S}
             state={shelfMetadataBackfillState}
