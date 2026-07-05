@@ -20,10 +20,8 @@ import {
   SYSTEM_B_ARTICLE_OVERVIEW_SOURCES,
   SYSTEM_B_TRACE_ENABLED,
   anchorKindLabel,
-  answerPointPreview,
   compact,
   evidencePreview,
-  isLowValueSystemAClaim,
   isOnlyPaperLabel,
   isReferenceEntryLikeText,
   looksGenericSystemBTakeawayText,
@@ -32,7 +30,7 @@ import {
   stripLocationIdentityPrefix,
   substantiallySame,
 } from './citationPopoverUtils'
-import { buildEvidenceCardViewModel } from './evidenceCardViewModel'
+import { buildSystemAEvidenceCardModel } from './citationPopoverSystemA'
 
 import { useT } from '../../i18n'
 
@@ -216,33 +214,6 @@ export function CitationPopover({
   const cardFlow = Array.isArray(detail.cardFlow)
     ? detail.cardFlow.map((item) => compact(item)).filter(Boolean)
     : []
-  const suppressRawSystemAEvidenceFallback = !isSystemB
-    && (
-      cardQualityFlags.includes('evidence_quote_filtered')
-      || cardQualityFlags.includes('missing_evidence_quote')
-    )
-  const systemAEvidenceCard = buildEvidenceCardViewModel(detail, {
-    S,
-    evidenceOverride: evidenceSection?.text || detail.cardEvidence,
-    evidenceLabelOverride: cardEvidenceLabel,
-    claimOverride: claimSection?.text || detail.cardClaim || detail.answerClaim,
-    claimLabelOverride: cardClaimLabel,
-    supportOverride: supportSection?.text || detail.cardSupportExplanation || detail.supportRelation || detail.whyLine || detail.bindingReason,
-    supportLabelOverride: cardSupportLabel,
-    includeCitationFallback: !suppressRawSystemAEvidenceFallback,
-    includeRawFallback: false,
-  })
-  const rawSystemAClaimText = systemAEvidenceCard.claim
-  const systemAClaimText = looksNarrativeMetadataText(rawSystemAClaimText, detail) ? '' : rawSystemAClaimText
-  const systemAClaimPreview = answerPointPreview(systemAClaimText)
-  const systemAClaimLabel = cardClaimLabel && !/^(?:答案中的话|对应回答)$/.test(cardClaimLabel)
-    ? cardClaimLabel
-    : S.cite_answer_point
-  const systemAEvidenceText = systemAEvidenceCard.evidence
-  const systemATakeawayText = !isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemAEvidenceText)
-    ? cardTakeaway
-    : ''
-  const systemAEvidencePreview = evidencePreview(systemAEvidenceText, systemATakeawayText ? 250 : 330)
   const systemBExplicitReferenceText = localizeKnownBody(cleanCitationDisplayText(referenceSection?.text || detail.cardReferenceEntry))
   const systemBReferenceText = systemBExplicitReferenceText || cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
   const systemBOverviewSource = compact(detail.summarySource).toLowerCase()
@@ -365,25 +336,23 @@ export function CitationPopover({
     figure: S.cite_anchor_figure,
     table: S.cite_anchor_table,
   })
-  const systemAHasReviewRisk = Boolean(bindingState || cardWarning || cardQualityFlags.includes('candidate_binding') || cardQualityFlags.includes('binding_mismatch'))
-  const systemAHasOccurrenceClaim = cardQualityFlags.includes('occurrence_specific_claim')
-  const systemAClaimLooksUseful = !isLowValueSystemAClaim(systemAClaimText)
-  const showSystemAClaim = Boolean(
-    systemAClaimPreview
-    && systemAClaimLooksUseful
-    && (!systemAEvidenceText || ((systemAHasReviewRisk || systemAHasOccurrenceClaim) && !substantiallySame(systemAClaimText, systemAEvidenceText))),
-  )
-  const showSystemATakeaway = Boolean(
-    systemATakeawayText
-    && !(showSystemAClaim && substantiallySame(systemATakeawayText, systemAClaimText)),
-  )
-  const showSystemASupport = Boolean(
-    systemAHasReviewRisk
-    &&
-    supportText
-    && !substantiallySame(supportText, systemAEvidenceText)
-    && !substantiallySame(supportText, systemAClaimText),
-  )
+  const systemA = buildSystemAEvidenceCardModel({
+    detail,
+    S,
+    isSystemB,
+    claimSection,
+    evidenceSection,
+    supportSection,
+    cardTakeaway,
+    cardTakeawayLabel,
+    cardClaimLabel,
+    cardEvidenceLabel,
+    cardSupportLabel,
+    cardQualityFlags,
+    cardWarning,
+    hasBindingState: Boolean(bindingState),
+    supportText,
+  })
   const primaryActionLabel = isSystemB ? S.cite_read_locate : S.cite_open_evidence
   const explainText = ''
   const flowSteps = isSystemB ? [] : cardFlow
@@ -614,19 +583,19 @@ export function CitationPopover({
       />
       {!isSystemB ? (
         <SystemAEvidenceCard
-          showTakeaway={showSystemATakeaway}
-          takeawayLabel={cardTakeawayLabel || S.cite_evidence_focus}
-          takeawayText={systemATakeawayText}
-          showClaim={showSystemAClaim}
-          claimLabel={systemAClaimLabel}
-          claimPreview={systemAClaimPreview}
-          evidenceText={systemAEvidenceText}
-          evidencePreview={systemAEvidencePreview}
-          evidenceLabel={cardEvidenceLabel || S.cite_original_evidence}
+          showTakeaway={systemA.showTakeaway}
+          takeawayLabel={systemA.takeawayLabel}
+          takeawayText={systemA.takeawayText}
+          showClaim={systemA.showClaim}
+          claimLabel={systemA.claimLabel}
+          claimPreview={systemA.claimPreview}
+          evidenceText={systemA.evidenceText}
+          evidencePreview={systemA.evidencePreview}
+          evidenceLabel={systemA.evidenceLabel}
           excerptLabel={S.cite_excerpt}
-          showSupport={showSystemASupport}
-          supportLabel={cardSupportLabel || S.cite_reliability}
-          supportText={supportText}
+          showSupport={systemA.showSupport}
+          supportLabel={systemA.supportLabel}
+          supportText={systemA.supportText}
         />
       ) : (
         <SystemBLiteratureCard
