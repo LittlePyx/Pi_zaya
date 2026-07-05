@@ -1998,88 +1998,6 @@
   font-size: 15px;
 }
 
-.kb-lib-quality-report-metrics {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  gap: 8px;
-}
-
-.kb-lib-quality-report-metric {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-width: 0;
-  min-height: 42px;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--kb-lib-surface) 86%, var(--panel));
-  color: color-mix(in srgb, var(--text-main) 70%, transparent);
-  padding: 8px 10px;
-  font-size: 11.5px;
-  line-height: 1.25;
-}
-
-button.kb-lib-quality-report-metric {
-  cursor: pointer;
-}
-
-button.kb-lib-quality-report-metric:disabled {
-  cursor: not-allowed;
-  opacity: 0.62;
-}
-
-.kb-lib-quality-report-metric span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.kb-lib-quality-report-metric strong {
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--panel) 86%, var(--bg));
-  color: var(--text-main);
-  padding: 3px 8px;
-  font-size: 12px;
-  line-height: 1.2;
-}
-
-.kb-lib-quality-report-metric.is-good {
-  border-color: color-mix(in srgb, #22c55e 24%, var(--border));
-  background: color-mix(in srgb, #22c55e 7%, var(--kb-lib-surface));
-}
-
-.kb-lib-quality-report-metric.is-source-ready {
-  border-color: color-mix(in srgb, #16a34a 28%, var(--border));
-  background: color-mix(in srgb, #16a34a 8%, var(--kb-lib-surface));
-}
-
-.kb-lib-quality-report-metric.is-autofixed {
-  border-color: color-mix(in srgb, #0ea5e9 28%, var(--border));
-  background: color-mix(in srgb, #0ea5e9 8%, var(--kb-lib-surface));
-}
-
-.kb-lib-quality-report-metric.is-review {
-  border-color: color-mix(in srgb, #f59e0b 30%, var(--border));
-  background: color-mix(in srgb, #f59e0b 8%, var(--kb-lib-surface));
-}
-
-.kb-lib-quality-report-metric.is-blocked {
-  border-color: color-mix(in srgb, #ef4444 30%, var(--border));
-  background: color-mix(in srgb, #ef4444 9%, var(--kb-lib-surface));
-}
-
-.kb-lib-quality-report-metric.is-unknown {
-  border-color: color-mix(in srgb, #64748b 22%, var(--border));
-}
-
-.kb-lib-quality-report-metric.is-score {
-  justify-content: center;
-  color: color-mix(in srgb, var(--accent) 78%, var(--text-main));
-  font-weight: 760;
-}
-
 .kb-lib-quality-report-section-title.ant-typography {
   color: color-mix(in srgb, var(--text-main) 72%, transparent);
   font-size: 11px;
@@ -4205,10 +4123,6 @@ button.kb-lib-quality-report-metric:disabled {
   .kb-lib-taxonomy-top-actions,
   .kb-lib-taxonomy-top-actions .ant-btn {
     width: 100%;
-  }
-
-  .kb-lib-quality-report-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .kb-lib-convert-row-actions .ant-btn {

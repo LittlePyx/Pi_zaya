@@ -89,6 +89,7 @@ import { LibraryQualityIssuePanels } from './library/LibraryQualityIssuePanels'
 import { LibraryQualityReportPanels } from './library/LibraryQualityReportPanels'
 import { LibraryQualityHistoryPanel } from './library/LibraryQualityHistoryPanel'
 import { LibraryQualityStatusPanels } from './library/LibraryQualityStatusPanels'
+import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
@@ -4708,145 +4709,93 @@ export default function LibraryPage() {
         >
           {qualityCenterOpen ? (
             <div className="kb-lib-quality-center-details" data-testid="library-quality-center-details">
-              <div className="kb-lib-quality-center-tools">
-                <Button
-                  size="small"
-                  className="kb-lib-action-quiet"
-                  loading={qualityBatchRunning}
-                  data-testid="library-quality-scan-source"
-                  onClick={() => { void runConversionQualityBatch(false) }}
-                >
-                  Source scan
-                </Button>
-                <Button
-                  size="small"
-                  className="kb-lib-action-quiet"
-                  loading={qualityBatchRunning}
-                  disabled={qualityReportStats.review <= 0 && qualitySourceReadinessStats.blocked <= 0}
-                  data-testid="library-quality-safe-repair-all"
-                  onClick={() => { void runConversionQualityBatch(true) }}
-                >
-                  Safe repair all
-                </Button>
-              </div>
-              <div className="kb-lib-quality-report-metrics">
-            <span className="kb-lib-quality-report-metric is-source-ready" data-testid="library-quality-report-source-ready">
-              <span>{S.lib_quality_report_source_ready}</span>
-              <strong>{qualitySourceReadinessStats.ready}</strong>
-            </span>
-            <span className="kb-lib-quality-report-metric is-autofixed" data-testid="library-quality-report-autofixed">
-              <span>{S.lib_quality_report_autofixed}</span>
-              <strong>{qualitySourceReadinessStats.autofixed}</strong>
-            </span>
-            <button
-              type="button"
-              className="kb-lib-quality-report-metric is-blocked"
-              disabled={qualitySourceReadinessStats.blocked <= 0}
-              data-testid="library-quality-report-blocked"
-              onClick={handleFocusQualityReview}
-            >
-              <span>{S.lib_quality_report_blocked}</span>
-              <strong>{qualitySourceReadinessStats.blocked}</strong>
-            </button>
-            <span className="kb-lib-quality-report-metric is-good" data-testid="library-quality-report-good">
-              <span>{S.lib_quality_report_good}</span>
-              <strong>{qualityReportStats.good}</strong>
-            </span>
-            <button
-              type="button"
-              className="kb-lib-quality-report-metric is-review"
-              disabled={qualityReportStats.review <= 0}
-              data-testid="library-quality-report-review"
-              onClick={handleFocusQualityReview}
-            >
-              <span>{S.lib_quality_report_review}</span>
-              <strong>{qualityReportStats.review}</strong>
-            </button>
-            <span className="kb-lib-quality-report-metric is-unknown" data-testid="library-quality-report-unknown">
-              <span>{S.lib_quality_report_unknown}</span>
-              <strong>{qualityReportStats.unknown}</strong>
-            </span>
-            <span className="kb-lib-quality-report-metric is-score" data-testid="library-quality-report-avg">
-              <span>{S.lib_quality_report_avg.replace('{score}', String(qualityReportStats.avgScore))}</span>
-            </span>
-          </div>
-          <LibraryQualityStatusPanels
-            S={S}
-            batchResult={qualityBatchResult}
-            repairImpact={qualityRepairImpact}
-            repairRun={qualityRepairRun}
-            repairAdvancing={qualityRepairAdvancing}
-            domains={qualityDomainViews}
-            reviewCount={qualityReportStats.review}
-            readerLocateRepairCount={qualityReaderLocateRecommendedSources.length}
-            artifactOpening={qualityArtifactOpening}
-            onFocusReview={handleFocusQualityReview}
-            onRepairReaderLocateSources={() => { void repairReaderLocateSources() }}
-            onAdvanceRepairRun={() => { void handleAdvanceQualityRepairRun() }}
-            onOpenArtifact={(domain, target) => { void openQualityArtifact(domain, target) }}
-          />
-          <LibraryQualityMetadataBackfillPanel
-            S={S}
-            state={shelfMetadataBackfillState}
-            scan={shelfMetadataBackfillScan}
-            result={shelfMetadataBackfillResult}
-            tone={shelfMetadataBackfillTone}
-            running={shelfMetadataBackfillRunning}
-            phase={shelfMetadataBackfillPhase}
-            progress={shelfMetadataBackfillProgress}
-            refreshing={shelfMetadataBackfillRefreshing}
-            onStart={() => { void startShelfMetadataBackfill({ silent: false }) }}
-            onRefresh={() => { void refreshShelfMetadataBackfillState(false) }}
-          />
-          <LibraryQualityFigureAssetsPanel
-            S={S}
-            scan={figureAssetScan}
-            scanRunning={figureAssetScanRunning}
-            refreshResult={figureAssetRefreshResult}
-            refreshRunning={figureAssetRefreshRunning}
-            onScan={(includeAll) => { void runFigureAssetQualityScan(includeAll) }}
-            onRefresh={() => { void refreshFigureAssets() }}
-          />
-          <LibraryQualityChainPanels
-            S={S}
-            featureHealth={qualityFeatureHealth}
-            featureItems={qualityFeatureHealthItems}
-            fullChain={qualityFullChain}
-            fullChainStages={qualityFullChainStages}
-            fullChainRootCauses={qualityFullChainRootCauses}
-            fullChainActionHistory={qualityFullChainActionHistory}
-            actionKey={qualityFullChainActionKey}
-            liveResults={qualityFullChainResults}
-            persistedResults={qualityFullChainPersistedResults}
-            onFeatureAction={(item) => { void handleQualityFeatureHealthAction(item) }}
-            onStageAction={(stage) => { void handleQualityFullChainStage(stage) }}
-            onHistoryOpen={(item) => { void handleQualityActionHistoryOpen(item) }}
-          />
-          <LibraryQualityIssuePanels
-            S={S}
-            priorityActions={qualityPriorityActions}
-            rerunSummary={qualityRerunSummary}
-            failureCases={qualityFailureCases}
-            failureFilters={qualityFailureFilters}
-            failureFilter={qualityFailureFilter}
-            visibleFailureCases={visibleQualityFailureCases}
-            artifactOpening={qualityArtifactOpening}
-            caseActionKey={qualityCaseActionKey}
-            caseRerunResults={qualityCaseRerunResults}
-            onPriorityAction={(action) => { void handleQualityPriorityAction(action) }}
-            onOpenFailureReport={() => { void openQualityArtifact('research_qa', 'report') }}
-            onFailureFilterChange={setQualityFailureFilter}
-            onOpenReplayCase={openResearchQaReplayCase}
-            onFailureAction={(item, action) => { void handleQualityFailureAction(item, action) }}
-            onCopyFailureSummary={(item) => { void copyQualityFailureSummary(item) }}
-          />
-          <LibraryQualityReportPanels
-            S={S}
-            issues={qualityIssueStats}
-            recommendations={qualityReportRecommendations}
-            onFocusIssue={handleFocusQualityIssue}
-            onFocusRecommendation={(name) => focusQualityHistoryNames([name])}
-          />
+              <LibraryQualityOverviewPanels
+                S={S}
+                scanRunning={qualityBatchRunning}
+                repairDisabled={qualityReportStats.review <= 0 && qualitySourceReadinessStats.blocked <= 0}
+                reportStats={qualityReportStats}
+                sourceReadinessStats={qualitySourceReadinessStats}
+                onScanSource={() => { void runConversionQualityBatch(false) }}
+                onSafeRepairAll={() => { void runConversionQualityBatch(true) }}
+                onFocusReview={handleFocusQualityReview}
+              />
+              <LibraryQualityStatusPanels
+                S={S}
+                batchResult={qualityBatchResult}
+                repairImpact={qualityRepairImpact}
+                repairRun={qualityRepairRun}
+                repairAdvancing={qualityRepairAdvancing}
+                domains={qualityDomainViews}
+                reviewCount={qualityReportStats.review}
+                readerLocateRepairCount={qualityReaderLocateRecommendedSources.length}
+                artifactOpening={qualityArtifactOpening}
+                onFocusReview={handleFocusQualityReview}
+                onRepairReaderLocateSources={() => { void repairReaderLocateSources() }}
+                onAdvanceRepairRun={() => { void handleAdvanceQualityRepairRun() }}
+                onOpenArtifact={(domain, target) => { void openQualityArtifact(domain, target) }}
+              />
+              <LibraryQualityMetadataBackfillPanel
+                S={S}
+                state={shelfMetadataBackfillState}
+                scan={shelfMetadataBackfillScan}
+                result={shelfMetadataBackfillResult}
+                tone={shelfMetadataBackfillTone}
+                running={shelfMetadataBackfillRunning}
+                phase={shelfMetadataBackfillPhase}
+                progress={shelfMetadataBackfillProgress}
+                refreshing={shelfMetadataBackfillRefreshing}
+                onStart={() => { void startShelfMetadataBackfill({ silent: false }) }}
+                onRefresh={() => { void refreshShelfMetadataBackfillState(false) }}
+              />
+              <LibraryQualityFigureAssetsPanel
+                S={S}
+                scan={figureAssetScan}
+                scanRunning={figureAssetScanRunning}
+                refreshResult={figureAssetRefreshResult}
+                refreshRunning={figureAssetRefreshRunning}
+                onScan={(includeAll) => { void runFigureAssetQualityScan(includeAll) }}
+                onRefresh={() => { void refreshFigureAssets() }}
+              />
+              <LibraryQualityChainPanels
+                S={S}
+                featureHealth={qualityFeatureHealth}
+                featureItems={qualityFeatureHealthItems}
+                fullChain={qualityFullChain}
+                fullChainStages={qualityFullChainStages}
+                fullChainRootCauses={qualityFullChainRootCauses}
+                fullChainActionHistory={qualityFullChainActionHistory}
+                actionKey={qualityFullChainActionKey}
+                liveResults={qualityFullChainResults}
+                persistedResults={qualityFullChainPersistedResults}
+                onFeatureAction={(item) => { void handleQualityFeatureHealthAction(item) }}
+                onStageAction={(stage) => { void handleQualityFullChainStage(stage) }}
+                onHistoryOpen={(item) => { void handleQualityActionHistoryOpen(item) }}
+              />
+              <LibraryQualityIssuePanels
+                S={S}
+                priorityActions={qualityPriorityActions}
+                rerunSummary={qualityRerunSummary}
+                failureCases={qualityFailureCases}
+                failureFilters={qualityFailureFilters}
+                failureFilter={qualityFailureFilter}
+                visibleFailureCases={visibleQualityFailureCases}
+                artifactOpening={qualityArtifactOpening}
+                caseActionKey={qualityCaseActionKey}
+                caseRerunResults={qualityCaseRerunResults}
+                onPriorityAction={(action) => { void handleQualityPriorityAction(action) }}
+                onOpenFailureReport={() => { void openQualityArtifact('research_qa', 'report') }}
+                onFailureFilterChange={setQualityFailureFilter}
+                onOpenReplayCase={openResearchQaReplayCase}
+                onFailureAction={(item, action) => { void handleQualityFailureAction(item, action) }}
+                onCopyFailureSummary={(item) => { void copyQualityFailureSummary(item) }}
+              />
+              <LibraryQualityReportPanels
+                S={S}
+                issues={qualityIssueStats}
+                recommendations={qualityReportRecommendations}
+                onFocusIssue={handleFocusQualityIssue}
+                onFocusRecommendation={(name) => focusQualityHistoryNames([name])}
+              />
             </div>
           ) : null}
         </LibraryQualityCenter>

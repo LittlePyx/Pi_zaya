@@ -142,13 +142,6 @@
   gap: 12px;
 }
 
-.kb-lib-quality-center-tools {
-  display: flex;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
 .kb-lib-quality-report-head {
   display: flex;
   align-items: flex-start;
