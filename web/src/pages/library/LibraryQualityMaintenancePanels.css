@@ -1,0 +1,358 @@
+.kb-lib-quality-metadata-backfill {
+  display: grid;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--kb-lib-surface) 84%, var(--panel));
+  padding: 9px;
+}
+
+.kb-lib-quality-metadata-backfill.is-good {
+  border-color: color-mix(in srgb, #22c55e 22%, var(--border));
+}
+
+.kb-lib-quality-metadata-backfill.is-warning {
+  border-color: color-mix(in srgb, #f59e0b 26%, var(--border));
+}
+
+.kb-lib-quality-metadata-backfill.is-error {
+  border-color: color-mix(in srgb, #ef4444 28%, var(--border));
+}
+
+.kb-lib-quality-metadata-backfill-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.kb-lib-quality-metadata-backfill-head > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.kb-lib-quality-metadata-backfill-head strong {
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1;
+}
+
+.kb-lib-quality-metadata-backfill-head .ant-tag {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
+}
+
+.kb-lib-quality-metadata-backfill-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.kb-lib-quality-metadata-backfill-grid span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+  padding: 7px;
+}
+
+.kb-lib-quality-metadata-backfill-grid strong,
+.kb-lib-quality-metadata-backfill-grid em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-lib-quality-metadata-backfill-grid strong {
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1.1;
+}
+
+.kb-lib-quality-metadata-backfill-grid em {
+  color: color-mix(in srgb, var(--text-main) 54%, transparent);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.2;
+}
+
+.kb-lib-quality-metadata-backfill-fields {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.kb-lib-quality-metadata-backfill-fields em {
+  max-width: 150px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, #f59e0b 10%, var(--panel));
+  color: color-mix(in srgb, var(--text-main) 64%, transparent);
+  padding: 3px 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.kb-lib-quality-metadata-backfill > p {
+  min-width: 0;
+  margin: 0;
+  color: color-mix(in srgb, var(--text-main) 58%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.kb-lib-quality-metadata-backfill-actions {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.kb-lib-quality-metadata-backfill-actions .ant-btn {
+  min-height: 24px;
+  height: 24px;
+  border-radius: 8px;
+  padding-inline: 9px;
+  font-size: 10.5px;
+  line-height: 1;
+}
+
+.kb-lib-quality-figure-assets {
+  display: grid;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--kb-lib-surface) 84%, var(--panel));
+  padding: 9px;
+}
+
+.kb-lib-quality-figure-assets.is-good {
+  border-color: color-mix(in srgb, #22c55e 22%, var(--border));
+}
+
+.kb-lib-quality-figure-assets.is-warning {
+  border-color: color-mix(in srgb, #f59e0b 26%, var(--border));
+}
+
+.kb-lib-quality-figure-assets.is-error {
+  border-color: color-mix(in srgb, #ef4444 28%, var(--border));
+}
+
+.kb-lib-quality-figure-assets-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.kb-lib-quality-figure-assets-head > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.kb-lib-quality-figure-assets-head strong {
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1;
+}
+
+.kb-lib-quality-figure-assets-head .ant-tag {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
+}
+
+.kb-lib-quality-figure-assets-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.kb-lib-quality-figure-assets-grid span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+  padding: 7px;
+}
+
+.kb-lib-quality-figure-assets-grid strong,
+.kb-lib-quality-figure-assets-grid em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-lib-quality-figure-assets-grid strong {
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1.1;
+}
+
+.kb-lib-quality-figure-assets-grid em {
+  color: color-mix(in srgb, var(--text-main) 54%, transparent);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1.2;
+}
+
+.kb-lib-quality-figure-assets-fields {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.kb-lib-quality-figure-assets-fields em {
+  max-width: 180px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, #f59e0b 10%, var(--panel));
+  color: color-mix(in srgb, var(--text-main) 64%, transparent);
+  padding: 3px 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.kb-lib-quality-figure-assets-list {
+  display: grid;
+  gap: 5px;
+}
+
+.kb-lib-quality-figure-assets-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 0.6fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 7px;
+  border: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  padding: 6px 7px;
+}
+
+.kb-lib-quality-figure-assets-row span,
+.kb-lib-quality-figure-assets-row strong,
+.kb-lib-quality-figure-assets-row em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.kb-lib-quality-figure-assets-row span {
+  color: color-mix(in srgb, var(--text-main) 76%, transparent);
+  font-size: 10.5px;
+  font-weight: 740;
+}
+
+.kb-lib-quality-figure-assets-row strong {
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-main));
+  font-size: 10px;
+  font-weight: 740;
+}
+
+.kb-lib-quality-figure-assets-row em {
+  color: color-mix(in srgb, var(--text-main) 54%, transparent);
+  font-size: 9.5px;
+  font-style: normal;
+}
+
+.kb-lib-quality-figure-assets-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.kb-lib-quality-figure-assets-result span {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #0ea5e9 9%, var(--panel));
+  color: color-mix(in srgb, var(--text-main) 62%, transparent);
+  padding: 3px 8px;
+  font-size: 10px;
+  line-height: 1.15;
+}
+
+.kb-lib-quality-figure-assets-result strong {
+  color: var(--text-main);
+  font-size: 10.5px;
+}
+
+.kb-lib-quality-figure-assets-actions {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kb-lib-quality-figure-assets-actions .ant-btn {
+  min-height: 24px;
+  height: 24px;
+  border-radius: 8px;
+  padding-inline: 9px;
+  font-size: 10.5px;
+  line-height: 1;
+}
+
+@media (max-width: 1200px) {
+  .kb-lib-quality-metadata-backfill-grid,
+  .kb-lib-quality-figure-assets-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .kb-lib-quality-metadata-backfill-head,
+  .kb-lib-quality-figure-assets-head {
+    align-items: flex-start;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .kb-lib-quality-metadata-backfill-grid,
+  .kb-lib-quality-figure-assets-grid,
+  .kb-lib-quality-figure-assets-row {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-lib-quality-figure-assets-actions,
+  .kb-lib-quality-metadata-backfill-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .kb-lib-quality-figure-assets-actions .ant-btn,
+  .kb-lib-quality-metadata-backfill-actions .ant-btn {
+    width: 100%;
+  }
+}

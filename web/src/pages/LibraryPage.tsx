@@ -44,7 +44,6 @@ import type {
   ConversionQualitySummary,
   LibraryFileItem,
   LibraryFigureAssetRefreshResponse,
-  LibraryFigureAssetScanItem,
   LibraryFigureAssetScanResponse,
   LibraryQualityActionDelta,
   LibraryQualityActionHistoryItem,
@@ -81,6 +80,10 @@ import {
   type WorkbenchTone,
 } from '../components/library/WorkbenchPrimitives'
 import { LibraryMetadataDrawer } from './library/LibraryMetadataDrawer'
+import {
+  LibraryQualityFigureAssetsPanel,
+  LibraryQualityMetadataBackfillPanel,
+} from './library/LibraryQualityMaintenancePanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
@@ -869,32 +872,6 @@ export default function LibraryPage() {
       : shelfMetadataBackfillScan
         ? (Number(shelfMetadataBackfillScan.needs_repair || 0) > 0 ? 'warning' : 'good')
         : 'unknown'
-  const figureAssetTone = figureAssetScanRunning || figureAssetRefreshRunning
-    ? 'warning'
-    : figureAssetScan
-      ? (
-          normalizeTextValue(figureAssetScan.status).toLowerCase() === 'error'
-            ? 'error'
-            : Number(figureAssetScan.docs_with_issues || 0) > 0 || Number(figureAssetScan.refresh_recommended || 0) > 0
-              ? 'warning'
-              : 'good'
-        )
-      : 'unknown'
-  const figureAssetIssueStats = useMemo(
-    () => Object.entries(figureAssetScan?.issue_counts || {})
-      .map(([name, count]) => ({ name, count: Number(count || 0) }))
-      .filter((item) => item.name && item.count > 0)
-      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-      .slice(0, 6),
-    [figureAssetScan],
-  )
-  const figureAssetPreviewItems = useMemo<LibraryFigureAssetScanItem[]>(
-    () => (Array.isArray(figureAssetScan?.items) ? figureAssetScan.items : [])
-      .filter((item) => item && (Number(item.issue_count || 0) > 0 || Boolean(item.refresh_recommended)))
-      .slice(0, 5),
-    [figureAssetScan],
-  )
-  const figureAssetRefreshableCount = Number(figureAssetScan?.refresh_recommended || 0)
   const qualityRerunSummary = backendQualityOverview?.rerun_summary
   const qualityFailureCases = useMemo<LibraryQualityFailureCase[]>(
     () => (Array.isArray(backendQualityOverview?.failure_cases) ? backendQualityOverview.failure_cases : [])
@@ -4975,170 +4952,28 @@ export default function LibraryPage() {
               })}
             </div>
           </div>
-          <div
-            className={`kb-lib-quality-metadata-backfill is-${shelfMetadataBackfillTone}`}
-            data-testid="library-metadata-backfill-health"
-          >
-            <div className="kb-lib-quality-metadata-backfill-head">
-              <div>
-                <Text className="kb-lib-quality-report-section-title">Literature metadata</Text>
-                <strong>{shelfMetadataBackfillScan ? `${Number(shelfMetadataBackfillScan.export_ready || 0)}/${Number(shelfMetadataBackfillScan.scanned || 0)}` : 'Not scanned'}</strong>
-              </div>
-              <Tag color={shelfMetadataBackfillRunning ? 'processing' : shelfMetadataBackfillTone === 'good' ? 'success' : shelfMetadataBackfillTone === 'error' ? 'error' : shelfMetadataBackfillTone === 'warning' ? 'warning' : 'default'}>
-                {shelfMetadataBackfillRunning ? shelfMetadataBackfillPhase : (shelfMetadataBackfillTone === 'unknown' ? 'Idle' : qualityStatusText(shelfMetadataBackfillTone, S))}
-              </Tag>
-            </div>
-            <div className="kb-lib-quality-metadata-backfill-grid">
-              <span>
-                <strong>{Number(shelfMetadataBackfillScan?.scanned || 0)}</strong>
-                <em>refs scanned</em>
-              </span>
-              <span>
-                <strong>{Number(shelfMetadataBackfillScan?.target_count || 0)}</strong>
-                <em>repairable</em>
-              </span>
-              <span>
-                <strong>{Number(shelfMetadataBackfillScan?.needs_repair || 0)}</strong>
-                <em>remaining</em>
-              </span>
-              <span>
-                <strong>{Number(shelfMetadataBackfillResult?.preheated || shelfMetadataBackfillResult?.persisted || shelfMetadataBackfillResult?.changed || 0)}</strong>
-                <em>preheated</em>
-              </span>
-            </div>
-            {shelfMetadataBackfillRunning ? (
-              <Progress percent={shelfMetadataBackfillProgress} size="small" showInfo={false} />
-            ) : null}
-            {(shelfMetadataBackfillScan?.missing_fields || []).length > 0 ? (
-              <div className="kb-lib-quality-metadata-backfill-fields">
-                {(shelfMetadataBackfillScan?.missing_fields || []).slice(0, 5).map((field) => (
-                  <em key={field.name}>{field.name} x{field.count}</em>
-                ))}
-              </div>
-            ) : null}
-            {shelfMetadataBackfillState?.error_detail ? (
-              <p>{shelfMetadataBackfillState.error_detail}</p>
-            ) : shelfMetadataBackfillResult?.verification ? (
-              <p>{qualityVerificationText(shelfMetadataBackfillResult.verification as unknown as Record<string, unknown>)}</p>
-            ) : null}
-            <div className="kb-lib-quality-metadata-backfill-actions">
-              <Button
-                size="small"
-                loading={shelfMetadataBackfillRefreshing || shelfMetadataBackfillRunning}
-                disabled={shelfMetadataBackfillRunning}
-                onClick={() => { void startShelfMetadataBackfill({ silent: false }) }}
-              >
-                {shelfMetadataBackfillRunning ? 'Running' : 'Preheat'}
-              </Button>
-              <Button
-                size="small"
-                type="text"
-                loading={shelfMetadataBackfillRefreshing && !shelfMetadataBackfillRunning}
-                onClick={() => { void refreshShelfMetadataBackfillState(false) }}
-              >
-                Refresh
-              </Button>
-            </div>
-          </div>
-          <div
-            className={`kb-lib-quality-figure-assets is-${figureAssetTone}`}
-            data-testid="library-figure-assets-health"
-          >
-            <div className="kb-lib-quality-figure-assets-head">
-              <div>
-                <Text className="kb-lib-quality-report-section-title">Figure assets</Text>
-                <strong>
-                  {figureAssetScan
-                    ? `${Number(figureAssetScan.refresh_recommended || 0)}/${Number(figureAssetScan.scanned || 0)} refresh`
-                    : 'Not scanned'}
-                </strong>
-              </div>
-              <Tag color={figureAssetScanRunning || figureAssetRefreshRunning ? 'processing' : figureAssetTone === 'good' ? 'success' : figureAssetTone === 'error' ? 'error' : figureAssetTone === 'warning' ? 'warning' : 'default'}>
-                {figureAssetScanRunning
-                  ? 'Scanning'
-                  : figureAssetRefreshRunning
-                    ? 'Queueing'
-                    : figureAssetTone === 'unknown'
-                      ? 'Idle'
-                      : qualityStatusText(figureAssetTone, S)}
-              </Tag>
-            </div>
-            <div className="kb-lib-quality-figure-assets-grid">
-              <span>
-                <strong>{Number(figureAssetScan?.scanned || 0)}</strong>
-                <em>sources scanned</em>
-              </span>
-              <span>
-                <strong>{Number(figureAssetScan?.figures || 0)}</strong>
-                <em>figures</em>
-              </span>
-              <span>
-                <strong>{Number(figureAssetScan?.docs_with_issues || 0)}</strong>
-                <em>issue docs</em>
-              </span>
-              <span>
-                <strong>{figureAssetRefreshableCount}</strong>
-                <em>refresh queue</em>
-              </span>
-            </div>
-            {figureAssetIssueStats.length > 0 ? (
-              <div className="kb-lib-quality-figure-assets-fields" data-testid="library-figure-assets-issues">
-                {figureAssetIssueStats.map((item) => (
-                  <em key={item.name}>{item.name} x{item.count}</em>
-                ))}
-              </div>
-            ) : null}
-            {figureAssetPreviewItems.length > 0 ? (
-              <div className="kb-lib-quality-figure-assets-list" data-testid="library-figure-assets-list">
-                {figureAssetPreviewItems.map((item) => {
-                  const issueCodes = Object.keys(item.issue_counts || {}).filter((code) => Number(item.issue_counts?.[code] || 0) > 0)
-                  const firstIssue = item.issues?.[0]
-                  return (
-                    <div key={item.md_path || item.pdf_name || item.source_name} className="kb-lib-quality-figure-assets-row">
-                      <span title={item.source_name || item.pdf_name || item.md_path}>{item.source_name || item.pdf_name || 'Converted source'}</span>
-                      <strong>{issueCodes.slice(0, 3).join(' / ') || firstIssue?.code || 'issue'}</strong>
-                      <em>{firstIssue?.message || `${item.issue_count} issue(s)`}</em>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : null}
-            {figureAssetRefreshResult ? (
-              <div className="kb-lib-quality-figure-assets-result" data-testid="library-figure-assets-refresh-result">
-                <span>queued <strong>{Number(figureAssetRefreshResult.enqueued || 0)}</strong></span>
-                <span>busy <strong>{Number(figureAssetRefreshResult.skipped_busy || 0)}</strong></span>
-                <span>failed <strong>{Number(figureAssetRefreshResult.failed || 0)}</strong></span>
-              </div>
-            ) : null}
-            <div className="kb-lib-quality-figure-assets-actions">
-              <Button
-                size="small"
-                loading={figureAssetScanRunning}
-                disabled={figureAssetRefreshRunning}
-                onClick={() => { void runFigureAssetQualityScan(false) }}
-              >
-                Scan
-              </Button>
-              <Button
-                size="small"
-                type="text"
-                loading={figureAssetScanRunning}
-                disabled={figureAssetRefreshRunning}
-                onClick={() => { void runFigureAssetQualityScan(true) }}
-              >
-                Show all
-              </Button>
-              <Button
-                size="small"
-                className="kb-lib-quality-domain-action"
-                loading={figureAssetRefreshRunning}
-                disabled={figureAssetScanRunning || figureAssetScan === null || figureAssetRefreshableCount <= 0}
-                onClick={() => { void refreshFigureAssets() }}
-              >
-                Refresh flagged
-              </Button>
-            </div>
-          </div>
+          <LibraryQualityMetadataBackfillPanel
+            S={S}
+            state={shelfMetadataBackfillState}
+            scan={shelfMetadataBackfillScan}
+            result={shelfMetadataBackfillResult}
+            tone={shelfMetadataBackfillTone}
+            running={shelfMetadataBackfillRunning}
+            phase={shelfMetadataBackfillPhase}
+            progress={shelfMetadataBackfillProgress}
+            refreshing={shelfMetadataBackfillRefreshing}
+            onStart={() => { void startShelfMetadataBackfill({ silent: false }) }}
+            onRefresh={() => { void refreshShelfMetadataBackfillState(false) }}
+          />
+          <LibraryQualityFigureAssetsPanel
+            S={S}
+            scan={figureAssetScan}
+            scanRunning={figureAssetScanRunning}
+            refreshResult={figureAssetRefreshResult}
+            refreshRunning={figureAssetRefreshRunning}
+            onScan={(includeAll) => { void runFigureAssetQualityScan(includeAll) }}
+            onRefresh={() => { void refreshFigureAssets() }}
+          />
           {qualityFeatureHealth && qualityFeatureHealthItems.length > 0 ? (
             <div
               className={`kb-lib-quality-feature-health is-${normalizeTextValue(qualityFeatureHealth.status).toLowerCase() || 'unknown'}`}
