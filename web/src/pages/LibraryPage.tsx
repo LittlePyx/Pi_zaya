@@ -86,6 +86,7 @@ import {
 } from './library/LibraryQualityMaintenancePanels'
 import { LibraryQualityChainPanels } from './library/LibraryQualityChainPanels'
 import { LibraryQualityIssuePanels } from './library/LibraryQualityIssuePanels'
+import { LibraryQualityReportPanels } from './library/LibraryQualityReportPanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
@@ -5005,53 +5006,13 @@ export default function LibraryPage() {
             onFailureAction={(item, action) => { void handleQualityFailureAction(item, action) }}
             onCopyFailureSummary={(item) => { void copyQualityFailureSummary(item) }}
           />
-          <div className="kb-lib-quality-report-body">
-            <div className="kb-lib-quality-report-section">
-              <Text className="kb-lib-quality-report-section-title">{S.lib_quality_report_top_issues}</Text>
-              {qualityIssueStats.length > 0 ? (
-                <div className="kb-lib-quality-report-issues">
-                  {qualityIssueStats.map((issue) => (
-                    <button
-                      key={issue.key}
-                      type="button"
-                      className={`kb-lib-quality-report-issue is-${issue.severity || 'warning'}`}
-                      data-testid="library-quality-report-issue"
-                      onClick={() => handleFocusQualityIssue(issue.label)}
-                    >
-                      <span>{issue.label}</span>
-                      {issue.repairStrategy ? <em>{issue.repairStrategy}</em> : null}
-                      <strong>{S.lib_quality_report_papers.replace('{n}', String(issue.papers))}</strong>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <Text type="secondary" className="kb-lib-quality-report-empty">{S.lib_quality_report_no_issues}</Text>
-              )}
-            </div>
-            <div className="kb-lib-quality-report-section">
-              <Text className="kb-lib-quality-report-section-title">{S.lib_quality_report_recommended}</Text>
-              {qualityReportRecommendations.length > 0 ? (
-                <div className="kb-lib-quality-report-recommendations" data-testid="library-quality-report-recommended">
-                  {qualityReportRecommendations.slice(0, 3).map((item) => (
-                    <button
-                      key={item.name}
-                      type="button"
-                      className="kb-lib-quality-report-recommendation"
-                      onClick={() => focusQualityHistoryNames([item.name])}
-                    >
-                      <span className="kb-lib-quality-report-rec-title">{stripKnownSourceExt(item.name) || item.name}</span>
-                      <span className="kb-lib-quality-report-rec-meta">
-                        Q{item.score}
-                        {item.issues.length > 0 ? ` · ${item.issues.join(' / ')}` : ''}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <Text type="secondary" className="kb-lib-quality-report-empty">{S.lib_quality_report_no_issues}</Text>
-              )}
-            </div>
-          </div>
+          <LibraryQualityReportPanels
+            S={S}
+            issues={qualityIssueStats}
+            recommendations={qualityReportRecommendations}
+            onFocusIssue={handleFocusQualityIssue}
+            onFocusRecommendation={(name) => focusQualityHistoryNames([name])}
+          />
             </div>
           ) : null}
         </LibraryQualityCenter>
