@@ -16,21 +16,25 @@ import { CitationPopoverFlowStrip } from './CitationPopoverFlowStrip'
 import { CitationPopoverHeader, type CompactMetaItem } from './CitationPopoverHeader'
 import { CitationPopoverMetaPanels } from './CitationPopoverMetaPanels'
 import { CitationPopoverStatusPanels } from './CitationPopoverStatusPanels'
-import { buildEvidenceCardViewModel, previewClaimText, previewEvidenceText } from './evidenceCardViewModel'
+import {
+  SYSTEM_B_ARTICLE_OVERVIEW_SOURCES,
+  SYSTEM_B_TRACE_ENABLED,
+  anchorKindLabel,
+  answerPointPreview,
+  compact,
+  evidencePreview,
+  isLowValueSystemAClaim,
+  isOnlyPaperLabel,
+  isReferenceEntryLikeText,
+  looksGenericSystemBTakeawayText,
+  looksNarrativeMetadataText,
+  pageRangeLabel,
+  stripLocationIdentityPrefix,
+  substantiallySame,
+} from './citationPopoverUtils'
+import { buildEvidenceCardViewModel } from './evidenceCardViewModel'
 
 import { useT } from '../../i18n'
-
-const SYSTEM_B_TRACE_ENABLED = false
-const SYSTEM_B_ARTICLE_OVERVIEW_SOURCES = new Set([
-  'abstract',
-  'fulltext',
-  'reference_primary_evidence',
-  'navigation',
-  'exact_anchor',
-  'section_intent_rescue',
-  'doc_list_seed',
-  'doc_list_prompt_aligned',
-])
 
 interface Props {
   detail: CiteDetail | null
@@ -47,189 +51,6 @@ interface Props {
   onMouseLeave?: () => void
   showOpenReaderAction?: boolean
   showStartGuideAction?: boolean
-}
-
-function compact(value: string) {
-  return String(value || '').trim()
-}
-
-function substantiallySame(left: string, right: string) {
-  const a = compact(left).replace(/\s+/g, ' ').toLowerCase()
-  const b = compact(right).replace(/\s+/g, ' ').toLowerCase()
-  if (!a || !b) return false
-  if (a === b) return true
-  if (a.length >= 36 && b.includes(a)) return true
-  if (b.length >= 36 && a.includes(b)) return true
-  const aTokens = new Set(a.match(/[a-z0-9\u4e00-\u9fff]{2,}/g) || [])
-  const bTokens = new Set(b.match(/[a-z0-9\u4e00-\u9fff]{2,}/g) || [])
-  if (aTokens.size < 6 || bTokens.size < 6) return false
-  let overlap = 0
-  for (const token of aTokens) {
-    if (bTokens.has(token)) overlap += 1
-  }
-  return overlap / Math.min(aTokens.size, bTokens.size) >= 0.82
-}
-
-function comparablePaperLabel(value: string): string {
-  const raw = compact(value)
-  if (!raw) return ''
-  const leaf = raw.replace(/\\/g, '/').split('/').pop() || raw
-  return leaf
-    .replace(/\.en\.md$/i, '')
-    .replace(/\.md$/i, '')
-    .replace(/\.pdf$/i, '')
-    .replace(/^[A-Za-z]{2,12}-\d{4}-/, '')
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase()
-}
-
-function isOnlyPaperLabel(value: string, candidates: string[]): boolean {
-  const text = compact(value)
-  const normalized = comparablePaperLabel(text)
-  if (!text || !normalized) return false
-  for (const candidate of candidates) {
-    const candidateText = compact(candidate)
-    const candidateNormalized = comparablePaperLabel(candidateText)
-    if (!candidateText || !candidateNormalized) continue
-    if (normalized === candidateNormalized) return true
-    if (substantiallySame(text, candidateText)) return true
-  }
-  return false
-}
-
-function stripLocationIdentityPrefix(value: string, candidates: string[]): string {
-  const text = compact(value)
-  if (!text) return ''
-  const identities = candidates.map(comparablePaperLabel).filter(Boolean)
-  if (!identities.length) return text
-  const sameIdentity = (left: string, right: string) => {
-    const a = comparablePaperLabel(left)
-    const b = comparablePaperLabel(right)
-    if (!a || !b) return false
-    if (a === b) return true
-    if (a.length >= 16 && b.includes(a)) return true
-    if (b.length >= 16 && a.includes(b)) return true
-    const at = new Set(a.match(/[a-z0-9\u4e00-\u9fff]{2,}/g) || [])
-    const bt = new Set(b.match(/[a-z0-9\u4e00-\u9fff]{2,}/g) || [])
-    if (at.size < 3 || bt.size < 3) return false
-    let overlap = 0
-    for (const token of at) {
-      if (bt.has(token)) overlap += 1
-    }
-    return overlap / Math.min(at.size, bt.size) >= 0.82
-  }
-  const parts = text.split(/\s*\/\s*/).map((part) => compact(part)).filter(Boolean)
-  while (parts.length > 1 && identities.some((candidate) => sameIdentity(parts[0], candidate))) {
-    parts.shift()
-  }
-  if (parts.length > 0 && parts.join(' / ') !== text) return parts.join(' / ')
-  if (identities.some((candidate) => sameIdentity(text, candidate))) return ''
-  for (const raw of candidates) {
-    const candidate = compact(raw)
-    if (candidate.length < 10) continue
-    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const next = text.replace(new RegExp(`^\\s*${escaped}\\s*(?:/|·|-|—|:|：)\\s*`, 'i'), '').trim()
-    if (next !== text) return next
-  }
-  return text
-}
-
-function compactIdentity(value: string): string {
-  return comparablePaperLabel(value).replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ').trim()
-}
-
-function containsIdentityText(value: string, candidate: string, minLen = 22): boolean {
-  const body = compactIdentity(value)
-  const ident = compactIdentity(candidate)
-  return Boolean(body && ident.length >= minLen && body.includes(ident))
-}
-
-function looksNarrativeMetadataText(value: string, detail: CiteDetail): boolean {
-  const text = compact(value)
-  if (!text) return false
-  if (/\b10\.\d{4,9}\/[^\s，。；;,)）]+/i.test(text)) return true
-  if (/\b(?:doi|jcr|impact\s*factor|if\s*[:：]?\s*\d|published\s+(?:in|by)|journal|conference|venue|citation\s+count|cited\s+by)\b/i.test(text)) return true
-  if (/(?:发表于|发表在|期刊|会议|年份|被引|影响因子|分区|出处|来源论文|论文标题|标题是|作者是)/.test(text)) return true
-  if (containsIdentityText(text, detail.title) || containsIdentityText(text, detail.cardTitle) || containsIdentityText(text, detail.sourceName) || containsIdentityText(text, detail.sourcePath)) return true
-  const venue = compact(detail.venue)
-  if (venue && containsIdentityText(text, venue, 7)) return true
-  return false
-}
-
-function looksGenericSystemBTakeawayText(value: string): boolean {
-  const text = compact(value).replace(/\s+/g, ' ')
-  if (!text) return false
-  return (
-    /作为当前论文引用的方法背景或实现依据/.test(text)
-    || /帮助核对该方法线索从哪里来/.test(text)
-    || /把回答中的说法追溯到当前论文引用的上游文献/.test(text)
-    || /参考文献条目.*(?:当前|本文).*Reader|本文引用.*参考文献条目|当前论文.*引用.*参考文献条目/.test(text)
-    || /(?:打开|当前|本文).*论文.*引用.*(?:上游|参考).*文献/.test(text)
-    || /links? the answer back to an upstream reference/i.test(text)
-    || /upstream reference cited by the current paper/i.test(text)
-    || /opened paper cites this upstream work as reference/i.test(text)
-    || /bibliography entry is linked from the opened Reader document/i.test(text)
-  )
-}
-
-function isReferenceEntryLikeText(value: string): boolean {
-  const text = cleanCitationDisplayText(value).replace(/\s+/g, ' ').trim()
-  if (!text || text.length < 32) return false
-  if (!/\b(?:18|19|20)\d{2}\b/.test(text)) return false
-  if (/\b(?:doi|arxiv|isbn|issn)\b|10\.\d{4,9}\//i.test(text)) return true
-  const venueLike = /\b(?:IEEE|ACM|Springer|Elsevier|Nature|Science|Nat\.?|Opt\.?|Phys\.?|Journal|Proceedings|Trans\.?|Conf\.?|CVPR|ICCV|ICML|NeurIPS|arXiv)\b/i.test(text)
-  const authorLead = /^(?:\[\s*\d{1,4}\s*\]\s*)?(?:[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.?\s*){1,4}|[A-Z][a-zA-Z'`-]+\s+[A-Z](?:\.|\b)|[A-Z][a-zA-Z'`-]+\s+et\s+al\.?)/.test(text)
-  return venueLike && authorLead
-}
-
-function isLowValueSystemAClaim(value: string): boolean {
-  const text = compact(value).replace(/\[[Rr]?\d{1,4}]/g, '').replace(/\s+/g, ' ')
-  if (!text || text.length < 18) return true
-  const tokens = text.match(/[A-Za-z0-9\u4e00-\u9fff]+/g) || []
-  const hasCjk = /[\u4e00-\u9fff]/.test(text)
-  if (!hasCjk && tokens.length <= 4) return true
-  if (/^[A-Za-z][A-Za-z\s-]{2,48}\s+\d{1,3}$/.test(text)) return true
-  const hasSentenceCue = /[：:，,。.!?；;]/.test(text)
-  if (hasCjk && text.length < 24 && !hasSentenceCue) return true
-  if (!hasCjk && tokens.length <= 6 && !hasSentenceCue) return true
-  return false
-}
-
-function pageRangeLabel(start: number, end: number): string {
-  const p0 = Number(start || 0)
-  const p1 = Number(end || 0)
-  if (!Number.isFinite(p0) || p0 <= 0) return ''
-  if (!Number.isFinite(p1) || p1 <= 0 || p1 === p0) return `p. ${Math.floor(p0)}`
-  return `pp. ${Math.floor(Math.min(p0, p1))}-${Math.floor(Math.max(p0, p1))}`
-}
-
-function anchorKindLabel(
-  value: string,
-  labels: {
-    sentence: string
-    paragraph: string
-    equation: string
-    figure: string
-    table: string
-  },
-): string {
-  const key = compact(value).toLowerCase()
-  if (key === 'sentence') return labels.sentence
-  if (key === 'paragraph') return labels.paragraph
-  if (key === 'equation') return labels.equation
-  if (key === 'figure') return labels.figure
-  if (key === 'table') return labels.table
-  return compact(value)
-}
-
-function evidencePreview(value: string, maxLen = 260): string {
-  return previewEvidenceText(value, maxLen)
-}
-
-function answerPointPreview(value: string, maxLen = 140): string {
-  return previewClaimText(value, maxLen)
 }
 
 export function CitationPopover({
