@@ -91,27 +91,22 @@ import { LibraryQualityHistoryPanel } from './library/LibraryQualityHistoryPanel
 import { LibraryQualityStatusPanels } from './library/LibraryQualityStatusPanels'
 import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
+import { LibraryFileQualityChips, LibraryFileQualityLine } from './library/LibraryFileQualityLine'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
   SCOPE_OPTIONS,
   RENAME_SCOPE_OPTIONS,
   buildQualityRepairHistoryRecord,
-  conversionMetric,
   conversionQualityIssueEntries,
-  conversionQualityLabel,
   conversionQualityScore,
   conversionQualityStatus,
-  conversionQualityToneClass,
-  conversionRepairAttemptLabel,
   conversionSourceReadiness,
   derivePageProgress,
   fileTag,
   formatSeconds,
-  formatQualityRepairRecordSummary,
   hasConversionQualityIssue,
   isUploadDraftConverted,
-  libraryDocumentTypeView,
   loadQualityRepairHistory,
   matchesKeyword,
   normalizeQualityRepairHistory,
@@ -3593,66 +3588,6 @@ export default function LibraryPage() {
     const itemProgressPercent = itemProgress.total > 0
       ? Math.round((itemProgress.done / Math.max(1, itemProgress.total)) * 100)
       : 0
-    const quality = item.conversion_quality
-    const qualityIssues = Array.isArray(quality?.issues) ? quality.issues.slice(0, 3) : []
-    const qualityReport = quality?.conversion_report || null
-    const qualityCenter = qualityReport?.quality_center || null
-    const sourceQuality = qualityReport?.source_quality || qualityCenter?.source_quality || null
-    const documentTypeView = libraryDocumentTypeView(sourceQuality?.document_type)
-    const sourceDocumentType = normalizeTextValue(sourceQuality?.document_type).toLowerCase()
-    const qualityCenterStatus = normalizeTextValue(qualityCenter?.status || qualityReport?.source_quality_status).toLowerCase()
-    const qualityCenterMessage = normalizeTextValue(qualityCenter?.message || qualityReport?.source_quality_message)
-    const qualityCenterBadges = normalizeTextList(qualityCenter?.badges || []).slice(0, 4)
-    const qualityCenterIssueLabels = normalizeTextList(qualityCenter?.issue_labels || []).slice(0, 3)
-    const qualityRepairPlan = qualityReport?.repair_plan || null
-    const latestQualityRepairAttempt = qualityReport?.latest_repair_attempt || null
-    const latestQualityRepairAttemptStatus = normalizeTextValue(latestQualityRepairAttempt?.status).toLowerCase()
-    const latestQualityRepairAttemptLabel = conversionRepairAttemptLabel(latestQualityRepairAttempt, S)
-    const latestQualityRepairAttemptTone =
-      ['success', 'resolved', 'ready', 'autofixed', 'fixed'].includes(latestQualityRepairAttemptStatus)
-        ? 'is-success'
-        : ['error', 'failed', 'blocked'].includes(latestQualityRepairAttemptStatus)
-          ? 'is-error'
-          : 'is-warning'
-    const qualityAutoRepairApplied = Array.isArray(qualityReport?.auto_repair_applied)
-      ? qualityReport?.auto_repair_applied || []
-      : []
-    const mathCount = conversionMetric(quality, 'display_math') + conversionMetric(quality, 'inline_math')
-    const referenceCount = conversionMetric(quality, 'references') || conversionMetric(quality, 'reference_lines')
-    const referenceMetricLabel = sourceDocumentType === 'supplementary' && referenceCount <= 0
-      ? 'refs n/a'
-      : `refs ${referenceCount}`
-    const qualityNeedsRepair = hasConversionQualityIssue(item)
-    const qualityRepairing = Boolean(qualityRepairingNames[item.name])
-    const sourceReadiness = conversionSourceReadiness(item, S)
-    const sourceQualityHasActionableIssues = Boolean(
-      sourceQuality?.source_text_loss
-      || sourceQuality?.references_before_body
-      || qualityCenterIssueLabels.length > 0
-      || qualityReport?.needs_reconvert
-    )
-    const showSourceQualityBadges = Boolean(qualityCenterBadges.length)
-      && (
-        !['ready', 'none'].includes(qualityCenterStatus)
-        || sourceQualityHasActionableIssues
-        || !sourceReadiness.qaReady
-      )
-    const visibleQualityCenterBadges = showSourceQualityBadges ? qualityCenterBadges : []
-    const showLatestQualityRepairAttempt = Boolean(latestQualityRepairAttempt)
-      && (
-        ['queued', 'running', 'partial', 'blocked', 'failed', 'error'].includes(latestQualityRepairAttemptStatus)
-        || (!sourceReadiness.qaReady && Boolean(latestQualityRepairAttemptStatus))
-      )
-    const qualityRepairButtonLabel = sourceReadiness.action === 'reconvert'
-      ? S.lib_btn_reconvert_quality
-      : sourceReadiness.action === 'reindex'
-        ? S.lib_btn_refresh_index
-      : S.lib_btn_repair_quality
-    const sourceReadinessActionAvailable = qualityNeedsRepair || sourceReadiness.action === 'reindex'
-    const qualityRepairRecord = qualityRepairHistory[item.name]
-    const qualityRepairResult = String(
-      qualityRepairResults[item.name] || (qualityRepairRecord ? formatQualityRepairRecordSummary(qualityRepairRecord, S) : ''),
-    ).trim()
 
     return (
       <div
@@ -3674,34 +3609,12 @@ export default function LibraryPage() {
             </div>
             <div className="kb-lib-file-submeta">
               <span className={`kb-lib-file-status-chip ${statusTone}`}>{tag.text}</span>
-              {QUALITY_STATUS_VISIBLE && quality ? (
-                <span
-                  className={`kb-lib-file-quality-chip ${conversionQualityToneClass(quality)}`}
-                  data-testid="library-file-quality-chip"
-                  data-quality-status={conversionQualityStatus(quality)}
-                  title={QUALITY_DIAGNOSTICS_VISIBLE ? quality.summary : conversionQualityLabel(quality)}
-                >
-                  {conversionQualityLabel(quality)}
-                </span>
-              ) : null}
-              {QUALITY_STATUS_VISIBLE ? (
-                <span
-                  className={`kb-lib-source-readiness-chip is-${sourceReadiness.tone}`}
-                  data-testid="library-file-source-readiness"
-                  data-source-readiness={sourceReadiness.kind}
-                  title={sourceReadiness.detail}
-                >
-                  {sourceReadiness.label}
-                </span>
-              ) : null}
-              {documentTypeView ? (
-                <span
-                  className={`kb-lib-file-submeta-chip is-doc-type ${documentTypeView.tone}`}
-                  title={documentTypeView.title}
-                >
-                  {documentTypeView.label}
-                </span>
-              ) : null}
+              <LibraryFileQualityChips
+                S={S}
+                item={item}
+                qualityStatusVisible={QUALITY_STATUS_VISIBLE}
+                qualityDiagnosticsVisible={QUALITY_DIAGNOSTICS_VISIBLE}
+              />
               {!item.md_exists ? <span className="kb-lib-file-meta-muted">{S.lib_file_no_md}</span> : null}
               {suggestionCount > 0 ? (
                 <span className="kb-lib-file-submeta-chip is-suggestion">
@@ -3744,122 +3657,16 @@ export default function LibraryPage() {
             </div>
           ) : null}
 
-          {QUALITY_DIAGNOSTICS_VISIBLE && quality ? (
-            <div className="kb-lib-quality-line" data-testid="library-file-quality-line">
-              <span className="kb-lib-quality-metric">pages {conversionMetric(quality, 'page_markers')}</span>
-              <span
-                className="kb-lib-quality-metric"
-                title={sourceDocumentType === 'supplementary' ? 'Supplementary material may not include a standalone references section.' : undefined}
-              >
-                {referenceMetricLabel}
-              </span>
-              <span className="kb-lib-quality-metric">fig {conversionMetric(quality, 'figures')}</span>
-              <span className="kb-lib-quality-metric">math {mathCount}</span>
-              {visibleQualityCenterBadges.map((badge) => (
-                <span
-                  key={`${item.name}-source-badge-${badge}`}
-                  className={`kb-lib-quality-issue ${
-                    qualityCenterStatus === 'ready' || qualityCenterStatus === 'none'
-                      ? 'is-success'
-                      : qualityCenterStatus === 'reconvert'
-                        ? 'is-error'
-                        : 'is-warning'
-                  }`}
-                  title={qualityCenterMessage || badge}
-                  data-testid="library-file-source-quality-badge"
-                >
-                  {badge}
-                </span>
-              ))}
-              {sourceQuality?.source_text_loss ? (
-                <span
-                  className="kb-lib-quality-issue is-error"
-                  title={qualityCenterMessage || S.lib_source_status_blocked_detail}
-                  data-testid="library-file-source-text-loss"
-                >
-                  source text loss
-                </span>
-              ) : null}
-              {sourceQuality?.references_before_body ? (
-                <span
-                  className="kb-lib-quality-issue is-warning"
-                  title={qualityCenterMessage || 'References were detected before recovered body sections.'}
-                  data-testid="library-file-source-references-before-body"
-                >
-                  references order
-                </span>
-              ) : null}
-              {qualityIssues.map((issue) => (
-                <span
-                  key={`${item.name}-${issue.code}`}
-                  className={`kb-lib-quality-issue ${String(issue.severity || '') === 'error' ? 'is-error' : 'is-warning'}`}
-                  title={issue.label}
-                >
-                  {issue.label}
-                </span>
-              ))}
-              {qualityReport?.auto_repair_changed ? (
-                <span
-                  className="kb-lib-quality-issue is-success"
-                  title={qualityAutoRepairApplied.join(' / ') || S.lib_quality_gate_autofixed}
-                >
-                  {S.lib_quality_auto_fixed_count.replace('{n}', String(qualityAutoRepairApplied.length || 1))}
-                </span>
-              ) : null}
-              {qualityCenterIssueLabels.length > 0 ? (
-                <span
-                  className={`kb-lib-quality-issue ${qualityCenterStatus === 'reconvert' ? 'is-error' : 'is-warning'}`}
-                  title={qualityCenterMessage}
-                  data-testid="library-file-source-quality-issues"
-                >
-                  {qualityCenterIssueLabels.join(' / ')}
-                </span>
-              ) : null}
-              {qualityReport?.needs_reconvert ? (
-                <span
-                  className="kb-lib-quality-issue is-error"
-                  title={qualityRepairPlan?.reason || S.lib_source_status_blocked_detail}
-                >
-                  {qualityRepairPlan?.scope
-                    ? S.lib_quality_reconvert_scope.replace('{scope}', qualityRepairPlan.scope)
-                    : S.lib_quality_gate_blocked}
-                </span>
-              ) : null}
-              {showLatestQualityRepairAttempt && latestQualityRepairAttempt ? (
-                <span
-                  className={`kb-lib-quality-issue ${latestQualityRepairAttemptTone}`}
-                  title={latestQualityRepairAttempt.detail || latestQualityRepairAttempt.reason || latestQualityRepairAttempt.event}
-                >
-                  {latestQualityRepairAttemptLabel}
-                </span>
-              ) : null}
-              {sourceReadinessActionAvailable ? (
-                <Button
-                  size="small"
-                  icon={<ReloadOutlined />}
-                  className="kb-lib-quality-repair-btn"
-                  data-testid="library-quality-repair"
-                  loading={qualityRepairing}
-                  disabled={item.task_state !== 'idle'}
-                  onClick={() => {
-                    if (sourceReadiness.action === 'reindex') {
-                      void handleReindex()
-                      return
-                    }
-                    void handleRepairQualityOne(item)
-                  }}
-                >
-                  {qualityRepairButtonLabel}
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
-
-          {QUALITY_DIAGNOSTICS_VISIBLE && qualityRepairResult ? (
-            <div className="kb-lib-quality-repair-result" data-testid="library-quality-repair-result">
-              {qualityRepairResult}
-            </div>
-          ) : null}
+          <LibraryFileQualityLine
+            S={S}
+            item={item}
+            diagnosticsVisible={QUALITY_DIAGNOSTICS_VISIBLE}
+            repairing={Boolean(qualityRepairingNames[item.name])}
+            repairResult={qualityRepairResults[item.name]}
+            repairRecord={qualityRepairHistory[item.name]}
+            onRepairQuality={() => { void handleRepairQualityOne(item) }}
+            onReindex={() => { void handleReindex() }}
+          />
 
           {item.note ? <div className="kb-lib-file-note">{item.note}</div> : null}
           {item.task_state === 'running' ? (
