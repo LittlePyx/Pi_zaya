@@ -1,0 +1,177 @@
+.kb-lib-quality-history .ant-card-body {
+  display: grid;
+  gap: 10px;
+}
+
+.kb-lib-quality-history-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.kb-lib-quality-history-title.ant-typography {
+  display: block;
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 740;
+  line-height: 1.35;
+}
+
+.kb-lib-quality-history-hint.ant-typography {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.kb-lib-quality-history-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.kb-lib-quality-history-side {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+  min-width: min(420px, 100%);
+}
+
+.kb-lib-quality-history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.kb-lib-quality-history-actions .ant-btn {
+  min-height: 26px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.kb-lib-quality-history-metrics span,
+.kb-lib-quality-history-score,
+.kb-lib-quality-history-fixed,
+.kb-lib-quality-history-remaining {
+  display: inline-flex;
+  align-items: center;
+  min-height: 21px;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.kb-lib-quality-history-metrics span {
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: var(--kb-lib-surface);
+  color: color-mix(in srgb, var(--muted-text) 88%, var(--text-main));
+  font-weight: 680;
+}
+
+.kb-lib-quality-history-list {
+  display: grid;
+  gap: 6px;
+}
+
+.kb-lib-quality-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--kb-lib-surface) 82%, var(--panel));
+  padding: 7px 8px;
+}
+
+.kb-lib-quality-history-paper {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: color-mix(in srgb, var(--text-main) 86%, transparent);
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.kb-lib-quality-history-paper:hover {
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-main));
+}
+
+.kb-lib-quality-history-paper:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  outline-offset: 2px;
+}
+
+.kb-lib-quality-history-result {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 5px;
+}
+
+.kb-lib-quality-history-score {
+  border: 1px solid color-mix(in srgb, #22c55e 24%, var(--border));
+  background: color-mix(in srgb, #22c55e 8%, var(--kb-lib-surface));
+  color: color-mix(in srgb, #15803d 84%, var(--text-main));
+  font-weight: 760;
+}
+
+.kb-lib-quality-history-fixed {
+  border: 1px solid color-mix(in srgb, #2563eb 22%, var(--border));
+  background: color-mix(in srgb, #2563eb 7%, var(--kb-lib-surface));
+  color: color-mix(in srgb, #1d4ed8 82%, var(--text-main));
+  font-weight: 650;
+}
+
+.kb-lib-quality-history-remaining {
+  border: 1px solid color-mix(in srgb, #f59e0b 28%, var(--border));
+  background: color-mix(in srgb, #f59e0b 8%, var(--kb-lib-surface));
+  color: color-mix(in srgb, #b45309 84%, var(--text-main));
+  font-weight: 650;
+}
+
+.kb-lib-quality-history-time {
+  color: color-mix(in srgb, var(--muted-text) 78%, var(--text-main));
+  font-size: 10.5px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .kb-lib-quality-history-head,
+  .kb-lib-quality-history-row {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .kb-lib-quality-history-metrics {
+    justify-content: flex-start;
+  }
+
+  .kb-lib-quality-history-side,
+  .kb-lib-quality-history-actions {
+    justify-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .kb-lib-quality-history-time {
+    white-space: normal;
+  }
+}

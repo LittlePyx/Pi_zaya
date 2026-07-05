@@ -87,6 +87,7 @@ import {
 import { LibraryQualityChainPanels } from './library/LibraryQualityChainPanels'
 import { LibraryQualityIssuePanels } from './library/LibraryQualityIssuePanels'
 import { LibraryQualityReportPanels } from './library/LibraryQualityReportPanels'
+import { LibraryQualityHistoryPanel } from './library/LibraryQualityHistoryPanel'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
@@ -105,7 +106,6 @@ import {
   derivePageProgress,
   fileTag,
   formatSeconds,
-  formatQualityRepairHistoryTime,
   formatQualityRepairRecordSummary,
   formatSignedNumber,
   hasConversionQualityIssue,
@@ -5018,87 +5018,20 @@ export default function LibraryPage() {
         </LibraryQualityCenter>
       ) : null}
 
-      {QUALITY_DIAGNOSTICS_VISIBLE && qualityCenterOpen && qualityRepairHistoryList.length > 0 ? (
-        <Card size="small" className="kb-lib-card kb-lib-quality-history" data-testid="library-quality-history">
-          <div className="kb-lib-quality-history-head">
-            <div>
-              <Text className="kb-lib-quality-history-title">{S.lib_quality_history_title}</Text>
-              <Text type="secondary" className="kb-lib-quality-history-hint">
-                {S.lib_quality_history_hint
-                  .replace('{n}', String(qualityRepairHistoryStats.total))
-                  .replace('{delta}', String(qualityRepairHistoryStats.avgDelta >= 0 ? `+${qualityRepairHistoryStats.avgDelta}` : qualityRepairHistoryStats.avgDelta))
-                  .replace('{issues}', String(qualityRepairHistoryStats.fixedCount))}
-              </Text>
-            </div>
-            <div className="kb-lib-quality-history-side">
-              <div className="kb-lib-quality-history-metrics">
-                <span data-testid="library-quality-history-count">{S.lib_quality_history_count.replace('{n}', String(qualityRepairHistoryStats.total))}</span>
-                <span>{S.lib_quality_history_improved.replace('{n}', String(qualityRepairHistoryStats.improved))}</span>
-              </div>
-              <div className="kb-lib-quality-history-actions">
-                <Button
-                  size="small"
-                  className="kb-lib-action-quiet"
-                  disabled={qualityHistoryRemainingNames.length <= 0}
-                  data-testid="library-quality-history-focus-remaining"
-                  onClick={handleFocusQualityHistoryRemaining}
-                >
-                  {S.lib_quality_history_focus_remaining}
-                </Button>
-                <Button
-                  size="small"
-                  type="primary"
-                  disabled={qualityRepairRecommendedNames.length <= 0}
-                  loading={qualityRepairRecommendedNames.some((name) => Boolean(qualityRepairingNames[name]))}
-                  data-testid="library-quality-history-repair-recommended"
-                  onClick={() => { void handleRepairRecommendedQuality() }}
-                >
-                  {S.lib_quality_history_repair_recommended.replace('{n}', String(qualityRepairRecommendedNames.length))}
-                </Button>
-                {QUALITY_DIAGNOSTICS_VISIBLE && qualityHistoryFocusNames.length > 0 ? (
-                  <Button
-                    size="small"
-                    className="kb-lib-action-quiet"
-                    data-testid="library-quality-history-clear-focus"
-                    onClick={() => setQualityHistoryFocusNames([])}
-                  >
-                    {S.lib_quality_history_clear_focus}
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          </div>
-          <div className="kb-lib-quality-history-list">
-            {qualityRepairHistoryList.slice(0, 4).map((record) => (
-              <div key={`${record.name}-${record.updatedAt}`} className="kb-lib-quality-history-row" data-testid="library-quality-history-row">
-                <button
-                  type="button"
-                  className="kb-lib-quality-history-paper"
-                  title={record.name}
-                  data-testid="library-quality-history-paper"
-                  onClick={() => focusQualityHistoryNames([record.name])}
-                >
-                  {stripKnownSourceExt(record.name) || record.name}
-                </button>
-                <div className="kb-lib-quality-history-result">
-                  <span className="kb-lib-quality-history-score">Q{record.beforeScore} -&gt; Q{record.afterScore}</span>
-                  {record.fixedIssues.length > 0 ? (
-                    <span className="kb-lib-quality-history-fixed">
-                      {S.lib_quality_history_fixed.replace('{issues}', record.fixedIssues.slice(0, 2).join(' / '))}
-                    </span>
-                  ) : null}
-                  {record.remainingIssues.length > 0 ? (
-                    <span className="kb-lib-quality-history-remaining">
-                      {S.lib_quality_history_remaining.replace('{n}', String(record.remainingIssues.length))}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="kb-lib-quality-history-time">{formatQualityRepairHistoryTime(record.updatedAt)}</div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      ) : null}
+      <LibraryQualityHistoryPanel
+        visible={QUALITY_DIAGNOSTICS_VISIBLE && qualityCenterOpen}
+        S={S}
+        records={qualityRepairHistoryList}
+        stats={qualityRepairHistoryStats}
+        remainingNames={qualityHistoryRemainingNames}
+        recommendedNames={qualityRepairRecommendedNames}
+        repairingNames={qualityRepairingNames}
+        focusNames={qualityHistoryFocusNames}
+        onFocusRemaining={handleFocusQualityHistoryRemaining}
+        onRepairRecommended={() => { void handleRepairRecommendedQuality() }}
+        onClearFocus={() => setQualityHistoryFocusNames([])}
+        onOpenRecord={(name) => focusQualityHistoryNames([name])}
+      />
 
       <Card size="small" className="kb-lib-card kb-lib-taxonomy-bar" title={S.lib_taxonomy_title}>
         <div className="kb-lib-taxonomy-shell">
