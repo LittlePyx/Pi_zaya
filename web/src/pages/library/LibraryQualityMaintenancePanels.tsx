@@ -1,8 +1,6 @@
-import { useMemo } from 'react'
 import { Button, Progress, Tag, Typography } from 'antd'
 import type {
   LibraryFigureAssetRefreshResponse,
-  LibraryFigureAssetScanItem,
   LibraryFigureAssetScanResponse,
 } from '../../api/library'
 import type {
@@ -11,10 +9,10 @@ import type {
   ShelfMetadataBackfillScanResponse,
 } from '../../api/references'
 import {
-  normalizeTextValue,
   qualityStatusText,
   qualityVerificationText,
 } from './libraryPageUtils'
+import { useLibraryFigureAssetsViewModel } from './useLibraryFigureAssetsViewModel'
 import './LibraryQualityMaintenancePanels.css'
 
 const { Text } = Typography
@@ -134,32 +132,16 @@ export function LibraryQualityFigureAssetsPanel({
   onScan,
   onRefresh,
 }: LibraryQualityFigureAssetsPanelProps) {
-  const tone = scanRunning || refreshRunning
-    ? 'warning'
-    : scan
-      ? (
-          normalizeTextValue(scan.status).toLowerCase() === 'error'
-            ? 'error'
-            : Number(scan.docs_with_issues || 0) > 0 || Number(scan.refresh_recommended || 0) > 0
-              ? 'warning'
-              : 'good'
-        )
-      : 'unknown'
-  const issueStats = useMemo(
-    () => Object.entries(scan?.issue_counts || {})
-      .map(([name, count]) => ({ name, count: Number(count || 0) }))
-      .filter((item) => item.name && item.count > 0)
-      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-      .slice(0, 6),
-    [scan],
-  )
-  const previewItems = useMemo<LibraryFigureAssetScanItem[]>(
-    () => (Array.isArray(scan?.items) ? scan.items : [])
-      .filter((item) => item && (Number(item.issue_count || 0) > 0 || Boolean(item.refresh_recommended)))
-      .slice(0, 5),
-    [scan],
-  )
-  const refreshableCount = Number(scan?.refresh_recommended || 0)
+  const {
+    tone,
+    issueStats,
+    previewItems,
+    refreshableCount,
+  } = useLibraryFigureAssetsViewModel({
+    scan,
+    scanRunning,
+    refreshRunning,
+  })
 
   return (
     <div
