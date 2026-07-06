@@ -54,7 +54,7 @@ export function LibraryUploadIntake({
         <div className="kb-lib-upload-meta">
           {uploadDraftCount > 0 ? (
             <div className="kb-lib-upload-meta-main">
-              <span className="kb-lib-rename-meta">{S.lib_workbench_draft_count.replace('{n}', String(uploadDraftCount))}</span>
+              <span className="kb-lib-upload-count">{S.lib_workbench_draft_count.replace('{n}', String(uploadDraftCount))}</span>
               <Button className="kb-lib-action-quiet" onClick={onToggleWorkbench}>
                 {showUploadWorkbench ? S.lib_workbench_hide_queue : S.lib_workbench_upload_queue}
               </Button>

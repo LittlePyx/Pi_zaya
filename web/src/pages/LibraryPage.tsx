@@ -5,7 +5,6 @@ import {
   Button,
   Drawer,
   message,
-  Pagination,
   Progress,
   Select,
   Typography,
@@ -77,6 +76,7 @@ import { LibraryDirectorySettings } from './library/LibraryDirectorySettings'
 import { LibraryUploadIntake } from './library/LibraryUploadIntake'
 import { LibraryUploadDraftWorkbench } from './library/LibraryUploadDraftWorkbench'
 import { LibraryProcessControls } from './library/LibraryProcessControls'
+import { LibraryRenameWorkbench } from './library/LibraryRenameWorkbench'
 import { LibraryFileRow } from './library/LibraryFileRow'
 import { LibraryFileList } from './library/LibraryFileList'
 import {
@@ -90,7 +90,6 @@ import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
   SCOPE_OPTIONS,
-  RENAME_SCOPE_OPTIONS,
   buildQualityRepairHistoryRecord,
   classifyFailedReason,
   conversionQualityIssueEntries,
@@ -122,7 +121,6 @@ import {
   saveQualityRepairHistory,
   saveResearchQaReplayFailureCase,
   stripKnownSourceExt,
-  suggestionBasisTagColor,
   summarizeConversionQualityRepair,
   toTextOptions,
   type QualityRepairHistoryRecord,
@@ -3563,110 +3561,35 @@ export default function LibraryPage() {
     { key: 'quality', label: S.lib_quality_report_review, value: counts.quality_review, tone: counts.quality_review > 0 ? 'warn' : 'neutral' },
   ]
 
-  const renameHasResults = renameItems.length > 0
-  const renameHasVisibleItems = renameVisible.length > 0
-  const hasRenameSelection = selectedRenameCount > 0
   const showUploadWorkbench = uploadWorkbenchOpen && uploadDrafts.length > 0
   const showTaxonomySelectAction = browseMode === 'list' && currentListItems.length > 0
   const showTaxonomyRefreshAction = browseMode === 'list' && visibleAll.length > 0
   const showTaxonomyClearAction = hasActiveTaxonomyFilters
   const renameWorkbenchSection = (
-    <section className="kb-lib-workbench-section kb-lib-workbench-section-rename">
-      <div className="kb-lib-section-head">
-        <div className="kb-lib-section-copy">
-          <Text className="kb-lib-section-title">{S.lib_section_rename}</Text>
-        </div>
-      </div>
-
-      <div className="kb-lib-rename-summary">
-        <div className="kb-lib-rename-summary-main">
-          <Select value={renameScope} onChange={setRenameScope} className="kb-lib-rename-scope" options={RENAME_SCOPE_OPTIONS(S)} />
-          <Button size="small" className="kb-lib-action-tonal" loading={renameLoading} onClick={() => { void scanRenameSuggestions() }}>
-            {renameHasResults ? S.lib_rename_recheck : S.lib_btn_rename_check}
-          </Button>
-          {renameHasVisibleItems ? (
-            <Button className="kb-lib-action-quiet" size="small" onClick={() => setRenameResultsOpen((open) => !open)}>
-              {renameResultsOpen ? S.lib_rename_collapse : S.lib_rename_expand}
-            </Button>
-          ) : null}
-          {renameHasVisibleItems ? (
-            <Button className="kb-lib-action-quiet" size="small" onClick={selectRenameDiffItems}>{S.lib_btn_select_all}</Button>
-          ) : null}
-          {hasRenameSelection ? (
-            <Button className="kb-lib-action-quiet" size="small" onClick={clearRenameSelection}>{S.lib_btn_clear}</Button>
-          ) : null}
-          {hasRenameSelection ? (
-            <Button className="kb-lib-action-tonal" size="small" type="primary" loading={renameApplying} onClick={() => { void applyRenameSuggestions() }}>
-              {S.lib_btn_apply_rename}
-            </Button>
-          ) : null}
-        </div>
-        {renameHasResults ? (
-          <div className="kb-lib-rename-summary-side">
-            <div className="kb-lib-rename-badges">
-              <span className="kb-lib-rename-meta">{S.lib_rename_meta_format.replace('{sel}', String(selectedRenameCount)).replace('{vis}', String(renameVisible.length)).replace('{total}', String(renameItems.length))}</span>
-            </div>
-          </div>
-        ) : null}
-      </div>
-
-      {renameHasResults && renameHasVisibleItems && renameResultsOpen ? (
-        <div className="kb-lib-rename-list">
-          <div className="kb-lib-rename-list-body" role="list">
-            {pagedRenameVisible.map((item) => (
-              <div key={item.name} className="kb-lib-rename-list-item" role="listitem">
-              <div className="kb-lib-rename-item">
-                <div className="kb-lib-rename-item-head">
-                  <Checkbox
-                    checked={Boolean(renameSelected[item.name])}
-                    onChange={(e) => setRenameSelected((cur) => ({ ...cur, [item.name]: e.target.checked }))}
-                  />
-                  <Text className="kb-lib-rename-item-name">{item.name}</Text>
-                  <Tag color={item.diff ? 'warning' : 'default'}>{item.diff ? S.lib_rename_suggest_rename : S.lib_rename_no_rename}</Tag>
-                </div>
-                <Input
-                  value={renameOverrides[item.name] || ''}
-                  onChange={(e) => setRenameOverrides((cur) => ({ ...cur, [item.name]: e.target.value }))}
-                  className="kb-lib-rename-item-input"
-                />
-                <div className="flex flex-wrap items-center gap-2">
-                  <Text type="secondary" className="kb-lib-rename-item-source">
-                    {item.display_full_name}
-                  </Text>
-                  {item.meta?.basis_label ? (
-                    <Tag color={suggestionBasisTagColor(item.meta)}>
-                      {item.meta.basis_label}
-                    </Tag>
-                  ) : null}
-                </div>
-                {item.meta?.basis_detail ? (
-                  <Text type="secondary" className="kb-lib-rename-item-source">
-                    {item.meta.basis_detail}
-                  </Text>
-                ) : null}
-              </div>
-              </div>
-            ))}
-          </div>
-          {renameVisible.length > RENAME_PAGE_SIZE ? (
-            <Pagination
-              className="kb-lib-list-pagination"
-              size="small"
-              current={renamePage}
-              pageSize={RENAME_PAGE_SIZE}
-              total={renameVisible.length}
-              showSizeChanger={false}
-              onChange={setRenamePage}
-            />
-          ) : null}
-        </div>
-      ) : null}
-      {renameHasResults && !renameHasVisibleItems ? (
-        <Text type="secondary" className="kb-lib-section-note">
-          {S.lib_rename_no_files}
-        </Text>
-      ) : null}
-    </section>
+    <LibraryRenameWorkbench
+      S={S}
+      renameScope={renameScope}
+      renameItems={renameItems}
+      renameVisible={renameVisible}
+      pagedRenameVisible={pagedRenameVisible}
+      renameSelected={renameSelected}
+      renameOverrides={renameOverrides}
+      renameResultsOpen={renameResultsOpen}
+      renameLoading={renameLoading}
+      renameApplying={renameApplying}
+      renamePage={renamePage}
+      renamePageSize={RENAME_PAGE_SIZE}
+      selectedRenameCount={selectedRenameCount}
+      onRenameScopeChange={setRenameScope}
+      onScanRenameSuggestions={scanRenameSuggestions}
+      onToggleResultsOpen={() => setRenameResultsOpen((open) => !open)}
+      onSelectDiffItems={selectRenameDiffItems}
+      onClearSelection={clearRenameSelection}
+      onApplyRenameSuggestions={applyRenameSuggestions}
+      onSelectedChange={(name, selected) => setRenameSelected((cur) => ({ ...cur, [name]: selected }))}
+      onOverrideChange={(name, value) => setRenameOverrides((cur) => ({ ...cur, [name]: value }))}
+      onPageChange={setRenamePage}
+    />
   )
 
   const preparationWorkbench = (

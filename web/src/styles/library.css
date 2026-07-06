@@ -319,8 +319,7 @@
   gap: 8px 12px;
 }
 
-.kb-lib-upload-summary,
-.kb-lib-rename-summary {
+.kb-lib-upload-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -338,46 +337,8 @@
   gap: 8px 12px;
 }
 
-.kb-lib-rename-summary {
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 16px;
-  flex-wrap: wrap;
-}
-
-.kb-lib-rename-summary-main,
-.kb-lib-rename-summary-side {
-  display: flex;
-  align-items: center;
-  gap: 8px 10px;
-  min-width: 0;
-}
-
-.kb-lib-rename-summary-main {
-  flex: 1 1 auto;
-  flex-wrap: nowrap;
-}
-
-.kb-lib-rename-summary-side {
-  flex: 0 0 auto;
-  flex-wrap: nowrap;
-  margin-left: auto;
-}
-
 .kb-lib-upload-summary .ant-upload {
   display: inline-flex;
-}
-
-.kb-lib-rename-summary .ant-btn,
-.kb-lib-rename-actions .ant-btn {
-  min-width: 0;
-  height: 36px;
-}
-
-.kb-lib-rename-summary .ant-btn,
-.kb-lib-rename-actions .ant-btn {
-  height: 32px;
-  padding-inline: 12px;
 }
 
 .kb-lib-action-quiet.ant-btn {
@@ -590,126 +551,8 @@
   letter-spacing: -0.02em;
 }
 
-.kb-lib-rename-card .ant-card-head {
-  border-bottom: none;
-}
-
-.kb-lib-rename-shell {
-  display: grid;
-  gap: 12px;
-}
-
-.kb-lib-rename-head {
-  display: grid;
-  gap: 8px;
-}
-
-.kb-lib-rename-note.ant-typography {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.kb-lib-rename-badges {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 10px;
-}
-
-.kb-lib-rename-meta {
-  color: color-mix(in srgb, var(--muted-text) 88%, transparent);
-  font-size: 12px;
-}
-
-.kb-lib-rename-toolbar {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 8px 12px;
-}
-
-.kb-lib-rename-scope {
-  width: 150px;
-  min-width: 150px;
-}
-
-.kb-lib-rename-toolbar .kb-lib-switch-item {
-  min-height: 30px;
-  border: none;
-  background: transparent;
-  padding: 0;
-}
-
-.kb-lib-rename-toolbar-note.ant-typography {
-  margin: 0;
-  font-size: 12px;
-  min-width: 0;
-}
-
-.kb-lib-rename-actions {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 10px 14px;
-  min-height: 32px;
-}
-
-.kb-lib-rename-actions-minor {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 2px 8px;
-}
-
-.kb-lib-rename-list-body {
-  display: grid;
-  gap: 0;
-}
-
 .kb-lib-list-pagination {
   margin-top: 12px;
-}
-
-.kb-lib-rename-list-item {
-  padding: 12px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 66%, transparent);
-}
-
-.kb-lib-rename-list-item:last-child {
-  border-bottom: none;
-}
-
-.kb-lib-rename-item {
-  display: grid;
-  gap: 8px;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  padding: 0;
-}
-
-.kb-lib-rename-item-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.kb-lib-rename-item-name.ant-typography {
-  min-width: 0;
-  flex: 1 1 auto;
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.kb-lib-rename-item-input {
-  width: 100%;
-}
-
-.kb-lib-rename-item-source.ant-typography {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.55;
 }
 
 .kb-lib-upload-card .ant-card-body {
@@ -2908,31 +2751,10 @@
     padding: 12px;
   }
 
-  .kb-lib-rename-summary,
-  .kb-lib-rename-summary-main,
-  .kb-lib-rename-summary-side,
-  .kb-lib-rename-toolbar,
-  .kb-lib-rename-actions,
-  .kb-lib-rename-actions-minor,
   .kb-lib-upload-summary,
   .kb-lib-upload-meta {
     grid-template-columns: 1fr;
     display: grid;
-  }
-
-  .kb-lib-rename-toolbar,
-  .kb-lib-rename-actions {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .kb-lib-rename-summary-side {
-    margin-left: 0;
-  }
-
-  .kb-lib-rename-scope {
-    width: 100%;
-    min-width: 0;
   }
 
   .kb-lib-convert-row-actions .ant-btn {

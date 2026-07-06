@@ -58,6 +58,11 @@
   gap: 8px 12px;
 }
 
+.kb-lib-upload-count {
+  color: color-mix(in srgb, var(--muted-text) 88%, transparent);
+  font-size: 12px;
+}
+
 .kb-lib-upload-inline-note.ant-typography {
   margin: 0;
   font-size: 12px;
