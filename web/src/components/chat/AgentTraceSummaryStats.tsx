@@ -1,4 +1,4 @@
-import { AgentTraceSummaryChip } from './AgentTraceSummaryChip'
+import { AgentTraceSummaryChip, type AgentTraceSummaryChipProps } from './AgentTraceSummaryChip'
 import type { AgentTraceLabels } from './agentTraceTypes'
 import type { AgentSourceSummaryViewModel } from './useAgentTraceViewModel'
 import {
@@ -10,6 +10,11 @@ import {
   tx,
   txFmt,
 } from './agentTracePanelUtils'
+
+type AgentTraceSummaryChipConfig = AgentTraceSummaryChipProps & {
+  id: string
+  visible?: boolean
+}
 
 function researchRunSummaryLabel(
   labels: AgentTraceLabels['labels'],
@@ -50,69 +55,84 @@ export function AgentTraceSummaryStats({
     ? researchRunSummaryLabel(labels, researchRunStatus, evidenceMatrixRows)
     : ''
   const sourcePolicyText = sourcePolicy ? sourcePolicyLabel(sourcePolicy, labels) : ''
+  const summaryChips: AgentTraceSummaryChipConfig[] = [
+    {
+      id: 'evidence',
+      visible: Boolean(evidenceLabel),
+      className: `kb-agent-trace-evidence-status ${evidenceStatusClass(evidenceStatus)}`,
+      label: tx(labels, 'agent_trace_label_evidence', 'Evidence'),
+      value: evidenceLabel,
+      testId: 'agent-trace-evidence-status',
+    },
+    {
+      id: 'claims',
+      visible: totalClaims > 0,
+      label: tx(labels, 'agent_trace_label_claims', 'Claims'),
+      value: claimsSummary,
+    },
+    {
+      id: 'unsupported-claims',
+      visible: unsupportedClaims > 0,
+      className: 'is-warning',
+      label: tx(labels, 'agent_trace_label_needs_review', 'Needs review'),
+      value: unsupportedClaims,
+    },
+    {
+      id: 'quality-gate',
+      visible: Boolean(qualityGateText),
+      className: qualityGateClass(qualityGateStatus),
+      label: tx(labels, 'agent_trace_label_answer_quality', 'Answer quality'),
+      value: qualityGateText,
+      title: qualityGateTitle,
+      testId: 'agent-trace-quality-gate',
+    },
+    {
+      id: 'task',
+      label: tx(labels, 'agent_trace_label_task', 'Task'),
+      value: taskLabel,
+    },
+    {
+      id: 'scope',
+      visible: Boolean(scopeSummary),
+      label: tx(labels, 'agent_trace_label_scope', 'Scope'),
+      value: scopeDisplay,
+      title: scopeSummary,
+    },
+    {
+      id: 'run-errors',
+      visible: hasErrors,
+      className: 'is-warning',
+      label: tx(labels, 'agent_trace_label_run', 'Run'),
+      value: tx(labels, 'agent_trace_label_errors', 'errors'),
+    },
+    {
+      id: 'research-run',
+      visible: Boolean(researchRunSummary),
+      label: tx(labels, 'agent_trace_label_research_run', 'Research run'),
+      value: researchRunSummary,
+    },
+    {
+      id: 'source-policy',
+      visible: Boolean(sourcePolicy),
+      label: tx(labels, 'agent_trace_label_source_policy', 'Source policy'),
+      value: sourcePolicyText,
+    },
+  ]
 
   return (
     <div className="kb-agent-trace-summary">
-      {evidenceLabel ? (
-        <AgentTraceSummaryChip
-          className={`kb-agent-trace-evidence-status ${evidenceStatusClass(evidenceStatus)}`}
-          label={tx(labels, 'agent_trace_label_evidence', 'Evidence')}
-          value={evidenceLabel}
-          testId="agent-trace-evidence-status"
-        />
-      ) : null}
-      {totalClaims > 0 ? (
-        <AgentTraceSummaryChip
-          label={tx(labels, 'agent_trace_label_claims', 'Claims')}
-          value={claimsSummary}
-        />
-      ) : null}
-      {unsupportedClaims > 0 ? (
-        <AgentTraceSummaryChip
-          className="is-warning"
-          label={tx(labels, 'agent_trace_label_needs_review', 'Needs review')}
-          value={unsupportedClaims}
-        />
-      ) : null}
-      {qualityGateText ? (
-        <AgentTraceSummaryChip
-          className={qualityGateClass(qualityGateStatus)}
-          label={tx(labels, 'agent_trace_label_answer_quality', 'Answer quality')}
-          value={qualityGateText}
-          title={qualityGateTitle}
-          testId="agent-trace-quality-gate"
-        />
-      ) : null}
-      <AgentTraceSummaryChip
-        label={tx(labels, 'agent_trace_label_task', 'Task')}
-        value={taskLabel}
-      />
-      {scopeSummary ? (
-        <AgentTraceSummaryChip
-          label={tx(labels, 'agent_trace_label_scope', 'Scope')}
-          value={scopeDisplay}
-          title={scopeSummary}
-        />
-      ) : null}
-      {hasErrors ? (
-        <AgentTraceSummaryChip
-          className="is-warning"
-          label={tx(labels, 'agent_trace_label_run', 'Run')}
-          value={tx(labels, 'agent_trace_label_errors', 'errors')}
-        />
-      ) : null}
-      {researchRunSummary ? (
-        <AgentTraceSummaryChip
-          label={tx(labels, 'agent_trace_label_research_run', 'Research run')}
-          value={researchRunSummary}
-        />
-      ) : null}
-      {sourcePolicy ? (
-        <AgentTraceSummaryChip
-          label={tx(labels, 'agent_trace_label_source_policy', 'Source policy')}
-          value={sourcePolicyText}
-        />
-      ) : null}
+      {summaryChips
+        .filter((chip) => chip.visible !== false)
+        .map((chip) => (
+          <AgentTraceSummaryChip
+            key={chip.id}
+            className={chip.className}
+            label={chip.label}
+            value={chip.value}
+            title={chip.title}
+            testId={chip.testId}
+          />
+        ))}
     </div>
   )
 }
