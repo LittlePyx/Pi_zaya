@@ -1,3 +1,4 @@
+import { AgentTraceSummaryChip } from './AgentTraceSummaryChip'
 import type { AgentTraceLabels } from './agentTraceTypes'
 import type { AgentSourceSummaryViewModel } from './useAgentTraceViewModel'
 import {
@@ -35,58 +36,64 @@ export function AgentTraceSummaryStats({
   return (
     <div className="kb-agent-trace-summary">
       {evidenceLabel ? (
-        <div className={`kb-agent-trace-evidence-status ${evidenceStatusClass(evidenceStatus)}`} data-testid="agent-trace-evidence-status">
-          <span>{tx(labels, 'agent_trace_label_evidence', 'Evidence')}</span>
-          <strong>{evidenceLabel}</strong>
-        </div>
+        <AgentTraceSummaryChip
+          className={`kb-agent-trace-evidence-status ${evidenceStatusClass(evidenceStatus)}`}
+          label={tx(labels, 'agent_trace_label_evidence', 'Evidence')}
+          value={evidenceLabel}
+          testId="agent-trace-evidence-status"
+        />
       ) : null}
       {totalClaims > 0 ? (
-        <div>
-          <span>{tx(labels, 'agent_trace_label_claims', 'Claims')}</span>
-          <strong>{supportedClaims}/{totalClaims}</strong>
-        </div>
+        <AgentTraceSummaryChip
+          label={tx(labels, 'agent_trace_label_claims', 'Claims')}
+          value={`${supportedClaims}/${totalClaims}`}
+        />
       ) : null}
       {unsupportedClaims > 0 ? (
-        <div className="is-warning">
-          <span>{tx(labels, 'agent_trace_label_needs_review', 'Needs review')}</span>
-          <strong>{unsupportedClaims}</strong>
-        </div>
+        <AgentTraceSummaryChip
+          className="is-warning"
+          label={tx(labels, 'agent_trace_label_needs_review', 'Needs review')}
+          value={unsupportedClaims}
+        />
       ) : null}
       {qualityGateLabel(qualityGateStatus, labels) ? (
-        <div className={qualityGateClass(qualityGateStatus)} data-testid="agent-trace-quality-gate">
-          <span>{tx(labels, 'agent_trace_label_answer_quality', 'Answer quality')}</span>
-          <strong title={qualityGateTitle}>{qualityGateLabel(qualityGateStatus, labels)}</strong>
-        </div>
+        <AgentTraceSummaryChip
+          className={qualityGateClass(qualityGateStatus)}
+          label={tx(labels, 'agent_trace_label_answer_quality', 'Answer quality')}
+          value={qualityGateLabel(qualityGateStatus, labels)}
+          title={qualityGateTitle}
+          testId="agent-trace-quality-gate"
+        />
       ) : null}
-      <div>
-        <span>{tx(labels, 'agent_trace_label_task', 'Task')}</span>
-        <strong>{taskLabel}</strong>
-      </div>
+      <AgentTraceSummaryChip
+        label={tx(labels, 'agent_trace_label_task', 'Task')}
+        value={taskLabel}
+      />
       {scopeSummary ? (
-        <div>
-          <span>{tx(labels, 'agent_trace_label_scope', 'Scope')}</span>
-          <strong title={scopeSummary}>{shortText(scopeSummary, 72)}</strong>
-        </div>
+        <AgentTraceSummaryChip
+          label={tx(labels, 'agent_trace_label_scope', 'Scope')}
+          value={shortText(scopeSummary, 72)}
+          title={scopeSummary}
+        />
       ) : null}
       {hasErrors ? (
-        <div className="is-warning">
-          <span>{tx(labels, 'agent_trace_label_run', 'Run')}</span>
-          <strong>{tx(labels, 'agent_trace_label_errors', 'errors')}</strong>
-        </div>
+        <AgentTraceSummaryChip
+          className="is-warning"
+          label={tx(labels, 'agent_trace_label_run', 'Run')}
+          value={tx(labels, 'agent_trace_label_errors', 'errors')}
+        />
       ) : null}
       {researchRunStatus || evidenceMatrixRows > 0 ? (
-        <div>
-          <span>{tx(labels, 'agent_trace_label_research_run', 'Research run')}</span>
-          <strong>
-            {[researchRunStatus || tx(labels, 'agent_trace_ready', 'ready'), evidenceMatrixRows > 0 ? txFmt(labels, 'agent_trace_rows', '{n} rows', { n: evidenceMatrixRows }) : ''].filter(Boolean).join(' / ')}
-          </strong>
-        </div>
+        <AgentTraceSummaryChip
+          label={tx(labels, 'agent_trace_label_research_run', 'Research run')}
+          value={[researchRunStatus || tx(labels, 'agent_trace_ready', 'ready'), evidenceMatrixRows > 0 ? txFmt(labels, 'agent_trace_rows', '{n} rows', { n: evidenceMatrixRows }) : ''].filter(Boolean).join(' / ')}
+        />
       ) : null}
       {sourcePolicy ? (
-        <div>
-          <span>{tx(labels, 'agent_trace_label_source_policy', 'Source policy')}</span>
-          <strong>{sourcePolicyLabel(sourcePolicy, labels)}</strong>
-        </div>
+        <AgentTraceSummaryChip
+          label={tx(labels, 'agent_trace_label_source_policy', 'Source policy')}
+          value={sourcePolicyLabel(sourcePolicy, labels)}
+        />
       ) : null}
     </div>
   )
