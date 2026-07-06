@@ -88,6 +88,7 @@ import {
 import { useLibraryQualityDomainViews } from './library/useLibraryQualityDomainViews'
 import { useLibraryQualityFailureCases } from './library/useLibraryQualityFailureCases'
 import { useLibraryQualityReportMetrics } from './library/useLibraryQualityReportMetrics'
+import { useShelfMetadataBackfillViewModel } from './library/useShelfMetadataBackfillViewModel'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -487,21 +488,16 @@ export default function LibraryPage() {
   } = useLibraryQualityChainViewModel({
     backendQualityOverview,
   })
-  const shelfMetadataBackfillScan = useMemo(() => {
-    const state = shelfMetadataBackfillState
-    return state?.after_scan || state?.result?.after_scan || state?.scan || state?.result?.scan || null
-  }, [shelfMetadataBackfillState])
-  const shelfMetadataBackfillResult = shelfMetadataBackfillState?.result || null
-  const shelfMetadataBackfillProgress = Math.max(0, Math.min(100, Math.round(Number(shelfMetadataBackfillState?.progress?.percent || 0))))
-  const shelfMetadataBackfillPhase = normalizeTextValue(shelfMetadataBackfillState?.phase || shelfMetadataBackfillState?.status || 'idle').replace(/_/g, ' ')
-  const shelfMetadataBackfillRunning = Boolean(shelfMetadataBackfillState?.running)
-  const shelfMetadataBackfillTone = shelfMetadataBackfillRunning
-    ? 'warning'
-    : normalizeTextValue(shelfMetadataBackfillState?.status).toLowerCase() === 'error'
-      ? 'error'
-      : shelfMetadataBackfillScan
-        ? (Number(shelfMetadataBackfillScan.needs_repair || 0) > 0 ? 'warning' : 'good')
-        : 'unknown'
+  const {
+    shelfMetadataBackfillScan,
+    shelfMetadataBackfillResult,
+    shelfMetadataBackfillProgress,
+    shelfMetadataBackfillPhase,
+    shelfMetadataBackfillRunning,
+    shelfMetadataBackfillTone,
+  } = useShelfMetadataBackfillViewModel({
+    shelfMetadataBackfillState,
+  })
   const qualityRerunSummary = backendQualityOverview?.rerun_summary
   const {
     qualityFailureCases,
