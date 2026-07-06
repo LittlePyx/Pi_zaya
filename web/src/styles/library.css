@@ -1862,17 +1862,6 @@
   line-height: 1.45;
 }
 
-.kb-lib-file-note {
-  margin-top: 1px;
-  color: color-mix(in srgb, var(--text-main) 74%, transparent);
-  font-size: 11px;
-  line-height: 1.45;
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
 .kb-lib-delete-confirm {
   display: grid;
   gap: 8px;

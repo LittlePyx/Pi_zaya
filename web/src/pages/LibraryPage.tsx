@@ -91,6 +91,7 @@ import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { LibraryFileQualityChips, LibraryFileQualityLine } from './library/LibraryFileQualityLine'
 import { LibraryFileActions } from './library/LibraryFileActions'
 import { LibraryFileTaxonomy } from './library/LibraryFileTaxonomy'
+import { LibraryFileProgressNote } from './library/LibraryFileProgressNote'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -3579,10 +3580,6 @@ export default function LibraryPage() {
     const readingLabel = readingStatusLabel(item.reading_status, S)
     const suggestionCount = (item.suggested_category ? 1 : 0) + (item.suggested_tags || []).length
     const isSelected = Boolean(selectedLibraryNames[item.name])
-    const itemProgress = derivePageProgress(item.cur_page_done, item.cur_page_total, item.cur_page_msg)
-    const itemProgressPercent = itemProgress.total > 0
-      ? Math.round((itemProgress.done / Math.max(1, itemProgress.total)) * 100)
-      : 0
 
     return (
       <div
@@ -3642,24 +3639,7 @@ export default function LibraryPage() {
             onReindex={() => { void handleReindex() }}
           />
 
-          {item.note ? <div className="kb-lib-file-note">{item.note}</div> : null}
-          {item.task_state === 'running' ? (
-            <div style={{ marginTop: 8 }}>
-              {itemProgress.total > 0 ? (
-                <>
-                  <Progress percent={itemProgressPercent} status="active" size="small" showInfo={false} />
-                  <Text type="secondary" className="text-xs">
-                    {`\u9875\u8fdb\u5ea6 ${itemProgress.done}/${itemProgress.total}`}
-                  </Text>
-                </>
-              ) : null}
-              {item.cur_page_msg ? (
-                <div>
-                  <Text type="secondary" className="text-xs">{item.cur_page_msg}</Text>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+          <LibraryFileProgressNote item={item} />
         </div>
 
         <LibraryFileActions
