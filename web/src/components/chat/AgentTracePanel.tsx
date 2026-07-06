@@ -5,19 +5,9 @@ import { internalDebugEnvEnabled } from '../../utils/internalDebug'
 import type { CiteDetail } from './citationState'
 import { AgentSourceSummaryPanel } from './AgentSourceSummaryPanel'
 import { AgentTraceDiagnosticsPanel } from './AgentTraceDiagnosticsPanel'
-import {
-  compactStringList,
-  evidenceStatusLabel,
-  evidenceStatusValue,
-  questionTypeLabel,
-  records,
-  shortText,
-  traceBool,
-  traceStepReferences,
-  tx,
-  verificationHeaderText,
-} from './agentTracePanelUtils'
-import { asTraceRecord, traceNum } from './messageTraceUtils'
+import { tx } from './agentTracePanelUtils'
+import { asTraceRecord } from './messageTraceUtils'
+import { useAgentTraceViewModel } from './useAgentTraceViewModel'
 
 export function AgentTracePanel({
   trace,
@@ -49,6 +39,7 @@ export function AgentTracePanel({
   const tr = hasInitialTrace ? initialTrace : loadedTraceRecord
   const hasTrace = Object.keys(tr).length > 0
   const canLazyLoad = Boolean(!hasInitialTrace && canLoadTrace && onLoadTrace && Number(messageId || 0) > 0)
+  const viewModel = useAgentTraceViewModel(tr, S)
   if (!hasTrace && !canLazyLoad) return null
   const mode = String(tr.mode || '').trim()
   if (hasTrace && mode && mode !== 'research_agent') return null
@@ -97,53 +88,6 @@ export function AgentTracePanel({
     )
   }
 
-  const plan = records(tr.plan)
-  const steps = records(tr.steps)
-  const context = asTraceRecord(tr.context)
-  const verification = asTraceRecord(tr.verification)
-  const researchRun = asTraceRecord(tr.research_run)
-  const summary = asTraceRecord(tr.summary)
-  const errors = Array.isArray(tr.errors) ? tr.errors : []
-  const evidenceMatrix = records(researchRun.evidence_matrix)
-  const researchSubtasks = records(researchRun.subtasks)
-  const claimRows = records(verification.claims)
-  const unsupportedClaimRows = claimRows
-    .filter((claim) => claim.supported === false || String(claim.unsupported_reason || '').trim())
-    .slice(0, 3)
-  const totalClaims = 'total_claims' in summary ? traceNum(summary.total_claims) : traceNum(verification.total_claims)
-  const supportedClaims = 'supported_claims' in summary ? traceNum(summary.supported_claims) : traceNum(verification.supported_claims)
-  const unsupportedClaims = 'unsupported_claims' in summary ? traceNum(summary.unsupported_claims) : traceNum(verification.unsupported_claims)
-  const planStepCount = 'plan_step_count' in summary ? traceNum(summary.plan_step_count) : plan.length
-  const toolCallCount = 'tool_call_count' in summary ? traceNum(summary.tool_call_count) : steps.length
-  const hasErrors = 'has_errors' in summary ? traceBool(summary.has_errors) : errors.length > 0
-  const researchRunStatus = String(summary.research_run_status || researchRun.status || '').trim()
-  const sourcePolicy = String(summary.source_policy || researchRun.source_policy || '').trim()
-  const evidenceMatrixRows = 'evidence_matrix_rows' in summary ? traceNum(summary.evidence_matrix_rows) : evidenceMatrix.length
-  const subtaskCount = 'subtask_count' in summary ? traceNum(summary.subtask_count) : researchSubtasks.length
-  const questionType = String(summary.question_type || tr.question_type || 'unknown').trim()
-  const queryScope = String(summary.query_scope || context.query_scope || context.queryScope || '').trim()
-  const requestedScope = String(summary.requested_query_scope || context.requested_query_scope || context.requestedQueryScope || '').trim()
-  const evidenceStatus = evidenceStatusValue(summary.evidence_status || verification.evidence_status)
-  const evidenceLabel = evidenceStatusLabel(evidenceStatus, S)
-  const qualityGateStatus = String(summary.quality_gate_status || '').trim().toLowerCase()
-  const qualityGateTitle = [
-    ...compactStringList(summary.quality_gate_reasons),
-    ...compactStringList(summary.quality_gate_warnings),
-  ].join(' / ')
-  const taskLabel = evidenceStatus === 'not_applicable' ? tx(S, 'agent_trace_type_general', 'General') : questionTypeLabel(questionType, S)
-  const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
-  const currentSource = shortText(context.current_source_name || context.currentSourceName || context.current_source_path || context.currentSourcePath, 90)
-  const scopeBits = [
-    queryScope,
-    requestedScope && requestedScope !== queryScope ? `requested ${requestedScope}` : '',
-    selectedCount > 0 ? `${selectedCount} selected` : '',
-    queryScope === 'current_paper' && currentSource ? currentSource : '',
-  ].filter(Boolean)
-  const scopeSummary = scopeBits.join(' / ')
-  const claimSummary = verificationHeaderText(totalClaims, supportedClaims, unsupportedClaims, hasErrors, S)
-  const headerEvidence = evidenceLabel || claimSummary
-  const headerContext = totalClaims > 0 && evidenceLabel ? claimSummary : (scopeSummary ? shortText(scopeSummary, 42) : taskLabel)
-  const publicReferences = traceStepReferences(steps)
   const showDiagnostics = internalDebugEnvEnabled()
 
   return (
@@ -152,38 +96,19 @@ export function AgentTracePanel({
     }}>
       <summary>
         <span>{tx(S, 'agent_trace_title', 'Sources & evidence')}</span>
-        <span>{headerEvidence}</span>
-        <span>{headerContext}</span>
+        <span>{viewModel.headerEvidence}</span>
+        <span>{viewModel.headerContext}</span>
       </summary>
       <AgentSourceSummaryPanel
         labels={S}
-        evidenceLabel={evidenceLabel}
-        evidenceStatus={evidenceStatus}
-        totalClaims={totalClaims}
-        supportedClaims={supportedClaims}
-        unsupportedClaims={unsupportedClaims}
-        qualityGateStatus={qualityGateStatus}
-        qualityGateTitle={qualityGateTitle}
-        taskLabel={taskLabel}
-        scopeSummary={scopeSummary}
-        hasErrors={hasErrors}
-        researchRunStatus={researchRunStatus}
-        evidenceMatrixRows={evidenceMatrixRows}
-        sourcePolicy={sourcePolicy}
-        evidenceMatrix={evidenceMatrix}
-        subtaskCount={subtaskCount}
-        unsupportedClaimRows={unsupportedClaimRows}
-        references={publicReferences}
+        viewModel={viewModel.sourceSummary}
         onOpenReference={onOpenReference}
         onAddReferenceToShelf={onAddReferenceToShelf}
       />
       {showDiagnostics ? (
         <AgentTraceDiagnosticsPanel
           labels={S}
-          plan={plan}
-          steps={steps}
-          planStepCount={planStepCount}
-          toolCallCount={toolCallCount}
+          viewModel={viewModel.diagnostics}
           onOpenReference={onOpenReference}
           onAddReferenceToShelf={onAddReferenceToShelf}
         />

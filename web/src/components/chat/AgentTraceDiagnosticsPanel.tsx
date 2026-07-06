@@ -2,6 +2,7 @@ import type { StringMap } from '../../i18n'
 import type { CiteDetail } from './citationState'
 import { asTraceRecord, traceNum } from './messageTraceUtils'
 import { AgentTraceReferenceList } from './AgentTraceReferenceList'
+import type { AgentTraceDiagnosticsViewModel } from './useAgentTraceViewModel'
 import {
   records,
   shortText,
@@ -12,21 +13,17 @@ import {
 
 export function AgentTraceDiagnosticsPanel({
   labels,
-  plan,
-  steps,
-  planStepCount,
-  toolCallCount,
+  viewModel,
   onOpenReference,
   onAddReferenceToShelf,
 }: {
   labels: Partial<StringMap>
-  plan: Record<string, unknown>[]
-  steps: Record<string, unknown>[]
-  planStepCount: number
-  toolCallCount: number
+  viewModel: AgentTraceDiagnosticsViewModel
   onOpenReference?: (detail: CiteDetail, ref: Record<string, unknown>) => void
   onAddReferenceToShelf?: (detail: CiteDetail, ref: Record<string, unknown>) => void
 }) {
+  const { plan, steps, planStepCount, toolCallCount } = viewModel
+
   if (plan.length <= 0 && steps.length <= 0) return null
   return (
     <details className="kb-agent-trace-details" data-testid="agent-trace-execution-details">

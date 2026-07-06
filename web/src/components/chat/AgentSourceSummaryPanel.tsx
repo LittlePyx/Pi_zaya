@@ -1,6 +1,7 @@
 import type { StringMap } from '../../i18n'
 import type { CiteDetail } from './citationState'
 import { AgentTraceReferenceList } from './AgentTraceReferenceList'
+import type { AgentSourceSummaryViewModel } from './useAgentTraceViewModel'
 import {
   evidenceStatusClass,
   evidenceStatusLabel,
@@ -16,47 +17,35 @@ import { traceNum } from './messageTraceUtils'
 
 export function AgentSourceSummaryPanel({
   labels,
-  evidenceLabel,
-  evidenceStatus,
-  totalClaims,
-  supportedClaims,
-  unsupportedClaims,
-  qualityGateStatus,
-  qualityGateTitle,
-  taskLabel,
-  scopeSummary,
-  hasErrors,
-  researchRunStatus,
-  evidenceMatrixRows,
-  sourcePolicy,
-  evidenceMatrix,
-  subtaskCount,
-  unsupportedClaimRows,
-  references,
+  viewModel,
   onOpenReference,
   onAddReferenceToShelf,
 }: {
   labels: Partial<StringMap>
-  evidenceLabel: string
-  evidenceStatus: string
-  totalClaims: number
-  supportedClaims: number
-  unsupportedClaims: number
-  qualityGateStatus: string
-  qualityGateTitle: string
-  taskLabel: string
-  scopeSummary: string
-  hasErrors: boolean
-  researchRunStatus: string
-  evidenceMatrixRows: number
-  sourcePolicy: string
-  evidenceMatrix: Record<string, unknown>[]
-  subtaskCount: number
-  unsupportedClaimRows: Record<string, unknown>[]
-  references: Record<string, unknown>[]
+  viewModel: AgentSourceSummaryViewModel
   onOpenReference?: (detail: CiteDetail, ref: Record<string, unknown>) => void
   onAddReferenceToShelf?: (detail: CiteDetail, ref: Record<string, unknown>) => void
 }) {
+  const {
+    evidenceLabel,
+    evidenceStatus,
+    totalClaims,
+    supportedClaims,
+    unsupportedClaims,
+    qualityGateStatus,
+    qualityGateTitle,
+    taskLabel,
+    scopeSummary,
+    hasErrors,
+    researchRunStatus,
+    evidenceMatrixRows,
+    sourcePolicy,
+    evidenceMatrix,
+    subtaskCount,
+    unsupportedClaimRows,
+    references,
+  } = viewModel
+
   return (
     <>
       <div className="kb-agent-trace-summary">
