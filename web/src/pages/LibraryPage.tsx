@@ -11,7 +11,6 @@ import {
   Tabs,
   Tag,
   Space,
-  Input,
   Card,
   Checkbox,
   Modal,
@@ -19,7 +18,6 @@ import {
 import {
   ReloadOutlined,
   StopOutlined,
-  SearchOutlined,
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import type {
@@ -77,6 +75,7 @@ import { LibraryUploadIntake } from './library/LibraryUploadIntake'
 import { LibraryUploadDraftWorkbench } from './library/LibraryUploadDraftWorkbench'
 import { LibraryProcessControls } from './library/LibraryProcessControls'
 import { LibraryRenameWorkbench } from './library/LibraryRenameWorkbench'
+import { LibraryLegacyConvertCard } from './library/LibraryLegacyConvertCard'
 import { LibraryFileRow } from './library/LibraryFileRow'
 import { LibraryFileList } from './library/LibraryFileList'
 import {
@@ -89,7 +88,6 @@ import { LibraryTaxonomyToolbar } from './library/LibraryTaxonomyToolbar'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
-  SCOPE_OPTIONS,
   buildQualityRepairHistoryRecord,
   classifyFailedReason,
   conversionQualityIssueEntries,
@@ -3759,74 +3757,34 @@ export default function LibraryPage() {
         </Card>
       ) : null}
 
-      <Card size="small" className="kb-lib-card kb-lib-legacy-convert-card" title={S.lib_convert_scope}>
-        <div className="kb-lib-convert-shell">
-          <div className="kb-lib-convert-row kb-lib-convert-row-top">
-            <Select
-              value={scope}
-              onChange={(value) => { setScope(value); void store.loadFiles(value) }}
-              data-testid="library-convert-scope"
-              className="kb-lib-convert-scope"
-              options={SCOPE_OPTIONS(S)}
-            />
-            <Input
-              value={fileKeyword}
-              onChange={(e) => setFileKeyword(e.target.value)}
-              allowClear
-              prefix={<SearchOutlined className="opacity-50" />}
-              placeholder={S.lib_filter_filename}
-              className="kb-lib-convert-search"
-            />
-            <Button className="kb-lib-convert-refresh" icon={<ReloadOutlined />} onClick={() => { void store.loadFiles(scope) }}>
-              {S.lib_btn_refresh}
-            </Button>
-          </div>
-
-          <div className="kb-lib-convert-row kb-lib-convert-row-filters">
-            <Select
-              value={paperCategoryFilter || undefined}
-              allowClear
-              placeholder={S.lib_filter_category}
-              className="kb-lib-convert-filter"
-              options={paperCategoryFilterOptions}
-              onChange={(value) => setPaperCategoryFilter(String(value || ''))}
-            />
-            <Select
-              value={paperTagFilter || undefined}
-              allowClear
-              showSearch
-              placeholder={S.lib_filter_tag}
-              className="kb-lib-convert-filter"
-              options={paperTagFilterOptions}
-              optionFilterProp="label"
-              onChange={(value) => setPaperTagFilter(String(value || ''))}
-            />
-            <Select
-              value={readingStatusFilter || undefined}
-              allowClear
-              placeholder={S.lib_filter_reading}
-              className="kb-lib-convert-filter"
-              options={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
-              onChange={(value) => setReadingStatusFilter(String(value || '') as ReadingStatusValue)}
-            />
-            <Button
-              className="kb-lib-convert-refresh"
-              onClick={() => {
-                setPaperCategoryFilter('')
-                setPaperTagFilter('')
-                setReadingStatusFilter('')
-              }}
-            >
-              {S.lib_btn_clear_metadata_filter}
-            </Button>
-          </div>
-
-          <div className="kb-lib-convert-row kb-lib-convert-row-actions">
-            <Button type="primary" onClick={() => { void handleConvertPending() }}>{S.lib_btn_convert_pending}</Button>
-            {store.converting ? <Button icon={<StopOutlined />} danger onClick={() => { void store.cancelConvert() }}>{S.lib_btn_stop}</Button> : null}
-          </div>
-        </div>
-      </Card>
+      <LibraryLegacyConvertCard
+        S={S}
+        scope={scope}
+        fileKeyword={fileKeyword}
+        paperCategoryFilter={paperCategoryFilter}
+        paperCategoryFilterOptions={paperCategoryFilterOptions}
+        paperTagFilter={paperTagFilter}
+        paperTagFilterOptions={paperTagFilterOptions}
+        readingStatusFilter={readingStatusFilter}
+        readingStatusOptions={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
+        converting={store.converting}
+        onScopeChange={(value) => {
+          setScope(value)
+          void store.loadFiles(value)
+        }}
+        onFileKeywordChange={setFileKeyword}
+        onPaperCategoryFilterChange={setPaperCategoryFilter}
+        onPaperTagFilterChange={setPaperTagFilter}
+        onReadingStatusFilterChange={(value) => setReadingStatusFilter(value as ReadingStatusValue)}
+        onClearMetadataFilters={() => {
+          setPaperCategoryFilter('')
+          setPaperTagFilter('')
+          setReadingStatusFilter('')
+        }}
+        onRefresh={() => store.loadFiles(scope)}
+        onConvertPending={handleConvertPending}
+        onStopConvert={store.cancelConvert}
+      />
 
       {showRefSyncCard && store.refSync ? (
         <WorkbenchPanel className="kb-lib-refsync-card">

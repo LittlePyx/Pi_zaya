@@ -1,0 +1,67 @@
+.kb-lib-legacy-convert-card {
+  display: none;
+}
+
+.kb-lib-convert-shell {
+  display: grid;
+  gap: 10px;
+}
+
+.kb-lib-convert-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.kb-lib-convert-row-top {
+  display: grid;
+  grid-template-columns: minmax(150px, 190px) auto;
+}
+
+.kb-lib-convert-scope {
+  width: 100%;
+}
+
+.kb-lib-convert-search {
+  display: none;
+}
+
+.kb-lib-convert-refresh.ant-btn {
+  min-width: 90px;
+}
+
+.kb-lib-convert-row-filters {
+  display: none;
+}
+
+.kb-lib-convert-filter {
+  min-width: 180px;
+  flex: 1 1 220px;
+}
+
+.kb-lib-convert-row-actions .ant-btn {
+  min-width: 126px;
+  font-weight: 600;
+}
+
+@media (max-width: 1200px) {
+  .kb-lib-convert-row-top {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-lib-convert-filter {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .kb-lib-convert-refresh.ant-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .kb-lib-convert-row-actions .ant-btn {
+    width: 100%;
+  }
+}

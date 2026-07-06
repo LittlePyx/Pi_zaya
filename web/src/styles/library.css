@@ -451,8 +451,7 @@
 }
 
 .kb-lib-stats-grid,
-.kb-lib-ops-grid,
-.kb-lib-legacy-convert-card {
+.kb-lib-ops-grid {
   display: none;
 }
 
@@ -943,48 +942,6 @@
   gap: 8px;
 }
 
-.kb-lib-convert-shell {
-  display: grid;
-  gap: 10px;
-}
-
-.kb-lib-convert-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-}
-
-.kb-lib-convert-row-top {
-  display: grid;
-  grid-template-columns: minmax(150px, 190px) auto;
-}
-
-.kb-lib-convert-scope {
-  width: 100%;
-}
-
-.kb-lib-convert-search {
-  display: none;
-}
-
-.kb-lib-convert-refresh.ant-btn {
-  min-width: 90px;
-}
-
-.kb-lib-convert-row-filters {
-  display: none;
-}
-
-.kb-lib-convert-filter {
-  min-width: 180px;
-  flex: 1 1 220px;
-}
-
-.kb-lib-convert-row-toggle {
-  gap: 8px;
-}
-
 .kb-lib-switch-item {
   display: inline-flex;
   align-items: center;
@@ -994,11 +951,6 @@
   border-radius: 10px;
   background: color-mix(in srgb, var(--panel) 99%, transparent);
   padding: 0 10px;
-}
-
-.kb-lib-convert-row-actions .ant-btn {
-  min-width: 126px;
-  font-weight: 600;
 }
 
 .kb-settings-drawer-root .ant-drawer-content-wrapper {
@@ -2696,19 +2648,6 @@
     background: transparent;
   }
 
-  .kb-lib-convert-row-top {
-    grid-template-columns: 1fr;
-  }
-
-  .kb-lib-convert-filter {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .kb-lib-convert-refresh.ant-btn {
-    width: 100%;
-  }
-
 }
 
 @media (max-width: 760px) {
@@ -2755,10 +2694,6 @@
   .kb-lib-upload-meta {
     grid-template-columns: 1fr;
     display: grid;
-  }
-
-  .kb-lib-convert-row-actions .ant-btn {
-    width: 100%;
   }
 
   .kb-lib-switch-item {
