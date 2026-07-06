@@ -470,6 +470,7 @@ export const S = {
   agent_trace_check_count: '{n} 次核对',
   agent_trace_plan: '计划',
   agent_trace_check_activity: '核对过程',
+  agent_trace_references: '参考文献',
 
   // ChatPage
   loading_conversation: '正在打开会话并加载最近消息...',

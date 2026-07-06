@@ -469,6 +469,7 @@ export const S = {
   agent_trace_check_count: '{n} checks',
   agent_trace_plan: 'Plan',
   agent_trace_check_activity: 'Check activity',
+  agent_trace_references: 'References',
 
   // ChatPage
   loading_conversation: 'Opening conversation and loading recent messages...',
