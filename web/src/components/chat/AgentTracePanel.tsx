@@ -3,6 +3,7 @@ import { internalDebugEnvEnabled } from '../../utils/internalDebug'
 import type { CiteDetail } from './citationState'
 import { AgentSourceSummaryPanel } from './AgentSourceSummaryPanel'
 import { AgentTraceDiagnosticsPanel } from './AgentTraceDiagnosticsPanel'
+import { AgentTraceStoredPrompt } from './AgentTraceStoredPrompt'
 import { tx } from './agentTracePanelUtils'
 import { useArchivedAgentTrace, type LoadArchivedAgentTrace } from './useArchivedAgentTrace'
 import { useAgentTraceViewModel } from './useAgentTraceViewModel'
@@ -41,31 +42,19 @@ export function AgentTracePanel({
   if (hasTrace && mode && mode !== 'research_agent') return null
 
   if (!hasTrace) {
-    const note = loadStatus === 'loading'
-      ? tx(S, 'agent_trace_loading_stored', 'Loading saved source check...')
-      : loadStatus === 'error'
-        ? tx(S, 'agent_trace_load_failed', 'Saved source check could not be loaded.')
-        : loadStatus === 'empty'
-          ? tx(S, 'agent_trace_no_stored', 'No saved source check is available.')
-          : tx(S, 'agent_trace_open_to_load', 'Open to load saved source check.')
     return (
-      <details className="kb-agent-trace" onToggle={(event) => {
-        if ((event.currentTarget as HTMLDetailsElement).open) void loadArchivedTrace()
-      }}>
-        <summary>
-          <span>{tx(S, 'agent_trace_title', 'Sources & evidence')}</span>
-          <span>{tx(S, 'agent_trace_stored', 'Saved check')}</span>
-          <span>{loadStatus === 'loading' ? tx(S, 'agent_trace_loading', 'loading') : tx(S, 'agent_trace_open_load', 'open to load')}</span>
-        </summary>
-        <div className="kb-agent-trace-empty">{note}</div>
-      </details>
+      <AgentTraceStoredPrompt
+        labels={S}
+        loadStatus={loadStatus}
+        onLoad={loadArchivedTrace}
+      />
     )
   }
 
   const showDiagnostics = internalDebugEnvEnabled()
 
   return (
-    <details className="kb-agent-trace" onToggle={(event) => {
+    <details className="kb-agent-trace" open={loadStatus === 'loaded' ? true : undefined} onToggle={(event) => {
       if ((event.currentTarget as HTMLDetailsElement).open) void loadArchivedTrace()
     }}>
       <summary>
