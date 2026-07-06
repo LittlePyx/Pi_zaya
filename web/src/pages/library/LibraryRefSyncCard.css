@@ -1,0 +1,83 @@
+.kb-lib-refsync-card {
+  display: grid;
+  gap: 12px;
+}
+
+.kb-lib-refsync-shell {
+  display: grid;
+  gap: 11px;
+  min-width: 0;
+}
+
+.kb-lib-refsync-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.kb-lib-refsync-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kb-lib-refsync-title.ant-typography {
+  display: block;
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 720;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.kb-lib-refsync-hint.ant-typography,
+.kb-lib-refsync-meta.ant-typography {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.kb-lib-refsync-meta.ant-typography {
+  color: color-mix(in srgb, var(--muted-text) 72%, transparent);
+}
+
+.kb-lib-refsync-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+
+.kb-lib-refsync-queues {
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  background: transparent;
+}
+
+.kb-lib-refsync-queues .kb-workbench-metric {
+  padding-block: 9px;
+}
+
+.kb-lib-refsync-queues .kb-workbench-metric strong {
+  font-size: 15px;
+}
+
+@media (max-width: 760px) {
+  .kb-lib-refsync-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .kb-lib-refsync-head .kb-workbench-pill {
+    align-self: flex-start;
+  }
+
+  .kb-lib-refsync-metrics,
+  .kb-lib-refsync-queues {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 460px) {
+  .kb-lib-refsync-metrics,
+  .kb-lib-refsync-queues {
+    grid-template-columns: 1fr;
+  }
+}

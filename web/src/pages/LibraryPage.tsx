@@ -53,8 +53,6 @@ import { useNavigate } from 'react-router-dom'
 import { useT } from '../i18n'
 import {
   WorkbenchMetricStrip,
-  WorkbenchPanel,
-  WorkbenchStatusPill,
   type WorkbenchMetricItem,
   type WorkbenchTone,
 } from '../components/library/WorkbenchPrimitives'
@@ -76,6 +74,7 @@ import { LibraryUploadDraftWorkbench } from './library/LibraryUploadDraftWorkben
 import { LibraryProcessControls } from './library/LibraryProcessControls'
 import { LibraryRenameWorkbench } from './library/LibraryRenameWorkbench'
 import { LibraryLegacyConvertCard } from './library/LibraryLegacyConvertCard'
+import { LibraryRefSyncCard } from './library/LibraryRefSyncCard'
 import { LibraryFileRow } from './library/LibraryFileRow'
 import { LibraryFileList } from './library/LibraryFileList'
 import {
@@ -1072,6 +1071,13 @@ export default function LibraryPage() {
         .replace('{manualRepair}', String(manualRepair))
     }
     return store.refSync.message || S.lib_refsync_waiting
+  }, [S, refSyncStats, store.refSync])
+  const refSyncMetaText = useMemo(() => {
+    if (!store.refSync) return ''
+    return S.lib_refsync_hint
+      .replace('{docsDone}', String(store.refSync.docsDone))
+      .replace('{docsTotal}', String(store.refSync.docsTotal ?? numericStat(refSyncStats, 'docs_total')))
+      .replace('{refsTotal}', String(numericStat(refSyncStats, 'refs_total')))
   }, [S, refSyncStats, store.refSync])
   const showRefSyncCard = Boolean(store.refSync && (
     store.refSync.running
@@ -3787,34 +3793,20 @@ export default function LibraryPage() {
       />
 
       {showRefSyncCard && store.refSync ? (
-        <WorkbenchPanel className="kb-lib-refsync-card">
-          <div className="kb-lib-refsync-shell">
-            <div className="kb-lib-refsync-head">
-              <div className="kb-lib-refsync-copy">
-                <Text className="kb-lib-refsync-title">{S.lib_card_refsync}</Text>
-                <Text type="secondary" className="kb-lib-refsync-hint">
-                  {refSyncDisplayMessage}
-                </Text>
-                <Text type="secondary" className="kb-lib-refsync-meta">
-                  {S.lib_refsync_hint
-                    .replace('{docsDone}', String(store.refSync.docsDone))
-                    .replace('{docsTotal}', String(store.refSync.docsTotal ?? numericStat(refSyncStats, 'docs_total')))
-                    .replace('{refsTotal}', String(numericStat(refSyncStats, 'refs_total')))}
-                </Text>
-              </div>
-              <WorkbenchStatusPill tone={refSyncStatusTone}>{refSyncStatusLabel}</WorkbenchStatusPill>
-            </div>
-            {store.refSync.docsTotal > 0 ? (
-              <Progress
-                percent={refSyncPercent}
-                status={store.refSync.running ? 'active' : (store.refSync.status === 'error' ? 'exception' : 'normal')}
-              />
-            ) : null}
-            <WorkbenchMetricStrip items={refSyncMetricItems} className="kb-lib-refsync-metrics" />
-            <WorkbenchMetricStrip items={refSyncQueueItems} className="kb-lib-refsync-queues" />
-            {store.refSync.error ? <Text type="danger" className="text-xs">{store.refSync.error}</Text> : null}
-          </div>
-        </WorkbenchPanel>
+        <LibraryRefSyncCard
+          title={S.lib_card_refsync}
+          message={refSyncDisplayMessage}
+          metaText={refSyncMetaText}
+          statusLabel={refSyncStatusLabel}
+          statusTone={refSyncStatusTone}
+          percent={refSyncPercent}
+          docsTotal={store.refSync.docsTotal}
+          running={store.refSync.running}
+          status={store.refSync.status}
+          metricItems={refSyncMetricItems}
+          queueItems={refSyncQueueItems}
+          error={store.refSync.error}
+        />
       ) : null}
 
       {QUALITY_DIAGNOSTICS_VISIBLE && (qualityReportStats.converted > 0 || qualityReportStats.assessed > 0) ? (
