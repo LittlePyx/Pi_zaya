@@ -87,6 +87,10 @@ import {
 } from './library/useLibraryQualityChainViewModel'
 import { useLibraryQualityDomainViews } from './library/useLibraryQualityDomainViews'
 import { useLibraryQualityFailureCases } from './library/useLibraryQualityFailureCases'
+import {
+  useLibraryQualityOperationGuard,
+  type LibraryQualityOperationToken,
+} from './library/useLibraryQualityOperationGuard'
 import { useLibraryQualityReportMetrics } from './library/useLibraryQualityReportMetrics'
 import { useShelfMetadataBackfillViewModel } from './library/useShelfMetadataBackfillViewModel'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
@@ -178,12 +182,6 @@ type QualityRepairRunOptions = {
   operationToken?: LibraryQualityOperationToken
 }
 
-type LibraryQualityOperationToken = {
-  id: number
-  key: string
-  scope: string
-}
-
 type FilterFilesOptions = {
   ignoreCategoryFilter?: boolean
   ignoreTagFilter?: boolean
@@ -266,8 +264,6 @@ export default function LibraryPage() {
   const [qualityCaseRerunResults, setQualityCaseRerunResults] = useState<Record<string, LibraryResearchQaRerunResponse>>({})
   const [qualityFailureFilter, setQualityFailureFilter] = useState('')
   const qualityRepairBaselinesRef = useRef<Record<string, QualityRepairBaseline>>({})
-  const qualityOperationSeqRef = useRef(0)
-  const activeQualityOperationRef = useRef<LibraryQualityOperationToken | null>(null)
   const [batchDraft, setBatchDraft] = useState<LibraryBatchMetaDraft>({
     apply_paper_category: false,
     paper_category: '',
@@ -315,41 +311,22 @@ export default function LibraryPage() {
     message.warning(S.lib_llm_unavailable_fallback.replace('{action}', action))
     openApiSettings()
   }, [S.lib_llm_unavailable_fallback, openApiSettings])
-  const beginQualityOperation = useCallback((key: string): LibraryQualityOperationToken => {
-    const token = {
-      id: qualityOperationSeqRef.current + 1,
-      key,
-      scope,
-    }
-    qualityOperationSeqRef.current = token.id
-    activeQualityOperationRef.current = token
+  const resetQualityOperationUi = useCallback(() => {
     setQualityCaseActionKey('')
     setQualityFullChainActionKey('')
     setQualityBatchRunning(false)
     setShelfMetadataBackfillRefreshing(false)
     setQualityRepairAdvancing(false)
-    return token
-  }, [scope])
-  const qualityOperationIsCurrent = useCallback((token?: LibraryQualityOperationToken | null): boolean => {
-    if (!token) return true
-    const active = activeQualityOperationRef.current
-    return Boolean(active && active.id === token.id && active.key === token.key && active.scope === token.scope && scope === token.scope)
-  }, [scope])
-  const qualityOperationIsActive = useCallback((token?: LibraryQualityOperationToken | null): boolean => {
-    if (!token) return true
-    const active = activeQualityOperationRef.current
-    return Boolean(active && active.id === token.id && active.key === token.key && active.scope === token.scope)
   }, [])
-  const clearQualityOperation = useCallback((token?: LibraryQualityOperationToken | null) => {
-    if (!token) {
-      activeQualityOperationRef.current = null
-      return
-    }
-    const active = activeQualityOperationRef.current
-    if (active && active.id === token.id && active.key === token.key) {
-      activeQualityOperationRef.current = null
-    }
-  }, [])
+  const {
+    beginQualityOperation,
+    qualityOperationIsCurrent,
+    qualityOperationIsActive,
+    clearQualityOperation,
+  } = useLibraryQualityOperationGuard({
+    scope,
+    onBegin: resetQualityOperationUi,
+  })
 
   const dirDirty = useMemo(
     () =>
