@@ -27,7 +27,6 @@ import {
   ReloadOutlined,
   StopOutlined,
   FolderOpenOutlined,
-  SaveOutlined,
   SearchOutlined,
   CheckOutlined,
   ClearOutlined,
@@ -86,6 +85,7 @@ import { LibraryQualityHistoryPanel } from './library/LibraryQualityHistoryPanel
 import { LibraryQualityStatusPanels } from './library/LibraryQualityStatusPanels'
 import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
+import { LibraryDirectorySettings } from './library/LibraryDirectorySettings'
 import { LibraryFileRow } from './library/LibraryFileRow'
 import { LibraryFileList } from './library/LibraryFileList'
 import {
@@ -3727,69 +3727,28 @@ export default function LibraryPage() {
     <Card size="small" className="kb-lib-card kb-lib-workbench-card" title={S.lib_prep_workbench}>
       <div className="kb-lib-workbench">
         <div className="kb-lib-workbench-main">
-          <section className="kb-lib-workbench-section">
-            <div className="kb-lib-section-head">
-              <div className="kb-lib-section-copy">
-                <Text className="kb-lib-section-title">{S.lib_section_dir}</Text>
-              </div>
-              {directoriesConfigured ? (
-                <Button className="kb-lib-action-quiet" onClick={() => setDirEditorOpen((open) => !open)}>
-                  {showDirEditor ? S.lib_dir_collapse : S.lib_dir_edit}
-                </Button>
-              ) : null}
-            </div>
-
-            <div className="kb-lib-dir-summary">
-              <div className={`kb-lib-dir-summary-row${showDirEditor ? ' is-editing' : ''}`}>
-                <Text className="kb-lib-dir-summary-label">PDF</Text>
-                {showDirEditor ? (
-                  <Input
-                    value={pdfDirDraft}
-                    placeholder={S.lib_dir_select_pdf}
-                    onChange={(e) => {
-                      setDirTouched(true)
-                      setPdfDirDraft(e.target.value)
-                    }}
-                  />
-                ) : (
-                  <Text className="kb-lib-dir-summary-path" ellipsis={{ tooltip: pdfDirDraft || S.lib_dir_no_pdf }}>
-                    {pdfDirDraft || S.lib_dir_no_pdf}
-                  </Text>
-                )}
-                {showDirEditor ? (
-                  <Button className="kb-lib-action-quiet" loading={pickingDir === 'pdf'} onClick={() => { void pickDir('pdf') }}>{S.lib_dir_pick}</Button>
-                ) : null}
-                <Button className="kb-lib-action-quiet" icon={<FolderOpenOutlined />} disabled={!pdfDirDraft.trim()} onClick={() => { void openFolder('pdf_dir') }}>{S.lib_dir_open}</Button>
-              </div>
-              <div className={`kb-lib-dir-summary-row${showDirEditor ? ' is-editing' : ''}`}>
-                <Text className="kb-lib-dir-summary-label">MD</Text>
-                {showDirEditor ? (
-                  <Input
-                    value={mdDirDraft}
-                    placeholder={S.lib_dir_select_md}
-                    onChange={(e) => {
-                      setDirTouched(true)
-                      setMdDirDraft(e.target.value)
-                    }}
-                  />
-                ) : (
-                  <Text className="kb-lib-dir-summary-path" ellipsis={{ tooltip: mdDirDraft || S.lib_dir_no_md }}>
-                    {mdDirDraft || S.lib_dir_no_md}
-                  </Text>
-                )}
-                {showDirEditor ? (
-                  <Button className="kb-lib-action-quiet" loading={pickingDir === 'md'} onClick={() => { void pickDir('md') }}>{S.lib_dir_pick}</Button>
-                ) : null}
-                <Button className="kb-lib-action-quiet" icon={<FolderOpenOutlined />} disabled={!mdDirDraft.trim()} onClick={() => { void openFolder('md_dir') }}>{S.lib_dir_open}</Button>
-              </div>
-            </div>
-
-            {showDirEditor ? (
-              <div className="kb-lib-section-actions">
-                <Button className="kb-lib-action-tonal" type="primary" icon={<SaveOutlined />} loading={savingDirs} disabled={!dirDirty} onClick={() => { void saveDirs() }}>{S.lib_dir_save}</Button>
-              </div>
-            ) : null}
-          </section>
+          <LibraryDirectorySettings
+            S={S}
+            directoriesConfigured={directoriesConfigured}
+            showDirEditor={showDirEditor}
+            pdfDirDraft={pdfDirDraft}
+            mdDirDraft={mdDirDraft}
+            pickingDir={pickingDir}
+            savingDirs={savingDirs}
+            dirDirty={dirDirty}
+            onToggleEditor={() => setDirEditorOpen((open) => !open)}
+            onPdfDirChange={(value) => {
+              setDirTouched(true)
+              setPdfDirDraft(value)
+            }}
+            onMdDirChange={(value) => {
+              setDirTouched(true)
+              setMdDirDraft(value)
+            }}
+            onPickDir={pickDir}
+            onOpenFolder={openFolder}
+            onSaveDirs={saveDirs}
+          />
 
           {renameWorkbenchSection}
         </div>

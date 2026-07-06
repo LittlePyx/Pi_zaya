@@ -1,0 +1,43 @@
+.kb-lib-dir-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.kb-lib-dir-summary-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 0;
+}
+
+.kb-lib-dir-summary-row.is-editing {
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
+}
+
+.kb-lib-dir-summary-row + .kb-lib-dir-summary-row {
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 66%, transparent);
+}
+
+.kb-lib-dir-summary-label.ant-typography {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.kb-lib-dir-summary-path.ant-typography {
+  margin: 0;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .kb-lib-dir-summary-row {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+}
