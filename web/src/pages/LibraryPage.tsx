@@ -18,9 +18,7 @@ import type {
   LibraryFileItem,
   LibraryFigureAssetRefreshResponse,
   LibraryFigureAssetScanResponse,
-  LibraryQualityActionDelta,
   LibraryQualityActionHistoryItem,
-  LibraryQualityActionSnapshot,
   LibraryConversionQualityBatchResponse,
   LibraryQualityFeatureHealthItem,
   LibraryQualityFailureCase,
@@ -85,6 +83,7 @@ import {
   useLibraryQualityChainViewModel,
   type QualityFullChainActionResult,
 } from './library/useLibraryQualityChainViewModel'
+import { useLibraryQualityActionRecorder } from './library/useLibraryQualityActionRecorder'
 import { useLibraryQualityDomainViews } from './library/useLibraryQualityDomainViews'
 import { useLibraryQualityFailureCases } from './library/useLibraryQualityFailureCases'
 import {
@@ -111,11 +110,9 @@ import {
   normalizeTextList,
   normalizeTextValue,
   numericStat,
-  qualityBuildActionDelta,
   qualityFailureCaseMatchesStage,
   qualityOverviewStageSnapshot,
   qualityVerificationFromRerun,
-  qualityVerificationText,
   saveQualityRepairHistory,
   saveResearchQaReplayFailureCase,
   stripKnownSourceExt,
@@ -1433,66 +1430,9 @@ export default function LibraryPage() {
     await store.convert(item.name, CONVERT_MODE, true)
   }
 
-  const recordQualityFullChainResult = (
-    stageKey: string,
-    result: Omit<QualityFullChainActionResult, 'updatedAt'>,
-    meta: {
-      stageLabel?: string
-      action?: string
-      targetIds?: string[]
-      metrics?: Record<string, string | number | boolean | null | undefined>
-      before?: LibraryQualityActionSnapshot
-      after?: LibraryQualityActionSnapshot
-      verification?: Record<string, unknown>
-    } = {},
-  ) => {
-    const key = normalizeTextValue(stageKey).toLowerCase()
-    if (!key) return
-    const nowMs = Date.now()
-    const hasSnapshots = Boolean(meta.before || meta.after)
-    const verificationOk = meta.verification?.quality_ok === true
-    const rawDelta: LibraryQualityActionDelta = hasSnapshots ? qualityBuildActionDelta(meta.before, meta.after) : {}
-    const delta: LibraryQualityActionDelta = hasSnapshots && rawDelta.improved === false && verificationOk
-      ? {
-        ...rawDelta,
-        improved: true,
-        worsened: false,
-        summary: 'Improved: QA rerun passed; overview unchanged',
-      }
-      : rawDelta
-    const improved = typeof delta.improved === 'boolean' ? delta.improved : null
-    const verificationText = qualityVerificationText(meta.verification)
-    const resultStatus = result.status === 'success' && improved === false ? 'warning' : result.status
-    setQualityFullChainResults((cur) => ({
-      ...cur,
-      [key]: {
-        ...result,
-        status: resultStatus,
-        deltaText: hasSnapshots ? delta.summary : '',
-        verificationText,
-        improved,
-        updatedAt: nowMs,
-      },
-    }))
-    void libraryApi.recordQualityAction({
-      stage_key: key,
-      stage_label: normalizeTextValue(meta.stageLabel || key),
-      action: normalizeTextValue(meta.action),
-      status: resultStatus,
-      summary: result.summary,
-      detail: result.detail,
-      target_ids: meta.targetIds || [],
-      metrics: meta.metrics || {},
-      before: meta.before,
-      after: meta.after,
-      delta: hasSnapshots ? delta : {},
-      improved,
-      verification: meta.verification || {},
-      created_at: Math.floor(nowMs / 1000),
-    }).catch(() => {
-      // Persisting the audit trail should never block the repair flow.
-    })
-  }
+  const { recordQualityFullChainResult } = useLibraryQualityActionRecorder({
+    setQualityFullChainResults,
+  })
 
   const repairQualityByNames = async (names: string[], opts: QualityRepairRunOptions = {}) => {
     const targets = Array.from(new Set(names.map((name) => String(name || '').trim()).filter(Boolean)))
