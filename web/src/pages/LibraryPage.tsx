@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AutoComplete,
   Button,
@@ -11,26 +11,16 @@ import {
   Typography,
   Tabs,
   Tag,
-  Switch,
   Space,
-  Empty,
   Input,
   Card,
   Checkbox,
-  Alert,
-  Tooltip,
   Modal,
 } from 'antd'
 import {
   ReloadOutlined,
   StopOutlined,
-  FolderOpenOutlined,
   SearchOutlined,
-  CheckOutlined,
-  ClearOutlined,
-  CopyOutlined,
-  LockOutlined,
-  ApiOutlined,
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import type {
@@ -85,6 +75,7 @@ import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPa
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { LibraryDirectorySettings } from './library/LibraryDirectorySettings'
 import { LibraryUploadIntake } from './library/LibraryUploadIntake'
+import { LibraryUploadDraftWorkbench } from './library/LibraryUploadDraftWorkbench'
 import { LibraryFileRow } from './library/LibraryFileRow'
 import { LibraryFileList } from './library/LibraryFileList'
 import {
@@ -100,6 +91,7 @@ import {
   SCOPE_OPTIONS,
   RENAME_SCOPE_OPTIONS,
   buildQualityRepairHistoryRecord,
+  classifyFailedReason,
   conversionQualityIssueEntries,
   conversionQualityScore,
   conversionQualityStatus,
@@ -107,6 +99,7 @@ import {
   derivePageProgress,
   formatSeconds,
   hasConversionQualityIssue,
+  isDuplicateFailure,
   isUploadDraftConverted,
   loadQualityRepairHistory,
   matchesKeyword,
@@ -133,6 +126,8 @@ import {
   toTextOptions,
   type QualityRepairHistoryRecord,
   type UploadDraft,
+  type UploadDraftFilter,
+  type UploadErrorReason,
   uniqueTextValues,
 } from './library/libraryPageUtils'
 
@@ -146,9 +141,6 @@ const QUALITY_STATUS_VISIBLE = qualityStatusVisible()
 
 type FileTabKey = 'pending' | 'converted' | 'all'
 type LibraryBrowseMode = 'list' | 'categories' | 'tags'
-type DraftStatus = 'queued' | 'inspecting' | 'ready' | 'saving' | 'saved' | 'error'
-type UploadDraftFilter = 'all' | 'todo' | 'error' | 'dup_error' | 'saved'
-type UploadErrorReason = 'all' | 'duplicate' | 'path' | 'permission' | 'network' | 'other'
 
 const CONVERT_MODE = 'balanced'
 const PAPER_CATEGORY_PRESETS = [
@@ -249,27 +241,6 @@ type FilterFilesOptions = {
   ignoreTagFilter?: boolean
 }
 
-function DRAFT_STATUS_TEXT(S: Record<string, string>): Record<DraftStatus, string> {
-  return {
-    queued: S.lib_draft_queued,
-    inspecting: S.lib_draft_inspecting,
-    ready: S.lib_draft_ready,
-    saving: S.lib_draft_saving,
-    saved: S.lib_draft_saved,
-    error: S.lib_draft_error,
-  }
-}
-
-function FAILED_REASON_META(S: Record<string, string>): Record<Exclude<UploadErrorReason, 'all'>, { label: string, icon: ReactNode }> {
-  return {
-    duplicate: { label: S.lib_fail_duplicate, icon: <CopyOutlined /> },
-    path: { label: S.lib_fail_path, icon: <FolderOpenOutlined /> },
-    permission: { label: S.lib_fail_permission, icon: <LockOutlined /> },
-    network: { label: S.lib_fail_network, icon: <ApiOutlined /> },
-    other: { label: S.lib_fail_other, icon: <ExclamationCircleOutlined /> },
-  }
-}
-
 function deriveConvertStageLabel(msg0: string, S_?: Record<string, string>) {
   const msg = String(msg0 || '').trim().toLowerCase()
   if (!msg) return ''
@@ -286,19 +257,6 @@ function readingStatusLabel(value: string, S_?: Record<string, string>) {
   return ''
 }
 
-function isDuplicateFailure(note: string) {
-  const t = String(note || '').toLowerCase()
-  return t.includes('重复') || t.includes('duplicate') || t.includes('already exists') || t.includes('已存在')
-}
-
-function classifyFailedReason(note: string) {
-  const t = String(note || '').toLowerCase()
-  if (isDuplicateFailure(t)) return 'duplicate'
-  if (t.includes('目录') || t.includes('路径') || t.includes('path') || t.includes('dir')) return 'path'
-  if (t.includes('权限') || t.includes('permission') || t.includes('denied')) return 'permission'
-  if (t.includes('网络') || t.includes('timeout') || t.includes('network')) return 'network'
-  return 'other'
-}
 
 export default function LibraryPage() {
   const S = useT()
@@ -951,9 +909,9 @@ export default function LibraryPage() {
       counter.set(key, (counter.get(key) || 0) + 1)
     }
     return Array.from(counter.entries())
-      .map(([key, count]) => ({ key, count, label: FAILED_REASON_META(S)[key].label }))
+      .map(([key, count]) => ({ key, count }))
       .sort((a, b) => b.count - a.count)
-  }, [failedUploadDrafts, S])
+  }, [failedUploadDrafts])
   const filteredUploadDrafts = useMemo(() => {
     const withReason = (items: UploadDraft[]) => (
       uploadErrorReason === 'all'
@@ -992,17 +950,6 @@ export default function LibraryPage() {
   useEffect(() => {
     if (uploadDraftPage > uploadDraftPageCount) setUploadDraftPage(uploadDraftPageCount)
   }, [uploadDraftPage, uploadDraftPageCount])
-  const activeErrorReasonText = useMemo(() => {
-    const map: Record<UploadErrorReason, string> = {
-      all: S.lib_error_filter_all,
-      duplicate: FAILED_REASON_META(S).duplicate.label,
-      path: FAILED_REASON_META(S).path.label,
-      permission: FAILED_REASON_META(S).permission.label,
-      network: FAILED_REASON_META(S).network.label,
-      other: FAILED_REASON_META(S).other.label,
-    }
-    return map[uploadErrorReason]
-  }, [uploadErrorReason, S])
   const convertPercent = useMemo(() => {
     if (!store.progress || store.progress.total <= 0) return 0
     const tasks = Array.isArray(store.progress.activeTasks) ? store.progress.activeTasks : []
@@ -3792,147 +3739,48 @@ export default function LibraryPage() {
   )
 
   const uploadWorkbenchCard = showUploadWorkbench ? (
-    <Card
-      size="small"
-      className="kb-lib-card kb-lib-upload-workbench-card"
-      title={S.lib_section_upload_workbench}
-      extra={(
-        <Space size={8}>
-          <Text type="secondary" className="text-xs">{S.lib_upload_selected_count.replace('{n}', String(selectedUploadCount))}</Text>
-          <Text type="secondary" className="text-xs">{S.lib_upload_show_count.replace('{n}', String(filteredUploadDrafts.length)).replace('{total}', String(uploadDrafts.length))}</Text>
-          <Button size="small" onClick={() => setUploadWorkbenchOpen(false)}>{S.lib_btn_collapse}</Button>
-        </Space>
-      )}
-    >
-      <div className="space-y-3">
-        <div className="kb-lib-upload-toolbar flex flex-wrap items-center gap-2">
-          <Switch checked={uploadUseLlm} onChange={setUploadUseLlm} />
-          <Text className="text-sm text-[var(--muted)]">{S.lib_upload_use_llm}</Text>
-          <Select
-            value={uploadDraftFilter}
-            onChange={(value) => applyUploadFilter(value as UploadDraftFilter)}
-            options={uploadDraftFilterOptions}
-            className="kb-lib-upload-filter"
-          />
-          <Tooltip title={S.lib_btn_select_all}><Button icon={<CheckOutlined />} onClick={selectAllUploadDrafts}>{S.lib_btn_select_all}</Button></Tooltip>
-          <Tooltip title={S.lib_btn_invert_select}><Button icon={<ClearOutlined />} onClick={invertUploadDraftSelection}>{S.lib_btn_invert_select}</Button></Tooltip>
-          <Button loading={uploadInspecting} disabled={uploadLocked} onClick={() => { void inspectSelectedDrafts() }}>{S.lib_btn_scan_selected}</Button>
-          <Button loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(false) }}>{S.lib_btn_save_selected}</Button>
-          <Button type="primary" loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(true) }}>{S.lib_btn_save_and_convert}</Button>
-          <Button disabled={uploadLocked} onClick={selectFailedDrafts}>{S.lib_btn_select_failed}</Button>
-          <Button disabled={uploadLocked || duplicateFailedDrafts.length === 0} onClick={showDuplicateFailedDrafts}>{S.lib_btn_view_dup_failed}</Button>
-          <Button loading={uploadSaving || uploadInspecting} disabled={uploadLocked || retryableFailedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(false) }}>{S.lib_btn_retry_failed}</Button>
-          <Button type="primary" loading={uploadSaving || uploadInspecting} disabled={uploadLocked || retryableFailedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(true) }}>{S.lib_btn_retry_and_convert}</Button>
-          <Button disabled={uploadLocked} onClick={() => setUploadDrafts((cur) => cur.filter((x) => x.status !== 'saved'))}>{S.lib_btn_clear_saved}</Button>
-        </div>
-
-        {(uploadDraftFilter === 'error' || uploadDraftFilter === 'dup_error') && uploadErrorReason !== 'all' ? (
-          <div className="kb-lib-upload-meta flex flex-wrap items-center gap-3">
-            <Button size="small" onClick={() => setUploadErrorReason('all')}>
-              {S.lib_upload_filter_reason.replace('{reason}', activeErrorReasonText)}
-            </Button>
-          </div>
-        ) : null}
-
-        {failedUploadDrafts.length > 0 ? (
-          <Alert
-            type="warning"
-            showIcon
-            message={S.lib_upload_failed_drafts.replace('{n}', String(failedUploadDrafts.length))}
-            description={(
-              <div className="kb-lib-failed-summary">
-                <div className="kb-lib-failed-reasons">
-                  {failedReasonBuckets.map((bucket) => (
-                    <Button
-                      key={bucket.key}
-                      size="small"
-                      icon={FAILED_REASON_META(S)[bucket.key].icon}
-                      className={`kb-lib-failed-reason-btn kb-lib-reason-tone is-${bucket.key}${uploadErrorReason === bucket.key ? ' is-active' : ''}`}
-                      onClick={() => {
-                        applyUploadFilter('error')
-                        setUploadErrorReason(bucket.key)
-                      }}
-                    >
-                      {bucket.label} ({bucket.count})
-                    </Button>
-                  ))}
-                </div>
-                <Text type="secondary" className="text-xs">
-                  {failedUploadNotes.length > 0 ? failedUploadNotes.join(' | ') : S.lib_upload_error_hint}
-                </Text>
-              </div>
-            )}
-          />
-        ) : null}
-
-        {filteredUploadDrafts.length > 0 ? (
-          <div className="kb-lib-upload-draft-list">
-            <div className="kb-lib-upload-draft-list-body" role="list">
-              {pagedUploadDrafts.map((x) => {
-                const reasonKey = x.status === 'error'
-                  ? classifyFailedReason(x.note) as Exclude<UploadErrorReason, 'all'>
-                  : null
-                return (
-                  <div key={x.key} className="kb-lib-upload-draft-item" role="listitem">
-                    <div className="w-full space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Checkbox checked={x.selected} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, selected: e.target.checked } : t)))} />
-                        <Text className="min-w-0 flex-1 truncate text-sm">{x.name}</Text>
-                        <Tag color={x.status === 'saved' ? 'success' : x.status === 'error' ? 'error' : (x.status === 'saving' || x.status === 'inspecting') ? 'processing' : 'default'}>
-                          {DRAFT_STATUS_TEXT(S)[x.status]}
-                        </Tag>
-                        {reasonKey ? (
-                          <span className={`kb-lib-inline-reason-chip kb-lib-reason-tone is-${reasonKey}`}>
-                            {FAILED_REASON_META(S)[reasonKey].icon}
-                            <span>{FAILED_REASON_META(S)[reasonKey].label}</span>
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 pl-6">
-                        <Text type="secondary" className="text-xs">{S.lib_upload_suggest_name}</Text>
-                        <Input value={x.stem} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, stem: e.target.value } : t)))} className="w-[24rem] max-w-full" />
-                        <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'inspecting'} onClick={() => { inspectSingleDraft(x.key) }}>{S.lib_btn_scan}</Button>
-                        <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, false) }}>{S.lib_btn_save}</Button>
-                        <Button size="small" type="primary" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, true) }}>{S.lib_btn_save_and_convert}</Button>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 pl-6">
-                        <Text type="secondary" className="text-xs">{x.displayName}</Text>
-                        {x.suggestionBasisLabel ? (
-                          <Tag color={suggestionBasisTagColor({ match_method: x.suggestionMatchMethod, year_source: x.suggestionYearSource })}>
-                            {x.suggestionBasisLabel}
-                          </Tag>
-                        ) : null}
-                      </div>
-                      {x.suggestionBasisDetail ? (
-                        <Text type="secondary" className="block pl-6 text-xs">{x.suggestionBasisDetail}</Text>
-                      ) : null}
-                      {x.note ? (
-                        <Text type="secondary" className={`block pl-6 text-xs${reasonKey ? ' kb-lib-fail-note' : ''}`}>
-                          {x.note}
-                        </Text>
-                      ) : null}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-            {filteredUploadDrafts.length > UPLOAD_DRAFT_PAGE_SIZE ? (
-              <Pagination
-                className="kb-lib-list-pagination"
-                size="small"
-                current={uploadDraftPage}
-                pageSize={UPLOAD_DRAFT_PAGE_SIZE}
-                total={filteredUploadDrafts.length}
-                showSizeChanger={false}
-                onChange={setUploadDraftPage}
-              />
-            ) : null}
-          </div>
-        ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.lib_upload_empty} />
-        )}
-      </div>
-    </Card>
+    <LibraryUploadDraftWorkbench
+      S={S}
+      uploadDrafts={uploadDrafts}
+      filteredUploadDrafts={filteredUploadDrafts}
+      pagedUploadDrafts={pagedUploadDrafts}
+      selectedUploadCount={selectedUploadCount}
+      uploadDraftFilter={uploadDraftFilter}
+      uploadErrorReason={uploadErrorReason}
+      uploadDraftFilterOptions={uploadDraftFilterOptions}
+      uploadUseLlm={uploadUseLlm}
+      uploadInspecting={uploadInspecting}
+      uploadSaving={uploadSaving}
+      uploadLocked={uploadLocked}
+      failedUploadDraftCount={failedUploadDrafts.length}
+      failedUploadNotes={failedUploadNotes}
+      failedReasonBuckets={failedReasonBuckets}
+      duplicateFailedDraftCount={duplicateFailedDrafts.length}
+      retryableFailedUploadDraftCount={retryableFailedUploadDrafts.length}
+      uploadDraftPage={uploadDraftPage}
+      uploadDraftPageSize={UPLOAD_DRAFT_PAGE_SIZE}
+      onCollapse={() => setUploadWorkbenchOpen(false)}
+      onUploadUseLlmChange={setUploadUseLlm}
+      onFilterChange={applyUploadFilter}
+      onClearErrorReason={() => setUploadErrorReason('all')}
+      onSelectAllDrafts={selectAllUploadDrafts}
+      onInvertDraftSelection={invertUploadDraftSelection}
+      onInspectSelectedDrafts={inspectSelectedDrafts}
+      onSaveSelectedDrafts={saveSelectedDrafts}
+      onSelectFailedDrafts={selectFailedDrafts}
+      onShowDuplicateFailedDrafts={showDuplicateFailedDrafts}
+      onRetryFailedDrafts={retryFailedDrafts}
+      onClearSavedDrafts={() => setUploadDrafts((cur) => cur.filter((x) => x.status !== 'saved'))}
+      onSelectFailedReason={(reason) => {
+        applyUploadFilter('error')
+        setUploadErrorReason(reason)
+      }}
+      onDraftSelectedChange={(key, selected) => setUploadDrafts((cur) => cur.map((x) => (x.key === key ? { ...x, selected } : x)))}
+      onDraftStemChange={(key, stem) => setUploadDrafts((cur) => cur.map((x) => (x.key === key ? { ...x, stem } : x)))}
+      onInspectDraft={inspectSingleDraft}
+      onSaveDraft={saveDraft}
+      onPageChange={setUploadDraftPage}
+    />
   ) : null
 
   return (

@@ -105,6 +105,23 @@ export type UploadDraft = {
   suggestionYearSource?: string
 }
 
+export type UploadDraftFilter = 'all' | 'todo' | 'error' | 'dup_error' | 'saved'
+export type UploadErrorReason = 'all' | 'duplicate' | 'path' | 'permission' | 'network' | 'other'
+
+export function isDuplicateFailure(note: string) {
+  const text = String(note || '').toLowerCase()
+  return text.includes('\u91cd\u590d') || text.includes('duplicate') || text.includes('already exists') || text.includes('\u5df2\u5b58\u5728')
+}
+
+export function classifyFailedReason(note: string): Exclude<UploadErrorReason, 'all'> {
+  const text = String(note || '').toLowerCase()
+  if (isDuplicateFailure(text)) return 'duplicate'
+  if (text.includes('\u76ee\u5f55') || text.includes('\u8def\u5f84') || text.includes('path') || text.includes('dir')) return 'path'
+  if (text.includes('\u6743\u9650') || text.includes('permission') || text.includes('denied')) return 'permission'
+  if (text.includes('\u7f51\u7edc') || text.includes('timeout') || text.includes('network')) return 'network'
+  return 'other'
+}
+
 export type QualityRepairHistoryRecord = {
   name: string
   beforeScore: number
