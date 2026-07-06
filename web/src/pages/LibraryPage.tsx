@@ -53,6 +53,7 @@ import {
   LibraryBatchMetadataDrawer,
   type LibraryBatchMetaDraft,
 } from './library/LibraryBatchMetadataDrawer'
+import { LibraryBatchSelectionBar } from './library/LibraryBatchSelectionBar'
 import { LibraryMetadataDrawer } from './library/LibraryMetadataDrawer'
 import {
   LibraryQualityFigureAssetsPanel,
@@ -3935,35 +3936,19 @@ export default function LibraryPage() {
         onClearQualityHistoryFocus={() => setQualityHistoryFocusNames([])}
       />
 
-      {browseMode === 'list' && selectedLibraryCount > 0 ? (
-        <Card size="small" className="kb-lib-card kb-lib-batch-card">
-          <div className="kb-lib-batch-bar">
-            <div className="kb-lib-batch-summary">
-              <div className="kb-lib-batch-badges">
-                <span className="kb-lib-batch-badge is-strong">{S.lib_batch_selected_count.replace('{n}', String(selectedLibraryCount))}</span>
-                <span className="kb-lib-batch-badge">{S.lib_batch_current_count.replace('{n}', String(currentListItems.length))}</span>
-              </div>
-              <Text className="kb-lib-batch-count">{S.lib_batch_title_selected}</Text>
-              <Text type="secondary" className="kb-lib-batch-hint">{S.lib_batch_hint_scope}</Text>
-            </div>
-            <div className="kb-lib-batch-actions">
-              <Button onClick={selectCurrentListItems}>{S.lib_btn_select_current_list}</Button>
-              <Button onClick={clearLibrarySelection} disabled={!selectedLibraryCount}>{S.lib_btn_clear_selection}</Button>
-              {QUALITY_DIAGNOSTICS_VISIBLE && selectedQualityReviewNames.length > 0 ? (
-                <Button
-                  icon={<ReloadOutlined />}
-                  loading={selectedQualityReviewNames.some((name) => Boolean(qualityRepairingNames[name]))}
-                  onClick={() => { void handleRepairSelectedQuality() }}
-                  data-testid="library-quality-repair-selected"
-                >
-                  {S.lib_btn_repair_quality_selected}
-                </Button>
-              ) : null}
-              <Button type="primary" onClick={openBatchEditor} disabled={!selectedLibraryCount}>{S.lib_batch_title}</Button>
-            </div>
-          </div>
-        </Card>
-      ) : null}
+      <LibraryBatchSelectionBar
+        visible={browseMode === 'list'}
+        S={S}
+        selectedCount={selectedLibraryCount}
+        currentCount={currentListItems.length}
+        qualityDiagnosticsVisible={QUALITY_DIAGNOSTICS_VISIBLE}
+        repairableQualityCount={selectedQualityReviewNames.length}
+        repairingSelectedQuality={selectedQualityReviewNames.some((name) => Boolean(qualityRepairingNames[name]))}
+        onSelectCurrentList={selectCurrentListItems}
+        onClearSelection={clearLibrarySelection}
+        onRepairSelectedQuality={() => { void handleRepairSelectedQuality() }}
+        onOpenBatchEditor={openBatchEditor}
+      />
 
       {browseMode === 'list' ? (
         <Tabs
