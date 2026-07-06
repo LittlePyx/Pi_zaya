@@ -89,6 +89,12 @@ import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPa
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { LibraryFileRow } from './library/LibraryFileRow'
 import { LibraryFileList } from './library/LibraryFileList'
+import {
+  LibraryCategoryCards,
+  LibraryTagCards,
+  type CategoryCardItem,
+  type TagCardItem,
+} from './library/LibraryTaxonomyViews'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -238,26 +244,6 @@ type QualityFullChainActionResult = {
   verificationText?: string
   improved?: boolean | null
   updatedAt: number
-}
-
-type CategoryCardItem = {
-  key: string
-  label: string
-  count: number
-  unreadCount: number
-  convertedCount: number
-  pendingCount: number
-  commonTags: string[]
-  recentPapers: string[]
-}
-
-type TagCardItem = {
-  key: string
-  label: string
-  count: number
-  unreadCount: number
-  categories: string[]
-  recentPapers: string[]
 }
 
 type FilterFilesOptions = {
@@ -3592,122 +3578,6 @@ export default function LibraryPage() {
     )
   }
 
-  const renderCategoriesView = () => {
-    if (!categoryCards.length) {
-      return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.lib_empty_category} />
-    }
-
-    return (
-      <div className="kb-lib-category-grid">
-        {categoryCards.map((card) => {
-          const isUnclassified = card.key === 'category:__unclassified__'
-          const active = isUnclassified ? onlyUnclassified : (!onlyUnclassified && paperCategoryFilter === card.label)
-          return (
-            <button
-              key={card.key}
-              type="button"
-              className={`kb-lib-category-card${active ? ' is-active' : ''}`}
-              onClick={() => {
-                if (isUnclassified) {
-                  setPaperCategoryFilter('')
-                  setOnlyUnclassified(true)
-                } else {
-                  applyPaperCategoryFilter(card.label)
-                }
-                setBrowseMode('list')
-              }}
-            >
-              <div className="kb-lib-category-card-head">
-                <div className="kb-lib-category-card-title">
-                  <span>{card.label}</span>
-                  <strong>{card.count}</strong>
-                </div>
-                <div className="kb-lib-category-card-meta">
-                  <span>{card.unreadCount} unread</span>
-                  <span>{card.convertedCount} converted</span>
-                  {card.pendingCount > 0 ? <span>{card.pendingCount} pending</span> : null}
-                </div>
-              </div>
-
-              {card.commonTags.length > 0 ? (
-                <div className="kb-lib-category-card-tags">
-                  {card.commonTags.map((tagValue) => (
-                    <span key={`${card.key}-${tagValue}`} className="kb-lib-category-tag">
-                      #{tagValue}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <div className="kb-lib-category-card-empty">{S.lib_tag_empty_common}</div>
-              )}
-
-              <div className="kb-lib-category-card-recent">
-                {card.recentPapers.map((paper) => (
-                  <span key={`${card.key}-${paper}`} className="kb-lib-category-paper">
-                    {paper}
-                  </span>
-                ))}
-              </div>
-            </button>
-          )
-        })}
-      </div>
-    )
-  }
-
-  const renderTagsView = () => {
-    if (!tagCards.length) {
-      return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.lib_empty_tag} />
-    }
-
-    return (
-      <div className="kb-lib-tag-grid">
-        {tagCards.map((card) => {
-          const active = paperTagFilter && card.label.toLowerCase() === paperTagFilter.toLowerCase()
-          return (
-            <button
-              key={card.key}
-              type="button"
-              className={`kb-lib-tag-card${active ? ' is-active' : ''}`}
-              onClick={() => {
-                applyPaperTagFilter(card.label)
-                setBrowseMode('list')
-              }}
-            >
-              <div className="kb-lib-tag-card-head">
-                <div className="kb-lib-tag-card-title">
-                  <span>#{card.label}</span>
-                  <strong>{card.count}</strong>
-                </div>
-                <div className="kb-lib-tag-card-meta">
-                  <span>{S.lib_tag_unread_count.replace('{n}', String(card.unreadCount))}</span>
-                </div>
-              </div>
-
-              {card.categories.length > 0 ? (
-                <div className="kb-lib-tag-card-cats">
-                  {card.categories.map((category) => (
-                    <span key={`${card.key}-${category}`} className="kb-lib-tag-category">
-                      {category}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-
-              <div className="kb-lib-tag-card-recent">
-                {card.recentPapers.map((paper) => (
-                  <span key={`${card.key}-${paper}`} className="kb-lib-tag-paper">
-                    {paper}
-                  </span>
-                ))}
-              </div>
-            </button>
-          )
-        })}
-      </div>
-    )
-  }
-
   const renderFiles = (items: LibraryFileItem[], emptyText: string) => {
     return (
       <LibraryFileList
@@ -4622,11 +4492,33 @@ export default function LibraryPage() {
       />
       ) : browseMode === 'categories' ? (
         <Card size="small" className="kb-lib-card">
-          {renderCategoriesView()}
+          <LibraryCategoryCards
+            S={S}
+            cards={categoryCards}
+            onlyUnclassified={onlyUnclassified}
+            paperCategoryFilter={paperCategoryFilter}
+            onSelectCategory={(card) => {
+              if (card.key === 'category:__unclassified__') {
+                setPaperCategoryFilter('')
+                setOnlyUnclassified(true)
+              } else {
+                applyPaperCategoryFilter(card.label)
+              }
+              setBrowseMode('list')
+            }}
+          />
         </Card>
       ) : (
         <Card size="small" className="kb-lib-card">
-          {renderTagsView()}
+          <LibraryTagCards
+            S={S}
+            cards={tagCards}
+            paperTagFilter={paperTagFilter}
+            onSelectTag={(card) => {
+              applyPaperTagFilter(card.label)
+              setBrowseMode('list')
+            }}
+          />
         </Card>
       )}
 
