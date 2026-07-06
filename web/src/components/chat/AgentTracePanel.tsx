@@ -1,10 +1,10 @@
 import { useT } from '../../i18n'
 import { internalDebugEnvEnabled } from '../../utils/internalDebug'
-import type { CiteDetail } from './citationState'
 import { AgentTraceFrame } from './AgentTraceFrame'
 import { AgentSourceSummaryPanel } from './AgentSourceSummaryPanel'
 import { AgentTraceDiagnosticsPanel } from './AgentTraceDiagnosticsPanel'
 import { AgentTraceStoredPrompt } from './AgentTraceStoredPrompt'
+import type { AgentTraceReferenceHandlers } from './agentTraceReferenceTypes'
 import { useArchivedAgentTrace, type LoadArchivedAgentTrace } from './useArchivedAgentTrace'
 import { useAgentTraceViewModel } from './useAgentTraceViewModel'
 
@@ -15,13 +15,11 @@ export function AgentTracePanel({
   onLoadTrace,
   onOpenReference,
   onAddReferenceToShelf,
-}: {
+}: AgentTraceReferenceHandlers & {
   trace?: Record<string, unknown> | null
   messageId?: number
   canLoadTrace?: boolean
   onLoadTrace?: LoadArchivedAgentTrace
-  onOpenReference?: (detail: CiteDetail, ref: Record<string, unknown>) => void
-  onAddReferenceToShelf?: (detail: CiteDetail, ref: Record<string, unknown>) => void
 }) {
   const S = useT()
   const {

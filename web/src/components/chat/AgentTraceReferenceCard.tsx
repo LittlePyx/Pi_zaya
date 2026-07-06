@@ -1,6 +1,5 @@
-import type { StringMap } from '../../i18n'
-import type { CiteDetail } from './citationState'
 import { AgentTraceReferenceActions } from './AgentTraceReferenceActions'
+import type { AgentTraceReferenceCardProps } from './agentTraceReferenceTypes'
 import {
   referenceDetail,
   referenceMeta,
@@ -13,12 +12,7 @@ export function AgentTraceReferenceCard({
   reference,
   onOpenReference,
   onAddReferenceToShelf,
-}: {
-  labels: Partial<StringMap>
-  reference: Record<string, unknown>
-  onOpenReference?: (detail: CiteDetail, ref: Record<string, unknown>) => void
-  onAddReferenceToShelf?: (detail: CiteDetail, ref: Record<string, unknown>) => void
-}) {
+}: AgentTraceReferenceCardProps) {
   const detail = referenceDetail(reference)
   const meta = referenceMeta(reference)
 

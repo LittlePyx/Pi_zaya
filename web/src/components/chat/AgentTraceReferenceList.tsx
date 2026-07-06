@@ -1,18 +1,12 @@
-import type { StringMap } from '../../i18n'
-import type { CiteDetail } from './citationState'
 import { AgentTraceReferenceCard } from './AgentTraceReferenceCard'
+import type { AgentTraceReferenceListProps } from './agentTraceReferenceTypes'
 
 export function AgentTraceReferenceList({
   references,
   labels,
   onOpenReference,
   onAddReferenceToShelf,
-}: {
-  references: Record<string, unknown>[]
-  labels: Partial<StringMap>
-  onOpenReference?: (detail: CiteDetail, ref: Record<string, unknown>) => void
-  onAddReferenceToShelf?: (detail: CiteDetail, ref: Record<string, unknown>) => void
-}) {
+}: AgentTraceReferenceListProps) {
   if (references.length <= 0) return null
   return (
     <div className="kb-agent-trace-refs">

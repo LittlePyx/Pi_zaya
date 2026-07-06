@@ -1,6 +1,6 @@
 import type { StringMap } from '../../i18n'
-import type { CiteDetail } from './citationState'
 import { AgentTraceReferenceList } from './AgentTraceReferenceList'
+import type { AgentTraceReferenceHandlers, AgentTraceReferenceRecord } from './agentTraceReferenceTypes'
 import { tx } from './agentTracePanelUtils'
 
 export function AgentTraceReferenceSection({
@@ -8,11 +8,9 @@ export function AgentTraceReferenceSection({
   references,
   onOpenReference,
   onAddReferenceToShelf,
-}: {
+}: AgentTraceReferenceHandlers & {
   labels: Partial<StringMap>
-  references: Record<string, unknown>[]
-  onOpenReference?: (detail: CiteDetail, ref: Record<string, unknown>) => void
-  onAddReferenceToShelf?: (detail: CiteDetail, ref: Record<string, unknown>) => void
+  references: AgentTraceReferenceRecord[]
 }) {
   if (references.length <= 0) return null
 

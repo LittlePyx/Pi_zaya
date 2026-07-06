@@ -1,7 +1,7 @@
 import type { StringMap } from '../../i18n'
-import type { CiteDetail } from './citationState'
 import { asTraceRecord, traceNum } from './messageTraceUtils'
 import { AgentTraceReferenceList } from './AgentTraceReferenceList'
+import type { AgentTraceReferenceHandlers } from './agentTraceReferenceTypes'
 import type { AgentTraceDiagnosticsViewModel } from './useAgentTraceViewModel'
 import {
   records,
@@ -16,11 +16,9 @@ export function AgentTraceDiagnosticsPanel({
   viewModel,
   onOpenReference,
   onAddReferenceToShelf,
-}: {
+}: AgentTraceReferenceHandlers & {
   labels: Partial<StringMap>
   viewModel: AgentTraceDiagnosticsViewModel
-  onOpenReference?: (detail: CiteDetail, ref: Record<string, unknown>) => void
-  onAddReferenceToShelf?: (detail: CiteDetail, ref: Record<string, unknown>) => void
 }) {
   const { plan, steps, planStepCount, toolCallCount } = viewModel
 
