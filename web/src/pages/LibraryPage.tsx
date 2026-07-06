@@ -88,10 +88,11 @@ import { LibraryQualityHistoryPanel } from './library/LibraryQualityHistoryPanel
 import { LibraryQualityStatusPanels } from './library/LibraryQualityStatusPanels'
 import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
-import { LibraryFileQualityChips, LibraryFileQualityLine } from './library/LibraryFileQualityLine'
+import { LibraryFileQualityLine } from './library/LibraryFileQualityLine'
 import { LibraryFileActions } from './library/LibraryFileActions'
 import { LibraryFileTaxonomy } from './library/LibraryFileTaxonomy'
 import { LibraryFileProgressNote } from './library/LibraryFileProgressNote'
+import { LibraryFileHeader } from './library/LibraryFileHeader'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -103,7 +104,6 @@ import {
   conversionQualityStatus,
   conversionSourceReadiness,
   derivePageProgress,
-  fileTag,
   formatSeconds,
   hasConversionQualityIssue,
   isUploadDraftConverted,
@@ -3568,15 +3568,6 @@ export default function LibraryPage() {
   }
 
   const renderFileRow = (item: LibraryFileItem) => {
-    const tag = fileTag(item, S)
-    const statusTone =
-      tag.color === 'success'
-        ? 'is-success'
-        : tag.color === 'processing'
-          ? 'is-processing'
-          : tag.color === 'warning'
-            ? 'is-warning'
-            : 'is-default'
     const readingLabel = readingStatusLabel(item.reading_status, S)
     const suggestionCount = (item.suggested_category ? 1 : 0) + (item.suggested_tags || []).length
     const isSelected = Boolean(selectedLibraryNames[item.name])
@@ -3595,26 +3586,13 @@ export default function LibraryPage() {
         </div>
 
         <div className="kb-lib-file-main">
-          <div className="kb-lib-file-head">
-            <div className="kb-lib-file-title-wrap">
-              <Text className="kb-lib-file-title" title={item.name}>{item.name}</Text>
-            </div>
-            <div className="kb-lib-file-submeta">
-              <span className={`kb-lib-file-status-chip ${statusTone}`}>{tag.text}</span>
-              <LibraryFileQualityChips
-                S={S}
-                item={item}
-                qualityStatusVisible={QUALITY_STATUS_VISIBLE}
-                qualityDiagnosticsVisible={QUALITY_DIAGNOSTICS_VISIBLE}
-              />
-              {!item.md_exists ? <span className="kb-lib-file-meta-muted">{S.lib_file_no_md}</span> : null}
-              {suggestionCount > 0 ? (
-                <span className="kb-lib-file-submeta-chip is-suggestion">
-                  {S.lib_file_suggestions.replace('{n}', String(suggestionCount))}
-                </span>
-              ) : null}
-            </div>
-          </div>
+          <LibraryFileHeader
+            S={S}
+            item={item}
+            suggestionCount={suggestionCount}
+            qualityStatusVisible={QUALITY_STATUS_VISIBLE}
+            qualityDiagnosticsVisible={QUALITY_DIAGNOSTICS_VISIBLE}
+          />
 
           <LibraryFileTaxonomy
             item={item}

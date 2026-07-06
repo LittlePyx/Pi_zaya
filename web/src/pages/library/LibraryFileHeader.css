@@ -1,0 +1,123 @@
+.kb-lib-file-head {
+  display: grid;
+  gap: 3px;
+}
+
+.kb-lib-file-title-wrap {
+  min-width: 0;
+}
+
+.kb-lib-file-title.ant-typography {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-main);
+  font-size: 13.25px;
+  font-weight: 640;
+  line-height: 1.28;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.kb-lib-file-submeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: flex-start;
+  align-items: center;
+}
+
+.kb-lib-file-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 18px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0;
+  background: transparent;
+  font-size: 10.75px;
+  font-weight: 650;
+  letter-spacing: 0;
+  box-shadow: none;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.kb-lib-file-status-chip::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.72;
+}
+
+.kb-lib-file-status-chip.is-success {
+  color: color-mix(in srgb, #15803d 82%, var(--text-main));
+}
+
+.kb-lib-file-status-chip.is-processing {
+  color: color-mix(in srgb, #2563eb 84%, var(--text-main));
+}
+
+.kb-lib-file-status-chip.is-warning {
+  color: color-mix(in srgb, #b45309 84%, var(--text-main));
+}
+
+.kb-lib-file-status-chip.is-default {
+  color: color-mix(in srgb, var(--muted-text) 92%, transparent);
+}
+
+.kb-lib-file-status-chip:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
+.kb-lib-file-submeta-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0;
+  font-size: 10.25px;
+  color: color-mix(in srgb, var(--muted-text) 88%, transparent);
+  box-shadow: none;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.kb-lib-file-meta-muted {
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--muted-text) 72%, transparent);
+}
+
+.kb-lib-file-submeta-chip.is-suggestion {
+  color: color-mix(in srgb, #1d4ed8 74%, var(--text-main));
+}
+
+.kb-lib-file-submeta-chip.is-doc-type {
+  font-weight: 680;
+}
+
+.kb-lib-file-submeta-chip.is-review {
+  color: color-mix(in srgb, #6d5b20 86%, var(--text-main));
+}
+
+.kb-lib-file-submeta-chip.is-supplement {
+  color: color-mix(in srgb, #47616f 86%, var(--text-main));
+}
+
+.kb-lib-file-submeta-chip:hover {
+  background: transparent;
+  box-shadow: none;
+}
