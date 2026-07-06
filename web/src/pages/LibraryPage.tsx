@@ -1,17 +1,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  AutoComplete,
   Button,
-  Drawer,
   message,
-  Select,
   Typography,
   Tabs,
-  Tag,
   Space,
   Card,
-  Checkbox,
   Modal,
 } from 'antd'
 import {
@@ -54,6 +49,10 @@ import {
   type WorkbenchMetricItem,
   type WorkbenchTone,
 } from '../components/library/WorkbenchPrimitives'
+import {
+  LibraryBatchMetadataDrawer,
+  type LibraryBatchMetaDraft,
+} from './library/LibraryBatchMetadataDrawer'
 import { LibraryMetadataDrawer } from './library/LibraryMetadataDrawer'
 import {
   LibraryQualityFigureAssetsPanel,
@@ -103,7 +102,6 @@ import {
   normalizeTextList,
   normalizeTextValue,
   numericStat,
-  optionMatchesInput,
   qualityActionDeltaText,
   qualityBuildActionDelta,
   qualityDomainNumber,
@@ -167,15 +165,6 @@ type LibraryMetaDraft = {
   reading_status: ReadingStatusValue
   note: string
   user_tags: string[]
-}
-
-type LibraryBatchMetaDraft = {
-  apply_paper_category: boolean
-  paper_category: string
-  apply_reading_status: boolean
-  reading_status: ReadingStatusValue
-  add_tags: string[]
-  remove_tags: string[]
 }
 
 type QualityRepairBaseline = {
@@ -1325,14 +1314,6 @@ export default function LibraryPage() {
   )
 
   const selectedLibraryCount = selectedLibraryNamesList.length
-  const batchDraftCategory = normalizeTextValue(batchDraft.paper_category)
-  const batchDraftAddTags = normalizeTextList(batchDraft.add_tags)
-  const batchDraftRemoveTags = normalizeTextList(batchDraft.remove_tags)
-  const batchDraftWillClearCategory = batchDraft.apply_paper_category && !batchDraftCategory
-  const batchDraftWillClearStatus = batchDraft.apply_reading_status && !batchDraft.reading_status
-  const batchDraftReadingLabel = batchDraft.apply_reading_status
-    ? readingStatusLabel(batchDraft.reading_status, S)
-    : ''
   const selectedQualityReviewNames = useMemo(
     () => store.files
       .filter((item) => Boolean(selectedLibraryNames[item.name]) && hasConversionQualityIssue(item) && item.task_state === 'idle')
@@ -4049,145 +4030,22 @@ export default function LibraryPage() {
         readingStatusLabel={readingStatusLabel}
       />
 
-      <Drawer
-        title={S.lib_batch_edit_count_format.replace('{n}', String(selectedLibraryCount))}
+      <LibraryBatchMetadataDrawer
         open={batchDrawerOpen}
-        size={420}
+        selectedCount={selectedLibraryCount}
+        draft={batchDraft}
+        saving={batchSaving}
+        S={S}
+        paperCategoryOptions={paperCategoryOptions}
+        paperTagOptions={paperTagOptions}
+        paperTagFilterOptions={paperTagFilterOptions}
+        readingStatusOptions={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
+        tagInputSeparators={TAG_INPUT_SEPARATORS}
         onClose={() => setBatchDrawerOpen(false)}
-        destroyOnClose={false}
-      >
-        <div className="kb-lib-meta-drawer">
-          <div className="kb-lib-meta-hero kb-lib-meta-hero-batch">
-            <div className="kb-lib-meta-hero-copy">
-              <Text className="kb-lib-meta-hero-title">{S.lib_batch_edit_hero.replace('{n}', String(selectedLibraryCount))}</Text>
-              <Text type="secondary" className="kb-lib-meta-hero-note">
-                {S.lib_batch_notice}
-              </Text>
-            </div>
-            <Space wrap size={[6, 6]} className="kb-lib-meta-chip-row">
-              <Tag color={selectedLibraryCount ? 'blue' : 'default'}>{S.lib_batch_selected_tag.replace('{n}', String(selectedLibraryCount))}</Tag>
-              {batchDraft.apply_paper_category ? (
-                batchDraftWillClearCategory ? (
-                  <Tag color="warning">{S.lib_batch_clear_category_label}</Tag>
-                ) : (
-                  <Tag color="processing">{S.lib_batch_set_category_label.replace('{category}', batchDraftCategory)}</Tag>
-                )
-              ) : null}
-              {batchDraft.apply_reading_status ? (
-                batchDraftWillClearStatus ? (
-                  <Tag color="warning">{S.lib_batch_clear_status_label}</Tag>
-                ) : (
-                  <Tag color="gold">{S.lib_batch_set_status_label.replace('{status}', batchDraftReadingLabel)}</Tag>
-                )
-              ) : null}
-              {batchDraftAddTags.length ? (
-                <Tag color="green">{S.lib_batch_add_tag_count.replace('{n}', String(batchDraftAddTags.length))}</Tag>
-              ) : null}
-              {batchDraftRemoveTags.length ? (
-                <Tag color="red">{S.lib_batch_remove_tag_count.replace('{n}', String(batchDraftRemoveTags.length))}</Tag>
-              ) : null}
-            </Space>
-          </div>
-
-          <section className="kb-lib-meta-section">
-            <div className="kb-lib-meta-section-head">
-              <div className="kb-lib-meta-section-copy">
-                <Text className="kb-lib-meta-section-title">{S.lib_batch_section_setting}</Text>
-                <Text type="secondary" className="kb-lib-meta-section-note">
-                  {S.lib_batch_setting_hint}
-                </Text>
-              </div>
-            </div>
-
-            <div className={`kb-lib-meta-field ${batchDraft.apply_paper_category ? '' : 'is-muted'}`}>
-              <Checkbox
-                checked={batchDraft.apply_paper_category}
-                onChange={(event) => setBatchDraft((cur) => ({ ...cur, apply_paper_category: event.target.checked }))}
-              >
-                {S.lib_batch_set_category_cb}
-              </Checkbox>
-              <AutoComplete
-                value={batchDraft.paper_category}
-                allowClear
-                disabled={!batchDraft.apply_paper_category}
-                options={paperCategoryOptions}
-                placeholder={S.lib_meta_category_placeholder}
-                filterOption={optionMatchesInput}
-                onChange={(value) => setBatchDraft((cur) => ({ ...cur, paper_category: String(value || '') }))}
-                onBlur={() => setBatchDraft((cur) => ({ ...cur, paper_category: normalizeTextValue(cur.paper_category) }))}
-              />
-              <Text type="secondary" className="kb-lib-meta-help">
-                {S.lib_batch_category_hint}
-              </Text>
-            </div>
-
-            <div className={`kb-lib-meta-field ${batchDraft.apply_reading_status ? '' : 'is-muted'}`}>
-              <Checkbox
-                checked={batchDraft.apply_reading_status}
-                onChange={(event) => setBatchDraft((cur) => ({ ...cur, apply_reading_status: event.target.checked }))}
-              >
-                {S.lib_batch_set_status_cb}
-              </Checkbox>
-              <Select
-                value={batchDraft.reading_status || undefined}
-                allowClear
-                disabled={!batchDraft.apply_reading_status}
-                placeholder={S.lib_meta_reading_placeholder}
-                options={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
-                onChange={(value) => setBatchDraft((cur) => ({ ...cur, reading_status: String(value || '') as ReadingStatusValue }))}
-              />
-            </div>
-          </section>
-
-          <section className="kb-lib-meta-section">
-            <div className="kb-lib-meta-section-head">
-              <div className="kb-lib-meta-section-copy">
-                <Text className="kb-lib-meta-section-title">{S.lib_batch_section_tags}</Text>
-                <Text type="secondary" className="kb-lib-meta-section-note">
-                  {S.lib_batch_tags_hint}
-                </Text>
-              </div>
-            </div>
-
-            <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">{S.lib_batch_label_add_tags}</Text>
-              <Select
-                mode="tags"
-                value={batchDraft.add_tags}
-                showSearch
-                maxTagCount="responsive"
-                tokenSeparators={TAG_INPUT_SEPARATORS}
-                placeholder={S.lib_batch_add_tag_placeholder}
-                options={paperTagOptions}
-                optionFilterProp="label"
-                onChange={(value) => setBatchDraft((cur) => ({ ...cur, add_tags: normalizeTextList(value as unknown[]) }))}
-              />
-            </div>
-
-            <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">{S.lib_batch_label_remove_tags}</Text>
-              <Select
-                mode="multiple"
-                value={batchDraft.remove_tags}
-                maxTagCount="responsive"
-                placeholder={S.lib_batch_remove_tag_placeholder}
-                options={paperTagFilterOptions}
-                optionFilterProp="label"
-                onChange={(value) => setBatchDraft((cur) => ({ ...cur, remove_tags: normalizeTextList(value as unknown[]) }))}
-              />
-            </div>
-          </section>
-
-          <div className="kb-lib-meta-actions">
-            <Button onClick={() => setBatchDrawerOpen(false)}>
-              {S.lib_btn_cancel}
-            </Button>
-            <Button type="primary" loading={batchSaving} onClick={() => { void saveBatchEditor() }}>
-              {S.lib_btn_apply_to_selected}
-            </Button>
-          </div>
-        </div>
-      </Drawer>
+        onDraftChange={setBatchDraft}
+        onSave={() => { void saveBatchEditor() }}
+        readingStatusLabel={readingStatusLabel}
+      />
     </div>
   )
 }
