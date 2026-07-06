@@ -1,7 +1,8 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import {
   READER_REGRESSION_SOURCE_PATH,
 } from '../../src/testing/readerRegressionFixtures'
+import type { AgentSourceSummaryViewModel } from '../../src/components/chat/useAgentTraceViewModel'
 import {
   installAppShellMocks,
   installEmptyCitationShelfMock,
@@ -23,12 +24,113 @@ const DIAGNOSTICS_RE = /Diagnostics|诊断信息/
 const NOT_FROM_KB_RE = /Not from KB|非本地文献库|闈炴湰鍦版枃鐚簱/
 const LOCAL_EXTERNAL_RE = /Local \+ external|文献库 \+ 外部补充|鏂囩尞搴?.*澶栭儴琛ュ厖/
 
+function agentSummaryViewModel(overrides: Partial<AgentSourceSummaryViewModel> = {}): AgentSourceSummaryViewModel {
+  return {
+    evidenceLabel: 'Evidence grounded',
+    evidenceStatus: 'grounded',
+    totalClaims: 2,
+    supportedClaims: 1,
+    unsupportedClaims: 1,
+    qualityGateStatus: 'repaired',
+    qualityGateTitle: 'citation repair applied',
+    taskLabel: 'Single paper',
+    scopeSummary: 'library / 2 selected',
+    hasErrors: true,
+    researchRunStatus: 'done',
+    evidenceMatrixRows: 3,
+    sourcePolicy: 'local_only',
+    evidenceMatrix: [],
+    subtaskCount: 0,
+    unsupportedClaimRows: [],
+    references: [],
+    ...overrides,
+  }
+}
+
+type SummaryChipSnapshot = {
+  id: string
+  className?: string
+  label: string | number
+  testId?: string
+  title?: string
+  value: string | number
+}
+
+async function visibleSummaryChips(page: Page, viewModel: AgentSourceSummaryViewModel): Promise<SummaryChipSnapshot[]> {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (model) => {
+    const { buildAgentTraceSummaryChips } = await import('/src/components/chat/agentTraceSummaryChips.ts')
+    return buildAgentTraceSummaryChips({}, model)
+      .filter((chip) => chip.visible !== false)
+      .map((chip) => ({
+        id: chip.id,
+        className: chip.className,
+        label: typeof chip.label === 'number' || typeof chip.label === 'string' ? chip.label : String(chip.label ?? ''),
+        testId: chip.testId,
+        title: chip.title,
+        value: typeof chip.value === 'number' || typeof chip.value === 'string' ? chip.value : String(chip.value ?? ''),
+      }))
+  }, viewModel)
+}
+
 test.beforeEach(async ({ page }) => {
   await installAppShellMocks(page)
   await installIdleReferenceMocks(page)
   await installEmptyCitationShelfMock(page, {
     scopeId: 'message-list-regression-project',
     projectId: 'message-list-regression-project',
+  })
+})
+
+test('agent trace summary chip builder preserves compact chip order and test ids', async ({ page }) => {
+  const chips = await visibleSummaryChips(page, agentSummaryViewModel())
+
+  expect(chips.map((chip) => chip.id)).toEqual([
+    'evidence',
+    'claims',
+    'unsupported-claims',
+    'quality-gate',
+    'task',
+    'scope',
+    'run-errors',
+    'research-run',
+    'source-policy',
+  ])
+  expect(chips.find((chip) => chip.id === 'evidence')).toMatchObject({
+    className: 'kb-agent-trace-evidence-status is-grounded',
+    testId: 'agent-trace-evidence-status',
+    value: 'Evidence grounded',
+  })
+  expect(chips.find((chip) => chip.id === 'quality-gate')).toMatchObject({
+    className: 'is-warning',
+    testId: 'agent-trace-quality-gate',
+    title: 'citation repair applied',
+    value: 'Repaired',
+  })
+  expect(chips.find((chip) => chip.id === 'research-run')?.value).toBe('done / 3 rows')
+  expect(chips.find((chip) => chip.id === 'source-policy')?.value).toBe('Local KB')
+})
+
+test('agent trace summary chip builder hides empty optional chips but keeps task', async ({ page }) => {
+  const chips = await visibleSummaryChips(page, agentSummaryViewModel({
+    evidenceLabel: '',
+    evidenceStatus: '',
+    totalClaims: 0,
+    supportedClaims: 0,
+    unsupportedClaims: 0,
+    qualityGateStatus: '',
+    qualityGateTitle: '',
+    scopeSummary: '',
+    hasErrors: false,
+    researchRunStatus: '',
+    evidenceMatrixRows: 0,
+    sourcePolicy: '',
+  }))
+
+  expect(chips.map((chip) => chip.id)).toEqual(['task'])
+  expect(chips[0]).toMatchObject({
+    label: 'Task',
+    value: 'Single paper',
   })
 })
 
