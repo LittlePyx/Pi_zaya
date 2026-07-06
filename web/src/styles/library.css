@@ -1673,12 +1673,6 @@
   box-shadow: none;
 }
 
-.kb-lib-file-taxonomy {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
 .kb-lib-taxonomy-pill {
   font: inherit;
   border: 1px solid color-mix(in srgb, var(--border) 42%, transparent);

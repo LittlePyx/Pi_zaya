@@ -90,6 +90,7 @@ import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPa
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { LibraryFileQualityChips, LibraryFileQualityLine } from './library/LibraryFileQualityLine'
 import { LibraryFileActions } from './library/LibraryFileActions'
+import { LibraryFileTaxonomy } from './library/LibraryFileTaxonomy'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -3576,10 +3577,7 @@ export default function LibraryPage() {
             ? 'is-warning'
             : 'is-default'
     const readingLabel = readingStatusLabel(item.reading_status, S)
-    const metaTags = item.user_tags || []
     const suggestionCount = (item.suggested_category ? 1 : 0) + (item.suggested_tags || []).length
-    const categoryActive = !onlyUnclassified && paperCategoryFilter && String(item.paper_category || '') === paperCategoryFilter
-    const statusActive = readingStatusFilter && item.reading_status === readingStatusFilter
     const isSelected = Boolean(selectedLibraryNames[item.name])
     const itemProgress = derivePageProgress(item.cur_page_done, item.cur_page_total, item.cur_page_msg)
     const itemProgressPercent = itemProgress.total > 0
@@ -3621,38 +3619,17 @@ export default function LibraryPage() {
             </div>
           </div>
 
-          {(item.paper_category || readingLabel || metaTags.length > 0) ? (
-            <div className="kb-lib-file-taxonomy">
-              {item.paper_category ? (
-                <button
-                  type="button"
-                  className={`kb-lib-taxonomy-pill is-category${categoryActive ? ' is-active' : ''}`}
-                  onClick={() => applyPaperCategoryFilter(String(item.paper_category || ''))}
-                >
-                  {item.paper_category}
-                </button>
-              ) : null}
-              {readingLabel ? (
-                <button
-                  type="button"
-                  className={`kb-lib-taxonomy-pill is-status${statusActive ? ' is-active' : ''}`}
-                  onClick={() => setReadingStatusFilter(item.reading_status)}
-                >
-                  {readingLabel}
-                </button>
-              ) : null}
-              {metaTags.map((tagValue) => (
-                <button
-                  key={`${item.name}-tag-${tagValue}`}
-                  type="button"
-                  className={`kb-lib-taxonomy-pill is-tag${paperTagFilter && tagValue.toLowerCase() === paperTagFilter.toLowerCase() ? ' is-active' : ''}`}
-                  onClick={() => applyPaperTagFilter(tagValue)}
-                >
-                  #{tagValue}
-                </button>
-              ))}
-            </div>
-          ) : null}
+          <LibraryFileTaxonomy
+            item={item}
+            readingLabel={readingLabel}
+            onlyUnclassified={onlyUnclassified}
+            paperCategoryFilter={paperCategoryFilter}
+            readingStatusFilter={readingStatusFilter}
+            paperTagFilter={paperTagFilter}
+            onApplyPaperCategoryFilter={applyPaperCategoryFilter}
+            onSetReadingStatusFilter={setReadingStatusFilter}
+            onApplyPaperTagFilter={applyPaperTagFilter}
+          />
 
           <LibraryFileQualityLine
             S={S}
