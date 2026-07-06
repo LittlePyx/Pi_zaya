@@ -5,7 +5,6 @@ import {
   Button,
   Drawer,
   message,
-  Progress,
   Select,
   Typography,
   Tabs,
@@ -17,7 +16,6 @@ import {
 } from 'antd'
 import {
   ReloadOutlined,
-  StopOutlined,
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import type {
@@ -75,6 +73,7 @@ import { LibraryProcessControls } from './library/LibraryProcessControls'
 import { LibraryRenameWorkbench } from './library/LibraryRenameWorkbench'
 import { LibraryLegacyConvertCard } from './library/LibraryLegacyConvertCard'
 import { LibraryRefSyncCard } from './library/LibraryRefSyncCard'
+import { LibraryStickyStatus } from './library/LibraryStickyStatus'
 import { LibraryFileRow } from './library/LibraryFileRow'
 import { LibraryFileList } from './library/LibraryFileList'
 import {
@@ -1095,7 +1094,6 @@ export default function LibraryPage() {
   const refSyncStatusLabel = store.refSync?.running
     ? S.lib_refsync_running
     : (store.refSync?.status === 'idle' ? S.lib_refsync_idle : String(store.refSync?.status || ''))
-  const showStickyStatus = Boolean((store.converting && store.progress) || store.refSync?.running)
 
   const paperCategoryFilterOptions = useMemo(() => {
     const values = uniqueTextValues(store.files.map((item) => item.paper_category))
@@ -3719,49 +3717,24 @@ export default function LibraryPage() {
       {preparationWorkbench}
       {uploadWorkbenchCard}
 
-      {showStickyStatus ? (
-        <Card size="small" className="kb-lib-card kb-lib-sticky-status">
-          <div className="kb-lib-sticky-wrap">
-            {store.converting && store.progress ? (
-              <div className="kb-lib-sticky-item">
-                <div className="kb-lib-sticky-main">
-                  <Text className="kb-lib-sticky-title">{S.lib_convert_progress.replace('{done}', String(store.progress.completed)).replace('{total}', String(store.progress.total))}</Text>
-                  {store.progress.current ? <Text type="secondary" className="kb-lib-sticky-sub">{store.progress.current}</Text> : null}
-                  {convertActiveSummary ? <Text type="secondary" className="kb-lib-sticky-sub">{convertActiveSummary}</Text> : null}
-                  {convertStageLabel ? <Text type="secondary" className="kb-lib-sticky-sub">{convertStageLabel}</Text> : null}
-                  {convertPageProgress.total > 0 ? (
-                    <Text type="secondary" className="kb-lib-sticky-sub">
-                      {S.lib_convert_page_progress} {convertPageProgress.done}/{convertPageProgress.total}
-                    </Text>
-                  ) : null}
-                </div>
-                <div className="kb-lib-sticky-progress-stack">
-                  <Progress className="kb-lib-sticky-progress" percent={convertPercent} status="active" size="small" />
-                  {convertPageProgress.total > 0 ? (
-                    <Progress className="kb-lib-sticky-progress kb-lib-sticky-progress-inner" percent={convertPagePercent} status="active" size="small" />
-                  ) : null}
-                </div>
-                <Button size="small" danger icon={<StopOutlined />} onClick={() => { void store.cancelConvert() }}>
-                  {S.lib_btn_stop}
-                </Button>
-              </div>
-            ) : null}
-
-            {store.refSync?.running ? (
-              <div className="kb-lib-sticky-item">
-                <div className="kb-lib-sticky-main">
-                  <Text className="kb-lib-sticky-title">{S.lib_refsync_title}</Text>
-                  <Text type="secondary" className="kb-lib-sticky-sub">
-                    {refSyncDisplayMessage}
-                  </Text>
-                </div>
-                <Progress className="kb-lib-sticky-progress" percent={refSyncPercent} status="active" size="small" />
-                <Tag color="processing">{S.lib_refsync_running}</Tag>
-              </div>
-            ) : null}
-          </div>
-        </Card>
-      ) : null}
+      <LibraryStickyStatus
+        convertRunning={store.converting}
+        convertProgress={store.progress}
+        convertTitle={store.progress ? S.lib_convert_progress.replace('{done}', String(store.progress.completed)).replace('{total}', String(store.progress.total)) : ''}
+        convertActiveSummary={convertActiveSummary}
+        convertStageLabel={convertStageLabel}
+        convertPageLabel={S.lib_convert_page_progress}
+        convertPageProgress={convertPageProgress}
+        convertPercent={convertPercent}
+        convertPagePercent={convertPagePercent}
+        stopLabel={S.lib_btn_stop}
+        refSyncRunning={Boolean(store.refSync?.running)}
+        refSyncTitle={S.lib_refsync_title}
+        refSyncMessage={refSyncDisplayMessage}
+        refSyncPercent={refSyncPercent}
+        refSyncRunningLabel={S.lib_refsync_running}
+        onStopConvert={store.cancelConvert}
+      />
 
       <LibraryLegacyConvertCard
         S={S}

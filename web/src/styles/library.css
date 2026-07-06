@@ -560,67 +560,6 @@
   gap: 12px;
 }
 
-.kb-lib-sticky-status.ant-card {
-  position: sticky;
-  top: 10px;
-  z-index: 20;
-  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.1);
-}
-
-.kb-lib-sticky-wrap {
-  display: grid;
-  gap: 8px;
-}
-
-.kb-lib-sticky-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.9fr) auto;
-  align-items: center;
-  gap: 9px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: 12px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--msg-user-bg) 42%, transparent),
-    color-mix(in srgb, var(--panel) 97%, transparent)
-  );
-  padding: 8px 10px;
-}
-
-.kb-lib-sticky-main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.kb-lib-sticky-title {
-  font-size: 13px;
-  font-weight: 680;
-}
-
-.kb-lib-sticky-sub.ant-typography {
-  margin: 0;
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.kb-lib-sticky-progress {
-  margin: 0;
-}
-
-.kb-lib-sticky-progress-stack {
-  display: grid;
-  gap: 6px;
-}
-
-.kb-lib-sticky-progress-inner .ant-progress-bg {
-  opacity: 0.9;
-}
-
 .kb-lib-upload-meta {
   padding-inline: 1px;
 }
@@ -2516,10 +2455,6 @@
 
   .kb-lib-head {
     padding-inline: 0;
-  }
-
-  .kb-lib-sticky-item {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .kb-lib-summary-strip {
