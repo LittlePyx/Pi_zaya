@@ -88,11 +88,7 @@ import { LibraryQualityHistoryPanel } from './library/LibraryQualityHistoryPanel
 import { LibraryQualityStatusPanels } from './library/LibraryQualityStatusPanels'
 import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
-import { LibraryFileQualityLine } from './library/LibraryFileQualityLine'
-import { LibraryFileActions } from './library/LibraryFileActions'
-import { LibraryFileTaxonomy } from './library/LibraryFileTaxonomy'
-import { LibraryFileProgressNote } from './library/LibraryFileProgressNote'
-import { LibraryFileHeader } from './library/LibraryFileHeader'
+import { LibraryFileRow } from './library/LibraryFileRow'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -3568,69 +3564,34 @@ export default function LibraryPage() {
   }
 
   const renderFileRow = (item: LibraryFileItem) => {
-    const readingLabel = readingStatusLabel(item.reading_status, S)
-    const suggestionCount = (item.suggested_category ? 1 : 0) + (item.suggested_tags || []).length
-    const isSelected = Boolean(selectedLibraryNames[item.name])
-
     return (
-      <div
-        className={`kb-lib-file-row${isSelected ? ' is-selected' : ''}${suggestionCount > 0 ? ' has-suggestions' : ''}`}
-        data-testid="library-file-row"
-        data-library-file-name={item.name}
-      >
-        <div className="kb-lib-file-select">
-          <Checkbox
-            checked={isSelected}
-            onChange={(event) => toggleLibrarySelection(item.name, event.target.checked)}
-          />
-        </div>
-
-        <div className="kb-lib-file-main">
-          <LibraryFileHeader
-            S={S}
-            item={item}
-            suggestionCount={suggestionCount}
-            qualityStatusVisible={QUALITY_STATUS_VISIBLE}
-            qualityDiagnosticsVisible={QUALITY_DIAGNOSTICS_VISIBLE}
-          />
-
-          <LibraryFileTaxonomy
-            item={item}
-            readingLabel={readingLabel}
-            onlyUnclassified={onlyUnclassified}
-            paperCategoryFilter={paperCategoryFilter}
-            readingStatusFilter={readingStatusFilter}
-            paperTagFilter={paperTagFilter}
-            onApplyPaperCategoryFilter={applyPaperCategoryFilter}
-            onSetReadingStatusFilter={setReadingStatusFilter}
-            onApplyPaperTagFilter={applyPaperTagFilter}
-          />
-
-          <LibraryFileQualityLine
-            S={S}
-            item={item}
-            diagnosticsVisible={QUALITY_DIAGNOSTICS_VISIBLE}
-            repairing={Boolean(qualityRepairingNames[item.name])}
-            repairResult={qualityRepairResults[item.name]}
-            repairRecord={qualityRepairHistory[item.name]}
-            onRepairQuality={() => { void handleRepairQualityOne(item) }}
-            onReindex={() => { void handleReindex() }}
-          />
-
-          <LibraryFileProgressNote item={item} />
-        </div>
-
-        <LibraryFileActions
-          S={S}
-          item={item}
-          onOpenMeta={() => openMetaEditor(item)}
-          onStartPaperGuide={() => { void handleStartPaperGuide(item) }}
-          onConvert={() => { void handleConvertOne(item) }}
-          onOpenPdf={() => { void store.openFile(item.name, 'pdf') }}
-          onOpenMarkdown={() => { void store.openFile(item.name, 'md') }}
-          onDelete={() => confirmDeleteOne(item)}
-        />
-      </div>
+      <LibraryFileRow
+        S={S}
+        item={item}
+        selected={Boolean(selectedLibraryNames[item.name])}
+        readingLabel={readingStatusLabel(item.reading_status, S)}
+        onlyUnclassified={onlyUnclassified}
+        paperCategoryFilter={paperCategoryFilter}
+        readingStatusFilter={readingStatusFilter}
+        paperTagFilter={paperTagFilter}
+        qualityStatusVisible={QUALITY_STATUS_VISIBLE}
+        qualityDiagnosticsVisible={QUALITY_DIAGNOSTICS_VISIBLE}
+        qualityRepairing={Boolean(qualityRepairingNames[item.name])}
+        qualityRepairResult={qualityRepairResults[item.name]}
+        qualityRepairRecord={qualityRepairHistory[item.name]}
+        onSelectionChange={toggleLibrarySelection}
+        onApplyPaperCategoryFilter={applyPaperCategoryFilter}
+        onSetReadingStatusFilter={setReadingStatusFilter}
+        onApplyPaperTagFilter={applyPaperTagFilter}
+        onRepairQuality={(rowItem) => { void handleRepairQualityOne(rowItem) }}
+        onReindex={() => { void handleReindex() }}
+        onOpenMeta={openMetaEditor}
+        onStartPaperGuide={(rowItem) => { void handleStartPaperGuide(rowItem) }}
+        onConvert={(rowItem) => { void handleConvertOne(rowItem) }}
+        onOpenPdf={(name) => { void store.openFile(name, 'pdf') }}
+        onOpenMarkdown={(name) => { void store.openFile(name, 'md') }}
+        onDelete={confirmDeleteOne}
+      />
     )
   }
 
