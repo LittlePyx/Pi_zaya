@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import {
   READER_REGRESSION_SOURCE_PATH,
 } from '../../src/testing/readerRegressionFixtures'
+import type { AgentTraceHeaderSummaryInput } from '../../src/components/chat/agentTraceHeaderSummary'
 import type { AgentSourceSummaryViewModel } from '../../src/components/chat/useAgentTraceViewModel'
 import {
   installAppShellMocks,
@@ -56,6 +57,14 @@ type SummaryChipSnapshot = {
   value: string | number
 }
 
+async function agentHeaderSummary(page: Page, input: AgentTraceHeaderSummaryInput) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (summaryInput) => {
+    const { buildAgentTraceHeaderSummary } = await import('/src/components/chat/agentTraceHeaderSummary.ts')
+    return buildAgentTraceHeaderSummary({}, summaryInput)
+  }, input)
+}
+
 async function visibleSummaryChips(page: Page, viewModel: AgentSourceSummaryViewModel): Promise<SummaryChipSnapshot[]> {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async (model) => {
@@ -79,6 +88,53 @@ test.beforeEach(async ({ page }) => {
   await installEmptyCitationShelfMock(page, {
     scopeId: 'message-list-regression-project',
     projectId: 'message-list-regression-project',
+  })
+})
+
+test('agent trace header summary keeps evidence status primary and claims as context', async ({ page }) => {
+  const summary = await agentHeaderSummary(page, {
+    evidenceLabel: 'Evidence grounded',
+    totalClaims: 2,
+    supportedClaims: 1,
+    unsupportedClaims: 1,
+    hasErrors: false,
+    scopeSummary: 'library / 2 selected',
+    taskLabel: 'Single paper',
+  })
+
+  expect(summary).toEqual({
+    headerEvidence: 'Evidence grounded',
+    headerContext: 'Review 1/2',
+  })
+})
+
+test('agent trace header summary falls back from scope to task without evidence', async ({ page }) => {
+  const scopedSummary = await agentHeaderSummary(page, {
+    evidenceLabel: '',
+    totalClaims: 0,
+    supportedClaims: 0,
+    unsupportedClaims: 0,
+    hasErrors: false,
+    scopeSummary: 'library / 2 selected',
+    taskLabel: 'Single paper',
+  })
+  const taskSummary = await agentHeaderSummary(page, {
+    evidenceLabel: '',
+    totalClaims: 0,
+    supportedClaims: 0,
+    unsupportedClaims: 0,
+    hasErrors: false,
+    scopeSummary: '',
+    taskLabel: 'Single paper',
+  })
+
+  expect(scopedSummary).toEqual({
+    headerEvidence: 'Source check available',
+    headerContext: 'library / 2 selected',
+  })
+  expect(taskSummary).toEqual({
+    headerEvidence: 'Source check available',
+    headerContext: 'Single paper',
   })
 })
 

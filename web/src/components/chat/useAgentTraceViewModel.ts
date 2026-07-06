@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import type { StringMap } from '../../i18n'
+import { buildAgentTraceHeaderSummary } from './agentTraceHeaderSummary'
 import {
   compactStringList,
   evidenceStatusLabel,
@@ -10,7 +11,6 @@ import {
   traceBool,
   traceStepReferences,
   tx,
-  verificationHeaderText,
 } from './agentTracePanelUtils'
 import type { AgentTraceRecord } from './agentTraceTypes'
 import type { AgentTraceReferenceRecord } from './agentTraceReferenceTypes'
@@ -94,9 +94,18 @@ function buildAgentTraceViewModel(trace: Record<string, unknown>, labels: Partia
     queryScope === 'current_paper' && currentSource ? currentSource : '',
   ].filter(Boolean)
   const scopeSummary = scopeBits.join(' / ')
-  const claimSummary = verificationHeaderText(totalClaims, supportedClaims, unsupportedClaims, hasErrors, labels)
-  const headerEvidence = evidenceLabel || claimSummary
-  const headerContext = totalClaims > 0 && evidenceLabel ? claimSummary : (scopeSummary ? shortText(scopeSummary, 42) : taskLabel)
+  const {
+    headerEvidence,
+    headerContext,
+  } = buildAgentTraceHeaderSummary(labels, {
+    evidenceLabel,
+    totalClaims,
+    supportedClaims,
+    unsupportedClaims,
+    hasErrors,
+    scopeSummary,
+    taskLabel,
+  })
 
   return {
     headerEvidence,
