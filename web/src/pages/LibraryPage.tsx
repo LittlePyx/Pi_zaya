@@ -83,6 +83,7 @@ import {
   type TagCardItem,
 } from './library/LibraryTaxonomyViews'
 import { LibraryTaxonomyToolbar } from './library/LibraryTaxonomyToolbar'
+import { useLibraryQualityCenterViewModel } from './library/useLibraryQualityCenterViewModel'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -811,65 +812,20 @@ export default function LibraryPage() {
     () => qualityReportRecommendations.map((item) => item.name).filter(Boolean),
     [qualityReportRecommendations],
   )
-  const qualityCenterBusy = qualityBatchRunning
-    || qualityRepairAdvancing
-    || shelfMetadataBackfillRunning
-    || Object.values(qualityRepairingNames).some(Boolean)
-  const qualityCenterDomainProblems = qualityDomainViews.filter((domain) => (
-    domain.available
-    && !['good', 'unknown'].includes(normalizeTextValue(domain.status).toLowerCase())
-  ))
-  const qualityCenterFailureCount = qualityFailureCases.length
-  const qualityCenterMetadataRemaining = Number(shelfMetadataBackfillScan?.needs_repair || 0)
-  const qualityCenterProblemCount = qualityReportStats.review
-    + qualitySourceReadinessStats.blocked
-    + qualityCenterFailureCount
-    + qualityCenterDomainProblems.length
-  const qualityCenterTone = qualityCenterBusy
-    ? 'processing'
-    : (qualitySourceReadinessStats.blocked > 0
-      || qualityReportStats.review > 0
-      || qualityCenterFailureCount > 0
-      || qualityCenterDomainProblems.some((domain) => normalizeTextValue(domain.status).toLowerCase() === 'error'))
-        ? 'error'
-        : (qualityReportStats.unknown > 0 || qualityCenterMetadataRemaining > 0 || actionableQualityPriorityActions.length > 0)
-          ? 'warning'
-          : 'good'
-  const qualityCenterStatusLabel = qualityCenterTone === 'processing'
-    ? S.lib_quality_center_status_processing
-    : qualityCenterTone === 'good'
-      ? S.lib_quality_center_status_ready
-      : qualityCenterTone === 'error'
-        ? S.lib_quality_center_status_repair
-        : S.lib_quality_center_status_attention
-  const qualityCenterSummary = qualityCenterTone === 'good'
-    ? S.lib_quality_center_summary_ready
-      .replace('{ready}', String(qualityReportStats.good))
-      .replace('{total}', String(qualityReportStats.assessed || qualityReportStats.converted))
-    : qualityCenterTone === 'processing'
-      ? S.lib_quality_center_summary_running
-      : S.lib_quality_center_summary_review
-        .replace('{review}', String(qualityReportStats.review))
-        .replace('{blocked}', String(qualitySourceReadinessStats.blocked))
-        .replace('{cases}', String(qualityCenterFailureCount))
-        .replace('{domains}', String(qualityCenterDomainProblems.length))
-  const qualityCenterNextAction = qualityCenterTone === 'good'
-    ? S.lib_quality_center_action_none
-    : qualityCenterTone === 'processing'
-      ? S.lib_quality_center_action_monitor
-      : qualityRepairRecommendedNames.length > 0
-        ? S.lib_quality_center_action_repair.replace('{n}', String(qualityRepairRecommendedNames.length))
-        : qualityCenterMetadataRemaining > 0
-          ? S.lib_quality_center_action_metadata.replace('{n}', String(qualityCenterMetadataRemaining))
-          : qualityReportStats.review > 0
-            ? S.lib_quality_center_action_review
-            : S.lib_quality_center_action_open
-  const qualityCenterSignals = [
-    { key: 'usable', label: S.lib_quality_center_signal_usable, value: `${qualityReportStats.good}/${qualityReportStats.assessed || qualityReportStats.converted || 0}` },
-    { key: 'risk', label: S.lib_quality_center_signal_attention, value: String(qualityCenterProblemCount) },
-    { key: 'locate', label: S.lib_quality_center_signal_locate, value: String(qualitySourceReadinessStats.blocked) },
-    { key: 'metadata', label: S.lib_quality_center_signal_metadata, value: String(qualityCenterMetadataRemaining) },
-  ]
+  const qualityCenterView = useLibraryQualityCenterViewModel({
+    S,
+    reportStats: qualityReportStats,
+    sourceReadinessStats: qualitySourceReadinessStats,
+    domains: qualityDomainViews,
+    failureCount: qualityFailureCases.length,
+    metadataRemaining: Number(shelfMetadataBackfillScan?.needs_repair || 0),
+    priorityActionCount: actionableQualityPriorityActions.length,
+    recommendedRepairCount: qualityRepairRecommendedNames.length,
+    batchRunning: qualityBatchRunning,
+    repairAdvancing: qualityRepairAdvancing,
+    metadataBackfillRunning: shelfMetadataBackfillRunning,
+    repairingNames: qualityRepairingNames,
+  })
   const renameOnlyDiff = true
   const renameVisible = useMemo(() => (renameOnlyDiff ? renameItems.filter((x) => x.diff) : renameItems), [renameOnlyDiff, renameItems])
   const selectedUploadCount = useMemo(() => uploadDrafts.filter((x) => x.selected).length, [uploadDrafts])
@@ -3767,13 +3723,13 @@ export default function LibraryPage() {
       {QUALITY_DIAGNOSTICS_VISIBLE && (qualityReportStats.converted > 0 || qualityReportStats.assessed > 0) ? (
         <LibraryQualityCenter
           open={qualityCenterOpen}
-          tone={qualityCenterTone}
+          tone={qualityCenterView.tone}
           S={S}
           stats={qualityReportStats}
-          statusLabel={qualityCenterStatusLabel}
-          nextAction={qualityCenterNextAction}
-          summary={qualityCenterSummary}
-          signals={qualityCenterSignals}
+          statusLabel={qualityCenterView.statusLabel}
+          nextAction={qualityCenterView.nextAction}
+          summary={qualityCenterView.summary}
+          signals={qualityCenterView.signals}
           recommendedRepairCount={qualityRepairRecommendedNames.length}
           recommendedRepairBusy={qualityRepairRecommendedNames.some((name) => Boolean(qualityRepairingNames[name]))}
           onToggleOpen={() => setQualityCenterOpen((value) => !value)}
