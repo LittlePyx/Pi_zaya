@@ -1,7 +1,7 @@
-import type { StringMap } from '../../i18n'
 import { asTraceRecord, traceNum } from './messageTraceUtils'
 import { AgentTraceReferenceList } from './AgentTraceReferenceList'
 import type { AgentTraceReferenceHandlers } from './agentTraceReferenceTypes'
+import type { AgentTraceLabels, AgentTraceRecord } from './agentTraceTypes'
 import {
   records,
   shortText,
@@ -13,9 +13,8 @@ export function AgentTraceToolCall({
   step,
   onOpenReference,
   onAddReferenceToShelf,
-}: AgentTraceReferenceHandlers & {
-  labels: Partial<StringMap>
-  step: Record<string, unknown>
+}: AgentTraceReferenceHandlers & AgentTraceLabels & {
+  step: AgentTraceRecord
 }) {
   const output = asTraceRecord(step.output)
   const refs = records(output.references).slice(0, 3)

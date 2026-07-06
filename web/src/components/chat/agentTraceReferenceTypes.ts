@@ -1,7 +1,7 @@
-import type { StringMap } from '../../i18n'
 import type { CiteDetail } from './citationState'
+import type { AgentTraceLabels, AgentTraceRecord } from './agentTraceTypes'
 
-export type AgentTraceReferenceRecord = Record<string, unknown>
+export type AgentTraceReferenceRecord = AgentTraceRecord
 
 export type AgentTraceReferenceAction = (
   detail: CiteDetail,
@@ -13,14 +13,10 @@ export type AgentTraceReferenceHandlers = {
   onAddReferenceToShelf?: AgentTraceReferenceAction
 }
 
-export type AgentTraceReferenceLabels = {
-  labels: Partial<StringMap>
-}
-
-export type AgentTraceReferenceListProps = AgentTraceReferenceLabels & AgentTraceReferenceHandlers & {
+export type AgentTraceReferenceListProps = AgentTraceLabels & AgentTraceReferenceHandlers & {
   references: AgentTraceReferenceRecord[]
 }
 
-export type AgentTraceReferenceCardProps = AgentTraceReferenceLabels & AgentTraceReferenceHandlers & {
+export type AgentTraceReferenceCardProps = AgentTraceLabels & AgentTraceReferenceHandlers & {
   reference: AgentTraceReferenceRecord
 }

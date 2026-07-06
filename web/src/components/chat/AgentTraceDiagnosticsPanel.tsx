@@ -1,7 +1,7 @@
-import type { StringMap } from '../../i18n'
 import { AgentTraceCheckActivity } from './AgentTraceCheckActivity'
 import { AgentTracePlanSection } from './AgentTracePlanSection'
 import type { AgentTraceReferenceHandlers } from './agentTraceReferenceTypes'
+import type { AgentTraceLabels } from './agentTraceTypes'
 import type { AgentTraceDiagnosticsViewModel } from './useAgentTraceViewModel'
 import {
   tx,
@@ -13,8 +13,7 @@ export function AgentTraceDiagnosticsPanel({
   viewModel,
   onOpenReference,
   onAddReferenceToShelf,
-}: AgentTraceReferenceHandlers & {
-  labels: Partial<StringMap>
+}: AgentTraceReferenceHandlers & AgentTraceLabels & {
   viewModel: AgentTraceDiagnosticsViewModel
 }) {
   const { plan, steps, planStepCount, toolCallCount } = viewModel

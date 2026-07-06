@@ -1,6 +1,6 @@
-import type { StringMap } from '../../i18n'
 import { AgentTraceToolCall } from './AgentTraceToolCall'
 import type { AgentTraceReferenceHandlers } from './agentTraceReferenceTypes'
+import type { AgentTraceLabels, AgentTraceRecord } from './agentTraceTypes'
 import { tx } from './agentTracePanelUtils'
 
 export function AgentTraceCheckActivity({
@@ -8,9 +8,8 @@ export function AgentTraceCheckActivity({
   steps,
   onOpenReference,
   onAddReferenceToShelf,
-}: AgentTraceReferenceHandlers & {
-  labels: Partial<StringMap>
-  steps: Record<string, unknown>[]
+}: AgentTraceReferenceHandlers & AgentTraceLabels & {
+  steps: AgentTraceRecord[]
 }) {
   if (steps.length <= 0) return null
 

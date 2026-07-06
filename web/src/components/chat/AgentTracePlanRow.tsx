@@ -1,3 +1,4 @@
+import type { AgentTraceRecord } from './agentTraceTypes'
 import {
   shortText,
   statusClass,
@@ -6,7 +7,7 @@ import {
 export function AgentTracePlanRow({
   step,
 }: {
-  step: Record<string, unknown>
+  step: AgentTraceRecord
 }) {
   return (
     <div className="kb-agent-trace-row">

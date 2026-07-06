@@ -1,13 +1,12 @@
-import type { StringMap } from '../../i18n'
 import { AgentTracePlanRow } from './AgentTracePlanRow'
+import type { AgentTraceLabels, AgentTraceRecord } from './agentTraceTypes'
 import { tx } from './agentTracePanelUtils'
 
 export function AgentTracePlanSection({
   labels,
   plan,
-}: {
-  labels: Partial<StringMap>
-  plan: Record<string, unknown>[]
+}: AgentTraceLabels & {
+  plan: AgentTraceRecord[]
 }) {
   if (plan.length <= 0) return null
 

@@ -12,6 +12,7 @@ import {
   tx,
   verificationHeaderText,
 } from './agentTracePanelUtils'
+import type { AgentTraceRecord } from './agentTraceTypes'
 import type { AgentTraceReferenceRecord } from './agentTraceReferenceTypes'
 import { asTraceRecord, traceNum } from './messageTraceUtils'
 
@@ -29,15 +30,15 @@ export type AgentSourceSummaryViewModel = {
   researchRunStatus: string
   evidenceMatrixRows: number
   sourcePolicy: string
-  evidenceMatrix: Record<string, unknown>[]
+  evidenceMatrix: AgentTraceRecord[]
   subtaskCount: number
-  unsupportedClaimRows: Record<string, unknown>[]
+  unsupportedClaimRows: AgentTraceRecord[]
   references: AgentTraceReferenceRecord[]
 }
 
 export type AgentTraceDiagnosticsViewModel = {
-  plan: Record<string, unknown>[]
-  steps: Record<string, unknown>[]
+  plan: AgentTraceRecord[]
+  steps: AgentTraceRecord[]
   planStepCount: number
   toolCallCount: number
 }
