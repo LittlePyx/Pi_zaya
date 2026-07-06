@@ -1,0 +1,49 @@
+.kb-lib-file-item {
+  display: block;
+  width: 100%;
+  padding: 7px 0;
+  border-bottom: none;
+}
+
+.kb-lib-file-list {
+  display: grid;
+  gap: 5px;
+}
+
+.kb-lib-file-virtual-shell {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.kb-lib-file-virtual-tip {
+  padding: 0 2px 6px;
+}
+
+.kb-lib-file-virtual-shell .rc-virtual-list-holder {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding-right: 4px;
+}
+
+.kb-lib-file-virtual-shell .rc-virtual-list-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted-text) 34%, transparent) !important;
+}
+
+.kb-lib-file-virtual-item {
+  display: block !important;
+  width: 100%;
+  padding: 2px 0 !important;
+  border-bottom: none !important;
+}
+
+@media (max-width: 1200px) {
+  .kb-lib-file-virtual-shell {
+    padding-inline: 8px;
+  }
+
+  .kb-lib-file-virtual-shell .rc-virtual-list-holder {
+    height: 520px !important;
+  }
+}

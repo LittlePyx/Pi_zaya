@@ -66,7 +66,6 @@ import { useChatStore } from '../stores/chatStore'
 import { settingsApi } from '../api/settings'
 import { useLibraryStore } from '../stores/libraryStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import VirtualList from 'rc-virtual-list'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '../i18n'
 import {
@@ -89,6 +88,7 @@ import { LibraryQualityStatusPanels } from './library/LibraryQualityStatusPanels
 import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { LibraryFileRow } from './library/LibraryFileRow'
+import { LibraryFileList } from './library/LibraryFileList'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -133,9 +133,6 @@ import {
 
 const { Text } = Typography
 const { Dragger } = Upload
-const FILE_VIRTUAL_THRESHOLD = 60
-const FILE_VIRTUAL_HEIGHT = 620
-const FILE_VIRTUAL_ROW_HEIGHT = 88
 const RENAME_PAGE_SIZE = 6
 const UPLOAD_DRAFT_PAGE_SIZE = 8
 const EMPTY_REF_SYNC_STATS: ReferenceSyncStats = {}
@@ -3712,40 +3709,13 @@ export default function LibraryPage() {
   }
 
   const renderFiles = (items: LibraryFileItem[], emptyText: string) => {
-    if (!items.length) {
-      return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />
-    }
-
-    if (items.length < FILE_VIRTUAL_THRESHOLD) {
-      return (
-        <div className="kb-lib-file-list" role="list">
-          {items.map((item) => (
-            <div key={item.name} className="kb-lib-file-item" role="listitem">
-              {renderFileRow(item)}
-            </div>
-          ))}
-        </div>
-      )
-    }
-
     return (
-      <div className="kb-lib-file-virtual-shell">
-        <div className="kb-lib-file-virtual-tip">
-          <Text type="secondary" className="text-xs">{S.lib_virtual_scroll_hint.replace('{n}', String(items.length))}</Text>
-        </div>
-        <VirtualList
-          data={items}
-          itemKey="name"
-          height={FILE_VIRTUAL_HEIGHT}
-          itemHeight={FILE_VIRTUAL_ROW_HEIGHT}
-        >
-          {(item: LibraryFileItem) => (
-            <div className="ant-list-item kb-lib-file-item kb-lib-file-virtual-item">
-              {renderFileRow(item)}
-            </div>
-          )}
-        </VirtualList>
-      </div>
+      <LibraryFileList
+        items={items}
+        emptyText={emptyText}
+        virtualScrollHint={S.lib_virtual_scroll_hint}
+        renderRow={renderFileRow}
+      />
     )
   }
 
