@@ -1,9 +1,9 @@
-import type { StringMap } from '../../i18n'
 import { AgentEvidenceMatrix } from './AgentEvidenceMatrix'
 import { AgentTraceReferenceSection } from './AgentTraceReferenceSection'
 import { AgentTraceSummaryStats } from './AgentTraceSummaryStats'
 import { AgentUnsupportedClaims } from './AgentUnsupportedClaims'
 import type { AgentTraceReferenceHandlers } from './agentTraceReferenceTypes'
+import type { AgentTraceLabels } from './agentTraceTypes'
 import type { AgentSourceSummaryViewModel } from './useAgentTraceViewModel'
 
 export function AgentSourceSummaryPanel({
@@ -11,8 +11,7 @@ export function AgentSourceSummaryPanel({
   viewModel,
   onOpenReference,
   onAddReferenceToShelf,
-}: AgentTraceReferenceHandlers & {
-  labels: Partial<StringMap>
+}: AgentTraceReferenceHandlers & AgentTraceLabels & {
   viewModel: AgentSourceSummaryViewModel
 }) {
   const {

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { StringMap } from '../../i18n'
+import type { AgentTraceLabels } from './agentTraceTypes'
 import { tx } from './agentTracePanelUtils'
 
 export function AgentTraceFrame({
@@ -9,8 +9,7 @@ export function AgentTraceFrame({
   open,
   onOpen,
   children,
-}: {
-  labels: Partial<StringMap>
+}: AgentTraceLabels & {
   summaryStatus: ReactNode
   summaryContext: ReactNode
   open?: boolean

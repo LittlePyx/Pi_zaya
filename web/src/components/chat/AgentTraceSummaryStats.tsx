@@ -1,4 +1,4 @@
-import type { StringMap } from '../../i18n'
+import type { AgentTraceLabels } from './agentTraceTypes'
 import type { AgentSourceSummaryViewModel } from './useAgentTraceViewModel'
 import {
   evidenceStatusClass,
@@ -13,8 +13,7 @@ import {
 export function AgentTraceSummaryStats({
   labels,
   viewModel,
-}: {
-  labels: Partial<StringMap>
+}: AgentTraceLabels & {
   viewModel: AgentSourceSummaryViewModel
 }) {
   const {
