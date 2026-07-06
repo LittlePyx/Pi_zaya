@@ -1,7 +1,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Upload,
   AutoComplete,
   Button,
   Drawer,
@@ -23,7 +22,6 @@ import {
   Modal,
 } from 'antd'
 import {
-  UploadOutlined,
   ReloadOutlined,
   StopOutlined,
   FolderOpenOutlined,
@@ -86,6 +84,7 @@ import { LibraryQualityStatusPanels } from './library/LibraryQualityStatusPanels
 import { LibraryQualityOverviewPanels } from './library/LibraryQualityOverviewPanels'
 import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { LibraryDirectorySettings } from './library/LibraryDirectorySettings'
+import { LibraryUploadIntake } from './library/LibraryUploadIntake'
 import { LibraryFileRow } from './library/LibraryFileRow'
 import { LibraryFileList } from './library/LibraryFileList'
 import {
@@ -138,7 +137,6 @@ import {
 } from './library/libraryPageUtils'
 
 const { Text } = Typography
-const { Dragger } = Upload
 const RENAME_PAGE_SIZE = 6
 const UPLOAD_DRAFT_PAGE_SIZE = 8
 const EMPTY_REF_SYNC_STATS: ReferenceSyncStats = {}
@@ -3754,49 +3752,15 @@ export default function LibraryPage() {
         </div>
 
         <div className="kb-lib-workbench-side">
-          <section className="kb-lib-workbench-section kb-lib-workbench-section-upload">
-            <div className="kb-lib-section-head">
-              <div className="kb-lib-section-copy">
-                <Text className="kb-lib-section-title">{S.lib_upload_title}</Text>
-              </div>
-            </div>
-
-            <Dragger
-              multiple
-              accept=".pdf"
-              disabled={uploadLocked}
-              showUploadList={false}
-              className={`kb-lib-upload-dropzone${uploadLocked ? ' is-locked' : ''}`}
-              beforeUpload={(file) => {
-                addDrafts([file as File])
-                return false
-              }}
-            >
-              <div className="kb-lib-upload-dropzone-copy">
-                <UploadOutlined className="kb-lib-upload-dropzone-icon" />
-                <Text className="kb-lib-upload-dropzone-title">{S.lib_upload_drop_hint}</Text>
-                <Text type="secondary" className="kb-lib-upload-dropzone-note">{S.lib_upload_click_hint}</Text>
-              </div>
-            </Dragger>
-
-            {(uploadDrafts.length > 0 || uploadLocked) ? (
-              <div className="kb-lib-upload-meta">
-                {uploadDrafts.length > 0 ? (
-                  <div className="kb-lib-upload-meta-main">
-                    <span className="kb-lib-rename-meta">{S.lib_workbench_draft_count.replace('{n}', String(uploadDrafts.length))}</span>
-                    <Button className="kb-lib-action-quiet" onClick={() => setUploadWorkbenchOpen((open) => !open)}>
-                      {showUploadWorkbench ? S.lib_workbench_hide_queue : S.lib_workbench_upload_queue}
-                    </Button>
-                  </div>
-                ) : null}
-                {uploadLocked ? (
-                  <Text type="secondary" className="kb-lib-upload-inline-note">
-                    {store.converting ? S.lib_upload_locked_converting : S.lib_upload_locked_refsync}
-                  </Text>
-                ) : null}
-              </div>
-            ) : null}
-          </section>
+          <LibraryUploadIntake
+            S={S}
+            uploadLocked={uploadLocked}
+            uploadDraftCount={uploadDrafts.length}
+            showUploadWorkbench={showUploadWorkbench}
+            lockedMessage={store.converting ? S.lib_upload_locked_converting : S.lib_upload_locked_refsync}
+            onAddDrafts={addDrafts}
+            onToggleWorkbench={() => setUploadWorkbenchOpen((open) => !open)}
+          />
 
           <section className="kb-lib-workbench-section kb-lib-workbench-section-process">
             <div className="kb-lib-section-head">

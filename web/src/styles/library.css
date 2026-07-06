@@ -332,77 +332,12 @@
   align-items: center;
 }
 
-.kb-lib-upload-dropzone.ant-upload-wrapper {
-  display: block;
-}
-
-.kb-lib-upload-dropzone .ant-upload.ant-upload-drag {
-  border: 1px dashed color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: 18px;
-  background: var(--kb-lib-surface);
-  min-height: 148px;
-  padding: 0;
-  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
-}
-
-.kb-lib-upload-dropzone .ant-upload.ant-upload-drag:hover,
-.kb-lib-upload-dropzone .ant-upload.ant-upload-drag.ant-upload-drag-hover {
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  background: var(--kb-lib-hover);
-}
-
-.kb-lib-upload-dropzone.is-locked .ant-upload.ant-upload-drag {
-  opacity: 0.7;
-}
-
-.kb-lib-upload-dropzone .ant-upload-btn {
-  padding: 20px 18px;
-}
-
-.kb-lib-upload-dropzone-copy {
-  min-height: 122px;
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  gap: 6px;
-  text-align: center;
-}
-
-.kb-lib-upload-dropzone-icon {
-  font-size: 20px;
-  color: color-mix(in srgb, var(--text-main) 74%, var(--muted-text));
-}
-
-.kb-lib-upload-dropzone-title.ant-typography {
-  margin: 0;
-  color: var(--text-main);
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.kb-lib-upload-dropzone-note.ant-typography {
-  margin: 0;
-  font-size: 12px;
-}
-
 .kb-lib-upload-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
-}
-
-.kb-lib-upload-meta-main {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-}
-
-.kb-lib-upload-inline-note.ant-typography {
-  margin: 0;
-  font-size: 12px;
 }
 
 .kb-lib-rename-summary {
@@ -3134,7 +3069,6 @@
   .kb-lib-rename-actions-minor,
   .kb-lib-upload-summary,
   .kb-lib-upload-meta,
-  .kb-lib-upload-meta-main,
   .kb-lib-process-toolbar,
   .kb-lib-process-toolbar-main,
   .kb-lib-process-toolbar-side,
@@ -3161,10 +3095,6 @@
 
   .kb-lib-process-toolbar-side {
     margin-left: 0;
-  }
-
-  .kb-lib-upload-dropzone .ant-upload.ant-upload-drag {
-    min-height: 136px;
   }
 
   .kb-lib-rename-scope {
