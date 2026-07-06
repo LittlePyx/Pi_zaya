@@ -21,7 +21,6 @@ import {
   Alert,
   Tooltip,
   Modal,
-  Segmented,
 } from 'antd'
 import {
   UploadOutlined,
@@ -95,6 +94,7 @@ import {
   type CategoryCardItem,
   type TagCardItem,
 } from './library/LibraryTaxonomyViews'
+import { LibraryTaxonomyToolbar } from './library/LibraryTaxonomyToolbar'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -3624,8 +3624,6 @@ export default function LibraryPage() {
   const showTaxonomySelectAction = browseMode === 'list' && currentListItems.length > 0
   const showTaxonomyRefreshAction = browseMode === 'list' && visibleAll.length > 0
   const showTaxonomyClearAction = hasActiveTaxonomyFilters
-  const showTaxonomyTopActions = showTaxonomySelectAction || showTaxonomyRefreshAction || showTaxonomyClearAction
-
   const renameWorkbenchSection = (
     <section className="kb-lib-workbench-section kb-lib-workbench-section-rename">
       <div className="kb-lib-section-head">
@@ -4306,148 +4304,49 @@ export default function LibraryPage() {
         onOpenRecord={(name) => focusQualityHistoryNames([name])}
       />
 
-      <Card size="small" className="kb-lib-card kb-lib-taxonomy-bar" title={S.lib_taxonomy_title}>
-        <div className="kb-lib-taxonomy-shell">
-          <div className="kb-lib-taxonomy-top">
-            <div className="kb-lib-taxonomy-view">
-              <Segmented
-                className="kb-lib-browse-switch"
-                value={browseMode}
-                onChange={(value) => setBrowseMode(value as LibraryBrowseMode)}
-                options={[
-                  { label: S.lib_browse_list, value: 'list' },
-                  { label: S.lib_browse_categories, value: 'categories' },
-                  { label: S.lib_browse_tags, value: 'tags' },
-                ]}
-              />
-            </div>
-            <div className="kb-lib-taxonomy-meta">
-              <div className="kb-lib-taxonomy-summary">
-                <Text type="secondary" className="kb-lib-taxonomy-result">
-                  {S.lib_taxonomy_result.replace('{n}', String(visibleAll.length)).replace('{total}', String(store.files.length))}
-                </Text>
-                {hasActiveTaxonomyFilters ? (
-                  <span className="kb-lib-taxonomy-status-pill">
-                    {S.lib_taxonomy_filtering.replace('{n}', String(activeTaxonomyFilterCount))}
-                  </span>
-                ) : null}
-              </div>
-              {showTaxonomyTopActions ? (
-                <div className="kb-lib-taxonomy-top-actions">
-                  {showTaxonomySelectAction ? (
-                    <Button className="kb-lib-action-quiet" onClick={selectCurrentListItems}>
-                      {S.lib_btn_select_current_list}
-                    </Button>
-                  ) : null}
-                  {showTaxonomyRefreshAction ? (
-                    <Button
-                      className="kb-lib-action-tonal"
-                      loading={suggestionsRefreshing}
-                      onClick={() => { void regenerateSuggestionsForVisible() }}
-                    >
-                      {S.lib_btn_auto_organize}
-                    </Button>
-                  ) : null}
-                  {showTaxonomyClearAction ? (
-                    <Button className="kb-lib-action-quiet" onClick={clearTaxonomyFilters}>
-                      {S.lib_btn_clear_filters}
-                    </Button>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="kb-lib-taxonomy-controls">
-            <div className="kb-lib-taxonomy-filters">
-              <Input
-                value={fileKeyword}
-                onChange={(e) => setFileKeyword(e.target.value)}
-                allowClear
-                prefix={<SearchOutlined className="opacity-50" />}
-                placeholder={S.lib_search_placeholder}
-                className="kb-lib-taxonomy-search"
-              />
-              <Select
-                value={paperCategoryFilter || undefined}
-                allowClear
-                placeholder={S.lib_search_category}
-                className="kb-lib-taxonomy-select"
-                options={paperCategoryFilterOptions}
-                onChange={(value) => applyPaperCategoryFilter(String(value || ''))}
-              />
-              <Select
-                value={paperTagFilter || undefined}
-                allowClear
-                showSearch
-                placeholder={S.lib_search_tag}
-                className="kb-lib-taxonomy-select"
-                options={paperTagFilterOptions}
-                optionFilterProp="label"
-                onChange={(value) => applyPaperTagFilter(String(value || ''))}
-              />
-              <Select
-                value={readingStatusFilter || undefined}
-                allowClear
-                placeholder={S.lib_search_reading}
-                className="kb-lib-taxonomy-select"
-                options={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
-                onChange={(value) => setReadingStatusFilter(String(value || '') as ReadingStatusValue)}
-              />
-            </div>
-
-            <div className="kb-lib-taxonomy-quick">
-              <div className="kb-lib-taxonomy-toggle-row">
-                <button
-                  type="button"
-                  className={`kb-lib-taxonomy-pill is-status${onlyUnread ? ' is-active' : ''}`}
-                  onClick={() => setOnlyUnread((value) => !value)}
-                >
-                  {S.lib_taxonomy_unread}
-                </button>
-                <button
-                  type="button"
-                  className={`kb-lib-taxonomy-pill is-category${onlyUnclassified ? ' is-active' : ''}`}
-                  onClick={() => {
-                    const next = !onlyUnclassified
-                    setOnlyUnclassified(next)
-                    if (next) setPaperCategoryFilter('')
-                  }}
-                >
-                  {S.lib_category_unclassified}
-                </button>
-                <button
-                  type="button"
-                  className={`kb-lib-taxonomy-pill is-suggestion${onlySuggested ? ' is-active' : ''}`}
-                  onClick={() => setOnlySuggested((value) => !value)}
-                >
-                  {S.lib_taxonomy_has_suggestions}
-                </button>
-                {QUALITY_DIAGNOSTICS_VISIBLE ? (
-                  <button
-                    type="button"
-                    className={`kb-lib-taxonomy-pill is-quality${onlyQualityIssues ? ' is-active' : ''}`}
-                    data-testid="library-quality-issues-filter"
-                    onClick={() => setOnlyQualityIssues((value) => !value)}
-                  >
-                    {S.lib_quality_quick_filter_review.replace('{n}', String(qualityReviewCount))}
-                  </button>
-                ) : null}
-                {qualityHistoryFocusNames.length > 0 ? (
-                  <button
-                    type="button"
-                    className="kb-lib-taxonomy-pill is-quality is-active"
-                    data-testid="library-quality-history-active-filter"
-                    onClick={() => setQualityHistoryFocusNames([])}
-                  >
-                    {S.lib_quality_history_focus_badge.replace('{n}', String(qualityHistoryFocusNames.length))}
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        </div>
-      </Card>
+      <LibraryTaxonomyToolbar
+        S={S}
+        browseMode={browseMode}
+        visibleCount={visibleAll.length}
+        totalCount={store.files.length}
+        hasActiveFilters={hasActiveTaxonomyFilters}
+        activeFilterCount={activeTaxonomyFilterCount}
+        canSelectCurrent={showTaxonomySelectAction}
+        canRefreshSuggestions={showTaxonomyRefreshAction}
+        canClearFilters={showTaxonomyClearAction}
+        suggestionsRefreshing={suggestionsRefreshing}
+        fileKeyword={fileKeyword}
+        paperCategoryFilter={paperCategoryFilter}
+        paperCategoryOptions={paperCategoryFilterOptions}
+        paperTagFilter={paperTagFilter}
+        paperTagOptions={paperTagFilterOptions}
+        readingStatusFilter={readingStatusFilter}
+        readingStatusOptions={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
+        onlyUnread={onlyUnread}
+        onlyUnclassified={onlyUnclassified}
+        onlySuggested={onlySuggested}
+        diagnosticsVisible={QUALITY_DIAGNOSTICS_VISIBLE}
+        onlyQualityIssues={onlyQualityIssues}
+        qualityReviewCount={qualityReviewCount}
+        qualityHistoryFocusCount={qualityHistoryFocusNames.length}
+        onBrowseModeChange={setBrowseMode}
+        onSelectCurrentList={selectCurrentListItems}
+        onRefreshSuggestions={() => { void regenerateSuggestionsForVisible() }}
+        onClearFilters={clearTaxonomyFilters}
+        onFileKeywordChange={setFileKeyword}
+        onPaperCategoryFilterChange={applyPaperCategoryFilter}
+        onPaperTagFilterChange={applyPaperTagFilter}
+        onReadingStatusFilterChange={(value) => setReadingStatusFilter(value as ReadingStatusValue)}
+        onToggleOnlyUnread={() => setOnlyUnread((value) => !value)}
+        onToggleOnlyUnclassified={() => {
+          const next = !onlyUnclassified
+          setOnlyUnclassified(next)
+          if (next) setPaperCategoryFilter('')
+        }}
+        onToggleOnlySuggested={() => setOnlySuggested((value) => !value)}
+        onToggleOnlyQualityIssues={() => setOnlyQualityIssues((value) => !value)}
+        onClearQualityHistoryFocus={() => setQualityHistoryFocusNames([])}
+      />
 
       {browseMode === 'list' && selectedLibraryCount > 0 ? (
         <Card size="small" className="kb-lib-card kb-lib-batch-card">
