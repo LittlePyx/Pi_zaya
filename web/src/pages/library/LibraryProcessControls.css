@@ -1,0 +1,53 @@
+.kb-lib-process-scope {
+  min-width: 150px;
+  width: 150px;
+}
+
+.kb-lib-process-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.kb-lib-process-toolbar-main,
+.kb-lib-process-toolbar-side {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.kb-lib-process-toolbar-main {
+  flex: 1 1 auto;
+}
+
+.kb-lib-process-toolbar-side {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.kb-lib-process-toolbar .ant-btn {
+  min-width: 0;
+  height: 36px;
+}
+
+@media (max-width: 760px) {
+  .kb-lib-process-toolbar,
+  .kb-lib-process-toolbar-main,
+  .kb-lib-process-toolbar-side {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .kb-lib-process-scope {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .kb-lib-process-toolbar-side {
+    margin-left: 0;
+  }
+}

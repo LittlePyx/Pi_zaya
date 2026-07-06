@@ -76,6 +76,7 @@ import { LibraryQualityCenter } from './library/LibraryQualityCenter'
 import { LibraryDirectorySettings } from './library/LibraryDirectorySettings'
 import { LibraryUploadIntake } from './library/LibraryUploadIntake'
 import { LibraryUploadDraftWorkbench } from './library/LibraryUploadDraftWorkbench'
+import { LibraryProcessControls } from './library/LibraryProcessControls'
 import { LibraryFileRow } from './library/LibraryFileRow'
 import { LibraryFileList } from './library/LibraryFileList'
 import {
@@ -3709,30 +3710,18 @@ export default function LibraryPage() {
             onToggleWorkbench={() => setUploadWorkbenchOpen((open) => !open)}
           />
 
-          <section className="kb-lib-workbench-section kb-lib-workbench-section-process">
-            <div className="kb-lib-section-head">
-              <div className="kb-lib-section-copy">
-                <Text className="kb-lib-section-title">{S.lib_section_batch}</Text>
-              </div>
-            </div>
-
-            <div className="kb-lib-process-toolbar">
-              <div className="kb-lib-process-toolbar-main">
-                <Select
-                  value={scope}
-                  onChange={(value) => { setScope(value); void store.loadFiles(value) }}
-                  data-testid="library-process-scope"
-                  className="kb-lib-process-scope"
-                  options={SCOPE_OPTIONS(S)}
-                />
-                <Button className="kb-lib-action-tonal" type="primary" onClick={() => { void handleConvertPending() }}>{S.lib_btn_convert_pending_short}</Button>
-              </div>
-              <div className="kb-lib-process-toolbar-side">
-                <Button className="kb-lib-action-quiet kb-lib-process-refresh" icon={<ReloadOutlined />} onClick={() => { void store.loadFiles(scope) }}>{S.lib_btn_refresh}</Button>
-                {store.converting ? <Button icon={<StopOutlined />} danger onClick={() => { void store.cancelConvert() }}>{S.lib_btn_stop}</Button> : null}
-              </div>
-            </div>
-          </section>
+          <LibraryProcessControls
+            S={S}
+            scope={scope}
+            converting={store.converting}
+            onScopeChange={(value) => {
+              setScope(value)
+              void store.loadFiles(value)
+            }}
+            onConvertPending={handleConvertPending}
+            onRefresh={() => store.loadFiles(scope)}
+            onStopConvert={store.cancelConvert}
+          />
         </div>
       </div>
     </Card>

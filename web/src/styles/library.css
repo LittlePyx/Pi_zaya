@@ -320,9 +320,7 @@
 }
 
 .kb-lib-upload-summary,
-.kb-lib-rename-summary,
-.kb-lib-process-toolbar,
-.kb-lib-process-actions {
+.kb-lib-rename-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -370,36 +368,6 @@
   display: inline-flex;
 }
 
-.kb-lib-process-scope {
-  min-width: 150px;
-  width: 150px;
-}
-
-.kb-lib-process-toolbar {
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px 16px;
-}
-
-.kb-lib-process-toolbar-main,
-.kb-lib-process-toolbar-side {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 10px;
-  min-width: 0;
-}
-
-.kb-lib-process-toolbar-main {
-  flex: 1 1 auto;
-}
-
-.kb-lib-process-toolbar-side {
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-.kb-lib-process-toolbar .ant-btn,
 .kb-lib-rename-summary .ant-btn,
 .kb-lib-rename-actions .ant-btn {
   min-width: 0;
@@ -515,20 +483,6 @@
   border-color: transparent !important;
   background: color-mix(in srgb, var(--msg-user-bg) 42%, var(--panel)) !important;
   box-shadow: none !important;
-}
-
-.kb-lib-process-advanced {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 18px;
-  padding-top: 2px;
-}
-
-.kb-lib-process-check.ant-checkbox-wrapper {
-  margin-inline-start: 0;
-  color: color-mix(in srgb, var(--text-main) 88%, var(--muted-text));
-  font-size: 13px;
 }
 
 .kb-lib-upload-workbench-card .ant-card-body {
@@ -2961,19 +2915,9 @@
   .kb-lib-rename-actions,
   .kb-lib-rename-actions-minor,
   .kb-lib-upload-summary,
-  .kb-lib-upload-meta,
-  .kb-lib-process-toolbar,
-  .kb-lib-process-toolbar-main,
-  .kb-lib-process-toolbar-side,
-  .kb-lib-process-actions,
-  .kb-lib-process-advanced {
+  .kb-lib-upload-meta {
     grid-template-columns: 1fr;
     display: grid;
-  }
-
-  .kb-lib-process-scope {
-    width: 100%;
-    min-width: 0;
   }
 
   .kb-lib-rename-toolbar,
@@ -2983,10 +2927,6 @@
   }
 
   .kb-lib-rename-summary-side {
-    margin-left: 0;
-  }
-
-  .kb-lib-process-toolbar-side {
     margin-left: 0;
   }
 
