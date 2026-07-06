@@ -3,6 +3,7 @@ import {
   READER_REGRESSION_SOURCE_PATH,
 } from '../../src/testing/readerRegressionFixtures'
 import type { AgentTraceHeaderSummaryInput } from '../../src/components/chat/agentTraceHeaderSummary'
+import type { AgentTraceScopeSummaryInput } from '../../src/components/chat/agentTraceScopeSummary'
 import type { AgentSourceSummaryViewModel } from '../../src/components/chat/useAgentTraceViewModel'
 import {
   installAppShellMocks,
@@ -65,6 +66,14 @@ async function agentHeaderSummary(page: Page, input: AgentTraceHeaderSummaryInpu
   }, input)
 }
 
+async function agentScopeSummary(page: Page, input: AgentTraceScopeSummaryInput) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (summaryInput) => {
+    const { buildAgentTraceScopeSummary } = await import('/src/components/chat/agentTraceScopeSummary.ts')
+    return buildAgentTraceScopeSummary(summaryInput)
+  }, input)
+}
+
 async function visibleSummaryChips(page: Page, viewModel: AgentSourceSummaryViewModel): Promise<SummaryChipSnapshot[]> {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async (model) => {
@@ -89,6 +98,35 @@ test.beforeEach(async ({ page }) => {
     scopeId: 'message-list-regression-project',
     projectId: 'message-list-regression-project',
   })
+})
+
+test('agent trace scope summary includes requested scope and selected count', async ({ page }) => {
+  const summary = await agentScopeSummary(page, {
+    queryScope: 'library',
+    requestedScope: 'current_paper',
+    selectedCount: 2,
+    currentSource: 'Current source should not appear outside current_paper scope',
+  })
+
+  expect(summary).toBe('library / requested current_paper / 2 selected')
+})
+
+test('agent trace scope summary shows current paper source only for current-paper scope', async ({ page }) => {
+  const currentPaperSummary = await agentScopeSummary(page, {
+    queryScope: 'current_paper',
+    requestedScope: 'current_paper',
+    selectedCount: 1,
+    currentSource: 'Fast hyperspectral single-pixel imaging fixture source',
+  })
+  const librarySummary = await agentScopeSummary(page, {
+    queryScope: 'library',
+    requestedScope: 'library',
+    selectedCount: 0,
+    currentSource: 'Fast hyperspectral single-pixel imaging fixture source',
+  })
+
+  expect(currentPaperSummary).toBe('current_paper / 1 selected / Fast hyperspectral single-pixel imaging fixture source')
+  expect(librarySummary).toBe('library')
 })
 
 test('agent trace header summary keeps evidence status primary and claims as context', async ({ page }) => {

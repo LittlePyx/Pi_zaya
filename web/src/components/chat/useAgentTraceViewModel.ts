@@ -1,13 +1,13 @@
 import { useMemo } from 'react'
 import type { StringMap } from '../../i18n'
 import { buildAgentTraceHeaderSummary } from './agentTraceHeaderSummary'
+import { buildAgentTraceScopeSummary } from './agentTraceScopeSummary'
 import {
   compactStringList,
   evidenceStatusLabel,
   evidenceStatusValue,
   questionTypeLabel,
   records,
-  shortText,
   traceBool,
   traceStepReferences,
   tx,
@@ -86,14 +86,12 @@ function buildAgentTraceViewModel(trace: Record<string, unknown>, labels: Partia
   ].join(' / ')
   const taskLabel = evidenceStatus === 'not_applicable' ? tx(labels, 'agent_trace_type_general', 'General') : questionTypeLabel(questionType, labels)
   const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
-  const currentSource = shortText(context.current_source_name || context.currentSourceName || context.current_source_path || context.currentSourcePath, 90)
-  const scopeBits = [
+  const scopeSummary = buildAgentTraceScopeSummary({
     queryScope,
-    requestedScope && requestedScope !== queryScope ? `requested ${requestedScope}` : '',
-    selectedCount > 0 ? `${selectedCount} selected` : '',
-    queryScope === 'current_paper' && currentSource ? currentSource : '',
-  ].filter(Boolean)
-  const scopeSummary = scopeBits.join(' / ')
+    requestedScope,
+    selectedCount,
+    currentSource: context.current_source_name || context.currentSourceName || context.current_source_path || context.currentSourcePath,
+  })
   const {
     headerEvidence,
     headerContext,
