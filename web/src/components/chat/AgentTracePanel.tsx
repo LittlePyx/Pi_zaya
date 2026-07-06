@@ -1,10 +1,10 @@
 import { useT } from '../../i18n'
 import { internalDebugEnvEnabled } from '../../utils/internalDebug'
 import type { CiteDetail } from './citationState'
+import { AgentTraceFrame } from './AgentTraceFrame'
 import { AgentSourceSummaryPanel } from './AgentSourceSummaryPanel'
 import { AgentTraceDiagnosticsPanel } from './AgentTraceDiagnosticsPanel'
 import { AgentTraceStoredPrompt } from './AgentTraceStoredPrompt'
-import { tx } from './agentTracePanelUtils'
 import { useArchivedAgentTrace, type LoadArchivedAgentTrace } from './useArchivedAgentTrace'
 import { useAgentTraceViewModel } from './useAgentTraceViewModel'
 
@@ -54,14 +54,13 @@ export function AgentTracePanel({
   const showDiagnostics = internalDebugEnvEnabled()
 
   return (
-    <details className="kb-agent-trace" open={loadStatus === 'loaded' ? true : undefined} onToggle={(event) => {
-      if ((event.currentTarget as HTMLDetailsElement).open) void loadArchivedTrace()
-    }}>
-      <summary>
-        <span>{tx(S, 'agent_trace_title', 'Sources & evidence')}</span>
-        <span>{viewModel.headerEvidence}</span>
-        <span>{viewModel.headerContext}</span>
-      </summary>
+    <AgentTraceFrame
+      labels={S}
+      summaryStatus={viewModel.headerEvidence}
+      summaryContext={viewModel.headerContext}
+      open={loadStatus === 'loaded' ? true : undefined}
+      onOpen={loadArchivedTrace}
+    >
       <AgentSourceSummaryPanel
         labels={S}
         viewModel={viewModel.sourceSummary}
@@ -76,6 +75,6 @@ export function AgentTracePanel({
           onAddReferenceToShelf={onAddReferenceToShelf}
         />
       ) : null}
-    </details>
+    </AgentTraceFrame>
   )
 }

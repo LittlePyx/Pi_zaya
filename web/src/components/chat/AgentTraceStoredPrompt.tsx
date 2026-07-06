@@ -1,4 +1,5 @@
 import type { StringMap } from '../../i18n'
+import { AgentTraceFrame } from './AgentTraceFrame'
 import { tx } from './agentTracePanelUtils'
 import type { ArchivedAgentTraceLoadStatus } from './useArchivedAgentTrace'
 
@@ -19,15 +20,13 @@ export function AgentTraceStoredPrompt({
   onLoad: () => void | Promise<void>
 }) {
   return (
-    <details className="kb-agent-trace" onToggle={(event) => {
-      if ((event.currentTarget as HTMLDetailsElement).open) void onLoad()
-    }}>
-      <summary>
-        <span>{tx(labels, 'agent_trace_title', 'Sources & evidence')}</span>
-        <span>{tx(labels, 'agent_trace_stored', 'Saved check')}</span>
-        <span>{loadStatus === 'loading' ? tx(labels, 'agent_trace_loading', 'loading') : tx(labels, 'agent_trace_open_load', 'open to load')}</span>
-      </summary>
+    <AgentTraceFrame
+      labels={labels}
+      summaryStatus={tx(labels, 'agent_trace_stored', 'Saved check')}
+      summaryContext={loadStatus === 'loading' ? tx(labels, 'agent_trace_loading', 'loading') : tx(labels, 'agent_trace_open_load', 'open to load')}
+      onOpen={onLoad}
+    >
       <div className="kb-agent-trace-empty">{storedTraceNote(loadStatus, labels)}</div>
-    </details>
+    </AgentTraceFrame>
   )
 }
