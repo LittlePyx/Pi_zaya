@@ -6,6 +6,7 @@ import type { AgentTraceHeaderSummaryInput } from '../../src/components/chat/age
 import type { AgentTraceMetricCountInput } from '../../src/components/chat/agentTraceMetricCounts'
 import type { AgentTraceQualityGateTitleInput } from '../../src/components/chat/agentTraceQualityGate'
 import type { AgentTraceScopeSummaryInput } from '../../src/components/chat/agentTraceScopeSummary'
+import type { AgentTraceSourceStatusInput } from '../../src/components/chat/agentTraceSourceStatus'
 import type { AgentSourceSummaryViewModel } from '../../src/components/chat/useAgentTraceViewModel'
 import {
   installAppShellMocks,
@@ -81,6 +82,17 @@ async function agentScopeSummary(page: Page, input: AgentTraceScopeSummaryInput)
   return page.evaluate(async (summaryInput) => {
     const { buildAgentTraceScopeSummary } = await import('/src/components/chat/agentTraceScopeSummary.ts')
     return buildAgentTraceScopeSummary(summaryInput)
+  }, input)
+}
+
+async function agentSourceStatus(page: Page, input: Omit<AgentTraceSourceStatusInput, 'labels'>) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (summaryInput) => {
+    const { buildAgentTraceSourceStatus } = await import('/src/components/chat/agentTraceSourceStatus.ts')
+    return buildAgentTraceSourceStatus({
+      ...summaryInput,
+      labels: {},
+    })
   }, input)
 }
 
@@ -178,6 +190,61 @@ test('agent trace metric counts fall back to source records and lengths', async 
     hasErrors: true,
     evidenceMatrixRows: 5,
     subtaskCount: 6,
+  })
+})
+
+test('agent trace source status prefers summary values and keeps not-applicable tasks general', async ({ page }) => {
+  const status = await agentSourceStatus(page, {
+    summary: {
+      evidence_status: 'not_applicable',
+      question_type: 'single_paper_qa',
+      quality_gate_status: ' Repaired ',
+      quality_gate_reasons: ['citation repair applied'],
+      research_run_status: 'done',
+      source_policy: 'external_allowed_with_notice',
+    },
+    verification: {
+      evidence_status: 'grounded',
+    },
+    researchRun: {
+      status: 'fallback',
+      source_policy: 'local_only',
+    },
+    traceQuestionType: 'reading_guide',
+  })
+
+  expect(status).toEqual({
+    evidenceStatus: 'not_applicable',
+    evidenceLabel: 'Not from KB',
+    qualityGateStatus: 'repaired',
+    qualityGateTitle: 'citation repair applied',
+    taskLabel: 'General',
+    researchRunStatus: 'done',
+    sourcePolicy: 'external_allowed_with_notice',
+  })
+})
+
+test('agent trace source status falls back to verification, research run, and trace task type', async ({ page }) => {
+  const status = await agentSourceStatus(page, {
+    summary: {},
+    verification: {
+      evidence_status: 'grounded',
+    },
+    researchRun: {
+      status: 'done',
+      source_policy: 'local_only',
+    },
+    traceQuestionType: 'reading_guide',
+  })
+
+  expect(status).toEqual({
+    evidenceStatus: 'grounded',
+    evidenceLabel: 'Evidence grounded',
+    qualityGateStatus: '',
+    qualityGateTitle: '',
+    taskLabel: 'Reading guide',
+    researchRunStatus: 'done',
+    sourcePolicy: 'local_only',
   })
 })
 

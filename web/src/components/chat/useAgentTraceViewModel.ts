@@ -2,16 +2,9 @@ import { useMemo } from 'react'
 import type { StringMap } from '../../i18n'
 import { buildAgentTraceHeaderSummary } from './agentTraceHeaderSummary'
 import { buildAgentTraceMetricCounts } from './agentTraceMetricCounts'
-import { buildAgentTraceQualityGateTitle } from './agentTraceQualityGate'
 import { buildAgentTraceScopeSummary } from './agentTraceScopeSummary'
-import {
-  evidenceStatusLabel,
-  evidenceStatusValue,
-  questionTypeLabel,
-  records,
-  traceStepReferences,
-  tx,
-} from './agentTracePanelUtils'
+import { buildAgentTraceSourceStatus } from './agentTraceSourceStatus'
+import { evidenceStatusValue, records, traceStepReferences } from './agentTracePanelUtils'
 import type { AgentTraceRecord } from './agentTraceTypes'
 import type { AgentTraceReferenceRecord } from './agentTraceReferenceTypes'
 import { asTraceRecord, traceNum } from './messageTraceUtils'
@@ -82,19 +75,23 @@ function buildAgentTraceViewModel(trace: Record<string, unknown>, labels: Partia
     evidenceMatrixCount: evidenceMatrix.length,
     researchSubtaskCount: researchSubtasks.length,
   })
-  const researchRunStatus = String(summary.research_run_status || researchRun.status || '').trim()
-  const sourcePolicy = String(summary.source_policy || researchRun.source_policy || '').trim()
-  const questionType = String(summary.question_type || trace.question_type || 'unknown').trim()
   const queryScope = String(summary.query_scope || context.query_scope || context.queryScope || '').trim()
   const requestedScope = String(summary.requested_query_scope || context.requested_query_scope || context.requestedQueryScope || '').trim()
-  const evidenceStatus = evidenceStatusValue(summary.evidence_status || verification.evidence_status)
-  const evidenceLabel = evidenceStatusLabel(evidenceStatus, labels)
-  const qualityGateStatus = String(summary.quality_gate_status || '').trim().toLowerCase()
-  const qualityGateTitle = buildAgentTraceQualityGateTitle({
-    reasons: summary.quality_gate_reasons,
-    warnings: summary.quality_gate_warnings,
+  const {
+    evidenceStatus,
+    evidenceLabel,
+    qualityGateStatus,
+    qualityGateTitle,
+    taskLabel,
+    researchRunStatus,
+    sourcePolicy,
+  } = buildAgentTraceSourceStatus({
+    summary,
+    verification,
+    researchRun,
+    traceQuestionType: trace.question_type,
+    labels,
   })
-  const taskLabel = evidenceStatus === 'not_applicable' ? tx(labels, 'agent_trace_type_general', 'General') : questionTypeLabel(questionType, labels)
   const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
   const scopeSummary = buildAgentTraceScopeSummary({
     queryScope,
