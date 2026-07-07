@@ -3,6 +3,7 @@ import {
   READER_REGRESSION_SOURCE_PATH,
 } from '../../src/testing/readerRegressionFixtures'
 import type { AgentTraceHeaderSummaryInput } from '../../src/components/chat/agentTraceHeaderSummary'
+import type { AgentTraceQualityGateTitleInput } from '../../src/components/chat/agentTraceQualityGate'
 import type { AgentTraceScopeSummaryInput } from '../../src/components/chat/agentTraceScopeSummary'
 import type { AgentSourceSummaryViewModel } from '../../src/components/chat/useAgentTraceViewModel'
 import {
@@ -74,6 +75,14 @@ async function agentScopeSummary(page: Page, input: AgentTraceScopeSummaryInput)
   }, input)
 }
 
+async function agentQualityGateTitle(page: Page, input: AgentTraceQualityGateTitleInput) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (summaryInput) => {
+    const { buildAgentTraceQualityGateTitle } = await import('/src/components/chat/agentTraceQualityGate.ts')
+    return buildAgentTraceQualityGateTitle(summaryInput)
+  }, input)
+}
+
 async function visibleSummaryChips(page: Page, viewModel: AgentSourceSummaryViewModel): Promise<SummaryChipSnapshot[]> {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async (model) => {
@@ -98,6 +107,30 @@ test.beforeEach(async ({ page }) => {
     scopeId: 'message-list-regression-project',
     projectId: 'message-list-regression-project',
   })
+})
+
+test('agent trace quality gate title combines reasons before warnings', async ({ page }) => {
+  const title = await agentQualityGateTitle(page, {
+    reasons: ['missing citation repaired', 'claim overlap checked'],
+    warnings: ['fallback citation used'],
+  })
+
+  expect(title).toBe('missing citation repaired / claim overlap checked / fallback citation used')
+})
+
+test('agent trace quality gate title trims and limits noisy lists', async ({ page }) => {
+  const title = await agentQualityGateTitle(page, {
+    reasons: [
+      ' first reason ',
+      'second   reason',
+      'third reason',
+      'fourth reason',
+      'fifth reason omitted',
+    ],
+    warnings: 'not an array',
+  })
+
+  expect(title).toBe('first reason / second reason / third reason / fourth reason')
 })
 
 test('agent trace scope summary includes requested scope and selected count', async ({ page }) => {

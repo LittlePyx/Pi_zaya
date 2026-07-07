@@ -1,9 +1,9 @@
 import { useMemo } from 'react'
 import type { StringMap } from '../../i18n'
 import { buildAgentTraceHeaderSummary } from './agentTraceHeaderSummary'
+import { buildAgentTraceQualityGateTitle } from './agentTraceQualityGate'
 import { buildAgentTraceScopeSummary } from './agentTraceScopeSummary'
 import {
-  compactStringList,
   evidenceStatusLabel,
   evidenceStatusValue,
   questionTypeLabel,
@@ -80,10 +80,10 @@ function buildAgentTraceViewModel(trace: Record<string, unknown>, labels: Partia
   const evidenceStatus = evidenceStatusValue(summary.evidence_status || verification.evidence_status)
   const evidenceLabel = evidenceStatusLabel(evidenceStatus, labels)
   const qualityGateStatus = String(summary.quality_gate_status || '').trim().toLowerCase()
-  const qualityGateTitle = [
-    ...compactStringList(summary.quality_gate_reasons),
-    ...compactStringList(summary.quality_gate_warnings),
-  ].join(' / ')
+  const qualityGateTitle = buildAgentTraceQualityGateTitle({
+    reasons: summary.quality_gate_reasons,
+    warnings: summary.quality_gate_warnings,
+  })
   const taskLabel = evidenceStatus === 'not_applicable' ? tx(labels, 'agent_trace_type_general', 'General') : questionTypeLabel(questionType, labels)
   const selectedCount = traceNum(context.selected_research_context_count || context.selectedResearchContextCount)
   const scopeSummary = buildAgentTraceScopeSummary({
