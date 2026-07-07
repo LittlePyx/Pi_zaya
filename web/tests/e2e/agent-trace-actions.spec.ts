@@ -146,6 +146,36 @@ async function archivedTraceLoadedState(page: Page, messageId: number, response:
   })
 }
 
+async function answerSourceNoticeViewModel(page: Page, input: {
+  answerContract?: unknown
+  legacySourceSummary?: unknown
+  fallbackNoticeText?: string
+  allowFallbackNotice?: boolean
+  S: Record<string, string>
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (noticeInput) => {
+    const { buildAnswerSourceNoticeViewModel } = await import('/src/components/chat/answerSourceNoticeViewModel.ts')
+    return buildAnswerSourceNoticeViewModel(noticeInput)
+  }, input)
+}
+
+async function evidenceDrawerViewModel(page: Page, input: {
+  sourceNotice: Record<string, unknown> | null
+  citeDetails: Record<string, unknown>[]
+  S: Record<string, string>
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (drawerInput) => {
+    const { buildEvidenceDrawerViewModel } = await import('/src/components/chat/answerSourceNoticeViewModel.ts')
+    return buildEvidenceDrawerViewModel({
+      sourceNotice: drawerInput.sourceNotice as never,
+      citeDetails: drawerInput.citeDetails as never,
+      S: drawerInput.S,
+    })
+  }, input)
+}
+
 async function agentQualityGateTitle(page: Page, input: AgentTraceQualityGateTitleInput) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async (summaryInput) => {
@@ -507,6 +537,92 @@ test('archived trace helper merges audit summary without overwriting trace summa
     trace: null,
     status: 'empty',
   })
+})
+
+test('answer source notice view model prefers answer contract over legacy summary', async ({ page }) => {
+  const model = await answerSourceNoticeViewModel(page, {
+    answerContract: {
+      source_summary: {
+        kind: 'local_kb',
+        label: 'Contract local source',
+      },
+      source_policy_payload: {
+        kind: 'local_kb',
+        uses_local_knowledge_base: true,
+        uses_external_model: false,
+        requires_user_notice: false,
+        badge: {
+          label_key: 'agent_trace_source_local_only',
+          detail: 'Contract-backed evidence is available.',
+        },
+      },
+    },
+    legacySourceSummary: {
+      kind: 'external_not_kb',
+      label: 'Legacy external source',
+      detail: 'Legacy summary should not win.',
+    },
+    S: {
+      agent_trace_source_local_only: 'Local KB',
+      agent_trace_evidence_not_from_kb: 'Not from KB',
+      agent_trace_source_fallback: 'Source',
+    },
+  })
+
+  expect(model).toEqual({
+    label: 'Local KB',
+    title: 'Contract-backed evidence is available.',
+    kind: 'local_kb',
+    usesLocalKnowledgeBase: true,
+    usesExternalModel: false,
+    requiresUserNotice: false,
+  })
+})
+
+test('evidence drawer view model dedupes cards and derives compact source detail', async ({ page }) => {
+  const drawer = await evidenceDrawerViewModel(page, {
+    sourceNotice: {
+      label: 'Local + external',
+      title: 'Local citations [n] come from the knowledge base.',
+      kind: 'local_plus_external',
+      usesLocalKnowledgeBase: true,
+      usesExternalModel: true,
+      requiresUserNotice: true,
+    },
+    citeDetails: [
+      {
+        num: 1,
+        displayNum: 1,
+        sourcePath: '/tmp/a.md',
+        sourceName: 'Paper A',
+        cardEvidence: 'same evidence',
+      },
+      {
+        num: 1,
+        displayNum: 1,
+        sourcePath: '/tmp/a.md',
+        sourceName: 'Paper A',
+        cardEvidence: 'same evidence',
+      },
+      {
+        num: 2,
+        displayNum: 2,
+        sourcePath: '/tmp/b.md',
+        sourceName: 'Paper B',
+        cardEvidence: 'different evidence',
+      },
+    ],
+    S: {
+      msg_evidence_label: 'Evidence',
+      agent_trace_label_evidence: 'Evidence',
+      agent_trace_source_fallback: 'Source',
+    },
+  })
+
+  expect(drawer.title).toBe('Evidence')
+  expect(drawer.subtitle).toBe('Local + external')
+  expect(drawer.sourceDetail).toBe('Local citations are grounded in the knowledge base; external context may supplement uncited background.')
+  expect(drawer.visibleDetails.map((detail) => detail.sourcePath)).toEqual(['/tmp/a.md', '/tmp/b.md'])
 })
 
 test('agent trace quality gate title combines reasons before warnings', async ({ page }) => {

@@ -153,7 +153,7 @@ import {
 import {
   sourceSummaryFromAnswerContract,
   type AnswerSourceNoticeViewModel,
-} from './answerContractViewModel'
+} from './answerSourceNoticeViewModel'
 import { AgentTracePanel } from './AgentTracePanel'
 import { ResearchTracePanel } from './ResearchTracePanel'
 import { ResearchContextReceipt } from './ResearchContextReceipt'

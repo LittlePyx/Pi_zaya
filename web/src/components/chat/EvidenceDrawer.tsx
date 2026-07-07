@@ -1,6 +1,9 @@
 import { Button, Drawer, Empty, Typography } from 'antd'
 import { BookOutlined, PlusOutlined } from '@ant-design/icons'
-import type { AnswerSourceNoticeViewModel } from './answerContractViewModel'
+import {
+  buildEvidenceDrawerViewModel,
+  type AnswerSourceNoticeViewModel,
+} from './answerSourceNoticeViewModel'
 import { buildEvidenceCardViewModel } from './evidenceCardViewModel'
 import type { CiteDetail } from './citationState'
 
@@ -16,38 +19,6 @@ interface EvidenceDrawerProps {
   S: Record<string, string>
 }
 
-function dedupeDetails(details: CiteDetail[]): CiteDetail[] {
-  const seen = new Set<string>()
-  const out: CiteDetail[] = []
-  for (const detail of details) {
-    const key = [
-      Number(detail.displayNum || detail.num || 0),
-      detail.sourcePath,
-      detail.sourceName,
-      detail.cardEvidence || detail.evidenceQuote || detail.summaryLine,
-    ].join('|')
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(detail)
-    if (out.length >= 8) break
-  }
-  return out
-}
-
-function sourcePolicyLine(sourceNotice: AnswerSourceNoticeViewModel | null): string {
-  if (!sourceNotice) return ''
-  if (sourceNotice.usesLocalKnowledgeBase && sourceNotice.usesExternalModel) {
-    return 'Local citations are grounded in the knowledge base; external context may supplement uncited background.'
-  }
-  if (sourceNotice.usesLocalKnowledgeBase) {
-    return 'This answer is grounded in local knowledge-base evidence.'
-  }
-  if (sourceNotice.usesExternalModel) {
-    return 'This answer is not grounded in local knowledge-base evidence.'
-  }
-  return sourceNotice.title
-}
-
 export function EvidenceDrawer({
   open,
   sourceNotice,
@@ -57,15 +28,17 @@ export function EvidenceDrawer({
   onAddToShelf,
   S,
 }: EvidenceDrawerProps) {
-  const visibleDetails = dedupeDetails(citeDetails)
-  const title = S.msg_evidence_label || S.agent_trace_label_evidence || 'Evidence'
-  const subtitle = sourceNotice?.label || S.agent_trace_source_fallback || 'Source'
+  const drawer = buildEvidenceDrawerViewModel({
+    sourceNotice,
+    citeDetails,
+    S,
+  })
   return (
     <Drawer
       title={(
         <div className="kb-evidence-drawer-title">
-          <span>{title}</span>
-          <Text className="kb-evidence-drawer-subtitle">{subtitle}</Text>
+          <span>{drawer.title}</span>
+          <Text className="kb-evidence-drawer-subtitle">{drawer.subtitle}</Text>
         </div>
       )}
       open={open}
@@ -78,14 +51,14 @@ export function EvidenceDrawer({
       <div className="kb-evidence-drawer-shell" data-testid="evidence-drawer">
         {sourceNotice ? (
           <section className="kb-evidence-source-summary" data-testid="evidence-source-summary">
-            <div className="kb-evidence-source-label">{sourceNotice.label}</div>
-            <div className="kb-evidence-source-detail">{sourcePolicyLine(sourceNotice)}</div>
+            <div className="kb-evidence-source-label">{drawer.sourceLabel}</div>
+            <div className="kb-evidence-source-detail">{drawer.sourceDetail}</div>
           </section>
         ) : null}
 
-        {visibleDetails.length > 0 ? (
+        {drawer.visibleDetails.length > 0 ? (
           <div className="kb-evidence-list">
-            {visibleDetails.map((detail, index) => {
+            {drawer.visibleDetails.map((detail, index) => {
               const card = buildEvidenceCardViewModel(detail, {
                 S,
                 fallbackLabel: `[${index + 1}]`,

@@ -7,7 +7,7 @@ import {
   type AnswerSourceNoticeViewModel,
   buildAnswerSourceNoticeViewModel,
   labelForSourceNoticeText,
-} from './answerContractViewModel'
+} from './answerSourceNoticeViewModel'
 
 const { Text } = Typography
 

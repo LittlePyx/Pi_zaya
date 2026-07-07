@@ -5,7 +5,7 @@ import {
   type SelectedResearchContextPack,
 } from './researchContextPack'
 import { internalDebugBrowserEnabled } from '../../utils/internalDebug'
-import { sourceSummaryFromAnswerContract } from './answerContractViewModel'
+import { sourceSummaryFromAnswerContract } from './answerSourceNoticeViewModel'
 
 export function isImageOnlyPlaceholder(content: string) {
   return /^\[Image attachment x\d+\]$/i.test(String(content || '').trim())
