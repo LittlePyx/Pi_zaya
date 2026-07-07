@@ -176,6 +176,26 @@ async function evidenceDrawerViewModel(page: Page, input: {
   }, input)
 }
 
+async function assistantMessageNoticeViewModel(page: Page, input: {
+  message: Record<string, unknown>
+  lowConfidenceMeta: Record<string, unknown> | null
+  provenanceModeLabel?: string
+  showProvenanceModeLabel?: boolean
+  S: Record<string, string>
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (noticeInput) => {
+    const { buildAssistantMessageNoticeViewModel } = await import('/src/components/chat/assistantMessageNoticeViewModel.ts')
+    return buildAssistantMessageNoticeViewModel({
+      message: noticeInput.message as never,
+      lowConfidenceMeta: noticeInput.lowConfidenceMeta as never,
+      provenanceModeLabel: noticeInput.provenanceModeLabel || '',
+      showProvenanceModeLabel: Boolean(noticeInput.showProvenanceModeLabel),
+      S: noticeInput.S,
+    })
+  }, input)
+}
+
 async function agentQualityGateTitle(page: Page, input: AgentTraceQualityGateTitleInput) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async (summaryInput) => {
@@ -623,6 +643,128 @@ test('evidence drawer view model dedupes cards and derives compact source detail
   expect(drawer.subtitle).toBe('Local + external')
   expect(drawer.sourceDetail).toBe('Local citations are grounded in the knowledge base; external context may supplement uncited background.')
   expect(drawer.visibleDetails.map((detail) => detail.sourcePath)).toEqual(['/tmp/a.md', '/tmp/b.md'])
+})
+
+test('assistant message notice view model keeps contract source badge primary', async ({ page }) => {
+  const model = await assistantMessageNoticeViewModel(page, {
+    message: {
+      role: 'assistant',
+      notice: 'Note: no matching local knowledge-base evidence was found; this is an external model answer.',
+      meta: {
+        answer_contract: {
+          source_summary: {
+            kind: 'local_kb',
+          },
+          source_policy_payload: {
+            kind: 'local_kb',
+            uses_local_knowledge_base: true,
+            uses_external_model: false,
+            requires_user_notice: false,
+            badge: {
+              label_key: 'agent_trace_source_local_only',
+              detail: 'Contract-backed evidence is available.',
+            },
+          },
+        },
+        agent_source_summary: {
+          kind: 'external_not_kb',
+          label: 'Legacy external source',
+        },
+      },
+    },
+    lowConfidenceMeta: null,
+    S: {
+      agent_trace_source_local_only: 'Local KB',
+      agent_trace_evidence_not_from_kb: 'Not from KB',
+      agent_trace_source_fallback: 'Source',
+    },
+  })
+
+  expect(model.sourceNoticeViewModel).toMatchObject({
+    label: 'Local KB',
+    title: 'Contract-backed evidence is available.',
+    kind: 'local_kb',
+  })
+  expect(model.legacySourceNoticeText).toBe('')
+  expect(model.plainNoticeText).toBe('')
+  expect(model.hasVisibleNotice).toBe(true)
+})
+
+test('assistant message notice view model separates fallback source and plain notices', async ({ page }) => {
+  const fallbackSource = await assistantMessageNoticeViewModel(page, {
+    message: {
+      role: 'assistant',
+      notice: 'Note: no matching local knowledge-base evidence was found; this is an external model answer.',
+      meta: {},
+    },
+    lowConfidenceMeta: null,
+    S: {
+      agent_trace_evidence_not_from_kb: 'Not from KB',
+      agent_trace_source_fallback: 'Source',
+    },
+  })
+  const plainNotice = await assistantMessageNoticeViewModel(page, {
+    message: {
+      role: 'assistant',
+      notice: 'Regular maintenance notice.',
+      meta: {},
+    },
+    lowConfidenceMeta: null,
+    S: {
+      agent_trace_evidence_not_from_kb: 'Not from KB',
+      agent_trace_source_fallback: 'Source',
+    },
+  })
+
+  expect(fallbackSource.sourceNoticeViewModel).toMatchObject({
+    label: 'Not from KB',
+    title: 'Note: no matching local knowledge-base evidence was found; this is an external model answer.',
+  })
+  expect(fallbackSource.legacySourceNoticeText).toBe('')
+  expect(fallbackSource.plainNoticeText).toBe('')
+  expect(plainNotice.sourceNoticeViewModel).toBeNull()
+  expect(plainNotice.legacySourceNoticeText).toBe('')
+  expect(plainNotice.plainNoticeText).toBe('Regular maintenance notice.')
+})
+
+test('assistant message notice view model exposes low confidence and provenance flags', async ({ page }) => {
+  const active = await assistantMessageNoticeViewModel(page, {
+    message: {
+      role: 'assistant',
+      content: 'Evidence-backed answer.',
+      meta: {},
+    },
+    lowConfidenceMeta: {
+      isZh: false,
+      reasonCode: 'weak_signal',
+      reasonText: 'retrieval signal is weak',
+      candidateRefs: [1, 2],
+    },
+    provenanceModeLabel: 'debug provenance',
+    showProvenanceModeLabel: true,
+    S: {},
+  })
+  const empty = await assistantMessageNoticeViewModel(page, {
+    message: {
+      role: 'assistant',
+      content: 'Evidence-backed answer.',
+      meta: {},
+    },
+    lowConfidenceMeta: null,
+    provenanceModeLabel: 'debug provenance',
+    showProvenanceModeLabel: false,
+    S: {},
+  })
+
+  expect(active.showLowConfidence).toBe(true)
+  expect(active.lowConfidenceMeta).toMatchObject({
+    reasonText: 'retrieval signal is weak',
+    candidateRefs: [1, 2],
+  })
+  expect(active.showProvenanceLabel).toBe(true)
+  expect(active.provenanceModeLabel).toBe('debug provenance')
+  expect(active.hasVisibleNotice).toBe(true)
+  expect(empty.hasVisibleNotice).toBe(false)
 })
 
 test('agent trace quality gate title combines reasons before warnings', async ({ page }) => {
