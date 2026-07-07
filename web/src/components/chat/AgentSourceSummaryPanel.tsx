@@ -4,7 +4,7 @@ import { AgentTraceSummaryStats } from './AgentTraceSummaryStats'
 import { AgentUnsupportedClaims } from './AgentUnsupportedClaims'
 import type { AgentTraceReferenceHandlers } from './agentTraceReferenceTypes'
 import type { AgentTraceLabels } from './agentTraceTypes'
-import type { AgentSourceSummaryViewModel } from './useAgentTraceViewModel'
+import type { AgentSourceSummaryViewModel } from './agentTraceViewModel'
 
 export function AgentSourceSummaryPanel({
   labels,

@@ -2,7 +2,7 @@ import { AgentTraceCheckActivity } from './AgentTraceCheckActivity'
 import { AgentTracePlanSection } from './AgentTracePlanSection'
 import type { AgentTraceReferenceHandlers } from './agentTraceReferenceTypes'
 import type { AgentTraceLabels } from './agentTraceTypes'
-import type { AgentTraceDiagnosticsViewModel } from './useAgentTraceViewModel'
+import type { AgentTraceDiagnosticsViewModel } from './agentTraceViewModel'
 import {
   tx,
   txFmt,

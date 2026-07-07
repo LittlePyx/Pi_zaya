@@ -1,6 +1,6 @@
 import type { AgentTraceSummaryChipProps } from './AgentTraceSummaryChip'
 import type { AgentTraceLabels } from './agentTraceTypes'
-import type { AgentSourceSummaryViewModel } from './useAgentTraceViewModel'
+import type { AgentSourceSummaryViewModel } from './agentTraceViewModel'
 import {
   evidenceStatusClass,
   qualityGateClass,

@@ -8,7 +8,10 @@ import type { AgentTraceQualityGateTitleInput } from '../../src/components/chat/
 import type { AgentTraceScopeSummaryInput } from '../../src/components/chat/agentTraceScopeSummary'
 import type { AgentTraceSourceRowsInput } from '../../src/components/chat/agentTraceSourceRows'
 import type { AgentTraceSourceStatusInput } from '../../src/components/chat/agentTraceSourceStatus'
-import type { AgentSourceSummaryViewModel } from '../../src/components/chat/useAgentTraceViewModel'
+import type {
+  AgentSourceSummaryViewModel,
+  AgentTraceViewModel,
+} from '../../src/components/chat/agentTraceViewModel'
 import {
   installAppShellMocks,
   installEmptyCitationShelfMock,
@@ -103,6 +106,14 @@ async function agentSourceRows(page: Page, input: AgentTraceSourceRowsInput) {
     const { buildAgentTraceSourceRows } = await import('/src/components/chat/agentTraceSourceRows.ts')
     return buildAgentTraceSourceRows(rowsInput)
   }, input)
+}
+
+async function agentTraceViewModel(page: Page, trace: Record<string, unknown>): Promise<AgentTraceViewModel> {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (inputTrace) => {
+    const { buildAgentTraceViewModel } = await import('/src/components/chat/agentTraceViewModel.ts')
+    return buildAgentTraceViewModel(inputTrace, {})
+  }, trace)
 }
 
 async function agentQualityGateTitle(page: Page, input: AgentTraceQualityGateTitleInput) {
@@ -297,6 +308,70 @@ test('agent trace source rows limit unsupported claims and dedupe step reference
     'unsupported second',
   ])
   expect(rows.references.map((ref) => ref.title)).toEqual(['Ref A', 'Ref B', 'Ref C'])
+})
+
+test('agent trace view model assembles source summary and diagnostics', async ({ page }) => {
+  const model = await agentTraceViewModel(page, {
+    question_type: 'single_paper_qa',
+    context: {
+      query_scope: 'library',
+      requested_query_scope: 'current_paper',
+      selected_research_context_count: 2,
+    },
+    summary: {
+      evidence_status: 'grounded',
+      total_claims: 2,
+      supported_claims: 1,
+      unsupported_claims: 1,
+      quality_gate_status: 'repaired',
+      quality_gate_reasons: ['citation repair applied'],
+      query_scope: 'library',
+      requested_query_scope: 'current_paper',
+      plan_step_count: 1,
+      tool_call_count: 1,
+    },
+    verification: {
+      claims: [
+        { text: 'supported claim', supported: true },
+        { text: 'unsupported claim', supported: false, unsupported_reason: 'missing_citation' },
+      ],
+    },
+    plan: [
+      { goal: 'Find evidence', status: 'done' },
+    ],
+    steps: [
+      {
+        tool: 'retrieve_evidence',
+        output: {
+          references: [
+            { title: 'Ref A', source_path: '/tmp/a.md', ref_num: 1 },
+          ],
+        },
+      },
+    ],
+    research_run: {
+      status: 'done',
+      source_policy: 'local_only',
+      evidence_matrix: [
+        { paper: 'Paper A' },
+      ],
+      subtasks: [
+        { task: 'Subtask A' },
+      ],
+    },
+  })
+
+  expect(model.headerEvidence).toBe('Evidence grounded')
+  expect(model.headerContext).toBe('Review 1/2')
+  expect(model.sourceSummary.scopeSummary).toBe('library / requested current_paper / 2 selected')
+  expect(model.sourceSummary.references.map((ref) => ref.title)).toEqual(['Ref A'])
+  expect(model.sourceSummary.unsupportedClaimRows.map((claim) => claim.text)).toEqual(['unsupported claim'])
+  expect(model.sourceSummary.researchRunStatus).toBe('done')
+  expect(model.sourceSummary.sourcePolicy).toBe('local_only')
+  expect(model.sourceSummary.evidenceMatrixRows).toBe(1)
+  expect(model.sourceSummary.subtaskCount).toBe(1)
+  expect(model.diagnostics.planStepCount).toBe(1)
+  expect(model.diagnostics.toolCallCount).toBe(1)
 })
 
 test('agent trace quality gate title combines reasons before warnings', async ({ page }) => {

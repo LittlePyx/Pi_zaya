@@ -1,7 +1,7 @@
 import { AgentTraceSummaryChip } from './AgentTraceSummaryChip'
 import type { AgentTraceLabels } from './agentTraceTypes'
 import { buildAgentTraceSummaryChips } from './agentTraceSummaryChips'
-import type { AgentSourceSummaryViewModel } from './useAgentTraceViewModel'
+import type { AgentSourceSummaryViewModel } from './agentTraceViewModel'
 
 export function AgentTraceSummaryStats({
   labels,
