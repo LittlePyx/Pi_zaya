@@ -3,6 +3,7 @@ import {
   READER_REGRESSION_SOURCE_PATH,
 } from '../../src/testing/readerRegressionFixtures'
 import type { AgentTraceHeaderSummaryInput } from '../../src/components/chat/agentTraceHeaderSummary'
+import type { AgentTraceMetricCountInput } from '../../src/components/chat/agentTraceMetricCounts'
 import type { AgentTraceQualityGateTitleInput } from '../../src/components/chat/agentTraceQualityGate'
 import type { AgentTraceScopeSummaryInput } from '../../src/components/chat/agentTraceScopeSummary'
 import type { AgentSourceSummaryViewModel } from '../../src/components/chat/useAgentTraceViewModel'
@@ -67,6 +68,14 @@ async function agentHeaderSummary(page: Page, input: AgentTraceHeaderSummaryInpu
   }, input)
 }
 
+async function agentMetricCounts(page: Page, input: AgentTraceMetricCountInput) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (summaryInput) => {
+    const { buildAgentTraceMetricCounts } = await import('/src/components/chat/agentTraceMetricCounts.ts')
+    return buildAgentTraceMetricCounts(summaryInput)
+  }, input)
+}
+
 async function agentScopeSummary(page: Page, input: AgentTraceScopeSummaryInput) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async (summaryInput) => {
@@ -106,6 +115,69 @@ test.beforeEach(async ({ page }) => {
   await installEmptyCitationShelfMock(page, {
     scopeId: 'message-list-regression-project',
     projectId: 'message-list-regression-project',
+  })
+})
+
+test('agent trace metric counts prefer summary values when present', async ({ page }) => {
+  const counts = await agentMetricCounts(page, {
+    summary: {
+      total_claims: 4,
+      supported_claims: 3,
+      unsupported_claims: 1,
+      plan_step_count: 5,
+      tool_call_count: 6,
+      has_errors: true,
+      evidence_matrix_rows: 7,
+      subtask_count: 8,
+    },
+    verification: {
+      total_claims: 1,
+      supported_claims: 1,
+      unsupported_claims: 0,
+    },
+    planCount: 1,
+    stepCount: 2,
+    errorCount: 0,
+    evidenceMatrixCount: 3,
+    researchSubtaskCount: 4,
+  })
+
+  expect(counts).toEqual({
+    totalClaims: 4,
+    supportedClaims: 3,
+    unsupportedClaims: 1,
+    planStepCount: 5,
+    toolCallCount: 6,
+    hasErrors: true,
+    evidenceMatrixRows: 7,
+    subtaskCount: 8,
+  })
+})
+
+test('agent trace metric counts fall back to source records and lengths', async ({ page }) => {
+  const counts = await agentMetricCounts(page, {
+    summary: {},
+    verification: {
+      total_claims: 2,
+      supported_claims: 1,
+      unsupported_claims: 1,
+    },
+    planCount: 3,
+    stepCount: 4,
+    errorCount: 1,
+    evidenceMatrixCount: 5,
+    researchSubtaskCount: 6,
+  })
+
+  expect(counts).toEqual({
+    totalClaims: 2,
+    supportedClaims: 1,
+    unsupportedClaims: 1,
+    planStepCount: 3,
+    toolCallCount: 4,
+    hasErrors: true,
+    evidenceMatrixRows: 5,
+    subtaskCount: 6,
   })
 })
 

@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { StringMap } from '../../i18n'
 import { buildAgentTraceHeaderSummary } from './agentTraceHeaderSummary'
+import { buildAgentTraceMetricCounts } from './agentTraceMetricCounts'
 import { buildAgentTraceQualityGateTitle } from './agentTraceQualityGate'
 import { buildAgentTraceScopeSummary } from './agentTraceScopeSummary'
 import {
@@ -8,7 +9,6 @@ import {
   evidenceStatusValue,
   questionTypeLabel,
   records,
-  traceBool,
   traceStepReferences,
   tx,
 } from './agentTracePanelUtils'
@@ -64,16 +64,26 @@ function buildAgentTraceViewModel(trace: Record<string, unknown>, labels: Partia
   const unsupportedClaimRows = claimRows
     .filter((claim) => claim.supported === false || String(claim.unsupported_reason || '').trim())
     .slice(0, 3)
-  const totalClaims = 'total_claims' in summary ? traceNum(summary.total_claims) : traceNum(verification.total_claims)
-  const supportedClaims = 'supported_claims' in summary ? traceNum(summary.supported_claims) : traceNum(verification.supported_claims)
-  const unsupportedClaims = 'unsupported_claims' in summary ? traceNum(summary.unsupported_claims) : traceNum(verification.unsupported_claims)
-  const planStepCount = 'plan_step_count' in summary ? traceNum(summary.plan_step_count) : plan.length
-  const toolCallCount = 'tool_call_count' in summary ? traceNum(summary.tool_call_count) : steps.length
-  const hasErrors = 'has_errors' in summary ? traceBool(summary.has_errors) : errors.length > 0
+  const {
+    totalClaims,
+    supportedClaims,
+    unsupportedClaims,
+    planStepCount,
+    toolCallCount,
+    hasErrors,
+    evidenceMatrixRows,
+    subtaskCount,
+  } = buildAgentTraceMetricCounts({
+    summary,
+    verification,
+    planCount: plan.length,
+    stepCount: steps.length,
+    errorCount: errors.length,
+    evidenceMatrixCount: evidenceMatrix.length,
+    researchSubtaskCount: researchSubtasks.length,
+  })
   const researchRunStatus = String(summary.research_run_status || researchRun.status || '').trim()
   const sourcePolicy = String(summary.source_policy || researchRun.source_policy || '').trim()
-  const evidenceMatrixRows = 'evidence_matrix_rows' in summary ? traceNum(summary.evidence_matrix_rows) : evidenceMatrix.length
-  const subtaskCount = 'subtask_count' in summary ? traceNum(summary.subtask_count) : researchSubtasks.length
   const questionType = String(summary.question_type || trace.question_type || 'unknown').trim()
   const queryScope = String(summary.query_scope || context.query_scope || context.queryScope || '').trim()
   const requestedScope = String(summary.requested_query_scope || context.requested_query_scope || context.requestedQueryScope || '').trim()
