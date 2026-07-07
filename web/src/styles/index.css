@@ -4718,27 +4718,43 @@ body.kb-reader-resizing .kb-reader-content {
 .kb-shelf-item {
   position: relative;
   border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+  border-bottom: 1px solid var(--border-quiet);
   border-radius: 0;
   background: transparent;
-  padding: 11px 2px 11px 0;
+  padding: 11px 2px 11px 8px;
   box-shadow: none;
+}
+
+.kb-shelf-item::before {
+  content: "";
+  position: absolute;
+  inset: 10px auto 10px 0;
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
 }
 
 .kb-shelf-item:hover {
-  border-color: color-mix(in srgb, var(--border) 58%, transparent);
-  background: color-mix(in srgb, var(--bg) 36%, transparent);
+  border-color: var(--border-subtle);
+  background: var(--surface-subtle);
 }
 
 .kb-shelf-item-active {
-  border-color: color-mix(in srgb, var(--border) 54%, transparent);
-  background: transparent;
+  border-color: var(--border-subtle);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
   box-shadow: none;
-  padding-left: 0;
+}
+
+.kb-shelf-item-active::before {
+  background: color-mix(in srgb, var(--accent) 58%, var(--text-main));
 }
 
 .kb-shelf-item.is-context {
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.kb-shelf-item.is-context::before {
+  background: color-mix(in srgb, var(--accent) 44%, var(--text-main));
 }
 
 .kb-shelf-item-active .kb-shelf-item-title {
@@ -4803,8 +4819,8 @@ body.kb-reader-resizing .kb-reader-content {
 
 .kb-shelf-source-open:hover,
 .kb-shelf-item-remove:hover {
-  border-color: color-mix(in srgb, var(--border) 66%, transparent);
-  background: color-mix(in srgb, var(--panel) 78%, var(--bg));
+  border-color: var(--border-subtle);
+  background: var(--surface);
   color: color-mix(in srgb, var(--text-main) 72%, transparent);
 }
 
@@ -4904,7 +4920,7 @@ body.kb-reader-resizing .kb-reader-content {
 
 .kb-shelf-note {
   border: 0;
-  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-left: 1px solid var(--border-subtle);
   border-radius: 0;
   padding: 2px 0 2px 8px;
 }

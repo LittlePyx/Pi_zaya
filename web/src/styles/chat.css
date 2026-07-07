@@ -212,13 +212,13 @@
   min-height: 0;
   flex: 0 0 auto;
   flex-direction: column;
-  border-left: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-  background: color-mix(in srgb, var(--panel) 96%, var(--bg));
+  border-left: 1px solid var(--border-subtle);
+  background: var(--surface);
   box-shadow: none;
 }
 
 .kb-chat-side-dock.is-resizing {
-  background: color-mix(in srgb, var(--panel) 100%, var(--bg));
+  background: var(--surface-elevated);
 }
 
 .kb-chat-side-dock.is-collapsed {
@@ -353,7 +353,7 @@
 .kb-chat-side-tabs {
   gap: 10px;
   min-height: 48px;
-  border-bottom-color: color-mix(in srgb, var(--border) 44%, transparent);
+  border-bottom-color: var(--border-quiet);
   padding: 8px 12px 0;
 }
 
@@ -389,13 +389,13 @@
 
 .kb-chat-side-tab:hover,
 .kb-chat-side-tab:focus-visible {
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
   background: transparent;
   color: color-mix(in srgb, var(--text-main) 76%, transparent);
 }
 
 .kb-chat-side-tab.is-active {
-  border-color: color-mix(in srgb, var(--text-main) 70%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--text-main));
   background: transparent;
   color: color-mix(in srgb, var(--text-main) 88%, transparent);
 }
@@ -409,8 +409,8 @@
 .kb-shelf-panel-docked .kb-shelf-head,
 .kb-shelf-head {
   padding: 16px 18px 12px !important;
-  border-bottom-color: color-mix(in srgb, var(--border) 46%, transparent) !important;
-  background: color-mix(in srgb, var(--panel) 98%, var(--bg));
+  border-bottom-color: var(--border-quiet) !important;
+  background: var(--surface);
 }
 
 .kb-shelf-head-top {
@@ -819,7 +819,7 @@
 .kb-shelf-toolbar-wrap {
   margin: 0 0 10px;
   padding: 0 0 10px;
-  border-bottom-color: color-mix(in srgb, var(--border) 40%, transparent);
+  border-bottom-color: var(--border-quiet);
 }
 
 .kb-shelf-toolbar-main {
@@ -832,10 +832,17 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 36px;
-  border-color: color-mix(in srgb, var(--border) 42%, transparent);
-  border-radius: 8px;
-  background: transparent;
+  border-color: var(--border-quiet);
+  border-radius: var(--radius-md);
+  background: var(--surface-elevated);
   box-shadow: none;
+}
+
+.kb-shelf-search.ant-input-affix-wrapper:hover,
+.kb-shelf-search.ant-input-affix-wrapper-focused,
+.kb-shelf-search.ant-input-affix-wrapper:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+  box-shadow: var(--focus-ring);
 }
 
 .kb-shelf-toolbar-controls {
@@ -924,7 +931,7 @@
 .kb-shelf-filters {
   gap: 9px;
   border: 0;
-  border-top: 1px solid color-mix(in srgb, var(--border) 38%, transparent);
+  border-top: 1px solid var(--border-quiet);
   border-radius: 0;
   background: transparent;
   padding: 12px 0 0;
@@ -962,7 +969,7 @@
 .kb-shelf-segment:hover:not(:disabled),
 .kb-shelf-segment:focus-visible:not(:disabled),
 .kb-shelf-segment.is-active {
-  border-bottom-color: color-mix(in srgb, var(--text-main) 68%, transparent) !important;
+  border-bottom-color: color-mix(in srgb, var(--accent) 52%, var(--text-main)) !important;
   color: color-mix(in srgb, var(--text-main) 82%, transparent);
 }
 
@@ -1021,7 +1028,7 @@
   gap: 9px;
   margin: 0 0 12px;
   border: 0;
-  border-top: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+  border-top: 1px solid var(--border-quiet);
   border-radius: 0;
   background: transparent;
   padding: 10px 0 2px;
