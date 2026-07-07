@@ -1,9 +1,8 @@
 import { useT } from '../../i18n'
 import { internalDebugEnvEnabled } from '../../utils/internalDebug'
-import { AgentTraceFrame } from './AgentTraceFrame'
-import { AgentSourceSummaryPanel } from './AgentSourceSummaryPanel'
-import { AgentTraceDiagnosticsPanel } from './AgentTraceDiagnosticsPanel'
+import { AgentTraceResolvedPanel } from './AgentTraceResolvedPanel'
 import { AgentTraceStoredPrompt } from './AgentTraceStoredPrompt'
+import { buildAgentTracePanelState } from './agentTracePanelState'
 import type { AgentTraceReferenceHandlers } from './agentTraceReferenceTypes'
 import { useArchivedAgentTrace, type LoadArchivedAgentTrace } from './useArchivedAgentTrace'
 import { useAgentTraceViewModel } from './useAgentTraceViewModel'
@@ -35,11 +34,15 @@ export function AgentTracePanel({
     onLoadTrace,
   })
   const viewModel = useAgentTraceViewModel(traceRecord, S)
-  if (!hasTrace && !canLazyLoad) return null
-  const mode = String(traceRecord.mode || '').trim()
-  if (hasTrace && mode && mode !== 'research_agent') return null
+  const panelState = buildAgentTracePanelState({
+    traceRecord,
+    hasTrace,
+    canLazyLoad,
+  })
 
-  if (!hasTrace) {
+  if (panelState === 'hidden') return null
+
+  if (panelState === 'stored_prompt') {
     return (
       <AgentTraceStoredPrompt
         labels={S}
@@ -52,27 +55,14 @@ export function AgentTracePanel({
   const showDiagnostics = internalDebugEnvEnabled()
 
   return (
-    <AgentTraceFrame
+    <AgentTraceResolvedPanel
       labels={S}
-      summaryStatus={viewModel.headerEvidence}
-      summaryContext={viewModel.headerContext}
-      open={loadStatus === 'loaded' ? true : undefined}
+      viewModel={viewModel}
+      loadStatus={loadStatus}
+      showDiagnostics={showDiagnostics}
       onOpen={loadArchivedTrace}
-    >
-      <AgentSourceSummaryPanel
-        labels={S}
-        viewModel={viewModel.sourceSummary}
-        onOpenReference={onOpenReference}
-        onAddReferenceToShelf={onAddReferenceToShelf}
-      />
-      {showDiagnostics ? (
-        <AgentTraceDiagnosticsPanel
-          labels={S}
-          viewModel={viewModel.diagnostics}
-          onOpenReference={onOpenReference}
-          onAddReferenceToShelf={onAddReferenceToShelf}
-        />
-      ) : null}
-    </AgentTraceFrame>
+      onOpenReference={onOpenReference}
+      onAddReferenceToShelf={onAddReferenceToShelf}
+    />
   )
 }

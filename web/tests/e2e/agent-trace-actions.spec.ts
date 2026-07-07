@@ -4,6 +4,7 @@ import {
 } from '../../src/testing/readerRegressionFixtures'
 import type { AgentTraceHeaderSummaryInput } from '../../src/components/chat/agentTraceHeaderSummary'
 import type { AgentTraceMetricCountInput } from '../../src/components/chat/agentTraceMetricCounts'
+import type { AgentTracePanelStateInput } from '../../src/components/chat/agentTracePanelState'
 import type { AgentTraceQualityGateTitleInput } from '../../src/components/chat/agentTraceQualityGate'
 import type { AgentTraceScopeSummaryInput } from '../../src/components/chat/agentTraceScopeSummary'
 import type { AgentTraceSourceRowsInput } from '../../src/components/chat/agentTraceSourceRows'
@@ -114,6 +115,14 @@ async function agentTraceViewModel(page: Page, trace: Record<string, unknown>): 
     const { buildAgentTraceViewModel } = await import('/src/components/chat/agentTraceViewModel.ts')
     return buildAgentTraceViewModel(inputTrace, {})
   }, trace)
+}
+
+async function agentTracePanelState(page: Page, input: AgentTracePanelStateInput) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (stateInput) => {
+    const { buildAgentTracePanelState } = await import('/src/components/chat/agentTracePanelState.ts')
+    return buildAgentTracePanelState(stateInput)
+  }, input)
 }
 
 async function agentQualityGateTitle(page: Page, input: AgentTraceQualityGateTitleInput) {
@@ -372,6 +381,29 @@ test('agent trace view model assembles source summary and diagnostics', async ({
   expect(model.sourceSummary.subtaskCount).toBe(1)
   expect(model.diagnostics.planStepCount).toBe(1)
   expect(model.diagnostics.toolCallCount).toBe(1)
+})
+
+test('agent trace panel state gates stored prompts and non-research traces', async ({ page }) => {
+  await expect(agentTracePanelState(page, {
+    traceRecord: {},
+    hasTrace: false,
+    canLazyLoad: false,
+  })).resolves.toBe('hidden')
+  await expect(agentTracePanelState(page, {
+    traceRecord: {},
+    hasTrace: false,
+    canLazyLoad: true,
+  })).resolves.toBe('stored_prompt')
+  await expect(agentTracePanelState(page, {
+    traceRecord: { mode: 'legacy_debug_trace' },
+    hasTrace: true,
+    canLazyLoad: false,
+  })).resolves.toBe('hidden')
+  await expect(agentTracePanelState(page, {
+    traceRecord: { mode: 'research_agent' },
+    hasTrace: true,
+    canLazyLoad: false,
+  })).resolves.toBe('trace')
 })
 
 test('agent trace quality gate title combines reasons before warnings', async ({ page }) => {
