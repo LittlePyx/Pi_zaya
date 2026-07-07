@@ -1804,9 +1804,9 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--panel) 95%, var(--bg));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   color: color-mix(in srgb, var(--text-main) 70%, transparent);
 }
 
@@ -1821,7 +1821,7 @@
 
 .kb-msg-bubble {
   min-width: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   line-height: 1.7;
   overflow-wrap: anywhere;
@@ -1830,9 +1830,10 @@
 .kb-msg-bubble-user {
   width: fit-content;
   max-width: min(72%, 760px);
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  background: color-mix(in srgb, var(--panel) 98%, var(--bg));
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
   padding: 9px 13px;
+  box-shadow: var(--shadow-soft);
 }
 
 .kb-msg-bubble-user.is-image-only {
@@ -1844,10 +1845,10 @@
   flex: 0 1 var(--kb-message-content-width);
   width: min(100%, var(--kb-message-content-width));
   max-width: calc(100% - 38px);
-  border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
-  background: color-mix(in srgb, var(--msg-ai-bg) 98%, var(--bg));
+  border: 1px solid var(--border-quiet);
+  background: color-mix(in srgb, var(--msg-ai-bg) 96%, var(--surface));
   padding: 15px 18px;
-  box-shadow: none;
+  box-shadow: var(--shadow-soft);
 }
 
 .kb-message-row.is-assistant .kb-msg-bubble-assistant,
@@ -1858,7 +1859,7 @@
 }
 
 .kb-msg-bubble-assistant.is-streaming {
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  border-color: var(--border-subtle);
 }
 
 .kb-assistant-source-notice {
@@ -1917,7 +1918,7 @@ button.kb-assistant-source-notice {
 
 .kb-evidence-drawer .ant-drawer-body {
   padding: 0;
-  background: color-mix(in srgb, var(--panel) 98%, var(--bg));
+  background: var(--surface);
 }
 
 .kb-evidence-drawer-title {
@@ -1965,10 +1966,11 @@ button.kb-assistant-source-notice {
 }
 
 .kb-evidence-item {
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-elevated);
   padding: 11px;
+  box-shadow: var(--shadow-soft);
 }
 
 .kb-evidence-item-head {
@@ -2089,9 +2091,9 @@ button.kb-assistant-source-notice {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
   padding: 7px 9px;
 }
 
@@ -2155,22 +2157,22 @@ button.kb-assistant-source-notice {
 }
 
 .kb-chat-input-shell {
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--panel) 97%, var(--bg));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-elevated);
   padding: 10px !important;
-  box-shadow: none;
+  box-shadow: var(--shadow-soft);
 }
 
 .kb-chat-input-shell.is-drag-active {
   border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
-  background: color-mix(in srgb, var(--msg-user-bg) 48%, var(--panel));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 10%, transparent);
+  background: color-mix(in srgb, var(--msg-user-bg) 48%, var(--surface-elevated));
+  box-shadow: var(--focus-ring);
 }
 
 .kb-chat-input-shell:focus-within {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 7%, transparent);
+  box-shadow: var(--focus-ring);
 }
 
 .kb-chat-composer-main {
@@ -2180,7 +2182,7 @@ button.kb-assistant-source-notice {
 
 textarea.kb-chat-textarea {
   border: 0 !important;
-  border-radius: 6px !important;
+  border-radius: var(--radius-sm) !important;
   background: transparent !important;
   padding: 5px 4px 8px !important;
   font-size: 14px;

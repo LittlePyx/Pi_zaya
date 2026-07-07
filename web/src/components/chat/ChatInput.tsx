@@ -354,7 +354,7 @@ export function ChatInput({
               return (
                 <div
                   key={imageKey(item)}
-                  className="group relative overflow-hidden rounded-[22px] border border-[var(--border)] bg-[var(--msg-user-bg)]/55"
+                  className="group relative overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-subtle)]"
                 >
                   {src && isImageAttachment(item) ? (
                     <img

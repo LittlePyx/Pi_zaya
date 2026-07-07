@@ -572,9 +572,9 @@ export default function ChatPage() {
                 {conversationLoading ? (
                   <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-6 py-6">
                     <div className="h-5 w-40 animate-pulse rounded-full bg-black/[0.06] dark:bg-white/[0.08]" />
-                    <div className="ml-auto h-24 w-[68%] animate-pulse rounded-[28px] bg-black/[0.05] dark:bg-white/[0.06]" />
-                    <div className="h-32 w-[82%] animate-pulse rounded-[28px] bg-black/[0.04] dark:bg-white/[0.05]" />
-                    <div className="ml-auto h-20 w-[58%] animate-pulse rounded-[28px] bg-black/[0.05] dark:bg-white/[0.06]" />
+                    <div className="ml-auto h-24 w-[68%] animate-pulse rounded-lg bg-black/[0.05] dark:bg-white/[0.06]" />
+                    <div className="h-32 w-[82%] animate-pulse rounded-lg bg-black/[0.04] dark:bg-white/[0.05]" />
+                    <div className="ml-auto h-20 w-[58%] animate-pulse rounded-lg bg-black/[0.05] dark:bg-white/[0.06]" />
                   </div>
                 ) : (
                   <MessageList
