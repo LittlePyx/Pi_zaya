@@ -1,7 +1,7 @@
 import { AgentTraceFrame } from './AgentTraceFrame'
 import type { AgentTraceLabels } from './agentTraceTypes'
 import { tx } from './agentTracePanelUtils'
-import type { ArchivedAgentTraceLoadStatus } from './useArchivedAgentTrace'
+import type { ArchivedAgentTraceLoadStatus } from './agentTraceArchiveState'
 
 function storedTraceNote(loadStatus: ArchivedAgentTraceLoadStatus, labels: AgentTraceLabels['labels']) {
   if (loadStatus === 'loading') return tx(labels, 'agent_trace_loading_stored', 'Loading saved source check...')

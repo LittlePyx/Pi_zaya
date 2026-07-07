@@ -4,7 +4,7 @@ import { AgentTraceFrame } from './AgentTraceFrame'
 import type { AgentTraceReferenceHandlers } from './agentTraceReferenceTypes'
 import type { AgentTraceLabels } from './agentTraceTypes'
 import type { AgentTraceViewModel } from './agentTraceViewModel'
-import type { ArchivedAgentTraceLoadStatus } from './useArchivedAgentTrace'
+import type { ArchivedAgentTraceLoadStatus } from './agentTraceArchiveState'
 
 export function AgentTraceResolvedPanel({
   labels,

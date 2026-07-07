@@ -2,6 +2,8 @@ import { expect, test, type Page } from '@playwright/test'
 import {
   READER_REGRESSION_SOURCE_PATH,
 } from '../../src/testing/readerRegressionFixtures'
+import type { AgentTraceAuditResponse } from '../../src/api/chat'
+import type { ArchivedAgentTraceSnapshotInput } from '../../src/components/chat/agentTraceArchiveState'
 import type { AgentTraceHeaderSummaryInput } from '../../src/components/chat/agentTraceHeaderSummary'
 import type { AgentTraceMetricCountInput } from '../../src/components/chat/agentTraceMetricCounts'
 import type { AgentTracePanelStateInput } from '../../src/components/chat/agentTracePanelState'
@@ -123,6 +125,25 @@ async function agentTracePanelState(page: Page, input: AgentTracePanelStateInput
     const { buildAgentTracePanelState } = await import('/src/components/chat/agentTracePanelState.ts')
     return buildAgentTracePanelState(stateInput)
   }, input)
+}
+
+async function archivedTraceSnapshot(page: Page, input: ArchivedAgentTraceSnapshotInput) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (snapshotInput) => {
+    const { buildArchivedAgentTraceSnapshot } = await import('/src/components/chat/agentTraceArchiveState.ts')
+    return buildArchivedAgentTraceSnapshot(snapshotInput)
+  }, input)
+}
+
+async function archivedTraceLoadedState(page: Page, messageId: number, response: AgentTraceAuditResponse) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async ({ inputMessageId, inputResponse }) => {
+    const { buildArchivedAgentTraceLoadedState } = await import('/src/components/chat/agentTraceArchiveState.ts')
+    return buildArchivedAgentTraceLoadedState(inputMessageId, inputResponse)
+  }, {
+    inputMessageId: messageId,
+    inputResponse: response,
+  })
 }
 
 async function agentQualityGateTitle(page: Page, input: AgentTraceQualityGateTitleInput) {
@@ -404,6 +425,88 @@ test('agent trace panel state gates stored prompts and non-research traces', asy
     hasTrace: true,
     canLazyLoad: false,
   })).resolves.toBe('trace')
+})
+
+test('archived trace helper prefers inline trace and isolates loaded state by message id', async ({ page }) => {
+  const inlineSnapshot = await archivedTraceSnapshot(page, {
+    trace: { mode: 'research_agent', marker: 'inline' },
+    loadedState: {
+      messageId: 9301,
+      trace: { mode: 'research_agent', marker: 'loaded' },
+      status: 'loaded',
+    },
+    messageId: 9301,
+    canLoadTrace: true,
+    hasLoadHandler: true,
+  })
+  const switchedSnapshot = await archivedTraceSnapshot(page, {
+    trace: null,
+    loadedState: {
+      messageId: 9301,
+      trace: { mode: 'research_agent', marker: 'loaded' },
+      status: 'loaded',
+    },
+    messageId: 9302,
+    canLoadTrace: true,
+    hasLoadHandler: true,
+  })
+
+  expect(inlineSnapshot.traceRecord.marker).toBe('inline')
+  expect(inlineSnapshot.hasInitialTrace).toBe(true)
+  expect(inlineSnapshot.canLazyLoad).toBe(false)
+  expect(switchedSnapshot.traceRecord).toEqual({})
+  expect(switchedSnapshot.loadStatus).toBe('idle')
+  expect(switchedSnapshot.canLazyLoad).toBe(true)
+})
+
+test('archived trace helper merges audit summary without overwriting trace summary', async ({ page }) => {
+  const mergedState = await archivedTraceLoadedState(page, 9301, {
+    message_id: 9301,
+    conv_id: 'message-list-regression:agent-trace-lazy-audit',
+    available: true,
+    agent_trace: {
+      mode: 'research_agent',
+      verification: { total_claims: 9 },
+    },
+    summary: {
+      total_claims: 1,
+      query_scope: 'library',
+    },
+  })
+  const preservedState = await archivedTraceLoadedState(page, 9301, {
+    message_id: 9301,
+    conv_id: 'message-list-regression:agent-trace-lazy-audit',
+    available: true,
+    agent_trace: {
+      mode: 'research_agent',
+      summary: { query_scope: 'raw-trace-context' },
+    },
+    summary: {
+      query_scope: 'library',
+    },
+  })
+  const emptyState = await archivedTraceLoadedState(page, 9301, {
+    message_id: 9301,
+    conv_id: 'message-list-regression:agent-trace-lazy-audit',
+    available: false,
+    agent_trace: {},
+    summary: {
+      query_scope: 'library',
+    },
+  })
+
+  expect(mergedState.status).toBe('loaded')
+  expect(mergedState.trace?.summary).toEqual({
+    total_claims: 1,
+    query_scope: 'library',
+  })
+  expect(mergedState.trace?.verification).toEqual({ total_claims: 9 })
+  expect(preservedState.trace?.summary).toEqual({ query_scope: 'raw-trace-context' })
+  expect(emptyState).toEqual({
+    messageId: 9301,
+    trace: null,
+    status: 'empty',
+  })
 })
 
 test('agent trace quality gate title combines reasons before warnings', async ({ page }) => {

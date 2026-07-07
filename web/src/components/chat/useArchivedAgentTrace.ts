@@ -1,16 +1,13 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { AgentTraceAuditResponse } from '../../api/chat'
-import { asTraceRecord } from './messageTraceUtils'
+import {
+  buildArchivedAgentTraceLoadedState,
+  buildArchivedAgentTraceSnapshot,
+  type ArchivedAgentTraceLoadedState,
+} from './agentTraceArchiveState'
 
-export type ArchivedAgentTraceLoadStatus = 'idle' | 'loading' | 'loaded' | 'empty' | 'error'
+export type { ArchivedAgentTraceLoadStatus } from './agentTraceArchiveState'
 export type LoadArchivedAgentTrace = (messageId: number) => Promise<AgentTraceAuditResponse>
-
-function withAuditSummary(trace: Record<string, unknown>, summary: Record<string, unknown>) {
-  if (Object.keys(trace).length <= 0 || Object.keys(summary).length <= 0 || Object.keys(asTraceRecord(trace.summary)).length > 0) {
-    return trace
-  }
-  return { ...trace, summary }
-}
 
 export function useArchivedAgentTrace({
   trace,
@@ -23,44 +20,32 @@ export function useArchivedAgentTrace({
   canLoadTrace?: boolean
   onLoadTrace?: LoadArchivedAgentTrace
 }) {
-  const initialTrace = useMemo(() => asTraceRecord(trace), [trace])
-  const [loadedState, setLoadedState] = useState<{
-    messageId: number
-    trace: Record<string, unknown> | null
-    status: ArchivedAgentTraceLoadStatus
-  }>({ messageId: 0, trace: null, status: 'idle' })
-
-  const hasInitialTrace = Object.keys(initialTrace).length > 0
-  const currentMessageId = Number(messageId || 0)
-  const loadedTraceRecord = loadedState.messageId === currentMessageId ? asTraceRecord(loadedState.trace) : {}
-  const loadStatus = loadedState.messageId === currentMessageId ? loadedState.status : 'idle'
-  const traceRecord = hasInitialTrace ? initialTrace : loadedTraceRecord
-  const hasTrace = Object.keys(traceRecord).length > 0
-  const canLazyLoad = Boolean(!hasInitialTrace && canLoadTrace && onLoadTrace && currentMessageId > 0)
+  const [loadedState, setLoadedState] = useState<ArchivedAgentTraceLoadedState>({ messageId: 0, trace: null, status: 'idle' })
+  const snapshot = useMemo(() => buildArchivedAgentTraceSnapshot({
+    trace,
+    loadedState,
+    messageId,
+    canLoadTrace,
+    hasLoadHandler: Boolean(onLoadTrace),
+  }), [canLoadTrace, loadedState, messageId, onLoadTrace, trace])
 
   const loadArchivedTrace = useCallback(async () => {
-    if (!canLazyLoad || loadStatus === 'loading' || loadStatus === 'loaded') return
-    if (!currentMessageId || !onLoadTrace) return
-    setLoadedState({ messageId: currentMessageId, trace: null, status: 'loading' })
+    if (!snapshot.canLazyLoad || snapshot.loadStatus === 'loading' || snapshot.loadStatus === 'loaded') return
+    if (!snapshot.currentMessageId || !onLoadTrace) return
+    setLoadedState({ messageId: snapshot.currentMessageId, trace: null, status: 'loading' })
     try {
-      const res = await onLoadTrace(currentMessageId)
-      const loadedTrace = asTraceRecord(res.agent_trace)
-      const nextTrace = withAuditSummary(loadedTrace, asTraceRecord(res.summary))
-      if (res.available !== false && Object.keys(nextTrace).length > 0) {
-        setLoadedState({ messageId: currentMessageId, trace: nextTrace, status: 'loaded' })
-      } else {
-        setLoadedState({ messageId: currentMessageId, trace: null, status: 'empty' })
-      }
+      const res = await onLoadTrace(snapshot.currentMessageId)
+      setLoadedState(buildArchivedAgentTraceLoadedState(snapshot.currentMessageId, res))
     } catch {
-      setLoadedState({ messageId: currentMessageId, trace: null, status: 'error' })
+      setLoadedState({ messageId: snapshot.currentMessageId, trace: null, status: 'error' })
     }
-  }, [canLazyLoad, currentMessageId, loadStatus, onLoadTrace])
+  }, [onLoadTrace, snapshot.canLazyLoad, snapshot.currentMessageId, snapshot.loadStatus])
 
   return {
-    traceRecord,
-    hasTrace,
-    canLazyLoad,
-    loadStatus,
+    traceRecord: snapshot.traceRecord,
+    hasTrace: snapshot.hasTrace,
+    canLazyLoad: snapshot.canLazyLoad,
+    loadStatus: snapshot.loadStatus,
     loadArchivedTrace,
   }
 }
