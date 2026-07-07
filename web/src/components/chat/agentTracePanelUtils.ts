@@ -191,23 +191,3 @@ export function referenceDetail(ref: Record<string, unknown>): CiteDetail | null
     page_end: traceNum(ref.page_end || ref.pageEnd),
   })
 }
-
-export function traceStepReferences(steps: Record<string, unknown>[], limit = 4): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = []
-  const seen = new Set<string>()
-  for (const step of steps) {
-    const output = asTraceRecord(step.output)
-    for (const ref of records(output.references)) {
-      const key = [
-        refText(ref, 'source_path', 'sourcePath'),
-        traceNum(ref.ref_num || ref.num),
-        refText(ref, 'title', 'raw', 'source_name', 'sourceName'),
-      ].join('|')
-      if (seen.has(key)) continue
-      seen.add(key)
-      out.push(ref)
-      if (out.length >= limit) return out
-    }
-  }
-  return out
-}

@@ -3,8 +3,9 @@ import type { StringMap } from '../../i18n'
 import { buildAgentTraceHeaderSummary } from './agentTraceHeaderSummary'
 import { buildAgentTraceMetricCounts } from './agentTraceMetricCounts'
 import { buildAgentTraceScopeSummary } from './agentTraceScopeSummary'
+import { buildAgentTraceSourceRows } from './agentTraceSourceRows'
 import { buildAgentTraceSourceStatus } from './agentTraceSourceStatus'
-import { evidenceStatusValue, records, traceStepReferences } from './agentTracePanelUtils'
+import { evidenceStatusValue, records } from './agentTracePanelUtils'
 import type { AgentTraceRecord } from './agentTraceTypes'
 import type { AgentTraceReferenceRecord } from './agentTraceReferenceTypes'
 import { asTraceRecord, traceNum } from './messageTraceUtils'
@@ -53,10 +54,10 @@ function buildAgentTraceViewModel(trace: Record<string, unknown>, labels: Partia
   const errors = Array.isArray(trace.errors) ? trace.errors : []
   const evidenceMatrix = records(researchRun.evidence_matrix)
   const researchSubtasks = records(researchRun.subtasks)
-  const claimRows = records(verification.claims)
-  const unsupportedClaimRows = claimRows
-    .filter((claim) => claim.supported === false || String(claim.unsupported_reason || '').trim())
-    .slice(0, 3)
+  const { unsupportedClaimRows, references } = buildAgentTraceSourceRows({
+    verification,
+    steps,
+  })
   const {
     totalClaims,
     supportedClaims,
@@ -132,7 +133,7 @@ function buildAgentTraceViewModel(trace: Record<string, unknown>, labels: Partia
       evidenceMatrix,
       subtaskCount,
       unsupportedClaimRows,
-      references: traceStepReferences(steps),
+      references,
     },
     diagnostics: {
       plan,

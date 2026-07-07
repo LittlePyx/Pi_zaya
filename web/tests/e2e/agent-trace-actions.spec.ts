@@ -6,6 +6,7 @@ import type { AgentTraceHeaderSummaryInput } from '../../src/components/chat/age
 import type { AgentTraceMetricCountInput } from '../../src/components/chat/agentTraceMetricCounts'
 import type { AgentTraceQualityGateTitleInput } from '../../src/components/chat/agentTraceQualityGate'
 import type { AgentTraceScopeSummaryInput } from '../../src/components/chat/agentTraceScopeSummary'
+import type { AgentTraceSourceRowsInput } from '../../src/components/chat/agentTraceSourceRows'
 import type { AgentTraceSourceStatusInput } from '../../src/components/chat/agentTraceSourceStatus'
 import type { AgentSourceSummaryViewModel } from '../../src/components/chat/useAgentTraceViewModel'
 import {
@@ -93,6 +94,14 @@ async function agentSourceStatus(page: Page, input: Omit<AgentTraceSourceStatusI
       ...summaryInput,
       labels: {},
     })
+  }, input)
+}
+
+async function agentSourceRows(page: Page, input: AgentTraceSourceRowsInput) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (rowsInput) => {
+    const { buildAgentTraceSourceRows } = await import('/src/components/chat/agentTraceSourceRows.ts')
+    return buildAgentTraceSourceRows(rowsInput)
   }, input)
 }
 
@@ -246,6 +255,48 @@ test('agent trace source status falls back to verification, research run, and tr
     researchRunStatus: 'done',
     sourcePolicy: 'local_only',
   })
+})
+
+test('agent trace source rows limit unsupported claims and dedupe step references', async ({ page }) => {
+  const rows = await agentSourceRows(page, {
+    verification: {
+      claims: [
+        { text: 'supported claim', supported: true },
+        { text: 'unsupported explicit', supported: false },
+        { text: 'unsupported reason only', unsupported_reason: 'missing_evidence_overlap' },
+        { text: 'unsupported second', supported: false },
+        { text: 'unsupported third omitted by limit', supported: false },
+      ],
+    },
+    steps: [
+      {
+        output: {
+          references: [
+            { title: 'Ref A', source_path: '/tmp/a.md', ref_num: 1 },
+            { title: 'Ref A', source_path: '/tmp/a.md', ref_num: 1 },
+            { title: 'Ref B', source_path: '/tmp/b.md', ref_num: 2 },
+          ],
+        },
+      },
+      {
+        output: {
+          references: [
+            { title: 'Ref C', source_path: '/tmp/c.md', ref_num: 3 },
+            { title: 'Ref D omitted by limit', source_path: '/tmp/d.md', ref_num: 4 },
+          ],
+        },
+      },
+    ],
+    unsupportedClaimLimit: 3,
+    referenceLimit: 3,
+  })
+
+  expect(rows.unsupportedClaimRows.map((claim) => claim.text)).toEqual([
+    'unsupported explicit',
+    'unsupported reason only',
+    'unsupported second',
+  ])
+  expect(rows.references.map((ref) => ref.title)).toEqual(['Ref A', 'Ref B', 'Ref C'])
 })
 
 test('agent trace quality gate title combines reasons before warnings', async ({ page }) => {
