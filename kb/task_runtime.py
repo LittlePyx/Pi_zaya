@@ -43,16 +43,23 @@ from kb.answer_contract import (
     _prefer_zh_locale,
     _reconcile_kb_notice,
     _split_kb_miss_notice,
-    build_answer_contract_payload,
 )
 from kb.answer_quality import (
     _gen_answer_quality_summary,
     _gen_record_answer_quality,
 )
-from kb.answer_runtime_check import build_answer_runtime_check, repair_answer_for_runtime_contract
 from kb.agent.runner import build_agent_trace_for_completed_answer, build_generation_agent_notes
-from kb.agent.source_summary import build_agent_source_summary
 from kb.agent.tools import generate_grounded_answer as agent_generate_grounded_answer
+from kb.generation_agent_finalize_runtime import (
+    _gen_agent_source_summary as _agent_finalize_source_summary,
+    _gen_answer_contract as _agent_finalize_answer_contract,
+    _gen_answer_runtime_check as _agent_finalize_answer_runtime_check,
+    _gen_build_agent_completion_payload as _agent_finalize_completion_payload,
+    _gen_compact_agent_trace as _agent_finalize_compact_trace,
+    _gen_repair_answer_runtime as _agent_finalize_repair_answer_runtime,
+    _gen_store_agent_trace_meta as _agent_finalize_store_agent_trace_meta,
+    _sync_runtime_repaired_answer_contracts as _agent_finalize_sync_runtime_repaired_answer_contracts,
+)
 from kb.generation_citation_validation_runtime import (
     _source_refs_from_index as _citation_validation_source_refs_from_index,
     _validate_freeform_numeric_citations as _citation_validation_validate_freeform_numeric_citations,
@@ -3320,38 +3327,11 @@ def _gen_store_research_trace_meta(task: dict, *, research_trace: dict | None) -
 
 
 def _gen_compact_agent_trace(agent_trace: dict | None) -> dict:
-    if not isinstance(agent_trace, dict):
-        return {}
-    trace = copy.deepcopy(agent_trace)
-    verification = trace.get("verification")
-    if isinstance(verification, dict) and isinstance(verification.get("claims"), list):
-        verification["claims"] = verification["claims"][:50]
-    steps = trace.get("steps")
-    if isinstance(steps, list):
-        for step in steps[:10]:
-            if not isinstance(step, dict):
-                continue
-            output = step.get("output")
-            if not isinstance(output, dict):
-                continue
-            for key in ("hits", "references", "guide", "comparisons", "claims"):
-                if isinstance(output.get(key), list):
-                    output[key] = output[key][:8]
-        trace["steps"] = steps[:10]
-    research_run = trace.get("research_run")
-    if isinstance(research_run, dict):
-        if isinstance(research_run.get("subtasks"), list):
-            research_run["subtasks"] = research_run["subtasks"][:12]
-        if isinstance(research_run.get("evidence_matrix"), list):
-            research_run["evidence_matrix"] = research_run["evidence_matrix"][:12]
-    return trace
+    return _agent_finalize_compact_trace(agent_trace)
 
 
 def _gen_agent_source_summary(agent_trace: dict | None) -> dict:
-    try:
-        return build_agent_source_summary(agent_trace)
-    except Exception:
-        return {}
+    return _agent_finalize_source_summary(agent_trace)
 
 
 def _gen_answer_runtime_check(
@@ -3365,28 +3345,16 @@ def _gen_answer_runtime_check(
     source_blend: str = "",
     runtime_repair: dict | None = None,
 ) -> dict:
-    if not bool(task.get("agent_mode")):
-        return {}
-    try:
-        check = build_answer_runtime_check(
-            answer=answer,
-            answer_quality=answer_quality,
-            agent_trace=agent_trace,
-            agent_source_summary=agent_source_summary,
-            answer_mode=answer_mode,
-            source_blend=source_blend,
-        )
-        repair = dict(runtime_repair or {})
-        if repair.get("changed") or repair.get("reasons"):
-            check["repair"] = {
-                "changed": bool(repair.get("changed")),
-                "reasons": list(repair.get("reasons") or [])[:8],
-                "before": dict(repair.get("before") or {}),
-                "after": dict(repair.get("after") or {}),
-            }
-        return check
-    except Exception:
-        return {}
+    return _agent_finalize_answer_runtime_check(
+        task,
+        answer=answer,
+        answer_quality=answer_quality,
+        agent_trace=agent_trace,
+        agent_source_summary=agent_source_summary,
+        answer_mode=answer_mode,
+        source_blend=source_blend,
+        runtime_repair=runtime_repair,
+    )
 
 
 def _gen_answer_contract(
@@ -3396,16 +3364,12 @@ def _gen_answer_contract(
     agent_source_summary: dict | None = None,
     answer_runtime_check: dict | None = None,
 ) -> dict:
-    if not bool(task.get("agent_mode")):
-        return {}
-    try:
-        return build_answer_contract_payload(
-            answer_quality=answer_quality,
-            agent_source_summary=agent_source_summary,
-            answer_runtime_check=answer_runtime_check,
-        )
-    except Exception:
-        return {}
+    return _agent_finalize_answer_contract(
+        task,
+        answer_quality=answer_quality,
+        agent_source_summary=agent_source_summary,
+        answer_runtime_check=answer_runtime_check,
+    )
 
 
 def _gen_repair_answer_runtime(
@@ -3419,57 +3383,24 @@ def _gen_repair_answer_runtime(
     answer_mode: str = "",
     source_blend: str = "",
 ) -> dict:
-    if not bool(task.get("agent_mode")):
-        return {"answer": str(answer or ""), "changed": False, "reasons": []}
-    try:
-        return repair_answer_for_runtime_contract(
-            answer=answer,
-            query=prompt,
-            answer_quality=answer_quality,
-            agent_trace=agent_trace,
-            agent_source_summary=agent_source_summary,
-            answer_mode=answer_mode,
-            source_blend=source_blend,
-        )
-    except Exception:
-        return {"answer": str(answer or ""), "changed": False, "reasons": ["runtime_repair_error"]}
+    return _agent_finalize_repair_answer_runtime(
+        task,
+        prompt=prompt,
+        answer=answer,
+        answer_quality=answer_quality,
+        agent_trace=agent_trace,
+        agent_source_summary=agent_source_summary,
+        answer_mode=answer_mode,
+        source_blend=source_blend,
+    )
 
 
 def _sync_runtime_repaired_answer_contracts(paper_guide_contracts: dict | None, *, answer: str) -> dict:
-    contracts = dict(paper_guide_contracts or {})
-    packet = contracts.get("render_packet") if isinstance(contracts.get("render_packet"), dict) else {}
-    if not packet:
-        return contracts
-    packet = dict(packet)
-    for key in ("answer_markdown", "rendered_body", "rendered_content", "copy_markdown", "copy_text"):
-        if key in packet:
-            packet[key] = str(answer or "").strip()
-    contracts["render_packet"] = packet
-    return contracts
+    return _agent_finalize_sync_runtime_repaired_answer_contracts(paper_guide_contracts, answer=answer)
 
 
 def _gen_store_agent_trace_meta(task: dict, *, agent_trace: dict | None) -> None:
-    if not bool(task.get("agent_mode")):
-        return
-    trace = _gen_compact_agent_trace(agent_trace)
-    if not trace:
-        return
-    chat_db = Path(str(task.get("chat_db") or "")).expanduser()
-    chat_store = ChatStore(chat_db)
-    try:
-        amid = int(task.get("assistant_msg_id") or 0)
-    except Exception:
-        amid = 0
-    if amid <= 0:
-        return
-    try:
-        meta = {"agent_trace": trace, "agent_mode": "research_agent"}
-        source_summary = _gen_agent_source_summary(trace)
-        if source_summary:
-            meta["agent_source_summary"] = source_summary
-        chat_store.merge_message_meta(amid, meta)
-    except Exception:
-        pass
+    return _agent_finalize_store_agent_trace_meta(task, agent_trace=agent_trace, chat_store_cls=ChatStore)
 
 
 def _gen_store_paper_guide_contract_meta(task: dict, *, paper_guide_contracts: dict | None) -> None:
@@ -3783,23 +3714,18 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             _gen_store_research_trace_meta(task, research_trace=research_trace)
             if bool(task.get("agent_mode")):
                 _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
-            agent_source_summary = _gen_agent_source_summary(agent_trace)
-            answer_runtime_check = _gen_answer_runtime_check(
+            agent_completion_payload = _agent_finalize_completion_payload(
                 task,
                 answer=quick_answer,
                 answer_quality={},
                 agent_trace=agent_trace,
-                agent_source_summary=agent_source_summary,
                 answer_mode=agent_answer_mode,
                 source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
                 runtime_repair=runtime_repair,
             )
-            answer_contract = _gen_answer_contract(
-                task,
-                answer_quality={},
-                agent_source_summary=agent_source_summary,
-                answer_runtime_check=answer_runtime_check,
-            )
+            agent_source_summary = dict(agent_completion_payload.get("agent_source_summary") or {})
+            answer_runtime_check = dict(agent_completion_payload.get("answer_runtime_check") or {})
+            answer_contract = dict(agent_completion_payload.get("answer_contract") or {})
             _gen_store_answer_runtime_check_meta(task, answer_runtime_check=answer_runtime_check)
             _gen_store_answer_contract_meta(task, answer_contract=answer_contract)
             _gen_update_task(
@@ -5669,23 +5595,18 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 generation_output=agent_generation_result_for_trace,
             )
             _gen_store_agent_trace_meta(task, agent_trace=agent_trace)
-        agent_source_summary = _gen_agent_source_summary(agent_trace)
-        answer_runtime_check = _gen_answer_runtime_check(
+        agent_completion_payload = _agent_finalize_completion_payload(
             task,
             answer=answer,
             answer_quality=answer_quality,
             agent_trace=agent_trace,
-            agent_source_summary=agent_source_summary,
             answer_mode=agent_answer_mode,
             source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
             runtime_repair=runtime_repair,
         )
-        answer_contract = _gen_answer_contract(
-            task,
-            answer_quality=answer_quality,
-            agent_source_summary=agent_source_summary,
-            answer_runtime_check=answer_runtime_check,
-        )
+        agent_source_summary = dict(agent_completion_payload.get("agent_source_summary") or {})
+        answer_runtime_check = dict(agent_completion_payload.get("answer_runtime_check") or {})
+        answer_contract = dict(agent_completion_payload.get("answer_contract") or {})
         _gen_store_answer_runtime_check_meta(task, answer_runtime_check=answer_runtime_check)
         _gen_store_answer_contract_meta(task, answer_contract=answer_contract)
         _gen_update_task(

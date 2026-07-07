@@ -1,11 +1,5 @@
-import { theme } from 'antd'
+import { buildAppTheme } from './designTokens'
 
-export const lightTheme = {
-  algorithm: theme.defaultAlgorithm,
-  token: { colorPrimary: '#1677ff', borderRadius: 8 },
-}
+export const lightTheme = buildAppTheme('light')
 
-export const darkTheme = {
-  algorithm: theme.darkAlgorithm,
-  token: { colorPrimary: '#4daafc', borderRadius: 8 },
-}
+export const darkTheme = buildAppTheme('dark')
