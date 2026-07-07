@@ -1,11 +1,11 @@
-import { Button, Drawer, Empty, Typography } from 'antd'
-import { BookOutlined, PlusOutlined } from '@ant-design/icons'
+import { Drawer, Empty, Typography } from 'antd'
 import {
   buildEvidenceDrawerViewModel,
   type AnswerSourceNoticeViewModel,
 } from './answerSourceNoticeViewModel'
-import { buildEvidenceCardViewModel } from './evidenceCardViewModel'
 import type { CiteDetail } from './citationState'
+import { EvidenceDrawerItem } from './EvidenceDrawerItem'
+import { EvidenceDrawerSourceSummary } from './EvidenceDrawerSourceSummary'
 
 const { Text } = Typography
 
@@ -50,72 +50,24 @@ export function EvidenceDrawer({
     >
       <div className="kb-evidence-drawer-shell" data-testid="evidence-drawer">
         {sourceNotice ? (
-          <section className="kb-evidence-source-summary" data-testid="evidence-source-summary">
-            <div className="kb-evidence-source-label">{drawer.sourceLabel}</div>
-            <div className="kb-evidence-source-detail">{drawer.sourceDetail}</div>
-          </section>
+          <EvidenceDrawerSourceSummary
+            label={drawer.sourceLabel}
+            detail={drawer.sourceDetail}
+          />
         ) : null}
 
         {drawer.visibleDetails.length > 0 ? (
           <div className="kb-evidence-list">
-            {drawer.visibleDetails.map((detail, index) => {
-              const card = buildEvidenceCardViewModel(detail, {
-                S,
-                fallbackLabel: `[${index + 1}]`,
-                evidenceLimit: 320,
-                claimLimit: 220,
-                supportLimit: 160,
-                includeRawFallback: true,
-              })
-              return (
-                <article className="kb-evidence-item" key={`${detail.anchor || detail.num || index}-${index}`} data-testid="evidence-drawer-item">
-                  <div className="kb-evidence-item-head">
-                    <span className="kb-evidence-cite-label">{card.label}</span>
-                    <span className="kb-evidence-source-name">{card.source || S.cite_meta_source || 'Source'}</span>
-                  </div>
-                  {card.claim ? (
-                    <div className="kb-evidence-block">
-                      <div className="kb-evidence-block-label">{card.claimLabel}</div>
-                      <div className="kb-evidence-block-text">{card.claimPreview}</div>
-                    </div>
-                  ) : null}
-                  {card.evidence ? (
-                    <div className="kb-evidence-block">
-                      <div className="kb-evidence-block-label">{card.evidenceLabel}</div>
-                      <blockquote>{card.evidencePreview}</blockquote>
-                    </div>
-                  ) : null}
-                  {card.location || card.support ? (
-                    <div className="kb-evidence-meta">
-                      {card.location ? <span>{card.location}</span> : null}
-                      {card.support ? <span>{card.supportPreview}</span> : null}
-                    </div>
-                  ) : null}
-                  <div className="kb-evidence-actions">
-                    {onOpenReader ? (
-                      <Button
-                        size="small"
-                        icon={<BookOutlined />}
-                        onClick={() => onOpenReader(detail)}
-                        data-testid="evidence-open-source"
-                      >
-                        {S.cite_open_reader || 'Open source'}
-                      </Button>
-                    ) : null}
-                    {onAddToShelf ? (
-                      <Button
-                        size="small"
-                        icon={<PlusOutlined />}
-                        onClick={() => onAddToShelf(detail)}
-                        data-testid="evidence-add-shelf"
-                      >
-                        {S.cite_add_to_shelf || 'Add'}
-                      </Button>
-                    ) : null}
-                  </div>
-                </article>
-              )
-            })}
+            {drawer.visibleDetails.map((detail, index) => (
+              <EvidenceDrawerItem
+                key={`${detail.anchor || detail.num || index}-${index}`}
+                detail={detail}
+                index={index}
+                onOpenReader={onOpenReader}
+                onAddToShelf={onAddToShelf}
+                S={S}
+              />
+            ))}
           </div>
         ) : (
           <Empty
