@@ -4,25 +4,19 @@
 import type { CiteDetail } from './citationState'
 import {
   citationCardView,
-  citationDisplay,
-  citationInlineLabel,
-  citeMetricSummary,
 } from './citationState'
 import { CitationPopoverActions } from './CitationPopoverActions'
 import { SystemAEvidenceCard, SystemBLiteratureCard } from './CitationPopoverCards'
 import { CitationPopoverFlowStrip } from './CitationPopoverFlowStrip'
-import { CitationPopoverHeader, type CompactMetaItem } from './CitationPopoverHeader'
+import { CitationPopoverHeader } from './CitationPopoverHeader'
 import { CitationPopoverMetaPanels } from './CitationPopoverMetaPanels'
 import { CitationPopoverStatusPanels } from './CitationPopoverStatusPanels'
 import {
-  anchorKindLabel,
   compact,
-  isOnlyPaperLabel,
   looksNarrativeMetadataText,
-  pageRangeLabel,
-  stripLocationIdentityPrefix,
   substantiallySame,
 } from './citationPopoverUtils'
+import { buildCitationPopoverFrameModel } from './citationPopoverFrameModel'
 import { buildSystemAEvidenceCardModel } from './citationPopoverSystemA'
 import { buildSystemBLiteratureCardModel } from './citationPopoverSystemB'
 
@@ -148,12 +142,6 @@ export function CitationPopover({
 
   if (!detail || !position) return null
 
-  const display = citationDisplay(detail)
-  const doiLabel = compact(detail.doi) || compact(detail.doiUrl)
-  const doiHref = compact(detail.doiUrl) || (doiLabel ? `https://doi.org/${doiLabel}` : '')
-  const metrics = citeMetricSummary(detail)
-  const inlineLabel = citationInlineLabel(detail, { includeSource: false })
-  const canOpenReader = Boolean(compact(detail.sourcePath))
   const isSystemB = Boolean(detail.isInpaper)
   const view = citationCardView(detail)
   const viewSection = (id: string) => view.sections.find((item) => item.id === id)
@@ -165,35 +153,21 @@ export function CitationPopover({
   const referenceSection = viewSection('reference')
   const supportSection = viewSection('support')
   const warningSection = viewSection('warning')
-  const kindLabel = localizeKnownLabel(view.header.kicker) || (isSystemB ? S.cite_kind_upstream : S.cite_kind_evidence)
-  const systemADisplayNumSeeds = [
-    ...(Array.isArray(detail.displayNums) ? detail.displayNums : []),
-    detail.displayNum,
-  ].map((num) => Number(num || 0)).filter((num) => Number.isFinite(num) && num > 0)
-  const displayNums = Array.from(new Set(
-    (isSystemB
-      ? [
-          ...(Array.isArray(detail.linkedNums) ? detail.linkedNums : []),
-          detail.num,
-        ]
-      : (systemADisplayNumSeeds.length > 0 ? systemADisplayNumSeeds : [detail.num]))
-      .map((num) => Number(num || 0))
-      .filter((num) => Number.isFinite(num) && num > 0),
-  )).sort((a, b) => a - b)
-  const badgeNumText = displayNums.length > 1 ? displayNums.join('/') : String(displayNums[0] || '')
-  const badgeLabel = badgeNumText ? (isSystemB ? `[R${badgeNumText}]` : `#${badgeNumText}`) : inlineLabel
-  const headingPath = compact(detail.headingPath) || (!isSystemB ? compact(detail.title) : '')
-  const pageLabel = pageRangeLabel(detail.pageStart, detail.pageEnd)
-  const sourcePaperText = compact(detail.sourceName) || compact(display.source)
-  const cardTitle = compact(view.header.title) || compact(detail.cardTitle)
-  const cardSubtitle = compact(view.header.subtitle) || compact(detail.cardSubtitle)
-  const rawHeaderSubtitle = isSystemB ? cardSubtitle : ''
   const cardTakeawayLabel = localizeKnownLabel(takeawaySection?.label || detail.cardTakeawayLabel)
   const rawCardTakeaway = compact(takeawaySection?.text || detail.cardTakeaway)
   const cardTakeaway = looksNarrativeMetadataText(rawCardTakeaway, detail) ? '' : rawCardTakeaway
   const cardClaimLabel = localizeKnownLabel(claimSection?.label || detail.cardClaimLabel)
   const cardEvidenceLabel = localizeKnownLabel(evidenceSection?.label || detail.cardEvidenceLabel)
   const cardLocatorLabel = localizeKnownLabel(locatorSection?.label || detail.cardLocatorLabel)
+  const frame = buildCitationPopoverFrameModel({
+    detail,
+    S,
+    isSystemB,
+    viewHeader: view.header,
+    locatorSection,
+    cardLocatorLabel,
+    localizeKnownLabel,
+  })
   const cardReferenceLabel = localizeKnownLabel(referenceSection?.label || detail.cardReferenceLabel)
   const cardSupportLabel = localizeKnownLabel(supportSection?.label || detail.cardSupportLabel)
   const cardWarning = compact(warningSection?.text || detail.cardWarning)
@@ -204,9 +178,6 @@ export function CitationPopover({
   const cardQualityScore = Number(detail.cardQualityScore || 0)
   const cardQualityFlags = Array.isArray(detail.cardQualityFlags)
     ? detail.cardQualityFlags.map((item) => compact(item)).filter(Boolean)
-    : []
-  const cardFlow = Array.isArray(detail.cardFlow)
-    ? detail.cardFlow.map((item) => compact(item)).filter(Boolean)
     : []
   const whyText = compact(detail.whyLine)
   const bindingStatus = compact(detail.bindingStatus).toLowerCase()
@@ -234,30 +205,6 @@ export function CitationPopover({
       : ''))
   const supportText = supportBaseText
   const showBindingReason = Boolean(bindingReason && !substantiallySame(bindingReason, supportText))
-  const displayMain = compact(display.main)
-  const systemATitle = cardTitle || ((displayMain && displayMain !== headingPath)
-    ? displayMain
-    : (compact(detail.sourceName) || compact(display.source) || displayMain))
-  const systemBTitleMissing = !cardTitle && !compact(detail.title)
-  const systemBTitle = cardTitle || compact(detail.title) || S.cite_upstream_reference
-  const headerSubtitle = !isSystemB && rawHeaderSubtitle && !substantiallySame(rawHeaderSubtitle, systemBTitle)
-    ? rawHeaderSubtitle
-    : ''
-  const systemASub = [headingPath, pageLabel].filter(Boolean).join(' · ')
-  const rawSystemALocationText = compact(locatorSection?.text || '') || compact(detail.cardLocator) || compact(detail.locationLabel) || systemASub || systemATitle
-  const systemALocationText = stripLocationIdentityPrefix(rawSystemALocationText, [
-    systemATitle,
-    sourcePaperText,
-    detail.sourceName,
-    display.source,
-  ]) || rawSystemALocationText
-  const systemAAnchorText = anchorKindLabel(detail.anchorKind, {
-    sentence: S.cite_anchor_sentence,
-    paragraph: S.cite_anchor_paragraph,
-    equation: S.cite_anchor_equation,
-    figure: S.cite_anchor_figure,
-    table: S.cite_anchor_table,
-  })
   const systemA = buildSystemAEvidenceCardModel({
     detail,
     S,
@@ -275,9 +222,7 @@ export function CitationPopover({
     hasBindingState: Boolean(bindingState),
     supportText,
   })
-  const primaryActionLabel = isSystemB ? S.cite_read_locate : S.cite_open_evidence
   const explainText = ''
-  const flowSteps = isSystemB ? [] : cardFlow
   const systemB = buildSystemBLiteratureCardModel({
     detail,
     S,
@@ -291,103 +236,29 @@ export function CitationPopover({
     cardReferenceLabel,
     cardSupportLabel,
     cardQualityFlags,
-    sourcePaperText,
-    headingPath,
-    pageLabel,
-    badgeLabel,
-    doiLabel,
-    systemBTitle,
-    systemBTitleMissing,
-    headerSubtitle,
-    metrics,
+    sourcePaperText: frame.sourcePaperText,
+    headingPath: frame.headingPath,
+    pageLabel: frame.pageLabel,
+    badgeLabel: frame.badgeLabel,
+    doiLabel: frame.doiLabel,
+    systemBTitle: frame.systemBTitle,
+    systemBTitleMissing: frame.systemBTitleMissing,
+    headerSubtitle: frame.headerSubtitle,
+    metrics: frame.metrics,
     explicitSupportText,
-    displaySource: display.source,
+    displaySource: frame.displaySource,
     localizeKnownBody,
     localizeKnownLabel,
   })
-  const systemAMetaSource = display.source && !isOnlyPaperLabel(display.source, [systemATitle, sourcePaperText])
-    ? display.source
-    : ''
-  const metaRows = [
-    systemAMetaSource ? { label: S.cite_meta_source, value: systemAMetaSource } : null,
-    display.venueYear ? { label: S.cite_meta_published, value: display.venueYear } : null,
-  ].filter(Boolean) as Array<{ label: string; value: string }>
-  const showMetaGrid = false
-  const showMetrics = false
   const showCardQuality = false
   const showCardWarning = Boolean(cardWarning && cardQualityFlags.includes('missing_reference_entry'))
   const showExternalMetadataWarning = externalMetadataStatus === 'conflict'
   const externalMetadataWarningText = showExternalMetadataWarning
     ? (externalMetadataReason || S.cite_external_metadata_warning)
     : ''
-  const externalMetadataTitleHint = externalTitle && !substantiallySame(externalTitle, displayMain)
+  const externalMetadataTitleHint = externalTitle && !substantiallySame(externalTitle, frame.displayMain)
     ? S.cite_external_title.replace('{title}', externalTitle)
     : ''
-  const systemACompactMetaItems = !isSystemB
-    ? ([
-        systemALocationText ? {
-          key: 'location',
-          label: cardLocatorLabel || S.cite_position,
-          value: systemALocationText,
-          tone: 'location',
-        } : null,
-        systemAAnchorText ? {
-          key: 'anchor',
-          label: S.cite_anchor_label,
-          value: systemAAnchorText,
-          tone: 'muted',
-        } : null,
-        ...metaRows.map((item) => ({
-          key: `meta-${item.label}`,
-          label: item.label,
-          value: item.value,
-          tone: 'muted',
-        })),
-        doiLabel ? {
-          key: 'doi',
-          label: 'DOI',
-          value: doiLabel,
-          href: doiHref,
-          tone: 'doi',
-        } : null,
-        ...metrics.map((item) => ({
-          key: `metric-${item}`,
-          label: '',
-          value: item,
-          tone: 'metric',
-        })),
-      ].filter(Boolean) as CompactMetaItem[])
-    : []
-  const systemBCompactMetaItems = isSystemB
-    ? ([
-        display.authors ? {
-          key: 'authors',
-          label: '',
-          value: display.authors,
-          tone: 'muted',
-        } : null,
-        display.venueYear ? {
-          key: 'published',
-          label: '',
-          value: display.venueYear,
-          tone: 'muted',
-        } : null,
-        doiLabel ? {
-          key: 'doi',
-          label: 'DOI',
-          value: doiLabel,
-          href: doiHref,
-          tone: 'doi',
-        } : null,
-        ...metrics.map((item) => ({
-          key: `metric-${item}`,
-          label: '',
-          value: item,
-          tone: 'metric',
-        })),
-      ].filter(Boolean) as CompactMetaItem[])
-    : []
-  const compactMetaItems = isSystemB ? systemBCompactMetaItems : systemACompactMetaItems
 
   return (
     <div
@@ -400,17 +271,17 @@ export function CitationPopover({
     >
       <CitationPopoverHeader
         isSystemB={isSystemB}
-        kindLabel={kindLabel}
-        badgeLabel={badgeLabel}
-        title={isSystemB ? systemBTitle : systemATitle}
-        subtitle={headerSubtitle}
-        compactMetaItems={compactMetaItems}
+        kindLabel={frame.kindLabel}
+        badgeLabel={frame.badgeLabel}
+        title={isSystemB ? frame.systemBTitle : frame.systemATitle}
+        subtitle={frame.headerSubtitle}
+        compactMetaItems={frame.compactMetaItems}
         onClose={onClose}
       />
 
       <CitationPopoverFlowStrip
         explainText={explainText}
-        flowSteps={flowSteps}
+        flowSteps={frame.flowSteps}
         flowAriaLabel={S.cite_flow_aria}
       />
       <CitationPopoverStatusPanels
@@ -445,22 +316,22 @@ export function CitationPopover({
         />
       )}
       <CitationPopoverMetaPanels
-        showMetaGrid={showMetaGrid}
-        metaRows={metaRows}
-        doiLabel={doiLabel}
-        doiHref={doiHref}
+        showMetaGrid={frame.showMetaGrid}
+        metaRows={frame.metaRows}
+        doiLabel={frame.doiLabel}
+        doiHref={frame.doiHref}
         loading={loading}
         isSystemB={isSystemB}
         loadingLabel={S.cite_loading}
-        showMetrics={showMetrics}
-        metrics={metrics}
+        showMetrics={frame.showMetrics}
+        metrics={frame.metrics}
       />
 
       <CitationPopoverActions
         detail={detail}
         showOpenReaderAction={showOpenReaderAction}
-        canOpenReader={canOpenReader}
-        openReaderLabel={primaryActionLabel}
+        canOpenReader={frame.canOpenReader}
+        openReaderLabel={frame.primaryActionLabel}
         onOpenReader={onOpenReader}
         showStartGuideAction={showStartGuideAction}
         guideLoading={guideLoading}

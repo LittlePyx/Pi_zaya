@@ -176,6 +176,33 @@ async function evidenceDrawerViewModel(page: Page, input: {
   }, input)
 }
 
+async function citationPopoverFrameModel(page: Page, input: {
+  detail: Record<string, unknown>
+  S: Record<string, string>
+  isSystemB?: boolean
+  viewHeader?: Record<string, string>
+  locatorSection?: Record<string, unknown>
+  cardLocatorLabel?: string
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (modelInput) => {
+    const { buildCitationPopoverFrameModel } = await import('/src/components/chat/citationPopoverFrameModel.ts')
+    return buildCitationPopoverFrameModel({
+      detail: modelInput.detail as never,
+      S: modelInput.S as never,
+      isSystemB: Boolean(modelInput.isSystemB),
+      viewHeader: {
+        kicker: modelInput.viewHeader?.kicker || '',
+        title: modelInput.viewHeader?.title || '',
+        subtitle: modelInput.viewHeader?.subtitle || '',
+      },
+      locatorSection: modelInput.locatorSection as never,
+      cardLocatorLabel: modelInput.cardLocatorLabel || '',
+      localizeKnownLabel: (value: string) => String(value || '').trim(),
+    })
+  }, input)
+}
+
 async function systemBLiteratureCardModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -700,6 +727,83 @@ test('evidence drawer view model dedupes cards and derives compact source detail
   expect(drawer.subtitle).toBe('Local + external')
   expect(drawer.sourceDetail).toBe('Local citations are grounded in the knowledge base; external context may supplement uncited background.')
   expect(drawer.visibleDetails.map((detail) => detail.sourcePath)).toEqual(['/tmp/a.md', '/tmp/b.md'])
+})
+
+test('citation popover frame model derives route-specific badges, meta, and actions', async ({ page }) => {
+  const S = {
+    cite_anchor_equation: 'Equation',
+    cite_anchor_figure: 'Figure',
+    cite_anchor_label: 'Anchor',
+    cite_anchor_paragraph: 'Paragraph',
+    cite_anchor_sentence: 'Sentence',
+    cite_anchor_table: 'Table',
+    cite_kind_evidence: 'Answer evidence',
+    cite_kind_upstream: 'Upstream citation',
+    cite_meta_published: 'Published',
+    cite_meta_source: 'Source',
+    cite_open_evidence: 'Open evidence',
+    cite_position: 'Position',
+    cite_read_locate: 'Read location',
+    cite_upstream_reference: 'Upstream reference',
+  }
+  const systemA = await citationPopoverFrameModel(page, {
+    detail: {
+      num: 9,
+      displayNum: 5,
+      displayNums: [7, 5],
+      sourceName: 'Fixture Paper',
+      sourcePath: '/tmp/fixture.md',
+      title: 'Fallback title',
+      headingPath: 'Method',
+      pageStart: 2,
+      pageEnd: 3,
+      anchorKind: 'sentence',
+      doi: '10.1000/frame',
+      venue: 'TestConf',
+      year: '2024',
+      cardFlow: ['retrieve', 'verify'],
+    },
+    S,
+    isSystemB: false,
+    viewHeader: {
+      title: 'Evidence claim title',
+    },
+    locatorSection: {
+      text: 'Fixture Paper / Method',
+    },
+    cardLocatorLabel: 'Position',
+  })
+  const systemB = await citationPopoverFrameModel(page, {
+    detail: {
+      num: 9,
+      linkedNums: [11, 3],
+      sourceName: 'Current Paper',
+      sourcePath: '/tmp/current.md',
+      title: 'Upstream Work',
+      authors: 'Doe J.',
+      venue: 'Optics Letters',
+      year: '2022',
+      cardFlow: ['ignored'],
+    },
+    S,
+    isSystemB: true,
+  })
+
+  expect(systemA.kindLabel).toBe('Answer evidence')
+  expect(systemA.badgeLabel).toBe('#5/7')
+  expect(systemA.systemATitle).toBe('Evidence claim title')
+  expect(systemA.primaryActionLabel).toBe('Open evidence')
+  expect(systemA.flowSteps).toEqual(['retrieve', 'verify'])
+  expect(systemA.canOpenReader).toBe(true)
+  expect(systemA.compactMetaItems.map((item) => item.key)).toEqual(['location', 'anchor', 'meta-Published', 'doi'])
+  expect(systemA.compactMetaItems.find((item) => item.key === 'location')?.value).toBe('Method')
+
+  expect(systemB.kindLabel).toBe('Upstream citation')
+  expect(systemB.badgeLabel).toBe('[R3/9/11]')
+  expect(systemB.systemBTitle).toBe('Upstream Work')
+  expect(systemB.primaryActionLabel).toBe('Read location')
+  expect(systemB.flowSteps).toEqual([])
+  expect(systemB.compactMetaItems.map((item) => item.key)).toEqual(['authors', 'published'])
 })
 
 test('citation popover System B model suppresses weak locations while keeping missing-title references', async ({ page }) => {
