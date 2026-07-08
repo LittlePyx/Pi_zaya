@@ -6,6 +6,10 @@ import { MarkdownRenderer } from './MarkdownRenderer'
 import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
 import { CiteShelf } from './CiteShelf'
+import {
+  buildCitationPopoverMetadataPlan,
+  loadCitationPopoverMetadata,
+} from './citationPopoverMetadata'
 import { useCitationPopoverPreview } from './useCitationPopoverPreview'
 import { useCitationPopoverState } from './useCitationPopoverState'
 import type {
@@ -1540,18 +1544,9 @@ export function MessageList({
   const showCitationAt = (detail: CiteDetail, position: { x: number; y: number }, pinned: boolean) => {
     citationPreview.clearTimers()
     if (!pinned && popoverPinned) return
-    const sourcePath = String(detail.sourcePath || '').trim()
-    const isInPaperReference = Boolean(detail.isInpaper)
-    const shouldFetchCitationMeta = Boolean(sourcePath) && !isInPaperReference
-    const hasDoi = Boolean(String(detail.doi || '').trim())
     const itemKey = toShelfItem(detail).key
+    const metadataPlan = buildCitationPopoverMetadataPlan(detail, itemKey)
     openCitationPopoverState(detail, position, { pinned, requestKey: itemKey })
-    const needsSummaryBackfill = shelfItemNeedsSummaryBackfill(toShelfItem(detail))
-    const shouldFetchBibliometrics = (!detail.bibliometricsChecked || needsSummaryBackfill) && (
-      isInPaperReference
-        ? hasDoi
-        : (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
-    )
     if (shouldRequestCitationCardPolish(detail)) {
       citationPreview.requestPolish({
         activeRequestKeyRef: activePopoverRequestKeyRef,
@@ -1560,25 +1555,14 @@ export function MessageList({
         onMeta: mergeCitationMetaForItemKey,
       })
     }
-    if (!shouldFetchCitationMeta && !shouldFetchBibliometrics) {
+    if (metadataPlan.requestCount <= 0) {
       setPopoverLoading(false)
       return
     }
 
-    const reqs: Array<Promise<Record<string, unknown>>> = []
-    if (shouldFetchCitationMeta && sourcePath) {
-      reqs.push(referencesApi.citationMetaCached(sourcePath).catch(() => ({})))
-    }
-    if (shouldFetchBibliometrics) {
-      const loadBibliometrics = needsSummaryBackfill
-        ? referencesApi.bibliometrics(withBibliometricsLocale(detail as unknown as Record<string, unknown>))
-        : referencesApi.bibliometricsCached(withBibliometricsLocale(detail as unknown as Record<string, unknown>))
-      reqs.push(loadBibliometrics.catch(() => ({})))
-    }
-
     setPopoverLoading(true)
-    Promise.all(reqs)
-      .then((metas) => {
+    loadCitationPopoverMetadata(detail, { plan: metadataPlan })
+      .then(({ metas }) => {
         mergeCitationMetaForItemKey(itemKey, metas)
       })
       .finally(() => {

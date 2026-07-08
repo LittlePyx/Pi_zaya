@@ -243,6 +243,113 @@ async function citationPopoverPreviewSmoke(page: Page) {
   })
 }
 
+async function citationPopoverMetadataSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const {
+      buildCitationPopoverMetadataPlan,
+      loadCitationPopoverMetadata,
+    } = await import('/src/components/chat/citationPopoverMetadata.ts')
+    const systemADetail = {
+      anchor: 'cite-a',
+      bibliometricsChecked: false,
+      citeFmt: '',
+      doi: '',
+      isInpaper: false,
+      num: 1,
+      raw: 'Raw citation A',
+      sourceName: 'Paper A',
+      sourcePath: '/tmp/paper-a.md',
+      title: 'Paper A Title',
+    }
+    const systemBDetail = {
+      anchor: 'cite-b',
+      bibliometricsChecked: false,
+      citeFmt: '',
+      doi: '10.1000/system-b',
+      isInpaper: true,
+      num: 2,
+      raw: '',
+      sourceName: 'Current Paper',
+      sourcePath: '/tmp/current.md',
+      title: 'Upstream Paper',
+    }
+    const quietDetail = {
+      anchor: 'cite-c',
+      bibliometricsChecked: true,
+      citeFmt: '',
+      doi: '',
+      isInpaper: true,
+      num: 3,
+      raw: '',
+      sourceName: 'Current Paper',
+      sourcePath: '',
+      title: '',
+    }
+    const cachedMetricDetail = {
+      anchor: 'cite-d',
+      bibliometricsChecked: false,
+      citeFmt: '',
+      doi: '',
+      isInpaper: false,
+      num: 4,
+      raw: '',
+      sourceName: 'Cached Paper',
+      sourcePath: '',
+      summaryLine: 'A useful abstract summary.',
+      summarySource: 'abstract',
+      title: 'Cached Paper Title',
+    }
+    const calls: string[] = []
+    const client = {
+      bibliometrics: async (meta: Record<string, unknown>) => {
+        calls.push(`fresh:${String(meta.target_locale || '')}`)
+        return { kind: 'fresh' }
+      },
+      bibliometricsCached: async (meta: Record<string, unknown>) => {
+        calls.push(`cached:${String(meta.target_locale || '')}`)
+        return { kind: 'cached' }
+      },
+      citationMetaCached: async (sourcePath: string) => {
+        calls.push(`citation:${sourcePath}`)
+        return { sourcePath }
+      },
+    }
+    const systemAPlan = buildCitationPopoverMetadataPlan(systemADetail as never, 'key-a')
+    const systemAResult = await loadCitationPopoverMetadata(systemADetail as never, {
+      client,
+      plan: systemAPlan,
+    })
+    const systemBPlan = buildCitationPopoverMetadataPlan(systemBDetail as never, 'key-b')
+    const systemBResult = await loadCitationPopoverMetadata(systemBDetail as never, {
+      client,
+      plan: systemBPlan,
+    })
+    const quietPlan = buildCitationPopoverMetadataPlan(quietDetail as never, 'key-c')
+    const quietResult = await loadCitationPopoverMetadata(quietDetail as never, {
+      client,
+      plan: quietPlan,
+    })
+    const cachedMetricPlan = buildCitationPopoverMetadataPlan(cachedMetricDetail as never, 'key-d')
+    const cachedMetricResult = await loadCitationPopoverMetadata(cachedMetricDetail as never, {
+      client,
+      plan: cachedMetricPlan,
+    })
+
+    return {
+      cachedMetricMetas: cachedMetricResult.metas,
+      cachedMetricPlan,
+      calls,
+      quietMetas: quietResult.metas,
+      quietPlan,
+      systemAMetas: systemAResult.metas,
+      systemAPlan,
+      systemBMetas: systemBResult.metas,
+      systemBPlan,
+    }
+  })
+}
+
 async function citationPopoverFrameModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -1042,6 +1149,54 @@ test('citation popover preview hook manages hover timers and polish retries', as
   ])
   expect(preview.fetchCalls).toBe(2)
   expect(preview.polishWaitSeconds).toEqual([4, 4])
+})
+
+test('citation popover metadata helper plans route-specific citation and metric requests', async ({ page }) => {
+  const metadata = await citationPopoverMetadataSmoke(page)
+
+  expect(metadata.systemAPlan).toMatchObject({
+    itemKey: 'key-a',
+    needsSummaryBackfill: true,
+    requestCount: 2,
+    shouldFetchBibliometrics: true,
+    shouldFetchCitationMeta: true,
+    sourcePath: '/tmp/paper-a.md',
+  })
+  expect(metadata.systemAMetas).toEqual([
+    { sourcePath: '/tmp/paper-a.md' },
+    { kind: 'fresh' },
+  ])
+  expect(metadata.systemBPlan).toMatchObject({
+    itemKey: 'key-b',
+    needsSummaryBackfill: true,
+    requestCount: 1,
+    shouldFetchBibliometrics: true,
+    shouldFetchCitationMeta: false,
+    sourcePath: '/tmp/current.md',
+  })
+  expect(metadata.systemBMetas).toEqual([{ kind: 'fresh' }])
+  expect(metadata.quietPlan).toMatchObject({
+    itemKey: 'key-c',
+    requestCount: 0,
+    shouldFetchBibliometrics: false,
+    shouldFetchCitationMeta: false,
+    sourcePath: '',
+  })
+  expect(metadata.quietMetas).toEqual([])
+  expect(metadata.cachedMetricPlan).toMatchObject({
+    itemKey: 'key-d',
+    needsSummaryBackfill: false,
+    requestCount: 1,
+    shouldFetchBibliometrics: true,
+    shouldFetchCitationMeta: false,
+    sourcePath: '',
+  })
+  expect(metadata.cachedMetricMetas).toEqual([{ kind: 'cached' }])
+  expect(metadata.calls).toHaveLength(4)
+  expect(metadata.calls[0]).toBe('citation:/tmp/paper-a.md')
+  expect(metadata.calls[1]).toMatch(/^fresh:/)
+  expect(metadata.calls[2]).toMatch(/^fresh:/)
+  expect(metadata.calls[3]).toMatch(/^cached:/)
 })
 
 test('citation popover view model assembles route-specific frame, status, and cards', async ({ page }) => {
