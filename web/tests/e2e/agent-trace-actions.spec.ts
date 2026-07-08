@@ -300,6 +300,32 @@ async function systemBLiteratureCardModel(page: Page, input: {
   }, input)
 }
 
+async function systemBOverviewState(page: Page, input: {
+  S: Record<string, string>
+  isSystemB?: boolean
+  loading?: boolean
+  paperOverviewText?: string
+  showReference?: boolean
+  bibliometricsChecked?: boolean
+  doiLabel?: string
+  systemBTitle?: string
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (stateInput) => {
+    const { buildSystemBOverviewState } = await import('/src/components/chat/citationPopoverSystemBOverviewState.ts')
+    return buildSystemBOverviewState({
+      S: stateInput.S as never,
+      isSystemB: stateInput.isSystemB ?? true,
+      loading: Boolean(stateInput.loading),
+      paperOverviewText: stateInput.paperOverviewText || '',
+      showReference: Boolean(stateInput.showReference),
+      bibliometricsChecked: Boolean(stateInput.bibliometricsChecked),
+      doiLabel: stateInput.doiLabel || '',
+      systemBTitle: stateInput.systemBTitle || '',
+    })
+  }, input)
+}
+
 async function systemBTextPanelsModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -1067,6 +1093,49 @@ test('citation popover status model derives binding, support, and warning state'
   expect(systemB.bindingState).toBeNull()
   expect(systemB.explicitSupportText).toBe('')
   expect(systemB.supportText).toBe('Bibliography link from current paper.')
+})
+
+test('citation popover System B overview state separates loading and unavailable states', async ({ page }) => {
+  const S = {
+    cite_loading: 'Loading',
+    cite_loading_summary: 'Loading summary',
+    cite_summary_unavailable: 'Summary unavailable',
+  }
+
+  const loading = await systemBOverviewState(page, {
+    S,
+    loading: true,
+  })
+  const unavailable = await systemBOverviewState(page, {
+    S,
+    bibliometricsChecked: true,
+    doiLabel: 'doi:10.1000/example',
+  })
+  const hasReference = await systemBOverviewState(page, {
+    S,
+    bibliometricsChecked: true,
+    showReference: true,
+    systemBTitle: 'Upstream Work',
+  })
+  const hasOverview = await systemBOverviewState(page, {
+    S,
+    loading: true,
+    bibliometricsChecked: true,
+    paperOverviewText: 'Article overview is already available.',
+    doiLabel: 'doi:10.1000/example',
+  })
+
+  expect(loading.showOverviewLoading).toBe(true)
+  expect(loading.overviewLoadingLabel).toBe('Loading summary')
+  expect(loading.showOverviewUnavailable).toBe(false)
+
+  expect(unavailable.showOverviewLoading).toBe(false)
+  expect(unavailable.showOverviewUnavailable).toBe(true)
+  expect(unavailable.overviewUnavailableLabel).toBe('Summary unavailable')
+
+  expect(hasReference.showOverviewUnavailable).toBe(false)
+  expect(hasOverview.showOverviewLoading).toBe(false)
+  expect(hasOverview.showOverviewUnavailable).toBe(false)
 })
 
 test('citation popover System B trace model gates trace display and normalizes steps', async ({ page }) => {

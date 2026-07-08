@@ -1,4 +1,5 @@
 import type { CiteDetail, CitationCardViewSection } from './citationState'
+import { buildSystemBOverviewState } from './citationPopoverSystemBOverviewState'
 import { buildSystemBSourcePanelsModel } from './citationPopoverSystemBSourcePanels'
 import { buildSystemBTextPanelsModel } from './citationPopoverSystemBTextPanels'
 import { buildSystemBTraceModel } from './citationPopoverSystemBTrace'
@@ -152,15 +153,16 @@ export function buildSystemBLiteratureCardModel({
     paperOverviewText: textPanels.paperOverviewText,
     citationContextText: textPanels.citationContextText,
   })
-  const showOverviewLoading = Boolean(isSystemB && loading && !textPanels.paperOverviewText)
-  const showOverviewUnavailable = Boolean(
-    isSystemB
-    && !loading
-    && detail.bibliometricsChecked
-    && !textPanels.paperOverviewText
-    && !sourcePanels.showReference
-    && (doiLabel || systemBTitle),
-  )
+  const overviewState = buildSystemBOverviewState({
+    S,
+    isSystemB,
+    loading,
+    paperOverviewText: textPanels.paperOverviewText,
+    showReference: sourcePanels.showReference,
+    bibliometricsChecked: Boolean(detail.bibliometricsChecked),
+    doiLabel,
+    systemBTitle,
+  })
 
   return {
     showTrace: trace.showTrace,
@@ -172,10 +174,10 @@ export function buildSystemBLiteratureCardModel({
     paperOverviewText: textPanels.paperOverviewText,
     paperOverviewLabel: textPanels.paperOverviewLabel,
     paperOverviewPreview: textPanels.paperOverviewPreview,
-    showOverviewLoading,
-    overviewLoadingLabel: S.cite_loading_summary || S.cite_loading,
-    showOverviewUnavailable,
-    overviewUnavailableLabel: S.cite_summary_unavailable,
+    showOverviewLoading: overviewState.showOverviewLoading,
+    overviewLoadingLabel: overviewState.overviewLoadingLabel,
+    showOverviewUnavailable: overviewState.showOverviewUnavailable,
+    overviewUnavailableLabel: overviewState.overviewUnavailableLabel,
     takeawayText: textPanels.takeawayText,
     takeawayLabel: textPanels.takeawayLabel,
     showLocation: sourcePanels.showLocation,
