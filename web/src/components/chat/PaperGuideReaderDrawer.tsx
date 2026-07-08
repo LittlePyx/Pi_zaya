@@ -1,7 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { message } from 'antd'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { CitationPopover } from './CitationPopover'
 import { PaperGuideReaderPanel } from './reader/PaperGuideReaderPanel'
@@ -23,6 +22,7 @@ import { useReaderBlockShelf } from './useReaderBlockShelf'
 import { useReaderSelectionShelf } from './useReaderSelectionShelf'
 import { useReaderHighlightActions } from './useReaderHighlightActions'
 import { useReaderHighlightMenu } from './useReaderHighlightMenu'
+import { useReaderHighlightUndoShortcut } from './useReaderHighlightUndoShortcut'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -60,12 +60,6 @@ interface LocateMetaBadge {
   title?: string
   tone?: LocateBadgeTone
   testId?: string
-}
-
-function isEditableUndoTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  if (target.isContentEditable) return true
-  return Boolean(target.closest('input, textarea, select, [contenteditable="true"], .ant-input'))
 }
 
 interface Props {
@@ -946,22 +940,11 @@ export function PaperGuideReaderDrawer({
     clearHighlightUndoStack()
   }, [clearHighlightUndoStack, open, sourcePath])
 
-  useEffect(() => {
-    if (!open) return undefined
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const key = String(event.key || '').toLowerCase()
-      const isUndo = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === 'z'
-      if (!isUndo || isEditableUndoTarget(event.target)) return
-      if (!undoHighlightAction()) return
-      event.preventDefault()
-      event.stopPropagation()
-      message.success(S.reader_undo_complete || 'Undone')
-    }
-    window.addEventListener('keydown', handleKeyDown, true)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, true)
-    }
-  }, [S.reader_undo_complete, open, undoHighlightAction])
+  useReaderHighlightUndoShortcut({
+    enabled: open,
+    onUndo: undoHighlightAction,
+    successLabel: S.reader_undo_complete || 'Undone',
+  })
 
   useReaderSessionHighlightLayer({
     open,

@@ -291,6 +291,14 @@ async function readerHighlightMenuSmoke(page: Page) {
   })
 }
 
+async function readerHighlightUndoShortcutSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderHighlightUndoShortcutSmoke } = await import('/src/testing/readerHighlightUndoShortcutSmoke.ts')
+    return runReaderHighlightUndoShortcutSmoke()
+  })
+}
+
 async function citationPopoverMetadataSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1432,6 +1440,34 @@ test('reader highlight menu hook locates, opens, and closes highlight actions', 
   })
   expect(menu.bubbleAfterStale).toBeNull()
   expect(menu.renderedText).toBe('closed')
+})
+
+test('reader highlight undo shortcut hook handles only non-editable undo keys', async ({ page }) => {
+  const shortcut = await readerHighlightUndoShortcutSmoke(page)
+
+  expect(shortcut.handlerHandled).toBe(true)
+  expect(shortcut.missedEmptyUndo).toBe(false)
+  expect(shortcut.missedShiftUndo).toBe(false)
+  expect(shortcut.editableIgnored).toBe(false)
+  expect(shortcut.pureEventCounts).toEqual({
+    prevented: 1,
+    stopped: 1,
+  })
+  expect(shortcut.shortcutDetection).toEqual({
+    ctrl: true,
+    meta: true,
+    ordinary: false,
+  })
+  expect(shortcut.inputIsEditable).toBe(true)
+  expect(shortcut.normalIsEditable).toBe(false)
+  expect(shortcut.hookUndoCount).toBe(1)
+  expect(shortcut.disabledUndoCount).toBe(0)
+  expect(shortcut.hookDefaultPrevented).toBe(true)
+  expect(shortcut.renderedText).toBe('disabled')
+  expect(shortcut.successMessages).toEqual([
+    'Undo complete',
+    'Hook undone',
+  ])
 })
 
 test('reader highlight actions hook preserves undo, feedback, and ask-again actions', async ({ page }) => {
