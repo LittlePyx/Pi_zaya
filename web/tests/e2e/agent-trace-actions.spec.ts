@@ -259,6 +259,14 @@ async function readerCitationShelfSmoke(page: Page) {
   })
 }
 
+async function readerBlockShelfSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderBlockShelfSmoke } = await import('/src/testing/readerBlockShelfSmoke.ts')
+    return runReaderBlockShelfSmoke()
+  })
+}
+
 async function citationPopoverMetadataSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1296,6 +1304,36 @@ test('reader citation shelf hook tracks local citation membership and preserves 
     { otherInShelf: false, primaryInShelf: true, size: 1 },
     { otherInShelf: false, primaryInShelf: true, size: 1 },
     { otherInShelf: true, primaryInShelf: true, size: 2 },
+  ])
+})
+
+test('reader block shelf hook builds selection payloads from reader block actions', async ({ page }) => {
+  const shelf = await readerBlockShelfSmoke(page)
+
+  expect(shelf.canAddBlockToShelf).toBe(true)
+  expect(shelf.renderedText).toBe('true')
+  expect(shelf.emptyPayload).toBeNull()
+  expect(shelf.directPayload).toMatchObject({
+    anchorId: 'anchor-direct',
+    anchorKind: 'figure',
+    blockId: 'block-direct',
+    createdAt: 12345,
+    headingPath: 'Intro / Figure',
+    sourceName: 'Reader Paper',
+    sourcePath: '/tmp/reader.md',
+    text: 'Direct figure text',
+  })
+  expect(shelf.events).toEqual([
+    {
+      anchorId: 'anchor-a',
+      anchorKind: 'table',
+      blockId: 'block-a',
+      createdAt: 67890,
+      headingPath: 'Methods',
+      sourceName: 'Reader Paper',
+      sourcePath: '/tmp/reader.md',
+      text: 'Table text',
+    },
   ])
 })
 

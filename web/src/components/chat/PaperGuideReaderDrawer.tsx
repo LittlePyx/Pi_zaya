@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { message } from 'antd'
-import { MarkdownRenderer, type ReaderBlockShelfPayload } from './MarkdownRenderer'
+import { MarkdownRenderer } from './MarkdownRenderer'
 import { CitationPopover } from './CitationPopover'
 import { PaperGuideReaderPanel } from './reader/PaperGuideReaderPanel'
 import { useReaderDocument } from './reader/useReaderDocument'
@@ -19,6 +19,7 @@ import {
 } from './citationState'
 import { useReaderCitationPopover } from './useReaderCitationPopover'
 import { useReaderCitationShelf } from './useReaderCitationShelf'
+import { useReaderBlockShelf } from './useReaderBlockShelf'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -360,6 +361,14 @@ export function PaperGuideReaderDrawer({
   })
 
   const title = resolvedName || sourceName || 'Document reader'
+  const {
+    addBlockToShelf: addReaderBlockToShelf,
+    canAddBlockToShelf: canAddReaderBlockToShelf,
+  } = useReaderBlockShelf({
+    onAddSelectionToShelf,
+    sourceName: title,
+    sourcePath,
+  })
   const requestedCandidateIdentity = useMemo(() => candidateIdentityKey({
     headingPath: primaryHeadingPath,
     snippet: primaryFocusSnippet,
@@ -733,21 +742,6 @@ export function PaperGuideReaderDrawer({
     closeReaderCitationPopover()
   }, [closeReaderCitationPopover, open, sourcePath])
 
-  const addReaderBlockToShelf = useCallback((block: ReaderBlockShelfPayload) => {
-    const text = String(block?.text || '').trim()
-    if (!text || !sourcePath || !onAddSelectionToShelf) return
-    onAddSelectionToShelf({
-      text,
-      sourcePath,
-      sourceName: title,
-      headingPath: String(block.headingPath || '').trim() || undefined,
-      blockId: String(block.blockId || '').trim() || undefined,
-      anchorId: String(block.anchorId || '').trim() || undefined,
-      anchorKind: String(block.anchorKind || '').trim() || undefined,
-      createdAt: Date.now(),
-    })
-  }, [onAddSelectionToShelf, sourcePath, title])
-
   useEffect(() => {
     if (!open || !onAddSelectionToShelf || !contentRef.current || !sourcePath) return undefined
     const root = contentRef.current
@@ -840,7 +834,7 @@ export function PaperGuideReaderDrawer({
       citeDetails={citeDetails}
       onCitationClick={showReaderCitation}
       onCitationAddToShelf={addReaderCitationToShelf}
-      onReaderBlockAddToShelf={onAddSelectionToShelf ? addReaderBlockToShelf : undefined}
+      onReaderBlockAddToShelf={canAddReaderBlockToShelf ? addReaderBlockToShelf : undefined}
       readerAnchors={readerAnchors}
       readerBlocks={readerBlocks}
     />
@@ -848,8 +842,8 @@ export function PaperGuideReaderDrawer({
     addReaderBlockToShelf,
     addReaderCitationToShelf,
     citeDetails,
+    canAddReaderBlockToShelf,
     markdown,
-    onAddSelectionToShelf,
     readerAnchors,
     readerBlocks,
     showReaderCitation,
