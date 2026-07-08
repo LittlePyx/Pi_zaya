@@ -192,6 +192,41 @@ async function citationPopoverViewModel(page: Page, input: {
   }, input)
 }
 
+async function citationPopoverPositionSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const {
+      getCitationPopoverPositionStyle,
+      getHiddenCitationPopoverStyle,
+      isCitationPopoverDismissIgnoredTarget,
+    } = await import('/src/components/chat/useCitationPopoverPosition.ts')
+    const locateButton = document.createElement('button')
+    locateButton.className = 'kb-md-locate-inline-btn'
+    const locateButtonLabel = document.createElement('span')
+    locateButton.append(locateButtonLabel)
+    const locateBlock = document.createElement('button')
+    locateBlock.setAttribute('data-kb-locate-block-id', 'block-1')
+    const ordinaryButton = document.createElement('button')
+
+    return {
+      clamped: getCitationPopoverPositionStyle(
+        { x: 480, y: 390 },
+        { width: 120, height: 100 },
+        { width: 500, height: 400 },
+      ),
+      hidden: getHiddenCitationPopoverStyle({ x: 7, y: 9 }),
+      ignoredLocateBlock: isCitationPopoverDismissIgnoredTarget(locateBlock),
+      ignoredLocateButtonChild: isCitationPopoverDismissIgnoredTarget(locateButtonLabel),
+      ignoredOrdinaryButton: isCitationPopoverDismissIgnoredTarget(ordinaryButton),
+      placed: getCitationPopoverPositionStyle(
+        { x: 40, y: 50 },
+        { width: 100, height: 80 },
+        { width: 500, height: 400 },
+      ),
+    }
+  })
+}
+
 async function citationPopoverFrameModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -909,6 +944,17 @@ test('evidence drawer view model dedupes cards and derives compact source detail
   expect(drawer.subtitle).toBe('Local + external')
   expect(drawer.sourceDetail).toBe('Local citations are grounded in the knowledge base; external context may supplement uncited background.')
   expect(drawer.visibleDetails.map((detail) => detail.sourcePath)).toEqual(['/tmp/a.md', '/tmp/b.md'])
+})
+
+test('citation popover position helpers clamp placement and preserve dismiss exemptions', async ({ page }) => {
+  const position = await citationPopoverPositionSmoke(page)
+
+  expect(position.placed).toEqual({ left: 50, top: 78 })
+  expect(position.clamped).toEqual({ left: 368, top: 288 })
+  expect(position.hidden).toEqual({ left: 17, top: 19, visibility: 'hidden' })
+  expect(position.ignoredLocateButtonChild).toBe(true)
+  expect(position.ignoredLocateBlock).toBe(true)
+  expect(position.ignoredOrdinaryButton).toBe(false)
 })
 
 test('citation popover view model assembles route-specific frame, status, and cards', async ({ page }) => {

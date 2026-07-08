@@ -1,5 +1,4 @@
-﻿import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-/* eslint-disable react-hooks/set-state-in-effect */
+﻿import { useRef } from 'react'
 
 import type { CiteDetail } from './citationState'
 import { CitationPopoverActions } from './CitationPopoverActions'
@@ -9,6 +8,11 @@ import { CitationPopoverHeader } from './CitationPopoverHeader'
 import { CitationPopoverMetaPanels } from './CitationPopoverMetaPanels'
 import { CitationPopoverStatusPanels } from './CitationPopoverStatusPanels'
 import { buildCitationPopoverViewModel } from './citationPopoverViewModel'
+import {
+  getHiddenCitationPopoverStyle,
+  useCitationPopoverDismiss,
+  useCitationPopoverPosition,
+} from './useCitationPopoverPosition'
 
 import { useT } from '../../i18n'
 
@@ -47,42 +51,16 @@ export function CitationPopover({
 }: Props) {
   const S = useT()
   const ref = useRef<HTMLDivElement>(null)
-  const [style, setStyle] = useState<{ left: number; top: number } | null>(null)
-
-  useEffect(() => {
-    if (!detail) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    const onPointerDown = (event: MouseEvent) => {
-      const el = ref.current
-      if (!el) return
-      const targetEl = event.target instanceof Element ? event.target : null
-      if (targetEl?.closest('.kb-md-locate-inline-btn, .kb-prov-locate-chip, [data-kb-locate-block-id]')) return
-      if (event.target instanceof Node && !el.contains(event.target)) onClose()
-    }
-    document.addEventListener('keydown', onKeyDown)
-    document.addEventListener('mousedown', onPointerDown)
-    return () => {
-      document.removeEventListener('keydown', onKeyDown)
-      document.removeEventListener('mousedown', onPointerDown)
-    }
-  }, [detail, onClose])
-
-  useLayoutEffect(() => {
-    if (!detail || !position || !ref.current) {
-      setStyle(null)
-      return
-    }
-    const rect = ref.current.getBoundingClientRect()
-    const margin = 12
-    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin)
-    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin)
-    setStyle({
-      left: Math.min(Math.max(margin, position.x + 10), maxLeft),
-      top: Math.min(Math.max(margin, position.y + 28), maxTop),
-    })
-  }, [detail, position])
+  const style = useCitationPopoverPosition({
+    active: Boolean(detail && position),
+    popoverRef: ref,
+    position,
+  })
+  useCitationPopoverDismiss({
+    active: Boolean(detail),
+    onClose,
+    popoverRef: ref,
+  })
 
   if (!detail || !position) return null
 
@@ -104,7 +82,7 @@ export function CitationPopover({
       ref={ref}
       className={`kb-cite-pop ${isSystemB ? 'kb-cite-pop-system-b w-[480px]' : 'kb-cite-pop-system-a w-[460px]'} fixed z-50 max-w-[calc(100vw-20px)]`}
       data-testid="citation-popover"
-      style={style ?? { left: position.x + 10, top: position.y + 10, visibility: 'hidden' }}
+      style={style ?? getHiddenCitationPopoverStyle(position)}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
