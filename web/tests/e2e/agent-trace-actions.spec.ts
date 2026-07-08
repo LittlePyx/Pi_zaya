@@ -203,6 +203,30 @@ async function citationPopoverFrameModel(page: Page, input: {
   }, input)
 }
 
+async function citationPopoverStatusModel(page: Page, input: {
+  detail: Record<string, unknown>
+  S: Record<string, string>
+  isSystemB?: boolean
+  supportSection?: Record<string, unknown>
+  warningSection?: Record<string, unknown>
+  displayMain?: string
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (modelInput) => {
+    const { buildCitationPopoverStatusModel } = await import('/src/components/chat/citationPopoverStatusModel.ts')
+    return buildCitationPopoverStatusModel({
+      detail: modelInput.detail as never,
+      S: modelInput.S as never,
+      isSystemB: Boolean(modelInput.isSystemB),
+      supportSection: modelInput.supportSection as never,
+      warningSection: modelInput.warningSection as never,
+      displayMain: modelInput.displayMain || '',
+      localizeKnownBody: (value: string) => String(value || '').trim(),
+      localizeKnownLabel: (value: string) => String(value || '').trim(),
+    })
+  }, input)
+}
+
 async function systemBLiteratureCardModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -804,6 +828,67 @@ test('citation popover frame model derives route-specific badges, meta, and acti
   expect(systemB.primaryActionLabel).toBe('Read location')
   expect(systemB.flowSteps).toEqual([])
   expect(systemB.compactMetaItems.map((item) => item.key)).toEqual(['authors', 'published'])
+})
+
+test('citation popover status model derives binding, support, and warning state', async ({ page }) => {
+  const S = {
+    cite_binding_candidate: 'Candidate evidence',
+    cite_binding_mismatch: 'Citation mismatch',
+    cite_candidate_support_default: 'Candidate support fallback',
+    cite_external_metadata_warning: 'External metadata differs',
+    cite_external_title: 'External title: {title}',
+    cite_system_b_support_default: 'Bibliography link from current paper.',
+  }
+  const systemA = await citationPopoverStatusModel(page, {
+    detail: {
+      title: 'Known title',
+      sourceName: 'Fixture Paper',
+      bindingStatus: 'mismatch',
+      bindingReason: 'retrieved evidence does not overlap the claim',
+      bindingOverlapTerms: ['illumination', 'DMD'],
+      cardQualityLabel: 'Quality',
+      cardQualityScore: 0.42,
+      cardQualityFlags: ['missing_reference_entry'],
+      cardWarning: 'detail warning should lose to section',
+      externalMetadataStatus: 'conflict',
+      externalMetadataReason: 'External DOI conflicts with local metadata.',
+      externalTitle: 'Different external title',
+    },
+    S,
+    supportSection: {
+      text: 'Human-readable support explanation.',
+    },
+    warningSection: {
+      text: 'Reference [4] is missing from the converted bibliography.',
+    },
+    displayMain: 'Known title',
+  })
+  const systemB = await citationPopoverStatusModel(page, {
+    detail: {
+      bindingStatus: 'mismatch',
+      cardQualityFlags: [],
+    },
+    S,
+    isSystemB: true,
+    displayMain: 'Upstream Work',
+  })
+
+  expect(systemA.bindingState).toEqual({
+    label: 'Citation mismatch',
+    tone: 'mismatch',
+  })
+  expect(systemA.bindingOverlapText).toBe('illumination / DMD')
+  expect(systemA.supportText).toBe('Human-readable support explanation.')
+  expect(systemA.showBindingReason).toBe(true)
+  expect(systemA.showCardWarning).toBe(true)
+  expect(systemA.cardWarning).toBe('Reference [4] is missing from the converted bibliography.')
+  expect(systemA.showExternalMetadataWarning).toBe(true)
+  expect(systemA.externalMetadataWarningText).toBe('External DOI conflicts with local metadata.')
+  expect(systemA.externalMetadataTitleHint).toBe('External title: Different external title')
+
+  expect(systemB.bindingState).toBeNull()
+  expect(systemB.explicitSupportText).toBe('')
+  expect(systemB.supportText).toBe('Bibliography link from current paper.')
 })
 
 test('citation popover System B model suppresses weak locations while keeping missing-title references', async ({ page }) => {

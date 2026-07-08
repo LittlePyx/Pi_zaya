@@ -14,9 +14,9 @@ import { CitationPopoverStatusPanels } from './CitationPopoverStatusPanels'
 import {
   compact,
   looksNarrativeMetadataText,
-  substantiallySame,
 } from './citationPopoverUtils'
 import { buildCitationPopoverFrameModel } from './citationPopoverFrameModel'
+import { buildCitationPopoverStatusModel } from './citationPopoverStatusModel'
 import { buildSystemAEvidenceCardModel } from './citationPopoverSystemA'
 import { buildSystemBLiteratureCardModel } from './citationPopoverSystemB'
 
@@ -170,41 +170,16 @@ export function CitationPopover({
   })
   const cardReferenceLabel = localizeKnownLabel(referenceSection?.label || detail.cardReferenceLabel)
   const cardSupportLabel = localizeKnownLabel(supportSection?.label || detail.cardSupportLabel)
-  const cardWarning = compact(warningSection?.text || detail.cardWarning)
-  const externalMetadataStatus = compact(detail.externalMetadataStatus).toLowerCase()
-  const externalMetadataReason = compact(detail.externalMetadataReason)
-  const externalTitle = compact(detail.externalTitle)
-  const cardQualityLabel = localizeKnownLabel(detail.cardQualityLabel)
-  const cardQualityScore = Number(detail.cardQualityScore || 0)
-  const cardQualityFlags = Array.isArray(detail.cardQualityFlags)
-    ? detail.cardQualityFlags.map((item) => compact(item)).filter(Boolean)
-    : []
-  const whyText = compact(detail.whyLine)
-  const bindingStatus = compact(detail.bindingStatus).toLowerCase()
-  const bindingReason = localizeKnownBody(detail.bindingReason)
-  const bindingOverlapText = Array.isArray(detail.bindingOverlapTerms)
-    ? detail.bindingOverlapTerms.map((item) => compact(item)).filter(Boolean).join(' / ')
-    : ''
-  const bindingState = !isSystemB && bindingStatus && bindingStatus !== 'grounded'
-    ? (
-        bindingStatus === 'mismatch'
-            ? { label: S.cite_binding_mismatch, tone: 'mismatch' }
-            : { label: S.cite_binding_candidate, tone: 'candidate' }
-      )
-    : null
-  const rawExplicitSupportText = localizeKnownBody(supportSection?.text || '')
-    || localizeKnownBody(detail.cardSupportExplanation)
-    || localizeKnownBody(detail.supportRelation)
-    || whyText
-    || bindingReason
-  const explicitSupportText = looksNarrativeMetadataText(rawExplicitSupportText, detail) ? '' : rawExplicitSupportText
-  const supportBaseText = isSystemB
-    ? (explicitSupportText || S.cite_system_b_support_default)
-    : (explicitSupportText || (bindingStatus === 'candidate'
-      ? S.cite_candidate_support_default
-      : ''))
-  const supportText = supportBaseText
-  const showBindingReason = Boolean(bindingReason && !substantiallySame(bindingReason, supportText))
+  const status = buildCitationPopoverStatusModel({
+    detail,
+    S,
+    isSystemB,
+    supportSection,
+    warningSection,
+    displayMain: frame.displayMain,
+    localizeKnownBody,
+    localizeKnownLabel,
+  })
   const systemA = buildSystemAEvidenceCardModel({
     detail,
     S,
@@ -217,10 +192,10 @@ export function CitationPopover({
     cardClaimLabel,
     cardEvidenceLabel,
     cardSupportLabel,
-    cardQualityFlags,
-    cardWarning,
-    hasBindingState: Boolean(bindingState),
-    supportText,
+    cardQualityFlags: status.cardQualityFlags,
+    cardWarning: status.cardWarning,
+    hasBindingState: Boolean(status.bindingState),
+    supportText: status.supportText,
   })
   const explainText = ''
   const systemB = buildSystemBLiteratureCardModel({
@@ -235,7 +210,7 @@ export function CitationPopover({
     cardEvidenceLabel,
     cardReferenceLabel,
     cardSupportLabel,
-    cardQualityFlags,
+    cardQualityFlags: status.cardQualityFlags,
     sourcePaperText: frame.sourcePaperText,
     headingPath: frame.headingPath,
     pageLabel: frame.pageLabel,
@@ -245,20 +220,11 @@ export function CitationPopover({
     systemBTitleMissing: frame.systemBTitleMissing,
     headerSubtitle: frame.headerSubtitle,
     metrics: frame.metrics,
-    explicitSupportText,
+    explicitSupportText: status.explicitSupportText,
     displaySource: frame.displaySource,
     localizeKnownBody,
     localizeKnownLabel,
   })
-  const showCardQuality = false
-  const showCardWarning = Boolean(cardWarning && cardQualityFlags.includes('missing_reference_entry'))
-  const showExternalMetadataWarning = externalMetadataStatus === 'conflict'
-  const externalMetadataWarningText = showExternalMetadataWarning
-    ? (externalMetadataReason || S.cite_external_metadata_warning)
-    : ''
-  const externalMetadataTitleHint = externalTitle && !substantiallySame(externalTitle, frame.displayMain)
-    ? S.cite_external_title.replace('{title}', externalTitle)
-    : ''
 
   return (
     <div
@@ -285,19 +251,19 @@ export function CitationPopover({
         flowAriaLabel={S.cite_flow_aria}
       />
       <CitationPopoverStatusPanels
-        bindingState={bindingState}
-        bindingOverlapText={bindingOverlapText}
-        showBindingReason={showBindingReason}
-        bindingReason={bindingReason}
-        showCardQuality={showCardQuality}
-        cardQualityFlags={cardQualityFlags}
-        cardQualityLabel={cardQualityLabel}
-        cardQualityScore={cardQualityScore}
-        showCardWarning={showCardWarning}
-        cardWarning={cardWarning}
-        showExternalMetadataWarning={showExternalMetadataWarning}
-        externalMetadataWarningText={externalMetadataWarningText}
-        externalMetadataTitleHint={externalMetadataTitleHint}
+        bindingState={status.bindingState}
+        bindingOverlapText={status.bindingOverlapText}
+        showBindingReason={status.showBindingReason}
+        bindingReason={status.bindingReason}
+        showCardQuality={status.showCardQuality}
+        cardQualityFlags={status.cardQualityFlags}
+        cardQualityLabel={status.cardQualityLabel}
+        cardQualityScore={status.cardQualityScore}
+        showCardWarning={status.showCardWarning}
+        cardWarning={status.cardWarning}
+        showExternalMetadataWarning={status.showExternalMetadataWarning}
+        externalMetadataWarningText={status.externalMetadataWarningText}
+        externalMetadataTitleHint={status.externalMetadataTitleHint}
       />
       {!isSystemB ? (
         <SystemAEvidenceCard
