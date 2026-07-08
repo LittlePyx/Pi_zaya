@@ -1,6 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { message } from 'antd'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { CitationPopover } from './CitationPopover'
@@ -22,6 +22,7 @@ import { useReaderCitationShelf } from './useReaderCitationShelf'
 import { useReaderBlockShelf } from './useReaderBlockShelf'
 import { useReaderSelectionShelf } from './useReaderSelectionShelf'
 import { useReaderHighlightActions } from './useReaderHighlightActions'
+import { useReaderHighlightMenu } from './useReaderHighlightMenu'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -206,15 +207,6 @@ export function PaperGuideReaderDrawer({
   const contentRef = useRef<HTMLDivElement>(null)
   const [drawerReady, setDrawerReady] = useState(false)
   const [altChangeSource, setAltChangeSource] = useState<'system' | 'manual'>('system')
-  const [highlightBubble, setHighlightBubble] = useState<{
-    x: number
-    y: number
-    highlightId: string
-    text: string
-  } | null>(null)
-  const closeHighlightBubble = useCallback(() => {
-    setHighlightBubble(null)
-  }, [setHighlightBubble])
   const {
     close: closeReaderCitationPopover,
     detail: citationPopoverDetail,
@@ -845,9 +837,17 @@ export function PaperGuideReaderDrawer({
   ])
 
   const sourceLabel = [title, activeHeadingPath].filter(Boolean).join(' / ')
-  const activeHighlightAction = highlightBubble
-    ? sessionHighlights.find((item) => item.id === highlightBubble.highlightId) || null
-    : null
+  const {
+    activeHighlight: activeHighlightAction,
+    closeHighlightBubble,
+    highlightBubble,
+    openHighlightMenuFromClick,
+  } = useReaderHighlightMenu({
+    contentRef,
+    open,
+    sessionHighlights,
+    sourcePath,
+  })
   const {
     addHighlightWithUndo,
     appendActiveHighlight,
@@ -931,52 +931,20 @@ export function PaperGuideReaderDrawer({
     sourcePath,
   })
 
-  const openHighlightMenuFromClick = (event: MouseEvent<HTMLDivElement>) => {
-    const root = contentRef.current
-    const target = event.target instanceof HTMLElement ? event.target : null
-    const mark = target?.closest<HTMLElement>('.kb-reader-user-highlight') || null
-    if (!root || !mark || !root.contains(mark)) {
-      setHighlightBubble(null)
-      return
-    }
-    const highlightId = String(mark.getAttribute('data-kb-session-highlight-id') || '').trim()
-    const item = sessionHighlights.find((entry) => entry.id === highlightId) || null
-    if (!item) {
-      setHighlightBubble(null)
-      return
-    }
-    event.preventDefault()
-    event.stopPropagation()
-    clearSelectionState(true)
-    const rect = mark.getBoundingClientRect()
-    const containerRect = root.getBoundingClientRect()
-    const x = Math.max(18, Math.min(containerRect.width - 18, rect.left + (rect.width / 2) - containerRect.left))
-    const aboveY = rect.top - containerRect.top - 10
-    const belowY = rect.bottom - containerRect.top + 10
-    const y = aboveY >= 16 ? aboveY : belowY
-    setHighlightBubble({
-      x,
-      y,
-      highlightId,
-      text: String(item.text || '').trim(),
-    })
-  }
+  const handleHighlightMenuClick = useCallback((
+    event: Parameters<typeof openHighlightMenuFromClick>[0],
+  ) => {
+    openHighlightMenuFromClick(event, () => clearSelectionState(true))
+  }, [clearSelectionState, openHighlightMenuFromClick])
 
-  const handleContentScroll = () => {
+  const handleContentScroll = useCallback(() => {
     queueSelectionStateSync()
-    setHighlightBubble(null)
-  }
-
-  useEffect(() => {
-    if (!highlightBubble) return
-    if (sessionHighlights.some((item) => item.id === highlightBubble.highlightId)) return
-    setHighlightBubble(null)
-  }, [highlightBubble, sessionHighlights])
+    closeHighlightBubble()
+  }, [closeHighlightBubble, queueSelectionStateSync])
 
   useEffect(() => {
     clearHighlightUndoStack()
-    closeHighlightBubble()
-  }, [clearHighlightUndoStack, closeHighlightBubble, open, sourcePath])
+  }, [clearHighlightUndoStack, open, sourcePath])
 
   useEffect(() => {
     if (!open) return undefined
@@ -1137,7 +1105,7 @@ export function PaperGuideReaderDrawer({
       isInlinePresentation={isInlinePresentation}
       isPageSurface={isPageSurface}
       contentRef={contentRef}
-      onContentClick={openHighlightMenuFromClick}
+      onContentClick={handleHighlightMenuClick}
       onContentMouseUp={queueSelectionStateSync}
       onContentKeyUp={queueSelectionStateSync}
       onContentScroll={handleContentScroll}

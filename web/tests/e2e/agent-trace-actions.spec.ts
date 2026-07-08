@@ -283,6 +283,14 @@ async function readerHighlightActionsSmoke(page: Page) {
   })
 }
 
+async function readerHighlightMenuSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderHighlightMenuSmoke } = await import('/src/testing/readerHighlightMenuSmoke.ts')
+    return runReaderHighlightMenuSmoke()
+  })
+}
+
 async function citationPopoverMetadataSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1398,6 +1406,32 @@ test('reader selection shelf hook builds selection and active-highlight payloads
     { ...shelf.directSelectionPayload, createdAt: 34567 },
     { ...shelf.directHighlightPayload, createdAt: 34567 },
   ])
+})
+
+test('reader highlight menu hook locates, opens, and closes highlight actions', async ({ page }) => {
+  const menu = await readerHighlightMenuSmoke(page)
+
+  expect(menu.foundInside).toBe(true)
+  expect(menu.foundOutside).toBe(false)
+  expect(menu.invalidBubble).toBeNull()
+  expect(menu.staleChecks).toEqual({
+    active: false,
+    stale: true,
+  })
+  expect(menu.beforeOpenCount).toBe(1)
+  expect(menu.eventCounts).toEqual({
+    prevented: 1,
+    stopped: 1,
+  })
+  expect(menu.activeHighlightText).toBe(' Highlight text ')
+  expect(menu.bubbleAfterOpen).toEqual({
+    highlightId: 'highlight-a',
+    text: 'Highlight text',
+    x: 82,
+    y: 32,
+  })
+  expect(menu.bubbleAfterStale).toBeNull()
+  expect(menu.renderedText).toBe('closed')
 })
 
 test('reader highlight actions hook preserves undo, feedback, and ask-again actions', async ({ page }) => {
