@@ -251,6 +251,14 @@ async function readerCitationPopoverSmoke(page: Page) {
   })
 }
 
+async function readerCitationShelfSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderCitationShelfSmoke } = await import('/src/testing/readerCitationShelfSmoke.ts')
+    return runReaderCitationShelfSmoke()
+  })
+}
+
 async function citationPopoverMetadataSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1271,6 +1279,23 @@ test('reader citation popover hook opens reader citations and ignores stale meta
     { loading: true, title: 'Slow Citation', x: 12, y: 34 },
     { loading: true, title: 'Fast Citation', x: 56, y: 78 },
     { loading: false, title: 'Fast Citation', x: 56, y: 78 },
+  ])
+})
+
+test('reader citation shelf hook tracks local citation membership and preserves add callbacks', async ({ page }) => {
+  const shelf = await readerCitationShelfSmoke(page)
+
+  expect(shelf.events).toEqual([
+    'add:Primary Citation',
+    'add:Primary Citation',
+    'add:Other Citation',
+  ])
+  expect(shelf.renderedText).toBe('true|true|2')
+  expect(shelf.snapshots).toEqual([
+    { otherInShelf: false, primaryInShelf: false, size: 0 },
+    { otherInShelf: false, primaryInShelf: true, size: 1 },
+    { otherInShelf: false, primaryInShelf: true, size: 1 },
+    { otherInShelf: true, primaryInShelf: true, size: 2 },
   ])
 })
 

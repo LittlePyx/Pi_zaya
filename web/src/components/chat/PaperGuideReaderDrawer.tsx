@@ -15,10 +15,10 @@ import { useReaderHighlightWorkspace } from './reader/useReaderHighlightWorkspac
 import { useReaderEvidenceNavigator } from './reader/useReaderEvidenceNavigator'
 import type { ReaderDocResponse } from '../../api/references'
 import {
-  toShelfItem,
   type CiteDetail,
 } from './citationState'
 import { useReaderCitationPopover } from './useReaderCitationPopover'
+import { useReaderCitationShelf } from './useReaderCitationShelf'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -226,7 +226,10 @@ export function PaperGuideReaderDrawer({
     position: citationPopoverPos,
     showCitation: showReaderCitation,
   } = useReaderCitationPopover()
-  const [readerCitationShelfKeys, setReaderCitationShelfKeys] = useState<Set<string>>(() => new Set())
+  const {
+    addCitationToShelf: addReaderCitationToShelf,
+    hasCitation: hasReaderCitationInShelf,
+  } = useReaderCitationShelf({ onAddCitationToShelf })
   const isInlinePresentation = presentation === 'inline'
   const isPageSurface = isInlinePresentation && surface === 'page'
 
@@ -729,16 +732,6 @@ export function PaperGuideReaderDrawer({
   useEffect(() => {
     closeReaderCitationPopover()
   }, [closeReaderCitationPopover, open, sourcePath])
-
-  const addReaderCitationToShelf = useCallback((detail: CiteDetail) => {
-    onAddCitationToShelf?.(detail)
-    const key = toShelfItem(detail).key
-    setReaderCitationShelfKeys((current) => {
-      const next = new Set(current)
-      next.add(key)
-      return next
-    })
-  }, [onAddCitationToShelf, setReaderCitationShelfKeys])
 
   const addReaderBlockToShelf = useCallback((block: ReaderBlockShelfPayload) => {
     const text = String(block?.text || '').trim()
@@ -1288,9 +1281,7 @@ export function PaperGuideReaderDrawer({
       {readerMarkdownNode}
     </PaperGuideReaderPanel>
   )
-  const citationPopoverInShelf = Boolean(
-    citationPopoverDetail && readerCitationShelfKeys.has(toShelfItem(citationPopoverDetail).key),
-  )
+  const citationPopoverInShelf = hasReaderCitationInShelf(citationPopoverDetail)
 
   return (
     <PaperGuideReaderShell
