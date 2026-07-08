@@ -176,6 +176,63 @@ async function evidenceDrawerViewModel(page: Page, input: {
   }, input)
 }
 
+async function systemBLiteratureCardModel(page: Page, input: {
+  detail: Record<string, unknown>
+  S: Record<string, string>
+  isSystemB?: boolean
+  loading?: boolean
+  locatorSection?: Record<string, unknown>
+  contextSummarySection?: Record<string, unknown>
+  referenceSection?: Record<string, unknown>
+  cardTakeaway?: string
+  cardEvidenceLabel?: string
+  cardReferenceLabel?: string
+  cardSupportLabel?: string
+  cardQualityFlags?: string[]
+  sourcePaperText?: string
+  headingPath?: string
+  pageLabel?: string
+  badgeLabel?: string
+  doiLabel?: string
+  systemBTitle?: string
+  systemBTitleMissing?: boolean
+  headerSubtitle?: string
+  metrics?: string[]
+  explicitSupportText?: string
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (modelInput) => {
+    const { buildSystemBLiteratureCardModel } = await import('/src/components/chat/citationPopoverSystemB.ts')
+    return buildSystemBLiteratureCardModel({
+      detail: modelInput.detail as never,
+      S: modelInput.S as never,
+      isSystemB: modelInput.isSystemB ?? true,
+      loading: Boolean(modelInput.loading),
+      locatorSection: modelInput.locatorSection as never,
+      contextSummarySection: modelInput.contextSummarySection as never,
+      referenceSection: modelInput.referenceSection as never,
+      cardTakeaway: modelInput.cardTakeaway || '',
+      cardEvidenceLabel: modelInput.cardEvidenceLabel || '',
+      cardReferenceLabel: modelInput.cardReferenceLabel || '',
+      cardSupportLabel: modelInput.cardSupportLabel || '',
+      cardQualityFlags: modelInput.cardQualityFlags || [],
+      sourcePaperText: modelInput.sourcePaperText || '',
+      headingPath: modelInput.headingPath || '',
+      pageLabel: modelInput.pageLabel || '',
+      badgeLabel: modelInput.badgeLabel || '',
+      doiLabel: modelInput.doiLabel || '',
+      systemBTitle: modelInput.systemBTitle || '',
+      systemBTitleMissing: Boolean(modelInput.systemBTitleMissing),
+      headerSubtitle: modelInput.headerSubtitle || '',
+      metrics: modelInput.metrics || [],
+      explicitSupportText: modelInput.explicitSupportText || '',
+      displaySource: String(modelInput.detail.sourceName || ''),
+      localizeKnownBody: (value: string) => String(value || '').trim(),
+      localizeKnownLabel: (value: string) => String(value || '').trim(),
+    })
+  }, input)
+}
+
 async function assistantMessageNoticeViewModel(page: Page, input: {
   message: Record<string, unknown>
   lowConfidenceMeta: Record<string, unknown> | null
@@ -643,6 +700,50 @@ test('evidence drawer view model dedupes cards and derives compact source detail
   expect(drawer.subtitle).toBe('Local + external')
   expect(drawer.sourceDetail).toBe('Local citations are grounded in the knowledge base; external context may supplement uncited background.')
   expect(drawer.visibleDetails.map((detail) => detail.sourcePath)).toEqual(['/tmp/a.md', '/tmp/b.md'])
+})
+
+test('citation popover System B model suppresses weak locations while keeping missing-title references', async ({ page }) => {
+  const model = await systemBLiteratureCardModel(page, {
+    detail: {
+      isInpaper: true,
+      sourceName: 'Current Paper',
+      citationContextSource: 'answer_context',
+      cardReferenceEntry: '[12] Doe, J. Upstream imaging method. IEEE Transactions on Imaging, 2024. doi:10.1000/example.',
+      bibliometricsChecked: true,
+      cardQualityFlags: [],
+    },
+    S: {
+      cite_context: 'Context',
+      cite_context_summary: 'Context summary',
+      cite_current_paper_usage: 'Current paper usage',
+      cite_evidence_chain: 'Evidence chain',
+      cite_loading: 'Loading',
+      cite_loading_summary: 'Loading summary',
+      cite_location_current: 'Current paper location',
+      cite_note: 'Note',
+      cite_original_reference_entry: 'Original reference entry',
+      cite_paper_overview: 'Article overview',
+      cite_reference_entry: 'Reference entry',
+      cite_summary_unavailable: 'Summary unavailable',
+      cite_system_b_support_default: 'Bibliography link from current paper.',
+      cite_trace_complete: 'Trace complete',
+      cite_trace_review: 'Trace needs review',
+      cite_upstream_reference: 'Upstream reference',
+      cite_upstream_role: 'Upstream role',
+    },
+    sourcePaperText: 'Current Paper',
+    headingPath: 'Related Work',
+    pageLabel: 'p. 2',
+    badgeLabel: '[R12]',
+    systemBTitle: 'Upstream reference',
+    systemBTitleMissing: true,
+  })
+
+  expect(model.showLocation).toBe(false)
+  expect(model.showReference).toBe(true)
+  expect(model.referenceLabel).toBe('Original reference entry')
+  expect(model.referencePreview).toContain('Upstream imaging method')
+  expect(model.showOverviewUnavailable).toBe(false)
 })
 
 test('assistant message notice view model keeps contract source badge primary', async ({ page }) => {

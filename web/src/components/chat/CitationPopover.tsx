@@ -7,8 +7,6 @@ import {
   citationDisplay,
   citationInlineLabel,
   citeMetricSummary,
-  cleanCitationDisplayText,
-  looksLowValueCitationContext,
 } from './citationState'
 import { CitationPopoverActions } from './CitationPopoverActions'
 import { SystemAEvidenceCard, SystemBLiteratureCard } from './CitationPopoverCards'
@@ -17,20 +15,16 @@ import { CitationPopoverHeader, type CompactMetaItem } from './CitationPopoverHe
 import { CitationPopoverMetaPanels } from './CitationPopoverMetaPanels'
 import { CitationPopoverStatusPanels } from './CitationPopoverStatusPanels'
 import {
-  SYSTEM_B_ARTICLE_OVERVIEW_SOURCES,
-  SYSTEM_B_TRACE_ENABLED,
   anchorKindLabel,
   compact,
-  evidencePreview,
   isOnlyPaperLabel,
-  isReferenceEntryLikeText,
-  looksGenericSystemBTakeawayText,
   looksNarrativeMetadataText,
   pageRangeLabel,
   stripLocationIdentityPrefix,
   substantiallySame,
 } from './citationPopoverUtils'
 import { buildSystemAEvidenceCardModel } from './citationPopoverSystemA'
+import { buildSystemBLiteratureCardModel } from './citationPopoverSystemB'
 
 import { useT } from '../../i18n'
 
@@ -214,78 +208,6 @@ export function CitationPopover({
   const cardFlow = Array.isArray(detail.cardFlow)
     ? detail.cardFlow.map((item) => compact(item)).filter(Boolean)
     : []
-  const systemBExplicitReferenceText = localizeKnownBody(cleanCitationDisplayText(referenceSection?.text || detail.cardReferenceEntry))
-  const systemBReferenceText = systemBExplicitReferenceText || cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
-  const systemBOverviewSource = compact(detail.summarySource).toLowerCase()
-  const systemBContextSource = compact(detail.citationContextSource).toLowerCase()
-  const systemBReferenceIdentityText = cleanCitationDisplayText(systemBReferenceText)
-  const normalizeSystemBTextCandidate = (value: string, opts: { allowCitationContext?: boolean } = {}): string => {
-    const text = cleanCitationDisplayText(value).replace(/\s+/g, ' ').trim()
-    if (!text) return ''
-    if (looksGenericSystemBTakeawayText(text)) return ''
-    if (looksNarrativeMetadataText(text, detail)) return ''
-    if (substantiallySame(text, systemBReferenceIdentityText) || isReferenceEntryLikeText(text)) return ''
-    if (!opts.allowCitationContext && looksLowValueCitationContext(text)) return ''
-    return text
-  }
-  const firstSystemBText = (values: string[], opts?: { allowCitationContext?: boolean }): string => {
-    for (const value of values) {
-      const text = normalizeSystemBTextCandidate(value, opts)
-      if (text) return text
-    }
-    return ''
-  }
-  const systemBOverviewSourceIsContext = [
-    'answer_context',
-    'citation_context',
-    'reader_occurrence',
-    'reader_reference_link',
-    'reader_references',
-  ].includes(systemBOverviewSource)
-  const systemBOverviewSourceIsArticle = SYSTEM_B_ARTICLE_OVERVIEW_SOURCES.has(systemBOverviewSource)
-  const systemBPaperOverviewText = isSystemB
-    ? firstSystemBText([
-      systemBOverviewSourceIsContext ? '' : detail.summaryLine,
-    ], { allowCitationContext: systemBOverviewSourceIsArticle })
-    : ''
-  const systemBPaperOverviewPreview = evidencePreview(systemBPaperOverviewText, 360)
-  const systemBPaperOverviewLabel = ((S as unknown as Record<string, string>).cite_paper_overview || 'Article overview')
-  const systemBCitationContextText = ''
-  const systemBCitationContextLabel = cardEvidenceLabel || S.cite_context
-  const rawSystemBTakeawayText = isSystemB
-    ? firstSystemBText([
-      detail.cardContextSummary,
-      contextSummarySection?.text || '',
-      cardTakeaway,
-      detail.upstreamWorkRole,
-      detail.cardSupportExplanation,
-      detail.supportRelation,
-      detail.whyLine,
-      detail.systemBTraceContext,
-      systemBContextSource === 'reader_references' ? '' : detail.citationContext,
-    ], { allowCitationContext: true })
-    : ''
-  const localizedSystemBTakeawayText = localizeKnownBody(rawSystemBTakeawayText)
-  const systemBTakeawayText = localizedSystemBTakeawayText && !substantiallySame(localizedSystemBTakeawayText, systemBReferenceText)
-    ? localizedSystemBTakeawayText
-    : ''
-  const systemBTakeawayLabel = ((S as unknown as Record<string, string>).cite_current_paper_usage || S.cite_upstream_role)
-  const systemBContextSummaryText = ''
-  const systemBContextSummaryLabel = localizeKnownLabel(contextSummarySection?.label || '') || S.cite_context_summary
-  const systemBTraceSteps = isSystemB && Array.isArray(detail.systemBTraceSteps)
-    ? detail.systemBTraceSteps.map((item) => compact(item)).filter(Boolean)
-    : []
-  const systemBTraceReason = isSystemB ? cleanCitationDisplayText(detail.systemBTraceReason) : ''
-  const systemBTraceScore = Number(detail.systemBTraceScore || 0)
-  const showSystemBTrace = Boolean(
-    SYSTEM_B_TRACE_ENABLED
-    && isSystemB
-    && (systemBTraceSteps.length > 0 || systemBTraceReason || systemBTraceScore > 0),
-  )
-  const systemBTraceStatus = detail.systemBTraceComplete
-    ? { label: S.cite_trace_complete, tone: 'complete' }
-    : { label: S.cite_trace_review, tone: 'review' }
-  const systemBCitationContextPreview = evidencePreview(systemBCitationContextText, 330)
   const whyText = compact(detail.whyLine)
   const bindingStatus = compact(detail.bindingStatus).toLowerCase()
   const bindingReason = localizeKnownBody(detail.bindingReason)
@@ -356,108 +278,33 @@ export function CitationPopover({
   const primaryActionLabel = isSystemB ? S.cite_read_locate : S.cite_open_evidence
   const explainText = ''
   const flowSteps = isSystemB ? [] : cardFlow
-  const rawSystemBLocationText = compact(locatorSection?.text || '') || compact(detail.cardLocator) || compact(detail.locationLabel) || [sourcePaperText, headingPath, pageLabel].filter(Boolean).join(' / ')
-  const cleanedSystemBLocationText = stripLocationIdentityPrefix(rawSystemBLocationText, [
+  const systemB = buildSystemBLiteratureCardModel({
+    detail,
+    S,
+    isSystemB,
+    loading,
+    locatorSection,
+    contextSummarySection,
+    referenceSection,
+    cardTakeaway,
+    cardEvidenceLabel,
+    cardReferenceLabel,
+    cardSupportLabel,
+    cardQualityFlags,
     sourcePaperText,
-    detail.sourceName,
-    display.source,
-  ])
-  const systemBLocationIsPaperOnly = isOnlyPaperLabel(rawSystemBLocationText, [
-    sourcePaperText,
-    detail.sourceName,
-    display.source,
-  ])
-  const systemBReferenceRowLocation = (
-    systemBContextSource === 'reader_references'
-    || compact(detail.shelfOrigin).toLowerCase() === 'reader_references'
-  ) && badgeLabel
-    ? badgeLabel
-    : ''
-  const systemBMeaningfulLocation = systemBLocationIsPaperOnly
-    ? ''
-    : (cleanedSystemBLocationText || rawSystemBLocationText)
-  const systemBLocationLabel = systemBReferenceRowLocation ? S.cite_reference_entry : S.cite_location_current
-  const systemBLocationText = systemBReferenceRowLocation || systemBMeaningfulLocation
-  const systemBLocationHint = ''
-  const systemBLocationSourceIsWeak = [
-    'answer_context',
-    'answer_reference_mention',
-    'reader_references',
-  ].includes(systemBContextSource) || cardQualityFlags.some((flag) => [
-    'answer_context_only',
-    'reference_entry_only',
-    'weak_citation_context',
-    'missing_citation_context',
-  ].includes(flag))
-  const showSystemBLocation = Boolean(
-    isSystemB
-    && systemBMeaningfulLocation
-    && !systemBReferenceRowLocation
-    && !systemBLocationSourceIsWeak,
-  )
-  const systemBSupportText = isSystemB
-    && explicitSupportText
-    && !substantiallySame(explicitSupportText, systemBCitationContextText)
-    && !substantiallySame(explicitSupportText, systemBReferenceText)
-    ? explicitSupportText
-    : ''
-  const showSystemBSupport = false
-  const hasSystemBHeaderIdentity = Boolean(
-    (systemBTitle && systemBTitle !== S.cite_upstream_reference)
-    || headerSubtitle
-    || doiLabel
-    || metrics.length > 0
-  )
-  const systemBReferenceHasBibliographicContext = Boolean(
-    systemBReferenceText
-    && /\b(?:18|19|20)\d{2}\b/.test(systemBReferenceText)
-    && (
-      isReferenceEntryLikeText(systemBReferenceText)
-      || !systemBTitle
-      || systemBReferenceText.length > systemBTitle.length + 18
-    )
-  )
-  const systemBReferenceIsUsefulEntry = Boolean(
-    systemBReferenceText
-    && (
-      systemBReferenceHasBibliographicContext
-      || (
-        (!systemBTitle || !substantiallySame(systemBReferenceText, systemBTitle))
-        && (!headerSubtitle || !substantiallySame(systemBReferenceText, headerSubtitle))
-      )
-    )
-  )
-  const systemBReferenceEntryOnly = cardQualityFlags.includes('reference_entry_only')
-  const systemBReferenceTitleMissing = systemBTitleMissing || cardQualityFlags.includes('missing_reference_title')
-  const suppressSystemBReferenceEntry = [
-    'reader_occurrence',
-    'reader_reference_link',
-    'reader_references',
-  ].includes(systemBContextSource)
-    && !systemBReferenceEntryOnly
-    && !systemBReferenceTitleMissing
-  const showSystemBReference = Boolean(
-    systemBReferenceText
-    && !suppressSystemBReferenceEntry
-    && (
-      (isSystemB && systemBReferenceIsUsefulEntry && (showSystemBLocation || systemBReferenceEntryOnly || systemBReferenceTitleMissing || !hasSystemBHeaderIdentity))
-      || (systemBExplicitReferenceText && (systemBReferenceEntryOnly || systemBReferenceTitleMissing || !hasSystemBHeaderIdentity))
-      || systemBReferenceTitleMissing
-      || systemBReferenceEntryOnly
-      || (!hasSystemBHeaderIdentity && !systemBPaperOverviewText)
-    ),
-  )
-  const systemBReferencePreview = evidencePreview(systemBReferenceText, 260)
-  const systemBReferenceLabel = ((S as unknown as Record<string, string>).cite_original_reference_entry || S.cite_reference_entry)
-  const showSystemBOverviewLoading = Boolean(isSystemB && loading && !systemBPaperOverviewText)
-  const showSystemBOverviewUnavailable = Boolean(
-    isSystemB
-    && !loading
-    && detail.bibliometricsChecked
-    && !systemBPaperOverviewText
-    && !showSystemBReference
-    && (doiLabel || systemBTitle),
-  )
+    headingPath,
+    pageLabel,
+    badgeLabel,
+    doiLabel,
+    systemBTitle,
+    systemBTitleMissing,
+    headerSubtitle,
+    metrics,
+    explicitSupportText,
+    displaySource: display.source,
+    localizeKnownBody,
+    localizeKnownLabel,
+  })
   const systemAMetaSource = display.source && !isOnlyPaperLabel(display.source, [systemATitle, sourcePaperText])
     ? display.source
     : ''
@@ -593,37 +440,8 @@ export function CitationPopover({
         />
       ) : (
         <SystemBLiteratureCard
-          showTrace={showSystemBTrace}
-          traceStatus={systemBTraceStatus}
-          traceScore={systemBTraceScore}
-          traceSteps={systemBTraceSteps}
-          traceReason={systemBTraceReason}
-          traceLabel={S.cite_evidence_chain}
-          paperOverviewText={systemBPaperOverviewText}
-          paperOverviewLabel={systemBPaperOverviewLabel}
-          paperOverviewPreview={systemBPaperOverviewPreview}
-          showOverviewLoading={showSystemBOverviewLoading}
-          overviewLoadingLabel={S.cite_loading_summary || S.cite_loading}
-          showOverviewUnavailable={showSystemBOverviewUnavailable}
-          overviewUnavailableLabel={S.cite_summary_unavailable}
-          takeawayText={systemBTakeawayText}
-          takeawayLabel={systemBTakeawayLabel}
-          showLocation={showSystemBLocation}
-          locationLabel={systemBLocationLabel}
-          locationText={systemBLocationText}
-          locationHint={systemBLocationHint}
-          contextSummaryText={systemBContextSummaryText}
-          contextSummaryLabel={systemBContextSummaryLabel}
-          citationContextText={systemBCitationContextText}
-          citationContextPreview={systemBCitationContextPreview}
-          citationContextLabel={systemBCitationContextLabel}
+          {...systemB}
           excerptLabel={S.cite_excerpt}
-          showReference={showSystemBReference}
-          referenceLabel={cardReferenceLabel || systemBReferenceLabel}
-          referencePreview={systemBReferencePreview}
-          showSupport={showSystemBSupport}
-          supportLabel={cardSupportLabel || S.cite_note}
-          supportText={systemBSupportText}
         />
       )}
       <CitationPopoverMetaPanels
