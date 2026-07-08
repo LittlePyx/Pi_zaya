@@ -14,12 +14,15 @@ import { useReaderSessionHighlightLayer } from './reader/useReaderSessionHighlig
 import { useReaderOutline } from './reader/useReaderOutline'
 import { useReaderHighlightWorkspace } from './reader/useReaderHighlightWorkspace'
 import { useReaderEvidenceNavigator } from './reader/useReaderEvidenceNavigator'
-import { referencesApi, type ReaderDocResponse } from '../../api/references'
+import type { ReaderDocResponse } from '../../api/references'
 import {
-  looksLowValueShelfSummary,
   toShelfItem,
   type CiteDetail,
 } from './citationState'
+import {
+  buildReaderCitationPopoverMetadataPlan,
+  loadReaderCitationPopoverMetadata,
+} from './readerCitationPopoverMetadata'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -42,7 +45,6 @@ import {
   scrollReaderTargetIntoView,
 } from './reader/readerDomUtils'
 import { useT } from '../../i18n'
-import { useSettingsStore } from '../../stores/settingsStore'
 export type {
   ReaderLocateCandidate,
   ReaderLocateClaimGroup,
@@ -50,32 +52,6 @@ export type {
   ReaderOpenPayload,
   ReaderSessionHighlight,
 } from './reader/readerTypes'
-
-function bibliometricsLocalePatch(): Record<string, string> {
-  const settings = useSettingsStore.getState()
-  const refsLocale = settings.refsCardLocale === 'zh' || settings.refsCardLocale === 'en'
-    ? settings.refsCardLocale
-    : 'auto'
-  const uiLocale = settings.uiLocale === 'en' ? 'en' : 'zh'
-  const targetLocale = refsLocale === 'auto' ? uiLocale : refsLocale
-  return {
-    refsCardLocale: refsLocale,
-    refs_card_locale: refsLocale,
-    uiLocale,
-    ui_locale: uiLocale,
-    targetLocale,
-    target_locale: targetLocale,
-    renderLocale: targetLocale,
-    render_locale: targetLocale,
-  }
-}
-
-function withBibliometricsLocale(meta: Record<string, unknown>): Record<string, unknown> {
-  return {
-    ...meta,
-    ...bibliometricsLocalePatch(),
-  }
-}
 
 type LocateBadgeTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
 
@@ -121,66 +97,6 @@ interface Props {
   onAddCitationToShelf?: (detail: CiteDetail) => void
   onOpenCitationShelf?: () => void
   documentOverride?: ReaderDocResponse | null
-}
-
-const READER_ARTICLE_SUMMARY_SOURCES = new Set([
-  'abstract',
-  'fulltext',
-  'reference_primary_evidence',
-  'navigation',
-  'exact_anchor',
-  'section_intent_rescue',
-  'doc_list_seed',
-  'doc_list_prompt_aligned',
-])
-
-const READER_CONTEXT_SUMMARY_SOURCES = new Set([
-  'answer_context',
-  'citation_context',
-  'citation_card',
-  'citation_card_view',
-  'metadata',
-  'references_panel_hit',
-  'reader_occurrence',
-  'reader_reference_link',
-  'reader_references',
-])
-
-function readerCitationLooksContextOnly(detail: CiteDetail, summaryLine: string, summarySource: string): boolean {
-  if (READER_ARTICLE_SUMMARY_SOURCES.has(summarySource)) return false
-  const contextSource = String(
-    detail.citationContextSource
-    || detail.evidenceSource
-    || detail.shelfOrigin
-    || '',
-  ).trim().toLowerCase()
-  if (READER_CONTEXT_SUMMARY_SOURCES.has(summarySource) || READER_CONTEXT_SUMMARY_SOURCES.has(contextSource)) {
-    return true
-  }
-  if (detail.isInpaper && !summarySource) return true
-  return /opened paper cites|bibliography entry is linked|current paper cites|当前论文|本文引用|上游文献|参考文献条目/i.test(summaryLine)
-}
-
-function readerCitationHasArticleSummary(detail: CiteDetail): boolean {
-  const summaryLine = String(detail.summaryLine || '').trim()
-  if (!summaryLine || looksLowValueShelfSummary(summaryLine)) return false
-  const summarySource = String(detail.summarySource || '').trim().toLowerCase()
-  if (readerCitationLooksContextOnly(detail, summaryLine, summarySource)) return false
-  const quality = detail.summaryQuality || {}
-  const qualityOk = quality.ok === true || String(quality.status || '').trim().toLowerCase() === 'grounded'
-  return Boolean(READER_ARTICLE_SUMMARY_SOURCES.has(summarySource) || (!detail.isInpaper && qualityOk))
-}
-
-function readerMetaHasArticleSummary(meta: Record<string, unknown>): boolean {
-  const summaryLine = String(meta.summary_line || meta.summaryLine || '').trim()
-  const summarySource = String(meta.summary_source || meta.summarySource || '').trim().toLowerCase()
-  return Boolean(summaryLine && READER_ARTICLE_SUMMARY_SOURCES.has(summarySource))
-}
-
-function readerCitationHasMissingReferenceEntry(detail: CiteDetail): boolean {
-  const status = String(detail.bindingStatus || '').trim().toLowerCase()
-  if (status === 'missing_reference_entry') return true
-  return Array.isArray(detail.cardQualityFlags) && detail.cardQualityFlags.includes('missing_reference_entry')
 }
 
 function locateResultBadge(
@@ -822,36 +738,22 @@ export function PaperGuideReaderDrawer({
   }, [closeReaderCitationPopover, open, sourcePath])
 
   const mergeReaderCitationMeta = useCallback((itemKey: string, metas: Array<Record<string, unknown>>) => {
-    const usable = metas.filter((meta) => meta && Object.keys(meta).length > 0)
-    if (usable.length <= 0) return
-    mergeCitationPopoverDetailForKey(itemKey, [
-      ...usable.filter((meta) => !readerMetaHasArticleSummary(meta)),
-      ...usable.filter(readerMetaHasArticleSummary),
-    ])
+    if (metas.length <= 0) return
+    mergeCitationPopoverDetailForKey(itemKey, metas)
   }, [mergeCitationPopoverDetailForKey])
 
   const showReaderCitation = useCallback((detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
     const itemKey = toShelfItem(detail).key
     openCitationPopoverState(detail, { x: event.clientX, y: event.clientY }, { requestKey: itemKey })
-    const hasDoi = Boolean(String(detail.doi || detail.doiUrl || '').trim())
-    const missingReferenceEntry = readerCitationHasMissingReferenceEntry(detail)
-    const needsSummaryBackfill = !readerCitationHasArticleSummary(detail)
-    const shouldFetchBibliometrics = !missingReferenceEntry
-      && (needsSummaryBackfill || !detail.bibliometricsChecked)
-      && Boolean(hasDoi || detail.title || detail.raw || detail.citeFmt)
-    const reqs: Array<Promise<Record<string, unknown>>> = []
-    if (shouldFetchBibliometrics) {
-      const loadBibliometrics = needsSummaryBackfill
-        ? referencesApi.bibliometrics(withBibliometricsLocale(detail as unknown as Record<string, unknown>))
-        : referencesApi.bibliometricsCached(withBibliometricsLocale(detail as unknown as Record<string, unknown>))
-      reqs.push(loadBibliometrics.catch(() => ({})))
+    const metadataPlan = buildReaderCitationPopoverMetadataPlan(detail, itemKey)
+    if (metadataPlan.requestCount <= 0) {
+      setCitationPopoverLoading(false)
+      return
     }
-    if (!missingReferenceEntry) {
-      reqs.push(referencesApi.citationCardPolishCached(detail as unknown as Record<string, unknown>, 1.5).catch(() => ({})))
-    }
-    setCitationPopoverLoading(reqs.length > 0)
-    Promise.all(reqs)
-      .then((metas) => {
+
+    setCitationPopoverLoading(true)
+    loadReaderCitationPopoverMetadata(detail, { plan: metadataPlan })
+      .then(({ metas }) => {
         if (activeCitationRequestKeyRef.current !== itemKey) return
         mergeReaderCitationMeta(itemKey, metas)
       })
