@@ -283,6 +283,14 @@ async function readerReturnToEvidenceSmoke(page: Page) {
   })
 }
 
+async function readerLocateResultReportingSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderLocateResultReportingSmoke } = await import('/src/testing/readerLocateResultReportingSmoke.ts')
+    return runReaderLocateResultReportingSmoke()
+  })
+}
+
 async function readerSelectionShelfSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1427,6 +1435,58 @@ test('reader return-to-evidence hook resolves, focuses, and scrolls evidence', a
   expect(result.focusedIds).toEqual(['direct-readable'])
   expect(result.renderedText).toBe('ready')
   expect(result.scrollCalls).toBe(1)
+})
+
+test('reader locate result reporting hook preserves success and failure payloads', async ({ page }) => {
+  const result = await readerLocateResultReportingSmoke(page)
+
+  expect(result.successReport).toMatchObject({
+    blockId: 'block-a',
+    locateFeedbackKey: 'payload-key',
+    sourceName: 'Reader Title',
+    status: 'block',
+  })
+  expect(result.successWithoutPayloadKey).toMatchObject({
+    locateFeedbackKey: 'engine-key',
+    sourceName: 'Reader Source',
+  })
+  expect(result.failureReport).toMatchObject({
+    activeAltIndex: 2,
+    anchorId: 'anchor-failed',
+    anchorKind: 'equation',
+    blockId: 'block-failed',
+    headingPath: 'Results',
+    hint: 'Source file missing',
+    locateFeedbackKey: 'failed-key',
+    ok: false,
+    precision: 'failed',
+    reason: 'Source file missing',
+    repairable: true,
+    sourceName: 'Missing Reader',
+    sourcePath: '/tmp/missing.md',
+    status: 'failed',
+    strictLocate: true,
+  })
+  expect(result.fallbackFailure.hint).toBe('Reader source could not be loaded.')
+  expect(result.fallbackFailure.sourceName).toBeUndefined()
+  expect(result.renderedText).toBe('open')
+  expect(result.hookReports).toHaveLength(2)
+  expect(result.hookReports[0]).toMatchObject({
+    locateFeedbackKey: 'hook-key',
+    sourceName: 'Hook Reader',
+    status: 'block',
+  })
+  expect(result.hookReports[1]).toMatchObject({
+    activeAltIndex: 3,
+    anchorId: 'hook-anchor',
+    anchorKind: 'figure',
+    blockId: 'hook-block',
+    headingPath: 'Hook Heading',
+    hint: 'Hook load failed',
+    locateFeedbackKey: 'hook-key',
+    sourceName: 'Hook Reader',
+    status: 'failed',
+  })
 })
 
 test('reader selection shelf hook builds selection and active-highlight payloads', async ({ page }) => {

@@ -25,6 +25,7 @@ import { useReaderHighlightMenu } from './useReaderHighlightMenu'
 import { useReaderHighlightUndoShortcut } from './useReaderHighlightUndoShortcut'
 import { useReaderEquationShelfActions } from './useReaderEquationShelfActions'
 import { useReaderReturnToEvidence } from './useReaderReturnToEvidence'
+import { useReaderLocateResultReporting } from './useReaderLocateResultReporting'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -562,51 +563,23 @@ export function PaperGuideReaderDrawer({
     relatedBlockIds,
   })
 
-  useEffect(() => {
-    if (!open || !locateResult || !onLocateResult) return
-    onLocateResult({
-      ...locateResult,
-      sourceName: sourceName || title || undefined,
-      locateFeedbackKey: String(payload?.locateFeedbackKey || locateResult.locateFeedbackKey || '').trim() || undefined,
-    })
-  }, [locateResult, onLocateResult, open, payload?.locateFeedbackKey, sourceName, title])
-
-  useEffect(() => {
-    if (!open || !error || !onLocateResult || !sourcePath) return
-    onLocateResult({
-      locateRequestId,
-      sourcePath,
-      sourceName: sourceName || title || undefined,
-      locateFeedbackKey: String(payload?.locateFeedbackKey || '').trim() || undefined,
-      status: 'failed',
-      precision: 'failed',
-      ok: false,
-      repairable: true,
-      strictLocate,
-      hint: String(error || '').trim() || 'Reader source could not be loaded.',
-      reason: String(error || '').trim() || 'Reader source could not be loaded.',
-      activeAltIndex,
-      blockId: activeBlockId || undefined,
-      anchorId: activeAnchorId || undefined,
-      anchorKind: activeAnchorKind || undefined,
-      headingPath: activeHeadingPath || undefined,
-    })
-  }, [
+  useReaderLocateResultReporting({
     activeAltIndex,
     activeAnchorId,
     activeAnchorKind,
     activeBlockId,
     activeHeadingPath,
     error,
+    locateFeedbackKey: payload?.locateFeedbackKey,
     locateRequestId,
+    locateResult,
     onLocateResult,
     open,
-    payload?.locateFeedbackKey,
     sourceName,
     sourcePath,
     strictLocate,
     title,
-  ])
+  })
 
   const sourceTitleAttr = String(sourcePath || sourceName || title || '').trim()
   const metaLocationText = activeHeadingPath || (S.reader_document_start || 'Document start')
