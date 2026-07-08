@@ -267,6 +267,14 @@ async function readerBlockShelfSmoke(page: Page) {
   })
 }
 
+async function readerEquationShelfActionsSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderEquationShelfActionsSmoke } = await import('/src/testing/readerEquationShelfActionsSmoke.ts')
+    return runReaderEquationShelfActionsSmoke()
+  })
+}
+
 async function readerSelectionShelfSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1366,6 +1374,38 @@ test('reader block shelf hook builds selection payloads from reader block action
       sourcePath: '/tmp/reader.md',
       text: 'Table text',
     },
+  ])
+})
+
+test('reader equation shelf hook injects equation shelf buttons and cleans up', async ({ page }) => {
+  const shelf = await readerEquationShelfActionsSmoke(page)
+
+  expect(shelf.tailCountBeforeClick).toBe(2)
+  expect(shelf.tailCountAfterCleanup).toBe(0)
+  expect(shelf.buttonText).toBe('EqShelf')
+  expect(shelf.hostClassBeforeCleanup).toContain('kb-md-reader-equation-action-host')
+  expect(shelf.anchorAttrs).toEqual({
+    anchorId: 'equation-anchor',
+    anchorKind: 'equation',
+    anchorNumber: '7',
+    blockId: 'equation-block',
+  })
+  expect(shelf.emptyPayload).toBeNull()
+  expect(shelf.truncatedPayload).toMatchObject({
+    text: 'abcd...',
+  })
+  expect(shelf.directPayload).toMatchObject({
+    anchorId: 'equation-anchor',
+    anchorKind: 'equation',
+    blockId: 'equation-block',
+    createdAt: 12345,
+    headingPath: 'Methods / Equation',
+    sourceName: 'Reader Paper',
+    sourcePath: '/tmp/reader.md',
+    text: 'E = mc^2',
+  })
+  expect(shelf.events).toEqual([
+    { ...shelf.directPayload, createdAt: 67890 },
   ])
 })
 
