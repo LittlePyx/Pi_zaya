@@ -243,6 +243,14 @@ async function citationPopoverPreviewSmoke(page: Page) {
   })
 }
 
+async function readerCitationPopoverSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderCitationPopoverSmoke } = await import('/src/testing/readerCitationPopoverSmoke.ts')
+    return runReaderCitationPopoverSmoke()
+  })
+}
+
 async function citationPopoverMetadataSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1249,6 +1257,21 @@ test('citation popover preview hook manages hover timers and polish retries', as
   ])
   expect(preview.fetchCalls).toBe(2)
   expect(preview.polishWaitSeconds).toEqual([4, 4])
+})
+
+test('reader citation popover hook opens reader citations and ignores stale metadata', async ({ page }) => {
+  const popover = await readerCitationPopoverSmoke(page)
+
+  expect(popover.calls).toHaveLength(2)
+  expect(popover.calls[0]).toContain('Slow Citation:')
+  expect(popover.calls[1]).toContain('Fast Citation:')
+  expect(popover.renderedText).toBe('ready')
+  expect(popover.snapshots).toEqual([
+    { loading: false, title: '', x: null, y: null },
+    { loading: true, title: 'Slow Citation', x: 12, y: 34 },
+    { loading: true, title: 'Fast Citation', x: 56, y: 78 },
+    { loading: false, title: 'Fast Citation', x: 56, y: 78 },
+  ])
 })
 
 test('citation popover metadata helper plans route-specific citation and metric requests', async ({ page }) => {

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { message } from 'antd'
 import { MarkdownRenderer, type ReaderBlockShelfPayload } from './MarkdownRenderer'
 import { CitationPopover } from './CitationPopover'
-import { useCitationPopoverState } from './useCitationPopoverState'
 import { PaperGuideReaderPanel } from './reader/PaperGuideReaderPanel'
 import { useReaderDocument } from './reader/useReaderDocument'
 import { PaperGuideReaderShell } from './reader/PaperGuideReaderShell'
@@ -19,10 +18,7 @@ import {
   toShelfItem,
   type CiteDetail,
 } from './citationState'
-import {
-  buildReaderCitationPopoverMetadataPlan,
-  loadReaderCitationPopoverMetadata,
-} from './readerCitationPopoverMetadata'
+import { useReaderCitationPopover } from './useReaderCitationPopover'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -224,15 +220,12 @@ export function PaperGuideReaderDrawer({
     text: string
   } | null>(null)
   const {
-    activeRequestKeyRef: activeCitationRequestKeyRef,
     close: closeReaderCitationPopover,
     detail: citationPopoverDetail,
     loading: citationPopoverLoading,
-    mergeDetailForKey: mergeCitationPopoverDetailForKey,
-    open: openCitationPopoverState,
     position: citationPopoverPos,
-    setLoading: setCitationPopoverLoading,
-  } = useCitationPopoverState()
+    showCitation: showReaderCitation,
+  } = useReaderCitationPopover()
   const [readerCitationShelfKeys, setReaderCitationShelfKeys] = useState<Set<string>>(() => new Set())
   const isInlinePresentation = presentation === 'inline'
   const isPageSurface = isInlinePresentation && surface === 'page'
@@ -737,33 +730,6 @@ export function PaperGuideReaderDrawer({
     closeReaderCitationPopover()
   }, [closeReaderCitationPopover, open, sourcePath])
 
-  const mergeReaderCitationMeta = useCallback((itemKey: string, metas: Array<Record<string, unknown>>) => {
-    if (metas.length <= 0) return
-    mergeCitationPopoverDetailForKey(itemKey, metas)
-  }, [mergeCitationPopoverDetailForKey])
-
-  const showReaderCitation = useCallback((detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
-    const itemKey = toShelfItem(detail).key
-    openCitationPopoverState(detail, { x: event.clientX, y: event.clientY }, { requestKey: itemKey })
-    const metadataPlan = buildReaderCitationPopoverMetadataPlan(detail, itemKey)
-    if (metadataPlan.requestCount <= 0) {
-      setCitationPopoverLoading(false)
-      return
-    }
-
-    setCitationPopoverLoading(true)
-    loadReaderCitationPopoverMetadata(detail, { plan: metadataPlan })
-      .then(({ metas }) => {
-        if (activeCitationRequestKeyRef.current !== itemKey) return
-        mergeReaderCitationMeta(itemKey, metas)
-      })
-      .finally(() => {
-        if (activeCitationRequestKeyRef.current === itemKey) {
-          setCitationPopoverLoading(false)
-        }
-      })
-  }, [activeCitationRequestKeyRef, mergeReaderCitationMeta, openCitationPopoverState, setCitationPopoverLoading])
-
   const addReaderCitationToShelf = useCallback((detail: CiteDetail) => {
     onAddCitationToShelf?.(detail)
     const key = toShelfItem(detail).key
@@ -885,7 +851,16 @@ export function PaperGuideReaderDrawer({
       readerAnchors={readerAnchors}
       readerBlocks={readerBlocks}
     />
-  ), [addReaderBlockToShelf, addReaderCitationToShelf, citeDetails, markdown, onAddSelectionToShelf, readerAnchors, readerBlocks, showReaderCitation])
+  ), [
+    addReaderBlockToShelf,
+    addReaderCitationToShelf,
+    citeDetails,
+    markdown,
+    onAddSelectionToShelf,
+    readerAnchors,
+    readerBlocks,
+    showReaderCitation,
+  ])
 
   const sourceLabel = [title, activeHeadingPath].filter(Boolean).join(' / ')
   const enrichSessionHighlight = useCallback((highlight: ReaderSessionHighlight): ReaderSessionHighlight => {
