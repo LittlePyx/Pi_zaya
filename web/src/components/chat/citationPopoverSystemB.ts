@@ -1,11 +1,7 @@
 import type { CiteDetail, CitationCardViewSection } from './citationState'
-import { cleanCitationDisplayText } from './citationState'
-import {
-  SYSTEM_B_TRACE_ENABLED,
-  compact,
-} from './citationPopoverUtils'
 import { buildSystemBSourcePanelsModel } from './citationPopoverSystemBSourcePanels'
 import { buildSystemBTextPanelsModel } from './citationPopoverSystemBTextPanels'
+import { buildSystemBTraceModel } from './citationPopoverSystemBTrace'
 
 interface SystemBStrings extends Record<string, string> {
   cite_context: string
@@ -126,19 +122,11 @@ export function buildSystemBLiteratureCardModel({
     localizeKnownBody,
     localizeKnownLabel,
   })
-  const traceSteps = isSystemB && Array.isArray(detail.systemBTraceSteps)
-    ? detail.systemBTraceSteps.map((item) => compact(item)).filter(Boolean)
-    : []
-  const traceReason = isSystemB ? cleanCitationDisplayText(detail.systemBTraceReason) : ''
-  const traceScore = Number(detail.systemBTraceScore || 0)
-  const showTrace = Boolean(
-    SYSTEM_B_TRACE_ENABLED
-    && isSystemB
-    && (traceSteps.length > 0 || traceReason || traceScore > 0),
-  )
-  const traceStatus = detail.systemBTraceComplete
-    ? { label: S.cite_trace_complete, tone: 'complete' }
-    : { label: S.cite_trace_review, tone: 'review' }
+  const trace = buildSystemBTraceModel({
+    detail,
+    S,
+    isSystemB,
+  })
   const sourcePanels = buildSystemBSourcePanelsModel({
     detail,
     S,
@@ -175,12 +163,12 @@ export function buildSystemBLiteratureCardModel({
   )
 
   return {
-    showTrace,
-    traceStatus,
-    traceScore,
-    traceSteps,
-    traceReason,
-    traceLabel: S.cite_evidence_chain,
+    showTrace: trace.showTrace,
+    traceStatus: trace.traceStatus,
+    traceScore: trace.traceScore,
+    traceSteps: trace.traceSteps,
+    traceReason: trace.traceReason,
+    traceLabel: trace.traceLabel,
     paperOverviewText: textPanels.paperOverviewText,
     paperOverviewLabel: textPanels.paperOverviewLabel,
     paperOverviewPreview: textPanels.paperOverviewPreview,

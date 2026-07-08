@@ -326,6 +326,24 @@ async function systemBTextPanelsModel(page: Page, input: {
   }, input)
 }
 
+async function systemBTraceModel(page: Page, input: {
+  detail: Record<string, unknown>
+  S: Record<string, string>
+  isSystemB?: boolean
+  traceEnabled?: boolean
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (modelInput) => {
+    const { buildSystemBTraceModel } = await import('/src/components/chat/citationPopoverSystemBTrace.ts')
+    return buildSystemBTraceModel({
+      detail: modelInput.detail as never,
+      S: modelInput.S as never,
+      isSystemB: modelInput.isSystemB ?? true,
+      traceEnabled: modelInput.traceEnabled,
+    })
+  }, input)
+}
+
 async function systemBSourcePanelsModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -1049,6 +1067,48 @@ test('citation popover status model derives binding, support, and warning state'
   expect(systemB.bindingState).toBeNull()
   expect(systemB.explicitSupportText).toBe('')
   expect(systemB.supportText).toBe('Bibliography link from current paper.')
+})
+
+test('citation popover System B trace model gates trace display and normalizes steps', async ({ page }) => {
+  const S = {
+    cite_evidence_chain: 'Evidence chain',
+    cite_trace_complete: 'Trace complete',
+    cite_trace_review: 'Trace needs review',
+  }
+  const detail = {
+    systemBTraceSteps: ['  locate reference  ', '', 'verify upstream work'],
+    systemBTraceReason: '  Source chain verified.  ',
+    systemBTraceScore: 0.76,
+    systemBTraceComplete: true,
+  }
+
+  const hidden = await systemBTraceModel(page, {
+    detail,
+    S,
+  })
+  const visible = await systemBTraceModel(page, {
+    detail,
+    S,
+    traceEnabled: true,
+  })
+  const nonSystemB = await systemBTraceModel(page, {
+    detail,
+    S,
+    isSystemB: false,
+    traceEnabled: true,
+  })
+
+  expect(hidden.showTrace).toBe(false)
+  expect(hidden.traceSteps).toEqual(['locate reference', 'verify upstream work'])
+  expect(hidden.traceReason).toBe('Source chain verified.')
+  expect(hidden.traceScore).toBe(0.76)
+  expect(hidden.traceStatus).toEqual({ label: 'Trace complete', tone: 'complete' })
+  expect(hidden.traceLabel).toBe('Evidence chain')
+
+  expect(visible.showTrace).toBe(true)
+  expect(nonSystemB.showTrace).toBe(false)
+  expect(nonSystemB.traceSteps).toEqual([])
+  expect(nonSystemB.traceReason).toBe('')
 })
 
 test('citation popover System B text panels filter overview and takeaway candidates', async ({ page }) => {
