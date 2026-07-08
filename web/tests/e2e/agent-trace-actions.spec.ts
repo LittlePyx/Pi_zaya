@@ -203,6 +203,22 @@ async function citationPopoverFrameModel(page: Page, input: {
   }, input)
 }
 
+async function citationPopoverLocalization(page: Page, input: {
+  labels: string[]
+  bodies: string[]
+  S: Record<string, string>
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (localizationInput) => {
+    const { buildCitationPopoverLocalizers } = await import('/src/components/chat/citationPopoverLocalization.ts')
+    const { localizeKnownBody, localizeKnownLabel } = buildCitationPopoverLocalizers(localizationInput.S as never)
+    return {
+      bodies: localizationInput.bodies.map((item) => localizeKnownBody(item)),
+      labels: localizationInput.labels.map((item) => localizeKnownLabel(item)),
+    }
+  }, input)
+}
+
 async function citationPopoverStatusModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -751,6 +767,68 @@ test('evidence drawer view model dedupes cards and derives compact source detail
   expect(drawer.subtitle).toBe('Local + external')
   expect(drawer.sourceDetail).toBe('Local citations are grounded in the knowledge base; external context may supplement uncited background.')
   expect(drawer.visibleDetails.map((detail) => detail.sourcePath)).toEqual(['/tmp/a.md', '/tmp/b.md'])
+})
+
+test('citation popover localization maps known labels and body fallbacks', async ({ page }) => {
+  const localized = await citationPopoverLocalization(page, {
+    labels: [
+      '答案依据',
+      '链路需核对',
+      'Missing reference entry',
+      'Custom untouched label',
+    ],
+    bodies: [
+      'Reference [42] is cited in the opened Reader document, but the converted References section does not contain a matching bibliography entry.',
+      '前端缺少后端 cite_details，临时补齐候选依据。',
+      '前端根据本轮 References 临时补齐。',
+      '这条引用只能作为候选依据，需要人工核对。',
+      'Custom body stays as-is.',
+    ],
+    S: {
+      cite_answer_point: 'Answer point',
+      cite_anchor_label: 'Anchor',
+      cite_binding_candidate: 'Candidate evidence',
+      cite_binding_mismatch: 'Citation mismatch',
+      cite_candidate_support_default: 'Candidate support fallback',
+      cite_context: 'Context',
+      cite_context_summary: 'Context summary',
+      cite_evidence_chain: 'Evidence chain',
+      cite_evidence_focus: 'Evidence focus',
+      cite_frontend_candidate_reason: 'Frontend candidate fallback',
+      cite_kind_evidence: 'Answer evidence',
+      cite_kind_upstream: 'Upstream citation',
+      cite_location_current: 'Current location',
+      cite_location_paper: 'Source paper',
+      cite_meta_author: 'Author',
+      cite_meta_published: 'Published',
+      cite_meta_source: 'Source',
+      cite_missing_reference_entry: 'Missing entry',
+      cite_missing_reference_entry_body: 'Reference {n} is missing from the converted bibliography.',
+      cite_note: 'Note',
+      cite_original_evidence: 'Original evidence',
+      cite_position: 'Position',
+      cite_reference_entry: 'Reference entry',
+      cite_reliability: 'Reliability',
+      cite_trace_complete: 'Trace complete',
+      cite_trace_review: 'Trace review',
+      cite_upstream_reference: 'Upstream reference',
+      cite_upstream_role: 'Upstream role',
+    },
+  })
+
+  expect(localized.labels).toEqual([
+    'Answer evidence',
+    'Trace review',
+    'Missing entry',
+    'Custom untouched label',
+  ])
+  expect(localized.bodies).toEqual([
+    'Reference 42 is missing from the converted bibliography.',
+    'Frontend candidate fallback',
+    'Candidate support fallback',
+    'Candidate support fallback',
+    'Custom body stays as-is.',
+  ])
 })
 
 test('citation popover frame model derives route-specific badges, meta, and actions', async ({ page }) => {
