@@ -300,6 +300,32 @@ async function systemBLiteratureCardModel(page: Page, input: {
   }, input)
 }
 
+async function systemBTextPanelsModel(page: Page, input: {
+  detail: Record<string, unknown>
+  S: Record<string, string>
+  isSystemB?: boolean
+  contextSummarySection?: Record<string, unknown>
+  referenceSection?: Record<string, unknown>
+  cardTakeaway?: string
+  cardEvidenceLabel?: string
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (modelInput) => {
+    const { buildSystemBTextPanelsModel } = await import('/src/components/chat/citationPopoverSystemBTextPanels.ts')
+    return buildSystemBTextPanelsModel({
+      detail: modelInput.detail as never,
+      S: modelInput.S as never,
+      isSystemB: modelInput.isSystemB ?? true,
+      contextSummarySection: modelInput.contextSummarySection as never,
+      referenceSection: modelInput.referenceSection as never,
+      cardTakeaway: modelInput.cardTakeaway || '',
+      cardEvidenceLabel: modelInput.cardEvidenceLabel || '',
+      localizeKnownBody: (value: string) => String(value || '').trim(),
+      localizeKnownLabel: (value: string) => String(value || '').trim(),
+    })
+  }, input)
+}
+
 async function systemBSourcePanelsModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -1023,6 +1049,48 @@ test('citation popover status model derives binding, support, and warning state'
   expect(systemB.bindingState).toBeNull()
   expect(systemB.explicitSupportText).toBe('')
   expect(systemB.supportText).toBe('Bibliography link from current paper.')
+})
+
+test('citation popover System B text panels filter overview and takeaway candidates', async ({ page }) => {
+  const referenceText = '[12] Doe, J. Upstream imaging method. IEEE Transactions on Imaging, 2024. doi:10.1000/example.'
+  const model = await systemBTextPanelsModel(page, {
+    detail: {
+      summarySource: 'abstract',
+      summaryLine: 'This article introduces a calibrated imaging pipeline for robust microscopy measurements.',
+      citationContextSource: 'reader_references',
+      cardContextSummary: 'links the answer back to an upstream reference',
+      upstreamWorkRole: referenceText,
+      cardSupportExplanation: 'Published in IEEE Transactions on Imaging, 2024.',
+      supportRelation: 'The current paper cites this work to justify the upstream calibration method.',
+      citationContext: 'Reader reference row text should not become the takeaway.',
+    },
+    S: {
+      cite_context: 'Context',
+      cite_context_summary: 'Context summary',
+      cite_current_paper_usage: 'Current paper usage',
+      cite_paper_overview: 'Article overview',
+      cite_upstream_role: 'Upstream role',
+    },
+    contextSummarySection: {
+      label: 'Reader usage',
+      text: 'doi:10.1000/example, journal metadata, cited by 42.',
+    },
+    referenceSection: {
+      text: referenceText,
+    },
+    cardTakeaway: referenceText,
+    cardEvidenceLabel: 'Evidence focus',
+  })
+
+  expect(model.systemBReferenceText).toBe(referenceText)
+  expect(model.systemBContextSource).toBe('reader_references')
+  expect(model.paperOverviewText).toBe('This article introduces a calibrated imaging pipeline for robust microscopy measurements.')
+  expect(model.paperOverviewLabel).toBe('Article overview')
+  expect(model.takeawayText).toBe('The current paper cites this work to justify the upstream calibration method.')
+  expect(model.takeawayLabel).toBe('Current paper usage')
+  expect(model.contextSummaryText).toBe('')
+  expect(model.contextSummaryLabel).toBe('Reader usage')
+  expect(model.citationContextLabel).toBe('Evidence focus')
 })
 
 test('citation popover System B source panels derive clean locations and missing-title references', async ({ page }) => {

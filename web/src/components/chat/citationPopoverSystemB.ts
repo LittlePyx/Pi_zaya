@@ -1,16 +1,11 @@
 import type { CiteDetail, CitationCardViewSection } from './citationState'
-import { cleanCitationDisplayText, looksLowValueCitationContext } from './citationState'
+import { cleanCitationDisplayText } from './citationState'
 import {
-  SYSTEM_B_ARTICLE_OVERVIEW_SOURCES,
   SYSTEM_B_TRACE_ENABLED,
   compact,
-  evidencePreview,
-  isReferenceEntryLikeText,
-  looksGenericSystemBTakeawayText,
-  looksNarrativeMetadataText,
-  substantiallySame,
 } from './citationPopoverUtils'
 import { buildSystemBSourcePanelsModel } from './citationPopoverSystemBSourcePanels'
+import { buildSystemBTextPanelsModel } from './citationPopoverSystemBTextPanels'
 
 interface SystemBStrings extends Record<string, string> {
   cite_context: string
@@ -120,64 +115,17 @@ export function buildSystemBLiteratureCardModel({
   localizeKnownBody,
   localizeKnownLabel,
 }: BuildSystemBLiteratureCardModelOptions): SystemBLiteratureCardModel {
-  const systemBExplicitReferenceText = localizeKnownBody(cleanCitationDisplayText(referenceSection?.text || detail.cardReferenceEntry))
-  const systemBReferenceText = systemBExplicitReferenceText || cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
-  const systemBOverviewSource = compact(detail.summarySource).toLowerCase()
-  const systemBContextSource = compact(detail.citationContextSource).toLowerCase()
-  const systemBReferenceIdentityText = cleanCitationDisplayText(systemBReferenceText)
-  const normalizeSystemBTextCandidate = (value: string, opts: { allowCitationContext?: boolean } = {}): string => {
-    const text = cleanCitationDisplayText(value).replace(/\s+/g, ' ').trim()
-    if (!text) return ''
-    if (looksGenericSystemBTakeawayText(text)) return ''
-    if (looksNarrativeMetadataText(text, detail)) return ''
-    if (substantiallySame(text, systemBReferenceIdentityText) || isReferenceEntryLikeText(text)) return ''
-    if (!opts.allowCitationContext && looksLowValueCitationContext(text)) return ''
-    return text
-  }
-  const firstSystemBText = (values: string[], opts?: { allowCitationContext?: boolean }): string => {
-    for (const value of values) {
-      const text = normalizeSystemBTextCandidate(value, opts)
-      if (text) return text
-    }
-    return ''
-  }
-  const systemBOverviewSourceIsContext = [
-    'answer_context',
-    'citation_context',
-    'reader_occurrence',
-    'reader_reference_link',
-    'reader_references',
-  ].includes(systemBOverviewSource)
-  const systemBOverviewSourceIsArticle = SYSTEM_B_ARTICLE_OVERVIEW_SOURCES.has(systemBOverviewSource)
-  const paperOverviewText = isSystemB
-    ? firstSystemBText([
-      systemBOverviewSourceIsContext ? '' : detail.summaryLine,
-    ], { allowCitationContext: systemBOverviewSourceIsArticle })
-    : ''
-  const paperOverviewPreview = evidencePreview(paperOverviewText, 360)
-  const paperOverviewLabel = S.cite_paper_overview || 'Article overview'
-  const citationContextText = ''
-  const citationContextLabel = cardEvidenceLabel || S.cite_context
-  const rawTakeawayText = isSystemB
-    ? firstSystemBText([
-      detail.cardContextSummary,
-      contextSummarySection?.text || '',
-      cardTakeaway,
-      detail.upstreamWorkRole,
-      detail.cardSupportExplanation,
-      detail.supportRelation,
-      detail.whyLine,
-      detail.systemBTraceContext,
-      systemBContextSource === 'reader_references' ? '' : detail.citationContext,
-    ], { allowCitationContext: true })
-    : ''
-  const localizedTakeawayText = localizeKnownBody(rawTakeawayText)
-  const takeawayText = localizedTakeawayText && !substantiallySame(localizedTakeawayText, systemBReferenceText)
-    ? localizedTakeawayText
-    : ''
-  const takeawayLabel = S.cite_current_paper_usage || S.cite_upstream_role
-  const contextSummaryText = ''
-  const contextSummaryLabel = localizeKnownLabel(contextSummarySection?.label || '') || S.cite_context_summary
+  const textPanels = buildSystemBTextPanelsModel({
+    detail,
+    S,
+    isSystemB,
+    contextSummarySection,
+    referenceSection,
+    cardTakeaway,
+    cardEvidenceLabel,
+    localizeKnownBody,
+    localizeKnownLabel,
+  })
   const traceSteps = isSystemB && Array.isArray(detail.systemBTraceSteps)
     ? detail.systemBTraceSteps.map((item) => compact(item)).filter(Boolean)
     : []
@@ -191,7 +139,6 @@ export function buildSystemBLiteratureCardModel({
   const traceStatus = detail.systemBTraceComplete
     ? { label: S.cite_trace_complete, tone: 'complete' }
     : { label: S.cite_trace_review, tone: 'review' }
-  const citationContextPreview = evidencePreview(citationContextText, 330)
   const sourcePanels = buildSystemBSourcePanelsModel({
     detail,
     S,
@@ -211,18 +158,18 @@ export function buildSystemBLiteratureCardModel({
     metrics,
     explicitSupportText,
     displaySource,
-    systemBContextSource,
-    systemBReferenceText,
-    systemBExplicitReferenceText,
-    paperOverviewText,
-    citationContextText,
+    systemBContextSource: textPanels.systemBContextSource,
+    systemBReferenceText: textPanels.systemBReferenceText,
+    systemBExplicitReferenceText: textPanels.systemBExplicitReferenceText,
+    paperOverviewText: textPanels.paperOverviewText,
+    citationContextText: textPanels.citationContextText,
   })
-  const showOverviewLoading = Boolean(isSystemB && loading && !paperOverviewText)
+  const showOverviewLoading = Boolean(isSystemB && loading && !textPanels.paperOverviewText)
   const showOverviewUnavailable = Boolean(
     isSystemB
     && !loading
     && detail.bibliometricsChecked
-    && !paperOverviewText
+    && !textPanels.paperOverviewText
     && !sourcePanels.showReference
     && (doiLabel || systemBTitle),
   )
@@ -234,24 +181,24 @@ export function buildSystemBLiteratureCardModel({
     traceSteps,
     traceReason,
     traceLabel: S.cite_evidence_chain,
-    paperOverviewText,
-    paperOverviewLabel,
-    paperOverviewPreview,
+    paperOverviewText: textPanels.paperOverviewText,
+    paperOverviewLabel: textPanels.paperOverviewLabel,
+    paperOverviewPreview: textPanels.paperOverviewPreview,
     showOverviewLoading,
     overviewLoadingLabel: S.cite_loading_summary || S.cite_loading,
     showOverviewUnavailable,
     overviewUnavailableLabel: S.cite_summary_unavailable,
-    takeawayText,
-    takeawayLabel,
+    takeawayText: textPanels.takeawayText,
+    takeawayLabel: textPanels.takeawayLabel,
     showLocation: sourcePanels.showLocation,
     locationLabel: sourcePanels.locationLabel,
     locationText: sourcePanels.locationText,
     locationHint: sourcePanels.locationHint,
-    contextSummaryText,
-    contextSummaryLabel,
-    citationContextText,
-    citationContextPreview,
-    citationContextLabel,
+    contextSummaryText: textPanels.contextSummaryText,
+    contextSummaryLabel: textPanels.contextSummaryLabel,
+    citationContextText: textPanels.citationContextText,
+    citationContextPreview: textPanels.citationContextPreview,
+    citationContextLabel: textPanels.citationContextLabel,
     showReference: sourcePanels.showReference,
     referenceLabel: sourcePanels.referenceLabel,
     referencePreview: sourcePanels.referencePreview,
