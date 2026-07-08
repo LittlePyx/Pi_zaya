@@ -586,16 +586,10 @@ export function CitationPopover({
           showTakeaway={systemA.showTakeaway}
           takeawayLabel={systemA.takeawayLabel}
           takeawayText={systemA.takeawayText}
+          card={systemA.contentCard}
           showClaim={systemA.showClaim}
-          claimLabel={systemA.claimLabel}
-          claimPreview={systemA.claimPreview}
-          evidenceText={systemA.evidenceText}
-          evidencePreview={systemA.evidencePreview}
-          evidenceLabel={systemA.evidenceLabel}
           excerptLabel={S.cite_excerpt}
           showSupport={systemA.showSupport}
-          supportLabel={systemA.supportLabel}
-          supportText={systemA.supportText}
         />
       ) : (
         <SystemBLiteratureCard

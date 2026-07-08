@@ -7,6 +7,7 @@ import {
   substantiallySame,
 } from './citationPopoverUtils'
 import { buildEvidenceCardViewModel } from './evidenceCardViewModel'
+import type { EvidenceCardViewModel } from './evidenceCardViewModel'
 
 interface SystemAStrings extends Record<string, string> {
   cite_answer_point: string
@@ -37,15 +38,9 @@ export interface SystemAEvidenceCardModel {
   showTakeaway: boolean
   takeawayLabel: string
   takeawayText: string
+  contentCard: EvidenceCardViewModel
   showClaim: boolean
-  claimLabel: string
-  claimPreview: string
-  evidenceText: string
-  evidencePreview: string
-  evidenceLabel: string
   showSupport: boolean
-  supportLabel: string
-  supportText: string
 }
 
 const GENERIC_SYSTEM_A_CLAIM_LABELS = new Set([
@@ -120,19 +115,26 @@ export function buildSystemAEvidenceCardModel({
     && !substantiallySame(supportText, evidenceText)
     && !substantiallySame(supportText, claimText),
   )
+  const contentCard: EvidenceCardViewModel = {
+    ...evidenceCard,
+    claim: claimText,
+    claimPreview,
+    claimLabel,
+    evidence: evidenceText,
+    evidencePreview: evidencePreviewText,
+    evidenceLabel: cardEvidenceLabel || S.cite_original_evidence,
+    support: supportText,
+    supportPreview: supportText,
+    supportLabel: cardSupportLabel || S.cite_reliability,
+    isEvidenceExcerpt: Boolean(evidenceText && evidencePreviewText !== evidenceText),
+  }
 
   return {
     showTakeaway,
     takeawayLabel: cardTakeawayLabel || S.cite_evidence_focus,
     takeawayText,
+    contentCard,
     showClaim,
-    claimLabel,
-    claimPreview,
-    evidenceText,
-    evidencePreview: evidencePreviewText,
-    evidenceLabel: cardEvidenceLabel || S.cite_original_evidence,
     showSupport,
-    supportLabel: cardSupportLabel || S.cite_reliability,
-    supportText,
   }
 }

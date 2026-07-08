@@ -1,6 +1,7 @@
 import { BookOutlined, PlusOutlined } from '@ant-design/icons'
 import { Button } from 'antd'
 import type { CiteDetail } from './citationState'
+import { EvidenceCardContent } from './EvidenceCardContent'
 import { buildEvidenceCardViewModel } from './evidenceCardViewModel'
 
 export function EvidenceDrawerItem({
@@ -27,28 +28,11 @@ export function EvidenceDrawerItem({
 
   return (
     <article className="kb-evidence-item" data-testid="evidence-drawer-item">
-      <div className="kb-evidence-item-head">
-        <span className="kb-evidence-cite-label">{card.label}</span>
-        <span className="kb-evidence-source-name">{card.source || S.cite_meta_source || 'Source'}</span>
-      </div>
-      {card.claim ? (
-        <div className="kb-evidence-block">
-          <div className="kb-evidence-block-label">{card.claimLabel}</div>
-          <div className="kb-evidence-block-text">{card.claimPreview}</div>
-        </div>
-      ) : null}
-      {card.evidence ? (
-        <div className="kb-evidence-block">
-          <div className="kb-evidence-block-label">{card.evidenceLabel}</div>
-          <blockquote>{card.evidencePreview}</blockquote>
-        </div>
-      ) : null}
-      {card.location || card.support ? (
-        <div className="kb-evidence-meta">
-          {card.location ? <span>{card.location}</span> : null}
-          {card.support ? <span>{card.supportPreview}</span> : null}
-        </div>
-      ) : null}
+      <EvidenceCardContent
+        card={card}
+        variant="drawer"
+        sourceFallback={S.cite_meta_source || 'Source'}
+      />
       <div className="kb-evidence-actions">
         {onOpenReader ? (
           <Button

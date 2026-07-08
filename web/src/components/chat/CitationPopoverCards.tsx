@@ -1,17 +1,14 @@
+import type { EvidenceCardViewModel } from './evidenceCardViewModel'
+import { EvidenceCardContent } from './EvidenceCardContent'
+
 interface SystemAEvidenceCardProps {
   showTakeaway: boolean
   takeawayLabel: string
   takeawayText: string
+  card: EvidenceCardViewModel
   showClaim: boolean
-  claimLabel: string
-  claimPreview: string
-  evidenceText: string
-  evidencePreview: string
-  evidenceLabel: string
   excerptLabel: string
   showSupport: boolean
-  supportLabel: string
-  supportText: string
 }
 
 interface SystemBLiteratureCardProps {
@@ -52,16 +49,10 @@ export function SystemAEvidenceCard({
   showTakeaway,
   takeawayLabel,
   takeawayText,
+  card,
   showClaim,
-  claimLabel,
-  claimPreview,
-  evidenceText,
-  evidencePreview,
-  evidenceLabel,
   excerptLabel,
   showSupport,
-  supportLabel,
-  supportText,
 }: SystemAEvidenceCardProps) {
   return (
     <div className="kb-cite-pop-evidence-map">
@@ -71,27 +62,18 @@ export function SystemAEvidenceCard({
           <div className="kb-cite-pop-main">{takeawayText}</div>
         </div>
       ) : null}
-      {showClaim ? (
-        <div className="kb-cite-pop-claim" data-testid="citation-popover-system-a-claim">
-          <span className="kb-cite-pop-section-title">{claimLabel}</span>
-          <div className="kb-cite-pop-main">{claimPreview}</div>
-        </div>
-      ) : null}
-      {evidenceText ? (
-        <div className="kb-cite-pop-quote" data-testid="citation-popover-system-a-evidence">
-          <div className="kb-cite-pop-section-line">
-            <span className="kb-cite-pop-section-title">{evidenceLabel}</span>
-            {evidencePreview !== evidenceText ? <span className="kb-cite-pop-section-hint">{excerptLabel}</span> : null}
-          </div>
-          <blockquote>{evidencePreview}</blockquote>
-        </div>
-      ) : null}
-      {showSupport ? (
-        <div className="kb-cite-pop-why" data-testid="citation-popover-system-a-support">
-          <span className="kb-cite-pop-section-title">{supportLabel}</span>
-          <div className="kb-cite-pop-main">{supportText}</div>
-        </div>
-      ) : null}
+      <EvidenceCardContent
+        card={card}
+        variant="citation-system-a"
+        showHeader={false}
+        showClaim={showClaim}
+        showEvidence={Boolean(card.evidence)}
+        showSupport={showSupport}
+        excerptLabel={excerptLabel}
+        claimTestId="citation-popover-system-a-claim"
+        evidenceTestId="citation-popover-system-a-evidence"
+        supportTestId="citation-popover-system-a-support"
+      />
     </div>
   )
 }
