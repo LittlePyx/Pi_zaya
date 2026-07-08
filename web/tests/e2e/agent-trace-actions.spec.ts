@@ -267,6 +267,14 @@ async function readerBlockShelfSmoke(page: Page) {
   })
 }
 
+async function readerSelectionShelfSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderSelectionShelfSmoke } = await import('/src/testing/readerSelectionShelfSmoke.ts')
+    return runReaderSelectionShelfSmoke()
+  })
+}
+
 async function citationPopoverMetadataSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1334,6 +1342,53 @@ test('reader block shelf hook builds selection payloads from reader block action
       sourcePath: '/tmp/reader.md',
       text: 'Table text',
     },
+  ])
+})
+
+test('reader selection shelf hook builds selection and active-highlight payloads', async ({ page }) => {
+  const shelf = await readerSelectionShelfSmoke(page)
+
+  expect(shelf.renderedText).toBe('true|true')
+  expect(shelf.clearEvents).toEqual(['true'])
+  expect(shelf.closeEvents).toEqual(['close'])
+  expect(shelf.invalidSelectionPayload).toBeNull()
+  expect(shelf.directSelectionPayload).toMatchObject({
+    anchorId: 'selected-anchor',
+    anchorKind: 'paragraph',
+    blockId: 'selected-block',
+    createdAt: 12345,
+    documentOccurrence: 6,
+    endOffset: 13,
+    endReadableIndex: 5,
+    headingPath: 'Active Heading',
+    occurrence: 2,
+    readableIndex: 4,
+    sourceName: 'Reader Paper',
+    sourcePath: '/tmp/reader.md',
+    startOffset: 3,
+    startReadableIndex: 4,
+    text: 'Selected text',
+  })
+  expect(shelf.directHighlightPayload).toMatchObject({
+    anchorId: 'highlight-anchor',
+    anchorKind: 'paragraph',
+    blockId: 'highlight-block',
+    createdAt: 23456,
+    documentOccurrence: 3,
+    endOffset: 9,
+    endReadableIndex: 4,
+    headingPath: 'Highlight Heading',
+    occurrence: 1,
+    readableIndex: 2,
+    sourceName: 'Reader Paper',
+    sourcePath: '/tmp/reader.md',
+    startOffset: 5,
+    startReadableIndex: 2,
+    text: 'Highlight text',
+  })
+  expect(shelf.events).toEqual([
+    { ...shelf.directSelectionPayload, createdAt: 34567 },
+    { ...shelf.directHighlightPayload, createdAt: 34567 },
   ])
 })
 

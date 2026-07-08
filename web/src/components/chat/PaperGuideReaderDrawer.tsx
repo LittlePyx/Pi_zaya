@@ -20,6 +20,7 @@ import {
 import { useReaderCitationPopover } from './useReaderCitationPopover'
 import { useReaderCitationShelf } from './useReaderCitationShelf'
 import { useReaderBlockShelf } from './useReaderBlockShelf'
+import { useReaderSelectionShelf } from './useReaderSelectionShelf'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -220,6 +221,9 @@ export function PaperGuideReaderDrawer({
     highlightId: string
     text: string
   } | null>(null)
+  const closeHighlightBubble = useCallback(() => {
+    setHighlightBubble(null)
+  }, [setHighlightBubble])
   const {
     close: closeReaderCitationPopover,
     detail: citationPopoverDetail,
@@ -978,33 +982,27 @@ export function PaperGuideReaderDrawer({
     sourceLabel,
   })
 
-  const addSelectionToShelf = () => {
-    const selected = selectionBubble
-    const text = String(selected?.text || selection || '').trim()
-    if (!selected || !text || !onAddSelectionToShelf) return
-    onAddSelectionToShelf({
-      text,
-      sourcePath,
-      sourceName: title,
-      headingPath: String(activeHeadingPath || '').trim() || undefined,
-      blockId: String(selected.blockId || activeBlockId || '').trim() || undefined,
-      anchorId: String(selected.anchorId || activeAnchorId || '').trim() || undefined,
-      anchorKind: String(activeAnchorKind || '').trim() || undefined,
-      startOffset: selected.startOffset >= 0 ? selected.startOffset : undefined,
-      endOffset: selected.endOffset > selected.startOffset ? selected.endOffset : undefined,
-      occurrence: Number.isFinite(Number(selected.occurrence)) ? Number(selected.occurrence) : undefined,
-      readableIndex: selected.readableIndex >= 0 ? selected.readableIndex : undefined,
-      documentOccurrence: selected.documentOccurrence >= 0 ? selected.documentOccurrence : undefined,
-      startReadableIndex: selected.startReadableIndex >= 0 ? selected.startReadableIndex : undefined,
-      endReadableIndex: selected.endReadableIndex >= 0 ? selected.endReadableIndex : undefined,
-      createdAt: Date.now(),
-    })
-    clearSelectionState(true)
-  }
-
   const activeHighlightAction = highlightBubble
     ? sessionHighlights.find((item) => item.id === highlightBubble.highlightId) || null
     : null
+  const {
+    addActiveHighlightToShelf,
+    addSelectionToShelf,
+    canAddSelectionToShelf,
+  } = useReaderSelectionShelf({
+    activeAnchorId,
+    activeAnchorKind,
+    activeBlockId,
+    activeHeadingPath,
+    activeHighlight: activeHighlightAction,
+    onAddSelectionToShelf,
+    onClearSelection: clearSelectionState,
+    onCloseHighlight: closeHighlightBubble,
+    selection,
+    selectionBubble,
+    sourceName: title,
+    sourcePath,
+  })
 
   const setActiveHighlightFeedback = useCallback((feedback: 'useful' | 'needs_check') => {
     const item = activeHighlightAction
@@ -1029,32 +1027,6 @@ export function PaperGuideReaderDrawer({
     onAppendSelection(`${sourceLine}${quoted}\n\n`)
     setHighlightBubble(null)
   }
-
-  const addActiveHighlightToShelf = activeHighlightAction && onAddSelectionToShelf
-    ? () => {
-      const item = activeHighlightAction
-      const text = String(item.text || '').trim()
-      if (!text) return
-      onAddSelectionToShelf({
-        text,
-        sourcePath,
-        sourceName: title,
-        headingPath: String(item.headingPath || activeHeadingPath || '').trim() || undefined,
-        blockId: String(item.blockId || activeBlockId || '').trim() || undefined,
-        anchorId: String(item.anchorId || activeAnchorId || '').trim() || undefined,
-        anchorKind: String(activeAnchorKind || '').trim() || undefined,
-        startOffset: Number.isFinite(Number(item.startOffset ?? -1)) && Number(item.startOffset) >= 0 ? Number(item.startOffset) : undefined,
-        endOffset: Number.isFinite(Number(item.endOffset ?? -1)) && Number(item.endOffset) >= 0 ? Number(item.endOffset) : undefined,
-        occurrence: Number.isFinite(Number(item.occurrence)) ? Number(item.occurrence) : undefined,
-        readableIndex: Number.isFinite(Number(item.readableIndex ?? -1)) && Number(item.readableIndex) >= 0 ? Number(item.readableIndex) : undefined,
-        documentOccurrence: Number.isFinite(Number(item.documentOccurrence ?? -1)) && Number(item.documentOccurrence) >= 0 ? Number(item.documentOccurrence) : undefined,
-        startReadableIndex: Number.isFinite(Number(item.startReadableIndex ?? -1)) && Number(item.startReadableIndex) >= 0 ? Number(item.startReadableIndex) : undefined,
-        endReadableIndex: Number.isFinite(Number(item.endReadableIndex ?? -1)) && Number(item.endReadableIndex) >= 0 ? Number(item.endReadableIndex) : undefined,
-        createdAt: Date.now(),
-      })
-      setHighlightBubble(null)
-    }
-    : undefined
 
   const removeActiveHighlight = () => {
     if (!activeHighlightAction) return
@@ -1258,7 +1230,7 @@ export function PaperGuideReaderDrawer({
       highlightBubble={highlightBubble}
       activeHighlightFeedback={String(activeHighlightAction?.feedback || '')}
       onToggleSelectionHighlight={toggleSelectionHighlight}
-      onAddSelectionToShelf={onAddSelectionToShelf ? addSelectionToShelf : undefined}
+      onAddSelectionToShelf={canAddSelectionToShelf ? addSelectionToShelf : undefined}
       onRemoveActiveHighlight={removeActiveHighlight}
       onAddActiveHighlightToShelf={addActiveHighlightToShelf}
       onSetActiveHighlightFeedback={onUpdateSessionHighlight ? setActiveHighlightFeedback : undefined}
