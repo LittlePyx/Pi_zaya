@@ -235,6 +235,14 @@ async function citationPopoverStateSmoke(page: Page) {
   })
 }
 
+async function citationPopoverPreviewSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runCitationPopoverPreviewSmoke } = await import('/src/testing/citationPopoverPreviewSmoke.ts')
+    return runCitationPopoverPreviewSmoke()
+  })
+}
+
 async function citationPopoverFrameModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -1022,6 +1030,18 @@ test('citation popover state hook opens, merges metadata, and closes predictably
       y: null,
     },
   ])
+})
+
+test('citation popover preview hook manages hover timers and polish retries', async ({ page }) => {
+  const preview = await citationPopoverPreviewSmoke(page)
+
+  expect(preview.events).toEqual([
+    'open',
+    'close',
+    'polish:preview-key:10.1000/preview',
+  ])
+  expect(preview.fetchCalls).toBe(2)
+  expect(preview.polishWaitSeconds).toEqual([4, 4])
 })
 
 test('citation popover view model assembles route-specific frame, status, and cards', async ({ page }) => {

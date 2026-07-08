@@ -6,6 +6,7 @@ import { MarkdownRenderer } from './MarkdownRenderer'
 import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
 import { CiteShelf } from './CiteShelf'
+import { useCitationPopoverPreview } from './useCitationPopoverPreview'
 import { useCitationPopoverState } from './useCitationPopoverState'
 import type {
   ReaderLocateResult,
@@ -286,11 +287,9 @@ export function MessageList({
     setGuideLoading: setPopoverGuideLoading,
     setLoading: setPopoverLoading,
   } = useCitationPopoverState()
+  const citationPreview = useCitationPopoverPreview()
   const [evidenceDrawerSource, setEvidenceDrawerSource] = useState<AnswerSourceNoticeViewModel | null>(null)
   const [evidenceDrawerCiteDetails, setEvidenceDrawerCiteDetails] = useState<CiteDetail[]>([])
-  const citationHoverOpenTimerRef = useRef<number | null>(null)
-  const citationHoverCloseTimerRef = useRef<number | null>(null)
-  const citationPolishRetryTimerRef = useRef<number | null>(null)
   const citationPolishPrewarmKeysRef = useRef(new Set<string>())
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
@@ -458,15 +457,6 @@ export function MessageList({
 
   useEffect(() => {
     return () => {
-      if (citationHoverOpenTimerRef.current !== null) {
-        window.clearTimeout(citationHoverOpenTimerRef.current)
-      }
-      if (citationHoverCloseTimerRef.current !== null) {
-        window.clearTimeout(citationHoverCloseTimerRef.current)
-      }
-      if (citationPolishRetryTimerRef.current !== null) {
-        window.clearTimeout(citationPolishRetryTimerRef.current)
-      }
       if (shelfAutoRepairTimerRef.current !== null) {
         window.clearTimeout(shelfAutoRepairTimerRef.current)
       }
@@ -1530,21 +1520,6 @@ export function MessageList({
     }
   }, [repairShelfItemsMetadataBatch, shelfItems, shelfRepairLoadingKey])
 
-  const clearCitationHoverTimers = () => {
-    if (citationHoverOpenTimerRef.current !== null) {
-      window.clearTimeout(citationHoverOpenTimerRef.current)
-      citationHoverOpenTimerRef.current = null
-    }
-    if (citationHoverCloseTimerRef.current !== null) {
-      window.clearTimeout(citationHoverCloseTimerRef.current)
-      citationHoverCloseTimerRef.current = null
-    }
-    if (citationPolishRetryTimerRef.current !== null) {
-      window.clearTimeout(citationPolishRetryTimerRef.current)
-      citationPolishRetryTimerRef.current = null
-    }
-  }
-
   const mergeCitationMetaForItemKey = (itemKey: string, metas: Array<Record<string, unknown>>) => {
     const usable = mergePopoverDetailForItemKey(itemKey, metas)
     if (!usable.length) return
@@ -1562,32 +1537,8 @@ export function MessageList({
     }))
   }
 
-  const requestCitationCardPolish = (detail: CiteDetail, itemKey: string, attempt = 0) => {
-    const waitSeconds = attempt <= 1 ? 4 : 2
-    referencesApi.citationCardPolishCached(detail as unknown as Record<string, unknown>, waitSeconds)
-      .then((meta) => {
-        if (activePopoverRequestKeyRef.current !== itemKey) return
-        const status = String(meta?.citation_card_polish_status || meta?.citationCardPolishStatus || '').trim().toLowerCase()
-        if (status === 'pending') {
-          if (attempt >= 8) return
-          if (citationPolishRetryTimerRef.current !== null) {
-            window.clearTimeout(citationPolishRetryTimerRef.current)
-          }
-          citationPolishRetryTimerRef.current = window.setTimeout(() => {
-            citationPolishRetryTimerRef.current = null
-            requestCitationCardPolish(detail, itemKey, attempt + 1)
-          }, 900 + attempt * 700)
-          return
-        }
-        mergeCitationMetaForItemKey(itemKey, [meta])
-      })
-      .catch(() => {
-        // The card already has deterministic fallback text; LLM polish is a best-effort enhancement.
-      })
-  }
-
   const showCitationAt = (detail: CiteDetail, position: { x: number; y: number }, pinned: boolean) => {
-    clearCitationHoverTimers()
+    citationPreview.clearTimers()
     if (!pinned && popoverPinned) return
     const sourcePath = String(detail.sourcePath || '').trim()
     const isInPaperReference = Boolean(detail.isInpaper)
@@ -1602,7 +1553,12 @@ export function MessageList({
         : (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
     )
     if (shouldRequestCitationCardPolish(detail)) {
-      requestCitationCardPolish(detail, itemKey)
+      citationPreview.requestPolish({
+        activeRequestKeyRef: activePopoverRequestKeyRef,
+        detail,
+        itemKey,
+        onMeta: mergeCitationMetaForItemKey,
+      })
     }
     if (!shouldFetchCitationMeta && !shouldFetchBibliometrics) {
       setPopoverLoading(false)
@@ -1639,47 +1595,22 @@ export function MessageList({
   const previewCitation = (detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
     if (popoverPinned) return
     const position = { x: event.clientX, y: event.clientY }
-    if (citationHoverOpenTimerRef.current !== null) {
-      window.clearTimeout(citationHoverOpenTimerRef.current)
-    }
-    if (citationHoverCloseTimerRef.current !== null) {
-      window.clearTimeout(citationHoverCloseTimerRef.current)
-      citationHoverCloseTimerRef.current = null
-    }
-    citationHoverOpenTimerRef.current = window.setTimeout(() => {
-      citationHoverOpenTimerRef.current = null
+    citationPreview.schedulePreviewOpen(() => {
       showCitationAt(detail, position, false)
-    }, 180)
+    })
   }
 
   const scheduleCitationPreviewClose = () => {
     if (popoverPinned) return
-    if (citationHoverOpenTimerRef.current !== null) {
-      window.clearTimeout(citationHoverOpenTimerRef.current)
-      citationHoverOpenTimerRef.current = null
-    }
-    if (citationHoverCloseTimerRef.current !== null) {
-      window.clearTimeout(citationHoverCloseTimerRef.current)
-    }
-    citationHoverCloseTimerRef.current = window.setTimeout(() => {
-      citationHoverCloseTimerRef.current = null
-      if (citationPolishRetryTimerRef.current !== null) {
-        window.clearTimeout(citationPolishRetryTimerRef.current)
-        citationPolishRetryTimerRef.current = null
-      }
-      closeCitationPopoverState()
-    }, 260)
+    citationPreview.schedulePreviewClose(closeCitationPopoverState)
   }
 
   const keepCitationPreviewOpen = () => {
-    if (citationHoverCloseTimerRef.current !== null) {
-      window.clearTimeout(citationHoverCloseTimerRef.current)
-      citationHoverCloseTimerRef.current = null
-    }
+    citationPreview.keepPreviewOpen()
   }
 
   const closeCitationPopover = () => {
-    clearCitationHoverTimers()
+    citationPreview.clearTimers()
     closeCitationPopoverState()
   }
 
@@ -1823,7 +1754,7 @@ export function MessageList({
         title: `${S.timeline_guide_label} · ${sourceName}`,
       })
       message.success(S.reader_entered_guide)
-      clearCitationHoverTimers()
+      citationPreview.clearTimers()
       closeCitationPopoverState()
     } catch (err) {
       message.error(err instanceof Error ? err.message : S.reader_create_guide_failed)
