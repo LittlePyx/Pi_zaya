@@ -24,6 +24,7 @@ import { useReaderHighlightActions } from './useReaderHighlightActions'
 import { useReaderHighlightMenu } from './useReaderHighlightMenu'
 import { useReaderHighlightUndoShortcut } from './useReaderHighlightUndoShortcut'
 import { useReaderEquationShelfActions } from './useReaderEquationShelfActions'
+import { useReaderReturnToEvidence } from './useReaderReturnToEvidence'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -32,16 +33,10 @@ import type {
   ReaderSessionHighlight,
 } from './reader/readerTypes'
 import {
-  buildHighlightQueries,
   candidateDisplayLabel,
   candidateIdentityKey,
   candidateVisibilityKey,
-  clearReaderFocusClasses,
-  closestReadableBlock,
   compactLocateHintLabel,
-  resolveDirectTargetNode,
-  resolveStickyHighlightTarget,
-  scrollReaderTargetIntoView,
 } from './reader/readerDomUtils'
 import { useT } from '../../i18n'
 export type {
@@ -553,37 +548,19 @@ export function PaperGuideReaderDrawer({
     expectsEquationBinding,
   })
 
-  const returnToEvidence = () => {
-    const root = contentRef.current
-    if (!root) return
-    const resultBlockId = String(locateResult?.blockId || activeBlockId || '').trim()
-    const resultAnchorId = String(locateResult?.anchorId || activeAnchorId || '').trim()
-    const resultAnchorKind = String(locateResult?.anchorKind || activeAnchorKind || '').trim().toLowerCase()
-    const seed = String(activeHighlightSnippet || activeFocusSnippet || '').trim()
-    const direct = resolveDirectTargetNode(root, readerBlocks, {
-      blockId: resultBlockId,
-      anchorId: resultAnchorId,
-      anchorKind: resultAnchorKind,
-    })
-    const target = closestReadableBlock(direct.target) || direct.target || resolveStickyHighlightTarget(root, readerBlocks, {
-      blockId: resultBlockId,
-      anchorId: resultAnchorId,
-      anchorKind: resultAnchorKind,
-      anchorNumber: activeAnchorNumber,
-      headingPath: String(locateResult?.headingPath || activeHeadingPath || '').trim(),
-      highlightSeed: seed,
-      highlightQueries: buildHighlightQueries(seed, {
-        anchorKind: resultAnchorKind,
-        anchorNumber: activeAnchorNumber,
-      }),
-      relatedBlockIds,
-      strictLocate: false,
-    })
-    if (!target) return
-    clearReaderFocusClasses(root)
-    target.classList.add('kb-reader-focus')
-    scrollReaderTargetIntoView(root, target, { force: true })
-  }
+  const returnToEvidence = useReaderReturnToEvidence({
+    activeAnchorId,
+    activeAnchorKind,
+    activeAnchorNumber,
+    activeBlockId,
+    activeFocusSnippet,
+    activeHeadingPath,
+    activeHighlightSnippet,
+    contentRef,
+    locateResult,
+    readerBlocks,
+    relatedBlockIds,
+  })
 
   useEffect(() => {
     if (!open || !locateResult || !onLocateResult) return

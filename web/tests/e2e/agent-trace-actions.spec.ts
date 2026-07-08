@@ -275,6 +275,14 @@ async function readerEquationShelfActionsSmoke(page: Page) {
   })
 }
 
+async function readerReturnToEvidenceSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderReturnToEvidenceSmoke } = await import('/src/testing/readerReturnToEvidenceSmoke.ts')
+    return runReaderReturnToEvidenceSmoke()
+  })
+}
+
 async function readerSelectionShelfSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1407,6 +1415,18 @@ test('reader equation shelf hook injects equation shelf buttons and cleans up', 
   expect(shelf.events).toEqual([
     { ...shelf.directPayload, createdAt: 67890 },
   ])
+})
+
+test('reader return-to-evidence hook resolves, focuses, and scrolls evidence', async ({ page }) => {
+  const result = await readerReturnToEvidenceSmoke(page)
+
+  expect(result.directTargetId).toBe('direct-readable')
+  expect(result.fallbackTargetId).toBe('fallback-readable')
+  expect(result.missingTarget).toBe(true)
+  expect(result.previousFocusCleared).toBe(true)
+  expect(result.focusedIds).toEqual(['direct-readable'])
+  expect(result.renderedText).toBe('ready')
+  expect(result.scrollCalls).toBe(1)
 })
 
 test('reader selection shelf hook builds selection and active-highlight payloads', async ({ page }) => {

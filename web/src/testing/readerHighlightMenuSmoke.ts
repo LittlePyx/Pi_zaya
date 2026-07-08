@@ -146,6 +146,7 @@ export async function runReaderHighlightMenuSmoke(): Promise<ReaderHighlightMenu
     readSetHighlights()([])
   })
   await nextFrame()
+  await nextFrame()
   const bubbleAfterStale = readController().highlightBubble
 
   const renderedText = host.textContent || ''
