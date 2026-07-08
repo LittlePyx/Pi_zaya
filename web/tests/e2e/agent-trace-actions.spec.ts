@@ -300,6 +300,62 @@ async function systemBLiteratureCardModel(page: Page, input: {
   }, input)
 }
 
+async function systemBSourcePanelsModel(page: Page, input: {
+  detail: Record<string, unknown>
+  S: Record<string, string>
+  isSystemB?: boolean
+  locatorSection?: Record<string, unknown>
+  cardReferenceLabel?: string
+  cardSupportLabel?: string
+  cardQualityFlags?: string[]
+  sourcePaperText?: string
+  headingPath?: string
+  pageLabel?: string
+  badgeLabel?: string
+  doiLabel?: string
+  systemBTitle?: string
+  systemBTitleMissing?: boolean
+  headerSubtitle?: string
+  metrics?: string[]
+  explicitSupportText?: string
+  displaySource?: string
+  systemBContextSource?: string
+  systemBReferenceText?: string
+  systemBExplicitReferenceText?: string
+  paperOverviewText?: string
+  citationContextText?: string
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (modelInput) => {
+    const { buildSystemBSourcePanelsModel } = await import('/src/components/chat/citationPopoverSystemBSourcePanels.ts')
+    return buildSystemBSourcePanelsModel({
+      detail: modelInput.detail as never,
+      S: modelInput.S as never,
+      isSystemB: modelInput.isSystemB ?? true,
+      locatorSection: modelInput.locatorSection as never,
+      cardReferenceLabel: modelInput.cardReferenceLabel || '',
+      cardSupportLabel: modelInput.cardSupportLabel || '',
+      cardQualityFlags: modelInput.cardQualityFlags || [],
+      sourcePaperText: modelInput.sourcePaperText || '',
+      headingPath: modelInput.headingPath || '',
+      pageLabel: modelInput.pageLabel || '',
+      badgeLabel: modelInput.badgeLabel || '',
+      doiLabel: modelInput.doiLabel || '',
+      systemBTitle: modelInput.systemBTitle || '',
+      systemBTitleMissing: Boolean(modelInput.systemBTitleMissing),
+      headerSubtitle: modelInput.headerSubtitle || '',
+      metrics: modelInput.metrics || [],
+      explicitSupportText: modelInput.explicitSupportText || '',
+      displaySource: modelInput.displaySource || String(modelInput.detail.sourceName || ''),
+      systemBContextSource: modelInput.systemBContextSource || '',
+      systemBReferenceText: modelInput.systemBReferenceText || '',
+      systemBExplicitReferenceText: modelInput.systemBExplicitReferenceText || '',
+      paperOverviewText: modelInput.paperOverviewText || '',
+      citationContextText: modelInput.citationContextText || '',
+    })
+  }, input)
+}
+
 async function assistantMessageNoticeViewModel(page: Page, input: {
   message: Record<string, unknown>
   lowConfidenceMeta: Record<string, unknown> | null
@@ -967,6 +1023,63 @@ test('citation popover status model derives binding, support, and warning state'
   expect(systemB.bindingState).toBeNull()
   expect(systemB.explicitSupportText).toBe('')
   expect(systemB.supportText).toBe('Bibliography link from current paper.')
+})
+
+test('citation popover System B source panels derive clean locations and missing-title references', async ({ page }) => {
+  const S = {
+    cite_location_current: 'Current paper location',
+    cite_note: 'Note',
+    cite_original_reference_entry: 'Original reference entry',
+    cite_reference_entry: 'Reference entry',
+    cite_upstream_reference: 'Upstream reference',
+  }
+  const referenceText = '[12] Doe, J. Upstream imaging method. IEEE Transactions on Imaging, 2024. doi:10.1000/example.'
+
+  const strong = await systemBSourcePanelsModel(page, {
+    detail: {
+      sourceName: 'Current Paper',
+    },
+    S,
+    locatorSection: {
+      text: 'Current Paper / Related Work / p. 2',
+    },
+    sourcePaperText: 'Current Paper',
+    systemBContextSource: 'abstract',
+    systemBReferenceText: referenceText,
+    systemBExplicitReferenceText: referenceText,
+    systemBTitle: 'Upstream imaging method',
+    headerSubtitle: 'IEEE Transactions on Imaging, 2024',
+    metrics: ['IF 5.0'],
+    explicitSupportText: 'The current paper cites this method as related work.',
+  })
+  const weak = await systemBSourcePanelsModel(page, {
+    detail: {
+      sourceName: 'Current Paper',
+      shelfOrigin: 'reader_references',
+    },
+    S,
+    cardQualityFlags: ['weak_citation_context'],
+    sourcePaperText: 'Current Paper',
+    headingPath: 'Related Work',
+    pageLabel: 'p. 2',
+    badgeLabel: '[R12]',
+    systemBContextSource: 'answer_context',
+    systemBReferenceText: referenceText,
+    systemBExplicitReferenceText: referenceText,
+    systemBTitle: 'Upstream reference',
+    systemBTitleMissing: true,
+  })
+
+  expect(strong.showLocation).toBe(true)
+  expect(strong.locationText).toBe('Related Work / p. 2')
+  expect(strong.showReference).toBe(true)
+  expect(strong.supportText).toBe('The current paper cites this method as related work.')
+  expect(strong.showSupport).toBe(false)
+
+  expect(weak.showLocation).toBe(false)
+  expect(weak.showReference).toBe(true)
+  expect(weak.referenceLabel).toBe('Original reference entry')
+  expect(weak.referencePreview).toContain('Upstream imaging method')
 })
 
 test('citation popover System B model suppresses weak locations while keeping missing-title references', async ({ page }) => {
