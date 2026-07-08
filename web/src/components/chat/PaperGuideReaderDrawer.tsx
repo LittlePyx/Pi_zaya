@@ -21,6 +21,7 @@ import { useReaderCitationPopover } from './useReaderCitationPopover'
 import { useReaderCitationShelf } from './useReaderCitationShelf'
 import { useReaderBlockShelf } from './useReaderBlockShelf'
 import { useReaderSelectionShelf } from './useReaderSelectionShelf'
+import { useReaderHighlightActions } from './useReaderHighlightActions'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -39,7 +40,6 @@ import {
   orderedEquationReaderBlocks,
   resolveDirectTargetNode,
   resolveStickyHighlightTarget,
-  sameHighlightTarget,
   scrollReaderTargetIntoView,
 } from './reader/readerDomUtils'
 import { useT } from '../../i18n'
@@ -59,14 +59,6 @@ interface LocateMetaBadge {
   title?: string
   tone?: LocateBadgeTone
   testId?: string
-}
-
-type HighlightUndoAction =
-  | { kind: 'remove'; highlight: ReaderSessionHighlight }
-  | { kind: 'restore'; highlight: ReaderSessionHighlight }
-
-function sameHighlightUndoAction(left: HighlightUndoAction, right: HighlightUndoAction): boolean {
-  return left.kind === right.kind && String(left.highlight.id || '').trim() === String(right.highlight.id || '').trim()
 }
 
 function isEditableUndoTarget(target: EventTarget | null): boolean {
@@ -212,7 +204,6 @@ export function PaperGuideReaderDrawer({
 }: Props) {
   const S = useT()
   const contentRef = useRef<HTMLDivElement>(null)
-  const highlightUndoStackRef = useRef<HighlightUndoAction[]>([])
   const [drawerReady, setDrawerReady] = useState(false)
   const [altChangeSource, setAltChangeSource] = useState<'system' | 'manual'>('system')
   const [highlightBubble, setHighlightBubble] = useState<{
@@ -854,97 +845,36 @@ export function PaperGuideReaderDrawer({
   ])
 
   const sourceLabel = [title, activeHeadingPath].filter(Boolean).join(' / ')
-  const enrichSessionHighlight = useCallback((highlight: ReaderSessionHighlight): ReaderSessionHighlight => {
-    const now = Date.now()
-    const rawMessageId = highlight.messageId ?? messageId
-    const nextMessageId = rawMessageId == null || !Number.isFinite(Number(rawMessageId))
-      ? undefined
-      : Number(rawMessageId)
-    const rawLocateRequestId = highlight.locateRequestId ?? locateRequestId
-    const nextLocateRequestId = rawLocateRequestId == null || !Number.isFinite(Number(rawLocateRequestId)) || Number(rawLocateRequestId) <= 0
-      ? undefined
-      : Number(rawLocateRequestId)
-    return {
-      ...highlight,
-      noteKind: highlight.noteKind || 'highlight',
-      sourcePath: highlight.sourcePath || sourcePath || undefined,
-      sourceName: highlight.sourceName || title || sourceName || undefined,
-      conversationId: highlight.conversationId || String(conversationId || '').trim() || undefined,
-      messageId: nextMessageId,
-      locateRequestId: nextLocateRequestId,
-      locateFeedbackKey: highlight.locateFeedbackKey || locateFeedbackKey || undefined,
-      headingPath: highlight.headingPath || activeHeadingPath || undefined,
-      createdAt: Number.isFinite(Number(highlight.createdAt)) ? Number(highlight.createdAt) : now,
-      updatedAt: now,
-    }
-  }, [activeHeadingPath, conversationId, locateFeedbackKey, locateRequestId, messageId, sourceName, sourcePath, title])
-
-  const applyHighlightUndoAction = useCallback((action: HighlightUndoAction): boolean => {
-    const highlightId = String(action.highlight.id || '').trim()
-    if (!highlightId) return false
-    if (action.kind === 'remove') {
-      onRemoveSessionHighlight?.(highlightId)
-    } else {
-      onAddSessionHighlight?.(action.highlight)
-    }
-    setHighlightBubble(null)
-    return true
-  }, [onAddSessionHighlight, onRemoveSessionHighlight, setHighlightBubble])
-
-  const undoHighlightAction = useCallback((specificAction?: HighlightUndoAction): boolean => {
-    let action = specificAction || highlightUndoStackRef.current.pop()
-    if (specificAction) {
-      const idx = [...highlightUndoStackRef.current]
-        .reverse()
-        .findIndex((item) => sameHighlightUndoAction(item, specificAction))
-      if (idx < 0) return false
-      const removeAt = highlightUndoStackRef.current.length - 1 - idx
-      action = highlightUndoStackRef.current[removeAt]
-      highlightUndoStackRef.current.splice(removeAt, 1)
-    }
-    if (!action) return false
-    return applyHighlightUndoAction(action)
-  }, [applyHighlightUndoAction])
-
-  const addHighlightWithUndo = useCallback((highlight: ReaderSessionHighlight) => {
-    const nextHighlight = enrichSessionHighlight(highlight)
-    const nextId = String(nextHighlight?.id || '').trim()
-    const alreadyExists = sessionHighlights.some((item) => (
-      String(item.id || '').trim() === nextId || sameHighlightTarget(item, nextHighlight)
-    ))
-    if (alreadyExists) return
-    onAddSessionHighlight?.(nextHighlight)
-    highlightUndoStackRef.current.push({ kind: 'remove', highlight: nextHighlight })
-  }, [enrichSessionHighlight, onAddSessionHighlight, sessionHighlights])
-
-  const removeHighlightWithUndo = useCallback((highlightId: string) => {
-    const targetId = String(highlightId || '').trim()
-    if (!targetId) return
-    const removed = sessionHighlights.find((item) => item.id === targetId) || null
-    onRemoveSessionHighlight?.(targetId)
-    setHighlightBubble(null)
-    if (removed && onAddSessionHighlight) {
-      const undoAction: HighlightUndoAction = { kind: 'restore', highlight: removed }
-      highlightUndoStackRef.current.push(undoAction)
-      message.open({
-        type: 'success',
-        content: (
-          <span className="kb-reader-toast-content">
-            <span>{S.reader_highlight_removed || 'Highlight removed'}</span>
-            <button
-              type="button"
-              className="kb-reader-toast-action"
-              onClick={() => undoHighlightAction(undoAction)}
-            >
-              {S.reader_undo || 'Undo'}
-            </button>
-          </span>
-        ),
-      })
-      return
-    }
-    message.success(S.reader_highlight_removed || 'Highlight removed')
-  }, [S, onAddSessionHighlight, onRemoveSessionHighlight, sessionHighlights, setHighlightBubble, undoHighlightAction])
+  const activeHighlightAction = highlightBubble
+    ? sessionHighlights.find((item) => item.id === highlightBubble.highlightId) || null
+    : null
+  const {
+    addHighlightWithUndo,
+    appendActiveHighlight,
+    clearHighlightUndoStack,
+    removeActiveHighlight,
+    removeHighlightWithUndo,
+    setActiveHighlightFeedback,
+    undoHighlightAction,
+  } = useReaderHighlightActions({
+    activeHeadingPath,
+    activeHighlight: activeHighlightAction,
+    conversationId,
+    labels: S,
+    locateFeedbackKey,
+    locateRequestId,
+    messageId,
+    onAddSessionHighlight,
+    onAppendSelection,
+    onCloseHighlight: closeHighlightBubble,
+    onRemoveSessionHighlight,
+    onUpdateSessionHighlight,
+    sessionHighlights,
+    sourceLabel,
+    sourceName,
+    sourcePath,
+    title,
+  })
 
   const {
     outlineItems,
@@ -982,9 +912,6 @@ export function PaperGuideReaderDrawer({
     sourceLabel,
   })
 
-  const activeHighlightAction = highlightBubble
-    ? sessionHighlights.find((item) => item.id === highlightBubble.highlightId) || null
-    : null
   const {
     addActiveHighlightToShelf,
     addSelectionToShelf,
@@ -1003,35 +930,6 @@ export function PaperGuideReaderDrawer({
     sourceName: title,
     sourcePath,
   })
-
-  const setActiveHighlightFeedback = useCallback((feedback: 'useful' | 'needs_check') => {
-    const item = activeHighlightAction
-    if (!item || !onUpdateSessionHighlight) return
-    const nextFeedback = item.feedback === feedback ? undefined : feedback
-    const updated = enrichSessionHighlight({
-      ...item,
-      feedback: nextFeedback,
-      feedbackAt: nextFeedback ? Date.now() : undefined,
-    })
-    onUpdateSessionHighlight(updated)
-    message.success(S.reader_feedback_saved || 'Evidence note updated')
-    setHighlightBubble(null)
-  }, [S.reader_feedback_saved, activeHighlightAction, enrichSessionHighlight, onUpdateSessionHighlight, setHighlightBubble])
-
-  const appendActiveHighlight = () => {
-    const item = activeHighlightAction
-    const text = String(item?.text || '').trim()
-    if (!item || !text) return
-    const quoted = text.split('\n').map((line) => `> ${line}`).join('\n')
-    const sourceLine = sourceLabel ? `> Source: ${sourceLabel}\n` : ''
-    onAppendSelection(`${sourceLine}${quoted}\n\n`)
-    setHighlightBubble(null)
-  }
-
-  const removeActiveHighlight = () => {
-    if (!activeHighlightAction) return
-    removeHighlightWithUndo(activeHighlightAction.id)
-  }
 
   const openHighlightMenuFromClick = (event: MouseEvent<HTMLDivElement>) => {
     const root = contentRef.current
@@ -1076,9 +974,9 @@ export function PaperGuideReaderDrawer({
   }, [highlightBubble, sessionHighlights])
 
   useEffect(() => {
-    highlightUndoStackRef.current = []
-    setHighlightBubble(null)
-  }, [open, sourcePath])
+    clearHighlightUndoStack()
+    closeHighlightBubble()
+  }, [clearHighlightUndoStack, closeHighlightBubble, open, sourcePath])
 
   useEffect(() => {
     if (!open) return undefined

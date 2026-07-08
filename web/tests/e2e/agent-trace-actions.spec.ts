@@ -275,6 +275,14 @@ async function readerSelectionShelfSmoke(page: Page) {
   })
 }
 
+async function readerHighlightActionsSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderHighlightActionsSmoke } = await import('/src/testing/readerHighlightActionsSmoke.ts')
+    return runReaderHighlightActionsSmoke()
+  })
+}
+
 async function citationPopoverMetadataSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1389,6 +1397,67 @@ test('reader selection shelf hook builds selection and active-highlight payloads
   expect(shelf.events).toEqual([
     { ...shelf.directSelectionPayload, createdAt: 34567 },
     { ...shelf.directHighlightPayload, createdAt: 34567 },
+  ])
+})
+
+test('reader highlight actions hook preserves undo, feedback, and ask-again actions', async ({ page }) => {
+  const actions = await readerHighlightActionsSmoke(page)
+
+  expect(actions.renderedText).toBe('ready')
+  expect(actions.sameUndoMatch).toBe(true)
+  expect(actions.differentUndoMatch).toBe(false)
+  expect(actions.undoAfterClear).toBe(false)
+  expect(actions.directEnriched).toMatchObject({
+    conversationId: 'conv-direct',
+    createdAt: 12345,
+    headingPath: 'Direct Heading',
+    id: 'direct',
+    locateFeedbackKey: 'locate-direct',
+    locateRequestId: 77,
+    messageId: 43,
+    noteKind: 'highlight',
+    sourceName: 'Direct Title',
+    sourcePath: '/tmp/direct.md',
+    text: 'Direct quote',
+    updatedAt: 12345,
+  })
+  expect(actions.addedHighlights[0]).toMatchObject({
+    conversationId: 'conv-reader',
+    createdAt: 45678,
+    headingPath: 'Active Heading',
+    id: 'new-highlight',
+    locateFeedbackKey: 'locate-key',
+    locateRequestId: 12,
+    messageId: 99,
+    noteKind: 'highlight',
+    sourceName: 'Reader Title',
+    sourcePath: '/tmp/reader.md',
+    text: 'New quote',
+    updatedAt: 45678,
+  })
+  expect(actions.addedHighlights[1]).toMatchObject({
+    id: 'existing',
+    text: 'Existing quote\nSecond line',
+  })
+  expect(actions.removedIds).toEqual(['new-highlight', 'existing', 'existing'])
+  expect(actions.feedbackUpdates).toHaveLength(1)
+  expect(actions.feedbackUpdates[0]).toMatchObject({
+    feedback: 'useful',
+    feedbackAt: 45678,
+    headingPath: 'Existing Heading',
+    id: 'existing',
+    sourceName: 'Reader Title',
+    sourcePath: '/tmp/reader.md',
+    updatedAt: 45678,
+  })
+  expect(actions.appendedText).toEqual([
+    '> Source: Reader Title / Active Heading\n> Existing quote\n> Second line\n\n',
+  ])
+  expect(actions.closeCount).toBe(6)
+  expect(actions.messageEvents).toEqual([
+    'open:success',
+    'success:Evidence note updated',
+    'open:success',
   ])
 })
 
