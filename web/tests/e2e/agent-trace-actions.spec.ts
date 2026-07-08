@@ -176,6 +176,22 @@ async function evidenceDrawerViewModel(page: Page, input: {
   }, input)
 }
 
+async function citationPopoverViewModel(page: Page, input: {
+  detail: Record<string, unknown>
+  S: Record<string, string>
+  loading?: boolean
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (modelInput) => {
+    const { buildCitationPopoverViewModel } = await import('/src/components/chat/citationPopoverViewModel.ts')
+    return buildCitationPopoverViewModel({
+      detail: modelInput.detail as never,
+      S: modelInput.S as never,
+      loading: Boolean(modelInput.loading),
+    })
+  }, input)
+}
+
 async function citationPopoverFrameModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -893,6 +909,117 @@ test('evidence drawer view model dedupes cards and derives compact source detail
   expect(drawer.subtitle).toBe('Local + external')
   expect(drawer.sourceDetail).toBe('Local citations are grounded in the knowledge base; external context may supplement uncited background.')
   expect(drawer.visibleDetails.map((detail) => detail.sourcePath)).toEqual(['/tmp/a.md', '/tmp/b.md'])
+})
+
+test('citation popover view model assembles route-specific frame, status, and cards', async ({ page }) => {
+  const S = {
+    cite_anchor_equation: 'Equation',
+    cite_anchor_figure: 'Figure',
+    cite_anchor_label: 'Anchor',
+    cite_anchor_paragraph: 'Paragraph',
+    cite_anchor_sentence: 'Sentence',
+    cite_anchor_table: 'Table',
+    cite_answer_point: 'Answer point',
+    cite_binding_candidate: 'Candidate evidence',
+    cite_binding_mismatch: 'Citation mismatch',
+    cite_candidate_support_default: 'Candidate support fallback',
+    cite_context: 'Context',
+    cite_context_summary: 'Context summary',
+    cite_current_paper_usage: 'Current paper usage',
+    cite_evidence_chain: 'Evidence chain',
+    cite_evidence_focus: 'Evidence focus',
+    cite_external_metadata_warning: 'External metadata differs',
+    cite_external_title: 'External title: {title}',
+    cite_frontend_candidate_reason: 'Frontend candidate fallback',
+    cite_kind_evidence: 'Answer evidence',
+    cite_kind_upstream: 'Upstream citation',
+    cite_loading: 'Loading',
+    cite_loading_summary: 'Loading summary',
+    cite_location_current: 'Current paper location',
+    cite_location_paper: 'Source paper',
+    cite_meta_author: 'Author',
+    cite_meta_published: 'Published',
+    cite_meta_source: 'Source',
+    cite_missing_reference_entry: 'Missing entry',
+    cite_missing_reference_entry_body: 'Reference {n} is missing from the converted bibliography.',
+    cite_note: 'Note',
+    cite_open_evidence: 'Open evidence',
+    cite_original_evidence: 'Original evidence',
+    cite_original_reference_entry: 'Original reference entry',
+    cite_paper_overview: 'Article overview',
+    cite_position: 'Position',
+    cite_read_locate: 'Read location',
+    cite_reference_entry: 'Reference entry',
+    cite_reliability: 'Reliability',
+    cite_summary_unavailable: 'Summary unavailable',
+    cite_system_b_support_default: 'Bibliography link from current paper.',
+    cite_trace_complete: 'Trace complete',
+    cite_trace_review: 'Trace needs review',
+    cite_upstream_reference: 'Upstream reference',
+    cite_upstream_role: 'Upstream role',
+  }
+  const systemA = await citationPopoverViewModel(page, {
+    detail: {
+      num: 3,
+      sourceName: 'Fixture Paper',
+      sourcePath: '/tmp/fixture.md',
+      title: 'Method',
+      headingPath: 'Method',
+      pageStart: 2,
+      pageEnd: 2,
+      anchorKind: 'sentence',
+      cardClaim: 'The method improves imaging stability.',
+      cardEvidence: 'The proposed calibration reduces drift across measurements.',
+      cardTakeaway: 'Calibration reduces drift across measurements.',
+      cardSupportExplanation: 'The retrieved sentence directly discusses calibration and drift.',
+      bindingStatus: 'mismatch',
+      bindingReason: 'retrieved evidence does not fully match the answer wording',
+      bindingOverlapTerms: ['calibration', 'drift'],
+      cardQualityFlags: ['binding_mismatch'],
+      cardFlow: ['retrieve', 'verify'],
+    },
+    S,
+  })
+  const systemB = await citationPopoverViewModel(page, {
+    detail: {
+      isInpaper: true,
+      num: 12,
+      linkedNums: [12],
+      sourceName: 'Current Paper',
+      sourcePath: '/tmp/current.md',
+      title: 'Upstream Work',
+      authors: 'Doe J.',
+      venue: 'Optics Letters',
+      year: '2022',
+      summarySource: 'abstract',
+      summaryLine: 'This upstream work introduces a calibrated imaging pipeline.',
+      citationContextSource: 'abstract',
+      cardReferenceEntry: '[12] Doe, J. Upstream Work. Optics Letters, 2022. doi:10.1000/upstream.',
+      cardContextSummary: 'The current paper cites this upstream work as calibration background.',
+      cardQualityFlags: [],
+    },
+    S,
+  })
+
+  expect(systemA.isSystemB).toBe(false)
+  expect(systemA.explainText).toBe('')
+  expect(systemA.frame.kindLabel).toBe('Answer evidence')
+  expect(systemA.frame.badgeLabel).toBe('#3')
+  expect(systemA.frame.primaryActionLabel).toBe('Open evidence')
+  expect(systemA.frame.canOpenReader).toBe(true)
+  expect(systemA.status.bindingState).toEqual({ label: 'Citation mismatch', tone: 'mismatch' })
+  expect(systemA.status.bindingOverlapText).toBe('calibration / drift')
+  expect(systemA.systemA.showSupport).toBe(true)
+  expect(systemA.systemA.contentCard.evidence).toContain('calibration reduces drift')
+
+  expect(systemB.isSystemB).toBe(true)
+  expect(systemB.frame.kindLabel).toBe('Upstream citation')
+  expect(systemB.frame.badgeLabel).toBe('[R12]')
+  expect(systemB.frame.primaryActionLabel).toBe('Read location')
+  expect(systemB.frame.compactMetaItems.map((item) => item.key)).toEqual(['authors', 'published'])
+  expect(systemB.systemB.paperOverviewText).toBe('This upstream work introduces a calibrated imaging pipeline.')
+  expect(systemB.systemB.takeawayText).toBe('The current paper cites this upstream work as calibration background.')
+  expect(systemB.systemB.showOverviewLoading).toBe(false)
 })
 
 test('citation popover localization maps known labels and body fallbacks', async ({ page }) => {

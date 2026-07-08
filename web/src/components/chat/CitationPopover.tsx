@@ -2,24 +2,13 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import type { CiteDetail } from './citationState'
-import {
-  citationCardView,
-} from './citationState'
 import { CitationPopoverActions } from './CitationPopoverActions'
 import { SystemAEvidenceCard, SystemBLiteratureCard } from './CitationPopoverCards'
 import { CitationPopoverFlowStrip } from './CitationPopoverFlowStrip'
 import { CitationPopoverHeader } from './CitationPopoverHeader'
 import { CitationPopoverMetaPanels } from './CitationPopoverMetaPanels'
 import { CitationPopoverStatusPanels } from './CitationPopoverStatusPanels'
-import {
-  compact,
-  looksNarrativeMetadataText,
-} from './citationPopoverUtils'
-import { buildCitationPopoverFrameModel } from './citationPopoverFrameModel'
-import { buildCitationPopoverLocalizers } from './citationPopoverLocalization'
-import { buildCitationPopoverStatusModel } from './citationPopoverStatusModel'
-import { buildSystemAEvidenceCardModel } from './citationPopoverSystemA'
-import { buildSystemBLiteratureCardModel } from './citationPopoverSystemB'
+import { buildCitationPopoverViewModel } from './citationPopoverViewModel'
 
 import { useT } from '../../i18n'
 
@@ -59,7 +48,6 @@ export function CitationPopover({
   const S = useT()
   const ref = useRef<HTMLDivElement>(null)
   const [style, setStyle] = useState<{ left: number; top: number } | null>(null)
-  const { localizeKnownBody, localizeKnownLabel } = buildCitationPopoverLocalizers(S)
 
   useEffect(() => {
     if (!detail) return
@@ -98,88 +86,17 @@ export function CitationPopover({
 
   if (!detail || !position) return null
 
-  const isSystemB = Boolean(detail.isInpaper)
-  const view = citationCardView(detail)
-  const viewSection = (id: string) => view.sections.find((item) => item.id === id)
-  const takeawaySection = viewSection('takeaway')
-  const claimSection = viewSection('claim')
-  const locatorSection = viewSection('locator')
-  const contextSummarySection = viewSection('context_summary')
-  const evidenceSection = viewSection('evidence')
-  const referenceSection = viewSection('reference')
-  const supportSection = viewSection('support')
-  const warningSection = viewSection('warning')
-  const cardTakeawayLabel = localizeKnownLabel(takeawaySection?.label || detail.cardTakeawayLabel)
-  const rawCardTakeaway = compact(takeawaySection?.text || detail.cardTakeaway)
-  const cardTakeaway = looksNarrativeMetadataText(rawCardTakeaway, detail) ? '' : rawCardTakeaway
-  const cardClaimLabel = localizeKnownLabel(claimSection?.label || detail.cardClaimLabel)
-  const cardEvidenceLabel = localizeKnownLabel(evidenceSection?.label || detail.cardEvidenceLabel)
-  const cardLocatorLabel = localizeKnownLabel(locatorSection?.label || detail.cardLocatorLabel)
-  const frame = buildCitationPopoverFrameModel({
+  const {
+    explainText,
+    frame,
+    isSystemB,
+    status,
+    systemA,
+    systemB,
+  } = buildCitationPopoverViewModel({
     detail,
     S,
-    isSystemB,
-    viewHeader: view.header,
-    locatorSection,
-    cardLocatorLabel,
-    localizeKnownLabel,
-  })
-  const cardReferenceLabel = localizeKnownLabel(referenceSection?.label || detail.cardReferenceLabel)
-  const cardSupportLabel = localizeKnownLabel(supportSection?.label || detail.cardSupportLabel)
-  const status = buildCitationPopoverStatusModel({
-    detail,
-    S,
-    isSystemB,
-    supportSection,
-    warningSection,
-    displayMain: frame.displayMain,
-    localizeKnownBody,
-    localizeKnownLabel,
-  })
-  const systemA = buildSystemAEvidenceCardModel({
-    detail,
-    S,
-    isSystemB,
-    claimSection,
-    evidenceSection,
-    supportSection,
-    cardTakeaway,
-    cardTakeawayLabel,
-    cardClaimLabel,
-    cardEvidenceLabel,
-    cardSupportLabel,
-    cardQualityFlags: status.cardQualityFlags,
-    cardWarning: status.cardWarning,
-    hasBindingState: Boolean(status.bindingState),
-    supportText: status.supportText,
-  })
-  const explainText = ''
-  const systemB = buildSystemBLiteratureCardModel({
-    detail,
-    S,
-    isSystemB,
     loading,
-    locatorSection,
-    contextSummarySection,
-    referenceSection,
-    cardTakeaway,
-    cardEvidenceLabel,
-    cardReferenceLabel,
-    cardSupportLabel,
-    cardQualityFlags: status.cardQualityFlags,
-    sourcePaperText: frame.sourcePaperText,
-    headingPath: frame.headingPath,
-    pageLabel: frame.pageLabel,
-    badgeLabel: frame.badgeLabel,
-    doiLabel: frame.doiLabel,
-    systemBTitle: frame.systemBTitle,
-    systemBTitleMissing: frame.systemBTitleMissing,
-    headerSubtitle: frame.headerSubtitle,
-    metrics: frame.metrics,
-    explicitSupportText: status.explicitSupportText,
-    displaySource: frame.displaySource,
-    localizeKnownBody,
-    localizeKnownLabel,
   })
 
   return (
