@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { message } from 'antd'
 import { MarkdownRenderer, type ReaderBlockShelfPayload } from './MarkdownRenderer'
 import { CitationPopover } from './CitationPopover'
+import { useCitationPopoverState } from './useCitationPopoverState'
 import { PaperGuideReaderPanel } from './reader/PaperGuideReaderPanel'
 import { useReaderDocument } from './reader/useReaderDocument'
 import { PaperGuideReaderShell } from './reader/PaperGuideReaderShell'
@@ -16,7 +17,6 @@ import { useReaderEvidenceNavigator } from './reader/useReaderEvidenceNavigator'
 import { referencesApi, type ReaderDocResponse } from '../../api/references'
 import {
   looksLowValueShelfSummary,
-  mergeCiteMeta,
   toShelfItem,
   type CiteDetail,
 } from './citationState'
@@ -307,11 +307,17 @@ export function PaperGuideReaderDrawer({
     highlightId: string
     text: string
   } | null>(null)
-  const [citationPopoverDetail, setCitationPopoverDetail] = useState<CiteDetail | null>(null)
-  const [citationPopoverPos, setCitationPopoverPos] = useState<{ x: number; y: number } | null>(null)
-  const [citationPopoverLoading, setCitationPopoverLoading] = useState(false)
+  const {
+    activeRequestKeyRef: activeCitationRequestKeyRef,
+    close: closeReaderCitationPopover,
+    detail: citationPopoverDetail,
+    loading: citationPopoverLoading,
+    mergeDetailForKey: mergeCitationPopoverDetailForKey,
+    open: openCitationPopoverState,
+    position: citationPopoverPos,
+    setLoading: setCitationPopoverLoading,
+  } = useCitationPopoverState()
   const [readerCitationShelfKeys, setReaderCitationShelfKeys] = useState<Set<string>>(() => new Set())
-  const activeCitationRequestKeyRef = useRef('')
   const isInlinePresentation = presentation === 'inline'
   const isPageSurface = isInlinePresentation && surface === 'page'
 
@@ -812,35 +818,21 @@ export function PaperGuideReaderDrawer({
   }, [decisionText, statusTextFull])
 
   useEffect(() => {
-    setCitationPopoverDetail(null)
-    setCitationPopoverPos(null)
-    setCitationPopoverLoading(false)
-    activeCitationRequestKeyRef.current = ''
-  }, [open, sourcePath])
+    closeReaderCitationPopover()
+  }, [closeReaderCitationPopover, open, sourcePath])
 
   const mergeReaderCitationMeta = useCallback((itemKey: string, metas: Array<Record<string, unknown>>) => {
     const usable = metas.filter((meta) => meta && Object.keys(meta).length > 0)
     if (usable.length <= 0) return
-    setCitationPopoverDetail((current) => {
-      if (!current) return current
-      if (toShelfItem(current).key !== itemKey) return current
-      let merged = current
-      const ordered = [
-        ...usable.filter((meta) => !readerMetaHasArticleSummary(meta)),
-        ...usable.filter(readerMetaHasArticleSummary),
-      ]
-      for (const meta of ordered) {
-        merged = mergeCiteMeta(merged, meta)
-      }
-      return merged
-    })
-  }, [setCitationPopoverDetail])
+    mergeCitationPopoverDetailForKey(itemKey, [
+      ...usable.filter((meta) => !readerMetaHasArticleSummary(meta)),
+      ...usable.filter(readerMetaHasArticleSummary),
+    ])
+  }, [mergeCitationPopoverDetailForKey])
 
   const showReaderCitation = useCallback((detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
     const itemKey = toShelfItem(detail).key
-    activeCitationRequestKeyRef.current = itemKey
-    setCitationPopoverDetail(detail)
-    setCitationPopoverPos({ x: event.clientX, y: event.clientY })
+    openCitationPopoverState(detail, { x: event.clientX, y: event.clientY }, { requestKey: itemKey })
     const hasDoi = Boolean(String(detail.doi || detail.doiUrl || '').trim())
     const missingReferenceEntry = readerCitationHasMissingReferenceEntry(detail)
     const needsSummaryBackfill = !readerCitationHasArticleSummary(detail)
@@ -868,14 +860,7 @@ export function PaperGuideReaderDrawer({
           setCitationPopoverLoading(false)
         }
       })
-  }, [mergeReaderCitationMeta, setCitationPopoverDetail, setCitationPopoverLoading, setCitationPopoverPos])
-
-  const closeReaderCitationPopover = useCallback(() => {
-    setCitationPopoverDetail(null)
-    setCitationPopoverPos(null)
-    setCitationPopoverLoading(false)
-    activeCitationRequestKeyRef.current = ''
-  }, [setCitationPopoverDetail, setCitationPopoverLoading, setCitationPopoverPos])
+  }, [activeCitationRequestKeyRef, mergeReaderCitationMeta, openCitationPopoverState, setCitationPopoverLoading])
 
   const addReaderCitationToShelf = useCallback((detail: CiteDetail) => {
     onAddCitationToShelf?.(detail)

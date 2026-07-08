@@ -227,6 +227,14 @@ async function citationPopoverPositionSmoke(page: Page) {
   })
 }
 
+async function citationPopoverStateSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runCitationPopoverStateSmoke } = await import('/src/testing/citationPopoverStateSmoke.ts')
+    return runCitationPopoverStateSmoke()
+  })
+}
+
 async function citationPopoverFrameModel(page: Page, input: {
   detail: Record<string, unknown>
   S: Record<string, string>
@@ -955,6 +963,65 @@ test('citation popover position helpers clamp placement and preserve dismiss exe
   expect(position.ignoredLocateButtonChild).toBe(true)
   expect(position.ignoredLocateBlock).toBe(true)
   expect(position.ignoredOrdinaryButton).toBe(false)
+})
+
+test('citation popover state hook opens, merges metadata, and closes predictably', async ({ page }) => {
+  const state = await citationPopoverStateSmoke(page)
+
+  expect(state.usableMetaCount).toBe(1)
+  expect(state.renderedText).toBe('empty')
+  expect(state.snapshots).toEqual([
+    {
+      doi: '',
+      guideLoading: false,
+      loading: false,
+      pinned: false,
+      requestKey: '',
+      title: '',
+      x: null,
+      y: null,
+    },
+    {
+      doi: '',
+      guideLoading: false,
+      loading: true,
+      pinned: true,
+      requestKey: 'cite-a|State Paper|4',
+      title: 'State Paper Title',
+      x: 12,
+      y: 34,
+    },
+    {
+      doi: '10.1000/state',
+      guideLoading: false,
+      loading: true,
+      pinned: true,
+      requestKey: 'cite-a|State Paper|4',
+      title: 'State Paper Title',
+      x: 12,
+      y: 34,
+    },
+    {
+      doi: '10.1000/state',
+      guideLoading: true,
+      loading: true,
+      pinned: true,
+      requestKey: 'cite-a|State Paper|4',
+      title: 'State Paper Title',
+      x: 12,
+      y: 34,
+    },
+    {
+      doi: '',
+      guideLoading: false,
+      loading: false,
+      pinned: false,
+      requestKey: '',
+      title: '',
+      x: null,
+      y: null,
+    },
+  ])
 })
 
 test('citation popover view model assembles route-specific frame, status, and cards', async ({ page }) => {

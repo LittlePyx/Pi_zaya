@@ -6,6 +6,7 @@ import { MarkdownRenderer } from './MarkdownRenderer'
 import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
 import { CiteShelf } from './CiteShelf'
+import { useCitationPopoverState } from './useCitationPopoverState'
 import type {
   ReaderLocateResult,
   ReaderOpenPayload,
@@ -272,17 +273,24 @@ export function MessageList({
 }: Props) {
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const [popoverDetail, setPopoverDetail] = useState<CiteDetail | null>(null)
-  const [popoverPos, setPopoverPos] = useState<{ x: number; y: number } | null>(null)
-  const [popoverLoading, setPopoverLoading] = useState(false)
-  const [popoverGuideLoading, setPopoverGuideLoading] = useState(false)
-  const [popoverPinned, setPopoverPinned] = useState(false)
+  const {
+    activeRequestKeyRef: activePopoverRequestKeyRef,
+    close: closeCitationPopoverState,
+    detail: popoverDetail,
+    guideLoading: popoverGuideLoading,
+    loading: popoverLoading,
+    mergeDetailForKey: mergePopoverDetailForItemKey,
+    open: openCitationPopoverState,
+    pinned: popoverPinned,
+    position: popoverPos,
+    setGuideLoading: setPopoverGuideLoading,
+    setLoading: setPopoverLoading,
+  } = useCitationPopoverState()
   const [evidenceDrawerSource, setEvidenceDrawerSource] = useState<AnswerSourceNoticeViewModel | null>(null)
   const [evidenceDrawerCiteDetails, setEvidenceDrawerCiteDetails] = useState<CiteDetail[]>([])
   const citationHoverOpenTimerRef = useRef<number | null>(null)
   const citationHoverCloseTimerRef = useRef<number | null>(null)
   const citationPolishRetryTimerRef = useRef<number | null>(null)
-  const activePopoverRequestKeyRef = useRef('')
   const citationPolishPrewarmKeysRef = useRef(new Set<string>())
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
@@ -1538,17 +1546,8 @@ export function MessageList({
   }
 
   const mergeCitationMetaForItemKey = (itemKey: string, metas: Array<Record<string, unknown>>) => {
-    const usable = metas.filter((meta) => meta && Object.keys(meta).length > 0)
+    const usable = mergePopoverDetailForItemKey(itemKey, metas)
     if (!usable.length) return
-    setPopoverDetail((current) => {
-      if (!current) return current
-      if (toShelfItem(current).key !== itemKey) return current
-      let merged = current
-      for (const meta of usable) {
-        merged = mergeCiteMeta(merged, meta)
-      }
-      return merged
-    })
     setShelfItems((current) => current.map((item) => {
       if (item.key !== itemKey) return item
       let merged: CiteDetail = item
@@ -1590,22 +1589,18 @@ export function MessageList({
   const showCitationAt = (detail: CiteDetail, position: { x: number; y: number }, pinned: boolean) => {
     clearCitationHoverTimers()
     if (!pinned && popoverPinned) return
-    setPopoverPinned(pinned)
-    setPopoverDetail(detail)
-    setPopoverPos(position)
-    setPopoverGuideLoading(false)
     const sourcePath = String(detail.sourcePath || '').trim()
     const isInPaperReference = Boolean(detail.isInpaper)
     const shouldFetchCitationMeta = Boolean(sourcePath) && !isInPaperReference
     const hasDoi = Boolean(String(detail.doi || '').trim())
     const itemKey = toShelfItem(detail).key
+    openCitationPopoverState(detail, position, { pinned, requestKey: itemKey })
     const needsSummaryBackfill = shelfItemNeedsSummaryBackfill(toShelfItem(detail))
     const shouldFetchBibliometrics = (!detail.bibliometricsChecked || needsSummaryBackfill) && (
       isInPaperReference
         ? hasDoi
         : (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
     )
-    activePopoverRequestKeyRef.current = itemKey
     if (shouldRequestCitationCardPolish(detail)) {
       requestCitationCardPolish(detail, itemKey)
     }
@@ -1672,11 +1667,7 @@ export function MessageList({
         window.clearTimeout(citationPolishRetryTimerRef.current)
         citationPolishRetryTimerRef.current = null
       }
-      setPopoverDetail(null)
-      setPopoverPos(null)
-      activePopoverRequestKeyRef.current = ''
-      setPopoverLoading(false)
-      setPopoverGuideLoading(false)
+      closeCitationPopoverState()
     }, 260)
   }
 
@@ -1689,12 +1680,7 @@ export function MessageList({
 
   const closeCitationPopover = () => {
     clearCitationHoverTimers()
-    setPopoverPinned(false)
-    setPopoverDetail(null)
-    setPopoverPos(null)
-    activePopoverRequestKeyRef.current = ''
-    setPopoverLoading(false)
-    setPopoverGuideLoading(false)
+    closeCitationPopoverState()
   }
 
   const closeEvidenceDrawer = () => {
@@ -1837,11 +1823,8 @@ export function MessageList({
         title: `${S.timeline_guide_label} · ${sourceName}`,
       })
       message.success(S.reader_entered_guide)
-      setPopoverPinned(false)
       clearCitationHoverTimers()
-      setPopoverDetail(null)
-      setPopoverPos(null)
-      activePopoverRequestKeyRef.current = ''
+      closeCitationPopoverState()
     } catch (err) {
       message.error(err instanceof Error ? err.message : S.reader_create_guide_failed)
     } finally {
