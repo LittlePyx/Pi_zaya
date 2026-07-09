@@ -34,7 +34,6 @@ import type {
 import { libraryApi } from '../api/library'
 import { referencesApi, type ReferenceSyncStats, type ShelfMetadataBackfillJobState } from '../api/references'
 import { useChatStore } from '../stores/chatStore'
-import { settingsApi } from '../api/settings'
 import { useLibraryStore } from '../stores/libraryStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useNavigate } from 'react-router-dom'
@@ -92,6 +91,7 @@ import {
 } from './library/useLibraryQualityOperationGuard'
 import { useLibraryQualityReportMetrics } from './library/useLibraryQualityReportMetrics'
 import { useShelfMetadataBackfillViewModel } from './library/useShelfMetadataBackfillViewModel'
+import { useLibraryDirectoryActions } from './library/useLibraryDirectoryActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -208,11 +208,8 @@ export default function LibraryPage() {
   const nav = useNavigate()
 
   const settingsLoaded = useSettingsStore((s) => s.loaded)
-  const settingsPdfDir = useSettingsStore((s) => s.pdfDir)
-  const settingsMdDir = useSettingsStore((s) => s.mdDir)
   const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
   const llmReadiness = useSettingsStore((s) => s.llmReadiness)
-  const updateSettings = useSettingsStore((s) => s.update)
 
   const [scope, setScope] = useState('200')
   const [tabKey, setTabKey] = useState<FileTabKey>('all')
@@ -270,13 +267,6 @@ export default function LibraryPage() {
     remove_tags: [],
   })
 
-  const [pdfDirDraft, setPdfDirDraft] = useState('')
-  const [mdDirDraft, setMdDirDraft] = useState('')
-  const [savingDirs, setSavingDirs] = useState(false)
-  const [pickingDir, setPickingDir] = useState<'pdf' | 'md' | null>(null)
-  const [dirTouched, setDirTouched] = useState(false)
-  const [dirEditorOpen, setDirEditorOpen] = useState(false)
-
   const [uploadDrafts, setUploadDrafts] = useState<UploadDraft[]>([])
   const [uploadUseLlm, setUploadUseLlm] = useState(true)
   const [uploadDraftFilter, setUploadDraftFilter] = useState<UploadDraftFilter>('all')
@@ -296,6 +286,23 @@ export default function LibraryPage() {
   const [renameResultsOpen, setRenameResultsOpen] = useState(false)
   const [renamePage, setRenamePage] = useState(1)
   const [suggestionsRefreshing, setSuggestionsRefreshing] = useState(false)
+
+  const {
+    directoriesConfigured,
+    dirDirty,
+    dirEditorOpen,
+    ensureDirsReady,
+    mdDirDraft,
+    openFolder,
+    pdfDirDraft,
+    pickDir,
+    pickingDir,
+    saveDirs,
+    savingDirs,
+    toggleDirEditor,
+    updateMdDirDraft,
+    updatePdfDirDraft,
+  } = useLibraryDirectoryActions({ S, scope })
 
   const uploadLocked = store.converting || Boolean(store.refSync?.running)
   const normalizedKeyword = fileKeyword.trim().toLowerCase()
@@ -324,13 +331,6 @@ export default function LibraryPage() {
     scope,
     onBegin: resetQualityOperationUi,
   })
-
-  const dirDirty = useMemo(
-    () =>
-      pdfDirDraft.trim() !== String(settingsPdfDir || '').trim()
-      || mdDirDraft.trim() !== String(settingsMdDir || '').trim(),
-    [pdfDirDraft, mdDirDraft, settingsPdfDir, settingsMdDir],
-  )
 
   const pendingFiles = useMemo(() => store.files.filter((x) => x.category === 'pending'), [store.files])
   const convertedFiles = useMemo(() => store.files.filter((x) => x.category === 'converted'), [store.files])
@@ -966,19 +966,6 @@ export default function LibraryPage() {
   }, [])
 
   useEffect(() => {
-    if (!settingsLoaded || dirTouched) return
-    setPdfDirDraft(String(settingsPdfDir || ''))
-    setMdDirDraft(String(settingsMdDir || ''))
-  }, [settingsLoaded, settingsPdfDir, settingsMdDir, dirTouched])
-
-  useEffect(() => {
-    if (!settingsLoaded) return
-    if (!String(settingsPdfDir || '').trim() || !String(settingsMdDir || '').trim()) {
-      setDirEditorOpen(true)
-    }
-  }, [settingsLoaded, settingsPdfDir, settingsMdDir])
-
-  useEffect(() => {
     if (uploadDrafts.length === 0) {
       setUploadWorkbenchOpen(false)
       return
@@ -1027,57 +1014,6 @@ export default function LibraryPage() {
       return merged
     })
   }, [store.files, S])
-
-  const saveDirs = useCallback(async () => {
-    if (!pdfDirDraft.trim() || !mdDirDraft.trim()) {
-      message.warning(S.lib_msg_dir_empty)
-      return false
-    }
-    setSavingDirs(true)
-    try {
-      await updateSettings({ pdfDir: pdfDirDraft.trim(), mdDir: mdDirDraft.trim() })
-      setDirTouched(false)
-      setDirEditorOpen(false)
-      message.success(S.lib_msg_save_dir_success)
-      await store.loadFiles(scope)
-      return true
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : S.lib_msg_save_dir_fail)
-      return false
-    } finally {
-      setSavingDirs(false)
-    }
-  }, [mdDirDraft, pdfDirDraft, scope, store, updateSettings, S])
-
-  const ensureDirsReady = useCallback(async () => {
-    if (!dirDirty) return true
-    return saveDirs()
-  }, [dirDirty, saveDirs])
-
-  const openFolder = async (target: 'pdf_dir' | 'md_dir') => {
-    const ready = await ensureDirsReady()
-    if (!ready) return
-    await store.openFile('', target)
-  }
-
-  const pickDir = async (target: 'pdf' | 'md') => {
-    const initial = target === 'pdf' ? pdfDirDraft : mdDirDraft
-    setPickingDir(target)
-    try {
-      const res = await settingsApi.pickDir(target, initial)
-      if (!res.ok || !res.path) {
-        message.info(S.lib_msg_no_dir_selected)
-        return
-      }
-      setDirTouched(true)
-      if (target === 'pdf') setPdfDirDraft(res.path)
-      else setMdDirDraft(res.path)
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : S.lib_msg_pick_dir_fail)
-    } finally {
-      setPickingDir(null)
-    }
-  }
 
   const addDrafts = (files: File[]) => {
     setUploadDrafts((cur) => {
@@ -3104,7 +3040,6 @@ export default function LibraryPage() {
     index_stale: qualitySourceReadinessStats.indexStale,
   }
 
-  const directoriesConfigured = Boolean(pdfDirDraft.trim() && mdDirDraft.trim())
   const showDirEditor = dirEditorOpen || !directoriesConfigured
   const workbenchStats: WorkbenchMetricItem[] = [
     { key: 'view', label: S.lib_stats_view, value: counts.total_view, tone: 'neutral' },
@@ -3161,15 +3096,9 @@ export default function LibraryPage() {
             pickingDir={pickingDir}
             savingDirs={savingDirs}
             dirDirty={dirDirty}
-            onToggleEditor={() => setDirEditorOpen((open) => !open)}
-            onPdfDirChange={(value) => {
-              setDirTouched(true)
-              setPdfDirDraft(value)
-            }}
-            onMdDirChange={(value) => {
-              setDirTouched(true)
-              setMdDirDraft(value)
-            }}
+            onToggleEditor={toggleDirEditor}
+            onPdfDirChange={updatePdfDirDraft}
+            onMdDirChange={updateMdDirDraft}
             onPickDir={pickDir}
             onOpenFolder={openFolder}
             onSaveDirs={saveDirs}
