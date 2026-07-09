@@ -156,6 +156,61 @@ test('library file filter helper derives visible lists and taxonomy cards', asyn
   expect(result.tagOptionValues).toContain('triage')
 })
 
+test('library quality focus helper plans current and cross-scope history targets', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const { buildLibraryQualityHistoryFocusPlan } = await import('/src/pages/library/useLibraryQualityFocusActions.ts')
+    const files = [
+      { name: 'Converted Weak.pdf' },
+      { name: 'Converted Clean.pdf' },
+    ]
+
+    return {
+      currentScopeHit: buildLibraryQualityHistoryFocusPlan({
+        files,
+        names: [' Converted Weak.pdf ', '', 'Converted Weak.pdf', 'Archived Missing.pdf'],
+        scope: '200',
+      }),
+      currentScopeMiss: buildLibraryQualityHistoryFocusPlan({
+        files,
+        names: ['Archived Missing.pdf'],
+        scope: '200',
+      }),
+      allScopeMiss: buildLibraryQualityHistoryFocusPlan({
+        files,
+        names: ['Archived Missing.pdf'],
+        scope: 'all',
+      }),
+      empty: buildLibraryQualityHistoryFocusPlan({
+        files,
+        names: [],
+        scope: '200',
+      }),
+    }
+  })
+
+  expect(result.currentScopeHit).toEqual({
+    rawTargets: ['Converted Weak.pdf', 'Archived Missing.pdf'],
+    targets: ['Converted Weak.pdf'],
+    shouldLoadAllScope: false,
+  })
+  expect(result.currentScopeMiss).toEqual({
+    rawTargets: ['Archived Missing.pdf'],
+    targets: [],
+    shouldLoadAllScope: true,
+  })
+  expect(result.allScopeMiss).toEqual({
+    rawTargets: ['Archived Missing.pdf'],
+    targets: [],
+    shouldLoadAllScope: false,
+  })
+  expect(result.empty).toEqual({
+    rawTargets: [],
+    targets: [],
+    shouldLoadAllScope: false,
+  })
+})
+
 test.beforeEach(async ({ page }) => {
   const brokenName = 'Optica-2024-Broken conversion.pdf'
   const weakName = 'Applied Optics-2023-Weak anchors.pdf'

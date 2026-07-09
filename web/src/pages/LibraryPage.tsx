@@ -94,6 +94,7 @@ import {
   useLibraryFileFilters,
   type ReadingStatusValue,
 } from './library/useLibraryFileFilters'
+import { useLibraryQualityFocusActions } from './library/useLibraryQualityFocusActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -473,6 +474,26 @@ export default function LibraryPage() {
       .filter((record) => record.remainingIssues.length > 0 && availableNames.has(record.name))
       .map((record) => record.name)
   }, [qualityRepairHistoryList, store.files])
+  const {
+    focusQualityHistoryNames,
+    handleFocusQualityHistoryRemaining,
+    handleFocusQualityIssue,
+    handleFocusQualityReview,
+  } = useLibraryQualityFocusActions({
+    S,
+    files: store.files,
+    scope,
+    qualityReviewCount,
+    qualityHistoryRemainingNames,
+    loadFiles: store.loadFiles,
+    setBrowseMode,
+    setFileKeyword,
+    setOnlyQualityIssues,
+    setQualityCenterOpen,
+    setQualityHistoryFocusNames,
+    setScope,
+    setTabKey,
+  })
   const qualityDomainViews = useLibraryQualityDomainViews({
     S,
     backendQualityOverview,
@@ -880,57 +901,6 @@ export default function LibraryPage() {
 
   const handleRepairSelectedQuality = async () => {
     await repairQualityByNames(selectedQualityReviewNames)
-  }
-
-  const handleFocusQualityReview = () => {
-    if (qualityReviewCount <= 0) {
-      message.info(S.lib_quality_report_no_issues)
-      return
-    }
-    setQualityCenterOpen(true)
-    setQualityHistoryFocusNames([])
-    setOnlyQualityIssues(true)
-    setBrowseMode('list')
-    setTabKey('all')
-  }
-
-  const handleFocusQualityIssue = (label: string) => {
-    const keyword = String(label || '').trim()
-    if (!keyword) return
-    setQualityCenterOpen(true)
-    setFileKeyword(keyword)
-    setQualityHistoryFocusNames([])
-    setOnlyQualityIssues(true)
-    setBrowseMode('list')
-    setTabKey('all')
-  }
-
-  const focusQualityHistoryNames = (names: string[]) => {
-    const availableNames = new Set(store.files.map((item) => item.name))
-    const rawTargets = Array.from(new Set(names.map((name) => String(name || '').trim()).filter(Boolean)))
-    const targets = rawTargets.filter((name) => availableNames.has(name))
-    setQualityCenterOpen(true)
-    if (!targets.length) {
-      if (rawTargets.length > 0) {
-        setQualityHistoryFocusNames(rawTargets)
-        setBrowseMode('list')
-        setTabKey('all')
-        if (scope !== 'all') {
-          setScope('all')
-          void store.loadFiles('all')
-        }
-        return
-      }
-      message.info(S.lib_quality_history_no_remaining)
-      return
-    }
-    setQualityHistoryFocusNames(targets)
-    setBrowseMode('list')
-    setTabKey('all')
-  }
-
-  const handleFocusQualityHistoryRemaining = () => {
-    focusQualityHistoryNames(qualityHistoryRemainingNames)
   }
 
   const handleRepairRecommendedQuality = async (opts: QualityRepairRunOptions = {}) => {
