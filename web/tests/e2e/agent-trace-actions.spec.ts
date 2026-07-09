@@ -315,6 +315,14 @@ async function readerOpenPayloadViewModelSmoke(page: Page) {
   })
 }
 
+async function readerCandidatePickerStateSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderCandidatePickerStateSmoke } = await import('/src/testing/readerCandidatePickerStateSmoke.ts')
+    return runReaderCandidatePickerStateSmoke()
+  })
+}
+
 async function readerSidePanelNavigationSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1669,6 +1677,32 @@ test('reader open payload view model normalizes locate targets and alternatives'
     sourcePath: '',
     strictLocate: false,
   })
+})
+
+test('reader candidate picker state syncs requested, manual, reset, and auto-expand state', async ({ page }) => {
+  const result = await readerCandidatePickerStateSmoke(page)
+
+  expect(result.afterRequestedSync).toEqual({
+    activeAltIndex: 2,
+    altChangeSource: 'system',
+    candidatePickerExpanded: false,
+  })
+  expect(result.afterManualSelect).toEqual({
+    activeAltIndex: 1,
+    altChangeSource: 'manual',
+    candidatePickerExpanded: true,
+  })
+  expect(result.afterPayloadReset).toEqual({
+    activeAltIndex: 0,
+    altChangeSource: 'system',
+    candidatePickerExpanded: false,
+  })
+  expect(result.afterAutoExpand).toEqual({
+    activeAltIndex: 0,
+    altChangeSource: 'system',
+    candidatePickerExpanded: true,
+  })
+  expect(result.renderedText).toBe('0|system|true')
 })
 
 test('reader side panel navigation helper derives compact labels', async ({ page }) => {

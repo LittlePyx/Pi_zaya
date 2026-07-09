@@ -29,6 +29,10 @@ import {
   useReaderSidePanelNavigation,
 } from './useReaderSidePanelNavigation'
 import {
+  useReaderCandidatePickerState,
+  useReaderCandidatePickerSync,
+} from './useReaderCandidatePickerState'
+import {
   buildReaderActiveLocateCandidate,
   buildReaderOpenPayloadViewModel,
 } from './readerOpenPayloadViewModel'
@@ -107,7 +111,6 @@ export function PaperGuideReaderDrawer({
   const S = useT()
   const contentRef = useRef<HTMLDivElement>(null)
   const [drawerReady, setDrawerReady] = useState(false)
-  const [altChangeSource, setAltChangeSource] = useState<'system' | 'manual'>('system')
   const {
     close: closeReaderCitationPopover,
     detail: citationPopoverDetail,
@@ -146,12 +149,18 @@ export function PaperGuideReaderDrawer({
     highlightSnippet: primaryHighlightSnippet,
     snippet: primaryFocusSnippet,
   } = primaryCandidate
-  const [activeAltIndex, setActiveAltIndexState] = useState(0)
-  const [candidatePickerExpanded, setCandidatePickerExpanded] = useState(false)
-  const setActiveAltIndex = (idx: number, source: 'system' | 'manual' = 'system') => {
-    setAltChangeSource(source)
-    setActiveAltIndexState(idx)
-  }
+  const {
+    activeAltIndex,
+    altChangeSource,
+    candidatePickerExpanded,
+    setActiveAltIndex,
+    setCandidatePickerExpanded,
+    toggleCandidatePicker,
+  } = useReaderCandidatePickerState({
+    locateRequestId,
+    open,
+    sourcePath,
+  })
   const {
     loading,
     error,
@@ -340,6 +349,14 @@ export function PaperGuideReaderDrawer({
     statusTextFull,
     strictLocate,
   ])
+
+  useReaderCandidatePickerSync({
+    payloadKey: openPayloadViewModel,
+    requestedAltIndex,
+    setActiveAltIndex,
+    setCandidatePickerExpanded,
+    shouldAutoExpandCandidatePicker,
+  })
 
   useEffect(() => {
     closeReaderCitationPopover()
@@ -537,23 +554,6 @@ export function PaperGuideReaderDrawer({
   })
 
   useEffect(() => {
-    setActiveAltIndex(requestedAltIndex, 'system')
-  }, [openPayloadViewModel, requestedAltIndex])
-
-  useEffect(() => {
-    if (!open) {
-      setCandidatePickerExpanded(false)
-      return
-    }
-    setCandidatePickerExpanded(false)
-  }, [open, locateRequestId, sourcePath])
-
-  useEffect(() => {
-    if (!shouldAutoExpandCandidatePicker) return
-    setCandidatePickerExpanded(true)
-  }, [shouldAutoExpandCandidatePicker])
-
-  useEffect(() => {
     if (!open) {
       setDrawerReady(false)
       return
@@ -610,7 +610,7 @@ export function PaperGuideReaderDrawer({
       onRemoveHighlight={removeSessionHighlight}
       onGoPrevEvidence={goPrevEvidence}
       onGoNextEvidence={goNextEvidence}
-      onToggleCandidatePicker={() => setCandidatePickerExpanded((prev) => !prev)}
+      onToggleCandidatePicker={toggleCandidatePicker}
       onSelectCandidate={(idx) => setActiveAltIndex(idx, 'manual')}
       onReturnToEvidence={returnToEvidence}
       returnToEvidenceLabel={S.reader_return_to_evidence || 'Back to evidence'}
