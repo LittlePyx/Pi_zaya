@@ -11,7 +11,6 @@ import {
 } from 'antd'
 import {
   ReloadOutlined,
-  ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import type {
   ConversionQualitySummary,
@@ -42,10 +41,7 @@ import {
   type WorkbenchMetricItem,
   type WorkbenchTone,
 } from '../components/library/WorkbenchPrimitives'
-import {
-  LibraryBatchMetadataDrawer,
-  type LibraryBatchMetaDraft,
-} from './library/LibraryBatchMetadataDrawer'
+import { LibraryBatchMetadataDrawer } from './library/LibraryBatchMetadataDrawer'
 import { LibraryBatchSelectionBar } from './library/LibraryBatchSelectionBar'
 import { LibraryMetadataDrawer } from './library/LibraryMetadataDrawer'
 import {
@@ -93,6 +89,7 @@ import { useShelfMetadataBackfillViewModel } from './library/useShelfMetadataBac
 import { useLibraryDirectoryActions } from './library/useLibraryDirectoryActions'
 import { useLibraryUploadDraftActions } from './library/useLibraryUploadDraftActions'
 import { useLibraryRenameActions } from './library/useLibraryRenameActions'
+import { useLibraryBatchMetadataActions } from './library/useLibraryBatchMetadataActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -227,9 +224,6 @@ export default function LibraryPage() {
     note: '',
     user_tags: [],
   })
-  const [selectedLibraryNames, setSelectedLibraryNames] = useState<Record<string, boolean>>({})
-  const [batchDrawerOpen, setBatchDrawerOpen] = useState(false)
-  const [batchSaving, setBatchSaving] = useState(false)
   const [qualityRepairingNames, setQualityRepairingNames] = useState<Record<string, boolean>>({})
   const [qualityRepairResults, setQualityRepairResults] = useState<Record<string, string>>({})
   const [qualityRepairImpact, setQualityRepairImpact] = useState<LibraryQualityRepairImpact | null>(null)
@@ -253,15 +247,6 @@ export default function LibraryPage() {
   const [qualityCaseRerunResults, setQualityCaseRerunResults] = useState<Record<string, LibraryResearchQaRerunResponse>>({})
   const [qualityFailureFilter, setQualityFailureFilter] = useState('')
   const qualityRepairBaselinesRef = useRef<Record<string, QualityRepairBaseline>>({})
-  const [batchDraft, setBatchDraft] = useState<LibraryBatchMetaDraft>({
-    apply_paper_category: false,
-    paper_category: '',
-    apply_reading_status: false,
-    reading_status: '',
-    add_tags: [],
-    remove_tags: [],
-  })
-
   const [suggestionsRefreshing, setSuggestionsRefreshing] = useState(false)
 
   const {
@@ -926,18 +911,24 @@ export default function LibraryPage() {
     return visibleAll
   }, [tabKey, visiblePending, visibleConverted, visibleAll])
 
-  const selectedLibraryNamesList = useMemo(
-    () => Object.keys(selectedLibraryNames).filter((name) => Boolean(selectedLibraryNames[name])),
-    [selectedLibraryNames],
-  )
-
-  const selectedLibraryCount = selectedLibraryNamesList.length
-  const selectedQualityReviewNames = useMemo(
-    () => store.files
-      .filter((item) => Boolean(selectedLibraryNames[item.name]) && hasConversionQualityIssue(item) && item.task_state === 'idle')
-      .map((item) => item.name),
-    [store.files, selectedLibraryNames],
-  )
+  const {
+    batchDraft,
+    batchDrawerOpen,
+    batchSaving,
+    clearLibrarySelection,
+    closeBatchEditor,
+    openBatchEditor,
+    saveBatchEditor,
+    selectCurrentListItems,
+    selectedLibraryCount,
+    selectedLibraryNames,
+    selectedQualityReviewNames,
+    setBatchDraft,
+    toggleLibrarySelection,
+  } = useLibraryBatchMetadataActions({
+    S,
+    currentListItems,
+  })
   const metaSuggestionCount = (metaItem?.suggested_category ? 1 : 0) + (metaItem?.suggested_tags?.length || 0)
   const metaDraftCategory = normalizeTextValue(metaDraft.paper_category)
   const metaDraftTags = normalizeTextList(metaDraft.user_tags)
@@ -952,23 +943,6 @@ export default function LibraryPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  useEffect(() => {
-    const existing = new Set(store.files.map((item) => item.name))
-    setSelectedLibraryNames((cur) => {
-      let changed = false
-      const next: Record<string, boolean> = {}
-      for (const [name, selected] of Object.entries(cur)) {
-        if (!selected) continue
-        if (!existing.has(name)) {
-          changed = true
-          continue
-        }
-        next[name] = true
-      }
-      return changed ? next : cur
-    })
-  }, [store.files])
 
   useEffect(() => {
     const pending = qualityRepairBaselinesRef.current
@@ -2470,123 +2444,6 @@ export default function LibraryPage() {
     }
   }
 
-  const toggleLibrarySelection = (name: string, checked: boolean) => {
-    setSelectedLibraryNames((cur) => {
-      if (!checked && !cur[name]) return cur
-      return {
-        ...cur,
-        [name]: checked,
-      }
-    })
-  }
-
-  const selectCurrentListItems = () => {
-    if (!currentListItems.length) {
-      message.info(S.lib_msg_no_selectable)
-      return
-    }
-    setSelectedLibraryNames((cur) => {
-      const next = { ...cur }
-      for (const item of currentListItems) next[item.name] = true
-      return next
-    })
-  }
-
-  const clearLibrarySelection = () => {
-    setSelectedLibraryNames({})
-  }
-
-  const openBatchEditor = () => {
-    if (!selectedLibraryCount) {
-      message.info(S.lib_msg_select_batch_edit)
-      return
-    }
-    setBatchDraft({
-      apply_paper_category: false,
-      paper_category: '',
-      apply_reading_status: false,
-      reading_status: '',
-      add_tags: [],
-      remove_tags: [],
-    })
-    setBatchDrawerOpen(true)
-  }
-
-  const confirmBatchEditorRisk = async (params: { paperCategory: string, removeTags: string[] }): Promise<boolean> => {
-    const willClearCategory = batchDraft.apply_paper_category && !params.paperCategory
-    const willClearStatus = batchDraft.apply_reading_status && !batchDraft.reading_status
-    const willRemoveTags = params.removeTags.length > 0
-    if (!willClearCategory && !willClearStatus && !willRemoveTags) return true
-
-    const previewTags = params.removeTags.slice(0, 8).join(', ')
-    const removeTagsText = params.removeTags.length > 8 ? `${previewTags}...` : previewTags
-    return new Promise<boolean>((resolve) => {
-      let settled = false
-      const done = (value: boolean) => {
-        if (settled) return
-        settled = true
-        resolve(value)
-      }
-      Modal.confirm({
-        title: S.lib_batch_confirm_title,
-        icon: <ExclamationCircleOutlined />,
-        content: (
-          <div className="kb-lib-batch-confirm">
-            <Text>{S.lib_batch_confirm_detail.replace('{n}', String(selectedLibraryCount))}</Text>
-            {willClearCategory ? <Text type="warning">{S.lib_batch_confirm_clear_category}</Text> : null}
-            {willClearStatus ? <Text type="warning">{S.lib_batch_confirm_clear_status}</Text> : null}
-            {willRemoveTags ? (
-              <Text type="danger">{S.lib_batch_confirm_remove_tags.replace('{tags}', removeTagsText)}</Text>
-            ) : null}
-          </div>
-        ),
-        okText: S.lib_batch_confirm_ok,
-        cancelText: S.lib_batch_confirm_cancel,
-        okButtonProps: { danger: true },
-        onOk: () => done(true),
-        onCancel: () => done(false),
-        afterClose: () => done(false),
-      })
-    })
-  }
-
-  const saveBatchEditor = async () => {
-    if (!selectedLibraryCount) return
-    const paperCategory = normalizeTextValue(batchDraft.paper_category)
-    const addTags = normalizeTextList(batchDraft.add_tags)
-    const removeTags = normalizeTextList(batchDraft.remove_tags)
-    if (
-      !batchDraft.apply_paper_category
-      && !batchDraft.apply_reading_status
-      && addTags.length === 0
-      && removeTags.length === 0
-    ) {
-      message.info(S.lib_msg_set_batch_content)
-      return
-    }
-    const confirmed = await confirmBatchEditorRisk({ paperCategory, removeTags })
-    if (!confirmed) return
-    setBatchSaving(true)
-    try {
-      const updated = await store.batchUpdatePaperMeta({
-        pdf_names: selectedLibraryNamesList,
-        apply_paper_category: batchDraft.apply_paper_category,
-        paper_category: paperCategory,
-        apply_reading_status: batchDraft.apply_reading_status,
-        reading_status: batchDraft.reading_status,
-        add_tags: addTags,
-        remove_tags: removeTags,
-      })
-      setBatchDrawerOpen(false)
-      setSelectedLibraryNames({})
-      message.success(S.lib_msg_batch_updated_count.replace('{n}', String(updated)))
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : S.lib_msg_batch_edit_fail)
-    } finally {
-      setBatchSaving(false)
-    }
-  }
-
   const renderFileRow = (item: LibraryFileItem) => {
     return (
       <LibraryFileRow
@@ -3129,7 +2986,7 @@ export default function LibraryPage() {
         paperTagFilterOptions={paperTagFilterOptions}
         readingStatusOptions={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
         tagInputSeparators={TAG_INPUT_SEPARATORS}
-        onClose={() => setBatchDrawerOpen(false)}
+        onClose={closeBatchEditor}
         onDraftChange={setBatchDraft}
         onSave={() => { void saveBatchEditor() }}
         readingStatusLabel={readingStatusLabel}
