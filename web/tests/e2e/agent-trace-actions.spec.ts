@@ -299,6 +299,14 @@ async function readerLocateStatusViewModelSmoke(page: Page) {
   })
 }
 
+async function readerLocateCandidateViewModelSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderLocateCandidateViewModelSmoke } = await import('/src/testing/readerLocateCandidateViewModelSmoke.ts')
+    return runReaderLocateCandidateViewModelSmoke()
+  })
+}
+
 async function readerSelectionShelfSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1532,6 +1540,39 @@ test('reader locate status view model derives badges and decision text', async (
     tone: 'success',
     title: 'Exact target matched',
   })
+})
+
+test('reader locate candidate view model derives options and picker state', async ({ page }) => {
+  const result = await readerLocateCandidateViewModelSmoke(page)
+
+  expect(result.hiddenActive.requestedAltIndex).toBe(0)
+  expect(result.hiddenActive.hasDistinctAlternatives).toBe(true)
+  expect(result.hiddenActive.shouldAutoExpandCandidatePicker).toBe(true)
+  expect(result.hiddenActive.candidateToggleLabel).toBe('Alt 3/3')
+  expect(result.hiddenActive.evidenceAlternatives).toHaveLength(1)
+  expect(result.hiddenActive.candidateOptions).toMatchObject([
+    { displayIndex: 0, roleLabel: 'Requested', roleTone: 'accent', targetIndex: 0 },
+    { displayIndex: 1, roleLabel: 'Evidence', roleTone: 'success', targetIndex: 1 },
+    { displayIndex: 2, roleLabel: 'Resolved', roleTone: 'success', targetIndex: 2 },
+  ])
+  expect(result.hiddenActive.activeCandidateDistinctKey).toBe(result.hiddenActive.candidateOptions[2].distinctKey)
+
+  expect(result.manualActive.candidateToggleLabel).toBe('Hide list')
+  expect(result.manualActive.shouldAutoExpandCandidatePicker).toBe(false)
+  expect(result.manualActive.candidateOptions[1]).toMatchObject({
+    roleLabel: 'Manual',
+    roleTone: 'accent',
+    targetIndex: 1,
+  })
+
+  expect(result.single).toMatchObject({
+    candidateToggleLabel: '',
+    hasDistinctAlternatives: false,
+    shouldAutoExpandCandidatePicker: false,
+  })
+  expect(result.single.candidateOptions).toMatchObject([
+    { roleLabel: 'Primary', roleTone: 'accent', targetIndex: 0 },
+  ])
 })
 
 test('reader selection shelf hook builds selection and active-highlight payloads', async ({ page }) => {

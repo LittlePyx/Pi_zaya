@@ -28,8 +28,8 @@ import { useReaderReturnToEvidence } from './useReaderReturnToEvidence'
 import { useReaderLocateResultReporting } from './useReaderLocateResultReporting'
 import {
   buildReaderLocateStatusViewModel,
-  type ReaderLocateBadgeTone,
 } from './readerLocateStatusViewModel'
+import { buildReaderLocateCandidateViewModel } from './readerLocateCandidateViewModel'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -38,9 +38,7 @@ import type {
   ReaderSessionHighlight,
 } from './reader/readerTypes'
 import {
-  candidateDisplayLabel,
   candidateIdentityKey,
-  candidateVisibilityKey,
   compactLocateHintLabel,
 } from './reader/readerDomUtils'
 import { useT } from '../../i18n'
@@ -255,165 +253,7 @@ export function PaperGuideReaderDrawer({
     sourceName: title,
     sourcePath,
   })
-  const requestedCandidateIdentity = useMemo(() => candidateIdentityKey({
-    headingPath: primaryHeadingPath,
-    snippet: primaryFocusSnippet,
-    highlightSnippet: primaryHighlightSnippet,
-    anchorId,
-    blockId,
-    anchorKind: primaryAnchorKind,
-    anchorNumber: primaryAnchorNumber,
-  }), [
-    primaryHeadingPath,
-    primaryFocusSnippet,
-    primaryHighlightSnippet,
-    anchorId,
-    blockId,
-    primaryAnchorKind,
-    primaryAnchorNumber,
-  ])
-  const visibleCandidateOptions = (() => {
-    const rawList = Array.isArray(payload?.visibleAlternatives) && payload.visibleAlternatives.length > 0
-      ? payload.visibleAlternatives
-      : alternatives
-    if (!Array.isArray(rawList) || rawList.length <= 0) return []
-    const internalIndexByKey = new Map<string, number>()
-    alternatives.forEach((item, idx) => {
-      internalIndexByKey.set(candidateIdentityKey(item), idx)
-    })
-    const out: Array<{ targetIndex: number; label: string; distinctKey: string }> = []
-    const seenDistinct = new Set<string>()
-    for (const raw of rawList) {
-      if (!raw || typeof raw !== 'object') continue
-      const key = candidateIdentityKey(raw)
-      const targetIndex = internalIndexByKey.get(key)
-      if (!Number.isFinite(targetIndex)) continue
-      const safeIndex = Number(targetIndex)
-      const item = alternatives[safeIndex]
-      if (!item) continue
-      const distinctKey = candidateVisibilityKey(item, title) || `alt:${safeIndex + 1}`
-      if (seenDistinct.has(distinctKey)) continue
-      seenDistinct.add(distinctKey)
-      out.push({
-        targetIndex: safeIndex,
-        label: candidateDisplayLabel(item, title) || `Candidate ${safeIndex + 1}`,
-        distinctKey,
-      })
-    }
-    return out
-  })()
-  const evidenceAlternatives = useMemo(() => {
-    const rawList = Array.isArray(payload?.evidenceAlternatives)
-      ? payload.evidenceAlternatives
-      : []
-    if (!Array.isArray(rawList) || rawList.length <= 0) return []
-    const out: ReaderLocateCandidate[] = []
-    const seen = new Set<string>()
-    for (const item of rawList) {
-      if (!item || typeof item !== 'object') continue
-      const key = candidateIdentityKey(item)
-      if (!key || seen.has(key)) continue
-      seen.add(key)
-      out.push({
-        headingPath: String(item.headingPath || '').trim() || undefined,
-        snippet: String(item.snippet || '').trim() || undefined,
-        highlightSnippet: String(item.highlightSnippet || '').trim() || undefined,
-        blockId: String(item.blockId || '').trim() || undefined,
-        anchorId: String(item.anchorId || '').trim() || undefined,
-        anchorKind: String(item.anchorKind || '').trim() || undefined,
-        anchorNumber: Number.isFinite(Number(item.anchorNumber || 0))
-          ? Math.floor(Number(item.anchorNumber || 0))
-          : undefined,
-      })
-    }
-    return out
-  }, [payload])
-  const evidenceCandidateIdentitySet = useMemo(() => new Set(
-    evidenceAlternatives.map((item) => candidateIdentityKey(item)).filter(Boolean),
-  ), [evidenceAlternatives])
-
   const activeAlt = alternatives[activeAltIndex] || null
-  const activeCandidateDistinctKey = activeAlt
-    ? candidateVisibilityKey(activeAlt, title) || candidateIdentityKey(activeAlt)
-    : ''
-  const requestedAltIndex = useMemo(() => {
-    const hintIndex = Number(payload?.initialAltIndex || 0)
-    return Number.isFinite(hintIndex) ? Math.max(0, Math.min(alternatives.length - 1, Math.floor(hintIndex))) : 0
-  }, [payload, alternatives.length])
-  const candidateOptions = (() => {
-    const describeCandidateRole = (
-      candidate: ReaderLocateCandidate | null | undefined,
-    ): { roleLabel?: string; roleTone?: ReaderLocateBadgeTone } => {
-      const identity = candidateIdentityKey(candidate)
-      if (!identity) return {}
-      const isActive = identity === candidateIdentityKey(activeAlt)
-      if (requestedCandidateIdentity && identity === requestedCandidateIdentity) {
-        return {
-          roleLabel: strictLocate
-            ? (S.reader_candidate_requested || 'Requested')
-            : (S.reader_candidate_primary || 'Primary'),
-          roleTone: 'accent',
-        }
-      }
-      if (isActive && strictLocate && altChangeSource === 'system' && activeAltIndex !== requestedAltIndex) {
-        return {
-          roleLabel: S.reader_candidate_resolved || 'Resolved',
-          roleTone: 'success',
-        }
-      }
-      if (isActive && strictLocate && altChangeSource === 'manual' && activeAltIndex !== requestedAltIndex) {
-        return {
-          roleLabel: S.reader_candidate_manual || 'Manual',
-          roleTone: 'accent',
-        }
-      }
-      if (evidenceCandidateIdentitySet.has(identity)) {
-        return {
-          roleLabel: S.reader_candidate_evidence || 'Evidence',
-          roleTone: 'success',
-        }
-      }
-      return {
-        roleLabel: strictLocate
-          ? (S.reader_candidate_backup || 'Backup')
-          : (S.reader_candidate_alt || 'Alt'),
-        roleTone: 'neutral',
-      }
-    }
-
-    const out = visibleCandidateOptions.map((item, displayIndex) => {
-      const candidate = alternatives[item.targetIndex] || null
-      const role = describeCandidateRole(candidate)
-      return {
-        displayIndex,
-        targetIndex: item.targetIndex,
-        label: item.label,
-        distinctKey: item.distinctKey,
-        roleLabel: role.roleLabel,
-        roleTone: role.roleTone,
-      }
-    })
-
-    const activeOptionExists = out.some((item) => item.distinctKey === activeCandidateDistinctKey)
-    if (activeOptionExists || !activeAlt || !activeCandidateDistinctKey) return out
-    const role = describeCandidateRole(activeAlt)
-    return [
-      ...out,
-      {
-        displayIndex: out.length,
-        targetIndex: activeAltIndex,
-        label: candidateDisplayLabel(activeAlt, title) || `Candidate ${activeAltIndex + 1}`,
-        distinctKey: activeCandidateDistinctKey,
-        roleLabel: role.roleLabel,
-        roleTone: role.roleTone,
-      },
-    ]
-  })()
-  const hasDistinctAlternatives = (() => {
-    if (candidateOptions.length <= 1) return false
-    const distinct = new Set(candidateOptions.map((item) => item.distinctKey).filter(Boolean))
-    return distinct.size > 1
-  })()
   const activeHeadingPath = String(activeAlt?.headingPath || primaryHeadingPath).trim()
   const activeFocusSnippet = String(activeAlt?.snippet || primaryFocusSnippet).trim()
   const activeHighlightSnippet = String(activeAlt?.highlightSnippet || primaryHighlightSnippet || activeFocusSnippet).trim()
@@ -498,20 +338,55 @@ export function PaperGuideReaderDrawer({
     : ''
   const statusTextFull = String(locateHint || bindingStatusText).trim()
   const statusTextCompact = compactLocateHintLabel(statusTextFull)
-  const shouldAutoExpandCandidatePicker = useMemo(() => {
-    if (!hasDistinctAlternatives) return false
-    if (altChangeSource === 'system' && activeAltIndex > requestedAltIndex) return true
-    return /\b(not found|fallback|strict locate|neighbor evidence|was not found)\b/i.test(String(locateHint || ''))
-  }, [hasDistinctAlternatives, activeAltIndex, locateHint, altChangeSource, requestedAltIndex])
-  const candidateToggleLabel = hasDistinctAlternatives
-      ? (candidatePickerExpanded
-      ? (S.reader_hide_list || 'Hide list')
-      : activeAltIndex > 0
-        ? (S.reader_alt_index || 'Alt {i}/{n}')
-          .replace('{i}', String(Math.max(1, candidateOptions.findIndex((item) => item.distinctKey === activeCandidateDistinctKey) + 1)))
-          .replace('{n}', String(candidateOptions.length))
-        : (S.reader_candidates_count || '{n} candidates').replace('{n}', String(candidateOptions.length)))
-    : ''
+  const {
+    activeCandidateDistinctKey,
+    candidateOptions,
+    candidateToggleLabel,
+    evidenceAlternatives,
+    hasDistinctAlternatives,
+    requestedAltIndex,
+    shouldAutoExpandCandidatePicker,
+  } = useMemo(() => buildReaderLocateCandidateViewModel({
+    activeAltIndex,
+    altChangeSource,
+    alternatives,
+    candidatePickerExpanded,
+    evidenceAlternatives: payload?.evidenceAlternatives,
+    initialAltIndex: payload?.initialAltIndex,
+    locateHint,
+    requestedCandidate: {
+      headingPath: primaryHeadingPath,
+      snippet: primaryFocusSnippet,
+      highlightSnippet: primaryHighlightSnippet,
+      anchorId,
+      blockId,
+      anchorKind: primaryAnchorKind,
+      anchorNumber: primaryAnchorNumber,
+    },
+    S,
+    strictLocate,
+    title,
+    visibleAlternatives: payload?.visibleAlternatives,
+  }), [
+    S,
+    activeAltIndex,
+    altChangeSource,
+    alternatives,
+    anchorId,
+    blockId,
+    candidatePickerExpanded,
+    locateHint,
+    payload?.evidenceAlternatives,
+    payload?.initialAltIndex,
+    payload?.visibleAlternatives,
+    primaryAnchorKind,
+    primaryAnchorNumber,
+    primaryFocusSnippet,
+    primaryHeadingPath,
+    primaryHighlightSnippet,
+    strictLocate,
+    title,
+  ])
   const {
     decisionText,
     decisionTitle,
