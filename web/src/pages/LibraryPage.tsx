@@ -29,7 +29,6 @@ import type {
   LibraryQualityRepairImpact,
   LibraryQualityRepairRun,
   LibraryResearchQaRerunResponse,
-  RenameSuggestionItem,
 } from '../api/library'
 import { libraryApi } from '../api/library'
 import { referencesApi, type ReferenceSyncStats, type ShelfMetadataBackfillJobState } from '../api/references'
@@ -93,6 +92,7 @@ import { useLibraryQualityReportMetrics } from './library/useLibraryQualityRepor
 import { useShelfMetadataBackfillViewModel } from './library/useShelfMetadataBackfillViewModel'
 import { useLibraryDirectoryActions } from './library/useLibraryDirectoryActions'
 import { useLibraryUploadDraftActions } from './library/useLibraryUploadDraftActions'
+import { useLibraryRenameActions } from './library/useLibraryRenameActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -262,14 +262,6 @@ export default function LibraryPage() {
     remove_tags: [],
   })
 
-  const [renameScope, setRenameScope] = useState('30')
-  const [renameLoading, setRenameLoading] = useState(false)
-  const [renameApplying, setRenameApplying] = useState(false)
-  const [renameItems, setRenameItems] = useState<RenameSuggestionItem[]>([])
-  const [renameSelected, setRenameSelected] = useState<Record<string, boolean>>({})
-  const [renameOverrides, setRenameOverrides] = useState<Record<string, string>>({})
-  const [renameResultsOpen, setRenameResultsOpen] = useState(false)
-  const [renamePage, setRenamePage] = useState(1)
   const [suggestionsRefreshing, setSuggestionsRefreshing] = useState(false)
 
   const {
@@ -346,6 +338,34 @@ export default function LibraryPage() {
     scope,
     textModelReady,
     uploadLocked,
+    warnLlmFallback,
+  })
+  const {
+    applyRenameSuggestions,
+    clearRenameSelection,
+    pagedRenameVisible,
+    renameApplying,
+    renameItems,
+    renameLoading,
+    renameOverrides,
+    renamePage,
+    renameResultsOpen,
+    renameScope,
+    renameSelected,
+    renameVisible,
+    scanRenameSuggestions,
+    selectRenameDiffItems,
+    selectedRenameCount,
+    setRenameItemSelected,
+    setRenameOverride,
+    setRenamePage,
+    setRenameScope,
+    toggleRenameResultsOpen,
+  } = useLibraryRenameActions({
+    S,
+    pageSize: RENAME_PAGE_SIZE,
+    scope,
+    textModelReady,
     warnLlmFallback,
   })
   const resetQualityOperationUi = useCallback(() => {
@@ -532,17 +552,6 @@ export default function LibraryPage() {
     metadataBackfillRunning: shelfMetadataBackfillRunning,
     repairingNames: qualityRepairingNames,
   })
-  const renameOnlyDiff = true
-  const renameVisible = useMemo(() => (renameOnlyDiff ? renameItems.filter((x) => x.diff) : renameItems), [renameOnlyDiff, renameItems])
-  const selectedRenameCount = useMemo(() => renameItems.filter((x) => renameSelected[x.name]).length, [renameItems, renameSelected])
-  const renamePageCount = Math.max(1, Math.ceil(renameVisible.length / RENAME_PAGE_SIZE))
-  const pagedRenameVisible = useMemo(
-    () => renameVisible.slice((renamePage - 1) * RENAME_PAGE_SIZE, renamePage * RENAME_PAGE_SIZE),
-    [renamePage, renameVisible],
-  )
-  useEffect(() => {
-    if (renamePage > renamePageCount) setRenamePage(renamePageCount)
-  }, [renamePage, renamePageCount])
   const convertPercent = useMemo(() => {
     if (!store.progress || store.progress.total <= 0) return 0
     const tasks = Array.isArray(store.progress.activeTasks) ? store.progress.activeTasks : []
@@ -985,59 +994,6 @@ export default function LibraryPage() {
       return merged
     })
   }, [store.files, S])
-
-  const scanRenameSuggestions = async () => {
-    setRenameLoading(true)
-    try {
-      const effectiveUseLlm = textModelReady
-      if (!textModelReady) {
-        warnLlmFallback(S.lib_btn_rename_check)
-      }
-      const res = await libraryApi.listRenameSuggestions(renameScope, effectiveUseLlm)
-      const items = Array.isArray(res.items) ? res.items : []
-      setRenameItems(items)
-      const selected: Record<string, boolean> = {}
-      const overrides: Record<string, string> = {}
-      for (const item of items) {
-        selected[item.name] = Boolean(item.diff)
-        overrides[item.name] = item.suggested_stem || item.name.replace(/\.pdf$/i, '')
-      }
-      setRenameSelected(selected)
-      setRenameOverrides(overrides)
-      setRenameResultsOpen(items.some((item) => item.diff))
-      message.success(S.lib_msg_scan_result.replace('{changed}', String(res.changed)).replace('{total}', String(res.total_scanned)))
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : S.lib_msg_scan_rename_fail)
-    } finally {
-      setRenameLoading(false)
-    }
-  }
-
-  const applyRenameSuggestions = async () => {
-    const names = renameItems.filter((x) => renameSelected[x.name]).map((x) => x.name)
-    if (!names.length) {
-      message.info(S.lib_msg_select_rename)
-      return
-    }
-    setRenameApplying(true)
-    try {
-      const overrides: Record<string, string> = {}
-      for (const name of names) overrides[name] = String(renameOverrides[name] || '').trim()
-      const effectiveUseLlm = textModelReady
-      if (!textModelReady) {
-        warnLlmFallback(S.lib_btn_apply_rename)
-      }
-      const res = await libraryApi.applyRenameSuggestions(names, overrides, { useLlm: effectiveUseLlm, alsoMd: true })
-      message[res.failed > 0 ? 'warning' : 'success'](S.lib_msg_rename_result.replace('{ok}', String(res.renamed)).replace('{skip}', String(res.skipped)).replace('{fail}', String(res.failed)))
-      if (res.needs_reindex) message.info(S.lib_msg_rename_suggest_reindex)
-      await store.loadFiles(scope)
-      await scanRenameSuggestions()
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : S.lib_msg_apply_rename_fail)
-    } finally {
-      setRenameApplying(false)
-    }
-  }
 
   const handleConvertPending = async () => {
     const res = await store.convertPending(CONVERT_MODE)
@@ -2631,26 +2587,6 @@ export default function LibraryPage() {
     }
   }
 
-  const selectRenameDiffItems = () => {
-    setRenameSelected((cur) => {
-      const next = { ...cur }
-      for (const item of renameItems) {
-        next[item.name] = Boolean(item.diff)
-      }
-      return next
-    })
-  }
-
-  const clearRenameSelection = () => {
-    setRenameSelected((cur) => {
-      const next = { ...cur }
-      for (const item of renameItems) {
-        next[item.name] = false
-      }
-      return next
-    })
-  }
-
   const renderFileRow = (item: LibraryFileItem) => {
     return (
       <LibraryFileRow
@@ -2742,12 +2678,12 @@ export default function LibraryPage() {
       selectedRenameCount={selectedRenameCount}
       onRenameScopeChange={setRenameScope}
       onScanRenameSuggestions={scanRenameSuggestions}
-      onToggleResultsOpen={() => setRenameResultsOpen((open) => !open)}
+      onToggleResultsOpen={toggleRenameResultsOpen}
       onSelectDiffItems={selectRenameDiffItems}
       onClearSelection={clearRenameSelection}
       onApplyRenameSuggestions={applyRenameSuggestions}
-      onSelectedChange={(name, selected) => setRenameSelected((cur) => ({ ...cur, [name]: selected }))}
-      onOverrideChange={(name, value) => setRenameOverrides((cur) => ({ ...cur, [name]: value }))}
+      onSelectedChange={setRenameItemSelected}
+      onOverrideChange={setRenameOverride}
       onPageChange={setRenamePage}
     />
   )
