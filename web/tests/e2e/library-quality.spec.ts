@@ -415,6 +415,104 @@ test('shelf metadata backfill helper summarizes stage metrics', async ({ page })
   })
 })
 
+test('library full-chain stage recorder helper builds stable snapshots', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const { buildLibraryQualityFullChainStageRecord } = await import('/src/pages/library/useLibraryQualityFullChainStageRecorder.ts')
+    const stage = {
+      key: ' retrieval ',
+      label: 'Retrieval coverage',
+      action: 'rebuild_index',
+    }
+    const beforeOverview = {
+      ok: true,
+      status: 'warning',
+      full_chain: {
+        score: 45,
+        summary: 'before full-chain',
+        stages: [
+          { key: 'retrieval', label: 'Retrieval coverage', status: 'error', count: 5, detail: 'before retrieval' },
+        ],
+      },
+      feature_health: {
+        items: [
+          { key: 'index_state', target_stage: 'retrieval', status: 'warning', score: 40, count: 2, blocking: true, summary: 'index stale' },
+        ],
+      },
+    }
+    const currentOverview = {
+      ok: true,
+      status: 'warning',
+      full_chain: {
+        score: 55,
+        summary: 'current full-chain',
+        stages: [
+          { key: 'retrieval', label: 'Retrieval coverage', status: 'warning', count: 3, detail: 'current retrieval' },
+        ],
+      },
+      feature_health: { items: [] },
+    }
+    const afterOverview = {
+      ok: true,
+      status: 'good',
+      full_chain: {
+        score: 88,
+        summary: 'after full-chain',
+        stages: [
+          { key: 'retrieval', label: 'Retrieval coverage', status: 'good', count: 0, detail: 'after retrieval' },
+        ],
+      },
+      feature_health: {
+        items: [
+          { key: 'index_state', target_stage: 'retrieval', status: 'good', score: 92, count: 0, blocking: false, summary: 'index ready' },
+        ],
+      },
+    }
+
+    return buildLibraryQualityFullChainStageRecord({
+      stage,
+      stageKey: ' Retrieval ',
+      result: { status: 'success', summary: 'Rebuilt retrieval index' },
+      meta: {
+        targetIds: ['case-1'],
+        metrics: { qa_rerun_quality_ok: true },
+        verification: { quality_ok: true, type: 'research_qa_rerun' },
+        afterOverview,
+      },
+      beforeOverview,
+      currentOverview,
+      fallbackOverview: beforeOverview,
+    })
+  })
+
+  expect(result.stageKey).toBe('retrieval')
+  expect(result.result).toMatchObject({
+    status: 'success',
+    summary: 'Rebuilt retrieval index',
+  })
+  expect(result.meta).toMatchObject({
+    stageLabel: 'Retrieval coverage',
+    action: 'rebuild_index',
+    targetIds: ['case-1'],
+    metrics: { qa_rerun_quality_ok: true },
+    verification: { quality_ok: true, type: 'research_qa_rerun' },
+    before: {
+      status: 'error',
+      score: 40,
+      count: 5,
+      detail: 'before retrieval',
+      blocking: true,
+    },
+    after: {
+      status: 'good',
+      score: 92,
+      count: 0,
+      detail: 'after retrieval',
+      blocking: false,
+    },
+  })
+})
+
 test.beforeEach(async ({ page }) => {
   const brokenName = 'Optica-2024-Broken conversion.pdf'
   const weakName = 'Applied Optics-2023-Weak anchors.pdf'

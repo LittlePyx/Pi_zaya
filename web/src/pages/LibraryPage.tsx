@@ -18,7 +18,6 @@ import type {
   LibraryQualityFeatureHealthItem,
   LibraryQualityFailureCase,
   LibraryQualityFullChainStage,
-  LibraryQualityOverviewResponse,
   LibraryQualityPriorityAction,
   LibraryQualityRepairAction,
   LibraryQualityRepairImpact,
@@ -100,6 +99,10 @@ import {
   buildShelfMetadataBackfillStageSummary,
   useShelfMetadataBackfillActions,
 } from './library/useShelfMetadataBackfillActions'
+import {
+  useLibraryQualityFullChainStageRecorder,
+  type LibraryQualityFullChainStageRecordMeta,
+} from './library/useLibraryQualityFullChainStageRecorder'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -113,7 +116,6 @@ import {
   normalizeTextValue,
   numericStat,
   qualityFailureCaseMatchesStage,
-  qualityOverviewStageSnapshot,
   qualityVerificationFromRerun,
   saveResearchQaReplayFailureCase,
   stripKnownSourceExt,
@@ -777,6 +779,11 @@ export default function LibraryPage() {
   const { recordQualityFullChainResult } = useLibraryQualityActionRecorder({
     setQualityFullChainResults,
   })
+  const { recordQualityFullChainStageResult } = useLibraryQualityFullChainStageRecorder({
+    backendQualityOverview,
+    qualityOperationIsCurrent,
+    recordQualityFullChainResult,
+  })
 
   const openQualityArtifact = async (domain: 'research_qa' | 'citation_cards', target: 'report' | 'folder' | 'raw' | 'summary' | 'runbook') => {
     const key = `${domain}:${target}`
@@ -1306,31 +1313,11 @@ export default function LibraryPage() {
     const action = normalizeTextValue(stage.action).toLowerCase()
     const operationToken = beginQualityOperation(`full-chain:${stageKey}:${action}`)
     const caseTarget = firstQualityCaseForStage(stageKey)
-    const beforeOverview = backendQualityOverview
-    const beforeSnapshot = qualityOverviewStageSnapshot(beforeOverview, stageKey)
     const recordStageResult = (
       result: Omit<QualityFullChainActionResult, 'updatedAt'>,
-      meta: {
-        targetIds?: string[]
-        metrics?: Record<string, string | number | boolean | null | undefined>
-        afterOverview?: LibraryQualityOverviewResponse | null
-        verification?: Record<string, unknown>
-      } = {},
+      meta: LibraryQualityFullChainStageRecordMeta = {},
     ) => {
-      if (!qualityOperationIsCurrent(operationToken)) return
-      const latestOverview = meta.afterOverview
-        || (useLibraryStore.getState().qualityOverview?.ok ? useLibraryStore.getState().qualityOverview : null)
-        || backendQualityOverview
-      const afterSnapshot = qualityOverviewStageSnapshot(latestOverview, stageKey)
-      recordQualityFullChainResult(stageKey, result, {
-        stageLabel: stage.label,
-        action: stage.action,
-        before: beforeSnapshot,
-        after: afterSnapshot,
-        verification: meta.verification,
-        targetIds: meta.targetIds,
-        metrics: meta.metrics,
-      })
+      recordQualityFullChainStageResult(stage, stageKey, operationToken, result, meta)
     }
     setQualityFullChainActionKey(stageKey)
     try {
