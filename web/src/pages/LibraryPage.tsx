@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button,
   message,
@@ -13,7 +13,6 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons'
 import type {
-  ConversionQualitySummary,
   LibraryFileItem,
   LibraryFigureAssetRefreshResponse,
   LibraryFigureAssetScanResponse,
@@ -95,27 +94,27 @@ import {
   type ReadingStatusValue,
 } from './library/useLibraryFileFilters'
 import { useLibraryQualityFocusActions } from './library/useLibraryQualityFocusActions'
+import {
+  useLibraryQualityRepairActions,
+  type LibraryQualityRepairRunOptions as QualityRepairRunOptions,
+} from './library/useLibraryQualityRepairActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
-  buildQualityRepairHistoryRecord,
   conversionQualityStatus,
   conversionSourceReadiness,
   derivePageProgress,
   formatSeconds,
   hasConversionQualityIssue,
   loadQualityRepairHistory,
-  normalizeQualityRepairHistory,
   normalizeTextList,
   normalizeTextValue,
   numericStat,
   qualityFailureCaseMatchesStage,
   qualityOverviewStageSnapshot,
   qualityVerificationFromRerun,
-  saveQualityRepairHistory,
   saveResearchQaReplayFailureCase,
   stripKnownSourceExt,
-  summarizeConversionQualityRepair,
   type QualityRepairHistoryRecord,
 } from './library/libraryPageUtils'
 
@@ -140,17 +139,6 @@ function READING_STATUS_OPTIONS(S: Record<string, string>) {
     { value: 'done', label: S.lib_reading_status_done },
     { value: 'revisit', label: S.lib_reading_status_revisit },
   ] as const
-}
-
-type QualityRepairBaseline = {
-  quality: ConversionQualitySummary | null
-  startedAt: number
-}
-
-type QualityRepairRunOptions = {
-  autoReindexImmediate?: boolean
-  autoReindexQueued?: boolean
-  operationToken?: LibraryQualityOperationToken
 }
 
 function deriveConvertStageLabel(msg0: string, S_?: Record<string, string>) {
@@ -183,8 +171,6 @@ export default function LibraryPage() {
   const [scope, setScope] = useState('200')
   const [tabKey, setTabKey] = useState<FileTabKey>('all')
   const [browseMode, setBrowseMode] = useState<LibraryBrowseMode>('list')
-  const [qualityRepairingNames, setQualityRepairingNames] = useState<Record<string, boolean>>({})
-  const [qualityRepairResults, setQualityRepairResults] = useState<Record<string, string>>({})
   const [qualityRepairImpact, setQualityRepairImpact] = useState<LibraryQualityRepairImpact | null>(null)
   const [qualityBatchRunning, setQualityBatchRunning] = useState(false)
   const [qualityBatchResult, setQualityBatchResult] = useState<LibraryConversionQualityBatchResponse | null>(null)
@@ -204,7 +190,6 @@ export default function LibraryPage() {
   const [shelfMetadataBackfillRefreshing, setShelfMetadataBackfillRefreshing] = useState(false)
   const [qualityCaseRerunResults, setQualityCaseRerunResults] = useState<Record<string, LibraryResearchQaRerunResponse>>({})
   const [qualityFailureFilter, setQualityFailureFilter] = useState('')
-  const qualityRepairBaselinesRef = useRef<Record<string, QualityRepairBaseline>>({})
   const {
     directoriesConfigured,
     dirDirty,
@@ -536,20 +521,6 @@ export default function LibraryPage() {
     () => qualityReportRecommendations.map((item) => item.name).filter(Boolean),
     [qualityReportRecommendations],
   )
-  const qualityCenterView = useLibraryQualityCenterViewModel({
-    S,
-    reportStats: qualityReportStats,
-    sourceReadinessStats: qualitySourceReadinessStats,
-    domains: qualityDomainViews,
-    failureCount: qualityFailureCases.length,
-    metadataRemaining: Number(shelfMetadataBackfillScan?.needs_repair || 0),
-    priorityActionCount: actionableQualityPriorityActions.length,
-    recommendedRepairCount: qualityRepairRecommendedNames.length,
-    batchRunning: qualityBatchRunning,
-    repairAdvancing: qualityRepairAdvancing,
-    metadataBackfillRunning: shelfMetadataBackfillRunning,
-    repairingNames: qualityRepairingNames,
-  })
   const convertPercent = useMemo(() => {
     if (!store.progress || store.progress.total <= 0) return 0
     const tasks = Array.isArray(store.progress.activeTasks) ? store.progress.activeTasks : []
@@ -719,6 +690,43 @@ export default function LibraryPage() {
     currentListItems,
   })
   const {
+    handleRepairQualityOne,
+    handleRepairRecommendedQuality,
+    handleRepairSelectedQuality,
+    qualityRepairingNames,
+    qualityRepairResults,
+  } = useLibraryQualityRepairActions({
+    S,
+    files: store.files,
+    scope,
+    speedMode: CONVERT_MODE,
+    qualityRepairRecommendedNames,
+    selectedQualityReviewNames,
+    beginQualityOperation,
+    clearQualityOperation,
+    handleReindex,
+    loadFiles: store.loadFiles,
+    qualityOperationIsCurrent,
+    repairQuality: store.repairQuality,
+    setQualityRepairHistory,
+    setQualityRepairImpact,
+    setQualityRepairRun,
+  })
+  const qualityCenterView = useLibraryQualityCenterViewModel({
+    S,
+    reportStats: qualityReportStats,
+    sourceReadinessStats: qualitySourceReadinessStats,
+    domains: qualityDomainViews,
+    failureCount: qualityFailureCases.length,
+    metadataRemaining: Number(shelfMetadataBackfillScan?.needs_repair || 0),
+    priorityActionCount: actionableQualityPriorityActions.length,
+    recommendedRepairCount: qualityRepairRecommendedNames.length,
+    batchRunning: qualityBatchRunning,
+    repairAdvancing: qualityRepairAdvancing,
+    metadataBackfillRunning: shelfMetadataBackfillRunning,
+    repairingNames: qualityRepairingNames,
+  })
+  const {
     applyMetaSuggestionAction,
     closeMetaEditor,
     metaDraft,
@@ -753,31 +761,6 @@ export default function LibraryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    const pending = qualityRepairBaselinesRef.current
-    const pendingNames = Object.keys(pending)
-    if (!pendingNames.length) return
-    const nextPending = { ...pending }
-    const nextResults: Record<string, string> = {}
-    const nextHistory: Record<string, QualityRepairHistoryRecord> = {}
-    for (const item of store.files) {
-      const baseline = pending[item.name]
-      if (!baseline) continue
-      if (item.task_state !== 'idle' || !item.conversion_quality) continue
-      nextResults[item.name] = summarizeConversionQualityRepair(baseline.quality, item.conversion_quality, S)
-      nextHistory[item.name] = buildQualityRepairHistoryRecord(item.name, baseline.quality, item.conversion_quality)
-      delete nextPending[item.name]
-    }
-    if (Object.keys(nextResults).length <= 0) return
-    qualityRepairBaselinesRef.current = nextPending
-    setQualityRepairResults((cur) => ({ ...cur, ...nextResults }))
-    setQualityRepairHistory((cur) => {
-      const merged = normalizeQualityRepairHistory({ ...cur, ...nextHistory })
-      saveQualityRepairHistory(merged)
-      return merged
-    })
-  }, [store.files, S])
-
   const handleConvertPending = async () => {
     const res = await store.convertPending(CONVERT_MODE)
     message[res.enqueued > 0 ? 'success' : 'info'](
@@ -796,120 +779,6 @@ export default function LibraryPage() {
   const { recordQualityFullChainResult } = useLibraryQualityActionRecorder({
     setQualityFullChainResults,
   })
-
-  const repairQualityByNames = async (names: string[], opts: QualityRepairRunOptions = {}) => {
-    const targets = Array.from(new Set(names.map((name) => String(name || '').trim()).filter(Boolean)))
-    if (!targets.length) {
-      message.info(S.lib_msg_quality_repair_none)
-      return { ok: true, targetCount: 0, queued: 0, repaired: 0, needsReindex: false, reindexed: false, impact: null as LibraryQualityRepairImpact | null }
-    }
-    const operationToken = opts.operationToken || beginQualityOperation(`quality-repair:${targets.join('|')}`)
-    const ownsOperation = !opts.operationToken
-    const startedAt = Date.now()
-    const baselineByName = new Map(store.files.map((item) => [item.name, item.conversion_quality || null]))
-    qualityRepairBaselinesRef.current = {
-      ...qualityRepairBaselinesRef.current,
-      ...Object.fromEntries(targets.map((name) => [name, { quality: baselineByName.get(name) || null, startedAt }])),
-    }
-    setQualityRepairResults((cur) => {
-      const next = { ...cur }
-      for (const name of targets) delete next[name]
-      return next
-    })
-    setQualityRepairingNames((cur) => {
-      const next = { ...cur }
-      for (const name of targets) next[name] = true
-      return next
-    })
-    try {
-      const res = await store.repairQuality({
-        pdf_names: targets,
-        speed_mode: CONVERT_MODE,
-        replace: true,
-      }, {
-        autoReindexAfterQueued: opts.autoReindexQueued !== false,
-      })
-      const queued = Number(res.enqueued || 0)
-      const repaired = Number(res.repaired || 0)
-      const impact = res.impact || null
-      const needsReindex = Boolean(res.needs_reindex || impact?.needs_reindex)
-      let reindexed = false
-      if (!qualityOperationIsCurrent(operationToken)) {
-        return { ok: false, targetCount: targets.length, queued, repaired, needsReindex, reindexed, impact: null as LibraryQualityRepairImpact | null }
-      }
-      if (res.repair_run) {
-        setQualityRepairRun(res.repair_run)
-      }
-      if (impact) {
-        setQualityRepairImpact(impact)
-      }
-      if (queued > 0 || repaired > 0) {
-        message.success(
-          queued > 0
-            ? S.lib_msg_quality_repair_enqueued.replace('{n}', String(queued))
-            : `Markdown repaired: ${repaired}`,
-        )
-      } else {
-        qualityRepairBaselinesRef.current = Object.fromEntries(
-          Object.entries(qualityRepairBaselinesRef.current).filter(([name]) => !targets.includes(name)),
-        )
-        message.info(S.lib_msg_quality_repair_none)
-      }
-      await store.loadFiles(scope)
-      if (!qualityOperationIsCurrent(operationToken)) {
-        return { ok: false, targetCount: targets.length, queued, repaired, needsReindex, reindexed, impact: null as LibraryQualityRepairImpact | null }
-      }
-      if (needsReindex && repaired > 0 && queued <= 0 && opts.autoReindexImmediate !== false) {
-        reindexed = await handleReindex(operationToken)
-        if (!qualityOperationIsCurrent(operationToken)) {
-          return { ok: false, targetCount: targets.length, queued, repaired, needsReindex, reindexed, impact: null as LibraryQualityRepairImpact | null }
-        }
-        if (impact) {
-          setQualityRepairImpact({ ...impact, reindexed })
-        }
-        if (res.repair_run?.run_id) {
-          const status = reindexed ? 'completed' : 'warning'
-          const phase = reindexed ? 'reindex_complete' : 'reindex_failed'
-          setQualityRepairRun({ ...res.repair_run, status, phase, reindexed })
-          libraryApi.updateQualityRepairRun(res.repair_run.run_id, { status, phase, reindexed }).catch(() => {})
-        }
-        if (reindexed) await store.loadFiles(scope)
-      }
-      return { ok: true, targetCount: targets.length, queued, repaired, needsReindex, reindexed, impact }
-    } catch (err) {
-      qualityRepairBaselinesRef.current = Object.fromEntries(
-        Object.entries(qualityRepairBaselinesRef.current).filter(([name]) => !targets.includes(name)),
-      )
-      if (qualityOperationIsCurrent(operationToken)) {
-        message.error(err instanceof Error ? err.message : S.lib_msg_quality_repair_failed)
-      }
-      return { ok: false, targetCount: targets.length, queued: 0, repaired: 0, needsReindex: false, reindexed: false, impact: null as LibraryQualityRepairImpact | null }
-    } finally {
-      setQualityRepairingNames((cur) => {
-        const next = { ...cur }
-        for (const name of targets) delete next[name]
-        return next
-      })
-      if (ownsOperation) clearQualityOperation(operationToken)
-    }
-  }
-
-  const handleRepairQualityOne = async (item: LibraryFileItem) => {
-    if (item.task_state !== 'idle' || !hasConversionQualityIssue(item)) return
-    await repairQualityByNames([item.name])
-  }
-
-  const handleRepairSelectedQuality = async () => {
-    await repairQualityByNames(selectedQualityReviewNames)
-  }
-
-  const handleRepairRecommendedQuality = async (opts: QualityRepairRunOptions = {}) => {
-    if (!qualityRepairRecommendedNames.length) {
-      message.info(S.lib_quality_history_no_recommended)
-      return { ok: true, targetCount: 0, queued: 0, repaired: 0, needsReindex: false, reindexed: false, impact: null as LibraryQualityRepairImpact | null }
-    }
-    return repairQualityByNames(qualityRepairRecommendedNames, opts)
-  }
 
   const openQualityArtifact = async (domain: 'research_qa' | 'citation_cards', target: 'report' | 'folder' | 'raw' | 'summary' | 'runbook') => {
     const key = `${domain}:${target}`
@@ -1841,7 +1710,7 @@ export default function LibraryPage() {
     })
   }
 
-  const handleReindex = async (operationToken?: LibraryQualityOperationToken): Promise<boolean> => {
+  async function handleReindex(operationToken?: LibraryQualityOperationToken): Promise<boolean> {
     const token = operationToken || beginQualityOperation('reindex')
     const ownsOperation = !operationToken
     const hide = message.loading(S.lib_msg_updating_kb, 0)

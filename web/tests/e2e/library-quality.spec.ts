@@ -211,6 +211,53 @@ test('library quality focus helper plans current and cross-scope history targets
   })
 })
 
+test('library quality repair helper normalizes targets and completion status', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const {
+      buildLibraryQualityRepairRunCompletionPatch,
+      normalizeLibraryQualityRepairTargets,
+    } = await import('/src/pages/library/useLibraryQualityRepairActions.ts')
+    const repairRun = {
+      run_id: 'repair-1',
+      status: 'running',
+      phase: 'repair_complete',
+      created_at: 1,
+      updated_at: 2,
+      requested: 2,
+      enqueued: 0,
+      repaired: 2,
+      failed: 0,
+      skipped_busy: 0,
+      needs_reindex: true,
+      reindexed: null,
+      target_names: ['A.pdf'],
+      target_sources: [],
+      detail: '',
+    }
+
+    return {
+      targets: normalizeLibraryQualityRepairTargets([' A.pdf ', '', 'B.pdf', 'A.pdf', '  B.pdf']),
+      successPatch: buildLibraryQualityRepairRunCompletionPatch(repairRun, true),
+      warningPatch: buildLibraryQualityRepairRunCompletionPatch(repairRun, false),
+    }
+  })
+
+  expect(result.targets).toEqual(['A.pdf', 'B.pdf'])
+  expect(result.successPatch).toMatchObject({
+    run_id: 'repair-1',
+    status: 'completed',
+    phase: 'reindex_complete',
+    reindexed: true,
+  })
+  expect(result.warningPatch).toMatchObject({
+    run_id: 'repair-1',
+    status: 'warning',
+    phase: 'reindex_failed',
+    reindexed: false,
+  })
+})
+
 test.beforeEach(async ({ page }) => {
   const brokenName = 'Optica-2024-Broken conversion.pdf'
   const weakName = 'Applied Optics-2023-Weak anchors.pdf'
