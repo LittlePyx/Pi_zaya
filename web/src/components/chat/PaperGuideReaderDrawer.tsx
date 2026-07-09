@@ -29,18 +29,20 @@ import {
   useReaderSidePanelNavigation,
 } from './useReaderSidePanelNavigation'
 import {
+  buildReaderActiveLocateCandidate,
+  buildReaderOpenPayloadViewModel,
+} from './readerOpenPayloadViewModel'
+import {
   buildReaderLocateStatusViewModel,
 } from './readerLocateStatusViewModel'
 import { buildReaderLocateCandidateViewModel } from './readerLocateCandidateViewModel'
 import type {
-  ReaderLocateCandidate,
   ReaderLocateResult,
   ReaderOpenPayload,
   ReaderSelectionShelfPayload,
   ReaderSessionHighlight,
 } from './reader/readerTypes'
 import {
-  candidateIdentityKey,
   compactLocateHintLabel,
 } from './reader/readerDomUtils'
 import { useT } from '../../i18n'
@@ -120,111 +122,30 @@ export function PaperGuideReaderDrawer({
   const isInlinePresentation = presentation === 'inline'
   const isPageSurface = isInlinePresentation && surface === 'page'
 
-  const sourcePath = String(payload?.sourcePath || '').trim()
-  const sourceName = String(payload?.sourceName || '').trim()
-  const headingPath = String(payload?.headingPath || '').trim()
-  const focusSnippet = String(payload?.snippet || '').trim()
-  const highlightSnippet = String(payload?.highlightSnippet || '').trim()
-  const locateTarget = (payload?.locateTarget && typeof payload.locateTarget === 'object')
-    ? payload.locateTarget
-    : null
-  const hasStructuredLocateTarget = Boolean(locateTarget)
-  const primaryHeadingPath = String(locateTarget?.headingPath || headingPath).trim()
-  const primaryFocusSnippet = String(locateTarget?.snippet || focusSnippet).trim()
-  const primaryHighlightSnippet = String(
-    locateTarget?.highlightSnippet
-    || highlightSnippet
-    || primaryFocusSnippet,
-  ).trim()
-  const anchorId = String(locateTarget?.anchorId || payload?.anchorId || '').trim()
-  const blockId = String(locateTarget?.blockId || payload?.blockId || '').trim()
-  const relatedBlockIds = Array.isArray(locateTarget?.relatedBlockIds)
-    ? locateTarget.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
-    : Array.isArray(payload?.relatedBlockIds)
-      ? payload.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
-      : []
-  const primaryAnchorKind = String(locateTarget?.anchorKind || payload?.anchorKind || '').trim().toLowerCase()
-  const primaryAnchorNumber = Number.isFinite(Number(locateTarget?.anchorNumber || payload?.anchorNumber || 0))
-    ? Math.floor(Number(locateTarget?.anchorNumber || payload?.anchorNumber || 0))
-    : 0
-  const activeHitLevel = String(locateTarget?.hitLevel || '').trim().toLowerCase()
-  const strictLocate = Boolean(payload?.strictLocate || hasStructuredLocateTarget)
-  const locateRequestId = Number.isFinite(Number(payload?.locateRequestId || 0))
-    ? Math.max(0, Math.floor(Number(payload?.locateRequestId || 0)))
-    : 0
-  const locateFeedbackKey = String(payload?.locateFeedbackKey || '').trim()
-
-  const alternatives = useMemo(() => {
-    const listRaw = [
-      ...(Array.isArray(payload?.visibleAlternatives) ? payload.visibleAlternatives : []),
-      ...(Array.isArray(payload?.evidenceAlternatives) ? payload.evidenceAlternatives : []),
-      ...(Array.isArray(payload?.alternatives) ? payload.alternatives : []),
-    ]
-    const out: Array<Required<Pick<ReaderLocateCandidate, 'headingPath' | 'snippet' | 'highlightSnippet' | 'anchorId' | 'blockId' | 'anchorKind' | 'anchorNumber'>>> = []
-    const seen = new Set<string>()
-    const push = (
-      headingPath0: string,
-      snippet0: string,
-      highlightSnippet0: string,
-      anchorId0: string,
-      blockId0: string,
-      anchorKind0: string,
-      anchorNumber0: number,
-    ) => {
-      const heading = String(headingPath0 || '').trim()
-      const snippet = String(snippet0 || '').trim()
-      const highlightSnippet = String(highlightSnippet0 || '').trim()
-      const anchorId = String(anchorId0 || '').trim()
-      const blockId = String(blockId0 || '').trim()
-      const anchorKind = String(anchorKind0 || '').trim().toLowerCase()
-      const anchorNumber = Number.isFinite(Number(anchorNumber0)) ? Math.floor(Number(anchorNumber0)) : 0
-      if (!heading && !snippet && !highlightSnippet && !anchorId && !blockId && !anchorKind && anchorNumber <= 0) return
-      const key = candidateIdentityKey({
-        headingPath: heading,
-        snippet,
-        highlightSnippet,
-        anchorId,
-        blockId,
-        anchorKind,
-        anchorNumber,
-      })
-      if (seen.has(key)) return
-      seen.add(key)
-      out.push({ headingPath: heading, snippet, highlightSnippet, anchorId, blockId, anchorKind, anchorNumber })
-    }
-    push(
-      primaryHeadingPath,
-      primaryFocusSnippet,
-      primaryHighlightSnippet,
-      anchorId,
-      blockId,
-      primaryAnchorKind,
-      primaryAnchorNumber,
-    )
-    for (const item of listRaw) {
-      if (!item || typeof item !== 'object') continue
-      push(
-        String(item.headingPath || ''),
-        String(item.snippet || ''),
-        String(item.highlightSnippet || ''),
-        String(item.anchorId || ''),
-        String(item.blockId || ''),
-        String(item.anchorKind || ''),
-        Number(item.anchorNumber || 0),
-      )
-      if (out.length >= 6) break
-    }
-    return out
-  }, [
-    payload,
-    primaryHeadingPath,
-    primaryFocusSnippet,
-    primaryHighlightSnippet,
+  const openPayloadViewModel = useMemo(() => buildReaderOpenPayloadViewModel(payload), [payload])
+  const {
+    activeHitLevel,
+    alternatives,
+    evidenceAlternatives: payloadEvidenceAlternatives,
+    initialAltIndex,
+    locateFeedbackKey,
+    locateRequestId,
+    primaryCandidate,
+    relatedBlockIds,
+    sourceName,
+    sourcePath,
+    strictLocate,
+    visibleAlternatives,
+  } = openPayloadViewModel
+  const {
     anchorId,
+    anchorKind: primaryAnchorKind,
+    anchorNumber: primaryAnchorNumber,
     blockId,
-    primaryAnchorKind,
-    primaryAnchorNumber,
-  ])
+    headingPath: primaryHeadingPath,
+    highlightSnippet: primaryHighlightSnippet,
+    snippet: primaryFocusSnippet,
+  } = primaryCandidate
   const [activeAltIndex, setActiveAltIndexState] = useState(0)
   const [candidatePickerExpanded, setCandidatePickerExpanded] = useState(false)
   const setActiveAltIndex = (idx: number, source: 'system' | 'manual' = 'system') => {
@@ -255,21 +176,24 @@ export function PaperGuideReaderDrawer({
     sourceName: title,
     sourcePath,
   })
-  const activeAlt = alternatives[activeAltIndex] || null
-  const activeHeadingPath = String(activeAlt?.headingPath || primaryHeadingPath).trim()
-  const activeFocusSnippet = String(activeAlt?.snippet || primaryFocusSnippet).trim()
-  const activeHighlightSnippet = String(activeAlt?.highlightSnippet || primaryHighlightSnippet || activeFocusSnippet).trim()
-  const activeAnchorId = String(activeAlt?.anchorId || anchorId).trim()
-  const activeBlockId = String(activeAlt?.blockId || blockId).trim()
-  const activeAnchorKind = String(activeAlt?.anchorKind || primaryAnchorKind).trim().toLowerCase()
-  const activeAnchorNumber = Number.isFinite(Number(activeAlt?.anchorNumber || primaryAnchorNumber || 0))
-    ? Math.floor(Number(activeAlt?.anchorNumber || primaryAnchorNumber || 0))
-    : 0
-  const expectsEquationBinding = useMemo(() => {
-    if (activeAnchorKind === 'equation') return true
-    if (alternatives.some((item) => String(item?.anchorKind || '').trim().toLowerCase() === 'equation')) return true
-    return false
-  }, [activeAnchorKind, alternatives])
+  const {
+    activeAnchorId,
+    activeAnchorKind,
+    activeAnchorNumber,
+    activeBlockId,
+    activeFocusSnippet,
+    activeHeadingPath,
+    activeHighlightSnippet,
+    expectsEquationBinding,
+  } = useMemo(() => buildReaderActiveLocateCandidate({
+    activeAltIndex,
+    alternatives,
+    primaryCandidate,
+  }), [
+    activeAltIndex,
+    alternatives,
+    primaryCandidate,
+  ])
 
   const {
     locateHint,
@@ -321,7 +245,7 @@ export function PaperGuideReaderDrawer({
     activeBlockId,
     activeHeadingPath,
     error,
-    locateFeedbackKey: payload?.locateFeedbackKey,
+    locateFeedbackKey,
     locateRequestId,
     locateResult,
     onLocateResult,
@@ -353,8 +277,8 @@ export function PaperGuideReaderDrawer({
     altChangeSource,
     alternatives,
     candidatePickerExpanded,
-    evidenceAlternatives: payload?.evidenceAlternatives,
-    initialAltIndex: payload?.initialAltIndex,
+    evidenceAlternatives: payloadEvidenceAlternatives,
+    initialAltIndex,
     locateHint,
     requestedCandidate: {
       headingPath: primaryHeadingPath,
@@ -368,7 +292,7 @@ export function PaperGuideReaderDrawer({
     S,
     strictLocate,
     title,
-    visibleAlternatives: payload?.visibleAlternatives,
+    visibleAlternatives,
   }), [
     S,
     activeAltIndex,
@@ -377,10 +301,9 @@ export function PaperGuideReaderDrawer({
     anchorId,
     blockId,
     candidatePickerExpanded,
+    initialAltIndex,
     locateHint,
-    payload?.evidenceAlternatives,
-    payload?.initialAltIndex,
-    payload?.visibleAlternatives,
+    payloadEvidenceAlternatives,
     primaryAnchorKind,
     primaryAnchorNumber,
     primaryFocusSnippet,
@@ -388,6 +311,7 @@ export function PaperGuideReaderDrawer({
     primaryHighlightSnippet,
     strictLocate,
     title,
+    visibleAlternatives,
   ])
   const {
     decisionText,
@@ -614,7 +538,7 @@ export function PaperGuideReaderDrawer({
 
   useEffect(() => {
     setActiveAltIndex(requestedAltIndex, 'system')
-  }, [payload, requestedAltIndex])
+  }, [openPayloadViewModel, requestedAltIndex])
 
   useEffect(() => {
     if (!open) {

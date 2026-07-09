@@ -307,6 +307,14 @@ async function readerLocateCandidateViewModelSmoke(page: Page) {
   })
 }
 
+async function readerOpenPayloadViewModelSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderOpenPayloadViewModelSmoke } = await import('/src/testing/readerOpenPayloadViewModelSmoke.ts')
+    return runReaderOpenPayloadViewModelSmoke()
+  })
+}
+
 async function readerSidePanelNavigationSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1581,6 +1589,86 @@ test('reader locate candidate view model derives options and picker state', asyn
   expect(result.single.candidateOptions).toMatchObject([
     { roleLabel: 'Primary', roleTone: 'accent', targetIndex: 0 },
   ])
+})
+
+test('reader open payload view model normalizes locate targets and alternatives', async ({ page }) => {
+  const result = await readerOpenPayloadViewModelSmoke(page)
+  const primary = {
+    anchorId: 'target-anchor',
+    anchorKind: 'equation',
+    anchorNumber: 4,
+    blockId: 'target-block',
+    headingPath: 'Target Heading',
+    highlightSnippet: 'target quote',
+    snippet: 'target snippet',
+  }
+
+  expect(result.rich).toMatchObject({
+    activeHitLevel: 'exact',
+    hasStructuredLocateTarget: true,
+    initialAltIndex: 2,
+    locateFeedbackKey: 'feedback-key',
+    locateRequestId: 9,
+    primaryCandidate: primary,
+    relatedBlockIds: ['rel-a'],
+    sourceName: 'Reader Paper',
+    sourcePath: '/tmp/paper.md',
+    strictLocate: true,
+    visibleCount: 2,
+    evidenceCount: 1,
+  })
+  expect(result.rich.alternatives).toEqual([
+    primary,
+    {
+      anchorId: '',
+      anchorKind: '',
+      anchorNumber: 0,
+      blockId: '',
+      headingPath: 'Visible Section',
+      highlightSnippet: '',
+      snippet: 'visible quote',
+    },
+    {
+      anchorId: '',
+      anchorKind: '',
+      anchorNumber: 0,
+      blockId: 'evidence-block',
+      headingPath: '',
+      highlightSnippet: '',
+      snippet: 'evidence quote',
+    },
+    {
+      anchorId: '',
+      anchorKind: 'figure',
+      anchorNumber: 3,
+      blockId: '',
+      headingPath: 'Figure Section',
+      highlightSnippet: '',
+      snippet: '',
+    },
+  ])
+  expect(result.activeFigure).toMatchObject({
+    activeAnchorKind: 'figure',
+    activeAnchorNumber: 3,
+    activeFocusSnippet: 'target snippet',
+    activeHeadingPath: 'Figure Section',
+    activeHighlightSnippet: 'target quote',
+    expectsEquationBinding: true,
+  })
+  expect(result.fallbackPrimary).toMatchObject({
+    activeAlt: null,
+    activeAnchorKind: 'equation',
+    activeAnchorNumber: 4,
+    activeBlockId: 'target-block',
+    activeHeadingPath: 'Target Heading',
+    expectsEquationBinding: true,
+  })
+  expect(result.empty).toEqual({
+    alternativesCount: 0,
+    locateRequestId: 0,
+    sourcePath: '',
+    strictLocate: false,
+  })
 })
 
 test('reader side panel navigation helper derives compact labels', async ({ page }) => {
