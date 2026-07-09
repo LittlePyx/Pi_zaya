@@ -517,8 +517,13 @@ test('library full-chain stage result helpers classify and build records', async
   await page.goto('/library')
   const result = await page.evaluate(async () => {
     const {
+      buildLibraryQualityConversionReviewStageRecord,
+      buildLibraryQualityConversionStageRecord,
       buildLibraryQualityMetadataStageRecord,
       buildLibraryQualityRepairLoopStageRecord,
+      buildLibraryQualityResearchQaOpenStageRecord,
+      buildLibraryQualityResearchQaRepairPlanStageRecord,
+      buildLibraryQualityResearchQaRerunStageRecord,
       buildLibraryQualityRetrievalStageRecord,
       getLibraryQualityFullChainStageKind,
     } = await import('/src/pages/library/libraryQualityFullChainStageResults.ts')
@@ -565,6 +570,31 @@ test('library full-chain stage result helpers classify and build records', async
         ok: false,
         rerun: null,
       }).result,
+      conversionQueued: buildLibraryQualityConversionStageRecord({
+        repair: { ok: true, targetCount: 3, queued: 2, repaired: 0 },
+        completed: false,
+        needsReindex: false,
+        reindexed: false,
+        targetIds: ['doc-a', 'doc-b', 'doc-c'],
+        rerun: null,
+      }),
+      conversionReindexFailed: buildLibraryQualityConversionStageRecord({
+        repair: { ok: true, targetCount: 1, queued: 0, repaired: 1 },
+        completed: true,
+        needsReindex: true,
+        reindexed: false,
+        targetIds: ['doc-a'],
+        rerun: null,
+      }),
+      conversionVerified: buildLibraryQualityConversionStageRecord({
+        repair: { ok: true, targetCount: 2, queued: 2, repaired: 0 },
+        completed: true,
+        needsReindex: false,
+        reindexed: false,
+        targetIds: ['doc-a', 'doc-b'],
+        rerun: passedRerun,
+      }),
+      conversionReview: buildLibraryQualityConversionReviewStageRecord(),
       metadataRunning: buildLibraryQualityMetadataStageRecord({
         result: { ...metadataBase, targetCount: 2, running: true },
         rerun: null,
@@ -578,6 +608,16 @@ test('library full-chain stage result helpers classify and build records', async
         caseId: 'case-1',
         rerun: passedRerun,
       }),
+      researchPlanPassed: buildLibraryQualityResearchQaRepairPlanStageRecord({
+        caseId: 'case-1',
+        result: { ok: true, status: 'passed', rerun: passedRerun },
+      }),
+      researchRerunFailed: buildLibraryQualityResearchQaRerunStageRecord({
+        caseId: 'case-2',
+        rerun: failedRerun,
+      }),
+      researchRunbook: buildLibraryQualityResearchQaOpenStageRecord('run_research_qa'),
+      researchReport: buildLibraryQualityResearchQaOpenStageRecord('open_report'),
     }
   })
 
@@ -603,6 +643,41 @@ test('library full-chain stage result helpers classify and build records', async
   expect(result.retrievalError).toMatchObject({
     status: 'error',
     summary: 'Retrieval index rebuild failed',
+  })
+  expect(result.conversionQueued.result).toMatchObject({
+    status: 'success',
+    summary: 'Queued 2 conversion repairs',
+    detail: '3 recommended sources checked',
+  })
+  expect(result.conversionQueued.meta).toMatchObject({
+    targetIds: ['doc-a', 'doc-b', 'doc-c'],
+    metrics: {
+      queued: 2,
+      repaired: 0,
+      target_count: 3,
+      conversion_completed: false,
+      needs_reindex: false,
+      reindexed: false,
+      qa_rerun_quality_ok: false,
+    },
+  })
+  expect(result.conversionReindexFailed.result).toMatchObject({
+    status: 'warning',
+    summary: 'Markdown autofix repaired 1; index refresh failed',
+    detail: 'Rebuild the retrieval index before rerunning QA.',
+  })
+  expect(result.conversionVerified.result).toMatchObject({
+    status: 'success',
+    summary: 'Verified 2 conversion repairs',
+    detail: 'Regression check: case-1',
+  })
+  expect(result.conversionVerified.meta).toMatchObject({
+    metrics: { qa_rerun_quality_ok: true },
+    verification: { type: 'research_qa_rerun', case_id: 'case-1', status: 'passed', quality_ok: true, failure_count: 0 },
+  })
+  expect(result.conversionReview.result).toMatchObject({
+    status: 'info',
+    summary: 'Focused the conversion review list',
   })
   expect(result.metadataRunning.result).toMatchObject({
     status: 'success',
@@ -632,6 +707,30 @@ test('library full-chain stage result helpers classify and build records', async
     targetIds: ['case-1'],
     metrics: { quality_ok: true, failure_count: 0 },
     verification: { type: 'research_qa_rerun', case_id: 'case-1', status: 'passed', quality_ok: true, failure_count: 0 },
+  })
+  expect(result.researchPlanPassed).toMatchObject({
+    result: { status: 'success', summary: 'Repair plan passed: case-1', detail: 'Last status: passed' },
+    meta: {
+      targetIds: ['case-1'],
+      metrics: { quality_ok: true, has_rerun: true },
+      verification: { type: 'research_qa_rerun', case_id: 'case-1', status: 'passed', quality_ok: true, failure_count: 0 },
+    },
+  })
+  expect(result.researchRerunFailed).toMatchObject({
+    result: { status: 'warning', summary: 'QA case still failing: case-2', detail: '2 failures remain' },
+    meta: {
+      targetIds: ['case-2'],
+      metrics: { quality_ok: false, failure_count: 2 },
+      verification: { type: 'research_qa_rerun', case_id: 'case-2', status: 'failed', quality_ok: false, failure_count: 2 },
+    },
+  })
+  expect(result.researchRunbook.result).toMatchObject({
+    status: 'info',
+    summary: 'Opened QA runbook',
+  })
+  expect(result.researchReport.result).toMatchObject({
+    status: 'info',
+    summary: 'Opened QA report',
   })
 })
 

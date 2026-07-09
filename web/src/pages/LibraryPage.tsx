@@ -104,8 +104,13 @@ import {
   type LibraryQualityFullChainStageRecordMeta,
 } from './library/useLibraryQualityFullChainStageRecorder'
 import {
+  buildLibraryQualityConversionReviewStageRecord,
+  buildLibraryQualityConversionStageRecord,
   buildLibraryQualityMetadataStageRecord,
   buildLibraryQualityRepairLoopStageRecord,
+  buildLibraryQualityResearchQaOpenStageRecord,
+  buildLibraryQualityResearchQaRepairPlanStageRecord,
+  buildLibraryQualityResearchQaRerunStageRecord,
   buildLibraryQualityRetrievalStageRecord,
   getLibraryQualityFullChainStageKind,
 } from './library/libraryQualityFullChainStageResults'
@@ -122,7 +127,6 @@ import {
   normalizeTextValue,
   numericStat,
   qualityFailureCaseMatchesStage,
-  qualityVerificationFromRerun,
   saveResearchQaReplayFailureCase,
   stripKnownSourceExt,
   type QualityRepairHistoryRecord,
@@ -1338,8 +1342,6 @@ export default function LibraryPage() {
           if (!qualityOperationIsCurrent(operationToken)) return
           const completed = Number(repair?.queued || 0) > 0 ? await waitForLibraryConversionDone() : true
           if (!qualityOperationIsCurrent(operationToken)) return
-          const repaired = Number(repair?.repaired || 0)
-          const queued = Number(repair?.queued || 0)
           const needsReindex = Boolean(repair?.needsReindex || repair?.impact?.needs_reindex)
           const reindexed = completed && needsReindex ? await handleReindex(operationToken) : false
           if (!qualityOperationIsCurrent(operationToken)) return
@@ -1352,40 +1354,20 @@ export default function LibraryPage() {
           if (!qualityOperationIsCurrent(operationToken)) return
           const afterOverview = await refreshQualityOverviewSnapshot()
           if (!qualityOperationIsCurrent(operationToken)) return
-          const repairOk = Boolean(repair?.ok)
-          const reindexFailed = Boolean(completed && needsReindex && !reindexed)
-          recordStageResult({
-            status: reindexFailed ? 'warning' : (queued > 0 || repaired > 0 ? 'success' : (repairOk ? 'info' : 'error')),
-            summary: queued > 0
-              ? (completed
-                ? (reindexFailed ? `Converted ${queued} sources; index refresh failed` : `Verified ${queued} conversion repairs`)
-                : `Queued ${queued} conversion repairs`)
-              : (repaired > 0
-                ? (reindexFailed ? `Markdown autofix repaired ${repaired}; index refresh failed` : `Markdown autofix repaired ${repaired} sources`)
-                : (repairOk ? 'No conversion repair was queued' : 'Conversion repair failed')),
-            detail: rerun?.case_id
-              ? `Regression check: ${rerun.case_id}`
-              : (reindexFailed ? 'Rebuild the retrieval index before rerunning QA.' : (repair?.targetCount ? `${repair.targetCount} recommended sources checked` : undefined)),
-          }, {
+          const record = buildLibraryQualityConversionStageRecord({
+            repair,
+            completed,
+            needsReindex,
+            reindexed,
             targetIds: qualityRepairRecommendedNames.slice(0, 12),
-            metrics: {
-              queued,
-              repaired,
-              target_count: Number(repair?.targetCount || 0),
-              conversion_completed: Boolean(completed),
-              needs_reindex: needsReindex,
-              reindexed,
-              qa_rerun_quality_ok: Boolean(rerun?.quality_ok || rerun?.status === 'passed'),
-            },
+            rerun,
             afterOverview,
-            verification: qualityVerificationFromRerun(rerun),
           })
+          recordStageResult(record.result, record.meta)
         } else {
           handleFocusQualityReview()
-          recordStageResult({
-            status: 'info',
-            summary: 'Focused the conversion review list',
-          })
+          const record = buildLibraryQualityConversionReviewStageRecord()
+          recordStageResult(record.result, record.meta)
         }
         return
       }
@@ -1450,47 +1432,27 @@ export default function LibraryPage() {
           if (!qualityOperationIsCurrent(operationToken)) return
           const afterOverview = await refreshQualityOverviewSnapshot()
           if (!qualityOperationIsCurrent(operationToken)) return
-          recordStageResult({
-            status: result?.ok ? 'success' : 'warning',
-            summary: result?.rerun?.quality_ok || result?.rerun?.status === 'passed'
-              ? `Repair plan passed: ${caseTarget.id}`
-              : `Repair plan ran: ${caseTarget.id}`,
-            detail: result?.status ? `Last status: ${result.status}` : undefined,
-          }, {
-            targetIds: [caseTarget.id],
-            metrics: {
-              quality_ok: Boolean(result?.rerun?.quality_ok),
-              has_rerun: Boolean(result?.rerun),
-            },
+          const record = buildLibraryQualityResearchQaRepairPlanStageRecord({
+            caseId: caseTarget.id,
+            result,
             afterOverview,
-            verification: qualityVerificationFromRerun(result?.rerun),
           })
+          recordStageResult(record.result, record.meta)
         } else if (caseTarget) {
           const rerun = await runQualityFailureCaseRerun(caseTarget, operationToken)
           if (!qualityOperationIsCurrent(operationToken)) return
           const afterOverview = await refreshQualityOverviewSnapshot()
           if (!qualityOperationIsCurrent(operationToken)) return
-          recordStageResult({
-            status: rerun?.quality_ok || rerun?.status === 'passed' ? 'success' : 'warning',
-            summary: rerun?.quality_ok || rerun?.status === 'passed'
-              ? `QA case passed: ${caseTarget.id}`
-              : `QA case still failing: ${caseTarget.id}`,
-            detail: rerun?.failures?.length ? `${rerun.failures.length} failures remain` : undefined,
-          }, {
-            targetIds: [caseTarget.id],
-            metrics: {
-              quality_ok: Boolean(rerun?.quality_ok),
-              failure_count: Number(rerun?.failures?.length || 0),
-            },
+          const record = buildLibraryQualityResearchQaRerunStageRecord({
+            caseId: caseTarget.id,
+            rerun,
             afterOverview,
-            verification: qualityVerificationFromRerun(rerun),
           })
+          recordStageResult(record.result, record.meta)
         } else {
           await openQualityArtifact('research_qa', action === 'run_research_qa' ? 'runbook' : 'report')
-          recordStageResult({
-            status: 'info',
-            summary: action === 'run_research_qa' ? 'Opened QA runbook' : 'Opened QA report',
-          })
+          const record = buildLibraryQualityResearchQaOpenStageRecord(action)
+          recordStageResult(record.result, record.meta)
         }
         return
       }
