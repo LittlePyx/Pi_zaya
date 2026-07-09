@@ -258,6 +258,71 @@ test('library quality repair helper normalizes targets and completion status', a
   })
 })
 
+test('library quality maintenance helper derives refresh sources and reindex detail', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const {
+      buildLibraryFigureAssetRefreshSources,
+      buildLibraryReindexFailureDetail,
+    } = await import('/src/pages/library/useLibraryQualityMaintenanceActions.ts')
+    const scan = {
+      items: [
+        {
+          refresh_recommended: true,
+          md_path: ' F:\\kb\\md\\paper-a.md ',
+          source_name: 'Paper A',
+          pdf_name: 'Paper A.pdf',
+        },
+        {
+          refresh_recommended: true,
+          md_path: '',
+          source_name: '',
+          pdf_name: 'Paper B.pdf',
+        },
+        {
+          refresh_recommended: false,
+          md_path: 'F:\\kb\\md\\paper-c.md',
+          source_name: 'Paper C',
+          pdf_name: 'Paper C.pdf',
+        },
+        {
+          refresh_recommended: true,
+          md_path: '',
+          source_name: '',
+          pdf_name: '',
+        },
+      ],
+    }
+
+    return {
+      sources: buildLibraryFigureAssetRefreshSources(scan),
+      structuredDetail: buildLibraryReindexFailureDetail({
+        structured_indices_error: ' structured index failed ',
+        stderr: 'stderr fallback',
+        refsync_error: 'refsync fallback',
+      }),
+      stderrDetail: buildLibraryReindexFailureDetail({
+        structured_indices_error: '',
+        stderr: ' stderr failed ',
+        refsync_error: 'refsync fallback',
+      }),
+      emptyDetail: buildLibraryReindexFailureDetail({
+        structured_indices_error: '',
+        stderr: '',
+        refsync_error: '',
+      }),
+    }
+  })
+
+  expect(result.sources).toEqual([
+    { source_path: 'F:\\kb\\md\\paper-a.md', source_name: 'Paper A' },
+    { source_path: '', source_name: 'Paper B.pdf' },
+  ])
+  expect(result.structuredDetail).toBe('structured index failed')
+  expect(result.stderrDetail).toBe('stderr failed')
+  expect(result.emptyDetail).toBe('')
+})
+
 test.beforeEach(async ({ page }) => {
   const brokenName = 'Optica-2024-Broken conversion.pdf'
   const weakName = 'Applied Optics-2023-Weak anchors.pdf'

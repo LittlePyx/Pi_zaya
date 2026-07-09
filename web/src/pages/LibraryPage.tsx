@@ -14,10 +14,7 @@ import {
 } from '@ant-design/icons'
 import type {
   LibraryFileItem,
-  LibraryFigureAssetRefreshResponse,
-  LibraryFigureAssetScanResponse,
   LibraryQualityActionHistoryItem,
-  LibraryConversionQualityBatchResponse,
   LibraryQualityFeatureHealthItem,
   LibraryQualityFailureCase,
   LibraryQualityFullChainStage,
@@ -98,6 +95,7 @@ import {
   useLibraryQualityRepairActions,
   type LibraryQualityRepairRunOptions as QualityRepairRunOptions,
 } from './library/useLibraryQualityRepairActions'
+import { useLibraryQualityMaintenanceActions } from './library/useLibraryQualityMaintenanceActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -173,11 +171,6 @@ export default function LibraryPage() {
   const [browseMode, setBrowseMode] = useState<LibraryBrowseMode>('list')
   const [qualityRepairImpact, setQualityRepairImpact] = useState<LibraryQualityRepairImpact | null>(null)
   const [qualityBatchRunning, setQualityBatchRunning] = useState(false)
-  const [qualityBatchResult, setQualityBatchResult] = useState<LibraryConversionQualityBatchResponse | null>(null)
-  const [figureAssetScan, setFigureAssetScan] = useState<LibraryFigureAssetScanResponse | null>(null)
-  const [figureAssetScanRunning, setFigureAssetScanRunning] = useState(false)
-  const [figureAssetRefreshResult, setFigureAssetRefreshResult] = useState<LibraryFigureAssetRefreshResponse | null>(null)
-  const [figureAssetRefreshRunning, setFigureAssetRefreshRunning] = useState(false)
   const [qualityRepairRun, setQualityRepairRun] = useState<LibraryQualityRepairRun | null>(null)
   const [qualityRepairAdvancing, setQualityRepairAdvancing] = useState(false)
   const [qualityRepairHistory, setQualityRepairHistory] = useState<Record<string, QualityRepairHistoryRecord>>(() => loadQualityRepairHistory())
@@ -308,6 +301,30 @@ export default function LibraryPage() {
   } = useLibraryQualityOperationGuard({
     scope,
     onBegin: resetQualityOperationUi,
+  })
+  const {
+    figureAssetRefreshResult,
+    figureAssetRefreshRunning,
+    figureAssetScan,
+    figureAssetScanRunning,
+    handleReindex,
+    qualityBatchResult,
+    refreshFigureAssets,
+    runConversionQualityBatch,
+    runFigureAssetQualityScan,
+  } = useLibraryQualityMaintenanceActions({
+    S,
+    scope,
+    speedMode: CONVERT_MODE,
+    beginQualityOperation,
+    clearQualityOperation,
+    loadFiles: store.loadFiles,
+    loadQualityOverview: store.loadQualityOverview,
+    qualityOperationIsActive,
+    qualityOperationIsCurrent,
+    reindex: store.reindex,
+    setQualityBatchRunning,
+    startProgressStream: store.startProgressStream,
   })
 
   const pendingFiles = useMemo(() => store.files.filter((x) => x.category === 'pending'), [store.files])
@@ -1708,153 +1725,6 @@ export default function LibraryPage() {
         await handleDeleteOne(item)
       },
     })
-  }
-
-  async function handleReindex(operationToken?: LibraryQualityOperationToken): Promise<boolean> {
-    const token = operationToken || beginQualityOperation('reindex')
-    const ownsOperation = !operationToken
-    const hide = message.loading(S.lib_msg_updating_kb, 0)
-    try {
-      const res = await store.reindex()
-      hide()
-      if (!qualityOperationIsCurrent(token)) return false
-      if (!res.ok) {
-        const detail = [
-          res.structured_indices_error,
-          res.stderr,
-          res.refsync_error,
-        ].map((item) => String(item || '').trim()).find(Boolean)
-        message.error(detail ? `${S.lib_msg_exec_fail}: ${detail}` : S.lib_msg_exec_fail)
-        return false
-      }
-      message.success(S.lib_msg_exec_done)
-      if (res.refsync_error) {
-        message.warning(S.lib_msg_refsync_fail_detail.replace('{error}', String(res.refsync_error)))
-      } else if (res.refsync?.started) {
-        message.info(S.lib_msg_refsync_started_bg)
-      }
-      return true
-    } catch (err) {
-      hide()
-      if (qualityOperationIsCurrent(token)) {
-        message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
-      }
-      return false
-    } finally {
-      if (ownsOperation) clearQualityOperation(token)
-    }
-  }
-
-  const runConversionQualityBatch = async (repair: boolean) => {
-    const operationToken = beginQualityOperation(repair ? 'quality-batch-repair' : 'quality-batch-scan')
-    const hide = message.loading(repair ? 'Repairing conversion quality...' : 'Scanning conversion source quality...', 0)
-    setQualityBatchRunning(true)
-    try {
-      const res = await libraryApi.conversionQualityBatch({
-        repair,
-        rebuild_indices: true,
-        limit: 1000,
-      })
-      hide()
-      if (!qualityOperationIsCurrent(operationToken)) return
-      setQualityBatchResult(res)
-      if (!res.ok) {
-        message.error(S.lib_msg_exec_fail)
-        return
-      }
-      if (repair && res.needs_reindex) {
-        const reindexed = await handleReindex(operationToken)
-        if (!qualityOperationIsCurrent(operationToken)) return
-        if (!reindexed) {
-          message.warning('Conversion repair finished, but index refresh needs retry.')
-        } else {
-          message.success(`Safe repair finished: ${res.changed} changed, index refreshed`)
-        }
-      } else {
-        message.success(repair
-          ? `Safe repair finished: ${res.changed} changed, ${res.ready} ready`
-          : `Source scan finished: ${res.scanned} checked, ${res.ready} ready`)
-      }
-      await store.loadFiles(scope)
-      if (!qualityOperationIsCurrent(operationToken)) return
-      await store.loadQualityOverview('all')
-    } catch (err) {
-      hide()
-      if (qualityOperationIsCurrent(operationToken)) {
-        message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
-      }
-    } finally {
-      if (qualityOperationIsActive(operationToken)) setQualityBatchRunning(false)
-      clearQualityOperation(operationToken)
-    }
-  }
-
-  const runFigureAssetQualityScan = async (includeAll = false) => {
-    setFigureAssetScanRunning(true)
-    try {
-      const res = await libraryApi.figureAssetQualityScan({
-        limit: 1000,
-        include_all: includeAll,
-      })
-      setFigureAssetScan(res)
-      setFigureAssetRefreshResult(null)
-      if (Number(res.refresh_recommended || 0) > 0) {
-        message.warning(`Figure asset scan found ${res.refresh_recommended} sources to refresh`)
-      } else {
-        message.success(`Figure asset scan checked ${res.scanned} sources`)
-      }
-      return res
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Figure asset scan failed')
-      return null
-    } finally {
-      setFigureAssetScanRunning(false)
-    }
-  }
-
-  const refreshFigureAssets = async () => {
-    if (!figureAssetScan) {
-      message.info('Run a figure asset scan before refreshing flagged sources')
-      return
-    }
-    const sourceItems = (figureAssetScan.items || []).filter((item) => Boolean(item.refresh_recommended))
-    const sources = sourceItems.map((item) => ({
-      source_path: item.md_path,
-      source_name: item.source_name || item.pdf_name,
-    })).filter((item) => item.source_path || item.source_name)
-    if (sources.length <= 0) {
-      message.info('No figure assets need refresh right now')
-      return
-    }
-    setFigureAssetRefreshRunning(true)
-    try {
-      const res = await libraryApi.refreshFigureAssets({
-        sources,
-        limit: Math.max(1, sources.length),
-        speed_mode: CONVERT_MODE,
-        replace: true,
-        target_dpi: figureAssetScan?.target_dpi,
-      })
-      setFigureAssetRefreshResult(res)
-      if (Number(res.enqueued || 0) > 0) {
-        message.success(`Figure asset refresh queued: ${res.enqueued}`)
-        store.startProgressStream()
-      } else if (Number(res.skipped_busy || 0) > 0) {
-        message.warning(`Figure asset refresh skipped busy sources: ${res.skipped_busy}`)
-      } else if (Number(res.failed || 0) > 0) {
-        message.error(`Figure asset refresh failed: ${res.failed}`)
-      } else {
-        message.info('No figure assets need refresh right now')
-      }
-      await store.loadFiles(scope)
-      await store.loadQualityOverview('all')
-      return res
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Figure asset refresh failed')
-      return null
-    } finally {
-      setFigureAssetRefreshRunning(false)
-    }
   }
 
   const handleAdvanceQualityRepairRun = async () => {
