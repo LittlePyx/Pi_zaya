@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from api.contracts.generation import GenerationStreamEvent
 from api.deps import get_settings, get_chat_store, load_prefs
 from api.internal_access import internal_api_allowed, require_internal_api
 from api.routers.chat import _normalize_chat_image_attachment, _resolve_allowed_paper_guide_source_path
@@ -490,54 +491,20 @@ async def stream_generation(session_id: str, request: Request):
         t = _gen_get_task(session_id)
         if t is None:
             failure_message = generation_start_failed_message(load_prefs().get("ui_locale"))
-            return {
-                "stream_schema_version": 2,
-                "stage": "error",
-                "partial": failure_message,
-                "char_count": len(failure_message),
-                "done": True,
-                "status": "error",
-                "answer": failure_message,
-                "error": "not_found",
-                "answer_intent": "",
-                "answer_depth": "",
-                "answer_output_mode": "",
-                "answer_contract_v1": False,
-                "answer_quality": {},
-                "paper_guide_debug": {},
-                "research_trace": {},
-                "agent_trace": {},
-                "agent_source_summary": {},
-                "answer_runtime_check": {},
-                "answer_contract": {},
-            }
+            return GenerationStreamEvent.missing_task(failure_message).as_dict()
         partial = _strip_internal_structured_markers(str(t.get("partial", "") or ""))
         answer = _strip_internal_structured_markers(str(t.get("answer", "") or ""))
         if bool(t.get("agent_mode")):
             partial = clean_assistant_answer_presentation_text(partial)
             answer = clean_assistant_answer_presentation_text(answer)
         visible_text = partial or answer
-        return {
-            "stream_schema_version": 2,
-            "stage": t.get("stage", ""),
-            "partial": partial,
-            "char_count": len(visible_text) if visible_text else t.get("char_count", 0),
-            "done": t.get("status") in ("done", "error", "canceled"),
-            "status": t.get("status", ""),
-            "answer": answer,
-            "error": t.get("error", ""),
-            "answer_intent": t.get("answer_intent", ""),
-            "answer_depth": t.get("answer_depth", ""),
-            "answer_output_mode": t.get("answer_output_mode", ""),
-            "answer_contract_v1": bool(t.get("answer_contract_v1", False)),
-            "answer_quality": t.get("answer_quality", {}),
-            "paper_guide_debug": t.get("paper_guide_debug", {}) if include_internal_debug else {},
-            "research_trace": t.get("research_trace", {}) if include_internal_debug else {},
-            "agent_trace": t.get("agent_trace", {}) if bool(t.get("agent_mode")) else {},
-            "agent_source_summary": t.get("agent_source_summary", {}) if bool(t.get("agent_mode")) else {},
-            "answer_runtime_check": t.get("answer_runtime_check", {}) if bool(t.get("agent_mode")) else {},
-            "answer_contract": t.get("answer_contract", {}) if bool(t.get("agent_mode")) else {},
-        }
+        return GenerationStreamEvent.from_task(
+            t,
+            partial=partial,
+            answer=answer,
+            visible_text=visible_text,
+            include_internal_debug=include_internal_debug,
+        ).as_dict()
 
     return sse_response(sse_generator(poll, interval=0.15))
 
