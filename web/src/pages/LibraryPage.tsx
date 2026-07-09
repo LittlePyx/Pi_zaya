@@ -68,8 +68,6 @@ import { LibraryFileList } from './library/LibraryFileList'
 import {
   LibraryCategoryCards,
   LibraryTagCards,
-  type CategoryCardItem,
-  type TagCardItem,
 } from './library/LibraryTaxonomyViews'
 import { LibraryTaxonomyToolbar } from './library/LibraryTaxonomyToolbar'
 import { useLibraryQualityCenterViewModel } from './library/useLibraryQualityCenterViewModel'
@@ -92,6 +90,10 @@ import { useLibraryRenameActions } from './library/useLibraryRenameActions'
 import { useLibraryBatchMetadataActions } from './library/useLibraryBatchMetadataActions'
 import { useLibraryMetadataActions } from './library/useLibraryMetadataActions'
 import { useLibrarySuggestionRefreshActions } from './library/useLibrarySuggestionRefreshActions'
+import {
+  useLibraryFileFilters,
+  type ReadingStatusValue,
+} from './library/useLibraryFileFilters'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -102,7 +104,6 @@ import {
   formatSeconds,
   hasConversionQualityIssue,
   loadQualityRepairHistory,
-  matchesKeyword,
   normalizeQualityRepairHistory,
   normalizeTextList,
   normalizeTextValue,
@@ -114,9 +115,7 @@ import {
   saveResearchQaReplayFailureCase,
   stripKnownSourceExt,
   summarizeConversionQualityRepair,
-  toTextOptions,
   type QualityRepairHistoryRecord,
-  uniqueTextValues,
 } from './library/libraryPageUtils'
 
 const { Text } = Typography
@@ -131,18 +130,6 @@ type FileTabKey = 'pending' | 'converted' | 'all'
 type LibraryBrowseMode = 'list' | 'categories' | 'tags'
 
 const CONVERT_MODE = 'balanced'
-const PAPER_CATEGORY_PRESETS = [
-  'NeRF',
-  '3DGS',
-  'SCI',
-  'Diffusion',
-  'Single-Photon Imaging',
-  'Single-Pixel Imaging',
-  'Inverse Imaging',
-  'Survey',
-  'Dataset',
-  'Benchmark',
-] as const
 const TAG_INPUT_SEPARATORS = [',', '，', ';', '；']
 function READING_STATUS_OPTIONS(S: Record<string, string>) {
   return [
@@ -154,8 +141,6 @@ function READING_STATUS_OPTIONS(S: Record<string, string>) {
   ] as const
 }
 
-type ReadingStatusValue = '' | 'unread' | 'reading' | 'done' | 'revisit'
-
 type QualityRepairBaseline = {
   quality: ConversionQualitySummary | null
   startedAt: number
@@ -165,11 +150,6 @@ type QualityRepairRunOptions = {
   autoReindexImmediate?: boolean
   autoReindexQueued?: boolean
   operationToken?: LibraryQualityOperationToken
-}
-
-type FilterFilesOptions = {
-  ignoreCategoryFilter?: boolean
-  ignoreTagFilter?: boolean
 }
 
 function deriveConvertStageLabel(msg0: string, S_?: Record<string, string>) {
@@ -202,14 +182,6 @@ export default function LibraryPage() {
   const [scope, setScope] = useState('200')
   const [tabKey, setTabKey] = useState<FileTabKey>('all')
   const [browseMode, setBrowseMode] = useState<LibraryBrowseMode>('list')
-  const [fileKeyword, setFileKeyword] = useState('')
-  const [paperCategoryFilter, setPaperCategoryFilter] = useState('')
-  const [paperTagFilter, setPaperTagFilter] = useState('')
-  const [readingStatusFilter, setReadingStatusFilter] = useState<ReadingStatusValue>('')
-  const [onlyUnread, setOnlyUnread] = useState(false)
-  const [onlyUnclassified, setOnlyUnclassified] = useState(false)
-  const [onlySuggested, setOnlySuggested] = useState(false)
-  const [onlyQualityIssues, setOnlyQualityIssues] = useState(false)
   const [qualityRepairingNames, setQualityRepairingNames] = useState<Record<string, boolean>>({})
   const [qualityRepairResults, setQualityRepairResults] = useState<Record<string, string>>({})
   const [qualityRepairImpact, setQualityRepairImpact] = useState<LibraryQualityRepairImpact | null>(null)
@@ -222,7 +194,6 @@ export default function LibraryPage() {
   const [qualityRepairRun, setQualityRepairRun] = useState<LibraryQualityRepairRun | null>(null)
   const [qualityRepairAdvancing, setQualityRepairAdvancing] = useState(false)
   const [qualityRepairHistory, setQualityRepairHistory] = useState<Record<string, QualityRepairHistoryRecord>>(() => loadQualityRepairHistory())
-  const [qualityHistoryFocusNames, setQualityHistoryFocusNames] = useState<string[]>([])
   const [qualityCenterOpen, setQualityCenterOpen] = useState(false)
   const [qualityArtifactOpening, setQualityArtifactOpening] = useState('')
   const [qualityCaseActionKey, setQualityCaseActionKey] = useState('')
@@ -251,7 +222,6 @@ export default function LibraryPage() {
   } = useLibraryDirectoryActions({ S, scope })
 
   const uploadLocked = store.converting || Boolean(store.refSync?.running)
-  const normalizedKeyword = fileKeyword.trim().toLowerCase()
   const textModelReady = !settingsLoaded
     || (hasTextApiKey && llmReadiness?.providers.text?.severity !== 'error')
   const openApiSettings = useCallback(() => {
@@ -356,6 +326,48 @@ export default function LibraryPage() {
 
   const pendingFiles = useMemo(() => store.files.filter((x) => x.category === 'pending'), [store.files])
   const convertedFiles = useMemo(() => store.files.filter((x) => x.category === 'converted'), [store.files])
+  const {
+    activeTaxonomyFilterCount,
+    applyPaperCategoryFilter,
+    applyPaperTagFilter,
+    categoryCards,
+    clearTaxonomyFilters,
+    currentListItems,
+    fileKeyword,
+    hasActiveTaxonomyFilters,
+    onlyQualityIssues,
+    onlySuggested,
+    onlyUnclassified,
+    onlyUnread,
+    paperCategoryFilter,
+    paperCategoryFilterOptions,
+    paperCategoryOptions,
+    paperTagFilter,
+    paperTagFilterOptions,
+    paperTagOptions,
+    qualityHistoryFocusNames,
+    readingStatusFilter,
+    selectUnclassifiedCategory,
+    setFileKeyword,
+    setOnlyQualityIssues,
+    setOnlySuggested,
+    setOnlyUnread,
+    setPaperCategoryFilter,
+    setPaperTagFilter,
+    setQualityHistoryFocusNames,
+    setReadingStatusFilter,
+    tagCards,
+    toggleOnlyUnclassified,
+    visibleAll,
+    visibleConverted,
+    visiblePending,
+  } = useLibraryFileFilters({
+    S,
+    files: store.files,
+    pendingFiles,
+    convertedFiles,
+    tabKey,
+  })
   const qualityReviewCount = useMemo(() => store.files.filter((x) => hasConversionQualityIssue(x)).length, [store.files])
   const qualityReadyCount = useMemo(
     () => store.files.filter((x) => conversionQualityStatus(x.conversion_quality) === 'good').length,
@@ -455,10 +467,6 @@ export default function LibraryPage() {
       : 0
     return { total, fixedCount, improved, avgDelta }
   }, [qualityRepairHistoryList])
-  const qualityHistoryFocusSet = useMemo(
-    () => new Set(qualityHistoryFocusNames.map((name) => String(name || '').trim()).filter(Boolean)),
-    [qualityHistoryFocusNames],
-  )
   const qualityHistoryRemainingNames = useMemo(() => {
     const availableNames = new Set(store.files.map((item) => item.name))
     return qualityRepairHistoryList
@@ -670,230 +678,6 @@ export default function LibraryPage() {
   const refSyncStatusLabel = store.refSync?.running
     ? S.lib_refsync_running
     : (store.refSync?.status === 'idle' ? S.lib_refsync_idle : String(store.refSync?.status || ''))
-
-  const paperCategoryFilterOptions = useMemo(() => {
-    const values = uniqueTextValues(store.files.map((item) => item.paper_category))
-      .sort((a, b) => a.localeCompare(b, 'en'))
-    return toTextOptions(values)
-  }, [store.files])
-
-  const paperCategoryOptions = useMemo(() => {
-    const presetValues = Array.from(PAPER_CATEGORY_PRESETS)
-    const dynamicValues = uniqueTextValues([
-      ...store.files.map((item) => item.paper_category),
-      ...store.files.map((item) => item.suggested_category),
-    ]).sort((a, b) => a.localeCompare(b, 'en'))
-    const presetKeys = new Set(presetValues.map((value) => value.toLowerCase()))
-    const merged = [
-      ...presetValues,
-      ...dynamicValues.filter((value) => !presetKeys.has(value.toLowerCase())),
-    ]
-    return toTextOptions(merged)
-  }, [store.files])
-
-  const paperTagFilterOptions = useMemo(() => {
-    const values = uniqueTextValues(store.files.flatMap((item) => item.user_tags || []))
-      .sort((a, b) => a.localeCompare(b, 'en'))
-    return toTextOptions(values)
-  }, [store.files])
-
-  const paperTagOptions = useMemo(() => {
-    const values = uniqueTextValues([
-      ...store.files.flatMap((item) => item.user_tags || []),
-      ...store.files.flatMap((item) => item.suggested_tags || []),
-    ]).sort((a, b) => a.localeCompare(b, 'en'))
-    return toTextOptions(values)
-  }, [store.files])
-
-  const applyPaperCategoryFilter = (value: string) => {
-    setOnlyUnclassified(false)
-    setPaperCategoryFilter(value)
-  }
-
-  const applyPaperTagFilter = (value: string) => {
-    setPaperTagFilter(value)
-  }
-
-  const clearTaxonomyFilters = () => {
-    setFileKeyword('')
-    setPaperCategoryFilter('')
-    setPaperTagFilter('')
-    setReadingStatusFilter('')
-    setOnlyUnread(false)
-    setOnlyUnclassified(false)
-    setOnlySuggested(false)
-    setOnlyQualityIssues(false)
-    setQualityHistoryFocusNames([])
-  }
-
-  const hasActiveTaxonomyFilters = Boolean(
-    normalizedKeyword
-    || paperCategoryFilter
-    || paperTagFilter
-    || readingStatusFilter
-    || onlyUnread
-    || onlyUnclassified
-    || onlySuggested
-    || onlyQualityIssues
-    || qualityHistoryFocusNames.length > 0
-  )
-  const activeTaxonomyFilterCount = [
-    normalizedKeyword,
-    paperCategoryFilter,
-    paperTagFilter,
-    readingStatusFilter,
-    onlyUnread ? 'onlyUnread' : '',
-    onlyUnclassified ? 'onlyUnclassified' : '',
-    onlySuggested ? 'onlySuggested' : '',
-    onlyQualityIssues ? 'onlyQualityIssues' : '',
-    qualityHistoryFocusNames.length > 0 ? 'qualityHistoryFocus' : '',
-  ].filter(Boolean).length
-
-  const filterFiles = useCallback(
-    (items: LibraryFileItem[], options: FilterFilesOptions = {}) =>
-      items.filter((item) => {
-        if (qualityHistoryFocusSet.size > 0 && !qualityHistoryFocusSet.has(item.name)) return false
-        const keywordText = [
-          item.name,
-          item.paper_category,
-          item.reading_status,
-          item.note,
-          item.suggested_category,
-          item.index_state,
-          item.index_status,
-          item.conversion_quality?.label,
-          item.conversion_quality?.summary,
-          ...(item.conversion_quality?.issues || []).flatMap((issue) => [issue.code, issue.label]),
-          ...(item.user_tags || []),
-          ...(item.suggested_tags || []),
-        ]
-          .map((part) => String(part || '').toLowerCase())
-          .join(' ')
-        if (!matchesKeyword(keywordText, normalizedKeyword)) return false
-        if (!options.ignoreCategoryFilter && paperCategoryFilter && String(item.paper_category || '') !== paperCategoryFilter) return false
-        if (!options.ignoreTagFilter && paperTagFilter && !(item.user_tags || []).some((tag) => String(tag || '').toLowerCase() === paperTagFilter.toLowerCase())) return false
-        if (readingStatusFilter && String(item.reading_status || '') !== readingStatusFilter) return false
-        if (onlyUnread && String(item.reading_status || '') !== 'unread') return false
-        if (onlyUnclassified && String(item.paper_category || '').trim()) return false
-        if (onlySuggested && !item.has_suggestions) return false
-        if (onlyQualityIssues && !hasConversionQualityIssue(item)) return false
-        return true
-      }),
-    [normalizedKeyword, onlyQualityIssues, onlySuggested, onlyUnclassified, onlyUnread, paperCategoryFilter, paperTagFilter, qualityHistoryFocusSet, readingStatusFilter],
-  )
-
-  const visiblePending = useMemo(
-    () => filterFiles(pendingFiles),
-    [filterFiles, pendingFiles],
-  )
-  const visibleConverted = useMemo(
-    () => filterFiles(convertedFiles),
-    [convertedFiles, filterFiles],
-  )
-  const visibleAll = useMemo(
-    () => filterFiles(store.files),
-    [filterFiles, store.files],
-  )
-  const visibleAllWithoutCategory = useMemo(
-    () => filterFiles(store.files, { ignoreCategoryFilter: true }),
-    [filterFiles, store.files],
-  )
-  const visibleAllWithoutTag = useMemo(
-    () => filterFiles(store.files, { ignoreTagFilter: true }),
-    [filterFiles, store.files],
-  )
-
-  const categoryCards = useMemo<CategoryCardItem[]>(() => {
-    const groups = new Map<string, LibraryFileItem[]>()
-    for (const item of visibleAllWithoutCategory) {
-      const rawLabel = String(item.paper_category || '').trim()
-      const key = rawLabel ? `category:${rawLabel}` : 'category:__unclassified__'
-      const list = groups.get(key)
-      if (list) {
-        list.push(item)
-      } else {
-        groups.set(key, [item])
-      }
-    }
-
-    const out: CategoryCardItem[] = []
-    for (const [key, items] of groups.entries()) {
-      const label = key === 'category:__unclassified__'
-        ? S.lib_category_unclassified
-        : String(items[0]?.paper_category || '').trim()
-      const tagCounts = new Map<string, number>()
-      for (const item of items) {
-        for (const tag of item.user_tags || []) {
-          const value = String(tag || '').trim()
-          if (!value) continue
-          tagCounts.set(value, (tagCounts.get(value) || 0) + 1)
-        }
-      }
-      const commonTags = Array.from(tagCounts.entries())
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'en'))
-        .slice(0, 4)
-        .map(([tag]) => tag)
-      out.push({
-        key,
-        label: label || S.lib_category_unclassified,
-        count: items.length,
-        unreadCount: items.filter((item) => item.reading_status === 'unread').length,
-        convertedCount: items.filter((item) => item.category === 'converted').length,
-        pendingCount: items.filter((item) => item.category === 'pending').length,
-        commonTags,
-        recentPapers: items.slice(0, 3).map((item) => item.name),
-      })
-    }
-
-    return out.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'en'))
-  }, [visibleAllWithoutCategory, S])
-
-  const tagCards = useMemo<TagCardItem[]>(() => {
-    const groups = new Map<string, LibraryFileItem[]>()
-    for (const item of visibleAllWithoutTag) {
-      for (const rawTag of item.user_tags || []) {
-        const label = String(rawTag || '').trim()
-        if (!label) continue
-        const key = label.toLowerCase()
-        const list = groups.get(key)
-        if (list) {
-          list.push(item)
-        } else {
-          groups.set(key, [item])
-        }
-      }
-    }
-
-    const out: TagCardItem[] = []
-    for (const [key, items] of groups.entries()) {
-      const label = items.find((item) => (item.user_tags || []).some((tag) => String(tag || '').trim().toLowerCase() === key))
-        ?.user_tags.find((tag) => String(tag || '').trim().toLowerCase() === key) || key
-      const categoryCounts = new Map<string, number>()
-      for (const item of items) {
-        const category = String(item.paper_category || '').trim() || S.lib_category_unclassified
-        categoryCounts.set(category, (categoryCounts.get(category) || 0) + 1)
-      }
-      out.push({
-        key,
-        label: String(label),
-        count: items.length,
-        unreadCount: items.filter((item) => item.reading_status === 'unread').length,
-        categories: Array.from(categoryCounts.entries())
-          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'en'))
-          .slice(0, 3)
-          .map(([category]) => category),
-        recentPapers: items.slice(0, 3).map((item) => item.name),
-      })
-    }
-
-    return out.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'en'))
-  }, [visibleAllWithoutTag, S])
-
-  const currentListItems = useMemo(() => {
-    if (tabKey === 'pending') return visiblePending
-    if (tabKey === 'converted') return visibleConverted
-    return visibleAll
-  }, [tabKey, visiblePending, visibleConverted, visibleAll])
 
   const {
     batchDraft,
@@ -2776,11 +2560,7 @@ export default function LibraryPage() {
         onPaperTagFilterChange={applyPaperTagFilter}
         onReadingStatusFilterChange={(value) => setReadingStatusFilter(value as ReadingStatusValue)}
         onToggleOnlyUnread={() => setOnlyUnread((value) => !value)}
-        onToggleOnlyUnclassified={() => {
-          const next = !onlyUnclassified
-          setOnlyUnclassified(next)
-          if (next) setPaperCategoryFilter('')
-        }}
+        onToggleOnlyUnclassified={toggleOnlyUnclassified}
         onToggleOnlySuggested={() => setOnlySuggested((value) => !value)}
         onToggleOnlyQualityIssues={() => setOnlyQualityIssues((value) => !value)}
         onClearQualityHistoryFocus={() => setQualityHistoryFocusNames([])}
@@ -2820,8 +2600,7 @@ export default function LibraryPage() {
             paperCategoryFilter={paperCategoryFilter}
             onSelectCategory={(card) => {
               if (card.key === 'category:__unclassified__') {
-                setPaperCategoryFilter('')
-                setOnlyUnclassified(true)
+                selectUnclassifiedCategory()
               } else {
                 applyPaperCategoryFilter(card.label)
               }

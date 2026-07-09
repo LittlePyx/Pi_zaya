@@ -30,6 +30,132 @@ const baseItem = {
   suggested_tags: [],
 }
 
+test('library file filter helper derives visible lists and taxonomy cards', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const { buildLibraryFileFilterModel } = await import('/src/pages/library/useLibraryFileFilters.ts')
+    const makeItem = (overrides: Record<string, unknown>) => ({
+      sha1: '',
+      name: '',
+      category: 'converted',
+      task_state: 'idle',
+      status: 'converted',
+      replace_task: false,
+      queue_pos: 0,
+      cur_page_done: 0,
+      cur_page_total: 0,
+      cur_page_msg: '',
+      paper_category: '',
+      reading_status: '',
+      note: '',
+      user_tags: [],
+      has_suggestions: false,
+      suggested_category: '',
+      suggested_tags: [],
+      index_state: '',
+      index_status: '',
+      conversion_quality: null,
+      ...overrides,
+    })
+    const files = [
+      makeItem({
+        name: 'Converted Weak.pdf',
+        category: 'converted',
+        paper_category: 'Single-Photon Imaging',
+        reading_status: 'unread',
+        note: 'weak anchor needs review',
+        user_tags: ['Photon', 'quality'],
+        has_suggestions: true,
+        conversion_quality: {
+          has_review_issue: true,
+          issues: [{ code: 'weak_anchor', label: 'Weak anchor' }],
+          conversion_report: {
+            remaining_issue_codes: ['weak_anchor'],
+            quality_center: { status: 'review' },
+          },
+        },
+        index_state: 'quality_blocked',
+      }),
+      makeItem({
+        name: 'Converted Clean.pdf',
+        category: 'converted',
+        paper_category: 'NeRF',
+        reading_status: 'done',
+        user_tags: ['nerf'],
+      }),
+      makeItem({
+        name: 'Pending Draft.pdf',
+        category: 'pending',
+        paper_category: '',
+        reading_status: 'unread',
+        user_tags: ['Photon'],
+        has_suggestions: true,
+        suggested_tags: ['triage'],
+      }),
+    ]
+    const pendingFiles = files.filter((item) => item.category === 'pending')
+    const convertedFiles = files.filter((item) => item.category === 'converted')
+    const S = { lib_category_unclassified: 'Unclassified' }
+    const filtered = buildLibraryFileFilterModel({
+      S,
+      files,
+      pendingFiles,
+      convertedFiles,
+      tabKey: 'converted',
+      state: {
+        fileKeyword: 'weak',
+        paperTagFilter: 'photon',
+        onlyQualityIssues: true,
+        qualityHistoryFocusNames: ['Converted Weak.pdf'],
+      },
+    })
+    const unfiltered = buildLibraryFileFilterModel({
+      S,
+      files,
+      pendingFiles,
+      convertedFiles,
+      tabKey: 'all',
+      state: {},
+    })
+
+    return {
+      activeCount: filtered.activeTaxonomyFilterCount,
+      categoryCards: filtered.categoryCards.map((card) => ({
+        key: card.key,
+        count: card.count,
+        commonTags: card.commonTags,
+      })),
+      currentListItems: filtered.currentListItems.map((item) => item.name),
+      hasActiveFilters: filtered.hasActiveTaxonomyFilters,
+      tagCards: filtered.tagCards.map((card) => ({
+        label: card.label,
+        count: card.count,
+        categories: card.categories,
+      })),
+      visibleAll: filtered.visibleAll.map((item) => item.name),
+      unclassifiedCard: unfiltered.categoryCards.find((card) => card.key === 'category:__unclassified__'),
+      categoryOptionValues: unfiltered.paperCategoryOptions.map((option) => option.value),
+      tagOptionValues: unfiltered.paperTagOptions.map((option) => option.value),
+    }
+  })
+
+  expect(result.hasActiveFilters).toBe(true)
+  expect(result.activeCount).toBe(4)
+  expect(result.visibleAll).toEqual(['Converted Weak.pdf'])
+  expect(result.currentListItems).toEqual(['Converted Weak.pdf'])
+  expect(result.categoryCards).toEqual([
+    { key: 'category:Single-Photon Imaging', count: 1, commonTags: ['Photon', 'quality'] },
+  ])
+  expect(result.tagCards).toEqual([
+    { label: 'Photon', count: 1, categories: ['Single-Photon Imaging'] },
+    { label: 'quality', count: 1, categories: ['Single-Photon Imaging'] },
+  ])
+  expect(result.unclassifiedCard).toMatchObject({ label: 'Unclassified', count: 1 })
+  expect(result.categoryOptionValues).toContain('NeRF')
+  expect(result.categoryOptionValues).toContain('Single-Photon Imaging')
+  expect(result.tagOptionValues).toContain('triage')
+})
+
 test.beforeEach(async ({ page }) => {
   const brokenName = 'Optica-2024-Broken conversion.pdf'
   const weakName = 'Applied Optics-2023-Weak anchors.pdf'
