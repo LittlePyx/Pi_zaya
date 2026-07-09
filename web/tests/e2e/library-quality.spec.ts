@@ -513,6 +513,128 @@ test('library full-chain stage recorder helper builds stable snapshots', async (
   })
 })
 
+test('library full-chain stage result helpers classify and build records', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const {
+      buildLibraryQualityMetadataStageRecord,
+      buildLibraryQualityRepairLoopStageRecord,
+      buildLibraryQualityRetrievalStageRecord,
+      getLibraryQualityFullChainStageKind,
+    } = await import('/src/pages/library/libraryQualityFullChainStageResults.ts')
+    const passedRerun = {
+      case_id: 'case-1',
+      status: 'passed',
+      quality_ok: true,
+      failures: [],
+    }
+    const failedRerun = {
+      case_id: 'case-2',
+      status: 'failed',
+      quality_ok: false,
+      failures: [{ name: 'missing expected doc' }, { name: 'weak citation' }],
+    }
+    const metadataBase = {
+      targetCount: 3,
+      targetIds: ['case-2'],
+      ready: 1,
+      exportReady: 1,
+      changed: 1,
+      retryable: 0,
+      unresolved: 2,
+      verification: { type: 'shelf_metadata_repair', quality_ok: true },
+      running: false,
+    }
+
+    return {
+      kinds: {
+        conversionAction: getLibraryQualityFullChainStageKind('shelf', 'repair_conversion'),
+        retrievalAction: getLibraryQualityFullChainStageKind('shelf', 'rebuild_index'),
+        metadataAction: getLibraryQualityFullChainStageKind('other', 'repair_shelf_metadata'),
+        repairLoopAction: getLibraryQualityFullChainStageKind('other', 'rerun_failed_cases'),
+        researchAction: getLibraryQualityFullChainStageKind('other', 'fix_failed_qa_cases'),
+        citationCards: getLibraryQualityFullChainStageKind('citation_cards', 'open_report'),
+        unknown: getLibraryQualityFullChainStageKind('other', 'open_report'),
+      },
+      retrievalFailed: buildLibraryQualityRetrievalStageRecord({
+        ok: true,
+        caseId: 'case-2',
+        rerun: failedRerun,
+      }),
+      retrievalError: buildLibraryQualityRetrievalStageRecord({
+        ok: false,
+        rerun: null,
+      }).result,
+      metadataRunning: buildLibraryQualityMetadataStageRecord({
+        result: { ...metadataBase, targetCount: 2, running: true },
+        rerun: null,
+      }),
+      metadataCombined: buildLibraryQualityMetadataStageRecord({
+        result: metadataBase,
+        caseId: 'case-2',
+        rerun: failedRerun,
+      }),
+      repairLoopPassed: buildLibraryQualityRepairLoopStageRecord({
+        caseId: 'case-1',
+        rerun: passedRerun,
+      }),
+    }
+  })
+
+  expect(result.kinds).toEqual({
+    conversionAction: 'conversion',
+    retrievalAction: 'retrieval',
+    metadataAction: 'metadata',
+    repairLoopAction: 'repair_loop',
+    researchAction: 'research_qa',
+    citationCards: 'citation_cards',
+    unknown: 'unknown',
+  })
+  expect(result.retrievalFailed.result).toMatchObject({
+    status: 'warning',
+    summary: 'Reindex done; QA still failing: case-2',
+    detail: '2 failures remain',
+  })
+  expect(result.retrievalFailed.meta).toMatchObject({
+    targetIds: ['case-2'],
+    metrics: { qa_rerun_quality_ok: false, failure_count: 2 },
+    verification: { type: 'research_qa_rerun', case_id: 'case-2', status: 'failed', quality_ok: false, failure_count: 2 },
+  })
+  expect(result.retrievalError).toMatchObject({
+    status: 'error',
+    summary: 'Retrieval index rebuild failed',
+  })
+  expect(result.metadataRunning.result).toMatchObject({
+    status: 'success',
+    summary: 'Metadata backfill started',
+    detail: '2 metadata targets queued',
+  })
+  expect(result.metadataCombined.result).toMatchObject({
+    status: 'warning',
+    summary: 'Metadata checked; QA still failing: case-2',
+    detail: '2 failures remain',
+  })
+  expect(result.metadataCombined.meta).toMatchObject({
+    targetIds: ['case-2'],
+    metrics: { changed: 1, ready: 1, export_ready: 1, retryable: 0, unresolved: 2, target_count: 3, async_running: false, qa_rerun_quality_ok: false },
+    verification: {
+      type: 'combined_shelf_metadata_verification',
+      quality_ok: false,
+      shelf_metadata: { type: 'shelf_metadata_repair', quality_ok: true },
+      research_qa: { type: 'research_qa_rerun', case_id: 'case-2', status: 'failed', quality_ok: false, failure_count: 2 },
+    },
+  })
+  expect(result.repairLoopPassed.result).toMatchObject({
+    status: 'success',
+    summary: 'Rerun passed: case-1',
+  })
+  expect(result.repairLoopPassed.meta).toMatchObject({
+    targetIds: ['case-1'],
+    metrics: { quality_ok: true, failure_count: 0 },
+    verification: { type: 'research_qa_rerun', case_id: 'case-1', status: 'passed', quality_ok: true, failure_count: 0 },
+  })
+})
+
 test.beforeEach(async ({ page }) => {
   const brokenName = 'Optica-2024-Broken conversion.pdf'
   const weakName = 'Applied Optics-2023-Weak anchors.pdf'

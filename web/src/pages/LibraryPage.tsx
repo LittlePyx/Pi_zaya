@@ -103,6 +103,12 @@ import {
   useLibraryQualityFullChainStageRecorder,
   type LibraryQualityFullChainStageRecordMeta,
 } from './library/useLibraryQualityFullChainStageRecorder'
+import {
+  buildLibraryQualityMetadataStageRecord,
+  buildLibraryQualityRepairLoopStageRecord,
+  buildLibraryQualityRetrievalStageRecord,
+  getLibraryQualityFullChainStageKind,
+} from './library/libraryQualityFullChainStageResults'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -1311,6 +1317,7 @@ export default function LibraryPage() {
   const handleQualityFullChainStage = async (stage: LibraryQualityFullChainStage) => {
     const stageKey = normalizeTextValue(stage.key).toLowerCase()
     const action = normalizeTextValue(stage.action).toLowerCase()
+    const stageKind = getLibraryQualityFullChainStageKind(stageKey, action)
     const operationToken = beginQualityOperation(`full-chain:${stageKey}:${action}`)
     const caseTarget = firstQualityCaseForStage(stageKey)
     const recordStageResult = (
@@ -1321,7 +1328,7 @@ export default function LibraryPage() {
     }
     setQualityFullChainActionKey(stageKey)
     try {
-      if (stageKey === 'conversion' || action === 'repair_conversion') {
+      if (stageKind === 'conversion') {
         if (qualityRepairRecommendedNames.length > 0) {
           const repair = await handleRepairRecommendedQuality({
             autoReindexImmediate: false,
@@ -1382,7 +1389,7 @@ export default function LibraryPage() {
         }
         return
       }
-      if (stageKey === 'retrieval' || action === 'rebuild_index') {
+      if (stageKind === 'retrieval') {
         const ok = await handleReindex(operationToken)
         if (!qualityOperationIsCurrent(operationToken)) return
         const rerun = ok && caseTarget ? await runQualityFailureCaseRerun(caseTarget, operationToken) : null
@@ -1390,93 +1397,43 @@ export default function LibraryPage() {
         if (ok && !rerun) await store.loadQualityOverview('all')
         const afterOverview = await refreshQualityOverviewSnapshot()
         if (!qualityOperationIsCurrent(operationToken)) return
-        const rerunPassed = Boolean(rerun?.quality_ok || rerun?.status === 'passed')
-        recordStageResult({
-          status: ok ? (rerun && !rerunPassed ? 'warning' : 'success') : 'error',
-          summary: ok
-            ? (rerun ? (rerunPassed ? `Reindex verified: ${caseTarget?.id}` : `Reindex done; QA still failing: ${caseTarget?.id}`) : 'Rebuilt retrieval index')
-            : 'Retrieval index rebuild failed',
-          detail: rerun?.failures?.length ? `${rerun.failures.length} failures remain` : (caseTarget?.id ? `Regression check: ${caseTarget.id}` : undefined),
-        }, {
-          targetIds: caseTarget?.id ? [caseTarget.id] : [],
-          metrics: {
-            qa_rerun_quality_ok: rerun ? rerunPassed : false,
-            failure_count: Number(rerun?.failures?.length || 0),
-          },
+        const record = buildLibraryQualityRetrievalStageRecord({
+          ok,
+          caseId: caseTarget?.id,
+          rerun,
           afterOverview,
-          verification: qualityVerificationFromRerun(rerun),
         })
+        recordStageResult(record.result, record.meta)
         return
       }
-      if (stageKey === 'citations' || stageKey === 'shelf' || action === 'repair_citation_cards' || action === 'repair_shelf_metadata') {
+      if (stageKind === 'metadata') {
         const result = await repairQualityStageShelfMetadata(stageKey === 'citations' ? 'citations' : 'shelf', operationToken)
         if (!qualityOperationIsCurrent(operationToken)) return
         const rerun = result.targetCount > 0 && caseTarget ? await runQualityFailureCaseRerun(caseTarget, operationToken) : null
         if (!qualityOperationIsCurrent(operationToken)) return
         const afterOverview = await refreshQualityOverviewSnapshot()
         if (!qualityOperationIsCurrent(operationToken)) return
-        const rerunPassed = Boolean(rerun?.quality_ok || rerun?.status === 'passed')
-        const shelfVerification = result.verification && Object.keys(result.verification).length ? result.verification : {}
-        const qaVerification = qualityVerificationFromRerun(rerun)
-        const verification = Object.keys(shelfVerification).length && Object.keys(qaVerification).length
-          ? {
-            type: 'combined_shelf_metadata_verification',
-            quality_ok: Boolean(shelfVerification.quality_ok) && Boolean(qaVerification.quality_ok),
-            shelf_metadata: shelfVerification,
-            research_qa: qaVerification,
-          }
-          : (Object.keys(shelfVerification).length ? shelfVerification : qaVerification)
-        const resultRunning = Boolean(result.running)
-        recordStageResult({
-          status: resultRunning ? 'success' : (result.retryable > 0 || result.unresolved > 0 || (rerun && !rerunPassed) ? 'warning' : (result.changed > 0 || result.ready > 0 ? 'success' : 'info')),
-          summary: resultRunning
-            ? 'Metadata backfill started'
-            : rerun
-            ? (rerunPassed ? `Metadata repair verified: ${caseTarget?.id}` : `Metadata checked; QA still failing: ${caseTarget?.id}`)
-            : (result.changed > 0
-              ? (result.unresolved > 0 ? `Metadata repaired ${result.changed}; ${result.unresolved} still missing` : `Metadata repaired: ${result.changed}`)
-              : (result.exportReady > 0 ? `Metadata export ready: ${result.exportReady}` : (result.ready > 0 ? `Metadata already ready: ${result.ready}` : 'Opened citation quality report'))),
-          detail: resultRunning
-            ? (result.targetCount > 0 ? `${result.targetCount} metadata targets queued` : 'Scanning the reference index')
-            : (rerun?.failures?.length ? `${rerun.failures.length} failures remain` : (result.targetCount > 0 ? `${result.targetCount} failed cases checked` : undefined)),
-        }, {
-          targetIds: result.targetIds,
-          metrics: {
-            changed: result.changed,
-            ready: result.ready,
-            export_ready: result.exportReady,
-            retryable: result.retryable,
-            unresolved: result.unresolved,
-            target_count: result.targetCount,
-            async_running: resultRunning,
-            qa_rerun_quality_ok: rerun ? rerunPassed : false,
-          },
+        const record = buildLibraryQualityMetadataStageRecord({
+          result,
+          caseId: caseTarget?.id,
+          rerun,
           afterOverview,
-          verification,
         })
+        recordStageResult(record.result, record.meta)
         return
       }
-      if (stageKey === 'repair_loop' || action === 'rerun_failed_cases') {
+      if (stageKind === 'repair_loop') {
         if (caseTarget) {
           const rerun = await runQualityFailureCaseRerun(caseTarget, operationToken)
           if (!qualityOperationIsCurrent(operationToken)) return
           const afterOverview = await refreshQualityOverviewSnapshot()
           if (!qualityOperationIsCurrent(operationToken)) return
-          recordStageResult({
-            status: rerun?.quality_ok || rerun?.status === 'passed' ? 'success' : 'warning',
-            summary: rerun?.quality_ok || rerun?.status === 'passed'
-              ? `Rerun passed: ${caseTarget.id}`
-              : `Rerun still failing: ${caseTarget.id}`,
-            detail: rerun?.failures?.length ? `${rerun.failures.length} failures remain` : undefined,
-          }, {
-            targetIds: [caseTarget.id],
-            metrics: {
-              quality_ok: Boolean(rerun?.quality_ok),
-              failure_count: Number(rerun?.failures?.length || 0),
-            },
+          const record = buildLibraryQualityRepairLoopStageRecord({
+            caseId: caseTarget.id,
+            rerun,
             afterOverview,
-            verification: qualityVerificationFromRerun(rerun),
           })
+          recordStageResult(record.result, record.meta)
         } else {
           await openQualityArtifact('research_qa', 'report')
           recordStageResult({
@@ -1486,7 +1443,7 @@ export default function LibraryPage() {
         }
         return
       }
-      if (stageKey === 'research_qa' || action === 'fix_failed_qa_cases') {
+      if (stageKind === 'research_qa') {
         const plan = caseTarget?.repair_actions?.find((item) => item.kind === 'apply_repair_plan')
         if (caseTarget && plan) {
           const result = await applyQualityFailureRepairPlan(caseTarget, plan, operationToken)
@@ -1537,7 +1494,7 @@ export default function LibraryPage() {
         }
         return
       }
-      if (stageKey === 'citation_cards') {
+      if (stageKind === 'citation_cards') {
         await openQualityArtifact('citation_cards', 'report')
         recordStageResult({
           status: 'info',
