@@ -17,7 +17,6 @@ import type {
   LibraryQualityActionHistoryItem,
   LibraryQualityFeatureHealthItem,
   LibraryQualityFailureCase,
-  LibraryQualityFullChainStage,
   LibraryQualityPriorityAction,
   LibraryQualityRepairAction,
   LibraryQualityRepairImpact,
@@ -101,19 +100,8 @@ import {
 } from './library/useShelfMetadataBackfillActions'
 import {
   useLibraryQualityFullChainStageRecorder,
-  type LibraryQualityFullChainStageRecordMeta,
 } from './library/useLibraryQualityFullChainStageRecorder'
-import {
-  buildLibraryQualityConversionReviewStageRecord,
-  buildLibraryQualityConversionStageRecord,
-  buildLibraryQualityMetadataStageRecord,
-  buildLibraryQualityRepairLoopStageRecord,
-  buildLibraryQualityResearchQaOpenStageRecord,
-  buildLibraryQualityResearchQaRepairPlanStageRecord,
-  buildLibraryQualityResearchQaRerunStageRecord,
-  buildLibraryQualityRetrievalStageRecord,
-  getLibraryQualityFullChainStageKind,
-} from './library/libraryQualityFullChainStageResults'
+import { useLibraryQualityFullChainActions } from './library/useLibraryQualityFullChainActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -1312,172 +1300,28 @@ export default function LibraryPage() {
     return { targetCount: targets.length, targetIds: targets.map((item) => normalizeTextValue(item.id)).filter(Boolean), ready, exportReady, changed, retryable, unresolved, verification, running: false }
   }
 
-  const refreshQualityOverviewSnapshot = async () => {
-    await store.loadQualityOverview('all')
-    const overview = useLibraryStore.getState().qualityOverview
-    return overview?.ok ? overview : null
-  }
-
-  const handleQualityFullChainStage = async (stage: LibraryQualityFullChainStage) => {
-    const stageKey = normalizeTextValue(stage.key).toLowerCase()
-    const action = normalizeTextValue(stage.action).toLowerCase()
-    const stageKind = getLibraryQualityFullChainStageKind(stageKey, action)
-    const operationToken = beginQualityOperation(`full-chain:${stageKey}:${action}`)
-    const caseTarget = firstQualityCaseForStage(stageKey)
-    const recordStageResult = (
-      result: Omit<QualityFullChainActionResult, 'updatedAt'>,
-      meta: LibraryQualityFullChainStageRecordMeta = {},
-    ) => {
-      recordQualityFullChainStageResult(stage, stageKey, operationToken, result, meta)
-    }
-    setQualityFullChainActionKey(stageKey)
-    try {
-      if (stageKind === 'conversion') {
-        if (qualityRepairRecommendedNames.length > 0) {
-          const repair = await handleRepairRecommendedQuality({
-            autoReindexImmediate: false,
-            autoReindexQueued: false,
-            operationToken,
-          })
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const completed = Number(repair?.queued || 0) > 0 ? await waitForLibraryConversionDone() : true
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const needsReindex = Boolean(repair?.needsReindex || repair?.impact?.needs_reindex)
-          const reindexed = completed && needsReindex ? await handleReindex(operationToken) : false
-          if (!qualityOperationIsCurrent(operationToken)) return
-          if (repair?.impact && needsReindex) {
-            setQualityRepairImpact({ ...repair.impact, reindexed })
-          }
-          if (reindexed) await store.loadFiles(scope)
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const rerun = completed && (!needsReindex || reindexed) && caseTarget ? await runQualityFailureCaseRerun(caseTarget, operationToken) : null
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const afterOverview = await refreshQualityOverviewSnapshot()
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const record = buildLibraryQualityConversionStageRecord({
-            repair,
-            completed,
-            needsReindex,
-            reindexed,
-            targetIds: qualityRepairRecommendedNames.slice(0, 12),
-            rerun,
-            afterOverview,
-          })
-          recordStageResult(record.result, record.meta)
-        } else {
-          handleFocusQualityReview()
-          const record = buildLibraryQualityConversionReviewStageRecord()
-          recordStageResult(record.result, record.meta)
-        }
-        return
-      }
-      if (stageKind === 'retrieval') {
-        const ok = await handleReindex(operationToken)
-        if (!qualityOperationIsCurrent(operationToken)) return
-        const rerun = ok && caseTarget ? await runQualityFailureCaseRerun(caseTarget, operationToken) : null
-        if (!qualityOperationIsCurrent(operationToken)) return
-        if (ok && !rerun) await store.loadQualityOverview('all')
-        const afterOverview = await refreshQualityOverviewSnapshot()
-        if (!qualityOperationIsCurrent(operationToken)) return
-        const record = buildLibraryQualityRetrievalStageRecord({
-          ok,
-          caseId: caseTarget?.id,
-          rerun,
-          afterOverview,
-        })
-        recordStageResult(record.result, record.meta)
-        return
-      }
-      if (stageKind === 'metadata') {
-        const result = await repairQualityStageShelfMetadata(stageKey === 'citations' ? 'citations' : 'shelf', operationToken)
-        if (!qualityOperationIsCurrent(operationToken)) return
-        const rerun = result.targetCount > 0 && caseTarget ? await runQualityFailureCaseRerun(caseTarget, operationToken) : null
-        if (!qualityOperationIsCurrent(operationToken)) return
-        const afterOverview = await refreshQualityOverviewSnapshot()
-        if (!qualityOperationIsCurrent(operationToken)) return
-        const record = buildLibraryQualityMetadataStageRecord({
-          result,
-          caseId: caseTarget?.id,
-          rerun,
-          afterOverview,
-        })
-        recordStageResult(record.result, record.meta)
-        return
-      }
-      if (stageKind === 'repair_loop') {
-        if (caseTarget) {
-          const rerun = await runQualityFailureCaseRerun(caseTarget, operationToken)
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const afterOverview = await refreshQualityOverviewSnapshot()
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const record = buildLibraryQualityRepairLoopStageRecord({
-            caseId: caseTarget.id,
-            rerun,
-            afterOverview,
-          })
-          recordStageResult(record.result, record.meta)
-        } else {
-          await openQualityArtifact('research_qa', 'report')
-          recordStageResult({
-            status: 'info',
-            summary: 'Opened QA report',
-          })
-        }
-        return
-      }
-      if (stageKind === 'research_qa') {
-        const plan = caseTarget?.repair_actions?.find((item) => item.kind === 'apply_repair_plan')
-        if (caseTarget && plan) {
-          const result = await applyQualityFailureRepairPlan(caseTarget, plan, operationToken)
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const afterOverview = await refreshQualityOverviewSnapshot()
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const record = buildLibraryQualityResearchQaRepairPlanStageRecord({
-            caseId: caseTarget.id,
-            result,
-            afterOverview,
-          })
-          recordStageResult(record.result, record.meta)
-        } else if (caseTarget) {
-          const rerun = await runQualityFailureCaseRerun(caseTarget, operationToken)
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const afterOverview = await refreshQualityOverviewSnapshot()
-          if (!qualityOperationIsCurrent(operationToken)) return
-          const record = buildLibraryQualityResearchQaRerunStageRecord({
-            caseId: caseTarget.id,
-            rerun,
-            afterOverview,
-          })
-          recordStageResult(record.result, record.meta)
-        } else {
-          await openQualityArtifact('research_qa', action === 'run_research_qa' ? 'runbook' : 'report')
-          const record = buildLibraryQualityResearchQaOpenStageRecord(action)
-          recordStageResult(record.result, record.meta)
-        }
-        return
-      }
-      if (stageKind === 'citation_cards') {
-        await openQualityArtifact('citation_cards', 'report')
-        recordStageResult({
-          status: 'info',
-          summary: 'Opened citation-card quality report',
-        })
-        return
-      }
-      message.info('No direct action is available for this quality stage yet.')
-      recordStageResult({
-        status: 'info',
-        summary: 'No direct action available for this stage',
-      })
-    } catch (err) {
-      if (qualityOperationIsCurrent(operationToken)) {
-        message.error(err instanceof Error ? err.message : 'Quality stage action failed')
-      }
-    } finally {
-      if (qualityOperationIsActive(operationToken)) setQualityFullChainActionKey('')
-      clearQualityOperation(operationToken)
-    }
-  }
+  const { handleQualityFullChainStage } = useLibraryQualityFullChainActions({
+    scope,
+    qualityRepairRecommendedNames,
+    beginQualityOperation,
+    clearQualityOperation,
+    qualityOperationIsActive,
+    qualityOperationIsCurrent,
+    setQualityFullChainActionKey,
+    setQualityRepairImpact,
+    firstQualityCaseForStage,
+    handleFocusQualityReview,
+    handleReindex,
+    handleRepairRecommendedQuality,
+    waitForLibraryConversionDone,
+    runQualityFailureCaseRerun,
+    repairQualityStageShelfMetadata,
+    applyQualityFailureRepairPlan,
+    openQualityArtifact,
+    loadFiles: store.loadFiles,
+    loadQualityOverview: store.loadQualityOverview,
+    recordQualityFullChainStageResult,
+  })
 
   const handleQualityFeatureHealthAction = async (item: LibraryQualityFeatureHealthItem) => {
     const targetStage = normalizeTextValue(item.target_stage).toLowerCase()
