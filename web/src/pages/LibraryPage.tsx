@@ -91,6 +91,7 @@ import { useLibraryUploadDraftActions } from './library/useLibraryUploadDraftAct
 import { useLibraryRenameActions } from './library/useLibraryRenameActions'
 import { useLibraryBatchMetadataActions } from './library/useLibraryBatchMetadataActions'
 import { useLibraryMetadataActions } from './library/useLibraryMetadataActions'
+import { useLibrarySuggestionRefreshActions } from './library/useLibrarySuggestionRefreshActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
@@ -232,8 +233,6 @@ export default function LibraryPage() {
   const [qualityCaseRerunResults, setQualityCaseRerunResults] = useState<Record<string, LibraryResearchQaRerunResponse>>({})
   const [qualityFailureFilter, setQualityFailureFilter] = useState('')
   const qualityRepairBaselinesRef = useRef<Record<string, QualityRepairBaseline>>({})
-  const [suggestionsRefreshing, setSuggestionsRefreshing] = useState(false)
-
   const {
     directoriesConfigured,
     dirDirty,
@@ -930,6 +929,13 @@ export default function LibraryPage() {
     saveMetaEditor,
     setMetaDraft,
   } = useLibraryMetadataActions({ S })
+  const {
+    refreshSuggestionsForVisible,
+    suggestionsRefreshing,
+  } = useLibrarySuggestionRefreshActions({
+    S,
+    items: visibleAll,
+  })
 
   useEffect(() => {
     void store.loadFiles(scope)
@@ -2328,23 +2334,6 @@ export default function LibraryPage() {
     }
   }
 
-  const regenerateSuggestionsForVisible = async () => {
-    const targets = visibleAll.map((item) => item.name).filter(Boolean)
-    if (!targets.length) {
-      message.info(S.lib_msg_no_suggestion_candidates)
-      return
-    }
-    setSuggestionsRefreshing(true)
-    try {
-      const updated = await store.regenerateSuggestions({ pdf_names: targets, auto_apply_empty: true })
-      message.success(S.lib_msg_suggestions_refreshed_count.replace('{n}', String(updated)))
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : S.lib_msg_refresh_suggestion_fail)
-    } finally {
-      setSuggestionsRefreshing(false)
-    }
-  }
-
   const renderFileRow = (item: LibraryFileItem) => {
     return (
       <LibraryFileRow
@@ -2780,7 +2769,7 @@ export default function LibraryPage() {
         qualityHistoryFocusCount={qualityHistoryFocusNames.length}
         onBrowseModeChange={setBrowseMode}
         onSelectCurrentList={selectCurrentListItems}
-        onRefreshSuggestions={() => { void regenerateSuggestionsForVisible() }}
+        onRefreshSuggestions={() => { void refreshSuggestionsForVisible() }}
         onClearFilters={clearTaxonomyFilters}
         onFileKeywordChange={setFileKeyword}
         onPaperCategoryFilterChange={applyPaperCategoryFilter}
