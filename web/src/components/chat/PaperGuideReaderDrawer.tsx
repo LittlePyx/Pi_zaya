@@ -10,8 +10,6 @@ import { useReaderSelectionInteractions } from './reader/useReaderSelectionInter
 import { useReaderLocateEngine } from './reader/useReaderLocateEngine'
 import { useReaderSessionHighlightLayer } from './reader/useReaderSessionHighlightLayer'
 import { useReaderOutline } from './reader/useReaderOutline'
-import { useReaderHighlightWorkspace } from './reader/useReaderHighlightWorkspace'
-import { useReaderEvidenceNavigator } from './reader/useReaderEvidenceNavigator'
 import type { ReaderDocResponse } from '../../api/references'
 import {
   type CiteDetail,
@@ -26,6 +24,10 @@ import { useReaderHighlightUndoShortcut } from './useReaderHighlightUndoShortcut
 import { useReaderEquationShelfActions } from './useReaderEquationShelfActions'
 import { useReaderReturnToEvidence } from './useReaderReturnToEvidence'
 import { useReaderLocateResultReporting } from './useReaderLocateResultReporting'
+import {
+  buildReaderSourceLabel,
+  useReaderSidePanelNavigation,
+} from './useReaderSidePanelNavigation'
 import {
   buildReaderLocateStatusViewModel,
 } from './readerLocateStatusViewModel'
@@ -452,7 +454,7 @@ export function PaperGuideReaderDrawer({
     showReaderCitation,
   ])
 
-  const sourceLabel = [title, activeHeadingPath].filter(Boolean).join(' / ')
+  const sourceLabel = buildReaderSourceLabel(title, activeHeadingPath)
   const {
     activeHighlight: activeHighlightAction,
     closeHighlightBubble,
@@ -578,37 +580,36 @@ export function PaperGuideReaderDrawer({
   })
 
   const {
+    hasEvidenceNav,
+    activeEvidenceLabel,
+    canGoPrevEvidence,
+    canGoNextEvidence,
+    evidencePositionLabel,
+    goPrevEvidence,
+    goNextEvidence,
     hasHighlights,
     highlightsOpen,
     activeHighlightId,
     toggleHighlights,
     jumpToSessionHighlight,
     removeSessionHighlight,
-  } = useReaderHighlightWorkspace({
-    open,
-    sourcePath,
+    outlineToggleLabel,
+    highlightsToggleLabel,
+  } = useReaderSidePanelNavigation({
+    activeAltIndex,
+    alternatives,
     contentRef,
+    evidenceAlternatives,
+    isPageSurface,
+    onRemoveSessionHighlight: removeHighlightWithUndo,
+    open,
+    outlineOpen,
     readerBlocks,
     sessionHighlights,
-    onRemoveSessionHighlight: removeHighlightWithUndo,
-  })
-
-  const {
-    hasEvidenceNav,
-    activeEvidenceItem,
-    canGoPrevEvidence,
-    canGoNextEvidence,
-    evidencePositionLabel,
-    goPrevEvidence,
-    goNextEvidence,
-  } = useReaderEvidenceNavigator({
-    open,
+    setActiveAltIndex: (idx) => setActiveAltIndex(idx, 'manual'),
     sourcePath,
     title,
-    evidenceAlternatives,
-    alternatives,
-    activeAltIndex,
-    setActiveAltIndex: (idx) => setActiveAltIndex(idx, 'manual'),
+    S,
   })
 
   useEffect(() => {
@@ -668,17 +669,13 @@ export function PaperGuideReaderDrawer({
       activeHighlightId={activeHighlightId}
       hasEvidenceNav={hasEvidenceNav}
       evidencePositionLabel={evidencePositionLabel}
-      activeEvidenceLabel={String(activeEvidenceItem?.label || '').trim()}
+      activeEvidenceLabel={activeEvidenceLabel}
       canGoPrevEvidence={canGoPrevEvidence}
       canGoNextEvidence={canGoNextEvidence}
       hasDistinctAlternatives={hasDistinctAlternatives}
       candidatePickerExpanded={candidatePickerExpanded}
-      outlineToggleLabel={outlineOpen && !isPageSurface
-        ? (S.reader_hide_sections || 'Hide sections')
-        : (S.reader_sections || 'Sections')}
-      highlightsToggleLabel={highlightsOpen && !isPageSurface
-        ? (S.reader_hide_highlights || 'Hide highlights')
-        : (S.reader_highlights_count || '{n} highlights').replace('{n}', String(sessionHighlights.length))}
+      outlineToggleLabel={outlineToggleLabel}
+      highlightsToggleLabel={highlightsToggleLabel}
       candidateToggleLabel={candidateToggleLabel}
       candidateOptions={candidateOptions}
       activeCandidateDistinctKey={activeCandidateDistinctKey}

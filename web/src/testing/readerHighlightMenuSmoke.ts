@@ -63,6 +63,17 @@ function nextFrame(): Promise<void> {
   })
 }
 
+async function waitForClosedHighlightBubble(
+  readController: () => ReaderHighlightMenuController,
+): Promise<ReaderHighlightBubble | null> {
+  for (let i = 0; i < 8; i += 1) {
+    await nextFrame()
+    const bubble = readController().highlightBubble
+    if (!bubble) return null
+  }
+  return readController().highlightBubble
+}
+
 export async function runReaderHighlightMenuSmoke(): Promise<ReaderHighlightMenuSmokeResult> {
   const host = document.createElement('div')
   const rootElement = document.createElement('div')
@@ -145,9 +156,7 @@ export async function runReaderHighlightMenuSmoke(): Promise<ReaderHighlightMenu
   flushSync(() => {
     readSetHighlights()([])
   })
-  await nextFrame()
-  await nextFrame()
-  const bubbleAfterStale = readController().highlightBubble
+  const bubbleAfterStale = await waitForClosedHighlightBubble(readController)
 
   const renderedText = host.textContent || ''
   root.unmount()

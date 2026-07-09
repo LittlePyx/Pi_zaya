@@ -307,6 +307,14 @@ async function readerLocateCandidateViewModelSmoke(page: Page) {
   })
 }
 
+async function readerSidePanelNavigationSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderSidePanelNavigationSmoke } = await import('/src/testing/readerSidePanelNavigationSmoke.ts')
+    return runReaderSidePanelNavigationSmoke()
+  })
+}
+
 async function readerSelectionShelfSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1573,6 +1581,28 @@ test('reader locate candidate view model derives options and picker state', asyn
   expect(result.single.candidateOptions).toMatchObject([
     { roleLabel: 'Primary', roleTone: 'accent', targetIndex: 0 },
   ])
+})
+
+test('reader side panel navigation helper derives compact labels', async ({ page }) => {
+  const result = await readerSidePanelNavigationSmoke(page)
+
+  expect(result.sourceLabel).toBe('Reader Paper / Methods')
+  expect(result.sourceOnlyLabel).toBe('Reader Paper')
+  expect(result.closedDock).toEqual({
+    activeEvidenceLabel: '',
+    highlightsToggleLabel: '0 notes',
+    outlineToggleLabel: 'Sections',
+  })
+  expect(result.openDock).toEqual({
+    activeEvidenceLabel: 'Evidence A',
+    highlightsToggleLabel: 'Hide highlights',
+    outlineToggleLabel: 'Hide sections',
+  })
+  expect(result.pageSurface).toEqual({
+    activeEvidenceLabel: 'Page Evidence',
+    highlightsToggleLabel: '4 notes',
+    outlineToggleLabel: 'Sections',
+  })
 })
 
 test('reader selection shelf hook builds selection and active-highlight payloads', async ({ page }) => {
