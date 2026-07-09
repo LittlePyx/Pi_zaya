@@ -323,6 +323,98 @@ test('library quality maintenance helper derives refresh sources and reindex det
   expect(result.emptyDetail).toBe('')
 })
 
+test('shelf metadata backfill helper summarizes stage metrics', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const { buildShelfMetadataBackfillStageSummary } = await import('/src/pages/library/useShelfMetadataBackfillActions.ts')
+    const scan = {
+      ok: true,
+      docs: 9,
+      scanned: 8,
+      ready: 4,
+      export_ready: 3,
+      needs_repair: 2,
+      repairable: 2,
+      retryable: 1,
+      target_count: 6,
+      target_limit: 10,
+      truncated: false,
+      targets: [],
+    }
+    const acceptance = {
+      contract_version: 1,
+      requested: 3,
+      quality_ok: false,
+      metadata_ready_before: 1,
+      metadata_ready_after: 2,
+      metadata_ready_delta: 1,
+      export_ready_before: 1,
+      export_ready_after: 7,
+      export_ready_delta: 6,
+      summary_export_ready_after: 7,
+      retryable: 4,
+      failed: 0,
+      unresolved_after: 8,
+    }
+
+    return {
+      resultPreferred: buildShelfMetadataBackfillStageSummary({
+        status: 'completed',
+        phase: 'completed',
+        running: false,
+        target_total: 99,
+        scan,
+        verification: { type: 'state_verification', quality_ok: true },
+        result: {
+          ok: true,
+          requested: 3,
+          ready: 2,
+          export_ready: 5,
+          partial: 0,
+          retryable: 4,
+          failed: 0,
+          unresolved: 6,
+          changed: 5,
+          acceptance,
+          verification: { type: 'result_verification', quality_ok: false },
+          repair_run: { verification: { type: 'repair_run_verification' } },
+          items: [],
+        },
+      }),
+      scanFallback: buildShelfMetadataBackfillStageSummary({
+        status: 'running',
+        phase: 'repairing',
+        running: true,
+        target_total: 10,
+        scan,
+      }),
+    }
+  })
+
+  expect(result.resultPreferred).toMatchObject({
+    targetCount: 3,
+    ready: 2,
+    exportReady: 7,
+    changed: 5,
+    retryable: 4,
+    unresolved: 8,
+    running: false,
+    verification: { type: 'state_verification', quality_ok: true },
+  })
+  expect(result.resultPreferred.repairRun).toMatchObject({
+    verification: { type: 'repair_run_verification' },
+  })
+  expect(result.scanFallback).toMatchObject({
+    targetCount: 6,
+    ready: 4,
+    exportReady: 3,
+    changed: 0,
+    retryable: 1,
+    unresolved: 2,
+    running: true,
+  })
+})
+
 test.beforeEach(async ({ page }) => {
   const brokenName = 'Optica-2024-Broken conversion.pdf'
   const weakName = 'Applied Optics-2023-Weak anchors.pdf'
