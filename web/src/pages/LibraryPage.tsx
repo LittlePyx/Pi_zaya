@@ -92,18 +92,16 @@ import {
 import { useLibraryQualityReportMetrics } from './library/useLibraryQualityReportMetrics'
 import { useShelfMetadataBackfillViewModel } from './library/useShelfMetadataBackfillViewModel'
 import { useLibraryDirectoryActions } from './library/useLibraryDirectoryActions'
+import { useLibraryUploadDraftActions } from './library/useLibraryUploadDraftActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
 import {
   buildQualityRepairHistoryRecord,
-  classifyFailedReason,
   conversionQualityStatus,
   conversionSourceReadiness,
   derivePageProgress,
   formatSeconds,
   hasConversionQualityIssue,
-  isDuplicateFailure,
-  isUploadDraftConverted,
   loadQualityRepairHistory,
   matchesKeyword,
   normalizeQualityRepairHistory,
@@ -119,9 +117,6 @@ import {
   summarizeConversionQualityRepair,
   toTextOptions,
   type QualityRepairHistoryRecord,
-  type UploadDraft,
-  type UploadDraftFilter,
-  type UploadErrorReason,
   uniqueTextValues,
 } from './library/libraryPageUtils'
 
@@ -267,16 +262,6 @@ export default function LibraryPage() {
     remove_tags: [],
   })
 
-  const [uploadDrafts, setUploadDrafts] = useState<UploadDraft[]>([])
-  const [uploadUseLlm, setUploadUseLlm] = useState(true)
-  const [uploadDraftFilter, setUploadDraftFilter] = useState<UploadDraftFilter>('all')
-  const [uploadErrorReason, setUploadErrorReason] = useState<UploadErrorReason>('all')
-  const [uploadInspecting, setUploadInspecting] = useState(false)
-  const [uploadSaving, setUploadSaving] = useState(false)
-  const [uploadWorkbenchOpen, setUploadWorkbenchOpen] = useState(false)
-  const [uploadDraftPage, setUploadDraftPage] = useState(1)
-  const autoInspectingRef = useRef(false)
-
   const [renameScope, setRenameScope] = useState('30')
   const [renameLoading, setRenameLoading] = useState(false)
   const [renameApplying, setRenameApplying] = useState(false)
@@ -315,6 +300,54 @@ export default function LibraryPage() {
     message.warning(S.lib_llm_unavailable_fallback.replace('{action}', action))
     openApiSettings()
   }, [S.lib_llm_unavailable_fallback, openApiSettings])
+  const {
+    addDrafts,
+    applyUploadFilter,
+    clearSavedDrafts,
+    duplicateFailedDrafts,
+    failedReasonBuckets,
+    failedUploadDrafts,
+    failedUploadNotes,
+    filteredUploadDrafts,
+    inspectSelectedDrafts,
+    inspectSingleDraft,
+    invertUploadDraftSelection,
+    pagedUploadDrafts,
+    retryFailedDrafts,
+    retryableFailedUploadDrafts,
+    saveDraft,
+    saveSelectedDrafts,
+    selectAllUploadDrafts,
+    selectFailedDrafts,
+    selectFailedReason,
+    selectedUploadCount,
+    setDraftSelected,
+    setDraftStem,
+    setUploadDraftPage,
+    setUploadErrorReason,
+    setUploadUseLlm,
+    setUploadWorkbenchOpen,
+    showDuplicateFailedDrafts,
+    uploadDraftFilter,
+    uploadDraftFilterOptions,
+    uploadDraftPage,
+    uploadDrafts,
+    uploadErrorReason,
+    uploadInspecting,
+    uploadSaving,
+    uploadUseLlm,
+    uploadWorkbenchOpen,
+  } = useLibraryUploadDraftActions({
+    S,
+    convertMode: CONVERT_MODE,
+    dirDirty,
+    ensureDirsReady,
+    pageSize: UPLOAD_DRAFT_PAGE_SIZE,
+    scope,
+    textModelReady,
+    uploadLocked,
+    warnLlmFallback,
+  })
   const resetQualityOperationUi = useCallback(() => {
     setQualityCaseActionKey('')
     setQualityFullChainActionKey('')
@@ -501,69 +534,15 @@ export default function LibraryPage() {
   })
   const renameOnlyDiff = true
   const renameVisible = useMemo(() => (renameOnlyDiff ? renameItems.filter((x) => x.diff) : renameItems), [renameOnlyDiff, renameItems])
-  const selectedUploadCount = useMemo(() => uploadDrafts.filter((x) => x.selected).length, [uploadDrafts])
   const selectedRenameCount = useMemo(() => renameItems.filter((x) => renameSelected[x.name]).length, [renameItems, renameSelected])
-  const failedUploadDrafts = useMemo(() => uploadDrafts.filter((x) => x.status === 'error'), [uploadDrafts])
-  const duplicateFailedDrafts = useMemo(
-    () => failedUploadDrafts.filter((x) => isDuplicateFailure(x.note)),
-    [failedUploadDrafts],
-  )
-  const retryableFailedUploadDrafts = useMemo(
-    () => failedUploadDrafts.filter((x) => x.failureStage !== 'duplicate' && !isDuplicateFailure(x.note)),
-    [failedUploadDrafts],
-  )
-  const failedUploadNotes = useMemo(
-    () => Array.from(new Set(failedUploadDrafts.map((x) => String(x.note || '').trim()).filter(Boolean))).slice(0, 3),
-    [failedUploadDrafts],
-  )
-  const failedReasonBuckets = useMemo(() => {
-    const counter = new Map<Exclude<UploadErrorReason, 'all'>, number>()
-    for (const item of failedUploadDrafts) {
-      const key = classifyFailedReason(item.note) as Exclude<UploadErrorReason, 'all'>
-      counter.set(key, (counter.get(key) || 0) + 1)
-    }
-    return Array.from(counter.entries())
-      .map(([key, count]) => ({ key, count }))
-      .sort((a, b) => b.count - a.count)
-  }, [failedUploadDrafts])
-  const filteredUploadDrafts = useMemo(() => {
-    const withReason = (items: UploadDraft[]) => (
-      uploadErrorReason === 'all'
-        ? items
-        : items.filter((x) => classifyFailedReason(x.note) === uploadErrorReason)
-    )
-    if (uploadDraftFilter === 'all') return uploadDrafts
-    if (uploadDraftFilter === 'error') return withReason(uploadDrafts.filter((x) => x.status === 'error'))
-    if (uploadDraftFilter === 'dup_error') return withReason(uploadDrafts.filter((x) => x.status === 'error' && isDuplicateFailure(x.note)))
-    if (uploadDraftFilter === 'saved') return uploadDrafts.filter((x) => x.status === 'saved')
-    return uploadDrafts.filter((x) => ['queued', 'inspecting', 'ready', 'saving'].includes(x.status))
-  }, [uploadDrafts, uploadDraftFilter, uploadErrorReason])
-  const uploadDraftFilterOptions = useMemo(
-    () => [
-      { value: 'all', label: S.lib_upload_filter_all.replace('{n}', String(uploadDrafts.length)) },
-      { value: 'todo', label: S.lib_upload_filter_todo.replace('{n}', String(uploadDrafts.filter((x) => ['queued', 'inspecting', 'ready', 'saving'].includes(x.status)).length)) },
-      { value: 'error', label: S.lib_upload_filter_error.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'error').length)) },
-      { value: 'dup_error', label: S.lib_upload_filter_dup.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'error' && isDuplicateFailure(x.note)).length)) },
-      { value: 'saved', label: S.lib_upload_filter_saved.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'saved').length)) },
-    ],
-    [uploadDrafts, S],
-  )
   const renamePageCount = Math.max(1, Math.ceil(renameVisible.length / RENAME_PAGE_SIZE))
-  const uploadDraftPageCount = Math.max(1, Math.ceil(filteredUploadDrafts.length / UPLOAD_DRAFT_PAGE_SIZE))
   const pagedRenameVisible = useMemo(
     () => renameVisible.slice((renamePage - 1) * RENAME_PAGE_SIZE, renamePage * RENAME_PAGE_SIZE),
     [renamePage, renameVisible],
   )
-  const pagedUploadDrafts = useMemo(
-    () => filteredUploadDrafts.slice((uploadDraftPage - 1) * UPLOAD_DRAFT_PAGE_SIZE, uploadDraftPage * UPLOAD_DRAFT_PAGE_SIZE),
-    [filteredUploadDrafts, uploadDraftPage],
-  )
   useEffect(() => {
     if (renamePage > renamePageCount) setRenamePage(renamePageCount)
   }, [renamePage, renamePageCount])
-  useEffect(() => {
-    if (uploadDraftPage > uploadDraftPageCount) setUploadDraftPage(uploadDraftPageCount)
-  }, [uploadDraftPage, uploadDraftPageCount])
   const convertPercent = useMemo(() => {
     if (!store.progress || store.progress.total <= 0) return 0
     const tasks = Array.isArray(store.progress.activeTasks) ? store.progress.activeTasks : []
@@ -966,14 +945,6 @@ export default function LibraryPage() {
   }, [])
 
   useEffect(() => {
-    if (uploadDrafts.length === 0) {
-      setUploadWorkbenchOpen(false)
-      return
-    }
-    setUploadWorkbenchOpen(true)
-  }, [uploadDrafts.length])
-
-  useEffect(() => {
     const existing = new Set(store.files.map((item) => item.name))
     setSelectedLibraryNames((cur) => {
       let changed = false
@@ -1015,233 +986,6 @@ export default function LibraryPage() {
     })
   }, [store.files, S])
 
-  const addDrafts = (files: File[]) => {
-    setUploadDrafts((cur) => {
-      const seen = new Set(cur.map((x) => x.key))
-      const next = [...cur]
-      for (const file of files) {
-        const key = `${file.name}:${file.size}:${file.lastModified}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        next.push({
-          key,
-          file,
-          name: file.name,
-          selected: true,
-          stem: file.name.replace(/\.pdf$/i, ''),
-          status: 'queued',
-          failureStage: '',
-          displayName: file.name,
-          note: '',
-          savedName: '',
-          savedSha1: '',
-          taskId: '',
-          convertRequested: false,
-          suggestionBasisLabel: '',
-          suggestionBasisDetail: '',
-          suggestionMatchMethod: '',
-          suggestionYearSource: '',
-        })
-      }
-      return next
-    })
-  }
-
-  const inspectDraft = useCallback(async (key: string, opts?: { useLlm?: boolean }): Promise<{
-    ok: boolean
-    duplicate: boolean
-    suggestedStem: string
-  }> => {
-    const ready = await ensureDirsReady()
-    if (!ready) return { ok: false, duplicate: false, suggestedStem: '' }
-    const target = uploadDrafts.find((x) => x.key === key)
-    if (!target) return { ok: false, duplicate: false, suggestedStem: '' }
-    const effectiveUseLlm = Boolean(opts?.useLlm ?? uploadUseLlm)
-    setUploadDrafts((cur) => cur.map((x) => (x.key === key ? { ...x, status: 'inspecting', failureStage: '', note: '' } : x)))
-    try {
-      const res = await libraryApi.inspectUpload(target.file, effectiveUseLlm)
-      const suggestedStem = String(res.suggested_stem || target.stem || '')
-      setUploadDrafts((cur) => cur.map((x) => {
-        if (x.key !== key) return x
-        return {
-          ...x,
-          stem: suggestedStem || x.stem,
-          displayName: res.display_full_name || x.displayName,
-          suggestionBasisLabel: String(res.meta?.basis_label || ''),
-          suggestionBasisDetail: String(res.meta?.basis_detail || ''),
-          suggestionMatchMethod: String(res.meta?.match_method || ''),
-          suggestionYearSource: String(res.meta?.year_source || ''),
-          status: res.duplicate ? 'error' : 'ready',
-          failureStage: res.duplicate ? 'duplicate' : '',
-          note: res.duplicate ? `${S.lib_upload_dup_prefix}${String(res.existing || '')}` : S.lib_upload_scan_done,
-        }
-      }))
-      return { ok: !res.duplicate, duplicate: Boolean(res.duplicate), suggestedStem }
-    } catch (err) {
-      setUploadDrafts((cur) => cur.map((x) => (
-        x.key === key
-          ? { ...x, status: 'error', failureStage: 'inspect', note: err instanceof Error ? err.message : S.lib_upload_scan_fail }
-          : x
-      )))
-      return { ok: false, duplicate: false, suggestedStem: '' }
-    }
-  }, [ensureDirsReady, uploadDrafts, uploadUseLlm, S])
-
-  const inspectSelectedDrafts = async () => {
-    const selected = uploadDrafts.filter((x) => x.selected && x.status !== 'inspecting')
-    if (!selected.length) {
-      message.info(S.lib_msg_select_scan)
-      return
-    }
-    const effectiveUseLlm = uploadUseLlm && textModelReady
-    if (uploadUseLlm && !textModelReady) {
-      warnLlmFallback(S.lib_upload_use_llm)
-    }
-    setUploadInspecting(true)
-    try {
-      for (const x of selected) {
-        await inspectDraft(x.key, { useLlm: effectiveUseLlm })
-      }
-      message.success(S.lib_msg_scanned_count.replace('{n}', String(selected.length)))
-    } finally {
-      setUploadInspecting(false)
-    }
-  }
-
-  const inspectSingleDraft = useCallback((key: string) => {
-    const effectiveUseLlm = uploadUseLlm && textModelReady
-    if (uploadUseLlm && !textModelReady) {
-      warnLlmFallback(S.lib_upload_use_llm)
-    }
-    void inspectDraft(key, { useLlm: effectiveUseLlm })
-  }, [S.lib_upload_use_llm, inspectDraft, textModelReady, uploadUseLlm, warnLlmFallback])
-
-  useEffect(() => {
-    if (uploadLocked || dirDirty || uploadInspecting || autoInspectingRef.current) return
-    const queuedKeys = uploadDrafts
-      .filter((x) => x.status === 'queued')
-      .map((x) => x.key)
-    if (!queuedKeys.length) return
-
-    autoInspectingRef.current = true
-    setUploadInspecting(true)
-
-    void (async () => {
-      try {
-        const effectiveUseLlm = uploadUseLlm && textModelReady
-        if (uploadUseLlm && !textModelReady) {
-          warnLlmFallback(S.lib_upload_use_llm)
-        }
-        for (const key of queuedKeys) {
-          // Auto-fill suggested names for newly added upload drafts.
-          await inspectDraft(key, { useLlm: effectiveUseLlm })
-        }
-      } finally {
-        autoInspectingRef.current = false
-        setUploadInspecting(false)
-      }
-    })()
-  }, [S.lib_upload_use_llm, dirDirty, inspectDraft, textModelReady, uploadDrafts, uploadInspecting, uploadLocked, uploadUseLlm, warnLlmFallback])
-
-  useEffect(() => {
-    setUploadDrafts((cur) => {
-      const next = cur.filter((draft) => !isUploadDraftConverted(draft, store.files))
-      return next.length === cur.length ? cur : next
-    })
-  }, [store.files])
-
-  const saveDraft = async (key: string, convertNow: boolean, opts?: { syncUi?: boolean; baseName?: string }) => {
-    const syncUi = opts?.syncUi ?? true
-    const ready = await ensureDirsReady()
-    if (!ready) return { saved: false, enqueued: false }
-    const target = uploadDrafts.find((x) => x.key === key)
-    if (!target) return { saved: false, enqueued: false }
-    setUploadDrafts((cur) => cur.map((x) => (
-      x.key === key
-        ? {
-          ...x,
-          status: 'saving',
-          failureStage: '',
-          note: '',
-          savedName: '',
-          savedSha1: '',
-          taskId: '',
-          convertRequested: false,
-        }
-        : x
-    )))
-    try {
-      const res = await libraryApi.commitUpload(target.file, {
-        baseName: opts?.baseName ?? target.stem,
-        convertNow,
-        speedMode: CONVERT_MODE,
-        allowDuplicate: false,
-      })
-      const savedName = String(res.name || target.file.name || '')
-      const enqueued = Boolean(convertNow && res.enqueued)
-      setUploadDrafts((cur) => cur.map((x) => {
-        if (x.key !== key) return x
-        if (res.duplicate) {
-          return {
-            ...x,
-            status: 'error',
-            failureStage: 'duplicate',
-            note: `${S.lib_upload_dup_prefix}${String(res.existing || '')}`,
-          }
-        }
-        return {
-          ...x,
-          status: 'saved',
-          failureStage: '',
-          selected: false,
-          stem: savedName.replace(/\.pdf$/i, '') || x.stem,
-          displayName: savedName || x.displayName,
-          savedName,
-          savedSha1: String(res.sha1 || ''),
-          taskId: String(res.task_id || ''),
-          convertRequested: enqueued,
-          note: enqueued ? S.lib_msg_saved_enqueued.replace('{name}', savedName) : S.lib_msg_saved_only.replace('{name}', savedName),
-        }
-      }))
-      if (res.duplicate) return { saved: false, enqueued: false }
-      if (syncUi) {
-        await store.loadFiles(scope)
-        if (enqueued) store.startProgressStream()
-      }
-      return { saved: true, enqueued }
-    } catch (err) {
-      setUploadDrafts((cur) => cur.map((x) => (
-        x.key === key
-          ? { ...x, status: 'error', failureStage: 'save', note: err instanceof Error ? err.message : S.lib_upload_save_fail }
-          : x
-      )))
-      return { saved: false, enqueued: false }
-    }
-  }
-
-  const saveSelectedDrafts = async (convertNow: boolean) => {
-    const ready = await ensureDirsReady()
-    if (!ready) return
-    const selected = uploadDrafts.filter((x) => x.selected && x.status !== 'saving' && x.status !== 'saved')
-    if (!selected.length) {
-      message.info(S.lib_msg_select_save)
-      return
-    }
-    setUploadSaving(true)
-    try {
-      let anyEnqueued = false
-      for (const x of selected) {
-        const result = await saveDraft(x.key, convertNow, { syncUi: false })
-        anyEnqueued = anyEnqueued || Boolean(result.enqueued)
-      }
-      await store.loadFiles(scope)
-      if (anyEnqueued) store.startProgressStream()
-      message.success(S.lib_msg_processed_count.replace('{n}', String(selected.length)))
-    } finally {
-      setUploadSaving(false)
-    }
-  }
-
   const scanRenameSuggestions = async () => {
     setRenameLoading(true)
     try {
@@ -1266,62 +1010,6 @@ export default function LibraryPage() {
       message.error(err instanceof Error ? err.message : S.lib_msg_scan_rename_fail)
     } finally {
       setRenameLoading(false)
-    }
-  }
-
-  const selectFailedDrafts = () => {
-    if (!failedUploadDrafts.length) {
-      message.info(S.lib_msg_no_failed_items)
-      return
-    }
-    setUploadDrafts((cur) => cur.map((x) => ({ ...x, selected: x.status === 'error' })))
-    message.info(S.lib_msg_selected_failed.replace('{n}', String(failedUploadDrafts.length)))
-  }
-
-  const showDuplicateFailedDrafts = () => {
-    if (!duplicateFailedDrafts.length) {
-      message.info(S.lib_msg_no_dup_failures)
-      return
-    }
-    applyUploadFilter('dup_error')
-    message.info(S.lib_msg_switched_dup.replace('{n}', String(duplicateFailedDrafts.length)))
-  }
-
-  const retryFailedDrafts = async (convertNow: boolean) => {
-    const failed = uploadDrafts.filter((x) => x.status === 'error')
-    const retryable = failed.filter((x) => x.failureStage !== 'duplicate' && !isDuplicateFailure(x.note))
-    if (!retryable.length) {
-      message.info(S.lib_msg_no_retryable)
-      return
-    }
-    setUploadSaving(true)
-    setUploadInspecting(true)
-    try {
-      let anyEnqueued = false
-      const effectiveUseLlm = uploadUseLlm && textModelReady
-      if (uploadUseLlm && !textModelReady) {
-        warnLlmFallback(S.lib_upload_use_llm)
-      }
-      for (const x of retryable) {
-        if (x.failureStage === 'inspect') {
-          const inspectResult = await inspectDraft(x.key, { useLlm: effectiveUseLlm })
-          if (!inspectResult.ok || !convertNow) continue
-          const result = await saveDraft(x.key, true, {
-            syncUi: false,
-            baseName: inspectResult.suggestedStem || x.stem,
-          })
-          anyEnqueued = anyEnqueued || Boolean(result.enqueued)
-          continue
-        }
-        const result = await saveDraft(x.key, convertNow, { syncUi: false })
-        anyEnqueued = anyEnqueued || Boolean(result.enqueued)
-      }
-      await store.loadFiles(scope)
-      if (anyEnqueued) store.startProgressStream()
-      message.success(S.lib_msg_retried_count.replace('{n}', String(retryable.length)))
-    } finally {
-      setUploadInspecting(false)
-      setUploadSaving(false)
     }
   }
 
@@ -2943,14 +2631,6 @@ export default function LibraryPage() {
     }
   }
 
-  const selectAllUploadDrafts = () => {
-    setUploadDrafts((cur) => cur.map((item) => ({ ...item, selected: true })))
-  }
-
-  const invertUploadDraftSelection = () => {
-    setUploadDrafts((cur) => cur.map((item) => ({ ...item, selected: !item.selected })))
-  }
-
   const selectRenameDiffItems = () => {
     setRenameSelected((cur) => {
       const next = { ...cur }
@@ -2969,17 +2649,6 @@ export default function LibraryPage() {
       }
       return next
     })
-  }
-
-  const applyUploadFilter = (next: UploadDraftFilter) => {
-    setUploadDraftFilter(next)
-    if (next === 'dup_error') {
-      setUploadErrorReason('duplicate')
-      return
-    }
-    if (next !== 'error') {
-      setUploadErrorReason('all')
-    }
   }
 
   const renderFileRow = (item: LibraryFileItem) => {
@@ -3167,13 +2836,10 @@ export default function LibraryPage() {
       onSelectFailedDrafts={selectFailedDrafts}
       onShowDuplicateFailedDrafts={showDuplicateFailedDrafts}
       onRetryFailedDrafts={retryFailedDrafts}
-      onClearSavedDrafts={() => setUploadDrafts((cur) => cur.filter((x) => x.status !== 'saved'))}
-      onSelectFailedReason={(reason) => {
-        applyUploadFilter('error')
-        setUploadErrorReason(reason)
-      }}
-      onDraftSelectedChange={(key, selected) => setUploadDrafts((cur) => cur.map((x) => (x.key === key ? { ...x, selected } : x)))}
-      onDraftStemChange={(key, stem) => setUploadDrafts((cur) => cur.map((x) => (x.key === key ? { ...x, stem } : x)))}
+      onClearSavedDrafts={clearSavedDrafts}
+      onSelectFailedReason={selectFailedReason}
+      onDraftSelectedChange={setDraftSelected}
+      onDraftStemChange={setDraftStem}
       onInspectDraft={inspectSingleDraft}
       onSaveDraft={saveDraft}
       onPageChange={setUploadDraftPage}
