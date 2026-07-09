@@ -291,6 +291,14 @@ async function readerLocateResultReportingSmoke(page: Page) {
   })
 }
 
+async function readerLocateStatusViewModelSmoke(page: Page) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async () => {
+    const { runReaderLocateStatusViewModelSmoke } = await import('/src/testing/readerLocateStatusViewModelSmoke.ts')
+    return runReaderLocateStatusViewModelSmoke()
+  })
+}
+
 async function readerSelectionShelfSmoke(page: Page) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async () => {
@@ -1486,6 +1494,43 @@ test('reader locate result reporting hook preserves success and failure payloads
     locateFeedbackKey: 'hook-key',
     sourceName: 'Hook Reader',
     status: 'failed',
+  })
+})
+
+test('reader locate status view model derives badges and decision text', async ({ page }) => {
+  const result = await readerLocateStatusViewModelSmoke(page)
+
+  expect(result.unresolved.decisionText).toBe('')
+  expect(result.unresolved.locateBadges).toMatchObject([
+    { key: 'mode', label: 'Strict', tone: 'accent', title: 'Strict title' },
+    { key: 'result', label: 'Unresolved', tone: 'danger', title: 'Strict locate stopped: not found' },
+  ])
+  expect(result.systemSwitch.decisionText).toBe('Auto note')
+  expect(result.systemSwitch.decisionTitle).toBe('Equation block matched')
+  expect(result.systemSwitch.locateBadges).toMatchObject([
+    { key: 'mode', label: 'Strict', tone: 'accent' },
+    { key: 'result', label: 'Anchor', tone: 'success' },
+    { key: 'switch', label: 'Auto switched', tone: 'warning', title: 'Auto title' },
+  ])
+  expect(result.manualSwitch.decisionText).toBe('Manual note')
+  expect(result.manualSwitch.decisionTitle).toBe('Manual note')
+  expect(result.manualSwitch.locateBadges).toMatchObject([
+    { key: 'mode', label: 'Section', tone: 'neutral', title: 'Section title' },
+    { key: 'result', label: 'Section only', tone: 'neutral' },
+    { key: 'switch', label: 'Manual alt', tone: 'accent', title: 'Manual title' },
+  ])
+  expect(result.quiet).toMatchObject({
+    decisionText: '',
+    locateBadges: [
+      { key: 'mode', label: 'Section', tone: 'neutral' },
+    ],
+  })
+  expect(result.quiet.decisionTitle).toBeUndefined()
+  expect(result.exactBadge).toMatchObject({
+    key: 'result',
+    label: 'Exact',
+    tone: 'success',
+    title: 'Exact target matched',
   })
 })
 

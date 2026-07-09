@@ -26,6 +26,10 @@ import { useReaderHighlightUndoShortcut } from './useReaderHighlightUndoShortcut
 import { useReaderEquationShelfActions } from './useReaderEquationShelfActions'
 import { useReaderReturnToEvidence } from './useReaderReturnToEvidence'
 import { useReaderLocateResultReporting } from './useReaderLocateResultReporting'
+import {
+  buildReaderLocateStatusViewModel,
+  type ReaderLocateBadgeTone,
+} from './readerLocateStatusViewModel'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -48,16 +52,6 @@ export type {
   ReaderSessionHighlight,
 } from './reader/readerTypes'
 
-type LocateBadgeTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
-
-interface LocateMetaBadge {
-  key: string
-  label: string
-  title?: string
-  tone?: LocateBadgeTone
-  testId?: string
-}
-
 interface Props {
   open: boolean
   payload: ReaderOpenPayload | null
@@ -78,91 +72,6 @@ interface Props {
   onAddCitationToShelf?: (detail: CiteDetail) => void
   onOpenCitationShelf?: () => void
   documentOverride?: ReaderDocResponse | null
-}
-
-function locateResultBadge(
-  statusTextFull: string,
-  activeHitLevel: string,
-  activeAnchorKind: string,
-  strictLocate: boolean,
-  activeHeadingPath: string,
-  S: Record<string, string>,
-): LocateMetaBadge | null {
-  const hint = String(statusTextFull || '').trim().toLowerCase()
-  const hitLevel = String(activeHitLevel || '').trim().toLowerCase()
-  const anchorKind = String(activeAnchorKind || '').trim().toLowerCase()
-  const title = statusTextFull || undefined
-
-  if (/\b(strict locate stopped|not found)\b/i.test(hint)) {
-    return {
-      key: 'result',
-      label: S.reader_locate_unresolved || 'Unresolved',
-      title,
-      tone: 'danger',
-      testId: 'reader-locate-resolution',
-    }
-  }
-  if (hitLevel === 'heading' || /\bheading\b/i.test(hint)) {
-    return {
-      key: 'result',
-      label: S.reader_locate_section_only || 'Section only',
-      title,
-      tone: strictLocate ? 'warning' : 'neutral',
-      testId: 'reader-locate-resolution',
-    }
-  }
-  if (
-    anchorKind === 'equation'
-    || anchorKind === 'figure'
-    || /\b(equation block|figure block|inline formula|neighbor formula|exact figure block)\b/i.test(hint)
-  ) {
-    return {
-      key: 'result',
-      label: S.reader_locate_bound_anchor || 'Bound anchor',
-      title,
-      tone: 'success',
-      testId: 'reader-locate-resolution',
-    }
-  }
-  if (/\b(neighbor evidence|fallback|block only)\b/i.test(hint)) {
-    return {
-      key: 'result',
-      label: S.reader_locate_fallback_evidence || 'Fallback evidence',
-      title,
-      tone: 'warning',
-      testId: 'reader-locate-resolution',
-    }
-  }
-  if (hitLevel === 'block' || /\bevidence block matched\b/i.test(hint)) {
-    return {
-      key: 'result',
-      label: S.reader_locate_bound_block || 'Bound block',
-      title,
-      tone: 'success',
-      testId: 'reader-locate-resolution',
-    }
-  }
-  if (hitLevel === 'exact' || /\bexact\b/i.test(hint)) {
-    return {
-      key: 'result',
-      label: S.reader_locate_exact_target || 'Exact target',
-      title,
-      tone: 'success',
-      testId: 'reader-locate-resolution',
-    }
-  }
-  if (activeHeadingPath) {
-    return {
-      key: 'result',
-      label: strictLocate
-        ? (S.reader_locate_requested_section || 'Requested section')
-        : (S.reader_locate_section_open || 'Section open'),
-      title,
-      tone: 'neutral',
-      testId: 'reader-locate-resolution',
-    }
-  }
-  return null
 }
 
 function compactReaderEvidenceText(value: string, limit = 180): string {
@@ -434,7 +343,7 @@ export function PaperGuideReaderDrawer({
   const candidateOptions = (() => {
     const describeCandidateRole = (
       candidate: ReaderLocateCandidate | null | undefined,
-    ): { roleLabel?: string; roleTone?: LocateBadgeTone } => {
+    ): { roleLabel?: string; roleTone?: ReaderLocateBadgeTone } => {
       const identity = candidateIdentityKey(candidate)
       if (!identity) return {}
       const isActive = identity === candidateIdentityKey(activeAlt)
@@ -603,71 +512,33 @@ export function PaperGuideReaderDrawer({
           .replace('{n}', String(candidateOptions.length))
         : (S.reader_candidates_count || '{n} candidates').replace('{n}', String(candidateOptions.length)))
     : ''
-  const locateBadges = useMemo(() => {
-    const out: LocateMetaBadge[] = []
-    out.push({
-      key: 'mode',
-      label: strictLocate
-        ? (S.reader_locate_mode_strict || 'Strict locate')
-        : (S.reader_locate_mode_section || 'Section locate'),
-      title: strictLocate
-        ? (S.reader_locate_mode_strict_title || 'This reader open expects a direct evidence location before softer fallbacks.')
-        : (S.reader_locate_mode_section_title || 'This reader open starts from the best matched section or snippet.'),
-      tone: strictLocate ? 'accent' : 'neutral',
-      testId: 'reader-locate-mode',
-    })
-    const resultBadge = locateResultBadge(
-      statusTextFull,
-      activeHitLevel,
-      activeAnchorKind,
-      strictLocate,
-      activeHeadingPath,
-      S,
-    )
-    if (resultBadge) out.push(resultBadge)
-    if (hasDistinctAlternatives && altChangeSource === 'system' && activeAltIndex !== requestedAltIndex) {
-      out.push({
-        key: 'switch',
-        label: S.reader_auto_switched || 'Auto-switched',
-        title: S.reader_auto_switched_title || 'The requested candidate could not be bound directly, so the reader moved to a backup candidate.',
-        tone: 'warning',
-        testId: 'reader-locate-switch',
-      })
-    } else if (hasDistinctAlternatives && altChangeSource === 'manual' && activeAltIndex !== requestedAltIndex) {
-      out.push({
-        key: 'switch',
-        label: S.reader_manual_alt || 'Manual alt',
-        title: S.reader_manual_alt_title || 'You are viewing a manually selected alternate candidate.',
-        tone: 'accent',
-        testId: 'reader-locate-switch',
-      })
-    }
-    return out
-  }, [
-    S,
-    strictLocate,
-    statusTextFull,
-    activeHitLevel,
+  const {
+    decisionText,
+    decisionTitle,
+    locateBadges,
+  } = useMemo(() => buildReaderLocateStatusViewModel({
+    activeAltIndex,
     activeAnchorKind,
     activeHeadingPath,
-    hasDistinctAlternatives,
+    activeHitLevel,
     altChangeSource,
-    activeAltIndex,
+    hasDistinctAlternatives,
     requestedAltIndex,
+    S,
+    statusTextFull,
+    strictLocate,
+  }), [
+    S,
+    activeAltIndex,
+    activeAnchorKind,
+    activeHeadingPath,
+    activeHitLevel,
+    altChangeSource,
+    hasDistinctAlternatives,
+    requestedAltIndex,
+    statusTextFull,
+    strictLocate,
   ])
-  const decisionText = useMemo(() => {
-    if (hasDistinctAlternatives && altChangeSource === 'system' && activeAltIndex !== requestedAltIndex) {
-      return S.reader_auto_switched_note || 'The requested target missed, so the reader moved to the best backup evidence.'
-    }
-    if (hasDistinctAlternatives && altChangeSource === 'manual' && activeAltIndex !== requestedAltIndex) {
-      return S.reader_manual_alt_note || 'Showing a manually selected alternate candidate.'
-    }
-    return ''
-  }, [S, hasDistinctAlternatives, altChangeSource, activeAltIndex, requestedAltIndex])
-  const decisionTitle = useMemo(() => {
-    if (!decisionText) return undefined
-    return statusTextFull || decisionText
-  }, [decisionText, statusTextFull])
 
   useEffect(() => {
     closeReaderCitationPopover()
