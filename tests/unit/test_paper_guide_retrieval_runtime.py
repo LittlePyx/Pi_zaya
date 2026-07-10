@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from kb import paper_guide_retrieval_runtime as retrieval_runtime
@@ -72,6 +73,48 @@ def test_paper_guide_targeted_source_block_hits_extracts_box_block(tmp_path: Pat
     assert hits
     assert any("Box 1" in str(hit.get("text") or "") for hit in hits)
     assert any("M \\ge O(K \\log(N/K))" in str(hit.get("text") or "") for hit in hits)
+
+
+def test_paper_guide_targeted_source_block_hits_uses_figure_index_panel_clause(tmp_path: Path):
+    source_pdf = tmp_path / "DemoFigure.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    db_root = tmp_path / "db"
+    md_dir = db_root / "DemoFigure"
+    assets_dir = md_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoFigure.en.md"
+    md_main.write_text("## Results\n\nFigure 2 summarizes the experiment.\n", encoding="utf-8")
+    (assets_dir / "figure_index.json").write_text(
+        json.dumps(
+            {
+                "figures": [
+                    {
+                        "paper_figure_number": 2,
+                        "caption": "Figure 2. (a) Baseline response. (b) Improved response after calibration.",
+                        "caption_block_id": "blk-fig-2-caption",
+                        "caption_anchor_id": "anchor-fig-2-caption",
+                        "heading_path": "Results / Calibration",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source_pdf),
+        prompt="Walk me through Figure 2 panel b.",
+        db_dir=db_root,
+        limit=3,
+    )
+
+    assert len(hits) == 1
+    assert "Improved response after calibration" in str(hits[0].get("text") or "")
+    meta = hits[0].get("meta") or {}
+    assert meta["source_sha1"]
+    assert meta["figure_number"] == 2
+    assert meta["panel_letters"] == ["b"]
+    assert meta["block_id"] == "blk-fig-2-caption"
 
 
 def test_paper_guide_fallback_deepread_hits_prefers_targeted_hits_for_box_query(tmp_path: Path):

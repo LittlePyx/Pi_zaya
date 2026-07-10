@@ -24,6 +24,7 @@ from kb.paper_guide_prompting import (
     _paper_guide_requested_box_numbers,
     _paper_guide_requested_heading_hints,
     _paper_guide_requested_section_targets,
+    _requested_figure_number,
     _paper_guide_text_matches_requested_box,
     _paper_guide_text_matches_requested_section,
     _paper_guide_text_matches_requested_targets,
@@ -39,6 +40,7 @@ from kb.paper_guide_provenance import (
 )
 from kb.retrieval_engine import _deep_read_md_for_context
 from kb.source_blocks import load_source_blocks, normalize_inline_markdown, normalize_match_text
+from kb.store import compute_file_sha1
 
 
 def _paper_guide_seed_query_tokens_for_targeted_scan(
@@ -426,7 +428,10 @@ def _paper_guide_targeted_source_block_hits(
     if family0 == "figure_walkthrough" and target_fig0 > 0 and target_panels0:
         try:
             from kb.paper_guide_structured_index_runtime import load_paper_guide_figure_index
-            from kb.paper_guide.grounder import _extract_caption_fragment_for_letters
+            from kb.paper_guide.grounder import (
+                _extract_caption_fragment_for_letters,
+                _extract_caption_fragment_for_letters_fallback,
+            )
 
             for row in load_paper_guide_figure_index(md_path):
                 try:
@@ -437,6 +442,8 @@ def _paper_guide_targeted_source_block_hits(
                     continue
                 caption = str(row.get("caption") or "").strip()
                 frag = _extract_caption_fragment_for_letters(caption, set(target_panels0))
+                if not frag:
+                    frag = _extract_caption_fragment_for_letters_fallback(caption, set(target_panels0))
                 if not frag:
                     continue
                 caption_block_id = str(row.get("caption_block_id") or "").strip()

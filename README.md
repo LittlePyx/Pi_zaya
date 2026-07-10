@@ -395,6 +395,7 @@ Useful commands:
 
 ```powershell
 python -m pytest tests/unit -q
+python -m ruff check .
 python -m pytest tests/unit/test_agent_answer_runtime_e2e.py -q
 python tools\research_qa\validate_research_agent_golden.py
 python tools\research_qa\run_agent_trace_eval.py --json-out test_results\agent_trace_eval.json
@@ -415,7 +416,9 @@ npm run test:e2e:smoke
 GitHub Actions runs these as separate `frontend`, `backend`, and
 `quality_gates` jobs, with `build_and_test` kept as a final summary check for
 branch-protection compatibility. Shared backend CI setup lives in
-`.github/actions/setup-backend-python`.
+`.github/actions/setup-backend-python`; pinned CI-only Python tools live in
+`requirements-ci.txt`. Ruff initially gates syntax errors and undefined names,
+so existing style debt can be reduced incrementally without weakening the gate.
 
 ## Data Files
 

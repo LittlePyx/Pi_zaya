@@ -10,6 +10,10 @@ inputs:
     description: Backend requirements file used for pip cache and install.
     required: false
     default: requirements.txt
+  ci-requirements-file:
+    description: Pinned backend test and static-analysis tools.
+    required: false
+    default: requirements-ci.txt
 
 runs:
   using: composite
@@ -19,14 +23,17 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
         cache: pip
-        cache-dependency-path: ${{ inputs.requirements-file }}
+        cache-dependency-path: |
+          ${{ inputs.requirements-file }}
+          ${{ inputs.ci-requirements-file }}
 
     - name: Install backend dependencies
       shell: bash
       env:
         REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
+        CI_REQUIREMENTS_FILE: ${{ inputs.ci-requirements-file }}
       run: |
         set -euo pipefail
         python -m pip install --upgrade pip
         pip install -r "${REQUIREMENTS_FILE}"
-        pip install pytest
+        pip install -r "${CI_REQUIREMENTS_FILE}"

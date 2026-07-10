@@ -92,6 +92,9 @@ jobs:
       - name: Setup backend Python
         uses: ./.github/actions/setup-backend-python
 
+      - name: Check backend syntax and undefined names
+        run: python -m ruff check . --output-format=github
+
       - name: Check visible Research Agent answer contract
         run: python -m pytest tests/unit/test_agent_answer_runtime_e2e.py -q
 
