@@ -730,6 +730,53 @@ def _run_step(trace: AgentTrace, index: int, tool_fn, *args, **kwargs) -> dict[s
         return {}
 
 
+_FINAL_TRACE_STATUSES = {"done", "error", "canceled"}
+
+
+def _normalize_trace_status(value: object, *, fallback: str = "done") -> str:
+    status = str(value or "").strip().lower()
+    return status if status in _FINAL_TRACE_STATUSES else fallback
+
+
+def _finalize_agent_trace(
+    trace: AgentTrace,
+    query: str,
+    *,
+    hits: list[dict[str, Any]],
+    agent_notes: dict[str, Any] | None,
+    scope_context: dict[str, Any] | None,
+    status: str = "done",
+) -> None:
+    context = trace.context
+    if isinstance(scope_context, dict):
+        for key, value in scope_context.items():
+            context.setdefault(key, value)
+    gate = agent_notes.get("evidence_gate") if isinstance(agent_notes, dict) else None
+    if isinstance(gate, dict):
+        for context_key, gate_key in (
+            ("answer_source_blend", "source_blend"),
+            ("answer_mode", "answer_mode"),
+            ("source_policy", "source_policy"),
+            ("retrieval_confidence", "retrieval_confidence"),
+        ):
+            value = str(gate.get(gate_key) or "").strip()
+            if value:
+                context.setdefault(context_key, value)
+    final_status = _normalize_trace_status(status)
+    if final_status == "done" and trace.errors:
+        final_status = "error"
+    trace.status = final_status
+    trace.research_run = build_research_run(
+        query,
+        question_type=trace.question_type,
+        hits=hits,
+        agent_notes=agent_notes or {},
+        scope_context=context,
+        verification_status=trace.verification.evidence_status,
+        failed=final_status in {"error", "canceled"},
+    )
+
+
 def run_research_agent(
     query: str,
     *,
@@ -872,15 +919,13 @@ def run_research_agent(
                 pass
     if not context["answer"]:
         context["answer"] = "Research Agent Mode could not generate an answer. See agent_trace.errors for details."
-    trace.status = "error" if trace.errors and not context["answer"] else "done"
-    trace.research_run = build_research_run(
+    _finalize_agent_trace(
+        trace,
         query,
-        question_type=question_type,
         hits=context["hits"],
         agent_notes=context.get("agent_notes"),
         scope_context=scope_context,
-        verification_status=trace.verification.evidence_status,
-        failed=trace.status == "error",
+        status="error" if trace.errors else "done",
     )
     return {"answer": context["answer"], "agent_trace": trace.to_dict(), "hits": context["hits"]}
 
@@ -904,9 +949,7 @@ def build_agent_trace_for_completed_answer(
         verification = _general_answer_verification()
     else:
         verification = verify_completed_answer(answer, hits, answer_mode=resolved_answer_mode)
-    final_status = str(status or "done").strip().lower()
-    if final_status not in {"done", "error", "canceled"}:
-        final_status = "done"
+    final_status = _normalize_trace_status(status)
     context = dict(scope_context or {})
     context.setdefault("planner_intent", intent.to_dict())
     context.setdefault("planner_confidence", intent.confidence)
@@ -918,17 +961,11 @@ def build_agent_trace_for_completed_answer(
         verification=verification,
         status=final_status,
     )
-    trace.research_run = build_research_run(
-        query,
-        question_type=question_type,
-        hits=hits,
-        agent_notes=agent_notes or {},
-        scope_context=context,
-        verification_status=verification.evidence_status,
-        failed=final_status == "error",
-    )
     for step in trace.plan:
-        step.status = "done" if final_status == "done" else "error"
+        if step.tool == "verify_answer_citations" and resolved_answer_mode in {"general_llm", "external_academic_llm"}:
+            step.status = "skipped"
+        else:
+            step.status = "done" if final_status == "done" else final_status
     trace.steps.append(
         AgentExecutionStep(
             tool="retrieve_evidence",
@@ -958,12 +995,24 @@ def build_agent_trace_for_completed_answer(
     trace.steps.append(
         AgentExecutionStep(
             tool="verify_answer_citations",
-            status="done",
+            status="skipped" if resolved_answer_mode in {"general_llm", "external_academic_llm"} else final_status,
             observation=(
-                f"Verified {verification.supported_claims}/{verification.total_claims} claim(s) "
-                "with citation/evidence support."
+                "Skipped local citation verification because this answer was not grounded in local knowledge-base evidence."
+                if resolved_answer_mode in {"general_llm", "external_academic_llm"}
+                else (
+                    f"Verified {verification.supported_claims}/{verification.total_claims} claim(s) "
+                    "with citation/evidence support."
+                )
             ),
             output=verification.to_dict(),
         )
+    )
+    _finalize_agent_trace(
+        trace,
+        query,
+        hits=hits,
+        agent_notes=agent_notes,
+        scope_context=context,
+        status=final_status,
     )
     return trace.to_dict()

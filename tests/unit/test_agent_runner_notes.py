@@ -145,6 +145,36 @@ def test_runner_marks_academic_no_hit_as_external_answer(monkeypatch, tmp_path):
     assert result["agent_trace"]["steps"][-1]["status"] == "skipped"
 
 
+def test_runner_surfaces_tool_errors_even_when_a_partial_answer_exists(monkeypatch, tmp_path):
+    def fake_retrieve_evidence(query, *, db_dir, settings=None, top_k=6):
+        return {
+            "hits": [
+                {
+                    "text": "The paper uses retrieval before generation to improve grounding.",
+                    "score": 3.0,
+                    "meta": {"source_name": "Paper A", "source_path": "paper-a.md"},
+                }
+            ],
+            "observation": "retrieved",
+        }
+
+    def failed_retrieve_references(*args, **kwargs):
+        raise RuntimeError("reference index unavailable")
+
+    def fake_generate_grounded_answer(query, hits, **kwargs):
+        return {"answer": "The paper uses retrieval before generation [1].", "observation": "answered"}
+
+    monkeypatch.setattr(runner, "retrieve_evidence", fake_retrieve_evidence)
+    monkeypatch.setattr(runner, "retrieve_references", failed_retrieve_references)
+    monkeypatch.setattr(runner, "generate_grounded_answer", fake_generate_grounded_answer)
+
+    result = runner.run_research_agent("Which upstream reference should I read?", db_dir=tmp_path)
+
+    assert result["agent_trace"]["status"] == "error"
+    assert "retrieve_references" in result["agent_trace"]["errors"][0]
+    assert result["agent_trace"]["research_run"]["status"] == "failed"
+
+
 def test_runner_allows_general_llm_answer_when_query_is_not_about_library(monkeypatch, tmp_path):
     captured = {}
 

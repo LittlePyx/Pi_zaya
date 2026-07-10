@@ -45,6 +45,20 @@ def test_agent_trace_can_mark_error_status():
     assert all(step["status"] == "error" for step in trace["plan"])
 
 
+def test_completed_external_trace_skips_local_verification():
+    trace = build_agent_trace_for_completed_answer(
+        "Compare Python lists and tuples.",
+        "Lists are mutable; tuples are immutable.",
+        answer_mode="general_llm",
+        status="canceled",
+    )
+
+    assert trace["status"] == "canceled"
+    assert trace["plan"][-1]["status"] == "skipped"
+    assert trace["steps"][-1]["status"] == "skipped"
+    assert trace["research_run"]["status"] == "failed"
+
+
 def test_agent_trace_marks_no_evidence_as_insufficient():
     trace = build_agent_trace_for_completed_answer("x", "Answer without evidence [1].", evidence_hits=[])
 
