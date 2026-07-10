@@ -43,7 +43,7 @@ export function EvidenceDrawer({
       )}
       open={open}
       onClose={onClose}
-      width={420}
+      size={420}
       mask={false}
       rootClassName="kb-evidence-drawer-root"
       className="kb-evidence-drawer"

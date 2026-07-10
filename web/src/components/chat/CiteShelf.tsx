@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, message } from 'antd'
-import { CloseOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, FileSearchOutlined, LoadingOutlined, SaveOutlined, SearchOutlined, SlidersOutlined } from '@ant-design/icons'
+import { BookOutlined, CloseOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, FileSearchOutlined, LoadingOutlined, SaveOutlined, SearchOutlined, SlidersOutlined } from '@ant-design/icons'
 import type { CiteShelfItem } from './citationState'
 import type { ReaderLocateResult } from './reader/readerTypes'
 import type { ShelfMetadataRepairImpact } from '../../api/references'
@@ -1273,7 +1273,8 @@ export function CiteShelf({
           onClick={onToggle}
           type="button"
         >
-          {S.shelf_title}
+          <BookOutlined className="kb-shelf-toggle-icon" aria-hidden="true" />
+          <span className="kb-shelf-toggle-label">{S.shelf_title}</span>
         </button>
       ) : null}
       <aside
