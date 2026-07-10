@@ -34,6 +34,49 @@ def _clip(value: Any, limit: int = 220) -> str:
     return text[: max(20, int(limit or 220))]
 
 
+def _research_run_id(
+    query: str,
+    *,
+    question_type: QuestionType,
+    hits: list[dict[str, Any]],
+    scope_context: dict[str, Any] | None,
+) -> str:
+    context = scope_context or {}
+    explicit = str(context.get("research_run_id") or "").strip().lower()
+    if re.fullmatch(r"rr_[a-z0-9_-]{8,64}", explicit):
+        return explicit
+    runtime_identity = str(context.get("trace_id") or context.get("task_id") or "").strip()
+    if runtime_identity:
+        digest = hashlib.sha1(f"runtime|{runtime_identity}".encode("utf-8", errors="ignore")).hexdigest()[:16]
+        return f"rr_{digest}"
+
+    evidence_identity: list[str] = []
+    for hit in hits:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        text_digest = hashlib.sha1(
+            str(hit.get("text") or "").strip()[:1200].encode("utf-8", errors="ignore")
+        ).hexdigest()[:10]
+        evidence_identity.append(
+            "|".join(
+                [
+                    str(meta.get("source_path") or meta.get("source_name") or "").strip(),
+                    str(meta.get("block_id") or "").strip(),
+                    str(meta.get("anchor_id") or meta.get("anchor") or "").strip(),
+                    text_digest,
+                ]
+            )
+        )
+    run_seed = "|".join(
+        [
+            str(query or "").strip(),
+            str(question_type),
+            str(context.get("query_scope") or ""),
+            *sorted(evidence_identity),
+        ]
+    )
+    return f"rr_{hashlib.sha1(run_seed.encode('utf-8', errors='ignore')).hexdigest()[:16]}"
+
+
 def _meta(hit: dict[str, Any]) -> dict[str, Any]:
     meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
     return meta if isinstance(meta, dict) else {}
@@ -253,16 +296,12 @@ def build_research_run(
         agent_notes=agent_notes,
         verification_status=verification_status,
     )
-    run_seed = "|".join(
-        [
-            str(query or "").strip(),
-            str(question_type),
-            str((scope_context or {}).get("query_scope") or ""),
-            str(len(local_hits)),
-            str(len(matrix)),
-        ]
+    run_id = _research_run_id(
+        query,
+        question_type=question_type,
+        hits=local_hits,
+        scope_context=scope_context,
     )
-    run_id = f"rr_{hashlib.sha1(run_seed.encode('utf-8', errors='ignore')).hexdigest()[:12]}"
     run_status = status or ("failed" if failed else "verified")
     metrics = {
         "subtask_count": len(subtasks),

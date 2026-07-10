@@ -97,3 +97,42 @@ def test_build_evidence_matrix_can_be_used_before_answer_generation():
     assert matrix[0].paper == "Paper B"
     assert matrix[0].support_status == "needs_review"
     assert run.status == "synthesizing"
+
+
+def test_research_run_id_uses_runtime_identity_and_evidence_fallback():
+    common = {
+        "query": "Summarize the paper.",
+        "question_type": "single_paper_qa",
+        "agent_notes": {},
+        "verification_status": "needs_review",
+    }
+    first = build_research_run(
+        **common,
+        hits=[{"text": "Evidence A", "meta": {"source_path": "paper-a.md", "block_id": "a"}}],
+        scope_context={"query_scope": "library", "task_id": "task-1"},
+    )
+    same_runtime = build_research_run(
+        **common,
+        hits=[{"text": "Different evidence", "meta": {"source_path": "paper-b.md", "block_id": "b"}}],
+        scope_context={"query_scope": "library", "task_id": "task-1"},
+    )
+    second_runtime = build_research_run(
+        **common,
+        hits=[{"text": "Evidence A", "meta": {"source_path": "paper-a.md", "block_id": "a"}}],
+        scope_context={"query_scope": "library", "task_id": "task-2"},
+    )
+    evidence_a = build_research_run(
+        **common,
+        hits=[{"text": "Evidence A", "meta": {"source_path": "paper-a.md", "block_id": "a"}}],
+        scope_context={"query_scope": "library"},
+    )
+    evidence_b = build_research_run(
+        **common,
+        hits=[{"text": "Evidence B", "meta": {"source_path": "paper-b.md", "block_id": "b"}}],
+        scope_context={"query_scope": "library"},
+    )
+
+    assert first.run_id == same_runtime.run_id
+    assert first.run_id != second_runtime.run_id
+    assert evidence_a.run_id != evidence_b.run_id
+    assert first.run_id.startswith("rr_")

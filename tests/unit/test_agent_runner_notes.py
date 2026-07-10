@@ -54,6 +54,8 @@ def test_runner_passes_structured_comparison_notes_to_answer_tool(monkeypatch, t
     assert captured["agent_notes"]["comparisons"][0]["paper"] == "Paper A"
     assert captured["agent_notes"]["research_run"]["status"] == "synthesizing"
     assert captured["agent_notes"]["research_run"]["source_policy"] == "local_plus_external_background"
+    assert captured["agent_notes"]["research_run"]["run_id"] == result["agent_trace"]["research_run"]["run_id"]
+    assert result["agent_trace"]["research_run"]["run_id"].startswith("rr_")
     assert captured["agent_notes"]["evidence_matrix"][0]["paper"] == "Paper A"
     assert captured["agent_notes"]["evidence_gate"]["evidence_status"] == "needs_review"
     assert captured["agent_notes"]["evidence_gate"]["answer_mode"] == "hybrid_local_external"

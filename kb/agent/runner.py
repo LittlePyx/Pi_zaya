@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -766,7 +767,7 @@ def _finalize_agent_trace(
     if final_status == "done" and trace.errors:
         final_status = "error"
     trace.status = final_status
-    trace.research_run = build_research_run(
+    research_run = build_research_run(
         query,
         question_type=trace.question_type,
         hits=hits,
@@ -775,6 +776,26 @@ def _finalize_agent_trace(
         verification_status=trace.verification.evidence_status,
         failed=final_status in {"error", "canceled"},
     )
+    tool_status_counts: dict[str, int] = {}
+    tool_elapsed_ms = 0
+    for step in trace.steps:
+        step_status = str(step.status or "unknown").strip().lower() or "unknown"
+        tool_status_counts[step_status] = tool_status_counts.get(step_status, 0) + 1
+        tool_elapsed_ms += max(0, int(step.elapsed_ms or 0))
+    research_run.metrics.update(
+        {
+            "plan_step_count": len(trace.plan),
+            "tool_call_count": len(trace.steps),
+            "tool_error_count": int(tool_status_counts.get("error") or 0),
+            "tool_status_counts": tool_status_counts,
+            "tool_elapsed_ms": tool_elapsed_ms,
+            "verification_total_claims": int(trace.verification.total_claims or 0),
+            "verification_supported_claims": int(trace.verification.supported_claims or 0),
+            "verification_unsupported_claims": int(trace.verification.unsupported_claims or 0),
+            "verification_support_ratio": float(trace.verification.support_ratio or 0.0),
+        }
+    )
+    trace.research_run = research_run
 
 
 def run_research_agent(
@@ -801,6 +822,7 @@ def run_research_agent(
         current_source_name=current_source_name,
         source="direct_research_agent",
     )
+    scope_context["research_run_id"] = f"rr_{uuid.uuid4().hex[:16]}"
     scope_context["planner_intent"] = intent.to_dict()
     scope_context["planner_confidence"] = intent.confidence
     scope_context["evidence_need"] = intent.evidence_need

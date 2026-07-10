@@ -3551,6 +3551,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "current_source_name": str(paper_guide_bound_source_name or ""),
             "selected_research_context_count": int(len(selected_research_context_items)),
             "scope_source": "existing_rag",
+            "task_id": str(task_id or ""),
+            "trace_id": str(task.get("trace_id") or ""),
+            "conversation_id": str(conv_id or ""),
+            "user_message_id": int(task.get("user_msg_id") or 0),
+            "assistant_message_id": int(task.get("assistant_msg_id") or 0),
         }
         research_trace = _trace_new(
             session_id=session_id,
