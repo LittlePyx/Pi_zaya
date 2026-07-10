@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from kb.reference_query_family import (
+    extract_multi_paper_topic,
     extract_requested_paper_count,
     prompt_explicitly_requests_multi_paper_list,
     prompt_likely_multi_paper_synthesis,
@@ -46,3 +47,16 @@ def test_exact_count_reading_route_does_not_require_missing_discussion_topic() -
     assert prompt_explicitly_requests_multi_paper_list(prompt) is True
     assert prompt_requires_reference_focus_match(prompt) is False
     assert prompt_requires_reference_focus_match("Which papers discuss SCI?") is True
+
+
+def test_compare_and_locate_prompts_extract_explicit_focus_topics() -> None:
+    compare_prompt = (
+        "Which paper in my library directly compares Hadamard single-pixel imaging "
+        "and Fourier single-pixel imaging?"
+    )
+    locate_prompt = "In the SCINeRF paper, where is ADMM discussed?"
+
+    assert "Hadamard" in extract_multi_paper_topic(compare_prompt)
+    assert prompt_requires_reference_focus_match(compare_prompt) is True
+    assert extract_multi_paper_topic(locate_prompt) == "ADMM"
+    assert prompt_requires_reference_focus_match(locate_prompt) is True

@@ -187,6 +187,11 @@ def extract_multi_paper_topic(prompt: str) -> str:
     patterns = (
         r"(?:\u63d0\u5230(?:\u4e86)?|\u63d0\u53ca(?:\u4e86)?|\u8ba8\u8bba(?:\u4e86)?|\u6d89\u53ca(?:\u4e86)?|\u5b9a\u4e49(?:\u4e86)?)\s*(.+?)(?:[\uff0c\u3002\uff1f?]|$)",
         r"(?:mention(?:s|ed)?|discuss(?:es|ed)?|define(?:s|d)?)\s+(.+?)(?:[?.,]|$)",
+        r"(?:directly\s+|systematically\s+)?compar(?:e|es|ed|ing)\s+(.+?)(?:[?.,]|$)",
+        r"comparison\s+between\s+(.+?)(?:[?.,]|$)",
+        r"where\s+(?:is|was|are|were)\s+(.+?)\s+(?:discussed|mentioned|defined|described|located)(?:[?.,]|$)",
+        r"(?:\u76f4\u63a5|\u7cfb\u7edf)?(?:\u6bd4\u8f83|\u5bf9\u6bd4)\s*(.+?)(?:[\uff0c\u3002\uff1f?]|$)",
+        r"(.+?)\s*(?:\u5728\u54ea\u91cc|\u54ea\u4e2a\u7ae0\u8282|\u5982\u4f55)(?:\u8ba8\u8bba|\u63d0\u5230|\u5b9a\u4e49|\u5b9a\u4f4d)",
     )
     for pattern in patterns:
         m = re.search(pattern, text, flags=re.I)
