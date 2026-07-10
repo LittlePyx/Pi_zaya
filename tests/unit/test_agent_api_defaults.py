@@ -1,4 +1,6 @@
 from api.routers.generate import GenerateBody, _generation_user_meta
+from api.contracts.research_agent import ResearchAgentResponse
+from api.routers import chat as chat_router
 from api.routers.chat import ResearchAgentBody
 
 
@@ -38,3 +40,19 @@ def test_research_agent_body_accepts_scope_without_requiring_it():
 
     assert body.query_scope == "basket"
     assert body.prompt_context["items"][0]["title"] == "Paper A"
+
+
+def test_research_agent_route_returns_typed_public_contract(monkeypatch, tmp_path):
+    monkeypatch.setattr(chat_router, "get_settings", lambda: type("Settings", (), {"db_dir": tmp_path})())
+    monkeypatch.setattr(
+        chat_router,
+        "run_research_agent",
+        lambda *args, **kwargs: {"answer": "A concise answer.", "agent_trace": {}, "hits": []},
+    )
+
+    result = chat_router.run_chat_research_agent(ResearchAgentBody(query="What does the paper show?"))
+
+    assert isinstance(result, ResearchAgentResponse)
+    assert result.answer == "A concise answer."
+    assert result.agent_trace == {}
+    assert result.hits == []

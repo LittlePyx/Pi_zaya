@@ -252,6 +252,24 @@ export interface AgentTraceAuditResponse {
   schema_errors?: string[]
 }
 
+export interface ResearchAgentRequest {
+  prompt?: string
+  query?: string
+  top_k?: number
+  temperature?: number
+  max_tokens?: number
+  query_scope?: string
+  prompt_context?: Record<string, unknown> | null
+  source_lock_path?: string
+  source_lock_name?: string
+}
+
+export interface ResearchAgentResponse {
+  answer: string
+  agent_trace: AgentTrace
+  hits: Array<Record<string, unknown>>
+}
+
 export interface MessageMeta {
   provenance?: MessageProvenance
   answer_quality?: Record<string, unknown>
@@ -703,6 +721,8 @@ export const chatApi = {
       `/api/messages/${Math.floor(Number(messageId || 0))}/agent-trace`
       + `${convId ? `?conv_id=${encodeURIComponent(convId)}` : ''}`,
     ),
+  runResearchAgent: (body: ResearchAgentRequest) =>
+    api.post<ResearchAgentResponse>('/api/chat/research-agent', body),
   uploadFiles: async (files: File[], opts?: { quickIngest?: boolean; speedMode?: string; convId?: string | null }) => {
     const fd = new FormData()
     files.forEach((file) => fd.append('files', file))

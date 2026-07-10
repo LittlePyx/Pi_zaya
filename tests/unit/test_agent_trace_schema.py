@@ -2,6 +2,17 @@ from kb.agent.runner import build_agent_trace_for_completed_answer
 from kb.agent.schema import validate_agent_trace
 
 
+def test_research_agent_contract_models_keep_public_shape():
+    from api.contracts.research_agent import ResearchAgentRequest, ResearchAgentResponse
+
+    request = ResearchAgentRequest(query="What does the paper show?", prompt_context={"scope": "library"})
+    response = ResearchAgentResponse(answer="A concise answer.", agent_trace={}, hits=[])
+
+    assert request.query == "What does the paper show?"
+    assert request.prompt_context == {"scope": "library"}
+    assert response.model_dump() == {"answer": "A concise answer.", "agent_trace": {}, "hits": []}
+
+
 def test_agent_trace_schema_accepts_completed_trace():
     trace = build_agent_trace_for_completed_answer(
         "How does the method work?",
