@@ -388,6 +388,123 @@ def _canonicalize_detail(detail: Mapping[str, Any] | None) -> dict[str, Any]:
     return out
 
 
+def _trusted_library_match_doi(detail: Mapping[str, Any] | None) -> str:
+    data = detail or {}
+    status = _text(data.get("library_match_status") or data.get("libraryMatchStatus")).lower()
+    reason = _text(data.get("library_match_reason") or data.get("libraryMatchReason")).lower()
+    method = _text(data.get("library_match_method") or data.get("libraryMatchMethod")).lower()
+    match_doi = _norm_doi(data.get("library_match_doi") or data.get("libraryMatchDoi"))
+    if status != "in_library" or not match_doi:
+        return ""
+    try:
+        confidence = float(data.get("library_match_confidence") or data.get("libraryMatchConfidence") or 0.0)
+    except Exception:
+        confidence = 0.0
+    trusted = bool(
+        (reason == "doi_exact" and method == "doi" and confidence >= 0.98)
+        or (reason == "title_exact" and method in {"title", "title_year"} and confidence >= 0.84)
+    )
+    if not trusted:
+        return ""
+    visible_title = _text(data.get("title") or data.get("card_title") or data.get("cardTitle"))
+    matched_title = _text(data.get("library_match_title") or data.get("libraryMatchTitle"))
+    if visible_title and matched_title and title_similarity(visible_title, matched_title) < 0.94:
+        return ""
+    visible_year = _year_from_any(data.get("year"))
+    matched_year = _year_from_any(data.get("library_match_year") or data.get("libraryMatchYear"))
+    if visible_year and matched_year and visible_year != matched_year:
+        return ""
+    return match_doi
+
+
+_DOI_BOUND_STALE_FIELDS = (
+    "citation_count",
+    "citationCount",
+    "citation_source",
+    "citationSource",
+    "journal_if",
+    "journalIf",
+    "journal_quartile",
+    "journalQuartile",
+    "journal_if_source",
+    "journalIfSource",
+    "openalex_venue",
+    "openalexVenue",
+    "openalex_issn_l",
+    "openalex_issn_set",
+    "venue_verified",
+    "venue_verified_by",
+    "venueVerifiedBy",
+    "bibliometrics_checked",
+    "bibliometricsChecked",
+    "external_metadata_status",
+    "externalMetadataStatus",
+    "external_metadata_reason",
+    "externalMetadataReason",
+    "external_doi",
+    "externalDoi",
+    "external_doi_url",
+    "externalDoiUrl",
+    "metadata_quality",
+    "metadataQuality",
+    "metadata_export_acceptance",
+    "metadataExportAcceptance",
+)
+
+
+def promote_trusted_library_match_identity(detail: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Prefer a high-confidence local-library DOI over a conflicting visible DOI."""
+    data = _canonicalize_detail(detail)
+    match_doi = _trusted_library_match_doi(data)
+    if not match_doi:
+        return data
+    current_doi = _norm_doi(data.get("doi") or data.get("doi_url") or data.get("doiUrl"))
+    if current_doi.lower() == match_doi.lower():
+        data["doi"] = match_doi
+        data["doi_url"] = _doi_url(match_doi)
+        data["doiUrl"] = _doi_url(match_doi)
+        return data
+
+    if current_doi:
+        for key in _DOI_BOUND_STALE_FIELDS:
+            data.pop(key, None)
+        summary_source = _text(data.get("summary_source") or data.get("summarySource")).lower()
+        summary_provider = _text(data.get("summary_provider") or data.get("summaryProvider")).lower()
+        if summary_provider != "local_markdown" and summary_source in {
+            "abstract",
+            "crossref",
+            "doi_landing_page",
+            "metadata",
+            "openalex",
+            "semantic_scholar",
+        }:
+            for key in (
+                "summary_line",
+                "summaryLine",
+                "summary_source",
+                "summarySource",
+                "summary_provider",
+                "summaryProvider",
+                "summary_quality",
+                "summaryQuality",
+            ):
+                data.pop(key, None)
+
+    data["doi"] = match_doi
+    data["doi_url"] = _doi_url(match_doi)
+    data["doiUrl"] = _doi_url(match_doi)
+    data["library_match_doi_promoted"] = True
+    if current_doi:
+        data["library_match_previous_doi"] = current_doi
+    raw_sources = data.get("metadata_repair_sources")
+    source_values = raw_sources if isinstance(raw_sources, (list, tuple, set)) else [raw_sources]
+    sources = {_text(source) for source in source_values if _text(source)}
+    reason = _text(data.get("library_match_reason") or data.get("libraryMatchReason")).lower()
+    sources.add(f"library_match:{reason or 'exact'}")
+    data["metadata_repair_sources"] = sorted(sources)
+    return data
+
+
 def _issue(code: str, label: str, *, field: str, severity: str = "warning", detail: str = "") -> dict[str, Any]:
     return {
         "code": code,
@@ -485,6 +602,7 @@ def citation_metadata_quality(detail: Mapping[str, Any] | None) -> dict[str, Any
     external_status = _text(data.get("external_metadata_status") or data.get("externalMetadataStatus")).lower()
     external_doi = _norm_doi(data.get("external_doi") or data.get("externalDoi") or data.get("external_doi_url") or data.get("externalDoiUrl"))
     issues: list[dict[str, Any]] = []
+    trusted_library_doi = _trusted_library_match_doi(data)
 
     if not source:
         issues.append(_issue("missing_source", "Missing source identity", field="source", severity="error"))
@@ -502,6 +620,16 @@ def citation_metadata_quality(detail: Mapping[str, Any] | None) -> dict[str, Any
             issues.append(_issue("doi_not_promoted", "DOI present in reference text but not promoted", field="doi", severity="error", detail=raw_doi))
         else:
             issues.append(_issue("missing_doi", "Missing DOI", field="doi", severity="warning"))
+    elif trusted_library_doi and doi.lower() != trusted_library_doi.lower():
+        issues.append(
+            _issue(
+                "library_match_doi_conflict",
+                "DOI conflicts with the exact local-library match",
+                field="doi",
+                severity="error",
+                detail=f"visible={doi}; library={trusted_library_doi}",
+            )
+        )
 
     identity_complete = bool(
         source
@@ -1214,7 +1342,7 @@ def hydrate_repaired_citation_metadata(
     include_quality: bool = True,
 ) -> dict[str, Any]:
     """Load previously repaired citation metadata from local durable stores."""
-    original = _canonicalize_detail(detail)
+    original = promote_trusted_library_match_identity(detail)
     if not db_dir:
         return dict(original)
     local_meta = _metadata_from_reference_index(original, db_dir)
@@ -1222,14 +1350,16 @@ def hydrate_repaired_citation_metadata(
     if not local_meta and not cache_meta:
         return dict(original)
 
-    sources: list[str] = []
+    raw_sources = original.get("metadata_repair_sources")
+    source_values = raw_sources if isinstance(raw_sources, (list, tuple, set)) else [raw_sources]
+    sources = [_text(source) for source in source_values if _text(source)]
     if local_meta:
         sources.append("reference_index")
     if cache_meta:
         source = _text(cache_meta.get("metadata_repair_source") or "crossref_cache")
         if source:
             sources.append(source)
-    merged = _canonicalize_detail({**original, **local_meta, **cache_meta})
+    merged = promote_trusted_library_match_identity({**original, **local_meta, **cache_meta})
     if sources:
         merged["metadata_repair_sources"] = sorted(set(sources))
         merged["metadata_repair_source"] = sources[0]

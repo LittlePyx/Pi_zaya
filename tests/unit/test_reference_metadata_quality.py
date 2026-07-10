@@ -30,6 +30,45 @@ def test_metadata_accepts_initial_surname_author() -> None:
     assert acceptance["export_ready"] is True
 
 
+def test_metadata_rejects_and_repairs_doi_conflicting_with_exact_library_match() -> None:
+    detail = {
+        "source_path": "citing-paper.en.md",
+        "title": "Principles and prospects for single-pixel imaging",
+        "authors": "M. Edgar, G. Gibson, M. Padgett",
+        "venue": "Nat. Photonics",
+        "year": "2019",
+        "doi": "10.1126/science.4071051",
+        "doi_url": "https://doi.org/10.1126/science.4071051",
+        "citation_count": 7,
+        "journal_if": 1.1,
+        "summary_line": "Summary fetched for the wrong DOI.",
+        "summary_source": "crossref",
+        "library_match_status": "in_library",
+        "library_match_confidence": 0.9,
+        "library_match_method": "title_year",
+        "library_match_reason": "title_exact",
+        "library_match_title": "Principles and prospects for single-pixel imaging",
+        "library_match_year": "2019",
+        "library_match_doi": "10.1038/s41566-018-0300-7",
+    }
+
+    quality = mq.citation_metadata_quality(detail)
+    acceptance = mq.citation_metadata_export_acceptance({**detail, "metadata_quality": quality})
+    repaired = mq.promote_trusted_library_match_identity(detail)
+
+    assert quality["status"] == "error"
+    assert "library_match_doi_conflict" in {item["code"] for item in quality["issues"]}
+    assert acceptance["field_ready"]["doi"] is False
+    assert acceptance["export_ready"] is False
+    assert repaired["doi"] == "10.1038/s41566-018-0300-7"
+    assert repaired["doi_url"] == "https://doi.org/10.1038/s41566-018-0300-7"
+    assert repaired["library_match_previous_doi"] == "10.1126/science.4071051"
+    assert repaired["library_match_doi_promoted"] is True
+    assert "citation_count" not in repaired
+    assert "journal_if" not in repaired
+    assert "summary_line" not in repaired
+
+
 def test_metadata_accepts_single_word_journal_venue() -> None:
     detail = {
         "source_path": "spd_review.en.md",

@@ -1332,6 +1332,8 @@ test('citation shelf hydrates persisted quality-center metadata on open', async 
         journal_if: '1.2',
         journal_quartile: 'Q3',
         journal_if_source: 'fixture',
+        citation_count: 42,
+        citation_source: 'Crossref',
         summary_line: 'The abstract explains how missing spatial frequencies create low-pass distortion in optical serial sectioning microscopy.',
         summary_source: 'abstract',
         summary_provider: 'crossref',
@@ -1373,9 +1375,11 @@ test('citation shelf hydrates persisted quality-center metadata on open', async 
   await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('1988')
   await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('IF 1.2')
   await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('JCR Q3')
+  await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('被引 42')
   await expandFocusedShelfDetails(page)
   await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('IF 1.2')
   await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('JCR Q3')
+  await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('被引 42')
   await expect(shelf.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
   await openShelfOrganizeTools(page)
   await expect(page.getByTestId('citation-shelf-readiness')).toContainText(/1\/1/)
@@ -1443,6 +1447,14 @@ test('citation popover upgrades to waited LLM polish when it is ready', async ({
 
 test('citation popover and shelf prefer card_view over legacy fallback fields', async ({ page }) => {
   await mockReaderDoc(page)
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(shelfMetadataRepairFixture(payload.items || [], false)),
+    })
+  })
   await page.goto('/__message_list_test__?scenario=card-view-priority-popover')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('card-view-priority-popover')
@@ -1465,11 +1477,14 @@ test('citation popover and shelf prefer card_view over legacy fallback fields', 
 
   await popover.locator('.kb-cite-pop-add').click()
   await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
-  await expect(page.locator('.kb-shelf-item')).toContainText('Clean Card Title')
-  await page.locator('.kb-shelf-item').first().click()
-  await expandFocusedShelfDetails(page)
-  await expect(page.locator('.kb-shelf-summary')).toContainText('证据卡片')
-  await expect(page.locator('.kb-shelf-summary')).toContainText('Polished card-view takeaway')
+  const shelfItem = page.getByTestId('citation-shelf-item').filter({ hasText: 'Clean Card Title' })
+  await expect(shelfItem).toHaveCount(1)
+  await shelfItem.getByTestId('citation-shelf-item-title').click()
+  const shelfSummary = shelfItem.getByTestId('citation-shelf-summary')
+  await expect(shelfSummary).toContainText('证据说明')
+  await expect(shelfSummary).toContainText('证据卡片')
+  await expect(shelfSummary).toContainText('Polished card-view takeaway')
+  await expect(shelfItem.getByTestId('citation-shelf-summary-quality')).toHaveCount(0)
 })
 
 test('citation shelf export auto-completes metadata before download', async ({ page }) => {

@@ -235,7 +235,7 @@ def _format_authors(item: dict[str, Any]) -> str:
     return ", ".join(names)
 
 
-def _meta_from_item(item: dict[str, Any], *, fallback_title: str = "") -> dict[str, str]:
+def _meta_from_item(item: dict[str, Any], *, fallback_title: str = "") -> dict[str, Any]:
     title_list = item.get("title", []) or []
     title = html.unescape(str(title_list[0] if title_list else fallback_title)).strip()
     venue_list = item.get("container-title", []) or []
@@ -252,7 +252,7 @@ def _meta_from_item(item: dict[str, Any], *, fallback_title: str = "") -> dict[s
                 venue = html.unescape(str(first.get("name") or "")).strip()
             else:
                 venue = html.unescape(str(first or "")).strip()
-    return {
+    out: dict[str, Any] = {
         "title": title,
         "authors": _format_authors(item) or "[Unknown Authors]",
         "venue": venue,
@@ -262,6 +262,13 @@ def _meta_from_item(item: dict[str, Any], *, fallback_title: str = "") -> dict[s
         "pages": str(item.get("page") or item.get("article-number") or "").strip(),
         "doi": str(item.get("DOI") or "").strip(),
     }
+    try:
+        cited_by = int(item.get("is-referenced-by-count") or item.get("is_referenced_by_count") or 0)
+    except Exception:
+        cited_by = 0
+    if cited_by > 0:
+        out["crossref_cited_by_count"] = cited_by
+    return out
 
 
 def _candidate_biblio_text(item: dict[str, Any]) -> str:
@@ -631,7 +638,7 @@ def _crossref_search_title_raw(title: str, rows: int) -> list[dict[str, Any]]:
     params = {
         "query.title": q,
         "rows": int(max(1, min(8, rows))),
-        "select": "author,published-print,published-online,issued,created,container-title,publisher,volume,issue,page,article-number,DOI,title",
+        "select": "author,published-print,published-online,issued,created,container-title,publisher,volume,issue,page,article-number,is-referenced-by-count,DOI,title",
     }
     headers = {"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"}
     url = "https://api.crossref.org/works"
@@ -661,7 +668,7 @@ def _crossref_search_bibliographic_raw(reference_text: str, rows: int) -> list[d
     params = {
         "query.bibliographic": q,
         "rows": int(max(1, min(7, rows))),
-        "select": "author,published-print,published-online,issued,created,container-title,publisher,volume,issue,page,article-number,DOI,title",
+        "select": "author,published-print,published-online,issued,created,container-title,publisher,volume,issue,page,article-number,is-referenced-by-count,DOI,title",
     }
     headers = {"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"}
     url = "https://api.crossref.org/works"

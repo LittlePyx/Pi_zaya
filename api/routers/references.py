@@ -36,6 +36,7 @@ from api.reference_metadata_quality import (
     citation_metadata_quality,
     hydrate_repaired_citation_metadata,
     persist_repaired_citation_metadata,
+    promote_trusted_library_match_identity,
     repair_citation_metadata_batch,
     scan_reference_metadata_backfill_targets,
 )
@@ -2584,6 +2585,74 @@ def _attach_library_match_contract(meta: dict | None) -> dict:
     return data
 
 
+def _prepare_bibliometrics_identity(meta: dict | None, *, verify_library: bool = False) -> dict:
+    candidate = _attach_library_match_contract(meta) if verify_library else dict(meta or {})
+    data = promote_trusted_library_match_identity(candidate)
+    status = str(data.get("library_match_status") or data.get("libraryMatchStatus") or "").strip().lower()
+    match_doi = str(data.get("library_match_doi") or data.get("libraryMatchDoi") or "").strip()
+    if status == "in_library" and match_doi:
+        aliases = {
+            "library_match_status": "libraryMatchStatus",
+            "library_match_confidence": "libraryMatchConfidence",
+            "library_match_method": "libraryMatchMethod",
+            "library_match_reason": "libraryMatchReason",
+            "library_match_path": "libraryMatchPath",
+            "library_match_sha1": "libraryMatchSha1",
+            "library_match_title": "libraryMatchTitle",
+            "library_match_doi": "libraryMatchDoi",
+            "library_match_year": "libraryMatchYear",
+        }
+        for snake_key, camel_key in aliases.items():
+            snake_value = data.get(snake_key)
+            camel_value = data.get(camel_key)
+            if (snake_value is None or snake_value == "") and camel_value is not None and camel_value != "":
+                data[snake_key] = data[camel_key]
+        if not isinstance(data.get("library_match"), dict):
+            data["library_match"] = {
+                "matched": True,
+                "status": data.get("library_match_status") or "",
+                "confidence": data.get("library_match_confidence") or 0,
+                "method": data.get("library_match_method") or "",
+                "reason": data.get("library_match_reason") or "",
+                "path": data.get("library_match_path") or "",
+                "sha1": data.get("library_match_sha1") or "",
+                "title": data.get("library_match_title") or "",
+                "doi": data.get("library_match_doi") or "",
+                "year": data.get("library_match_year") or "",
+            }
+        return data
+    return promote_trusted_library_match_identity(_attach_library_match_contract(data))
+
+
+def _bibliometrics_local_summary_input(meta: dict | None) -> dict:
+    data = dict(meta or {})
+    status = str(data.get("library_match_status") or data.get("libraryMatchStatus") or "").strip().lower()
+    reason = str(data.get("library_match_reason") or data.get("libraryMatchReason") or "").strip().lower()
+    match_path = str(data.get("library_match_path") or data.get("libraryMatchPath") or "").strip()
+    if status == "in_library" and reason in {"doi_exact", "title_exact"} and match_path:
+        data["source_path"] = match_path
+        data["sourcePath"] = match_path
+    return data
+
+
+def _bibliometrics_has_metrics(meta: dict | None) -> bool:
+    data = dict(meta or {})
+    citation_source = str(data.get("citation_source") or data.get("citationSource") or "").strip()
+    citation_count = data.get("citation_count", data.get("citationCount"))
+    has_citations = citation_source != "" and isinstance(citation_count, (int, float))
+    metric_values = (
+        data.get("journal_if"),
+        data.get("journalIf"),
+        data.get("journal_quartile"),
+        data.get("journalQuartile"),
+        data.get("conference_tier"),
+        data.get("conferenceTier"),
+        data.get("conference_ccf"),
+        data.get("conferenceCcf"),
+    )
+    return has_citations or any(value is not None and value != "" for value in metric_values)
+
+
 @router.post("/open", dependencies=[Depends(require_management_api)])
 def open_reference(body: OpenReferenceBody):
     ok, message = open_reference_source(
@@ -2688,16 +2757,26 @@ def _attach_bibliometrics_summary_locale(meta: dict | None) -> dict:
 
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
-    meta = _strip_misbound_local_source_summary(body.meta or {})
+    meta = _prepare_bibliometrics_identity(
+        _strip_misbound_local_source_summary(body.meta or {}),
+        verify_library=True,
+    )
     settings = get_settings()
     target_locale = _bibliometrics_requested_locale(body, meta)
-    hydrated = _strip_misbound_local_source_summary(hydrate_repaired_citation_metadata(meta, db_dir=settings.db_dir))
+    hydrated = _prepare_bibliometrics_identity(
+        _strip_misbound_local_source_summary(
+            hydrate_repaired_citation_metadata(meta, db_dir=settings.db_dir)
+        )
+    )
     if (
         _bibliometrics_accept_local_source_summary(hydrated)
         or not _bibliometrics_summary_matches_locale(hydrated, target_locale)
         or not _bibliometrics_summary_has_locale_contract(hydrated)
     ):
-        local_summary = _local_source_summary_meta({**dict(hydrated or {}), **dict(meta or {})}, target_locale=target_locale)
+        local_summary = _local_source_summary_meta(
+            _bibliometrics_local_summary_input({**dict(hydrated or {}), **dict(meta or {})}),
+            target_locale=target_locale,
+        )
         if local_summary:
             hydrated = _bibliometrics_quality_contract({**dict(hydrated or {}), **local_summary})
     hydrated = _attach_bibliometrics_summary_locale(_bibliometrics_quality_contract(hydrated))
@@ -2712,13 +2791,21 @@ def get_bibliometrics(body: BibliometricsBody):
         and bool(acceptance.get("export_ready"))
         and _bibliometrics_summary_export_ready(acceptance)
         and _bibliometrics_summary_matches_locale(hydrated, target_locale)
+        and (
+            not bool(hydrated.get("library_match_doi_promoted"))
+            or _bibliometrics_has_metrics(hydrated)
+        )
     ):
-        return _attach_library_match_contract(_attach_bibliometrics_summary_locale(_bibliometrics_quality_contract(hydrated)))
-    seed = {**dict(meta or {}), **dict(hydrated or {})}
+        return _prepare_bibliometrics_identity(
+            _attach_bibliometrics_summary_locale(_bibliometrics_quality_contract(hydrated))
+        )
+    seed = _prepare_bibliometrics_identity({**dict(meta or {}), **dict(hydrated or {})})
     enriched = enrich_citation_detail_meta(seed)
     if not isinstance(enriched, dict):
         enriched = {}
-    merged_result = _strip_misbound_local_source_summary({**seed, **enriched})
+    merged_result = _prepare_bibliometrics_identity(
+        _strip_misbound_local_source_summary({**seed, **enriched})
+    )
     if (
         not isinstance(enriched.get("metadata_quality"), dict)
         or enriched.get("metadata_quality") == seed.get("metadata_quality")
@@ -2737,7 +2824,10 @@ def get_bibliometrics(body: BibliometricsBody):
         or not _bibliometrics_summary_matches_locale(result, target_locale)
         or not _bibliometrics_summary_has_locale_contract(result)
     ):
-        local_summary = _local_source_summary_meta(result, target_locale=target_locale)
+        local_summary = _local_source_summary_meta(
+            _bibliometrics_local_summary_input(result),
+            target_locale=target_locale,
+        )
         if local_summary:
             result = _bibliometrics_quality_contract({**result, **local_summary})
     acceptance = (
@@ -2747,7 +2837,7 @@ def get_bibliometrics(body: BibliometricsBody):
     )
     if _bibliometrics_summary_export_ready(acceptance):
         persist_repaired_citation_metadata(_attach_bibliometrics_summary_locale(result), db_dir=settings.db_dir)
-    return _attach_library_match_contract(_attach_bibliometrics_summary_locale(result))
+    return _prepare_bibliometrics_identity(_attach_bibliometrics_summary_locale(result))
 
 
 @router.post("/shelf/metadata/repair", dependencies=[Depends(require_management_api)])

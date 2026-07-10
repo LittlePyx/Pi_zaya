@@ -521,6 +521,109 @@ def test_bibliometrics_route_reports_local_library_doi_match(tmp_path, monkeypat
     assert payload["library_match"]["confidence"] >= 0.99
 
 
+def test_bibliometrics_route_promotes_exact_library_doi_before_enrichment(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    library_db = tmp_path / "library.sqlite3"
+    pdf_path = tmp_path / "papers" / "Principles and prospects for single-pixel imaging.pdf"
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    LibraryStore(library_db).upsert(
+        "sha1-local-natphoton",
+        pdf_path,
+        citation_meta={
+            "title": "Principles and prospects for single-pixel imaging",
+            "authors": "Edgar M, Gibson G, Padgett M",
+            "venue": "Nature Photonics",
+            "year": "2019",
+            "doi": "10.1038/s41566-018-0300-7",
+            "doi_url": "https://doi.org/10.1038/s41566-018-0300-7",
+        },
+    )
+    enrich_calls = []
+
+    def fake_enrich(detail):
+        enrich_calls.append(dict(detail))
+        return {
+            **dict(detail),
+            "citation_count": 642,
+            "citation_source": "Crossref",
+            "journal_if": 32.9,
+            "journal_quartile": "Q1",
+            "summary_line": "A grounded summary for the correctly matched article.",
+            "summary_source": "abstract",
+            "summary_provider": "crossref",
+            "summary_quality": {
+                "ok": True,
+                "status": "grounded",
+                "score": 94,
+                "source": "abstract",
+                "provider": "crossref",
+                "locale": "zh",
+                "export_ready": True,
+            },
+            "summary_locale": "zh",
+        }
+
+    monkeypatch.setattr(
+        references_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=db_dir, library_db_path=library_db),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_local_source_summary_meta",
+        lambda _meta, *, target_locale="": {
+            "summary_line": "A grounded local summary that must not skip metric refresh.",
+            "summary_source": "abstract",
+            "summary_provider": "local_markdown",
+            "summary_locale": target_locale or "zh",
+            "summary_quality": {
+                "ok": True,
+                "status": "grounded",
+                "score": 94,
+                "source": "abstract",
+                "provider": "local_markdown",
+                "locale": target_locale or "zh",
+                "export_ready": True,
+            },
+        },
+    )
+    monkeypatch.setattr(references_router, "enrich_citation_detail_meta", fake_enrich)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/bibliometrics",
+        json={
+            "meta": {
+                "key": "wrong-doi-upstream",
+                "source_path": "citing-paper.en.md",
+                "title": "Principles and prospects for single-pixel imaging",
+                "authors": "M. Edgar, G. Gibson, M. Padgett",
+                "venue": "Nat. Photonics",
+                "year": "2019",
+                "doi": "10.1126/science.4071051",
+                "doi_url": "https://doi.org/10.1126/science.4071051",
+                "citation_count": 1,
+                "journal_if": 1.1,
+                "summary_line": "Summary for the wrong DOI.",
+                "summary_source": "crossref",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert enrich_calls
+    assert enrich_calls[0]["doi"] == "10.1038/s41566-018-0300-7"
+    assert payload["doi"] == "10.1038/s41566-018-0300-7"
+    assert payload["library_match_previous_doi"] == "10.1126/science.4071051"
+    assert payload["citation_count"] == 642
+    assert payload["journal_if"] == 32.9
+    assert payload["journal_quartile"] == "Q1"
+    assert payload["summary_source"] == "abstract"
+
+
 def test_bibliometrics_route_does_not_treat_inpaper_source_as_upstream_library_match(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir(parents=True, exist_ok=True)

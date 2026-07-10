@@ -91,9 +91,12 @@ export const metricLabel = (prefix: string, value: string): string => {
   return text.toLowerCase().startsWith(prefix.toLowerCase()) ? text : `${prefix} ${text}`
 }
 
-export const citeImpactMetrics = (item: CiteShelfItem): string[] => [
+export const citeImpactMetrics = (item: CiteShelfItem, S: Record<string, string>): string[] => [
   metricLabel('IF', item.journalIf),
   metricLabel('JCR', item.journalQuartile),
+  item.citationCount > 0
+    ? (S.shelf_citation_count || 'Cited by {n}').replace('{n}', String(item.citationCount))
+    : '',
 ].filter(Boolean)
 
 export const uniqueCitationMetrics = (...groups: string[][]): string[] => {
@@ -423,7 +426,6 @@ export const summaryQuality = (item: CiteShelfItem): Record<string, unknown> | n
 export const trustedSummarySource = (source: string): boolean => [
   'abstract',
   'fulltext',
-  'citation_context',
   'navigation',
   'exact_anchor',
   'section_intent_rescue',
@@ -462,6 +464,9 @@ export type ShelfSummaryDisplay = {
   line: string
   sourceLabel: string
   quality: ReturnType<typeof summaryQualityView>
+  kind: 'article' | 'evidence' | 'empty'
+  headingLabel: string
+  showQuality: boolean
 }
 
 export const shelfSummarySourceLabels = (S: Record<string, string>) => ({
@@ -510,20 +515,6 @@ export const looksMetadataOnlyShelfSummary = (value: string): boolean => {
   return /仅检索到|暂无可用摘要|缺少可用摘要|建议.*DOI|metadata only|no abstract/i.test(text)
 }
 
-export const groundedDisplaySummaryQuality = (
-  base: ReturnType<typeof summaryQualityView>,
-  S: Record<string, string>,
-): ReturnType<typeof summaryQualityView> => {
-  const score = Math.max(Number(base.score || 0), 88)
-  return {
-    ok: true,
-    status: 'grounded',
-    score,
-    label: S.shelf_summary_quality_grounded.replace('{score}', String(score)),
-    tone: 'ready',
-  }
-}
-
 export const shelfSummaryDisplay = (
   item: CiteShelfItem,
   cardView: ReturnType<typeof citationCardView>,
@@ -531,17 +522,8 @@ export const shelfSummaryDisplay = (
 ): ShelfSummaryDisplay => {
   const quality = summaryQualityView(item, S)
   const sourceLabels = shelfSummarySourceLabels(S)
-  const cardSummary = item.cardView
-    ? compactShelfSummaryCandidate(cardView.summary)
-    : ''
-  if (cardSummary && !looksLowValueShelfSummary(cardSummary) && !looksMetadataOnlyShelfSummary(cardSummary)) {
-    return {
-      line: cardSummary,
-      sourceLabel: sourceLabels.citationCard,
-      quality: groundedDisplaySummaryQuality(quality, S),
-    }
-  }
-  const source = String(item.summarySource || '').trim().toLowerCase()
+  const qualityContract = summaryQuality(item)
+  const source = String(item.summarySource || qualityContract?.source || '').trim().toLowerCase()
   const existing = compactShelfSummaryCandidate(item.summaryLine)
   if (
     existing
@@ -555,8 +537,25 @@ export const shelfSummaryDisplay = (
   ) {
     return {
       line: existing,
-      sourceLabel: summarySourceLabel(item.summarySource, item.summaryProvider, sourceLabels),
+      sourceLabel: summarySourceLabel(source, item.summaryProvider, sourceLabels),
       quality,
+      kind: 'article',
+      headingLabel: S.shelf_summary_head,
+      showQuality: true,
+    }
+  }
+
+  const cardSummary = item.cardView
+    ? compactShelfSummaryCandidate(cardView.summary)
+    : ''
+  if (cardSummary && !looksLowValueShelfSummary(cardSummary) && !looksMetadataOnlyShelfSummary(cardSummary)) {
+    return {
+      line: cardSummary,
+      sourceLabel: sourceLabels.citationCard,
+      quality,
+      kind: 'evidence',
+      headingLabel: S.shelf_evidence_note_head || 'Evidence note',
+      showQuality: false,
     }
   }
 
@@ -564,6 +563,9 @@ export const shelfSummaryDisplay = (
     line: '',
     sourceLabel: '',
     quality,
+    kind: 'empty',
+    headingLabel: S.shelf_summary_head,
+    showQuality: false,
   }
 }
 

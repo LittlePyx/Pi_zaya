@@ -41,7 +41,6 @@ import {
   sourceOpenQualityView,
   sourceQualityForItem,
   sourceQualityNeedsReview,
-  summaryQualityView,
   uniqueCitationMetrics,
   type GroupMode,
   type ScopeFilter,
@@ -517,7 +516,7 @@ export function CiteShelf({
       const needsMetadataReview = shelfItemNeedsMetadataRepair(item, display)
       const isDuplicate = (duplicateCountByIdentity[shelfItemPaperIdentity(item)] || 0) > 1
       const summaryDisplay = shelfSummaryDisplay(item, citationCardView(item), S)
-      const hasSummary = Boolean(summaryDisplay.line)
+      const hasSummary = summaryDisplay.kind === 'article' && Boolean(summaryDisplay.line)
       const summaryView = summaryDisplay.quality
       const sourceOpenView = sourceOpenQualityView(
         item,
@@ -797,7 +796,10 @@ export function CiteShelf({
     const venue = cleanCitationDisplayText(item.venue || '')
     const doi = shelfItemDoiExportValue(item)
     const source = cleanCitationDisplayText(item.sourceName || item.sourcePath || '')
-    const summary = cleanCitationDisplayText(shelfSummaryDisplay(item, card, S).line || card.summary || '')
+    const summaryDisplay = shelfSummaryDisplay(item, card, S)
+    const summary = summaryDisplay.kind === 'article'
+      ? cleanCitationDisplayText(summaryDisplay.line)
+      : ''
     const excerpt = cleanCitationDisplayText(item.shelfExcerpt || item.evidenceQuote || item.cardEvidence || '')
     const note = cleanCitationDisplayText(item.note || '')
     const tags = normalizeShelfTags(item.tags)
@@ -1028,7 +1030,9 @@ export function CiteShelf({
       const rows = exportItems.map((item) => {
         const sourceQuality = sourceQualityForItem(item, sourceQualityByPath)
         const sourceOpen = sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key])
-        const summaryQuality = summaryQualityView(item, S)
+        const summaryDisplay = shelfSummaryDisplay(item, citationCardView(item), S)
+        const summaryQuality = summaryDisplay.quality
+        const hasArticleSummary = summaryDisplay.kind === 'article' && Boolean(summaryDisplay.line)
         return [
           citationCardView(item).header.title || item.title || item.main,
           item.authors,
@@ -1069,11 +1073,11 @@ export function CiteShelf({
           item.journalQuartile,
           item.conferenceTier,
           item.conferenceCcf,
-          item.summarySource,
-          item.summaryProvider,
-          summaryQuality.status,
-          summaryQuality.score,
-          item.summaryLine || citationCardView(item).summary,
+          hasArticleSummary ? item.summarySource : '',
+          hasArticleSummary ? item.summaryProvider : '',
+          hasArticleSummary ? summaryQuality.status : 'missing',
+          hasArticleSummary ? summaryQuality.score : 0,
+          hasArticleSummary ? summaryDisplay.line : '',
         ].map((field) => csvEscape(field)).join(',')
       })
       const csv = `${headers.join(',')}\n${rows.join('\n')}`
@@ -1839,6 +1843,7 @@ export function CiteShelf({
                       const shelfSummaryLine = shelfSummary.line
                       const shelfSummarySource = shelfSummary.sourceLabel
                       const shelfSummaryQuality = shelfSummary.quality
+                      const shelfSummaryHeading = shelfSummary.headingLabel
                       const shelfSummaryLines = splitSummary(shelfSummaryLine)
                       const rawItemSourceLabel = String(item.sourceName || basenameFromPath(item.sourcePath) || '').trim()
                       const itemLocationLabel = String(item.locationLabel || item.headingPath || '').trim()
@@ -1863,7 +1868,7 @@ export function CiteShelf({
                       })
                       const shelfTitle = shelfCard.title
                       const publicationParts = shelfCard.showArticleSummary
-                        ? uniqueCitationMetrics(citeVenueYearParts(item, display), citeImpactMetrics(item))
+                        ? uniqueCitationMetrics(citeVenueYearParts(item, display), citeImpactMetrics(item, S))
                         : []
                       const itemSourceLabel = shelfCard.sourceLabel
                       const itemSourceQuality = sourceQualityForItem(item, sourceQualityByPath)
@@ -2093,16 +2098,18 @@ export function CiteShelf({
                               ) : shelfSummaryLine ? (
                                 <>
                                   <div className="kb-shelf-summary-meta">
-                                    <span className="kb-shelf-summary-head">{S.shelf_summary_head}</span>
+                                    <span className="kb-shelf-summary-head">{shelfSummaryHeading}</span>
                                     {shelfSummarySource ? (
                                       <span className="kb-shelf-summary-source">/ {shelfSummarySource}</span>
                                     ) : null}
-                                    <span
-                                      className={`kb-shelf-summary-quality is-${shelfSummaryQuality.tone}`}
-                                      data-testid="citation-shelf-summary-quality"
-                                    >
-                                      {shelfSummaryQuality.label}
-                                    </span>
+                                    {shelfSummary.showQuality ? (
+                                      <span
+                                        className={`kb-shelf-summary-quality is-${shelfSummaryQuality.tone}`}
+                                        data-testid="citation-shelf-summary-quality"
+                                      >
+                                        {shelfSummaryQuality.label}
+                                      </span>
+                                    ) : null}
                                   </div>
                                   {(() => {
                                     const lines = shelfSummaryLines

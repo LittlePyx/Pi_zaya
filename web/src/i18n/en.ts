@@ -972,6 +972,8 @@ export const S = {
   shelf_background_export: 'Export cleanup is running in the background',
   shelf_summary_loading: 'Generating summary...',
   shelf_summary_head: 'Article summary',
+  shelf_evidence_note_head: 'Evidence note',
+  shelf_citation_count: 'Cited by {n}',
   shelf_summary_empty: 'Article summary pending',
   shelf_summary_source_fulltext: 'Full text',
   shelf_summary_source_crossref: 'Crossref abstract',

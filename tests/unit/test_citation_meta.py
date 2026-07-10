@@ -37,6 +37,32 @@ def test_fetch_best_crossref_meta_prefers_candidate_with_matching_venue(monkeypa
     assert str(out.get("doi") or "") == "10.1038/s41467-021-24990-0"
 
 
+def test_crossref_meta_preserves_cited_by_count(monkeypatch):
+    title = "Principles and prospects for single-pixel imaging"
+    monkeypatch.setattr(
+        citation_meta,
+        "_crossref_get_work_by_doi",
+        lambda _doi: {
+            "title": [title],
+            "container-title": ["Nature Photonics"],
+            "issued": {"date-parts": [[2019]]},
+            "author": [{"family": "Edgar", "given": "Matthew"}],
+            "DOI": "10.1038/s41566-018-0300-7",
+            "is-referenced-by-count": 642,
+        },
+    )
+
+    out = citation_meta.fetch_best_crossref_meta(
+        query_title=title,
+        expected_year="2019",
+        expected_venue="Nature Photonics",
+        doi_hint="10.1038/s41566-018-0300-7",
+    )
+
+    assert isinstance(out, dict)
+    assert out["crossref_cited_by_count"] == 642
+
+
 def test_fetch_best_openalex_meta_uses_title_year_author_gate(monkeypatch):
     q = "Optical imaging by means of two-photon quantum entanglement"
 
@@ -122,6 +148,7 @@ def test_crossref_title_search_uses_valid_work_list_select(monkeypatch):
     assert out and out[0]["DOI"] == "10.1000/demo"
     assert "institution" not in select
     assert "article-number" in select
+    assert "is-referenced-by-count" in select
 
 
 def test_fetch_best_crossref_for_reference_accepts_compact_bibliographic_match(monkeypatch):

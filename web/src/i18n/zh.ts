@@ -973,6 +973,8 @@ export const S = {
   shelf_background_export: '导出清理正在后台处理',
   shelf_summary_loading: '正在生成学术概括...',
   shelf_summary_head: '文献摘要',
+  shelf_evidence_note_head: '证据说明',
+  shelf_citation_count: '被引 {n}',
   shelf_summary_empty: '文献摘要待补',
   shelf_summary_source_fulltext: '全文',
   shelf_summary_source_crossref: 'Crossref 摘要',
