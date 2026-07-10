@@ -209,6 +209,12 @@ def infer_research_answer_plan(
             r"\u6279\u5224",
             r"\u53ef\u4fe1",
             r"\u7f3a\u4ec0\u4e48",
+            r"\baudit\b",
+            r"\bverify\s+(?:the\s+)?(?:previous|last|prior)\s+answer\b",
+            r"\u5ba1\u67e5",
+            r"\u6838\u5bf9",
+            r"\u9519\u914d",
+            r"\u4e0d\u4e00\u81f4",
         ),
         q,
     ):

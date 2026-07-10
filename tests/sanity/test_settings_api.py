@@ -486,7 +486,11 @@ def test_get_settings_returns_text_and_vision_connection(monkeypatch):
     assert payload["connection"]["vision"]["model"] == "vision-model"
     assert payload["connection"]["vision"]["uses_text_fallback"] is False
     assert payload["connection"]["auto_route"] is True
-    assert payload["readiness"]["overall"]["status"] == "ok"
+    assert payload["readiness"]["overall"] == {
+        "status": "warning",
+        "reason": "configured_not_tested",
+        "target": "text",
+    }
     assert payload["readiness"]["providers"]["text"]["status"] == "configured"
     assert payload["prefs"] == {
         "theme": "light",
@@ -614,6 +618,32 @@ def test_llm_readiness_reports_missing_text_key(monkeypatch):
     assert payload["overall"] == {"status": "error", "reason": "missing_api_key", "target": "text"}
     assert payload["providers"]["text"]["status"] == "missing"
     assert payload["providers"]["text"]["severity"] == "error"
+
+
+def test_llm_readiness_warns_when_configured_providers_have_not_been_tested(monkeypatch):
+    settings_router._LLM_TEST_RESULTS.clear()
+    settings = SimpleNamespace(
+        text_api_key="saved-text",
+        text_base_url="https://saved-text.example/v1",
+        text_model="saved-text-model",
+        vision_api_key="saved-vision",
+        vision_base_url="https://saved-vision.example/v1",
+        vision_model="saved-vision-model",
+        vision_uses_text_fallback=False,
+        auto_route=True,
+    )
+
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+
+    payload = settings_router.get_llm_readiness()
+
+    assert payload["overall"] == {
+        "status": "warning",
+        "reason": "configured_not_tested",
+        "target": "text",
+    }
+    assert payload["providers"]["text"]["severity"] == "warning"
+    assert payload["providers"]["vision"]["severity"] == "warning"
 
 
 def test_llm_readiness_keeps_last_failed_test(monkeypatch):

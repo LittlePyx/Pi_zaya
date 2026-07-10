@@ -2455,15 +2455,6 @@
 @media (max-width: 460px) {
   .kb-workbench-metric-strip,
   .kb-lib-summary-strip {
-    grid-template-columns: 1fr;
-  }
-
-  .kb-workbench-metric {
-    border-left: 0;
-    border-top: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
-  }
-
-  .kb-workbench-metric:first-child {
-    border-top: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

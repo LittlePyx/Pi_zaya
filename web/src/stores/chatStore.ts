@@ -2300,6 +2300,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
               conversationCacheById: nextCache,
             }
           })
+          const terminalStatus = String(data.status || data.stage || '').trim().toLowerCase()
+          if (data.done && terminalStatus === 'error') {
+            streamDone = true
+            throw new Error(String(
+              data.error
+              || data.partial
+              || data.answer
+              || localizedGenerationStreamFailedMessage(uiLocale),
+            ))
+          }
           if (data.done) {
             streamDone = true
             if (!requestGenerationIsCurrent()) return

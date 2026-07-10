@@ -5,6 +5,39 @@ import pytest
 import kb.generation_answer_finalize_runtime as finalize_runtime
 
 
+def test_answer_audit_doc_labels_become_user_facing_source_labels() -> None:
+    out = finalize_runtime._replace_answer_audit_doc_labels(
+        "来源核对：DOC-2 的正文与标题一致 [10002]。"
+    )
+
+    assert out == "来源核对：来源 [2] 的正文与标题一致 [10002]。"
+    assert "DOC-" not in out
+
+
+def test_answer_audit_strips_internal_citation_format_review_unless_requested() -> None:
+    answer = (
+        "## 审查结果\n\n四篇论文标题与依据一致。\n\n"
+        "### 3. 引用编号问题\n\n模型没有使用 [10001] 偏移标记。\n\n"
+        "### 4. 总结\n\n核心路线准确；二是引用编号格式不符合要求。"
+    )
+
+    out = finalize_runtime._strip_answer_audit_internal_citation_review(
+        answer,
+        prompt="Audit the previous answer and verify its source bindings.",
+    )
+
+    assert "四篇论文标题与依据一致" in out
+    assert "### 4. 总结" in out
+    assert "引用编号" not in out
+    assert "10001" not in out
+
+    preserved = finalize_runtime._strip_answer_audit_internal_citation_review(
+        answer,
+        prompt="Audit the previous answer's citation format and marker numbering.",
+    )
+    assert "10001" in preserved
+
+
 def test_negative_boundary_answer_clarifies_not_core_paper() -> None:
     answer = finalize_runtime._maybe_clarify_negative_boundary_answer(
         "**\u7ed3\u8bba\uff1a\u5173\u7cfb\u4e0d\u5927\uff0c\u4e0d\u5efa\u8bae\u4e00\u8d77\u8bfb\u3002** "
@@ -246,6 +279,38 @@ def test_finalize_generation_answer_passes_shared_primary_evidence_from_cards_fo
     assert contracts["primary_evidence"]["heading_path"] == "2.2 Basis patterns generation"
     assert contracts["render_packet"]["primary_evidence"]["block_id"] == "blk_22"
     assert contracts["render_packet"]["answer_markdown"] == "Core grounded answer."
+
+
+def test_contract_snapshot_drops_stale_seed_render_text_when_final_answer_changes():
+    contracts = finalize_runtime._build_paper_guide_contract_snapshot(
+        paper_guide_mode=False,
+        intent_model=None,
+        answer_markdown="Final four-step route.",
+        final_answer_markdown="Final four-step route.",
+        evidence_cards=[],
+        candidate_refs_by_source={},
+        support_slots=[],
+        support_resolution=[],
+        needs_supplement=False,
+        citation_validation={},
+        doc_list_contract=[{"source_path": "db/paper-a.md", "source_name": "Paper A"}],
+        paper_guide_contracts_seed={
+            "render_packet": {
+                "answer_markdown": "Simplified document list.",
+                "rendered_body": "Stale simplified document list.",
+                "rendered_content": "Stale rendered content.",
+                "copy_markdown": "Stale copy markdown.",
+                "copy_text": "Stale copy text.",
+            }
+        },
+    )
+
+    packet = contracts["render_packet"]
+    assert packet["answer_markdown"] == "Final four-step route."
+    assert packet["rendered_body"] == ""
+    assert packet["rendered_content"] == ""
+    assert packet["copy_markdown"] == ""
+    assert packet["copy_text"] == ""
 
 
 def test_finalize_generation_answer_prefers_more_precise_card_primary_over_coarse_seed(monkeypatch):
@@ -1121,12 +1186,12 @@ def test_build_multi_paper_doc_list_contract_carries_llm_pack_copy_from_ref_pack
         prompt="Which papers in my library mention SCI (Snapshot Compressive Imaging)?",
         seed_docs=[
             {
-                "text": "Snapshot Compressive Imaging is discussed in the abstract.",
+                "text": "SCI-based 3D scene reconstruction recovers a scene from a single compressed capture.",
                 "meta": {
                     "source_path": source_path,
                     "ref_best_heading_path": "Abstract",
                     "ref_show_snippets": [
-                        "Snapshot Compressive Imaging is discussed in the abstract."
+                        "SCI-based 3D scene reconstruction recovers a scene from a single compressed capture."
                     ],
                     "ref_pack": {
                         "what": "The paper studies SCI-based 3D scene reconstruction from a single compressed capture rather than only introducing the term.",
@@ -1145,6 +1210,167 @@ def test_build_multi_paper_doc_list_contract_carries_llm_pack_copy_from_ref_pack
     assert row["summary_generation"] == "llm_pack"
     assert row["why_line"].startswith("It explicitly frames the method as Snapshot Compressive Imaging")
     assert row["why_generation"] == "llm_pack"
+
+
+def test_filter_multi_paper_doc_list_contract_respects_requested_count():
+    rows = [
+        {
+            "source_path": f"db/paper-{idx}.md",
+            "source_name": f"Paper {idx}.pdf",
+            "heading_path": "Abstract",
+            "summary_line": f"Snapshot Compressive Imaging (SCI) contribution {idx} with reconstruction evidence.",
+        }
+        for idx in range(1, 7)
+    ]
+
+    out = finalize_runtime._filter_multi_paper_doc_list_contract(
+        prompt="List 4 papers that mention SCI.",
+        doc_list=rows,
+    )
+
+    assert len(out) == 4
+
+
+def test_multi_paper_answer_preserves_complete_requested_route() -> None:
+    answer = "\n".join(
+        [
+            "下面按阅读顺序给出 4 篇论文：",
+            "1. **Paper A** - 综述与基本原理。",
+            "2. **Paper B** - 采样与重建。",
+            "3. **Paper C** - 深度学习重建。",
+            "4. **Paper D** - 实时系统实现。",
+            "每一步都对应可核对的库内依据。",
+        ]
+    )
+
+    assert finalize_runtime._multi_paper_answer_needs_contract_rebuild(
+        answer=answer,
+        prompt="请只用最相关的 4 篇论文做阅读路线。",
+    ) is False
+
+
+def test_multi_paper_answer_rebuilds_wrong_requested_count() -> None:
+    answer = "\n".join(
+        [
+            "下面给出论文路线：",
+            "1. **Paper A** - overview and evidence.",
+            "2. **Paper B** - sampling and reconstruction.",
+            "3. **Paper C** - learned reconstruction.",
+            "4. **Paper D** - real-time system.",
+            "5. **Paper E** - unrelated extra item.",
+            "6. **Paper F** - another unrelated extra item.",
+        ]
+    )
+
+    assert finalize_runtime._multi_paper_answer_needs_contract_rebuild(
+        answer=answer,
+        prompt="Please use only 4 papers.",
+    ) is True
+
+
+def test_multi_paper_count_accepts_numbered_markdown_headings() -> None:
+    answer = "\n".join(
+        f"## {idx}. Step {idx}\nEvidence-backed reading rationale for this paper [{idx}]"
+        for idx in range(1, 5)
+    )
+
+    assert finalize_runtime._count_multi_paper_answer_items(answer) == 4
+    assert finalize_runtime._multi_paper_answer_needs_contract_rebuild(
+        answer=answer,
+        prompt="Use only 4 papers and cite each source.",
+    ) is False
+
+
+def test_multi_paper_count_accepts_chinese_step_headings() -> None:
+    answer = "\n".join(
+        f"## \u7b2c{idx}\u6b65\uff1aRoute stage {idx}\nEvidence-backed rationale [{idx}]"
+        for idx in range(1, 5)
+    )
+
+    assert finalize_runtime._count_multi_paper_answer_items(answer) == 4
+    assert finalize_runtime._multi_paper_answer_needs_contract_rebuild(
+        answer=answer,
+        prompt="Use only 4 papers and cite each source.",
+    ) is False
+
+
+def test_requested_multi_paper_repair_removes_extra_recommendation_and_restores_source_marker() -> None:
+    answer = """## 1. Overview
+Paper: Principles and prospects for single-pixel imaging
+Evidence without a marker.
+
+---
+
+## 2. Sampling
+Paper: Sequentially designed compressed sensing [2]
+
+---
+
+## 3. Deep learning
+Paper: Part-based image-loop network [3]
+
+---
+
+## 4. System
+Paper: 3D single-pixel video [4]
+
+---
+
+**Further reading:** A fifth paper [5].
+"""
+    hits = [
+        {
+            "text": "overview evidence",
+            "meta": {"source_path": "db/NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md"},
+        },
+        {"text": "sampling evidence", "meta": {"source_path": "db/Sequentially designed compressed sensing.md"}},
+        {"text": "learning evidence", "meta": {"source_path": "db/Part-based image-loop network.md"}},
+        {"text": "system evidence", "meta": {"source_path": "db/3D single-pixel video.md"}},
+    ]
+
+    repaired = finalize_runtime._repair_requested_multi_paper_answer(
+        answer,
+        prompt="Use only 4 papers and cite each source so I can verify the evidence.",
+        answer_hits=hits,
+    )
+
+    assert "Further reading" not in repaired
+    assert "Evidence without a marker. [1]" in repaired
+    assert finalize_runtime._multi_paper_answer_needs_contract_rebuild(
+        answer=repaired,
+        prompt="Use only 4 papers and cite each source so I can verify the evidence.",
+    ) is False
+
+    heading_extra = answer.replace("**Further reading:**", "## Further reading")
+    assert "Further reading" not in finalize_runtime._strip_requested_multi_paper_extras(heading_extra)
+
+
+def test_multi_paper_llm_summary_with_foreign_technical_marker_falls_back_to_evidence() -> None:
+    out = finalize_runtime._build_multi_paper_doc_list_contract(
+        prompt="Which papers discuss single-pixel imaging?",
+        seed_docs=[
+            {
+                "text": "Single-pixel imaging uses compressive sensing for acquisition and image reconstruction strategies.",
+                "meta": {
+                    "source_path": "db/natphoton-review.md",
+                    "ref_best_heading_path": "Abstract",
+                    "ref_show_snippets": [
+                        "Single-pixel imaging uses compressive sensing for acquisition and image reconstruction strategies."
+                    ],
+                    "ref_pack": {
+                        "what": "The paper implements an API using a dynamic-link library.",
+                        "why": "It is useful background.",
+                    },
+                },
+            }
+        ],
+        answer_hits=[],
+        evidence_cards=[],
+    )
+
+    assert len(out) == 1
+    assert "compressive sensing" in out[0]["summary_line"].lower()
+    assert "API" not in out[0]["summary_line"]
 
 
 @pytest.mark.skip(reason="legacy encoding-sensitive prompt case replaced by ASCII-equivalent coverage below")
@@ -1543,6 +1769,50 @@ def test_filter_multi_paper_doc_list_contract_does_not_match_single_photon_promp
         "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf",
         "Frontiers of Physics-2024-Emerging single-photon...performance photodetector.pdf",
     ]
+
+
+def test_select_multi_paper_doc_list_follows_answer_titles_and_non_contiguous_canonical_markers():
+    names = [
+        "Frequency-division-multiplexed single-pixel imaging with metamaterials",
+        "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+        "Part-based image-loop network for single-pixel imaging",
+        "Imaging biological tissue with single-pixel compressive holography",
+        "Robust real-time single-pixel imaging based on a spinning mask via differential detection supplement",
+        "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+    ]
+    hits = [
+        {"text": name, "meta": {"source_path": f"db/{name}.en.md"}}
+        for name in names
+    ]
+    doc_list = [
+        {
+            "source_path": f"db/{name}.en.md",
+            "source_name": name,
+            "summary_line": f"Evidence for {name}",
+        }
+        for name in names
+    ]
+    answer = """## 1. 综述与基本原理
+**论文：** Advances and Challenges of Single-Pixel Imaging Based on Deep Learning [2]
+
+## 2. 采样与重建
+**论文：** Hadamard single-pixel imaging versus Fourier single-pixel imaging [6]
+
+## 3. 深度学习重建
+**论文：** Part-based image-loop network for single-pixel imaging [3]
+
+## 4. 实时系统
+**论文：** Robust real-time single-pixel imaging based on a spinning mask via differential detection [5]
+"""
+
+    selected = finalize_runtime._select_multi_paper_doc_list_from_answer(
+        answer=answer,
+        answer_hits=hits,
+        doc_list=doc_list,
+    )
+
+    assert [item["citation_num"] for item in selected] == [2, 6, 3, 5]
+    assert [item["source_name"] for item in selected] == [names[1], names[5], names[2], names[4]]
 
 
 def test_filter_multi_paper_doc_list_contract_requires_both_deep_learning_and_single_pixel_segments():

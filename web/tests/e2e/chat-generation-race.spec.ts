@@ -91,6 +91,7 @@ async function installBackend(
   opts?: {
     streamFailure?: boolean
     streamIncomplete?: boolean
+    terminalStreamError?: boolean
     completionMessageFailure?: boolean
     generateStartFailure?: boolean
     uiLocale?: 'en' | 'zh'
@@ -373,6 +374,17 @@ async function installBackend(
     await streamReleased
     generationDone = true
     try {
+      if (opts?.terminalStreamError) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/event-stream',
+          body: [
+            'data: {"stage":"error","status":"error","partial":"Generation stream failed.","error":"Generation stream failed.","done":true}',
+            '',
+          ].join('\n'),
+        })
+        return
+      }
       if (opts?.streamIncomplete) {
         await route.fulfill({
           status: 200,
@@ -820,6 +832,29 @@ test('done generation stream clears running state when final message reload fail
   await expect(page.locator('body')).toContainText(A_REFRESH_FAILED_ANSWER)
   await expect(page.locator('body')).not.toContainText('messages page temporarily unavailable')
   await expect(page.locator('body')).not.toContainText(A_STREAM_FAILED_ANSWER)
+})
+
+test('terminal error event is not treated as a successful answer and can retry the same prompt', async ({ page }) => {
+  const backend = await installBackend(page, { terminalStreamError: true })
+  const prompt = 'Question for terminal failure'
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill(prompt)
+  await page.locator('button.kb-send-btn').click()
+  await expect(page.locator('button.kb-stop-btn')).toBeVisible({ timeout: 5_000 })
+
+  backend.releaseStream()
+  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+  await expect(page.locator('body')).toContainText(A_STREAM_FAILED_ANSWER)
+  await expect(page.locator('button.kb-generation-retry-btn')).toHaveText('Retry this question')
+  expect(backend.getConvADonePageLoads()).toBe(0)
+
+  await page.locator('button.kb-generation-retry-btn').click()
+  await expect.poll(() => backend.getGeneratePayloads().length, { timeout: 5_000 }).toBe(2)
+  expect(backend.getGeneratePayloads()[1].prompt).toBe(prompt)
 })
 
 test('chat store ignores duplicate send while generation start is still pending', async ({ page }) => {

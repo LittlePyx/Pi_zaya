@@ -114,6 +114,69 @@ def test_generation_agent_notes_recommend_hybrid_for_thin_local_evidence():
     assert len(bridge["agent_notes"]["evidence_matrix"]) == 1
 
 
+def test_generation_agent_notes_keep_previous_answer_audit_local_only():
+    hits = [
+        {
+            "text": f"Evidence for paper {idx}.",
+            "score": 3.0,
+            "meta": {
+                "source_name": f"Paper {idx}",
+                "source_path": f"paper-{idx}.md",
+                "heading_path": "Results",
+            },
+        }
+        for idx in range(1, 5)
+    ]
+
+    bridge = build_generation_agent_notes(
+        "Audit the previous answer and verify that its four titles match their evidence.",
+        evidence_hits=hits,
+        candidate_hits=hits,
+        scope_context={"query_scope": "library", "scope_source": "previous_answer"},
+    )
+
+    gate = bridge["agent_notes"]["evidence_gate"]
+    assert gate["answer_mode"] == "evidence_grounded"
+    assert gate["source_policy"] == "local_only"
+    assert gate["reasons"] == ["previous_answer_authoritative_sources"]
+    assert bridge["hybrid_generation_recommended"] is False
+    assert bridge["context"]["answer_source_blend"] == "local_grounded"
+
+
+def test_completed_previous_answer_audit_verifies_authoritative_sources_not_markdown_lines():
+    hits = [
+        {
+            "text": f"Evidence for {title}.",
+            "score": 3.0,
+            "meta": {"source_path": f"db/{title}.en.md", "heading_path": "Results"},
+        }
+        for title in (
+            "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+            "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+            "OLT-2024-Part-based image-loop network for single-pixel imaging",
+            "Optica-2024-Robust real-time single-pixel imaging based on a spinning mask via differential detection",
+        )
+    ]
+    answer = (
+        "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning matches its evidence [1].\n"
+        "Hadamard single-pixel imaging versus Fourier single-pixel imaging matches its evidence [2].\n"
+        "Part-based image-loop network for single-pixel imaging matches its evidence [3].\n"
+        "Robust real-time single-pixel imaging based on a spinning mask via differential detection matches its evidence [4]."
+    )
+
+    trace = build_agent_trace_for_completed_answer(
+        "Audit the previous answer and verify that its titles match their evidence.",
+        answer,
+        evidence_hits=hits,
+        answer_mode="evidence_grounded",
+    )
+
+    assert trace["verification"]["total_claims"] == 4
+    assert trace["verification"]["supported_claims"] == 4
+    assert trace["verification"]["unsupported_claims"] == 0
+    assert trace["verification"]["evidence_status"] == "grounded"
+
+
 def test_completed_trace_marks_external_answer_verification_not_applicable():
     query = "In the literature, how does retrieval augmented generation improve academic question answering?"
     bridge = build_generation_agent_notes(

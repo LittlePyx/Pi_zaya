@@ -135,6 +135,14 @@
   border-color: var(--border-subtle);
 }
 
+.kb-generation-retry-btn.ant-btn {
+  margin-top: 8px;
+  margin-left: -7px;
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-main));
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .kb-assistant-source-notice {
   display: inline-flex;
   max-width: 100%;
@@ -632,6 +640,37 @@ textarea.kb-chat-textarea:focus {
 }
 
 @media (max-width: 600px) {
+  .kb-message-scroll {
+    padding: 12px 8px 18px;
+  }
+
+  .kb-message-stack {
+    --kb-message-content-width: 100%;
+    gap: 12px;
+  }
+
+  .kb-message-row {
+    gap: 6px;
+  }
+
+  .kb-msg-avatar,
+  .kb-msg-avatar-spacer {
+    width: 24px;
+    height: 24px;
+    flex-basis: 24px;
+  }
+
+  .kb-message-row.is-assistant .kb-msg-bubble-assistant,
+  .kb-message-row-refs .kb-message-refs-wrap {
+    flex: 1 1 auto !important;
+    width: auto !important;
+    max-width: calc(100% - 30px) !important;
+  }
+
+  .kb-msg-bubble-assistant {
+    padding: 12px;
+  }
+
   .kb-chat-input-wrap {
     padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
   }

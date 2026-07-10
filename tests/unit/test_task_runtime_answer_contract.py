@@ -57,6 +57,28 @@ def test_detect_answer_output_mode_keeps_generic_problem_question_out_of_critica
     assert mode == "reading_guide"
 
 
+def test_detect_answer_output_mode_marks_previous_answer_audit_as_critical_review():
+    from kb import task_runtime
+
+    mode = task_runtime._detect_answer_output_mode(
+        "Audit the previous answer and verify that every title matches its evidence. Do not regenerate it.",
+        paper_guide_mode=False,
+        intent="reading",
+        anchor_grounded=False,
+    )
+
+    assert mode == "critical_review"
+
+    hinted_mode = task_runtime._detect_answer_output_mode(
+        "Audit the previous answer and verify that every title matches its evidence.",
+        answer_output_mode_hint="reading_guide",
+        paper_guide_mode=False,
+        intent="reading",
+    )
+
+    assert hinted_mode == "critical_review"
+
+
 def test_apply_answer_contract_with_hits():
     from kb import task_runtime
 

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from kb.reference_query_family import (
+    extract_requested_paper_count,
     prompt_explicitly_requests_multi_paper_list,
     prompt_likely_multi_paper_synthesis,
+    prompt_requests_answer_audit,
+    prompt_requires_reference_focus_match,
 )
 
 
@@ -17,3 +20,29 @@ def test_lineage_and_method_map_count_as_multi_paper_synthesis() -> None:
     assert prompt_likely_multi_paper_synthesis("SCI 这条线是怎么从光谱成像走到 3D 场景重建的？")
     assert prompt_likely_multi_paper_synthesis("这些 structured detection、interferometric 方法分别解决什么麻烦？")
     assert prompt_likely_multi_paper_synthesis("探测器综述和 physics-informed deep learning 这篇应该怎么搭配读？")
+
+
+def test_explicit_numeric_paper_request_extracts_count() -> None:
+    prompt = "请只用库里最相关的 4 篇论文，按阅读顺序做一条路线。"
+
+    assert extract_requested_paper_count(prompt) == 4
+    assert prompt_explicitly_requests_multi_paper_list(prompt) is True
+
+
+def test_previous_answer_audit_is_not_a_multi_paper_list_request() -> None:
+    prompt = (
+        "审查上一条回答：是否严格只用了 4 篇？"
+        "逐条核对论文标题与依据是否来自同一篇。不要重新生成阅读路线。"
+    )
+
+    assert prompt_requests_answer_audit(prompt) is True
+    assert extract_requested_paper_count(prompt) is None
+    assert prompt_explicitly_requests_multi_paper_list(prompt) is False
+
+
+def test_exact_count_reading_route_does_not_require_missing_discussion_topic() -> None:
+    prompt = "Please use only 4 papers for a reading route and cite each source."
+
+    assert prompt_explicitly_requests_multi_paper_list(prompt) is True
+    assert prompt_requires_reference_focus_match(prompt) is False
+    assert prompt_requires_reference_focus_match("Which papers discuss SCI?") is True

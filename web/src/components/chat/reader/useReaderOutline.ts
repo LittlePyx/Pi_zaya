@@ -181,20 +181,19 @@ function scrollOutlineHeadingIntoView(root: HTMLElement, target: HTMLElement) {
 export function useReaderOutline({
   open,
   sourcePath,
-  isInlinePresentation,
   defaultOutlineOpen,
   contentRef,
   readerBlocks,
 }: UseReaderOutlineArgs): UseReaderOutlineResult {
   const outlineItems = useMemo(() => deriveOutlineItems(readerBlocks), [readerBlocks])
-  const initialOutlineOpen = defaultOutlineOpen ?? isInlinePresentation
+  const initialOutlineOpen = defaultOutlineOpen ?? false
   const [outlineOpen, setOutlineOpen] = useState(() => initialOutlineOpen)
   const [activeOutlineId, setActiveOutlineId] = useState('')
 
   useEffect(() => {
     if (!open) return
-    setOutlineOpen(defaultOutlineOpen ?? isInlinePresentation)
-  }, [defaultOutlineOpen, open, sourcePath, isInlinePresentation])
+    setOutlineOpen(defaultOutlineOpen ?? false)
+  }, [defaultOutlineOpen, open, sourcePath])
 
   useEffect(() => {
     if (!open) {

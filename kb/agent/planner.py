@@ -11,6 +11,11 @@ _COMPARISON_RE = re.compile(
     r"|(?:\bA\s+vs\.?\s+B\b)",
     flags=re.IGNORECASE,
 )
+_ANSWER_AUDIT_RE = re.compile(
+    r"\b(?:audit|review|check|verify|critique)\s+(?:the\s+)?(?:previous|last|prior)\s+answer\b"
+    r"|(?:\u5ba1\u67e5|\u6838\u5bf9|\u68c0\u67e5|\u9a8c\u8bc1)(?:\u4e0a\u4e00\u6761|\u4e0a\u4e2a|\u524d\u4e00\u6761|\u8be5)?\u56de\u7b54",
+    flags=re.IGNORECASE,
+)
 _READING_GUIDE_RE = re.compile(
     r"\b(how\s+(?:should\s+i\s+)?read|how\s+to\s+read|reading\s+guide|reading\s+map|roadmap|study\s+plan|where\s+should\s+i\s+start)\b"
     r"|(?:\u600e\u4e48\u8bfb|\u5982\u4f55\u8bfb|\u9605\u8bfb\u8def\u7ebf|\u9605\u8bfb\u5730\u56fe|\u8bfb\u54ea|\u5148\u8bfb|\u9605\u8bfb\u6307\u5357|\u5b66\u4e60\u8def\u7ebf)",
@@ -52,6 +57,8 @@ _PLAN_GOALS: dict[ToolName, str] = {
 def _classify_question_type_from_text(text: str) -> QuestionType:
     if not text:
         return "unknown"
+    if _ANSWER_AUDIT_RE.search(text):
+        return "multi_paper_comparison"
     if _COMPARISON_RE.search(text):
         return "multi_paper_comparison"
     if _READING_GUIDE_RE.search(text):
@@ -94,7 +101,9 @@ def _extract_target_papers(text: str) -> list[str]:
 
 def _routing_signals(text: str, question_type: QuestionType) -> list[str]:
     signals: list[str] = []
-    if question_type == "multi_paper_comparison":
+    if _ANSWER_AUDIT_RE.search(text):
+        signals.append("answer_audit")
+    elif question_type == "multi_paper_comparison":
         signals.append("comparison_keyword")
     elif question_type == "reading_guide":
         signals.append("reading_guide_keyword")

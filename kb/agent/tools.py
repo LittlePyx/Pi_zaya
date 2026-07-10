@@ -78,10 +78,18 @@ def _clip(text: Any, limit: int = 180) -> str:
 
 def _source_name(hit: dict[str, Any]) -> str:
     meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-    return (
+    source = (
         str(meta.get("source_name") or meta.get("title") or meta.get("source_path") or "").strip()
         or str(hit.get("id") or "").strip()
     )
+    if not source:
+        return ""
+    if "\\" in source or "/" in source:
+        source = Path(source).name or source
+    for suffix in (".en.md", ".md", ".pdf"):
+        if source.lower().endswith(suffix):
+            return source[: -len(suffix)]
+    return source
 
 
 def _hit_meta(hit: dict[str, Any]) -> dict[str, Any]:

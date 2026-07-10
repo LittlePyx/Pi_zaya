@@ -365,6 +365,34 @@ def _check_main_answer_clutter(answer: str) -> dict[str, Any]:
     return {"ok": not reasons, "reasons": reasons}
 
 
+def _check_evidence_grounding(*, source_summary: dict[str, Any], profile: str) -> dict[str, Any]:
+    if profile not in {"local_evidence_grounded", "hybrid_synthesis"}:
+        return {"ok": True, "required": False, "reasons": []}
+    total_claims = int(source_summary.get("total_claims") or 0)
+    supported_claims = int(source_summary.get("supported_claims") or 0)
+    unsupported_claims = int(source_summary.get("unsupported_claims") or 0)
+    support_ratio = float(source_summary.get("support_ratio") or 0.0)
+    evidence_status = _text(source_summary.get("evidence_status")).lower()
+    if total_claims <= 0:
+        return {"ok": True, "required": True, "reasons": []}
+    reasons: list[str] = []
+    if supported_claims <= 0:
+        reasons.append("no_supported_claims")
+    if support_ratio < 0.5:
+        reasons.append("low_support_ratio")
+    if evidence_status in {"insufficient", "missing", "unsupported"}:
+        reasons.append("evidence_insufficient")
+    return {
+        "ok": not reasons,
+        "required": True,
+        "total_claims": total_claims,
+        "supported_claims": supported_claims,
+        "unsupported_claims": unsupported_claims,
+        "support_ratio": support_ratio,
+        "reasons": list(dict.fromkeys(reasons)),
+    }
+
+
 def build_answer_runtime_check(
     *,
     answer: str,
@@ -403,6 +431,7 @@ def build_answer_runtime_check(
         "source_summary": _check_source_summary(source_summary=source_summary, contract=contract),
         "notice_shape": _check_notice_shape(answer=answer, source_summary=source_summary, contract=contract),
         "main_answer_clutter": _check_main_answer_clutter(answer),
+        "evidence_grounding": _check_evidence_grounding(source_summary=source_summary, profile=profile),
     }
     failed = sorted(name for name, result in checks.items() if _record(result).get("ok") is False)
     return {

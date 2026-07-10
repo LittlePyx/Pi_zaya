@@ -33,10 +33,12 @@ from kb.paper_guide_reference_opportunities import (
     strip_reference_opportunity_note,
 )
 from kb.reference_query_family import (
+    extract_requested_paper_count,
     extract_multi_paper_topic as _shared_extract_multi_paper_topic,
     prompt_explicitly_requests_multi_paper_list,
     prompt_likely_cross_paper_refs,
     prompt_prefers_zh,
+    prompt_requests_answer_audit,
     prompt_requires_reference_focus_match as _shared_prompt_requires_reference_focus_match,
     prompt_targets_sci_topic as _shared_prompt_targets_sci_topic,
 )
@@ -95,6 +97,15 @@ _DOC_INLINE_TITLE_LINE_RE = re.compile(
     r"\s*[:：-]\s*(?P<title>\S.*)\s*$"
 )
 _DOC_LABEL_TOKEN_RE = re.compile(r"(?i)\*{0,2}DOC-\d{1,3}(?:-S\d{1,3})?\*{0,2}")
+_DOC_LABEL_CAPTURE_RE = re.compile(r"(?i)\*{0,2}DOC-(\d{1,3})(?:-S\d{1,3})?\*{0,2}")
+_ANSWER_AUDIT_CITATION_FORMAT_REQUEST_RE = re.compile(
+    r"(?i)(?:citation|reference)\s+(?:format|numbering|marker|syntax)|"
+    r"(?:\u5f15\u7528|\u53c2\u8003)(?:\u7f16\u53f7|\u683c\u5f0f|\u6807\u8bb0)|\u504f\u79fb\u6807\u8bb0"
+)
+_INTERNAL_CITATION_REVIEW_HEADING_RE = re.compile(
+    r"(?i)(?:citation|reference)\s+(?:format|numbering|marker|syntax)|"
+    r"(?:\u5f15\u7528|\u53c2\u8003)(?:\u7f16\u53f7|\u683c\u5f0f|\u6807\u8bb0)(?:\u95ee\u9898)?|\u504f\u79fb\u6807\u8bb0"
+)
 _DOC_LABEL_GROUP_IN_PARENS_RE = re.compile(
     r"(?i)[\(\[（【]\s*(?:(?:\*{0,2}DOC-\d{1,3}(?:-S\d{1,3})?\*{0,2})"
     r"\s*(?:[,/、，]|\band\b|\bor\b|及|和|与)?\s*)+[\)\]）】]"
@@ -732,6 +743,54 @@ def _strip_internal_doc_label_mentions(text: str) -> str:
     return out.strip(" \t:-")
 
 
+def _replace_answer_audit_doc_labels(text: str) -> str:
+    raw = str(text or "")
+    if not raw or "DOC-" not in raw.upper():
+        return raw
+    label = "来源" if _contains_cjk(raw) else "Source"
+    return _DOC_LABEL_CAPTURE_RE.sub(lambda match: f"{label} [{int(match.group(1))}]", raw)
+
+
+def _strip_answer_audit_internal_citation_review(text: str, *, prompt: str) -> str:
+    raw = str(text or "")
+    if (
+        not raw
+        or not prompt_requests_answer_audit(prompt)
+        or _ANSWER_AUDIT_CITATION_FORMAT_REQUEST_RE.search(prompt)
+    ):
+        return raw
+    lines = raw.splitlines()
+    out: list[str] = []
+    skipped_level = 0
+    for line in lines:
+        heading = re.match(r"^\s*(#{1,6})\s+(.+?)\s*$", line)
+        if heading:
+            level = len(heading.group(1))
+            title = heading.group(2)
+            if _INTERNAL_CITATION_REVIEW_HEADING_RE.search(title):
+                skipped_level = level
+                continue
+            if skipped_level and level <= skipped_level:
+                skipped_level = 0
+        if skipped_level:
+            continue
+        if _INTERNAL_CITATION_REVIEW_HEADING_RE.search(line) and (
+            "|" in line or "10001" in line or "offset" in line.lower() or "\u504f\u79fb" in line
+        ):
+            continue
+        out.append(line)
+    cleaned = "\n".join(out)
+    cleaned = re.sub(
+        r"[\uff1b;]\s*(?:\u4e8c\u662f|second(?:ly)?,?)?[^\n\u3002.!?]{0,100}"
+        r"(?:\u5f15\u7528|\u53c2\u8003)(?:\u7f16\u53f7|\u683c\u5f0f|\u6807\u8bb0)[^\n\u3002.!?]*[\u3002.!?]",
+        "\u3002",
+        cleaned,
+        flags=re.I,
+    )
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def _sanitize_internal_doc_label_blocks(answer: str) -> str:
     text = str(answer or "").strip()
     if not text or ("DOC-" not in text.upper()):
@@ -849,6 +908,27 @@ def _single_line_summary(text: str, *, source_name: str = "", max_chars: int = 1
     if " " in trimmed:
         trimmed = trimmed.rsplit(" ", 1)[0].rstrip()
     return trimmed + "…"
+
+
+def _multi_paper_technical_markers(text: str) -> set[str]:
+    raw = str(text or "")
+    markers = {
+        str(token or "").strip("-_").lower()
+        for token in re.findall(
+            r"(?<![A-Za-z0-9])(?:[A-Z]{2,}[A-Za-z0-9-]*|[A-Z][A-Z][A-Za-z]+|\d+(?:\.\d+)?\s*(?:hz|db|ms|fps|%)?)",
+            raw,
+        )
+        if str(token or "").strip("-_")
+    }
+    return {marker for marker in markers if marker not in {"pdf", "doi"}}
+
+
+def _multi_paper_summary_conflicts_with_evidence(summary: str, evidence: str) -> bool:
+    summary_markers = _multi_paper_technical_markers(summary)
+    if not summary_markers:
+        return False
+    evidence_low = str(evidence or "").lower()
+    return any(marker not in evidence_low for marker in summary_markers)
 
 
 
@@ -1233,10 +1313,14 @@ def _filter_multi_paper_doc_list_contract(*, prompt: str, doc_list: list[dict] |
             int(item.get("_order") or 0),
         )
     )
-    return [
+    filtered = [
         {k: v for k, v in row.items() if not str(k).startswith("_")}
         for row in rows
     ]
+    requested_count = extract_requested_paper_count(prompt)
+    if requested_count is not None:
+        return filtered[:requested_count]
+    return filtered
 
 
 def _doc_list_entry_matches_bound_source(
@@ -1504,6 +1588,7 @@ def _build_multi_paper_doc_list_contract(
     seed_docs: list[dict] | None = None,
     answer_hits: list[dict] | None,
     evidence_cards: list[dict] | None,
+    apply_prompt_filter: bool = True,
 ) -> list[dict]:
     entries: list[dict] = []
     entry_by_source: dict[str, dict] = {}
@@ -1608,8 +1693,13 @@ def _build_multi_paper_doc_list_contract(
                         str(norm_primary.get("highlight_snippet") or norm_primary.get("snippet") or "").strip(),
                         source_name=str(entry.get("source_name") or ""),
                     )
+                    summary_conflicts = _multi_paper_summary_conflicts_with_evidence(
+                        str(entry.get("summary_line") or ""),
+                        snippet,
+                    )
                     if snippet and (
                         (not str(entry.get("summary_line") or "").strip())
+                        or summary_conflicts
                         or (
                             norm_primary_score >= current_primary_score
                             and str(entry.get("summary_generation") or "").strip().lower() != "llm_pack"
@@ -1697,7 +1787,7 @@ def _build_multi_paper_doc_list_contract(
             rank=3,
         )
 
-    for hit in list(answer_hits or []):
+    for hit_index, hit in enumerate(list(answer_hits or []), start=1):
         if not isinstance(hit, dict):
             continue
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
@@ -1738,6 +1828,8 @@ def _build_multi_paper_doc_list_contract(
             primary_evidence=primary_evidence,
             rank=2,
         )
+        if source_path and source_path in entry_by_source:
+            entry_by_source[source_path].setdefault("citation_num", hit_index)
 
     normalized_entries = [
         {
@@ -1747,10 +1839,9 @@ def _build_multi_paper_doc_list_contract(
         }
         for raw_entry in entries
     ]
-    return _filter_multi_paper_doc_list_contract(
-        prompt=prompt,
-        doc_list=normalized_entries,
-    )
+    if not apply_prompt_filter:
+        return normalized_entries
+    return _filter_multi_paper_doc_list_contract(prompt=prompt, doc_list=normalized_entries)
 
 
 
@@ -1772,6 +1863,8 @@ def _format_multi_paper_list_answer_v2(*, prompt: str, docs: list[dict]) -> str:
             name = str(item.get("source_name") or _source_name_from_path_like(item.get("source_path") or "")).strip() or f"\u6587\u732e {idx}"
             heading = str(item.get("heading_path") or "").strip()
             summary = str(item.get("summary_line") or "").strip()
+            citation_num = _as_positive_int(item.get("citation_num"))
+            citation_marker = f" [{citation_num}]" if citation_num > 0 else ""
             match_note = _multi_paper_topic_match_note(
                 prompt=prompt,
                 match_kind=str(item.get("topic_match_kind") or ""),
@@ -1780,7 +1873,12 @@ def _format_multi_paper_list_answer_v2(*, prompt: str, docs: list[dict]) -> str:
             if heading:
                 lines.append(f"   - \u5b9a\u4f4d\uff1a{heading}")
             if summary:
-                lines.append(f"   - \u4f9d\u636e\uff1a{summary}")
+                lines.append(f"   - \u4f9d\u636e\uff1a{summary}{citation_marker}")
+            elif citation_marker:
+                lines.append(f"   - \u6765\u6e90\uff1a{citation_marker.strip()}")
+            why_line = str(item.get("why_line") or "").strip()
+            if why_line:
+                lines.append(f"   - \u4e3a\u4ec0\u4e48\u8bfb\uff1a{why_line}")
             if match_note:
                 lines.append(f"   - \u76f8\u5173\u6027\uff1a{match_note}")
             lines.append("")
@@ -1800,6 +1898,8 @@ def _format_multi_paper_list_answer_v2(*, prompt: str, docs: list[dict]) -> str:
         name = str(item.get("source_name") or _source_name_from_path_like(item.get("source_path") or "")).strip() or f"Paper {idx}"
         heading = str(item.get("heading_path") or "").strip()
         summary = str(item.get("summary_line") or "").strip()
+        citation_num = _as_positive_int(item.get("citation_num"))
+        citation_marker = f" [{citation_num}]" if citation_num > 0 else ""
         match_note = _multi_paper_topic_match_note(
             prompt=prompt,
             match_kind=str(item.get("topic_match_kind") or ""),
@@ -1808,11 +1908,198 @@ def _format_multi_paper_list_answer_v2(*, prompt: str, docs: list[dict]) -> str:
         if heading:
             lines.append(f"   - Locate: {heading}")
         if summary:
-            lines.append(f"   - Evidence: {summary}")
+            lines.append(f"   - Evidence: {summary}{citation_marker}")
+        elif citation_marker:
+            lines.append(f"   - Source: {citation_marker.strip()}")
+        why_line = str(item.get("why_line") or "").strip()
+        if why_line:
+            lines.append(f"   - Why read it: {why_line}")
         if match_note:
             lines.append(f"   - Match: {match_note}")
         lines.append("")
     return "\n".join(lines).strip()
+
+
+_MULTI_PAPER_NUMBERED_SECTION_RE = re.compile(
+    r"(?m)^\s*(?:#{1,6}\s*)?(?:\u7b2c\s*)?(\d{1,2})"
+    r"(?:\s*\u6b65\s*[:\uff1a]\s*|[.)]\s+)"
+)
+
+
+def _multi_paper_numbered_sections(answer: str) -> list[str]:
+    text = str(answer or "")
+    matches = list(_MULTI_PAPER_NUMBERED_SECTION_RE.finditer(text))
+    return [
+        text[match.start() : (matches[idx + 1].start() if idx + 1 < len(matches) else len(text))]
+        for idx, match in enumerate(matches)
+    ]
+
+
+def _count_multi_paper_answer_items(answer: str) -> int:
+    numbers = [
+        int(match.group(1))
+        for match in _MULTI_PAPER_NUMBERED_SECTION_RE.finditer(str(answer or ""))
+    ]
+    if not numbers:
+        return 0
+    expected = list(range(1, len(numbers) + 1))
+    return len(numbers) if numbers == expected else len(set(numbers))
+
+
+def _prompt_requests_multi_paper_source_markers(prompt: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:cite|citation|source\s+(?:number|marker)|evidence\s+(?:number|marker))\b|"
+            r"\u6765\u6e90\u7f16\u53f7|\u6765\u6e90\u6807\u8bb0|\u5f15\u7528\u7f16\u53f7|"
+            r"\u7528\u6765\u6e90|\u53ef\u70b9\u56de|\u70b9\u56de\u539f\u6587|\u6838\u5bf9\u7684\u4f9d\u636e",
+            str(prompt or ""),
+            flags=re.I,
+        )
+    )
+
+
+def _section_has_citation_marker(section: str) -> bool:
+    return bool(_FREEFORM_NUMERIC_CITE_RE.search(str(section or "")) or _has_structured_cite_marker(section))
+
+
+def _strip_requested_multi_paper_extras(answer: str) -> str:
+    text = str(answer or "").strip()
+    extra_block = re.compile(
+        r"(?ims)\n\s*(?:---\s*\n\s*)?(?:#{1,6}\s*)?(?:\*\*)?"
+        r"(?:\u8865\u5145\u8bf4\u660e|\u8865\u5145\u9605\u8bfb|\u5ef6\u4f38\u9605\u8bfb|\u8fdb\u4e00\u6b65\u9605\u8bfb|"
+        r"additional\s+reading|further\s+reading|supplementary\s+note)"
+        r"(?:\s*[:\uff1a](?:\*\*)?)?.*$"
+    )
+    text = extra_block.sub("", text).rstrip()
+    citation_chain_tail = re.compile(
+        r"(?ims)\n\s*(?:\u5982\u679c\u60f3\u987a\u7740\u8bba\u6587\u7684\u5f15\u7528\u94fe|"
+        r"if\s+you\s+want\s+to\s+follow\s+the\s+citation\s+chain).*$"
+    )
+    return citation_chain_tail.sub("", text).rstrip()
+
+
+def _multi_paper_section_hit_num(section: str, answer_hits: list[dict] | None) -> int:
+    section_norm = _normalize_topic_identity(section)
+    if not section_norm:
+        return 0
+    stop_tokens = {"paper", "article", "journal", "single", "pixel", "imaging", "study", "method"}
+    best_num = 0
+    best_score = 0
+    for hit_num, hit in enumerate(list(answer_hits or []), start=1):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or hit.get("source_path") or "").strip()
+        source_name = _source_name_from_path_like(source_path)
+        source_norm = _normalize_topic_identity(source_name)
+        tokens = {
+            token
+            for token in source_norm.split()
+            if len(token) >= 4 and (not token.isdigit()) and token not in stop_tokens
+        }
+        score = sum(1 for token in tokens if token in section_norm)
+        if score > best_score:
+            best_num = hit_num
+            best_score = score
+    return best_num if best_score >= 2 else 0
+
+
+def _select_multi_paper_doc_list_from_answer(
+    *,
+    answer: str,
+    answer_hits: list[dict] | None,
+    doc_list: list[dict] | None,
+) -> list[dict]:
+    entries_by_source: dict[str, dict] = {}
+    for raw in list(doc_list or []):
+        if not isinstance(raw, dict):
+            continue
+        source_path = str(raw.get("source_path") or "").strip()
+        if source_path:
+            entries_by_source[source_path.replace("\\", "/").lower()] = dict(raw)
+
+    selected: list[dict] = []
+    seen_sources: set[str] = set()
+    for section in _multi_paper_numbered_sections(answer):
+        hit_num = _multi_paper_section_hit_num(section, answer_hits)
+        if hit_num <= 0:
+            marker = _FREEFORM_NUMERIC_CITE_RE.search(section)
+            try:
+                hit_num = int(marker.group(1)) if marker else 0
+            except Exception:
+                hit_num = 0
+        if not (1 <= hit_num <= len(list(answer_hits or []))):
+            continue
+        hit = list(answer_hits or [])[hit_num - 1]
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or hit.get("source_path") or "").strip()
+        source_key = source_path.replace("\\", "/").lower()
+        if not source_key or source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        entry = dict(entries_by_source.get(source_key) or {})
+        entry["source_path"] = source_path
+        entry["source_name"] = str(entry.get("source_name") or _source_name_from_path_like(source_path)).strip()
+        entry["citation_num"] = int(hit_num)
+        selected.append(entry)
+    return selected
+
+
+def _repair_requested_multi_paper_answer(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict] | None,
+) -> str:
+    requested_count = extract_requested_paper_count(prompt)
+    if requested_count is None:
+        return str(answer or "")
+    text = _strip_requested_multi_paper_extras(answer)
+    if not _prompt_requests_multi_paper_source_markers(prompt):
+        return text
+    matches = list(_MULTI_PAPER_NUMBERED_SECTION_RE.finditer(text))
+    if len(matches) != requested_count:
+        return text
+    repaired: list[str] = [text[: matches[0].start()]]
+    for idx, match in enumerate(matches):
+        section_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        section = text[match.start() : section_end]
+        if not _section_has_citation_marker(section):
+            hit_num = _multi_paper_section_hit_num(section, answer_hits)
+            if hit_num > 0:
+                trailing_separator = re.search(r"\n\s*---\s*$", section)
+                if trailing_separator:
+                    section = (
+                        section[: trailing_separator.start()].rstrip()
+                        + f" [{hit_num}]\n\n---\n\n"
+                    )
+                else:
+                    section = section.rstrip() + f" [{hit_num}]\n\n"
+        repaired.append(section)
+    return "".join(repaired).rstrip()
+
+
+def _multi_paper_answer_needs_contract_rebuild(*, answer: str, prompt: str) -> bool:
+    text = str(answer or "").strip()
+    if len(text) < 120:
+        return True
+    if re.search(r"\bDOC-\d{1,3}(?:-S\d{1,3})?\b", text, flags=re.I):
+        return True
+    requested_count = extract_requested_paper_count(prompt)
+    if requested_count is None:
+        return False
+    actual_count = _count_multi_paper_answer_items(text)
+    if actual_count != requested_count:
+        return True
+    if _prompt_requests_multi_paper_source_markers(prompt):
+        sections = _multi_paper_numbered_sections(text)
+        return len(sections) != requested_count or any(
+            not _section_has_citation_marker(section)
+            for section in sections
+        )
+    return False
 
 
 def _extract_multi_paper_topic(prompt: str) -> str:
@@ -2392,6 +2679,18 @@ def _build_paper_guide_contract_snapshot(
     )
     render_packet_seed = seed.get("render_packet") if isinstance(seed.get("render_packet"), dict) else {}
     citation_plan_seed = seed.get("citation_plan") if isinstance(seed.get("citation_plan"), dict) else {}
+    final_packet_answer = str(final_answer_markdown or render_packet_seed.get("answer_markdown") or "").strip()
+    seed_packet_answer = str(render_packet_seed.get("answer_markdown") or "").strip()
+    seed_packet_matches_final = bool(
+        seed_packet_answer
+        and final_packet_answer
+        and seed_packet_answer == final_packet_answer
+    )
+
+    def _seed_render_text(key: str) -> str:
+        if not seed_packet_matches_final:
+            return ""
+        return str(render_packet_seed.get(key) or "").strip()
     if (
         (not paper_guide_mode)
         and (not primary_evidence)
@@ -2404,12 +2703,12 @@ def _build_paper_guide_contract_snapshot(
     snapshot = {"version": 1}
     if not paper_guide_mode:
         render_packet_model = _build_paper_guide_render_packet_model(
-            answer_markdown=str(render_packet_seed.get("answer_markdown") or final_answer_markdown or "").strip(),
+            answer_markdown=final_packet_answer,
             notice=str(render_packet_seed.get("notice") or "").strip(),
-            rendered_body=str(render_packet_seed.get("rendered_body") or "").strip(),
-            rendered_content=str(render_packet_seed.get("rendered_content") or "").strip(),
-            copy_markdown=str(render_packet_seed.get("copy_markdown") or "").strip(),
-            copy_text=str(render_packet_seed.get("copy_text") or "").strip(),
+            rendered_body=_seed_render_text("rendered_body"),
+            rendered_content=_seed_render_text("rendered_content"),
+            copy_markdown=_seed_render_text("copy_markdown"),
+            copy_text=_seed_render_text("copy_text"),
             cite_details=list(render_packet_seed.get("cite_details") or []),
             citation_validation=(
                 render_packet_seed.get("citation_validation")
@@ -2477,12 +2776,12 @@ def _build_paper_guide_contract_snapshot(
     if citation_plan_seed:
         snapshot["citation_plan"] = dict(citation_plan_seed)
     render_packet_model = _build_paper_guide_render_packet_model(
-        answer_markdown=str(render_packet_seed.get("answer_markdown") or final_answer_markdown or "").strip(),
+        answer_markdown=final_packet_answer,
         notice=str(render_packet_seed.get("notice") or "").strip(),
-        rendered_body=str(render_packet_seed.get("rendered_body") or "").strip(),
-        rendered_content=str(render_packet_seed.get("rendered_content") or "").strip(),
-        copy_markdown=str(render_packet_seed.get("copy_markdown") or "").strip(),
-        copy_text=str(render_packet_seed.get("copy_text") or "").strip(),
+        rendered_body=_seed_render_text("rendered_body"),
+        rendered_content=_seed_render_text("rendered_content"),
+        copy_markdown=_seed_render_text("copy_markdown"),
+        copy_text=_seed_render_text("copy_text"),
         cite_details=list(render_packet_seed.get("cite_details") or []),
         citation_validation=(
             render_packet_seed.get("citation_validation")
@@ -2633,13 +2932,18 @@ def _finalize_generation_answer(
     effective_paper_guide_family = str(getattr(resolved_paper_guide_intent, "family", "") or "").strip()
     sanitize_paper_guide_family = effective_paper_guide_family or "overview"
     research_answer_plan_norm = str(research_answer_plan or "").strip()
+    answer_audit_requested = prompt_requests_answer_audit(prompt_for_user or prompt)
     multi_paper_list_prompt = bool(prompt_explicitly_requests_multi_paper_list(prompt_for_user or prompt))
+    raw_answer_had_internal_doc_labels = bool(
+        re.search(r"\bDOC-\d{1,3}(?:-S\d{1,3})?\b", str(partial or ""), flags=re.I)
+    )
     multi_paper_doc_list = (
         _build_multi_paper_doc_list_contract(
             prompt=prompt or prompt_for_user,
             seed_docs=list((paper_guide_contracts_seed or {}).get("doc_list_seed") or []),
             answer_hits=list(answer_hits or []),
             evidence_cards=list(paper_guide_evidence_cards or []),
+            apply_prompt_filter=False,
         )
         if multi_paper_list_prompt
         else []
@@ -2647,6 +2951,12 @@ def _finalize_generation_answer(
     answer = _normalize_math_markdown(
         _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
     ).strip() or "(No text returned)"
+    if answer_audit_requested:
+        answer = _replace_answer_audit_doc_labels(answer)
+        answer = _strip_answer_audit_internal_citation_review(
+            answer,
+            prompt=prompt_for_user or prompt,
+        )
     answer = _sanitize_empty_markdown_label_fragments(answer)
     answer = _reconcile_kb_notice(answer, has_hits=bool(answer_hits))
     shared_primary_evidence = _pick_shared_primary_evidence(
@@ -2707,7 +3017,7 @@ def _finalize_generation_answer(
     # Step 1: Promote bare [n] where n < CITATION_OFFSET to structured
     # [[CITE:<sid>:n]] — these are in-paper bibliography references (System B).
     # Hit citations use [OFFSET+1] numbers and are handled in step 2.
-    if not paper_guide_mode:
+    if not paper_guide_mode and not answer_audit_requested:
         answer = _promote_numeric_inpaper_refs(
             answer,
             answer_hits=answer_hits,
@@ -2721,13 +3031,14 @@ def _finalize_generation_answer(
         answer = _strip_citation_offset(answer)
     # Step 3: Strip LaTeX footnote markers ($^n$, $_{xx}$) that leak from paper text.
     answer = _strip_latex_footnote_markers(answer)
-    answer = _maybe_append_prompt_requested_inpaper_refs(
-        answer,
-        prompt=prompt_for_user or prompt,
-        answer_hits=answer_hits,
-        db_dir=db_dir,
-        locked_citation_source=locked_citation_source,
-    )
+    if not answer_audit_requested:
+        answer = _maybe_append_prompt_requested_inpaper_refs(
+            answer,
+            prompt=prompt_for_user or prompt,
+            answer_hits=answer_hits,
+            db_dir=db_dir,
+            locked_citation_source=locked_citation_source,
+        )
     paper_guide_reference_opportunities: list[dict[str, object]] = [
         dict(item)
         for item in list((paper_guide_contracts_seed or {}).get("reference_opportunities") or [])
@@ -2754,7 +3065,7 @@ def _finalize_generation_answer(
             cards=list(paper_guide_evidence_cards or []),
             max_items=3,
         )
-    else:
+    elif not answer_audit_requested:
         paper_guide_reference_opportunities = detect_text_reference_opportunities(
             prompt=prompt_for_user or prompt,
             answer=answer,
@@ -2845,7 +3156,38 @@ def _finalize_generation_answer(
         allow_paper_guide_structured_refs=bool(paper_guide_validated_structured_refs),
     )
     answer = _maybe_clarify_negative_boundary_answer(answer, prompt=prompt_for_user or prompt)
-    if multi_paper_list_prompt and multi_paper_doc_list:
+    if multi_paper_list_prompt:
+        answer = _repair_requested_multi_paper_answer(
+            answer,
+            prompt=prompt_for_user or prompt,
+            answer_hits=answer_hits,
+        )
+        selected_multi_paper_doc_list = _select_multi_paper_doc_list_from_answer(
+            answer=answer,
+            answer_hits=answer_hits,
+            doc_list=multi_paper_doc_list,
+        )
+        requested_count = extract_requested_paper_count(prompt_for_user or prompt)
+        if selected_multi_paper_doc_list and (
+            requested_count is None or len(selected_multi_paper_doc_list) == requested_count
+        ):
+            multi_paper_doc_list = selected_multi_paper_doc_list
+        else:
+            multi_paper_doc_list = _filter_multi_paper_doc_list_contract(
+                prompt=prompt_for_user or prompt,
+                doc_list=multi_paper_doc_list,
+            )
+    if (
+        multi_paper_list_prompt
+        and multi_paper_doc_list
+        and (
+            raw_answer_had_internal_doc_labels
+            or _multi_paper_answer_needs_contract_rebuild(
+                answer=answer,
+                prompt=prompt_for_user or prompt,
+            )
+        )
+    ):
         formatted_multi_paper_answer = _format_multi_paper_list_answer_v2(
             prompt=prompt_for_user or prompt,
             docs=multi_paper_doc_list,
@@ -2905,6 +3247,15 @@ def _finalize_generation_answer(
         paper_guide_mode=bool(paper_guide_mode),
         prompt_family=sanitize_paper_guide_family,
     )
+    requested_paper_count = extract_requested_paper_count(prompt_for_user or prompt)
+    if requested_paper_count is not None:
+        actual_paper_count = _count_multi_paper_answer_items(answer)
+        paper_count_ok = actual_paper_count == requested_paper_count
+        answer_quality["requested_paper_count"] = requested_paper_count
+        answer_quality["actual_paper_count"] = actual_paper_count
+        answer_quality["paper_count_ok"] = paper_count_ok
+        if not paper_count_ok:
+            answer_quality["minimum_ok"] = False
     if research_answer_plan_norm:
         answer_quality["research_answer_plan"] = research_answer_plan_norm
     retrieval_confidence = dict(paper_guide_retrieval_confidence_hint or {})

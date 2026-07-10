@@ -135,6 +135,22 @@ async function messageListDerived(page: Page, input: {
   }, input)
 }
 
+async function messagePresentationValues(page: Page, message: Message) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (messageInput) => {
+    const {
+      getMessageCopyMarkdownValue,
+      getMessageCopyTextValue,
+      getMessageRenderedBodyContent,
+    } = await import('/src/components/chat/messageRenderPacket.ts')
+    return {
+      body: getMessageRenderedBodyContent(messageInput),
+      copyText: getMessageCopyTextValue(messageInput),
+      copyMarkdown: getMessageCopyMarkdownValue(messageInput),
+    }
+  }, message)
+}
+
 async function agentSourceRows(page: Page, input: AgentTraceSourceRowsInput) {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
   return page.evaluate(async (rowsInput) => {
@@ -1128,6 +1144,61 @@ test('message list derived helpers keep rows, trace order, context, and live she
     traceAssistantOrder: 1,
     traceUserMsgId: 1,
   }])
+})
+
+test('final message rendering wins over a stale simplified render packet', async ({ page }) => {
+  const values = await messagePresentationValues(page, {
+    id: 44,
+    role: 'assistant',
+    content: 'raw final answer',
+    rendered_body: 'final four-step reading route',
+    rendered_content: 'final rendered markdown',
+    copy_text: 'final copy text',
+    copy_markdown: 'final copy markdown',
+    meta: {
+      paper_guide_contracts: {
+        render_packet: {
+          answer_markdown: 'simplified document list',
+          rendered_body: 'stale simplified document list',
+          rendered_content: 'stale rendered content',
+          copy_text: 'stale copy text',
+          copy_markdown: 'stale copy markdown',
+        },
+      },
+    },
+  } as Message)
+
+  expect(values).toEqual({
+    body: 'final four-step reading route',
+    copyText: 'final copy text',
+    copyMarkdown: 'final copy markdown',
+  })
+})
+
+test('generation failure helper only offers the matching user prompt for retry', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  const result = await page.evaluate(async () => {
+    const {
+      generationRetryPrompt,
+      isGenerationFailureAnswer,
+    } = await import('/src/components/chat/generationFailureUi.ts')
+    const messages = [
+      { id: 1, role: 'user', content: 'Explain single-pixel imaging', created_at: 1 },
+      { id: 2, role: 'assistant', content: '（调用模型失败：Connection error.）', created_at: 2 },
+      { id: 3, role: 'assistant', content: 'A normal answer can discuss network timeout handling.', created_at: 3 },
+    ]
+    return {
+      failure: isGenerationFailureAnswer(messages[1].content),
+      normal: isGenerationFailureAnswer(messages[2].content),
+      prompt: generationRetryPrompt(messages, 2, 1),
+    }
+  })
+
+  expect(result).toEqual({
+    failure: true,
+    normal: false,
+    prompt: 'Explain single-pixel imaging',
+  })
 })
 
 test('agent trace view model assembles source summary and diagnostics', async ({ page }) => {

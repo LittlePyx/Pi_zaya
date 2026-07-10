@@ -258,7 +258,7 @@ def _provider_readiness(s, target: Literal["text", "vision"]) -> dict:
         reason = str(last_test.get("error_type") or "unknown")
     else:
         status = "configured"
-        severity = "ok"
+        severity = "warning"
         reason = "configured_not_tested"
 
     public_last_test = None
@@ -291,6 +291,8 @@ def _readiness_payload(s) -> dict:
         overall = {"status": "error", "reason": text["reason"], "target": "text"}
     elif vision["severity"] == "error":
         overall = {"status": "error", "reason": vision["reason"], "target": "vision"}
+    elif text["severity"] == "warning":
+        overall = {"status": "warning", "reason": text["reason"], "target": "text"}
     elif vision["severity"] == "warning":
         overall = {"status": "warning", "reason": vision["reason"], "target": "vision"}
     else:

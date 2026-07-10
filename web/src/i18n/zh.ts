@@ -786,6 +786,7 @@ export const S = {
   msg_reference_candidate_index: '参考文献索引',
   msg_reference_candidate_open: '打开',
   msg_reference_candidate_add: '入篮',
+  chat_retry_answer: '重试本次问题',
 
   // CiteShelf
   shelf_title: '研究摘录篮',

@@ -785,6 +785,7 @@ export const S = {
   msg_reference_candidate_index: 'Reference index',
   msg_reference_candidate_open: 'Open',
   msg_reference_candidate_add: 'Add',
+  chat_retry_answer: 'Retry this question',
 
   // CiteShelf
   shelf_title: 'Research Basket',

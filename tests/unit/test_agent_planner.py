@@ -9,6 +9,16 @@ def test_planner_classifies_common_question_types():
     assert classify_question_type("") == "unknown"
 
 
+def test_answer_audit_takes_precedence_over_negated_reading_route_phrase():
+    prompt = "审查上一条回答，逐条核对标题与依据，不要重新生成阅读路线。"
+
+    intent = plan_research_intent(prompt)
+
+    assert intent.task_type == "multi_paper_comparison"
+    assert intent.routing_signals[0] == "answer_audit"
+    assert "compare_papers" in intent.required_tools
+
+
 def test_planner_builds_tool_plan_for_comparison():
     question_type, plan = plan_research_question("compare A versus B")
 

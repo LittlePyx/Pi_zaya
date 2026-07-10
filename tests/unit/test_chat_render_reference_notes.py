@@ -948,6 +948,42 @@ def test_named_upstream_title_repair_does_not_link_short_venue_mentions(monkeypa
     assert "[[CITE:" not in repaired
 
 
+def test_named_upstream_title_repair_does_not_duplicate_a_current_library_source(monkeypatch):
+    from api import chat_render
+
+    citing_path = r"db\video\Journal of Optics-2016-3D single-pixel video.en.md"
+    current_path = (
+        r"db\review\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md"
+    )
+    index_data = {
+        "docs": {
+            chat_render._render_norm_source_key(citing_path): {
+                "path": citing_path,
+                "name": "3D single-pixel video.pdf",
+                "refs": {
+                    "11": {
+                        "title": "Principles and prospects for single-pixel imaging",
+                        "raw": "[11] Principles and prospects for single-pixel imaging.",
+                    }
+                },
+            }
+        }
+    }
+    monkeypatch.setattr(chat_render, "_load_reference_index_cached", lambda: index_data)
+
+    repaired, changed = chat_render._repair_named_system_b_citation_markers(
+        "Read Principles and prospects for single-pixel imaging first.",
+        [
+            {"text": "citing hit", "meta": {"source_path": citing_path}},
+            {"text": "review hit", "meta": {"source_path": current_path}},
+        ],
+        {"budget": {"system_b": 2}},
+    )
+
+    assert changed is False
+    assert "[[CITE:" not in repaired
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -3175,6 +3211,39 @@ def test_reading_guide_repair_adds_missing_system_a_source_to_matching_paragraph
 
     assert "死时间 [2]。" in repaired
     assert "噪声模型 [1]" in repaired
+
+
+def test_reading_guide_repair_does_not_add_ranked_sources_when_every_step_is_already_cited():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    answer = (
+        "## 1. 综述\n\n**论文：** Review paper [2]\n\n为什么读它：建立全局认识。\n\n"
+        "## 2. 实时系统\n\n**论文：** Real-time paper [6]\n\n为什么读它：理解工程实现。"
+    )
+    hits = [
+        {"text": "Unselected ranked source", "meta": {"source_path": "rank-1.md"}},
+        {"text": "Review paper", "meta": {"source_path": "review.md"}},
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "rank-1.md",
+                "source_name": "Unselected ranked source",
+            }
+        ]
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+    )
+
+    assert repaired == answer
+    assert "[1]" not in repaired
 
 
 def test_reading_guide_repair_resolves_stale_candidate_hit_by_source_path():

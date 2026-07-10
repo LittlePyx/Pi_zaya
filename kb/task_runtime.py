@@ -65,12 +65,18 @@ from kb.generation_citation_validation_runtime import (
     _validate_freeform_numeric_citations as _citation_validation_validate_freeform_numeric_citations,
     _validate_structured_citations as _citation_validation_validate_structured_citations,
 )
+from kb.conversation_followup import (
+    build_answer_audit_scope_block,
+    filter_hits_to_source_hints,
+    order_hits_by_source_hints,
+    previous_assistant_reference_hits,
+    previous_assistant_source_hints,
+)
 from kb.generation_answer_finalize_runtime import (
     _build_multi_paper_doc_list_contract as _finalize_runtime_build_multi_paper_doc_list_contract,
     _exclude_bound_source_from_multi_paper_doc_list_contract as _finalize_runtime_exclude_bound_source_from_multi_paper_doc_list_contract,
     _filter_multi_paper_doc_list_contract as _finalize_runtime_filter_multi_paper_doc_list_contract,
     _finalize_generation_answer as _finalize_runtime_finalize_generation_answer,
-    _format_multi_paper_list_answer as _finalize_runtime_format_multi_paper_list_answer,
 )
 from kb.paper_guide_contracts import (
     _build_paper_guide_render_packet_model,
@@ -229,8 +235,10 @@ from kb.path_safety import (
     resolve_verified_chat_image_upload_path,
 )
 from kb.reference_query_family import (
+    extract_requested_paper_count,
     prompt_explicitly_requests_multi_paper_list,
     prompt_likely_multi_paper_synthesis,
+    prompt_requests_answer_audit,
 )
 from kb.pdf_tools import run_pdf_to_md
 from kb.paper_guide_postprocess import (
@@ -3758,9 +3766,39 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             cur_user_msg_id = int(task.get("user_msg_id") or 0)
         except Exception:
             cur_user_msg_id = 0
+        answer_audit_requested = prompt_requests_answer_audit(prompt)
+        answer_audit_source_hints: list[str] = []
+        answer_audit_reference_hits: list[dict] = []
+        answer_audit_scope_block = ""
+        if answer_audit_requested:
+            try:
+                prior_messages = chat_store.get_messages_upto_id(
+                    conv_id,
+                    max(0, cur_user_msg_id - 1),
+                )
+            except Exception:
+                prior_messages = []
+            answer_audit_source_hints = previous_assistant_source_hints(
+                prior_messages,
+                before_message_id=cur_user_msg_id,
+                limit=max(6, int(top_k or 6)),
+            )
+            try:
+                prior_refs_by_user = chat_store.list_message_refs(conv_id) or {}
+            except Exception:
+                prior_refs_by_user = {}
+            answer_audit_reference_hits = previous_assistant_reference_hits(
+                prior_messages,
+                prior_refs_by_user,
+                before_message_id=cur_user_msg_id,
+                source_hints=answer_audit_source_hints,
+            )
+            answer_audit_scope_block = build_answer_audit_scope_block(answer_audit_source_hints)
         retrieval_prompt = str(prompt or "").strip()
         if query_scope_block:
             retrieval_prompt = f"{retrieval_prompt}\n\n{query_scope_block}".strip()
+        if answer_audit_scope_block:
+            retrieval_prompt = f"{retrieval_prompt}\n\n{answer_audit_scope_block}".strip()
         if selected_research_context_block:
             retrieval_prompt = (
                 f"{retrieval_prompt}\n\n"
@@ -3782,6 +3820,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 preferred_source_hints.append(cand)
                 if len(preferred_source_hints) >= 6:
                     break
+        for hint in reversed(answer_audit_source_hints):
+            if hint in preferred_source_hints:
+                preferred_source_hints.remove(hint)
+            preferred_source_hints.insert(0, hint)
+        if len(preferred_source_hints) > 12:
+            preferred_source_hints = preferred_source_hints[:12]
         if paper_guide_source_scoped:
             for cand in (paper_guide_bound_source_path, paper_guide_bound_source_name):
                 cand_norm = str(cand or "").strip()
@@ -3881,6 +3925,26 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 settings=settings_obj,
                 allow_expand=True,
             )
+            if answer_audit_source_hints:
+                current_audit_hits, _current_audit_scores = filter_hits_to_source_hints(
+                    hits_raw,
+                    scores_raw,
+                    answer_audit_source_hints,
+                    fallback_to_original=False,
+                )
+                candidate_audit_hits = list(answer_audit_reference_hits or []) + list(current_audit_hits or [])
+                hits_raw = order_hits_by_source_hints(
+                    candidate_audit_hits,
+                    answer_audit_source_hints,
+                )
+                scores_raw = []
+                for idx, hit in enumerate(hits_raw):
+                    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+                    try:
+                        score_value = float(hit.get("score") or (meta or {}).get("score") or 0.0)
+                    except Exception:
+                        score_value = 0.0
+                    scores_raw.append(score_value if score_value else float(len(hits_raw) - idx))
             if paper_guide_cross_paper_refs:
                 refs_unscoped_hits_raw = _exclude_bound_source_hits_for_cross_paper_refs(
                     list(hits_raw or []),
@@ -4253,8 +4317,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             _perf_log("gen.answer_refs_enrich", elapsed=0.0, docs=len(answer_grouped_docs), mode="async_only")
 
             prompt_multi_paper_list = bool(
-                effective_query_scope == "library"
-                or prompt_explicitly_requests_multi_paper_list(prompt or retrieval_prompt or "")
+                prompt_explicitly_requests_multi_paper_list(prompt or retrieval_prompt or "")
             )
             try:
                 refs_async_enabled = bool(int(str(os.environ.get("KB_REFS_ASYNC_ENRICH", "1") or "1")))
@@ -4736,6 +4799,23 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         "evidence_sources": _trace_summarize_hits(list(selected_research_context_evidence_hits or []), limit=6),
                     },
                 )
+        if answer_audit_requested and answer_audit_source_hints:
+            audit_candidates = list(answer_audit_reference_hits or []) + list(hits_raw or [])
+            authoritative_audit_hits = order_hits_by_source_hints(
+                audit_candidates,
+                answer_audit_source_hints,
+            )
+            if authoritative_audit_hits:
+                answer_hits = authoritative_audit_hits
+                answer_hit_limit = max(answer_hit_limit, len(authoritative_audit_hits))
+                _trace_section(
+                    "answer_audit",
+                    {
+                        "authoritative_source_count": int(len(answer_audit_source_hints)),
+                        "answer_hit_count": int(len(authoritative_audit_hits)),
+                        "answer_sources": _trace_summarize_hits(authoritative_audit_hits, limit=8),
+                    },
+                )
         anchor_grounded_answer = _has_anchor_grounded_answer_hits(answer_hits)
         answer_output_mode = _detect_answer_output_mode(
             prompt,
@@ -4970,6 +5050,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 paper_guide_debug["research_answer_plan"] = research_answer_plan
         if query_scope_block:
             user = f"{user.rstrip()}\n\n{query_scope_block}".strip()
+        if answer_audit_scope_block:
+            user = f"{user.rstrip()}\n\n{answer_audit_scope_block}".strip()
         if selected_research_context_block:
             user = (
                 f"{user.rstrip()}\n\n"
@@ -5220,7 +5302,24 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             paper_guide_contracts["research_basket_evidence"] = dict(selected_research_context_evidence_contract)
         doc_list_rendered_payload = None
         doc_list_rendered_payload_sig = ""
+        multi_paper_refs_hits = list(refs_seed_docs_for_display or [])
         if prompt_multi_paper_list:
+            requested_paper_count = extract_requested_paper_count(prompt or prompt_for_user or "")
+            available_answer_hit_count = len(list(answer_hits or refs_seed_docs_for_display or []))
+            refs_hit_limit = max(
+                1,
+                min(
+                    8,
+                    available_answer_hit_count or 4,
+                    int(requested_paper_count or 4),
+                ),
+            )
+            multi_paper_refs_hits = _merge_refs_display_docs_with_answer_hits(
+                refs_seed_docs=list(refs_seed_docs_for_display or []),
+                answer_hits=list(answer_hits or []),
+                limit=refs_hit_limit,
+                answer=answer,
+            )
             had_doc_list_contract_key = "doc_list" in paper_guide_contracts
             doc_list_contract = _extract_doc_list_contract(paper_guide_contracts)
             if paper_guide_cross_paper_refs:
@@ -5256,7 +5355,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         user_msg_id=umid,
                         prompt=prompt,
                         prompt_sig=str(task.get("prompt_sig") or ""),
-                        hits=list(refs_seed_docs_for_display or []),
+                        hits=list(multi_paper_refs_hits or []),
                         scores=list(scores_raw or []),
                         used_query=str(used_query or ""),
                         used_translation=bool(used_translation),
@@ -5277,25 +5376,6 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         doc_list_contract = list(rendered_doc_list_contract)
                         paper_guide_contracts["doc_list"] = list(doc_list_contract)
                         doc_list_contract_changed = True
-            if doc_list_contract_changed and doc_list_contract:
-                reformatted_answer = _finalize_runtime_format_multi_paper_list_answer(
-                    prompt=prompt or prompt_for_user or "",
-                    docs=list(doc_list_contract),
-                )
-                if str(reformatted_answer or "").strip():
-                    answer = str(reformatted_answer or "").strip()
-                    render_packet = (
-                        dict(paper_guide_contracts.get("render_packet") or {})
-                        if isinstance(paper_guide_contracts.get("render_packet"), dict)
-                        else {}
-                    )
-                    if render_packet:
-                        render_packet["answer_markdown"] = answer
-                        render_packet["rendered_body"] = answer
-                        render_packet["rendered_content"] = answer
-                        render_packet["copy_markdown"] = answer
-                        render_packet["copy_text"] = answer
-                        paper_guide_contracts["render_packet"] = render_packet
             paper_guide_contracts = _sync_multi_paper_primary_evidence_into_contracts(
                 paper_guide_contracts=paper_guide_contracts,
                 doc_list_contract=doc_list_contract,
@@ -5485,7 +5565,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         user_msg_id=umid,
                         prompt=prompt,
                         prompt_sig=str(task.get("prompt_sig") or ""),
-                        hits=list(refs_seed_docs_for_display or []),
+                        hits=list(multi_paper_refs_hits or []),
                         scores=list(scores_raw or []),
                         used_query=str(used_query or ""),
                         used_translation=bool(used_translation),
@@ -5496,7 +5576,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     )
                 if isinstance(rendered_payload, dict) and rendered_payload and str(rendered_payload_sig or "").strip():
                     ready_seed_hits = _set_refs_hit_pack_state(
-                        list(refs_seed_docs_for_display or []),
+                        list(multi_paper_refs_hits or []),
                         state="ready",
                     )
                     _trace_section(

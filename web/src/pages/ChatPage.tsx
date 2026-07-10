@@ -607,6 +607,7 @@ export default function ChatPage() {
                     selectedResearchContextKeys={selectedResearchContextKeys}
                     onResearchContextPackChange={handleResearchContextPackChange}
                     onResearchContextFollowUp={handleResearchContextFollowUp}
+                    onRetryMessage={onSend}
                   />
                 )}
               </div>

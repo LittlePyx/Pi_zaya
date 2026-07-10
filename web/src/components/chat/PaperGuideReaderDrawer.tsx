@@ -446,7 +446,7 @@ export function PaperGuideReaderDrawer({
     open,
     sourcePath,
     isInlinePresentation,
-    defaultOutlineOpen: isInlinePresentation && !isPageSurface,
+    defaultOutlineOpen: false,
     contentRef,
     readerBlocks,
   })

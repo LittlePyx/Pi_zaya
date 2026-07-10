@@ -158,11 +158,11 @@ export function getMessageRenderPacket(message: Pick<Message, 'meta'>): MessageR
 export function getMessageRenderedBodyContent(message: Message): string {
   const packet = getMessageRenderPacket(message)
   const clean = cleanMessagePresentationText(message, (
-    packet?.renderedBody
+    message.rendered_body
+    || message.rendered_content
+    || packet?.renderedBody
     || packet?.renderedContent
     || packet?.answerMarkdown
-    || message.rendered_body
-    || message.rendered_content
     || message.content
     || ''
   ))
@@ -180,8 +180,10 @@ export function getMessageCiteDetailRecords(message: Message): Array<Record<stri
 export function getMessageCopyTextValue(message: Message): string {
   const packet = getMessageRenderPacket(message)
   return cleanMessagePresentationText(message, (
-    packet?.copyText
-    || message.copy_text
+    message.copy_text
+    || message.rendered_body
+    || message.rendered_content
+    || packet?.copyText
     || packet?.renderedBody
     || packet?.answerMarkdown
     || message.content
@@ -192,8 +194,10 @@ export function getMessageCopyTextValue(message: Message): string {
 export function getMessageCopyMarkdownValue(message: Message): string | undefined {
   const packet = getMessageRenderPacket(message)
   const value = cleanMessagePresentationText(message, (
-    packet?.copyMarkdown
-    || message.copy_markdown
+    message.copy_markdown
+    || message.rendered_content
+    || message.rendered_body
+    || packet?.copyMarkdown
     || packet?.renderedContent
     || packet?.renderedBody
     || ''

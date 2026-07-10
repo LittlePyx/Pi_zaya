@@ -190,3 +190,25 @@ def test_runtime_repair_keeps_non_notice_phrase_inside_body():
 
     assert result["changed"] is False
     assert "only an example" in result["answer"]
+
+
+def test_answer_runtime_check_rejects_zero_supported_local_claims() -> None:
+    check = build_answer_runtime_check(
+        answer="The answer makes several claims about the retrieved papers [1].",
+        answer_quality={"answer_profile": "local_evidence_grounded"},
+        answer_mode="evidence_grounded",
+        agent_source_summary={
+            "kind": "local_kb",
+            "source_blend": "local_grounded",
+            "evidence_status": "insufficient",
+            "total_claims": 19,
+            "supported_claims": 0,
+            "unsupported_claims": 19,
+            "support_ratio": 0.0,
+            "source_notice_count": 0,
+        },
+    )
+
+    assert check["status"] == "needs_review"
+    assert "evidence_grounding" in check["summary"]["failed"]
+    assert "no_supported_claims" in check["checks"]["evidence_grounding"]["reasons"]

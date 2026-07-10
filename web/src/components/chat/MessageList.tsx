@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { Typography, message } from 'antd'
-import { UserOutlined } from '@ant-design/icons'
+import { Button, Typography, message } from 'antd'
+import { ReloadOutlined, UserOutlined } from '@ant-design/icons'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
@@ -168,6 +168,7 @@ import { AgentTracePanel } from './AgentTracePanel'
 import { ResearchTracePanel } from './ResearchTracePanel'
 import { ResearchContextReceipt } from './ResearchContextReceipt'
 import { EvidenceDrawer } from './EvidenceDrawer'
+import { generationRetryPrompt, isGenerationFailureAnswer } from './generationFailureUi'
 
 const { Text } = Typography
 const SHELF_BACKEND_PERSIST_MS = 320
@@ -222,6 +223,7 @@ interface Props {
   selectedResearchContextKeys?: Record<string, boolean>
   onResearchContextPackChange?: (pack: SelectedResearchContextPack | null) => void
   onResearchContextFollowUp?: (pack: SelectedResearchContextPack, promptText: string) => void
+  onRetryMessage?: (promptText: string) => void
 }
 
 interface RefEntryLite {
@@ -271,6 +273,7 @@ export function MessageList({
   selectedResearchContextKeys = {},
   onResearchContextPackChange,
   onResearchContextFollowUp,
+  onRetryMessage,
 }: Props) {
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -1689,6 +1692,7 @@ export function MessageList({
       locateFeedbackKey: String((detail as CiteShelfItem).key || toShelfItem(detail).key || '').trim(),
     })
     if (!payload) return
+    closeCitationPopoverState()
     onOpenReader(payload)
   }
 
@@ -2046,6 +2050,9 @@ export function MessageList({
             const bodyContent = lowConfidenceMeta
               ? stripLeadingLowConfidenceNotice(rawBodyContent)
               : rawBodyContent
+            const retryPrompt = !isUser && onRetryMessage && isGenerationFailureAnswer(message.content)
+              ? generationRetryPrompt(messages, message.id, trace?.userMsgId)
+              : ''
             const refsUserMsgIdForCitations = Number(prep?.refsUserMsgId || message.refs_user_msg_id || trace?.userMsgId || 0)
             const refEntryForCitations = refsUserMsgIdForCitations > 0
               ? refs[String(refsUserMsgIdForCitations)] as RefEntryLite | undefined
@@ -2270,6 +2277,18 @@ export function MessageList({
                         text={getMessageCopyTextValue(message)}
                         markdown={getMessageCopyMarkdownValue(message)}
                       />
+                      {retryPrompt ? (
+                        <Button
+                          className="kb-generation-retry-btn"
+                          type="text"
+                          size="small"
+                          icon={<ReloadOutlined />}
+                          disabled={generationPartial !== undefined && generationPartial !== null}
+                          onClick={() => onRetryMessage?.(retryPrompt)}
+                        >
+                          {S.chat_retry_answer}
+                        </Button>
+                      ) : null}
                     </>
                   </div>
                 )}

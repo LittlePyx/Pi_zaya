@@ -404,11 +404,35 @@ def _primary_evidence_quality_score(raw: dict, *, claim: str = "", source: str =
     return float(score)
 
 
+def _primary_evidence_claim_from_ref_hit(hit: dict | None) -> str:
+    if not isinstance(hit, dict):
+        return ""
+    ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    ref_pack = meta.get("ref_pack") if isinstance(meta.get("ref_pack"), dict) else {}
+    return str(
+        ui_meta.get("summary_line")
+        or ui_meta.get("card_summary")
+        or ui_meta.get("why_line")
+        or ref_pack.get("what")
+        or ""
+    ).strip()
+
+
 def _primary_evidence_from_ref_hit(hit: dict | None) -> dict:
     candidates = _primary_evidence_candidates_from_ref_hit(hit)
     if not candidates:
         return {}
-    candidates.sort(key=lambda item: (_primary_evidence_quality_score(item), -int(item.get("_rank") or 0)), reverse=True)
+    meta = hit.get("meta") if isinstance(hit, dict) and isinstance(hit.get("meta"), dict) else {}
+    source = str(meta.get("source_name") or meta.get("source_path") or "").strip()
+    claim = _primary_evidence_claim_from_ref_hit(hit)
+    candidates.sort(
+        key=lambda item: (
+            _primary_evidence_quality_score(item, claim=claim, source=source),
+            -int(item.get("_rank") or 0),
+        ),
+        reverse=True,
+    )
     best = dict(candidates[0])
     best.pop("_rank", None)
     return best
@@ -928,6 +952,25 @@ def _reading_hit_for_slot(slot: dict, hits: list[dict], num: int) -> dict | None
     return None
 
 
+def _reading_guide_numbered_sections_have_sources(text: str) -> bool:
+    section_re = re.compile(
+        r"(?m)^\s*(?:#{1,6}\s*)?(?:第\s*)?\d{1,2}(?:\s*步\s*[:：]|[.)]\s+)"
+    )
+    matches = list(section_re.finditer(str(text or "")))
+    if len(matches) < 2:
+        return False
+    for idx, match in enumerate(matches):
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(str(text or ""))
+        section = str(text or "")[match.start() : end]
+        if not re.search(
+            r"\[\d{1,5}(?:\s*(?:-|–|—|,|，|、)\s*\d{1,5})*\]|\[\[\s*CITE\s*:",
+            section,
+            flags=re.IGNORECASE,
+        ):
+            return False
+    return True
+
+
 def _reading_guide_repair_missing_system_a_citations(
     md: str,
     hits: list[dict],
@@ -942,6 +985,8 @@ def _reading_guide_repair_missing_system_a_citations(
         return str(md or "")
     text = str(md or "")
     if not text.strip():
+        return text
+    if _reading_guide_numbered_sections_have_sources(text):
         return text
     candidates: list[tuple[int, dict]] = []
     for slot in list(citation_plan.get("slots") or []):
@@ -1028,6 +1073,30 @@ def _reference_index_doc_for_source(index_data: dict | None, source_path: str, *
 
 def _title_tokens_for_named_system_b(title: str) -> list[str]:
     return re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+", str(title or "").lower())
+
+
+def _named_system_b_title_matches_current_source(title: str, hits: list[dict]) -> bool:
+    title_key = " ".join(_title_tokens_for_named_system_b(title))
+    if len(title_key) < 18:
+        return False
+    for hit in list(hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or "").strip()
+        candidates = [
+            str((meta or {}).get("title") or ""),
+            str((meta or {}).get("source_name") or ""),
+            str((ui_meta or {}).get("title") or ""),
+            str((ui_meta or {}).get("display_name") or (ui_meta or {}).get("displayName") or ""),
+            Path(source_path).stem if source_path else "",
+        ]
+        for candidate in candidates:
+            candidate_key = " ".join(_title_tokens_for_named_system_b(candidate))
+            if len(candidate_key) >= 18 and (title_key in candidate_key or candidate_key in title_key):
+                return True
+    return False
 
 
 def _usable_named_system_b_title(title: str) -> bool:
@@ -1135,6 +1204,8 @@ def _repair_named_system_b_citation_markers(
                 continue
             title = str(raw_ref.get("title") or "").strip()
             if not _usable_named_system_b_title(title):
+                continue
+            if _named_system_b_title_matches_current_source(title, hits):
                 continue
             title_key = " ".join(_title_tokens_for_named_system_b(title))
             if title_key in seen_titles:

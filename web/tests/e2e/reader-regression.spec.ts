@@ -181,6 +181,7 @@ test('discussion-only locate can open the reader at section level without an exa
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
   await expect(page.locator('.kb-reader-focus')).toContainText('4. Discussion')
   await expect(page.getByRole('heading', { name: '4. Discussion' })).toBeInViewport()
+  await page.getByTestId('reader-outline-toggle').click()
   await expect(page.getByTestId('reader-outline-item-3')).toContainText('4. Discussion')
 })
 
@@ -190,6 +191,7 @@ test('limitations-only locate can open the reader at section level without an ex
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
   await expect(page.locator('.kb-reader-focus')).toContainText('5. Limitations')
   await expect(page.getByRole('heading', { name: '5. Limitations' })).toBeInViewport()
+  await page.getByTestId('reader-outline-toggle').click()
   await expect(page.getByTestId('reader-outline-item-4')).toContainText('5. Limitations')
 })
 
@@ -199,12 +201,15 @@ test('future-work-only locate can open the reader at section level without an ex
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
   await expect(page.locator('.kb-reader-focus')).toContainText('6. Future Work')
   await expect(page.getByRole('heading', { name: '6. Future Work' })).toBeInViewport()
+  await page.getByTestId('reader-outline-toggle').click()
   await expect(page.getByTestId('reader-outline-item-5')).toContainText('6. Future Work')
 })
 
 test('outline jump lands on the selected section heading', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 560 })
   await openHarness(page, 'strict-quote')
+  await expect(page.getByTestId('reader-outline-panel')).toHaveCount(0)
+  await page.getByTestId('reader-outline-toggle').click()
   await expect(page.getByTestId('reader-outline-panel')).toBeVisible()
   const reader = page.getByTestId('reader-content')
   await page.getByTestId('reader-outline-item-2').click()
@@ -215,6 +220,7 @@ test('outline jump lands on the selected section heading', async ({ page }) => {
 test('outline active section follows reader scroll position', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 560 })
   await openHarness(page, 'strict-quote')
+  await page.getByTestId('reader-outline-toggle').click()
   const reader = page.getByTestId('reader-content')
   await expect.poll(async () => reader.evaluate((node) => {
     const el = node as HTMLDivElement

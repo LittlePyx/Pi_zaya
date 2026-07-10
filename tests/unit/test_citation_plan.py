@@ -68,3 +68,67 @@ def test_comparison_plan_disables_system_b_budget():
     assert plan["system_b_enabled"] is False
     assert not citation_plan_prefers_system_b(plan, context="Fourier basis [2].", ref_num=2)
 
+
+def test_multi_paper_source_marker_request_keeps_system_a_slots_for_every_requested_paper():
+    hits = [
+        {
+            "text": f"Evidence for paper {idx}",
+            "meta": {
+                "source_path": f"paper-{idx}.en.md",
+                "heading_path": f"Paper {idx} / Results",
+            },
+        }
+        for idx in range(1, 7)
+    ]
+
+    plan = build_citation_plan(
+        prompt="请只用最相关的 4 篇论文做阅读路线，并用来源编号标出可点回原文的依据。",
+        prompt_family="method",
+        answer_hits=hits,
+        reference_opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 11,
+                "label": "upstream work",
+                "source_path": "paper-1.en.md",
+            }
+        ],
+    )
+
+    assert plan["intent"] == "method_explain"
+    assert plan["budget"]["system_a"] == 4
+    system_a_slots = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert [slot["candidate_hits"] for slot in system_a_slots] == [[1], [2], [3], [4]]
+
+
+def test_previous_answer_audit_uses_every_authoritative_source_without_system_b():
+    hits = [
+        {
+            "text": f"Evidence for paper {idx}",
+            "meta": {
+                "source_path": f"paper-{idx}.en.md",
+                "heading_path": f"Paper {idx} / Results",
+            },
+        }
+        for idx in range(1, 5)
+    ]
+
+    plan = build_citation_plan(
+        prompt="Audit the previous answer and verify that its four titles match their evidence.",
+        prompt_family="overview",
+        answer_hits=hits,
+        reference_opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 11,
+                "label": "upstream work",
+                "source_path": "paper-1.en.md",
+            }
+        ],
+    )
+
+    assert plan["intent"] == "answer_audit"
+    assert plan["budget"] == {"system_a": 4, "system_b": 0}
+    assert plan["system_b_enabled"] is False
+    system_a_slots = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert [slot["candidate_hits"] for slot in system_a_slots] == [[1], [2], [3], [4]]

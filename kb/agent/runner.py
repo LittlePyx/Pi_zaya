@@ -7,6 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from kb.reference_query_family import prompt_requests_answer_audit
+
 from .planner import plan_research_intent, plan_research_question
 from .research_run import build_research_run
 from .source_policy import decide_answer_source
@@ -83,6 +85,17 @@ _CONFIDENCE_STOPWORDS = {
     "work",
     "works",
 }
+_AUDIT_TITLE_STOPWORDS = {
+    "based",
+    "imaging",
+    "single",
+    "pixel",
+    "supplement",
+    "the",
+    "using",
+    "with",
+}
+_AUDIT_NUMERIC_CITE_RE = re.compile(r"(?<!\[)\[(\d{1,3})\](?!\])")
 
 
 def _normalize_query_scope(value: object) -> str:
@@ -593,6 +606,90 @@ def _general_answer_verification() -> AgentVerification:
     )
 
 
+def _answer_audit_source_verification(answer: str, hits: list[dict[str, Any]]) -> AgentVerification:
+    text = str(answer or "")
+    lowered = text.lower()
+    cited = {int(match.group(1)) for match in _AUDIT_NUMERIC_CITE_RE.finditer(text)}
+    claims: list[dict[str, Any]] = []
+    supported = 0
+    for index, hit in enumerate(hits, start=1):
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str(meta.get("source_path") or "").strip()
+        source_name = str(meta.get("source_name") or meta.get("title") or "").strip()
+        title = source_name or (Path(source_path).name if source_path else f"Source {index}")
+        for suffix in (".en.md", ".md", ".pdf"):
+            if title.lower().endswith(suffix):
+                title = title[: -len(suffix)]
+                break
+        title_core = re.sub(r"^[^-]+-\d{4}-", "", title).strip()
+        title_terms = [
+            token
+            for token in re.findall(r"[a-z][a-z0-9-]{3,}", title_core.lower())
+            if token not in _AUDIT_TITLE_STOPWORDS
+        ]
+        distinct_terms = list(dict.fromkeys(title_terms))[:8]
+        required_terms = min(2, len(distinct_terms))
+        title_match = bool(required_terms and sum(term in lowered for term in distinct_terms) >= required_terms)
+        citation_match = index in cited
+        is_supported = bool(title_match and citation_match)
+        if is_supported:
+            supported += 1
+        claims.append(
+            {
+                "index": index,
+                "local_claim_index": index,
+                "text": title[:280],
+                "claim_text": title[:280],
+                "claim_kind": "answer_audit_source_binding",
+                "verification_scope": "previous_answer_source_set",
+                "classification_reason": "authoritative_source_title_and_citation",
+                "has_citation": citation_match,
+                "citation_present": citation_match,
+                "citation_numbers": [index] if citation_match else [],
+                "bound_citation_numbers": [index] if citation_match else [],
+                "unresolved_citation_numbers": [],
+                "citation_binding": "bound" if citation_match else "none",
+                "has_evidence_overlap": title_match,
+                "matched_evidence_count": 1 if title_match else 0,
+                "matched_sources": [
+                    {
+                        "source_name": title,
+                        "source_path": source_path,
+                        "heading_path": str(meta.get("heading_path") or "").strip(),
+                        "citation_index": index,
+                    }
+                ]
+                if is_supported
+                else [],
+                "supported": is_supported,
+                "unsupported_reason": "" if is_supported else "missing_source_title_or_citation",
+            }
+        )
+    total = len(hits)
+    unsupported = max(0, total - supported)
+    ratio = round(supported / total, 4) if total else 0.0
+    if total and supported == total:
+        status: EvidenceStatus = "grounded"
+        reasons: list[str] = []
+    elif supported:
+        status = "needs_review"
+        reasons = ["incomplete_answer_audit_source_coverage"]
+    else:
+        status = "insufficient"
+        reasons = ["no_answer_audit_source_bindings"]
+    return AgentVerification(
+        total_claims=total,
+        supported_claims=supported,
+        unsupported_claims=unsupported,
+        local_claims=total,
+        support_ratio=ratio,
+        evidence_status=status,
+        evidence_hit_count=total,
+        evidence_status_reasons=reasons,
+        claims=claims,
+    )
+
+
 def _hybrid_generation_recommended(
     gate: dict[str, Any],
     confidence: dict[str, Any],
@@ -653,6 +750,21 @@ def build_generation_agent_notes(
         question_type=question_type,
         retrieval_confidence=retrieval_confidence,
     )
+    if hits and prompt_requests_answer_audit(query):
+        gate = {
+            **gate,
+            "source_blend": "local_grounded",
+            "answer_mode": "evidence_grounded",
+            "source_policy": "local_only",
+            "source_notice": "none",
+            "evidence_status": "grounded",
+            "evidence_hit_count": len(hits),
+            "reasons": ["previous_answer_authoritative_sources"],
+            "instruction": (
+                "Audit only the authoritative sources bound to the previous answer. "
+                "Do not add external background or replace the previous answer's paper set."
+            ),
+        }
     public_confidence = _public_retrieval_confidence(retrieval_confidence)
     agent_notes: dict[str, Any] = {"evidence_gate": gate}
     research_run = build_research_run(
@@ -969,6 +1081,8 @@ def build_agent_trace_for_completed_answer(
     resolved_answer_mode = str(answer_mode or _answer_mode(agent_notes) or "").strip()
     if resolved_answer_mode in {"general_llm", "external_academic_llm"}:
         verification = _general_answer_verification()
+    elif prompt_requests_answer_audit(query) and hits:
+        verification = _answer_audit_source_verification(answer, hits)
     else:
         verification = verify_completed_answer(answer, hits, answer_mode=resolved_answer_mode)
     final_status = _normalize_trace_status(status)

@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 
 from kb.paper_guide_shared import _source_name_from_md_path
-from kb.reference_query_family import prompt_likely_cross_paper_refs
+from kb.reference_query_family import prompt_likely_cross_paper_refs, prompt_requests_answer_audit
 
 
 def _split_kb_miss_notice(text: str) -> tuple[str, str]:
@@ -185,6 +185,9 @@ def _detect_answer_output_mode(
     intent: str = "",
     anchor_grounded: bool = False,
 ) -> str:
+    q = str(prompt or "").strip()
+    if prompt_requests_answer_audit(q):
+        return "critical_review"
     explicit_mode = _normalize_answer_output_mode_hint(answer_output_mode_hint)
     if explicit_mode:
         return explicit_mode
@@ -192,7 +195,6 @@ def _detect_answer_output_mode(
     if hinted_mode:
         return hinted_mode
 
-    q = str(prompt or "").strip()
     if not q:
         return "reading_guide"
     if re.search(r"(解决.*问题|核心贡献|主要贡献|这篇.*讲了什么)", q, flags=re.IGNORECASE):

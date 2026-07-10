@@ -22,6 +22,32 @@ _MULTI_PAPER_LIST_PATTERNS = (
     "\u54ea\u51e0\u7bc7",
 )
 
+_ANSWER_AUDIT_PATTERNS = (
+    r"\b(?:audit|review|check|verify|critique)\s+(?:the\s+)?(?:previous|last|prior)\s+answer\b",
+    r"\b(?:previous|last|prior)\s+answer\b.{0,80}\b(?:audit|review|check|verify|correct)\b",
+    r"\u5ba1\u67e5(?:\u4e0a\u4e00\u6761|\u4e0a\u4e2a|\u524d\u4e00\u6761)?\u56de\u7b54",
+    r"(?:\u6838\u5bf9|\u68c0\u67e5|\u9a8c\u8bc1)(?:\u4e0a\u4e00\u6761|\u4e0a\u4e2a|\u524d\u4e00\u6761|\u8be5)\u56de\u7b54",
+    r"\u4e0d\u8981\u91cd\u65b0\u751f\u6210",
+)
+
+_REQUESTED_PAPER_COUNT_PATTERNS = (
+    r"(?:\b(?:exactly|only|top|choose|select|recommend|list|give\s+me)\s+)(\d{1,2})\s+(?:papers?|articles?|studies|references?)\b",
+    r"(?:\u53ea(?:\u7528|\u8981|\u9009)|\u8bf7(?:\u9009|\u5217\u51fa|\u63a8\u8350|\u7ed9)|\u5217\u51fa|\u63a8\u8350|\u9009\u51fa|\u6700\u76f8\u5173\u7684)\s*(\d{1,2}|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24]{1,3})\s*\u7bc7(?:\u8bba\u6587|\u6587\u7ae0|\u6587\u732e)?",
+)
+
+_CJK_PAPER_COUNT_DIGITS = {
+    "\u4e00": 1,
+    "\u4e8c": 2,
+    "\u4e24": 2,
+    "\u4e09": 3,
+    "\u56db": 4,
+    "\u4e94": 5,
+    "\u516d": 6,
+    "\u4e03": 7,
+    "\u516b": 8,
+    "\u4e5d": 9,
+}
+
 _MULTI_PAPER_SYNTHESIS_PATTERNS = (
     r"\b(?:roadmap|lineage|reading\s+route|reading\s+order|how\s+to\s+read|how\s+.*relat(?:e|es)|position(?:ing)?|background)\b",
     r"\bfrom\b.{0,80}\bto\b",
@@ -69,10 +95,51 @@ def _prompt_matches_any_pattern(prompt: str, patterns: tuple[str, ...]) -> bool:
     return any(re.search(pattern, text, flags=re.I) for pattern in patterns)
 
 
+def prompt_requests_answer_audit(prompt: str) -> bool:
+    return _prompt_matches_any_pattern(prompt, _ANSWER_AUDIT_PATTERNS)
+
+
+def _parse_requested_paper_count_token(value: str) -> int | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        count = int(raw)
+    elif raw == "\u5341":
+        count = 10
+    elif "\u5341" in raw:
+        left, _, right = raw.partition("\u5341")
+        tens = _CJK_PAPER_COUNT_DIGITS.get(left, 1) if left else 1
+        ones = _CJK_PAPER_COUNT_DIGITS.get(right, 0) if right else 0
+        count = tens * 10 + ones
+    else:
+        count = _CJK_PAPER_COUNT_DIGITS.get(raw, 0)
+    return count if 1 <= count <= 20 else None
+
+
+def extract_requested_paper_count(prompt: str) -> int | None:
+    text = str(prompt or "").strip()
+    if not text or prompt_requests_answer_audit(text):
+        return None
+    for pattern in _REQUESTED_PAPER_COUNT_PATTERNS:
+        match = re.search(pattern, text, flags=re.I)
+        if not match:
+            continue
+        count = _parse_requested_paper_count_token(match.group(1))
+        if count is not None:
+            return count
+    return None
+
+
 def prompt_explicitly_requests_multi_paper_list(prompt: str) -> bool:
     text = str(prompt or "").strip().lower()
     if not text:
         return False
+    if prompt_requests_answer_audit(text):
+        return False
+    requested_count = extract_requested_paper_count(text)
+    if requested_count is not None:
+        return requested_count > 1
     if any(pat in text for pat in _MULTI_PAPER_LIST_PATTERNS):
         return True
     return bool(
@@ -166,7 +233,7 @@ def prompt_reference_focus_action(prompt: str) -> str:
 
 
 def prompt_requires_reference_focus_match(prompt: str) -> bool:
-    return bool(prompt_reference_focus_action(prompt))
+    return bool(prompt_reference_focus_action(prompt) and extract_multi_paper_topic(prompt))
 
 
 def prompt_targets_sci_topic(prompt: str) -> bool:

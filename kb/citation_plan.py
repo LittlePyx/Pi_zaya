@@ -4,11 +4,21 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from kb.reference_query_family import extract_requested_paper_count, prompt_requests_answer_audit
+
 
 _ORIGIN_INTENT_RE = re.compile(
     r"(?i)(怎么来|从哪(?:里)?来|来源|出处|源头|借鉴|上游|前人|已有|先前|之前|早期|"
     r"谁提出|谁发明|谁最早|原创|不是.*原创|origin|source|upstream|prior|previous|"
     r"borrowed|based on|inspired|who proposed|who introduced|come from|came from)"
+)
+_STRONG_ORIGIN_INTENT_RE = re.compile(
+    r"(?i)(怎么来|从哪(?:里)?来|出处|源头|借鉴|上游|前人|谁提出|谁发明|谁最早|原创|不是.*原创|"
+    r"origin|upstream|borrowed|based on|inspired|who proposed|who introduced|come from|came from)"
+)
+_SOURCE_MARKER_REQUEST_RE = re.compile(
+    r"(?i)(?:来源|引用|证据)(?:编号|序号|标号)|(?:编号|序号|标号).{0,8}(?:来源|引用|证据)|"
+    r"source\s+(?:number|marker|citation)|citation\s+(?:number|marker)"
 )
 _COMPARE_INTENT_RE = re.compile(
     r"(?i)(对比|比较|区别|差异|哪个更|优缺点|trade-?off|versus|vs\.?|compare|comparison|difference)"
@@ -66,7 +76,9 @@ def _positive_ints(values: Any, *, limit: int = 6) -> list[int]:
 def _citation_intent(prompt: str, *, prompt_family: str = "") -> str:
     raw = " ".join([str(prompt or ""), str(prompt_family or "")]).strip()
     family = str(prompt_family or "").strip().lower()
-    if _ORIGIN_INTENT_RE.search(raw) or family == "citation_lookup":
+    origin_match = bool(_ORIGIN_INTENT_RE.search(raw))
+    marker_request = bool(_SOURCE_MARKER_REQUEST_RE.search(raw))
+    if family == "citation_lookup" or bool(_STRONG_ORIGIN_INTENT_RE.search(raw)) or (origin_match and not marker_request):
         return "origin_lookup"
     if _COMPARE_INTENT_RE.search(raw) or family == "compare":
         return "comparison"
@@ -213,12 +225,26 @@ def build_citation_plan(
 ) -> dict[str, Any]:
     intent = _citation_intent(prompt, prompt_family=prompt_family)
     budget = _budget_for_intent(intent)
+    requested_paper_count = extract_requested_paper_count(prompt)
+    requested_system_a = min(8, int(requested_paper_count or 0))
+    answer_audit = prompt_requests_answer_audit(prompt)
+    if answer_audit:
+        intent = "answer_audit"
+        requested_system_a = min(8, len(list(answer_hits or [])))
+        budget = {"system_a": requested_system_a, "system_b": 0}
+    if requested_system_a > 0:
+        budget["system_a"] = max(int(budget.get("system_a") or 0), requested_system_a)
     sys_b = _system_b_slots(reference_opportunities, intent=intent, max_items=3)
-    sys_a = _system_a_slots(support_slots=support_slots, answer_hits=answer_hits, max_items=3)
+    system_a_limit = max(3, requested_system_a)
+    sys_a = _system_a_slots(
+        support_slots=support_slots,
+        answer_hits=answer_hits,
+        max_items=system_a_limit,
+    )
     slots = (sys_b if intent == "origin_lookup" else []) + sys_a
     if intent != "origin_lookup":
         slots.extend(sys_b)
-    slots = slots[: max(1, int(max_slots))]
+    slots = slots[: max(1, int(max(max_slots, system_a_limit)))]
     return {
         "version": 1,
         "source": "citation_plan_builder",
