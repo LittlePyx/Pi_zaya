@@ -8,6 +8,7 @@ from .types import AgentVerification, EvidenceStatus
 
 
 _CITATION_RE = re.compile(r"(?:\[[0-9][0-9,\-\s]*\]|\[\[CITE:[^\]]+\]\])")
+_NUMERIC_CITATION_RE = re.compile(r"(?<!\[)\[(\d+(?:\s*(?:,|-)\s*\d+)*)\](?!\])")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?\u3002\uff01\uff1f])\s+|\n+")
 _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}")
@@ -124,30 +125,82 @@ def _source_summary(hit: dict[str, Any], *, overlap_terms: int) -> dict[str, Any
     }
 
 
-def _matched_evidence_sources(claim: str, evidence_hits: list[dict[str, Any]], *, limit: int = 3) -> list[dict[str, Any]]:
+def _citation_numbers(claim: str, *, limit: int = 24) -> list[int]:
+    numbers: list[int] = []
+    seen: set[int] = set()
+    for match in _NUMERIC_CITATION_RE.finditer(str(claim or "")):
+        for part in re.split(r"\s*,\s*", match.group(1)):
+            raw = part.strip()
+            if "-" in raw:
+                start_raw, end_raw = [item.strip() for item in raw.split("-", 1)]
+                try:
+                    start = int(start_raw)
+                    end = int(end_raw)
+                except ValueError:
+                    continue
+                if start <= 0 or end < start or end - start >= limit:
+                    continue
+                candidates = range(start, end + 1)
+            else:
+                try:
+                    candidates = (int(raw),)
+                except ValueError:
+                    continue
+            for number in candidates:
+                if number <= 0 or number in seen:
+                    continue
+                seen.add(number)
+                numbers.append(number)
+                if len(numbers) >= limit:
+                    return numbers
+    return numbers
+
+
+def _matched_cited_evidence_sources(
+    claim: str,
+    evidence_hits: list[dict[str, Any]],
+    citation_numbers: list[int],
+) -> list[dict[str, Any]]:
     claim_terms = _claim_terms(claim)
     if not claim_terms:
         return []
     matches: list[dict[str, Any]] = []
-    for hit in evidence_hits[:8]:
+    for citation_number in citation_numbers:
+        hit_index = citation_number - 1
+        if hit_index < 0 or hit_index >= len(evidence_hits):
+            continue
+        hit = evidence_hits[hit_index]
         if not isinstance(hit, dict):
             continue
         text = str(hit.get("text") or "")
         hit_terms = _claim_terms(text)
         overlap = len(claim_terms & hit_terms)
         if overlap >= 2:
-            matches.append(_source_summary(hit, overlap_terms=overlap))
+            summary = _source_summary(hit, overlap_terms=overlap)
+            summary["citation_index"] = citation_number
+            matches.append(summary)
     matches.sort(key=lambda item: (int(item.get("overlap_terms") or 0), float(item.get("score") or 0.0)), reverse=True)
-    return matches[: max(1, int(limit or 3))]
+    return matches[: max(1, min(3, len(matches)))]
 
 
-def _unsupported_reason(*, citation_present: bool, matched_evidence_count: int, hit_count: int) -> str:
+def _unsupported_reason(
+    *,
+    citation_present: bool,
+    citation_numbers: list[int],
+    bound_citation_count: int,
+    matched_evidence_count: int,
+    hit_count: int,
+) -> str:
     if not citation_present:
         return "missing_citation"
     if hit_count <= 0:
         return "no_evidence_hits"
+    if not citation_numbers:
+        return "unbound_citation"
+    if bound_citation_count < len(citation_numbers):
+        return "citation_index_out_of_range"
     if matched_evidence_count <= 0:
-        return "missing_evidence_overlap"
+        return "citation_evidence_mismatch"
     return ""
 
 
@@ -229,12 +282,34 @@ def verify_answer_citations(
             continue
         local_claim_index += 1
         citation_present = bool(_CITATION_RE.search(claim))
-        matched_sources = _matched_evidence_sources(claim, hits) if hits else []
+        citation_numbers = _citation_numbers(claim)
+        bound_citation_numbers = [number for number in citation_numbers if number <= len(hits)]
+        unresolved_citation_numbers = [number for number in citation_numbers if number > len(hits)]
+        matched_sources = _matched_cited_evidence_sources(claim, hits, bound_citation_numbers) if hits else []
         matched_evidence_count = len(matched_sources)
         overlap = matched_evidence_count > 0
-        is_supported = bool(citation_present and matched_evidence_count > 0)
+        is_supported = bool(
+            citation_present
+            and citation_numbers
+            and not unresolved_citation_numbers
+            and matched_evidence_count > 0
+        )
+        if not citation_present:
+            citation_binding = "none"
+        elif not citation_numbers:
+            citation_binding = "unbound"
+        elif unresolved_citation_numbers and matched_evidence_count > 0:
+            citation_binding = "partial"
+        elif unresolved_citation_numbers:
+            citation_binding = "unresolved"
+        elif matched_evidence_count > 0:
+            citation_binding = "bound"
+        else:
+            citation_binding = "mismatch"
         unsupported_reason = "" if is_supported else _unsupported_reason(
             citation_present=citation_present,
+            citation_numbers=citation_numbers,
+            bound_citation_count=len(bound_citation_numbers),
             matched_evidence_count=matched_evidence_count,
             hit_count=len(hits),
         )
@@ -251,6 +326,10 @@ def verify_answer_citations(
                 "classification_reason": item.reason,
                 "has_citation": citation_present,
                 "citation_present": citation_present,
+                "citation_numbers": citation_numbers,
+                "bound_citation_numbers": bound_citation_numbers,
+                "unresolved_citation_numbers": unresolved_citation_numbers,
+                "citation_binding": citation_binding,
                 "has_evidence_overlap": overlap,
                 "matched_evidence_count": matched_evidence_count,
                 "matched_sources": matched_sources,

@@ -36,7 +36,55 @@ def test_verifier_flags_cited_claim_without_matching_evidence():
     assert result.claims[0]["citation_present"] is True
     assert result.claims[0]["matched_evidence_count"] == 0
     assert result.claims[0]["matched_sources"] == []
-    assert result.claims[0]["unsupported_reason"] == "missing_evidence_overlap"
+    assert result.claims[0]["unsupported_reason"] == "citation_evidence_mismatch"
+
+
+def test_verifier_binds_citation_number_to_the_matching_hit():
+    result = verify_answer_citations(
+        "Alpha uses retrieval for grounding [2].",
+        [
+            {"text": "Alpha uses retrieval for grounding.", "meta": {"source_name": "Alpha"}},
+            {"text": "Beta reports a different optimization strategy.", "meta": {"source_name": "Beta"}},
+        ],
+    )
+
+    assert result.supported_claims == 0
+    assert result.evidence_status == "insufficient"
+    assert result.claims[0]["citation_numbers"] == [2]
+    assert result.claims[0]["bound_citation_numbers"] == [2]
+    assert result.claims[0]["citation_binding"] == "mismatch"
+    assert result.claims[0]["matched_evidence_count"] == 0
+    assert result.claims[0]["unsupported_reason"] == "citation_evidence_mismatch"
+
+
+def test_verifier_expands_numeric_citation_ranges_and_binds_each_hit():
+    result = verify_answer_citations(
+        "The method combines retrieval and reranking [1-2].",
+        [
+            {"text": "The method combines retrieval and reranking.", "meta": {"source_name": "Alpha"}},
+            {"text": "The method combines retrieval and reranking in a second experiment.", "meta": {"source_name": "Beta"}},
+        ],
+    )
+
+    claim = result.claims[0]
+    assert result.supported_claims == 1
+    assert claim["citation_numbers"] == [1, 2]
+    assert claim["bound_citation_numbers"] == [1, 2]
+    assert {row["citation_index"] for row in claim["matched_sources"]} == {1, 2}
+    assert claim["citation_binding"] == "bound"
+
+
+def test_verifier_rejects_an_extra_citation_outside_the_evidence_list():
+    result = verify_answer_citations(
+        "Alpha uses retrieval for grounding [1, 99].",
+        [{"text": "Alpha uses retrieval for grounding.", "meta": {"source_name": "Alpha"}}],
+    )
+
+    claim = result.claims[0]
+    assert result.supported_claims == 0
+    assert claim["citation_binding"] == "partial"
+    assert claim["unresolved_citation_numbers"] == [99]
+    assert claim["unsupported_reason"] == "citation_index_out_of_range"
 
 
 def test_split_answer_claims_ignores_tiny_fragments_and_headings():
