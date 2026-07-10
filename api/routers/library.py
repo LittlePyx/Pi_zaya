@@ -14,11 +14,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request
 from pydantic import BaseModel
 
 from api.deps import get_settings, load_prefs
-from api.internal_access import require_internal_api
+from api.internal_access import require_internal_api, require_management_api
 from api.library_path_utils import (
     path_is_within as _library_path_is_within,
     resolve_library_pdf_name_arg as _library_resolve_pdf_name_arg,
@@ -5884,7 +5884,7 @@ def _inspect_pdf_upload(*, file_name: str, data: bytes, use_llm: bool = True) ->
             pass
 
 
-@router.get("/rename/suggestions")
+@router.get("/rename/suggestions", dependencies=[Depends(require_management_api)])
 def list_rename_suggestions(scope: str = "30", use_llm: bool = True):
     pdf_d = _pdf_dir()
     md_d = _md_dir()
@@ -5949,7 +5949,7 @@ class RenameApplyBody(BaseModel):
     also_md: bool = True
 
 
-@router.post("/rename/apply")
+@router.post("/rename/apply", dependencies=[Depends(require_management_api)])
 def apply_rename_suggestions(body: RenameApplyBody):
     names: list[str] = []
     for raw_name in list(body.pdf_names or []):
@@ -6028,7 +6028,7 @@ def apply_rename_suggestions(body: RenameApplyBody):
     }
 
 
-@router.post("/convert/pending")
+@router.post("/convert/pending", dependencies=[Depends(require_management_api)])
 def convert_pending(body: ConvertPendingBody):
     s = get_settings()
     pdf_d = _pdf_dir()
@@ -6089,7 +6089,7 @@ def convert_pending(body: ConvertPendingBody):
     }
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(require_management_api)])
 async def upload_pdf(file: UploadFile = File(...), base_name: str = Form("")):
     data = await read_upload_limited(
         file,
@@ -6108,7 +6108,7 @@ async def upload_pdf(file: UploadFile = File(...), base_name: str = Form("")):
     )
 
 
-@router.post("/upload/inspect")
+@router.post("/upload/inspect", dependencies=[Depends(require_management_api)])
 async def inspect_upload_pdf(file: UploadFile = File(...), use_llm: bool = Form(True)):
     data = await read_upload_limited(
         file,
@@ -6127,7 +6127,7 @@ async def inspect_upload_pdf(file: UploadFile = File(...), use_llm: bool = Form(
     )
 
 
-@router.post("/upload/commit")
+@router.post("/upload/commit", dependencies=[Depends(require_management_api)])
 async def commit_upload_pdf(
     file: UploadFile = File(...),
     base_name: str = Form(""),
@@ -6184,7 +6184,7 @@ class ConvertBody(BaseModel):
     replace: bool = True
 
 
-@router.post("/convert")
+@router.post("/convert", dependencies=[Depends(require_management_api)])
 def start_convert(body: ConvertBody):
     s = get_settings()
     md_d = _md_dir()
@@ -6244,7 +6244,7 @@ async def convert_status():
     return sse_response(sse_generator(poll, interval=0.5))
 
 
-@router.post("/convert/cancel")
+@router.post("/convert/cancel", dependencies=[Depends(require_management_api)])
 def cancel_convert():
     _bg_cancel_all()
     return {"ok": True}
@@ -7823,7 +7823,7 @@ def repair_library_quality(request: Request, body: QualityRepairBody):
     }
 
 
-@router.post("/file/delete")
+@router.post("/file/delete", dependencies=[Depends(require_management_api)])
 def delete_library_file(body: DeleteLibraryFileBody):
     pdf_name = str(body.pdf_name or "").strip()
     md_d = _md_dir()
@@ -7903,7 +7903,7 @@ def delete_library_file(body: DeleteLibraryFileBody):
     }
 
 
-@router.post("/meta/update")
+@router.post("/meta/update", dependencies=[Depends(require_management_api)])
 def update_library_meta(body: UpdateLibraryMetaBody):
     pdf_name = str(body.pdf_name or "").strip()
     sha1 = str(body.sha1 or "").strip().lower()
@@ -7941,7 +7941,7 @@ def update_library_meta(body: UpdateLibraryMetaBody):
     }
 
 
-@router.post("/meta/batch_update")
+@router.post("/meta/batch_update", dependencies=[Depends(require_management_api)])
 def batch_update_library_meta(body: BatchUpdateLibraryMetaBody):
     pdf_names = [str(name or "").strip() for name in list(body.pdf_names or []) if str(name or "").strip()]
     sha1s = [str(value or "").strip().lower() for value in list(body.sha1s or []) if str(value or "").strip()]
@@ -8007,7 +8007,7 @@ def batch_update_library_meta(body: BatchUpdateLibraryMetaBody):
     }
 
 
-@router.post("/meta/suggestions/regenerate")
+@router.post("/meta/suggestions/regenerate", dependencies=[Depends(require_management_api)])
 def regenerate_library_meta_suggestions(body: RegenerateLibrarySuggestionsBody):
     pdf_names = [str(name or "").strip() for name in list(body.pdf_names or []) if str(name or "").strip()]
     sha1s = [str(value or "").strip().lower() for value in list(body.sha1s or []) if str(value or "").strip()]
@@ -8047,7 +8047,7 @@ def regenerate_library_meta_suggestions(body: RegenerateLibrarySuggestionsBody):
     }
 
 
-@router.post("/meta/suggestions/apply")
+@router.post("/meta/suggestions/apply", dependencies=[Depends(require_management_api)])
 def apply_library_meta_suggestions(body: LibrarySuggestionActionBody):
     pdf_name = str(body.pdf_name or "").strip()
     sha1 = str(body.sha1 or "").strip().lower()
@@ -8091,7 +8091,7 @@ def apply_library_meta_suggestions(body: LibrarySuggestionActionBody):
     }
 
 
-@router.post("/file/guide_source")
+@router.post("/file/guide_source", dependencies=[Depends(require_management_api)])
 def resolve_library_guide_source(body: GuideSourceBody):
     pdf_name = str(body.pdf_name or "").strip()
     md_d = _md_dir()
@@ -8188,7 +8188,7 @@ def _run_library_reindex() -> dict:
     }
 
 
-@router.post("/reindex")
+@router.post("/reindex", dependencies=[Depends(require_management_api)])
 def reindex():
     auto_backup = _dangerous_auto_snapshot("library_reindex", label="manual")
     result = _run_library_reindex()

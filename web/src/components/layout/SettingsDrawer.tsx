@@ -1,8 +1,8 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { ApiOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ApiOutlined, LockOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Alert, Button, Drawer, Input, Popconfirm, Select, Segmented, Slider, Space, Switch, Typography, message } from 'antd'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { settingsApi, type SettingsPatch } from '../../api/settings'
+import { settingsApi, type AuthStatusPayload, type SettingsPatch } from '../../api/settings'
 import { userIssuesApi, type UserIssueRemoteStatus } from '../../api/userIssues'
 import { authGateBuildEnabled } from '../../api/authGate'
 import { AUTH_REQUIRED_EVENT, setAccessToken } from '../../api/client'
@@ -143,8 +143,10 @@ export function SettingsDrawer({
   const [autoBackupSaving, setAutoBackupSaving] = useState(false)
   const [restoreReviewAcking, setRestoreReviewAcking] = useState(false)
   const [diagnosticsExporting, setDiagnosticsExporting] = useState(false)
-  const [authStatus, setAuthStatus] = useState<{ required?: boolean; configured?: boolean; authenticated?: boolean } | null>(null)
+  const [authStatus, setAuthStatus] = useState<AuthStatusPayload | null>(null)
   const [authLocking, setAuthLocking] = useState(false)
+  const [managementToken, setManagementToken] = useState('')
+  const [managementUnlocking, setManagementUnlocking] = useState(false)
   const [qualityCollectorStatus, setQualityCollectorStatus] = useState<UserIssueRemoteStatus | null>(null)
   const [qualityCollectorLoading, setQualityCollectorLoading] = useState(false)
   const [qualityCollectorError, setQualityCollectorError] = useState('')
@@ -239,18 +241,13 @@ export function SettingsDrawer({
       void refreshMaintenanceStatus()
       void refreshQualityCollectorStatus()
     }
-    if (showAuthGateTools) {
-      settingsApi.authStatus().then(setAuthStatus).catch(() => setAuthStatus(null))
-    } else {
-      setAuthStatus(null)
-    }
+    settingsApi.authStatus().then(setAuthStatus).catch(() => setAuthStatus(null))
   }, [
     open,
     refreshAppReadiness,
     refreshMaintenanceStatus,
     refreshQualityCollectorStatus,
     refreshReadinessStore,
-    showAuthGateTools,
     showInternalSettingsTools,
   ])
 
@@ -443,6 +440,32 @@ export function SettingsDrawer({
       message.error(err instanceof Error ? err.message : S.settings_auth_lock_failed)
     } finally {
       setAuthLocking(false)
+    }
+  }
+
+  const unlockManagementAccess = async () => {
+    const token = managementToken.trim()
+    if (!token) return
+    setManagementUnlocking(true)
+    try {
+      setAccessToken(token)
+      const next = await settingsApi.authLogin(token)
+      setAuthStatus(next)
+      if (!next.management_authenticated) {
+        throw new Error(S.settings_management_access_failed)
+      }
+      setManagementToken('')
+      await Promise.all([
+        s.load(),
+        refreshAppReadiness(),
+        refreshReadinessStore().catch(() => {}),
+      ])
+      message.success(S.settings_management_access_unlocked)
+    } catch (err) {
+      setAccessToken('')
+      message.error(err instanceof Error ? err.message : S.settings_management_access_failed)
+    } finally {
+      setManagementUnlocking(false)
     }
   }
 
@@ -737,6 +760,29 @@ export function SettingsDrawer({
         </SettingsSection>
 
         <SettingsSection title={S.settings_section_privacy}>
+          {authStatus?.management_required && !authStatus.management_authenticated ? (
+            <SettingsRow title={S.settings_management_access_title} description={S.settings_management_access_desc}>
+              <Space.Compact>
+                <Input.Password
+                  value={managementToken}
+                  onChange={(event) => setManagementToken(event.target.value)}
+                  onPressEnter={() => { void unlockManagementAccess() }}
+                  placeholder={S.settings_management_access_placeholder}
+                  autoComplete="current-password"
+                  data-testid="settings-management-access-token"
+                />
+                <Button
+                  icon={<LockOutlined />}
+                  type="primary"
+                  loading={managementUnlocking}
+                  onClick={() => { void unlockManagementAccess() }}
+                  data-testid="settings-management-access-unlock"
+                >
+                  {S.settings_management_access_unlock}
+                </Button>
+              </Space.Compact>
+            </SettingsRow>
+          ) : null}
           {showAuthGateTools && authStatus?.required ? (
             <SettingsRow title={S.settings_auth_lock_title} description={S.settings_auth_lock_desc}>
               <Popconfirm

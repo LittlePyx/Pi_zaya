@@ -4,7 +4,13 @@ import os
 
 from fastapi import HTTPException, Request
 
-from api.security import auth_settings, request_is_authenticated
+from api.security import (
+    auth_settings,
+    management_auth_required,
+    management_token_configured,
+    request_has_management_access,
+    request_is_authenticated,
+)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -38,3 +44,33 @@ def internal_api_allowed(request: Request) -> bool:
         return True
 
     return False
+
+
+def management_api_allowed(request: Request) -> bool:
+    """Return whether a caller may change server-managed application state."""
+
+    settings = auth_settings()
+    if not management_auth_required(settings):
+        return True
+    return request_has_management_access(request, settings=settings)
+
+
+def require_management_api(request: Request) -> None:
+    """Protect write and cost-bearing management endpoints in public deployments."""
+
+    settings = auth_settings()
+    if not management_auth_required(settings):
+        return
+    if not management_token_configured(settings):
+        raise HTTPException(
+            status_code=503,
+            detail="Management access token is not configured",
+            headers={"X-KB-Management-Auth": "required"},
+        )
+    if management_api_allowed(request):
+        return
+    raise HTTPException(
+        status_code=401,
+        detail="Management authentication required",
+        headers={"X-KB-Management-Auth": "required"},
+    )

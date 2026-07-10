@@ -10,11 +10,12 @@ import time
 from pathlib import Path
 from urllib.parse import quote, unquote
 from typing import Any
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.deps import get_chat_store, get_settings, load_prefs
+from api.internal_access import require_management_api
 from api.reference_ui import (
     _attach_pack_display_contract,
     _compact_reader_open_text,
@@ -1230,7 +1231,7 @@ def _warm_conversation_refs_payload_async(
             _REFS_CONVERSATION_WARMING.discard(warm_key)
 
 
-@router.post("/sync")
+@router.post("/sync", dependencies=[Depends(require_management_api)])
 def start_sync(workers: int | None = None, crossref_budget_s: float | None = None):
     s = get_settings()
     try:
@@ -2583,7 +2584,7 @@ def _attach_library_match_contract(meta: dict | None) -> dict:
     return data
 
 
-@router.post("/open")
+@router.post("/open", dependencies=[Depends(require_management_api)])
 def open_reference(body: OpenReferenceBody):
     ok, message = open_reference_source(
         source_path=body.source_path,
@@ -2749,7 +2750,7 @@ def get_bibliometrics(body: BibliometricsBody):
     return _attach_library_match_contract(_attach_bibliometrics_summary_locale(result))
 
 
-@router.post("/shelf/metadata/repair")
+@router.post("/shelf/metadata/repair", dependencies=[Depends(require_management_api)])
 def repair_shelf_metadata(body: ShelfMetadataRepairBody):
     limit = 40
     if body.limit is not None:
@@ -2916,7 +2917,7 @@ def scan_shelf_metadata_backfill(limit: int = 120):
     return scan_reference_metadata_backfill_targets(db_dir=get_settings().db_dir, limit=scan_limit)
 
 
-@router.post("/shelf/metadata/backfill")
+@router.post("/shelf/metadata/backfill", dependencies=[Depends(require_management_api)])
 def backfill_shelf_metadata(body: ShelfMetadataBackfillBody):
     limit = 40 if body.limit is None else max(1, min(80, int(body.limit)))
     scan_limit = 240 if body.scan_limit is None else max(limit, min(1000, int(body.scan_limit)))
@@ -2940,7 +2941,7 @@ def shelf_metadata_backfill_status():
     return _shelf_metadata_backfill_snapshot()
 
 
-@router.post("/shelf/metadata/backfill/start")
+@router.post("/shelf/metadata/backfill/start", dependencies=[Depends(require_management_api)])
 def start_shelf_metadata_backfill(body: ShelfMetadataBackfillBody):
     limit = 40 if body.limit is None else max(1, min(80, int(body.limit)))
     scan_limit = 240 if body.scan_limit is None else max(limit, min(1000, int(body.scan_limit)))

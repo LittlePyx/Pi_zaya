@@ -91,6 +91,11 @@ class Settings:
     access_token_sha256: str | None = field(default=None, repr=False)
     auth_required: bool = field(default=False)
     auth_cookie_secure: bool = field(default=False)
+    # Management operations can remain protected even when the user-facing
+    # chat surface is intentionally public.
+    management_auth_required: bool = field(default=False)
+    management_access_token: str | None = field(default=None, repr=False)
+    management_access_token_sha256: str | None = field(default=None, repr=False)
     auto_backup_enabled: bool | None = field(default=None)
     max_pdf_upload_bytes: int = field(default=80 * 1024 * 1024)
     max_image_upload_bytes: int = field(default=8 * 1024 * 1024)
@@ -250,6 +255,13 @@ def load_settings() -> Settings:
     auth_required = private_instance_auth and auth_gate_enabled and auth_requested and (
         production or local_auth_gate_allowed
     )
+    management_access_token = _clean_env_key(_env("KB_MANAGEMENT_ACCESS_TOKEN") or "")
+    management_access_token_sha256 = _clean_env_key(_env("KB_MANAGEMENT_ACCESS_TOKEN_SHA256") or "")
+    management_auth_raw = _env("KB_REQUIRE_MANAGEMENT_AUTH")
+    if management_auth_raw is None or str(management_auth_raw).strip() == "":
+        management_auth_required = production
+    else:
+        management_auth_required = str(management_auth_raw).strip().lower() in {"1", "true", "yes", "on"}
     cookie_secure_raw = _env("KB_AUTH_COOKIE_SECURE")
     if cookie_secure_raw is None or str(cookie_secure_raw).strip() == "":
         auth_cookie_secure = production
@@ -322,6 +334,9 @@ def load_settings() -> Settings:
         access_token_sha256=access_token_sha256,
         auth_required=auth_required,
         auth_cookie_secure=auth_cookie_secure,
+        management_auth_required=management_auth_required,
+        management_access_token=management_access_token,
+        management_access_token_sha256=management_access_token_sha256,
         auto_backup_enabled=stored_auto_backup_enabled,
         max_pdf_upload_bytes=max_pdf_upload_bytes,
         max_image_upload_bytes=max_image_upload_bytes,

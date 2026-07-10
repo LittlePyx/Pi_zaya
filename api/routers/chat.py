@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import File, Form, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.chat_render import enrich_messages_with_reference_render
 from api.deps import get_chat_store, get_settings, load_prefs
+from api.internal_access import require_management_api
 from api.upload_limits import (
     is_probably_pdf,
     max_chat_upload_files,
@@ -1145,7 +1146,7 @@ def get_chat_upload_status(job_ids: str = ""):
     return {"items": items}
 
 
-@router.post("/chat/uploads/cancel")
+@router.post("/chat/uploads/cancel", dependencies=[Depends(require_management_api)])
 def cancel_chat_upload_job(body: UploadJobBody):
     rec = _cancel_chat_pdf_ingest_job(str(body.job_id or "").strip())
     if rec is None:
@@ -1153,7 +1154,7 @@ def cancel_chat_upload_job(body: UploadJobBody):
     return {"item": _chat_pdf_ingest_status_payload(str(body.job_id or "").strip(), rec)}
 
 
-@router.post("/chat/uploads/retry")
+@router.post("/chat/uploads/retry", dependencies=[Depends(require_management_api)])
 def retry_chat_upload_job(body: UploadJobBody):
     job_id = str(body.job_id or "").strip()
     if not job_id:
@@ -1172,7 +1173,7 @@ def retry_chat_upload_job(body: UploadJobBody):
     return {"item": _chat_pdf_ingest_status_payload(new_job_id, rec)}
 
 
-@router.post("/chat/uploads/quality/retry")
+@router.post("/chat/uploads/quality/retry", dependencies=[Depends(require_management_api)])
 def retry_chat_upload_quality_job(body: UploadJobBody):
     job_id = str(body.job_id or "").strip()
     if not job_id:
@@ -1190,7 +1191,7 @@ def retry_chat_upload_quality_job(body: UploadJobBody):
     return {"item": _chat_pdf_ingest_status_payload(job_id, rec)}
 
 
-@router.post("/chat/uploads")
+@router.post("/chat/uploads", dependencies=[Depends(require_management_api)])
 async def upload_chat_files(
     files: list[UploadFile] = File(...),
     quick_ingest: bool = Form(True),

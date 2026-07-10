@@ -9,6 +9,9 @@ from api.security import (
     auth_settings,
     auth_status_payload,
     auth_token_configured,
+    management_auth_required,
+    management_token_configured,
+    management_token_valid,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -26,13 +29,20 @@ def auth_status(request: Request):
 @router.post("/login")
 def login(body: LoginBody, response: Response):
     settings = auth_settings()
-    if not getattr(settings, "auth_required", False):
+    requires_user_auth = bool(getattr(settings, "auth_required", False))
+    requires_management_auth = management_auth_required(settings)
+    if not requires_user_auth and not requires_management_auth:
         response.delete_cookie(AUTH_COOKIE_NAME, path="/")
         return {"ok": True, **auth_status_payload(settings=settings)}
-    if not auth_token_configured(settings):
+    if requires_user_auth and not auth_token_configured(settings):
         raise HTTPException(503, "API access token is not configured")
+    if requires_management_auth and not management_token_configured(settings):
+        raise HTTPException(503, "Management access token is not configured")
     token = str(body.token or "").strip()
-    if not access_token_valid(token, settings=settings):
+    if not (
+        access_token_valid(token, settings=settings)
+        or management_token_valid(token, settings=settings)
+    ):
         raise HTTPException(401, "Invalid access token")
     response.set_cookie(
         AUTH_COOKIE_NAME,
@@ -44,7 +54,10 @@ def login(body: LoginBody, response: Response):
         path="/",
     )
     payload = auth_status_payload(settings=settings)
-    payload["authenticated"] = True
+    if requires_user_auth and access_token_valid(token, settings=settings):
+        payload["authenticated"] = True
+    if requires_management_auth and management_token_valid(token, settings=settings):
+        payload["management_authenticated"] = True
     return {"ok": True, **payload}
 
 

@@ -38,6 +38,19 @@ def _set_auth_env(monkeypatch, *, token: str = "secret-token") -> None:
     _clear_settings_cache()
 
 
+def _set_management_env(monkeypatch, *, token: str = "management-secret") -> None:
+    monkeypatch.setenv("KB_ENV", "production")
+    monkeypatch.setenv("KB_APP_ENV", "")
+    monkeypatch.setenv("KB_REQUIRE_MANAGEMENT_AUTH", "1")
+    monkeypatch.setenv("KB_MANAGEMENT_ACCESS_TOKEN", token)
+    monkeypatch.setenv("KB_MANAGEMENT_ACCESS_TOKEN_SHA256", "")
+    monkeypatch.setenv("KB_AUTH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("KB_PRIVATE_INSTANCE_AUTH", "0")
+    monkeypatch.setenv("KB_ENABLE_AUTH_GATE", "0")
+    monkeypatch.setenv("KB_REQUIRE_AUTH", "0")
+    _clear_settings_cache()
+
+
 def _asgi_post_without_content_length(
     path: str,
     chunks: list[bytes],
@@ -237,6 +250,16 @@ def test_server_file_picker_hidden_for_public_production(monkeypatch):
     monkeypatch.setenv("KB_APP_ENV", "")
     monkeypatch.setenv("KB_ENABLE_AUTH_GATE", "0")
     monkeypatch.setenv("KB_REQUIRE_AUTH", "0")
+    monkeypatch.setenv("KB_PRIVATE_INSTANCE_AUTH", "0")
+    monkeypatch.setenv("KB_REQUIRE_MANAGEMENT_AUTH", "1")
+    monkeypatch.setenv("KB_MANAGEMENT_ACCESS_TOKEN", "")
+    monkeypatch.setenv("KB_MANAGEMENT_ACCESS_TOKEN_SHA256", "")
+    monkeypatch.setenv("KB_ACCESS_TOKEN", "")
+    monkeypatch.setenv("KB_ACCESS_TOKEN_SHA256", "")
+    monkeypatch.setenv("KB_API_TOKEN", "")
+    monkeypatch.setenv("KB_API_TOKEN_SHA256", "")
+    monkeypatch.setenv("KB_AUTH_TOKEN", "")
+    monkeypatch.setenv("KB_AUTH_TOKEN_SHA256", "")
 
     def fail_picker(initial: str) -> str:
         raise AssertionError("public production should not open a server-side picker")
@@ -247,7 +270,53 @@ def test_server_file_picker_hidden_for_public_production(monkeypatch):
 
     response = client.post("/api/settings/pick-dir", json={"target": "pdf", "initial_dir": ""})
 
-    assert response.status_code == 404
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Management access token is not configured"
+
+
+def test_public_production_blocks_management_writes_but_allows_management_unlock(monkeypatch, tmp_path: Path):
+    _set_management_env(monkeypatch)
+    monkeypatch.setattr(settings_router, "_pick_directory_dialog", lambda initial: str(tmp_path))
+    client = TestClient(app)
+
+    status = client.get("/api/auth/status")
+    assert status.status_code == 200
+    assert status.json()["required"] is False
+    assert status.json()["management_required"] is True
+    assert status.json()["management_configured"] is True
+    assert status.json()["management_authenticated"] is False
+
+    denied = client.post("/api/settings/pick-dir", json={"target": "pdf", "initial_dir": ""})
+    assert denied.status_code == 401
+    assert denied.json()["detail"] == "Management authentication required"
+    assert denied.headers["X-KB-Management-Auth"] == "required"
+
+    unlocked = client.post(
+        "/api/settings/pick-dir",
+        json={"target": "pdf", "initial_dir": ""},
+        headers={"X-KB-Management-Token": "management-secret"},
+    )
+    assert unlocked.status_code == 200
+    assert unlocked.json()["path"] == str(tmp_path)
+
+    safe_settings = client.get("/api/settings")
+    assert safe_settings.status_code == 200
+    assert safe_settings.json()["db_dir"] == ""
+
+
+def test_management_login_unlocks_public_management_routes(monkeypatch, tmp_path: Path):
+    _set_management_env(monkeypatch, token="login-management-secret")
+    monkeypatch.setattr(settings_router, "_pick_directory_dialog", lambda initial: str(tmp_path))
+    client = TestClient(app)
+
+    login = client.post("/api/auth/login", json={"token": "login-management-secret"})
+    assert login.status_code == 200
+    assert login.json()["authenticated"] is False
+    assert login.json()["management_authenticated"] is True
+
+    response = client.post("/api/settings/pick-dir", json={"target": "pdf", "initial_dir": ""})
+    assert response.status_code == 200
+    assert response.json()["path"] == str(tmp_path)
 
 
 def test_server_file_picker_allowed_for_authenticated_private_production(monkeypatch, tmp_path: Path):

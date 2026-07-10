@@ -45,6 +45,7 @@ import {
   type SettingsFocusTarget,
 } from './settingsEvents'
 import { internalDebugEnabled, internalSettingsToolsVisible } from '../../utils/internalDebug'
+import { MANAGEMENT_AUTH_REQUIRED_EVENT } from '../../api/client'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
@@ -402,6 +403,15 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (window.name !== CHAT_MAIN_WINDOW_NAME) {
       window.name = CHAT_MAIN_WINDOW_NAME
     }
+  }, [])
+
+  useEffect(() => {
+    const openManagementSettings = () => {
+      setSettingsFocusTarget('')
+      setDrawerOpen(true)
+    }
+    window.addEventListener(MANAGEMENT_AUTH_REQUIRED_EVENT, openManagementSettings)
+    return () => window.removeEventListener(MANAGEMENT_AUTH_REQUIRED_EVENT, openManagementSettings)
   }, [])
 
   useEffect(() => {

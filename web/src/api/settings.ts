@@ -62,6 +62,7 @@ export interface AppReadinessPayload {
   env: string
   production: boolean
   auth_required: boolean
+  management_auth_required?: boolean
   items: AppReadinessItem[]
   llm?: LlmReadinessPayload
   restore?: {
@@ -95,6 +96,9 @@ export interface AuthStatusPayload {
   required: boolean
   configured: boolean
   authenticated: boolean
+  management_required?: boolean
+  management_configured?: boolean
+  management_authenticated?: boolean
   env: string
   production: boolean
 }

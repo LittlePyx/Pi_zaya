@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.deps import get_settings, load_prefs, save_prefs
-from api.security import auth_token_configured, request_is_authenticated
+from api.internal_access import management_api_allowed, require_management_api
+from api.security import auth_token_configured, management_auth_required, management_token_configured, request_is_authenticated
 from kb.file_ops import _pick_directory_dialog
 from kb.maintenance import latest_restore_review_state
 from kb.user_issue_store import UserIssueStore
@@ -202,11 +203,13 @@ def _pref_key_is_sensitive(key: object) -> bool:
     return bool(clean in _PRIVATE_PREF_KEYS or _SENSITIVE_PREF_KEY_RE.search(clean))
 
 
-def _public_prefs(prefs: dict) -> dict:
+def _public_prefs(prefs: dict, *, include_paths: bool = True) -> dict:
     out: dict[str, object] = {}
     for key, value in dict(prefs or {}).items():
         clean = str(key or "")
         if clean not in _PUBLIC_PREF_KEYS or _pref_key_is_sensitive(clean):
+            continue
+        if not include_paths and clean in _PATH_PREF_KEYS:
             continue
         if isinstance(value, (dict, list, tuple)):
             continue
@@ -566,6 +569,31 @@ def _production_readiness_payload(s) -> dict:
             detail="Disabled; public access",
         ))
 
+    management_required = management_auth_required(s)
+    if management_required and not management_token_configured(s):
+        items.append(_readiness_item(
+            "management_auth",
+            severity="error",
+            label="Management API protection",
+            detail="Management writes are protected but no management access token is configured.",
+            action="set_management_access_token",
+        ))
+    elif management_required:
+        items.append(_readiness_item(
+            "management_auth",
+            severity="ok",
+            label="Management API protection",
+            detail="Enabled for server settings and library changes.",
+        ))
+    else:
+        items.append(_readiness_item(
+            "management_auth",
+            severity="warning" if production else "ok",
+            label="Management API protection",
+            detail="Disabled; management writes are public.",
+            action="enable_management_auth" if production else "",
+        ))
+
     raw_origins = (os.environ.get("KB_API_ALLOW_ORIGINS") or os.environ.get("KB_CORS_ALLOW_ORIGINS") or "").strip()
     if production and raw_origins == "*":
         items.append(_readiness_item(
@@ -612,6 +640,7 @@ def _production_readiness_payload(s) -> dict:
         "env": str(getattr(s, "app_env", "development") or "development"),
         "production": production,
         "auth_required": auth_required,
+        "management_auth_required": management_required,
         "items": items,
         "llm": llm,
         "restore": {
@@ -622,23 +651,41 @@ def _production_readiness_payload(s) -> dict:
     }
 
 
+def _public_readiness_payload(payload: dict, *, reveal_paths: bool) -> dict:
+    if reveal_paths:
+        return payload
+    result = dict(payload or {})
+    items: list[dict] = []
+    for raw_item in list(result.get("items") or []):
+        item = dict(raw_item) if isinstance(raw_item, dict) else {}
+        if str(item.get("key") or "") in {"db_dir", "chat_db", "library_db", "user_issues_db", "frontend_build"}:
+            item["detail"] = "Hidden outside management access."
+        items.append(item)
+    result["items"] = items
+    return result
+
+
 def production_readiness_payload(s) -> dict:
     return _production_readiness_payload(s)
 
 
 @router.get("/settings")
-def get_all_settings():
+def get_all_settings(request: Request = None):
     s = get_settings()
     prefs = load_prefs()
+    has_management_access = bool(request is not None and management_api_allowed(request))
     return {
         "model": s.model,
         "base_url": s.base_url,
         "has_api_key": bool(s.api_key),
         "connection": _connection_status(s),
         "readiness": _readiness_payload(s),
-        "app_readiness": _production_readiness_payload(s),
-        "db_dir": str(s.db_dir),
-        "prefs": _public_prefs(prefs),
+        "app_readiness": _public_readiness_payload(
+            _production_readiness_payload(s),
+            reveal_paths=has_management_access,
+        ),
+        "db_dir": str(s.db_dir) if has_management_access else "",
+        "prefs": _public_prefs(prefs, include_paths=has_management_access),
     }
 
 
@@ -648,8 +695,11 @@ def get_llm_readiness():
 
 
 @router.get("/readiness")
-def get_readiness():
-    return production_readiness_payload(get_settings())
+def get_readiness(request: Request):
+    return _public_readiness_payload(
+        production_readiness_payload(get_settings()),
+        reveal_paths=management_api_allowed(request),
+    )
 
 
 class PrefsPatch(BaseModel):
@@ -694,7 +744,7 @@ class PrefsPatch(BaseModel):
         return str(value).replace("\x00", "").strip()
 
 
-@router.patch("/settings")
+@router.patch("/settings", dependencies=[Depends(require_management_api)])
 def update_settings(body: PrefsPatch):
     prefs = load_prefs()
     patch = body.model_dump(exclude_none=True)
@@ -746,12 +796,14 @@ def _require_server_file_picker_allowed(request: Request) -> None:
     settings = get_settings()
     if not bool(getattr(settings, "production", False)):
         return
+    if management_api_allowed(request):
+        return
     if bool(getattr(settings, "auth_required", False)) and request_is_authenticated(request, settings=settings):
         return
     raise HTTPException(status_code=404, detail="Not found")
 
 
-@router.post("/settings/pick-dir")
+@router.post("/settings/pick-dir", dependencies=[Depends(require_management_api)])
 def pick_dir(body: PickDirRequest, request: Request):
     _require_server_file_picker_allowed(request)
     prefs = load_prefs()
@@ -794,7 +846,7 @@ def _test_chat_completion(*, api_key: str | None, base_url: str, model: str, tim
     return {"ok": True, "reply": reply}
 
 
-@router.post("/settings/test-llm")
+@router.post("/settings/test-llm", dependencies=[Depends(require_management_api)])
 def test_llm(body: ConnectionTestBody | None = None):
     checked_at = time.time()
     target = body.target if body else "text"

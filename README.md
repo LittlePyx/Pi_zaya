@@ -289,12 +289,16 @@ python server.py
 
 ## Production Deployment
 
-For public deployments, keep token gates disabled by default:
+For public deployments, keep user-facing login disabled while protecting management writes:
 
 Set `KB_PRIVATE_INSTANCE_AUTH=0`, `KB_ENABLE_AUTH_GATE=0`, and
 `KB_REQUIRE_AUTH=0` so ordinary users can open the app without an access token.
+Set `KB_REQUIRE_MANAGEMENT_AUTH=1` and configure
+`KB_MANAGEMENT_ACCESS_TOKEN` or `KB_MANAGEMENT_ACCESS_TOKEN_SHA256` so settings,
+uploads, library changes, conversion, and reindex operations require the owner
+token. The Settings drawer contains the management unlock control.
 
-Chinese deployment note: 面向普通用户的公开部署保持 `KB_PRIVATE_INSTANCE_AUTH=0`、`KB_ENABLE_AUTH_GATE=0` 和 `KB_REQUIRE_AUTH=0`，用户打开应用不需要访问令牌。
+Chinese deployment note: 面向普通用户的公开部署保持 `KB_PRIVATE_INSTANCE_AUTH=0`、`KB_ENABLE_AUTH_GATE=0` 和 `KB_REQUIRE_AUTH=0`，同时设置 `KB_REQUIRE_MANAGEMENT_AUTH=1` 与管理令牌；普通用户无需令牌，但设置、上传、文献库修改、转换和重建索引需要管理员解锁。
 
 Use private/internal auth only for controlled instances, and configure
 `KB_ACCESS_TOKEN` or `KB_ACCESS_TOKEN_SHA256` when auth is enabled.

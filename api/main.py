@@ -30,6 +30,7 @@ _CORS_EXPOSE_HEADERS = [
     "Server-Timing",
     "X-KB-Refs-Counts",
     "X-KB-Refs-Mode",
+    "X-KB-Management-Auth",
 ]
 _BODY_GUARD_METHODS = {"POST", "PUT", "PATCH"}
 _USER_ISSUE_BODY_GUARD_PATHS = {"/api/user-issues", "/api/user-issues/ingest"}

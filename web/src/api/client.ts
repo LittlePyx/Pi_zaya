@@ -19,6 +19,7 @@ const VITE_ENV = ((import.meta as ImportMeta & {
 export const API_BASE = normalizeApiBase(VITE_ENV.VITE_BACKEND_URL)
 export const ACCESS_TOKEN_STORAGE_KEY = 'kb_access_token'
 export const AUTH_REQUIRED_EVENT = 'kb:auth-required'
+export const MANAGEMENT_AUTH_REQUIRED_EVENT = 'kb:management-auth-required'
 const AUTH_GATE_EVENTS_ENABLED = authGateBuildEnabled()
 export const BACKEND_CONNECT_ERROR_MESSAGE =
   'Cannot connect to the Pi-zaya backend. For local development, run .\\run_new.ps1 -StopExisting so /api is proxied to FastAPI; for single-server mode, run python server.py after building web/dist.'
@@ -52,6 +53,14 @@ function dispatchAuthRequired() {
   if (!AUTH_GATE_EVENTS_ENABLED) return
   try {
     window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT))
+  } catch {
+    /* ignore */
+  }
+}
+
+function dispatchManagementAuthRequired() {
+  try {
+    window.dispatchEvent(new CustomEvent(MANAGEMENT_AUTH_REQUIRED_EVENT))
   } catch {
     /* ignore */
   }
@@ -133,6 +142,9 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
       throw err
     }
     throw new Error(BACKEND_CONNECT_ERROR_MESSAGE)
+  }
+  if (response.headers.get('X-KB-Management-Auth') === 'required') {
+    dispatchManagementAuthRequired()
   }
   if (response.status === 401) {
     dispatchAuthRequired()
