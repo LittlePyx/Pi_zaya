@@ -15,6 +15,7 @@ import type {
   AgentSourceSummaryViewModel,
   AgentTraceViewModel,
 } from '../../src/components/chat/agentTraceViewModel'
+import type { Message } from '../../src/api/chat'
 import {
   installAppShellMocks,
   installEmptyCitationShelfMock,
@@ -100,6 +101,37 @@ async function agentSourceStatus(page: Page, input: Omit<AgentTraceSourceStatusI
       ...summaryInput,
       labels: {},
     })
+  }, input)
+}
+
+async function messageListDerived(page: Page, input: {
+  messages: Message[]
+  refs?: Record<string, unknown>
+  conversationId?: string
+}) {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  return page.evaluate(async (derivedInput) => {
+    const {
+      buildAssistantTraceByMsgId,
+      buildLiveCiteMap,
+      buildMessageRows,
+      buildSelectedResearchContextByAssistantId,
+    } = await import('/src/components/chat/messageListDerived.ts')
+    const trace = buildAssistantTraceByMsgId(derivedInput.messages)
+    const contexts = buildSelectedResearchContextByAssistantId(derivedInput.messages)
+    const liveCites = buildLiveCiteMap(derivedInput.messages, derivedInput.conversationId, trace)
+    return {
+      rows: buildMessageRows(derivedInput.messages, derivedInput.refs || {}, {}),
+      trace: Array.from(trace.entries()),
+      contexts: Array.from(contexts.entries()),
+      liveCiteKeys: Array.from(liveCites.keys()),
+      liveCiteTrace: Array.from(liveCites.values()).map((item) => ({
+        traceConvId: item.traceConvId,
+        traceAssistantMsgId: item.traceAssistantMsgId,
+        traceAssistantOrder: item.traceAssistantOrder,
+        traceUserMsgId: item.traceUserMsgId,
+      })),
+    }
   }, input)
 }
 
@@ -1032,6 +1064,70 @@ test('agent trace source rows limit unsupported claims and dedupe step reference
     'unsupported second',
   ])
   expect(rows.references.map((ref) => ref.title)).toEqual(['Ref A', 'Ref B', 'Ref C'])
+})
+
+test('message list derived helpers keep rows, trace order, context, and live shelf identity stable', async ({ page }) => {
+  const derived = await messageListDerived(page, {
+    conversationId: 'conv-7',
+    messages: [
+      {
+        id: 1,
+        role: 'user',
+        content: 'Compare the methods',
+        created_at: 1,
+        meta: {
+          prompt_context: {
+            id: 'pack-1',
+            items: [{ key: 'paper-a', title: 'Paper A', sourceName: 'Paper A' }],
+          },
+        },
+      },
+      {
+        id: 2,
+        role: 'assistant',
+        content: 'The methods differ.',
+        created_at: 2,
+        cite_details: [{
+          anchor: '[1]',
+          num: 1,
+          source_name: 'Paper A',
+          source_path: '/papers/a.md',
+          title: 'Paper A',
+        }],
+      },
+      {
+        id: 3,
+        role: 'user',
+        content: 'What about the data?',
+        created_at: 3,
+      },
+      {
+        id: 4,
+        role: 'assistant',
+        content: 'The data is limited.',
+        created_at: 4,
+      },
+    ],
+    refs: {
+      '1': { hits: [{ source_path: '/papers/a.md', title: 'Paper A', score: 1 }] },
+    },
+  })
+
+  expect(derived.rows.map((row) => row.kind)).toEqual(['message', 'message', 'refs', 'message', 'message'])
+  expect(derived.trace).toEqual([
+    [2, { answerOrder: 1, userMsgId: 1 }],
+    [4, { answerOrder: 2, userMsgId: 3 }],
+  ])
+  expect(derived.contexts).toHaveLength(1)
+  expect(derived.contexts[0][0]).toBe(2)
+  expect(derived.contexts[0][1].id).toBe('pack-1')
+  expect(derived.liveCiteKeys).toHaveLength(1)
+  expect(derived.liveCiteTrace).toEqual([{
+    traceConvId: 'conv-7',
+    traceAssistantMsgId: 2,
+    traceAssistantOrder: 1,
+    traceUserMsgId: 1,
+  }])
 })
 
 test('agent trace view model assembles source summary and diagnostics', async ({ page }) => {

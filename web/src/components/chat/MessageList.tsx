@@ -98,7 +98,6 @@ import {
   readerSelectionNote,
 } from './readerShelfPayload'
 import { RefsPanel } from '../refs/RefsPanel'
-import { hasRefsPanelContent } from '../refs/refsPanelDisplay'
 import { chatApi, type Message } from '../../api/chat'
 import { referencesApi, type ShelfMetadataRepairImpact } from '../../api/references'
 import { useT } from '../../i18n'
@@ -134,6 +133,13 @@ import {
   buildUnlinkedReferenceViews,
   enrichCiteDetailsWithVisibleRefContext,
 } from './messageCitationViews'
+import {
+  buildAssistantTraceByMsgId,
+  buildLiveCiteMap,
+  buildMessageRows,
+  buildSelectedResearchContextByAssistantId,
+  type MessageRow,
+} from './messageListDerived'
 import { buildFallbackCiteDetailsFromRefHits } from './messageFallbackCitations'
 import { resolveLowConfidenceMeta, stripLeadingLowConfidenceNotice } from './messageLowConfidence'
 import { createMessageLocateResolvers } from './messageLocateResolvers'
@@ -148,10 +154,8 @@ import {
 } from './messageSourceIdentity'
 import {
   contextItemTitle,
-  getAssistantSelectedResearchContext,
   getMessageAgentTrace,
   getMessageResearchTrace,
-  getUserPromptResearchContext,
   imageAttachmentsOf,
   isImageOnlyPlaceholder,
   messageHasAgentTraceHint,
@@ -226,14 +230,6 @@ interface RefEntryLite {
   suppression_reason?: string
   suggestion?: string
   guide_filter?: { hidden_self_source?: boolean; filtered_hit_count?: number }
-}
-
-function hasRenderableRefsForGuide(
-  refs: Record<string, unknown>,
-  msgId: number,
-  opts: { activeSourcePath?: string; activeSourceName?: string },
-) {
-  return hasRefsPanelContent(refs, msgId, opts)
 }
 
 function AssistantAvatar() {
@@ -1040,96 +1036,22 @@ export function MessageList({
     }
   }, [saveShelfBackendNow, shelfItems, shelfOpen, shelfScopeId])
 
-  const rows = useMemo(() => {
-    const out: Array<
-      | { kind: 'message'; message: Message }
-      | { kind: 'refs'; userMsgId: number }
-    > = []
-    let lastUserMsgId = 0
-    const renderedRefs = new Set<number>()
-    const refsPanelFilter = {
-      activeSourcePath: paperGuideSourcePath,
-      activeSourceName: paperGuideSourceName,
-    }
+  const rows = useMemo<MessageRow[]>(() => buildMessageRows(messages, refs, {
+    activeSourcePath: paperGuideSourcePath,
+    activeSourceName: paperGuideSourceName,
+  }), [messages, paperGuideSourceName, paperGuideSourcePath, refs])
 
-    for (const message of messages) {
-      out.push({ kind: 'message', message })
-      if (message.role === 'user') {
-        lastUserMsgId = message.id
-        continue
-      }
-      if (lastUserMsgId > 0 && !renderedRefs.has(lastUserMsgId) && hasRenderableRefsForGuide(refs, lastUserMsgId, refsPanelFilter)) {
-        out.push({ kind: 'refs', userMsgId: lastUserMsgId })
-        renderedRefs.add(lastUserMsgId)
-      }
-    }
-    if (lastUserMsgId > 0 && !renderedRefs.has(lastUserMsgId) && hasRenderableRefsForGuide(refs, lastUserMsgId, refsPanelFilter)) {
-      out.push({ kind: 'refs', userMsgId: lastUserMsgId })
-    }
+  const assistantTraceByMsgId = useMemo(() => buildAssistantTraceByMsgId(messages), [messages])
 
-    return out
-  }, [messages, paperGuideSourceName, paperGuideSourcePath, refs])
+  const selectedResearchContextByAssistantId = useMemo(
+    () => buildSelectedResearchContextByAssistantId(messages),
+    [messages],
+  )
 
-  const assistantTraceByMsgId = useMemo(() => {
-    const out = new Map<number, { answerOrder: number; userMsgId: number }>()
-    let answerOrder = 0
-    let lastUserMsgId = 0
-    for (const message of messages) {
-      if (message.role === 'user') {
-        lastUserMsgId = message.id
-        continue
-      }
-      if (message.role !== 'assistant') continue
-      answerOrder += 1
-      out.set(message.id, { answerOrder, userMsgId: lastUserMsgId })
-    }
-    return out
-  }, [messages])
-
-  const selectedResearchContextByAssistantId = useMemo(() => {
-    const out = new Map<number, SelectedResearchContextPack>()
-    let pendingUserContext: SelectedResearchContextPack | null = null
-    for (const message of messages) {
-      if (message.role === 'user') {
-        pendingUserContext = getUserPromptResearchContext(message)
-        continue
-      }
-      if (message.role !== 'assistant') continue
-      const assistantContext = getAssistantSelectedResearchContext(message)
-      if (assistantContext) {
-        out.set(Number(message.id), assistantContext)
-      } else if (pendingUserContext) {
-        out.set(Number(message.id), pendingUserContext)
-      }
-      pendingUserContext = null
-    }
-    return out
-  }, [messages])
-
-  const liveCiteMap = useMemo(() => {
-    const map = new Map<string, CiteShelfItem>()
-    const convTraceId = String(activeConvId || '')
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue
-      const rawCiteDetails = getMessageCiteDetailRecords(message)
-      if (rawCiteDetails.length <= 0) continue
-      const trace = assistantTraceByMsgId.get(message.id)
-      for (const rawDetail of rawCiteDetails) {
-        const detail = normalizeCiteDetail(rawDetail)
-        if (!detail) continue
-        const tracedDetail: CiteDetail = {
-          ...detail,
-          traceConvId: convTraceId,
-          traceAssistantMsgId: message.id,
-          traceAssistantOrder: Number(trace?.answerOrder || 0),
-          traceUserMsgId: Number(trace?.userMsgId || 0),
-        }
-        const item = toShelfItem(tracedDetail)
-        map.set(item.key, item)
-      }
-    }
-    return map
-  }, [activeConvId, assistantTraceByMsgId, messages])
+  const liveCiteMap = useMemo(
+    () => buildLiveCiteMap(messages, activeConvId, assistantTraceByMsgId),
+    [activeConvId, assistantTraceByMsgId, messages],
+  )
 
   useEffect(() => {
     const candidates = Array.from(liveCiteMap.values())
