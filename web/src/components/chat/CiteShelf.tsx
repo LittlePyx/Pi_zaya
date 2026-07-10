@@ -4,7 +4,6 @@ import { CloseOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, FileSear
 import type { CiteShelfItem } from './citationState'
 import type { ReaderLocateResult } from './reader/readerTypes'
 import type { ShelfMetadataRepairImpact, ShelfMetadataRepairItem } from '../../api/references'
-import { libraryApi } from '../../api/library'
 import {
   citationCardView,
   citationDisplay,
@@ -52,8 +51,8 @@ import {
   type ShelfExportOptions,
   type ShelfExportRequest,
   type ShelfExportScope,
-  type SourceQualityByPath,
 } from './citeShelfDisplay'
+import { useCiteShelfSourceQuality } from './useCiteShelfSourceQuality'
 import { useT } from '../../i18n'
 import { referencesApi } from '../../api/references'
 import { qualityDiagnosticsVisible } from '../../utils/qualityDiagnostics'
@@ -150,12 +149,8 @@ export function CiteShelf({
   const [batchTagInput, setBatchTagInput] = useState('')
   const [editingNoteKeys, setEditingNoteKeys] = useState<Record<string, boolean>>({})
   const [copyState, setCopyState] = useState<'idle' | 'gbt' | 'bibtex' | 'error'>('idle')
-  const [sourceQualityByPath, setSourceQualityByPath] = useState<SourceQualityByPath>({})
-  const [sourceRepairingKey, setSourceRepairingKey] = useState('')
   const [slowTaskVisible, setSlowTaskVisible] = useState(false)
   const copyStateTimerRef = useRef<number | null>(null)
-  const sourceRepairStreamRef = useRef<AbortController | null>(null)
-  const sourceRepairRunTokenRef = useRef(0)
   const exportRepairRunTokenRef = useRef(0)
   const exportRepairingKindRef = useRef<ShelfExportKind | ''>('')
   const autoSourceRepairKeysRef = useRef<Record<string, boolean>>({})
@@ -171,6 +166,33 @@ export function CiteShelf({
   const activeConversationKey = String(activeConvId || '').trim()
   const activeSourceKey = normalizeSourceIdentity(activeSourcePath)
   const showSourceQualityDiagnostics = qualityDiagnosticsVisible()
+  const sourceQualitySources = useMemo(() => {
+    if (!showSourceQualityDiagnostics) return []
+    const seen = new Set<string>()
+    const out: Array<{ source_path: string; source_name: string }> = []
+    for (const item of items) {
+      const sourcePath = String(item.sourcePath || '').trim()
+      if (!sourcePath || seen.has(sourcePath)) continue
+      seen.add(sourcePath)
+      out.push({
+        source_path: sourcePath,
+        source_name: String(item.sourceName || item.title || item.main || '').trim(),
+      })
+    }
+    return out
+  }, [items, showSourceQualityDiagnostics])
+
+  const {
+    sourceQualityByPath,
+    sourceRepairingKey,
+    repairSources,
+  } = useCiteShelfSourceQuality({
+    open,
+    showDiagnostics: showSourceQualityDiagnostics,
+    refreshToken: sourceQualityRefreshToken,
+    sources: sourceQualitySources,
+  })
+
   const shelfBackgroundBusy = Boolean(
     summaryLoadingKey
       || repairLoadingKey
@@ -212,27 +234,6 @@ export function CiteShelf({
   useEffect(() => () => {
     onBackgroundActivityChange?.(false)
   }, [onBackgroundActivityChange])
-
-  const sourceQualitySources = useMemo(() => {
-    if (!showSourceQualityDiagnostics) return []
-    const seen = new Set<string>()
-    const out: Array<{ source_path: string; source_name: string }> = []
-    for (const item of items) {
-      const sourcePath = String(item.sourcePath || '').trim()
-      if (!sourcePath || seen.has(sourcePath)) continue
-      seen.add(sourcePath)
-      out.push({
-        source_path: sourcePath,
-        source_name: String(item.sourceName || item.title || item.main || '').trim(),
-      })
-    }
-    return out
-  }, [items, showSourceQualityDiagnostics])
-
-  const sourceQualityKey = useMemo(
-    () => sourceQualitySources.map((item) => `${item.source_path}\t${item.source_name}`).join('\n'),
-    [sourceQualitySources],
-  )
 
   const splitSummary = (text: string): string[] => {
     const normalized = String(text || '').replace(/\s+/g, ' ').trim()
@@ -480,38 +481,9 @@ export function CiteShelf({
     return { chips: chips.slice(0, 3), tip, needsRepair }
   }
 
-  useEffect(() => {
-    if (!showSourceQualityDiagnostics) {
-      setSourceQualityByPath({})
-      return
-    }
-    if (!open || sourceQualitySources.length <= 0) return
-    let cancelled = false
-    libraryApi.sourceQuality(sourceQualitySources)
-      .then((res) => {
-        if (cancelled) return
-        const next: SourceQualityByPath = {}
-        for (const item of Array.isArray(res.items) ? res.items : []) {
-          const sourcePath = String(item.source_path || '').trim()
-          if (!sourcePath) continue
-          next[sourcePath] = item
-        }
-        setSourceQualityByPath((prev) => ({ ...prev, ...next }))
-      })
-      .catch(() => {
-        if (!cancelled) setSourceQualityByPath((prev) => ({ ...prev }))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open, showSourceQualityDiagnostics, sourceQualityKey, sourceQualityRefreshToken, sourceQualitySources])
-
   useEffect(() => () => {
     exportRepairRunTokenRef.current += 1
     exportRepairingKindRef.current = ''
-    sourceRepairRunTokenRef.current += 1
-    sourceRepairStreamRef.current?.abort()
-    sourceRepairStreamRef.current = null
   }, [])
 
   const duplicateCountByIdentity = useMemo(() => {
@@ -904,111 +876,6 @@ export function CiteShelf({
       message.error(S.shelf_copy_error)
     }
   }
-
-  const repairSources = useCallback(async (
-    sources: Array<{ source_path: string; source_name: string }>,
-    options: { silent?: boolean; repairKey?: string } = {},
-  ) => {
-    const silent = Boolean(options.silent)
-    if (!showSourceQualityDiagnostics) return
-    if (sources.length <= 0) {
-      if (!silent) message.info(S.shelf_source_quality_repair_none)
-      return
-    }
-    const repairKey = options.repairKey || sourceListKey(sources)
-    const repairSources = sources.map((item) => ({ ...item }))
-    const repairToken = sourceRepairRunTokenRef.current + 1
-    sourceRepairRunTokenRef.current = repairToken
-    const isCurrentRepair = () => sourceRepairRunTokenRef.current === repairToken
-    const refreshRepairSources = async () => {
-      if (!isCurrentRepair()) return
-      if (repairSources.length <= 0) return
-      const res = await libraryApi.sourceQuality(repairSources)
-      if (!isCurrentRepair()) return
-      const next: SourceQualityByPath = {}
-      for (const item of Array.isArray(res.items) ? res.items : []) {
-        const sourcePath = String(item.source_path || '').trim()
-        if (!sourcePath) continue
-        next[sourcePath] = item
-      }
-      setSourceQualityByPath((prev) => ({ ...prev, ...next }))
-    }
-    const refreshRepairRunAndSources = async (runId: string, needsReindex: boolean) => {
-      if (!isCurrentRepair()) return
-      if (needsReindex) {
-        let advanced = false
-        if (runId) {
-          try {
-            await libraryApi.advanceQualityRepairRun(runId)
-            advanced = true
-          } catch {
-            advanced = false
-          }
-        }
-        try {
-          if (!isCurrentRepair()) return
-          if (!advanced) await libraryApi.reindex()
-        } catch {
-          // Source quality will still be refreshed so the UI can show the latest diagnostics.
-        }
-      }
-      if (!isCurrentRepair()) return
-      await refreshRepairSources()
-    }
-    const clearRepairing = () => {
-      if (!isCurrentRepair()) return
-      setSourceRepairingKey((cur) => (cur === repairKey ? '' : cur))
-    }
-    setSourceRepairingKey(repairKey)
-    let watchingConversion = false
-    try {
-      const res = await libraryApi.repairQuality({
-        sources: repairSources,
-        speed_mode: 'balanced',
-        replace: true,
-      })
-      if (!isCurrentRepair()) return
-      const runId = String(res.repair_run_id || res.repair_run?.run_id || '').trim()
-      const queued = Number(res.enqueued || 0)
-      const repaired = Number(res.repaired || 0)
-      const needsReindex = Boolean(res.needs_reindex || res.impact?.needs_reindex)
-      if (queued > 0) {
-        if (!silent) message.success(S.shelf_source_quality_repair_queued.replace('{n}', String(queued)))
-        watchingConversion = true
-        sourceRepairStreamRef.current?.abort()
-        let streamCtrl: AbortController | null = null
-        const clearStreamIfCurrent = () => {
-          if (!isCurrentRepair() || sourceRepairStreamRef.current !== streamCtrl) return false
-          sourceRepairStreamRef.current = null
-          return true
-        }
-        streamCtrl = libraryApi.streamConvertStatus(
-          () => {},
-          () => {
-            if (!clearStreamIfCurrent()) return
-            void refreshRepairRunAndSources(runId, needsReindex).finally(clearRepairing)
-          },
-          () => {
-            if (!clearStreamIfCurrent()) return
-            void refreshRepairRunAndSources(runId, needsReindex).finally(clearRepairing)
-          },
-        )
-        sourceRepairStreamRef.current = streamCtrl
-      } else if (repaired > 0) {
-        if (!silent) message.success(`Markdown repaired: ${repaired}`)
-        await refreshRepairRunAndSources(runId, needsReindex)
-      } else if (needsReindex) {
-        await refreshRepairRunAndSources(runId, needsReindex)
-      } else {
-        if (!silent) message.info(S.shelf_source_quality_repair_none)
-        await refreshRepairSources()
-      }
-    } catch (err) {
-      if (isCurrentRepair() && !silent) message.error(err instanceof Error ? err.message : S.shelf_source_quality_repair_fail)
-    } finally {
-      if (!watchingConversion && isCurrentRepair()) clearRepairing()
-    }
-  }, [S, showSourceQualityDiagnostics])
 
   useEffect(() => {
     if (!open || selectedReviewSources.length <= 0 || sourceRepairingKey) return
