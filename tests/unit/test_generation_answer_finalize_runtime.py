@@ -1294,6 +1294,26 @@ def test_multi_paper_count_accepts_chinese_step_headings() -> None:
     ) is False
 
 
+def test_multi_paper_count_accepts_chinese_paper_headings_without_rebuild() -> None:
+    answer = """# \u5355\u50cf\u7d20\u6210\u50cf\u5165\u95e8\uff1a\u4e09\u7bc7\u63a8\u8350\u9605\u8bfb\u987a\u5e8f
+
+## \u7b2c1\u7bc7\uff1aPrinciples and prospects for single-pixel imaging
+\u4ece\u57fa\u672c\u539f\u7406\u5efa\u7acb\u5b8c\u6574\u77e5\u8bc6\u6846\u67b6\u3002
+
+## \u7b2c2\u7bc7\uff1a3D single-pixel video
+\u7406\u89e3\u5b9e\u9645\u7cfb\u7edf\u7684\u786c\u4ef6\u7ea6\u675f\u548c\u6743\u8861\u3002
+
+## \u7b2c3\u7bc7\uff1aAdvances and Challenges of Single-Pixel Imaging Based on Deep Learning
+\u4e86\u89e3\u6781\u4f4e\u91c7\u6837\u7387\u4e0b\u7684\u5b66\u4e60\u578b\u91cd\u5efa\u524d\u6cbf\u3002
+"""
+
+    assert finalize_runtime._count_multi_paper_answer_items(answer) == 3
+    assert finalize_runtime._multi_paper_answer_needs_contract_rebuild(
+        answer=answer,
+        prompt="\u8bf7\u4ece\u5e93\u91cc\u90093\u7bc7\u6700\u9002\u5408\u6309\u987a\u5e8f\u9605\u8bfb\u7684\u8bba\u6587\u3002",
+    ) is False
+
+
 def test_requested_multi_paper_repair_removes_extra_recommendation_and_restores_source_marker() -> None:
     answer = """## 1. Overview
 Paper: Principles and prospects for single-pixel imaging
@@ -1343,6 +1363,73 @@ Paper: 3D single-pixel video [4]
 
     heading_extra = answer.replace("**Further reading:**", "## Further reading")
     assert "Further reading" not in finalize_runtime._strip_requested_multi_paper_extras(heading_extra)
+
+
+def test_single_paper_selection_strips_other_candidate_table_but_keeps_reading_locations() -> None:
+    answer = (
+        "# 最直接的比较论文\n\n"
+        "**Hadamard single-pixel imaging versus Fourier single-pixel imaging**\n\n"
+        "## 为什么选这篇\n\n标题和实验都直接比较 HSI 与 FSI。\n\n"
+        "---\n\n## 其他候选论文为何不选\n\n"
+        "| 论文 | 不选原因 |\n|---|---|\n| 综述 | 不够直接 |\n\n"
+        "---\n\n## 关键阅读位置\n\n- 第2节：理论对比"
+    )
+
+    out = finalize_runtime._strip_single_paper_selection_extras(answer)
+
+    assert "其他候选论文" not in out
+    assert "综述" not in out
+    assert "关键阅读位置" in out
+    assert "第2节" in out
+
+
+def test_single_library_paper_selection_does_not_detect_system_b_opportunities(monkeypatch) -> None:
+    def _unexpected_detection(**_kwargs):
+        raise AssertionError("System B opportunity detection must not run for a library-paper pick")
+
+    monkeypatch.setattr(
+        finalize_runtime,
+        "detect_text_reference_opportunities",
+        _unexpected_detection,
+    )
+    out = finalize_runtime._finalize_generation_answer(
+        (
+            "# Best paper\n\nThe direct match is the OE 2017 comparison paper [[CITE:s1234abcd:26]].\n\n"
+            "## Other candidates\n\n| Paper | Why not |\n|---|---|\n| Review | Less direct |\n\n"
+            "## Reading location\n\nSection 2 compares both methods."
+        ),
+        prompt="Which paper in my library directly compares HSI and FSI? Only give 1 paper.",
+        prompt_for_user="Which paper in my library directly compares HSI and FSI? Only give 1 paper.",
+        answer_hits=[{"text": "HSI and FSI are compared directly.", "meta": {"source_path": "oe2017.en.md"}}],
+        db_dir=Path("db"),
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="L2",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=False,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="compare",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={},
+        paper_guide_retrieval_confidence_hint={},
+        apply_paper_guide_answer_postprocess=lambda answer, **_kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **_kwargs: answer,
+        validate_structured_citations=lambda answer, **_kwargs: (answer, {"kept": 0}),
+    )
+
+    answer = str(out.get("answer") or "")
+    assert "Other candidates" not in answer
+    assert "Reading location" in answer
+    assert "[[CITE:" not in answer
+    assert out["answer_quality"]["requested_paper_count"] == 1
+    assert out["answer_quality"]["actual_paper_count"] == 1
+    assert out["answer_quality"]["paper_count_ok"] is True
 
 
 def test_multi_paper_llm_summary_with_foreign_technical_marker_falls_back_to_evidence() -> None:

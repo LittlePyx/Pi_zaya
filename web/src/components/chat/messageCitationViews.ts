@@ -67,15 +67,23 @@ export function buildUnlinkedReferenceViews(opts: {
         ? candidateRec.cite_detail as Record<string, unknown>
         : candidateRec
     )
+    const seedIsInpaper = typeof detailSeed.is_inpaper === 'boolean'
+      ? detailSeed.is_inpaper
+      : typeof detailSeed.isInpaper === 'boolean'
+        ? detailSeed.isInpaper
+        : true
+    const seedNum = seedIsInpaper
+      ? Number(detailSeed.num || candidateRec.ref_num || 0)
+      : Number(detailSeed.num ?? 0)
     const detail = normalizeCiteDetail({
       ...candidateRec,
       ...detailSeed,
       anchor: String(detailSeed.anchor || candidateRec.id || `kb-unlinked-ref-${opts.messageId}-${out.length + 1}`),
-      num: Number(detailSeed.num || candidateRec.ref_num || 0),
+      num: seedNum,
       source_name: String(detailSeed.source_name || candidateRec.source_name || ''),
       source_path: String(detailSeed.source_path || candidateRec.source_path || ''),
       citation_route: String(detailSeed.citation_route || 'system_b'),
-      is_inpaper: true,
+      is_inpaper: seedIsInpaper,
       binding_status: String(detailSeed.binding_status || 'candidate'),
       binding_confidence: Number(detailSeed.binding_confidence || candidateRec.confidence || 0),
     })
@@ -92,7 +100,9 @@ export function buildUnlinkedReferenceViews(opts: {
     out.push({
       candidate,
       detail: tracedDetail,
-      label: unlinkedReferenceMatchLabel(String(candidateRec.match_method || ''), opts.S),
+      label: !tracedDetail.isInpaper && tracedDetail.libraryMatchStatus === 'in_library'
+        ? opts.S?.msg_reference_candidate_library || 'In library'
+        : unlinkedReferenceMatchLabel(String(candidateRec.match_method || ''), opts.S),
     })
   }
   return out.slice(0, 5)

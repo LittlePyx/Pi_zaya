@@ -32,7 +32,12 @@ _ANSWER_AUDIT_PATTERNS = (
 
 _REQUESTED_PAPER_COUNT_PATTERNS = (
     r"(?:\b(?:exactly|only|top|choose|select|recommend|list|give\s+me)\s+)(\d{1,2})\s+(?:papers?|articles?|studies|references?)\b",
+    r"\b(?:please|only|just|give\s+me).{0,12}?(?:choose|select|recommend|list|give)?\s*"
+    r"(\d{1,2})\s+(?:papers?|articles?|studies|references?)\b",
     r"(?:\u53ea(?:\u7528|\u8981|\u9009)|\u8bf7(?:\u9009|\u5217\u51fa|\u63a8\u8350|\u7ed9)|\u5217\u51fa|\u63a8\u8350|\u9009\u51fa|\u6700\u76f8\u5173\u7684)\s*(\d{1,2}|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24]{1,3})\s*\u7bc7(?:\u8bba\u6587|\u6587\u7ae0|\u6587\u732e)?",
+    r"(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u6211\u8981|\u6211\u60f3|\u53ea|\u4ec5).{0,24}?"
+    r"(?:\u9009|\u63a8\u8350|\u5217\u51fa|\u7ed9\u51fa|\u7ed9|\u6311)(?:\u51fa)?[^\u3002\uff01\uff1f\n]{0,16}?"
+    r"(\d{1,2}|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24]{1,3})\s*\u7bc7(?:\u8bba\u6587|\u6587\u7ae0|\u6587\u732e)?",
 )
 
 _CJK_PAPER_COUNT_DIGITS = {

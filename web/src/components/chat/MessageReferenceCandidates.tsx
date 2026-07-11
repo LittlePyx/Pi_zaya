@@ -19,12 +19,24 @@ export function MessageReferenceCandidates({
   S,
 }: MessageReferenceCandidatesProps) {
   if (views.length <= 0) return null
+  const localLibraryCount = views.filter((view) => (
+    !view.detail.isInpaper && view.detail.libraryMatchStatus === 'in_library'
+  )).length
+  const allLocalLibrary = localLibraryCount === views.length
+  const headerTitle = allLocalLibrary
+    ? S.msg_library_candidates_title || 'Papers in your library'
+    : S.msg_reference_candidates_title || 'Possible cited papers'
+  const headerNote = allLocalLibrary
+    ? S.msg_library_candidates_note || 'Open the local full text directly'
+    : localLibraryCount > 0
+      ? S.msg_reference_candidates_mixed_note || 'Local papers and bibliography matches'
+      : S.msg_reference_candidates_note || 'Found in this paper bibliography'
 
   return (
     <div className="kb-unlinked-ref-strip" data-testid={`unlinked-reference-candidates-${messageId}`}>
       <div className="kb-unlinked-ref-head">
-        <span>{S.msg_reference_candidates_title || 'Possible cited papers'}</span>
-        <span>{S.msg_reference_candidates_note || 'Found in this paper bibliography'}</span>
+        <span>{headerTitle}</span>
+        <span>{headerNote}</span>
       </div>
       <div className="kb-unlinked-ref-list">
         {views.map((view) => {

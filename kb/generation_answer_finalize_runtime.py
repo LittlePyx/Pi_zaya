@@ -36,6 +36,7 @@ from kb.reference_query_family import (
     extract_requested_paper_count,
     extract_multi_paper_topic as _shared_extract_multi_paper_topic,
     prompt_explicitly_requests_multi_paper_list,
+    prompt_explicitly_requests_single_paper_pick,
     prompt_likely_cross_paper_refs,
     prompt_prefers_zh,
     prompt_requests_answer_audit,
@@ -1922,7 +1923,7 @@ def _format_multi_paper_list_answer_v2(*, prompt: str, docs: list[dict]) -> str:
 
 _MULTI_PAPER_NUMBERED_SECTION_RE = re.compile(
     r"(?m)^\s*(?:#{1,6}\s*)?(?:\u7b2c\s*)?(\d{1,2})"
-    r"(?:\s*\u6b65\s*[:\uff1a]\s*|[.)]\s+)"
+    r"(?:\s*(?:\u7bc7|\u6b65|\u9879|\u90e8)\s*[:\uff1a]\s*|[.)]\s+)"
 )
 
 
@@ -1976,6 +1977,23 @@ def _strip_requested_multi_paper_extras(answer: str) -> str:
         r"if\s+you\s+want\s+to\s+follow\s+the\s+citation\s+chain).*$"
     )
     return citation_chain_tail.sub("", text).rstrip()
+
+
+def _strip_single_paper_selection_extras(answer: str) -> str:
+    text = str(answer or "").strip()
+    if not text:
+        return text
+    candidate_section = re.compile(
+        r"(?ims)^\s*#{1,6}\s*(?:"
+        r"\u5176\u4ed6\u5019\u9009(?:\u8bba\u6587|\u6587\u7ae0|\u6587\u732e)?(?:\u4e3a\u4f55\u4e0d\u9009)?|"
+        r"\u5176\u4ed6\u8bba\u6587\u4e3a\u4f55\u4e0d\u9009|\u672a\u9009\u5019\u9009|"
+        r"other\s+candidates?|why\s+not\s+the\s+others?|alternatives?)\s*$"
+        r".*?(?=^\s*#{1,6}\s|\Z)"
+    )
+    out = candidate_section.sub("", text)
+    out = re.sub(r"(?m)(?:^\s*---\s*$\n*){2,}", "---\n\n", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
 
 
 def _multi_paper_section_hit_num(section: str, answer_hits: list[dict] | None) -> int:
@@ -2949,6 +2967,8 @@ def _finalize_generation_answer(
     research_answer_plan_norm = str(research_answer_plan or "").strip()
     answer_audit_requested = prompt_requests_answer_audit(prompt_for_user or prompt)
     multi_paper_list_prompt = bool(prompt_explicitly_requests_multi_paper_list(prompt_for_user or prompt))
+    single_paper_pick_prompt = bool(prompt_explicitly_requests_single_paper_pick(prompt_for_user or prompt))
+    library_paper_selection_prompt = bool(multi_paper_list_prompt or single_paper_pick_prompt)
     raw_answer_had_internal_doc_labels = bool(
         re.search(r"\bDOC-\d{1,3}(?:-S\d{1,3})?\b", str(partial or ""), flags=re.I)
     )
@@ -3082,7 +3102,7 @@ def _finalize_generation_answer(
             cards=list(paper_guide_evidence_cards or []),
             max_items=3,
         )
-    elif not answer_audit_requested:
+    elif not answer_audit_requested and not library_paper_selection_prompt:
         paper_guide_reference_opportunities = detect_text_reference_opportunities(
             prompt=prompt_for_user or prompt,
             answer=answer,
@@ -3173,6 +3193,8 @@ def _finalize_generation_answer(
         allow_paper_guide_structured_refs=bool(paper_guide_validated_structured_refs),
     )
     answer = _maybe_clarify_negative_boundary_answer(answer, prompt=prompt_for_user or prompt)
+    if single_paper_pick_prompt:
+        answer = _strip_single_paper_selection_extras(answer)
     if multi_paper_list_prompt:
         answer = _repair_requested_multi_paper_answer(
             answer,
@@ -3266,7 +3288,11 @@ def _finalize_generation_answer(
     )
     requested_paper_count = extract_requested_paper_count(prompt_for_user or prompt)
     if requested_paper_count is not None:
-        actual_paper_count = _count_multi_paper_answer_items(answer)
+        actual_paper_count = (
+            1
+            if single_paper_pick_prompt and str(answer or "").strip()
+            else _count_multi_paper_answer_items(answer)
+        )
         paper_count_ok = actual_paper_count == requested_paper_count
         answer_quality["requested_paper_count"] = requested_paper_count
         answer_quality["actual_paper_count"] = actual_paper_count

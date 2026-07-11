@@ -3473,3 +3473,77 @@ def test_unlinked_reference_candidates_find_unique_venue_year(monkeypatch):
     assert "answer_context_only" in candidates[0]["cite_detail"]["card_quality_flags"]
     assert candidates[0]["cite_detail"]["system_b_trace_complete"] is False
     assert "answer_context_only" in candidates[0]["cite_detail"]["system_b_trace_flags"]
+
+
+def test_unlinked_reference_candidate_promotes_retrieved_library_document(monkeypatch):
+    from api import chat_render
+
+    local_source = r"F:\kb\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+    parent_source = r"F:\kb\NatCommun-2021-Imaging biological tissue.en.md"
+    second_parent_source = r"F:\kb\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md"
+    monkeypatch.setattr(
+        chat_render,
+        "_load_reference_index_cached",
+        lambda: {
+            "docs": {
+                "demo": {
+                    "path": parent_source,
+                    "name": "NatCommun-2021-Imaging biological tissue.en.md",
+                    "refs": {
+                        "12": {
+                            "num": 12,
+                            "raw": "Zhang Z et al. Hadamard single-pixel imaging versus Fourier single-pixel imaging. Opt. Express. 2017.",
+                            "title": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                            "authors": "Zhang Z, Wang X, Zheng G, et al",
+                            "venue": "Opt. Express",
+                            "year": "2017",
+                            "doi": "10.1364/oe.25.019619",
+                        }
+                    },
+                },
+                "demo-duplicate": {
+                    "path": second_parent_source,
+                    "name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+                    "refs": {
+                        "41": {
+                            "num": 41,
+                            "raw": "Zhang Z et al. Hadamard single-pixel imaging versus Fourier single-pixel imaging. Opt. Express. 2017.",
+                            "title": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                            "authors": "Zhang Z, Wang X, Zheng G, et al",
+                            "venue": "Opt. Express",
+                            "year": "2017",
+                            "doi": "10.1364/oe.25.019619-duplicate-index-row",
+                        }
+                    },
+                },
+            }
+        },
+    )
+
+    candidates = chat_render._build_unlinked_reference_candidates(
+        answer_markdown="The best match is Hadamard single-pixel imaging versus Fourier single-pixel imaging.",
+        rendered_body="",
+        copy_text="",
+        cite_details=[],
+        ref_pack={
+            "hits": [
+                {"meta": {"source_path": parent_source}},
+                {"meta": {"source_path": second_parent_source}},
+                {"meta": {"source_path": local_source}},
+            ]
+        },
+        provenance_segments=[],
+        render_locale="en",
+        anchor_ns="test",
+    )
+
+    assert len(candidates) == 1
+    detail = candidates[0]["cite_detail"]
+    assert candidates[0]["source_path"] == local_source
+    assert candidates[0]["ref_num"] == 0
+    assert detail["source_path"] == local_source
+    assert detail["is_inpaper"] is False
+    assert detail["citation_route"] == "system_a"
+    assert detail["library_match_status"] == "in_library"
+    assert detail["reference_source_path"] == parent_source
+    assert detail["reference_ref_num"] == 12

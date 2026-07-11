@@ -98,7 +98,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 20
+_RENDER_CACHE_SCHEMA_VERSION = 21
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -1497,6 +1497,34 @@ def _supp_ref_context_line(text: str, start: int, end: int) -> str:
         return raw[line_start + 1 : int(end) + line_end].strip()
 
 
+def _supp_ref_match_retrieved_document(row: dict, source_identities: list[dict] | None) -> dict:
+    title_key = _supp_ref_title_key(str(row.get("title") or ""))
+    if not title_key or len(title_key) < 18:
+        return {}
+    matches: list[dict] = []
+    seen: set[str] = set()
+    for raw in list(source_identities or []):
+        if not isinstance(raw, dict):
+            continue
+        source_path = str(raw.get("source_path") or "").strip()
+        if not source_path:
+            continue
+        source_name = str(raw.get("source_name") or "").strip() or _source_name_from_path(source_path)
+        source_key = _supp_ref_title_key(source_name or source_path)
+        if not source_key or not (title_key == source_key or title_key in source_key):
+            continue
+        identity = _render_norm_source_key(source_path)
+        if not identity or identity in seen:
+            continue
+        seen.add(identity)
+        matches.append({
+            "source_path": source_path,
+            "source_name": source_name or _source_name_from_path(source_path),
+            "source_sha1": str(raw.get("source_sha1") or "").strip(),
+        })
+    return matches[0] if len(matches) == 1 else {}
+
+
 def _supp_ref_candidate_detail(
     *,
     row: dict,
@@ -1505,28 +1533,43 @@ def _supp_ref_candidate_detail(
     render_locale: str,
     match_method: str,
     confidence: float,
+    retrieved_document: dict | None = None,
 ) -> dict:
-    source_path = str(row.get("source_path") or "").strip()
-    source_name = str(row.get("source_name") or _source_name_from_path(source_path)).strip()
+    reference_source_path = str(row.get("source_path") or "").strip()
+    reference_source_name = str(row.get("source_name") or _source_name_from_path(reference_source_path)).strip()
     ref_num = int(row.get("ref_num") or 0)
     title = str(row.get("title") or "").strip()
     raw = str(row.get("raw") or "").strip()
-    anchor = _build_anchor(anchor_ns, _source_cite_id(source_path), ref_num, source_name)
+    local_doc = dict(retrieved_document or {}) if isinstance(retrieved_document, dict) else {}
+    source_path = str(local_doc.get("source_path") or reference_source_path).strip()
+    source_name = str(local_doc.get("source_name") or reference_source_name or _source_name_from_path(source_path)).strip()
+    direct_library_match = bool(local_doc and source_path)
+    anchor = _build_anchor(anchor_ns, _source_cite_id(source_path), 1 if direct_library_match else ref_num, source_name)
     locale = str(render_locale or "").strip().lower()
-    if locale == "en":
+    if direct_library_match and locale == "en":
+        support_relation = "This paper is available in the local library and can be opened directly."
+        binding_reason = "Matched the mentioned title to a retrieved local-library document."
+    elif direct_library_match:
+        support_relation = "回答提到的论文已在本地文献库中，可直接打开全文。"
+        binding_reason = "回答标题与本次检索到的库内论文一致。"
+    elif locale == "en":
         support_relation = "The answer mentions this work, and it appears in the current paper's bibliography."
         binding_reason = f"Matched from local reference index by {match_method}."
     else:
         support_relation = "回答提到了这项工作，且它出现在当前论文的参考文献表中。"
         binding_reason = f"根据本地参考文献索引命中：{match_method}。"
     rec = {
-        "num": ref_num,
+        "num": 0 if direct_library_match else ref_num,
         "anchor": anchor,
         "source_name": source_name,
         "source_path": source_path,
-        "is_inpaper": True,
-        "citation_route": "system_b",
-        "routing_reason": f"unlinked_reference_candidate:{match_method}",
+        "is_inpaper": not direct_library_match,
+        "citation_route": "system_a" if direct_library_match else "system_b",
+        "routing_reason": (
+            "unlinked_reference_candidate:retrieved_library_document"
+            if direct_library_match
+            else f"unlinked_reference_candidate:{match_method}"
+        ),
         "routing_confidence": float(confidence),
         "raw": raw,
         "title": title,
@@ -1539,28 +1582,56 @@ def _supp_ref_candidate_detail(
         "doi": str(row.get("doi") or "").strip(),
         "doi_url": str(row.get("doi_url") or "").strip(),
         "cite_fmt": raw,
-        "heading_path": "References",
-        "location_label": f"References / [{ref_num}]",
-        "evidence_quote": raw,
-        "evidence_source": "reference_index",
+        "heading_path": "" if direct_library_match else "References",
+        "location_label": source_name if direct_library_match else f"References / [{ref_num}]",
+        "evidence_quote": str(answer_context or "").strip() if direct_library_match else raw,
+        "evidence_source": "answer_reference_mention" if direct_library_match else "reference_index",
         "citation_context": str(answer_context or "").strip(),
         "citation_context_source": "answer_reference_mention",
         "summary_line": str(answer_context or "").strip(),
         "summary_source": "answer_reference_mention",
         "answer_claim": str(answer_context or "").strip(),
         "support_relation": support_relation,
-        "binding_status": "candidate",
+        "binding_status": "library_match" if direct_library_match else "candidate",
         "binding_confidence": float(confidence),
         "binding_reason": binding_reason,
         "render_locale": locale,
     }
-    enrich_inpaper_detail_context(
-        rec,
-        source_path=source_path,
-        ref_num=ref_num,
-        answer_context=str(answer_context or "").strip(),
-        source_answer_context=str(answer_context or "").strip(),
-    )
+    if direct_library_match:
+        rec.update({
+            "library_match": {
+                "matched": True,
+                "status": "in_library",
+                "confidence": 0.96,
+                "method": "retrieved_title",
+                "reason": "retrieved_document_title_exact",
+                "path": source_path,
+                "sha1": str(local_doc.get("source_sha1") or "").strip(),
+                "title": title,
+                "doi": str(row.get("doi") or "").strip(),
+                "year": str(row.get("year") or "").strip(),
+            },
+            "library_match_status": "in_library",
+            "library_match_confidence": 0.96,
+            "library_match_method": "retrieved_title",
+            "library_match_reason": "retrieved_document_title_exact",
+            "library_match_path": source_path,
+            "library_match_sha1": str(local_doc.get("source_sha1") or "").strip(),
+            "library_match_title": title,
+            "library_match_doi": str(row.get("doi") or "").strip(),
+            "library_match_year": str(row.get("year") or "").strip(),
+            "reference_source_path": reference_source_path,
+            "reference_source_name": reference_source_name,
+            "reference_ref_num": ref_num,
+        })
+    else:
+        enrich_inpaper_detail_context(
+            rec,
+            source_path=source_path,
+            ref_num=ref_num,
+            answer_context=str(answer_context or "").strip(),
+            source_answer_context=str(answer_context or "").strip(),
+        )
     return compose_citation_card(rec, locale=render_locale)
 
 
@@ -1606,6 +1677,7 @@ def _build_unlinked_reference_candidates(
 
     out: list[dict] = []
     seen: set[str] = set()
+    seen_library_sources: set[str] = set()
 
     def add_candidate(row: dict, *, match_method: str, confidence: float, mention: str, start: int = -1, end: int = -1) -> None:
         if len(out) >= limit:
@@ -1633,7 +1705,19 @@ def _build_unlinked_reference_candidates(
             render_locale=render_locale,
             match_method=match_method,
             confidence=confidence,
+            retrieved_document=_supp_ref_match_retrieved_document(row, source_identities),
         )
+        detail_source_path = str(detail.get("source_path") or source_path).strip()
+        detail_source_name = str(detail.get("source_name") or row.get("source_name") or "").strip()
+        direct_library_source_key = (
+            _render_norm_source_key(detail_source_path)
+            if not bool(detail.get("is_inpaper", True))
+            else ""
+        )
+        if direct_library_source_key:
+            if direct_library_source_key in seen_library_sources:
+                return
+            seen_library_sources.add(direct_library_source_key)
         out.append(
             {
                 "id": hashlib.sha1(f"{candidate_key}|{match_method}".encode("utf-8", "ignore")).hexdigest()[:12],
@@ -1641,9 +1725,11 @@ def _build_unlinked_reference_candidates(
                 "match_method": match_method,
                 "confidence": round(float(confidence), 3),
                 "mention": str(mention or "").strip(),
-                "source_path": source_path,
-                "source_name": str(row.get("source_name") or "").strip(),
-                "ref_num": ref_num,
+                "source_path": detail_source_path,
+                "source_name": detail_source_name,
+                "ref_num": int(detail.get("num") or 0),
+                "reference_source_path": source_path if detail_source_path != source_path else "",
+                "reference_ref_num": ref_num if detail_source_path != source_path else 0,
                 "title": str(row.get("title") or "").strip(),
                 "authors": str(row.get("authors") or "").strip(),
                 "venue": str(row.get("venue") or "").strip(),

@@ -3166,3 +3166,58 @@ test('streaming research agent partial hides appended trace json', async ({ page
   await expect(page.getByText('stream trace leaked')).toHaveCount(0)
   await expect(page.getByText('agent_trace')).toHaveCount(0)
 })
+
+test('unlinked library candidate preserves direct document identity', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  const views = await page.evaluate(async () => {
+    const { buildUnlinkedReferenceViews } = await import('/src/components/chat/messageCitationViews.ts')
+    return buildUnlinkedReferenceViews({
+      packet: {
+        answerMarkdown: 'The best match is the OE 2017 comparison paper.',
+        notice: '',
+        renderedBody: '',
+        renderedContent: '',
+        copyMarkdown: '',
+        copyText: '',
+        citeDetails: [],
+        citationValidation: {},
+        locateTarget: null,
+        readerOpen: null,
+        provenanceSegments: [],
+        primaryEvidence: null,
+        unlinkedReferenceCandidates: [
+          {
+            id: 'local-oe-2017',
+            match_method: 'title_mention',
+            source_path: 'F:/kb/OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md',
+            title: 'Hadamard single-pixel imaging versus Fourier single-pixel imaging',
+            cite_detail: {
+              num: 0,
+              anchor: 'kb-local-oe-2017',
+              source_path: 'F:/kb/OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md',
+              source_name: 'OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md',
+              title: 'Hadamard single-pixel imaging versus Fourier single-pixel imaging',
+              is_inpaper: false,
+              citation_route: 'system_a',
+              library_match_status: 'in_library',
+              library_match_path: 'F:/kb/OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md',
+            },
+          },
+        ],
+      },
+      linkedDetails: [],
+      messageId: 42,
+      traceConvId: 'conv-local',
+      traceAssistantOrder: 1,
+      traceUserMsgId: 41,
+      S: { msg_reference_candidate_library: 'In library' },
+    })
+  })
+
+  expect(views).toHaveLength(1)
+  expect(views[0].detail.isInpaper).toBe(false)
+  expect(views[0].detail.citationRoute).toBe('system_a')
+  expect(views[0].detail.num).toBe(0)
+  expect(views[0].detail.libraryMatchStatus).toBe('in_library')
+  expect(views[0].label).toBe('In library')
+})

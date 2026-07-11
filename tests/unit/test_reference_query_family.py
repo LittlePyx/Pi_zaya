@@ -30,6 +30,26 @@ def test_explicit_numeric_paper_request_extracts_count() -> None:
     assert prompt_explicitly_requests_multi_paper_list(prompt) is True
 
 
+def test_natural_library_selection_phrase_extracts_requested_count() -> None:
+    prompt = "请从库里选3篇最适合按顺序阅读的论文，每篇说明为什么。"
+
+    assert extract_requested_paper_count(prompt) == 3
+    assert prompt_explicitly_requests_multi_paper_list(prompt) is True
+
+
+def test_natural_single_best_phrase_extracts_one_paper() -> None:
+    prompt = "库里哪篇论文最直接？只给最直接的一篇，并说明依据。"
+
+    assert extract_requested_paper_count(prompt) == 1
+    assert prompt_explicitly_requests_multi_paper_list(prompt) is False
+
+
+def test_flexible_english_count_phrase_extracts_one_paper() -> None:
+    prompt = "Which paper is the direct match? Only give 1 paper."
+
+    assert extract_requested_paper_count(prompt) == 1
+
+
 def test_previous_answer_audit_is_not_a_multi_paper_list_request() -> None:
     prompt = (
         "审查上一条回答：是否严格只用了 4 篇？"
