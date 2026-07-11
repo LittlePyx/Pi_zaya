@@ -439,10 +439,31 @@ def citation_detail_quality(detail: Mapping[str, Any] | None) -> dict[str, Any]:
             fail("template_phrase_visible", field=field, detail=text[:120])
         if field in {"card_takeaway", "card_context_summary"} and _looks_redundant_narrative_metadata(text, data):
             fail("narrative_metadata_repeated", field=field, detail=text[:120])
+    visible_section_ids = {
+        _norm(item)
+        for item in _string_list(data.get("card_visible_sections"))
+        if _norm(item)
+    }
+    field_section_ids = {
+        "card_takeaway": "takeaway",
+        "card_claim": "claim",
+        "card_context_summary": "context_summary",
+        "card_evidence": "evidence",
+        "card_locator": "locator",
+        "card_reference_entry": "reference",
+        "card_support_explanation": "support",
+    }
     comparable_visible = [
         (field, text)
         for field, text in visible_texts.items()
-        if text and len(text) >= 24 and field not in {"system_b_trace_reference", "card_reference_entry"}
+        if text
+        and len(text) >= 24
+        and field not in {"system_b_trace_reference", "card_reference_entry"}
+        and (
+            not visible_section_ids
+            or field not in field_section_ids
+            or field_section_ids[field] in visible_section_ids
+        )
     ]
     for idx, (left_field, left_text) in enumerate(comparable_visible):
         for right_field, right_text in comparable_visible[idx + 1 :]:

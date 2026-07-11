@@ -39,6 +39,7 @@ from kb.paper_guide_doc_map import (
     _select_focused_doc_map_records,
 )
 from kb.paper_guide_retrieval_runtime import (
+    _extract_paper_guide_local_citation_lookup_refs,
     _focus_citation_fragment_for_refs,
     _paper_guide_citation_lookup_fragments,
     _paper_guide_citation_lookup_query_tokens,
@@ -51,6 +52,7 @@ from kb.paper_guide_retrieval_runtime import (
 from kb.paper_guide_prompting import (
     _paper_guide_prompt_requests_doc_map,
     _paper_guide_prompt_requests_exact_method_support,
+    _paper_guide_prompt_requests_naive_source_trace,
     _requested_figure_number,
 )
 from kb.paper_guide_structured_index_runtime import (
@@ -1655,7 +1657,10 @@ def _resolve_exact_citation_lookup_support_from_source(
     explicit_ref_list_request = bool(
         re.search(r"(?i)\b(?:reference\s+list|works?\s+cited|bibliography)\b", q)
     )
-    prefers_single_reference = bool(_paper_guide_prompt_prefers_single_reference(q))
+    prefers_single_reference = bool(
+        _paper_guide_prompt_prefers_single_reference(q)
+        or _paper_guide_prompt_requests_naive_source_trace(q)
+    )
     query_tokens = set(_paper_guide_citation_lookup_query_tokens(q))
     query_focus_tokens: set[str] = set()
     for tok in re.findall(r"\b[A-Za-z]+\d{2,}\b", q):
@@ -1708,6 +1713,23 @@ def _resolve_exact_citation_lookup_support_from_source(
             explicit_ref_list_request=explicit_ref_list_request,
         )
         score += min(6.0, 2.0 * float(len(refs)))
+        direct_target_refs = _extract_paper_guide_local_citation_lookup_refs(
+            frag,
+            prompt=q,
+            max_candidates=4,
+        )
+        local_target_refs = direct_target_refs or _select_paper_guide_local_citation_lookup_refs(
+            frag,
+            prompt=q,
+            max_candidates=4,
+        )
+        if direct_target_refs:
+            score += 14.0
+            refs = list(direct_target_refs)
+        elif local_target_refs:
+            # Atom-level inference is useful as a fallback, but it must not receive
+            # the same confidence bonus as an entity immediately followed by [n].
+            refs = list(local_target_refs)
         if prefers_single_reference:
             if len(refs) == 1:
                 score += 6.0

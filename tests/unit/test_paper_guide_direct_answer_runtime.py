@@ -156,7 +156,7 @@ def test_build_paper_guide_direct_answer_override_uses_exact_citation_lookup_wit
         build_direct_citation_lookup_answer=_build_direct_citation_lookup_answer,
     )
 
-    assert "Use [4] as the cited source for this passage." in out
+    assert "Use [[CITE:s6ce92c61:4]] as the cited source for this passage." in out
     assert "Source location: Related Work." in out
     assert "abstract" not in calls
     assert "citation" not in calls
@@ -193,7 +193,7 @@ def test_build_paper_guide_direct_answer_override_names_exact_reference_title(mo
         build_direct_citation_lookup_answer=lambda **_kwargs: "",
     )
 
-    assert "本文参考文献 [9]" in out
+    assert "本文参考文献 [[CITE:s6ce92c61:9]]" in out
     assert "A single-pixel terahertz imaging system based on compressed sensing" in out
 
 

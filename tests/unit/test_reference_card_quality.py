@@ -323,6 +323,26 @@ def test_citation_detail_quality_rejects_duplicate_visible_card_text():
     assert "duplicate_visible_card_text" in names
 
 
+def test_citation_detail_quality_ignores_duplicate_hidden_card_sections():
+    quality = citation_detail_quality(
+        {
+            "num": 1,
+            "anchor": "a1",
+            "source_name": "Demo.pdf",
+            "heading_path": "2. Related Work",
+            "location_label": "2. Related Work / paragraph",
+            "card_claim": "Most existing methods employ ADMM [4].",
+            "card_evidence": "Most existing methods employ ADMM [4].",
+            "card_visible_sections": ["evidence", "locator"],
+            "binding_status": "grounded",
+            "binding_confidence": 0.9,
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert "duplicate_visible_card_text" not in names
+
+
 def test_citation_detail_quality_rejects_metadata_repeated_in_card_copy():
     quality = citation_detail_quality(
         {

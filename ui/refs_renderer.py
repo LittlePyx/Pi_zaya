@@ -4409,7 +4409,9 @@ def _annotate_inpaper_citations_with_hover_meta(
         doi_url = str(ref2.get("doi_url") or "").strip()
         if (not doi_url) and doi_text:
             doi_url = f"https://doi.org/{doi_text}"
-        anchor = _build_inpaper_anchor(anchor_ns, int(n), source_name=source_name)
+        # System A hit numbers and System B bibliography numbers can be equal in
+        # one answer, so their card anchors need separate namespaces.
+        anchor = _build_inpaper_anchor(anchor_ns, int(n), source_name=source_name, extra="system_b")
         rec = {
             "num": int(n),
             "anchor": anchor,

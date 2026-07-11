@@ -203,6 +203,61 @@ def test_structured_cite_routes_to_system_b_for_upstream_origin_context(monkeypa
     assert detail["routing_reason"] == "structured_cite"
 
 
+def test_same_number_system_a_and_system_b_keep_distinct_cards(monkeypatch):
+    source_path = "scinerf.en.md"
+
+    def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
+        del _index_data, _source_path, source_sha1
+        if int(ref_num) != 1:
+            return None
+        return {
+            "source_path": source_path,
+            "source_name": "SCINeRF.pdf",
+            "ref_num": 1,
+            "ref": {
+                "authors": "Boyd S",
+                "year": "2011",
+                "title": "Distributed Optimization and Statistical Learning via ADMM",
+                "raw": "[1] Boyd S. Distributed Optimization and Statistical Learning via ADMM. 2011.",
+            },
+        }
+
+    def fake_enrich(detail, *, source_path, ref_num, answer_context="", **_kwargs):
+        del source_path, ref_num
+        detail["answer_claim"] = answer_context
+        detail["citation_context"] = "Existing methods employ ADMM [1]."
+        detail["citation_context_source"] = "source_markdown"
+        detail["evidence_quote"] = detail["citation_context"]
+        detail["location_label"] = "Related Work"
+        return detail
+
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "SCINeRF.pdf")
+    monkeypatch.setattr(refs_renderer, "enrich_inpaper_detail_context", fake_enrich)
+
+    sid = refs_renderer._source_cite_id(source_path)
+    md = f"The current paper says existing methods employ ADMM [1].\nADMM is prior work [[CITE:{sid}:1]]."
+    hits = [
+        {
+            "text": "The current paper explains that existing methods employ ADMM.",
+            "meta": {"source_path": source_path, "source_sha1": "abc", "heading_path": "Related Work"},
+        }
+    ]
+    plan = {"budget": {"system_a": 1, "system_b": 1}}
+
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
+        md,
+        hits,
+        anchor_ns="t",
+        citation_plan=plan,
+    )
+
+    assert out.count("[1](#kb-cite-") == 2
+    assert {detail["citation_route"] for detail in details} == {"system_a", "system_b"}
+    assert len({detail["anchor"] for detail in details}) == 2
+
+
 def test_numeric_router_keeps_good_system_a_for_generic_reference_word(monkeypatch):
     source_path = "single_pixel_review.en.md"
 

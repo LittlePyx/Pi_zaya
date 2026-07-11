@@ -3,9 +3,12 @@ from __future__ import annotations
 from tools.research_qa.run_research_qa_eval import (
     _assistant_message_by_id,
     _build_report,
+    evaluate_replay_rows,
     load_fixture,
+    load_replay,
     source_path_for_doc,
     validate_case,
+    validate_fixture_contracts,
 )
 
 
@@ -93,6 +96,124 @@ def test_research_qa_fixture_cases_have_acceptance_contracts():
         assert expected.get("requiredCitationDocIds"), f"{case_id} must define required citation docs"
 
 
+def test_research_qa_fixture_covers_six_real_user_quality_focuses():
+    fixture = load_fixture()
+
+    assert validate_fixture_contracts(fixture) == []
+    focused = {
+        str(case.get("evaluationFocus") or ""): case
+        for case in fixture.cases
+        if str(case.get("evaluationFocus") or "").strip()
+    }
+    assert set(focused) == {
+        "paper_summary",
+        "method_detail",
+        "method_comparison",
+        "multi_paper_synthesis",
+        "upstream_reference",
+        "scope_boundary",
+    }
+    for focus, case in focused.items():
+        expected = case.get("expected") or {}
+        assert expected.get("allowedRefDocIds"), focus
+        assert expected.get("claimEvidenceContracts"), focus
+        assert expected.get("requiredRouteCounts") is not None, focus
+        assert expected.get("requiredLocateContracts"), focus
+
+
+def test_reviewed_real_paper_replay_passes_every_focused_quality_contract():
+    fixture = load_fixture()
+
+    summary = evaluate_replay_rows(fixture, load_replay())
+
+    assert summary["ok"], summary["errors"]
+    assert summary["total"] == 6
+    assert summary["passed"] == 6
+    assert summary["failed"] == 0
+
+
+def test_admm_live_style_hallucination_is_rejected_even_when_keywords_and_system_b_exist():
+    fixture = load_fixture()
+    case = _case_by_id(fixture, "scinerf-admm-origin")
+    scinerf_path = source_path_for_doc(fixture, "scinerf")
+    scigs_path = source_path_for_doc(fixture, "scigs")
+    result = {
+        "status": "done",
+        "done": True,
+        "user_msg_id": 901,
+        "assistant_message": {
+            "role": "assistant",
+            "content": (
+                "ADMM 不是 SCINeRF 的新东西，而是已有方法。"
+                "作者是在利用 ADMM 作为解决某个子问题的工具。"
+                "ADMM 很可能被用作一个优化策略。"
+            ),
+            "cite_details": [
+                {
+                    "num": 4,
+                    "anchor": "scinerf-r4",
+                    "source_path": scinerf_path,
+                    "source_name": "SCINeRF",
+                    "is_inpaper": True,
+                    "title": "Distributed Optimization and Statistical Learning via ADMM",
+                    "authors": "Stephen Boyd; Neal Parikh",
+                    "venue": "Foundations and Trends in Machine Learning",
+                    "year": "2011",
+                    "raw": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM, 2011.",
+                    "heading_path": "2. Related Work / Snapshot Compressive Imaging",
+                    "location_label": "Related Work / ref 4",
+                    "answer_claim": "ADMM 不是 SCINeRF 原创，而是已有优化方法。",
+                    "citation_context": "Most existing methods employ ADMM [4].",
+                    "citation_context_source": "source_markdown",
+                    "upstream_work_role": "This is upstream ADMM background.",
+                    "user_question_relation": "It predates SCINeRF.",
+                    "system_b_trace_complete": True,
+                    "system_b_trace_score": 0.9,
+                    "system_b_trace_source": "source_markdown",
+                    "routing_reason": "structured_cite",
+                }
+            ],
+        },
+        "refs_payload": {
+            "901": {
+                "display_state": "ready",
+                "hits": [
+                    {
+                        "text": "Most existing SCI methods employ ADMM.",
+                        "meta": {"source_path": scinerf_path, "ref_pack_state": "ready"},
+                        "ui_meta": {
+                            "display_name": "SCINeRF",
+                            "source_path": scinerf_path,
+                            "summary_line": "Related Work describes ADMM as prior SCI reconstruction background.",
+                            "why_line": "This evidence answers whether ADMM is a new SCINeRF contribution.",
+                        },
+                    },
+                    {
+                        "text": "SCIGS reconstructs dynamic scenes with 3D Gaussian splatting.",
+                        "meta": {"source_path": scigs_path, "ref_pack_state": "ready"},
+                        "ui_meta": {
+                            "display_name": "SCIGS",
+                            "source_path": scigs_path,
+                            "summary_line": "SCIGS is an unrelated extra retrieval result for this focused question.",
+                            "why_line": "It should not have been included in a current-paper ADMM origin answer.",
+                        },
+                    },
+                ],
+            }
+        },
+    }
+
+    quality = validate_case(case, fixture, result)
+    failed_names = {item["name"] for item in quality["failures"]}
+
+    assert quality["ok"] is False
+    assert "answer_avoids_forbidden_claims" in failed_names
+    assert "refs_avoid_unexpected_docs" in failed_names
+    assert "citations_match_required_routes" in failed_names
+    assert "claims_have_matching_evidence" in failed_names
+    assert "citations_have_expected_locators" in failed_names
+
+
 def test_research_qa_fixture_real_regression_cases_require_card_quality_gates():
     fixture = load_fixture()
     strict_case_ids = {
@@ -122,7 +243,18 @@ def test_research_qa_fixture_real_regression_cases_require_card_quality_gates():
 
 def test_validate_case_accepts_grounded_system_b_answer():
     fixture = load_fixture()
-    case = _case_by_id(fixture, "scinerf-admm-origin")
+    fixture_case = _case_by_id(fixture, "scinerf-admm-origin")
+    case = {
+        **fixture_case,
+        "expected": {
+            "requiredAnswerTerms": ["ADMM", "不是", "已有"],
+            "requiredRefDocIds": ["scinerf"],
+            "requiredCitationDocIds": ["scinerf"],
+            "requireSystemB": True,
+            "requiredSystemBTerms": ["ADMM", "Distributed optimization"],
+            "requireSystemBTraceComplete": True,
+        },
+    }
     scinerf_path = source_path_for_doc(fixture, "scinerf")
     answer = "ADMM 不是 SCINeRF 作者新提出的模块，而是已有的优化框架；论文只是把它放在相关工作里说明来源。"
     result = {
@@ -391,7 +523,18 @@ def test_validate_case_rejects_template_answer_and_missing_system_b():
 
 def test_validate_case_prefers_render_packet_over_raw_content_for_citation_quality():
     fixture = load_fixture()
-    case = _case_by_id(fixture, "scinerf-admm-origin")
+    fixture_case = _case_by_id(fixture, "scinerf-admm-origin")
+    case = {
+        **fixture_case,
+        "expected": {
+            "requiredAnswerTerms": ["ADMM", "不是", "已有"],
+            "requiredRefDocIds": ["scinerf"],
+            "requiredCitationDocIds": ["scinerf"],
+            "requireSystemB": True,
+            "requiredSystemBTerms": ["ADMM", "Distributed optimization"],
+            "requireSystemBTraceComplete": True,
+        },
+    }
     scinerf_path = source_path_for_doc(fixture, "scinerf")
     result = {
         "status": "done",

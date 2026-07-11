@@ -5,6 +5,12 @@ import pytest
 import kb.generation_answer_finalize_runtime as finalize_runtime
 
 
+def test_origin_question_requests_upstream_citation_lookup() -> None:
+    assert finalize_runtime._prompt_explicitly_requests_citation_lookup(
+        "ADMM 是作者自己发明的吗？我应该把它当成这篇论文的新东西吗？"
+    )
+
+
 def test_answer_audit_doc_labels_become_user_facing_source_labels() -> None:
     out = finalize_runtime._replace_answer_audit_doc_labels(
         "来源核对：DOC-2 的正文与标题一致 [10002]。"

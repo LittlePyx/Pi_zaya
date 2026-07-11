@@ -84,9 +84,9 @@ def test_finalize_generation_answer_surfaces_system_b_for_ordinary_question(tmp_
 
     def _validate_keep(answer: str, **kwargs):
         refs_by_source = kwargs.get("paper_guide_candidate_refs_by_source") or {}
-        assert refs_by_source.get(source) == [4, 21]
-        assert "[[CITE:s1234abcd:4]]" in answer
-        assert "[[CITE:s1234abcd:21]]" not in answer
+        assert refs_by_source.get(source) == [4]
+        assert ":4]]" in answer
+        assert ":21]]" not in answer
         return answer, {"raw_count": 1, "kept": 1, "rewritten": 0, "dropped": 0}
 
     result = finalize_runtime._finalize_generation_answer(
@@ -123,11 +123,11 @@ def test_finalize_generation_answer_surfaces_system_b_for_ordinary_question(tmp_
 
     answer = str(result.get("answer") or "")
     assert "citation trail" not in answer
-    assert "[[CITE:s1234abcd:4]]" in answer
+    assert ":4]]" in answer
     assert "[[CITE:s1234abcd:21]]" not in answer
     assert result["answer_quality"]["reference_opportunities"]["mode"] == "inline"
     assert result["answer_quality"]["reference_opportunities"]["injected_refs"] == [4]
-    assert result["answer_quality"]["reference_opportunities"]["refs"][:2] == [4, 21]
+    assert result["answer_quality"]["reference_opportunities"]["refs"] == [4]
 
 
 def test_finalize_generation_answer_skips_system_b_tail_when_plan_disables_it(

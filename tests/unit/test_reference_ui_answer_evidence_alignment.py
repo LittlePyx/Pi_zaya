@@ -60,6 +60,10 @@ def test_attach_pack_primary_evidence_prefers_answer_aligned_source_block(tmp_pa
     assert "ray tracing" in primary["snippet"]
     assert "wave propagation" in primary["snippet"]
     assert primary["selection_reason"] == "answer_aligned_block"
+    hit_primary = out["hits"][0]["ui_meta"]["primary_evidence"]
+    assert hit_primary["block_id"] == primary["block_id"]
+    assert hit_primary["anchor_id"] == primary["anchor_id"]
+    assert "Digital Refocusing Procedure" in hit_primary["heading_path"]
     alignment = out["primary_evidence_alignment"]
     assert alignment["mismatch"] is False
     assert alignment["selected_source"] == "source_blocks"

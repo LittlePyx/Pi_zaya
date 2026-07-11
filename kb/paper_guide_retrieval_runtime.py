@@ -1279,9 +1279,9 @@ def _extract_paper_guide_local_citation_lookup_refs(text: str, *, prompt: str, m
         if not tok:
             continue
         patterns = (
-            rf"(?i)\b{re.escape(tok)}\b[^\[\]\n]{{0,32}}\[({spec_pat})\](?![A-Za-z])",
-            rf"(?i)\b{re.escape(tok)}\b[^\n]{{0,32}}\$\^\{{({spec_pat})\}}\$",
-            rf"(?i)\b{re.escape(tok)}\b[^\n]{{0,32}}\^\{{({spec_pat})\}}",
+            rf"(?i)\b{re.escape(tok)}\b(?![-A-Za-z0-9])[^\[\]\n]{{0,32}}\[({spec_pat})\](?![A-Za-z])",
+            rf"(?i)\b{re.escape(tok)}\b(?![-A-Za-z0-9])[^\n]{{0,32}}\$\^\{{({spec_pat})\}}\$",
+            rf"(?i)\b{re.escape(tok)}\b(?![-A-Za-z0-9])[^\n]{{0,32}}\^\{{({spec_pat})\}}",
         )
         for pattern in patterns:
             m = re.search(pattern, frag)
@@ -1530,6 +1530,14 @@ def _build_paper_guide_direct_citation_lookup_answer(
                     explicit_ref_list_request=explicit_ref_list_request,
                 )
                 score += min(6.0, 2.0 * float(len(refs)))
+                local_target_refs = _extract_paper_guide_local_citation_lookup_refs(
+                    frag,
+                    prompt=q,
+                    max_candidates=4,
+                )
+                if local_target_refs:
+                    score += 14.0
+                    refs = list(local_target_refs)
                 if explicit_ref_list_request:
                     if is_reference_like:
                         score += 6.0

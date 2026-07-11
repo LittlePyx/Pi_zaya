@@ -220,6 +220,40 @@ def test_resolve_exact_citation_lookup_support_from_source_prefers_single_ref_an
     assert "[5,8]" not in rec["locate_anchor"]
 
 
+def test_resolve_exact_citation_lookup_support_prefers_admm_origin_sentence_over_pnp_neighbor(tmp_path, monkeypatch):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "_paper_guide_targeted_source_block_hits",
+        lambda **_kwargs: [
+            {
+                "text": (
+                    "Early SCI reconstruction methods focus on regularized optimization-based approaches [18,20,47,49]. "
+                    "Different priors include sparsity [47] and total variation [49]. "
+                    "Most of the existing methods employ alternating direction method of multipliers (ADMM) [4]. "
+                    "ADMM-Net [21] interprets an ADMM process as a deep network. "
+                    "Plug-and-play FFDNet [51] combined a denoising network with ADMM. "
+                    "STFormer [39] and EfficientSCI [38] use Transformer [37] architectures."
+                ),
+                "meta": {"heading_path": "2. Related Work", "block_id": "blk_rel", "anchor_id": "anc_rel"},
+            }
+        ],
+    )
+    monkeypatch.setattr(answer_post_runtime, "load_source_blocks", lambda _path: [])
+
+    rec = answer_post_runtime._resolve_exact_citation_lookup_support_from_source(
+        "demo.pdf",
+        prompt="ADMM 是作者自己发明的吗？我应该把它当成这篇论文的新东西吗？",
+        db_dir=tmp_path,
+    )
+
+    assert rec["ref_nums"] == [4]
+    assert "existing methods employ" in rec["locate_anchor"]
+    assert "PnP" not in rec["locate_anchor"]
+
+
 def test_resolve_exact_citation_lookup_support_from_source_keeps_multi_refs_for_plural_prompt(tmp_path, monkeypatch):
     md_path = tmp_path / "paper.en.md"
     md_path.write_text("placeholder", encoding="utf-8")
@@ -697,7 +731,7 @@ def test_apply_paper_guide_answer_postprocess_exact_citation_sets_resolved_ref_n
         locked_citation_source=None,
     )
 
-    assert "Use [4] as the cited source for this passage." in out
+    assert "Use [[CITE:s6ce92c61:4]] as the cited source for this passage." in out
     assert support_resolution == [
         {
             "source_path": "bound.md",
@@ -752,7 +786,7 @@ def test_apply_paper_guide_answer_postprocess_exact_citation_sets_resolved_ref_n
         locked_citation_source=None,
     )
 
-    assert "Use [33], [34] as the cited source for this passage." in out
+    assert "Use [[CITE:s6ce92c61:33]], [[CITE:s6ce92c61:34]] as the cited source for this passage." in out
     assert support_resolution and support_resolution[0].get("candidate_refs") == [33, 34]
     assert support_resolution and int(support_resolution[0].get("resolved_ref_num") or 0) == 33
 
@@ -793,7 +827,7 @@ def test_apply_paper_guide_answer_postprocess_exact_citation_extracts_refs_from_
         locked_citation_source=None,
     )
 
-    assert "Use [33], [34] as the cited source for this passage." in out
+    assert "Use [[CITE:s6ce92c61:33]], [[CITE:s6ce92c61:34]] as the cited source for this passage." in out
     assert support_resolution and support_resolution[0].get("candidate_refs") == [33, 34]
     assert support_resolution and int(support_resolution[0].get("resolved_ref_num") or 0) == 33
 

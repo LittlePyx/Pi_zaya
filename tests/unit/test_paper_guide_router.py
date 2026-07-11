@@ -20,10 +20,13 @@ def test_resolve_paper_guide_intent_marks_beginner_overview_prompt():
 
 def test_resolve_paper_guide_intent_marks_plain_user_origin_questions_as_citation_lookup():
     zh = _resolve_paper_guide_intent("ADMM 是怎么来的？作者是不是借鉴了别人以前的想法？")
+    zh_invented = _resolve_paper_guide_intent("ADMM 是作者自己发明的吗？我应该把它当成这篇论文的新东西吗？")
     en = _resolve_paper_guide_intent("Where did ADMM-Net come from before this paper?")
 
     assert zh.family == "citation_lookup"
     assert zh.exact_support is True
+    assert zh_invented.family == "citation_lookup"
+    assert zh_invented.exact_support is True
     assert en.family == "citation_lookup"
     assert en.exact_support is True
 
@@ -179,7 +182,7 @@ def test_dispatch_paper_guide_exact_support_skill_routes_citation_lookup_family(
 
     assert calls == ["citation"]
     assert result is not None
-    assert "Use [4] as the cited source for this passage." in result.answer_text
+    assert "Use [[CITE:s6ce92c61:4]] as the cited source for this passage." in result.answer_text
     assert result.support_resolution[0]["resolved_ref_num"] == 4
 
 
@@ -218,6 +221,7 @@ def test_dispatch_paper_guide_exact_support_skill_routes_naive_source_trace():
 
     assert result is not None
     assert calls == ["citation"]
+    assert "不是本文原创" in result.answer_text
     assert result.support_resolution[0]["resolved_ref_num"] == 11
 
 

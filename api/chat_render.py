@@ -185,7 +185,9 @@ def _propagate_box_scope_for_display(segments: list[dict]) -> list[dict]:
 def _render_primary_source_identity(raw: dict | None) -> str:
     if not isinstance(raw, dict):
         return ""
-    for key in ("source_name", "sourceName", "source_path", "sourcePath"):
+    # The same local paper can have a storage filename and a richer metadata
+    # display name. Canonical paths are stable across those presentation forms.
+    for key in ("source_path", "sourcePath", "source_name", "sourceName"):
         text = str(raw.get(key) or "").strip().lower()
         if not text:
             continue
@@ -442,6 +444,10 @@ def _ref_pack_primary_evidence_by_source(ref_pack: dict | None) -> dict[str, dic
     if not isinstance(ref_pack, dict):
         return {}
     out: dict[str, dict] = {}
+    pack_primary = ref_pack.get("primary_evidence") if isinstance(ref_pack.get("primary_evidence"), dict) else {}
+    pack_primary_key = _render_primary_source_identity(pack_primary)
+    if pack_primary_key and pack_primary:
+        out[pack_primary_key] = dict(pack_primary)
     candidate_hits: list[dict] = []
     candidate_hits.extend([item for item in list(ref_pack.get("hits") or []) if isinstance(item, dict)])
     candidate_hits.extend([item for item in list(ref_pack.get("enriched_hits") or []) if isinstance(item, dict)])
@@ -500,13 +506,24 @@ def _backfill_system_a_cite_details_from_ref_pack(cite_details: list[dict], ref_
     out: list[dict] = []
     for raw in cite_details:
         detail = dict(raw or {}) if isinstance(raw, dict) else {}
-        if not detail or not _system_a_detail_needs_ref_primary_backfill(detail):
+        if not detail:
+            out.append(detail)
+            continue
+        if bool(detail.get("is_inpaper")) or str(detail.get("citation_route") or "").strip().lower() == "system_b":
             out.append(detail)
             continue
         source_key = _render_primary_source_identity(detail)
         primary = primary_by_source.get(source_key) if source_key else None
         snippet = _primary_evidence_text(primary if isinstance(primary, dict) else {})
         if not isinstance(primary, dict) or not snippet:
+            out.append(detail)
+            continue
+        authoritative_answer_alignment = bool(
+            str(primary.get("selection_reason") or "").strip().lower() == "answer_aligned_block"
+            and bool(primary.get("strict_locate"))
+            and str(primary.get("block_id") or primary.get("anchor_id") or "").strip()
+        )
+        if (not _system_a_detail_needs_ref_primary_backfill(detail)) and (not authoritative_answer_alignment):
             out.append(detail)
             continue
         heading = str(primary.get("heading_path") or primary.get("headingPath") or "").strip()

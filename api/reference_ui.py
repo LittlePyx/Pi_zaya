@@ -4879,6 +4879,25 @@ def _attach_pack_primary_ref_evidence(pack: dict | None) -> dict:
         heading_path = str(primary.get("heading_path") or "").strip()
         if heading_path:
             pack2["primary_evidence_heading_path"] = heading_path
+        primary_source_key = str(primary.get("source_path") or "").strip().replace("\\", "/").lower()
+        if primary_source_key:
+            synced_hits: list[dict] = []
+            for raw_hit in list(pack2.get("hits") or []):
+                if not isinstance(raw_hit, dict):
+                    continue
+                hit = dict(raw_hit)
+                meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+                ui_meta = dict(hit.get("ui_meta") or {}) if isinstance(hit.get("ui_meta"), dict) else {}
+                hit_source_key = str(
+                    ui_meta.get("source_path") or meta.get("source_path") or ""
+                ).strip().replace("\\", "/").lower()
+                if hit_source_key == primary_source_key:
+                    ui_meta["primary_evidence"] = dict(primary)
+                    if heading_path:
+                        ui_meta["primary_evidence_heading_path"] = heading_path
+                    hit["ui_meta"] = ui_meta
+                synced_hits.append(hit)
+            pack2["hits"] = synced_hits
     if alignment:
         pack2["primary_evidence_alignment"] = dict(alignment)
         pipeline_debug = dict(pack2.get("pipeline_debug") or {}) if isinstance(pack2.get("pipeline_debug"), dict) else {}

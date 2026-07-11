@@ -24,8 +24,18 @@ from kb.citation_audit import summarize_system_b_citation_audit
 
 
 DEFAULT_FIXTURE = Path("web/src/testing/researchQaData.json")
+DEFAULT_REPLAY = Path("docs/research_qa_grounded_replay_v1.jsonl")
 DEFAULT_OUT_DIR = Path("test_results/research_qa_eval")
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+
+REQUIRED_EVALUATION_FOCUSES = {
+    "paper_summary",
+    "method_detail",
+    "method_comparison",
+    "multi_paper_synthesis",
+    "upstream_reference",
+    "scope_boundary",
+}
 
 
 @dataclass(frozen=True)
@@ -93,6 +103,54 @@ def load_fixture(path: Path | str = DEFAULT_FIXTURE) -> ResearchQaFixture:
         cases=[item for item in list(cases or []) if isinstance(item, dict)],
         forbidden_phrases=[str(item) for item in list(forbidden or []) if str(item or "").strip()],
     )
+
+
+def load_replay(path: Path | str = DEFAULT_REPLAY) -> list[dict[str, Any]]:
+    target = Path(path)
+    rows: list[dict[str, Any]] = []
+    for line_no, raw in enumerate(target.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{target}:{line_no}: invalid JSON: {exc}") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"{target}:{line_no}: replay row must be an object")
+        row["_line_no"] = line_no
+        rows.append(row)
+    return rows
+
+
+def validate_fixture_contracts(fixture: ResearchQaFixture) -> list[str]:
+    errors: list[str] = []
+    known_docs = set(fixture.docs_by_id)
+    focus_cases: dict[str, list[str]] = {}
+    for case in fixture.cases:
+        case_id = str(case.get("id") or "").strip() or "<missing-id>"
+        focus = str(case.get("evaluationFocus") or "").strip()
+        if focus:
+            focus_cases.setdefault(focus, []).append(case_id)
+        expected = case.get("expected") if isinstance(case.get("expected"), dict) else {}
+        doc_ids = [str(item or "").strip() for item in _as_list(case.get("docIds")) if str(item or "").strip()]
+        unknown_docs = sorted(set(doc_ids) - known_docs)
+        if unknown_docs:
+            errors.append(f"{case_id}: unknown doc ids: {', '.join(unknown_docs)}")
+        if not focus:
+            continue
+        if not _as_list(expected.get("allowedRefDocIds")):
+            errors.append(f"{case_id}: focused case requires allowedRefDocIds")
+        if not _as_list(expected.get("claimEvidenceContracts")):
+            errors.append(f"{case_id}: focused case requires claimEvidenceContracts")
+        if not isinstance(expected.get("requiredRouteCounts"), dict):
+            errors.append(f"{case_id}: focused case requires requiredRouteCounts")
+        if not _as_list(expected.get("requiredLocateContracts")):
+            errors.append(f"{case_id}: focused case requires requiredLocateContracts")
+    missing_focuses = sorted(REQUIRED_EVALUATION_FOCUSES - set(focus_cases))
+    if missing_focuses:
+        errors.append(f"fixture missing evaluation focuses: {', '.join(missing_focuses)}")
+    return errors
 
 
 def source_path_for_doc(fixture: ResearchQaFixture, doc_id: str) -> str:
@@ -452,11 +510,208 @@ def _extract_primary_evidence_payloads(refs_payload: Any, user_msg_id: int | str
     return payloads
 
 
+def _system_a_ref_evidence_details(
+    refs_payload: Any,
+    *,
+    answer: str,
+    user_msg_id: int | str | None = None,
+) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def _append(raw: Any) -> None:
+        if not isinstance(raw, dict):
+            return
+        source_path = str(raw.get("source_path") or raw.get("sourcePath") or "").strip()
+        heading_path = str(raw.get("heading_path") or raw.get("headingPath") or "").strip()
+        snippet = str(
+            raw.get("snippet")
+            or raw.get("highlight_snippet")
+            or raw.get("highlightSnippet")
+            or ""
+        ).strip()
+        if not source_path or not snippet:
+            return
+        key = (source_path.lower(), heading_path.lower(), snippet[:160].lower())
+        if key in seen:
+            return
+        seen.add(key)
+        details.append(
+            {
+                "citation_route": "system_a",
+                "is_inpaper": False,
+                "source_path": source_path,
+                "source_name": str(raw.get("source_name") or raw.get("sourceName") or "").strip(),
+                "heading_path": heading_path,
+                "location_label": heading_path,
+                "answer_claim": answer,
+                "evidence_quote": snippet,
+                "support_relation": str(raw.get("selection_reason") or "reference_card_primary_evidence"),
+                "block_id": str(raw.get("block_id") or raw.get("blockId") or "").strip(),
+                "anchor_id": str(raw.get("anchor_id") or raw.get("anchorId") or "").strip(),
+                "anchor_kind": str(raw.get("anchor_kind") or raw.get("anchorKind") or "").strip(),
+            }
+        )
+
+    for pack in _extract_ref_packs(refs_payload, user_msg_id=user_msg_id):
+        _append(pack.get("primary_evidence"))
+        for hit in _as_list(pack.get("hits")):
+            if not isinstance(hit, dict):
+                continue
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            reader_open = ui_meta.get("reader_open") if isinstance(ui_meta.get("reader_open"), dict) else {}
+            _append(reader_open.get("primaryEvidence"))
+    return details
+
+
 def _expected_int(expected: dict[str, Any], key: str, default: int = 0) -> int:
     try:
         return max(0, int(expected.get(key, default) or default))
     except Exception:
         return max(0, int(default or 0))
+
+
+def _citation_route(detail: dict[str, Any]) -> str:
+    route = str(detail.get("citation_route") or detail.get("citationRoute") or "").strip().lower()
+    if route in {"system_a", "system_b"}:
+        return route
+    return "system_b" if bool(detail.get("is_inpaper")) else "system_a"
+
+
+def _strict_phrase_hits(payload: Any, phrases: list[str]) -> list[str]:
+    haystack = _norm(_payload_text(payload))
+    return [phrase for phrase in phrases if _norm(phrase) and _norm(phrase) in haystack]
+
+
+def _detail_evidence_payload(detail: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: detail.get(key)
+        for key in (
+            "evidence_quote",
+            "citation_context",
+            "card_evidence",
+            "support_relation",
+            "upstream_work_role",
+            "user_question_relation",
+            "raw",
+        )
+        if detail.get(key)
+    }
+
+
+def _detail_locator_payload(detail: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: detail.get(key)
+        for key in (
+            "heading_path",
+            "location_label",
+            "card_locator",
+            "block_id",
+            "anchor_id",
+            "anchor_kind",
+            "page_start",
+            "page_end",
+            "source_path",
+        )
+        if detail.get(key) not in (None, "")
+    }
+
+
+def _matching_citation_details(
+    fixture: ResearchQaFixture,
+    citation_details: list[dict[str, Any]],
+    contract: dict[str, Any],
+) -> list[dict[str, Any]]:
+    doc_id = str(contract.get("docId") or "").strip()
+    route = str(contract.get("route") or "").strip().lower()
+    matches: list[dict[str, Any]] = []
+    for detail in citation_details:
+        if doc_id and not _doc_matches_payload(fixture, doc_id, detail):
+            continue
+        if route and _citation_route(detail) != route:
+            continue
+        matches.append(detail)
+    return matches
+
+
+def _contract_terms(value: Any) -> list[str]:
+    return [str(item or "").strip() for item in _as_list(value) if str(item or "").strip()]
+
+
+def _claim_evidence_contract_failures(
+    fixture: ResearchQaFixture,
+    citation_details: list[dict[str, Any]],
+    contracts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    for index, contract in enumerate(contracts, start=1):
+        contract_id = str(contract.get("id") or f"claim-{index}").strip()
+        answer_terms = _contract_terms(contract.get("answerTerms"))
+        evidence_terms = _contract_terms(contract.get("evidenceTerms"))
+        candidates = _matching_citation_details(fixture, citation_details, contract)
+        matched = False
+        for detail in candidates:
+            claim_payload = {
+                "answer_claim": detail.get("answer_claim"),
+                "support_relation": detail.get("support_relation"),
+                "user_question_relation": detail.get("user_question_relation"),
+            }
+            if answer_terms and not all(_contains_term(claim_payload, term) for term in answer_terms):
+                continue
+            evidence_payload = _detail_evidence_payload(detail)
+            if evidence_terms and not all(_contains_term(evidence_payload, term) for term in evidence_terms):
+                continue
+            matched = True
+            break
+        if not matched:
+            failures.append(
+                {
+                    "id": contract_id,
+                    "doc_id": str(contract.get("docId") or ""),
+                    "route": str(contract.get("route") or ""),
+                    "candidate_count": len(candidates),
+                    "answer_terms": answer_terms,
+                    "evidence_terms": evidence_terms,
+                }
+            )
+    return failures
+
+
+def _locate_contract_failures(
+    fixture: ResearchQaFixture,
+    citation_details: list[dict[str, Any]],
+    contracts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    for index, contract in enumerate(contracts, start=1):
+        contract_id = str(contract.get("id") or f"locate-{index}").strip()
+        locator_terms = _contract_terms(contract.get("locatorTerms"))
+        evidence_terms = _contract_terms(contract.get("evidenceTerms"))
+        candidates = _matching_citation_details(fixture, citation_details, contract)
+        matched = False
+        for detail in candidates:
+            locator_payload = _detail_locator_payload(detail)
+            if locator_terms and not all(_contains_term(locator_payload, term) for term in locator_terms):
+                continue
+            evidence_payload = _detail_evidence_payload(detail)
+            if evidence_terms and not all(_contains_term(evidence_payload, term) for term in evidence_terms):
+                continue
+            if not str(detail.get("source_path") or "").strip():
+                continue
+            matched = True
+            break
+        if not matched:
+            failures.append(
+                {
+                    "id": contract_id,
+                    "doc_id": str(contract.get("docId") or ""),
+                    "route": str(contract.get("route") or ""),
+                    "candidate_count": len(candidates),
+                    "locator_terms": locator_terms,
+                    "evidence_terms": evidence_terms,
+                }
+            )
+    return failures
 
 
 def _unique_doc_ids_in_payload(fixture: ResearchQaFixture, payload: Any) -> list[str]:
@@ -679,6 +934,15 @@ def validate_case(
     citation_details = _citation_details(result)
     ref_hits = _extract_ref_hits(refs_payload, user_msg_id=user_msg_id)
     ref_packs = _extract_ref_packs(refs_payload, user_msg_id=user_msg_id)
+    contract_citation_details = list(citation_details)
+    if bool(expected.get("allowSystemARefEvidence")):
+        contract_citation_details.extend(
+            _system_a_ref_evidence_details(
+                refs_payload,
+                answer=answer,
+                user_msg_id=user_msg_id,
+            )
+        )
     checks: list[dict[str, Any]] = []
 
     def add_check(name: str, ok: bool, detail: Any = "") -> None:
@@ -697,9 +961,37 @@ def validate_case(
     missing_answer_terms = [term for term in required_terms if not _contains_term(answer, term)]
     add_check("answer_contains_required_terms", not missing_answer_terms, missing_answer_terms)
 
+    forbidden_answer_terms = _contract_terms(expected.get("forbiddenAnswerTerms"))
+    if forbidden_answer_terms:
+        present_forbidden_answer_terms = _strict_phrase_hits(answer, forbidden_answer_terms)
+        add_check(
+            "answer_avoids_forbidden_claims",
+            not present_forbidden_answer_terms,
+            present_forbidden_answer_terms,
+        )
+
     required_ref_doc_ids = [str(item) for item in _as_list(expected.get("requiredRefDocIds")) if str(item or "").strip()]
     missing_ref_docs = [doc_id for doc_id in required_ref_doc_ids if not _doc_matches_payload(fixture, doc_id, refs_payload)]
     add_check("refs_include_required_docs", not missing_ref_docs, missing_ref_docs)
+
+    allowed_ref_doc_ids = {
+        str(item or "").strip()
+        for item in _as_list(expected.get("allowedRefDocIds"))
+        if str(item or "").strip()
+    }
+    if allowed_ref_doc_ids:
+        ref_doc_ids = set(_unique_doc_ids_in_payload(fixture, refs_payload))
+        unexpected_ref_docs = sorted(ref_doc_ids - allowed_ref_doc_ids)
+        max_unexpected_ref_docs = _expected_int(expected, "maxUnexpectedRefDocCount")
+        add_check(
+            "refs_avoid_unexpected_docs",
+            len(unexpected_ref_docs) <= max_unexpected_ref_docs,
+            {
+                "unexpected": unexpected_ref_docs,
+                "allowed": sorted(allowed_ref_doc_ids),
+                "max": max_unexpected_ref_docs,
+            },
+        )
 
     min_ref_hits = _expected_int(expected, "minRefHits")
     if min_ref_hits:
@@ -740,6 +1032,37 @@ def validate_case(
         doc_id for doc_id in required_citation_doc_ids if not _doc_matches_payload(fixture, doc_id, citation_details)
     ]
     add_check("citations_include_required_docs", not missing_citation_docs, missing_citation_docs)
+
+    required_route_counts = expected.get("requiredRouteCounts") if isinstance(expected.get("requiredRouteCounts"), dict) else {}
+    if required_route_counts:
+        actual_route_counts = {
+            route: sum(1 for detail in contract_citation_details if _citation_route(detail) == route)
+            for route in ("system_a", "system_b")
+        }
+        missing_route_counts = {
+            route: {"actual": actual_route_counts.get(route, 0), "min": _expected_int(required_route_counts, route)}
+            for route in ("system_a", "system_b")
+            if actual_route_counts.get(route, 0) < _expected_int(required_route_counts, route)
+        }
+        add_check("citations_match_required_routes", not missing_route_counts, missing_route_counts or actual_route_counts)
+
+    claim_evidence_contracts = [
+        item for item in _as_list(expected.get("claimEvidenceContracts")) if isinstance(item, dict)
+    ]
+    if claim_evidence_contracts:
+        claim_contract_failures = _claim_evidence_contract_failures(
+            fixture,
+            contract_citation_details,
+            claim_evidence_contracts,
+        )
+        add_check("claims_have_matching_evidence", not claim_contract_failures, claim_contract_failures)
+
+    locate_contracts = [
+        item for item in _as_list(expected.get("requiredLocateContracts")) if isinstance(item, dict)
+    ]
+    if locate_contracts:
+        locate_failures = _locate_contract_failures(fixture, contract_citation_details, locate_contracts)
+        add_check("citations_have_expected_locators", not locate_failures, locate_failures)
 
     min_citation_count = _expected_int(expected, "minCitationCount")
     if min_citation_count:
@@ -978,6 +1301,96 @@ def _build_report(rows: list[dict[str, Any]], *, fixture_path: Path, base_url: s
     return "\n".join(lines) + "\n"
 
 
+def evaluate_replay_rows(
+    fixture: ResearchQaFixture,
+    replay_rows: list[dict[str, Any]],
+    *,
+    selected_case_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    case_by_id = {str(case.get("id") or "").strip(): case for case in fixture.cases}
+    selected = set(selected_case_ids or [])
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+    for row in replay_rows:
+        case_id = str(row.get("case_id") or row.get("id") or "").strip()
+        if selected and case_id not in selected:
+            continue
+        if not case_id:
+            errors.append(f"line {row.get('_line_no')}: missing case_id")
+            continue
+        if case_id in seen:
+            errors.append(f"{case_id}: duplicate replay row")
+            continue
+        seen.add(case_id)
+        case = case_by_id.get(case_id)
+        if not isinstance(case, dict):
+            errors.append(f"{case_id}: replay references unknown fixture case")
+            continue
+        if str(row.get("review_status") or "").strip().lower() != "accepted":
+            errors.append(f"{case_id}: replay row must be human-reviewed and accepted")
+            continue
+        result = row.get("result") if isinstance(row.get("result"), dict) else row
+        result = dict(result)
+        result.setdefault("id", case_id)
+        quality = validate_case(case, fixture, result)
+        results.append({"id": case_id, "quality": quality})
+
+    expected_ids = {
+        str(case.get("id") or "").strip()
+        for case in fixture.cases
+        if str(case.get("evaluationFocus") or "").strip()
+        and (not selected or str(case.get("id") or "").strip() in selected)
+    }
+    missing_rows = sorted(expected_ids - seen)
+    if missing_rows:
+        errors.append(f"missing focused replay rows: {', '.join(missing_rows)}")
+    failed_results = [row for row in results if not bool((row.get("quality") or {}).get("ok"))]
+    for row in failed_results:
+        quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
+        names = [
+            str(item.get("name") or "")
+            for item in _as_list(quality.get("failures"))
+            if isinstance(item, dict)
+        ]
+        errors.append(f"{row.get('id')}: {', '.join(names) or 'quality check failed'}")
+    return {
+        "ok": not errors,
+        "total": len(results),
+        "passed": len(results) - len(failed_results),
+        "failed": len(failed_results),
+        "errors": errors,
+        "cases": results,
+    }
+
+
+def _selected_context_pack(fixture: ResearchQaFixture, case: dict[str, Any]) -> dict[str, Any] | None:
+    items: list[dict[str, Any]] = []
+    for doc_id_raw in _as_list(case.get("docIds")):
+        doc_id = str(doc_id_raw or "").strip()
+        doc = fixture.docs_by_id.get(doc_id) or {}
+        source_path = source_path_for_doc(fixture, doc_id)
+        if not source_path:
+            continue
+        items.append(
+            {
+                "key": f"research-qa:{doc_id}",
+                "kind": "source",
+                "sourcePath": source_path,
+                "sourceName": str(doc.get("title") or doc.get("shortLabel") or doc_id),
+                "title": str(doc.get("title") or doc_id),
+            }
+        )
+    if not items:
+        return None
+    return {
+        "version": 1,
+        "id": f"research-qa:{case.get('id')}",
+        "count": len(items),
+        "items": items,
+    }
+
+
 def run_case(
     *,
     base_url: str,
@@ -991,11 +1404,26 @@ def run_case(
     question = str(case.get("question") or "").strip()
     preferred_sources = [source_path_for_doc(fixture, str(doc_id)) for doc_id in _as_list(case.get("docIds"))]
     preferred_sources = [item for item in preferred_sources if item]
+    query_scope = str(case.get("queryScope") or "library").strip().lower()
+    source_lock_path = preferred_sources[0] if query_scope == "current_paper" and len(preferred_sources) == 1 else ""
+    source_lock_name = ""
+    if source_lock_path:
+        doc_id = str(_as_list(case.get("docIds"))[0] or "").strip()
+        doc = fixture.docs_by_id.get(doc_id) or {}
+        source_lock_name = str(doc.get("title") or doc.get("shortLabel") or "").strip()
+    prompt_context = _selected_context_pack(fixture, case) if query_scope == "selected_context" else None
     started = time.perf_counter()
     conv = _post_json(
         base_url,
         "/api/conversations",
-        {"title": f"research-qa-{case_id}", "project_id": None},
+        {
+            "title": f"research-qa-{case_id}",
+            "project_id": None,
+            "mode": "paper_guide" if source_lock_path else "normal",
+            "bound_source_path": source_lock_path,
+            "bound_source_name": source_lock_name,
+            "bound_source_ready": bool(source_lock_path),
+        },
         timeout_s=timeout_s,
     )
     conv_id = str(conv.get("id") or "").strip()
@@ -1011,6 +1439,10 @@ def run_case(
             "top_k": top_k,
             "max_tokens": max_tokens,
             "preferred_sources": preferred_sources,
+            "source_lock_path": source_lock_path,
+            "source_lock_name": source_lock_name,
+            "query_scope": query_scope,
+            "prompt_context": prompt_context,
         },
         timeout_s=timeout_s,
     )
@@ -1053,12 +1485,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case-id", action="append", default=[], help="Run one or more case ids.")
     parser.add_argument("--top-k", type=int, default=6, help="Retrieval top_k sent to /api/generate.")
     parser.add_argument("--max-tokens", type=int, default=1800, help="Max tokens sent to /api/generate.")
+    parser.add_argument(
+        "--replay",
+        default="",
+        help="Validate a human-reviewed deterministic JSONL replay without calling the API.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Load fixture and print planned cases without calling API.")
     parser.add_argument("--fail-on-quality", action="store_true", help="Exit 1 when any quality check fails.")
     args = parser.parse_args(argv)
 
     fixture_path = Path(args.fixture)
     fixture = load_fixture(fixture_path)
+    fixture_errors = validate_fixture_contracts(fixture)
+    if fixture_errors:
+        for error in fixture_errors:
+            print(f"[ERROR] {error}", file=sys.stderr)
+        return 2
     selected_cases = list(fixture.cases)
     wanted_ids = {str(item) for item in list(args.case_id or []) if str(item or "").strip()}
     if wanted_ids:
@@ -1069,13 +1511,35 @@ def main(argv: list[str] | None = None) -> int:
         print("[ERROR] no cases selected", file=sys.stderr)
         return 2
 
+    if args.replay:
+        summary = evaluate_replay_rows(
+            fixture,
+            load_replay(args.replay),
+            selected_case_ids=wanted_ids or None,
+        )
+        for row in summary["cases"]:
+            quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
+            print(f"[replay] {row.get('id')} -> {'pass' if quality.get('ok') else 'fail'}")
+        for error in summary["errors"]:
+            print(f"[ERROR] {error}", file=sys.stderr)
+        print(
+            f"[OK] reviewed replay: total={summary['total']} "
+            f"passed={summary['passed']} failed={summary['failed']}"
+        )
+        return 0 if summary["ok"] or not bool(args.fail_on_quality) else 1
+
     if args.dry_run:
         print(f"[OK] fixture: {fixture_path}")
         print(f"[OK] docs: {len(fixture.docs)}")
         print(f"[OK] cases: {len(selected_cases)}")
+        focus_counts: dict[str, int] = {}
         for idx, case in enumerate(selected_cases, start=1):
             doc_ids = ", ".join(str(item) for item in _as_list(case.get("docIds")))
             print(f"{idx:02d}. {case.get('id')} [{doc_ids}] {case.get('question')}")
+            focus = str(case.get("evaluationFocus") or "").strip()
+            if focus:
+                focus_counts[focus] = focus_counts.get(focus, 0) + 1
+        print(f"[OK] evaluation focuses: {json.dumps(focus_counts, ensure_ascii=False, sort_keys=True)}")
         return 0
 
     base_url = str(args.base_url or DEFAULT_BASE_URL).rstrip("/")

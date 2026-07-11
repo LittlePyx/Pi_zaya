@@ -226,6 +226,59 @@ def test_validate_structured_citations_drops_broad_hit_only_candidate_without_lo
     assert stats["dropped"] == 1
 
 
+def test_validate_structured_citations_keeps_focused_ref_over_broad_local_slot(tmp_path):
+    source_path = r"db\doc\scinerf.en.md"
+    locked_sid = "s1234abcd"
+    cite_re = re.compile(r"\[\[CITE:([a-z0-9]+):(\d+)\]\]", re.IGNORECASE)
+
+    def fake_resolve(_index, src, ref_num, *, source_sha1=""):
+        del _index, source_sha1
+        if str(src) != source_path or int(ref_num) not in {4, 18, 20}:
+            return None
+        return {"ref": {"raw": f"[{int(ref_num)}] Demo", "title": f"Ref {int(ref_num)}"}}
+
+    answer, stats = _validate_structured_citations(
+        "ADMM is established prior work [[CITE:s1234abcd:4]].",
+        answer_hits=[{"text": "Existing methods use ADMM [4].", "meta": {"source_path": source_path}}],
+        db_dir=tmp_path,
+        locked_source={"sid": locked_sid, "source_path": source_path},
+        paper_guide_mode=True,
+        paper_guide_candidate_refs_by_source={source_path: [4]},
+        paper_guide_support_slots=[
+            {
+                "source_path": source_path,
+                "candidate_refs": [18, 20],
+                "snippet": "Earlier regularized methods [18,20].",
+            }
+        ],
+        paper_guide_support_resolution=[],
+        sanitize_structured_cite_tokens=lambda text: text,
+        cite_canon_re=cite_re,
+        cite_source_id=lambda _src: locked_sid,
+        hit_source_path=lambda hit: str((hit.get("meta") or {}).get("source_path") or ""),
+        load_reference_index=lambda _db_dir: {"docs": {"demo": {}}},
+        resolve_reference_entry=fake_resolve,
+        source_refs_from_index=lambda _index, _src, *, source_sha1="": {
+            4: {"raw": "[4] ADMM", "title": "ADMM"},
+            18: {"raw": "[18] Other", "title": "Other"},
+            20: {"raw": "[20] Other", "title": "Other"},
+        },
+        extract_candidate_ref_nums_from_hits=lambda _hits, *, source_path="", max_candidates=48: [18, 20, 4],
+        extract_citation_context_hints=lambda _text, *, token_start=0, token_end=0: {
+            "author": "",
+            "year": "",
+            "doi": "",
+        },
+        has_explicit_reference_conflict=lambda ref, hints: False,
+        select_support_slot_for_context=lambda slots, *, context_text="": slots[0] if slots else None,
+        reference_alignment_score=lambda ref, hints: 0.0,
+    )
+
+    assert answer == "ADMM is established prior work [[CITE:s1234abcd:4]]."
+    assert stats["kept"] == 1
+    assert stats["dropped"] == 0
+
+
 def test_validate_structured_citations_uses_doc_reference_index_when_global_index_missing(tmp_path):
     source_path = tmp_path / "demo.en.md"
     source_path.write_text("# Demo\n", encoding="utf-8")

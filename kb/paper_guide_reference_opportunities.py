@@ -282,6 +282,42 @@ def _explicit_ref_nums_from_record(record: Mapping[str, object], *, text: str) -
     return out[:6]
 
 
+def _prioritize_explicit_refs_for_prompt(*, prompt: str, text: str, refs: Sequence[int]) -> list[int]:
+    """Rank same-paragraph refs by the sentence that matches the user's target.
+
+    Related-work paragraphs often enumerate broad method families first and only
+    later attach the reference for the named method. Keeping raw appearance order
+    can therefore surface an unrelated early ref and drop the relevant one.
+    """
+
+    ordered = [int(item) for item in refs if int(item) > 0]
+    if len(ordered) <= 1:
+        return ordered
+    prompt_text = str(prompt or "").strip()
+    labels = _candidate_labels_from_text(prompt=prompt_text, answer="", max_labels=8)
+    prompt_tokens = _tokens(prompt_text)
+    contexts: dict[int, list[str]] = {ref_num: [] for ref_num in ordered}
+    for segment in re.split(r"(?<=[.!?。！？;；])\s+|\n+", str(text or "")):
+        segment_text = str(segment or "").strip()
+        if not segment_text:
+            continue
+        segment_refs = set(_inline_ref_nums_from_text(segment_text, limit=24))
+        for ref_num in ordered:
+            if ref_num in segment_refs:
+                contexts.setdefault(ref_num, []).append(segment_text)
+
+    def _score(ref_num: int) -> tuple[float, int]:
+        best = 0.0
+        for context in contexts.get(ref_num, []):
+            context_tokens = _tokens(context)
+            shared = len(prompt_tokens.intersection(context_tokens))
+            label_hits = sum(1 for label in labels if _label_matches_surface(label, context))
+            best = max(best, (12.0 * float(label_hits)) + (1.2 * float(shared)))
+        return best, -ordered.index(ref_num)
+
+    return sorted(ordered, key=_score, reverse=True)
+
+
 def _explicit_ref_contexts_from_text(text: str, *, max_contexts: int = 12) -> list[tuple[int, str]]:
     src = str(text or "")
     if not src.strip():
@@ -1093,6 +1129,7 @@ def detect_paper_guide_reference_opportunities(
             continue
         text = _text_from_record(record)
         refs = _explicit_ref_nums_from_record(record, text=text)
+        refs = _prioritize_explicit_refs_for_prompt(prompt=prompt, text=text, refs=refs)
         if resolved_target_refs:
             refs = [ref_num for ref_num in refs if ref_num in resolved_target_refs]
         if not refs:
@@ -1175,6 +1212,30 @@ def _normalized_opportunities(
         if len(out) >= limit:
             break
     return out
+
+
+def merge_reference_opportunities(
+    *groups: Sequence[Mapping[str, object]] | None,
+    max_items: int = 3,
+) -> list[dict[str, object]]:
+    """Merge opportunity groups in priority order without duplicating a ref."""
+
+    try:
+        limit = max(1, min(4, int(max_items)))
+    except Exception:
+        limit = 3
+    merged: list[dict[str, object]] = []
+    seen: set[tuple[str, int]] = set()
+    for group in groups:
+        for row in _normalized_opportunities(group, max_items=limit):
+            key = (str(row.get("sid") or "").strip().lower(), int(row.get("ref_num") or 0))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(row)
+            if len(merged) >= limit:
+                return merged
+    return merged
 
 
 def build_reference_opportunities_prompt_block(

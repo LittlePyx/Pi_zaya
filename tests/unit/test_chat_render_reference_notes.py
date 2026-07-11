@@ -3177,6 +3177,88 @@ def test_effective_reference_pack_keeps_raw_hit_order_and_exposes_enriched_hits(
     assert effective["enriched_hits"][0]["text"] == "enriched reference hit"
 
 
+def test_answer_aligned_pack_primary_replaces_stale_precise_system_a_detail():
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source_path = "scinerf.en.md"
+    details = [
+        {
+            "num": 1,
+            "anchor": "cite-a",
+            "source_path": source_path,
+            "source_name": "SCINeRF.pdf",
+            "citation_route": "system_a",
+            "is_inpaper": False,
+            "heading_path": "3. Method / 3.3. Proposed Framework",
+            "title": "3. Method / 3.3. Proposed Framework",
+            "block_id": "blk_method",
+            "anchor_id": "p_method",
+            "anchor_kind": "paragraph",
+            "evidence_quote": "The camera poses cannot be estimated directly.",
+            "summary_line": "The camera poses cannot be estimated directly.",
+            "answer_claim": "ADMM is prior work, not an original contribution.",
+        }
+    ]
+    pack = {
+        "primary_evidence": {
+            "source_path": source_path,
+            "source_name": "SCINeRF.pdf",
+            "heading_path": "2. Related Work",
+            "block_id": "blk_related",
+            "anchor_id": "p_related",
+            "anchor_kind": "paragraph",
+            "snippet": "Most existing methods employ ADMM [4].",
+            "highlight_snippet": "Most existing methods employ ADMM [4].",
+            "selection_reason": "answer_aligned_block",
+            "strict_locate": True,
+        }
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, pack, render_locale="en")
+
+    assert out[0]["heading_path"] == "2. Related Work"
+    assert out[0]["block_id"] == "blk_related"
+    assert out[0]["anchor_id"] == "p_related"
+    assert "existing methods employ ADMM" in out[0]["evidence_quote"]
+
+
+def test_answer_aligned_primary_matches_same_path_across_different_display_names():
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source_path = "F:/db/SCINeRF/SCINeRF.en.md"
+    details = [
+        {
+            "num": 1,
+            "anchor": "cite-a",
+            "source_path": source_path,
+            "source_name": "SCINeRF.pdf",
+            "citation_route": "system_a",
+            "is_inpaper": False,
+            "heading_path": "3. Method",
+            "block_id": "blk_method",
+            "anchor_id": "p_method",
+            "evidence_quote": "A stale method excerpt.",
+        }
+    ]
+    pack = {
+        "primary_evidence": {
+            "source_path": source_path,
+            "source_name": "2024 IEEE CVPR - SCINeRF.pdf",
+            "heading_path": "2. Related Work",
+            "block_id": "blk_related",
+            "anchor_id": "p_related",
+            "snippet": "Most existing methods employ ADMM [4].",
+            "selection_reason": "answer_aligned_block",
+            "strict_locate": True,
+        }
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, pack, render_locale="en")
+
+    assert out[0]["heading_path"] == "2. Related Work"
+    assert out[0]["block_id"] == "blk_related"
+
+
 def test_reading_guide_repair_adds_missing_system_a_source_to_matching_paragraph():
     from api.chat_render import _reading_guide_repair_missing_system_a_citations
 

@@ -781,6 +781,8 @@ def _build_paper_guide_grounding_rules(
         "- If a DOC-k card shows cite_example=[[CITE:<sid>:<ref_num>]], reuse that exact marker on the claim derived from the card unless DOI or author-year text clearly identifies a different ref.",
         "- If an upstream-reference opportunity is provided for an ordinary origin, prior-work, concept, or method-background question, place its exact cite_example inline on the explanatory sentence instead of moving it to a separate reference trail.",
         "- For origin/prior-work questions, answer the user's actual question first (for example, whether the idea is original or borrowed), then attach the upstream cite; never start with locator shells like 'The paper cites...' or 'This is stated in...'.",
+        "- A method mentioned in Related Work is prior-work context, not proof that the current paper uses, chooses, or implements that method. Only claim current-paper adoption when the retrieved method section explicitly says so.",
+        "- Do not turn a citation relationship into a stronger implementation claim. If the evidence only says earlier methods used an algorithm, preserve that boundary in the answer.",
         "- If a 'Paper-guide citation grounding hints' block is provided, keep each claim aligned to the same DOC-k line before choosing [[CITE:<sid>:<ref_num>]].",
         "- Prefer the ref numbers listed on that DOC-k line; do not borrow a ref number from another DOC-k line unless DOI or author-year text explicitly identifies it.",
     ]

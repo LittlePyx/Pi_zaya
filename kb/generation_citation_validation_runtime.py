@@ -593,6 +593,16 @@ def _validate_structured_citations(
             if int(current_ref_num) not in focused_candidate_nums:
                 return None
 
+        if (
+            current_ref
+            and int(current_ref_num) in focused_candidate_nums
+            and len(local_candidate_nums) != 1
+            and not current_conflict
+        ):
+            # A focused citation lookup can override a broad multi-reference
+            # paragraph slot, but never a single exact local binding.
+            return int(current_ref_num)
+
         if current_ref and (not candidate_nums) and has_strong_hints and (not current_conflict):
             return int(current_ref_num)
         if current_ref and candidate_nums and (int(current_ref_num) in candidate_nums) and (not current_conflict):

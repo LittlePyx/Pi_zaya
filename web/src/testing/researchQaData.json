@@ -160,6 +160,8 @@
   "cases": [
     {
       "id": "scigs-dynamic-3d",
+      "evaluationFocus": "multi_paper_synthesis",
+      "queryScope": "selected_context",
       "docIds": ["scigs", "scinerf"],
       "question": "SCIGS 这篇到底想解决什么问题？它和 SCINeRF 的区别在哪里？",
       "acceptance": [
@@ -171,11 +173,50 @@
         "requiredAnswerTerms": ["SCIGS", "SCINeRF", "动态", "3D"],
         "requiredRefDocIds": ["scigs", "scinerf"],
         "requiredCitationDocIds": ["scigs", "scinerf"],
+        "allowedRefDocIds": ["scigs", "scinerf"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "scigs-dynamic-explicit-3d",
+            "docId": "scigs",
+            "route": "system_a",
+            "answerTerms": ["SCIGS", "动态", "3D"],
+            "evidenceTerms": ["dynamic", "3D"]
+          },
+          {
+            "id": "scinerf-implicit-nerf-route",
+            "docId": "scinerf",
+            "route": "system_a",
+            "answerTerms": ["SCINeRF", "NeRF"],
+            "evidenceTerms": ["physical imaging process", "NeRF"]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "scigs-abstract-locate",
+            "docId": "scigs",
+            "route": "system_a",
+            "locatorTerms": ["Abstract"],
+            "evidenceTerms": ["dynamic"]
+          },
+          {
+            "id": "scinerf-abstract-locate",
+            "docId": "scinerf",
+            "route": "system_a",
+            "locatorTerms": ["Abstract"],
+            "evidenceTerms": ["physical imaging process"]
+          }
+        ],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 2,
         "requireSystemB": false
       }
     },
     {
       "id": "scinerf-admm-origin",
+      "evaluationFocus": "upstream_reference",
+      "queryScope": "current_paper",
       "docIds": ["scinerf"],
       "question": "ADMM 是作者自己发明的吗？我应该把它当成这篇论文的新东西吗？",
       "acceptance": [
@@ -187,6 +228,47 @@
         "requiredAnswerTerms": ["ADMM", "不是", "已有"],
         "requiredRefDocIds": ["scinerf"],
         "requiredCitationDocIds": ["scinerf"],
+        "allowedRefDocIds": ["scinerf"],
+        "maxUnexpectedRefDocCount": 0,
+        "forbiddenAnswerTerms": [
+          "作者是在利用 ADMM 作为解决某个子问题的工具",
+          "ADMM 很可能被用作一个优化策略",
+          "为什么选择 ADMM 而不是其他优化器"
+        ],
+        "requiredRouteCounts": {"system_a": 1, "system_b": 1},
+        "claimEvidenceContracts": [
+          {
+            "id": "admm-is-prior-work",
+            "docId": "scinerf",
+            "route": "system_a",
+            "answerTerms": ["ADMM", "已有"],
+            "evidenceTerms": ["existing methods", "ADMM"]
+          },
+          {
+            "id": "boyd-upstream-origin",
+            "docId": "scinerf",
+            "route": "system_b",
+            "answerTerms": ["ADMM", "不是"],
+            "evidenceTerms": ["Distributed Optimization", "2011"]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "admm-related-work-locate",
+            "docId": "scinerf",
+            "route": "system_a",
+            "locatorTerms": ["Related Work"],
+            "evidenceTerms": ["existing methods", "ADMM"]
+          },
+          {
+            "id": "boyd-citation-context-locate",
+            "docId": "scinerf",
+            "route": "system_b",
+            "locatorTerms": ["Related Work"],
+            "evidenceTerms": ["ADMM"]
+          }
+        ],
+        "minSystemBQualityCount": 1,
         "requireSystemB": true,
         "requiredSystemBTerms": ["ADMM", "Distributed optimization"],
         "requireSystemBTraceComplete": true,
@@ -200,6 +282,8 @@
     },
     {
       "id": "hadamard-fourier-choice",
+      "evaluationFocus": "method_comparison",
+      "queryScope": "current_paper",
       "docIds": ["hsi-fsi"],
       "question": "我做单像素实验，Hadamard 和 Fourier 到底该怎么选？",
       "acceptance": [
@@ -210,6 +294,29 @@
         "requiredAnswerTerms": ["Hadamard", "Fourier", "测量"],
         "requiredRefDocIds": ["hsi-fsi"],
         "requiredCitationDocIds": ["hsi-fsi"],
+        "allowedRefDocIds": ["hsi-fsi"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "conditional-hadamard-fourier-choice",
+            "docId": "hsi-fsi",
+            "route": "system_a",
+            "answerTerms": ["Hadamard", "Fourier", "测量"],
+            "evidenceTerms": ["sampling ratio", "PSNR", "SSIM"]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "hsi-fsi-comparison-locate",
+            "docId": "hsi-fsi",
+            "route": "system_a",
+            "locatorTerms": ["Comparison"],
+            "evidenceTerms": ["sampling ratio"]
+          }
+        ],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
         "requireSystemB": false
       }
     },
@@ -230,6 +337,8 @@
     },
     {
       "id": "dl-spi-benefits-risks",
+      "evaluationFocus": "paper_summary",
+      "queryScope": "current_paper",
       "docIds": ["dl-spi-review"],
       "question": "深度学习给单像素成像带来的好处和坑分别是什么？",
       "acceptance": [
@@ -240,11 +349,50 @@
         "requiredAnswerTerms": ["深度学习", "数据", "泛化"],
         "requiredRefDocIds": ["dl-spi-review"],
         "requiredCitationDocIds": ["dl-spi-review"],
+        "allowedRefDocIds": ["dl-spi-review"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "dl-spi-benefit",
+            "docId": "dl-spi-review",
+            "route": "system_a",
+            "answerTerms": ["深度学习", "质量", "速度"],
+            "evidenceTerms": ["reconstruction quality", "reconstruction speed"]
+          },
+          {
+            "id": "dl-spi-generalization-risk",
+            "docId": "dl-spi-review",
+            "route": "system_a",
+            "answerTerms": ["数据", "泛化"],
+            "evidenceTerms": ["training", "limited generalization"]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "dl-spi-abstract-locate",
+            "docId": "dl-spi-review",
+            "route": "system_a",
+            "locatorTerms": ["Abstract"],
+            "evidenceTerms": ["reconstruction quality"]
+          },
+          {
+            "id": "dl-spi-strategy-locate",
+            "docId": "dl-spi-review",
+            "route": "system_a",
+            "locatorTerms": ["Strategy and Advantages"],
+            "evidenceTerms": ["limited generalization"]
+          }
+        ],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 2,
         "requireSystemB": false
       }
     },
     {
       "id": "qclfm-refocus",
+      "evaluationFocus": "method_detail",
+      "queryScope": "current_paper",
       "docIds": ["qclfm"],
       "question": "这个 quantum correlation light-field microscope 是怎么把离焦样品重新对焦的？",
       "acceptance": [
@@ -255,6 +403,29 @@
         "requiredAnswerTerms": ["ray tracing", "wave", "重聚焦"],
         "requiredRefDocIds": ["qclfm"],
         "requiredCitationDocIds": ["qclfm"],
+        "allowedRefDocIds": ["qclfm"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "qclfm-two-step-refocus",
+            "docId": "qclfm",
+            "route": "system_a",
+            "answerTerms": ["ray tracing", "wave", "重聚焦"],
+            "evidenceTerms": ["two steps", "ray tracing", "wave propagation"]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "qclfm-concept-locate",
+            "docId": "qclfm",
+            "route": "system_a",
+            "locatorTerms": ["Concept"],
+            "evidenceTerms": ["ray tracing", "wave propagation"]
+          }
+        ],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
         "requiredPrimaryEvidenceTerms": ["Digital Refocusing", "ray tracing", "wave propagation"],
         "forbiddenPrimaryEvidenceTerms": ["Conventional light-field microscope designs"],
         "requireSystemB": false
@@ -292,6 +463,8 @@
     },
     {
       "id": "perovskite-boundary",
+      "evaluationFocus": "scope_boundary",
+      "queryScope": "current_paper",
       "docIds": ["perovskite-laser"],
       "question": "这篇 perovskite laser 和我的单像素成像主线关系大吗？值得一起读吗？",
       "acceptance": [
@@ -302,6 +475,29 @@
         "requiredAnswerTerms": ["perovskite", "器件", "不是"],
         "requiredRefDocIds": ["perovskite-laser"],
         "requiredCitationDocIds": ["perovskite-laser"],
+        "allowedRefDocIds": ["perovskite-laser"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "perovskite-is-device-boundary",
+            "docId": "perovskite-laser",
+            "route": "system_a",
+            "answerTerms": ["perovskite", "器件", "不是"],
+            "evidenceTerms": ["dual-cavity perovskite", "lasing"]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "perovskite-abstract-locate",
+            "docId": "perovskite-laser",
+            "route": "system_a",
+            "locatorTerms": ["Abstract"],
+            "evidenceTerms": ["dual-cavity perovskite"]
+          }
+        ],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
         "requireSystemB": false
       }
     },

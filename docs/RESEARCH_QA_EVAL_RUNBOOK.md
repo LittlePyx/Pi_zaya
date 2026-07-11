@@ -15,15 +15,24 @@ The research QA eval protects the real researcher-facing workflow:
 
 The shared fixture is `web/src/testing/researchQaData.json`.
 
+Six focused user journeys also have a human-reviewed deterministic replay in
+`docs/research_qa_grounded_replay_v1.jsonl`. The replay uses real paper identities
+and reviewed source excerpts for paper summaries, method details, comparisons,
+multi-paper synthesis, upstream-reference reasoning, and scope-boundary decisions.
+
 ## Lightweight CI Check
 
 CI runs the fixture smoke check:
 
 ```bash
 python tools/research_qa/run_research_qa_eval.py --dry-run
+python tools/research_qa/run_research_qa_eval.py --replay docs/research_qa_grounded_replay_v1.jsonl --fail-on-quality
 ```
 
-This does not call the API or an LLM. It verifies that the real-question fixture loads, lists the covered documents and cases, and is backed by unit tests that enforce case contracts.
+These commands do not call the API or an LLM. The first validates fixture coverage;
+the second sends reviewed answers and evidence payloads through the same validator
+used by live runs. The replay rejects unexpected source documents, unsupported
+claim/evidence bindings, wrong citation routes, and incorrect reader locators.
 
 Use this for every PR.
 
@@ -79,6 +88,9 @@ Use `go` only when:
 4. No `citation_shelf_quality` failures for strict reading-list or cross-paper cases.
 5. System B audit has no `needs_review`, `answer_context_only`, or `reference_index_fallback` failures for strict cases.
 6. Any changed UI path still passes the Playwright research QA replay when frontend behavior is involved.
+7. Every focused journey passes `claims_have_matching_evidence`,
+   `refs_avoid_unexpected_docs`, `citations_match_required_routes`, and
+   `citations_have_expected_locators`.
 
 Use `no-go` when any strict case fails, even if the answer text looks plausible. A plausible answer with weak cards or untraceable citations is still a product regression.
 
@@ -90,6 +102,10 @@ Use `no-go` when any strict case fails, even if the answer text looks plausible.
 4. `citation_card_quality`: popover/shelf citation payload is missing evidence, locator, click anchor, or System B trace fields.
 5. `citation_shelf_quality`: a saved shelf item has a weak title, missing source/export identity, placeholder summary, raw Markdown, or templated visible copy.
 6. `system_b_audit`: in-paper upstream citation is present but not trace-complete.
+7. `refs_avoid_unexpected_docs`: a focused question retrieved papers outside its reviewed source scope.
+8. `claims_have_matching_evidence`: answer wording exists, but no citation payload binds that claim to the reviewed evidence terms.
+9. `citations_match_required_routes`: required System A current-paper evidence or System B upstream evidence is missing.
+10. `citations_have_expected_locators`: a citation points to the right paper but the wrong section or evidence span.
 
 ## When Extending The Fixture
 

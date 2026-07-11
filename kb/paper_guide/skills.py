@@ -9,9 +9,12 @@ formatting.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import re
 from typing import Callable
+
+from ..paper_guide_prompting import _paper_guide_prompt_requests_naive_source_trace
 
 
 PromptPredicateFn = Callable[[str], bool]
@@ -126,6 +129,22 @@ def _contains_cjk(text: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
 
 
+def _source_trace_target_label(prompt: str) -> str:
+    for match in re.finditer(r"\b[A-Z][A-Za-z0-9_-]{2,24}\b", str(prompt or "")):
+        label = str(match.group(0) or "").strip()
+        if label and label not in {"SCI", "SPI", "PDF"}:
+            return label
+    return "这个方法" if _contains_cjk(prompt) else "This method"
+
+
+def _structured_reference_label(source_path: str, ref_nums: list[int]) -> str:
+    source = str(source_path or "").strip()
+    if not source:
+        return ", ".join(f"[{int(n)}]" for n in ref_nums if int(n) > 0)
+    sid = "s" + hashlib.sha1(source.encode("utf-8", "ignore")).hexdigest()[:8]
+    return ", ".join(f"[[CITE:{sid}:{int(n)}]]" for n in ref_nums if int(n) > 0)
+
+
 def run_exact_equation_skill(
     *,
     prompt_text: str,
@@ -212,8 +231,9 @@ def run_exact_citation_lookup_skill(
     if (not locate_anchor) or (not ref_nums):
         return None
 
-    ref_label = ", ".join(f"[{int(n)}]" for n in ref_nums[:4])
+    ref_label = _structured_reference_label(str(source_path or ""), ref_nums[:4])
     reference_title = str((rec or {}).get("reference_title") or "").strip()
+    naive_source_trace = _paper_guide_prompt_requests_naive_source_trace(prompt)
     if _contains_cjk(prompt) and reference_title:
         if re.search(r"(?i)compress(?:ed|ive)\s+sensing", locate_anchor) and re.search(
             r"(?i)reduce(?:d|s)?\s+measurements?", locate_anchor
@@ -222,10 +242,17 @@ def run_exact_citation_lookup_skill(
         else:
             role_line = "上游作用：它是当前这句话指向的已有工作，而不是本文自身提出的结果。"
         lines = [
-            f"这篇文献是本文参考文献 [{int(ref_nums[0])}]：{reference_title}。",
+            f"这篇文献是本文参考文献 {ref_label}：{reference_title}。",
             _source_location_label(heading_path, prefer_zh=True),
             role_line,
             "正文引用语境：",
+        ]
+    elif _contains_cjk(prompt) and naive_source_trace:
+        target_label = _source_trace_target_label(prompt)
+        lines = [
+            f"不是。{target_label} 在这里是当前论文引用的已有方法背景 {ref_label}，不是本文原创。",
+            _source_location_label(heading_path, prefer_zh=True),
+            "原文引用语境：",
         ]
     elif _contains_cjk(prompt):
         lines = [
@@ -234,7 +261,14 @@ def run_exact_citation_lookup_skill(
         ]
     elif reference_title:
         lines = [
-            f'Reference [{int(ref_nums[0])}] is "{reference_title}".',
+            f'Reference {ref_label} is "{reference_title}".',
+            _source_location_label(heading_path, prefer_zh=False),
+            "In-text citation context:",
+        ]
+    elif naive_source_trace:
+        target_label = _source_trace_target_label(prompt)
+        lines = [
+            f"No. {target_label} is cited here as existing prior work {ref_label}, not introduced as an original contribution of the current paper.",
             _source_location_label(heading_path, prefer_zh=False),
             "In-text citation context:",
         ]

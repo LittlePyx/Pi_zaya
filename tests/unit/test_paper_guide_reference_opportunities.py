@@ -7,6 +7,7 @@ from kb.paper_guide_reference_opportunities import (
     detect_paper_guide_reference_opportunities,
     detect_text_reference_opportunities,
     inject_reference_opportunity_citations_inline,
+    merge_reference_opportunities,
     merge_reference_opportunity_candidate_refs,
     strip_reference_opportunity_note,
 )
@@ -42,6 +43,49 @@ def test_detects_upstream_refs_for_ordinary_beginner_question_before_generation(
     assert [item["ref_num"] for item in opportunities[:2]] == [4, 21]
     assert opportunities[0]["sid"] == "s1234abcd"
     assert "Related Work" in opportunities[0]["heading_path"]
+
+
+def test_detect_prioritizes_named_method_ref_over_earlier_refs_in_same_related_work_paragraph() -> None:
+    opportunities = detect_paper_guide_reference_opportunities(
+        prompt="ADMM 是作者自己发明的吗？我应该把它当成这篇论文的新东西吗？",
+        answer="",
+        prompt_family="overview",
+        source_path="db/demo/scinerf.en.md",
+        support_slots=[
+            {
+                "source_path": "db/demo/scinerf.en.md",
+                "sid": "s1234abcd",
+                "heading_path": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
+                "snippet": (
+                    "Early reconstruction methods use regularized optimization [18,20,47,49]. "
+                    "Most of the existing methods employ alternating direction method of multipliers "
+                    "(ADMM) [4], which leads to good results."
+                ),
+                "claim_type": "prior_work",
+                "cite_policy": "prefer_ref",
+            }
+        ],
+        max_items=3,
+    )
+
+    assert opportunities
+    assert opportunities[0]["ref_num"] == 4
+
+
+def test_merge_reference_opportunities_keeps_explicit_text_match_first_and_dedupes() -> None:
+    merged = merge_reference_opportunities(
+        [{"sid": "s1234abcd", "ref_num": 4, "label": "ADMM"}],
+        [
+            {"sid": "s1234abcd", "ref_num": 18, "label": "SCI"},
+            {"sid": "s1234abcd", "ref_num": 4, "label": "duplicate"},
+        ],
+        max_items=3,
+    )
+
+    assert [(row["sid"], row["ref_num"]) for row in merged] == [
+        ("s1234abcd", 4),
+        ("s1234abcd", 18),
+    ]
 
 
 def test_detect_paper_guide_reference_opportunities_requires_explicit_evidence_ref() -> None:

@@ -29,6 +29,7 @@ from kb.paper_guide_reference_opportunities import (
     apply_reference_opportunities_to_answer,
     detect_paper_guide_reference_opportunities,
     detect_text_reference_opportunities,
+    merge_reference_opportunities,
     merge_reference_opportunity_candidate_refs,
     strip_reference_opportunity_note,
 )
@@ -442,10 +443,18 @@ def _prompt_explicitly_requests_citation_lookup(prompt: str) -> bool:
         "what in-paper citation",
         "prior work is",
         "attributed to",
+        "invented",
+        "original to",
+        "come from",
         "引用",
         "引文",
         "参考文献",
         "编号",
+        "发明",
+        "原创",
+        "新东西",
+        "借鉴",
+        "来源",
     )
     return any(pattern in text for pattern in patterns)
 
@@ -3102,6 +3111,20 @@ def _finalize_generation_answer(
             cards=list(paper_guide_evidence_cards or []),
             max_items=3,
         )
+        if _prompt_explicitly_requests_citation_lookup(prompt_for_user or prompt):
+            text_opportunities = detect_text_reference_opportunities(
+                prompt=prompt_for_user or prompt,
+                answer=answer,
+                answer_hits=answer_hits,
+                db_dir=db_dir,
+                max_items=3,
+            )
+            if text_opportunities:
+                paper_guide_reference_opportunities = merge_reference_opportunities(
+                    text_opportunities,
+                    max_items=3,
+                )
+                paper_guide_candidate_refs_effective = {}
     elif not answer_audit_requested and not library_paper_selection_prompt:
         paper_guide_reference_opportunities = detect_text_reference_opportunities(
             prompt=prompt_for_user or prompt,

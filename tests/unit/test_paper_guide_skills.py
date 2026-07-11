@@ -44,7 +44,7 @@ def test_run_exact_citation_lookup_skill_extracts_inline_refs_when_record_missin
     )
 
     assert result is not None
-    assert "Use [4], [7] as the cited source for this passage." in result.answer_text
+    assert "Use [[CITE:s6ce92c61:4]], [[CITE:s6ce92c61:7]] as the cited source for this passage." in result.answer_text
     assert "Source location: Related Work." in result.answer_text
     assert result.support_resolution == [
         {
