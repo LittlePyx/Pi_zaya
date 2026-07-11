@@ -53,6 +53,7 @@ import {
 } from './citeShelfDisplay'
 import { useCiteShelfSourceQuality } from './useCiteShelfSourceQuality'
 import { useCiteShelfMetadataRepair } from './useCiteShelfMetadataRepair'
+import { shelfItemHasUsableLibraryFullText } from './citeShelfRuntime'
 import { useT } from '../../i18n'
 import { qualityDiagnosticsVisible } from '../../utils/qualityDiagnostics'
 
@@ -78,6 +79,7 @@ interface Props {
   onClear: () => void
   onSelect: (item: CiteShelfItem) => void
   onOpenSource?: (item: CiteShelfItem) => void
+  onOpenDiscoverySource?: (item: CiteShelfItem) => void
   onOpenMessage?: (item: CiteShelfItem) => void
   onUseSelectedAsContext?: (items: CiteShelfItem[]) => void
   onRemove: (key: string) => void
@@ -114,6 +116,7 @@ export function CiteShelf({
   onClear,
   onSelect,
   onOpenSource,
+  onOpenDiscoverySource,
   onOpenMessage,
   onUseSelectedAsContext,
   onRemove,
@@ -390,8 +393,17 @@ export function CiteShelf({
     const refNum = Number(item.num || 0)
     const refLabel = Number.isFinite(refNum) && refNum > 0 ? S.shelf_ref_num.replace('{n}', String(refNum)) : ''
     const anchor = String(item.anchor || '').trim()
+    const hasLibraryFullText = shelfItemHasUsableLibraryFullText(item)
+    const libraryFullTextPath = hasLibraryFullText ? String(item.libraryMatchPath || '').trim() : ''
+    const libraryFullTextLabel = String(item.libraryMatchTitle || '').trim() || basenameFromPath(libraryFullTextPath)
 
-    push('source', S.shelf_trace_source, sourceLabel, sourcePath || sourceLabel)
+    push('fulltext', S.shelf_trace_full_text || 'Local full text', libraryFullTextLabel, libraryFullTextPath)
+    push(
+      'source',
+      hasLibraryFullText ? S.shelf_trace_discovery_source || 'Discovered in' : S.shelf_trace_source,
+      sourceLabel,
+      sourcePath || sourceLabel,
+    )
     push('location', S.shelf_trace_location, location)
     push('reference', S.shelf_trace_reference, refLabel, anchor ? S.shelf_anchor.replace('{anchor}', anchor) : refLabel)
     return rows
@@ -409,7 +421,7 @@ export function CiteShelf({
     if (status === 'in_library') {
       const matched = String(item.libraryMatchTitle || item.libraryMatchPath || item.libraryMatchDoi || '').trim()
       return {
-        label: S.shelf_library_in_library,
+        label: S.shelf_library_full_text || S.shelf_library_in_library,
         title: matched ? `${methodLabel}: ${matched}` : methodLabel,
         tone: 'ready',
       }
@@ -1882,13 +1894,19 @@ export function CiteShelf({
                       const visibleQualityChips = isFocused ? quality.chips.slice(0, 3) : quality.chips.slice(0, 1)
                       const showQuality = organizeOpen && shelfCard.showArticleSummary && Boolean(quality.needsRepair || isFocused)
                       const libraryMatch = libraryMatchView(item)
+                      const hasLibraryFullText = shelfItemHasUsableLibraryFullText(item)
+                      const primaryOpenLabel = hasLibraryFullText
+                        ? S.shelf_open_full_text || S.shelf_open_source
+                        : S.shelf_open_source
                       const sourceTrail = organizeOpen && isDetailsExpanded ? sourceTrailRows(item) : []
                       const showSourceOpenBadge = showSourceQualityDiagnostics && organizeOpen && isDetailsExpanded && (
                         itemSourceOpenQuality.tone === 'review'
                         || itemSourceOpenQuality.tone === 'missing'
                         || itemSourceOpenQuality.label === S.shelf_source_open_repaired_reopen
                       )
-                      const showLibraryMatch = organizeOpen && isDetailsExpanded && shelfCard.showArticleSummary
+                      const showLibraryMatch = shelfCard.showArticleSummary && Boolean(
+                        libraryMatch && (libraryMatch.tone === 'ready' || (organizeOpen && isDetailsExpanded)),
+                      )
                       const messageTargetId = Number(item.traceAssistantMsgId || item.traceUserMsgId || 0)
                       const canOpenMessage = Boolean(onOpenMessage && Number.isFinite(messageTargetId) && messageTargetId > 0)
                       const isContextActive = Boolean(activeContextKeys[item.key])
@@ -1947,12 +1965,12 @@ export function CiteShelf({
                               ) : null}
                             </div>
                             <div className="kb-shelf-item-actions">
-                              {item.sourcePath && onOpenSource ? (
+                              {(item.sourcePath || hasLibraryFullText) && onOpenSource ? (
                                 <button
                                   type="button"
-                                  className={`kb-shelf-source-open is-${itemSourceOpenQuality.tone}`}
-                                  aria-label={S.locate_label}
-                                  title={itemSourceOpenQuality.reason || S.locate_label}
+                                  className={`kb-shelf-source-open is-${hasLibraryFullText ? 'ready' : itemSourceOpenQuality.tone}`}
+                                  aria-label={primaryOpenLabel}
+                                  title={hasLibraryFullText ? primaryOpenLabel : itemSourceOpenQuality.reason || primaryOpenLabel}
                                   data-testid="citation-shelf-open-source"
                                   onClick={(event) => {
                                     event.stopPropagation()
@@ -2196,17 +2214,30 @@ export function CiteShelf({
                                 ))}
                               </div>
                               <div className="kb-shelf-trace-actions">
-                                {item.sourcePath && onOpenSource ? (
+                                {(item.sourcePath || hasLibraryFullText) && onOpenSource ? (
+                                  <button
+                                    type="button"
+                                    className="kb-shelf-trace-action"
+                                    data-testid={hasLibraryFullText ? 'citation-shelf-trail-open-full-text' : 'citation-shelf-trail-open-source'}
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      onOpenSource(item)
+                                    }}
+                                  >
+                                    {primaryOpenLabel}
+                                  </button>
+                                ) : null}
+                                {hasLibraryFullText && item.sourcePath && onOpenDiscoverySource ? (
                                   <button
                                     type="button"
                                     className="kb-shelf-trace-action"
                                     data-testid="citation-shelf-trail-open-source"
                                     onClick={(event) => {
                                       event.stopPropagation()
-                                      onOpenSource(item)
+                                      onOpenDiscoverySource(item)
                                     }}
                                   >
-                                    {S.shelf_open_source}
+                                    {S.shelf_open_citation_source || S.shelf_open_source}
                                   </button>
                                 ) : null}
                                 {canOpenMessage && onOpenMessage ? (

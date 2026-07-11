@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import {
+  READER_REGRESSION_SOURCE_NAME,
   READER_REGRESSION_SOURCE_PATH,
   readerRegressionDocResponse,
 } from '../../src/testing/readerRegressionFixtures'
@@ -903,6 +904,74 @@ test('citation shelf item exposes source trail and can jump back to the answer',
   await page.locator('.kb-shelf-advanced-toggle').click()
   await page.getByTestId('citation-shelf-scope-paper').click()
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+})
+
+test('historical System B shelf item opens local full text and preserves citation discovery source', async ({ page }) => {
+  await mockReaderDoc(page)
+  const discoverySource = 'F:\\fixture\\NatPhoton-2019-Principles.en.md'
+  await mockProjectCitationShelf(page, [
+    {
+      key: 'historical-system-b-library-match',
+      main: '3D single-pixel video',
+      num: 17,
+      anchor: 'kb-cite-history-17',
+      sourceName: 'NatPhoton-2019-Principles.en.md',
+      sourcePath: discoverySource,
+      raw: 'Zhang Y et al. 3D single-pixel video. J. Opt. 2016.',
+      citeFmt: 'Zhang Y et al. 3D single-pixel video. J. Opt. 2016.',
+      isInpaper: true,
+      title: '3D single-pixel video',
+      authors: 'Zhang Y, Edgar M, Sun B, et al',
+      venue: 'Journal of Optics',
+      year: '2016',
+      doi: '10.1088/2040-8978/18/3/035203',
+      doiUrl: 'https://doi.org/10.1088/2040-8978/18/3/035203',
+      citationRoute: 'system_b',
+      shelfItemKind: 'reference',
+      shelfOrigin: 'reader_cross_reference',
+      headingPath: 'Applications and future potential',
+      locationLabel: 'Applications and future potential / p. 6',
+      citationContext: 'The NatPhoton source cites 3D single-pixel video for photometric stereo [17].',
+      bibliometricsChecked: true,
+      libraryMatchStatus: 'in_library',
+      libraryMatchConfidence: 0.99,
+      libraryMatchMethod: 'doi',
+      libraryMatchReason: 'doi_exact',
+      libraryMatchPath: READER_REGRESSION_SOURCE_PATH,
+      libraryMatchTitle: READER_REGRESSION_SOURCE_NAME,
+      metadataQuality: { ok: true, status: 'ready', score: 100, issues: [] },
+      tags: [],
+      note: '',
+    },
+  ])
+
+  await page.goto('/__message_list_test__?scenario=weak-system-b-popover&reader=1')
+  const item = page.getByTestId('citation-shelf-item')
+  await expect(item).toHaveCount(1)
+  await expect(item.getByTestId('citation-shelf-library-match')).toContainText(/Library full text|库内全文/)
+
+  await item.getByTestId('citation-shelf-open-source').click()
+  await expect.poll(async () => {
+    const raw = await page.getByTestId('message-list-open-payload').textContent()
+    return JSON.parse(raw || '{}').sourcePath
+  }).toBe(READER_REGRESSION_SOURCE_PATH)
+
+  await openShelfOrganizeTools(page)
+  await expandFocusedShelfDetails(page)
+  await expect(item.getByTestId('citation-shelf-trace-row-fulltext')).toContainText(READER_REGRESSION_SOURCE_NAME)
+  await expect(item.getByTestId('citation-shelf-trace-row-source')).toContainText('NatPhoton-2019-Principles.en.md')
+  await expect(item.getByTestId('citation-shelf-trail-open-full-text')).toBeVisible()
+  await expect(item.getByTestId('citation-shelf-trail-open-source')).toBeVisible()
+
+  await item.getByTestId('citation-shelf-trail-open-source').click()
+  await expect.poll(async () => {
+    const raw = await page.getByTestId('message-list-open-payload').textContent()
+    const payload = JSON.parse(raw || '{}')
+    return { sourcePath: payload.sourcePath, snippet: payload.snippet }
+  }).toEqual({
+    sourcePath: discoverySource,
+    snippet: 'The NatPhoton source cites 3D single-pixel video for photometric stereo [17].',
+  })
 })
 
 test('citation shelf migrates legacy conversation storage into project shelf', async ({ page }) => {

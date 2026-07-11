@@ -63,7 +63,9 @@ import {
   mergeShelfItemWithLive,
   sameShelfItem,
   sameShelfItems,
+  shelfDiscoverySourceDetail,
   shelfItemHasDisplayableArticleSummary,
+  shelfLibraryFullTextDetail,
   shelfItemNeedsPersistedMetadataHydrate,
   shelfItemNeedsSummaryBackfill,
   shelfItemsForBackend,
@@ -1907,7 +1909,10 @@ export function MessageList({
         fetchShelfSummaryForItem(item)
       }}
       onOpenSource={(item) => {
-        openReaderFromDetail(item as unknown as CiteDetail)
+        openReaderFromDetail(shelfLibraryFullTextDetail(item) || item as unknown as CiteDetail)
+      }}
+      onOpenDiscoverySource={(item) => {
+        openReaderFromDetail(shelfDiscoverySourceDetail(item) || item as unknown as CiteDetail)
       }}
       onOpenMessage={openMessageFromShelfItem}
       onUseSelectedAsContext={onResearchContextPackChange ? useSelectedShelfItemsAsContext : undefined}

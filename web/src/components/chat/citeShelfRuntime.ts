@@ -61,6 +61,81 @@ export function shelfSourceIdentity(item: Pick<CiteShelfItem, 'sourcePath' | 'so
     .toLowerCase()
 }
 
+export function shelfItemHasUsableLibraryFullText(item: CiteShelfItem): boolean {
+  return (
+    String(item.libraryMatchStatus || '').trim().toLowerCase() === 'in_library'
+    && Boolean(String(item.libraryMatchPath || '').trim())
+  )
+}
+
+function sourceNameFromPath(value: string): string {
+  return String(value || '').trim().split(/[\\/]/).filter(Boolean).pop() || ''
+}
+
+export function shelfLibraryFullTextDetail(item: CiteShelfItem): CiteDetail | null {
+  if (!shelfItemHasUsableLibraryFullText(item)) return null
+  const sourcePath = String(item.libraryMatchPath || '').trim()
+  const sourceName = sourceNameFromPath(sourcePath)
+    || String(item.libraryMatchTitle || item.title || item.main || '').trim()
+  return {
+    ...item,
+    num: 0,
+    displayNum: 0,
+    displayNums: [],
+    anchor: String(item.anchor || item.key || '').trim(),
+    sourcePath,
+    sourceName,
+    isInpaper: false,
+    citationRoute: 'system_a',
+    routingReason: 'citation_shelf:library_match_full_text',
+    routingConfidence: Math.max(0.9, Number(item.libraryMatchConfidence || 0)),
+    raw: '',
+    citeFmt: '',
+    summaryLine: '',
+    summarySource: '',
+    summaryProvider: '',
+    headingPath: '',
+    evidenceQuote: '',
+    citationContext: '',
+    locationLabel: sourceName,
+    blockId: '',
+    anchorId: '',
+    anchorKind: '',
+    pageStart: 0,
+    pageEnd: 0,
+    bindingStatus: 'library_match',
+    bindingConfidence: Math.max(0.9, Number(item.libraryMatchConfidence || 0)),
+    bindingReason: String(item.libraryMatchReason || 'local_library_match').trim(),
+    cardLocator: '',
+    cardEvidence: '',
+    cardContextSummary: '',
+  }
+}
+
+export function shelfDiscoverySourceDetail(item: CiteShelfItem): CiteDetail | null {
+  if (!String(item.sourcePath || '').trim()) return null
+  const cardEvidence = item.cardView?.sections.find((section) => (
+    ['evidence', 'context_summary'].includes(String(section.id || '').trim().toLowerCase())
+    && String(section.text || '').trim()
+  ))?.text || ''
+  const discoveryEvidence = [
+    item.citationContext,
+    item.cardEvidence,
+    cardEvidence,
+    item.answerClaim,
+    item.shelfExcerpt,
+    item.raw,
+  ].map((value) => String(value || '').trim()).find(Boolean) || ''
+  return {
+    ...item,
+    summaryLine: '',
+    summarySource: '',
+    summaryProvider: '',
+    evidenceQuote: discoveryEvidence,
+    citationContext: discoveryEvidence,
+  }
+}
+
 export function shouldMergeShelfItemsBySource(existing: CiteShelfItem, incoming: CiteShelfItem, sourceIdentity: string): boolean {
   if (!sourceIdentity) return false
   if (shelfKind(existing) === 'reader_selection') return false
@@ -456,6 +531,9 @@ export function shelfItemHasMetadataHydrationSeed(item: CiteShelfItem): boolean 
 
 export function shelfItemNeedsPersistedMetadataHydrate(item: CiteShelfItem): boolean {
   if (!shelfItemHasMetadataHydrationSeed(item)) return false
+  const libraryMatchStatus = String(item.libraryMatchStatus || '').trim().toLowerCase()
+  const libraryMatchChecked = ['in_library', 'not_in_library', 'ambiguous'].includes(libraryMatchStatus)
+  if (shelfKind(item) === 'reference' && !libraryMatchChecked) return true
   if (shelfItemMetadataQualityReady(item)) return false
   return shelfItemNeedsMetadataRepair(item) || !item.bibliometricsChecked || !item.metadataQuality
 }

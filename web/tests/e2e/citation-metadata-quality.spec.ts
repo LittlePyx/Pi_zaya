@@ -15,7 +15,11 @@ import {
   SHELF_MAX_ITEMS,
   dedupeShelfItems,
   mergeShelfItemWithLive,
+  shelfDiscoverySourceDetail,
   shelfItemHasDisplayableArticleSummary,
+  shelfItemHasUsableLibraryFullText,
+  shelfItemNeedsPersistedMetadataHydrate,
+  shelfLibraryFullTextDetail,
 } from '../../src/components/chat/citeShelfRuntime'
 import type { ReaderLocateResult } from '../../src/components/chat/reader/readerTypes'
 import { prepareRefsPanelHits } from '../../src/components/refs/refsPanelDisplay'
@@ -218,6 +222,60 @@ test('citation shelf live merge upgrades context-only summary as a full article 
   expect(merged.summaryProvider).toBe('crossref')
   expect(merged.summaryQuality?.source).toBe('abstract')
   expect(shelfItemHasDisplayableArticleSummary(merged)).toBe(true)
+})
+
+test('historical System B shelf item opens matched library full text without losing discovery source', () => {
+  const item = shelfItem({
+    num: 17,
+    source_path: 'db/NatPhoton-2019-Principles.en.md',
+    source_name: 'NatPhoton-2019-Principles.en.md',
+    is_inpaper: true,
+    citation_route: 'system_b',
+    shelf_item_kind: 'reference',
+    raw: 'Zhang Y et al. 3D single-pixel video. J. Opt. 2016.',
+    citation_context: 'The NatPhoton paper cites this work for 3D photometric stereo [17].',
+    library_match_status: 'in_library',
+    library_match_confidence: 0.99,
+    library_match_reason: 'doi_exact',
+    library_match_path: 'F:\\papers\\Journal of Optics-2016-3D single-pixel video.pdf',
+    library_match_title: '3D single-pixel video',
+  })
+
+  const fullText = shelfLibraryFullTextDetail(item)
+  const discovery = shelfDiscoverySourceDetail(item)
+
+  expect(shelfItemHasUsableLibraryFullText(item)).toBe(true)
+  expect(fullText).not.toBeNull()
+  expect(fullText?.sourcePath).toBe('F:\\papers\\Journal of Optics-2016-3D single-pixel video.pdf')
+  expect(fullText?.sourceName).toBe('Journal of Optics-2016-3D single-pixel video.pdf')
+  expect(fullText?.num).toBe(0)
+  expect(fullText?.isInpaper).toBe(false)
+  expect(fullText?.citationRoute).toBe('system_a')
+  expect(fullText?.headingPath).toBe('')
+  expect(fullText?.raw).toBe('')
+  expect(item.sourcePath).toBe('db/NatPhoton-2019-Principles.en.md')
+  expect(item.num).toBe(17)
+  expect(item.citationRoute).toBe('system_b')
+  expect(discovery?.sourcePath).toBe('db/NatPhoton-2019-Principles.en.md')
+  expect(discovery?.summaryLine).toBe('')
+  expect(discovery?.evidenceQuote).toContain('photometric stereo [17]')
+})
+
+test('ready historical reference retries metadata hydration until library match is checked', () => {
+  const unchecked = shelfItem({
+    is_inpaper: true,
+    shelf_item_kind: 'reference',
+    bibliometrics_checked: true,
+    metadata_quality: { ok: true, status: 'ready', score: 100, issues: [] },
+    library_match_status: '',
+  })
+  const checkedMissing = shelfItem({
+    ...unchecked,
+    library_match_status: 'not_in_library',
+  })
+
+  expect(shelfItemNeedsPersistedMetadataHydrate(unchecked)).toBe(true)
+  expect(shelfItemNeedsPersistedMetadataHydrate(checkedMissing)).toBe(false)
 })
 
 test('citation shelf source-open quality uses normalized source identity', () => {
