@@ -25,6 +25,7 @@ import {
   nearbyReadableBlocks,
   normalizeText,
   orderedEquationReaderBlocks,
+  readableBlocks,
   resolveDirectTargetNode,
   resolveInlineFormulaTarget,
   resolveRelatedTargetNodes,
@@ -712,6 +713,16 @@ export function useReaderLocateEngine({
         }
       } else if (anchorKindForLocate !== 'figure' && anchorKindForLocate !== 'equation' && highlightQueries.length > 0) {
         exactHit = tryExactHighlight(focusedBlock)
+        if (!exactHit && strictLocate && lockPrimaryToDirectIdentity) {
+          for (const candidate of readableBlocks(root)) {
+            if (candidate === focusedBlock) continue
+            const hit = tryExactHighlight(candidate)
+            if (!hit) continue
+            focusedBlock = closestReadableBlock(candidate) || candidate
+            exactHit = hit
+            break
+          }
+        }
         if (!exactHit && strictLocate && !lockPrimaryToDirectIdentity) {
           const maxDistance = anchorKindForLocate === 'equation' ? 1 : 2
           for (const neighbor of nearbyReadableBlocks(root, focusedBlock, maxDistance)) {

@@ -76,6 +76,16 @@ def test_resolve_paper_guide_intent_marks_naive_source_trace_as_citation_lookup(
     assert out.exact_support is True
 
 
+def test_resolve_paper_guide_intent_marks_quoted_reference_context_as_exact_support():
+    out = _resolve_paper_guide_intent(
+        "本文参考文献中的 “A single-pixel terahertz imaging system based on compressed sensing” "
+        "是第几条？正文在哪个段落引用它？请给引用语境。"
+    )
+
+    assert out.family == "citation_lookup"
+    assert out.exact_support is True
+
+
 def test_resolve_paper_guide_intent_marks_exact_method_support_prompt():
     out = _resolve_paper_guide_intent("Point me to the exact supporting sentence for the optimizer and batch size.")
 

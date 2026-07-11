@@ -86,63 +86,65 @@ export function CitationPopover({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      <CitationPopoverHeader
-        isSystemB={isSystemB}
-        kindLabel={frame.kindLabel}
-        badgeLabel={frame.badgeLabel}
-        title={isSystemB ? frame.systemBTitle : frame.systemATitle}
-        subtitle={frame.headerSubtitle}
-        compactMetaItems={frame.compactMetaItems}
-        onClose={onClose}
-      />
+      <div className="kb-cite-pop-scroll">
+        <CitationPopoverHeader
+          isSystemB={isSystemB}
+          kindLabel={frame.kindLabel}
+          badgeLabel={frame.badgeLabel}
+          title={isSystemB ? frame.systemBTitle : frame.systemATitle}
+          subtitle={frame.headerSubtitle}
+          compactMetaItems={frame.compactMetaItems}
+          onClose={onClose}
+        />
 
-      <CitationPopoverFlowStrip
-        explainText={explainText}
-        flowSteps={frame.flowSteps}
-        flowAriaLabel={S.cite_flow_aria}
-      />
-      <CitationPopoverStatusPanels
-        bindingState={status.bindingState}
-        bindingOverlapText={status.bindingOverlapText}
-        showBindingReason={status.showBindingReason}
-        bindingReason={status.bindingReason}
-        showCardQuality={status.showCardQuality}
-        cardQualityFlags={status.cardQualityFlags}
-        cardQualityLabel={status.cardQualityLabel}
-        cardQualityScore={status.cardQualityScore}
-        showCardWarning={status.showCardWarning}
-        cardWarning={status.cardWarning}
-        showExternalMetadataWarning={status.showExternalMetadataWarning}
-        externalMetadataWarningText={status.externalMetadataWarningText}
-        externalMetadataTitleHint={status.externalMetadataTitleHint}
-      />
-      {!isSystemB ? (
-        <SystemAEvidenceCard
-          showTakeaway={systemA.showTakeaway}
-          takeawayLabel={systemA.takeawayLabel}
-          takeawayText={systemA.takeawayText}
-          card={systemA.contentCard}
-          showClaim={systemA.showClaim}
-          excerptLabel={S.cite_excerpt}
-          showSupport={systemA.showSupport}
+        <CitationPopoverFlowStrip
+          explainText={explainText}
+          flowSteps={frame.flowSteps}
+          flowAriaLabel={S.cite_flow_aria}
         />
-      ) : (
-        <SystemBLiteratureCard
-          {...systemB}
-          excerptLabel={S.cite_excerpt}
+        <CitationPopoverStatusPanels
+          bindingState={status.bindingState}
+          bindingOverlapText={status.bindingOverlapText}
+          showBindingReason={status.showBindingReason}
+          bindingReason={status.bindingReason}
+          showCardQuality={status.showCardQuality}
+          cardQualityFlags={status.cardQualityFlags}
+          cardQualityLabel={status.cardQualityLabel}
+          cardQualityScore={status.cardQualityScore}
+          showCardWarning={status.showCardWarning}
+          cardWarning={status.cardWarning}
+          showExternalMetadataWarning={status.showExternalMetadataWarning}
+          externalMetadataWarningText={status.externalMetadataWarningText}
+          externalMetadataTitleHint={status.externalMetadataTitleHint}
         />
-      )}
-      <CitationPopoverMetaPanels
-        showMetaGrid={frame.showMetaGrid}
-        metaRows={frame.metaRows}
-        doiLabel={frame.doiLabel}
-        doiHref={frame.doiHref}
-        loading={loading}
-        isSystemB={isSystemB}
-        loadingLabel={S.cite_loading}
-        showMetrics={frame.showMetrics}
-        metrics={frame.metrics}
-      />
+        {!isSystemB ? (
+          <SystemAEvidenceCard
+            showTakeaway={systemA.showTakeaway}
+            takeawayLabel={systemA.takeawayLabel}
+            takeawayText={systemA.takeawayText}
+            card={systemA.contentCard}
+            showClaim={systemA.showClaim}
+            excerptLabel={S.cite_excerpt}
+            showSupport={systemA.showSupport}
+          />
+        ) : (
+          <SystemBLiteratureCard
+            {...systemB}
+            excerptLabel={S.cite_excerpt}
+          />
+        )}
+        <CitationPopoverMetaPanels
+          showMetaGrid={frame.showMetaGrid}
+          metaRows={frame.metaRows}
+          doiLabel={frame.doiLabel}
+          doiHref={frame.doiHref}
+          loading={loading}
+          isSystemB={isSystemB}
+          loadingLabel={S.cite_loading}
+          showMetrics={frame.showMetrics}
+          metrics={frame.metrics}
+        />
+      </div>
 
       <CitationPopoverActions
         detail={detail}

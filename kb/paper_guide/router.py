@@ -61,6 +61,10 @@ _PAPER_GUIDE_CITATION_EXACT_SUPPORT_RE = re.compile(
     r"\u53ef\u5b9a\u4f4d.*?(?:\u539f\u6587|\u652f\u6301|\u8bc1\u636e)"
     r")"
 )
+_PAPER_GUIDE_QUOTED_REFERENCE_TARGET_RE = re.compile(
+    r"[\"\u201c\u201d\u300c\u300d\u300e\u300f][^\"\u201c\u201d\u300c\u300d\u300e\u300f\n]{8,240}"
+    r"[\"\u201c\u201d\u300c\u300d\u300e\u300f]"
+)
 _PAPER_GUIDE_FIGURE_CAPTION_EXACT_SUPPORT_RE = re.compile(
     r"(?i)("
     r"exact\s+supporting\s+caption\s+clause|caption\s+clause|exact\s+caption|"
@@ -138,6 +142,13 @@ def _paper_guide_prompt_requests_exact_citation_support(prompt: str) -> bool:
     return bool(
         _PAPER_GUIDE_CITATION_EXACT_SUPPORT_RE.search(q)
         or _paper_guide_prompt_requests_naive_source_trace(q)
+        or (
+            _PAPER_GUIDE_QUOTED_REFERENCE_TARGET_RE.search(q)
+            and re.search(
+                r"(?i)(?:\u53c2\u8003\u6587\u732e|\u7b2c\u51e0\u6761|\u6b63\u6587.{0,20}\u5f15\u7528|\u5f15\u7528\u8bed\u5883|reference|cited|citation context)",
+                q,
+            )
+        )
     )
 
 

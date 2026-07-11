@@ -47,6 +47,31 @@ def test_paper_guide_prompt_family_detects_naive_source_trace_questions():
         assert _paper_guide_prompt_family(prompt) == "citation_lookup"
 
 
+def test_paper_guide_prompt_family_does_not_treat_clickable_answer_sources_as_upstream_lookup():
+    prompt = (
+        "只依据本文，Hadamard single-pixel imaging 与 Fourier single-pixel imaging "
+        "的采样基和重建原理有什么核心差别？每个结论都标出可点击回原文的来源。"
+    )
+
+    assert _paper_guide_prompt_family(prompt) == "compare"
+
+
+def test_negated_upstream_recommendation_does_not_flip_comparison_to_citation_lookup():
+    prompt = (
+        "只依据本文，简洁比较 HSI 与 FSI 的采样基和重建原理；"
+        "每个结论给可点击原文来源，不要推荐上游文献。"
+    )
+    assert _paper_guide_prompt_family(prompt) == "compare"
+
+
+def test_exact_reference_lookup_survives_negated_extra_upstream_recommendation():
+    prompt = (
+        "本文参考文献中的 A single-pixel terahertz imaging system based on compressed sensing "
+        "是第几条？不要推荐其他上游文献。"
+    )
+    assert _paper_guide_prompt_family(prompt) == "citation_lookup"
+
+
 def test_paper_guide_prompt_family_prefers_overview_for_beginner_problem_and_application_questions():
     assert (
         _paper_guide_prompt_family(

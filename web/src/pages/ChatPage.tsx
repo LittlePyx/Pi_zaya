@@ -107,6 +107,7 @@ export default function ChatPage() {
     openReaderDock,
   })
   const [queryScope, setQueryScope] = useState<QueryScope>('library')
+  const queryScopeConversationRef = useRef('')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
   const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
   const debugSnapshot = useChatPerfSnapshot(debugPanelEnabled)
@@ -257,6 +258,21 @@ export default function ChatPage() {
     setRightDockPanel,
     shelfProjectScope,
   ])
+
+  useEffect(() => {
+    const convId = String(activeConvId || '').trim()
+    if (!convId || queryScopeConversationRef.current === convId) return
+    const activeConversationId = String(activeConversation?.id || '').trim()
+    const hasLoadedConversation = activeConversationId === convId
+    const hasGuideBinding = Boolean(activeGuideBinding?.sourcePath)
+    if (!hasLoadedConversation && !hasGuideBinding) return
+    queryScopeConversationRef.current = convId
+    const isPaperGuide = Boolean(
+      (hasLoadedConversation && activeConversation?.mode === 'paper_guide')
+      || hasGuideBinding,
+    )
+    setQueryScope(isPaperGuide ? 'current_paper' : 'library')
+  }, [activeConvId, activeConversation?.id, activeConversation?.mode, activeGuideBinding?.sourcePath])
 
   useEffect(() => {
     const hasCurrentPaper = Boolean(researchContext.activeSource.ready)

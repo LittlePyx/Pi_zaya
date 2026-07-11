@@ -128,3 +128,62 @@ def test_finalize_generation_answer_surfaces_system_b_for_ordinary_question(tmp_
     assert result["answer_quality"]["reference_opportunities"]["mode"] == "inline"
     assert result["answer_quality"]["reference_opportunities"]["injected_refs"] == [4]
     assert result["answer_quality"]["reference_opportunities"]["refs"][:2] == [4, 21]
+
+
+def test_finalize_generation_answer_skips_system_b_tail_when_plan_disables_it(
+    tmp_path, monkeypatch
+) -> None:
+    source_path = tmp_path / "paper.en.md"
+    source_path.write_text("# Paper", encoding="utf-8")
+
+    def _unexpected_detection(**_kwargs):
+        raise AssertionError("System B opportunity detection must stay disabled")
+
+    monkeypatch.setattr(
+        finalize_runtime,
+        "detect_paper_guide_reference_opportunities",
+        _unexpected_detection,
+    )
+    result = finalize_runtime._finalize_generation_answer(
+        (
+            "HSI uses the Hadamard spectrum; FSI uses the Fourier spectrum.\n\n"
+            "To follow the paper's citation trail, open: Computational [[CITE:s1234abcd:7]]."
+        ),
+        prompt="Compare HSI and FSI and link each conclusion back to the paper source.",
+        prompt_for_user="Compare HSI and FSI and link each conclusion back to the paper source.",
+        answer_hits=[{"text": "HSI and FSI use different transforms.", "meta": {"source_path": str(source_path)}}],
+        db_dir=Path("db"),
+        locked_citation_source={"source_path": str(source_path)},
+        answer_intent="reading",
+        answer_depth="L2",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=True,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="compare",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path=str(source_path),
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={
+            "citation_plan": {
+                "intent": "comparison",
+                "budget": {"system_a": 2, "system_b": 0},
+                "system_b_enabled": False,
+                "slots": [],
+            }
+        },
+        paper_guide_retrieval_confidence_hint={},
+        apply_paper_guide_answer_postprocess=lambda answer, **_kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **_kwargs: answer,
+        validate_structured_citations=lambda answer, **_kwargs: (
+            answer,
+            {"raw_count": 1, "kept": 1, "rewritten": 0, "dropped": 0},
+        ),
+    )
+
+    answer = str(result.get("answer") or "")
+    assert "citation trail" not in answer
+    assert "[[CITE:" not in answer

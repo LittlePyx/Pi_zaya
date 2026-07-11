@@ -99,6 +99,25 @@ def _canonicalize_negative_shell(answer: str) -> str:
     return text
 
 
+def _strip_orphaned_fullwidth_closing_parentheses(text: str) -> str:
+    raw = str(text or "")
+    if not raw or "）" not in raw:
+        return raw
+    out: list[str] = []
+    balance = 0
+    for char in raw:
+        if char == "（":
+            balance += 1
+            out.append(char)
+            continue
+        if char == "）":
+            if balance <= 0:
+                continue
+            balance -= 1
+        out.append(char)
+    return "".join(out)
+
+
 def _sanitize_paper_guide_answer_for_user(
     answer: str,
     *,
@@ -206,7 +225,7 @@ def _sanitize_paper_guide_answer_for_user(
         out = re.sub(r"（\s*(?:如|例如)\s*）", "", out)
         out = re.sub(r"\(\s*(?:e\.g\.?|for example|see)?\s*\)", "", out, flags=re.IGNORECASE)
         # Remove truly orphaned Chinese brackets after all paired-bracket patterns have been handled.
-        out = re.sub(r"""[）](?=\s*[，。；：！？、])""", "", out)
+        out = _strip_orphaned_fullwidth_closing_parentheses(out)
         out = re.sub(r"""^\s*[（]\s*(?=[一-鿿])""", "", out, flags=re.MULTILINE)
         out = re.sub(r"""(?<=[。！？])\s*[（]\s*(?=[一-鿿])""", "", out)
         out = re.sub(r"\s+([,.;:!?])", r"\1", out)

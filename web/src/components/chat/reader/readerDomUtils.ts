@@ -396,6 +396,35 @@ function normalizeWithMap(text: string): { norm: string; map: number[] } {
   return { norm: chars.join(''), map }
 }
 
+export function expandReaderInlineCitationGroups(text: string): string {
+  return String(text || '').replace(/\[((?:\s*\d{1,4}\s*(?:(?:[,，、;]\s*)|(?:[\u2013\u2014-]\s*\d{1,4}\s*))?)+)\]/g, (match, spec: string) => {
+    const refs: number[] = []
+    for (const part of String(spec || '').split(/[,，、;]/)) {
+      const token = part.trim()
+      if (!token) continue
+      const range = token.match(/^(\d{1,4})\s*[\u2013\u2014-]\s*(\d{1,4})$/)
+      if (range) {
+        const start = Number(range[1])
+        const end = Number(range[2])
+        if (start > 0 && end >= start && end - start <= 64) {
+          for (let ref = start; ref <= end; ref += 1) refs.push(ref)
+        }
+        continue
+      }
+      const ref = Number(token)
+      if (Number.isInteger(ref) && ref > 0) refs.push(ref)
+    }
+    return refs.length > 0 ? refs.map((ref) => `[${ref}]`).join('') : match
+  })
+}
+
+function trimReaderEvidenceEllipsis(text: string): string {
+  return String(text || '')
+    .replace(/^\s*(?:\.{3,}|\u2026+)\s*/, '')
+    .replace(/\s*(?:\.{2,}|\u2026+)\s*$/, '')
+    .trim()
+}
+
 export function clearReaderInlineHits(root: HTMLElement | null) {
   if (!root) return
   const hits = Array.from(root.querySelectorAll<HTMLElement>('.kb-reader-inline-hit'))
@@ -623,24 +652,35 @@ function wrapExactTextMatchInContainer(
   const corpus = buildTextNodeCorpus(container)
   if (!corpus.raw) return null
   const normCorpus = normalizeWithMap(corpus.raw)
-  const normQuery = normalizeWithMap(probe).norm
-  if (!normCorpus.norm || !normQuery) return null
+  const expandedProbe = expandReaderInlineCitationGroups(probe)
+  const normQueries = Array.from(new Set([
+    normalizeWithMap(probe).norm,
+    normalizeWithMap(expandedProbe).norm,
+    normalizeWithMap(trimReaderEvidenceEllipsis(probe)).norm,
+    normalizeWithMap(trimReaderEvidenceEllipsis(expandedProbe)).norm,
+  ].filter(Boolean)))
+  if (!normCorpus.norm || normQueries.length === 0) return null
   let hitAt = -1
-  let occurrence = 0
-  let searchAt = 0
-  while (searchAt <= normCorpus.norm.length) {
-    const nextHit = normCorpus.norm.indexOf(normQuery, searchAt)
-    if (nextHit < 0) break
-    if (occurrence === targetOccurrence) {
-      hitAt = nextHit
-      break
+  let matchedQueryLength = 0
+  for (const normQuery of normQueries) {
+    let occurrence = 0
+    let searchAt = 0
+    while (searchAt <= normCorpus.norm.length) {
+      const nextHit = normCorpus.norm.indexOf(normQuery, searchAt)
+      if (nextHit < 0) break
+      if (occurrence === targetOccurrence) {
+        hitAt = nextHit
+        matchedQueryLength = normQuery.length
+        break
+      }
+      occurrence += 1
+      searchAt = nextHit + Math.max(1, normQuery.length)
     }
-    occurrence += 1
-    searchAt = nextHit + Math.max(1, normQuery.length)
+    if (hitAt >= 0) break
   }
-  if (hitAt < 0) return null
+  if (hitAt < 0 || matchedQueryLength <= 0) return null
   const startRaw = normCorpus.map[hitAt]
-  const endRaw = (normCorpus.map[hitAt + normQuery.length - 1] || startRaw) + 1
+  const endRaw = (normCorpus.map[hitAt + matchedQueryLength - 1] || startRaw) + 1
   const start = rawOffsetToDomPoint(corpus.nodes, startRaw)
   const end = rawOffsetToDomPoint(corpus.nodes, endRaw)
   if (!start || !end) return null

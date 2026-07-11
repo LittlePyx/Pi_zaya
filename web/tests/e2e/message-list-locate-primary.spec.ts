@@ -399,6 +399,7 @@ test('render packet contract can drive body render and strict locate without top
 })
 
 test('system B upstream reference citation is explicitly clickable and opens its card', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 600 })
   await mockReaderDoc(page)
   await page.goto('/__message_list_test__?scenario=render-packet-contract')
 
@@ -418,6 +419,13 @@ test('system B upstream reference citation is explicitly clickable and opens its
   await expect(popover).toContainText('被引 123')
   await expect(popover).toContainText('IF 3.8')
   await expect(popover).toContainText('JCR Q2')
+  const popoverBox = await popover.boundingBox()
+  const actions = popover.locator('.kb-cite-pop-actions')
+  const actionsBox = await actions.boundingBox()
+  expect(popoverBox).not.toBeNull()
+  expect(actionsBox).not.toBeNull()
+  expect((popoverBox?.y || 0) + (popoverBox?.height || 0)).toBeLessThanOrEqual(600)
+  expect((actionsBox?.y || 0) + (actionsBox?.height || 0)).toBeLessThanOrEqual(600)
 })
 
 test('system B popover folds LLM citation-context summary into current-paper usage', async ({ page }) => {

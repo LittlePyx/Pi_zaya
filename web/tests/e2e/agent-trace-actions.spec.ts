@@ -248,6 +248,7 @@ async function citationPopoverPositionSmoke(page: Page) {
       getHiddenCitationPopoverStyle,
       isCitationPopoverDismissIgnoredTarget,
     } = await import('/src/components/chat/useCitationPopoverPosition.ts')
+    const { expandReaderInlineCitationGroups } = await import('/src/components/chat/reader/readerDomUtils.ts')
     const locateButton = document.createElement('button')
     locateButton.className = 'kb-md-locate-inline-btn'
     const locateButtonLabel = document.createElement('span')
@@ -266,6 +267,9 @@ async function citationPopoverPositionSmoke(page: Page) {
       ignoredLocateBlock: isCitationPopoverDismissIgnoredTarget(locateBlock),
       ignoredLocateButtonChild: isCitationPopoverDismissIgnoredTarget(locateButtonLabel),
       ignoredOrdinaryButton: isCitationPopoverDismissIgnoredTarget(ordinaryButton),
+      expandedCitation: expandReaderInlineCitationGroups(
+        'Compressive sensing [7,9,14,16–18,20,21] reduces measurements.',
+      ),
       placed: getCitationPopoverPositionStyle(
         { x: 40, y: 50 },
         { width: 100, height: 80 },
@@ -1465,6 +1469,9 @@ test('citation popover position helpers clamp placement and preserve dismiss exe
   expect(position.ignoredLocateButtonChild).toBe(true)
   expect(position.ignoredLocateBlock).toBe(true)
   expect(position.ignoredOrdinaryButton).toBe(false)
+  expect(position.expandedCitation).toBe(
+    'Compressive sensing [7][9][14][16][17][18][20][21] reduces measurements.',
+  )
 })
 
 test('citation popover state hook opens, merges metadata, and closes predictably', async ({ page }) => {

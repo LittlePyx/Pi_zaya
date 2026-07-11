@@ -245,6 +245,64 @@ def test_resolve_exact_citation_lookup_support_from_source_keeps_multi_refs_for_
     assert set(rec["ref_nums"]) == {33, 34}
 
 
+def test_resolve_exact_citation_lookup_matches_quoted_reference_title_and_context(tmp_path, monkeypatch):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "load_paper_guide_reference_index",
+        lambda _path: [
+            {
+                "ref_num": 9,
+                "title": "A single-pixel terahertz imaging system based on compressed sensing",
+                "text": "[9] Chan et al. A single-pixel terahertz imaging system based on compressed sensing.",
+                "citation_mentions": [
+                    {
+                        "citation_context": "Compressive sensing [7,9,14] has been adopted to reduce measurements.",
+                        "heading_path": "Introduction",
+                        "block_id": "blk_intro",
+                        "anchor_id": "p_intro",
+                    }
+                ],
+            }
+        ],
+    )
+
+    rec = answer_post_runtime._resolve_exact_citation_lookup_support_from_source(
+        "demo.pdf",
+        prompt=(
+            "本文参考文献中的 “A single-pixel terahertz imaging system based on compressed sensing” "
+            "是第几条？正文在哪里引用它？"
+        ),
+        db_dir=tmp_path,
+    )
+
+    assert rec["ref_nums"] == [9]
+    assert rec["resolved_ref_num"] == 9
+    assert rec["block_id"] == "blk_intro"
+    assert rec["locate_anchor"] == "Compressive sensing [7,9,14] has been adopted to reduce measurements."
+
+
+def test_resolve_exact_citation_lookup_rejects_absent_quoted_title(tmp_path, monkeypatch):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "load_paper_guide_reference_index",
+        lambda _path: [{"ref_num": 9, "title": "A single-pixel terahertz imaging system based on compressed sensing"}],
+    )
+
+    rec = answer_post_runtime._resolve_exact_citation_lookup_support_from_source(
+        "demo.pdf",
+        prompt="本文参考文献里是否有 “First-Photon Imaging”？没有就明确说没有。",
+        db_dir=tmp_path,
+    )
+
+    assert rec == {"not_found": True, "requested_title": "First-Photon Imaging", "source_path": "demo.pdf"}
+
+
 def test_resolve_exact_citation_lookup_support_from_source_falls_back_to_reference_index(tmp_path, monkeypatch):
     md_path = tmp_path / "paper.en.md"
     assets_dir = tmp_path / "assets"

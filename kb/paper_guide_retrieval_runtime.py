@@ -633,8 +633,19 @@ def _paper_guide_targeted_source_block_hits(
                 )
             ):
                 score += 16.0
-        if "hadamard" in q_low and "hadamard" in text_low:
+        principle_comparison = bool(
+            family == "compare"
+            and re.search(r"(?i)(?:principle|reconstruct(?:ion)?|inverse\s+transform|原理|重建)", q)
+        )
+        if principle_comparison and "hadamard" in q_low and "hadamard" in text_low:
             score += 12.0
+        if principle_comparison and "fourier" in q_low and "fourier" in text_low:
+            score += 12.0
+        if principle_comparison:
+            if "hadamard spectrum" in text_low and "inverse hadamard transform" in text_low:
+                score += 34.0
+            if "fourier spectrum" in text_low and "inverse fourier transform" in text_low:
+                score += 34.0
         if "richardson" in q_low and "richardson" in text_low:
             score += 8.0
         if "lucy" in q_low and "lucy" in text_low:
@@ -1132,6 +1143,8 @@ def _paper_guide_prompt_prefers_single_reference(prompt: str) -> bool:
     if re.search(r"(?i)\b(?:which|what)\s+(?:in-?paper\s+)?citation\b", q):
         return True
     if re.search(r"(?i)\bcite(?:d|s)?\b[^\n]{0,60}\bfor\b", q):
+        return True
+    if re.search(r"(?:第几条|哪一条|哪一篇|哪篇|这篇文献|该文献|这个文献)", q):
         return True
     return False
 

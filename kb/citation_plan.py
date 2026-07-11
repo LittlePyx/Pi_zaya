@@ -4,7 +4,11 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from kb.reference_query_family import extract_requested_paper_count, prompt_requests_answer_audit
+from kb.reference_query_family import (
+    extract_requested_paper_count,
+    prompt_requests_answer_audit,
+    strip_negated_reference_trail_requests,
+)
 
 
 _ORIGIN_INTENT_RE = re.compile(
@@ -18,7 +22,11 @@ _STRONG_ORIGIN_INTENT_RE = re.compile(
 )
 _SOURCE_MARKER_REQUEST_RE = re.compile(
     r"(?i)(?:来源|引用|证据)(?:编号|序号|标号)|(?:编号|序号|标号).{0,8}(?:来源|引用|证据)|"
-    r"source\s+(?:number|marker|citation)|citation\s+(?:number|marker)"
+    r"(?:标出|标注|给出|注明|附上).{0,24}(?:来源|引用|证据|依据)|"
+    r"(?:每个|各个|逐(?:条|项|句)|结论).{0,24}(?:来源|引用|证据|依据)|"
+    r"(?:可点击|点回|回原文).{0,20}(?:来源|引用|证据|依据)|"
+    r"source\s+(?:number|marker|citation)|citation\s+(?:number|marker)|"
+    r"(?:each|every).{0,16}(?:claim|conclusion|sentence).{0,24}(?:source|citation|evidence)"
 )
 _COMPARE_INTENT_RE = re.compile(
     r"(?i)(对比|比较|区别|差异|哪个更|优缺点|trade-?off|versus|vs\.?|compare|comparison|difference)"
@@ -74,7 +82,8 @@ def _positive_ints(values: Any, *, limit: int = 6) -> list[int]:
 
 
 def _citation_intent(prompt: str, *, prompt_family: str = "") -> str:
-    raw = " ".join([str(prompt or ""), str(prompt_family or "")]).strip()
+    routing_prompt = strip_negated_reference_trail_requests(prompt)
+    raw = " ".join([routing_prompt, str(prompt_family or "")]).strip()
     family = str(prompt_family or "").strip().lower()
     origin_match = bool(_ORIGIN_INTENT_RE.search(raw))
     marker_request = bool(_SOURCE_MARKER_REQUEST_RE.search(raw))
@@ -234,7 +243,11 @@ def build_citation_plan(
         budget = {"system_a": requested_system_a, "system_b": 0}
     if requested_system_a > 0:
         budget["system_a"] = max(int(budget.get("system_a") or 0), requested_system_a)
-    sys_b = _system_b_slots(reference_opportunities, intent=intent, max_items=3)
+    sys_b = (
+        _system_b_slots(reference_opportunities, intent=intent, max_items=3)
+        if int(budget.get("system_b") or 0) > 0
+        else []
+    )
     system_a_limit = max(3, requested_system_a)
     sys_a = _system_a_slots(
         support_slots=support_slots,

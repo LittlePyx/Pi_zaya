@@ -2931,6 +2931,21 @@ def _finalize_generation_answer(
     )
     effective_paper_guide_family = str(getattr(resolved_paper_guide_intent, "family", "") or "").strip()
     sanitize_paper_guide_family = effective_paper_guide_family or "overview"
+    citation_plan_seed = (
+        dict((paper_guide_contracts_seed or {}).get("citation_plan") or {})
+        if isinstance((paper_guide_contracts_seed or {}).get("citation_plan"), dict)
+        else {}
+    )
+    citation_plan_budget = (
+        dict(citation_plan_seed.get("budget") or {})
+        if isinstance(citation_plan_seed.get("budget"), dict)
+        else {}
+    )
+    system_b_explicitly_disabled = bool(
+        citation_plan_seed
+        and "system_b" in citation_plan_budget
+        and int(citation_plan_budget.get("system_b") or 0) <= 0
+    )
     research_answer_plan_norm = str(research_answer_plan or "").strip()
     answer_audit_requested = prompt_requests_answer_audit(prompt_for_user or prompt)
     multi_paper_list_prompt = bool(prompt_explicitly_requests_multi_paper_list(prompt_for_user or prompt))
@@ -3048,7 +3063,9 @@ def _finalize_generation_answer(
     paper_guide_candidate_refs_effective = (
         dict(paper_guide_candidate_refs_by_source or {}) if bool(paper_guide_mode) else {}
     )
-    if bool(paper_guide_mode):
+    if bool(paper_guide_mode) and system_b_explicitly_disabled:
+        paper_guide_reference_opportunities = []
+    elif bool(paper_guide_mode):
         reference_source_path = str(
             paper_guide_bound_source_path
             or paper_guide_direct_source_path
@@ -3128,7 +3145,7 @@ def _finalize_generation_answer(
             or int(dict(citation_validation or {}).get("rewritten") or 0) > 0
         )
     )
-    if (
+    if system_b_explicitly_disabled or (
         paper_guide_reference_opportunities
         and not paper_guide_validated_structured_refs
         and bool(paper_guide_reference_apply_meta.get("tail_used"))

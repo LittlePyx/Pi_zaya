@@ -244,6 +244,39 @@ def test_paper_guide_targeted_source_block_hits_prioritizes_reconstruction_metho
     assert "total variation" in top_text
 
 
+def test_paper_guide_targeted_source_block_hits_covers_both_sides_of_transform_comparison(tmp_path: Path):
+    source_pdf = tmp_path / "TransformComparison.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    db_root = tmp_path / "db"
+    md_dir = db_root / "TransformComparison"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "TransformComparison.en.md"
+    md_main.write_text(
+        (
+            "## Principle of HSI and FSI\n\n"
+            "HSI acquires the Hadamard spectrum and reconstructs the object image by applying an inverse Hadamard transform.\n\n"
+            "FSI acquires the Fourier spectrum and reconstructs the object image by applying an inverse Fourier transform.\n\n"
+            "## Experimental comparison\n\n"
+            "Hadamard and Fourier patterns produce different artifacts in a Siemens star experiment.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source_pdf),
+        prompt="Compare HSI and FSI sampling basis and reconstruction principle.",
+        db_dir=db_root,
+        limit=2,
+        citation_lookup_query_tokens=lambda prompt: [tok for tok in prompt.lower().split() if tok],
+        citation_lookup_signal_score=lambda **_kwargs: 0.0,
+        resolve_support_slot_block=lambda **_kwargs: {},
+    )
+
+    texts = [str(hit.get("text") or "").lower() for hit in hits]
+    assert any("inverse hadamard transform" in text for text in texts)
+    assert any("inverse fourier transform" in text for text in texts)
+
+
 def test_seed_query_tokens_merges_augmented_family_terms_when_prompt_has_cjk_tokens():
     tokens = retrieval_runtime._paper_guide_seed_query_tokens_for_targeted_scan(
         prompt="请解释这个方法的关键步骤",

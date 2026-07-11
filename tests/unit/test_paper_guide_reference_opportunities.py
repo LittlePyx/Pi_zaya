@@ -149,6 +149,30 @@ def test_detect_text_reference_opportunities_for_normal_question(monkeypatch) ->
     assert opportunities[0]["ref_num"] == 4
 
 
+def test_citation_lookup_opportunities_keep_only_resolved_target_reference() -> None:
+    opportunities = detect_paper_guide_reference_opportunities(
+        prompt='Where is "Target work" cited?',
+        answer="Target work is reference [9].",
+        prompt_family="citation_lookup",
+        source_path="db/demo/paper.en.md",
+        support_resolution=[
+            {
+                "source_path": "db/demo/paper.en.md",
+                "sid": "s1234abcd",
+                "heading_path": "Introduction",
+                "locate_anchor": "Compressive sensing [7,9,14] has been adopted to reduce measurements.",
+                "ref_nums": [9],
+                "claim_type": "prior_work",
+                "cite_policy": "prefer_ref",
+            }
+        ],
+        support_slots=_admm_support_slots(),
+        max_items=3,
+    )
+
+    assert [item["ref_num"] for item in opportunities] == [9]
+
+
 def test_detect_text_reference_opportunities_for_ordinary_reading_route(monkeypatch) -> None:
     from kb import paper_guide_reference_opportunities as mod
 

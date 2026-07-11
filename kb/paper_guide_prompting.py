@@ -8,6 +8,7 @@ from kb.paper_guide_shared import (
     _trim_paper_guide_prompt_snippet,
 )
 from kb.paper_guide_provenance import _extract_figure_number
+from kb.reference_query_family import strip_negated_reference_trail_requests
 from kb.source_blocks import normalize_match_text
 
 _PAPER_GUIDE_OVERVIEW_PROMPT_RE = re.compile(
@@ -30,11 +31,11 @@ _PAPER_GUIDE_ABSTRACT_PROMPT_RE = re.compile(
 _PAPER_GUIDE_COMPARE_PROMPT_RE = re.compile(
     r"(\badvantage\b|\btrade[\s-]?off\b|\bcompared with\b|\bversus\b|\bvs\.?\b|"
     r"\bopen[-\s]?pinhole\b|\bclosed[-\s]?pinhole\b|\bcnr\b|\bnec\b|\bresolution\b|"
-    r"优势|代价|对比|区别|取舍|分辨率|噪声|信噪比)",
+    r"优势|代价|对比|区别|差别|差异|不同|取舍|分辨率|噪声|信噪比)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_COMPARE_PROMPT_RE_CLEAN = re.compile(
-    r"(\u5bf9\u6bd4|\u533a\u522b|\u53d6\u820d|\u4f18\u52bf|\u4ee3\u4ef7|\u5206\u8fa8\u7387|\u566a\u58f0|\u4fe1\u566a\u6bd4)",
+    r"(\u5bf9\u6bd4|\u6bd4\u8f83|\u533a\u522b|\u5dee\u522b|\u5dee\u5f02|\u4e0d\u540c|\u53d6\u820d|\u4f18\u52bf|\u4ee3\u4ef7|\u5206\u8fa8\u7387|\u566a\u58f0|\u4fe1\u566a\u6bd4)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_REPRO_PROMPT_RE = re.compile(
@@ -130,6 +131,16 @@ _PAPER_GUIDE_NAIVE_SOURCE_TRACE_OBJECT_RE = re.compile(
     r")",
     flags=re.IGNORECASE,
 )
+_PAPER_GUIDE_ANSWER_SOURCE_MARKER_RE = re.compile(
+    r"(?i)("
+    r"(?:\u6807\u51fa|\u6807\u6ce8|\u7ed9\u51fa|\u6ce8\u660e|\u9644\u4e0a).{0,24}(?:\u6765\u6e90|\u5f15\u7528|\u8bc1\u636e|\u4f9d\u636e)|"
+    r"(?:\u6bcf\u4e2a|\u5404\u4e2a|\u9010(?:\u6761|\u9879|\u53e5)|\u7ed3\u8bba).{0,24}(?:\u6765\u6e90|\u5f15\u7528|\u8bc1\u636e|\u4f9d\u636e)|"
+    r"(?:\u53ef\u70b9\u51fb|\u70b9\u56de|\u56de\u539f\u6587).{0,20}(?:\u6765\u6e90|\u5f15\u7528|\u8bc1\u636e|\u4f9d\u636e)|"
+    r"(?:cite|mark|attach|include).{0,24}(?:source|citation|evidence).{0,24}(?:claim|conclusion|sentence)|"
+    r"(?:each|every).{0,16}(?:claim|conclusion|sentence).{0,24}(?:source|citation|evidence)"
+    r")",
+    flags=re.IGNORECASE,
+)
 _PAPER_GUIDE_CITATION_LOOKUP_QUERY_STOPWORDS = {
     "reference",
     "references",
@@ -171,6 +182,8 @@ def _paper_guide_prompt_requests_naive_source_trace(prompt: str) -> bool:
     if not q:
         return False
     if not _PAPER_GUIDE_NAIVE_SOURCE_TRACE_PROMPT_RE.search(q):
+        return False
+    if _PAPER_GUIDE_ANSWER_SOURCE_MARKER_RE.search(q):
         return False
     return bool(_PAPER_GUIDE_NAIVE_SOURCE_TRACE_OBJECT_RE.search(q))
 _PAPER_GUIDE_METHOD_PROMPT_RE_CLEAN = re.compile(
@@ -392,6 +405,7 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
     q = str(prompt or "").strip()
     if not q:
         return ""
+    reference_routing_q = strip_negated_reference_trail_requests(q)
     if _PAPER_GUIDE_BOX_ONLY_PROMPT_RE.search(q):
         return "box_only"
     if _PAPER_GUIDE_DISCUSSION_ONLY_PROMPT_RE.search(q) and (
@@ -403,9 +417,9 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
     if _PAPER_GUIDE_FIGURE_PROMPT_RE.search(q):
         return "figure_walkthrough"
     if (
-        _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE.search(q)
-        or _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE_CLEAN.search(q)
-        or _paper_guide_prompt_requests_naive_source_trace(q)
+        _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE.search(reference_routing_q)
+        or _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE_CLEAN.search(reference_routing_q)
+        or _paper_guide_prompt_requests_naive_source_trace(reference_routing_q)
     ):
         return "citation_lookup"
     # Allow citation lookup to explicitly scope to "in the Abstract" without being misclassified as abstract.

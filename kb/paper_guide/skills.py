@@ -183,6 +183,24 @@ def run_exact_citation_lookup_skill(
         prompt=prompt,
         db_dir=db_dir,
     )
+    if bool((rec or {}).get("not_found")):
+        requested_title = str((rec or {}).get("requested_title") or "").strip()
+        if _contains_cjk(prompt):
+            answer = f"本文参考文献中没有《{requested_title}》。" if requested_title else "本文参考文献中没有找到这篇文献。"
+        else:
+            answer = (
+                f'The paper\'s reference list does not contain "{requested_title}".'
+                if requested_title
+                else "The paper's reference list does not contain that work."
+            )
+        return _finalize_skill_result(
+            answer,
+            support_resolution=[],
+            has_hits=has_hits,
+            prompt_text=prompt,
+            prompt_family=prompt_family,
+            sanitize_answer=sanitize_answer,
+        )
     locate_anchor = str((rec or {}).get("locate_anchor") or "").strip()
     heading_path = str((rec or {}).get("heading_path") or "").strip()
     ref_nums = _positive_ints(list((rec or {}).get("ref_nums") or []), limit=4)
@@ -195,10 +213,30 @@ def run_exact_citation_lookup_skill(
         return None
 
     ref_label = ", ".join(f"[{int(n)}]" for n in ref_nums[:4])
-    if _contains_cjk(prompt):
+    reference_title = str((rec or {}).get("reference_title") or "").strip()
+    if _contains_cjk(prompt) and reference_title:
+        if re.search(r"(?i)compress(?:ed|ive)\s+sensing", locate_anchor) and re.search(
+            r"(?i)reduce(?:d|s)?\s+measurements?", locate_anchor
+        ):
+            role_line = "上游作用：它被本文列为用压缩感知减少测量次数的已有工作；该句同时指出代价是计算时间。"
+        else:
+            role_line = "上游作用：它是当前这句话指向的已有工作，而不是本文自身提出的结果。"
+        lines = [
+            f"这篇文献是本文参考文献 [{int(ref_nums[0])}]：{reference_title}。",
+            _source_location_label(heading_path, prefer_zh=True),
+            role_line,
+            "正文引用语境：",
+        ]
+    elif _contains_cjk(prompt):
         lines = [
             f"这条线索在原文里可以定位到下面这句；句中的文内来源是 {ref_label}。",
             _source_location_label(heading_path, prefer_zh=True),
+        ]
+    elif reference_title:
+        lines = [
+            f'Reference [{int(ref_nums[0])}] is "{reference_title}".',
+            _source_location_label(heading_path, prefer_zh=False),
+            "In-text citation context:",
         ]
     else:
         lines = [

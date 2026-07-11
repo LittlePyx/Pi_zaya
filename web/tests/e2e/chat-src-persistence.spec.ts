@@ -222,6 +222,7 @@ test('paper guide src chips survive direct URL restore without sidebar conversat
   await page.goto(`/?conversation=${CONV_ID}`)
   await expect(page.getByTestId('research-context-state')).toHaveAttribute('data-research-conversation-id', CONV_ID)
   await expect(page.getByTestId('research-context-state')).toHaveAttribute('data-research-mode', 'paper_guide')
+  await expect(page.getByRole('radio', { name: '本文' })).toBeChecked()
   await expect(page.locator('body')).toContainText('The claim is supported by the fixture evidence')
   const chip = page.locator('.kb-cite-chip').first()
   await expect(chip).toBeVisible()

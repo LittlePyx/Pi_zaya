@@ -87,6 +87,14 @@ _REFERENCE_LOCATE_PATTERNS = (
     r"\u54ea\u91cc|\u54ea\u4e2a\u7ae0\u8282|\u5b9a\u4f4d|\u51fa\u5904|\u6e90\u7ae0\u8282",
 )
 
+_NEGATED_REFERENCE_TRAIL_REQUEST_RE = re.compile(
+    r"(?i)(?:不要|别|无需|无须|不需要|禁止)(?:再|额外)?(?:推荐|给出|列出|展示|添加|打开|追溯|延伸到)?"
+    r"(?:任何|其他|其它|相似)?(?:上游(?:文献|论文|参考文献)?|引用链(?:推荐)?|参考文献推荐)|"
+    r"(?:do\s+not|don't|no\s+need\s+to|without)\s+"
+    r"(?:recommend(?:ing)?|show(?:ing)?|list(?:ing)?|open(?:ing)?|follow(?:ing)?)\s+"
+    r"(?:any\s+|other\s+)?(?:upstream\s+(?:papers?|references?)|citation\s+trail|reference\s+trail)"
+)
+
 
 def _prompt_matches_any_pattern(prompt: str, patterns: tuple[str, ...]) -> bool:
     text = str(prompt or "").strip()
@@ -97,6 +105,13 @@ def _prompt_matches_any_pattern(prompt: str, patterns: tuple[str, ...]) -> bool:
 
 def prompt_requests_answer_audit(prompt: str) -> bool:
     return _prompt_matches_any_pattern(prompt, _ANSWER_AUDIT_PATTERNS)
+
+
+def strip_negated_reference_trail_requests(prompt: str) -> str:
+    text = str(prompt or "")
+    if not text:
+        return text
+    return _NEGATED_REFERENCE_TRAIL_REQUEST_RE.sub(" ", text)
 
 
 def _parse_requested_paper_count_token(value: str) -> int | None:

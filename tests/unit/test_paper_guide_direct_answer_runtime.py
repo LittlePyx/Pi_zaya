@@ -162,6 +162,70 @@ def test_build_paper_guide_direct_answer_override_uses_exact_citation_lookup_wit
     assert "citation" not in calls
 
 
+def test_build_paper_guide_direct_answer_override_names_exact_reference_title(monkeypatch):
+    monkeypatch.setattr(
+        direct_answer_runtime,
+        "_resolve_exact_citation_lookup_support_from_source",
+        lambda source_path, **_kwargs: {
+            "source_path": source_path,
+            "heading_path": "Introduction",
+            "locate_anchor": "Compressive sensing [7,9,14] has been adopted to reduce measurements.",
+            "ref_nums": [9],
+            "reference_title": "A single-pixel terahertz imaging system based on compressed sensing",
+        },
+    )
+
+    out = _build_paper_guide_direct_answer_override(
+        paper_guide_mode=True,
+        prompt_family="citation_lookup",
+        prompt_for_user=(
+            "本文参考文献中的 “A single-pixel terahertz imaging system based on compressed sensing” "
+            "是第几条？正文在哪里引用它？"
+        ),
+        paper_guide_focus_source_path="focus.md",
+        paper_guide_direct_source_path="direct.md",
+        paper_guide_bound_source_path="bound.md",
+        answer_hits=[{"meta": {"source_path": "focus.md"}}],
+        special_focus_block="focus",
+        db_dir="db",
+        llm=None,
+        build_direct_abstract_answer=lambda **_kwargs: "",
+        build_direct_citation_lookup_answer=lambda **_kwargs: "",
+    )
+
+    assert "本文参考文献 [9]" in out
+    assert "A single-pixel terahertz imaging system based on compressed sensing" in out
+
+
+def test_build_paper_guide_direct_answer_override_returns_deterministic_not_found(monkeypatch):
+    monkeypatch.setattr(
+        direct_answer_runtime,
+        "_resolve_exact_citation_lookup_support_from_source",
+        lambda source_path, **_kwargs: {
+            "not_found": True,
+            "requested_title": "First-Photon Imaging",
+            "source_path": source_path,
+        },
+    )
+
+    out = _build_paper_guide_direct_answer_override(
+        paper_guide_mode=True,
+        prompt_family="citation_lookup",
+        prompt_for_user="本文参考文献里是否有 “First-Photon Imaging”？没有就明确说没有。",
+        paper_guide_focus_source_path="focus.md",
+        paper_guide_direct_source_path="direct.md",
+        paper_guide_bound_source_path="bound.md",
+        answer_hits=[{"meta": {"source_path": "focus.md"}}],
+        special_focus_block="focus",
+        db_dir="db",
+        llm=None,
+        build_direct_abstract_answer=lambda **_kwargs: "",
+        build_direct_citation_lookup_answer=lambda **_kwargs: "",
+    )
+
+    assert out == "本文参考文献中没有《First-Photon Imaging》。"
+
+
 def test_build_paper_guide_direct_answer_override_skips_citation_lookup_when_targeted():
     calls = {}
 

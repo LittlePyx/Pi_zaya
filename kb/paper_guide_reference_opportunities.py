@@ -1071,6 +1071,18 @@ def detect_paper_guide_reference_opportunities(
         limit = 3
 
     rows: list[tuple[float, dict[str, object]]] = []
+    resolved_target_refs: set[int] = set()
+    if family == "citation_lookup":
+        for record in list(support_resolution or []):
+            if not isinstance(record, Mapping):
+                continue
+            for raw_ref in list(record.get("ref_nums") or record.get("candidate_refs") or []):
+                try:
+                    ref_num = int(raw_ref)
+                except Exception:
+                    continue
+                if ref_num > 0:
+                    resolved_target_refs.add(ref_num)
     for record in _iter_candidate_records(
         support_resolution=support_resolution,
         support_slots=support_slots,
@@ -1081,6 +1093,8 @@ def detect_paper_guide_reference_opportunities(
             continue
         text = _text_from_record(record)
         refs = _explicit_ref_nums_from_record(record, text=text)
+        if resolved_target_refs:
+            refs = [ref_num for ref_num in refs if ref_num in resolved_target_refs]
         if not refs:
             continue
         heading = _heading_from_record(record)

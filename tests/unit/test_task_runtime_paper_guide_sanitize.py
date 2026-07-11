@@ -126,6 +126,12 @@ def test_sanitize_removes_orphaned_chinese_right_bracket_before_punctuation():
     assert "基于压缩感知" in out or "基于，" in out
 
 
+def test_sanitize_preserves_balanced_chinese_parentheses_before_punctuation():
+    raw = "FSI 获取傅里叶谱（Fourier spectrum），然后通过逆傅里叶变换重建。"
+    out = _sanitize_paper_guide_answer_for_user(raw, has_hits=True)
+    assert "（Fourier spectrum）" in out
+
+
 def test_sanitize_removes_orphaned_chinese_left_bracket_after_period():
     raw = "该方法提高了分辨率。（讨论了不同的采样策略。"
     out = _sanitize_paper_guide_answer_for_user(raw, has_hits=True)

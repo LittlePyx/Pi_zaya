@@ -66,7 +66,73 @@ def test_comparison_plan_disables_system_b_budget():
     assert plan["intent"] == "comparison"
     assert plan["budget"]["system_b"] == 0
     assert plan["system_b_enabled"] is False
+    assert all(slot["preferred_system"] != "system_b" for slot in plan["slots"])
     assert not citation_plan_prefers_system_b(plan, context="Fourier basis [2].", ref_num=2)
+
+
+def test_comparison_with_clickable_source_markers_stays_system_a_only():
+    plan = build_citation_plan(
+        prompt=(
+            "只依据本文比较 HSI 与 FSI 的采样基和重建原理，"
+            "每个结论都标出可点击回原文的来源。"
+        ),
+        prompt_family="compare",
+        answer_hits=[
+            {
+                "text": "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns.",
+                "meta": {"source_path": "oe2017.en.md", "heading_path": "Comparison"},
+            }
+        ],
+        reference_opportunities=[
+            {"sid": "s9999abcd", "ref_num": 18, "label": "HSI", "source_path": "oe2017.en.md"}
+        ],
+    )
+
+    assert plan["intent"] == "comparison"
+    assert plan["system_b_enabled"] is False
+    assert all(slot["preferred_system"] != "system_b" for slot in plan["slots"])
+
+
+def test_comparison_rejecting_upstream_recommendations_stays_system_a_only():
+    plan = build_citation_plan(
+        prompt=(
+            "只依据本文，简洁比较 HSI 与 FSI 的采样基和重建原理；"
+            "每个结论给可点击原文来源，不要推荐上游文献。"
+        ),
+        prompt_family="compare",
+        answer_hits=[
+            {
+                "text": "HSI uses an inverse Hadamard transform; FSI uses an inverse Fourier transform.",
+                "meta": {"source_path": "oe2017.en.md", "heading_path": "Principle of HSI and FSI"},
+            }
+        ],
+        reference_opportunities=[
+            {"sid": "s9999abcd", "ref_num": 7, "label": "Computational", "source_path": "oe2017.en.md"}
+        ],
+    )
+
+    assert plan["intent"] == "comparison"
+    assert plan["budget"]["system_b"] == 0
+    assert plan["system_b_enabled"] is False
+    assert all(slot["preferred_system"] != "system_b" for slot in plan["slots"])
+
+
+def test_exact_reference_lookup_keeps_system_b_while_rejecting_extra_recommendations():
+    plan = build_citation_plan(
+        prompt=(
+            "本文参考文献中的 A single-pixel terahertz imaging system based on compressed sensing "
+            "是第几条？不要推荐其他上游文献。"
+        ),
+        prompt_family="citation_lookup",
+        answer_hits=[],
+        reference_opportunities=[
+            {"sid": "s9999abcd", "ref_num": 9, "label": "terahertz imaging", "source_path": "oe2017.en.md"}
+        ],
+    )
+
+    assert plan["intent"] == "origin_lookup"
+    assert plan["system_b_enabled"] is True
+    assert plan["slots"][0]["candidate_refs"] == [9]
 
 
 def test_multi_paper_source_marker_request_keeps_system_a_slots_for_every_requested_paper():

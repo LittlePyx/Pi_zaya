@@ -1824,6 +1824,10 @@ body.kb-reader-resizing .kb-reader-content {
 }
 
 .kb-cite-pop {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 24px);
+  overflow: hidden;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--surface-elevated);
@@ -1831,6 +1835,14 @@ body.kb-reader-resizing .kb-reader-content {
   max-height: calc(100vh - 24px);
   overflow-y: auto;
   padding: 11px;
+}
+
+.kb-cite-pop-scroll {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .kb-cite-pop-system-a {
@@ -2537,6 +2549,7 @@ body.kb-reader-resizing .kb-reader-content {
 
 
 .kb-cite-pop-actions {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-start;
   flex-wrap: wrap;

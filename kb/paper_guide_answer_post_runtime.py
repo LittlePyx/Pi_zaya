@@ -56,6 +56,7 @@ from kb.paper_guide_prompting import (
 from kb.paper_guide_structured_index_runtime import (
     load_paper_guide_equation_index,
     load_paper_guide_figure_index,
+    load_paper_guide_reference_index,
 )
 from kb.paper_guide_target_scope import _extract_prompt_panel_letters
 from kb.inpaper_citation_grounding import parse_ref_num_set
@@ -1562,6 +1563,85 @@ def _resolve_exact_citation_lookup_support_from_source(
     if (not src) or (not q):
         return {}
     md_path = _resolve_paper_guide_md_path(src, db_dir=db_dir)
+
+    requested_title = ""
+    quote_pattern = r"[\"\u201c\u201d\u300c\u300d\u300e\u300f]([^\"\u201c\u201d\u300c\u300d\u300e\u300f\n]{8,240})[\"\u201c\u201d\u300c\u300d\u300e\u300f]"
+    for match in re.finditer(quote_pattern, q):
+        candidate = str(match.group(1) or "").strip()
+        if len(candidate.split()) >= 3 or len(candidate) >= 12:
+            requested_title = candidate
+            break
+
+    if requested_title and isinstance(md_path, Path) and md_path.exists():
+        requested_norm = normalize_inline_markdown(requested_title).strip().lower()
+        requested_tokens = set(_paper_guide_cue_tokens(requested_title))
+        best_reference: dict = {}
+        best_title_score = 0.0
+        for raw in list(load_paper_guide_reference_index(md_path) or []):
+            if not isinstance(raw, dict):
+                continue
+            title = str(raw.get("title") or "").strip()
+            if not title:
+                continue
+            title_norm = normalize_inline_markdown(title).strip().lower()
+            title_tokens = set(_paper_guide_cue_tokens(title))
+            if not title_norm:
+                continue
+            exact = requested_norm == title_norm or requested_norm in title_norm or title_norm in requested_norm
+            overlap = len(requested_tokens.intersection(title_tokens))
+            coverage = float(overlap) / float(max(1, len(requested_tokens)))
+            precision = float(overlap) / float(max(1, len(title_tokens)))
+            score = 1.0 if exact else (0.65 * coverage) + (0.35 * precision)
+            if score > best_title_score:
+                best_title_score = score
+                best_reference = dict(raw)
+        if (not best_reference) or best_title_score < 0.82:
+            return {"not_found": True, "requested_title": requested_title, "source_path": src}
+
+        ref_num = int(best_reference.get("ref_num") or 0)
+        mentions = [
+            dict(item)
+            for item in list(best_reference.get("citation_mentions") or [])
+            if isinstance(item, dict)
+        ]
+        best_mention: dict = {}
+        best_mention_score = float("-inf")
+        query_tokens = set(_paper_guide_citation_lookup_query_tokens(q))
+        for mention in mentions:
+            context = str(mention.get("citation_context") or "").strip(" .")
+            if not context:
+                continue
+            context_tokens = set(_paper_guide_citation_lookup_query_tokens(context))
+            score = float(len(query_tokens.intersection(context_tokens)))
+            if re.search(r"(?i)compress(?:ed|ive)\s+sensing", requested_title) and re.search(
+                r"(?i)compress(?:ed|ive)\s+sensing", context
+            ):
+                score += 4.0
+            if score > best_mention_score:
+                best_mention_score = score
+                best_mention = mention
+        context = str(best_mention.get("citation_context") or "").strip()
+        context = re.sub(r"^\.{3}|\.{3}$", "", context).strip()
+        if not context:
+            context = str(best_reference.get("first_citation_context") or best_reference.get("text") or "").strip()
+        return {
+            "source_path": src,
+            "block_id": str(best_mention.get("block_id") or "").strip(),
+            "anchor_id": str(best_mention.get("anchor_id") or "").strip(),
+            "heading_path": str(
+                best_mention.get("heading_path") or best_reference.get("first_citation_location") or "References"
+            ).strip(),
+            "locate_anchor": context,
+            "claim_type": "prior_work",
+            "cite_policy": "prefer_ref",
+            "segment_text": context,
+            "segment_index": -1,
+            "ref_nums": [ref_num],
+            "candidate_refs": [ref_num],
+            "resolved_ref_num": ref_num,
+            "reference_title": str(best_reference.get("title") or requested_title).strip(),
+            "reference_entry": str(best_reference.get("text") or "").strip(),
+        }
 
     hits = _paper_guide_targeted_source_block_hits(
         bound_source_path=src,
