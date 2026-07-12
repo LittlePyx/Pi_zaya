@@ -1150,6 +1150,19 @@ def _refs_background_llm_polish_enabled() -> bool:
     return bool(_refs_card_polish_llm_enabled())
 
 
+def _refs_payload_has_fast_exact_hit(refs: dict | None) -> bool:
+    for pack in dict(refs or {}).values():
+        if not isinstance(pack, dict):
+            continue
+        for hit in list(pack.get("hits") or []):
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            if bool((meta or {}).get("paper_guide_fast_exact")):
+                return True
+    return False
+
+
 def _warm_conversation_refs_payload_async(
     *,
     conv_id: str,
@@ -1180,7 +1193,10 @@ def _warm_conversation_refs_payload_async(
                 guide_source_path=guide_source_path,
                 guide_source_name=guide_source_name,
                 render_variant="bounded_full",
-                allow_expensive_llm_for_ready=_refs_background_llm_polish_enabled(),
+                allow_expensive_llm_for_ready=(
+                    _refs_background_llm_polish_enabled()
+                    and not _refs_payload_has_fast_exact_hit(refs)
+                ),
                 allow_exact_locate=True,
             )
             if not isinstance(payload, dict):
@@ -1635,16 +1651,56 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                     default_status="failed",
                 )
         _record("failed_fast_render", phase_started_at)
-    if ready_missing_refs:
+    normal_ready_refs: dict[int, dict] = {}
+    exact_ready_refs: dict[int, dict] = {}
+    for user_msg_id, pack in ready_missing_refs.items():
+        target = (
+            exact_ready_refs
+            if _refs_payload_has_fast_exact_hit({int(user_msg_id): pack})
+            else normal_ready_refs
+        )
+        target[int(user_msg_id)] = pack
+    if exact_ready_refs:
+        phase_started_at = time.perf_counter()
+        exact_payload = enrich_refs_payload(
+            exact_ready_refs,
+            pdf_root=_pdf_dir(),
+            md_root=_md_dir(),
+            lib_store=_lib_store(),
+            guide_mode=guide_mode,
+            guide_source_path=guide_source_path,
+            guide_source_name=guide_source_name,
+            render_variant="bounded_full",
+            allow_expensive_llm_for_ready=False,
+            allow_exact_locate=True,
+        )
+        if isinstance(exact_payload, dict):
+            _persist_rendered_refs_payloads(
+                refs=exact_ready_refs,
+                payload=exact_payload,
+                guide_mode=guide_mode,
+                guide_source_path=guide_source_path,
+                guide_source_name=guide_source_name,
+            )
+            for user_msg_id, pack in exact_ready_refs.items():
+                payload_pack = exact_payload.get(int(user_msg_id))
+                if isinstance(payload_pack, dict):
+                    payload[int(user_msg_id)] = _attach_pack_render_state(
+                        payload_pack,
+                        source_pack=pack,
+                        default_status="full",
+                    )
+        _record("exact_full_render", phase_started_at)
+    if normal_ready_refs:
         phase_started_at = time.perf_counter()
         fast_payload = _build_fast_ready_conversation_refs_payload(
-            refs=ready_missing_refs,
+            refs=normal_ready_refs,
             guide_mode=guide_mode,
             guide_source_path=guide_source_path,
             guide_source_name=guide_source_name,
             deadline_at=route_deadline_at,
         )
-        for user_msg_id, pack in ready_missing_refs.items():
+        for user_msg_id, pack in normal_ready_refs.items():
             payload_pack = fast_payload.get(int(user_msg_id))
             if isinstance(payload_pack, dict):
                 payload[int(user_msg_id)] = _attach_pack_render_state(
@@ -1663,7 +1719,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         )
 
     cache_mode = "full"
-    if ready_missing_refs:
+    if normal_ready_refs:
         cache_mode = "fast"
     elif failed_ready_refs:
         cache_mode = "fast"

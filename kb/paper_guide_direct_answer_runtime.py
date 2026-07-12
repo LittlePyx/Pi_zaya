@@ -212,12 +212,33 @@ def _build_exact_support_direct_answer(
     db_dir,
     has_hits: bool,
 ) -> str:
-    if not str(source_path or "").strip():
-        return ""
-    exact_skill_result = _dispatch_paper_guide_exact_support_skill(
+    exact_skill_result = _run_exact_support_skill(
         prompt_text=prompt_text,
         resolved_intent=resolved_intent,
-        source_path=str(source_path or "").strip(),
+        source_path=source_path,
+        db_dir=db_dir,
+        has_hits=bool(has_hits),
+    )
+    if exact_skill_result is None:
+        return ""
+    return str(exact_skill_result.answer_text or "").strip()
+
+
+def _run_exact_support_skill(
+    *,
+    prompt_text: str,
+    resolved_intent,
+    source_path: str,
+    db_dir,
+    has_hits: bool,
+):
+    source = str(source_path or "").strip()
+    if not source:
+        return None
+    return _dispatch_paper_guide_exact_support_skill(
+        prompt_text=prompt_text,
+        resolved_intent=resolved_intent,
+        source_path=source,
         db_dir=db_dir,
         has_hits=bool(has_hits),
         deps=PaperGuideExactSkillDeps(
@@ -231,9 +252,53 @@ def _build_exact_support_direct_answer(
             sanitize_answer=_sanitize_paper_guide_answer_for_user,
         ),
     )
+
+
+def _build_paper_guide_exact_answer_preflight(
+    *,
+    paper_guide_mode: bool,
+    prompt_family: str,
+    prompt_for_user: str,
+    source_path: str,
+    db_dir,
+) -> dict:
+    """Resolve exact paper support before the general retrieval pipeline runs."""
+
+    if not paper_guide_mode:
+        return {}
+    prompt_text = str(prompt_for_user or "").strip()
+    source = str(source_path or "").strip()
+    if (not prompt_text) or (not source):
+        return {}
+    family = str(prompt_family or "").strip().lower()
+    resolved_intent = _resolve_paper_guide_intent(
+        prompt_text,
+        prompt_family=family,
+        answer_hits=[],
+    )
+    exact_skill_result = _run_exact_support_skill(
+        prompt_text=prompt_text,
+        resolved_intent=resolved_intent,
+        source_path=source,
+        db_dir=db_dir,
+        has_hits=True,
+    )
     if exact_skill_result is None:
-        return ""
-    return str(exact_skill_result.answer_text or "").strip()
+        return {}
+    answer = str(exact_skill_result.answer_text or "").strip()
+    support_resolution = [
+        dict(item)
+        for item in list(exact_skill_result.support_resolution or [])
+        if isinstance(item, dict)
+    ]
+    if (not answer) or (not support_resolution):
+        return {}
+    return {
+        "answer": answer,
+        "support_resolution": support_resolution,
+        "prompt_family": str(getattr(resolved_intent, "family", "") or family).strip().lower(),
+        "source_path": source,
+    }
 
 
 def _build_paper_guide_direct_answer_override(

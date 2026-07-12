@@ -260,6 +260,7 @@ from kb.paper_guide_context_runtime import (
     _prepare_paper_guide_prompt_context as _context_prepare_prompt_context,
 )
 from kb.paper_guide_direct_answer_runtime import (
+    _build_paper_guide_exact_answer_preflight as _direct_answer_build_exact_preflight,
     _build_paper_guide_direct_answer_override as _direct_answer_build_override,
 )
 from kb.paper_guide_message_builder import (
@@ -2695,6 +2696,180 @@ def _build_paper_guide_direct_answer_override(
     )
 
 
+def _build_exact_preflight_hit(preflight: dict, *, source_name: str = "") -> dict:
+    support_rows = [
+        dict(item)
+        for item in list((preflight or {}).get("support_resolution") or [])
+        if isinstance(item, dict)
+    ]
+    if not support_rows:
+        return {}
+    support = support_rows[0]
+    source_path = str(
+        support.get("source_path") or (preflight or {}).get("source_path") or ""
+    ).strip()
+    text = str(
+        support.get("locate_anchor")
+        or support.get("segment_text")
+        or support.get("evidence_quote")
+        or support.get("text")
+        or ""
+    ).strip()
+    if (not source_path) or (not text):
+        return {}
+    heading_path = str(
+        support.get("heading_path") or support.get("primary_heading_path") or ""
+    ).strip()
+    meta = {
+        "source_path": source_path,
+        "source_name": str(support.get("source_name") or source_name or "").strip(),
+        "heading_path": heading_path,
+        "top_heading": heading_path,
+        "kind": str(support.get("kind") or "paragraph").strip(),
+        "paper_guide_targeted_block": True,
+        "paper_guide_fast_exact": True,
+        "ref_pack_state": "ready",
+    }
+    for key in (
+        "source_sha1",
+        "block_id",
+        "anchor_id",
+        "page",
+        "page_number",
+        "segment_index",
+        "claim_type",
+        "resolved_ref_num",
+        "candidate_refs",
+        "ref_nums",
+        "ref_spans",
+    ):
+        value = support.get(key)
+        if value not in (None, "", [], {}):
+            meta[key] = value
+    meta["ref_locs"] = [
+        {
+            "source_path": source_path,
+            "heading_path": heading_path,
+            "snippet": text,
+            "block_id": str(support.get("block_id") or "").strip(),
+            "anchor_id": str(support.get("anchor_id") or "").strip(),
+            "selection_reason": "exact_support_preflight",
+        }
+    ]
+    meta["ref_show_snippets"] = [text]
+    return {"text": text, "score": 1_000_000.0, "meta": meta}
+
+
+def _candidate_refs_from_support_resolution(rows: list[dict] | None) -> dict[str, list[int]]:
+    out: dict[str, list[int]] = {}
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        source_path = str(row.get("source_path") or "").strip()
+        if not source_path:
+            continue
+        bucket = out.setdefault(source_path, [])
+        raw_values: list[object] = []
+        for key in ("resolved_ref_num", "ref_num", "reference_number"):
+            raw_values.append(row.get(key))
+        for key in ("candidate_refs", "ref_nums", "support_ref_candidates", "inline_refs"):
+            value = row.get(key)
+            if isinstance(value, (list, tuple)):
+                raw_values.extend(value)
+        for raw in raw_values:
+            try:
+                ref_num = int(raw)
+            except Exception:
+                continue
+            if ref_num > 0 and ref_num not in bucket:
+                bucket.append(ref_num)
+        if not bucket:
+            out.pop(source_path, None)
+    return out
+
+
+def _build_exact_preflight_citation_contract(
+    support_rows: list[dict] | None,
+    *,
+    bound_source_path: str,
+    bound_source_name: str,
+) -> dict:
+    rows = [dict(item) for item in list(support_rows or []) if isinstance(item, dict)]
+    candidate_refs = _candidate_refs_from_support_resolution(rows)
+    if not rows:
+        return {
+            "candidate_refs_by_source": candidate_refs,
+            "reference_opportunities": [],
+            "citation_plan": {},
+        }
+    support = rows[0]
+    source_path = str(support.get("source_path") or bound_source_path or "").strip()
+    ref_nums = list(candidate_refs.get(source_path) or [])
+    ref_num = int(ref_nums[0]) if ref_nums else 0
+    sid = _cite_source_id(source_path) if source_path else ""
+    heading = str(support.get("heading_path") or "").strip()
+    evidence = str(
+        support.get("locate_anchor") or support.get("segment_text") or ""
+    ).strip()
+    opportunities = (
+        [
+            {
+                "source_path": source_path,
+                "sid": sid,
+                "ref_num": ref_num,
+                "label": f"reference {ref_num}",
+                "heading_path": heading,
+                "evidence_quote": evidence,
+            }
+        ]
+        if sid and ref_num > 0
+        else []
+    )
+    slots = [
+        {
+            "claim_type": "prior_work",
+            "preferred_system": "system_a",
+            "topic": heading,
+            "candidate_hits": [1],
+            "support_example": "[[SUPPORT:DOC-1]]",
+            "source_path": source_path,
+            "source_name": bound_source_name,
+            "heading_path": heading,
+            "evidence_quote": evidence,
+            "candidate_refs": ref_nums,
+        }
+    ]
+    if sid and ref_num > 0:
+        slots.append(
+            {
+                "claim_type": "origin",
+                "preferred_system": "system_b",
+                "topic": evidence,
+                "candidate_refs": [ref_num],
+                "candidate_cite_examples": [f"[[CITE:{sid}:{ref_num}]]"],
+                "sid": sid,
+                "source_path": source_path,
+                "source_name": bound_source_name,
+                "heading_path": heading,
+                "evidence_quote": evidence,
+            }
+        )
+    citation_plan = {
+        "version": 1,
+        "source": "exact_support_preflight",
+        "intent": "origin_lookup",
+        "budget": {"system_a": 1, "system_b": 1 if ref_num > 0 else 0},
+        "system_a_enabled": True,
+        "system_b_enabled": bool(ref_num > 0),
+        "slots": slots,
+    }
+    return {
+        "candidate_refs_by_source": candidate_refs,
+        "reference_opportunities": opportunities,
+        "citation_plan": citation_plan,
+    }
+
+
 def _apply_paper_guide_answer_postprocess(
     answer: str,
     *,
@@ -2963,6 +3138,8 @@ def _finalize_generation_answer(
     research_answer_plan: str = "",
     paper_guide_contracts_seed: dict | None = None,
     paper_guide_retrieval_confidence_hint: dict[str, object] | None = None,
+    paper_guide_precomputed_support_resolution: list[dict] | None = None,
+    paper_guide_fast_exact: bool = False,
     settings_obj=None,
 ) -> dict:
     supplement_builder = None
@@ -3000,6 +3177,10 @@ def _finalize_generation_answer(
         paper_guide_evidence_cards=paper_guide_evidence_cards,
         paper_guide_contracts_seed=dict(paper_guide_contracts_seed or {}),
         paper_guide_retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
+        paper_guide_precomputed_support_resolution=list(
+            paper_guide_precomputed_support_resolution or []
+        ),
+        paper_guide_fast_exact=bool(paper_guide_fast_exact),
         apply_paper_guide_answer_postprocess=_apply_paper_guide_answer_postprocess,
         maybe_append_library_figure_markdown=_maybe_append_library_figure_markdown,
         validate_structured_citations=_validate_structured_citations,
@@ -3546,6 +3727,26 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             has_basket=bool(selected_research_context_items),
         )
         paper_guide_source_scoped = bool(paper_guide_mode and effective_query_scope == "current_paper")
+        paper_guide_prompt_family = (
+            _paper_guide_prompt_family(prompt, intent=answer_intent)
+            if paper_guide_source_scoped
+            else ""
+        )
+        paper_guide_exact_preflight: dict = {}
+        exact_preflight_elapsed_s = 0.0
+        if paper_guide_source_scoped and paper_guide_bound_source_ready:
+            t_preflight0 = time.perf_counter()
+            try:
+                paper_guide_exact_preflight = _direct_answer_build_exact_preflight(
+                    paper_guide_mode=True,
+                    prompt_family=paper_guide_prompt_family,
+                    prompt_for_user=prompt,
+                    source_path=paper_guide_bound_source_path,
+                    db_dir=db_dir,
+                )
+            except Exception:
+                paper_guide_exact_preflight = {}
+            exact_preflight_elapsed_s = time.perf_counter() - t_preflight0
         query_scope_block = _query_scope_prompt_block(
             scope=effective_query_scope,
             selected_count=len(selected_research_context_items),
@@ -3607,6 +3808,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "selected_research_context_count": int(len(selected_research_context_items)),
             },
         )
+        if paper_guide_source_scoped:
+            _trace_event(
+                "exact_support_preflight",
+                elapsed_s=exact_preflight_elapsed_s,
+                matched=bool(paper_guide_exact_preflight),
+                support_count=int(
+                    len(list(paper_guide_exact_preflight.get("support_resolution") or []))
+                ),
+            )
 
         image_attachments: list[dict] = []
         if isinstance(raw_image_atts, list):
@@ -3632,7 +3842,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             raise RuntimeError("invalid task")
         if _gen_should_cancel(session_id, task_id):
             raise RuntimeError("canceled")
-        if paper_guide_source_scoped and paper_guide_bound_source_path:
+        if (
+            paper_guide_source_scoped
+            and paper_guide_bound_source_path
+            and (not paper_guide_exact_preflight)
+        ):
             try:
                 try:
                     from api.routers.library import _md_dir, _pdf_dir
@@ -3866,9 +4080,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 for h in bound_hints:
                     retrieval_prompt = _augment_prompt_with_source_hint(retrieval_prompt, h)
         paper_guide_debug: dict[str, object] = {}
-        paper_guide_prompt_family = ""
         if paper_guide_source_scoped:
-            paper_guide_prompt_family = _paper_guide_prompt_family(prompt, intent=answer_intent)
             retrieval_prompt = _augment_paper_guide_retrieval_prompt(
                 retrieval_prompt,
                 family=paper_guide_prompt_family,
@@ -3888,11 +4100,16 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 paper_guide_debug=dict(paper_guide_debug),
             )
 
-        t_load0 = time.perf_counter()
-        chunks = load_all_chunks(db_dir)
-        retriever = BM25Retriever(chunks)
-        _perf_log("gen.load_retriever", elapsed=time.perf_counter() - t_load0, chunks=len(chunks))
-        _trace_event("load_retriever", elapsed_s=time.perf_counter() - t_load0, chunks=len(chunks))
+        chunks: list[dict] = []
+        retriever = None
+        if not paper_guide_exact_preflight:
+            t_load0 = time.perf_counter()
+            chunks = load_all_chunks(db_dir)
+            retriever = BM25Retriever(chunks)
+            _perf_log("gen.load_retriever", elapsed=time.perf_counter() - t_load0, chunks=len(chunks))
+            _trace_event("load_retriever", elapsed_s=time.perf_counter() - t_load0, chunks=len(chunks))
+        else:
+            _trace_event("load_retriever_skipped", elapsed_s=0.0, reason="exact_support_preflight")
 
         hits_raw: list[dict] = []
         scores_raw: list[float] = []
@@ -3915,7 +4132,51 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         prompt_multi_paper_list = False
         seed_refs_should_stay_pending = False
         basket_filter_trace: dict[str, object] = {}
-        if prompt and (not bypass_kb):
+        if paper_guide_exact_preflight:
+            exact_hit = _build_exact_preflight_hit(
+                paper_guide_exact_preflight,
+                source_name=paper_guide_bound_source_name,
+            )
+            if exact_hit:
+                hits_raw = [dict(exact_hit)]
+                hits = [dict(exact_hit)]
+                grouped_docs = [dict(exact_hit)]
+                answer_grouped_docs = [dict(exact_hit)]
+                refs_seed_docs_for_display = [dict(exact_hit)]
+                scores_raw = [float(exact_hit.get("score") or 1_000_000.0)]
+            used_query = str(prompt or "").strip()
+            query_variants = [used_query] if used_query else []
+            paper_guide_retrieval_confidence_hint = {
+                "hit_count": int(len(hits_raw)),
+                "family": str(paper_guide_prompt_family or ""),
+                "explicit_targeting": True,
+                "has_requested_target_hits": bool(hits_raw),
+                "targeted_hit_count": int(len(hits_raw)),
+                "strong_signal": bool(hits_raw),
+                "low_confidence": not bool(hits_raw),
+                "low_confidence_reason": "" if hits_raw else "exact_support_hit_missing",
+                "fast_exact": True,
+            }
+            _trace_section(
+                "retrieval",
+                {
+                    "bypassed": True,
+                    "bypass_reason": "exact_support_preflight",
+                    "raw_hit_count": int(len(hits_raw)),
+                    "raw_hits": _trace_summarize_hits(hits_raw, limit=2),
+                },
+            )
+            _trace_section(
+                "refs",
+                {
+                    "seed_count": int(len(refs_seed_docs_for_display)),
+                    "seed_sources": _trace_summarize_hits(refs_seed_docs_for_display, limit=2),
+                    "async_will_run": False,
+                    "pending_seed": False,
+                },
+            )
+            _gen_update_task(session_id, task_id, stage="exact support ready")
+        elif prompt and (not bypass_kb):
             _gen_update_task(session_id, task_id, stage="retrieve")
             t_ret0 = time.perf_counter()
             hits_raw, scores_raw, used_query, used_translation, query_variants = _search_hits_with_fallback(
@@ -4916,7 +5177,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
 
         deep_added = 0
         deep_docs = 0
-        if deep_read and answer_hits:
+        if deep_read and answer_hits and (not paper_guide_exact_preflight):
             deep_begin = time.monotonic()
             deepread_state = _apply_paper_guide_deepread_context(
                 ctx_parts=ctx_parts,
@@ -4949,18 +5210,57 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             stage="answer",
         )
         ctx = "\n\n---\n\n".join(ctx_parts)
-        paper_guide_prompt_context = _prepare_paper_guide_prompt_context(
-            paper_guide_mode=bool(paper_guide_source_scoped),
-            paper_guide_bound_source_ready=bool(paper_guide_source_scoped and paper_guide_bound_source_ready),
-            answer_hits=answer_hits,
-            paper_guide_evidence_cards=paper_guide_evidence_cards,
-            prompt=prompt,
-            retrieval_prompt=retrieval_prompt,
-            used_query=used_query,
-            prompt_family=paper_guide_prompt_family,
-            paper_guide_bound_source_path=paper_guide_bound_source_path,
-            db_dir=db_dir,
-        )
+        if paper_guide_exact_preflight:
+            exact_support_rows = [
+                dict(item)
+                for item in list(paper_guide_exact_preflight.get("support_resolution") or [])
+                if isinstance(item, dict)
+            ]
+            exact_citation_contract = _build_exact_preflight_citation_contract(
+                exact_support_rows,
+                bound_source_path=paper_guide_bound_source_path,
+                bound_source_name=paper_guide_bound_source_name,
+            )
+            exact_candidate_refs = dict(
+                exact_citation_contract.get("candidate_refs_by_source") or {}
+            )
+            exact_reference_opportunities = list(
+                exact_citation_contract.get("reference_opportunities") or []
+            )
+            exact_citation_plan = dict(
+                exact_citation_contract.get("citation_plan") or {}
+            )
+            paper_guide_prompt_context = {
+                "paper_guide_evidence_cards_block": "",
+                "paper_guide_support_slots_block": "",
+                "paper_guide_special_focus_block": "",
+                "paper_guide_citation_grounding_block": "",
+                "paper_guide_reference_opportunities_block": "",
+                "paper_guide_reference_opportunities": exact_reference_opportunities,
+                "citation_plan": exact_citation_plan,
+                "citation_plan_block": "",
+                "paper_guide_candidate_refs_by_source": exact_candidate_refs,
+                "paper_guide_support_slots": exact_support_rows,
+                "paper_guide_contracts_seed": {
+                    "citation_plan": exact_citation_plan,
+                    "reference_opportunities": exact_reference_opportunities,
+                },
+                "paper_guide_direct_source_path": paper_guide_bound_source_path,
+                "paper_guide_focus_source_path": paper_guide_bound_source_path,
+            }
+        else:
+            paper_guide_prompt_context = _prepare_paper_guide_prompt_context(
+                paper_guide_mode=bool(paper_guide_source_scoped),
+                paper_guide_bound_source_ready=bool(paper_guide_source_scoped and paper_guide_bound_source_ready),
+                answer_hits=answer_hits,
+                paper_guide_evidence_cards=paper_guide_evidence_cards,
+                prompt=prompt,
+                retrieval_prompt=retrieval_prompt,
+                used_query=used_query,
+                prompt_family=paper_guide_prompt_family,
+                paper_guide_bound_source_path=paper_guide_bound_source_path,
+                db_dir=db_dir,
+            )
         paper_guide_evidence_cards_block = str(paper_guide_prompt_context.get("paper_guide_evidence_cards_block") or "")
         paper_guide_support_slots_block = str(paper_guide_prompt_context.get("paper_guide_support_slots_block") or "")
         paper_guide_special_focus_block = str(paper_guide_prompt_context.get("paper_guide_special_focus_block") or "")
@@ -4990,7 +5290,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         )
         if prompt_multi_paper_list and refs_seed_docs_for_display:
             paper_guide_contracts_seed["doc_list_seed"] = [dict(item) for item in list(refs_seed_docs_for_display or []) if isinstance(item, dict)]
-        paper_guide_support_resolution: list[dict] = []
+        paper_guide_support_resolution: list[dict] = [
+            dict(item)
+            for item in list(paper_guide_exact_preflight.get("support_resolution") or [])
+            if isinstance(item, dict)
+        ]
         paper_guide_direct_source_path = (
             str(paper_guide_prompt_context.get("paper_guide_direct_source_path") or paper_guide_bound_source_path or "")
             if paper_guide_source_scoped
@@ -5147,19 +5451,24 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 _trace_section("agent", {"mode": "research_agent", "generation_error": str(exc)[:180]})
         direct_answer_override = ""
         if not agent_direct_answer_override:
-            ds = DeepSeekChat(settings_obj)
-            direct_answer_override = _build_paper_guide_direct_answer_override(
-                paper_guide_mode=bool(paper_guide_source_scoped),
-                prompt_family=paper_guide_prompt_family,
-                prompt_for_user=prompt_for_user,
-                paper_guide_focus_source_path=paper_guide_focus_source_path,
-                paper_guide_direct_source_path=paper_guide_direct_source_path,
-                paper_guide_bound_source_path=paper_guide_bound_source_path,
-                answer_hits=answer_hits,
-                special_focus_block=paper_guide_special_focus_block,
-                db_dir=db_dir,
-                llm=ds,
-            )
+            if paper_guide_exact_preflight:
+                direct_answer_override = str(
+                    paper_guide_exact_preflight.get("answer") or ""
+                ).strip()
+            else:
+                ds = DeepSeekChat(settings_obj)
+                direct_answer_override = _build_paper_guide_direct_answer_override(
+                    paper_guide_mode=bool(paper_guide_source_scoped),
+                    prompt_family=paper_guide_prompt_family,
+                    prompt_for_user=prompt_for_user,
+                    paper_guide_focus_source_path=paper_guide_focus_source_path,
+                    paper_guide_direct_source_path=paper_guide_direct_source_path,
+                    paper_guide_bound_source_path=paper_guide_bound_source_path,
+                    answer_hits=answer_hits,
+                    special_focus_block=paper_guide_special_focus_block,
+                    db_dir=db_dir,
+                    llm=ds,
+                )
         if paper_guide_mode:
             paper_guide_debug.update(
                 {
@@ -5290,6 +5599,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             research_answer_plan=research_answer_plan,
             paper_guide_contracts_seed=paper_guide_contracts_seed,
             paper_guide_retrieval_confidence_hint=paper_guide_retrieval_confidence_hint,
+            paper_guide_precomputed_support_resolution=paper_guide_support_resolution,
+            paper_guide_fast_exact=bool(paper_guide_exact_preflight),
             settings_obj=settings_obj,
         )
         _trace_event("finalize_answer", elapsed_s=time.perf_counter() - t_finalize0)
@@ -5474,7 +5785,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     chat_store.merge_message_meta(cur_assistant_msg_id, {"canonical_hit_paths": _canon_paths})
             except Exception:
                 pass
-        if (not prompt_multi_paper_list) and umid > 0 and answer_hits:
+        if (
+            (not prompt_multi_paper_list)
+            and umid > 0
+            and answer_hits
+            and (not paper_guide_exact_preflight)
+        ):
             try:
                 final_refs_docs = _merge_refs_display_docs_with_answer_hits(
                     refs_seed_docs=list(refs_seed_docs_for_display or []),
@@ -5615,34 +5931,41 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             conv_id=conv_id,
             answer_quality=answer_quality,
         )
-        t_prov0 = time.perf_counter()
-        try:
-            stored_provenance = _gen_store_answer_provenance_fast(
-                task,
-                answer=answer,
-                answer_hits=answer_hits,
-                support_resolution=paper_guide_support_resolution,
-                primary_evidence=shared_primary_evidence,
+        if paper_guide_exact_preflight:
+            _trace_event(
+                "provenance_fast_skipped",
+                elapsed_s=0.0,
+                reason="exact_support_contract",
             )
-            if isinstance(stored_provenance, dict) and stored_provenance:
-                synced_contracts = _sync_paper_guide_render_packet_with_provenance(
-                    paper_guide_contracts=paper_guide_contracts,
-                    provenance=stored_provenance,
+        else:
+            t_prov0 = time.perf_counter()
+            try:
+                stored_provenance = _gen_store_answer_provenance_fast(
+                    task,
                     answer=answer,
+                    answer_hits=answer_hits,
+                    support_resolution=paper_guide_support_resolution,
+                    primary_evidence=shared_primary_evidence,
                 )
-                if synced_contracts != paper_guide_contracts:
-                    paper_guide_contracts = synced_contracts
-                    shared_primary_evidence = (
-                        dict(paper_guide_contracts.get("primary_evidence") or {})
-                        if isinstance(paper_guide_contracts.get("primary_evidence"), dict)
-                        else shared_primary_evidence
+                if isinstance(stored_provenance, dict) and stored_provenance:
+                    synced_contracts = _sync_paper_guide_render_packet_with_provenance(
+                        paper_guide_contracts=paper_guide_contracts,
+                        provenance=stored_provenance,
+                        answer=answer,
                     )
-            _perf_log("gen.provenance_inline_fast", elapsed=time.perf_counter() - t_prov0, ok=1)
-            _trace_event("provenance_fast", elapsed_s=time.perf_counter() - t_prov0, ok=True)
-        except Exception as exc:
-            _perf_log("gen.provenance_inline_fast", elapsed=time.perf_counter() - t_prov0, ok=0, err=str(exc)[:120])
-            _trace_event("provenance_fast", elapsed_s=time.perf_counter() - t_prov0, ok=False)
-        if _should_run_provenance_async_refine(task):
+                    if synced_contracts != paper_guide_contracts:
+                        paper_guide_contracts = synced_contracts
+                        shared_primary_evidence = (
+                            dict(paper_guide_contracts.get("primary_evidence") or {})
+                            if isinstance(paper_guide_contracts.get("primary_evidence"), dict)
+                            else shared_primary_evidence
+                        )
+                _perf_log("gen.provenance_inline_fast", elapsed=time.perf_counter() - t_prov0, ok=1)
+                _trace_event("provenance_fast", elapsed_s=time.perf_counter() - t_prov0, ok=True)
+            except Exception as exc:
+                _perf_log("gen.provenance_inline_fast", elapsed=time.perf_counter() - t_prov0, ok=0, err=str(exc)[:120])
+                _trace_event("provenance_fast", elapsed_s=time.perf_counter() - t_prov0, ok=False)
+        if (not paper_guide_exact_preflight) and _should_run_provenance_async_refine(task):
             try:
                 _gen_store_answer_provenance_async(
                     task,
@@ -5666,7 +5989,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             },
         )
         research_trace = _trace_finish(research_trace, status="done", total_elapsed_s=time.perf_counter() - worker_t0)
-        _gen_store_research_trace_meta(task, research_trace=research_trace)
+        fast_exact_completion = bool(
+            paper_guide_exact_preflight and not bool(task.get("agent_mode"))
+        )
+        if not fast_exact_completion:
+            _gen_store_research_trace_meta(task, research_trace=research_trace)
         agent_trace = {}
         if bool(task.get("agent_mode")):
             agent_trace = build_agent_trace_for_completed_answer(
@@ -5692,8 +6019,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         agent_source_summary = dict(agent_completion_payload.get("agent_source_summary") or {})
         answer_runtime_check = dict(agent_completion_payload.get("answer_runtime_check") or {})
         answer_contract = dict(agent_completion_payload.get("answer_contract") or {})
-        _gen_store_answer_runtime_check_meta(task, answer_runtime_check=answer_runtime_check)
-        _gen_store_answer_contract_meta(task, answer_contract=answer_contract)
+        if not fast_exact_completion:
+            _gen_store_answer_runtime_check_meta(task, answer_runtime_check=answer_runtime_check)
+            _gen_store_answer_contract_meta(task, answer_contract=answer_contract)
         _gen_update_task(
             session_id,
             task_id,

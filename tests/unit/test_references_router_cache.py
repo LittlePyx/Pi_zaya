@@ -1312,6 +1312,22 @@ def test_background_llm_polish_follows_card_polish_flag_when_unset(monkeypatch):
     assert references_router._refs_background_llm_polish_enabled() is True
 
 
+def test_fast_exact_refs_disable_background_llm_polish():
+    refs = {
+        13: {
+            "hits": [
+                {
+                    "text": "Most existing methods employ ADMM [4].",
+                    "meta": {"paper_guide_fast_exact": True},
+                }
+            ]
+        }
+    }
+
+    assert references_router._refs_payload_has_fast_exact_hit(refs) is True
+    assert references_router._refs_payload_has_fast_exact_hit({13: {"hits": []}}) is False
+
+
 def test_background_llm_polish_env_override_can_disable_card_polish(monkeypatch):
     monkeypatch.setenv("KB_REFS_BACKGROUND_LLM_POLISH", "0")
     monkeypatch.setattr(references_router, "_refs_card_polish_llm_enabled", lambda: True)

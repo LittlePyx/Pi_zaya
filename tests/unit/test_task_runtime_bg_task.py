@@ -14,6 +14,8 @@ from kb.task_runtime import (
     _bg_post_convert_quality_gate,
     _bg_run_ingest_subprocess,
     _build_bg_task,
+    _build_exact_preflight_citation_contract,
+    _build_exact_preflight_hit,
     _build_doc_list_contract_from_rendered_payload,
     _build_doc_list_refs_render_payload,
     _filter_multi_paper_seed_docs_for_display,
@@ -29,6 +31,7 @@ from kb.task_runtime import (
     _build_paper_guide_support_slots,
     _build_paper_guide_support_slots_block,
     _collect_paper_guide_candidate_refs_by_source,
+    _candidate_refs_from_support_resolution,
     _drop_paper_guide_locate_only_line_citations,
     _extract_inline_reference_numbers,
     _extract_bound_paper_method_focus,
@@ -69,6 +72,68 @@ from kb.task_runtime import (
     _should_sync_deep_seed_for_display,
     _stabilize_paper_guide_output_mode,
 )
+
+
+def test_exact_preflight_hit_keeps_locate_and_reference_identity():
+    support = {
+        "source_path": "paper.md",
+        "heading_path": "2. Related Work",
+        "block_id": "blk_admm",
+        "anchor_id": "p_admm",
+        "locate_anchor": "Most existing methods employ ADMM [4].",
+        "resolved_ref_num": 4,
+        "candidate_refs": [4, 21],
+    }
+
+    hit = _build_exact_preflight_hit(
+        {"source_path": "paper.md", "support_resolution": [support]},
+        source_name="SCINeRF",
+    )
+
+    assert hit["text"] == support["locate_anchor"]
+    assert hit["meta"]["block_id"] == "blk_admm"
+    assert hit["meta"]["anchor_id"] == "p_admm"
+    assert hit["meta"]["paper_guide_fast_exact"] is True
+    assert hit["meta"]["ref_locs"][0]["block_id"] == "blk_admm"
+    assert hit["meta"]["ref_locs"][0]["snippet"] == support["locate_anchor"]
+    assert _candidate_refs_from_support_resolution([support]) == {"paper.md": [4, 21]}
+
+    contract = _build_exact_preflight_citation_contract(
+        [support],
+        bound_source_path="paper.md",
+        bound_source_name="SCINeRF",
+    )
+    assert contract["citation_plan"]["budget"] == {"system_a": 1, "system_b": 1}
+    assert [slot["preferred_system"] for slot in contract["citation_plan"]["slots"]] == [
+        "system_a",
+        "system_b",
+    ]
+    assert contract["reference_opportunities"][0]["ref_num"] == 4
+
+
+def test_reference_ui_does_not_replace_authoritative_exact_hit_with_section_rescue(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_refs_prompt_section_intent", lambda _prompt: "related")
+    monkeypatch.setattr(
+        reference_ui,
+        "_build_section_intent_rescue_hit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("exact evidence must not be replaced by section rescue")
+        ),
+    )
+    hit = {
+        "text": "Most existing methods employ ADMM [4].",
+        "meta": {"source_path": "paper.md", "paper_guide_fast_exact": True},
+    }
+
+    assert reference_ui._maybe_add_section_intent_rescue_hit("Where does ADMM come from?", [hit]) == [hit]
+
+
+def test_reference_ui_score_gate_force_keeps_fast_exact_hit():
+    from api.reference_ui_score import _should_force_keep_ref_hit
+
+    assert _should_force_keep_ref_hit(
+        {"meta": {"paper_guide_fast_exact": True, "source_path": "paper.md"}}
+    )
 from kb.converter.quality_repair import load_conversion_quality_result
 from tests._paper_guide_fixtures import build_paper_guide_runtime_fixture
 

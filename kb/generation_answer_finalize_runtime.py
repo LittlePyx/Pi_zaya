@@ -2922,6 +2922,222 @@ def _maybe_clarify_negative_boundary_answer(answer: str, *, prompt: str) -> str:
     return "\u4e0d\u662f\u5f53\u524d\u4e3b\u7ebf\u7684\u6838\u5fc3\u6587\u732e\uff1b" + text
 
 
+def _finalize_fast_exact_generation_answer(
+    partial: str,
+    *,
+    prompt: str,
+    prompt_for_user: str,
+    answer_hits: list[dict],
+    db_dir: Path | None,
+    locked_citation_source: dict | None,
+    answer_intent: str,
+    answer_depth: str,
+    answer_output_mode: str,
+    paper_guide_prompt_family: str,
+    paper_guide_bound_source_path: str,
+    paper_guide_candidate_refs_by_source: dict[str, list[int]] | None,
+    paper_guide_support_slots: list[dict] | None,
+    paper_guide_evidence_cards: list[dict] | None,
+    paper_guide_precomputed_support_resolution: list[dict] | None,
+    paper_guide_contracts_seed: dict | None,
+    paper_guide_retrieval_confidence_hint: dict[str, object] | None,
+    research_answer_plan: str,
+    validate_structured_citations,
+) -> dict:
+    prompt_text = str(prompt_for_user or prompt or "").strip()
+    support_resolution = [
+        dict(item)
+        for item in list(paper_guide_precomputed_support_resolution or [])
+        if isinstance(item, dict)
+    ]
+    answer = _normalize_math_markdown(
+        _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
+    ).strip() or "(No text returned)"
+    answer = _sanitize_empty_markdown_label_fragments(answer)
+    structured_ref_nums = {
+        int(match.group(2) or 0)
+        for match in _CITE_CANON_RE.finditer(answer)
+        if int(match.group(2) or 0) > 0
+    }
+    if structured_ref_nums:
+        answer_lines: list[str] = []
+        for line in answer.splitlines():
+            line_out = line
+            if line.lstrip().startswith(">"):
+                for ref_num in structured_ref_nums:
+                    line_out = re.sub(
+                        rf"(?<!\[)\[\s*{int(ref_num)}\s*\](?!\])",
+                        "",
+                        line_out,
+                    )
+                line_out = re.sub(r"\s+([,.;:!?])", r"\1", line_out)
+            answer_lines.append(line_out)
+        answer = "\n".join(answer_lines).strip()
+    resolved_intent = _resolve_paper_guide_intent(
+        prompt_text,
+        prompt_family=paper_guide_prompt_family,
+    )
+    effective_family = str(
+        getattr(resolved_intent, "family", "") or paper_guide_prompt_family or "overview"
+    ).strip().lower()
+    source_path = str(paper_guide_bound_source_path or "").strip()
+    opportunities = detect_paper_guide_reference_opportunities(
+        prompt=prompt_text,
+        answer=answer,
+        prompt_family=effective_family,
+        source_path=source_path,
+        support_resolution=support_resolution,
+        support_slots=list(paper_guide_support_slots or []),
+        cards=list(paper_guide_evidence_cards or []),
+        max_items=3,
+    )
+    candidate_refs = merge_reference_opportunity_candidate_refs(
+        dict(paper_guide_candidate_refs_by_source or {}),
+        opportunities,
+    )
+    answer, citation_validation = validate_structured_citations(
+        answer,
+        answer_hits=answer_hits,
+        db_dir=db_dir,
+        locked_source=locked_citation_source,
+        paper_guide_mode=True,
+        paper_guide_candidate_refs_by_source=dict(candidate_refs or {}),
+        paper_guide_support_slots=list(paper_guide_support_slots or []),
+        paper_guide_support_resolution=support_resolution,
+    )
+    contracts = _build_paper_guide_contract_snapshot(
+        paper_guide_mode=True,
+        intent_model=resolved_intent,
+        answer_markdown=answer,
+        final_answer_markdown=answer,
+        evidence_cards=list(paper_guide_evidence_cards or []),
+        candidate_refs_by_source=dict(candidate_refs or {}),
+        support_slots=list(paper_guide_support_slots or []),
+        support_resolution=support_resolution,
+        needs_supplement=False,
+        citation_validation=dict(citation_validation or {}),
+        doc_list_contract=[],
+        paper_guide_contracts_seed=dict(paper_guide_contracts_seed or {}),
+    )
+    if support_resolution:
+        primary_support = support_resolution[0]
+        evidence_quote = str(
+            primary_support.get("locate_anchor")
+            or primary_support.get("segment_text")
+            or primary_support.get("evidence_quote")
+            or ""
+        ).strip()
+        heading_path = str(primary_support.get("heading_path") or "").strip()
+        source_name = str(
+            (locked_citation_source or {}).get("source_name")
+            or primary_support.get("source_name")
+            or ""
+        ).strip()
+        system_a_detail = {
+            "num": 1,
+            "anchor": "kb-support-exact-1",
+            "source_name": source_name,
+            "source_path": str(primary_support.get("source_path") or source_path).strip(),
+            "raw": evidence_quote,
+            "title": heading_path,
+            "is_inpaper": False,
+            "linked_nums": [1],
+            "citation_route": "system_a",
+            "routing_reason": "exact_support_preflight",
+            "routing_confidence": 1.0,
+            "summary_line": evidence_quote,
+            "summary_source": "exact_support_preflight",
+            "answer_claim": str(answer.splitlines()[0] if answer else "").strip(),
+            "heading_path": heading_path,
+            "evidence_quote": evidence_quote,
+            "evidence_source": "exact_support_preflight",
+            "location_label": heading_path,
+            "support_relation": "Exact supporting passage resolved before general retrieval.",
+            "block_id": str(primary_support.get("block_id") or "").strip(),
+            "anchor_id": str(primary_support.get("anchor_id") or "").strip(),
+            "anchor_kind": str(primary_support.get("anchor_kind") or "paragraph").strip(),
+            "binding_status": "grounded",
+            "binding_confidence": 1.0,
+            "binding_reason": "Exact paper support was resolved for the answer claim.",
+        }
+        packet = (
+            dict(contracts.get("render_packet") or {})
+            if isinstance(contracts.get("render_packet"), dict)
+            else {}
+        )
+        packet_details = [
+            dict(item)
+            for item in list(packet.get("cite_details") or [])
+            if isinstance(item, dict)
+        ]
+        if not any(
+            str(item.get("citation_route") or "").strip().lower() == "system_a"
+            for item in packet_details
+        ):
+            packet_details.insert(0, system_a_detail)
+        packet["cite_details"] = packet_details
+        contracts["render_packet"] = packet
+    research_plan = str(research_answer_plan or "").strip()
+    if research_plan:
+        intent_contract = (
+            dict(contracts.get("intent") or {})
+            if isinstance(contracts.get("intent"), dict)
+            else {}
+        )
+        intent_contract["research_answer_plan"] = research_plan
+        contracts["intent"] = intent_contract
+    answer_quality = _build_answer_quality_probe(
+        answer,
+        has_hits=bool(answer_hits),
+        contract_enabled=False,
+        intent=answer_intent,
+        depth=answer_depth,
+        output_mode=answer_output_mode,
+        paper_guide_mode=True,
+        prompt_family=effective_family,
+    )
+    if research_plan:
+        answer_quality["research_answer_plan"] = research_plan
+    citation_plan = (
+        dict((paper_guide_contracts_seed or {}).get("citation_plan") or {})
+        if isinstance((paper_guide_contracts_seed or {}).get("citation_plan"), dict)
+        else {}
+    )
+    if citation_plan:
+        answer_quality["citation_plan"] = citation_plan
+    if opportunities:
+        opportunity_refs = [
+            int(item.get("ref_num") or 0)
+            for item in opportunities
+            if isinstance(item, dict) and int(item.get("ref_num") or 0) > 0
+        ]
+        rendered_refs = [
+            int(match.group(2) or 0)
+            for match in _CITE_CANON_RE.finditer(answer)
+            if int(match.group(2) or 0) in set(opportunity_refs)
+        ]
+        answer_quality["reference_opportunities"] = {
+            "count": len(opportunities),
+            "rendered_count": len(list(dict.fromkeys(rendered_refs))),
+            "mode": "already_present",
+            "injected_refs": [],
+            "rendered_refs": list(dict.fromkeys(rendered_refs)),
+            "refs": opportunity_refs,
+        }
+    if dict(citation_validation or {}).get("raw_count"):
+        answer_quality["citation_validation"] = dict(citation_validation or {})
+    answer_quality["retrieval_confidence"] = dict(
+        paper_guide_retrieval_confidence_hint or {}
+    )
+    return {
+        "answer": answer,
+        "paper_guide_support_resolution": support_resolution,
+        "paper_guide_contracts": contracts,
+        "citation_validation": citation_validation,
+        "answer_quality": answer_quality,
+    }
+
+
 def _finalize_generation_answer(
     partial: str,
     *,
@@ -2946,12 +3162,40 @@ def _finalize_generation_answer(
     research_answer_plan: str = "",
     paper_guide_contracts_seed: dict | None = None,
     paper_guide_retrieval_confidence_hint: dict[str, object] | None = None,
+    paper_guide_precomputed_support_resolution: list[dict] | None = None,
+    paper_guide_fast_exact: bool = False,
     apply_paper_guide_answer_postprocess,
     maybe_append_library_figure_markdown,
     validate_structured_citations,
     build_paper_guide_supplement_lines=None,
     validate_freeform_numeric_citations=None,
 ) -> dict:
+    if paper_guide_fast_exact and paper_guide_precomputed_support_resolution:
+        return _finalize_fast_exact_generation_answer(
+            partial,
+            prompt=prompt,
+            prompt_for_user=prompt_for_user,
+            answer_hits=answer_hits,
+            db_dir=db_dir,
+            locked_citation_source=locked_citation_source,
+            answer_intent=answer_intent,
+            answer_depth=answer_depth,
+            answer_output_mode=answer_output_mode,
+            paper_guide_prompt_family=paper_guide_prompt_family,
+            paper_guide_bound_source_path=paper_guide_bound_source_path,
+            paper_guide_candidate_refs_by_source=paper_guide_candidate_refs_by_source,
+            paper_guide_support_slots=paper_guide_support_slots,
+            paper_guide_evidence_cards=paper_guide_evidence_cards,
+            paper_guide_precomputed_support_resolution=(
+                paper_guide_precomputed_support_resolution
+            ),
+            paper_guide_contracts_seed=paper_guide_contracts_seed,
+            paper_guide_retrieval_confidence_hint=(
+                paper_guide_retrieval_confidence_hint
+            ),
+            research_answer_plan=research_answer_plan,
+            validate_structured_citations=validate_structured_citations,
+        )
     resolved_paper_guide_intent = _resolve_paper_guide_intent(
         prompt_for_user or prompt,
         prompt_family=paper_guide_prompt_family,

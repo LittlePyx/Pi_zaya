@@ -171,6 +171,66 @@ def test_finalize_generation_answer_runs_postprocess_validate_and_quality(monkey
     assert out["paper_guide_contracts"]["intent"]["research_answer_plan"] == "method_explain"
 
 
+def test_finalize_fast_exact_reuses_support_without_full_text_rescan(monkeypatch):
+    support = {
+        "source_path": "paper.md",
+        "heading_path": "2. Related Work",
+        "block_id": "blk_admm",
+        "anchor_id": "p_admm",
+        "locate_anchor": "Most existing methods employ ADMM [4].",
+        "ref_nums": [4],
+        "resolved_ref_num": 4,
+    }
+    monkeypatch.setattr(
+        finalize_runtime,
+        "detect_text_reference_opportunities",
+        lambda **_kwargs: pytest.fail("fast exact path must not rescan source text"),
+    )
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_build_answer_quality_probe",
+        lambda answer, **_kwargs: {"minimum_ok": True, "answer": answer},
+    )
+
+    out = finalize_runtime._finalize_generation_answer(
+        "ADMM is established prior work [[CITE:s1234abcd:4]].\n> Most existing methods employ ADMM [4].",
+        prompt="Which reference is cited for ADMM, and where exactly?",
+        prompt_for_user="Which reference is cited for ADMM, and where exactly?",
+        answer_hits=[{"text": support["locate_anchor"], "meta": {"source_path": "paper.md"}}],
+        db_dir=Path("db"),
+        locked_citation_source={"sid": "s1234abcd", "source_path": "paper.md"},
+        answer_intent="reading",
+        answer_depth="L2",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=True,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="citation_lookup",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="paper.md",
+        paper_guide_direct_source_path="paper.md",
+        paper_guide_bound_source_path="paper.md",
+        paper_guide_candidate_refs_by_source={"paper.md": [4]},
+        paper_guide_support_slots=[support],
+        paper_guide_evidence_cards=[],
+        paper_guide_precomputed_support_resolution=[support],
+        paper_guide_fast_exact=True,
+        apply_paper_guide_answer_postprocess=lambda *_args, **_kwargs: pytest.fail(
+            "fast exact path must reuse precomputed support"
+        ),
+        maybe_append_library_figure_markdown=lambda answer, **_kwargs: answer,
+        validate_structured_citations=lambda answer, **_kwargs: (answer, {"kept": 1}),
+    )
+
+    assert "[[CITE:s1234abcd:4]]" in out["answer"]
+    assert "> Most existing methods employ ADMM." in out["answer"]
+    assert "> Most existing methods employ ADMM [4]." not in out["answer"]
+    assert out["paper_guide_support_resolution"][0]["block_id"] == "blk_admm"
+    system_a = out["paper_guide_contracts"]["render_packet"]["cite_details"][0]
+    assert system_a["citation_route"] == "system_a"
+    assert system_a["block_id"] == "blk_admm"
+    assert system_a["anchor_id"] == "p_admm"
+
+
 def test_finalize_generation_answer_passes_shared_primary_evidence_into_answer_contract(monkeypatch):
     seen = {}
 

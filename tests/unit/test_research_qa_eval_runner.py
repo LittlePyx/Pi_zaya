@@ -3,6 +3,8 @@ from __future__ import annotations
 from tools.research_qa.run_research_qa_eval import (
     _assistant_message_by_id,
     _build_report,
+    _latency_budget_checks,
+    _refs_payload_is_full,
     evaluate_replay_rows,
     load_fixture,
     load_replay,
@@ -10,6 +12,30 @@ from tools.research_qa.run_research_qa_eval import (
     validate_case,
     validate_fixture_contracts,
 )
+
+
+def test_research_qa_latency_budgets_track_answer_and_async_cards_separately():
+    checks = _latency_budget_checks(
+        {
+            "maxFirstAnswerMs": 10000,
+            "maxAnswerCompleteMs": 10000,
+            "maxCardsCompleteMs": 30000,
+        },
+        {
+            "first_answer_ms": 4200,
+            "answer_complete_ms": 8700,
+            "cards_complete_ms": 31500,
+        },
+    )
+
+    assert [item["ok"] for item in checks] == [True, True, False]
+    assert checks[-1]["name"] == "latency_cards_complete_ms"
+
+
+def test_refs_payload_full_state_rejects_fast_or_pending_cards():
+    assert _refs_payload_is_full({"9": {"payload_mode": "full", "render_status": "full"}}, user_msg_id=9)
+    assert not _refs_payload_is_full({"9": {"payload_mode": "fast", "render_status": "fast"}}, user_msg_id=9)
+    assert not _refs_payload_is_full({"9": {"payload_mode": "pending", "pending": True}}, user_msg_id=9)
 
 
 def _case_by_id(fixture, case_id: str):

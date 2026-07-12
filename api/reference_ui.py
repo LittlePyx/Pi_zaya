@@ -6424,6 +6424,15 @@ def _maybe_add_section_intent_rescue_hit(prompt: str, hits: list[dict]) -> list[
     rows = [hit for hit in (hits or []) if isinstance(hit, dict)]
     if not rows or not _refs_prompt_section_intent(prompt):
         return rows
+    if any(
+        bool(
+            ((hit.get("meta") if isinstance(hit.get("meta"), dict) else {}) or {}).get(
+                "paper_guide_fast_exact"
+            )
+        )
+        for hit in rows
+    ):
+        return rows
     if any(bool(((hit.get("meta") if isinstance(hit.get("meta"), dict) else {}) or {}).get("section_intent_rescue")) for hit in rows):
         return rows
     rescue = _build_section_intent_rescue_hit(prompt, rows)

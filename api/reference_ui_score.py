@@ -219,6 +219,8 @@ def _should_force_keep_ref_hit(hit: dict) -> bool:
         return False
     if str(meta.get("ref_display_reason") or "").strip().lower() == "answer_hit_top":
         return True
+    if bool(meta.get("paper_guide_fast_exact")):
+        return True
     if str(meta.get("ref_pack_state") or "").strip().lower() == "pending":
         return True
     try:

@@ -277,7 +277,10 @@
         "maxSystemBNeedsReviewCount": 0,
         "maxSystemBAnswerContextOnlyCount": 0,
         "maxSystemBReferenceIndexFallbackCount": 0,
-        "minSystemBCompleteRate": 1.0
+        "minSystemBCompleteRate": 1.0,
+        "maxFirstAnswerMs": 10000,
+        "maxAnswerCompleteMs": 10000,
+        "maxCardsCompleteMs": 30000
       }
     },
     {

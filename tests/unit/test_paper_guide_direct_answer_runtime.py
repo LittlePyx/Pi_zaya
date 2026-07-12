@@ -1,5 +1,39 @@
 import kb.paper_guide_direct_answer_runtime as direct_answer_runtime
 from kb.paper_guide_direct_answer_runtime import _build_paper_guide_direct_answer_override
+from kb.paper_guide.skills import PaperGuideSkillResult
+
+
+def test_exact_answer_preflight_preserves_support_resolution(monkeypatch):
+    monkeypatch.setattr(
+        direct_answer_runtime,
+        "_run_exact_support_skill",
+        lambda **_kwargs: PaperGuideSkillResult(
+            answer_text="ADMM is prior work [[CITE:s1234abcd:4]].",
+            support_resolution=[
+                {
+                    "source_path": "paper.md",
+                    "heading_path": "2. Related Work",
+                    "block_id": "blk_admm",
+                    "anchor_id": "p_admm",
+                    "locate_anchor": "Most existing methods employ ADMM [4].",
+                    "ref_nums": [4],
+                }
+            ],
+        ),
+    )
+
+    out = direct_answer_runtime._build_paper_guide_exact_answer_preflight(
+        paper_guide_mode=True,
+        prompt_family="citation_lookup",
+        prompt_for_user="Which reference is cited for ADMM, and where exactly?",
+        source_path="paper.md",
+        db_dir="db",
+    )
+
+    assert out["answer"].endswith("[[CITE:s1234abcd:4]].")
+    assert out["support_resolution"][0]["block_id"] == "blk_admm"
+    assert out["support_resolution"][0]["anchor_id"] == "p_admm"
+    assert out["support_resolution"][0]["ref_nums"] == [4]
 
 
 def test_build_paper_guide_direct_answer_override_prefers_abstract_path():

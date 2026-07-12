@@ -69,9 +69,17 @@ def _get_json(base_url: str, path: str, timeout_s: float) -> Any:
     return json.loads(raw or "{}")
 
 
-def _stream_generation(base_url: str, session_id: str, timeout_s: float) -> dict[str, Any]:
+def _stream_generation(
+    base_url: str,
+    session_id: str,
+    timeout_s: float,
+    *,
+    started_at: float | None = None,
+) -> dict[str, Any]:
     req = request.Request(f"{base_url}/api/generate/{parse.quote(session_id)}/stream", method="GET")
     final_payload: dict[str, Any] = {}
+    origin = float(started_at) if started_at is not None else time.perf_counter()
+    first_answer_ms: float | None = None
     with request.urlopen(req, timeout=timeout_s) as resp:
         for raw in resp:
             line = raw.decode("utf-8", errors="ignore").strip()
@@ -86,9 +94,64 @@ def _stream_generation(base_url: str, session_id: str, timeout_s: float) -> dict
                 continue
             if isinstance(payload, dict):
                 final_payload = payload
+                visible_answer = str(payload.get("partial") or payload.get("answer") or "").strip()
+                if visible_answer and first_answer_ms is None:
+                    first_answer_ms = round((time.perf_counter() - origin) * 1000.0, 2)
                 if payload.get("done"):
                     break
+    final_payload = dict(final_payload or {})
+    final_payload["_eval_timing"] = {
+        "first_answer_ms": first_answer_ms,
+        "answer_complete_ms": round((time.perf_counter() - origin) * 1000.0, 2),
+    }
     return final_payload
+
+
+def _refs_payload_is_full(refs_payload: Any, *, user_msg_id: int | str | None = None) -> bool:
+    packs = _extract_ref_packs(refs_payload, user_msg_id=user_msg_id)
+    if not packs:
+        return False
+    for pack in packs:
+        if bool(pack.get("pending") or pack.get("enrichment_pending")):
+            return False
+        render_status = str(pack.get("render_status") or "").strip().lower()
+        payload_mode = str(pack.get("payload_mode") or "").strip().lower()
+        if render_status and render_status != "full":
+            return False
+        if payload_mode and payload_mode not in {"full", "ready"}:
+            return False
+    return True
+
+
+def _latency_budget_checks(expected: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    for expected_key, result_key in (
+        ("maxFirstAnswerMs", "first_answer_ms"),
+        ("maxAnswerCompleteMs", "answer_complete_ms"),
+        ("maxCardsCompleteMs", "cards_complete_ms"),
+    ):
+        if expected_key not in expected or result_key not in result:
+            continue
+        try:
+            budget_ms = float(expected.get(expected_key))
+            actual_ms = float(result.get(result_key))
+        except (TypeError, ValueError):
+            checks.append(
+                {
+                    "name": f"latency_{result_key}",
+                    "ok": False,
+                    "detail": {"actual_ms": result.get(result_key), "max_ms": expected.get(expected_key)},
+                }
+            )
+            continue
+        checks.append(
+            {
+                "name": f"latency_{result_key}",
+                "ok": actual_ms <= budget_ms,
+                "detail": {"actual_ms": actual_ms, "max_ms": budget_ms},
+            }
+        )
+    return checks
 
 
 def load_fixture(path: Path | str = DEFAULT_FIXTURE) -> ResearchQaFixture:
@@ -950,6 +1013,7 @@ def validate_case(
 
     status = str(result.get("status") or "").strip().lower()
     add_check("generation_done", bool(result.get("done")) and status not in {"error", "canceled"}, status)
+    checks.extend(_latency_budget_checks(expected, result))
 
     forbidden_hits = [phrase for phrase in fixture.forbidden_phrases if _contains_term(answer, phrase)]
     add_check("answer_no_template_phrase", not forbidden_hits, forbidden_hits)
@@ -1430,6 +1494,7 @@ def run_case(
     if not conv_id:
         raise RuntimeError("conversation creation returned no id")
 
+    generation_started = time.perf_counter()
     gen = _post_json(
         base_url,
         "/api/generate",
@@ -1449,9 +1514,33 @@ def run_case(
     session_id = str(gen.get("session_id") or "").strip()
     if not session_id:
         raise RuntimeError("generation returned no session_id")
-    final_payload = _stream_generation(base_url, session_id, timeout_s=timeout_s)
-    _get_json(base_url, f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1", timeout_s)
+    final_payload = _stream_generation(
+        base_url,
+        session_id,
+        timeout_s=timeout_s,
+        started_at=generation_started,
+    )
+    eval_timing = (
+        dict(final_payload.get("_eval_timing") or {})
+        if isinstance(final_payload.get("_eval_timing"), dict)
+        else {}
+    )
     refs_payload = _get_json(base_url, f"/api/references/conversation/{parse.quote(conv_id)}", timeout_s)
+    cards_complete_ms: float | None = None
+    if _refs_payload_is_full(refs_payload, user_msg_id=gen.get("user_msg_id")):
+        cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
+    elif "maxCardsCompleteMs" in (case.get("expected") or {}):
+        card_wait_deadline = time.perf_counter() + min(45.0, max(1.0, float(timeout_s)))
+        while time.perf_counter() < card_wait_deadline:
+            time.sleep(0.35)
+            refs_payload = _get_json(
+                base_url,
+                f"/api/references/conversation/{parse.quote(conv_id)}",
+                timeout_s,
+            )
+            if _refs_payload_is_full(refs_payload, user_msg_id=gen.get("user_msg_id")):
+                cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
+                break
     # References may refine primary evidence and backfill message render packets;
     # validate the converged message after the references endpoint has run.
     messages = _get_json(base_url, f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1", timeout_s)
@@ -1465,6 +1554,9 @@ def run_case(
         "status": str(final_payload.get("status") or ""),
         "done": bool(final_payload.get("done")),
         "latency_ms": round((time.perf_counter() - started) * 1000.0, 2),
+        "first_answer_ms": eval_timing.get("first_answer_ms"),
+        "answer_complete_ms": eval_timing.get("answer_complete_ms"),
+        "cards_complete_ms": cards_complete_ms,
         "question": question,
         "expected": case.get("expected") if isinstance(case.get("expected"), dict) else {},
         "final_payload": final_payload,
