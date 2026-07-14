@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import re
 
-from ui.refs_renderer import _annotate_inpaper_citations_with_hover_meta, _system_a_is_low_value_evidence_text
+from ui.refs_renderer import (
+    _annotate_inpaper_citations_with_hover_meta,
+    _system_a_is_low_value_evidence_text,
+    _system_a_pick_best_evidence_candidate,
+)
 
 
 def test_system_a_citation_detail_carries_reader_card_fields() -> None:
@@ -113,6 +117,120 @@ def test_system_a_uses_richest_metadata_from_duplicate_source_hits() -> None:
     assert details[0]["citation_count"] == 42
     assert details[0]["journal_if"] == 3.3
     assert details[0]["journal_quartile"] == "Q2"
+
+
+def test_system_a_canonical_path_matches_windows_and_posix_separators() -> None:
+    canonical_path = "F:/library/scigs/scigs.en.md"
+    raw_hit_path = r"F:\library\scigs\scigs.en.md"
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "SCIGS 从单张压缩图像重建动态 3D 场景 [1]。",
+        [
+            {
+                "text": (
+                    "The proposed SCIGS reconstructs a 3D explicit scene from a single compressed "
+                    "image and extends the task to dynamic 3D scenes."
+                ),
+                "meta": {
+                    "source_path": raw_hit_path,
+                    "heading_path": "Abstract",
+                    "block_id": "blk_abstract",
+                    "anchor_id": "p_abstract",
+                },
+            },
+            {
+                "text": "Title: SCIGS: 3D Gaussians Splatting from a Snapshot Compressive Image",
+                "meta": {
+                    "source_path": canonical_path,
+                    "citation_plan_slot": True,
+                },
+            },
+        ],
+        anchor_ns="test-cross-platform-path",
+        canonical_paths=[canonical_path],
+    )
+
+    assert "#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["citation_plan_slot"] is False
+    assert details[0]["heading_path"] == "Abstract"
+    assert "dynamic 3D scenes" in details[0]["evidence_quote"]
+    assert details[0]["block_id"] == "blk_abstract"
+
+
+def test_system_a_binds_chinese_color_spi_claim_to_english_acquisition_evidence() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "彩色 SPI 可使用频分复用、多探测器和空间-光谱采集 [1]。",
+        [
+            {
+                "text": (
+                    "Color SPI uses frequency-division multiplexing, a single-time measurement "
+                    "with multiple detectors, and a spatial-spectral acquisition scheme."
+                ),
+                "meta": {"source_path": "F:/library/dl-spi-review.en.md", "heading_path": "Color SPI"},
+            }
+        ],
+    )
+
+    assert "#kb-cite-" in rendered
+    assert len(details) == 1
+    assert "frequency-division multiplexing" in details[0]["evidence_quote"]
+
+
+def test_system_a_binds_chinese_basis_claim_to_english_hsi_fsi_evidence() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "该路线从随机模式转向确定性正交基，并追求完美重构 [1]。",
+        [
+            {
+                "text": (
+                    "Random patterns form a non-orthogonal set. Deterministic orthogonal basis "
+                    "patterns used by HSI and FSI enable perfect reconstruction in principle."
+                ),
+                "meta": {"source_path": "F:/library/hsi-fsi.en.md", "heading_path": "Comparison of theory"},
+            }
+        ],
+    )
+
+    assert "#kb-cite-" in rendered
+    assert len(details) == 1
+    assert "perfect reconstruction" in details[0]["evidence_quote"]
+
+
+def test_system_a_binds_chinese_spi_bottleneck_to_english_abstract_evidence() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "传统 SPI 的图像质量有限、迭代重建计算时间长，限制了实际应用 [1]。",
+        [
+            {
+                "text": (
+                    "The limited image quality and lengthy computational times for iterative "
+                    "reconstruction still hinder practical application."
+                ),
+                "meta": {"source_path": "F:/library/dl-spi-review.en.md", "heading_path": "Abstract"},
+            }
+        ],
+    )
+
+    assert "#kb-cite-" in rendered
+    assert len(details) == 1
+    assert "image quality and reconstruction time" in details[0]["binding_overlap_terms"]
+
+
+def test_system_a_does_not_bind_from_source_title_without_body_evidence() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "彩色 SPI 可以使用频分复用完成单次采集 [1]。",
+        [
+            {
+                "text": "The detector array was calibrated before every experiment.",
+                "meta": {
+                    "source_path": "F:/library/frequency-multiplexing.en.md",
+                    "source_name": "Frequency-Division Multiplexing for Color SPI.pdf",
+                    "heading_path": "Calibration",
+                },
+            }
+        ],
+    )
+
+    assert "#kb-cite-" not in rendered
+    assert details == []
 
 
 def test_system_a_cleans_markdown_heading_from_evidence_quote() -> None:
@@ -483,6 +601,134 @@ def test_system_a_prefers_primary_evidence_location_from_hit_ui_meta() -> None:
     assert "attrac" not in detail["card_evidence"]
 
 
+def test_system_a_prefers_claim_specific_raw_hit_over_stale_primary() -> None:
+    claim = (
+        "Waveguide integration raises single-photon detector efficiency by constraining "
+        "transmission at the cut-off frequency [1]."
+    )
+    hit = {
+        "text": (
+            "### 4.2 Waveguide integration\n"
+            "The waveguide serves to confine energy within the waveguide medium. "
+            "The cut-off frequency constrains energy transmission. Waveguide integration "
+            "is widely used to improve light absorption and increase detection efficiency."
+        ),
+        "meta": {
+            "source_path": "db/demo/spd-review.en.md",
+            "ref_best_heading_path": "4 Methods / 4.2 Waveguide",
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "heading_path": "Emerging single-photon detection technique / Abstract",
+                "snippet": (
+                    "Single-photon detectors are a highly sensitive light detection technique "
+                    "capable of detecting individual photons at extremely low light intensity levels."
+                ),
+                "block_id": "abstract",
+                "anchor_id": "p1",
+            }
+        },
+    }
+    primary_evidence = hit["ui_meta"]["primary_evidence"]
+
+    picked = _system_a_pick_best_evidence_candidate(
+        hit=hit,
+        meta=hit["meta"],
+        ui_meta=hit["ui_meta"],
+        primary_evidence=primary_evidence,
+        answer_claim=claim,
+        source_name="Emerging single-photon detection technique for high-performance photodetector.pdf",
+        default_heading=primary_evidence["heading_path"],
+    )
+
+    assert picked["source"] == "hit_text"
+    assert "cut-off frequency" in picked["readable_text"]
+    assert "detection efficiency" in picked["readable_text"]
+
+
+def test_system_a_raw_hit_uses_its_own_locator_instead_of_stale_primary() -> None:
+    source_path = "db/demo/spd-review.en.md"
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Waveguide cut-off frequency constrains transmission and improves detection efficiency [1].",
+        [
+            {
+                "text": (
+                    "The waveguide cut-off frequency constrains energy transmission. "
+                    "Waveguide integration improves light absorption and detection efficiency."
+                ),
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "4 Methods / 4.2 Waveguide",
+                    "block_id": "waveguide-block",
+                    "anchor_id": "waveguide-anchor",
+                    "anchor_kind": "paragraph",
+                },
+                "ui_meta": {
+                    "primary_evidence": {
+                        "heading_path": "Abstract",
+                        "snippet": "Single-photon detectors sense weak light.",
+                        "block_id": "abstract-block",
+                        "anchor_id": "abstract-anchor",
+                        "anchor_kind": "sentence",
+                    }
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={"budget": {"system_a": 1, "system_b": 0}},
+        anchor_ns="raw-own-locator",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["heading_path"] == "4 Methods / 4.2 Waveguide"
+    assert detail["block_id"] == "waveguide-block"
+    assert detail["anchor_id"] == "waveguide-anchor"
+    assert detail["anchor_kind"] == "paragraph"
+
+
+def test_system_a_raw_hit_without_locator_clears_stale_primary_locator() -> None:
+    source_path = "db/demo/spd-review.en.md"
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Waveguide cut-off frequency constrains transmission and improves detection efficiency [1].",
+        [
+            {
+                "text": (
+                    "The waveguide cut-off frequency constrains energy transmission. "
+                    "Waveguide integration improves light absorption and detection efficiency."
+                ),
+                "meta": {
+                    "source_path": source_path,
+                    "ref_best_heading_path": "Abstract",
+                    "primary_block_id": "abstract-block",
+                    "primary_anchor_id": "abstract-anchor",
+                },
+                "ui_meta": {
+                    "primary_evidence": {
+                        "heading_path": "Abstract",
+                        "snippet": "Single-photon detectors sense weak light.",
+                        "block_id": "abstract-block",
+                        "anchor_id": "abstract-anchor",
+                        "anchor_kind": "sentence",
+                    }
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={"budget": {"system_a": 1, "system_b": 0}},
+        anchor_ns="raw-no-locator",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["heading_path"] == ""
+    assert detail["block_id"] == ""
+    assert detail["anchor_id"] == ""
+    assert detail["anchor_kind"] == ""
+
+
 def test_system_a_prefers_reader_open_primary_evidence_when_direct_primary_missing() -> None:
     rendered, details = _annotate_inpaper_citations_with_hover_meta(
         "Light-field microscopy reconstructs three-dimensional information [1].",
@@ -640,3 +886,45 @@ def test_system_a_keeps_distinct_cards_for_distinct_evidence_locations() -> None
     assert len(set(anchors)) == 2
     assert len(details) == 2
     assert [d["linked_nums"] for d in details] == [[1], [2]]
+
+
+def test_system_a_context_keeps_sentence_before_inline_math_split() -> None:
+    source_path = "db/Frontiers-2024-single-photon-detection-review.en.md"
+    answer = (
+        "探测器综述解释了单光子探测器的波导集成机制，并给出了截止频率 "
+        "$f_c$ 等关键参数 [1]。下一句再讨论深度学习方法。"
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        answer,
+        [
+            {
+                "text": (
+                    "The waveguide cut-off frequency f_c controls transmission. "
+                    "Waveguide integration improves light absorption and detection efficiency."
+                ),
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "4.2 Waveguide integration",
+                },
+                "ui_meta": {
+                    "primary_evidence": {
+                        "heading_path": "Abstract",
+                        "snippet": (
+                            "Single-photon detectors can detect individual photons at very low light levels."
+                        ),
+                    }
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={"budget": {"system_a": 1, "system_b": 0}},
+        anchor_ns="inline-math",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["binding_status"] == "grounded"
+    assert "截止频率" in detail["answer_claim"]
+    assert "下一句" not in detail["answer_claim"]
+    assert detail["evidence_quote"]

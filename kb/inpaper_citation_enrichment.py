@@ -54,7 +54,41 @@ def extract_structured_cite_answer_context_line(
     right = source.find("\n", end)
     if right < 0:
         right = len(source)
-    raw = strip_structured_cite_tokens(str(source[left:right] or "").strip())
+    line = str(source[left:right] or "")
+    rel_start = max(0, start - left)
+    rel_end = max(rel_start, end - left)
+
+    def _sentence_boundaries() -> tuple[int, int]:
+        if re.search(r"(?:定量对比依据|quantitative\s+comparison\s+evidence)", line, flags=re.I):
+            return 0, len(line)
+        boundary_re = re.compile(r"(?:[。！？!?]|(?<!\d)\.(?=\s|$))")
+        sentence_left = 0
+        previous_matches = list(boundary_re.finditer(line[:rel_start]))
+        marker_follows_boundary = bool(
+            previous_matches
+            and not line[int(previous_matches[-1].end()) : rel_start].strip()
+        )
+        for match in reversed(previous_matches):
+            # Citation markers are sometimes emitted just after the sentence
+            # punctuation ("evidence. [1]"). In that form the adjacent period
+            # belongs to the cited sentence and must not cut its context away.
+            if not line[int(match.end()) : rel_start].strip():
+                continue
+            sentence_left = int(match.end())
+            break
+        if marker_follows_boundary:
+            # "Evidence. [[CITE:...]] Next sentence." cites the sentence that
+            # already ended before the marker.  Do not scan forward and absorb
+            # the unrelated sentence after the marker.
+            return sentence_left, rel_end
+        sentence_right = len(line)
+        next_match = boundary_re.search(line, rel_end)
+        if next_match is not None:
+            sentence_right = int(next_match.end())
+        return sentence_left, sentence_right
+
+    sentence_left, sentence_right = _sentence_boundaries()
+    raw = strip_structured_cite_tokens(str(line[sentence_left:sentence_right] or "").strip())
     clean_fn = normalizer or normalize_inline_markdown
     try:
         raw = clean_fn(raw)

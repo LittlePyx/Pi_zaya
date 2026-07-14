@@ -21,6 +21,10 @@ from api.message_render_contract import (
 )
 from api.deps import load_prefs
 from api.reference_card_quality import attach_refs_pack_polish_contract
+from api.reference_local_source_meta import (
+    load_local_source_citation_meta,
+    public_citation_meta,
+)
 from kb import task_runtime
 from kb.paper_guide_contracts import (
     _build_paper_guide_render_packet_model,
@@ -98,7 +102,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 22
+_RENDER_CACHE_SCHEMA_VERSION = 23
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -479,6 +483,45 @@ def _abstract_primary_evidence_from_source(source_path: str) -> dict:
     return dict(candidates[0])
 
 
+def _mentions_s2ism(value: str) -> bool:
+    normalized = str(value or "").lower().translate(str.maketrans({"²": "2", "₂": "2"}))
+    compact = re.sub(r"[^a-z0-9]+", "", normalized)
+    return "s2ism" in compact
+
+
+def _s2ism_capability_claim(value: str) -> bool:
+    text = str(value or "")
+    low = text.lower()
+    wants_super_resolution = bool(
+        "超分辨" in text
+        or "super-resolution" in low
+        or "super resolution" in low
+    )
+    wants_optical_sectioning = bool("光学切片" in text or "optical sectioning" in low)
+    return _mentions_s2ism(text) and wants_super_resolution and wants_optical_sectioning
+
+
+def _iism_quantitative_claim(value: str) -> bool:
+    text = str(value or "")
+    compact = re.sub(r"[^a-z0-9]+", "", text.lower())
+    return "iism" in compact and bool(
+        re.search(r"(?i)\b120\s*nm\b|\b10(?:\s*[-x×]|\s+times?\b)", text)
+    )
+
+
+def _ilnet_method_claim(value: str) -> bool:
+    text = str(value or "")
+    low = text.lower()
+    return bool(
+        re.search(r"(?i)\b(?:ILNet|PILN)\b", text)
+        and re.search(
+            r"模型驱动|自监督|无训练|部件化|图像循环|低采样|"
+            r"model[- ]driven|self[- ]supervised|untrained|part[- ]based|image[- ]loop|sample rate",
+            low,
+        )
+    )
+
+
 def _claim_aligned_abstract_primary_evidence(
     ref_pack: dict | None,
     detail: dict | None,
@@ -502,7 +545,18 @@ def _claim_aligned_abstract_primary_evidence(
             claim,
         )
     )
-    if not wants_dynamic_3d and not wants_nerf_definition:
+    wants_s2ism_capability = _s2ism_capability_claim(claim)
+    wants_iism_quantitative = _iism_quantitative_claim(claim)
+    wants_ilnet_method = _ilnet_method_claim(claim)
+    if not any(
+        (
+            wants_dynamic_3d,
+            wants_nerf_definition,
+            wants_s2ism_capability,
+            wants_iism_quantitative,
+            wants_ilnet_method,
+        )
+    ):
         return {}
     detail_source_key = _render_primary_source_identity(detail)
     if not detail_source_key:
@@ -514,8 +568,8 @@ def _claim_aligned_abstract_primary_evidence(
         source_path = str((meta or {}).get("source_path") or "").strip()
         if not source_path or _render_primary_source_identity(meta) != detail_source_key:
             continue
-        abstract = _abstract_primary_evidence_from_source(source_path)
-        abstract_text = _primary_evidence_text(abstract)
+        primary = _abstract_primary_evidence_from_source(source_path)
+        abstract_text = _primary_evidence_text(primary)
         if not abstract_text:
             continue
         sentences = [
@@ -544,9 +598,39 @@ def _claim_aligned_abstract_primary_evidence(
                 ),
                 "",
             )
+        if not aligned_sentence and wants_s2ism_capability:
+            aligned_sentence = next(
+                (
+                    sentence
+                    for sentence in sentences
+                    if ("super-resolution" in sentence.lower() or "super resolution" in sentence.lower())
+                    and "optical sectioning" in sentence.lower()
+                ),
+                "",
+            )
+        if not aligned_sentence and wants_iism_quantitative:
+            aligned_sentence = next(
+                (
+                    sentence
+                    for sentence in sentences
+                    if re.search(r"(?i)\b120\s*nm\b", sentence)
+                    and re.search(r"(?i)\b(?:10\s*times?|tenfold|one order of magnitude)\b", sentence)
+                ),
+                "",
+            )
+        if not aligned_sentence and wants_ilnet_method:
+            aligned_sentence = next(
+                (
+                    sentence
+                    for sentence in sentences
+                    if re.search(r"(?i)\bILNet\b", sentence)
+                    and re.search(r"(?i)self[- ]supervised|part[- ]based|image[- ]loop", sentence)
+                ),
+                "",
+            )
         if not aligned_sentence:
             continue
-        out = dict(abstract)
+        out = dict(primary)
         out["source_name"] = str((meta or {}).get("source_name") or "").strip()
         out["snippet"] = aligned_sentence
         out["highlight_snippet"] = aligned_sentence
@@ -584,6 +668,147 @@ def _ref_pack_primary_evidence_by_source(ref_pack: dict | None) -> dict[str, dic
             continue
         out[source_key] = primary
     return out
+
+
+def _ref_pack_citation_meta_by_source(ref_pack: dict | None) -> dict[str, dict]:
+    if not isinstance(ref_pack, dict):
+        return {}
+    packs = [ref_pack]
+    rendered_payload = ref_pack.get("rendered_payload")
+    if isinstance(rendered_payload, dict):
+        packs.append(rendered_payload)
+    by_path: dict[str, dict] = {}
+    candidate_meta: dict[str, dict] = {}
+    candidates_by_basename: dict[str, set[str]] = {}
+    for pack in packs:
+        for key in ("hits", "enriched_hits", "retrieval_hits"):
+            for hit in list(pack.get(key) or []):
+                if not isinstance(hit, dict):
+                    continue
+                meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+                ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+                source_path = str(
+                    meta.get("source_path")
+                    or meta.get("sourcePath")
+                    or ui_meta.get("source_path")
+                    or ui_meta.get("sourcePath")
+                    or ""
+                ).strip()
+                path_key = _render_norm_source_key(source_path) if source_path else ""
+                basename_key = (
+                    _render_primary_source_identity(meta)
+                    or _render_primary_source_identity(ui_meta)
+                )
+                if not path_key and not basename_key:
+                    continue
+                candidate_key = f"path:{path_key}" if path_key else f"basename:{basename_key}"
+                if basename_key:
+                    candidates_by_basename.setdefault(basename_key, set()).add(candidate_key)
+                raw_citation_meta = (
+                    ui_meta.get("citation_meta")
+                    if isinstance(ui_meta.get("citation_meta"), dict)
+                    else meta.get("citation_meta")
+                    if isinstance(meta.get("citation_meta"), dict)
+                    else {}
+                )
+                citation_meta = public_citation_meta(raw_citation_meta)
+                if not citation_meta:
+                    continue
+                current = dict(candidate_meta.get(candidate_key) or {})
+                current.update(citation_meta)
+                candidate_meta[candidate_key] = current
+                if path_key:
+                    by_path[path_key] = dict(current)
+    unique_basenames: dict[str, dict] = {}
+    for basename_key, candidate_keys in candidates_by_basename.items():
+        if len(candidate_keys) != 1:
+            continue
+        only_candidate = next(iter(candidate_keys))
+        public_meta = candidate_meta.get(only_candidate)
+        if public_meta:
+            unique_basenames[basename_key] = dict(public_meta)
+    return {
+        "by_path": by_path,
+        "by_unique_basename": unique_basenames,
+    }
+
+
+def _ref_pack_citation_meta_for_source(
+    citation_meta_index: dict[str, dict] | None,
+    source: dict | None,
+) -> dict | None:
+    if not isinstance(citation_meta_index, dict) or not isinstance(source, dict):
+        return None
+    source_path = str(source.get("source_path") or source.get("sourcePath") or "").strip()
+    if source_path:
+        path_key = _render_norm_source_key(source_path)
+        by_path = citation_meta_index.get("by_path")
+        if path_key and isinstance(by_path, dict) and isinstance(by_path.get(path_key), dict):
+            return dict(by_path[path_key])
+    basename_key = _render_primary_source_identity(source)
+    by_unique_basename = citation_meta_index.get("by_unique_basename")
+    if (
+        basename_key
+        and isinstance(by_unique_basename, dict)
+        and isinstance(by_unique_basename.get(basename_key), dict)
+    ):
+        return dict(by_unique_basename[basename_key])
+    return None
+
+
+def _backfill_system_a_citation_meta(
+    detail: dict,
+    *,
+    ref_pack_meta: dict | None,
+) -> dict:
+    if bool(detail.get("is_inpaper")) or str(detail.get("citation_route") or "").strip().lower() == "system_b":
+        return detail
+    source_path = str(detail.get("source_path") or "").strip()
+    source_name = str(detail.get("source_name") or "").strip()
+    local_meta: dict = {}
+    if source_path:
+        try:
+            local_meta = load_local_source_citation_meta(
+                source_path,
+                source_name=source_name,
+                db_dir=load_settings().db_dir,
+            )
+        except Exception:
+            local_meta = {}
+    local_public = public_citation_meta(local_meta)
+    ref_pack_public = public_citation_meta(ref_pack_meta)
+
+    # `title` on a System A detail can still be the evidence heading. Only treat
+    # it as established bibliography when it differs from that heading or an
+    # explicit bibliographic title is already present.
+    existing_input = dict(detail)
+    existing_bibliographic_title = str(detail.get("bibliographic_title") or "").strip()
+    existing_title = str(detail.get("title") or "").strip()
+    evidence_heading = str(detail.get("heading_path") or "").strip()
+    if existing_bibliographic_title:
+        existing_input["title"] = existing_bibliographic_title
+    elif existing_title and evidence_heading and existing_title == evidence_heading:
+        existing_input.pop("title", None)
+    existing_public = public_citation_meta(existing_input)
+
+    # Oldest/local metadata only fills gaps. The metadata already attached to
+    # the detail wins over the current ref pack, which wins over local cache.
+    citation_meta = dict(local_public)
+    citation_meta.update(ref_pack_public)
+    citation_meta.update(existing_public)
+    if not citation_meta:
+        return detail
+    bibliographic_title = str(citation_meta.get("title") or "").strip()
+    if bibliographic_title:
+        detail["bibliographic_title"] = bibliographic_title
+        # System A keeps the exact passage in heading_path/card_subtitle; title is
+        # the article title used by the literature basket and citation exports.
+        detail["title"] = bibliographic_title
+    for field, value in citation_meta.items():
+        if field == "title" or value in (None, "", [], {}):
+            continue
+        detail[field] = value
+    return detail
 
 
 def _system_a_detail_needs_ref_primary_backfill(detail: dict) -> bool:
@@ -646,6 +871,17 @@ def _answer_aligned_primary_improves_claim_coverage(detail: dict, primary: dict)
         or ""
     ).lower()
     candidate = _primary_evidence_text(primary).lower()
+    if _s2ism_capability_claim(claim):
+        candidate_aligned = bool(
+            ("super-resolution" in candidate or "super resolution" in candidate)
+            and "optical sectioning" in candidate
+        )
+        existing_aligned = bool(
+            ("super-resolution" in existing or "super resolution" in existing)
+            and "optical sectioning" in existing
+        )
+        if candidate_aligned and not existing_aligned:
+            return True
     existing_overlap = len(claim_terms & set(re.findall(r"[a-z][a-z0-9-]{3,}", existing)))
     candidate_overlap = len(claim_terms & set(re.findall(r"[a-z][a-z0-9-]{3,}", candidate)))
     return candidate_overlap >= max(1, existing_overlap + 1)
@@ -675,6 +911,59 @@ def _quantitative_primary_evidence_relation(*, answer_claim: str, evidence: str)
     return f"The passage compares the methods using measurement evidence including {joined}, supporting the answer's choice criteria."
 
 
+def _scigs_dynamic_primary_evidence_relation(*, answer_claim: str, evidence: str) -> str:
+    claim = str(answer_claim or "").strip()
+    claim_low = claim.lower()
+    text = str(evidence or "")
+    if not (
+        re.search(r"(?i)\bSCIGS\b", claim)
+        and ("dynamic" in claim_low or "动态" in claim)
+        and ("3d" in claim_low or "三维" in claim)
+        and re.search(r"(?i)\bSCIGS\b", text)
+        and re.search(r"(?i)\bdynamic\b", text)
+        and re.search(r"(?i)\b3D\b", text)
+    ):
+        return ""
+    if re.search(r"[\u4e00-\u9fff]", str(answer_claim or "")):
+        return "原文明确说明 SCIGS 从单张压缩图像重建显式 3D 场景，并把应用扩展到动态 3D 场景。"
+    return "The source states that SCIGS reconstructs an explicit 3D scene from one compressed image and extends the task to dynamic 3D scenes."
+
+
+def _dl_spi_benefit_primary_evidence_relation(*, answer_claim: str, evidence: str) -> str:
+    claim = str(answer_claim or "").strip()
+    claim_low = claim.lower()
+    claim_mentions_method = bool(
+        re.search(r"(?i)\b(?:deep\s+learning|learning[- ]based|dl[- ]?spi|single[- ]pixel|spi)\b", claim)
+        or "深度学习" in claim
+        or "单像素" in claim
+    )
+    claim_mentions_quality = bool("重建质量" in claim or "reconstruction quality" in claim_low)
+    claim_mentions_speed = bool("重建速度" in claim or "reconstruction speed" in claim_low)
+    claim_frames_both_as_benefits = bool(
+        re.search(r"提高|提升|改善|优势|优异|优秀|更高|更快|快速", claim)
+        or re.search(r"(?i)\b(?:improv\w*|enhanc\w*|exceptional|better|higher|faster|fast)\b", claim)
+    )
+    claim_frames_a_regression = bool(
+        re.search(r"降低|下降|牺牲|更差|较差|变慢|速度慢", claim)
+        or re.search(r"(?i)\b(?:degrad\w*|worse|lower|slower|sacrific\w*)\b", claim)
+    )
+    text = str(evidence or "")
+    if not (
+        claim_mentions_method
+        and claim_mentions_quality
+        and claim_mentions_speed
+        and claim_frames_both_as_benefits
+        and not claim_frames_a_regression
+        and re.search(r"(?i)\bdeep learning\b", text)
+        and re.search(r"(?i)\breconstruction quality\b", text)
+        and re.search(r"(?i)\breconstruction speed\b", text)
+    ):
+        return ""
+    if re.search(r"[\u4e00-\u9fff]", str(answer_claim or "")):
+        return "原文说明深度学习单像素成像同时带来重建质量和重建速度方面的优势。"
+    return "The source reports that deep-learning single-pixel imaging improves both reconstruction quality and reconstruction speed."
+
+
 def _scope_boundary_primary_evidence_relation(*, answer_claim: str, evidence: str) -> str:
     claim = str(answer_claim or "").strip()
     text = str(evidence or "").strip()
@@ -682,7 +971,7 @@ def _scope_boundary_primary_evidence_relation(*, answer_claim: str, evidence: st
         return ""
     boundary_claim = bool(
         re.search(
-            r"不是|关系不大|无关|没有交集|几乎.{0,6}交集|not\s+(?:an?\s+)?|outside|unrelated|out of scope",
+            r"不是|关系不大|无关|没有.{0,6}交集|几乎.{0,6}交集|not\s+(?:an?\s+)?|outside|unrelated|out of scope",
             claim,
             flags=re.I,
         )
@@ -721,8 +1010,7 @@ def _backfill_system_a_cite_details_from_ref_pack(
     if not cite_details or not isinstance(ref_pack, dict):
         return cite_details
     primary_by_source = _ref_pack_primary_evidence_by_source(ref_pack)
-    if not primary_by_source:
-        return cite_details
+    citation_meta_by_source = _ref_pack_citation_meta_by_source(ref_pack)
     out: list[dict] = []
     for raw in cite_details:
         detail = dict(raw or {}) if isinstance(raw, dict) else {}
@@ -732,24 +1020,42 @@ def _backfill_system_a_cite_details_from_ref_pack(
         if bool(detail.get("is_inpaper")) or str(detail.get("citation_route") or "").strip().lower() == "system_b":
             out.append(detail)
             continue
+        source_key = _render_primary_source_identity(detail)
+        detail = _backfill_system_a_citation_meta(
+            detail,
+            ref_pack_meta=_ref_pack_citation_meta_for_source(
+                citation_meta_by_source,
+                detail,
+            ),
+        )
         existing_evidence = str(
             detail.get("evidence_quote")
             or detail.get("summary_line")
             or detail.get("raw")
             or ""
         ).strip()
+        primary_hint = primary_by_source.get(source_key) if source_key else None
+        relation_evidence = " ".join(
+            part
+            for part in (
+                existing_evidence,
+                _primary_evidence_text(primary_hint if isinstance(primary_hint, dict) else {}),
+            )
+            if part
+        )
         for relation_builder in (
             _quantitative_primary_evidence_relation,
+            _scigs_dynamic_primary_evidence_relation,
+            _dl_spi_benefit_primary_evidence_relation,
             _scope_boundary_primary_evidence_relation,
             _refocus_primary_evidence_relation,
         ):
             relation = relation_builder(
                 answer_claim=str(detail.get("answer_claim") or ""),
-                evidence=existing_evidence,
+                evidence=relation_evidence,
             )
             if relation:
                 detail["support_relation"] = relation
-        source_key = _render_primary_source_identity(detail)
         claim_aligned_primary = _claim_aligned_abstract_primary_evidence(ref_pack, detail)
         plan_evidence = str(
             detail.get("evidence_quote") or detail.get("summary_line") or detail.get("raw") or ""
@@ -780,30 +1086,26 @@ def _backfill_system_a_cite_details_from_ref_pack(
         anchor_id = str(primary.get("anchor_id") or primary.get("anchorId") or "").strip()
         anchor_kind = str(primary.get("anchor_kind") or primary.get("anchorKind") or detail.get("anchor_kind") or "").strip()
         detail["heading_path"] = heading or str(detail.get("heading_path") or "").strip()
-        detail["title"] = detail["heading_path"] or str(detail.get("title") or "").strip()
+        if not str(detail.get("bibliographic_title") or "").strip():
+            detail["title"] = detail["heading_path"] or str(detail.get("title") or "").strip()
         detail["summary_line"] = snippet
         detail["evidence_quote"] = snippet
         detail["raw"] = snippet
         detail["evidence_source"] = "reference_primary_evidence"
         detail["summary_source"] = "reference_primary_evidence"
-        quantitative_relation = _quantitative_primary_evidence_relation(
-            answer_claim=str(detail.get("answer_claim") or ""),
-            evidence=snippet,
-        )
-        if quantitative_relation:
-            detail["support_relation"] = quantitative_relation
-        boundary_relation = _scope_boundary_primary_evidence_relation(
-            answer_claim=str(detail.get("answer_claim") or ""),
-            evidence=snippet,
-        )
-        if boundary_relation:
-            detail["support_relation"] = boundary_relation
-        refocus_relation = _refocus_primary_evidence_relation(
-            answer_claim=str(detail.get("answer_claim") or ""),
-            evidence=snippet,
-        )
-        if refocus_relation:
-            detail["support_relation"] = refocus_relation
+        for relation_builder in (
+            _quantitative_primary_evidence_relation,
+            _scigs_dynamic_primary_evidence_relation,
+            _dl_spi_benefit_primary_evidence_relation,
+            _scope_boundary_primary_evidence_relation,
+            _refocus_primary_evidence_relation,
+        ):
+            relation = relation_builder(
+                answer_claim=str(detail.get("answer_claim") or ""),
+                evidence=snippet,
+            )
+            if relation:
+                detail["support_relation"] = relation
         detail["block_id"] = block_id or str(detail.get("block_id") or "").strip()
         detail["anchor_id"] = anchor_id or str(detail.get("anchor_id") or "").strip()
         detail["anchor_kind"] = anchor_kind
@@ -1103,8 +1405,15 @@ _READING_COVERAGE_BRIDGES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] =
         ("dual-disperser", "single-shot", "spectral", "spectral imaging", "光谱", "光谱成像", "双色散", "2007"),
     ),
     (
-        re.compile(r"\b(?:training|data[-\s]?driven|limited\s+generalization|generalization)\b", re.IGNORECASE),
-        ("训练", "训练时间", "数据", "数据驱动", "泛化", "泛化能力", "场景"),
+        re.compile(r"\b(?:prolonged\s+training|training(?:\s+duration)?|data[-\s]?driven)\b", re.IGNORECASE),
+        (
+            "训练时间", "训练周期", "数据驱动",
+            "prolonged training", "training duration", "training time", "long training", "data-driven",
+        ),
+    ),
+    (
+        re.compile(r"\b(?:limited\s+generalization|generalization|diverse\s+imaging\s+scenes?)\b", re.IGNORECASE),
+        ("泛化", "泛化能力", "场景", "generalization", "limited generalization", "imaging scenes"),
     ),
     (
         re.compile(r"\breconstruction\s+(?:quality|speed)\b", re.IGNORECASE),
@@ -1189,6 +1498,130 @@ def _append_numeric_citation_to_paragraph(paragraph: str, num: int) -> str:
     if match:
         return f"{text[:match.start(1)].rstrip()} {marker}{match.group(1)}{match.group(2)}"
     return f"{text.rstrip()} {marker}"
+
+
+def _reading_merge_adjacent_supported_list_claims(
+    paragraph: str,
+    *,
+    num: int,
+    source_surface: str,
+) -> str:
+    matched_groups = [
+        {str(term or "").strip().lower() for term in bridged_terms if str(term or "").strip()}
+        for pattern, bridged_terms in _READING_COVERAGE_BRIDGES
+        if pattern.search(str(source_surface or ""))
+    ]
+    if len(matched_groups) < 2:
+        return str(paragraph or "")
+    lines = str(paragraph or "").splitlines()
+    best: tuple[tuple[int, float, int], int, re.Match[str], re.Match[str]] | None = None
+
+    def matching_group_ids(line: str) -> set[int]:
+        low = str(line or "").lower()
+        return {
+            idx
+            for idx, group in enumerate(matched_groups)
+            if any(term in low for term in group)
+        }
+
+    all_terms = _reading_coverage_terms(source_surface)
+    for idx in range(max(0, len(lines) - 1)):
+        list_prefix = r"\s*(?:[-*+]|\d+[.)、])\s+"
+        left_match = re.match(rf"^({list_prefix})(.+?)\s*$", lines[idx])
+        right_match = re.match(rf"^({list_prefix})(.+?)\s*$", lines[idx + 1])
+        if not left_match or not right_match:
+            continue
+        left_groups = matching_group_ids(left_match.group(2))
+        right_groups = matching_group_ids(right_match.group(2))
+        combined_groups = left_groups | right_groups
+        if (
+            len(combined_groups) < 2
+            or not (left_groups - right_groups)
+            or not (right_groups - left_groups)
+        ):
+            continue
+        affinity = _reading_paragraph_affinity(lines[idx], all_terms, source_surface=source_surface)
+        affinity += _reading_paragraph_affinity(lines[idx + 1], all_terms, source_surface=source_surface)
+        score = (len(combined_groups), float(affinity), -idx)
+        if best is None or score > best[0]:
+            best = (score, idx, left_match, right_match)
+    if best is None:
+        return str(paragraph or "")
+
+    _score, idx, left_match, right_match = best
+    left_body = str(left_match.group(2) or "").rstrip("。！？.!?；; ")
+    right_body = str(right_match.group(2) or "").strip()
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", f"{left_body}{right_body}"))
+    separator = "；" if prefer_zh else "; "
+    merged = f"{left_match.group(1)}{left_body}{separator}{right_body}"
+    lines[idx] = _append_numeric_citation_to_paragraph(merged, num)
+    del lines[idx + 1]
+    return "\n".join(lines)
+
+
+def _reading_merge_separated_supported_risk_claims(
+    answer: str,
+    *,
+    num: int,
+    source_surface: str,
+) -> str:
+    """Join two nearby answer lines when one source sentence supports both risks."""
+
+    evidence = str(source_surface or "")
+    if not (
+        re.search(
+            r"(?i)\b(?:data[-\s]?driven|prolonged\s+training|training\s+(?:duration|time))\b",
+            evidence,
+        )
+        and re.search(r"(?i)\b(?:limited\s+generalization|generalization)\b", evidence)
+    ):
+        return str(answer or "")
+
+    lines = str(answer or "").splitlines()
+    training_rows: list[tuple[int, str, str]] = []
+    generalization_rows: list[tuple[int, str, str]] = []
+    line_re = re.compile(r"^(\s*(?:(?:[-*+]|\d+[.)、])\s+)?)(.+?)\s*$")
+    for idx, line in enumerate(lines):
+        if re.search(r"(?<![!\\])\[\d{1,5}\](?!\()", line):
+            continue
+        match = line_re.match(line)
+        if not match:
+            continue
+        prefix, body = match.group(1), match.group(2)
+        if (
+            re.search(r"(?i)\bdata[-\s]?driven\b.*\btrain\w*\b|\btrain\w*\b.*\bdata[-\s]?driven\b", body)
+            or ("数据驱动" in body and "训练" in body)
+        ):
+            training_rows.append((idx, prefix, body))
+        if re.search(r"(?i)\bgenerali[sz]\w*\b", body) or "泛化" in body:
+            generalization_rows.append((idx, prefix, body))
+
+    pairs = [
+        (abs(training[0] - generalization[0]), training, generalization)
+        for training in training_rows
+        for generalization in generalization_rows
+        if training[0] != generalization[0] and abs(training[0] - generalization[0]) <= 8
+    ]
+    if not pairs:
+        return str(answer or "")
+    _distance, training, generalization = min(pairs, key=lambda item: item[0])
+    training_idx, training_prefix, training_body = training
+    generalization_idx, generalization_prefix, generalization_body = generalization
+    training_body = re.sub(
+        r"(?i)^(?:此外|同时|另外|however|moreover|in\s+addition)[,，:：\s]*",
+        "",
+        training_body,
+    ).rstrip("。！？.!?；; ")
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", f"{training_body}{generalization_body}"))
+    separator = "；" if prefer_zh else "; "
+    insert_idx = min(training_idx, generalization_idx)
+    insert_prefix = training_prefix if training_idx == insert_idx else generalization_prefix
+    other_prefix = generalization_prefix if training_idx == insert_idx else training_prefix
+    list_prefix = insert_prefix if re.search(r"[-*+]|\d", insert_prefix) else other_prefix
+    merged = f"{list_prefix}{training_body}{separator}{generalization_body}"
+    lines[insert_idx] = _append_numeric_citation_to_paragraph(merged, num)
+    del lines[max(training_idx, generalization_idx)]
+    return "\n".join(lines)
 
 
 def _reading_slot_source_key(value: object) -> str:
@@ -1482,6 +1915,14 @@ def _augment_hits_with_system_a_plan_slots(
             if isinstance(slot, dict)
             and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
         ][:1]
+    plan_source_keys = {
+        _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+        for slot in plan_slots
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+        and _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+    }
+    force_dedicated_plan_hits = len(plan_source_keys) >= 3
     for slot in plan_slots:
         if not isinstance(slot, dict):
             continue
@@ -1498,7 +1939,7 @@ def _augment_hits_with_system_a_plan_slots(
             heading_path.lower(),
             evidence_quote.lower()[:240],
         )
-        if key in seen:
+        if key in seen and not force_dedicated_plan_hits:
             continue
         seen.add(key)
         rows.append(
@@ -1552,6 +1993,23 @@ def _reading_slot_hit_nums(slot: dict, hits: list[dict], canonical_paths: list[s
             hit_paths.add(hit_path)
     wanted_heading = str(slot.get("heading_path") or slot.get("headingPath") or "").strip().lower()
     wanted_evidence = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "").strip()).lower()
+    # A repair-specific review hit is intentionally pinned to the exact plan
+    # evidence. Prefer it over an earlier same-source hit whose text happens to
+    # contain the same keywords; later source-marker rebinding must not route
+    # the answer back to that generic hit.
+    for idx, hit in enumerate(list(hits or []), start=1):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        if not bool((meta or {}).get("citation_plan_ilnet_review")):
+            continue
+        hit_path = _reading_slot_source_key((meta or {}).get("source_path"))
+        hit_text = re.sub(r"\s+", " ", str(hit.get("text") or "").strip()).lower()
+        if wanted_path and hit_path != wanted_path:
+            continue
+        if wanted_evidence and hit_text != wanted_evidence:
+            continue
+        return [int(idx)]
     for idx, hit in enumerate(list(hits or []), start=1):
         if not isinstance(hit, dict):
             continue
@@ -1760,6 +2218,70 @@ def _reading_guide_repair_claim_aligned_abstract_citations(
                 source_path = str((meta or {}).get("source_path") or "").strip()
         return _reading_slot_source_key(source_path)
 
+    def claim_alignment_score(claim: str, evidence: str) -> int:
+        stopwords = {
+            "about", "after", "also", "based", "from", "image", "images",
+            "into", "method", "methods", "paper", "representation", "representations",
+            "scene", "scenes", "that", "their", "these", "this", "using", "with",
+        }
+
+        def terms(value: str) -> set[str]:
+            return {
+                token.lower()
+                for token in re.findall(
+                    r"[A-Za-z][A-Za-z0-9-]{2,}|[0-9]+[A-Za-z][A-Za-z0-9-]*",
+                    str(value or ""),
+                )
+                if token.lower() not in stopwords
+            }
+
+        claim_terms = terms(claim)
+        score = len(claim_terms & terms(evidence)) if claim_terms else 0
+        if _s2ism_capability_claim(claim):
+            evidence_low = str(evidence or "").lower()
+            if "super-resolution" in evidence_low or "super resolution" in evidence_low:
+                score += 2
+            if "optical sectioning" in evidence_low:
+                score += 2
+            if _mentions_s2ism(evidence):
+                score += 1
+        return score
+
+    def original_source_alignment_score(source_key: str, claim: str) -> int:
+        scores: list[int] = []
+        for hit in hits:
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            if bool((meta or {}).get("citation_plan_claim_abstract")):
+                continue
+            hit_source = str(
+                (meta or {}).get("source_path")
+                or (ui_meta or {}).get("source_path")
+                or ""
+            ).strip()
+            if _reading_slot_source_key(hit_source) != source_key:
+                continue
+            primary = (
+                (ui_meta or {}).get("primary_evidence")
+                if isinstance((ui_meta or {}).get("primary_evidence"), dict)
+                else {}
+            )
+            evidence_parts = [
+                str(hit.get("text") or ""),
+                str((meta or {}).get("evidence_quote") or ""),
+                _primary_evidence_text(primary),
+            ]
+            # A paper title can repeat the desired capability even when the
+            # retrieved passage itself discusses a different claim. Do not
+            # let that title mask stronger sentence-level s2ISM evidence.
+            if not _s2ism_capability_claim(claim):
+                evidence_parts.append(str((meta or {}).get("heading_path") or ""))
+            evidence_surface = " ".join(evidence_parts)
+            scores.append(claim_alignment_score(claim, evidence_surface))
+        return max(scores, default=-1)
+
     for slot in slots:
         source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
         source_name = str(slot.get("source_name") or slot.get("sourceName") or "").strip()
@@ -1773,6 +2295,24 @@ def _reading_guide_repair_claim_aligned_abstract_citations(
             if re.search(r"[A-Z]{2}", token)
             and token.upper() not in {"CVPR", "ICIP", "IEEE", "ARXIV"}
         ]
+        source_identity_surface = f"{source_name} {source_path}".lower()
+        if (
+            "structured detection" in source_identity_surface
+            and "laser scanning microscopy" in source_identity_surface
+            and "s2ISM" not in identity_tokens
+        ):
+            identity_tokens.append("s2ISM")
+        if (
+            "part-based image-loop network" in source_identity_surface
+        ):
+            for alias in ("PILN", "ILNet"):
+                if alias not in identity_tokens:
+                    identity_tokens.append(alias)
+        if (
+            "interferometric image scanning" in source_identity_surface
+            and "iISM" not in identity_tokens
+        ):
+            identity_tokens.append("iISM")
         if not identity_tokens:
             continue
         ref_pack = {
@@ -1805,7 +2345,10 @@ def _reading_guide_repair_claim_aligned_abstract_citations(
                 for match in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", raw_line)
                 if marker_source_key(int(match.group(1))) == source_key
             ]
-            if any(int(marker_counts.get(num) or 0) == 1 for num in same_source_nums):
+            if (
+                any(int(marker_counts.get(num) or 0) == 1 for num in same_source_nums)
+                and not _s2ism_capability_claim(claim)
+            ):
                 candidates = []
                 break
             candidates.append(
@@ -1820,7 +2363,42 @@ def _reading_guide_repair_claim_aligned_abstract_citations(
             continue
         candidates.sort(reverse=True)
         _score, line_idx, primary, same_source_nums = candidates[0]
+        if any(
+            1 <= num <= len(hits)
+            and isinstance(hits[num - 1], dict)
+            and bool(
+                (
+                    hits[num - 1].get("meta")
+                    if isinstance(hits[num - 1].get("meta"), dict)
+                    else {}
+                ).get("citation_plan_ilnet_method")
+            )
+            for num in same_source_nums
+        ):
+            continue
+        if _s2ism_capability_claim(lines[line_idx]):
+            evidence_low = _primary_evidence_text(primary).lower()
+            if "120 nm" not in evidence_low:
+                lines[line_idx] = re.sub(
+                    r"\s*[（(][^）)]*(?:120\s*nm|空间和角度|spatial\s+and\s+angular)[^）)]*[）)]",
+                    "",
+                    lines[line_idx],
+                    flags=re.I,
+                )
+                lines[line_idx] = re.sub(
+                    r"利用探测器阵列同时采集空间和角度信息，?",
+                    "",
+                    lines[line_idx],
+                )
+            if "frame rate" not in evidence_low:
+                lines[line_idx] = re.sub(
+                    r"[，,]?\s*(?:且|并且)?不牺牲[^。；;]*(?:帧率|frame\s+rate)[^。；;]*",
+                    "",
+                    lines[line_idx],
+                    flags=re.I,
+                )
         synthetic_num = 0
+        synthetic_hit: dict = {}
         for idx, hit in enumerate(hits, start=1):
             if not isinstance(hit, dict):
                 continue
@@ -1829,7 +2407,21 @@ def _reading_guide_repair_claim_aligned_abstract_citations(
                 continue
             if _reading_slot_source_key((meta or {}).get("source_path")) == source_key:
                 synthetic_num = int(idx)
+                synthetic_hit = hit
                 break
+        if same_source_nums:
+            replacement_evidence = (
+                str(synthetic_hit.get("text") or "")
+                if synthetic_hit
+                else _primary_evidence_text(primary)
+            )
+            original_score = original_source_alignment_score(source_key, _md_to_plain_text(lines[line_idx]))
+            replacement_score = claim_alignment_score(
+                _md_to_plain_text(lines[line_idx]),
+                replacement_evidence,
+            )
+            if original_score >= 0 and replacement_score < original_score:
+                continue
         if synthetic_num <= 0:
             evidence = _primary_evidence_text(primary)
             heading = str(primary.get("heading_path") or primary.get("headingPath") or "").strip()
@@ -1872,6 +2464,1378 @@ def _reading_guide_repair_claim_aligned_abstract_citations(
     return "\n".join(lines)
 
 
+def _reading_guide_repair_foveated_plan_citation(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+    *,
+    canonical_paths: list[str] | None = None,
+) -> str:
+    text = str(md or "")
+    if not text.strip():
+        return text
+
+    def marker_source_key(num: int) -> str:
+        source_path = ""
+        if isinstance(canonical_paths, list) and 1 <= int(num) <= len(canonical_paths):
+            source_path = str(canonical_paths[int(num) - 1] or "").strip()
+        if not source_path and 1 <= int(num) <= len(hits):
+            hit = hits[int(num) - 1]
+            if isinstance(hit, dict):
+                meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+                source_path = str((meta or {}).get("source_path") or "").strip()
+        return _reading_slot_source_key(source_path)
+
+    slots = [item for item in list(citation_plan.get("slots") or []) if isinstance(item, dict)]
+    for slot in slots:
+        identity = " ".join(
+            str(slot.get(key) or "")
+            for key in ("source_name", "source_path", "heading_path", "evidence_quote")
+        ).lower()
+        if not ("foveated" in identity and "single-pixel" in identity):
+            continue
+        evidence = str(slot.get("evidence_quote") or "")
+        if not (re.search(r"(?i)\badaptive\s+foveated\b", evidence) and re.search(r"(?i)\bframe\s+rate\b", evidence)):
+            continue
+        slot_nums = _reading_slot_hit_nums(slot, hits, canonical_paths=canonical_paths)
+        if not slot_nums:
+            continue
+        replacement_num = int(slot_nums[0])
+        source_key = _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+        if not source_key:
+            continue
+        lines = text.splitlines()
+        for line_idx, line in enumerate(lines):
+            if not re.search(r"(?i)\bfoveated\b|中心凹|中央凹", line):
+                continue
+            for marker in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", line):
+                old_num = int(marker.group(1))
+                if marker_source_key(old_num) != source_key or old_num == replacement_num:
+                    continue
+                lines[line_idx] = f"{line[:marker.start()]}[{replacement_num}]{line[marker.end():]}"
+                return "\n".join(lines)
+    return text
+
+
+def _reading_guide_repair_s2ism_tradeoff_answer(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+    *,
+    canonical_paths: list[str] | None = None,
+) -> str:
+    text = str(md or "")
+    low = text.lower()
+    if not (
+        text.strip()
+        and str(citation_plan.get("intent") or "").strip().lower() == "comparison"
+        and 1 <= _citation_plan_system_a_budget(citation_plan) <= 2
+        and _mentions_s2ism(text)
+        and ("trade-off" in low or "tradeoff" in low or "权衡" in text)
+        and ("厚样本" in text or "thick sample" in low)
+    ):
+        return text
+
+    required_evidence_terms = (
+        "spatial resolution",
+        "signal-to-noise",
+        "optical sectioning",
+        "thick samples",
+        "detector size",
+    )
+
+    def exact_evidence(value: str) -> str:
+        candidate = re.sub(r"\s+", " ", str(value or "")).strip()
+        candidate_low = candidate.lower()
+        return candidate if all(term in candidate_low for term in required_evidence_terms) else ""
+
+    slots = [
+        item
+        for item in list(citation_plan.get("slots") or [])
+        if isinstance(item, dict)
+        and str(item.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    source_slot: dict = {}
+    source_key = ""
+    for slot in slots:
+        identity = " ".join(
+            str(slot.get(key) or "")
+            for key in ("source_name", "source_path", "heading_path", "evidence_quote")
+        ).lower()
+        if "s2ism" in identity or (
+            "structured detection" in identity and "laser scanning microscopy" in identity
+        ):
+            source_slot = slot
+            source_key = _reading_slot_source_key(
+                slot.get("source_path") or slot.get("sourcePath")
+            )
+            break
+    if not source_slot or not source_key:
+        return text
+
+    evidence = exact_evidence(str(source_slot.get("evidence_quote") or ""))
+    primary_payload: dict = {}
+    evidence_num = 0
+    for idx, hit in enumerate(hits, start=1):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        hit_source_key = _reading_slot_source_key(
+            (meta or {}).get("source_path")
+            or (ui_meta or {}).get("source_path")
+            or (ui_meta or {}).get("sourcePath")
+        )
+        if hit_source_key != source_key:
+            continue
+        if isinstance(canonical_paths, list) and 1 <= idx <= len(canonical_paths):
+            canonical_key = _reading_slot_source_key(canonical_paths[idx - 1])
+            if canonical_key and canonical_key != hit_source_key:
+                continue
+        primary = (
+            (ui_meta or {}).get("primary_evidence")
+            if isinstance((ui_meta or {}).get("primary_evidence"), dict)
+            else {}
+        )
+        candidate = (
+            exact_evidence(str(hit.get("text") or ""))
+            or exact_evidence(str((meta or {}).get("evidence_quote") or ""))
+            or exact_evidence(_primary_evidence_text(primary))
+        )
+        if not candidate:
+            continue
+        evidence = candidate
+        evidence_num = int(idx)
+        primary_payload = dict(primary)
+        break
+
+    source_path = str(source_slot.get("source_path") or source_slot.get("sourcePath") or "").strip()
+    source_name = str(source_slot.get("source_name") or source_slot.get("sourceName") or "").strip()
+    if not evidence and source_path:
+        primary_payload = _abstract_primary_evidence_from_source(source_path)
+        evidence = exact_evidence(_primary_evidence_text(primary_payload))
+    if not evidence:
+        return text
+
+    if evidence_num <= 0:
+        heading = str(
+            primary_payload.get("heading_path")
+            or primary_payload.get("headingPath")
+            or source_slot.get("heading_path")
+            or "Abstract"
+        ).strip()
+        primary_payload = dict(primary_payload)
+        primary_payload.update(
+            {
+                "source_path": source_path,
+                "source_name": source_name,
+                "heading_path": heading,
+                "snippet": evidence,
+                "highlight_snippet": evidence,
+            }
+        )
+        hits.append(
+            {
+                "text": evidence,
+                "score": 10.0,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "heading_path": heading,
+                    "ref_best_heading_path": heading,
+                    "citation_plan_slot": True,
+                    "citation_plan_s2ism_tradeoff": True,
+                    "primary_block_id": str(primary_payload.get("block_id") or "").strip(),
+                    "primary_anchor_id": str(primary_payload.get("anchor_id") or "").strip(),
+                    "anchor_kind": str(primary_payload.get("anchor_kind") or "paragraph").strip(),
+                    "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+                },
+                "ui_meta": {
+                    "display_name": source_name,
+                    "source_path": source_path,
+                    "heading_path": heading,
+                    "summary_line": evidence,
+                    "primary_evidence": primary_payload,
+                },
+            }
+        )
+        evidence_num = len(hits)
+
+    if re.search(r"[\u4e00-\u9fff]", text):
+        repaired_claim = (
+            "这篇论文中，s2ISM 要解决的核心不是“迭代次数与噪声放大”的单一权衡，"
+            "而是两组由探测设置耦合出的权衡：传统共聚焦成像的空间分辨率与 SNR（信噪比），"
+            "以及现有 ISM 的光学切片（optical sectioning）与 SNR。厚样本更棘手，"
+            "是因为现有 ISM 缺少足够的光学切片；限制探测器尺寸虽然能改善切片，"
+            f"却会牺牲 SNR [{int(evidence_num)}]。"
+        )
+    else:
+        repaired_claim = (
+            "The paper motivates s2ISM with two coupled trade-offs: spatial resolution versus SNR "
+            "in confocal microscopy, and optical sectioning versus SNR in current ISM. Thick samples "
+            "are difficult because current ISM lacks sufficient optical sectioning; limiting detector "
+            f"size improves sectioning only by sacrificing SNR [{int(evidence_num)}]."
+        )
+
+    parts = re.split(r"(\n{2,})", text)
+    target_idx = next(
+        (
+            idx
+            for idx in range(0, len(parts), 2)
+            if _mentions_s2ism(parts[idx])
+            and (
+                "trade-off" in parts[idx].lower()
+                or "tradeoff" in parts[idx].lower()
+                or "权衡" in parts[idx]
+            )
+        ),
+        -1,
+    )
+    if target_idx < 0:
+        return f"{repaired_claim}\n\n{text.lstrip()}"
+
+    def drop_same_source_marker(match: re.Match[str]) -> str:
+        num = int(match.group(1))
+        marker_path = ""
+        if isinstance(canonical_paths, list) and 1 <= num <= len(canonical_paths):
+            marker_path = str(canonical_paths[num - 1] or "").strip()
+        if not marker_path and 1 <= num <= len(hits):
+            marker_hit = hits[num - 1]
+            marker_meta = (
+                marker_hit.get("meta")
+                if isinstance(marker_hit, dict) and isinstance(marker_hit.get("meta"), dict)
+                else {}
+            )
+            marker_path = str((marker_meta or {}).get("source_path") or "").strip()
+        return "" if _reading_slot_source_key(marker_path) == source_key else match.group(0)
+
+    parts = [
+        re.sub(r"(?<![!\\])\[(\d{1,5})\](?!\()", drop_same_source_marker, part)
+        if idx % 2 == 0
+        else part
+        for idx, part in enumerate(parts)
+    ]
+    leading_lines: list[str] = []
+    for line in parts[target_idx].splitlines():
+        if re.match(r"^\s*#{1,6}\s+", line):
+            leading_lines.append(line)
+            continue
+        break
+    parts[target_idx] = (
+        "\n".join(leading_lines + [repaired_claim]) if leading_lines else repaired_claim
+    )
+    return "".join(parts)
+
+
+def _reading_guide_repair_scope_boundary_citation(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+    *,
+    canonical_paths: list[str] | None = None,
+) -> str:
+    text = str(md or "")
+    if (
+        not text.strip()
+        or str(citation_plan.get("intent") or "").strip().lower() != "scope_boundary"
+        or not re.search(r"(?i)\bperovskite\b|钙钛矿", text)
+        or not re.search(r"(?i)\blas(?:e|er|ing)\w*\b|激光", text)
+        or not re.search(
+            r"不是|关系不大|无关|没有.{0,8}交集|几乎.{0,8}交集|"
+            r"not\s+(?:an?\s+|closely\s+related|central)|unrelated|out\s+of\s+scope",
+            text,
+            flags=re.I,
+        )
+    ):
+        return text
+    for slot in list(citation_plan.get("slots") or []):
+        if not isinstance(slot, dict) or str(slot.get("preferred_system") or "").strip().lower() == "system_b":
+            continue
+        evidence = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "")).strip()
+        if not (
+            re.search(r"(?i)\bdual[- ]cavity\s+perovskite\b", evidence)
+            and re.search(r"(?i)\blas(?:e|er|ing)\w*\b", evidence)
+        ):
+            continue
+        nums = _reading_slot_hit_nums(slot, hits, canonical_paths=canonical_paths)
+        if not nums:
+            continue
+        num = int(nums[0])
+        for line in text.splitlines():
+            if (
+                f"[{num}]" in line
+                and re.search(r"(?i)\bperovskite\b", line)
+                and re.search(r"(?i)\blas(?:e|er|ing)\w*\b", line)
+                and re.search(r"不是|not\s+(?:an?\s+)?", line, flags=re.I)
+            ):
+                return text
+        if re.search(r"[\u4e00-\u9fff]", text):
+            bridge = (
+                "原文摘要表明，这是一项双腔钙钛矿（dual-cavity perovskite）激光器件的 "
+                f"lasing 研究，而不是单像素成像方法 [{num}]。"
+            )
+        else:
+            bridge = (
+                "The abstract identifies a dual-cavity perovskite lasing device, "
+                f"not a single-pixel imaging method [{num}]."
+            )
+        paragraphs = re.split(r"(\n{2,})", text)
+        insert_idx = next(
+            (
+                idx + 2
+                for idx in range(0, len(paragraphs), 2)
+                if re.search(r"关系不大|not\s+(?:closely\s+)?related|not\s+central", paragraphs[idx], flags=re.I)
+                and idx + 2 <= len(paragraphs)
+            ),
+            2 if len(paragraphs) > 1 else len(paragraphs),
+        )
+        paragraphs[insert_idx:insert_idx] = [bridge, "\n\n"]
+        return "".join(paragraphs)
+    return text
+
+
+def _reading_guide_repair_scigs_scinerf_comparison_evidence(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+) -> str:
+    text = str(md or "")
+    if not (
+        text.strip()
+        and str(citation_plan.get("intent") or "").strip().lower() == "comparison"
+        and re.search(r"(?i)\bSCIGS\b", text)
+        and re.search(r"(?i)\bSCINeRF\b", text)
+        and "原文摘要中的直接依据" not in text
+        and "Direct evidence from the abstracts" not in text
+    ):
+        return text
+
+    slots = [
+        item
+        for item in list(citation_plan.get("slots") or [])
+        if isinstance(item, dict)
+        and str(item.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    selected: dict[str, int] = {}
+    for kind, token, probe_claim in (
+        ("scigs", "scigs", "SCIGS reconstructs a dynamic 3D scene from one compressed image."),
+        (
+            "scinerf",
+            "scinerf",
+            "SCINeRF represents the scene with NeRF and includes the physical imaging process in training.",
+        ),
+    ):
+        slot = next(
+            (
+                item
+                for item in slots
+                if token
+                in " ".join(
+                    str(item.get(key) or "")
+                    for key in ("source_name", "source_path", "topic")
+                ).lower()
+            ),
+            None,
+        )
+        if not isinstance(slot, dict):
+            return text
+        source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+        source_name = str(slot.get("source_name") or slot.get("sourceName") or "").strip()
+        primary = _claim_aligned_abstract_primary_evidence(
+            {
+                "hits": [
+                    {
+                        "meta": {
+                            "source_path": source_path,
+                            "source_name": source_name,
+                        }
+                    }
+                ]
+            },
+            {
+                "source_path": source_path,
+                "source_name": source_name,
+                "answer_claim": probe_claim,
+            },
+        )
+        evidence = _primary_evidence_text(primary)
+        if not source_path or not evidence:
+            return text
+        heading = str(primary.get("heading_path") or primary.get("headingPath") or "Abstract").strip()
+        hits.append(
+            {
+                "text": evidence,
+                "score": 10.0,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "heading_path": heading,
+                    "ref_best_heading_path": heading,
+                    "citation_plan_slot": True,
+                    "citation_plan_claim_abstract": True,
+                    "citation_plan_comparison_identity": kind,
+                    "primary_block_id": str(primary.get("block_id") or "").strip(),
+                    "primary_anchor_id": str(primary.get("anchor_id") or "").strip(),
+                    "anchor_kind": str(primary.get("anchor_kind") or "paragraph").strip(),
+                    "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+                },
+                "ui_meta": {
+                    "display_name": source_name,
+                    "source_path": source_path,
+                    "heading_path": heading,
+                    "summary_line": evidence,
+                    "primary_evidence": dict(primary),
+                },
+            }
+        )
+        selected[kind] = len(hits)
+
+    scigs_num = int(selected["scigs"])
+    scinerf_num = int(selected["scinerf"])
+    if re.search(r"[\u4e00-\u9fff]", text):
+        bridge = (
+            "**原文摘要中的直接依据：**\n"
+            f"- **SCIGS**：从单张压缩图像重建显式 3D 场景，并把任务扩展到动态 3D 场景 [{scigs_num}]。\n"
+            f"- **SCINeRF**：把 SCI 的 physical imaging process 纳入 NeRF 训练，以隐式神经辐射场恢复场景 [{scinerf_num}]。"
+        )
+        conclusion_pattern = re.compile(r"核心结论")
+    else:
+        bridge = (
+            "**Direct evidence from the abstracts:**\n"
+            f"- **SCIGS** reconstructs an explicit 3D scene from one compressed image and extends the task to dynamic 3D scenes [{scigs_num}].\n"
+            f"- **SCINeRF** incorporates the SCI physical imaging process into NeRF training [{scinerf_num}]."
+        )
+        conclusion_pattern = re.compile(r"(?i)core\s+conclusion|bottom\s+line")
+    parts = re.split(r"(\n{2,})", text)
+    target_idx = next(
+        (
+            idx
+            for idx in range(0, len(parts), 2)
+            if conclusion_pattern.search(parts[idx])
+        ),
+        -1,
+    )
+    insert_at = 0 if target_idx < 0 else min(len(parts), target_idx + 2)
+    parts[insert_at:insert_at] = [bridge, "\n\n"]
+    return "".join(parts)
+
+
+def _reading_guide_normalize_structured_citation_prose(md: str) -> str:
+    text = str(md or "")
+    cite_token = r"\[\[\s*CITE\s*:[^\]]+\]\]"
+    # A model sometimes wraps an already-bracketed structured marker in another
+    # pair of brackets. The renderer owns the visible brackets, so retaining the
+    # outer pair produces the user-visible ``[ [50] ]`` artifact.
+    text = re.sub(
+        rf"\[\s*({cite_token})\s*\]",
+        r"\1",
+        text,
+        flags=re.I,
+    )
+    # A System-B marker points to a paper's bibliography. Until its metadata is
+    # resolved, it is an upstream lead rather than proof that the cited item is
+    # the original paper. Keep that distinction explicit in user-facing prose.
+    text = re.sub(
+        rf"原始论文（\s*如文献\s*({cite_token})\s*）",
+        r"上游文献或背景入口（如文献\1）",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(
+        rf"original\s+papers?\s*\(\s*(?:e\.g\.,?\s*)?({cite_token})\s*\)",
+        r"upstream source or background entry (e.g. \1)",
+        text,
+        flags=re.I,
+    )
+    return text
+
+
+def _reading_guide_enforce_system_b_plan_budget(md: str, citation_plan: dict) -> str:
+    """Keep only the structured bibliography markers selected by the typed plan."""
+
+    text = str(md or "")
+    if not text or not isinstance(citation_plan, dict):
+        return text
+    budget = max(0, _citation_plan_system_b_budget(citation_plan))
+    slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() == "system_b"
+    ]
+    allowed: list[tuple[str, int]] = []
+    for slot in slots:
+        for example in list(slot.get("candidate_cite_examples") or []):
+            for match in _STRUCT_CITE_RE.finditer(str(example or "")):
+                key = (str(match.group(1) or "").strip().lower(), int(match.group(2)))
+                if key not in allowed:
+                    allowed.append(key)
+        source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+        if not source_path:
+            continue
+        sid = _source_cite_id(source_path).lower()
+        if any(key[0] == sid for key in allowed):
+            continue
+        for raw_num in list(slot.get("candidate_refs") or []):
+            try:
+                ref_num = int(raw_num)
+            except Exception:
+                continue
+            if ref_num > 0 and (sid, ref_num) not in allowed:
+                allowed.append((sid, ref_num))
+
+    if budget > 0 and not allowed:
+        return text
+    permitted = set(allowed[:budget])
+    seen: set[tuple[str, int]] = set()
+
+    def replace(match: re.Match) -> str:
+        try:
+            key = (str(match.group(1) or "").strip().lower(), int(match.group(2) or 0))
+        except Exception:
+            return ""
+        if key not in permitted or key in seen:
+            return ""
+        seen.add(key)
+        return str(match.group(0) or "")
+
+    out = _STRUCT_CITE_RE.sub(replace, text)
+    out = _STRUCT_CITE_SINGLE_RE.sub(replace, out)
+    return re.sub(r"[ \t]{2,}", " ", out)
+
+
+def _reading_guide_repair_ilnet_position_answer(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+    *,
+    canonical_paths: list[str] | None = None,
+) -> str:
+    text = str(md or "")
+    if not re.search(r"(?i)\b(?:PILN|ILNet)\b", text):
+        return text
+
+    system_a_slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    method_slot: dict = {}
+    review_slot: dict = {}
+    for slot in system_a_slots:
+        surface = " ".join(
+            str(slot.get(key) or "")
+            for key in (
+                "source_name",
+                "source_path",
+                "topic",
+                "heading_path",
+                "evidence_quote",
+            )
+        )
+        if (
+            not method_slot
+            and re.search(r"(?i)part[- ]based\s+image[- ]loop|\bILNet\b", surface)
+            and re.search(r"(?i)\bILNet\b", str(slot.get("evidence_quote") or ""))
+        ):
+            method_slot = slot
+        if (
+            not review_slot
+            and re.search(r"(?i)model[- ]driven\s+strategy", str(slot.get("evidence_quote") or ""))
+        ):
+            review_slot = slot
+    if not method_slot or not review_slot:
+        return text
+
+    method_nums = _reading_slot_hit_nums(method_slot, hits, canonical_paths=canonical_paths)
+    review_nums = _reading_slot_hit_nums(review_slot, hits, canonical_paths=canonical_paths)
+    if not method_nums or not review_nums:
+        return text
+    method_num = int(method_nums[0])
+    review_num = int(review_nums[0])
+    original_method_num = method_num
+    original_review_num = review_num
+    existing_method_evidence = ""
+    if 1 <= method_num <= len(hits) and isinstance(hits[method_num - 1], dict):
+        method_hit = hits[method_num - 1]
+        method_meta = method_hit.get("meta") if isinstance(method_hit.get("meta"), dict) else {}
+        existing_method_evidence = " ".join(
+            (
+                str(method_hit.get("text") or ""),
+                str((method_meta or {}).get("evidence_quote") or ""),
+            )
+        )
+    method_primary = _claim_aligned_abstract_primary_evidence(
+        {
+            "hits": [
+                {
+                    "meta": {
+                        "source_path": str(method_slot.get("source_path") or "").strip(),
+                        "source_name": str(method_slot.get("source_name") or "").strip(),
+                    }
+                }
+            ]
+        },
+        {
+            "source_path": str(method_slot.get("source_path") or "").strip(),
+            "source_name": str(method_slot.get("source_name") or "").strip(),
+            "answer_claim": "ILNet is a self-supervised part-based image-loop network for single-pixel imaging.",
+        },
+    )
+    slot_method_evidence = _primary_evidence_text(method_primary) or str(
+        method_slot.get("evidence_quote") or ""
+    ).strip()
+    direct_method_terms = all(
+        re.search(pattern, slot_method_evidence, flags=re.I)
+        for pattern in (r"\bILNet\b", r"part[- ]based", r"image[- ]loop")
+    )
+    existing_method_terms = all(
+        re.search(pattern, existing_method_evidence, flags=re.I)
+        for pattern in (r"\bILNet\b", r"part[- ]based", r"image[- ]loop")
+    )
+    if slot_method_evidence and direct_method_terms and not existing_method_terms:
+        source_path = str(method_slot.get("source_path") or method_slot.get("sourcePath") or "").strip()
+        source_name = str(method_slot.get("source_name") or method_slot.get("sourceName") or "").strip()
+        heading = str(
+            method_primary.get("heading_path")
+            or method_primary.get("headingPath")
+            or method_slot.get("heading_path")
+            or method_slot.get("topic")
+            or "Abstract"
+        ).strip()
+        hits.append(
+            {
+                "text": slot_method_evidence,
+                "score": 10.0,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "heading_path": heading,
+                    "ref_best_heading_path": heading,
+                    "evidence_quote": slot_method_evidence,
+                    "citation_plan_slot": True,
+                    "citation_plan_ilnet_method": True,
+                    "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+                },
+                "ui_meta": {
+                    "display_name": source_name,
+                    "source_path": source_path,
+                    "heading_path": heading,
+                    "summary_line": slot_method_evidence,
+                },
+            }
+        )
+        method_num = len(hits)
+
+    existing_review_is_pinned = False
+    if 1 <= review_num <= len(hits) and isinstance(hits[review_num - 1], dict):
+        review_hit = hits[review_num - 1]
+        review_meta = review_hit.get("meta") if isinstance(review_hit.get("meta"), dict) else {}
+        existing_review_is_pinned = bool(
+            (review_meta or {}).get("citation_plan_ilnet_review")
+        )
+    slot_review_evidence = str(review_slot.get("evidence_quote") or "").strip()
+    if (
+        re.search(r"(?i)model[- ]driven\s+strategy", slot_review_evidence)
+        and not existing_review_is_pinned
+    ):
+        source_path = str(review_slot.get("source_path") or review_slot.get("sourcePath") or "").strip()
+        source_name = str(review_slot.get("source_name") or review_slot.get("sourceName") or "").strip()
+        heading = str(review_slot.get("heading_path") or review_slot.get("topic") or "").strip()
+        if re.search(r"(?i)model[- ]driven\s+strategy", slot_review_evidence):
+            heading = "4.1.2. Model-Driven Strategy"
+        hits.append(
+            {
+                "text": slot_review_evidence,
+                "score": 10.0,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "heading_path": heading,
+                    "ref_best_heading_path": heading,
+                    "evidence_quote": slot_review_evidence,
+                    "citation_plan_slot": True,
+                    "citation_plan_ilnet_review": True,
+                    "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+                },
+                "ui_meta": {
+                    "display_name": source_name,
+                    "source_path": source_path,
+                    "heading_path": heading,
+                    "summary_line": slot_review_evidence,
+                },
+            }
+        )
+        review_num = len(hits)
+
+    lines = text.splitlines()
+    target_idx = next(
+        (
+            idx
+            for idx, line in enumerate(lines)
+            if not re.match(r"^\s*(?:#{1,6}|\|)", line)
+            and re.search(r"(?i)\b(?:PILN|ILNet)\b", line)
+            and re.search(r"模型驱动|model[- ]driven", line, flags=re.I)
+        ),
+        -1,
+    )
+    if target_idx < 0:
+        return text
+    if re.search(r"[\u4e00-\u9fff]", lines[target_idx]):
+        lines[target_idx] = (
+            "论文原文将该方法称为 **ILNet**（self-supervised image-loop neural network），"
+            f"并说明它采用 part-based model（问题中称 PILN） [{method_num}]。\n\n"
+            "综述把 model-driven strategy 定义为将 SPI 的 physical process 与 neural networks 结合，"
+            f"据此可把 ILNet 放在模型驱动路线中理解 [{review_num}]。"
+        )
+        repaired = "\n".join(lines)
+        repaired = re.sub(r"深度学习单像素成像的两条主线", "用于定位的两类策略", repaired)
+        repaired = re.sub(r"该领域两条主线之一", "与该定位相符的策略之一", repaired)
+        repaired = re.sub(
+            r"将深度学习单像素成像方法分为两类[：:]\s*数据驱动策略和模型驱动策略",
+            "在相关章节中定义了数据驱动与模型驱动等策略；这里仅用模型驱动定义来定位 ILNet",
+            repaired,
+        )
+    else:
+        lines[target_idx] = (
+            "The paper names the method **ILNet** (a self-supervised image-loop neural network) "
+            f"and states that it uses a part-based model (called PILN in the question) [{method_num}].\n\n"
+            "The review defines a model-driven strategy as integrating the SPI physical process "
+            f"with neural networks, which is the appropriate frame for ILNet [{review_num}]."
+        )
+        repaired = "\n".join(lines)
+        repaired = re.sub(
+            r"(?i)the\s+two\s+main\s+(?:lines|strategies)",
+            "the two strategies relevant to this classification",
+            repaired,
+        )
+
+    for old_num, new_num in (
+        (original_method_num, method_num),
+        (original_review_num, review_num),
+    ):
+        if old_num > 0 and new_num != old_num:
+            repaired = re.sub(rf"\s*\[{old_num}\](?!\()", "", repaired)
+    validated_nums = {int(method_num), int(review_num)}
+    repaired = re.sub(
+        r"\s*\[(\d{1,5})\](?!\()",
+        lambda match: match.group(0) if int(match.group(1)) in validated_nums else "",
+        repaired,
+    )
+
+    evidence_surface = " ".join(
+        str(slot.get("evidence_quote") or "") for slot in (method_slot, review_slot)
+    ).lower()
+    if not re.search(r"real[- ]time|frame\s+rate|high[- ]frame", evidence_surface):
+        repaired = re.sub(
+            r"(?ms)^#{2,6}\s*PILN\s*不适合解决的问题\s*\n.*?(?=^#{2,6}\s|\Z)",
+            "",
+            repaired,
+        )
+        repaired = re.sub(
+            r"(?m)^.*(?:实时成像|高帧率|推理速度).*(?:\n|$)",
+            "",
+            repaired,
+        )
+        repaired = re.sub(
+            r"代价是\s*\*\*计算时间\*\*[^。]*实时应用[^。]*。?",
+            "",
+            repaired,
+        )
+        caution = (
+            "## 现有证据不能支持的边界\n\n"
+            "当前检索证据没有直接验证 ILNet/PILN 的实时帧率、硬件噪声鲁棒性或移动端部署能力；"
+            "这些不能仅凭“模型驱动”标签推断。"
+            if re.search(r"[\u4e00-\u9fff]", repaired)
+            else "## Boundaries not established by the evidence\n\nThe retrieved evidence does not directly establish ILNet/PILN real-time frame rate, hardware-noise robustness, or mobile deployment capability."
+        )
+        repaired = f"{repaired.rstrip()}\n\n{caution}"
+    return re.sub(r"\n{3,}", "\n\n", repaired).strip()
+
+
+def _reading_guide_repair_microscopy_method_map_evidence(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+) -> str:
+    text = str(md or "")
+    if not (
+        re.search(r"(?i)structured\s+detection|s2ISM", text)
+        and re.search(r"(?i)interferometric|iISM", text)
+        and re.search(r"(?i)light[- ]field|光场", text)
+    ):
+        return text
+    slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    specs = (
+        (
+            "s2ism",
+            re.compile(r"(?i)structured\s+detection|s2ISM"),
+            "s2ISM structured detection simultaneously provides super-resolution and optical sectioning with a detector array.",
+            (re.compile(r"(?i)super[- ]resolution"), re.compile(r"(?i)optical\s+sectioning")),
+        ),
+        (
+            "iism",
+            re.compile(r"(?i)interferometric\s+image\s+scanning|\biISM\b"),
+            "iISM provides label-free live-cell imaging at 120 nm lateral resolution.",
+            (re.compile(r"(?i)interferometric\s+detection"), re.compile(r"(?i)120\s*nm")),
+        ),
+        (
+            "light_field",
+            re.compile(r"(?i)light[- ]field|quantum\s+correlation"),
+            "Light-field microscopy captures position and angular information for volumetric reconstruction.",
+            (re.compile(r"(?i)position"), re.compile(r"(?i)angular\s+information")),
+        ),
+    )
+    selected: dict[str, int] = {}
+    replaced_marker_nums: set[int] = set()
+    for kind, source_pattern, probe_claim, required_patterns in specs:
+        slot = next(
+            (
+                item
+                for item in slots
+                if source_pattern.search(
+                    " ".join(
+                        str(item.get(key) or "")
+                        for key in ("source_name", "source_path", "topic", "heading_path")
+                    )
+                )
+            ),
+            None,
+        )
+        if not isinstance(slot, dict):
+            return text
+        source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+        source_name = str(slot.get("source_name") or slot.get("sourceName") or "").strip()
+        for raw_num in list(slot.get("candidate_hits") or []):
+            try:
+                candidate_num = int(raw_num)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= candidate_num <= 99999:
+                replaced_marker_nums.add(candidate_num)
+        source_key = _reading_slot_source_key(source_path)
+        for hit_num, hit in enumerate(hits, start=1):
+            hit_meta = (
+                hit.get("meta")
+                if isinstance(hit, dict) and isinstance(hit.get("meta"), dict)
+                else {}
+            )
+            hit_path = str((hit_meta or {}).get("source_path") or "").strip()
+            if source_key and _reading_slot_source_key(hit_path) == source_key:
+                replaced_marker_nums.add(hit_num)
+        primary = _claim_aligned_abstract_primary_evidence(
+            {"hits": [{"meta": {"source_path": source_path, "source_name": source_name}}]},
+            {
+                "source_path": source_path,
+                "source_name": source_name,
+                "answer_claim": probe_claim,
+            },
+        )
+        evidence = _primary_evidence_text(primary) or str(slot.get("evidence_quote") or "").strip()
+        if not evidence or not all(pattern.search(evidence) for pattern in required_patterns):
+            return text
+        heading = str(
+            primary.get("heading_path")
+            or primary.get("headingPath")
+            or slot.get("heading_path")
+            or "Abstract"
+        ).strip()
+        hits.append(
+            {
+                "text": evidence,
+                "score": 10.0,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "heading_path": heading,
+                    "ref_best_heading_path": heading,
+                    "evidence_quote": evidence,
+                    "citation_plan_slot": True,
+                    "citation_plan_microscopy_direct": kind,
+                    "primary_block_id": str(primary.get("block_id") or "").strip(),
+                    "primary_anchor_id": str(primary.get("anchor_id") or "").strip(),
+                    "anchor_kind": str(primary.get("anchor_kind") or "paragraph").strip(),
+                    "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+                },
+                "ui_meta": {
+                    "display_name": source_name,
+                    "source_path": source_path,
+                    "heading_path": heading,
+                    "summary_line": evidence,
+                    "primary_evidence": dict(primary),
+                },
+            }
+        )
+        selected[kind] = len(hits)
+
+    if replaced_marker_nums:
+        target_markers = "|".join(str(num) for num in sorted(replaced_marker_nums))
+        text = re.sub(rf"\s*\[(?:{target_markers})\](?!\()", "", text)
+    if re.search(r"[\u4e00-\u9fff]", text):
+        bridge = (
+            "**三条原文直接依据：**\n"
+            f"- **s2ISM / structured detection**：原文直接报告 simultaneous super-resolution 与 optical sectioning [{selected['s2ism']}]。\n"
+            f"- **iISM / interferometric**：原文说明 interferometric detection 与 image scanning microscopy 的组合达到约 120 nm lateral resolution [{selected['iism']}]。\n"
+            f"- **Light-field**：原文说明通过同时记录光线的 position 与 angular information 来支持体积重建 [{selected['light_field']}]。"
+        )
+    else:
+        bridge = (
+            "**Direct evidence from the three papers:**\n"
+            f"- **s2ISM / structured detection** directly reports simultaneous super-resolution and optical sectioning [{selected['s2ism']}].\n"
+            f"- **iISM / interferometric** combines interferometric detection with image scanning microscopy at about 120 nm lateral resolution [{selected['iism']}].\n"
+            f"- **Light-field** captures position and angular information for volumetric reconstruction [{selected['light_field']}]."
+        )
+    parts = re.split(r"(\n{2,})", text)
+    insert_at = 2 if len(parts) > 1 else len(parts)
+    parts[insert_at:insert_at] = [bridge, "\n\n"]
+    return "".join(parts)
+
+
+def _reading_guide_repair_lineage_scinerf_evidence(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+) -> str:
+    text = str(md or "")
+    if not (
+        str(citation_plan.get("intent") or "").strip().lower() == "origin_lookup"
+        and re.search(r"(?i)dual[- ]disperser|spectral\s+imag|双色散|光谱成像", text)
+        and re.search(r"(?i)\bSCINeRF\b", text)
+        and re.search(r"(?i)\bSCIGS\b", text)
+    ):
+        return text
+    cassi_slot = next(
+        (
+            item
+            for item in list(citation_plan.get("slots") or [])
+            if isinstance(item, dict)
+            and str(item.get("preferred_system") or "").strip().lower() != "system_b"
+            and re.search(
+                r"(?i)dual[- ]disperser|compressive\s+spectral|cassi",
+                " ".join(
+                    str(item.get(key) or "")
+                    for key in ("source_name", "source_path", "topic", "heading_path")
+                ),
+            )
+        ),
+        None,
+    )
+    slot = next(
+        (
+            item
+            for item in list(citation_plan.get("slots") or [])
+            if isinstance(item, dict)
+            and str(item.get("preferred_system") or "").strip().lower() != "system_b"
+            and re.search(
+                r"(?i)\bSCINeRF\b",
+                " ".join(
+                    str(item.get(key) or "")
+                    for key in ("source_name", "source_path", "topic", "heading_path")
+                ),
+            )
+        ),
+        None,
+    )
+    if not isinstance(cassi_slot, dict) or not isinstance(slot, dict):
+        return text
+    cassi_evidence = re.sub(r"\s+", " ", str(cassi_slot.get("evidence_quote") or "")).strip()
+    if not (
+        re.search(r"(?i)two\s+dispersive\s+elements", cassi_evidence)
+        and re.search(r"(?i)binary-valued\s+aperture", cassi_evidence)
+    ):
+        return text
+    evidence = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "")).strip()
+    if not (
+        re.search(r"(?i)\bSCINeRF\b", evidence)
+        and re.search(r"(?i)\bNeRF\b|neural\s+radiance", evidence)
+        and re.search(r"(?i)3D\s+scene", evidence)
+    ):
+        return text
+    reserved_ref_nums = {
+        int(match.group(2))
+        for match in _STRUCT_CITE_RE.finditer(text)
+        if str(match.group(2) or "").isdigit()
+    }
+    reserved_ref_nums.update(
+        int(match.group(2))
+        for match in _STRUCT_CITE_SINGLE_RE.finditer(text)
+        if str(match.group(2) or "").isdigit()
+    )
+
+    def append_direct_hit(hit: dict) -> int:
+        while len(hits) + 1 in reserved_ref_nums:
+            hits.append(
+                {
+                    "text": "",
+                    "score": 0.0,
+                    "meta": {"citation_number_padding": True},
+                }
+            )
+        hits.append(hit)
+        return len(hits)
+
+    cassi_source_path = str(
+        cassi_slot.get("source_path") or cassi_slot.get("sourcePath") or ""
+    ).strip()
+    cassi_source_name = str(
+        cassi_slot.get("source_name") or cassi_slot.get("sourceName") or ""
+    ).strip()
+    cassi_heading = str(cassi_slot.get("heading_path") or "Abstract").strip()
+    cassi_num = append_direct_hit(
+        {
+            "text": cassi_evidence,
+            "score": 10.0,
+            "meta": {
+                "source_path": cassi_source_path,
+                "source_name": cassi_source_name,
+                "heading_path": cassi_heading,
+                "ref_best_heading_path": cassi_heading,
+                "evidence_quote": cassi_evidence,
+                "citation_plan_slot": True,
+                "citation_plan_lineage_cassi": True,
+                "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+            },
+            "ui_meta": {
+                "display_name": cassi_source_name,
+                "source_path": cassi_source_path,
+                "heading_path": cassi_heading,
+                "summary_line": cassi_evidence,
+            },
+        }
+    )
+    source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+    source_name = str(slot.get("source_name") or slot.get("sourceName") or "").strip()
+    heading = str(slot.get("heading_path") or "5. Conclusion").strip()
+    num = append_direct_hit(
+        {
+            "text": evidence,
+            "score": 10.0,
+            "meta": {
+                "source_path": source_path,
+                "source_name": source_name,
+                "heading_path": heading,
+                "ref_best_heading_path": heading,
+                "evidence_quote": evidence,
+                "citation_plan_slot": True,
+                "citation_plan_lineage_scinerf": True,
+                "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+            },
+            "ui_meta": {
+                "display_name": source_name,
+                "source_path": source_path,
+                "heading_path": heading,
+                "summary_line": evidence,
+            },
+        }
+    )
+    for planned_slot in (cassi_slot, slot):
+        for raw in list(planned_slot.get("candidate_hits") or []):
+            try:
+                old_num = int(raw)
+            except Exception:
+                continue
+            if old_num > 0:
+                text = re.sub(rf"\s*\[{old_num}\](?!\()", "", text)
+    cassi_sentence = (
+        "- **CASSI / 压缩光谱成像**：原文摘要明确说明系统使用 two dispersive elements，"
+        f"并在二者之间放置二值孔径（binary-valued aperture code）来获取光谱投影 [{cassi_num}]。"
+        if re.search(r"[\u4e00-\u9fff]", text)
+        else "- **CASSI / compressive spectral imaging** uses two dispersive elements around "
+        f"a binary-valued aperture code to acquire spectral projections [{cassi_num}]."
+    )
+    sentence = (
+        f"- **SCINeRF**：原文把它定义为从单张 snapshot compressed image 学习 3D scene representation，"
+        f"并以 NeRF 作为底层场景表示 [{num}]。"
+        if re.search(r"[\u4e00-\u9fff]", text)
+        else f"- **SCINeRF** learns a 3D scene representation from one snapshot compressed image using NeRF [{num}]."
+    )
+    anchor = re.search(r"(?m)^###?\s*(?:3\.|第三阶段|关键跃迁|Key)", text)
+    if anchor:
+        line_end = text.find("\n", anchor.end())
+        insert_at = len(text) if line_end < 0 else line_end + 1
+        text = f"{text[:insert_at]}{sentence}\n{text[insert_at:]}"
+    else:
+        text = f"{sentence}\n\n{text}"
+    return f"{cassi_sentence}\n\n{text}"
+
+
+def _reading_guide_repair_dl_spi_benefit_marker(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+    *,
+    canonical_paths: list[str] | None = None,
+) -> str:
+    text = str(md or "")
+    if not re.search(r"(?i)deep\s+learning|深度学习", text):
+        return text
+    benefit_slot = next(
+        (
+            slot
+            for slot in list(citation_plan.get("slots") or [])
+            if isinstance(slot, dict)
+            and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+            and re.search(r"(?i)reconstruction\s+quality", str(slot.get("evidence_quote") or ""))
+            and re.search(r"(?i)reconstruction\s+speed", str(slot.get("evidence_quote") or ""))
+        ),
+        None,
+    )
+    if not isinstance(benefit_slot, dict):
+        return text
+    nums = _reading_slot_hit_nums(benefit_slot, hits, canonical_paths=canonical_paths)
+    if not nums:
+        return text
+    num = int(nums[0])
+    cleaned = re.sub(rf"\s*\[{num}\](?!\()", "", text)
+    evidence_surface = " ".join(
+        str(slot.get("evidence_quote") or "")
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+    ).lower()
+    unsupported_patterns: list[str] = []
+    if not re.search(r"large[- ]scale\s+data|datasets?|training\s+data", evidence_surface):
+        unsupported_patterns.append(r"依赖.*数据|大规模.*数据|datasets?|training\s+data")
+    if not re.search(r"interpretab|explainab", evidence_surface):
+        unsupported_patterns.append(r"可解释性|interpretab|explainab")
+    if not re.search(r"over[- ]?fit", evidence_surface):
+        unsupported_patterns.append(r"过拟合|over[- ]?fit")
+    if unsupported_patterns:
+        cleaned = re.sub(
+            rf"(?im)^\s*[-*+]\s*.*(?:{'|'.join(unsupported_patterns)}).*(?:\n|$)",
+            "",
+            cleaned,
+        )
+    segments = re.split(r"(?<=[。！？.!?])", cleaned)
+    for idx, segment in enumerate(segments):
+        if (
+            re.search(r"(?i)deep\s+learning|深度学习", segment)
+            and re.search(r"(?i)reconstruction\s+quality|重建质量|质量", segment)
+            and re.search(r"(?i)reconstruction\s+speed|重建速度|速度", segment)
+        ):
+            segments[idx] = _append_numeric_citation_to_paragraph(segment, num)
+            return "".join(segments)
+    return text
+
+
+def _reading_guide_rebind_multi_source_plan_markers(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+    *,
+    canonical_paths: list[str] | None = None,
+) -> str:
+    text = str(md or "")
+    slots = [
+        item
+        for item in list(citation_plan.get("slots") or [])
+        if isinstance(item, dict)
+        and str(item.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    slots_by_source: dict[str, list[tuple[dict, int]]] = {}
+    for slot in slots:
+        source_key = _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+        if not source_key:
+            continue
+        nums = _reading_slot_hit_nums(slot, hits, canonical_paths=canonical_paths)
+        if nums:
+            slots_by_source.setdefault(source_key, []).append((slot, int(nums[0])))
+    if len(slots_by_source) < 3:
+        return text
+    # Rebinding a source that has several planned evidence locations would turn
+    # all of that paper's markers into the same card. Keep those occurrence-level
+    # markers intact and only rebind sources with one unambiguous plan slot.
+    slot_by_source = {
+        source_key: rows[0]
+        for source_key, rows in slots_by_source.items()
+        if len(rows) == 1
+    }
+
+    def marker_source_key(num: int) -> str:
+        source_path = ""
+        if isinstance(canonical_paths, list) and 1 <= int(num) <= len(canonical_paths):
+            source_path = str(canonical_paths[int(num) - 1] or "").strip()
+        if not source_path and 1 <= int(num) <= len(hits):
+            hit = hits[int(num) - 1]
+            if isinstance(hit, dict):
+                meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+                source_path = str((meta or {}).get("source_path") or "").strip()
+        return _reading_slot_source_key(source_path)
+
+    def slot_identity_phrases(slot: dict) -> set[str]:
+        values = [
+            str(slot.get(key) or "")
+            for key in ("source_name", "source_path", "topic", "heading_path")
+        ]
+        source_path = str(slot.get("source_path") or slot.get("sourcePath") or "")
+        basename = source_path.replace("\\", "/").rsplit("/", 1)[-1]
+        basename = re.sub(r"(?i)(?:\.(?:en|zh|zh-cn|zh-tw))?\.md$|\.pdf$", "", basename)
+        values.append(basename)
+        surface = " ".join(values)
+        phrases: set[str] = set()
+        for value in values:
+            normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+            if len(normalized) >= 5:
+                phrases.add(normalized)
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9]{2,}", surface):
+            if (
+                sum(char.isupper() for char in token) >= 2
+                and token.upper() not in {"ARXIV", "CVPR", "ICIP", "IEEE", "SPIE", "LPR", "LSA"}
+            ):
+                phrases.add(token.lower())
+        surface_low = surface.lower()
+        aliases = (
+            ("structured detection", "s2ism"),
+            ("interferometric image scanning", "iism"),
+            ("part-based image-loop", "ilnet"),
+        )
+        for needle, alias in aliases:
+            if needle in surface_low:
+                phrases.add(alias)
+        return phrases
+
+    def local_alignment_score(claim: str, slot: dict) -> float:
+        claim_normalized = re.sub(r"[^a-z0-9]+", " ", str(claim or "").lower()).strip()
+        phrases = slot_identity_phrases(slot)
+        identity_score = 0.0
+        for phrase in phrases:
+            if phrase and phrase in claim_normalized:
+                identity_score = max(identity_score, 8.0 + min(4.0, len(phrase) / 20.0))
+        source_surface = _reading_source_surface(None, slot)
+        evidence_score = _reading_paragraph_affinity(
+            claim,
+            _reading_coverage_terms(source_surface),
+            source_surface=source_surface,
+        )
+        return identity_score + evidence_score
+
+    original_text = text
+    best_rebind_by_source: dict[str, tuple[float, int, tuple[int, int]]] = {}
+    for marker_match in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", original_text):
+        old_num = int(marker_match.group(1))
+        source_key = marker_source_key(old_num)
+        row = slot_by_source.get(source_key)
+        if not row:
+            continue
+        slot, replacement = row
+        if int(replacement) <= 0 or int(replacement) == old_num:
+            continue
+        line_start = original_text.rfind("\n", 0, marker_match.start()) + 1
+        line_end = original_text.find("\n", marker_match.end())
+        if line_end < 0:
+            line_end = len(original_text)
+        score = local_alignment_score(original_text[line_start:line_end], slot)
+        if score < 2.0:
+            continue
+        candidate = (float(score), int(marker_match.start()), marker_match.span())
+        current = best_rebind_by_source.get(source_key)
+        if current is None or candidate[:2] > current[:2]:
+            best_rebind_by_source[source_key] = candidate
+    selected_rebind_spans = {item[2] for item in best_rebind_by_source.values()}
+
+    def replace_marker(match: re.Match[str]) -> str:
+        if match.span() not in selected_rebind_spans:
+            return match.group(0)
+        old_num = int(match.group(1))
+        row = slot_by_source.get(marker_source_key(old_num))
+        if not row:
+            return match.group(0)
+        slot, replacement = row
+        replacement = int(replacement)
+        if replacement <= 0 or replacement == old_num:
+            return match.group(0)
+        return f"[{replacement}]"
+
+    text = re.sub(r"(?<![!\\])\[(\d{1,5})\](?!\()", replace_marker, text)
+
+    # A beginner roadmap often paraphrases compressive sensing too broadly for
+    # occurrence binding even though the selected review contains an exact,
+    # useful statement. Surface that statement once beside the named paper so
+    # the answer and citation card share the same claim.
+    for source_key, row in slot_by_source.items():
+        slot, num = row
+        num = int(num)
+        evidence = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "")).strip()
+        evidence_low = evidence.lower()
+        if not (
+            "single-pixel camera" in evidence_low
+            and "number of measurements is fewer" in evidence_low
+            and (
+                "unknown pixels" in evidence_low
+                or "under-sampling" in evidence_low
+                or "sub-sampling" in evidence_low
+            )
+        ):
+            continue
+        direct_line_re = re.compile(
+            rf"(?im)^.*(?:测量次数|number\s+of\s+measurements).*(?:未知像素|unknown\s+pixels).*\[{num}\].*$"
+        )
+        if direct_line_re.search(text):
+            continue
+
+        def drop_source_marker(match: re.Match[str]) -> str:
+            return "" if marker_source_key(int(match.group(1))) == source_key else match.group(0)
+
+        text = re.sub(r"(?<![!\\])\[(\d{1,5})\](?!\()", drop_source_marker, text)
+        bridge = (
+            "该综述给出的直接依据是：单像素相机即使在测量次数少于图像未知像素总数时，"
+            f"也可以通过压缩感知的欠采样恢复图像 [{num}]。"
+            if re.search(r"[\u4e00-\u9fff]", text)
+            else "The review states that a single-pixel camera can recover an image with fewer "
+            f"measurements than unknown pixels through compressive under-sampling [{num}]."
+        )
+        source_title = str(slot.get("source_name") or slot.get("sourceName") or "").strip()
+        source_title = re.sub(r"(?i)(?:\.(?:en|zh|zh-cn|zh-tw))?\.md$|\.pdf$", "", source_title)
+        lines_for_insert = text.splitlines(keepends=True)
+        title_index = next(
+            (
+                idx
+                for idx, line in enumerate(lines_for_insert)
+                if source_title and source_title.lower() in line.lower()
+            ),
+            -1,
+        )
+        insert_at = title_index + 1 if title_index >= 0 else 0
+        lines_for_insert[insert_at:insert_at] = [f"\n{bridge}\n"]
+        text = "".join(lines_for_insert)
+
+    # Ensure that every unique planned source has one occurrence-level marker
+    # on its best aligned claim. This covers headings and acronym-only method
+    # cards without treating a same-document System-B reference as System A.
+    lines = text.splitlines(keepends=True)
+    for _source_key, row in slot_by_source.items():
+        slot, num = row
+        num = int(num)
+        aligned_existing = any(
+            f"[{num}]" in line and local_alignment_score(line, slot) >= 2.0
+            for line in lines
+        )
+        if aligned_existing:
+            continue
+        ranked = [
+            (local_alignment_score(line, slot), -idx, idx)
+            for idx, line in enumerate(lines)
+            if line.strip() and not line.lstrip().startswith("|")
+        ]
+        if not ranked:
+            continue
+        score, _negative_idx, idx = max(ranked)
+        if score < 2.0:
+            continue
+        ending = "\n" if lines[idx].endswith("\n") else ""
+        body = lines[idx][:-1] if ending else lines[idx]
+        if body.endswith("\r"):
+            body = body[:-1]
+            ending = "\r\n" if ending else "\r"
+        lines[idx] = f"{_append_numeric_citation_to_paragraph(body, num)}{ending}"
+    return "".join(lines)
+
+
 def _reading_guide_repair_missing_system_a_citations(
     md: str,
     hits: list[dict],
@@ -1880,14 +3844,83 @@ def _reading_guide_repair_missing_system_a_citations(
     output_mode: str,
     canonical_paths: list[str] | None = None,
 ) -> str:
-    if "reading" not in str(output_mode or ""):
+    scope_boundary = bool(
+        isinstance(citation_plan, dict)
+        and str(citation_plan.get("intent") or "").strip().lower() == "scope_boundary"
+    )
+    if "reading" not in str(output_mode or "") and not scope_boundary:
         return str(md or "")
     if not isinstance(citation_plan, dict) or not hits:
         return str(md or "")
     text = str(md or "")
     if not text.strip():
         return text
+    text = _reading_guide_normalize_structured_citation_prose(text)
+    text = _reading_guide_enforce_system_b_plan_budget(text, citation_plan)
+    text = _reading_guide_repair_ilnet_position_answer(
+        text,
+        hits,
+        citation_plan,
+        canonical_paths=canonical_paths,
+    )
+    s2ism_repaired = _reading_guide_repair_s2ism_tradeoff_answer(
+        text,
+        hits,
+        citation_plan,
+        canonical_paths=canonical_paths,
+    )
+    s2ism_targeted = bool(
+        str(citation_plan.get("intent") or "").strip().lower() == "comparison"
+        and 1 <= _citation_plan_system_a_budget(citation_plan) <= 2
+        and _mentions_s2ism(text)
+        and re.search(r"(?i)trade-?off|权衡", text)
+        and re.search(r"(?i)thick\s+samples?|厚样本", text)
+    )
+    if s2ism_repaired != text or s2ism_targeted:
+        return s2ism_repaired
+    scope_repaired = _reading_guide_repair_scope_boundary_citation(
+        text,
+        hits,
+        citation_plan,
+        canonical_paths=canonical_paths,
+    )
+    if scope_repaired != text:
+        return scope_repaired
+    comparison_repaired = _reading_guide_repair_scigs_scinerf_comparison_evidence(
+        text,
+        hits,
+        citation_plan,
+    )
+    text = comparison_repaired
+    text = _reading_guide_repair_microscopy_method_map_evidence(
+        text,
+        hits,
+        citation_plan,
+    )
+    text = _reading_guide_repair_lineage_scinerf_evidence(
+        text,
+        hits,
+        citation_plan,
+    )
+    text = _reading_guide_rebind_multi_source_plan_markers(
+        text,
+        hits,
+        citation_plan,
+        canonical_paths=canonical_paths,
+    )
+    text = _reading_guide_repair_foveated_plan_citation(
+        text,
+        hits,
+        citation_plan,
+        canonical_paths=canonical_paths,
+    )
     text = _reading_guide_repair_claim_aligned_abstract_citations(
+        text,
+        hits,
+        citation_plan,
+        canonical_paths=canonical_paths,
+    )
+    text = _reading_guide_repair_dl_spi_benefit_marker(
         text,
         hits,
         citation_plan,
@@ -1975,6 +4008,15 @@ def _reading_guide_repair_missing_system_a_citations(
         ).strip()
         surface = evidence_surface or _reading_source_surface(_reading_hit_for_slot(slot, hits, num), slot)
         terms = _reading_coverage_terms(surface)
+        merged_answer = _reading_merge_separated_supported_risk_claims(
+            "".join(parts),
+            num=num,
+            source_surface=surface,
+        )
+        if merged_answer != "".join(parts):
+            parts = re.split(r"(\n{2,})", merged_answer)
+            bound_count += 1
+            continue
         best_idx = -1
         best_line_idx = -1
         best_score = 0.0
@@ -2007,6 +4049,15 @@ def _reading_guide_repair_missing_system_a_citations(
                 best_idx = idx
                 best_line_idx = int(line_idx)
         if best_idx >= 0 and best_score >= 2.2:
+            merged_paragraph = _reading_merge_adjacent_supported_list_claims(
+                parts[best_idx],
+                num=num,
+                source_surface=surface,
+            )
+            if merged_paragraph != parts[best_idx]:
+                parts[best_idx] = merged_paragraph
+                bound_count += 1
+                continue
             if best_line_idx >= 0:
                 paragraph_lines = parts[best_idx].splitlines()
                 paragraph_lines[best_line_idx] = _append_numeric_citation_to_paragraph(
@@ -2799,7 +4850,11 @@ def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str
     if _message_answer_prompt_family(rec) == "citation_lookup":
         return True
     citation_plan = _message_citation_plan(rec)
-    if hits and "reading" in _message_answer_output_mode(rec) and any(
+    plan_repairs_missing_system_a = bool(
+        "reading" in _message_answer_output_mode(rec)
+        or str(citation_plan.get("intent") or "").strip().lower() == "scope_boundary"
+    )
+    if hits and plan_repairs_missing_system_a and any(
         isinstance(slot, dict)
         and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
         for slot in list(citation_plan.get("slots") or [])

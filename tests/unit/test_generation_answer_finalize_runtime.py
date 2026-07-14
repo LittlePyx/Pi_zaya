@@ -171,6 +171,113 @@ def test_finalize_generation_answer_runs_postprocess_validate_and_quality(monkey
     assert out["paper_guide_contracts"]["intent"]["research_answer_plan"] == "method_explain"
 
 
+def test_finalize_strips_model_system_b_marker_when_plan_disables_system_b(monkeypatch):
+    citation_plan = {
+        "version": 1,
+        "intent": "method_explain",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [{"preferred_system": "system_a", "candidate_hits": [1]}],
+    }
+    monkeypatch.setattr(
+        finalize_runtime,
+        "detect_text_reference_opportunities",
+        lambda **_kwargs: [
+            {
+                "sid": "s1234abcd",
+                "ref_num": 7,
+                "source_path": "paper.md",
+                "label": "upstream work",
+            }
+        ],
+    )
+
+    out = finalize_runtime._finalize_generation_answer(
+        "The method uses retrieved evidence [[CITE:s1234abcd:7]].",
+        prompt="How does this method work?",
+        prompt_for_user="How does this method work?",
+        answer_hits=[{"text": "Retrieved method evidence.", "meta": {"source_path": "paper.md"}}],
+        db_dir=Path("db"),
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="L2",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=False,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="method",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={"citation_plan": citation_plan},
+        apply_paper_guide_answer_postprocess=lambda answer, **_kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **_kwargs: answer,
+        validate_structured_citations=lambda answer, **_kwargs: (answer, {"kept": 1}),
+    )
+
+    assert "[[CITE:" not in out["answer"]
+    assert "retrieved evidence" in out["answer"]
+
+
+def test_finalize_keeps_precomputed_origin_reference_candidates(monkeypatch):
+    citation_plan = {
+        "version": 1,
+        "intent": "origin_lookup",
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [{"preferred_system": "system_b", "candidate_refs": [50]}],
+    }
+    opportunity = {
+        "sid": "s1234abcd",
+        "ref_num": 50,
+        "source_path": "scinerf.md",
+        "label": "snapshot compressive imaging",
+        "evidence_quote": "video Snapshot Compressive Imaging (SCI) [50] system has emerged",
+    }
+    monkeypatch.setattr(
+        finalize_runtime,
+        "detect_text_reference_opportunities",
+        lambda **_kwargs: pytest.fail("precomputed origin reference must not be replaced after generation"),
+    )
+    seen: dict[str, object] = {}
+
+    def _validate(answer, **kwargs):
+        seen.update(kwargs)
+        return answer, {"kept": 1}
+
+    finalize_runtime._finalize_generation_answer(
+        "The SCI lineage builds on earlier snapshot compression [[CITE:s1234abcd:38]].",
+        prompt="SCI 是怎么从光谱成像走到 3D 场景重建的？",
+        prompt_for_user="SCI 是怎么从光谱成像走到 3D 场景重建的？",
+        answer_hits=[{"text": opportunity["evidence_quote"], "meta": {"source_path": "scinerf.md"}}],
+        db_dir=Path("db"),
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="L2",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=False,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="overview",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={"scinerf.md": [50]},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={
+            "citation_plan": citation_plan,
+            "reference_opportunities": [opportunity],
+        },
+        apply_paper_guide_answer_postprocess=lambda answer, **_kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **_kwargs: answer,
+        validate_structured_citations=_validate,
+    )
+
+    assert seen["paper_guide_candidate_refs_by_source"] == {"scinerf.md": [50]}
+
+
 def test_finalize_fast_exact_reuses_support_without_full_text_rescan(monkeypatch):
     support = {
         "source_path": "paper.md",

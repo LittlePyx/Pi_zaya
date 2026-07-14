@@ -36,11 +36,14 @@ def require_internal_api(request: Request) -> None:
 def internal_api_allowed(request: Request) -> bool:
     """Return whether this request may receive internal diagnostics."""
 
+    if not _env_bool("KB_ENABLE_INTERNAL_API", False):
+        return False
+
     settings = auth_settings()
     if bool(getattr(settings, "auth_required", False)):
         return bool(request_is_authenticated(request, settings=settings))
 
-    if not bool(getattr(settings, "production", False)) and _env_bool("KB_ENABLE_INTERNAL_API", False):
+    if not bool(getattr(settings, "production", False)):
         return True
 
     return False

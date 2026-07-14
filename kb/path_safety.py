@@ -20,6 +20,8 @@ IMAGE_EXT_BY_PIL_FORMAT = {
     "BMP": ".bmp",
 }
 
+ROOT_RELATIVE_FILE_ID_PREFIX = "kb-source/"
+
 
 def resolved_path(value: Path | str | None) -> Path | None:
     raw = str(value or "").strip()
@@ -44,6 +46,57 @@ def unique_resolved_roots(values: list[Path | str | None]) -> list[Path]:
         seen.add(key)
         roots.append(root)
     return roots
+
+
+def root_relative_file_id(
+    path_obj: Path | str | None,
+    roots: list[Path | str | None],
+) -> str:
+    path = resolved_path(path_obj)
+    if path is None:
+        return ""
+    for index, root in enumerate(unique_resolved_roots(roots)):
+        try:
+            relative = path.relative_to(root)
+        except Exception:
+            continue
+        parts = [part for part in relative.parts if part not in {"", "."}]
+        if not parts or any(part == ".." for part in parts):
+            return ""
+        return f"{ROOT_RELATIVE_FILE_ID_PREFIX}{index}/{'/'.join(parts)}"
+    return ""
+
+
+def resolve_root_relative_file_id(
+    value: Path | str | None,
+    roots: list[Path | str | None],
+) -> Path | None:
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw.startswith(ROOT_RELATIVE_FILE_ID_PREFIX):
+        return None
+    tail = raw[len(ROOT_RELATIVE_FILE_ID_PREFIX) :]
+    root_index_raw, separator, relative_raw = tail.partition("/")
+    if not separator or not root_index_raw.isdigit():
+        return None
+    root_list = unique_resolved_roots(roots)
+    root_index = int(root_index_raw)
+    if root_index < 0 or root_index >= len(root_list):
+        return None
+    parts = relative_raw.split("/")
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return None
+    root = root_list[root_index]
+    return resolve_existing_file_under_roots(root.joinpath(*parts), [root])
+
+
+def reference_source_roots(
+    *,
+    md_root: Path | str | None,
+    db_dir: Path | str | None,
+) -> list[Path]:
+    db_path = resolved_path(db_dir)
+    tmp_root = db_path.parent / "tmp" if db_path is not None else None
+    return unique_resolved_roots([md_root, tmp_root])
 
 
 def path_is_within_roots(path_obj: Path | str | None, roots: list[Path | str | None]) -> bool:

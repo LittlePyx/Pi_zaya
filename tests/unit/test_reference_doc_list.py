@@ -2159,7 +2159,14 @@ def test_build_doc_list_refs_payload_keeps_cached_library_bibliometrics(monkeypa
 
     hit = list(out.get("hits") or [])[0]
     ui_meta = dict(hit.get("ui_meta") or {})
-    assert ui_meta.get("citation_meta") == citation_meta
-    assert ui_meta["citation_meta"]["doi"] == "10.1038/s41566-018-0300-7"
+    assert ui_meta.get("citation_meta") == {
+        "title": "Principles and prospects for single-pixel imaging",
+        "doi": "10.1038/s41566-018-0300-7",
+        "doi_url": "https://doi.org/10.1038/s41566-018-0300-7",
+        "citation_count": 910,
+        "journal_if": 32.9,
+        "journal_quartile": "Q1",
+    }
+    assert "citation_source" not in ui_meta["citation_meta"]
     assert ui_meta["citation_meta"]["citation_count"] == 910
     assert ui_meta["citation_meta"]["journal_if"] == 32.9

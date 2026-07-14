@@ -188,6 +188,48 @@ def test_prepare_paper_guide_prompt_context_builds_reference_opportunity_block(m
     assert out["paper_guide_contracts_seed"]["reference_opportunities"][0]["ref_num"] == 4
 
 
+def test_prepare_ordinary_lineage_context_builds_grounded_reference_plan(monkeypatch):
+    source_path = r"db\demo\scinerf.en.md"
+    opportunity = {
+        "source_path": source_path,
+        "sid": "s1234abcd",
+        "ref_num": 50,
+        "label": "Snapshot compressive imaging",
+        "heading_path": "Introduction",
+        "evidence_quote": "video Snapshot Compressive Imaging (SCI) [50] system has emerged",
+    }
+    monkeypatch.setattr(
+        context_runtime,
+        "detect_text_reference_opportunities",
+        lambda **_kwargs: [opportunity],
+    )
+
+    out = context_runtime._prepare_paper_guide_prompt_context(
+        paper_guide_mode=False,
+        paper_guide_bound_source_ready=False,
+        answer_hits=[
+            {
+                "text": "SCINeRF connects SCI to a 3D representation.",
+                "meta": {"source_path": source_path, "heading_path": "Introduction"},
+            }
+        ],
+        paper_guide_evidence_cards=[],
+        prompt="SCI 这条线是怎么从光谱成像走到 3D 场景重建的？",
+        retrieval_prompt="SCI lineage",
+        used_query="SCI lineage",
+        prompt_family="overview",
+        paper_guide_bound_source_path="",
+        db_dir="db",
+    )
+
+    plan = out["citation_plan"]
+    assert plan["intent"] == "origin_lookup"
+    assert plan["system_b_enabled"] is True
+    assert "cite_example=[[CITE:s1234abcd:50]]" in out["citation_plan_block"]
+    assert "cite_example=[10001]" in out["citation_plan_block"]
+    assert "Upstream reference opportunities:" in out["paper_guide_reference_opportunities_block"]
+
+
 def test_prepare_paper_guide_prompt_context_keeps_bound_focus_when_first_hit_is_external(monkeypatch):
     captured: dict[str, str] = {}
 

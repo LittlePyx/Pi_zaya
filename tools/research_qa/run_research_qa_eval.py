@@ -1057,6 +1057,37 @@ def validate_case(
     forbidden_hits = [phrase for phrase in fixture.forbidden_phrases if _contains_term(answer, phrase)]
     add_check("answer_no_template_phrase", not forbidden_hits, forbidden_hits)
 
+    assistant_message = result.get("assistant_message") if isinstance(result.get("assistant_message"), dict) else {}
+    assistant_meta = assistant_message.get("meta") if isinstance(assistant_message.get("meta"), dict) else {}
+    guide_contracts = (
+        assistant_meta.get("paper_guide_contracts")
+        if isinstance(assistant_meta.get("paper_guide_contracts"), dict)
+        else {}
+    )
+    render_packet = (
+        guide_contracts.get("render_packet")
+        if isinstance(guide_contracts.get("render_packet"), dict)
+        else {}
+    )
+    has_rendered_answer = any(
+        str(render_packet.get(key) or "").strip()
+        for key in ("rendered_body", "rendered_content", "answer_markdown")
+    )
+    unresolved_citation_markers = re.findall(
+        r"\[\[(?:CITE|SUPPORT):[^\]]+\]\]",
+        answer,
+        flags=re.IGNORECASE,
+    )
+    if has_rendered_answer:
+        unresolved_citation_markers.extend(
+            re.findall(r"(?<!\[)\[(?:R)?\d+\](?!\s*\()", answer, flags=re.IGNORECASE)
+        )
+    add_check(
+        "answer_no_unresolved_citation_markers",
+        not unresolved_citation_markers,
+        unresolved_citation_markers,
+    )
+
     direct_starts = ("the paper cites", "this is stated in", "该文在", "文献中提到")
     add_check("answer_directly_addresses_question", not _norm(answer).startswith(direct_starts), answer[:120])
 

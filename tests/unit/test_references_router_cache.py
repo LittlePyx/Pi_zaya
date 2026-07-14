@@ -54,6 +54,70 @@ def test_get_conversation_refs_reuses_cached_payload_when_signature_is_unchanged
     assert calls["n"] == 1
 
 
+def test_get_conversation_refs_applies_public_payload_projection(monkeypatch):
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    source_path = r"F:\private\library\Paper.en.md"
+    refs = {
+        1: {
+            "prompt": "Where is the method described?",
+            "hits": [
+                {"text": "hit", "meta": {"source_path": source_path, "ref_pack_state": "ready"}}
+            ],
+        }
+    }
+    store = _FakeStore({"mode": "chat"}, refs)
+
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(references_router, "_pdf_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_md_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_lib_store", lambda: None)
+    monkeypatch.setattr(references_router, "_warm_conversation_refs_payload_async", lambda **kwargs: None)
+    monkeypatch.setattr(
+        references_router,
+        "hydrate_refs_payload_citation_meta",
+        lambda payload, **kwargs: dict(payload or {}),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "enrich_refs_payload",
+        lambda *args, **kwargs: {
+            1: {
+                "pipeline_debug": {"reranker": "internal"},
+                "scores": [8.0],
+                "rendered_payload": {"private": True},
+                "hits": [
+                    {
+                        "meta": {
+                            "source_path": source_path,
+                            "explicit_doc_match_score": 15.0,
+                        },
+                        "ui_meta": {
+                            "source_path": source_path,
+                            "polish_detail": "internal",
+                            "primary_evidence": {
+                                "source_path": source_path,
+                                "heading_path": "Methods",
+                            },
+                        },
+                    }
+                ],
+            }
+        },
+    )
+
+    out = references_router.get_conversation_refs("conv-public-projection")
+
+    pack = out[1]
+    assert "pipeline_debug" not in pack
+    assert "scores" not in pack
+    assert "rendered_payload" not in pack
+    assert "explicit_doc_match_score" not in pack["hits"][0]["meta"]
+    assert "polish_detail" not in pack["hits"][0]["ui_meta"]
+    assert pack["hits"][0]["ui_meta"]["source_path"] == "Paper.en.md"
+    assert "source_path" not in pack["hits"][0]["ui_meta"]["primary_evidence"]
+
+
 def test_get_conversation_refs_exposes_route_timing_headers(monkeypatch):
     references_router._REFS_CONVERSATION_CACHE.clear()
     references_router._REFS_CONVERSATION_WARMING.clear()
@@ -982,7 +1046,27 @@ def test_get_conversation_refs_falls_back_to_cached_payload_when_refs_db_is_busy
             del conv_id, timeout_s
             raise sqlite3.OperationalError("database is locked")
 
-    cached_payload = {9: {"hits": [{"ui_meta": {"summary_line": "cached"}}]}}
+    source_path = r"F:\private\cached\Paper.en.md"
+    cached_payload = {
+        9: {
+            "render_error": "cached_render_failure",
+            "render_error_detail": r"failed at F:\private\cached\trace.json",
+            "render_attempts": 2,
+            "render_evidence_sig": "cached-private-signature",
+            "hits": [
+                {
+                    "ui_meta": {
+                        "summary_line": "cached",
+                        "source_path": source_path,
+                        "primary_evidence": {
+                            "source_path": source_path,
+                            "heading_path": "Methods",
+                        },
+                    }
+                }
+            ],
+        }
+    }
     references_router._store_cached_conversation_refs_payload(
         conv_id="conv-busy",
         signature="sig",
@@ -993,7 +1077,14 @@ def test_get_conversation_refs_falls_back_to_cached_payload_when_refs_db_is_busy
 
     out = references_router.get_conversation_refs("conv-busy")
 
-    assert out == cached_payload
+    pack = out[9]
+    assert pack["hits"][0]["ui_meta"]["summary_line"] == "cached"
+    assert pack["hits"][0]["ui_meta"]["source_path"] == "Paper.en.md"
+    assert "source_path" not in pack["hits"][0]["ui_meta"]["primary_evidence"]
+    assert "render_error" not in pack
+    assert "render_error_detail" not in pack
+    assert "render_attempts" not in pack
+    assert "render_evidence_sig" not in pack
 
 
 def test_get_conversation_refs_uses_persisted_full_payload_without_reenrich(monkeypatch):
@@ -1012,10 +1103,30 @@ def test_get_conversation_refs_uses_persisted_full_payload_without_reenrich(monk
             "scores": [9.0],
         }
     }
-    rendered_payload = {11: {"hits": [{"ui_meta": {"summary_line": "full-persisted"}}]}}
+    source_path = r"db\SciAdv-2017\SciAdv-2017.en.md"
+    nested_private_path = r"F:\private\stored\SciAdv-2017.en.md"
+    rendered_payload = {
+        11: {
+            "hits": [
+                {
+                    "ui_meta": {
+                        "summary_line": "full-persisted",
+                        "source_path": source_path,
+                        "primary_evidence": {
+                            "source_path": nested_private_path,
+                            "heading_path": "Introduction",
+                        },
+                    }
+                }
+            ]
+        }
+    }
     refs[11]["rendered_payload"] = dict(rendered_payload[11])
     refs[11]["render_status"] = "full"
+    refs[11]["render_error"] = "stale-private-error"
+    refs[11]["render_error_detail"] = r"failed at F:\private\stored\trace.json"
     refs[11]["render_attempts"] = 1
+    refs[11]["render_evidence_sig"] = "stored-private-signature"
     refs[11]["rendered_payload_sig"] = references_router._refs_pack_render_signature(
         user_msg_id=11,
         pack=refs[11],
@@ -1037,8 +1148,13 @@ def test_get_conversation_refs_uses_persisted_full_payload_without_reenrich(monk
 
     assert out[11]["display_state"] == "ready"
     assert out[11]["render_status"] == "full"
-    assert out[11]["render_attempts"] == 1
+    assert "render_error" not in out[11]
+    assert "render_error_detail" not in out[11]
+    assert "render_attempts" not in out[11]
+    assert "render_evidence_sig" not in out[11]
     assert out[11]["hits"][0]["ui_meta"]["summary_line"] == "full-persisted"
+    assert out[11]["hits"][0]["ui_meta"]["source_path"] == source_path
+    assert "source_path" not in out[11]["hits"][0]["ui_meta"]["primary_evidence"]
     assert out[11]["hits"][0]["ui_meta"]["polish_status"] == "heuristic"
 
 
@@ -1136,6 +1252,9 @@ def test_get_conversation_refs_returns_fast_ready_payload_and_kicks_background_w
             "prompt": "Which paper defines dynamic supersampling?",
             "render_status": "failed",
             "render_error": "render_payload_empty",
+            "render_error_detail": r"failed at F:\private\failed\trace.json",
+            "render_attempts": 4,
+            "render_evidence_sig": "failed-private-signature",
             "hits": [
                 {"text": "hit", "meta": {"source_path": r"db\SciAdv-2017\SciAdv-2017.en.md", "ref_pack_state": "ready"}}
             ],
@@ -1155,7 +1274,22 @@ def test_get_conversation_refs_returns_fast_ready_payload_and_kicks_background_w
         del args
         if bool(kwargs.get("allow_exact_locate")) is False:
             fast_kwargs.update(dict(kwargs))
-            return {3: {"mode": "fast", "hits": [{"ui_meta": {"summary_line": "fast"}}]}}
+            return {
+                3: {
+                    "mode": "fast",
+                    "hits": [
+                        {
+                            "ui_meta": {
+                                "summary_line": "fast",
+                                "primary_evidence": {
+                                    "source_path": r"F:\private\failed\Paper.en.md",
+                                    "heading_path": "Methods",
+                                },
+                            }
+                        }
+                    ],
+                }
+            }
         return {3: {"mode": "full", "hits": [{"ui_meta": {"summary_line": "full"}}]}}
 
     monkeypatch.setattr(references_router, "enrich_refs_payload", fake_enrich_refs_payload)
@@ -1165,9 +1299,13 @@ def test_get_conversation_refs_returns_fast_ready_payload_and_kicks_background_w
     assert out[3]["mode"] == "fast"
     assert out[3]["payload_mode"] == "fast"
     assert out[3]["render_status"] == "failed"
-    assert out[3]["render_error"] == "render_payload_empty"
+    assert "render_error" not in out[3]
+    assert "render_error_detail" not in out[3]
+    assert "render_attempts" not in out[3]
+    assert "render_evidence_sig" not in out[3]
     assert out[3]["display_state"] == "ready"
     assert out[3]["hits"][0]["ui_meta"]["summary_line"] == "fast"
+    assert "source_path" not in out[3]["hits"][0]["ui_meta"]["primary_evidence"]
     assert out[3]["hits"][0]["ui_meta"]["polish_status"] == "failed"
     assert warm_calls == []
     assert fast_kwargs.get("render_variant") == "fast"

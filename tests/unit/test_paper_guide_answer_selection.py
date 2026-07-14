@@ -2,6 +2,7 @@ from kb.paper_guide_answer_selection import (
     _build_answer_hits_for_generation,
     _has_anchor_grounded_answer_hits,
     _paper_guide_focus_heading,
+    _rescue_multi_source_answer_hits,
     _select_paper_guide_answer_hits,
     _stabilize_paper_guide_output_mode,
 )
@@ -236,6 +237,64 @@ def test_build_answer_hits_for_generation_keeps_one_hit_per_source_by_default():
     )
 
     assert [str(item.get("text") or "") for item in out] == ["A1", "B1"]
+
+
+def test_multi_source_answer_rescue_replaces_low_value_representative_from_same_source():
+    structured_source = r"db\structured-detection.md"
+    grouped_docs = [
+        {
+            "score": 80.0,
+            "text": "A useful interferometric microscopy explanation.",
+            "meta": {"source_path": r"db\interferometric.md", "heading_path": "Abstract"},
+        },
+        {
+            "score": 90.0,
+            "text": (
+                "Data from: structured detection for simultaneous super-resolution and optical sectioning. "
+                "Zenodo https://doi.org/example. Acknowledgements We thank the sample providers."
+            ),
+            "meta": {"source_path": structured_source},
+        },
+    ]
+    raw_hits = [
+        {
+            "score": 120.0,
+            "text": "# Structured detection for laser scanning microscopy",
+            "meta": {"source_path": structured_source},
+        },
+        {
+            "score": 110.0,
+            "text": "[1] A reference-list entry about structured illumination.",
+            "meta": {"source_path": structured_source, "heading_path": "References"},
+        },
+        {
+            "score": 65.0,
+            "text": (
+                "Imaging a thick three-dimensional sample requires optical sectioning to reject out-of-focus light. "
+                "Structured detection provides simultaneous super-resolution and optical sectioning."
+            ),
+            "meta": {"source_path": structured_source, "heading_path": "Introduction", "block_id": "intro-1"},
+        },
+        {
+            "score": 999.0,
+            "text": "An unrelated deep-learning single-pixel imaging passage.",
+            "meta": {"source_path": r"db\dl-spi.md", "heading_path": "Methods"},
+        },
+    ]
+
+    out = _rescue_multi_source_answer_hits(
+        grouped_docs=grouped_docs,
+        raw_hits=raw_hits,
+        prompt="What problems do structured detection and interferometric microscopy solve?",
+    )
+
+    assert [str((item.get("meta") or {}).get("source_path") or "") for item in out] == [
+        r"db\interferometric.md",
+        structured_source,
+    ]
+    assert str((out[1].get("meta") or {}).get("block_id") or "") == "intro-1"
+    assert (out[1].get("meta") or {}).get("multi_source_representative_rescue") is True
+    assert all("dl-spi" not in str((item.get("meta") or {}).get("source_path") or "") for item in out)
 
 
 def test_has_anchor_grounded_answer_hits_detects_positive_anchor_match():

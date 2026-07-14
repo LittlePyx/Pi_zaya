@@ -545,6 +545,11 @@ def _score_reference_label_match(label: str, ref: Mapping[str, object]) -> float
         score += 3.0
     title_loose = _loose_ascii_text(title)
     surface_loose = _loose_ascii_text(surface)
+    label_loose = _loose_ascii_text(label_norm)
+    if label_loose and title_loose == label_loose:
+        score += 30.0
+    elif label_loose and title_loose.startswith(label_loose + " "):
+        score += 20.0
     for expansion in _expansions_for_label(label_norm):
         expansion_loose = _loose_ascii_text(expansion)
         if not expansion_loose:
@@ -826,11 +831,13 @@ def detect_text_reference_opportunities(
             if not strong_trace_intent and len(shared_focus) < 3 and not label_matches:
                 return
             hit_overlap = len(_tokens(hit_surface).intersection(combined_tokens))
+            reference_focus_score = max(float(current_label_score), float(best_focus_score))
             score = (
                 8.0
                 - (0.25 * float(hit_index))
                 + min(8.0, 1.1 * float(len(shared_focus)))
                 + min(3.0, 0.6 * float(hit_overlap))
+                + min(12.0, max(0.0, reference_focus_score) / 3.0)
                 + (4.0 if label_matches_prompt else 0.0)
                 + (2.0 if strong_trace_intent else 0.0)
                 + (2.0 if label_matches else 0.0)

@@ -21,6 +21,39 @@ def test_extract_structured_cite_answer_context_line_strips_internal_tokens() ->
     assert "CITE" not in out
 
 
+def test_extract_structured_cite_answer_context_stops_before_next_sentence() -> None:
+    sid = "abc12345"
+    token = f"[[CITE:{sid}:4]]"
+    text = (
+        "1. The detector review explains waveguide cut-off frequency "
+        f"{token}. The next sentence discusses deep learning instead."
+    )
+
+    out = extract_structured_cite_answer_context_line(
+        text,
+        text.index(token),
+        text.index(token) + len(token),
+    )
+
+    assert "waveguide cut-off frequency" in out
+    assert "deep learning" not in out
+
+
+def test_extract_structured_cite_answer_context_marker_after_period_stops_before_next_sentence() -> None:
+    sid = "abc12345"
+    token = f"[[CITE:{sid}:4]]"
+    text = f"Earlier sentence. The detector evidence ends here. {token} Next sentence is unrelated."
+
+    out = extract_structured_cite_answer_context_line(
+        text,
+        text.index(token),
+        text.index(token) + len(token),
+    )
+
+    assert out == "The detector evidence ends here."
+    assert "unrelated" not in out
+
+
 def test_strip_structured_cite_tokens_removes_garbage_forms() -> None:
     out = strip_structured_cite_tokens("Use [CITE:abc12345:2] and [[CITE:abc12345]] plus [[CITE:broken]]")
 

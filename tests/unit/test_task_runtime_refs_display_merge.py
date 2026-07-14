@@ -121,6 +121,35 @@ def test_refs_display_docs_preserve_all_non_contiguous_sources_selected_by_answe
     assert [item["meta"]["ref_answer_citation_num"] for item in merged] == [2, 6, 3, 5]
 
 
+def test_multi_source_synthesis_refs_follow_planned_system_a_sources() -> None:
+    planned = ["db/iism.en.md", "db/qclfm.en.md", "db/s2ism.en.md"]
+    plan = {
+        "slots": [
+            {"preferred_system": "system_a", "source_path": source_path}
+            for source_path in planned
+        ]
+    }
+    answer_hits = [
+        _hit("db/iism.en.md", "iISM evidence"),
+        _hit("db/qclfm.en.md", "QCLFM evidence"),
+        _hit("db/s2ism.en.md", "s2ISM evidence"),
+        _hit("db/unrelated.en.md", "unrelated evidence"),
+    ]
+
+    merged = _merge_refs_display_docs_with_answer_hits(
+        refs_seed_docs=[answer_hits[1], answer_hits[0], answer_hits[3]],
+        answer_hits=answer_hits,
+        limit=6,
+        answer="iISM [1] and QCLFM [2] form the methods map; s2ISM is added during grounded rendering.",
+        allowed_source_paths=_citation_plan_system_a_source_paths(plan),
+        required_source_paths=_citation_plan_system_a_source_paths(plan),
+    )
+
+    assert [item["meta"]["source_path"] for item in merged] == planned
+    assert [item["meta"].get("ref_answer_citation_num") for item in merged] == [1, 2, None]
+    assert merged[2]["meta"]["ref_display_reason"] == "citation_plan_source"
+
+
 def test_selected_context_comparison_keeps_only_cited_allowed_docs_in_answer_order():
     scigs = "db/ICIP-2025-SCIGS/SCIGS.en.md"
     scinerf = "db/CVPR-2024-SCINeRF/SCINeRF.en.md"

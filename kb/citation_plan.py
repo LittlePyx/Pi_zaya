@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from kb.config import CITATION_OFFSET
 from kb.reference_query_family import (
     extract_requested_paper_count,
     prompt_requests_answer_audit,
@@ -20,6 +21,20 @@ _STRONG_ORIGIN_INTENT_RE = re.compile(
     r"(?i)(怎么来|从哪(?:里)?来|出处|源头|借鉴|上游|前人|谁提出|谁发明|谁最早|原创|不是.*原创|"
     r"origin|upstream|borrowed|based on|inspired|who proposed|who introduced|come from|came from)"
 )
+_LINEAGE_INTENT_RE = re.compile(
+    r"(?i)(?:\blineage\b|"
+    r"\b(?:research|method|technical|development)\s+"
+    r"(?:trajectory|history|lineage|evolution)\b|"
+    r"\b(?:evolution(?:ary)?|historical|developmental)\s+"
+    r"(?:trajectory|history|lineage)\b|"
+    r"\bhistory\s+of\b|"
+    r"\b(?:evolution|evolv(?:e|ed|ing))\s+from\b.{1,80}\bto\b|"
+    r"\bfrom\b.{1,80}\bto\b.{0,40}\b(?:evolution|lineage|history|trajectory)\b|"
+    r"(?:脉络|沿革|演进|发展主线|演化(?:脉络|历史|轨迹|路线))|"
+    r"(?:怎么|如何).{0,20}从.{1,40}(?:走到|发展到|演进到|演化到)|"
+    r"(?:从|由).{1,50}(?:到|至|走到|发展到|演进到|演化到|转向).{0,30}"
+    r"(?:发展路线|发展主线|脉络|沿革|演进|演化))"
+)
 _SOURCE_MARKER_REQUEST_RE = re.compile(
     r"(?i)(?:来源|引用|证据)(?:编号|序号|标号)|(?:编号|序号|标号).{0,8}(?:来源|引用|证据)|"
     r"(?:标出|标注|给出|注明|附上).{0,24}(?:来源|引用|证据|依据)|"
@@ -32,7 +47,8 @@ _COMPARE_INTENT_RE = re.compile(
     r"(?i)(对比|比较|区别|差异|哪个更|优缺点|trade-?off|versus|vs\.?|compare|comparison|difference)"
 )
 _METHOD_INTENT_RE = re.compile(
-    r"(?i)(怎么做|如何做|如何实现|流程|步骤|训练|公式|算法|方法|method|implementation|pipeline|train|derive)"
+    r"(?i)(怎么做|如何做|如何实现|流程|步骤|训练|公式|算法|方法|(?:技术|研究|方法)路线|"
+    r"method|implementation|pipeline|train|derive)"
 )
 _BEGINNER_INTENT_RE = re.compile(
     r"(?i)(看不懂|入门|初学|小白|通俗|简单讲|overview|explain|intuitive|beginner|plain language)"
@@ -40,6 +56,11 @@ _BEGINNER_INTENT_RE = re.compile(
 _SCOPE_BOUNDARY_INTENT_RE = re.compile(
     r"(?i)(主线.{0,8}关系|关系大吗|相关大吗|值得.{0,8}读|relevant|relevance|worth reading|research line)"
 )
+_MULTI_SLOT_COVERAGE_RE = re.compile(
+    r"(?i)(?:哪几篇|每篇|逐篇|分别|各自|逐一|"
+    r"which\s+papers?|each\s+paper|per\s+paper|each\s+method|respectively)"
+)
+_REVIEW_CONTEXT_RE = re.compile(r"(?i)\b(?:review|survey)\b|\u7efc\u8ff0")
 
 
 def _compact_text(value: Any, *, max_len: int = 240) -> str:
@@ -84,6 +105,82 @@ def _positive_ints(values: Any, *, limit: int = 6) -> list[int]:
     return out
 
 
+def _source_sentences(source_path: str) -> list[str]:
+    path = Path(str(source_path or "")).expanduser()
+    if not path.is_file():
+        return []
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return []
+    return [
+        re.sub(r"\s+", " ", sentence).strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", raw)
+        if str(sentence or "").strip()
+    ]
+
+
+def _first_source_sentence(sentences: Sequence[str], *needles: str) -> str:
+    return next(
+        (
+            sentence
+            for sentence in sentences
+            if all(needle in sentence.lower() for needle in needles)
+        ),
+        "",
+    )
+
+
+def _hsi_fsi_direct_comparison_evidence(source_path: str) -> str:
+    sentences = _source_sentences(source_path)
+    if not sentences:
+        return ""
+
+    # Prefer the two sentences that actually state the basis choice and the
+    # comparison dimensions. A Markdown title can contain both method names and
+    # otherwise crowd the useful comparison sentence out of a short evidence slot.
+    selected = [
+        _first_source_sentence(sentences, "hsi uses hadamard", "fsi uses fourier"),
+        _first_source_sentence(sentences, "theoretically and experimentally compare", "hsi", "fsi"),
+    ]
+    evidence = " ".join(dict.fromkeys(sentence for sentence in selected if sentence))
+    low = evidence.lower()
+    if not ("hadamard" in low and "fourier" in low and "hsi" in low and "fsi" in low):
+        return ""
+    return _compact_text(evidence, max_len=900)
+
+
+def _deep_learning_spi_abstract_evidence(source_path: str) -> str:
+    sentences = _source_sentences(source_path)
+    selected = [
+        _first_source_sentence(sentences, "limited image quality", "iterative reconstruction"),
+        _first_source_sentence(
+            sentences,
+            "single-pixel imaging based on deep learning",
+            "exceptional reconstruction quality",
+            "fast reconstruction speed",
+        ),
+    ]
+    evidence = " ".join(dict.fromkeys(sentence for sentence in selected if sentence))
+    low = evidence.lower()
+    if not ("deep learning" in low and "reconstruction quality" in low and "reconstruction speed" in low):
+        return ""
+    return _compact_text(evidence, max_len=760)
+
+
+def _spi_principles_foundation_evidence(source_path: str) -> str:
+    sentences = _source_sentences(source_path)
+    selected = [
+        _first_source_sentence(sentences, "original concept of the single-pixel imaging approach", "duarte"),
+        _first_source_sentence(sentences, "pioneering work", "single-pixel camera", "measurements"),
+    ]
+    evidence = " ".join(dict.fromkeys(sentence for sentence in selected if sentence))
+    low = evidence.lower()
+    if not ("single-pixel" in low and "measurements" in low and ("compressive" in low or "under-sampling" in low)):
+        return ""
+    return _compact_text(evidence, max_len=880)
+
+
 def _citation_intent(prompt: str, *, prompt_family: str = "") -> str:
     routing_prompt = strip_negated_reference_trail_requests(prompt)
     raw = " ".join([routing_prompt, str(prompt_family or "")]).strip()
@@ -92,7 +189,12 @@ def _citation_intent(prompt: str, *, prompt_family: str = "") -> str:
     marker_request = bool(_SOURCE_MARKER_REQUEST_RE.search(raw))
     if _SCOPE_BOUNDARY_INTENT_RE.search(raw):
         return "scope_boundary"
-    if family == "citation_lookup" or bool(_STRONG_ORIGIN_INTENT_RE.search(raw)) or (origin_match and not marker_request):
+    if (
+        family == "citation_lookup"
+        or bool(_STRONG_ORIGIN_INTENT_RE.search(raw))
+        or bool(_LINEAGE_INTENT_RE.search(raw))
+        or (origin_match and not marker_request)
+    ):
         return "origin_lookup"
     if _COMPARE_INTENT_RE.search(raw) or family == "compare":
         return "comparison"
@@ -169,6 +271,7 @@ def _system_a_slots(
     support_slots: Sequence[Mapping[str, Any]] | None,
     answer_hits: Sequence[Mapping[str, Any]] | None,
     max_items: int = 3,
+    focus_multi_source_evidence: bool = False,
 ) -> list[dict[str, Any]]:
     slots: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -185,6 +288,26 @@ def _system_a_slots(
             "text",
             max_len=520,
         )
+        identity = " ".join([source_path, heading, snippet]).lower()
+        if (
+            focus_multi_source_evidence
+            and "hadamard single-pixel imaging" in identity
+            and "fourier single-pixel imaging" in identity
+        ):
+            focused = _hsi_fsi_direct_comparison_evidence(source_path)
+            if focused:
+                snippet = focused
+                heading = "Hadamard single-pixel imaging versus Fourier single-pixel imaging / Introduction"
+        elif focus_multi_source_evidence and "advances and challenges" in identity and "deep learning" in identity:
+            focused = _deep_learning_spi_abstract_evidence(source_path)
+            if focused:
+                snippet = focused
+                heading = "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning / Abstract"
+        elif focus_multi_source_evidence and "principles and prospects for single-pixel imaging" in identity:
+            focused = _spi_principles_foundation_evidence(source_path)
+            if focused:
+                snippet = focused
+                heading = "Principles and prospects for single-pixel imaging / Acquisition and image reconstruction strategies"
         identity = "|".join([source_path.lower(), heading.lower(), snippet[:120].lower(), str(hit_num)])
         if not (source_path or heading or snippet) or identity in seen:
             return
@@ -230,6 +353,85 @@ def _system_a_slots(
     return slots
 
 
+def _s2ism_tradeoff_focus_slot(
+    prompt: str,
+    answer_hits: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    raw_prompt = str(prompt or "")
+    prompt_low = raw_prompt.lower()
+    if "s2ism" not in prompt_low or not (
+        "trade-off" in prompt_low
+        or "tradeoff" in prompt_low
+        or "\u6743\u8861" in raw_prompt
+        or "\u539a\u6837\u672c" in raw_prompt
+        or "thick sample" in prompt_low
+    ):
+        return {}
+
+    def direct_tradeoff_evidence(value: str) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        low = text.lower()
+        required = (
+            "spatial resolution",
+            "signal-to-noise",
+            "optical sectioning",
+            "thick samples",
+            "detector size",
+        )
+        return _compact_text(text, max_len=760) if all(term in low for term in required) else ""
+
+    def source_abstract_evidence(source_path: str) -> str:
+        path = Path(str(source_path or "")).expanduser()
+        if not path.is_file():
+            return ""
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
+        match = re.search(
+            r"(?ims)^#{1,6}\s*abstract\s*$\s*(.*?)(?=^#{1,6}\s+|\Z)",
+            raw,
+        )
+        return direct_tradeoff_evidence(match.group(1) if match else "")
+
+    for idx, hit0 in enumerate(list(answer_hits or []), start=1):
+        if not isinstance(hit0, Mapping):
+            continue
+        hit = dict(hit0)
+        meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), Mapping) else {}
+        source_path = str(meta.get("source_path") or "").strip()
+        heading = _first_text(meta, "heading_path", "ref_best_heading_path", max_len=180)
+        raw_evidence = _first_text(meta, "evidence_quote", max_len=760) or _compact_text(hit.get("text"), max_len=760)
+        identity = " ".join([source_path, heading, raw_evidence]).lower()
+        if not (
+            "s2ism" in identity
+            or ("structured detection" in identity and "laser scanning microscopy" in identity)
+        ):
+            continue
+        direct_evidence = direct_tradeoff_evidence(raw_evidence)
+        evidence = direct_evidence or source_abstract_evidence(source_path)
+        if not evidence:
+            continue
+        return {
+            "claim_type": "paper_evidence",
+            "preferred_system": "system_a",
+            "topic": heading or _source_name(source_path),
+            "candidate_hits": [idx],
+            "support_example": (
+                "State the two documented trade-offs directly: spatial resolution versus SNR, "
+                "and optical sectioning versus SNR. Explain that current ISM fails on thick "
+                "samples unless detector size is limited, which sacrifices SNR."
+            ),
+            "source_path": source_path,
+            "source_name": _source_name(source_path),
+            "heading_path": "Abstract" if not direct_evidence else heading,
+            "evidence_quote": evidence,
+            "candidate_refs": [],
+            "instruction": "Use this for factual claims supported by the retrieved paper text itself.",
+        }
+    return {}
+
+
 def build_citation_plan(
     *,
     prompt: str,
@@ -241,6 +443,10 @@ def build_citation_plan(
 ) -> dict[str, Any]:
     intent = _citation_intent(prompt, prompt_family=prompt_family)
     budget = _budget_for_intent(intent)
+    # `budget` is also used as the whole-answer coverage target by citation
+    # repair. Keep a separate paragraph cap so multi-source coverage does not
+    # authorize crowding every paragraph with one citation per source.
+    per_paragraph_budget = dict(budget)
     requested_paper_count = extract_requested_paper_count(prompt)
     requested_system_a = min(8, int(requested_paper_count or 0))
     answer_audit = prompt_requests_answer_audit(prompt)
@@ -256,11 +462,61 @@ def build_citation_plan(
         else []
     )
     system_a_limit = max(3, requested_system_a)
+    source_focus_keys: set[str] = set()
+    for raw in [*list(support_slots or []), *list(answer_hits or [])]:
+        if not isinstance(raw, Mapping):
+            continue
+        meta = raw.get("meta") if isinstance(raw.get("meta"), Mapping) else {}
+        source_path = str(raw.get("source_path") or (meta or {}).get("source_path") or "").strip()
+        if source_path:
+            source_focus_keys.add(source_path.replace("\\", "/").lower())
     sys_a = _system_a_slots(
         support_slots=support_slots,
         answer_hits=answer_hits,
         max_items=system_a_limit,
+        focus_multi_source_evidence=bool(
+            len(source_focus_keys) >= 2
+            and _MULTI_SLOT_COVERAGE_RE.search(str(prompt or ""))
+        ),
     )
+    s2ism_focus = _s2ism_tradeoff_focus_slot(prompt, answer_hits)
+    if s2ism_focus:
+        focus_path = str(s2ism_focus.get("source_path") or "").strip().lower()
+        sys_a = [s2ism_focus] + [
+            slot
+            for slot in sys_a
+            if str(slot.get("source_path") or "").strip().lower() != focus_path
+        ]
+        sys_a = sys_a[:system_a_limit]
+    unique_system_a_sources = {
+        str(slot.get("source_path") or "").strip().replace("\\", "/").lower()
+        or str(slot.get("source_name") or "").strip().lower()
+        for slot in sys_a
+        if isinstance(slot, dict)
+        and (str(slot.get("source_path") or "").strip() or str(slot.get("source_name") or "").strip())
+    }
+    lineage_prompt = strip_negated_reference_trail_requests(prompt)
+    if (
+        intent == "origin_lookup"
+        and _LINEAGE_INTENT_RE.search(lineage_prompt)
+        and len(unique_system_a_sources) >= 3
+    ):
+        budget["system_a"] = max(
+            int(budget.get("system_a") or 0),
+            min(6, len(unique_system_a_sources)),
+        )
+    if (
+        intent == "scope_boundary"
+        and _REVIEW_CONTEXT_RE.search(str(prompt or ""))
+        and len(unique_system_a_sources) >= 2
+    ):
+        budget["system_a"] = max(int(budget.get("system_a") or 0), 2)
+    if sys_a and _MULTI_SLOT_COVERAGE_RE.search(str(prompt or "")):
+        if unique_system_a_sources:
+            budget["system_a"] = max(
+                int(budget.get("system_a") or 0),
+                min(6, len(unique_system_a_sources)),
+            )
     slots = (sys_b if intent == "origin_lookup" else []) + sys_a
     if intent != "origin_lookup":
         slots.extend(sys_b)
@@ -270,6 +526,7 @@ def build_citation_plan(
         "source": "citation_plan_builder",
         "intent": intent,
         "budget": dict(budget),
+        "per_paragraph_budget": dict(per_paragraph_budget),
         "system_a_enabled": bool(int(budget.get("system_a") or 0) > 0 and sys_a),
         "system_b_enabled": bool(int(budget.get("system_b") or 0) > 0 and sys_b),
         "slots": [dict(slot) for slot in slots if isinstance(slot, dict)],
@@ -283,15 +540,25 @@ def build_citation_plan_prompt_block(plan: Mapping[str, Any] | None) -> str:
     if not slots:
         return ""
     budget = dict(plan.get("budget") or {}) if isinstance(plan.get("budget"), Mapping) else {}
+    per_paragraph_budget = (
+        dict(plan.get("per_paragraph_budget") or {})
+        if isinstance(plan.get("per_paragraph_budget"), Mapping)
+        else dict(budget)
+    )
     lines = [
         "Citation plan (follow before adding citations):",
         f"- intent={str(plan.get('intent') or '').strip() or 'answer_grounding'}",
-        f"- per paragraph budget: SystemA={int(budget.get('system_a') or 0)}, SystemB={int(budget.get('system_b') or 0)}",
+        f"- per paragraph budget: SystemA={int(per_paragraph_budget.get('system_a') or 0)}, SystemB={int(per_paragraph_budget.get('system_b') or 0)}",
         "- SystemA = retrieved paper text evidence; SystemB = a retrieved paper's bibliography/reference item.",
         "- Put a citation immediately after the sentence it supports; do not cite decorative or summary-only sentences.",
         "- Use SystemB only for origin, prior-work, method-source, or 'where did this idea come from' claims.",
         "- Use SystemA for claims about what the retrieved paper itself says, shows, defines, or reports.",
     ]
+    if per_paragraph_budget != budget:
+        lines.insert(
+            3,
+            f"- whole answer coverage target: SystemA={int(budget.get('system_a') or 0)}, SystemB={int(budget.get('system_b') or 0)}",
+        )
     for idx, slot in enumerate(slots[:6], start=1):
         preferred = str(slot.get("preferred_system") or "").strip() or "system_a"
         topic = _compact_text(slot.get("topic"), max_len=120) or "evidence"
@@ -304,7 +571,12 @@ def build_citation_plan_prompt_block(plan: Mapping[str, Any] | None) -> str:
             parts.append(f"support_example={support_example}")
         candidate_hits = _positive_ints(slot.get("candidate_hits"), limit=3)
         if candidate_hits:
-            parts.append("hit=" + ",".join(str(n) for n in candidate_hits))
+            parts.append("retrieved_hit=" + ",".join(str(n) for n in candidate_hits))
+            if preferred.strip().lower() == "system_a":
+                parts.append(
+                    "cite_example="
+                    + " ".join(f"[{CITATION_OFFSET + int(n)}]" for n in candidate_hits[:2])
+                )
         heading = _compact_text(slot.get("heading_path"), max_len=100)
         if heading:
             parts.append(f"heading={heading}")

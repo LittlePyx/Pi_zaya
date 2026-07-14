@@ -3465,7 +3465,11 @@ def _finalize_generation_answer(
                     max_items=3,
                 )
                 paper_guide_candidate_refs_effective = {}
-    elif not answer_audit_requested and not library_paper_selection_prompt:
+    elif (
+        not answer_audit_requested
+        and not library_paper_selection_prompt
+        and not paper_guide_reference_opportunities
+    ):
         paper_guide_reference_opportunities = detect_text_reference_opportunities(
             prompt=prompt_for_user or prompt,
             answer=answer,
@@ -3514,10 +3518,13 @@ def _finalize_generation_answer(
         paper_guide_support_resolution=list(paper_guide_support_resolution or []),
     )
     structured_refs_allowed = bool(
-        bool(paper_guide_reference_opportunities)
-        or sanitize_paper_guide_family == "citation_lookup"
-        or _prompt_explicitly_requests_citation_lookup(prompt_for_user or prompt)
-        or (bool(paper_guide_mode) and "citation" in str(answer_output_mode or "").strip().lower())
+        not system_b_explicitly_disabled
+        and (
+            bool(paper_guide_reference_opportunities)
+            or sanitize_paper_guide_family == "citation_lookup"
+            or _prompt_explicitly_requests_citation_lookup(prompt_for_user or prompt)
+            or (bool(paper_guide_mode) and "citation" in str(answer_output_mode or "").strip().lower())
+        )
     )
     # Standard RAG [n] citation validation — catch hallucinated ref nums.
     paper_guide_validated_structured_refs = bool(

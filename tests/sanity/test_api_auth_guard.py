@@ -448,8 +448,43 @@ def test_internal_admin_routes_can_be_enabled_for_local_development(monkeypatch,
     assert reader_locate.json()["ok"] is True
 
 
+def test_authenticated_public_user_does_not_receive_internal_generation_diagnostics_by_default(monkeypatch):
+    _set_auth_env(monkeypatch)
+    monkeypatch.setenv("KB_ENV", "production")
+    monkeypatch.setenv("KB_APP_ENV", "")
+    monkeypatch.delenv("KB_ENABLE_INTERNAL_API", raising=False)
+    _clear_settings_cache()
+    monkeypatch.setattr(
+        generate_router,
+        "_gen_get_task",
+        lambda session_id: {
+            "stage": "done",
+            "partial": "public answer",
+            "status": "done",
+            "answer": "public answer",
+            "answer_quality": {"citation_plan": {"internal": True}},
+            "paper_guide_debug": {"source_path": "F:\\private\\paper.en.md"},
+            "research_trace": {"trace_id": "internal-trace"},
+        },
+    )
+
+    response = TestClient(app).get(
+        "/api/generate/public-session/stream",
+        headers={"X-KB-Access-Token": "secret-token"},
+    )
+
+    assert response.status_code == 200
+    lines = [line for line in response.text.splitlines() if line.startswith("data: ")]
+    payload = json.loads(lines[-1][6:])
+    assert payload["answer"] == "public answer"
+    assert payload["answer_quality"] == {}
+    assert payload["paper_guide_debug"] == {}
+    assert payload["research_trace"] == {}
+
+
 def test_user_issue_local_routes_require_main_auth_when_api_auth_is_required(monkeypatch, tmp_path: Path):
     _set_auth_env(monkeypatch)
+    monkeypatch.setenv("KB_ENABLE_INTERNAL_API", "1")
     monkeypatch.setattr(
         user_issues_router,
         "get_settings",

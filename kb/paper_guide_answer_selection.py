@@ -409,6 +409,90 @@ def _hit_source_path(hit: dict) -> str:
     return str(meta.get("source_path") or "").strip()
 
 
+def _multi_source_answer_hit_is_low_value(hit: dict) -> bool:
+    if not isinstance(hit, dict):
+        return True
+    if _looks_like_title_only_hit(hit) or _looks_like_heading_only_hit(hit):
+        return True
+    meta = hit.get("meta", {}) or {}
+    heading = normalize_match_text(
+        str(meta.get("heading_path") or meta.get("ref_best_heading_path") or meta.get("top_heading") or "")
+    )
+    if re.search(
+        r"(?:^|\s)(?:references|bibliography|acknowledgements?|acknowledgments?|"
+        r"data(?: and code)? availability|code availability)(?:\s|$)",
+        heading,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    text_prefix = normalize_match_text(str(hit.get("text") or "")[:900])
+    if re.search(r"\backnowledgements?\b|\backnowledgments?\b", text_prefix, flags=re.IGNORECASE):
+        return True
+    if re.search(r"\bdata(?: and code)? availability\b|\bcode availability\b", text_prefix, flags=re.IGNORECASE):
+        return True
+    if re.search(r"\bdata from\b.{0,320}\bzenodo\b", text_prefix, flags=re.IGNORECASE):
+        return True
+    return False
+
+
+def _rescue_multi_source_answer_hits(
+    *,
+    grouped_docs: list[dict],
+    raw_hits: list[dict],
+    prompt: str,
+) -> list[dict]:
+    """Choose one useful in-memory evidence hit per already selected source."""
+
+    def source_key(hit: dict) -> str:
+        return _hit_source_path(hit).replace("\\", "/").casefold()
+
+    raw_by_source: dict[str, list[dict]] = {}
+    for hit in raw_hits or []:
+        if not isinstance(hit, dict):
+            continue
+        key = source_key(hit)
+        if not key:
+            continue
+        raw_by_source.setdefault(key, []).append(hit)
+
+    rescued: list[dict] = []
+    for grouped in grouped_docs or []:
+        if not isinstance(grouped, dict):
+            continue
+        key = source_key(grouped)
+        candidates = [grouped, *raw_by_source.get(key, [])]
+        ranked: list[tuple[float, int, dict]] = []
+        seen: set[tuple[str, str]] = set()
+        for idx, candidate in enumerate(candidates):
+            if not isinstance(candidate, dict) or _multi_source_answer_hit_is_low_value(candidate):
+                continue
+            meta = candidate.get("meta", {}) or {}
+            fingerprint = (
+                str(meta.get("block_id") or meta.get("chunk_id") or "").strip(),
+                hashlib.sha1(str(candidate.get("text") or "")[:480].encode("utf-8", "ignore")).hexdigest()[:12],
+            )
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            ranked.append(
+                (
+                    _paper_guide_answer_hit_score(candidate, prompt=prompt),
+                    1 if idx == 0 else 0,
+                    candidate,
+                )
+            )
+        if not ranked:
+            continue
+        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        selected = dict(ranked[0][2])
+        if ranked[0][1] == 0:
+            meta_out = dict(selected.get("meta", {}) or {})
+            meta_out["multi_source_representative_rescue"] = True
+            selected["meta"] = meta_out
+        rescued.append(selected)
+    return rescued
+
+
 def _build_answer_hits_for_generation(
     *,
     grouped_docs: list[dict],

@@ -193,6 +193,25 @@ def test_detect_text_reference_opportunities_for_normal_question(monkeypatch) ->
     assert opportunities[0]["ref_num"] == 4
 
 
+def test_reference_title_starting_with_focus_outranks_incidental_title_match() -> None:
+    from kb import paper_guide_reference_opportunities as mod
+
+    focus = "snapshot compressive imaging"
+    exact_topic = {
+        "title": "Snapshot Compressive Imaging: Theory, Algorithms, and Applications",
+        "raw": "IEEE Signal Processing Magazine, 2021.",
+    }
+    incidental_match = {
+        "title": "BIRNAT: Bidirectional Recurrent Networks for Video Snapshot Compressive Imaging",
+        "raw": "ECCV, 2020.",
+    }
+
+    assert mod._score_reference_label_match(focus, exact_topic) > mod._score_reference_label_match(
+        focus,
+        incidental_match,
+    )
+
+
 def test_citation_lookup_opportunities_keep_only_resolved_target_reference() -> None:
     opportunities = detect_paper_guide_reference_opportunities(
         prompt='Where is "Target work" cited?',

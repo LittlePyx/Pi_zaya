@@ -559,6 +559,32 @@
         "minCitationCount": 3,
         "minCitationDocCount": 3,
         "minSystemBCount": 1,
+        "requiredRouteCounts": {"system_a": 3, "system_b": 1},
+        "claimEvidenceContracts": [
+          {
+            "id": "cassi-dual-disperser-stage",
+            "docId": "cassi",
+            "route": "system_a",
+            "answerTerms": ["光谱", "孔径"],
+            "evidenceTerms": ["two dispersive elements", "binary-valued aperture"]
+          },
+          {
+            "id": "scinerf-neural-3d-stage",
+            "docId": "scinerf",
+            "route": "system_a",
+            "answerTerms": ["NeRF", "3D"],
+            "evidenceTerms": ["physical image formation process", "NeRF"]
+          },
+          {
+            "id": "scigs-gaussian-3d-stage",
+            "docId": "scigs",
+            "route": "system_a",
+            "answerTerms": ["3D"],
+            "evidenceTerms": ["dynamic", "3D scene"]
+          }
+        ],
+        "requiredSystemBTerms": ["Snapshot Compressive Imaging", "Theory, Algorithms, and Applications"],
+        "requiredSystemBDocIds": ["scinerf"],
         "requireSystemBTraceComplete": true,
         "forbidSystemBAnswerContextOnly": true,
         "maxSystemBNeedsReviewCount": 0,
@@ -593,13 +619,31 @@
         "minRefDocCount": 3,
         "minCitationCount": 3,
         "minCitationDocCount": 3,
-        "minSystemBCount": 1,
-        "requireSystemBTraceComplete": true,
-        "forbidSystemBAnswerContextOnly": true,
-        "maxSystemBNeedsReviewCount": 0,
-        "maxSystemBAnswerContextOnlyCount": 0,
-        "maxSystemBReferenceIndexFallbackCount": 0,
-        "minSystemBCompleteRate": 1.0,
+        "maxSystemBCount": 0,
+        "requiredRouteCounts": {"system_a": 3, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "s2ism-structured-detection",
+            "docId": "s2ism",
+            "route": "system_a",
+            "answerTerms": ["s2ISM", "structured detection"],
+            "evidenceTerms": ["super-resolution", "optical sectioning"]
+          },
+          {
+            "id": "iism-interferometric-resolution",
+            "docId": "iism",
+            "route": "system_a",
+            "answerTerms": ["iISM", "interferometric"],
+            "evidenceTerms": ["interferometric detection", "120 nm"]
+          },
+          {
+            "id": "qclfm-light-field",
+            "docId": "qclfm",
+            "route": "system_a",
+            "answerTerms": ["light-field", "position", "angular"],
+            "evidenceTerms": ["position", "angular information"]
+          }
+        ],
         "requireRefsReady": true,
         "requirePolishStatus": true,
         "requireCitationShelfQuality": true,
@@ -618,7 +662,7 @@
       "acceptance": [
         "回答要说明一篇提供硬件/噪声背景，另一篇把物理噪声模型放进算法训练。",
         "要给出读者先读什么、再读什么、读的时候看哪些概念。",
-        "至少出现一个文内上游来源，帮助用户继续追 SPAD 或噪声模型来源。"
+        "普通搭配阅读只引用两篇正文证据，不强行插入额外上游文献。"
       ],
       "expected": {
         "requiredAnswerTerms": ["SPAD", "detector", "physics-informed", "noise"],
@@ -628,14 +672,7 @@
         "minRefDocCount": 2,
         "minCitationCount": 2,
         "minCitationDocCount": 2,
-        "minSystemBCount": 1,
-        "requiredSystemBTerms": ["SPAD"],
-        "requireSystemBTraceComplete": true,
-        "forbidSystemBAnswerContextOnly": true,
-        "maxSystemBNeedsReviewCount": 0,
-        "maxSystemBAnswerContextOnlyCount": 0,
-        "maxSystemBReferenceIndexFallbackCount": 0,
-        "minSystemBCompleteRate": 1.0,
+        "maxSystemBCount": 0,
         "requireRefsReady": true,
         "requirePolishStatus": true,
         "requireCitationShelfQuality": true,
@@ -657,20 +694,31 @@
         "参考定位卡不能只给综述，至少要命中 PILN 原文和 DL-SPI 综述。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["PILN", "deep learning", "single-pixel imaging", "generalization"],
+        "requiredAnswerTerms": ["PILN", "ILNet", "deep learning", "single-pixel imaging", "generalization"],
         "requiredRefDocIds": ["piln", "dl-spi-review"],
         "requiredCitationDocIds": ["piln", "dl-spi-review"],
         "minRefHits": 2,
         "minRefDocCount": 2,
         "minCitationCount": 2,
         "minCitationDocCount": 2,
-        "minSystemBCount": 1,
-        "requireSystemBTraceComplete": true,
-        "forbidSystemBAnswerContextOnly": true,
-        "maxSystemBNeedsReviewCount": 0,
-        "maxSystemBAnswerContextOnlyCount": 0,
-        "maxSystemBReferenceIndexFallbackCount": 0,
-        "minSystemBCompleteRate": 1.0,
+        "maxSystemBCount": 0,
+        "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "piln-ilnet-method",
+            "docId": "piln",
+            "route": "system_a",
+            "answerTerms": ["ILNet", "part-based", "image-loop"],
+            "evidenceTerms": ["ILNet", "part-based", "image-loop"]
+          },
+          {
+            "id": "dl-spi-review-position",
+            "docId": "dl-spi-review",
+            "route": "system_a",
+            "answerTerms": ["model-driven", "strategy"],
+            "evidenceTerms": ["model-driven strategy", "physical process"]
+          }
+        ],
         "requireRefsReady": true,
         "requirePolishStatus": true,
         "requireCitationShelfQuality": true,

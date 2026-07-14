@@ -65,6 +65,30 @@ def test_system_a_card_composer_trims_mid_word_ellipsis() -> None:
     assert "ima..." not in detail["card_evidence"]
 
 
+def test_system_a_card_uses_grounded_evidence_takeaway_when_claim_is_too_short_for_shelf() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Principles and prospects for single-pixel imaging.pdf",
+            "heading_path": "Acquisition and image reconstruction strategies",
+            "answer_claim": "压缩感知如何让测量次数少于像素总数成为可能。",
+            "evidence_quote": (
+                "Their pioneering work has laid the foundations for recovering images from a "
+                "single-pixel camera when the number of measurements is fewer than the total number "
+                "of unknown pixels in the image, also known as under-sampling or sub-sampling."
+            ),
+            "location_label": "Acquisition and image reconstruction strategies",
+            "binding_status": "grounded",
+            "binding_confidence": 0.86,
+        }
+    )
+
+    summary = str(detail["card_view"]["summary"])
+    assert summary.startswith("压缩感知让单像素相机")
+    assert len(summary) >= 24
+    assert summary != detail["answer_claim"]
+
+
 def test_card_composer_scrubs_markdown_table_and_structured_tokens() -> None:
     detail = compose_citation_card(
         {
@@ -384,6 +408,43 @@ def test_system_b_card_composer_marks_answer_context_only() -> None:
     assert detail["system_b_trace_complete"] is False
     assert "answer_context_only" in detail["system_b_trace_flags"]
     assert detail["system_b_trace_steps"] == ["答案句", "引用语境待核对", "上游文献"]
+
+
+def test_system_b_card_keeps_precomputed_cassi_citation_context() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "CVPR-2024-SCINeRF.pdf",
+            "title": "Snapshot Compressive Imaging: Theory, Algorithms, and Applications",
+            "authors": "Xin Yuan, David J. Brady, and Aggelos K. Katsaggelos",
+            "venue": "IEEE Signal Processing Magazine",
+            "year": "2021",
+            "raw": (
+                "Xin Yuan, David J. Brady, and Aggelos K. Katsaggelos. Snapshot compressive "
+                "imaging: Theory, algorithms, and applications. IEEE Signal Processing "
+                "Magazine, 38(2):65-88, 2021."
+            ),
+            "answer_claim": (
+                "SCINeRF cites video SCI prior work when tracing the transition from "
+                "compressed video imaging to 3D reconstruction."
+            ),
+            "citation_context": (
+                "...Drawing inspiration from Compressed Sensing (CS) [5,8], video Snapshot "
+                "Compressive Imaging (SCI) [50] system has emerged to address these limitations...."
+            ),
+            "citation_context_source": "structured_reference_index",
+            "heading_path": "SCINeRF / 1. Introduction",
+            "location_label": "SCINeRF / 1. Introduction / p. 1",
+        }
+    )
+
+    assert detail["card_evidence"].startswith("Drawing inspiration from Compressed Sensing")
+    assert "video Snapshot Compressive Imaging (SCI) [50]" in detail["card_evidence"]
+    assert "missing_citation_context" not in detail["card_quality_flags"]
+    assert "reference_entry_only" not in detail["card_quality_flags"]
+    assert detail["system_b_trace_complete"] is True
+    assert detail["system_b_trace_context"] == detail["card_evidence"]
+    assert detail["system_b_trace_source"] == "structured_reference_index"
 
 
 def test_system_b_card_composer_distills_generic_english_role() -> None:

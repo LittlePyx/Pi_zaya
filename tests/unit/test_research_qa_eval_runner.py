@@ -92,9 +92,6 @@ def test_research_qa_fixture_enforces_system_b_trace_policy():
     policy_case_ids = {
         "scinerf-admm-origin",
         "cassi-to-3d-sci-lineage",
-        "microscopy-methods-map",
-        "single-photon-reading-pair",
-        "piln-dl-spi-position",
     }
 
     for case_id in policy_case_ids:
@@ -110,6 +107,10 @@ def test_research_qa_fixture_enforces_system_b_trace_policy():
     scinerf_expected = _case_by_id(fixture, "scinerf-admm-origin").get("expected") or {}
     assert scinerf_expected.get("maxSystemBCount") == 1
 
+    lineage_expected = _case_by_id(fixture, "cassi-to-3d-sci-lineage").get("expected") or {}
+    assert lineage_expected.get("requiredSystemBDocIds") == ["scinerf"]
+    assert "Theory, Algorithms, and Applications" in lineage_expected.get("requiredSystemBTerms", [])
+
     roadmap_expected = _case_by_id(fixture, "spi-roadmap-beginner").get("expected") or {}
     assert int(roadmap_expected.get("minSystemBCount") or 0) == 0
     assert roadmap_expected.get("maxSystemBCount") == 0
@@ -119,6 +120,18 @@ def test_research_qa_fixture_enforces_system_b_trace_policy():
     assert roadmap_expected.get("maxRefHits") == 3
     assert roadmap_expected.get("maxRefDocCount") == 3
     assert roadmap_expected.get("maxCitationDocCount") == 3
+
+    ordinary_case_ids = {
+        "spi-roadmap-beginner",
+        "microscopy-methods-map",
+        "single-photon-reading-pair",
+        "piln-dl-spi-position",
+    }
+    for case_id in ordinary_case_ids:
+        expected = _case_by_id(fixture, case_id).get("expected") or {}
+        assert int(expected.get("minSystemBCount") or 0) == 0
+        assert expected.get("maxSystemBCount") == 0
+        assert expected.get("requireSystemBTraceComplete") is not True
 
 
 def test_research_qa_fixture_cases_have_acceptance_contracts():
@@ -670,6 +683,32 @@ def test_validate_case_prefers_render_packet_over_raw_content_for_citation_quali
     assert "citation_card_quality" not in failed_names
     assert quality["citation_quality"]["count"] == 1
     assert quality["system_b_audit"]["trace_complete_count"] == 1
+
+
+def test_validate_case_rejects_unresolved_user_visible_citation_markers() -> None:
+    fixture = load_fixture()
+    case = {"id": "synthetic-unresolved-citation", "expected": {}}
+    result = {
+        "status": "done",
+        "done": True,
+        "assistant_message": {
+            "role": "assistant",
+            "content": "Raw answer [[CITE:s12345678:5]].",
+            "meta": {
+                "paper_guide_contracts": {
+                    "render_packet": {
+                        "rendered_body": "A supported claim [1](#cite-1), but this marker is unresolved [5].",
+                    }
+                }
+            },
+        },
+    }
+
+    quality = validate_case(case, fixture, result)
+    failed_names = {item["name"] for item in quality["failures"]}
+
+    assert quality["ok"] is False
+    assert "answer_no_unresolved_citation_markers" in failed_names
 
 
 def test_validate_case_flags_system_b_audit_policy_failures():

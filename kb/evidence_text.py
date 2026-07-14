@@ -56,7 +56,7 @@ _CONTENT_VERB_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being|can|could|may|might|will|would|uses?|used|shows?|"
     r"shown|presents?|presented|proposes?|proposed|demonstrates?|develops?|developed|introduces?|introduced|"
     r"improves?|improved|captures?|captured|reconstructs?|reconstructed|enables?|enabled|"
-    r"achieves?|achieved|realizes?|realized|realizing|"
+    r"achieves?|achieved|realizes?|realized|realizing|emerges?|emerged|"
     r"adopts?|adopted|adopting|offers?|offering|collects?|collecting|employs?|employed|employing|"
     r"解决|提出|说明|表明|用于|能够|可以|实现|采用|提升|降低)\b",
     re.IGNORECASE,

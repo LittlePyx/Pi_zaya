@@ -114,6 +114,7 @@ from kb.paper_guide_answer_selection import (
     _has_anchor_grounded_answer_hits as _selection_has_anchor_grounded_answer_hits,
     _paper_guide_answer_hit_score as _selection_answer_hit_score,
     _paper_guide_focus_heading as _selection_focus_heading,
+    _rescue_multi_source_answer_hits as _selection_rescue_multi_source_answer_hits,
     _select_paper_guide_answer_hits as _selection_select_answer_hits,
     _stabilize_paper_guide_output_mode as _selection_stabilize_output_mode,
 )
@@ -1659,6 +1660,7 @@ def _merge_refs_display_docs_with_answer_hits(
     limit: int,
     answer: str = "",
     allowed_source_paths: list[str] | None = None,
+    required_source_paths: list[str] | None = None,
 ) -> list[dict]:
     try:
         cap = max(1, int(limit))
@@ -1671,6 +1673,11 @@ def _merge_refs_display_docs_with_answer_hits(
         for source_path in list(allowed_source_paths or [])
         for identity in _refs_document_identity_keys(source_path)
     }
+    required_source_identities = [
+        set(_refs_document_identity_keys(source_path))
+        for source_path in list(required_source_paths or [])
+        if str(source_path or "").strip()
+    ]
     cited_doc_indexes: list[int] = []
     seen_cited_indexes: set[int] = set()
     for match in re.finditer(r"(?<!\[)\[\s*(\d{1,2})\s*\](?!\])", str(answer or "")):
@@ -1755,6 +1762,25 @@ def _merge_refs_display_docs_with_answer_hits(
             display_reason="answer_hit_top",
             answer_citation_nums=cited_nums,
         )
+        if required_source_identities and len(out) < cap:
+            candidates = [
+                row
+                for row in list(answer_hits or []) + list(refs_seed_docs or [])
+                if isinstance(row, dict)
+            ]
+            required_rows: list[dict] = []
+            for required_identities in required_source_identities:
+                match = next(
+                    (
+                        row
+                        for row in candidates
+                        if required_identities & set(_source_keys(row))
+                    ),
+                    None,
+                )
+                if isinstance(match, dict):
+                    required_rows.append(match)
+            _push(required_rows, display_reason="citation_plan_source")
         return out[:cap]
     if cited_doc_indexes and allowed_source_keys:
         return []
@@ -5485,6 +5511,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             grouped_docs=list(grouped_docs or []),
             heading_hits=list(hits or []),
         )
+        if prompt_multi_source_synthesis and hits_raw:
+            answer_seed = _selection_rescue_multi_source_answer_hits(
+                grouped_docs=list(answer_seed or []),
+                raw_hits=list(hits_raw or []),
+                prompt=(prompt or retrieval_prompt or ""),
+            )
         if paper_guide_source_scoped and paper_guide_bound_source_ready:
             heading_hits_for_answer = list(grouped_docs or []) if paper_guide_cross_paper_refs else list(hits or [])
             if not paper_guide_cross_paper_refs:
@@ -6125,6 +6157,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             if prompt_multi_paper_list
             else []
         )
+        planned_synthesis_source_paths = (
+            _citation_plan_system_a_source_paths(finalized_citation_plan)
+            if prompt_multi_source_synthesis
+            else []
+        )
         if planned_multi_paper_source_paths:
             trimmed_answer = _trim_multi_paper_answer_to_planned_sources(
                 answer,
@@ -6336,7 +6373,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 pass
         refs_precompute_enabled = _generation_refs_precompute_enabled()
         if (
-            (refs_precompute_enabled or bool(selected_context_refs_source_paths))
+            (
+                refs_precompute_enabled
+                or bool(selected_context_refs_source_paths)
+                or bool(planned_synthesis_source_paths)
+            )
             and (not prompt_multi_paper_list)
             and umid > 0
             and (answer_hits or selected_context_refs_guarded)
@@ -6348,7 +6389,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     answer_hits=list(answer_hits or []),
                     limit=max(1, min(int(top_k or 4), 6 if prompt_multi_source_synthesis else 4)),
                     answer=answer,
-                    allowed_source_paths=selected_context_refs_source_paths,
+                    allowed_source_paths=(
+                        selected_context_refs_source_paths
+                        or planned_synthesis_source_paths
+                    ),
+                    required_source_paths=planned_synthesis_source_paths,
                 )
                 final_refs_source_paths = [
                     str((hit.get("meta") or {}).get("source_path") or hit.get("source_path") or "").strip()

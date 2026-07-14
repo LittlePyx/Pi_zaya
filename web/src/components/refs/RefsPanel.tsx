@@ -258,7 +258,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
     const ui = visibleHits[citeIndex]?.ui_meta || {}
     const meta = remoteMeta[citeIndex] || ui.citation_meta
     return buildCiteDetailFromMeta(meta as Record<string, unknown>, {
-      sourceName: ui.display_name,
+      sourceName: basenameFromSourcePath(ui.display_name || ui.source_path),
       sourcePath: ui.source_path,
       num: citeIndex + 1,
       anchor: `ref-source-${msgId}-${citeIndex}`,
@@ -271,7 +271,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
       message.info(S.refs_reader_missing)
       return
     }
-    const sourceName = String(ui.display_name || '').trim() || basenameFromSourcePath(sourcePath) || S.default_source_fallback
+    const sourceName = basenameFromSourcePath(ui.display_name || sourcePath) || S.default_source_fallback
     setGuideLoadingIndex(index)
     try {
       await createPaperGuideConversation({
@@ -298,7 +298,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
     }
     const payload = buildBasicReaderOpenPayload({
       sourcePath,
-      sourceName: String(readerOpen.sourceName || ui.display_name || '').trim(),
+      sourceName: basenameFromSourcePath(readerOpen.sourceName || ui.display_name || sourcePath),
       headingPath: String(readerOpen.headingPath || ui.heading_path || ui.section_label || ui.subsection_label || '').trim(),
       snippet: String(readerOpen.snippet || ui.summary_line || ui.why_line || '').trim(),
       highlightSnippet: String(readerOpen.highlightSnippet || readerOpen.snippet || ui.summary_line || ui.why_line || '').trim(),
@@ -392,7 +392,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                   const ui = hit.ui_meta || {}
                   const metaState = String(hit.meta?.ref_pack_state || '').trim().toLowerCase()
                   const isFailed = metaState === 'failed'
-                  const title = ui.display_name || hit.meta?.source_path?.split('\\').pop() || 'Unknown PDF'
+                  const title = basenameFromSourcePath(ui.display_name || hit.meta?.source_path) || 'Unknown PDF'
                   const heading = ui.heading_path || ui.section_label || ''
                   const scorePending = Boolean(ui.score_pending)
                   const score = typeof ui.score === 'number' ? ui.score.toFixed(2) : ''
@@ -417,7 +417,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                   const detail = buildCiteDetailFromMeta(
                     (remoteMeta[index] || ui.citation_meta || {}) as Record<string, unknown>,
                     {
-                      sourceName: ui.display_name,
+                      sourceName: title,
                       sourcePath: ui.source_path,
                       num: index + 1,
                       anchor: `ref-source-${msgId}-${index}`,

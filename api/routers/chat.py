@@ -40,10 +40,13 @@ from kb.agent.schema import validate_agent_trace
 from kb.maintenance import create_auto_snapshot
 from kb.paper_guide_provenance import _resolve_paper_guide_md_path
 from kb.path_safety import (
+    ROOT_RELATIVE_FILE_ID_PREFIX,
     clean_file_source_path_input,
     image_ext_for_mime,
     path_is_within_roots,
+    reference_source_roots,
     resolve_existing_file_under_roots,
+    resolve_root_relative_file_id,
     resolve_verified_image_file_under_roots,
     resolve_verified_pdf_file_under_roots,
     resolved_path,
@@ -315,6 +318,36 @@ def _reader_markdown_roots() -> list[Path]:
     ])
 
 
+def _public_reference_source_roots() -> list[Path]:
+    settings = get_settings()
+    return reference_source_roots(
+        md_root=_md_dir(),
+        db_dir=getattr(settings, "db_dir", None),
+    )
+
+
+def _resolve_public_reference_source_id(source_path: str) -> str:
+    raw = str(source_path or "").strip()
+    if not raw.replace("\\", "/").startswith(ROOT_RELATIVE_FILE_ID_PREFIX):
+        return raw
+    resolved = resolve_root_relative_file_id(raw, _public_reference_source_roots())
+    if resolved is None:
+        raise HTTPException(400, "source identifier is invalid or no longer available")
+    return str(resolved)
+
+
+def _is_public_reference_source_id(source_path: str) -> bool:
+    return str(source_path or "").strip().replace("\\", "/").startswith(
+        ROOT_RELATIVE_FILE_ID_PREFIX
+    )
+
+
+def _public_reader_state_record(record: Any, *, source_path: str) -> Any:
+    if not isinstance(record, dict) or not _is_public_reference_source_id(source_path):
+        return record
+    return {**record, "source_path": source_path}
+
+
 def _reader_session_store() -> ReaderSessionStore:
     settings = get_settings()
     return ReaderSessionStore(Path(settings.db_dir) / "_reader_sessions.json")
@@ -486,6 +519,7 @@ def _resolve_allowed_paper_guide_source_path(source_path: str) -> str:
     raw = _clean_reader_source_path_input(source_path)
     if not raw:
         return ""
+    raw = _resolve_public_reference_source_id(raw)
     try:
         pdf_root = _pdf_dir()
         md_root = _md_dir()
@@ -519,6 +553,7 @@ def _resolve_allowed_reader_source_path(source_path: str) -> str:
     raw = _clean_reader_source_path_input(source_path)
     if not raw:
         raise HTTPException(400, "reader sourcePath required")
+    raw = _resolve_public_reference_source_id(raw)
     suffix = Path(raw).suffix.lower()
     if suffix.endswith(".md"):
         try:
@@ -1341,7 +1376,12 @@ async def upload_chat_files(
 
 @router.post("/reader/sessions")
 def create_reader_session(body: ReaderSessionCreateBody):
+    requested_source_path = str(
+        body.payload.get("sourcePath") or body.payload.get("source_path") or ""
+    ).strip()
     payload = _normalize_reader_session_payload(body.payload, require_allowed_source=True)
+    if _is_public_reference_source_id(requested_source_path):
+        payload["sourcePath"] = requested_source_path
     source_path = str(payload.get("sourcePath") or "").strip()
     if not source_path:
         raise HTTPException(400, "reader sourcePath required")
@@ -1380,14 +1420,17 @@ def get_conversation_reader_state(conv_id: str, source_path: str = Query("")):
         raise HTTPException(404, "conversation not found")
     record = store.get_conversation_reader_state(conv_id, src)
     if record and (record.get("state") or raw_src == src):
-        return record
+        return _public_reader_state_record(record, source_path=raw_src)
     if raw_src and raw_src != src:
         legacy = store.get_conversation_reader_state(conv_id, raw_src)
         legacy_state = legacy.get("state") if isinstance(legacy, dict) else {}
         if isinstance(legacy_state, dict) and legacy_state:
             migrated = store.patch_conversation_reader_state(conv_id, src, legacy_state)
-            return migrated or {**legacy, "source_path": src}
-    return record
+            return _public_reader_state_record(
+                migrated or {**legacy, "source_path": src},
+                source_path=raw_src,
+            )
+    return _public_reader_state_record(record, source_path=raw_src)
 
 
 @router.patch("/conversations/{conv_id}/reader-state")
@@ -1396,11 +1439,12 @@ def patch_conversation_reader_state(
     body: ConversationReaderStatePatchBody,
     source_path: str = Query(""),
 ):
+    raw_src = str(source_path or "").strip()
     src = _resolve_reader_state_source_path(source_path)
     record = get_chat_store().patch_conversation_reader_state(conv_id, src, body.state)
     if record is None:
         raise HTTPException(404, "conversation not found")
-    return record
+    return _public_reader_state_record(record, source_path=raw_src)
 
 
 @router.get("/conversations/{conv_id}/research-state")

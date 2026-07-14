@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import time
+from typing import Any
 
 from api.reference_card_copy import (
     finalize_ref_card_copy as _finalize_ref_card_copy,
@@ -105,6 +106,11 @@ from api.reference_summary_llm import (
     _translate_summary_to_zh as _external_translate_summary_to_zh,
 )
 from api.reference_source_citation_meta import ensure_source_citation_meta as _external_ensure_source_citation_meta
+from api.reference_local_source_meta import (
+    load_local_source_citation_meta,
+    public_citation_meta,
+    source_identity_key,
+)
 from api.reference_detail_pipeline import enrich_citation_detail_meta as _detail_pipeline_enrich_citation_detail_meta
 from api import reference_card_copy_flow as _card_copy_flow
 from api import reference_doc_list as _doc_list
@@ -136,7 +142,7 @@ from kb.evidence_text import finish_evidence_text as _finish_evidence_text
 from kb.evidence_text import pick_readable_evidence_text as _pick_readable_evidence_text
 from kb.library_store import LibraryStore
 from kb.llm import DeepSeekChat
-from kb.path_safety import clean_file_source_path_input
+from kb.path_safety import clean_file_source_path_input, root_relative_file_id
 from kb.reference_query_family import (
     extract_multi_paper_topic as _shared_extract_multi_paper_topic,
     prompt_explicitly_requests_multi_paper_list as _shared_prompt_explicitly_requests_multi_paper_list,
@@ -5425,14 +5431,51 @@ def _build_doc_list_payload_hits(
     return _doc_list._build_doc_list_payload_hits(**kwargs)
 
 
+def _local_path_suffix_score(left: str, right: str) -> int:
+    lhs = [part for part in str(left or "").replace("\\", "/").lower().split("/") if part]
+    rhs = [part for part in str(right or "").replace("\\", "/").lower().split("/") if part]
+    score = 0
+    for offset in range(1, min(len(lhs), len(rhs), 8) + 1):
+        if lhs[-offset:] != rhs[-offset:]:
+            break
+        score = offset
+    return score
+
+
 def _cached_doc_list_citation_meta(
     doc_list: list[dict] | None,
     *,
     pdf_root: Path | None,
     lib_store: LibraryStore | None,
+    db_dir: str | Path | None = None,
 ) -> dict[str, dict]:
-    if pdf_root is None or lib_store is None:
-        return {}
+    library_by_identity: dict[str, list[tuple[str, dict]]] = {}
+    library_records_loaded = False
+
+    def _load_library_identity_records() -> None:
+        nonlocal library_records_loaded
+        if library_records_loaded or lib_store is None:
+            return
+        library_records_loaded = True
+        try:
+            records = lib_store.list_citation_records()
+        except Exception:
+            records = []
+        for record in records if isinstance(records, list) else []:
+            if not isinstance(record, dict):
+                continue
+            record_path = str(record.get("path") or "").strip()
+            identity = source_identity_key(record_path)
+            stored_meta = public_citation_meta(
+                record.get("citation_meta") if isinstance(record.get("citation_meta"), dict) else {}
+            )
+            # Every same-identity library record participates in ambiguity
+            # detection, including records whose citation metadata is empty.
+            # Otherwise an unannotated namesake can be ignored and metadata
+            # from a different same-name file can be bound incorrectly.
+            if identity:
+                library_by_identity.setdefault(identity, []).append((record_path, stored_meta))
+
     out: dict[str, dict] = {}
     for item in list(doc_list or []):
         if not isinstance(item, dict):
@@ -5440,15 +5483,79 @@ def _cached_doc_list_citation_meta(
         source_path = str(item.get("source_path") or "").strip()
         if not source_path or source_path in out or is_excluded_source_path(source_path):
             continue
-        pdf_path = _resolve_pdf_for_source(pdf_root, source_path)
-        if pdf_path is None:
-            continue
-        try:
-            stored = lib_store.get_citation_meta(pdf_path)
-        except Exception:
-            continue
-        if isinstance(stored, dict) and stored:
-            out[source_path] = dict(stored)
+        source_name = str(item.get("source_name") or "").strip()
+        merged = load_local_source_citation_meta(
+            source_path,
+            source_name=source_name,
+            db_dir=db_dir,
+        )
+        stored: dict = {}
+        if pdf_root is not None and lib_store is not None:
+            pdf_path = _resolve_pdf_for_source(pdf_root, source_path)
+            if pdf_path is not None:
+                try:
+                    value = lib_store.get_citation_meta(pdf_path)
+                except Exception:
+                    value = None
+                stored = public_citation_meta(value if isinstance(value, dict) else {})
+        if not stored:
+            identities = {
+                identity
+                for identity in (source_identity_key(source_path), source_identity_key(source_name))
+                if identity
+            }
+            _load_library_identity_records()
+            candidates = [
+                candidate
+                for identity in identities
+                for candidate in library_by_identity.get(identity, [])
+            ]
+            # Identity keys intentionally collapse .pdf/.md suffixes, so a
+            # basename-only fallback is safe only when the underlying library
+            # record is unique.  Do not deduplicate by citation metadata: two
+            # different files can carry identical metadata and still be an
+            # ambiguous match for the requested source.
+            candidates_by_path: dict[str, list[tuple[str, dict]]] = {}
+            for candidate_path, candidate_meta in candidates:
+                path_key = str(candidate_path or "").strip().replace("\\", "/").lower()
+                if not path_key:
+                    continue
+                candidates_by_path.setdefault(path_key, []).append(
+                    (candidate_path, candidate_meta)
+                )
+            if len(candidates_by_path) == 1:
+                only_path_records = next(iter(candidates_by_path.values()))
+                if len(only_path_records) == 1:
+                    stored = only_path_records[0][1]
+            elif len(candidates_by_path) > 1:
+                source_parent = str(Path(source_path).parent).strip().replace("\\", "/").lower()
+                ranked: list[tuple[int, str, list[tuple[str, dict]]]] = []
+                for path_records in candidates_by_path.values():
+                    candidate_path = path_records[0][0]
+                    candidate_parent = str(Path(candidate_path).parent).strip().replace("\\", "/").lower()
+                    ranked.append(
+                        (
+                            _local_path_suffix_score(source_parent, candidate_parent),
+                            candidate_path,
+                            path_records,
+                        )
+                    )
+                ranked.sort(key=lambda item: item[0], reverse=True)
+                if (
+                    ranked[0][0] > 0
+                    and ranked[0][0] > ranked[1][0]
+                    and len(ranked[0][2]) == 1
+                ):
+                    stored = ranked[0][2][0][1]
+        merged.update(stored)
+        inline_meta = (
+            item.get("citation_meta")
+            if isinstance(item.get("citation_meta"), dict)
+            else {}
+        )
+        merged.update(public_citation_meta(inline_meta))
+        if merged:
+            out[source_path] = merged
     return out
 
 
@@ -5459,12 +5566,14 @@ def _doc_list_citation_meta(
     md_root: Path | None,
     lib_store: LibraryStore | None,
     allow_citation_prefetch: bool,
+    db_dir: str | Path | None = None,
 ) -> dict[str, dict]:
     if not allow_citation_prefetch:
         return _cached_doc_list_citation_meta(
             doc_list,
             pdf_root=pdf_root,
             lib_store=lib_store,
+            db_dir=db_dir,
         )
     hits = [
         {
@@ -5474,20 +5583,33 @@ def _doc_list_citation_meta(
         for item in list(doc_list or [])
         if isinstance(item, dict) and str(item.get("source_path") or "").strip()
     ]
-    return _prefetch_refs_citation_meta(
+    prefetched = _prefetch_refs_citation_meta(
         hits,
         pdf_root=pdf_root,
         md_root=md_root,
         lib_store=lib_store,
     )
+    cached = _cached_doc_list_citation_meta(
+        doc_list,
+        pdf_root=pdf_root,
+        lib_store=lib_store,
+        db_dir=db_dir,
+    )
+    for source_path, meta in prefetched.items():
+        merged = dict(cached.get(source_path) or {})
+        merged.update(public_citation_meta(meta))
+        if merged:
+            cached[source_path] = merged
+    return cached
 
 
-def hydrate_doc_list_refs_payload_citation_meta(
+def hydrate_refs_payload_citation_meta(
     payload: dict | None,
     *,
-    doc_list: list[dict] | None,
+    doc_list: list[dict] | None = None,
     pdf_root: Path | None,
     lib_store: LibraryStore | None,
+    db_dir: str | Path | None = None,
 ) -> dict:
     out = dict(payload or {}) if isinstance(payload, dict) else {}
     hits = [dict(hit) for hit in list(out.get("hits") or []) if isinstance(hit, dict)]
@@ -5499,33 +5621,345 @@ def hydrate_doc_list_refs_payload_citation_meta(
     lookup_rows = list(rows_by_source.values())
     for hit in hits:
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-        source_path = str(meta.get("source_path") or "").strip()
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        source_path = str(
+            meta.get("source_path") or ui_meta.get("source_path") or ""
+        ).strip()
         if source_path and source_path not in rows_by_source:
-            row = {"source_path": source_path}
+            row = {
+                "source_path": source_path,
+                "source_name": str(
+                    meta.get("source_name") or ui_meta.get("source_name") or ""
+                ).strip(),
+            }
             rows_by_source[source_path] = row
             lookup_rows.append(row)
     citation_meta_by_source = _cached_doc_list_citation_meta(
         lookup_rows,
         pdf_root=pdf_root,
         lib_store=lib_store,
+        db_dir=db_dir,
     )
+    hydrated_hits: list[dict] = []
+    for hit in hits:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        ui_meta = dict(hit.get("ui_meta") or {}) if isinstance(hit.get("ui_meta"), dict) else {}
+        source_path = str(
+            meta.get("source_path") or ui_meta.get("source_path") or ""
+        ).strip()
+        stored_meta = citation_meta_by_source.get(source_path) if source_path else None
+        had_existing_meta = isinstance(ui_meta.get("citation_meta"), dict)
+        existing_meta = public_citation_meta(
+            ui_meta.get("citation_meta") if had_existing_meta else {}
+        )
+        merged_meta = public_citation_meta(stored_meta)
+        merged_meta.update(existing_meta)
+        if merged_meta or had_existing_meta:
+            # This payload is returned by the ordinary references API. Keep its
+            # bibliography useful while never forwarding internal matching or
+            # quality diagnostics embedded in stored/UI metadata.
+            ui_meta["citation_meta"] = merged_meta
+        hit["ui_meta"] = ui_meta
+        hydrated_hits.append(hit)
+    out["hits"] = hydrated_hits
+    return out
+
+
+_PUBLIC_REFS_INTERNAL_KEYS = frozenset(
+    {
+        "explicit_doc_match_score",
+        "pipeline_debug",
+        "polish_detail",
+        "render_attempts",
+        "render_built_at",
+        "render_error",
+        "render_error_detail",
+        "render_evidence_sig",
+        "rendered_payload_sig",
+        "rendered_payload",
+        "scores",
+    }
+)
+_PUBLIC_REFS_PACK_KEYS = frozenset(
+    {
+        "display_state",
+        "enrichment_pending",
+        "guide_filter",
+        "hits",
+        "mode",
+        "payload_mode",
+        "pending",
+        "pending_hit_count",
+        "primary_evidence",
+        "primary_evidence_heading_path",
+        "prompt",
+        "prompt_sig",
+        "render_locale",
+        "render_status",
+        "suggestion",
+        "suppression_reason",
+        "updated_at",
+        "user_msg_id",
+    }
+)
+_PUBLIC_REFS_HIT_KEYS = frozenset({"meta", "score", "text", "ui_meta"})
+_PUBLIC_REFS_HIT_META_KEYS = frozenset(
+    {
+        "citation_meta",
+        "heading_path",
+        "page",
+        "page_end",
+        "page_start",
+        "primary_evidence",
+        "ref_best_heading_path",
+        "ref_headings",
+        "ref_locs",
+        "ref_overview_snippets",
+        "ref_pack_state",
+        "ref_show_snippets",
+        "ref_snippets",
+        "source_name",
+        "source_path",
+    }
+)
+_PUBLIC_REFS_UI_META_KEYS = frozenset(
+    {
+        "anchor_match_score",
+        "anchor_target_kind",
+        "anchor_target_number",
+        "can_open",
+        "cardView",
+        "card_view",
+        "card_view_contract_version",
+        "citation_meta",
+        "display_name",
+        "heading_path",
+        "page_end",
+        "page_start",
+        "polish_source",
+        "polish_status",
+        "primary_evidence",
+        "primary_evidence_heading_path",
+        "primary_evidence_source",
+        "reader_open",
+        "render_locale",
+        "score",
+        "score_pending",
+        "score_tier",
+        "section_label",
+        "semantic_badges",
+        "source_path",
+        "subsection_label",
+        "summary_basis",
+        "summary_generation",
+        "summary_kind",
+        "summary_label",
+        "summary_line",
+        "summary_polish_status",
+        "summary_source",
+        "summary_title",
+        "why_basis",
+        "why_generation",
+        "why_line",
+        "why_polish_status",
+    }
+)
+_PUBLIC_REFS_PATH_KEYS = frozenset(
+    {
+        "md_path",
+        "path",
+        "pdf_path",
+        "source_path",
+        "sourcepath",
+    }
+)
+
+
+def _public_refs_absolute_path(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(re.match(r"^[A-Za-z]:[\\/]", text)) or text.startswith(("/", "\\\\"))
+
+
+def _public_refs_functional_source_path(*, parents: tuple[object, ...], key: str) -> bool:
+    if key not in {"source_path", "sourcepath"}:
+        return False
+    parent = str(parents[-1] if parents else "").strip().lower()
+    return parent in {"meta", "reader_open", "ui_meta"}
+
+
+def _public_refs_source_label(value: Any) -> Any:
+    if not isinstance(value, str) or not _public_refs_absolute_path(value):
+        return value
+    parts = [part for part in re.split(r"[\\/]", value.strip().rstrip("\\/")) if part]
+    return parts[-1] if parts else ""
+
+
+def _public_refs_source_identifier(value: Any, *, source_roots: tuple[Any, ...]) -> Any:
+    if not isinstance(value, str) or not _public_refs_absolute_path(value):
+        return value
+    source_id = root_relative_file_id(value, list(source_roots))
+    return source_id or _public_refs_source_label(value)
+
+
+def _public_refs_value(
+    value: Any,
+    *,
+    parents: tuple[object, ...] = (),
+    source_roots: tuple[Any, ...] = (),
+) -> Any:
+    if isinstance(value, dict):
+        out: dict = {}
+        for raw_key, raw_value in value.items():
+            key = str(raw_key)
+            key_norm = key.strip().lower()
+            if key_norm in _PUBLIC_REFS_INTERNAL_KEYS:
+                continue
+            if (
+                key_norm in _PUBLIC_REFS_PATH_KEYS
+                and _public_refs_absolute_path(raw_value)
+                and not _public_refs_functional_source_path(parents=parents, key=key_norm)
+            ):
+                continue
+            if (
+                key_norm in {"source_path", "sourcepath"}
+                and _public_refs_absolute_path(raw_value)
+                and _public_refs_functional_source_path(parents=parents, key=key_norm)
+            ):
+                out[raw_key] = _public_refs_source_identifier(
+                    raw_value,
+                    source_roots=source_roots,
+                )
+                continue
+            if key_norm in {"display_name", "source_name", "sourcename"}:
+                out[raw_key] = _public_refs_source_label(raw_value)
+                continue
+            if key_norm == "citation_meta" and isinstance(raw_value, dict):
+                out[raw_key] = public_citation_meta(raw_value)
+                continue
+            out[raw_key] = _public_refs_value(
+                raw_value,
+                parents=(*parents, raw_key),
+                source_roots=source_roots,
+            )
+        return out
+    if isinstance(value, list):
+        return [
+            _public_refs_value(
+                item,
+                parents=(*parents, index),
+                source_roots=source_roots,
+            )
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, tuple):
+        return [
+            _public_refs_value(
+                item,
+                parents=(*parents, index),
+                source_roots=source_roots,
+            )
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, str) and _public_refs_absolute_path(value):
+        return _public_refs_source_label(value)
+    return value
+
+
+def _public_refs_allowed_dict(value: Any, allowed_keys: frozenset[str]) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: raw_value
+        for key, raw_value in value.items()
+        if str(key) in allowed_keys
+    }
+
+
+def _public_refs_hit_projection(hit: Any, *, source_roots: tuple[Any, ...]) -> dict:
+    hit_out = _public_refs_allowed_dict(hit, _PUBLIC_REFS_HIT_KEYS)
+    if "meta" in hit_out:
+        hit_out["meta"] = _public_refs_allowed_dict(
+            hit_out.get("meta"),
+            _PUBLIC_REFS_HIT_META_KEYS,
+        )
+    if "ui_meta" in hit_out:
+        hit_out["ui_meta"] = _public_refs_allowed_dict(
+            hit_out.get("ui_meta"),
+            _PUBLIC_REFS_UI_META_KEYS,
+        )
+    projected = _public_refs_value(hit_out, source_roots=source_roots)
+    return projected if isinstance(projected, dict) else {}
+
+
+def _public_refs_pack_projection(pack: Any, *, source_roots: tuple[Any, ...]) -> dict:
+    pack_out = _public_refs_allowed_dict(pack, _PUBLIC_REFS_PACK_KEYS)
+    if "guide_filter" in pack_out:
+        pack_out["guide_filter"] = _public_refs_allowed_dict(
+            pack_out.get("guide_filter"),
+            frozenset(
+                {
+                    "active",
+                    "filtered_hit_count",
+                    "guide_source_name",
+                    "hidden_self_source",
+                }
+            ),
+        )
+    pack_out["hits"] = [
+        _public_refs_hit_projection(hit, source_roots=source_roots)
+        for hit in list(pack_out.get("hits") or [])
+        if isinstance(hit, dict)
+    ]
+    projected = _public_refs_value(pack_out, source_roots=source_roots)
+    return projected if isinstance(projected, dict) else {}
+
+
+def public_refs_payload_projection(
+    payload: dict | None,
+    *,
+    source_roots: list[Path | str | None] | None = None,
+) -> dict:
+    """Return the ordinary references API shape without internal diagnostics."""
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        raw_user_msg_id: _public_refs_pack_projection(
+            raw_pack,
+            source_roots=tuple(source_roots or ()),
+        )
+        for raw_user_msg_id, raw_pack in payload.items()
+        if isinstance(raw_pack, dict)
+    }
+
+
+def hydrate_doc_list_refs_payload_citation_meta(
+    payload: dict | None,
+    *,
+    doc_list: list[dict] | None,
+    pdf_root: Path | None,
+    lib_store: LibraryStore | None,
+    db_dir: str | Path | None = None,
+) -> dict:
+    out = hydrate_refs_payload_citation_meta(
+        payload,
+        doc_list=doc_list,
+        pdf_root=pdf_root,
+        lib_store=lib_store,
+        db_dir=db_dir,
+    )
+    hits = [dict(hit) for hit in list(out.get("hits") or []) if isinstance(hit, dict)]
+    rows_by_source: dict[str, dict] = {
+        str(item.get("source_path") or "").strip(): dict(item)
+        for item in list(doc_list or [])
+        if isinstance(item, dict) and str(item.get("source_path") or "").strip()
+    }
     hydrated_hits: list[dict] = []
     for hit in hits:
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
         source_path = str(meta.get("source_path") or "").strip()
         ui_meta = dict(hit.get("ui_meta") or {}) if isinstance(hit.get("ui_meta"), dict) else {}
-        stored_meta = citation_meta_by_source.get(source_path) if source_path else None
-        if isinstance(stored_meta, dict) and stored_meta:
-            existing_meta = ui_meta.get("citation_meta") if isinstance(ui_meta.get("citation_meta"), dict) else {}
-            merged_meta = dict(stored_meta)
-            merged_meta.update(
-                {
-                    key: value
-                    for key, value in existing_meta.items()
-                    if value not in (None, "", [], {})
-                }
-            )
-            ui_meta["citation_meta"] = merged_meta
         ui_meta = _doc_list._dedupe_doc_list_card_copy(
             raw_item=rows_by_source.get(source_path, {}),
             ui_meta=ui_meta,
@@ -5641,6 +6075,7 @@ def build_doc_list_refs_payload(
     md_root: Path | None = None,
     lib_store: LibraryStore | None = None,
     allow_citation_prefetch: bool = False,
+    db_dir: str | Path | None = None,
 ) -> dict:
     preloaded_citation_meta = _doc_list_citation_meta(
         doc_list,
@@ -5648,6 +6083,7 @@ def build_doc_list_refs_payload(
         md_root=md_root,
         lib_store=lib_store,
         allow_citation_prefetch=bool(allow_citation_prefetch),
+        db_dir=db_dir,
     )
 
     build_doc_list_payload_hits = _build_doc_list_payload_hits

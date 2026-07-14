@@ -50,6 +50,7 @@ import {
   compactLocateHintLabel,
 } from './reader/readerDomUtils'
 import { useT } from '../../i18n'
+import { basenameFromSourcePath } from '../../utils/sourcePath'
 export type {
   ReaderLocateCandidate,
   ReaderLocateClaimGroup,
@@ -265,7 +266,7 @@ export function PaperGuideReaderDrawer({
     title,
   })
 
-  const sourceTitleAttr = String(sourcePath || sourceName || title || '').trim()
+  const sourceTitleAttr = basenameFromSourcePath(resolvedName || sourceName || sourcePath || title) || title
   const metaLocationText = activeHeadingPath || (S.reader_document_start || 'Document start')
   const evidenceFocusText = compactReaderEvidenceText(activeHighlightSnippet || activeFocusSnippet)
   const bindingStatusText = expectsEquationBinding && !equationBindingReady

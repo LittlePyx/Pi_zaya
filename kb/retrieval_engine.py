@@ -529,6 +529,22 @@ def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
         if c_norm and (len(c_norm) >= 12) and (c_norm in prompt_norm):
             score = max(score, 8.0)
 
+    # A natural Chinese paper pointer can identify an English-titled source even
+    # when the user does not repeat any title words verbatim. Keep this alias
+    # deliberately narrow: generic perovskite/device questions must not be
+    # promoted to laser papers (or vice versa).
+    source_surface = _direct_phrase_surface(" ".join(str(x or "") for x in candidates))
+    wants_perovskite_laser = (
+        ("钙钛矿" in prompt_raw and ("激光器" in prompt_raw or "激光" in prompt_raw))
+        or bool(re.search(r"\bperovskite\s+(?:laser|lasing)\b", prompt_low))
+    )
+    is_perovskite_laser_source = (
+        "perovskite" in source_surface
+        and bool(re.search(r"\b(?:laser|lasing)\b", source_surface))
+    )
+    if wants_perovskite_laser and is_perovskite_laser_source:
+        score = max(score, 7.5)
+
     prompt_tokens = [t for t in tokenize(prompt_norm) if len(t) >= 3 and t not in _DOC_HINT_STOP_TOKENS]
     src_tokens = [
         t
@@ -1384,6 +1400,9 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
     # This keeps retrieval responsive even when translation LLM is slow/unavailable.
     terms: list[str] = []
     mapping = [
+        ("钙钛矿激光器", "perovskite laser"),
+        ("光泵浦", "optically pumped"),
+        ("器件问题", "device challenge"),
         ("\u5355\u50cf\u7d20", "single-pixel"),
         ("\u5355\u5149\u5b50", "single-photon"),
         ("\u5355\u66dd\u5149", "single-shot"),
@@ -1707,6 +1726,27 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
             "digital refocusing out-of-focus sample ray tracing wave propagation "
             "diffraction angular information"
         )
+    if has_any("perovskite laser", "perovskite lasing", "钙钛矿激光器", "钙钛矿激光"):
+        # Keep the base expansion technology-neutral. A generic perovskite-laser
+        # question may refer to optical pumping, nanowire lasers, or another
+        # device family; it must not silently become the dual-cavity Nature paper.
+        add("perovskite laser lasing optical gain threshold cavity device")
+        if has_any(
+            "dual-cavity",
+            "dual cavity",
+            "electrically driven",
+            "electrical injection",
+            "electrically injected",
+            "peled",
+            "双腔",
+            "电驱动",
+            "电注入",
+            "电泵浦",
+        ):
+            add(
+                "electrically driven lasing dual-cavity perovskite device microcavity "
+                "PeLED electrical injection laser"
+            )
     if has_any("trade-off", "tradeoff", "\u6743\u8861", "\u539a\u6837\u672c", "thick sample", "thick samples", "s2ism"):
         add(
             "structured detection microscopy thick samples resolution SNR signal-to-noise "
@@ -1719,6 +1759,22 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
         add(
             "deep learning single-pixel imaging advantages challenges data generalization "
             "interpretability speed reconstruction quality"
+        )
+    if has_any("piln", "part-based image-loop", "image-loop network") and has_any(
+        "review",
+        "survey",
+        "taxonomy",
+        "position",
+        "relationship",
+        "mainline",
+        "\u7efc\u8ff0",
+        "\u4e3b\u7ebf",
+        "\u4f4d\u7f6e",
+        "\u5173\u7cfb",
+    ):
+        add(
+            "data-driven model-driven hybrid-driven single-pixel imaging deep learning "
+            "taxonomy untrained network measurements physical model"
         )
     if has_any("origin", "source", "comes from", "prior", "previous", "\u6765\u6e90", "\u51fa\u5904", "\u4e4b\u524d", "\u5df2\u6709"):
         add("prior work existing method background reference citation source")

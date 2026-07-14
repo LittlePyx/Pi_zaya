@@ -1325,7 +1325,7 @@ def test_generate_allows_retry_after_cancel_request(monkeypatch, tmp_path: Path)
             RUNTIME.GEN_TASKS.pop(session_id, None)
 
 
-def test_generate_stream_exposes_answer_probe_fields(monkeypatch):
+def test_generate_stream_exposes_public_answer_contract_fields(monkeypatch):
     from api.routers import generate as generate_router
 
     monkeypatch.setattr(
@@ -1359,7 +1359,7 @@ def test_generate_stream_exposes_answer_probe_fields(monkeypatch):
     assert payload["answer_depth"] == "L2"
     assert payload["answer_output_mode"] == "fact_answer"
     assert payload["answer_contract_v1"] is True
-    assert payload["answer_quality"]["minimum_ok"] is True
+    assert payload["answer_quality"] == {}
     assert payload["paper_guide_debug"] == {}
     assert payload["research_trace"] == {}
 
@@ -1931,6 +1931,152 @@ def test_references_reader_doc_rewrites_tmp_assets_and_serves(monkeypatch, tmp_p
     assert asset_resp.headers["cache-control"] == "no-cache, max-age=0"
 
 
+def test_public_projected_nested_source_opens_without_absolute_path_leak(
+    monkeypatch,
+    tmp_path: Path,
+):
+    import api.reference_ui as reference_ui
+    from api.routers import references as refs_router
+
+    md_root = tmp_path / "md_output"
+    source_path = md_root / "collection" / "paper" / "Paper.en.md"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("# Paper\n\nDirect evidence.\n", encoding="utf-8")
+    roots = [md_root.resolve()]
+    monkeypatch.setattr(refs_router, "_reference_asset_roots", lambda: roots)
+
+    projected = reference_ui.public_refs_payload_projection(
+        {
+            1: {
+                "hits": [
+                    {
+                        "meta": {"source_path": str(source_path)},
+                        "ui_meta": {
+                            "source_path": str(source_path),
+                            "reader_open": {"sourcePath": str(source_path)},
+                        },
+                    }
+                ]
+            }
+        },
+        source_roots=roots,
+    )
+    source_id = projected[1]["hits"][0]["ui_meta"]["reader_open"]["sourcePath"]
+    assert source_id == "kb-source/0/collection/paper/Paper.en.md"
+    assert str(tmp_path) not in json.dumps(projected)
+
+    client = TestClient(app)
+    doc_resp = client.post("/api/references/reader/doc", json={"source_path": source_id})
+
+    assert doc_resp.status_code == 200
+    payload = doc_resp.json()
+    assert payload["source_path"] == source_id
+    assert payload["md_path"] == source_id
+    assert "Direct evidence" in payload["markdown"]
+    assert str(tmp_path) not in json.dumps(payload)
+
+    from api.routers import chat as chat_router
+    from kb.chat_store import ChatStore
+
+    db_dir = tmp_path / "db"
+    pdf_root = tmp_path / "pdfs"
+    pdf_root.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_root / "Paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n% safe test fixture\n")
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(chat_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(chat_router, "_md_dir", lambda: md_root)
+    monkeypatch.setattr(chat_router, "_pdf_dir", lambda: pdf_root)
+    monkeypatch.setattr(chat_router, "_kickoff_paper_guide_prefetch_if_needed", lambda **_kwargs: None)
+
+    guide_resp = client.post(
+        "/api/conversations",
+        json={
+            "title": "Paper guide",
+            "mode": "paper_guide",
+            "bound_source_path": source_id,
+            "bound_source_name": "Paper.pdf",
+            "bound_source_ready": True,
+        },
+    )
+
+    assert guide_resp.status_code == 200
+    guide = store.get_conversation(guide_resp.json()["id"])
+    assert guide is not None
+    assert guide["bound_source_path"] == str(source_path.resolve(strict=False))
+
+    session_resp = client.post(
+        "/api/reader/sessions",
+        json={
+            "payload": {"sourcePath": source_id, "sourceName": "Paper.pdf"},
+            "conversation_id": guide_resp.json()["id"],
+        },
+    )
+    assert session_resp.status_code == 200
+    session_payload = session_resp.json()
+    assert session_payload["payload"]["sourcePath"] == source_id
+    session_id = session_payload["id"]
+    session_get = client.get(f"/api/reader/sessions/{session_id}")
+    assert session_get.status_code == 200
+    assert session_get.json()["payload"]["sourcePath"] == source_id
+    session_patch = client.patch(
+        f"/api/reader/sessions/{session_id}/state",
+        json={"state": {"scrollTop": 24}},
+    )
+    assert session_patch.status_code == 200
+    assert session_patch.json()["payload"]["sourcePath"] == source_id
+
+    reader_state_get = client.get(
+        f"/api/conversations/{guide_resp.json()['id']}/reader-state",
+        params={"source_path": source_id},
+    )
+    assert reader_state_get.status_code == 200
+    assert reader_state_get.json()["source_path"] == source_id
+    reader_state_patch = client.patch(
+        f"/api/conversations/{guide_resp.json()['id']}/reader-state",
+        params={"source_path": source_id},
+        json={"state": {"scrollTop": 48}},
+    )
+    assert reader_state_patch.status_code == 200
+    assert reader_state_patch.json()["source_path"] == source_id
+
+    citation_calls: list[str] = []
+    monkeypatch.setattr(refs_router, "_pdf_dir", lambda: pdf_root)
+    monkeypatch.setattr(refs_router, "_md_dir", lambda: md_root)
+    monkeypatch.setattr(refs_router, "_lib_store", lambda: None)
+    monkeypatch.setattr(
+        refs_router,
+        "ensure_source_citation_meta",
+        lambda **kwargs: citation_calls.append(str(kwargs["source_path"]))
+        or {"source_path": str(kwargs["source_path"]), "title": "Paper"},
+    )
+    citation_resp = client.post(
+        "/api/references/citation-meta",
+        json={"source_path": source_id},
+    )
+
+    assert citation_resp.status_code == 200
+    assert citation_calls == [str(source_path.resolve(strict=False))]
+    assert citation_resp.json()["source_path"] == source_id
+
+    import api.reference_ui as reference_ui_module
+
+    opened: dict[str, object] = {}
+    monkeypatch.setattr(
+        reference_ui_module,
+        "_open_pdf_at",
+        lambda path, page=None: opened.update({"path": path, "page": page})
+        or (True, f"Opened: {path}"),
+    )
+    open_result = refs_router.open_reference(
+        refs_router.OpenReferenceBody(source_path=source_id, page=2)
+    )
+
+    assert open_result == {"ok": True, "message": "PDF opened"}
+    assert opened == {"path": pdf_path.resolve(strict=False), "page": 2}
+
+
 def test_references_reader_doc_accepts_file_url_source_path_variants(monkeypatch, tmp_path: Path):
     from api.routers import references as refs_router
 
@@ -1949,8 +2095,8 @@ def test_references_reader_doc_accepts_file_url_source_path_variants(monkeypatch
 
     assert doc_resp.status_code == 200
     payload = doc_resp.json()
-    assert payload["source_path"] == file_url_source_path
-    assert payload["md_path"] == str(md_path.resolve(strict=False))
+    assert payload["source_path"] == "kb-source/0/Doc With Spaces/Doc With Spaces.en.md"
+    assert payload["md_path"] == payload["source_path"]
     assert "important sentence" in payload["markdown"]
 
 

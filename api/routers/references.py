@@ -28,7 +28,9 @@ from api.reference_ui import (
     enrich_refs_payload,
     ensure_source_citation_meta,
     hydrate_doc_list_refs_payload_citation_meta,
+    hydrate_refs_payload_citation_meta,
     open_reference_source,
+    public_refs_payload_projection,
 )
 from api.reference_card_quality import refs_pack_has_full_llm_copy
 from api.reference_metadata_quality import (
@@ -57,10 +59,14 @@ from kb.citation_card import compose_citation_card
 from kb.file_ops import _resolve_md_output_paths
 from kb.library_store import LibraryStore
 from kb.path_safety import (
+    ROOT_RELATIVE_FILE_ID_PREFIX,
     clean_file_source_path_input,
     path_is_within_roots,
+    reference_source_roots,
     resolve_existing_file_under_roots,
+    resolve_root_relative_file_id,
     resolve_verified_image_file_under_roots,
+    root_relative_file_id,
     verified_image_file_mime,
 )
 from kb.reference_query_family import (
@@ -207,16 +213,10 @@ def _sync_message_render_packets_with_refs_payload(*, store, conv_id: str, paylo
 
 
 def _reference_asset_roots() -> list[Path]:
-    roots: list[Path] = []
-    for raw in (_md_dir(), _project_root() / "tmp"):
-        try:
-            resolved = Path(raw).expanduser().resolve(strict=False)
-        except Exception:
-            continue
-        if resolved in roots:
-            continue
-        roots.append(resolved)
-    return roots
+    return reference_source_roots(
+        md_root=_md_dir(),
+        db_dir=getattr(get_settings(), "db_dir", None),
+    )
 
 
 def _path_within_roots(path_obj: Path, roots: list[Path]) -> bool:
@@ -990,6 +990,7 @@ def _render_authoritative_doc_list_pack(
         md_root=_md_dir(),
         lib_store=_lib_store(),
         allow_citation_prefetch=bool(allow_citation_prefetch),
+        db_dir=get_settings().db_dir,
     )
 
 
@@ -1579,6 +1580,9 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         payload_out = payload if isinstance(payload, dict) else {}
         if payload_out:
             hydrated_payload = dict(payload_out)
+            pdf_root = _pdf_dir()
+            lib_store = _lib_store()
+            db_dir = get_settings().db_dir
             for raw_user_msg_id, raw_pack in payload_out.items():
                 if not isinstance(raw_pack, dict):
                     continue
@@ -1587,15 +1591,22 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                     if isinstance(raw_pack.get("pipeline_debug"), dict)
                     else {}
                 )
-                if not bool(pipeline_debug.get("doc_list_authoritative")):
-                    continue
                 try:
-                    hydrated_payload[raw_user_msg_id] = hydrate_doc_list_refs_payload_citation_meta(
-                        raw_pack,
-                        doc_list=[],
-                        pdf_root=_pdf_dir(),
-                        lib_store=_lib_store(),
-                    )
+                    if bool(pipeline_debug.get("doc_list_authoritative")):
+                        hydrated_payload[raw_user_msg_id] = hydrate_doc_list_refs_payload_citation_meta(
+                            raw_pack,
+                            doc_list=[],
+                            pdf_root=pdf_root,
+                            lib_store=lib_store,
+                            db_dir=db_dir,
+                        )
+                    else:
+                        hydrated_payload[raw_user_msg_id] = hydrate_refs_payload_citation_meta(
+                            raw_pack,
+                            pdf_root=pdf_root,
+                            lib_store=lib_store,
+                            db_dir=db_dir,
+                        )
                 except Exception:
                     continue
             payload_out = hydrated_payload
@@ -1615,7 +1626,10 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             mode=mode,
             payload=payload_out,
         )
-        return payload_out
+        return public_refs_payload_projection(
+            payload_out,
+            source_roots=_reference_asset_roots(),
+        )
 
     store = get_chat_store()
     read_timeout_s = _refs_conversation_read_timeout_s()
@@ -1725,6 +1739,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                     doc_list=authoritative_doc_list,
                     pdf_root=_pdf_dir(),
                     lib_store=_lib_store(),
+                    db_dir=get_settings().db_dir,
                 )
                 stored_full_payload[int(user_msg_id)] = _attach_pack_render_state(
                     pack_full,
@@ -2937,24 +2952,37 @@ def _bibliometrics_has_metrics(meta: dict | None) -> bool:
 
 @router.post("/open", dependencies=[Depends(require_management_api)])
 def open_reference(body: OpenReferenceBody):
+    source_path = _resolve_public_reference_source_input(body.source_path)
+    if not source_path:
+        raise HTTPException(404, "source not found")
     ok, message = open_reference_source(
-        source_path=body.source_path,
+        source_path=source_path,
         pdf_root=_pdf_dir(),
         page=body.page,
     )
     if not ok:
         raise HTTPException(404, message)
-    return {"ok": True, "message": message}
+    return {"ok": True, "message": "PDF opened"}
 
 
 @router.post("/citation-meta")
 def get_reference_citation_meta(body: CitationMetaBody):
-    return ensure_source_citation_meta(
-        source_path=body.source_path,
+    source_path = _resolve_public_reference_source_input(body.source_path)
+    if not source_path:
+        raise HTTPException(404, "source not found")
+    out = ensure_source_citation_meta(
+        source_path=source_path,
         pdf_root=_pdf_dir(),
         md_root=_md_dir(),
         lib_store=_lib_store(),
     )
+    if isinstance(out, dict) and body.source_path.replace("\\", "/").startswith(
+        ROOT_RELATIVE_FILE_ID_PREFIX
+    ):
+        for key in ("source_path", "sourcePath", "md_path"):
+            if key in out:
+                out[key] = body.source_path
+    return out
 
 
 def _bibliometrics_quality_contract(meta: dict | None) -> dict:
@@ -3437,9 +3465,12 @@ def _resolve_reader_md_path(source_path: str) -> Path | None:
     raw = _clean_reader_source_path_input(source_path)
     if not raw:
         return None
+    asset_roots = _reference_asset_roots()
+    if raw.replace("\\", "/").startswith(ROOT_RELATIVE_FILE_ID_PREFIX):
+        return resolve_root_relative_file_id(raw, asset_roots)
     src = Path(raw).expanduser()
     if src.suffix.lower().endswith(".md"):
-        return resolve_existing_file_under_roots(src, _reference_asset_roots())
+        return resolve_existing_file_under_roots(src, asset_roots)
 
     pdf_root = _pdf_dir()
     md_root = _md_dir()
@@ -3461,11 +3492,21 @@ def _resolve_reader_md_path(source_path: str) -> Path | None:
         return None
     if not md_exists:
         return None
-    return resolve_existing_file_under_roots(md_main, _reference_asset_roots())
+    return resolve_existing_file_under_roots(md_main, asset_roots)
 
 
 def _clean_reader_source_path_input(source_path: str) -> str:
     return clean_file_source_path_input(source_path)
+
+
+def _resolve_public_reference_source_input(source_path: str) -> str:
+    raw = clean_file_source_path_input(source_path)
+    if not raw:
+        return ""
+    if not raw.replace("\\", "/").startswith(ROOT_RELATIVE_FILE_ID_PREFIX):
+        return raw
+    resolved = resolve_root_relative_file_id(raw, _reference_asset_roots())
+    return str(resolved) if resolved is not None else ""
 
 
 def _rewrite_md_asset_links(md_text: str, *, md_path: Path, asset_roots: list[Path]) -> str:
@@ -3523,7 +3564,10 @@ def _rewrite_md_asset_links(md_text: str, *, md_path: Path, asset_roots: list[Pa
                 return m.group(0)
             version = _asset_cache_version(cand)
             version_part = f"&v={quote(version, safe='')}" if version else ""
-            asset_url = f"/api/references/asset?path={quote(str(cand), safe='')}{version_part}"
+            asset_id = root_relative_file_id(cand, asset_roots)
+            if not asset_id:
+                return m.group(0)
+            asset_url = f"/api/references/asset?path={quote(asset_id, safe='')}{version_part}"
             return f"![{alt}]({asset_url})"
         except Exception:
             return m.group(0)
@@ -3892,10 +3936,12 @@ def get_reader_doc(body: ReaderDocBody):
     except Exception:
         raise HTTPException(500, "failed to read markdown")
 
+    asset_roots = _reference_asset_roots()
+    public_source_path = root_relative_file_id(md_path, asset_roots) or md_path.name
     md_render = _rewrite_md_asset_links(
         md_text,
         md_path=md_path,
-        asset_roots=_reference_asset_roots(),
+        asset_roots=asset_roots,
     )
     anchors, blocks = _build_reader_anchors(md_text, md_path=md_path)
     source_name = md_path.name
@@ -3912,12 +3958,15 @@ def get_reader_doc(body: ReaderDocBody):
         md_path=md_path,
         doc_hash=doc_hash,
     )
+    for detail in cite_details:
+        if isinstance(detail, dict):
+            detail["source_path"] = public_source_path
 
     return {
         "ok": True,
-        "source_path": source_path,
+        "source_path": public_source_path,
         "source_name": source_name,
-        "md_path": str(md_path),
+        "md_path": public_source_path,
         "doc_hash": doc_hash,
         "outline_quality": _reader_outline_quality(blocks),
         "markdown": md_render,
@@ -3933,7 +3982,14 @@ def get_reference_asset(path: str):
     raw = str(path or "").strip()
     if not raw or len(raw) > _REFS_SOURCE_PATH_MAX_CHARS:
         raise HTTPException(404, "asset not found")
-    verified = resolve_verified_image_file_under_roots(raw, _reference_asset_roots())
+    asset_roots = _reference_asset_roots()
+    candidate: str | Path = raw
+    if raw.replace("\\", "/").startswith(ROOT_RELATIVE_FILE_ID_PREFIX):
+        resolved = resolve_root_relative_file_id(raw, asset_roots)
+        if resolved is None:
+            raise HTTPException(404, "asset not found")
+        candidate = resolved
+    verified = resolve_verified_image_file_under_roots(candidate, asset_roots)
     if verified is None:
         raise HTTPException(404, "asset not found")
     resolved, media_type = verified

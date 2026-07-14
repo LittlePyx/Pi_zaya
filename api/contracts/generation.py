@@ -116,7 +116,7 @@ class GenerationStreamEvent(_GenerationContractModel):
             answer_depth=_text(task.get("answer_depth")),
             answer_output_mode=_text(task.get("answer_output_mode")),
             answer_contract_v1=bool(task.get("answer_contract_v1", False)),
-            answer_quality=_record(task.get("answer_quality")),
+            answer_quality=_record(task.get("answer_quality")) if include_internal_debug else {},
             paper_guide_debug=_record(task.get("paper_guide_debug")) if include_internal_debug else {},
             research_trace=_record(task.get("research_trace")) if include_internal_debug else {},
             agent_trace=_record(task.get("agent_trace")) if agent_mode else {},
@@ -130,4 +130,3 @@ class GenerationStreamEvent(_GenerationContractModel):
             return dict(self.model_dump(mode="python"))
         except Exception:  # pragma: no cover - pydantic v1 compatibility
             return dict(self.dict())
-

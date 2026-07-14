@@ -9,12 +9,21 @@ import {
 const CONV_ID = 'public-surface-isolation'
 const ABSOLUTE_SOURCE_PATH = 'F:\\private\\research\\Internal Quality Paper.en.md'
 const ABSOLUTE_LIBRARY_MATCH_PATH = '/srv/private/research/Matched Internal Quality Paper.en.md'
+const ABSOLUTE_REFS_FALLBACK_PATH = '/srv/private/research/Refs Unix Fallback.en.md'
+const REFS_FALLBACK_BASENAME = 'Refs Unix Fallback.en.md'
 const SOURCE_NAME = 'Internal Quality Paper.pdf'
 const LIBRARY_MATCH_BASENAME = 'Matched Internal Quality Paper.en.md'
 const PATH_SOURCE_NAME = '/home/private/research/Path Named Source.en.md'
 const PATH_SOURCE_NAME_BASENAME = 'Path Named Source.en.md'
 const EMPTY_NAME_SOURCE_PATH = 'C:\\private\\research\\Empty Name Source.en.md'
 const EMPTY_NAME_SOURCE_BASENAME = 'Empty Name Source.en.md'
+const WEAK_PATH_SOURCE_NAME = '/home/private/research/Weak Path Source.en.md'
+const WEAK_PATH_SOURCE_PATH = '/mnt/private/research/weak-path-source.en.md'
+const WEAK_PATH_SOURCE_BASENAME = 'Weak Path Source.en.md'
+const STORED_CARD_VIEW_PATH = '/srv/private/research/Stored Card View Title.pdf'
+const STORED_CARD_VIEW_BASENAME = 'Stored Card View Title.pdf'
+const STORED_CARD_TITLE_PATH = 'C:\\private\\research\\Stored Card Title.pdf'
+const STORED_CARD_TITLE_BASENAME = 'Stored Card Title.pdf'
 const INTERNAL_TRACE_OBSERVATION = 'internal trace observation: quality gate repair executed'
 
 const conversation = {
@@ -95,6 +104,13 @@ const pathNamedCitationMeta = {
   summary_quality: {},
   library_match_status: 'unknown',
   library_match_path: '',
+  card_view: {
+    version: 1,
+    route: 'system_a',
+    kind: 'answer_evidence',
+    header: { title: STORED_CARD_VIEW_PATH, subtitle: 'Results / Path-safe title' },
+    sections: [],
+  },
 }
 
 const emptyNamedCitationMeta = {
@@ -106,6 +122,26 @@ const emptyNamedCitationMeta = {
   title: 'Source grouping remains safe without a source name',
   doi: '10.1234/public.surface.empty-name',
   doi_url: 'https://doi.org/10.1234/public.surface.empty-name',
+  summary_line: '',
+  summary_source: '',
+  summary_quality: {},
+  library_match_status: 'unknown',
+  library_match_path: '',
+  card_title: STORED_CARD_TITLE_PATH,
+}
+
+const weakPathCitationMeta = {
+  ...citationMeta,
+  num: 4,
+  anchor: 'public-source-weak-path',
+  source_name: WEAK_PATH_SOURCE_NAME,
+  source_path: WEAK_PATH_SOURCE_PATH,
+  title: '',
+  authors: '',
+  year: '',
+  venue: '',
+  doi: '',
+  doi_url: '',
   summary_line: '',
   summary_source: '',
   summary_quality: {},
@@ -124,11 +160,11 @@ const messages = [
     id: 102,
     role: 'assistant',
     refs_user_msg_id: 101,
-    content: 'Show the conclusion, a useful source explanation, and a direct path to the evidence.',
-    rendered_body: 'Show the conclusion, a useful source explanation, and a direct path to the evidence.',
+    content: 'Show the conclusion, a useful source explanation, and a direct path to the evidence [1] [2] [3].',
+    rendered_body: 'Show the conclusion, a useful source explanation, and a direct path to the evidence [1] [2] [3].',
     copy_text: 'Show the conclusion, a useful source explanation, and a direct path to the evidence.',
     copy_markdown: 'Show the conclusion, a useful source explanation, and a direct path to the evidence.',
-    cite_details: [citationMeta],
+    cite_details: [citationMeta, pathNamedCitationMeta, emptyNamedCitationMeta],
     created_at: 1_780_000_002,
     meta: {
       agent_trace: {
@@ -251,6 +287,19 @@ const refsPayload = {
           },
         },
       },
+      {
+        meta: {
+          ref_pack_state: 'ready',
+          source_path: ABSOLUTE_REFS_FALLBACK_PATH,
+        },
+        ui_meta: {
+          source_path: ABSOLUTE_REFS_FALLBACK_PATH,
+          heading_path: 'Results / Unix fallback',
+          summary_line: 'The fallback source label must remain a basename.',
+          why_line: 'It verifies path-safe reference rendering.',
+          can_open: false,
+        },
+      },
     ],
   },
 }
@@ -311,6 +360,7 @@ async function installPublicChatBackend(page: Page) {
     ).trim()
     if (sourcePath === pathNamedCitationMeta.source_path) return pathNamedCitationMeta
     if (sourcePath === emptyNamedCitationMeta.source_path) return emptyNamedCitationMeta
+    if (sourcePath === weakPathCitationMeta.source_path) return weakPathCitationMeta
     return citationMeta
   }
   await installAppShellMocks(page, { rootConversations: [conversation] })
@@ -319,7 +369,7 @@ async function installPublicChatBackend(page: Page) {
   await installEmptyCitationShelfMock(page, {
     scopeId: '__default__',
     projectId: null,
-    initialItems: [citationMeta, pathNamedCitationMeta, emptyNamedCitationMeta],
+    initialItems: [citationMeta, pathNamedCitationMeta, emptyNamedCitationMeta, weakPathCitationMeta],
     initialOpen: true,
   })
 
@@ -358,6 +408,15 @@ async function installPublicChatBackend(page: Page) {
   })
   await page.route('**/api/references/bibliometrics', async (route) => {
     await fulfillJson(route, citationMetaForRequest(route))
+  })
+  await page.route('**/api/references/reader/doc', async (route) => {
+    await fulfillJson(route, {
+      source_name: SOURCE_NAME,
+      markdown: '# Evidence presentation\n\nEvidence remains useful without exposing internal evaluation machinery.',
+      anchors: [],
+      blocks: [],
+      cite_details: [],
+    })
   })
   await page.route('**/api/library/quality/sources', async (route) => {
     sourceQualityCalls += 1
@@ -399,6 +458,7 @@ test.beforeAll(() => {
 })
 
 test('ordinary-user chat ignores debug flags and exports no diagnostic surface', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await injectAllDebugFlags(page)
   const backend = await installPublicChatBackend(page)
 
@@ -429,8 +489,21 @@ test('ordinary-user chat ignores debug flags and exports no diagnostic surface',
   await expect(page.getByText('Show the conclusion, a useful source explanation')).toBeVisible()
   await expect(page.getByTestId('chat-perf-panel')).toHaveCount(0)
   await expect(page.locator('body')).not.toContainText(ABSOLUTE_SOURCE_PATH)
+  await expect(page.locator('body')).not.toContainText(ABSOLUTE_REFS_FALLBACK_PATH)
+  await expect(page.locator('body')).not.toContainText(STORED_CARD_VIEW_PATH)
+  await expect(page.locator('body')).not.toContainText(STORED_CARD_TITLE_PATH)
   await expect(page.locator('body')).not.toContainText('Q94')
   expect(backend.sourceQualityCalls()).toBe(0)
+
+  const citeChips = page.locator('.kb-cite-chip')
+  await expect(citeChips).toHaveCount(3)
+  await citeChips.nth(1).click()
+  const citationPopover = page.getByTestId('citation-popover')
+  await expect(citationPopover).toBeVisible()
+  await expect(citationPopover).toContainText(STORED_CARD_VIEW_BASENAME)
+  await expect(citationPopover).not.toContainText(PATH_SOURCE_NAME)
+  await expect(citationPopover).not.toContainText(pathNamedCitationMeta.source_path)
+  await citationPopover.locator('.kb-cite-pop-close').click()
 
   const refsPanel = page.locator('.kb-refs-panel')
   await expect(refsPanel).toHaveCount(1)
@@ -438,8 +511,9 @@ test('ordinary-user chat ignores debug flags and exports no diagnostic surface',
   const refsTitle = refsPanel.locator('.kb-ref-title')
   await expect(async () => {
     if (await refsTitle.count() === 0) await refsHeader.click()
-    await expect(refsTitle).toContainText(SOURCE_NAME)
+    await expect(refsTitle).toContainText([SOURCE_NAME, REFS_FALLBACK_BASENAME])
   }).toPass({ timeout: 8_000 })
+  await expect(refsPanel).not.toContainText(ABSOLUTE_REFS_FALLBACK_PATH)
   await expect(refsPanel.locator('.kb-ref-score')).toHaveCount(0)
   await expect(refsPanel.locator('[data-testid^="refs-panel-polish-status-"]')).toHaveCount(0)
   await expect(refsPanel).not.toContainText('Score 9.20')
@@ -460,11 +534,15 @@ test('ordinary-user chat ignores debug flags and exports no diagnostic surface',
 
   const shelf = page.getByTestId('citation-shelf')
   await expect(shelf).toHaveClass(/is-visible/)
-  await expect(shelf.getByTestId('citation-shelf-item')).toHaveCount(3)
+  await expect(shelf.getByTestId('citation-shelf-item')).toHaveCount(4)
   await expect(shelf).not.toContainText(ABSOLUTE_SOURCE_PATH)
   await expect(shelf).not.toContainText(ABSOLUTE_LIBRARY_MATCH_PATH)
   await expect(shelf).not.toContainText(PATH_SOURCE_NAME)
   await expect(shelf).not.toContainText(EMPTY_NAME_SOURCE_PATH)
+  await expect(shelf).not.toContainText(WEAK_PATH_SOURCE_NAME)
+  await expect(shelf).not.toContainText(WEAK_PATH_SOURCE_PATH)
+  await expect(shelf).not.toContainText(STORED_CARD_VIEW_PATH)
+  await expect(shelf).not.toContainText(STORED_CARD_TITLE_PATH)
   await expect(shelf.getByTestId('citation-shelf-summary-quality')).toHaveCount(0)
 
   await shelf.getByTestId('citation-shelf-organize-toggle').click()
@@ -475,14 +553,16 @@ test('ordinary-user chat ignores debug flags and exports no diagnostic surface',
   await shelf.locator('.kb-shelf-advanced-toggle').click()
   await shelf.locator('.kb-shelf-filter-segments[role="group"]').first().locator('button').nth(2).click()
   const groupTitles = shelf.locator('.kb-shelf-group-title')
-  await expect(groupTitles).toContainText([SOURCE_NAME, PATH_SOURCE_NAME_BASENAME, EMPTY_NAME_SOURCE_BASENAME])
+  await expect(groupTitles).toContainText([SOURCE_NAME, PATH_SOURCE_NAME_BASENAME, EMPTY_NAME_SOURCE_BASENAME, WEAK_PATH_SOURCE_BASENAME])
   const groupTitleText = (await groupTitles.allTextContents()).join('\n')
   expect(groupTitleText).not.toContain(PATH_SOURCE_NAME)
   expect(groupTitleText).not.toContain(EMPTY_NAME_SOURCE_PATH)
-  const pathNamedShelfItem = shelf.getByTestId('citation-shelf-item').filter({ hasText: PATH_SOURCE_NAME_BASENAME })
+  expect(groupTitleText).not.toContain(WEAK_PATH_SOURCE_NAME)
+  expect(groupTitleText).not.toContain(WEAK_PATH_SOURCE_PATH)
+  const pathNamedShelfItem = shelf.getByTestId('citation-shelf-item').filter({ hasText: STORED_CARD_VIEW_BASENAME })
   await pathNamedShelfItem.click()
   await expect(pathNamedShelfItem.getByTestId('citation-shelf-trace-row-source')).toHaveAttribute('title', PATH_SOURCE_NAME_BASENAME)
-  const emptyNamedShelfItem = shelf.getByTestId('citation-shelf-item').filter({ hasText: emptyNamedCitationMeta.title })
+  const emptyNamedShelfItem = shelf.getByTestId('citation-shelf-item').filter({ hasText: STORED_CARD_TITLE_BASENAME })
   await emptyNamedShelfItem.click()
   await expect(emptyNamedShelfItem.getByTestId('citation-shelf-trace-row-source')).toHaveAttribute('title', EMPTY_NAME_SOURCE_BASENAME)
   const shelfTitleAttributes = await shelf.locator('[title]').evaluateAll((nodes) => (
@@ -492,11 +572,15 @@ test('ordinary-user chat ignores debug flags and exports no diagnostic surface',
   expect(shelfTitleAttributes.join('\n')).not.toContain(ABSOLUTE_LIBRARY_MATCH_PATH)
   expect(shelfTitleAttributes.join('\n')).not.toContain(PATH_SOURCE_NAME)
   expect(shelfTitleAttributes.join('\n')).not.toContain(EMPTY_NAME_SOURCE_PATH)
+  expect(shelfTitleAttributes.join('\n')).not.toContain(WEAK_PATH_SOURCE_NAME)
+  expect(shelfTitleAttributes.join('\n')).not.toContain(WEAK_PATH_SOURCE_PATH)
   const shelfAriaLabels = await shelf.locator('[aria-label]').evaluateAll((nodes) => (
     nodes.map((node) => node.getAttribute('aria-label') || '')
   ))
   expect(shelfAriaLabels.join('\n')).not.toContain(PATH_SOURCE_NAME)
   expect(shelfAriaLabels.join('\n')).not.toContain(EMPTY_NAME_SOURCE_PATH)
+  expect(shelfAriaLabels.join('\n')).not.toContain(WEAK_PATH_SOURCE_NAME)
+  expect(shelfAriaLabels.join('\n')).not.toContain(WEAK_PATH_SOURCE_PATH)
 
   await shelf.getByTestId('citation-shelf-export-toggle').click()
   const downloadPromise = page.waitForEvent('download')
@@ -510,9 +594,16 @@ test('ordinary-user chat ignores debug flags and exports no diagnostic surface',
     expect(csv).toContain(SOURCE_NAME)
     expect(csv).toContain(PATH_SOURCE_NAME_BASENAME)
     expect(csv).toContain(EMPTY_NAME_SOURCE_BASENAME)
+    expect(csv).toContain(WEAK_PATH_SOURCE_BASENAME)
+    expect(csv).toContain(STORED_CARD_VIEW_BASENAME)
+    expect(csv).toContain(STORED_CARD_TITLE_BASENAME)
     expect(csv).not.toContain(ABSOLUTE_SOURCE_PATH)
     expect(csv).not.toContain(PATH_SOURCE_NAME)
     expect(csv).not.toContain(EMPTY_NAME_SOURCE_PATH)
+    expect(csv).not.toContain(WEAK_PATH_SOURCE_NAME)
+    expect(csv).not.toContain(WEAK_PATH_SOURCE_PATH)
+    expect(csv).not.toContain(STORED_CARD_VIEW_PATH)
+    expect(csv).not.toContain(STORED_CARD_TITLE_PATH)
     expect(csv).not.toContain('trace_conversation_id')
     expect(csv).not.toContain('source_open_status')
     expect(csv).not.toContain('source_quality_status')
@@ -521,6 +612,33 @@ test('ordinary-user chat ignores debug flags and exports no diagnostic surface',
     expect(csv).not.toContain('internal exact-anchor quality reason')
     expect(csv).not.toContain('Q94')
   }
+
+  const markdownDownloadPromise = page.waitForEvent('download')
+  await shelf.getByTestId('citation-shelf-export-main-md').click()
+  const markdownPath = await (await markdownDownloadPromise).path()
+  expect(markdownPath).not.toBeNull()
+  if (markdownPath) {
+    const markdown = await readFile(markdownPath, 'utf8')
+    expect(markdown).toContain(WEAK_PATH_SOURCE_BASENAME)
+    expect(markdown).not.toContain(WEAK_PATH_SOURCE_NAME)
+    expect(markdown).not.toContain(WEAK_PATH_SOURCE_PATH)
+  }
+
+  await shelf.getByTestId('citation-shelf-export-copy-bibtex').click()
+  await expect.poll(async () => page.evaluate(() => navigator.clipboard.readText())).toContain(WEAK_PATH_SOURCE_BASENAME)
+  const copiedBibtex = await page.evaluate(() => navigator.clipboard.readText())
+  expect(copiedBibtex).not.toContain(WEAK_PATH_SOURCE_NAME)
+  expect(copiedBibtex).not.toContain(WEAK_PATH_SOURCE_PATH)
+
+  await citeChips.nth(0).click()
+  await citationPopover.locator('.kb-cite-pop-action-primary').click()
+  const readerTitle = page.locator('.kb-reader-shell-title')
+  await expect(readerTitle).toBeVisible()
+  await expect(readerTitle).toHaveAttribute('title', SOURCE_NAME)
+  const readerTitleAttributes = await page.locator('.kb-reader-shell [title]').evaluateAll((nodes) => (
+    nodes.map((node) => node.getAttribute('title') || '')
+  ))
+  expect(readerTitleAttributes.join('\n')).not.toContain(ABSOLUTE_SOURCE_PATH)
 })
 
 test('ordinary-user build excludes internal regression routes despite debug storage', async ({ page }) => {

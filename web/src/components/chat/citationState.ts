@@ -1297,6 +1297,8 @@ export function citationCardView(detail: CiteDetail): CitationCardView {
   const stored = detail.cardView
   const isSystemB = Boolean(detail.isInpaper)
   const route = isSystemB ? 'system_b' : 'system_a'
+  const publicSourceName = baseName(detail.sourceName)
+  const publicSourcePathName = baseName(detail.sourcePath)
   const storedMatchesRoute = Boolean(stored && (!stored.route || stored.route === route))
   const storedSection = (id: string): CitationCardViewSection | null => {
     if (!storedMatchesRoute) return null
@@ -1308,8 +1310,13 @@ export function citationCardView(detail: CiteDetail): CitationCardView {
   const sectionText = (id: string, fieldValue: string): string => {
     return cleanCitationDisplayText(storedSection(id)?.text || fieldValue || '')
   }
-  const storedTitle = cleanCitationDisplayText((storedMatchesRoute ? stored?.header?.title : '') || '')
-  const detailTitle = cleanCitationDisplayText(detail.title || '')
+  const publicCardTitle = (value: string): string => {
+    const text = cleanCitationDisplayText(value || '').trim()
+    if (!text) return ''
+    return /^(?:[A-Za-z]:[\\/]|[\\/]{2}|\/|file:\/{2,3})/i.test(text) ? baseName(text) : text
+  }
+  const storedTitle = publicCardTitle((storedMatchesRoute ? stored?.header?.title : '') || '')
+  const detailTitle = publicCardTitle(detail.title || '')
   const repairedSystemBTitle = (
     isSystemB
     && detailTitle
@@ -1319,12 +1326,12 @@ export function citationCardView(detail: CiteDetail): CitationCardView {
   const title = cleanCitationDisplayText(
     repairedSystemBTitle
     || storedTitle
-    || detail.cardTitle
-    || (isSystemB ? detail.title : detail.sourceName)
-    || detail.title
-    || detail.sourcePath,
+    || publicCardTitle(detail.cardTitle)
+    || (isSystemB ? detail.title : publicSourceName)
+    || detailTitle
+    || publicSourcePathName,
   )
-  const subtitle = cleanCitationDisplayText((storedMatchesRoute ? stored?.header?.subtitle : '') || detail.cardSubtitle || '')
+  const subtitle = publicCardTitle((storedMatchesRoute ? stored?.header?.subtitle : '') || detail.cardSubtitle || '')
   const qualityFlags = detail.cardQualityFlags.length ? detail.cardQualityFlags : (storedMatchesRoute ? (stored?.quality?.flags || []) : [])
   const systemAHasReviewRisk = !isSystemB && Boolean(
     detail.cardWarning

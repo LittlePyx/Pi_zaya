@@ -31,6 +31,7 @@ from kb.paper_guide_prompting import (
 from kb.paper_guide_reference_opportunities import (
     build_reference_opportunities_prompt_block,
     detect_paper_guide_reference_opportunities,
+    detect_text_reference_opportunities,
     merge_reference_opportunity_candidate_refs,
 )
 from kb.paper_guide.router import _resolve_paper_guide_intent
@@ -445,6 +446,34 @@ def _prepare_paper_guide_prompt_context(
         support_slots=paper_guide_support_slots,
         reference_opportunities=paper_guide_reference_opportunities,
     )
+    if (
+        not paper_guide_mode
+        and answer_hits
+        and str(citation_plan.get("intent") or "").strip().lower() == "origin_lookup"
+    ):
+        paper_guide_reference_opportunities = detect_text_reference_opportunities(
+            prompt=prompt_text,
+            answer="",
+            answer_hits=answer_hits,
+            db_dir=db_dir,
+            max_items=1,
+        )
+        if paper_guide_reference_opportunities:
+            paper_guide_reference_opportunities_block = build_reference_opportunities_prompt_block(
+                paper_guide_reference_opportunities,
+                max_items=1,
+            )
+            paper_guide_candidate_refs_by_source = merge_reference_opportunity_candidate_refs(
+                paper_guide_candidate_refs_by_source,
+                paper_guide_reference_opportunities,
+            )
+            citation_plan = build_citation_plan(
+                prompt=prompt_text,
+                prompt_family=prompt_family,
+                answer_hits=answer_hits,
+                support_slots=paper_guide_support_slots,
+                reference_opportunities=paper_guide_reference_opportunities,
+            )
     citation_plan_block = build_citation_plan_prompt_block(citation_plan)
     paper_guide_contracts_seed = {}
     if paper_guide_mode:

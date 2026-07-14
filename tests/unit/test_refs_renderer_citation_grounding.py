@@ -1,6 +1,74 @@
 from __future__ import annotations
 
+from kb.citation_plan import build_citation_plan
 from ui import refs_renderer
+
+
+def test_system_a_binds_cassi_dual_disperser_aliases() -> None:
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="CASSI introduced a dual-disperser architecture with a coded aperture.",
+        hit={"text": "The design uses two dispersive elements and a binary-valued aperture code."},
+        meta={},
+        heading="Abstract",
+        evidence_quote="The design uses two dispersive elements and a binary-valued aperture code.",
+        source_name="Single-shot compressive spectral imaging with a dual-disperser architecture",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "cassi" in binding["overlap_terms"]
+
+
+def test_system_a_binds_piln_to_ilnet_and_sampling_rate_aliases() -> None:
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="PILN targets single-pixel imaging at a low sampling rate.",
+        hit={
+            "text": (
+                "The part-based image-loop network (ILNet) reconstructs single-pixel images "
+                "while reducing sample rates."
+            )
+        },
+        meta={},
+        heading="Abstract",
+        evidence_quote=(
+            "The part-based image-loop network (ILNet) reconstructs single-pixel images "
+            "while reducing sample rates."
+        ),
+        source_name="Part-based image-loop network for single-pixel imaging",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert {"piln", "sampling ratio"}.issubset(set(binding["overlap_terms"]))
+
+
+def test_system_a_does_not_ground_unrelated_cutoff_frequency_phrase() -> None:
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="The waveguide cut-off frequency sets the supported optical mode.",
+        hit={"text": "The electrical low-pass filter has a measured cut-off frequency."},
+        meta={},
+        heading="Electronics",
+        evidence_quote="The electrical low-pass filter has a measured cut-off frequency.",
+        source_name="Detector readout electronics",
+    )
+
+    assert binding["status"] == "candidate"
+    assert binding["suppress_link"] is True
+
+
+def test_system_a_still_grounds_explicit_waveguide_evidence() -> None:
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="The waveguide geometry sets its supported optical modes.",
+        hit={"text": "The waveguide geometry determines which optical modes are supported."},
+        meta={},
+        heading="Waveguide design",
+        evidence_quote="The waveguide geometry determines which optical modes are supported.",
+        source_name="Integrated optical waveguide design",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "waveguide" in binding["overlap_terms"]
 
 
 def test_numeric_citation_is_hidden_when_local_doi_conflicts(monkeypatch):
@@ -520,6 +588,78 @@ def test_citation_router_applies_per_paragraph_budget_for_system_a(monkeypatch):
     assert "[3](#kb-cite-" not in out
     assert len(details) == 2
     assert all(item["citation_route"] == "system_a" for item in details)
+
+
+def test_multi_source_coverage_keeps_three_cards_without_three_per_paragraph(monkeypatch):
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *args, **kwargs: None)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda source_path: source_path)
+
+    hits = [
+        {
+            "text": "Structured detection improves optical sectioning.",
+            "meta": {
+                "source_path": "structured.en.md",
+                "heading_path": "Abstract",
+                "evidence_quote": "Structured detection improves optical sectioning.",
+                "primary_block_id": "structured",
+            },
+        },
+        {
+            "text": "Interferometric detection measures weak scattering signals.",
+            "meta": {
+                "source_path": "interferometric.en.md",
+                "heading_path": "Abstract",
+                "evidence_quote": "Interferometric detection measures weak scattering signals.",
+                "primary_block_id": "interferometric",
+            },
+        },
+        {
+            "text": "Light-field microscopy captures three-dimensional context.",
+            "meta": {
+                "source_path": "light-field.en.md",
+                "heading_path": "Abstract",
+                "evidence_quote": "Light-field microscopy captures three-dimensional context.",
+                "primary_block_id": "light-field",
+            },
+        },
+    ]
+    plan = build_citation_plan(
+        prompt="structured detection、interferometric、light-field 分别解决什么问题？",
+        prompt_family="method",
+        answer_hits=hits,
+    )
+
+    separated = (
+        "Structured detection improves optical sectioning [1].\n\n"
+        "Interferometric detection measures weak scattering signals [2].\n\n"
+        "Light-field microscopy captures three-dimensional context [3]."
+    )
+    separated_out, separated_details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
+        separated,
+        hits,
+        anchor_ns="multi-source-separated",
+        citation_plan=plan,
+    )
+
+    assert plan["budget"]["system_a"] == 3
+    assert plan["per_paragraph_budget"]["system_a"] == 2
+    assert separated_out.count("#kb-cite-") == 3
+    assert len(separated_details) == 3
+
+    crowded = (
+        "Structured detection improves optical sectioning [1], interferometric detection measures "
+        "weak scattering signals [2], and light-field microscopy captures three-dimensional context [3]."
+    )
+    crowded_out, crowded_details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
+        crowded,
+        hits,
+        anchor_ns="multi-source-crowded",
+        citation_plan=plan,
+    )
+
+    assert crowded_out.count("#kb-cite-") == 2
+    assert len(crowded_details) == 2
 
 
 def test_citation_router_reads_system_a_budget_from_citation_plan(monkeypatch):

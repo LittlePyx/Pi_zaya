@@ -7850,7 +7850,7 @@ def delete_library_file(body: DeleteLibraryFileBody):
     pdf_ok, pdf_err = _safe_delete_file(pdf_path)
     md_deleted = False
     md_warn = ""
-    if bool(body.also_md):
+    if bool(pdf_ok) and bool(body.also_md):
         try:
             md_root = md_d.resolve()
             target = (md_d / pdf_path.stem).resolve()
@@ -7865,10 +7865,12 @@ def delete_library_file(body: DeleteLibraryFileBody):
             md_warn = str(exc)
             md_deleted = False
 
-    try:
-        _library_store().delete_by_path(pdf_path)
-    except Exception:
-        pass
+    metadata_warn = ""
+    if bool(pdf_ok):
+        try:
+            _library_store().delete_by_path(pdf_path)
+        except Exception:
+            metadata_warn = "library metadata cleanup failed"
 
     index_cleanup = {
         "docs_removed": 0,
@@ -7888,6 +7890,8 @@ def delete_library_file(body: DeleteLibraryFileBody):
         warnings.append(f"pdf: {pdf_err}")
     if bool(body.also_md) and (not md_deleted) and md_warn:
         warnings.append(f"md: {md_warn}")
+    if metadata_warn:
+        warnings.append(f"metadata: {metadata_warn}")
     for err in list(index_cleanup.get("errors") or []):
         if str(err or "").strip():
             warnings.append(f"index: {str(err)[:240]}")

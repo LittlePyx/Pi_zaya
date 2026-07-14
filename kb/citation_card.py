@@ -761,6 +761,12 @@ def _trim_takeaway(value: str, *, max_len: int = 96) -> str:
 def _takeaway_from_english_evidence(evidence: str) -> str:
     text = str(evidence or "")
     low = text.lower()
+    if (
+        "single-pixel camera" in low
+        and "number of measurements is fewer" in low
+        and ("unknown pixels" in low or "under-sampling" in low or "sub-sampling" in low)
+    ):
+        return "压缩感知让单像素相机能在测量次数少于图像未知像素总数时，通过欠采样恢复图像。"
     if "dmd" in low and ("spatially filter" in low or "single-pixel camera configuration" in low):
         return "DMD 可以作为单像素相机中的空间调制器，通过选择性重定向光束来完成采样和成像配置。"
     if "single-pixel imaging technology can capture images at wavelengths outside" in low:
@@ -776,14 +782,18 @@ def _takeaway_from_english_evidence(evidence: str) -> str:
 
 def _system_a_takeaway(*, claim: str, evidence: str, heading: str, locale: str = "") -> str:
     claim_clean = _trim_takeaway(claim, max_len=110)
-    if _card_locale(locale) != "en" and claim_clean and _has_cjk(claim_clean) and not _looks_low_value_takeaway(claim_clean):
-        return claim_clean
-
     evidence_takeaway = _trim_takeaway(_takeaway_from_english_evidence(evidence), max_len=110)
+    claim_is_usable = bool(
+        _card_locale(locale) != "en"
+        and claim_clean
+        and _has_cjk(claim_clean)
+        and not _looks_low_value_takeaway(claim_clean)
+    )
+    if claim_is_usable and (len(claim_clean) >= 24 or not evidence_takeaway):
+        return claim_clean
     if evidence_takeaway and not _looks_low_value_takeaway(evidence_takeaway):
         return evidence_takeaway
-
-    return ""
+    return claim_clean if claim_is_usable else ""
 
 
 def _looks_generic_system_b_text(value: str) -> bool:

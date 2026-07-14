@@ -810,6 +810,9 @@ export function CiteShelf({
 
   const publicShelfTitleText = (item: CiteShelfItem, value: string): string => {
     const title = cleanCitationDisplayText(value).trim()
+    if (/^(?:[A-Za-z]:[\\/]|[\\/]{2}|\/|file:\/{2,3})/i.test(title)) {
+      return basenameFromPath(title)
+    }
     const sourceIdentity = String(item.sourceName || item.sourcePath || '').trim()
     return sourceIdentity && normalizeTitle(title) === normalizeTitle(sourceIdentity)
       ? basenameFromPath(title)
@@ -828,27 +831,28 @@ export function CiteShelf({
   }
 
   const markdownForExportItems = (exportItems: CiteShelfItem[]): string => exportItems.map((item, index) => {
-    const card = citationCardView(item)
+    const publicItem = publicExportItem(item)
+    const card = citationCardView(publicItem)
     const title = publicShelfTitleText(
-      item,
-      card.header.title || item.title || item.main || `${S.shelf_export_reference_fallback} ${index + 1}`,
+      publicItem,
+      card.header.title || publicItem.title || publicItem.main || `${S.shelf_export_reference_fallback} ${index + 1}`,
     )
-    const authors = cleanCitationDisplayText(item.authors || '')
-    const year = cleanCitationDisplayText(item.year || '')
-    const venue = cleanCitationDisplayText(item.venue || '')
-    const doi = shelfItemDoiExportValue(item)
-    const source = publicExportSourceName(item)
-    const summaryDisplay = shelfSummaryDisplay(item, card, S)
+    const authors = cleanCitationDisplayText(publicItem.authors || '')
+    const year = cleanCitationDisplayText(publicItem.year || '')
+    const venue = cleanCitationDisplayText(publicItem.venue || '')
+    const doi = shelfItemDoiExportValue(publicItem)
+    const source = publicExportSourceName(publicItem)
+    const summaryDisplay = shelfSummaryDisplay(publicItem, card, S)
     const summary = summaryDisplay.kind === 'article'
       ? cleanCitationDisplayText(summaryDisplay.line)
       : ''
-    const excerpt = cleanCitationDisplayText(item.shelfExcerpt || item.evidenceQuote || item.cardEvidence || '')
-    const note = cleanCitationDisplayText(item.note || '')
-    const tags = normalizeShelfTags(item.tags)
+    const excerpt = cleanCitationDisplayText(publicItem.shelfExcerpt || publicItem.evidenceQuote || publicItem.cardEvidence || '')
+    const note = cleanCitationDisplayText(publicItem.note || '')
+    const tags = normalizeShelfTags(publicItem.tags)
     const lines = [
       `## ${index + 1}. ${title}`,
       '',
-      citationFormats(item).gbt,
+      citationFormats(publicItem).gbt,
     ]
     const meta = [
       authors ? `${S.shelf_export_md_authors}: ${authors}` : '',
@@ -899,7 +903,7 @@ export function CiteShelf({
     }
     const text = kind === 'md'
       ? markdownForExportItems(copyItems)
-      : copyItems.map((item) => citationFormats(item)[kind]).join('\n\n')
+      : copyItems.map((item) => citationFormats(publicExportItem(item))[kind]).join('\n\n')
     try {
       await writeClipboard(text)
       if (scope === 'selected' && (kind === 'gbt' || kind === 'bibtex')) setTransientCopyState(kind)

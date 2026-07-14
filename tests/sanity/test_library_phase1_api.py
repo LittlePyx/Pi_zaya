@@ -2376,6 +2376,91 @@ def test_delete_library_file_route_deletes_pdf_and_md(monkeypatch, tmp_path: Pat
     assert fake_store.deleted == [str(pdf_d)]
 
 
+def test_delete_library_file_route_keeps_markdown_and_metadata_when_pdf_delete_fails(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_d = pdf_dir / "d.pdf"
+    pdf_d.write_bytes(b"%PDF-1.4 test")
+    md_d = md_dir / "d" / "d.en.md"
+    md_d.parent.mkdir(parents=True, exist_ok=True)
+    md_d.write_text("# d\n", encoding="utf-8")
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        def delete_by_path(self, path: Path) -> int:
+            self.deleted.append(str(path))
+            return 1
+
+    fake_store = FakeStore()
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: fake_store)
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": ""})
+    monkeypatch.setattr(library_router, "_safe_delete_file", lambda path: (False, "file is locked"))
+
+    client = TestClient(app)
+    response = client.post("/api/library/file/delete", json={"pdf_name": "d.pdf", "also_md": True})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["pdf_deleted"] is False
+    assert payload["md_deleted"] is False
+    assert payload["needs_reindex"] is False
+    assert payload["warnings"] == ["pdf: file is locked"]
+    assert pdf_d.exists()
+    assert md_d.exists()
+    assert fake_store.deleted == []
+
+
+def test_delete_library_file_route_reports_metadata_cleanup_failure_after_file_delete(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_d = pdf_dir / "d.pdf"
+    pdf_d.write_bytes(b"%PDF-1.4 test")
+    md_d = md_dir / "d" / "d.en.md"
+    md_d.parent.mkdir(parents=True, exist_ok=True)
+    md_d.write_text("# d\n", encoding="utf-8")
+
+    class FailingStore:
+        def delete_by_path(self, path: Path) -> int:
+            raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FailingStore())
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": ""})
+
+    client = TestClient(app)
+    response = client.post("/api/library/file/delete", json={"pdf_name": "d.pdf", "also_md": True})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["pdf_deleted"] is True
+    assert payload["md_deleted"] is True
+    assert payload["needs_reindex"] is True
+    assert payload["warnings"] == ["metadata: library metadata cleanup failed"]
+    assert not pdf_d.exists()
+    assert not md_d.parent.exists()
+
+
 def test_delete_library_file_route_keeps_indices_when_md_is_kept(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
