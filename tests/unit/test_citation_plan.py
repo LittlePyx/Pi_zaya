@@ -70,6 +70,59 @@ def test_comparison_plan_disables_system_b_budget():
     assert not citation_plan_prefers_system_b(plan, context="Fourier basis [2].", ref_num=2)
 
 
+def test_scope_boundary_plan_uses_one_direct_paper_evidence_citation():
+    plan = build_citation_plan(
+        prompt="这篇 perovskite laser 和我的单像素成像主线关系大吗？值得一起读吗？",
+        prompt_family="overview",
+        answer_hits=[
+            {
+                "text": "We demonstrate lasing from a dual-cavity perovskite device.",
+                "meta": {"source_path": "perovskite.en.md", "heading_path": "Abstract"},
+            }
+        ],
+        reference_opportunities=[],
+    )
+
+    assert plan["intent"] == "scope_boundary"
+    assert plan["budget"] == {"system_a": 1, "system_b": 0}
+
+
+def test_non_origin_reading_questions_do_not_budget_system_b() -> None:
+    opportunity = {
+        "sid": "s1234abcd",
+        "ref_num": 17,
+        "label": "single-pixel imaging background",
+        "source_path": "spi-review.en.md",
+    }
+    beginner = build_citation_plan(
+        prompt="我刚开始看单像素成像，想先建立主线，应该先读哪几篇？",
+        prompt_family="overview",
+        answer_hits=[
+            {
+                "text": "Single-pixel imaging principles and prospects.",
+                "meta": {"source_path": "spi-review.en.md", "heading_path": "Abstract"},
+            }
+        ],
+        reference_opportunities=[opportunity],
+    )
+    method = build_citation_plan(
+        prompt="这个系统具体怎么实现重聚焦？",
+        prompt_family="method",
+        answer_hits=[
+            {
+                "text": "Digital refocusing uses ray tracing and wave propagation.",
+                "meta": {"source_path": "qclfm.en.md", "heading_path": "Concept"},
+            }
+        ],
+        reference_opportunities=[opportunity],
+    )
+
+    assert beginner["budget"]["system_b"] == 0
+    assert beginner["system_b_enabled"] is False
+    assert method["budget"]["system_b"] == 0
+    assert method["system_b_enabled"] is False
+
+
 def test_comparison_with_clickable_source_markers_stays_system_a_only():
     plan = build_citation_plan(
         prompt=(

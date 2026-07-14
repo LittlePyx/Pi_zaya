@@ -6,6 +6,7 @@ from pathlib import Path
 from kb.chat_store import ChatStore
 from kb.task_runtime import (
     _apply_bound_source_hints,
+    _align_multi_paper_doc_list_contract_with_display_hits,
     _augment_paper_guide_retrieval_prompt,
     _augment_prompt_with_source_hint,
     _await_stored_doc_list_contract,
@@ -686,7 +687,7 @@ def test_build_doc_list_refs_render_payload_forwards_guide_filter_and_allows_emp
     assert payload is not None
     assert sig == "sig-doc-list"
     assert calls["doc_list"] == []
-    assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is True
+    assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is False
     assert dict(calls.get("kwargs") or {}).get("guide_mode") is True
     assert dict(calls.get("kwargs") or {}).get("guide_source_name") == "CVPR-2024-SCINeRF.pdf"
 
@@ -1537,6 +1538,94 @@ def test_rebuild_multi_paper_doc_list_contract_from_available_refs_recovers_prom
     assert [str(item.get("source_path") or "") for item in out] == [
         r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md"
     ]
+
+
+def test_align_multi_paper_doc_list_restores_answer_display_source_and_keeps_rich_copy():
+    prompt = "Which single-pixel imaging papers should I read first?"
+    display_hits = [
+        {
+            "text": "Deep learning review evidence.",
+            "meta": {
+                "source_path": r"db\LPR\LPR.en.md",
+                "ref_best_heading_path": "Abstract",
+                "ref_show_snippets": ["Deep learning review evidence."],
+            },
+        },
+        {
+            "text": "Principles and prospects evidence.",
+            "meta": {
+                "source_path": r"db\NatPhoton\NatPhoton.en.md",
+                "ref_best_heading_path": "Principles",
+                "ref_show_snippets": ["Principles and prospects evidence."],
+            },
+        },
+    ]
+
+    out = _align_multi_paper_doc_list_contract_with_display_hits(
+        prompt=prompt,
+        doc_list=[
+            {
+                "source_path": r"db\LPR\LPR.en.md",
+                "summary_line": "A richer grounded summary retained from finalization.",
+                "summary_generation": "llm_grounded",
+            }
+        ],
+        display_hits=display_hits,
+        evidence_cards=[],
+    )
+
+    assert [item["source_path"] for item in out] == [
+        r"db\LPR\LPR.en.md",
+        r"db\NatPhoton\NatPhoton.en.md",
+    ]
+    assert out[0]["summary_line"] == "A richer grounded summary retained from finalization."
+    assert out[0]["summary_generation"] == "llm_grounded"
+    assert out[0]["citation_num"] == 1
+    assert out[1]["citation_num"] == 2
+
+
+def test_align_multi_paper_doc_list_keeps_answer_order_and_original_citation_numbers():
+    prompt = "Which three single-pixel imaging papers should I read first?"
+    source_rows = [
+        (r"db\LPR\LPR.en.md", "Deep-learning review evidence."),
+        (r"db\OE\OE.en.md", "Hadamard versus Fourier evidence."),
+        (r"db\NatPhoton\NatPhoton.en.md", "Principles and prospects evidence."),
+    ]
+    display_hits = [
+        {
+            "text": text,
+            "meta": {
+                "source_path": source_path,
+                "ref_best_heading_path": "Abstract",
+                "ref_show_snippets": [text],
+                "ref_answer_citation_num": citation_num,
+            },
+        }
+        for citation_num, (source_path, text) in zip((3, 2, 1), reversed(source_rows))
+    ]
+    doc_list = [
+        {
+            "source_path": source_path,
+            "summary_line": f"Rich copy for {source_path}",
+            "citation_num": citation_num,
+        }
+        for citation_num, (source_path, _text) in zip((3, 2, 1), reversed(source_rows))
+    ]
+
+    out = _align_multi_paper_doc_list_contract_with_display_hits(
+        prompt=prompt,
+        doc_list=doc_list,
+        display_hits=display_hits,
+        evidence_cards=[],
+    )
+
+    assert [item["source_path"] for item in out] == [
+        r"db\NatPhoton\NatPhoton.en.md",
+        r"db\OE\OE.en.md",
+        r"db\LPR\LPR.en.md",
+    ]
+    assert [item["citation_num"] for item in out] == [3, 2, 1]
+    assert all(str(item.get("summary_line") or "").startswith("Rich copy") for item in out)
 
 
 def test_should_sync_deep_seed_for_display_enables_multi_paper_sci_prompt():

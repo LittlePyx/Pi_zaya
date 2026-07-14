@@ -3516,6 +3516,20 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("quantum correlation", re.compile(r"(?i)\bquantum\s+correlation\b|\btime[-\s]?correlation\b|量子关联|时间关联|光子对")),
     ("single-pixel imaging", re.compile(r"(?i)\bsingle[-\s]?pixel\b|\bspi\b|单像素")),
     ("deep learning", re.compile(r"(?i)\bdeep\s+learning\b|\bneural\s+network\b|深度学习|神经网络")),
+    (
+        "training and generalization",
+        re.compile(
+            r"(?i)\b(?:training\s+(?:duration|time|data)|limited\s+generalization|generalization)\b|"
+            r"训练(?:时间|耗时|数据)?|数据驱动|泛化(?:能力)?"
+        ),
+    ),
+    (
+        "reconstruction quality and speed",
+        re.compile(
+            r"(?i)\breconstruction\s+(?:quality|speed)\b|"
+            r"重建(?:质量|速度)|(?:质量高|速度快|高质量|快速重建)"
+        ),
+    ),
     ("foveated", re.compile(r"(?i)\bfoveated\b|中央凹|自适应采样")),
     ("dynamic supersampling", re.compile(r"(?i)\bdynamic\s+supersampling\b|\bsupersampling\b|超采样")),
     ("sampling ratio", re.compile(r"(?i)\bsampling\s+ratio\b|\blow[-\s]?sampling\b|\bfewer\s+measurements?\b|采样率|低采样|更少测量")),
@@ -4832,6 +4846,20 @@ def _annotate_inpaper_citations_with_hover_meta(
                 or snippet
                 or ""
             ).strip()
+            readable_evidence_quote = _pick_readable_evidence_text(
+                evidence_quote,
+                source=src_name,
+                title=heading,
+                claim=answer_claim,
+                heading=heading,
+                max_len=520,
+            )
+            if readable_evidence_quote:
+                evidence_quote = readable_evidence_quote
+            else:
+                cleaned_evidence_quote = _clean_evidence_display_text(evidence_quote, max_len=520)
+                if cleaned_evidence_quote:
+                    evidence_quote = cleaned_evidence_quote
             evidence_source = str(evidence_pick.get("source") or "retrieval_hit").strip() or "retrieval_hit"
             if evidence_source in {"hit_meta", "hit_text"}:
                 evidence_source = "retrieval_hit"
@@ -5029,7 +5057,61 @@ def _annotate_inpaper_citations_with_hover_meta(
                 "binding_reason": str(binding.get("reason") or "").strip(),
                 "binding_overlap_terms": list(binding.get("overlap_terms") or []),
                 "evidence_pick_score": float(evidence_pick.get("score") or 0.0) if evidence_pick else 0.0,
+                "citation_plan_slot": bool(meta_h.get("citation_plan_slot")),
             }
+            citation_meta_candidates: list[dict] = []
+            source_key = sp.replace("\\", "/").strip().lower()
+            for candidate in [hit, *(hits or [])]:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_meta = candidate.get("meta") if isinstance(candidate.get("meta"), dict) else {}
+                candidate_source = str(candidate_meta.get("source_path") or "").replace("\\", "/").strip().lower()
+                if candidate_source != source_key:
+                    continue
+                candidate_ui = candidate.get("ui_meta") if isinstance(candidate.get("ui_meta"), dict) else {}
+                candidate_citation_meta = (
+                    candidate_ui.get("citation_meta")
+                    if isinstance(candidate_ui.get("citation_meta"), dict)
+                    else {}
+                )
+                if candidate_citation_meta:
+                    citation_meta_candidates.append(candidate_citation_meta)
+            citation_meta = max(
+                citation_meta_candidates,
+                key=lambda item: sum(value not in (None, "", [], {}) for value in item.values()),
+                default={},
+            )
+            for field in (
+                "authors",
+                "venue",
+                "year",
+                "volume",
+                "issue",
+                "pages",
+                "doi",
+                "doi_url",
+                "citation_count",
+                "citation_source",
+                "venue_kind",
+                "venue_verified_by",
+                "openalex_venue",
+                "journal_if",
+                "journal_quartile",
+                "journal_if_source",
+                "conference_tier",
+                "conference_rank_source",
+                "conference_ccf",
+                "conference_ccf_source",
+                "conference_name",
+                "conference_acronym",
+                "bibliometrics_checked",
+            ):
+                value = citation_meta.get(field)
+                if value not in (None, "", [], {}):
+                    rec[field] = value
+            bibliographic_title = str(citation_meta.get("title") or "").strip()
+            if bibliographic_title:
+                rec["bibliographic_title"] = bibliographic_title
             detail_by_key[skey] = rec
             if not isinstance(existing, dict):
                 system_a_detail_by_fingerprint[evidence_fp] = rec

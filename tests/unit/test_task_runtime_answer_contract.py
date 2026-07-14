@@ -1,14 +1,49 @@
 from __future__ import annotations
 
+from kb import task_runtime
+
+
+def test_current_paper_retrieval_skips_llm_query_expansion_unless_cross_paper_requested() -> None:
+    assert task_runtime._retrieval_query_expansion_allowed(
+        current_paper_scoped=True,
+        cross_paper_requested=False,
+    ) is False
+    assert task_runtime._retrieval_query_expansion_allowed(
+        current_paper_scoped=True,
+        cross_paper_requested=True,
+    ) is True
+    assert task_runtime._retrieval_query_expansion_allowed(
+        current_paper_scoped=False,
+        cross_paper_requested=False,
+    ) is True
+
 
 def test_detect_answer_intent_prefers_explicit_hint():
-    from kb import task_runtime
-
     intent = task_runtime._detect_answer_intent(
         "Can you compare method A and method B?",
         answer_mode_hint="writing",
     )
     assert intent == "writing"
+
+
+def test_provider_failure_grounded_fallback_keeps_refocus_mechanism_terms() -> None:
+    out = task_runtime._build_provider_failure_grounded_fallback(
+        "这个显微镜怎么把离焦样品重新对焦？",
+        [
+            {
+                "text": (
+                    "Digital refocusing uses two steps. First, ray tracing reconstructs photon trajectories. "
+                    "Second, wave propagation reverses diffraction."
+                ),
+                "meta": {"heading_path": "A. Concept"},
+            }
+        ],
+    )
+
+    assert "模型服务暂时不可用" in out
+    assert "two steps" in out
+    assert "ray tracing" in out
+    assert "wave propagation" in out
 
 
 def test_detect_answer_intent_by_prompt():
@@ -130,6 +165,15 @@ def test_build_paper_guide_grounding_rules_fact_answer_discourages_generic_advic
 
     assert "answer the exact paper-grounded question first" in rules
     assert "avoid generic reading advice" in rules
+
+
+def test_paper_guide_prompt_family_treats_method_choice_as_comparison():
+    from kb import task_runtime
+
+    assert task_runtime._paper_guide_prompt_family(
+        "我做单像素实验，Hadamard 和 Fourier 到底该怎么选？"
+    ) == "compare"
+    assert task_runtime._paper_guide_prompt_family("这两种方法哪种更适合低采样率？") == "compare"
 
 
 def test_build_paper_guide_grounding_rules_adds_abstract_and_figure_family_guards():

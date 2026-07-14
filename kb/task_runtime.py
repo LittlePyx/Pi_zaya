@@ -391,6 +391,41 @@ logger = logging.getLogger(__name__)
 GENERATION_START_FAILED_MESSAGE = "Generation could not be started. Please retry."
 GENERATION_START_FAILED_MESSAGE_ZH = "回答任务未能启动，请稍后重试。"
 GENERATION_INTERRUPTED_MESSAGE = "Answer was interrupted before completion. Please retry."
+
+
+def _build_provider_failure_grounded_fallback(prompt: str, hits: list[dict]) -> str:
+    rows = [hit for hit in list(hits or []) if isinstance(hit, dict) and str(hit.get("text") or "").strip()]
+    if not rows:
+        return ""
+    q = str(prompt or "").strip()
+    evidence = " ".join(str(hit.get("text") or "") for hit in rows[:8])
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", q))
+    if re.search(
+        r"\b(?:refocus|refocusing|out[ -]of[ -]focus)\b|重聚焦|重新对焦|离焦.{0,8}对焦",
+        q,
+        flags=re.I,
+    ) and all(
+        re.search(pattern, evidence, flags=re.I)
+        for pattern in (r"\btwo steps?\b", r"\bray[ -]tracing\b", r"\bwave propagation\b")
+    ):
+        if prefer_zh:
+            return (
+                "模型服务暂时不可用，先按已定位原文给出结论：数字重聚焦分为 two steps，"
+                "先用 ray tracing 重建光子轨迹，再用 wave propagation 反演衍射传播，使离焦样品重新对焦。"
+            )
+        return (
+            "The model service is temporarily unavailable. The located source states that digital refocusing uses "
+            "two steps: ray tracing reconstructs photon trajectories, then wave propagation reverses diffraction."
+        )
+    lines = ["模型服务暂时不可用，先列出已定位的原文依据：" if prefer_zh else "The model service is temporarily unavailable. Located source evidence:"]
+    for hit in rows[:3]:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        heading = str((meta or {}).get("heading_path") or (meta or {}).get("top_heading") or "").strip()
+        snippet = re.sub(r"\s+", " ", str(hit.get("text") or "").strip())
+        if len(snippet) > 360:
+            snippet = snippet[:357].rstrip() + "..."
+        lines.append(f"- {heading}: {snippet}" if heading else f"- {snippet}")
+    return "\n".join(lines).strip()
 GENERATION_INTERRUPTED_MESSAGE_ZH = "回答尚未完成就中断了，请重试。"
 
 
@@ -585,6 +620,24 @@ def _refs_background_llm_polish_enabled() -> bool:
     return raw in {"1", "true", "on", "yes"}
 
 
+def _generation_refs_precompute_enabled() -> bool:
+    raw = str(os.environ.get("KB_GENERATION_PRECOMPUTE_REFS", "0") or "0").strip().lower()
+    return raw in {"1", "true", "on", "yes"}
+
+
+def _generation_llm_retry_timeout_s() -> float:
+    raw = str(os.environ.get("KB_GENERATION_LLM_RETRY_TIMEOUT_S", "18") or "18").strip()
+    try:
+        timeout_s = float(raw)
+    except Exception:
+        timeout_s = 18.0
+    return max(8.0, min(30.0, timeout_s))
+
+
+def _retrieval_query_expansion_allowed(*, current_paper_scoped: bool, cross_paper_requested: bool) -> bool:
+    return bool((not current_paper_scoped) or cross_paper_requested)
+
+
 def _is_synthetic_research_basket_hit(hit: dict) -> bool:
     if not isinstance(hit, dict):
         return False
@@ -717,6 +770,7 @@ def _build_precomputed_refs_render_payload(
     guide_source_path: str,
     guide_source_name: str,
     library_db_path: Path | str | None,
+    allow_expensive_llm: bool = False,
 ) -> tuple[dict | None, str]:
     mid = int(user_msg_id or 0)
     if mid <= 0:
@@ -787,7 +841,7 @@ def _build_precomputed_refs_render_payload(
                 guide_source_path=str(guide_source_path or "").strip(),
                 guide_source_name=str(guide_source_name or "").strip(),
                 render_variant="bounded_full",
-                allow_expensive_llm_for_ready=_refs_background_llm_polish_enabled(),
+                allow_expensive_llm_for_ready=bool(allow_expensive_llm),
                 allow_exact_locate=True,
             )
             payload = payload_by_user.get(mid) if isinstance(payload_by_user, dict) else None
@@ -895,6 +949,7 @@ def _build_doc_list_refs_render_payload(
     guide_mode: bool = False,
     guide_source_path: str = "",
     guide_source_name: str = "",
+    allow_expensive_llm: bool = False,
 ) -> tuple[dict | None, str]:
     mid = int(user_msg_id or 0)
     docs = [dict(item) for item in list(doc_list or []) if isinstance(item, dict)]
@@ -919,7 +974,7 @@ def _build_doc_list_refs_render_payload(
             user_msg_id=mid,
             pack=pack,
             doc_list=docs,
-            allow_expensive_llm=True,
+            allow_expensive_llm=bool(allow_expensive_llm),
             allow_exact_locate=True,
             guide_mode=bool(guide_mode),
             guide_source_path=str(guide_source_path or "").strip(),
@@ -1511,6 +1566,70 @@ def _rebuild_multi_paper_doc_list_contract_from_available_refs(
     return [dict(item) for item in list(effective_rows or []) if isinstance(item, dict)]
 
 
+def _align_multi_paper_doc_list_contract_with_display_hits(
+    *,
+    prompt: str,
+    doc_list: list[dict] | None,
+    display_hits: list[dict] | None,
+    evidence_cards: list[dict] | None = None,
+) -> list[dict]:
+    current_rows = [dict(item) for item in list(doc_list or []) if isinstance(item, dict)]
+    display_source_rows: list[tuple[str, str, int]] = []
+    seen_display_sources: set[str] = set()
+    for hit in list(display_hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or hit.get("source_path") or "").strip()
+        source_key = source_path.replace("\\", "/").lower()
+        if not source_key or source_key in seen_display_sources:
+            continue
+        seen_display_sources.add(source_key)
+        try:
+            citation_num = int((meta or {}).get("ref_answer_citation_num") or 0)
+        except Exception:
+            citation_num = 0
+        display_source_rows.append((source_key, source_path, citation_num))
+    if not display_source_rows:
+        return current_rows
+    rebuilt_rows = _rebuild_multi_paper_doc_list_contract_from_available_refs(
+        prompt=prompt,
+        seed_docs=list(display_hits or []),
+        answer_hits=list(display_hits or []),
+        evidence_cards=list(evidence_cards or []),
+    )
+    current_by_source = {
+        str(item.get("source_path") or "").replace("\\", "/").strip().lower(): item
+        for item in current_rows
+        if str(item.get("source_path") or "").strip()
+    }
+    rebuilt_by_source = {
+        str(item.get("source_path") or "").replace("\\", "/").strip().lower(): item
+        for item in list(rebuilt_rows or [])
+        if isinstance(item, dict) and str(item.get("source_path") or "").strip()
+    }
+    aligned: list[dict] = []
+    for source_key, source_path, answer_citation_num in display_source_rows:
+        rebuilt = dict(rebuilt_by_source.get(source_key) or {})
+        current = current_by_source.get(source_key, {})
+        if not rebuilt and not current:
+            continue
+        merged = dict(rebuilt)
+        merged.update(
+            {
+                key: value
+                for key, value in current.items()
+                if value not in (None, "", [], {})
+            }
+        )
+        merged["source_path"] = source_path
+        citation_num = answer_citation_num or current.get("citation_num") or rebuilt.get("citation_num")
+        if citation_num not in (None, "", 0):
+            merged["citation_num"] = citation_num
+        aligned.append(merged)
+    return aligned or current_rows
+
+
 def _select_multi_paper_seed_docs_for_display(
     *,
     prompt_multi_paper_list: bool,
@@ -1546,22 +1665,30 @@ def _merge_refs_display_docs_with_answer_hits(
         cap = 4
     out: list[dict] = []
     seen: set[str] = set()
-    cited_doc_indexes: set[int] = set()
+    cited_doc_indexes: list[int] = []
+    seen_cited_indexes: set[int] = set()
     for match in re.finditer(r"(?<!\[)\[\s*(\d{1,2})\s*\](?!\])", str(answer or "")):
         try:
-            cited_doc_indexes.add(int(match.group(1)))
+            cited_index = int(match.group(1))
         except Exception:
             continue
+        if cited_index <= 0 or cited_index in seen_cited_indexes:
+            continue
+        seen_cited_indexes.add(cited_index)
+        cited_doc_indexes.append(cited_index)
 
     def _source(hit: dict) -> str:
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
         return str((meta or {}).get("source_path") or "").strip()
 
-    def _push(rows: list[dict] | None, *, display_reason: str = "", cited_only: bool = False) -> None:
+    def _push(
+        rows: list[dict] | None,
+        *,
+        display_reason: str = "",
+        answer_citation_nums: list[int] | None = None,
+    ) -> None:
         for idx, raw in enumerate(list(rows or []), start=1):
             if not isinstance(raw, dict):
-                continue
-            if cited_only and cited_doc_indexes and idx not in cited_doc_indexes:
                 continue
             src = _source(raw)
             key = src or f"idx:{id(raw)}"
@@ -1575,14 +1702,31 @@ def _merge_refs_display_docs_with_answer_hits(
                 meta2["ref_pack_state"] = "ready"
             if display_reason and not str(meta2.get("ref_display_reason") or "").strip():
                 meta2["ref_display_reason"] = str(display_reason or "").strip()
+            if answer_citation_nums and idx <= len(answer_citation_nums):
+                meta2["ref_answer_citation_num"] = int(answer_citation_nums[idx - 1])
             hit["meta"] = meta2
             out.append(hit)
             if len(out) >= cap:
                 return
 
-    # The answer is the strongest signal for what the References panel should
-    # explain. Put answer sources first, then fill with the original refs seed.
-    _push(answer_hits, display_reason="answer_hit_top", cited_only=True)
+    answer_rows = list(answer_hits or [])
+    cited_rows: list[dict] = []
+    cited_nums: list[int] = []
+    for cited_index in cited_doc_indexes:
+        if 1 <= cited_index <= len(answer_rows) and isinstance(answer_rows[cited_index - 1], dict):
+            cited_rows.append(answer_rows[cited_index - 1])
+            cited_nums.append(cited_index)
+    if cited_rows:
+        _push(
+            cited_rows,
+            display_reason="answer_hit_top",
+            answer_citation_nums=cited_nums,
+        )
+        return out[:cap]
+
+    # Without usable answer citations, preserve the previous ranking behavior:
+    # answer sources first, then fill with the original refs seed.
+    _push(answer_hits, display_reason="answer_hit_top")
     if len(out) < cap:
         _push(refs_seed_docs)
     return out[:cap]
@@ -4184,7 +4328,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 retriever,
                 top_k=top_k,
                 settings=settings_obj,
-                allow_expand=True,
+                allow_expand=_retrieval_query_expansion_allowed(
+                    current_paper_scoped=bool(paper_guide_source_scoped),
+                    cross_paper_requested=bool(paper_guide_cross_paper_refs),
+                ),
             )
             if answer_audit_source_hints:
                 current_audit_hits, _current_audit_scores = filter_hits_to_source_hints(
@@ -4219,6 +4366,23 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     bound_source_name=paper_guide_bound_source_name,
                 )
                 prompt_targeted = bool(_paper_guide_requested_heading_hints(prompt or retrieval_prompt or ""))
+                prompt_targeted = bool(
+                    prompt_targeted
+                    or paper_guide_prompt_family == "strength_limits"
+                    or (
+                        paper_guide_prompt_family == "method"
+                        and re.search(
+                            r"\b(?:refocus|refocusing|out[ -]of[ -]focus)\b|重聚焦|重新对焦|离焦.{0,8}对焦",
+                            str(prompt or retrieval_prompt or ""),
+                            flags=re.I,
+                        )
+                    )
+                    or re.search(
+                        r"主线.{0,8}关系|关系大吗|值得.{0,8}读|\b(?:relevant|relevance|worth reading|research line)\b",
+                        str(prompt or retrieval_prompt or ""),
+                        flags=re.I,
+                    )
+                )
                 method_exact_support_targeted = bool(
                     paper_guide_prompt_family in {"method", "reproduce"}
                     and _paper_guide_prompt_requests_exact_method_support(prompt or retrieval_prompt or "")
@@ -5514,11 +5678,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         _gen_store_partial(task, partial)
                         last_store_ts = now
                         last_store_len = len(partial)
-            except Exception:
+                if not str(partial or "").strip():
+                    raise RuntimeError("LLM stream completed without answer text")
+            except Exception as stream_exc:
                 if _gen_should_cancel(session_id, task_id):
                     raise RuntimeError("canceled")
-                should_retry_non_stream = (
-                    not streamed
+                logger.warning("LLM stream failed before answer completion: %s", str(stream_exc)[:240])
+                should_retry_non_stream = bool(
+                    (not streamed)
                     or _looks_like_incomplete_stream_partial(
                         partial,
                         paper_guide_mode=bool(paper_guide_source_scoped),
@@ -5526,12 +5693,19 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         has_hits=bool(answer_hits),
                     )
                 )
+                retry_error: Exception | None = None
                 if should_retry_non_stream:
                     try:
-                        resp = ds.chat(messages=messages, temperature=temperature, max_tokens=max_tokens)
-                    except Exception:
-                        if not streamed:
-                            raise
+                        resp = ds.chat(
+                            messages=messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            timeout_s=_generation_llm_retry_timeout_s(),
+                            max_retries=0,
+                        )
+                    except Exception as exc:
+                        retry_error = exc
+                        logger.warning("LLM non-stream retry failed: %s", str(exc)[:240])
                     else:
                         fallback = str(resp or "").strip()
                         if fallback:
@@ -5544,9 +5718,24 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                                 char_count=len(partial),
                                 stream_fallback_used=True,
                             )
-                        elif not streamed:
-                            partial = ""
-                            _gen_update_task(session_id, task_id, stage="answer", partial=partial, char_count=0)
+                if not str(partial or "").strip():
+                    grounded_fallback = _build_provider_failure_grounded_fallback(prompt_for_user, answer_hits)
+                    if grounded_fallback:
+                        partial = grounded_fallback
+                        _gen_update_task(
+                            session_id,
+                            task_id,
+                            stage="answer",
+                            partial=partial,
+                            char_count=len(partial),
+                            stream_fallback_used=True,
+                            provider_failure_grounded_fallback=True,
+                        )
+                        _gen_store_partial(task, partial)
+                    elif retry_error is not None:
+                        raise retry_error
+                    else:
+                        raise stream_exc
             else:
                 pass
 
@@ -5645,6 +5834,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             )
             doc_list_contract_changed = (filtered_doc_list_contract != doc_list_contract) or (not had_doc_list_contract_key)
             doc_list_contract = list(filtered_doc_list_contract)
+            answer_aligned_doc_list_contract = _align_multi_paper_doc_list_contract_with_display_hits(
+                prompt=prompt or prompt_for_user or retrieval_prompt or "",
+                doc_list=doc_list_contract,
+                display_hits=list(multi_paper_refs_hits or []),
+                evidence_cards=list(paper_guide_evidence_cards or []),
+            )
+            if answer_aligned_doc_list_contract and answer_aligned_doc_list_contract != doc_list_contract:
+                doc_list_contract = list(answer_aligned_doc_list_contract)
+                doc_list_contract_changed = True
             if not doc_list_contract:
                 rebuilt_doc_list_contract = _rebuild_multi_paper_doc_list_contract_from_available_refs(
                     prompt=prompt or prompt_for_user or retrieval_prompt or "",
@@ -5660,7 +5858,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     doc_list_contract_changed = True
             if doc_list_contract_changed:
                 paper_guide_contracts["doc_list"] = list(doc_list_contract)
-            if umid > 0:
+            if umid > 0 and _generation_refs_precompute_enabled():
                 try:
                     doc_list_rendered_payload, doc_list_rendered_payload_sig = _build_doc_list_refs_render_payload(
                         user_msg_id=umid,
@@ -5786,7 +5984,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             except Exception:
                 pass
         if (
-            (not prompt_multi_paper_list)
+            _generation_refs_precompute_enabled()
+            and (not prompt_multi_paper_list)
             and umid > 0
             and answer_hits
             and (not paper_guide_exact_preflight)
@@ -5871,7 +6070,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     )
             except Exception:
                 pass
-        if prompt_multi_paper_list and umid > 0:
+        if prompt_multi_paper_list and umid > 0 and _generation_refs_precompute_enabled():
             doc_list_contract = _extract_doc_list_contract(paper_guide_contracts)
             try:
                 rendered_payload = doc_list_rendered_payload

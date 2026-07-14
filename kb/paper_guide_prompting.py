@@ -13,7 +13,8 @@ from kb.source_blocks import normalize_match_text
 
 _PAPER_GUIDE_OVERVIEW_PROMPT_RE = re.compile(
     r"(\bwhat problem\b|\bsolve(?:s|d)?\b|\bmain contribution\b|\bcore contribution\b|\bkey contribution\b|"
-    r"\bmain idea\b|\bsummary\b|\bwhat does this paper do\b|解决.*问题|核心贡献|主要贡献|这篇.*讲了什么)",
+    r"\bmain idea\b|\bsummary\b|\bwhat does this paper do\b|解决.*问题|核心贡献|主要贡献|这篇.*讲了什么|"
+    r"主线.{0,8}关系|关系大吗|值得.{0,8}读)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_OVERVIEW_PROMPT_RE_CLEAN = re.compile(
@@ -31,11 +32,13 @@ _PAPER_GUIDE_ABSTRACT_PROMPT_RE = re.compile(
 _PAPER_GUIDE_COMPARE_PROMPT_RE = re.compile(
     r"(\badvantage\b|\btrade[\s-]?off\b|\bcompared with\b|\bversus\b|\bvs\.?\b|"
     r"\bopen[-\s]?pinhole\b|\bclosed[-\s]?pinhole\b|\bcnr\b|\bnec\b|\bresolution\b|"
-    r"优势|代价|对比|区别|差别|差异|不同|取舍|分辨率|噪声|信噪比)",
+    r"优势|代价|对比|区别|差别|差异|不同|取舍|分辨率|噪声|信噪比|"
+    r"怎么选|如何选|该选|选哪个|哪种更适合|哪个更适合)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_COMPARE_PROMPT_RE_CLEAN = re.compile(
-    r"(\u5bf9\u6bd4|\u6bd4\u8f83|\u533a\u522b|\u5dee\u522b|\u5dee\u5f02|\u4e0d\u540c|\u53d6\u820d|\u4f18\u52bf|\u4ee3\u4ef7|\u5206\u8fa8\u7387|\u566a\u58f0|\u4fe1\u566a\u6bd4)",
+    r"(\u5bf9\u6bd4|\u6bd4\u8f83|\u533a\u522b|\u5dee\u522b|\u5dee\u5f02|\u4e0d\u540c|\u53d6\u820d|\u4f18\u52bf|\u4ee3\u4ef7|\u5206\u8fa8\u7387|\u566a\u58f0|\u4fe1\u566a\u6bd4|"
+    r"\u600e\u4e48\u9009|\u5982\u4f55\u9009|\u8be5\u9009|\u9009\u54ea\u4e2a|\u54ea\u79cd\u66f4\u9002\u5408|\u54ea\u4e2a\u66f4\u9002\u5408)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_REPRO_PROMPT_RE = re.compile(
@@ -61,7 +64,7 @@ _PAPER_GUIDE_STRENGTH_PROMPT_RE_CLEAN = re.compile(
 )
 _PAPER_GUIDE_METHOD_PROMPT_RE = re.compile(
     r"(\bhow does it work\b|\bmethod\b|\bmechanism\b|\bprinciple\b|\balgorithm\b|\bnetwork training\b|\btraining\b|\boptimizer\b|\blearning rate\b|\bbatch size\b|\bepoch(?:s)?\b|\bpytorch\b|\bhyperparameter(?:s)?\b|\bloss\b|\bimplementation details?\b|\btraining details?\b|\bapr\b|"
-    r"\bwhy\b.*\bapr\b|原理|方法|机制|算法|为什么.*APR|怎么做到的)",
+    r"\bwhy\b.*\bapr\b|原理|方法|机制|算法|为什么.*APR|怎么做到的|重聚焦|重新对焦|离焦.{0,8}对焦)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_EQUATION_PROMPT_RE = re.compile(
@@ -516,6 +519,13 @@ def _augment_paper_guide_retrieval_prompt(
         ],
         "compare": [
             "results",
+            "quantitative comparison",
+            "sampling ratio",
+            "measurements",
+            "undersampling",
+            "PSNR",
+            "SSIM",
+            "efficiency",
             "resolution",
             "contrast",
             "contrast-to-noise ratio",
@@ -547,6 +557,16 @@ def _augment_paper_guide_retrieval_prompt(
             "derivation",
         ],
         "strength_limits": [
+            "reconstruction quality",
+            "reconstruction speed",
+            "training data",
+            "generalization",
+            "data-driven",
+            "overfitting",
+            "benefit",
+            "risk",
+            "challenge",
+            "advantage",
             "results",
             "discussion",
             "resolution",
@@ -603,6 +623,24 @@ def _augment_paper_guide_retrieval_prompt(
     # Keep these before broad family defaults so CJK prompts like "重建方法优缺点" do not
     # spend the whole augmentation budget on generic strength/limitations terms.
     topic_extras: list[str] = []
+    if re.search(
+        r"structured detection|interferometric|light[- ]field|结构检测|干涉检测|光场",
+        q,
+        flags=re.IGNORECASE,
+    ):
+        topic_extras.extend(
+            [
+                "structured detection",
+                "interferometric detection",
+                "light-field microscopy",
+                "optical sectioning",
+                "super-resolution",
+                "signal-to-noise ratio",
+                "SNR",
+                "digital refocusing",
+                "refocus",
+            ]
+        )
     if re.search(r"(深度学习|神经网络|卷积网络|CNN|neural\s+network|deep\s+learning)", q, flags=re.IGNORECASE):
         topic_extras.extend(["deep learning", "neural network", "CNN"])
     if re.search(r"(重建|reconstruction|压缩感知|compressed\s+sensing)", q, flags=re.IGNORECASE):
@@ -618,7 +656,10 @@ def _augment_paper_guide_retrieval_prompt(
             "matching pursuit",
         ])
     if topic_extras:
-        extras = [*topic_extras, *extras]
+        if family_norm in {"method", "reproduce", "compare", "strength_limits"}:
+            extras = [*topic_extras, *extras]
+        else:
+            extras = [*extras, *topic_extras]
 
     norm = normalize_match_text(q)
     missing: list[str] = []

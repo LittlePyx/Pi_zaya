@@ -27,6 +27,7 @@ from api.reference_ui import (
     enrich_citation_detail_meta,
     enrich_refs_payload,
     ensure_source_citation_meta,
+    hydrate_doc_list_refs_payload_citation_meta,
     open_reference_source,
 )
 from api.reference_card_quality import refs_pack_has_full_llm_copy
@@ -98,7 +99,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 10
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 11
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000
@@ -597,6 +598,7 @@ def _get_stored_rendered_pack_payload(
     guide_mode: bool,
     guide_source_path: str,
     guide_source_name: str,
+    allow_authoritative_source_override: bool = False,
 ) -> dict | None:
     if not isinstance(pack, dict):
         return None
@@ -613,7 +615,10 @@ def _get_stored_rendered_pack_payload(
     )
     if (not stored_sig) or (stored_sig != expected_sig):
         return None
-    if _stored_rendered_pack_payload_lost_current_hits(payload=payload, pack=pack):
+    if (
+        not allow_authoritative_source_override
+        and _stored_rendered_pack_payload_lost_current_hits(payload=payload, pack=pack)
+    ):
         return None
     if _stored_rendered_pack_payload_has_dirty_card_copy(payload):
         return None
@@ -761,8 +766,6 @@ def _payload_is_authoritative_doc_list_pack(payload_pack: dict | None, authorita
     pipeline_debug = payload_pack.get("pipeline_debug") if isinstance(payload_pack.get("pipeline_debug"), dict) else {}
     if not bool((pipeline_debug or {}).get("doc_list_authoritative")):
         return False
-    if not _payload_refs_card_copy_has_llm_result(payload_pack):
-        return False
     expected_paths = _doc_list_source_paths(authoritative_doc_list)
     actual_paths = _payload_source_paths(payload_pack)
     if not expected_paths:
@@ -880,18 +883,25 @@ def _render_authoritative_doc_list_pack(
     guide_source_path: str,
     guide_source_name: str,
     pending: bool,
+    allow_expensive_llm: bool | None = None,
+    allow_citation_prefetch: bool = False,
 ) -> dict:
     # Keep pending/full on the same authoritative paper set and only defer strict locate until full render.
+    allow_llm = bool(not pending) if allow_expensive_llm is None else bool(allow_expensive_llm)
     return build_doc_list_refs_payload(
         user_msg_id=int(user_msg_id),
         pack=pack,
         doc_list=doc_list,
-        allow_expensive_llm=not pending,
+        allow_expensive_llm=allow_llm,
         allow_exact_locate=not pending,
         apply_copy_polish=True,
         guide_mode=bool(guide_mode),
         guide_source_path=str(guide_source_path or "").strip(),
         guide_source_name=str(guide_source_name or "").strip(),
+        pdf_root=_pdf_dir(),
+        md_root=_md_dir(),
+        lib_store=_lib_store(),
+        allow_citation_prefetch=bool(allow_citation_prefetch),
     )
 
 
@@ -1038,10 +1048,21 @@ def _annotate_refs_payload_refresh_state(payload: dict, *, mode: str) -> dict[in
     return out
 
 
-def _attach_pack_render_state(payload_pack: dict, *, source_pack: dict | None, default_status: str = "") -> dict:
+def _attach_pack_render_state(
+    payload_pack: dict,
+    *,
+    source_pack: dict | None,
+    default_status: str = "",
+    override_status: bool = False,
+) -> dict:
     out = _attach_pack_display_contract(payload_pack)
     src = source_pack if isinstance(source_pack, dict) else {}
-    render_status = str((src or {}).get("render_status") or default_status or "").strip().lower()
+    render_status = str(
+        (default_status if override_status else "")
+        or (src or {}).get("render_status")
+        or default_status
+        or ""
+    ).strip().lower()
     render_error = str((src or {}).get("render_error") or "").strip()
     render_error_detail = str((src or {}).get("render_error_detail") or "").strip()
     try:
@@ -1171,6 +1192,7 @@ def _warm_conversation_refs_payload_async(
     guide_mode: bool,
     guide_source_path: str,
     guide_source_name: str,
+    authoritative_doc_list_by_user: dict[int, list[dict]] | None = None,
 ) -> None:
     conv_key = str(conv_id or "").strip()
     sig_key = str(signature or "").strip()
@@ -1184,28 +1206,72 @@ def _warm_conversation_refs_payload_async(
 
     def _run() -> None:
         try:
-            payload = enrich_refs_payload(
-                refs,
-                pdf_root=_pdf_dir(),
-                md_root=_md_dir(),
-                lib_store=_lib_store(),
-                guide_mode=guide_mode,
-                guide_source_path=guide_source_path,
-                guide_source_name=guide_source_name,
-                render_variant="bounded_full",
-                allow_expensive_llm_for_ready=(
-                    _refs_background_llm_polish_enabled()
-                    and not _refs_payload_has_fast_exact_hit(refs)
-                ),
-                allow_exact_locate=True,
-            )
+            authoritative_map = {
+                int(key): [dict(item) for item in list(value or []) if isinstance(item, dict)]
+                for key, value in dict(authoritative_doc_list_by_user or {}).items()
+                if str(key).isdigit() or isinstance(key, int)
+            }
+            payload: dict[int, dict] = {}
+            regular_refs: dict[int, dict] = {}
+            for raw_user_msg_id, pack in dict(refs or {}).items():
+                try:
+                    user_msg_id = int(raw_user_msg_id)
+                except Exception:
+                    continue
+                if not isinstance(pack, dict):
+                    continue
+                if user_msg_id in authoritative_map:
+                    rendered = _render_authoritative_doc_list_pack(
+                        user_msg_id=user_msg_id,
+                        pack=pack,
+                        doc_list=authoritative_map[user_msg_id],
+                        guide_mode=bool(guide_mode),
+                        guide_source_path=str(guide_source_path or "").strip(),
+                        guide_source_name=str(guide_source_name or "").strip(),
+                        pending=False,
+                        allow_expensive_llm=_refs_background_llm_polish_enabled(),
+                        allow_citation_prefetch=True,
+                    )
+                    if isinstance(rendered, dict) and rendered:
+                        payload[user_msg_id] = rendered
+                    continue
+                regular_refs[user_msg_id] = pack
+            if regular_refs:
+                regular_payload = enrich_refs_payload(
+                    regular_refs,
+                    pdf_root=_pdf_dir(),
+                    md_root=_md_dir(),
+                    lib_store=_lib_store(),
+                    guide_mode=guide_mode,
+                    guide_source_path=guide_source_path,
+                    guide_source_name=guide_source_name,
+                    render_variant="bounded_full",
+                    allow_expensive_llm_for_ready=_refs_background_llm_polish_enabled(),
+                    allow_exact_locate=True,
+                )
+                if isinstance(regular_payload, dict):
+                    payload.update(
+                        {
+                            int(key): value
+                            for key, value in regular_payload.items()
+                            if (str(key).isdigit() or isinstance(key, int)) and isinstance(value, dict)
+                        }
+                    )
             if not isinstance(payload, dict):
                 return
             current = _REFS_CONVERSATION_CACHE.get(conv_key)
+            cached_payload: dict[int, dict] = {}
             if isinstance(current, dict):
                 current_sig = str(current.get("signature") or "").strip()
                 if current_sig and current_sig != sig_key:
                     return
+                current_payload = current.get("payload")
+                if isinstance(current_payload, dict):
+                    cached_payload = {
+                        int(key): value
+                        for key, value in current_payload.items()
+                        if (str(key).isdigit() or isinstance(key, int)) and isinstance(value, dict)
+                    }
             _persist_rendered_refs_payloads(
                 refs=refs,
                 payload=payload,
@@ -1213,10 +1279,11 @@ def _warm_conversation_refs_payload_async(
                 guide_source_path=guide_source_path,
                 guide_source_name=guide_source_name,
             )
+            cached_payload.update(payload)
             _store_cached_conversation_refs_payload(
                 conv_id=conv_key,
                 signature=sig_key,
-                payload=payload,
+                payload=cached_payload,
                 mode="full",
             )
         except Exception as exc:
@@ -1421,6 +1488,28 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
 
     def _finish(payload: dict | None, mode: str) -> dict:
         payload_out = payload if isinstance(payload, dict) else {}
+        if payload_out:
+            hydrated_payload = dict(payload_out)
+            for raw_user_msg_id, raw_pack in payload_out.items():
+                if not isinstance(raw_pack, dict):
+                    continue
+                pipeline_debug = (
+                    raw_pack.get("pipeline_debug")
+                    if isinstance(raw_pack.get("pipeline_debug"), dict)
+                    else {}
+                )
+                if not bool(pipeline_debug.get("doc_list_authoritative")):
+                    continue
+                try:
+                    hydrated_payload[raw_user_msg_id] = hydrate_doc_list_refs_payload_citation_meta(
+                        raw_pack,
+                        doc_list=[],
+                        pdf_root=_pdf_dir(),
+                        lib_store=_lib_store(),
+                    )
+                except Exception:
+                    continue
+            payload_out = hydrated_payload
         try:
             _sync_message_render_packets_with_refs_payload(
                 store=store,
@@ -1506,8 +1595,10 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
     pending_refs: dict[int, dict] = {}
     failed_ready_refs: dict[int, dict] = {}
     ready_missing_refs: dict[int, dict] = {}
-    authoritative_full_payloads: dict[int, dict] = {}
-    authoritative_full_refs: dict[int, dict] = {}
+    authoritative_sync_payloads: dict[int, dict] = {}
+    authoritative_sync_refs: dict[int, dict] = {}
+    authoritative_fast_payloads: dict[int, dict] = {}
+    authoritative_fast_refs: dict[int, dict] = {}
     phase_started_at = time.perf_counter()
     for user_msg_id, pack in refs_norm.items():
         if not isinstance(pack, dict):
@@ -1533,12 +1624,19 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             guide_mode=guide_mode,
             guide_source_path=guide_source_path,
             guide_source_name=guide_source_name,
+            allow_authoritative_source_override=bool(authoritative_doc_list_present),
         )
         if authoritative_doc_list_present and _refs_pack_has_pending(pack, include_stale=False):
             pending_refs[int(user_msg_id)] = pack
             continue
         if authoritative_doc_list_present:
             if isinstance(pack_full, dict) and _payload_is_authoritative_doc_list_pack(pack_full, authoritative_doc_list):
+                pack_full = hydrate_doc_list_refs_payload_citation_meta(
+                    pack_full,
+                    doc_list=authoritative_doc_list,
+                    pdf_root=_pdf_dir(),
+                    lib_store=_lib_store(),
+                )
                 stored_full_payload[int(user_msg_id)] = _attach_pack_render_state(
                     pack_full,
                     source_pack=pack,
@@ -1553,15 +1651,21 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                 guide_source_path=str(guide_source_path or "").strip(),
                 guide_source_name=str(guide_source_name or "").strip(),
                 pending=False,
+                allow_expensive_llm=False,
             )
             if isinstance(authoritative_payload, dict) and authoritative_payload:
-                authoritative_full_payloads[int(user_msg_id)] = authoritative_payload
-                authoritative_full_refs[int(user_msg_id)] = pack
-                stored_full_payload[int(user_msg_id)] = _attach_pack_render_state(
-                    authoritative_payload,
-                    source_pack=pack,
-                    default_status="full",
-                )
+                if not authoritative_doc_list:
+                    authoritative_sync_payloads[int(user_msg_id)] = authoritative_payload
+                    authoritative_sync_refs[int(user_msg_id)] = pack
+                    stored_full_payload[int(user_msg_id)] = _attach_pack_render_state(
+                        authoritative_payload,
+                        source_pack=pack,
+                        default_status="full",
+                        override_status=True,
+                    )
+                    continue
+                authoritative_fast_payloads[int(user_msg_id)] = authoritative_payload
+                authoritative_fast_refs[int(user_msg_id)] = pack
                 continue
         if isinstance(pack_full, dict):
             stored_full_payload[int(user_msg_id)] = _attach_pack_render_state(
@@ -1578,18 +1682,25 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             ready_missing_refs[int(user_msg_id)] = pack
     _record("render_state_scan", phase_started_at)
 
-    if authoritative_full_payloads:
+    if authoritative_sync_payloads:
         phase_started_at = time.perf_counter()
         _persist_rendered_refs_payloads(
-            refs=authoritative_full_refs,
-            payload=authoritative_full_payloads,
+            refs=authoritative_sync_refs,
+            payload=authoritative_sync_payloads,
             guide_mode=guide_mode,
             guide_source_path=guide_source_path,
             guide_source_name=guide_source_name,
         )
-        _record("persist_authoritative", phase_started_at)
+        _record("persist_empty_authoritative", phase_started_at)
 
-    if refs_norm and (not pending_refs) and (not failed_ready_refs) and (not ready_missing_refs) and stored_full_payload:
+    if (
+        refs_norm
+        and (not pending_refs)
+        and (not failed_ready_refs)
+        and (not ready_missing_refs)
+        and (not authoritative_fast_payloads)
+        and stored_full_payload
+    ):
         _store_cached_conversation_refs_payload(
             conv_id=conv_id,
             signature=signature,
@@ -1615,6 +1726,20 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         return _finish(annotated_cached, f"cache_{cached_mode or ('pending' if has_pending else 'fast')}")
 
     payload: dict[int, dict] = dict(stored_full_payload)
+    if authoritative_fast_payloads:
+        annotated_authoritative = _annotate_refs_payload_refresh_state(
+            authoritative_fast_payloads,
+            mode="fast",
+        )
+        for user_msg_id, pack in authoritative_fast_refs.items():
+            payload_pack = annotated_authoritative.get(int(user_msg_id))
+            if isinstance(payload_pack, dict):
+                payload[int(user_msg_id)] = _attach_pack_render_state(
+                    payload_pack,
+                    source_pack=pack,
+                    default_status="fast",
+                    override_status=True,
+                )
     if pending_refs:
         phase_started_at = time.perf_counter()
         pending_payload = _build_pending_conversation_refs_payload(
@@ -1662,35 +1787,32 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         target[int(user_msg_id)] = pack
     if exact_ready_refs:
         phase_started_at = time.perf_counter()
-        exact_payload = enrich_refs_payload(
-            exact_ready_refs,
-            pdf_root=_pdf_dir(),
-            md_root=_md_dir(),
-            lib_store=_lib_store(),
-            guide_mode=guide_mode,
-            guide_source_path=guide_source_path,
-            guide_source_name=guide_source_name,
-            render_variant="bounded_full",
-            allow_expensive_llm_for_ready=False,
-            allow_exact_locate=True,
-        )
-        if isinstance(exact_payload, dict):
-            _persist_rendered_refs_payloads(
-                refs=exact_ready_refs,
-                payload=exact_payload,
+        exact_payload = _annotate_refs_payload_refresh_state(
+            enrich_refs_payload(
+                exact_ready_refs,
+                pdf_root=_pdf_dir(),
+                md_root=_md_dir(),
+                lib_store=_lib_store(),
                 guide_mode=guide_mode,
                 guide_source_path=guide_source_path,
                 guide_source_name=guide_source_name,
-            )
+                render_variant="bounded_full",
+                allow_expensive_llm_for_ready=False,
+                allow_exact_locate=True,
+            ),
+            mode="fast",
+        )
+        if isinstance(exact_payload, dict):
             for user_msg_id, pack in exact_ready_refs.items():
                 payload_pack = exact_payload.get(int(user_msg_id))
                 if isinstance(payload_pack, dict):
                     payload[int(user_msg_id)] = _attach_pack_render_state(
                         payload_pack,
                         source_pack=pack,
-                        default_status="full",
+                        default_status="fast",
+                        override_status=True,
                     )
-        _record("exact_full_render", phase_started_at)
+        _record("exact_fast_render", phase_started_at)
     if normal_ready_refs:
         phase_started_at = time.perf_counter()
         fast_payload = _build_fast_ready_conversation_refs_payload(
@@ -1707,19 +1829,12 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                     payload_pack,
                     source_pack=pack,
                     default_status="fast",
+                    override_status=True,
                 )
         _record("fast_render", phase_started_at)
-        _warm_conversation_refs_payload_async(
-            conv_id=conv_id,
-            signature=signature,
-            refs=refs_norm,
-            guide_mode=guide_mode,
-            guide_source_path=guide_source_path,
-            guide_source_name=guide_source_name,
-        )
 
     cache_mode = "full"
-    if normal_ready_refs:
+    if authoritative_fast_payloads or exact_ready_refs or normal_ready_refs:
         cache_mode = "fast"
     elif failed_ready_refs:
         cache_mode = "fast"
@@ -1731,6 +1846,26 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             signature=signature,
             payload=payload,
             mode=cache_mode,
+        )
+    ready_refs_to_warm = {
+        **authoritative_fast_refs,
+        **exact_ready_refs,
+        **normal_ready_refs,
+    }
+    if ready_refs_to_warm and (not pending_refs) and (not failed_ready_refs):
+        authoritative_to_warm = {
+            user_msg_id: authoritative_doc_lists[user_msg_id]
+            for user_msg_id in authoritative_fast_refs
+            if user_msg_id in authoritative_doc_lists
+        }
+        _warm_conversation_refs_payload_async(
+            conv_id=conv_id,
+            signature=signature,
+            refs=ready_refs_to_warm,
+            guide_mode=guide_mode,
+            guide_source_path=guide_source_path,
+            guide_source_name=guide_source_name,
+            authoritative_doc_list_by_user=authoritative_to_warm,
         )
     return _finish(payload, cache_mode)
 

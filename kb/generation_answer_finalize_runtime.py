@@ -45,6 +45,7 @@ from kb.reference_query_family import (
     prompt_targets_sci_topic as _shared_prompt_targets_sci_topic,
 )
 from kb.config import CITATION_OFFSET
+from kb.evidence_text import pick_readable_evidence_text
 from kb.paper_guide_shared import _cite_source_id
 from kb.reference_index import (
     load_reference_index as _load_reference_index,
@@ -1514,6 +1515,13 @@ def _normalize_multi_paper_contract_primary_evidence(
         heading_path=heading_path,
         raw_text=raw_text,
     )
+    readable_evidence = pick_readable_evidence_text(
+        raw_text,
+        source=source_path,
+        title=source_name,
+        heading=normalized_heading,
+        max_len=460,
+    )
     out = {
         key: value
         for key, value in primary.items()
@@ -1525,14 +1533,15 @@ def _normalize_multi_paper_contract_primary_evidence(
         out["source_name"] = source_name
     if normalized_heading and (weak_primary or (not str(out.get("heading_path") or "").strip())):
         out["heading_path"] = normalized_heading
-    if normalized_summary and (
+    evidence_snippet = readable_evidence or normalized_summary
+    if evidence_snippet and (
         weak_primary
         or (
             not str(out.get("highlight_snippet") or out.get("snippet") or "").strip()
         )
     ):
-        out["snippet"] = normalized_summary
-        out["highlight_snippet"] = normalized_summary
+        out["snippet"] = evidence_snippet
+        out["highlight_snippet"] = evidence_snippet
     if selection_reason and (not str(out.get("selection_reason") or "").strip()):
         out["selection_reason"] = str(selection_reason or "").strip()
     return {
@@ -1931,9 +1940,34 @@ def _format_multi_paper_list_answer_v2(*, prompt: str, docs: list[dict]) -> str:
 
 
 _MULTI_PAPER_NUMBERED_SECTION_RE = re.compile(
-    r"(?m)^\s*(?:#{1,6}\s*)?(?:\u7b2c\s*)?(\d{1,2})"
-    r"(?:\s*(?:\u7bc7|\u6b65|\u9879|\u90e8)\s*[:\uff1a]\s*|[.)]\s+)"
+    r"(?m)^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:\u7b2c\s*)?"
+    r"(?:(\d{1,2})|([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]{1,3}))"
+    r"(?:\s*(?:\u7bc7|\u6b65|\u9879|\u90e8)[^:\uff1a\n]{0,24}[:\uff1a]\s*(?:\*\*)?|[.)]\s+)"
 )
+
+
+def _multi_paper_section_number(match: re.Match[str]) -> int:
+    raw_digit = str(match.group(1) or "").strip()
+    if raw_digit:
+        return int(raw_digit)
+    raw_chinese = str(match.group(2) or "").strip()
+    digit_by_char = {
+        "\u4e00": 1,
+        "\u4e8c": 2,
+        "\u4e09": 3,
+        "\u56db": 4,
+        "\u4e94": 5,
+        "\u516d": 6,
+        "\u4e03": 7,
+        "\u516b": 8,
+        "\u4e5d": 9,
+    }
+    if raw_chinese == "\u5341":
+        return 10
+    if "\u5341" in raw_chinese:
+        before, after = raw_chinese.split("\u5341", 1)
+        return digit_by_char.get(before, 1) * 10 + digit_by_char.get(after, 0)
+    return digit_by_char.get(raw_chinese, 0)
 
 
 def _multi_paper_numbered_sections(answer: str) -> list[str]:
@@ -1947,7 +1981,7 @@ def _multi_paper_numbered_sections(answer: str) -> list[str]:
 
 def _count_multi_paper_answer_items(answer: str) -> int:
     numbers = [
-        int(match.group(1))
+        _multi_paper_section_number(match)
         for match in _MULTI_PAPER_NUMBERED_SECTION_RE.finditer(str(answer or ""))
     ]
     if not numbers:
@@ -1976,16 +2010,78 @@ def _strip_requested_multi_paper_extras(answer: str) -> str:
     text = str(answer or "").strip()
     extra_block = re.compile(
         r"(?ims)\n\s*(?:---\s*\n\s*)?(?:#{1,6}\s*)?(?:\*\*)?"
-        r"(?:\u8865\u5145\u8bf4\u660e|\u8865\u5145\u9605\u8bfb|\u5ef6\u4f38\u9605\u8bfb|\u8fdb\u4e00\u6b65\u9605\u8bfb|"
-        r"additional\s+reading|further\s+reading|supplementary\s+note)"
+        r"(?:\u8865\u5145\u8bf4\u660e|\u8865\u5145\u5efa\u8bae|\u8865\u5145\u9605\u8bfb|\u5ef6\u4f38\u9605\u8bfb|\u8fdb\u4e00\u6b65\u9605\u8bfb|"
+        r"additional\s+reading|further\s+reading|supplementary\s+(?:note|recommendations?))"
         r"(?:\s*[:\uff1a](?:\*\*)?)?.*$"
     )
     text = extra_block.sub("", text).rstrip()
+    followup_paper_tail = re.compile(
+        r"(?ims)\n[ \t]*[-*+][ \t]+(?:\*\*)?"
+        r"(?:\u540e\u7eed|\u4e0b\u4e00\u6b65(?:\u9605\u8bfb)?|further\s+reading|next\s+reads?)"
+        r"(?:\s*[:\uff1a])?(?:\*\*)?.*?(?=^[ \t]*#{1,6}[ \t]+|\Z)"
+    )
+    text = followup_paper_tail.sub("", text).rstrip()
     citation_chain_tail = re.compile(
         r"(?ims)\n\s*(?:\u5982\u679c\u60f3\u987a\u7740\u8bba\u6587\u7684\u5f15\u7528\u94fe|"
         r"if\s+you\s+want\s+to\s+follow\s+the\s+citation\s+chain).*$"
     )
     return citation_chain_tail.sub("", text).rstrip()
+
+
+def _strip_multi_paper_unselected_recommendation_sections(
+    answer: str,
+    *,
+    allowed_citation_nums: set[int],
+) -> str:
+    text = str(answer or "").strip()
+    if not text or not allowed_citation_nums:
+        return text
+    recommendation_section = re.compile(
+        r"(?ims)^\s*#{1,6}\s*(?:"
+        r"\u5c40\u9650(?:\u6027)?(?:\u8bf4\u660e)?|\u8865\u5145(?:\u8bf4\u660e|\u5efa\u8bae|\u9605\u8bfb)?|"
+        r"\u5ef6\u4f38\u9605\u8bfb|\u8fdb\u4e00\u6b65\u9605\u8bfb|\u5176\u4ed6\u63a8\u8350|"
+        r"limitations?|supplementary(?:\s+(?:notes?|recommendations?|reading))?|"
+        r"additional\s+reading|further\s+reading|other\s+recommendations?)\s*$"
+        r".*?(?=^\s*#{1,6}\s|\Z)"
+    )
+
+    def _drop_if_outside_contract(match: re.Match[str]) -> str:
+        cited = {
+            int(chunk)
+            for marker in _FREEFORM_NUMERIC_CITE_RE.finditer(match.group(0))
+            for chunk in re.findall(r"\d+", marker.group(1))
+        }
+        return "" if cited - allowed_citation_nums else match.group(0)
+
+    out = recommendation_section.sub(_drop_if_outside_contract, text)
+    recommendation_callout = re.compile(
+        r"(?ims)^\s*(?:[-*+]\s*)?(?:\*\*)?(?:"
+        r"\u8fdb\u9636\u63d0\u793a|\u8865\u5145\u5efa\u8bae|\u8865\u5145\u9605\u8bfb|\u5ef6\u4f38\u9605\u8bfb|"
+        r"advanced\s+tips?|supplementary\s+recommendations?|further\s+reading)"
+        r"(?:\*\*)?\s*[:\uff1a]\s*(?:\*\*)?.*?(?=^\s*#{1,6}\s|\Z)"
+    )
+    out = recommendation_callout.sub(_drop_if_outside_contract, out)
+    followup_clause = re.compile(
+        r"(?ims)(?:"
+        r"\u4e4b\u540e\u53ef(?:\u6839\u636e\u5174\u8da3)?|\u540e\u7eed\u53ef|\u53ef\u6839\u636e\u5174\u8da3|"
+        r"if\s+(?:you(?:'re|\s+are)?\s+)?interested|for\s+further\s+reading)"
+        r"[^\n\u3002\uff01\uff1f.!?]*(?:[\u3002\uff01\uff1f.!?]|$)"
+    )
+    out = followup_clause.sub(_drop_if_outside_contract, out)
+    kept_lines: list[str] = []
+    for line in out.splitlines():
+        cited = {
+            int(chunk)
+            for marker in _FREEFORM_NUMERIC_CITE_RE.finditer(line)
+            for chunk in re.findall(r"\d+", marker.group(1))
+        }
+        if cited - allowed_citation_nums:
+            continue
+        kept_lines.append(line)
+    out = "\n".join(kept_lines)
+    out = re.sub(r"(?m)(?:^\s*---\s*$\n*){2,}", "---\n\n", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
 
 
 def _strip_single_paper_selection_extras(answer: str) -> str:
@@ -2080,10 +2176,10 @@ def _repair_requested_multi_paper_answer(
     prompt: str,
     answer_hits: list[dict] | None,
 ) -> str:
+    text = _strip_requested_multi_paper_extras(answer)
     requested_count = extract_requested_paper_count(prompt)
     if requested_count is None:
-        return str(answer or "")
-    text = _strip_requested_multi_paper_extras(answer)
+        return text
     if not _prompt_requests_multi_paper_source_markers(prompt):
         return text
     matches = list(_MULTI_PAPER_NUMBERED_SECTION_RE.finditer(text))
@@ -3474,26 +3570,41 @@ def _finalize_generation_answer(
             doc_list=multi_paper_doc_list,
         )
         requested_count = extract_requested_paper_count(prompt_for_user or prompt)
+        answer_item_count = _count_multi_paper_answer_items(answer)
+        selection_expected_count = requested_count or answer_item_count
         if selected_multi_paper_doc_list and (
-            requested_count is None or len(selected_multi_paper_doc_list) == requested_count
+            selection_expected_count <= 0
+            or len(selected_multi_paper_doc_list) == selection_expected_count
         ):
             multi_paper_doc_list = selected_multi_paper_doc_list
+            answer = _strip_multi_paper_unselected_recommendation_sections(
+                answer,
+                allowed_citation_nums={
+                    int(row.get("citation_num") or 0)
+                    for row in selected_multi_paper_doc_list
+                    if int(row.get("citation_num") or 0) > 0
+                },
+            )
         else:
             multi_paper_doc_list = _filter_multi_paper_doc_list_contract(
                 prompt=prompt_for_user or prompt,
                 doc_list=multi_paper_doc_list,
             )
+    multi_paper_answer_needs_rebuild = _multi_paper_answer_needs_contract_rebuild(
+        answer=answer,
+        prompt=prompt_for_user or prompt,
+    )
     if (
-        multi_paper_list_prompt
+        raw_answer_had_internal_doc_labels
+        and not multi_paper_answer_needs_rebuild
         and multi_paper_doc_list
-        and (
-            raw_answer_had_internal_doc_labels
-            or _multi_paper_answer_needs_contract_rebuild(
-                answer=answer,
-                prompt=prompt_for_user or prompt,
-            )
-        )
     ):
+        expected_item_count = extract_requested_paper_count(prompt_for_user or prompt) or len(multi_paper_doc_list)
+        multi_paper_answer_needs_rebuild = bool(
+            expected_item_count > 0
+            and _count_multi_paper_answer_items(answer) != expected_item_count
+        )
+    if multi_paper_list_prompt and multi_paper_doc_list and multi_paper_answer_needs_rebuild:
         formatted_multi_paper_answer = _format_multi_paper_list_answer_v2(
             prompt=prompt_for_user or prompt,
             docs=multi_paper_doc_list,

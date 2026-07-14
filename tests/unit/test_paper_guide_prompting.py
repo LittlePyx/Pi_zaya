@@ -5,6 +5,7 @@ from kb.paper_guide_prompting import (
     _looks_like_reference_list_snippet_local,
     _merge_paper_guide_deepread_context,
     _paper_guide_prompt_family,
+    _paper_guide_prompt_requests_exact_method_support,
     _paper_guide_requested_heading_hints,
     _paper_guide_text_matches_requested_targets,
     _requested_figure_number,
@@ -102,6 +103,12 @@ def test_paper_guide_prompt_family_prefers_method_for_training_summary_questions
     )
 
 
+def test_paper_guide_prompt_family_detects_chinese_refocus_and_scope_questions():
+    assert _paper_guide_prompt_family("这个显微镜怎么把离焦样品重新对焦？") == "method"
+    assert not _paper_guide_prompt_requests_exact_method_support("这个显微镜怎么把离焦样品重新对焦？")
+    assert _paper_guide_prompt_family("这篇论文和我的主线关系大吗？值得一起读吗？") == "overview"
+
+
 def test_paper_guide_prompt_family_prefers_strength_limits_for_section_tradeoff_prompt():
     assert (
         _paper_guide_prompt_family(
@@ -171,6 +178,44 @@ def test_augment_paper_guide_retrieval_prompt_keeps_reference_list_bias_for_expl
     low = out.lower()
     assert "reference list" in low
     assert "works cited" in low
+
+
+def test_augment_compare_choice_prompt_adds_quantitative_evidence_terms():
+    out = _augment_paper_guide_retrieval_prompt(
+        "我做单像素实验，Hadamard 和 Fourier 到底该怎么选？",
+        family="compare",
+    )
+
+    assert "sampling ratio" in out
+    assert "PSNR" in out
+    assert "SSIM" in out
+    assert "quantitative comparison" in out
+
+
+def test_augment_strength_limits_prompt_adds_data_and_generalization_terms():
+    out = _augment_paper_guide_retrieval_prompt(
+        "深度学习给单像素成像带来的好处和坑分别是什么？",
+        family="strength_limits",
+    )
+    low = out.lower()
+
+    assert "training data" in low
+    assert "generalization" in low
+    assert "reconstruction quality" in low
+    assert "reconstruction speed" in low
+
+
+def test_augment_method_map_prompt_keeps_metrics_and_refocusing_terms():
+    out = _augment_paper_guide_retrieval_prompt(
+        "structured detection、interferometric、light-field 方法分别解决什么麻烦？",
+        family="method",
+    )
+    low = out.lower()
+
+    assert "signal-to-noise ratio" in low
+    assert "snr" in low
+    assert "digital refocusing" in low
+    assert "optical sectioning" in low
 
 
 def test_augment_paper_guide_retrieval_prompt_prioritizes_reconstruction_terms_for_cjk_tradeoff_query():

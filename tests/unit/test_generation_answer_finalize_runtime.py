@@ -1054,6 +1054,123 @@ def test_finalize_generation_answer_rebuilds_multi_paper_list_from_structured_do
     assert len(list(contracts.get("doc_list") or [])) == 3
 
 
+def test_finalize_generation_answer_preserves_rich_reading_route_with_internal_doc_labels(monkeypatch):
+    monkeypatch.setattr(finalize_runtime, "_reconcile_kb_notice", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(finalize_runtime, "_apply_answer_contract_v1", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(finalize_runtime, "_enhance_kb_miss_fallback", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_build_answer_quality_probe",
+        lambda answer, **kwargs: {"minimum_ok": True, "answer": answer},
+    )
+
+    raw = """# 单像素成像入门主线：先读这3篇
+
+## 1. 第一篇：综述 — 建立全局认知
+
+**推荐论文（DOC-1）：** *Advances and Challenges of Single-Pixel Imaging Based on Deep Learning*
+
+**主要看什么：** 先看 Fundamentals，理解调制、测量和重建的基本框架 [1]。
+
+**为什么先读：** 它先给出问题、方法、进展和挑战的全局地图。
+
+## 2. 第二篇：原理对比 — 理解确定性方法
+
+**推荐论文（DOC-2）：** *Hadamard single-pixel imaging versus Fourier single-pixel imaging*
+
+**主要看什么：** 对比 HSI 与 FSI 的原理、成像效率和噪声鲁棒性 [2]。
+
+**为什么接着读：** 它把综述中的抽象分类落到硬件和采样策略选择上。
+
+## 3. 第三篇：系统展望 — 理解技术边界
+
+**推荐论文（DOC-3）：** *Principles and prospects for single-pixel imaging*
+
+**主要看什么：** 看采集与重建策略、扫描效率以及适用波段 [3]。
+
+**为什么收尾：** 它帮助判断什么场景下 SPI 真正有优势。
+
+## 阅读顺序建议
+
+综述（全局地图）→ 原理对比（核心方法）→ 系统展望（边界判断）。
+"""
+    docs = [
+        (
+            r"db\LPR\LPR.en.md",
+            "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf",
+            "Fundamentals of Single-Pixel Imaging",
+        ),
+        (
+            r"db\OE\OE.en.md",
+            "Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "2.1 Principle of HSI and FSI",
+        ),
+        (
+            r"db\NatPhoton\NatPhoton.en.md",
+            "Principles and prospects for single-pixel imaging.pdf",
+            "Acquisition and image reconstruction strategies",
+        ),
+    ]
+    answer_hits = [
+        {
+            "text": f"Grounded evidence for {source_name}",
+            "meta": {"source_path": source_path, "ref_best_heading_path": heading},
+        }
+        for source_path, source_name, heading in docs
+    ]
+    evidence_cards = [
+        {
+            "source_path": source_path,
+            "primary_evidence": {
+                "source_path": source_path,
+                "source_name": source_name,
+                "heading_path": heading,
+                "snippet": f"Grounded evidence for {source_name}",
+            },
+        }
+        for source_path, source_name, heading in docs
+    ]
+
+    out = finalize_runtime._finalize_generation_answer(
+        raw,
+        prompt="我刚开始看单像素成像，想先建立主线，只推荐3篇并给出阅读顺序和引用。",
+        prompt_for_user="我刚开始看单像素成像，想先建立主线，只推荐3篇并给出阅读顺序和引用。",
+        answer_hits=answer_hits,
+        db_dir="db",
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="medium",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=False,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=evidence_cards,
+        apply_paper_guide_answer_postprocess=lambda answer, **kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **kwargs: answer,
+        validate_structured_citations=lambda answer, **kwargs: (answer, {}),
+    )
+
+    answer = str(out.get("answer") or "")
+    assert "DOC-" not in answer
+    assert "为什么先读" in answer
+    assert "主要看什么" in answer
+    assert "阅读顺序建议" in answer
+    assert "[1]" in answer
+    assert "[2]" in answer
+    assert "[3]" in answer
+    assert "根据命中的库内文献" not in answer
+    assert [
+        item.get("source_path")
+        for item in list(dict(out.get("paper_guide_contracts") or {}).get("doc_list") or [])
+    ] == [source_path for source_path, _source_name, _heading in docs]
+
+
 def test_build_multi_paper_doc_list_contract_prefers_normalized_pending_seed_surface_over_weaker_answer_hit_card():
     source_path = (
         r"db\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image"
@@ -1108,6 +1225,39 @@ def test_build_multi_paper_doc_list_contract_prefers_normalized_pending_seed_sur
     assert primary["snippet"].startswith(
         "In this paper, we explore the potential of Snapshot Compressive Imaging (SCI) technique"
     )
+
+
+def test_build_multi_paper_doc_list_contract_keeps_complete_primary_evidence_beyond_short_summary():
+    source_path = r"db\OE-2017-HSI-FSI\OE-2017-HSI-FSI.en.md"
+    raw_snippet = (
+        "## 2. Comparison of theory\n"
+        "Hadamard single-pixel imaging and Fourier single-pixel imaging are representative deterministic methods. "
+        "The paper compares their principles, imaging efficiency, and noise robustness under the same experimental setup. "
+        "Hadamard basis patterns are binary, which makes them suitable for high-speed modulation by a digital micromirror device."
+    )
+
+    out = finalize_runtime._build_multi_paper_doc_list_contract(
+        prompt="Which papers should I read to compare HSI and FSI?",
+        seed_docs=[
+            {
+                "text": raw_snippet,
+                "meta": {
+                    "source_path": source_path,
+                    "ref_best_heading_path": "2. Comparison of theory",
+                    "ref_show_snippets": [raw_snippet],
+                },
+            }
+        ],
+        answer_hits=[],
+        evidence_cards=[],
+        apply_prompt_filter=False,
+    )
+
+    row = out[0]
+    primary = dict(row.get("primary_evidence") or {})
+    assert len(str(row.get("summary_line") or "")) <= 180
+    assert len(str(primary.get("snippet") or "")) > len(str(row.get("summary_line") or ""))
+    assert str(primary.get("snippet") or "").endswith("device.")
 
 
 def test_build_multi_paper_doc_list_contract_extracts_abstract_surface_from_title_plus_bold_abstract():
@@ -1429,6 +1579,189 @@ Paper: 3D single-pixel video [4]
 
     heading_extra = answer.replace("**Further reading:**", "## Further reading")
     assert "Further reading" not in finalize_runtime._strip_requested_multi_paper_extras(heading_extra)
+
+
+def test_multi_paper_repair_without_explicit_count_drops_followup_papers_but_keeps_reading_advice() -> None:
+    answer = """对于刚入门 SPI，建议按以下顺序阅读三篇核心文献：
+
+### 1. 先读综述
+主要看原理和系统边界 [3]。
+
+### 2. 再读方法对比
+主要看 Hadamard 与 Fourier 的差异 [2]。
+
+### 3. 最后看前沿
+主要看深度学习重建与泛化挑战 [1]。
+
+### 阅读建议
+- **顺序：** 综述 → 方法对比 → 深度学习前沿。
+- **重点：** 每篇都看动机、方法和局限。
+- **后续：** 读完后还可以选择其他方向：
+ - 自适应采样可读额外论文 [5]。
+ - 3D 成像可读额外论文 [6]。
+ - 自监督网络可读额外论文 [4]。
+"""
+
+    out = finalize_runtime._repair_requested_multi_paper_answer(
+        answer,
+        prompt="我刚开始看单像素成像，想先建立主线，应该先读哪几篇？每篇主要看什么？",
+        answer_hits=[],
+    )
+
+    assert "先读综述" in out
+    assert "再读方法对比" in out
+    assert "最后看前沿" in out
+    assert "### 阅读建议" in out
+    assert "**顺序：**" in out
+    assert "**重点：**" in out
+    assert "**后续：**" not in out
+    assert "[4]" not in out
+    assert "[5]" not in out
+    assert "[6]" not in out
+
+
+def test_multi_paper_contract_drops_limitations_with_unselected_paper_recommendations() -> None:
+    answer = """## 1. Review
+Read the overview [3].
+
+## 2. Comparison
+Compare the two acquisition strategies [2].
+
+## 3. Frontier
+Study the learning-based reconstruction limits [1].
+
+## Limitations
+For 3D imaging, read another paper [5]. A self-supervised route is covered by [4].
+
+## Next action
+Read [3], then [2], and finish with [1]."""
+
+    out = finalize_runtime._strip_multi_paper_unselected_recommendation_sections(
+        answer,
+        allowed_citation_nums={1, 2, 3},
+    )
+
+    assert "## Limitations" not in out
+    assert "[4]" not in out
+    assert "[5]" not in out
+    assert "## Next action" in out
+    assert "Read [3], then [2], and finish with [1]." in out
+
+
+def test_multi_paper_contract_selects_chinese_ordinal_core_sections_and_drops_followup_clause() -> None:
+    source_paths = ["learning.md", "comparison.md", "prospects.md", "foveated.md"]
+    hits = [
+        {"text": "evidence", "meta": {"source_path": source_path}}
+        for source_path in source_paths
+    ]
+    docs = [
+        {"source_path": source_path, "source_name": source_path}
+        for source_path in source_paths
+    ]
+    answer = """## 第一篇：建立整体框架
+**prospects** [3]
+
+## 第二篇：理解主流方法
+**comparison** [2]
+
+## 第三篇：了解学习方法
+**learning** [1]
+
+## 阅读路线图总结
+读完这三篇就能建立主线。之后可根据兴趣深入自适应采样 [4]。"""
+
+    selected = finalize_runtime._select_multi_paper_doc_list_from_answer(
+        answer=answer,
+        answer_hits=hits,
+        doc_list=docs,
+    )
+    assert [row["citation_num"] for row in selected] == [3, 2, 1]
+    assert [row["source_path"] for row in selected] == ["prospects.md", "comparison.md", "learning.md"]
+
+    out = finalize_runtime._strip_multi_paper_unselected_recommendation_sections(
+        answer,
+        allowed_citation_nums={1, 2, 3},
+    )
+    assert "读完这三篇就能建立主线。" in out
+    assert "自适应采样" not in out
+    assert "[4]" not in out
+
+
+def test_multi_paper_contract_selects_bold_chinese_ordinal_sections_with_descriptors() -> None:
+    source_paths = ["learning.md", "comparison.md", "prospects.md"]
+    hits = [
+        {"text": "evidence", "meta": {"source_path": source_path}}
+        for source_path in source_paths
+    ]
+    answer = """**第一篇必读：** **prospects** [3]
+
+Read the field overview.
+
+**第二篇（方法对比）：** **comparison** [2]
+
+Compare deterministic coding methods.
+
+**第三篇（综述）：** **learning** [1]
+
+Study the learning frontier.
+
+```
+第一步：prospects
+第二步：comparison
+第三步：learning
+```"""
+
+    selected = finalize_runtime._select_multi_paper_doc_list_from_answer(
+        answer=answer,
+        answer_hits=hits,
+        doc_list=[{"source_path": path} for path in source_paths],
+    )
+
+    assert finalize_runtime._count_multi_paper_answer_items(answer) == 3
+    assert [row["citation_num"] for row in selected] == [3, 2, 1]
+
+
+def test_multi_paper_contract_drops_bold_advanced_tip_with_unselected_sources() -> None:
+    answer = """## 1. Overview
+Read the overview [3].
+
+## Reading plan
+Read the three core papers in order.
+
+**Advanced tip:** Continue with self-supervised reconstruction [4].
+- Then study 3D imaging [5]."""
+
+    out = finalize_runtime._strip_multi_paper_unselected_recommendation_sections(
+        answer,
+        allowed_citation_nums={1, 2, 3},
+    )
+
+    assert "## Reading plan" in out
+    assert "Advanced tip" not in out
+    assert "[4]" not in out
+    assert "[5]" not in out
+
+
+def test_multi_paper_contract_drops_embedded_bullet_with_unselected_source() -> None:
+    answer = """## 3. Learning frontier
+- Deep learning improves reconstruction quality [1].
+- A self-supervised image-loop network is another paper [4].
+
+## Summary
+The three core papers form the requested roadmap.
+
+**Advanced tip:** Study 3D imaging [6]."""
+
+    out = finalize_runtime._strip_multi_paper_unselected_recommendation_sections(
+        answer,
+        allowed_citation_nums={1, 2, 3},
+    )
+
+    assert "improves reconstruction quality [1]" in out
+    assert "self-supervised" not in out
+    assert "Advanced tip" not in out
+    assert "[4]" not in out
+    assert "[6]" not in out
 
 
 def test_single_paper_selection_strips_other_candidate_table_but_keeps_reading_locations() -> None:

@@ -7,6 +7,42 @@ import re
 from api.reference_value_utils import _non_negative_float, _positive_int
 
 
+def _doc_list_copy_key(value: object) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").strip().lower())
+
+
+def _doc_list_copy_is_duplicate(left: object, right: object) -> bool:
+    left_key = _doc_list_copy_key(left)
+    right_key = _doc_list_copy_key(right)
+    if not left_key or not right_key:
+        return False
+    if left_key == right_key:
+        return True
+    shorter, longer = sorted((left_key, right_key), key=len)
+    return len(shorter) >= 24 and shorter in longer and (len(shorter) / max(1, len(longer))) >= 0.72
+
+
+def _dedupe_doc_list_card_copy(*, raw_item: dict, ui_meta: dict | None) -> dict:
+    out = dict(ui_meta or {}) if isinstance(ui_meta, dict) else {}
+    summary_line = str(out.get("summary_line") or "").strip()
+    why_line = str(out.get("why_line") or "").strip()
+    if not _doc_list_copy_is_duplicate(summary_line, why_line):
+        return out
+
+    authoritative_summary = str(raw_item.get("summary_line") or "").strip()
+    if authoritative_summary and not _doc_list_copy_is_duplicate(authoritative_summary, why_line):
+        out["summary_line"] = authoritative_summary
+        out["summary_generation"] = str(raw_item.get("summary_generation") or "").strip() or "section_grounded"
+        out["summary_basis"] = "authoritative document-list evidence"
+        out["summary_source"] = "doc_list_authoritative_fast"
+        return out
+
+    out.pop("why_line", None)
+    out.pop("why_generation", None)
+    out.pop("why_basis", None)
+    return out
+
+
 def _collect_doc_list_ref_text_candidates(
     *,
     raw_item: dict,
@@ -693,6 +729,28 @@ def _apply_doc_list_summary_fallbacks(
             ui_out["summary_line"] = fallback_raw
             ui_out["summary_generation"] = "raw_fallback"
             summary_source_out = "doc_list_raw_fallback"
+    current_summary = str(ui_out.get("summary_line") or "").strip()
+    authoritative_summary = compact_reader_open_text(str(raw_item.get("summary_line") or "").strip())
+    if (
+        authoritative_summary
+        and looks_why_like_ref_summary(current_summary)
+        and not looks_like_title_echo(authoritative_summary, display_name)
+        and not looks_why_like_ref_summary(authoritative_summary)
+        and not looks_fragmentary_ref_summary(authoritative_summary)
+        and not looks_surface_like_ref_summary(authoritative_summary)
+        and not looks_formula_heavy_ref_text(authoritative_summary)
+    ):
+        summary_generation = str(raw_item.get("summary_generation") or "").strip().lower() or "section_grounded"
+        summary_basis_meta = build_ref_summary_basis_meta(
+            prompt=prompt,
+            summary_kind=str(ui_out.get("summary_kind") or "guide"),
+            summary_generation=summary_generation,
+            summary_line=authoritative_summary,
+        )
+        ui_out["summary_line"] = authoritative_summary
+        ui_out["summary_generation"] = str(summary_basis_meta.get("summary_generation") or summary_generation)
+        ui_out["summary_basis"] = str(summary_basis_meta.get("summary_basis") or "")
+        summary_source_out = "doc_list_authoritative_fast"
     return ui_out, summary_source_out
 
 
@@ -853,6 +911,7 @@ def _build_doc_list_hit_ui_meta(
     apply_doc_list_summary_fallbacks: Callable[..., tuple[dict, str]],
     apply_doc_list_why_fallback: Callable[..., dict],
     finalize_doc_list_hit_ui_meta: Callable[..., dict],
+    preloaded_citation_meta: dict[str, dict] | None = None,
 ) -> dict:
     source_path = str(raw_item.get("source_path") or "").strip()
     source_name = str(raw_item.get("source_name") or "").strip() or source_filename(source_path) or f"Reference {idx}"
@@ -889,6 +948,13 @@ def _build_doc_list_hit_ui_meta(
             prompt=prompt,
         )
         summary_source = "doc_list_seed"
+    cached_citation_meta = (
+        (preloaded_citation_meta or {}).get(source_path)
+        if source_path and isinstance(preloaded_citation_meta, dict)
+        else None
+    )
+    if isinstance(cached_citation_meta, dict) and cached_citation_meta:
+        ui_meta["citation_meta"] = dict(cached_citation_meta)
     heading_path = (
         str(ui_meta.get("heading_path") or "").strip()
         or str(raw_item.get("heading_path") or "").strip()
@@ -1091,6 +1157,7 @@ def _build_doc_list_payload_hits(
     build_doc_list_hit_ui_meta: Callable[..., dict],
     normalize_ref_copy_ui_meta: Callable[[dict | None], dict],
     apply_doc_list_topic_match_hints: Callable[..., dict],
+    preloaded_citation_meta: dict[str, dict] | None = None,
 ) -> list[dict]:
     hits: list[dict] = []
     for idx, raw_item in enumerate(list(doc_rows or []), start=1):
@@ -1099,12 +1166,17 @@ def _build_doc_list_payload_hits(
         source_path = str(raw_item.get("source_path") or "").strip()
         if not source_path:
             continue
+        hit_ui_kwargs = {
+            "raw_item": raw_item,
+            "idx": idx,
+            "prompt": prompt,
+            "allow_expensive_llm": bool(allow_expensive_llm),
+            "allow_exact_locate": bool(allow_exact_locate),
+        }
+        if preloaded_citation_meta is not None:
+            hit_ui_kwargs["preloaded_citation_meta"] = preloaded_citation_meta
         ui_meta = build_doc_list_hit_ui_meta(
-            raw_item=raw_item,
-            idx=idx,
-            prompt=prompt,
-            allow_expensive_llm=bool(allow_expensive_llm),
-            allow_exact_locate=bool(allow_exact_locate),
+            **hit_ui_kwargs,
         )
         ui_meta = normalize_ref_copy_ui_meta(ui_meta)
         ui_meta = apply_doc_list_topic_match_hints(
@@ -1112,6 +1184,7 @@ def _build_doc_list_payload_hits(
             raw_item=raw_item,
             ui_meta=ui_meta,
         )
+        ui_meta = _dedupe_doc_list_card_copy(raw_item=raw_item, ui_meta=ui_meta)
         hits.append(
             {
                 "text": str(ui_meta.get("summary_line") or ui_meta.get("why_line") or source_path).strip(),
@@ -1223,6 +1296,16 @@ def _polish_doc_list_payload_hits(
                 hit2 = dict(hit)
                 hit2["ui_meta"] = polished_ui
                 polished_hits[idx] = hit2
+    for idx, hit in enumerate(polished_hits):
+        if not isinstance(hit, dict):
+            continue
+        row = rows[idx] if idx < len(rows) and isinstance(rows[idx], dict) else {}
+        hit_out = dict(hit)
+        hit_out["ui_meta"] = _dedupe_doc_list_card_copy(
+            raw_item=row,
+            ui_meta=hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {},
+        )
+        polished_hits[idx] = hit_out
     return polished_hits
 
 

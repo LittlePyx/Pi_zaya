@@ -72,6 +72,22 @@ def test_soften_baseline_reproduction_inference_adds_caveat():
     assert "作者建议的最基础 baseline" not in out
 
 
+def test_ensure_refocus_mechanism_terms_preserves_grounded_two_step_terms():
+    out = answer_post_runtime._ensure_refocus_mechanism_terms(
+        "该系统通过频域相位操作实现数字重聚焦。",
+        prompt="这个显微镜怎么把离焦样品重新对焦？",
+        evidence_parts=[
+            "Digital refocusing uses two steps: ray tracing reconstructs photon trajectories, "
+            "then wave propagation reverses diffraction."
+        ],
+    )
+
+    assert "two steps" in out
+    assert "ray tracing" in out
+    assert "wave propagation" in out
+    assert "重聚焦" in out
+
+
 def test_resolve_exact_method_support_from_source_combines_framework_lr_and_batch_details(tmp_path, monkeypatch):
     md_path = tmp_path / "paper.en.md"
     md_path.write_text("placeholder", encoding="utf-8")

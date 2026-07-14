@@ -16,6 +16,7 @@ from kb.paper_guide.grounder import (
     _resolve_paper_guide_support_ref_num,
 )
 from kb.paper_guide_grounding_runtime import (
+    _paper_guide_refocus_support_excerpt,
     _paper_guide_support_focus_tokens,
     _score_paper_guide_evidence_atom,
 )
@@ -39,6 +40,19 @@ def test_paper_guide_cue_tokens_keeps_domain_terms():
     assert "correlation" in out
     assert "registration" in out
     assert "iism" in out
+
+
+def test_refocus_support_excerpt_keeps_both_mechanism_steps():
+    excerpt = _paper_guide_refocus_support_excerpt(
+        "Digital refocusing is achieved using two steps. "
+        "First, photon trajectories are reconstructed through a ray tracing operation. "
+        "For microscopic samples diffraction must also be considered. "
+        "The second step applies wave propagation of distance -z to bring the sample back into focus."
+    )
+
+    assert "two steps" in excerpt
+    assert "ray tracing" in excerpt
+    assert "wave propagation" in excerpt
 
 
 def test_paper_guide_support_claim_type_and_policy_for_method_refs():

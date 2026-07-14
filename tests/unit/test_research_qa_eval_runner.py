@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from tools.research_qa import run_research_qa_eval as eval_mod
 from tools.research_qa.run_research_qa_eval import (
     _assistant_message_by_id,
     _build_report,
+    _case_requires_full_refs_wait,
     _latency_budget_checks,
     _refs_payload_is_full,
     evaluate_replay_rows,
@@ -36,6 +38,14 @@ def test_refs_payload_full_state_rejects_fast_or_pending_cards():
     assert _refs_payload_is_full({"9": {"payload_mode": "full", "render_status": "full"}}, user_msg_id=9)
     assert not _refs_payload_is_full({"9": {"payload_mode": "fast", "render_status": "fast"}}, user_msg_id=9)
     assert not _refs_payload_is_full({"9": {"payload_mode": "pending", "pending": True}}, user_msg_id=9)
+
+
+def test_quality_contract_waits_for_full_reference_cards() -> None:
+    assert _case_requires_full_refs_wait({"requireRefsReady": True})
+    assert _case_requires_full_refs_wait({"requirePolishStatus": True})
+    assert _case_requires_full_refs_wait({"requireCitationShelfQuality": True})
+    assert _case_requires_full_refs_wait({"maxCardsCompleteMs": 30000})
+    assert not _case_requires_full_refs_wait({"minRefHits": 3})
 
 
 def _case_by_id(fixture, case_id: str):
@@ -81,7 +91,6 @@ def test_research_qa_fixture_enforces_system_b_trace_policy():
     fixture = load_fixture()
     policy_case_ids = {
         "scinerf-admm-origin",
-        "spi-roadmap-beginner",
         "cassi-to-3d-sci-lineage",
         "microscopy-methods-map",
         "single-photon-reading-pair",
@@ -97,6 +106,19 @@ def test_research_qa_fixture_enforces_system_b_trace_policy():
         assert expected.get("maxSystemBAnswerContextOnlyCount") == 0
         assert expected.get("maxSystemBReferenceIndexFallbackCount") == 0
         assert expected.get("minSystemBCompleteRate") == 1.0
+
+    scinerf_expected = _case_by_id(fixture, "scinerf-admm-origin").get("expected") or {}
+    assert scinerf_expected.get("maxSystemBCount") == 1
+
+    roadmap_expected = _case_by_id(fixture, "spi-roadmap-beginner").get("expected") or {}
+    assert int(roadmap_expected.get("minSystemBCount") or 0) == 0
+    assert roadmap_expected.get("maxSystemBCount") == 0
+    assert roadmap_expected.get("requireSystemBTraceComplete") is not True
+    assert roadmap_expected.get("allowedRefDocIds") == ["spi-prospects", "dl-spi-review", "hsi-fsi"]
+    assert roadmap_expected.get("allowedCitationDocIds") == ["spi-prospects", "dl-spi-review", "hsi-fsi"]
+    assert roadmap_expected.get("maxRefHits") == 3
+    assert roadmap_expected.get("maxRefDocCount") == 3
+    assert roadmap_expected.get("maxCitationDocCount") == 3
 
 
 def test_research_qa_fixture_cases_have_acceptance_contracts():
@@ -335,7 +357,7 @@ def test_validate_case_accepts_grounded_system_b_answer():
     assert quality["system_b_count"] == 1
 
 
-def test_validate_case_accepts_multi_doc_ordinary_question_with_system_b_and_polished_refs():
+def test_validate_case_rejects_system_b_for_multi_doc_ordinary_question():
     fixture = load_fixture()
     case = _case_by_id(fixture, "spi-roadmap-beginner")
     spi_path = source_path_for_doc(fixture, "spi-prospects")
@@ -453,12 +475,39 @@ def test_validate_case_accepts_multi_doc_ordinary_question_with_system_b_and_pol
 
     quality = validate_case(case, fixture, result)
 
-    assert quality["ok"] is True
+    assert quality["ok"] is False
     assert quality["ref_hit_count"] == 3
     assert quality["system_b_count"] == 1
+    assert "system_b_max_count" in {item["name"] for item in quality["failures"]}
 
 
-def test_validate_case_rejects_unready_unpolished_refs_and_missing_ordinary_system_b():
+def test_citation_details_deduplicates_message_and_render_packet_cards():
+    detail = {
+        "num": 4,
+        "citation_route": "system_b",
+        "is_inpaper": True,
+        "source_path": "scinerf.md",
+        "title": "Distributed Optimization via ADMM",
+        "doi": "10.1561/2200000016",
+    }
+    result = {
+        "assistant_message": {
+            "content": "ADMM is prior work [[CITE:s1234abcd:4]].",
+            "cite_details": [detail],
+            "meta": {
+                "paper_guide_contracts": {
+                    "render_packet": {"cite_details": [dict(detail)]},
+                }
+            },
+        }
+    }
+
+    details = eval_mod._citation_details(result)
+
+    assert details == [detail]
+
+
+def test_validate_case_rejects_unready_unpolished_refs_without_forcing_ordinary_system_b():
     fixture = load_fixture()
     case = _case_by_id(fixture, "spi-roadmap-beginner")
     spi_path = source_path_for_doc(fixture, "spi-prospects")
@@ -499,7 +548,7 @@ def test_validate_case_rejects_unready_unpolished_refs_and_missing_ordinary_syst
     assert "refs_min_hit_count" in failed_names
     assert "refs_ready" in failed_names
     assert "refs_card_polish_status" in failed_names
-    assert "system_b_min_count" in failed_names
+    assert "system_b_min_count" not in failed_names
 
 
 def test_validate_case_rejects_template_answer_and_missing_system_b():

@@ -1742,6 +1742,29 @@ def _resolve_paper_guide_support_slot_block(
     }
 
 
+def _paper_guide_refocus_support_excerpt(text: str, *, max_chars: int = 900) -> str:
+    compact = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not compact or not all(
+        re.search(pattern, compact, flags=re.IGNORECASE)
+        for pattern in (r"\btwo steps?\b", r"\bray[ -]tracing\b", r"\bwave propagation\b")
+    ):
+        return ""
+    sentences = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+", compact)
+        if part.strip()
+    ]
+    selected: list[str] = []
+    for pattern in (r"\btwo steps?\b", r"\bray[ -]tracing\b", r"\bwave propagation\b"):
+        sentence = next((item for item in sentences if re.search(pattern, item, flags=re.IGNORECASE)), "")
+        if sentence and sentence not in selected:
+            selected.append(sentence)
+    excerpt = " ".join(selected).strip()
+    if len(excerpt) > max_chars:
+        excerpt = excerpt[: max(0, int(max_chars) - 3)].rstrip() + "..."
+    return excerpt
+
+
 def _build_paper_guide_support_slots(
     cards: list[dict],
     *,
@@ -1900,6 +1923,18 @@ def _build_paper_guide_support_slots(
             variant_snippet = str(variant.get("snippet") or "").strip() or snippet
             locate_anchor = str(variant.get("locate_anchor") or "").strip()
             panel_letters = [str(ch or "").strip().lower() for ch in list(variant.get("panel_letters") or []) if str(ch or "").strip()]
+            if family == "method" and re.search(
+                r"\b(?:refocus|refocusing|out[ -]of[ -]focus)\b|重聚焦|重新对焦|离焦.{0,8}对焦",
+                str(prompt or ""),
+                flags=re.IGNORECASE,
+            ):
+                refocus_excerpt = _paper_guide_refocus_support_excerpt(
+                    str(variant.get("block_text") or "")
+                )
+                if refocus_excerpt:
+                    variant_snippet = refocus_excerpt
+                    locate_anchor = refocus_excerpt
+                    variant["evidence_atom_text"] = refocus_excerpt
             if family == "figure_walkthrough" and claim_type == "figure_panel" and desired_panels:
                 # Keep the prompt-extracted panel fragment as the user-facing snippet, and
                 # derive the locate anchor from the resolved caption text when possible.

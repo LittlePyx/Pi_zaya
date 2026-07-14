@@ -603,7 +603,11 @@ def test_get_conversation_refs_full_payload_prefers_authoritative_doc_list_over_
         }
 
     monkeypatch.setattr(references_router, "get_chat_store", lambda: store)
-    monkeypatch.setattr(references_router, "_warm_conversation_refs_payload_async", lambda **kwargs: None)
+    monkeypatch.setattr(
+        references_router,
+        "_warm_conversation_refs_payload_async",
+        lambda **kwargs: calls.setdefault("warm", dict(kwargs)),
+    )
     monkeypatch.setattr(references_router, "build_doc_list_refs_payload", fake_build_doc_list_refs_payload)
 
     out = references_router.get_conversation_refs("conv-full-doc-list")
@@ -616,12 +620,16 @@ def test_get_conversation_refs_full_payload_prefers_authoritative_doc_list_over_
         "OE-2007.pdf",
     ]
     assert "NatPhoton-2019" not in " ".join(str(item or "") for item in titles)
-    assert pack["render_status"] == "full"
+    assert pack["render_status"] == "fast"
+    assert pack["payload_mode"] == "fast"
+    assert pack["enrichment_pending"] is True
     assert dict(calls.get("kwargs") or {}).get("allow_exact_locate") is True
-    assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is True
+    assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is False
+    assert dict(calls.get("kwargs") or {}).get("allow_citation_prefetch") is False
     assert dict(calls.get("kwargs") or {}).get("apply_copy_polish") is True
-    assert store.persisted
-    assert store.persisted[-1]["rendered_payload"]["pipeline_debug"]["doc_list_authoritative"] is True
+    assert store.persisted == []
+    warm = dict(calls.get("warm") or {})
+    assert list((warm.get("authoritative_doc_list_by_user") or {}).get(21) or []) == messages[1]["meta"]["paper_guide_contracts"]["doc_list"]
 
 
 def test_build_pending_conversation_refs_payload_uses_empty_authoritative_doc_list_and_forwards_guide(monkeypatch):
@@ -854,7 +862,11 @@ def test_get_conversation_refs_rebuilds_empty_authoritative_doc_list_for_plain_m
         }
 
     monkeypatch.setattr(references_router, "get_chat_store", lambda: store)
-    monkeypatch.setattr(references_router, "_warm_conversation_refs_payload_async", lambda **kwargs: None)
+    monkeypatch.setattr(
+        references_router,
+        "_warm_conversation_refs_payload_async",
+        lambda **kwargs: calls.setdefault("warm", dict(kwargs)),
+    )
     monkeypatch.setattr(references_router, "build_doc_list_refs_payload", fake_build_doc_list_refs_payload)
 
     out = references_router.get_conversation_refs("conv-empty-doc-list-chat")
@@ -864,7 +876,10 @@ def test_get_conversation_refs_rebuilds_empty_authoritative_doc_list_for_plain_m
     ]
     assert str(out[71]["display_state"] or "") == "ready"
     assert list(out[71]["hits"] or [])
-    assert store.persisted
+    assert str(out[71]["payload_mode"] or "") == "fast"
+    assert out[71]["enrichment_pending"] is True
+    assert store.persisted == []
+    assert 71 in dict((calls.get("warm") or {}).get("authoritative_doc_list_by_user") or {})
 
 
 def test_get_conversation_refs_drops_empty_doc_list_contract_when_rebuild_has_no_rows(monkeypatch):
@@ -1305,6 +1320,128 @@ def test_warm_conversation_refs_payload_async_allows_background_llm_when_enabled
     assert kwargs.get("allow_expensive_llm_for_ready") is True
 
 
+def test_warm_conversation_refs_payload_async_polishes_authoritative_doc_list_and_merges_cache(monkeypatch):
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    calls: dict[str, object] = {}
+    monkeypatch.setenv("KB_REFS_BACKGROUND_LLM_POLISH", "1")
+
+    class _ImmediateThread:
+        def __init__(self, *, target=None, daemon=None, name=None):
+            del daemon, name
+            self._target = target
+
+        def start(self):
+            if self._target is not None:
+                self._target()
+
+    monkeypatch.setattr(references_router.threading, "Thread", _ImmediateThread)
+    references_router._store_cached_conversation_refs_payload(
+        conv_id="conv-authoritative-warm",
+        signature="sig-authoritative-warm",
+        payload={5: {"hits": [{"ui_meta": {"summary_line": "existing full card"}}]}},
+        mode="fast",
+    )
+
+    doc_list = [
+        {"source_path": r"db\A\A.en.md", "source_name": "A.pdf"},
+        {"source_path": r"db\B\B.en.md", "source_name": "B.pdf"},
+    ]
+
+    def fake_build_doc_list_refs_payload(*, user_msg_id, pack, doc_list, **kwargs):
+        del pack
+        calls["user_msg_id"] = int(user_msg_id)
+        calls["doc_list"] = list(doc_list or [])
+        calls["kwargs"] = dict(kwargs)
+        return {"hits": [{"ui_meta": {"summary_generation": "llm_grounded"}}]}
+
+    monkeypatch.setattr(references_router, "build_doc_list_refs_payload", fake_build_doc_list_refs_payload)
+    monkeypatch.setattr(
+        references_router,
+        "enrich_refs_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("authoritative packs use the doc-list renderer")),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_persist_rendered_refs_payloads",
+        lambda **kwargs: calls.setdefault("persisted", dict(kwargs)),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_store_cached_conversation_refs_payload",
+        lambda **kwargs: calls.setdefault("cached", dict(kwargs)),
+    )
+
+    references_router._warm_conversation_refs_payload_async(
+        conv_id="conv-authoritative-warm",
+        signature="sig-authoritative-warm",
+        refs={13: {"prompt": "Which papers discuss SCI?", "hits": []}},
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+        authoritative_doc_list_by_user={13: doc_list},
+    )
+
+    assert calls["user_msg_id"] == 13
+    assert calls["doc_list"] == doc_list
+    assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is True
+    assert dict(calls.get("kwargs") or {}).get("allow_citation_prefetch") is True
+    assert dict(calls.get("persisted") or {}).get("payload") == {
+        13: {"hits": [{"ui_meta": {"summary_generation": "llm_grounded"}}]}
+    }
+    cached = dict(calls.get("cached") or {})
+    assert cached.get("mode") == "full"
+    assert set(dict(cached.get("payload") or {})) == {5, 13}
+
+
+def test_stored_authoritative_payload_can_replace_raw_retrieval_source_set():
+    prompt = "我刚开始看单像素成像，应该先读哪几篇？"
+    raw_source = r"db\LPR\LPR.en.md"
+    authoritative_source = r"db\NatPhoton\NatPhoton.en.md"
+    payload = {
+        "hits": [
+            {
+                "meta": {"source_path": authoritative_source},
+                "ui_meta": {
+                    "source_path": authoritative_source,
+                    "summary_line": "LLM summary",
+                    "why_line": "LLM reason",
+                    "summary_generation": "llm_grounded",
+                    "why_generation": "llm_grounded",
+                },
+            }
+        ]
+    }
+    pack = {
+        "prompt": prompt,
+        "hits": [{"meta": {"source_path": raw_source, "ref_pack_state": "ready"}}],
+        "rendered_payload": payload,
+    }
+    pack["rendered_payload_sig"] = references_router._refs_pack_render_signature(
+        user_msg_id=77,
+        pack=pack,
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+    )
+
+    assert references_router._get_stored_rendered_pack_payload(
+        user_msg_id=77,
+        pack=pack,
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+    ) is None
+    assert references_router._get_stored_rendered_pack_payload(
+        user_msg_id=77,
+        pack=pack,
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+        allow_authoritative_source_override=True,
+    ) == payload
+
+
 def test_background_llm_polish_follows_card_polish_flag_when_unset(monkeypatch):
     monkeypatch.delenv("KB_REFS_BACKGROUND_LLM_POLISH", raising=False)
     monkeypatch.setattr(references_router, "_refs_card_polish_llm_enabled", lambda: True)
@@ -1312,7 +1449,7 @@ def test_background_llm_polish_follows_card_polish_flag_when_unset(monkeypatch):
     assert references_router._refs_background_llm_polish_enabled() is True
 
 
-def test_fast_exact_refs_disable_background_llm_polish():
+def test_fast_exact_refs_are_detected_for_two_stage_rendering():
     refs = {
         13: {
             "hits": [
@@ -1326,6 +1463,138 @@ def test_fast_exact_refs_disable_background_llm_polish():
 
     assert references_router._refs_payload_has_fast_exact_hit(refs) is True
     assert references_router._refs_payload_has_fast_exact_hit({13: {"hits": []}}) is False
+
+
+def test_get_conversation_refs_returns_fast_exact_card_then_kicks_llm_warm(monkeypatch):
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    refs = {
+        13: {
+            "prompt": "ADMM 是作者自己发明的吗？",
+            "hits": [
+                {
+                    "text": "Most existing methods employ ADMM [4].",
+                    "meta": {
+                        "source_path": r"db\SCINeRF\SCINeRF.en.md",
+                        "ref_pack_state": "ready",
+                        "paper_guide_fast_exact": True,
+                    },
+                }
+            ],
+        }
+    }
+    store = _FakeStore(
+        {
+            "mode": "paper_guide",
+            "bound_source_path": r"db\SCINeRF\SCINeRF.en.md",
+            "bound_source_name": "SCINeRF",
+        },
+        refs,
+    )
+    warm_calls: list[dict] = []
+    initial_kwargs: dict = {}
+
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(references_router, "_pdf_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_md_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_lib_store", lambda: None)
+    monkeypatch.setattr(
+        references_router,
+        "_warm_conversation_refs_payload_async",
+        lambda **kwargs: warm_calls.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_persist_rendered_refs_payloads",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("heuristic exact card must not be persisted as full")),
+    )
+
+    def fake_enrich_refs_payload(*args, **kwargs):
+        del args
+        initial_kwargs.update(dict(kwargs))
+        return {
+            13: {
+                "hits": [
+                    {
+                        "meta": dict(refs[13]["hits"][0]["meta"]),
+                        "ui_meta": {
+                            "summary_line": "ADMM 是本文采用的已有优化方法。",
+                            "summary_generation": "section_grounded",
+                            "why_line": "该段明确把 ADMM 列为 existing methods。",
+                            "why_generation": "section_grounded",
+                        },
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(references_router, "enrich_refs_payload", fake_enrich_refs_payload)
+
+    out = references_router.get_conversation_refs("conv-fast-exact-two-stage")
+
+    assert out[13]["payload_mode"] == "fast"
+    assert out[13]["enrichment_pending"] is True
+    assert out[13]["hits"][0]["ui_meta"]["summary_line"] == "ADMM 是本文采用的已有优化方法。"
+    assert out[13]["hits"][0]["ui_meta"]["polish_status"] == "heuristic"
+    assert initial_kwargs.get("render_variant") == "bounded_full"
+    assert initial_kwargs.get("allow_expensive_llm_for_ready") is False
+    assert initial_kwargs.get("allow_exact_locate") is True
+    assert len(warm_calls) == 1
+    assert warm_calls[0]["refs"] == refs
+
+
+def test_warm_conversation_refs_payload_async_allows_llm_for_fast_exact_hits(monkeypatch):
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    calls: dict[str, object] = {}
+    monkeypatch.setenv("KB_REFS_BACKGROUND_LLM_POLISH", "1")
+
+    class _ImmediateThread:
+        def __init__(self, *, target=None, daemon=None, name=None):
+            del daemon, name
+            self._target = target
+
+        def start(self):
+            if self._target is not None:
+                self._target()
+
+    monkeypatch.setattr(references_router.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(references_router, "_pdf_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_md_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_lib_store", lambda: None)
+
+    def fake_enrich_refs_payload(*args, **kwargs):
+        del args
+        calls["kwargs"] = dict(kwargs)
+        return {13: {"hits": [{"ui_meta": {"summary_generation": "llm_grounded", "why_generation": "llm_grounded"}}]}}
+
+    monkeypatch.setattr(references_router, "enrich_refs_payload", fake_enrich_refs_payload)
+    monkeypatch.setattr(references_router, "_persist_rendered_refs_payloads", lambda **_kwargs: None)
+    monkeypatch.setattr(references_router, "_store_cached_conversation_refs_payload", lambda **_kwargs: None)
+
+    references_router._warm_conversation_refs_payload_async(
+        conv_id="conv-warm-fast-exact",
+        signature="sig-warm-fast-exact",
+        refs={
+            13: {
+                "prompt": "ADMM 是作者自己发明的吗？",
+                "hits": [
+                    {
+                        "text": "Most existing methods employ ADMM [4].",
+                        "meta": {"paper_guide_fast_exact": True},
+                    }
+                ],
+            }
+        },
+        guide_mode=True,
+        guide_source_path="SCINeRF.en.md",
+        guide_source_name="SCINeRF",
+    )
+
+    kwargs = dict(calls.get("kwargs") or {})
+    assert kwargs.get("render_variant") == "bounded_full"
+    assert kwargs.get("allow_expensive_llm_for_ready") is True
+    assert kwargs.get("allow_exact_locate") is True
 
 
 def test_background_llm_polish_env_override_can_disable_card_polish(monkeypatch):

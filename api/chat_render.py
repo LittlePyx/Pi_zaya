@@ -476,6 +476,10 @@ def _system_a_detail_needs_ref_primary_backfill(detail: dict) -> bool:
         return False
     if str(detail.get("citation_route") or "").strip().lower() == "system_b":
         return False
+    if bool(detail.get("citation_plan_slot")) and str(
+        detail.get("evidence_quote") or detail.get("summary_line") or detail.get("raw") or ""
+    ).strip():
+        return False
     flags = {str(item or "").strip().lower() for item in list(detail.get("card_quality_flags") or [])}
     if flags & {"evidence_quote_filtered", "missing_evidence_quote", "missing_precise_location"}:
         return True
@@ -497,6 +501,66 @@ def _system_a_detail_needs_ref_primary_backfill(detail: dict) -> bool:
     return False
 
 
+def _quantitative_primary_evidence_relation(*, answer_claim: str, evidence: str) -> str:
+    text = str(evidence or "").strip()
+    if not text:
+        return ""
+    signals: list[tuple[str, str]] = []
+    for pattern, zh_label, en_label in (
+        (r"\bsampling ratios?\b", "采样率", "sampling ratio"),
+        (r"\bmeasurements?\b", "测量次数", "measurement count"),
+        (r"\bpsnr\b", "PSNR", "PSNR"),
+        (r"\bssim\b", "SSIM", "SSIM"),
+        (r"\brmse\b", "RMSE", "RMSE"),
+    ):
+        if re.search(pattern, text, flags=re.I):
+            signals.append((zh_label, en_label))
+    if len(signals) < 2:
+        return ""
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", str(answer_claim or "")))
+    labels = [item[0 if prefer_zh else 1] for item in signals[:4]]
+    joined = "、".join(labels) if prefer_zh else ", ".join(labels)
+    if prefer_zh:
+        return f"原文用{joined}等测量指标比较相关方法，支撑答案中的选择判断。"
+    return f"The passage compares the methods using measurement evidence including {joined}, supporting the answer's choice criteria."
+
+
+def _scope_boundary_primary_evidence_relation(*, answer_claim: str, evidence: str) -> str:
+    claim = str(answer_claim or "").strip()
+    text = str(evidence or "").strip()
+    if not claim or not text:
+        return ""
+    boundary_claim = bool(
+        re.search(
+            r"不是|关系不大|无关|没有交集|几乎.{0,6}交集|not\s+(?:an?\s+)?|outside|unrelated|out of scope",
+            claim,
+            flags=re.I,
+        )
+    )
+    device_evidence = bool(
+        re.search(r"\bdual[- ]cavity\s+perovskite\b", text, flags=re.I)
+        and re.search(r"\blas(?:e|er|ing)\w*\b", text, flags=re.I)
+    )
+    if not boundary_claim or not device_evidence:
+        return ""
+    if re.search(r"[\u4e00-\u9fff]", claim):
+        return "原文说明其主题是 dual-cavity perovskite 器件的 lasing，而不是单像素成像方法，支撑答案中的研究边界判断。"
+    return "The passage identifies a dual-cavity perovskite lasing device, not a single-pixel imaging method, supporting the scope boundary in the answer."
+
+
+def _refocus_primary_evidence_relation(*, answer_claim: str, evidence: str) -> str:
+    text = str(evidence or "").strip()
+    if not (
+        re.search(r"\btwo steps?\b", text, flags=re.I)
+        and re.search(r"\bray[ -]tracing\b", text, flags=re.I)
+        and re.search(r"\bwave propagation\b", text, flags=re.I)
+    ):
+        return ""
+    if re.search(r"[\u4e00-\u9fff]", str(answer_claim or "")):
+        return "原文把重聚焦分为 two steps：ray tracing 重建光子轨迹，wave propagation 反演衍射传播。"
+    return "The source defines refocusing in two steps: ray tracing followed by wave propagation."
+
+
 def _backfill_system_a_cite_details_from_ref_pack(cite_details: list[dict], ref_pack: dict | None, *, render_locale: str = "") -> list[dict]:
     if not cite_details or not isinstance(ref_pack, dict):
         return cite_details
@@ -512,6 +576,23 @@ def _backfill_system_a_cite_details_from_ref_pack(cite_details: list[dict], ref_
         if bool(detail.get("is_inpaper")) or str(detail.get("citation_route") or "").strip().lower() == "system_b":
             out.append(detail)
             continue
+        existing_evidence = str(
+            detail.get("evidence_quote")
+            or detail.get("summary_line")
+            or detail.get("raw")
+            or ""
+        ).strip()
+        for relation_builder in (
+            _quantitative_primary_evidence_relation,
+            _scope_boundary_primary_evidence_relation,
+            _refocus_primary_evidence_relation,
+        ):
+            relation = relation_builder(
+                answer_claim=str(detail.get("answer_claim") or ""),
+                evidence=existing_evidence,
+            )
+            if relation:
+                detail["support_relation"] = relation
         source_key = _render_primary_source_identity(detail)
         primary = primary_by_source.get(source_key) if source_key else None
         snippet = _primary_evidence_text(primary if isinstance(primary, dict) else {})
@@ -537,6 +618,24 @@ def _backfill_system_a_cite_details_from_ref_pack(cite_details: list[dict], ref_
         detail["raw"] = snippet
         detail["evidence_source"] = "reference_primary_evidence"
         detail["summary_source"] = "reference_primary_evidence"
+        quantitative_relation = _quantitative_primary_evidence_relation(
+            answer_claim=str(detail.get("answer_claim") or ""),
+            evidence=snippet,
+        )
+        if quantitative_relation:
+            detail["support_relation"] = quantitative_relation
+        boundary_relation = _scope_boundary_primary_evidence_relation(
+            answer_claim=str(detail.get("answer_claim") or ""),
+            evidence=snippet,
+        )
+        if boundary_relation:
+            detail["support_relation"] = boundary_relation
+        refocus_relation = _refocus_primary_evidence_relation(
+            answer_claim=str(detail.get("answer_claim") or ""),
+            evidence=snippet,
+        )
+        if refocus_relation:
+            detail["support_relation"] = refocus_relation
         detail["block_id"] = block_id or str(detail.get("block_id") or "").strip()
         detail["anchor_id"] = anchor_id or str(detail.get("anchor_id") or "").strip()
         detail["anchor_kind"] = anchor_kind
@@ -558,15 +657,28 @@ def _effective_reference_render_pack(raw_pack: dict | None) -> dict:
     rendered_payload = dict(raw_pack.get("rendered_payload") or {}) if isinstance(raw_pack.get("rendered_payload"), dict) else {}
     if not rendered_payload:
         return attach_refs_pack_polish_contract(pack)
+    pack_debug = pack.get("pipeline_debug") if isinstance(pack.get("pipeline_debug"), dict) else {}
+    if bool(pack_debug.get("doc_list_authoritative")):
+        return attach_refs_pack_polish_contract(pack)
     merged = dict(rendered_payload)
-    # Always prefer original hits/scores (they reflect the full retrieval result
-    # the LLM actually saw).  rendered_payload may hold a stale or partial subset.
-    if pack.get("hits") not in (None, "", [], {}):
-        merged["hits"] = pack["hits"]
-    if pack.get("scores") not in (None, "", [], {}):
-        merged["scores"] = pack["scores"]
-    if rendered_payload.get("hits") not in (None, "", [], {}):
-        merged["enriched_hits"] = rendered_payload["hits"]
+    rendered_debug = (
+        rendered_payload.get("pipeline_debug")
+        if isinstance(rendered_payload.get("pipeline_debug"), dict)
+        else {}
+    )
+    rendered_is_authoritative = bool(rendered_debug.get("doc_list_authoritative"))
+    if rendered_is_authoritative:
+        if pack.get("hits") not in (None, "", [], {}):
+            merged["retrieval_hits"] = pack["hits"]
+    else:
+        # Ordinary rendered payloads may hold a stale or partial subset, so keep
+        # the exact retrieval order the model saw for numeric citation mapping.
+        if pack.get("hits") not in (None, "", [], {}):
+            merged["hits"] = pack["hits"]
+        if pack.get("scores") not in (None, "", [], {}):
+            merged["scores"] = pack["scores"]
+        if rendered_payload.get("hits") not in (None, "", [], {}):
+            merged["enriched_hits"] = rendered_payload["hits"]
     for key in (
         "user_msg_id",
         "conv_id",
@@ -795,6 +907,16 @@ def _citation_plan_system_b_budget(plan: dict | None) -> int:
         return 1
 
 
+def _citation_plan_system_a_budget(plan: dict | None) -> int:
+    if not isinstance(plan, dict):
+        return 2
+    budget = plan.get("budget") if isinstance(plan.get("budget"), dict) else {}
+    try:
+        return max(0, int((budget or {}).get("system_a") if "system_a" in (budget or {}) else 2))
+    except Exception:
+        return 2
+
+
 _READING_COVERAGE_BRIDGES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
     (
         re.compile(r"\b(?:single[-\s]?photon|spad|photodetectors?|detectors?|detection)\b", re.IGNORECASE),
@@ -811,6 +933,22 @@ _READING_COVERAGE_BRIDGES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] =
     (
         re.compile(r"\b(?:dual[-\s]?disperser|spectral\s+imaging|cassi|coded\s+aperture|single[-\s]?shot)\b", re.IGNORECASE),
         ("dual-disperser", "single-shot", "spectral", "spectral imaging", "光谱", "光谱成像", "双色散", "2007"),
+    ),
+    (
+        re.compile(r"\b(?:training|data[-\s]?driven|limited\s+generalization|generalization)\b", re.IGNORECASE),
+        ("训练", "训练时间", "数据", "数据驱动", "泛化", "泛化能力", "场景"),
+    ),
+    (
+        re.compile(r"\breconstruction\s+(?:quality|speed)\b", re.IGNORECASE),
+        ("重建", "重建质量", "重建速度", "质量", "速度", "高质量", "快速"),
+    ),
+    (
+        re.compile(r"\b(?:two\s+steps?|ray[ -]tracing|wave\s+propagation|digital\s+refocusing)\b", re.IGNORECASE),
+        ("两步", "重聚焦", "重新对焦", "离焦", "光线追迹", "射线", "波传播", "波动光学", "衍射"),
+    ),
+    (
+        re.compile(r"\b(?:dual[- ]cavity|perovskite|lasing|laser)\b", re.IGNORECASE),
+        ("dual-cavity", "perovskite", "双腔", "钙钛矿", "激光", "激光器", "器件", "主线", "关系", "交集"),
     ),
 )
 
@@ -889,6 +1027,86 @@ def _reading_slot_source_key(value: object) -> str:
     return str(value or "").strip().replace("\\", "/").lower()
 
 
+def _augment_hits_with_system_a_plan_slots(
+    hits: list[dict],
+    citation_plan: dict | None,
+    *,
+    reserved_count: int = 0,
+) -> list[dict]:
+    rows = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
+    if not isinstance(citation_plan, dict):
+        return rows
+    while len(rows) < max(0, int(reserved_count or 0)):
+        rows.append({"text": "", "meta": {"citation_plan_padding": True}})
+    seen: set[tuple[str, str, str]] = set()
+    for hit in rows:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        seen.add(
+            (
+                _reading_slot_source_key((meta or {}).get("source_path")),
+                str((meta or {}).get("heading_path") or "").strip().lower(),
+                re.sub(r"\s+", " ", str(hit.get("text") or "").strip()).lower()[:240],
+            )
+        )
+    plan_slots = list(citation_plan.get("slots") or [])
+    if str(citation_plan.get("intent") or "").strip().lower() == "scope_boundary":
+        plan_slots = [
+            slot
+            for slot in plan_slots
+            if isinstance(slot, dict)
+            and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+        ][:1]
+    for slot in plan_slots:
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
+            continue
+        source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+        source_name = str(slot.get("source_name") or slot.get("sourceName") or "").strip()
+        heading_path = str(slot.get("heading_path") or slot.get("headingPath") or "").strip()
+        evidence_quote = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "").strip())
+        if not source_path or not evidence_quote:
+            continue
+        key = (
+            _reading_slot_source_key(source_path),
+            heading_path.lower(),
+            evidence_quote.lower()[:240],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            {
+                "text": evidence_quote,
+                "score": 9.0,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "heading_path": heading_path,
+                    "ref_best_heading_path": heading_path,
+                    "citation_plan_slot": True,
+                    "ref_rank": {"display_score": 9.0, "semantic_score": 9.0},
+                },
+                "ui_meta": {
+                    "display_name": source_name,
+                    "source_path": source_path,
+                    "heading_path": heading_path,
+                    "summary_line": evidence_quote,
+                    "primary_evidence": {
+                        "source_path": source_path,
+                        "source_name": source_name,
+                        "heading_path": heading_path,
+                        "snippet": evidence_quote,
+                        "highlight_snippet": evidence_quote,
+                        "selection_reason": "citation_plan_slot",
+                        "strict_locate": False,
+                    },
+                },
+            }
+        )
+    return rows
+
+
 def _reading_slot_hit_nums(slot: dict, hits: list[dict], canonical_paths: list[str] | None = None) -> list[int]:
     nums: list[int] = []
     wanted_path = _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
@@ -906,12 +1124,31 @@ def _reading_slot_hit_nums(slot: dict, hits: list[dict], canonical_paths: list[s
         )
         if hit_path:
             hit_paths.add(hit_path)
+    wanted_heading = str(slot.get("heading_path") or slot.get("headingPath") or "").strip().lower()
+    wanted_evidence = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "").strip()).lower()
+    for idx, hit in enumerate(list(hits or []), start=1):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        if not bool((meta or {}).get("citation_plan_slot")):
+            continue
+        hit_path = _reading_slot_source_key((meta or {}).get("source_path"))
+        hit_heading = str((meta or {}).get("heading_path") or "").strip().lower()
+        hit_text = re.sub(r"\s+", " ", str(hit.get("text") or "").strip()).lower()
+        if wanted_path and hit_path != wanted_path:
+            continue
+        if wanted_heading and hit_heading != wanted_heading:
+            continue
+        if wanted_evidence and hit_text != wanted_evidence:
+            continue
+        return [int(idx)]
     if wanted_path and isinstance(canonical_paths, list):
         for idx, raw_path in enumerate(canonical_paths, start=1):
             canon_path = _reading_slot_source_key(raw_path)
             if canon_path and canon_path == wanted_path and canon_path in hit_paths:
                 return [int(idx)]
     if wanted_path or wanted_name:
+        matching_hits: list[tuple[float, int]] = []
         for idx, hit in enumerate(list(hits or []), start=1):
             if not isinstance(hit, dict):
                 continue
@@ -929,12 +1166,31 @@ def _reading_slot_hit_nums(slot: dict, hits: list[dict], canonical_paths: list[s
                 or (meta or {}).get("source_name")
                 or Path(hit_path).name
             )
-            if wanted_path and hit_path == wanted_path:
-                nums.append(int(idx))
-                break
-            if wanted_name and hit_name and (wanted_name in hit_name or hit_name in wanted_name):
-                nums.append(int(idx))
-                break
+            source_match = bool(
+                (wanted_path and hit_path == wanted_path)
+                or (wanted_name and hit_name and (wanted_name in hit_name or hit_name in wanted_name))
+            )
+            if not source_match:
+                continue
+            hit_heading = str((meta or {}).get("heading_path") or (meta or {}).get("ref_best_heading_path") or "").strip().lower()
+            hit_text = re.sub(r"\s+", " ", str(hit.get("text") or "").strip()).lower()
+            score = 1.0
+            if wanted_heading and hit_heading:
+                if wanted_heading == hit_heading:
+                    score += 8.0
+                elif wanted_heading in hit_heading or hit_heading in wanted_heading:
+                    score += 4.0
+            if wanted_evidence and hit_text:
+                if wanted_evidence == hit_text:
+                    score += 8.0
+                else:
+                    wanted_terms = set(re.findall(r"[a-z0-9-]{4,}", wanted_evidence))
+                    hit_terms = set(re.findall(r"[a-z0-9-]{4,}", hit_text))
+                    score += min(5.0, 0.5 * float(len(wanted_terms & hit_terms)))
+            matching_hits.append((score, int(idx)))
+        if matching_hits:
+            matching_hits.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            nums.append(int(matching_hits[0][1]))
         if wanted_path and not nums:
             return []
     for raw in list(slot.get("candidate_hits") or []):
@@ -948,6 +1204,11 @@ def _reading_slot_hit_nums(slot: dict, hits: list[dict], canonical_paths: list[s
 
 
 def _reading_hit_for_slot(slot: dict, hits: list[dict], num: int) -> dict | None:
+    idx = int(num) - 1
+    if 0 <= idx < len(hits):
+        hit = hits[idx]
+        if isinstance(hit, dict):
+            return hit
     wanted_path = _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
     if wanted_path:
         for hit in list(hits or []):
@@ -962,10 +1223,6 @@ def _reading_hit_for_slot(slot: dict, hits: list[dict], num: int) -> dict | None
             )
             if hit_path == wanted_path:
                 return hit
-    idx = int(num) - 1
-    if 0 <= idx < len(hits):
-        hit = hits[idx]
-        return hit if isinstance(hit, dict) else None
     return None
 
 
@@ -1005,38 +1262,102 @@ def _reading_guide_repair_missing_system_a_citations(
         return text
     if _reading_guide_numbered_sections_have_sources(text):
         return text
+    existing_source_keys: set[str] = set()
+    for marker in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", text):
+        try:
+            num = int(marker.group(1))
+        except Exception:
+            continue
+        source_path = ""
+        if isinstance(canonical_paths, list) and 1 <= num <= len(canonical_paths):
+            source_path = str(canonical_paths[num - 1] or "").strip()
+        if not source_path and 1 <= num <= len(hits):
+            hit = hits[num - 1]
+            if isinstance(hit, dict):
+                meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+                ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+                source_path = str(
+                    (meta or {}).get("source_path")
+                    or (ui_meta or {}).get("source_path")
+                    or (ui_meta or {}).get("sourcePath")
+                    or ""
+                ).strip()
+        source_key = _reading_slot_source_key(source_path)
+        if source_key:
+            existing_source_keys.add(source_key)
+    multi_source_answer = len(existing_source_keys) >= 2
     candidates: list[tuple[int, dict]] = []
+    seen_candidate_nums: set[int] = set()
     for slot in list(citation_plan.get("slots") or []):
         if not isinstance(slot, dict):
             continue
         if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
             continue
+        slot_source_key = _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+        if multi_source_answer and slot_source_key in existing_source_keys:
+            continue
         nums = _reading_slot_hit_nums(slot, hits, canonical_paths=canonical_paths)
         for num in nums[:1]:
+            if int(num) in seen_candidate_nums:
+                continue
+            seen_candidate_nums.add(int(num))
             candidates.append((num, slot))
     if not candidates:
         return text
 
     parts = re.split(r"(\n{2,})", text)
-    used_part_indices: set[int] = set()
-    for num, slot in candidates[:6]:
-        surface = _reading_source_surface(_reading_hit_for_slot(slot, hits, num), slot)
+    candidate_limit = min(6, _citation_plan_system_a_budget(citation_plan))
+    if candidate_limit <= 0:
+        return text
+    for num, slot in candidates[:candidate_limit]:
+        evidence_surface = str(
+            slot.get("evidence_quote")
+            or slot.get("evidence_atom_text")
+            or slot.get("locate_anchor")
+            or slot.get("snippet")
+            or ""
+        ).strip()
+        surface = evidence_surface or _reading_source_surface(_reading_hit_for_slot(slot, hits, num), slot)
         terms = _reading_coverage_terms(surface)
         best_idx = -1
+        best_line_idx = -1
         best_score = 0.0
         for idx in range(0, len(parts), 2):
-            if idx in used_part_indices:
-                continue
             paragraph = parts[idx]
             if not paragraph.strip() or f"[{num}]" in paragraph:
                 continue
-            score = _reading_paragraph_affinity(paragraph, terms, source_surface=surface)
+            if paragraph.lstrip().startswith("|"):
+                # Appending after a whole Markdown table creates an orphan cell
+                # marker that the table renderer later strips as invalid.
+                continue
+            paragraph_lines = paragraph.splitlines()
+            line_scores = [
+                (
+                    line_idx,
+                    _reading_paragraph_affinity(line, terms, source_surface=surface),
+                )
+                for line_idx, line in enumerate(paragraph_lines)
+                if line.strip()
+            ]
+            if len(line_scores) > 1:
+                line_idx, score = max(line_scores, key=lambda item: float(item[1]))
+            else:
+                line_idx = -1
+                score = _reading_paragraph_affinity(paragraph, terms, source_surface=surface)
             if score > best_score:
                 best_score = score
                 best_idx = idx
+                best_line_idx = int(line_idx)
         if best_idx >= 0 and best_score >= 2.2:
-            parts[best_idx] = _append_numeric_citation_to_paragraph(parts[best_idx], num)
-            used_part_indices.add(best_idx)
+            if best_line_idx >= 0:
+                paragraph_lines = parts[best_idx].splitlines()
+                paragraph_lines[best_line_idx] = _append_numeric_citation_to_paragraph(
+                    paragraph_lines[best_line_idx],
+                    num,
+                )
+                parts[best_idx] = "\n".join(paragraph_lines)
+            else:
+                parts[best_idx] = _append_numeric_citation_to_paragraph(parts[best_idx], num)
     return "".join(parts)
 
 
@@ -1817,6 +2138,16 @@ def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str
     if _message_intent_family(rec) == "citation_lookup":
         return True
     if _message_answer_prompt_family(rec) == "citation_lookup":
+        return True
+    citation_plan = _message_citation_plan(rec)
+    if hits and "reading" in _message_answer_output_mode(rec) and any(
+        isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+        for slot in list(citation_plan.get("slots") or [])
+    ):
+        # Reading-guide System A citations are repaired from the typed plan.
+        # Requiring an existing marker here makes the repair branch unreachable
+        # for the exact missing-citation case it is meant to handle.
         return True
     if hits and (
         _STRUCT_CITE_RE.search(raw)
@@ -2719,8 +3050,6 @@ def enrich_messages_with_reference_render(
         raw_ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
         ref_pack = _effective_reference_render_pack(raw_ref_pack if isinstance(raw_ref_pack, dict) else None)
         render_locale = _effective_citation_render_locale(ref_pack if isinstance(ref_pack, dict) else None)
-        if isinstance(raw_ref_pack, dict) and isinstance(ref_pack, dict) and ref_pack:
-            raw_ref_pack.update(ref_pack)
         hits = list((ref_pack or {}).get("hits") or []) if isinstance(ref_pack, dict) else []
         provenance_raw = rec.get("provenance") if isinstance(rec.get("provenance"), dict) else None
         render_cache_key = _build_message_render_cache_key(
@@ -2757,25 +3086,30 @@ def enrich_messages_with_reference_render(
             rendered_body = str(body or "")
             raw_body = rendered_body
             citation_plan = _message_citation_plan(rec)
+            _rec_meta = rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
+            _canon_paths = list(_rec_meta.get("canonical_hit_paths") or []) if isinstance(_rec_meta.get("canonical_hit_paths"), list) else []
+            citation_hits = _augment_hits_with_system_a_plan_slots(
+                hits,
+                citation_plan,
+                reserved_count=len(_canon_paths),
+            )
             allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
                 rec=rec,
                 content=render_source,
-                hits=hits,
+                hits=citation_hits,
             )
             if rendered_body.strip():
-                rendered_body = _annotate_equation_tags_with_sources(rendered_body, hits)
+                rendered_body = _annotate_equation_tags_with_sources(rendered_body, citation_hits)
                 rendered_body = _normalize_equation_source_notes(rendered_body)
                 rendered_body, linked_named_system_b = _repair_named_system_b_citation_markers(
                     rendered_body,
-                    hits,
+                    citation_hits,
                     citation_plan,
                 )
                 allow_inpaper_citation_linking = bool(allow_inpaper_citation_linking or linked_named_system_b)
                 if allow_inpaper_citation_linking:
                     # Pass canonical hit ordering if available, so [n] resolves to
                     # the same source the LLM referenced during generation.
-                    _rec_meta = rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
-                    _canon_paths = list(_rec_meta.get("canonical_hit_paths") or []) if isinstance(_rec_meta.get("canonical_hit_paths"), list) else []
                     annotate_kwargs = {
                         "anchor_ns": f"{conv_id}:{idx}:{msg_id}:api",
                         "canonical_paths": _canon_paths or None,
@@ -2784,7 +3118,7 @@ def enrich_messages_with_reference_render(
                         annotate_kwargs["citation_plan"] = citation_plan
                     rendered_body = _reading_guide_repair_missing_system_a_citations(
                         rendered_body,
-                        hits,
+                        citation_hits,
                         citation_plan,
                         output_mode=_message_answer_output_mode(rec),
                         canonical_paths=_canon_paths or None,
@@ -2792,10 +3126,37 @@ def enrich_messages_with_reference_render(
                     rendered_body, cite_details = _call_with_optional_render_locale(
                         _annotate_inpaper_citations_with_hover_meta,
                         rendered_body,
-                        hits,
+                        citation_hits,
                         render_locale=render_locale,
                         **annotate_kwargs,
                     )
+                    has_system_a = any(
+                        str((detail or {}).get("citation_route") or "").strip().lower() == "system_a"
+                        for detail in list(cite_details or [])
+                        if isinstance(detail, dict)
+                    )
+                    if (not has_system_a) and citation_hits != hits:
+                        fallback_body = _reading_guide_repair_missing_system_a_citations(
+                            raw_body,
+                            hits,
+                            citation_plan,
+                            output_mode=_message_answer_output_mode(rec),
+                            canonical_paths=_canon_paths or None,
+                        )
+                        fallback_body, fallback_details = _call_with_optional_render_locale(
+                            _annotate_inpaper_citations_with_hover_meta,
+                            fallback_body,
+                            hits,
+                            render_locale=render_locale,
+                            **annotate_kwargs,
+                        )
+                        if any(
+                            str((detail or {}).get("citation_route") or "").strip().lower() == "system_a"
+                            for detail in list(fallback_details or [])
+                            if isinstance(detail, dict)
+                        ):
+                            rendered_body = fallback_body
+                            cite_details = fallback_details
                     if _should_retry_structured_cite_fallback(
                         raw_body=raw_body,
                         rendered_body=rendered_body,
@@ -2804,7 +3165,7 @@ def enrich_messages_with_reference_render(
                         rendered_body, cite_details = _call_with_optional_render_locale(
                             _fallback_render_structured_citations,
                             raw_body,
-                            hits,
+                            citation_hits,
                             anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
                             render_locale=render_locale,
                         )

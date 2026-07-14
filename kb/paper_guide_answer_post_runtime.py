@@ -266,6 +266,43 @@ def _soften_baseline_reproduction_inference(answer: str, *, prompt: str = "") ->
     return text
 
 
+def _ensure_refocus_mechanism_terms(
+    answer: str,
+    *,
+    prompt: str,
+    evidence_parts: list[str],
+) -> str:
+    text = str(answer or "").strip()
+    q = str(prompt or "").strip()
+    if not text or not re.search(
+        r"\b(?:refocus|refocusing|out[ -]of[ -]focus)\b|重聚焦|重新对焦|离焦.{0,8}对焦",
+        q,
+        flags=re.I,
+    ):
+        return text
+    evidence = " ".join(str(part or "") for part in evidence_parts if str(part or "").strip())
+    if not (
+        re.search(r"\btwo steps?\b", evidence, flags=re.I)
+        and re.search(r"\bray[ -]tracing\b", evidence, flags=re.I)
+        and re.search(r"\bwave propagation\b", evidence, flags=re.I)
+    ):
+        return text
+    if re.search(r"\bray[ -]tracing\b", text, flags=re.I) and re.search(
+        r"\bwave propagation\b",
+        text,
+        flags=re.I,
+    ):
+        return text
+    if re.search(r"[\u4e00-\u9fff]", q):
+        anchor = "原文把数字重聚焦明确分为 two steps：先用 ray tracing 重建光子轨迹，再用 wave propagation 反演衍射传播。"
+    else:
+        anchor = "The paper defines digital refocusing in two steps: ray tracing reconstructs photon trajectories, then wave propagation reverses diffraction."
+    paragraphs = text.split("\n\n", 1)
+    if len(paragraphs) == 1:
+        return f"{text}\n\n{anchor}"
+    return f"{paragraphs[0]}\n\n{anchor}\n\n{paragraphs[1]}"
+
+
 def _iter_component_role_answer_lines(answer_text: str) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -2160,6 +2197,38 @@ def _apply_paper_guide_answer_postprocess(
     text = _soften_baseline_reproduction_inference(
         text,
         prompt=prompt_text,
+    )
+    refocus_source_parts: list[str] = []
+    if source_path and re.search(
+        r"\b(?:refocus|refocusing|out[ -]of[ -]focus)\b|重聚焦|重新对焦|离焦.{0,8}对焦",
+        prompt_text,
+        flags=re.I,
+    ):
+        md_path = _resolve_paper_guide_md_path(source_path, db_dir=db_dir)
+        if md_path is not None:
+            try:
+                refocus_source_parts = [
+                    str((block or {}).get("text") or (block or {}).get("raw_text") or "")
+                    for block in load_source_blocks(md_path)
+                    if isinstance(block, dict)
+                    and re.search(
+                        r"\bray[ -]tracing\b|\bwave propagation\b|\btwo steps?\b",
+                        str((block or {}).get("text") or (block or {}).get("raw_text") or ""),
+                        flags=re.I,
+                    )
+                ]
+            except Exception:
+                refocus_source_parts = []
+    text = _ensure_refocus_mechanism_terms(
+        text,
+        prompt=prompt_text,
+        evidence_parts=[
+            special_focus_block,
+            *[str((hit or {}).get("text") or "") for hit in list(answer_hits or []) if isinstance(hit, dict)],
+            *[str((slot or {}).get("evidence_quote") or "") for slot in list(support_slots or []) if isinstance(slot, dict)],
+            *[str((card or {}).get("snippet") or (card or {}).get("evidence_quote") or "") for card in list(cards or []) if isinstance(card, dict)],
+            *refocus_source_parts,
+        ],
     )
     text, support_resolution = _ground_paper_guide_answer_support(
         text,

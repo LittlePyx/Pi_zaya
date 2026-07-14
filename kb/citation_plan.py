@@ -37,6 +37,9 @@ _METHOD_INTENT_RE = re.compile(
 _BEGINNER_INTENT_RE = re.compile(
     r"(?i)(看不懂|入门|初学|小白|通俗|简单讲|overview|explain|intuitive|beginner|plain language)"
 )
+_SCOPE_BOUNDARY_INTENT_RE = re.compile(
+    r"(?i)(主线.{0,8}关系|关系大吗|相关大吗|值得.{0,8}读|relevant|relevance|worth reading|research line)"
+)
 
 
 def _compact_text(value: Any, *, max_len: int = 240) -> str:
@@ -87,6 +90,8 @@ def _citation_intent(prompt: str, *, prompt_family: str = "") -> str:
     family = str(prompt_family or "").strip().lower()
     origin_match = bool(_ORIGIN_INTENT_RE.search(raw))
     marker_request = bool(_SOURCE_MARKER_REQUEST_RE.search(raw))
+    if _SCOPE_BOUNDARY_INTENT_RE.search(raw):
+        return "scope_boundary"
     if family == "citation_lookup" or bool(_STRONG_ORIGIN_INTENT_RE.search(raw)) or (origin_match and not marker_request):
         return "origin_lookup"
     if _COMPARE_INTENT_RE.search(raw) or family == "compare":
@@ -99,15 +104,17 @@ def _citation_intent(prompt: str, *, prompt_family: str = "") -> str:
 
 
 def _budget_for_intent(intent: str) -> dict[str, int]:
+    if intent == "scope_boundary":
+        return {"system_a": 1, "system_b": 0}
     if intent == "origin_lookup":
         return {"system_a": 1, "system_b": 1}
     if intent == "comparison":
         return {"system_a": 2, "system_b": 0}
     if intent == "method_explain":
-        return {"system_a": 2, "system_b": 1}
+        return {"system_a": 2, "system_b": 0}
     if intent == "beginner_overview":
-        return {"system_a": 2, "system_b": 1}
-    return {"system_a": 2, "system_b": 1}
+        return {"system_a": 2, "system_b": 0}
+    return {"system_a": 2, "system_b": 0}
 
 
 def _system_b_slots(
@@ -176,7 +183,7 @@ def _system_a_slots(
             "locate_anchor",
             "snippet",
             "text",
-            max_len=220,
+            max_len=520,
         )
         identity = "|".join([source_path.lower(), heading.lower(), snippet[:120].lower(), str(hit_num)])
         if not (source_path or heading or snippet) or identity in seen:

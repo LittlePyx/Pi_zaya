@@ -18,7 +18,7 @@ SECTION_INTENT_LEXICONS: tuple[SectionIntentLexicon, ...] = (
         intent="problem",
         prompt_patterns=(
             r"\b(?:problem|challenge|motivation|contribution|novelty|what .* solve|why .* paper|why .* study|research question)\b",
-            r"(?:解决.{0,8}什么问题|想解决|要解决|为什么要做|研究动机|动机|核心问题|主要问题|问题是什么|挑战|瓶颈|贡献|创新点|新意|有什么用|这篇文章.{0,8}做什么)",
+            r"(?:解决.{0,8}什么问题|想解决|要解决|为什么要做|研究动机|动机|核心问题|主要问题|问题是什么|挑战|瓶颈|贡献|创新点|新意|有什么用|这篇文章.{0,8}做什么|主线.{0,8}关系|关系大吗|相关大吗|值得.{0,8}读)",
         ),
         base_terms=(
             "problem",
@@ -88,7 +88,7 @@ SECTION_INTENT_LEXICONS: tuple[SectionIntentLexicon, ...] = (
         prompt_patterns=(
             r"\b(?:method|methods|methodology|reproduce|replicate|implementation|pipeline|framework|model|training loss|core idea)\b",
             r"\b(?:how can .*recover|why it is plausible|how .* work|how .* works|how .* implement|how .* reproduce)\b",
-            r"(?:方法|实现|复现|模块|流程|框架|模型|物理模型|训练损失|核心想法|为什么.*恢复|怎么.*恢复|如何.*工作|怎么做到|怎么实现|怎么跑起来|原理|关键步骤|看懂算法|复现代码)",
+            r"(?:方法|实现|复现|模块|流程|框架|模型|物理模型|训练损失|核心想法|为什么.*恢复|怎么.*恢复|如何.*工作|怎么做到|怎么实现|怎么跑起来|原理|关键步骤|看懂算法|复现代码|重聚焦|重新对焦|离焦.{0,8}对焦)",
         ),
         base_terms=(
             "method",
@@ -114,6 +114,10 @@ SECTION_INTENT_LEXICONS: tuple[SectionIntentLexicon, ...] = (
             "pipeline",
             "implementation",
             "approach",
+            "concept",
+            "principle",
+            "procedure",
+            "digital refocusing",
             "方法",
             "模型",
             "框架",

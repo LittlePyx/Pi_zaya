@@ -2625,6 +2625,111 @@ def test_doc_list_primary_evidence_replaces_synthetic_section_rescue_with_altern
     assert "该文在" not in str(primary.get("snippet") or "")
 
 
+def test_experiment_section_rescue_prefers_metric_rich_comparison_over_table_caption():
+    prompt = "我做单像素实验，Hadamard 和 Fourier 到底该怎么选？"
+    heading = "3. Comparison of experiment / 3.1 Numerical simulations"
+    caption_score = reference_ui._section_intent_block_score(
+        prompt=prompt,
+        block={
+            "kind": "paragraph",
+            "heading_path": heading,
+            "text": "Table 1. Quantitative comparison results for USAF 1951 test chart",
+        },
+    )
+    evidence_score = reference_ui._section_intent_block_score(
+        prompt=prompt,
+        block={
+            "kind": "paragraph",
+            "heading_path": heading,
+            "text": (
+                "We use peak signal-to-noise ratio (PSNR), structural similarity index (SSIM), "
+                "and power ratio to quantitatively compare reconstruction quality at different "
+                "sampling ratios. Fourier imaging outperforms Hadamard imaging under undersampling."
+            ),
+        },
+    )
+
+    assert evidence_score > caption_score
+    assert evidence_score >= 4.25
+
+
+def test_experiment_section_rescue_excerpt_keeps_conditions_metrics_and_result():
+    excerpt = reference_ui._section_intent_evidence_excerpt(
+        prompt="我做单像素实验，Hadamard 和 Fourier 到底该怎么选？",
+        intent="experiments",
+        text=(
+            "We consider a diffraction-limited imaging system. "
+            "HSI and FSI are reconstructed under different sampling ratios. "
+            "The intermediate setup follows the same optical transfer function. "
+            "As indicated by PSNR, SSIM, and RMSE, the convergence of HSI is lower than FSI."
+        ),
+    )
+
+    assert "sampling ratios" in excerpt
+    assert "PSNR" in excerpt
+    assert "SSIM" in excerpt
+    assert "lower than" in excerpt
+
+
+def test_method_section_rescue_excerpt_keeps_two_stage_refocusing_mechanism():
+    excerpt = reference_ui._section_intent_evidence_excerpt(
+        prompt="这个量子关联光场显微镜怎么把离焦样品重新对焦？",
+        intent="method",
+        text=(
+            "Digital refocusing is achieved using two steps. "
+            "First, photon trajectories are reconstructed through ray tracing. "
+            "The intermediate image is a diffraction pattern. "
+            "Second, wave propagation reverses the diffraction and brings the sample back into focus."
+        ),
+    )
+
+    assert "two steps" in excerpt
+    assert "ray tracing" in excerpt
+    assert "wave propagation" in excerpt
+
+
+def test_method_section_rescue_prefers_complete_two_stage_refocusing_block():
+    prompt = "这个量子关联光场显微镜怎么把离焦样品重新对焦？"
+    complete_score = reference_ui._section_intent_block_score(
+        prompt=prompt,
+        block={
+            "kind": "paragraph",
+            "heading_path": "A. Concept",
+            "text": (
+                "Digital refocusing is achieved in two steps. First, ray tracing reconstructs "
+                "the photon trajectories. Second, wave propagation reverses diffraction."
+            ),
+        },
+    )
+    partial_score = reference_ui._section_intent_block_score(
+        prompt=prompt,
+        block={
+            "kind": "paragraph",
+            "heading_path": "Digital Refocusing Procedure",
+            "text": "Ray tracing reconstructs the photon trajectories in two steps.",
+        },
+    )
+
+    assert complete_score > partial_score
+
+
+def test_scope_section_rescue_excerpt_keeps_paper_object_and_contribution():
+    excerpt = reference_ui._section_intent_evidence_excerpt(
+        prompt="这篇 perovskite laser 和我的单像素成像主线关系大吗？值得一起读吗？",
+        intent="problem",
+        text=(
+            "Solution-processed lasers have broad applications. "
+            "Electrically driven lasing remains challenging. "
+            "We demonstrate an electrically driven perovskite laser using a dual-cavity device. "
+            "The device establishes lasing under pulsed electrical excitation."
+        ),
+    )
+
+    assert "perovskite laser" in excerpt
+    assert "dual-cavity device" in excerpt
+    assert "lasing" in excerpt
+
+
 def test_enrich_refs_payload_upgrades_generic_why_line_deterministically_without_llm(monkeypatch):
     refs = {
         40: {
@@ -5884,6 +5989,29 @@ def test_align_ref_card_copy_to_user_locale_prefers_chinese_prompt(monkeypatch):
     assert "中文概括" in str(summary_line or "")
     assert reference_ui._has_cjk_text(str(summary_line or ""))
     assert reference_ui._has_cjk_text(str(why_line or ""))
+
+
+def test_align_ref_card_copy_to_user_locale_keeps_grounded_text_until_llm_translation(monkeypatch):
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "auto")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_ui_locale_pref", lambda: "")
+    monkeypatch.setattr(
+        reference_ui,
+        "_build_prompt_aligned_ref_summary_fallback",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("fast cards must not replace evidence with a template")),
+    )
+
+    summary_line, why_line = reference_ui._align_ref_card_copy_to_user_locale(
+        prompt="我刚开始看单像素成像，应该先读哪几篇？",
+        display_name="NatPhoton-2019.pdf",
+        heading_path="Abstract",
+        summary_line="The review explains the principles and applications of single-pixel imaging.",
+        why_line="这篇综述适合用来建立单像素成像的整体框架。",
+        summary_kind="guide",
+        allow_llm_translate=False,
+    )
+
+    assert summary_line == "The review explains the principles and applications of single-pixel imaging."
+    assert why_line == "这篇综述适合用来建立单像素成像的整体框架。"
 
 
 def test_metadata_summary_line_for_ref_card_explains_missing_abstract(monkeypatch):

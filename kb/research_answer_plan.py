@@ -31,8 +31,8 @@ _PLAN_CARDS: dict[str, ResearchAnswerPlan] = {
     ),
     "method_explain": ResearchAnswerPlan(
         kind="method_explain",
-        evidence_need="inputs/outputs, method steps, key equation/module, implementation detail, and stated assumptions.",
-        answer_shape="what it does, how it works, what each key component contributes, and what is not specified.",
+        evidence_need="the problem each method solves, inputs/outputs, method steps, key equation/module, reported effects or metrics, and stated assumptions; preserve source terms and acronyms such as SNR when present.",
+        answer_shape="what trouble it solves, how it works, what each key component changes, the evidence-backed trade-off, and what is not specified.",
         avoid="inventing formulas, parameters, hardware, or training details that are not in the retrieved evidence.",
     ),
     "compare": ResearchAnswerPlan(

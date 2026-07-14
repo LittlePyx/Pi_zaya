@@ -1917,7 +1917,15 @@ def _align_ref_card_copy_to_user_locale(
         localized_summary = ""
         if target_locale == "zh" and allow_llm_translate:
             localized_summary = _translate_summary_to_zh(summary_out)
-        if (not localized_summary) and str(summary_kind or "").strip().lower() != "metadata":
+        allow_template_localization = bool(
+            target_locale != "zh"
+            or allow_llm_translate
+        )
+        if (
+            (not localized_summary)
+            and allow_template_localization
+            and str(summary_kind or "").strip().lower() != "metadata"
+        ):
             localized_summary = _build_prompt_aligned_ref_summary_fallback(
                 prompt=prompt,
                 display_name=display_name,
@@ -5320,8 +5328,9 @@ def _build_doc_list_hit_ui_meta(
     prompt: str,
     allow_expensive_llm: bool,
     allow_exact_locate: bool,
+    preloaded_citation_meta: dict[str, dict] | None = None,
 ) -> dict:
-    return _doc_list._build_doc_list_hit_ui_meta(
+    kwargs = dict(
         raw_item=raw_item,
         idx=idx,
         prompt=prompt,
@@ -5338,6 +5347,9 @@ def _build_doc_list_hit_ui_meta(
         apply_doc_list_why_fallback=_apply_doc_list_why_fallback,
         finalize_doc_list_hit_ui_meta=_finalize_doc_list_hit_ui_meta,
     )
+    if preloaded_citation_meta is not None:
+        kwargs["preloaded_citation_meta"] = preloaded_citation_meta
+    return _doc_list._build_doc_list_hit_ui_meta(**kwargs)
 
 
 def _doc_list_topic_match_why_line(
@@ -5397,8 +5409,9 @@ def _build_doc_list_payload_hits(
     prompt: str,
     allow_expensive_llm: bool,
     allow_exact_locate: bool,
+    preloaded_citation_meta: dict[str, dict] | None = None,
 ) -> list[dict]:
-    return _doc_list._build_doc_list_payload_hits(
+    kwargs = dict(
         doc_rows=doc_rows,
         prompt=prompt,
         allow_expensive_llm=allow_expensive_llm,
@@ -5407,6 +5420,120 @@ def _build_doc_list_payload_hits(
         normalize_ref_copy_ui_meta=_normalize_ref_copy_ui_meta,
         apply_doc_list_topic_match_hints=_apply_doc_list_topic_match_hints,
     )
+    if preloaded_citation_meta is not None:
+        kwargs["preloaded_citation_meta"] = preloaded_citation_meta
+    return _doc_list._build_doc_list_payload_hits(**kwargs)
+
+
+def _cached_doc_list_citation_meta(
+    doc_list: list[dict] | None,
+    *,
+    pdf_root: Path | None,
+    lib_store: LibraryStore | None,
+) -> dict[str, dict]:
+    if pdf_root is None or lib_store is None:
+        return {}
+    out: dict[str, dict] = {}
+    for item in list(doc_list or []):
+        if not isinstance(item, dict):
+            continue
+        source_path = str(item.get("source_path") or "").strip()
+        if not source_path or source_path in out or is_excluded_source_path(source_path):
+            continue
+        pdf_path = _resolve_pdf_for_source(pdf_root, source_path)
+        if pdf_path is None:
+            continue
+        try:
+            stored = lib_store.get_citation_meta(pdf_path)
+        except Exception:
+            continue
+        if isinstance(stored, dict) and stored:
+            out[source_path] = dict(stored)
+    return out
+
+
+def _doc_list_citation_meta(
+    doc_list: list[dict] | None,
+    *,
+    pdf_root: Path | None,
+    md_root: Path | None,
+    lib_store: LibraryStore | None,
+    allow_citation_prefetch: bool,
+) -> dict[str, dict]:
+    if not allow_citation_prefetch:
+        return _cached_doc_list_citation_meta(
+            doc_list,
+            pdf_root=pdf_root,
+            lib_store=lib_store,
+        )
+    hits = [
+        {
+            "meta": {"source_path": str(item.get("source_path") or "").strip()},
+            "ui_meta": {},
+        }
+        for item in list(doc_list or [])
+        if isinstance(item, dict) and str(item.get("source_path") or "").strip()
+    ]
+    return _prefetch_refs_citation_meta(
+        hits,
+        pdf_root=pdf_root,
+        md_root=md_root,
+        lib_store=lib_store,
+    )
+
+
+def hydrate_doc_list_refs_payload_citation_meta(
+    payload: dict | None,
+    *,
+    doc_list: list[dict] | None,
+    pdf_root: Path | None,
+    lib_store: LibraryStore | None,
+) -> dict:
+    out = dict(payload or {}) if isinstance(payload, dict) else {}
+    hits = [dict(hit) for hit in list(out.get("hits") or []) if isinstance(hit, dict)]
+    rows_by_source: dict[str, dict] = {
+        str(item.get("source_path") or "").strip(): dict(item)
+        for item in list(doc_list or [])
+        if isinstance(item, dict) and str(item.get("source_path") or "").strip()
+    }
+    lookup_rows = list(rows_by_source.values())
+    for hit in hits:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str(meta.get("source_path") or "").strip()
+        if source_path and source_path not in rows_by_source:
+            row = {"source_path": source_path}
+            rows_by_source[source_path] = row
+            lookup_rows.append(row)
+    citation_meta_by_source = _cached_doc_list_citation_meta(
+        lookup_rows,
+        pdf_root=pdf_root,
+        lib_store=lib_store,
+    )
+    hydrated_hits: list[dict] = []
+    for hit in hits:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str(meta.get("source_path") or "").strip()
+        ui_meta = dict(hit.get("ui_meta") or {}) if isinstance(hit.get("ui_meta"), dict) else {}
+        stored_meta = citation_meta_by_source.get(source_path) if source_path else None
+        if isinstance(stored_meta, dict) and stored_meta:
+            existing_meta = ui_meta.get("citation_meta") if isinstance(ui_meta.get("citation_meta"), dict) else {}
+            merged_meta = dict(stored_meta)
+            merged_meta.update(
+                {
+                    key: value
+                    for key, value in existing_meta.items()
+                    if value not in (None, "", [], {})
+                }
+            )
+            ui_meta["citation_meta"] = merged_meta
+        ui_meta = _doc_list._dedupe_doc_list_card_copy(
+            raw_item=rows_by_source.get(source_path, {}),
+            ui_meta=ui_meta,
+        )
+        hit["ui_meta"] = ui_meta
+        hydrated_hits.append(hit)
+    out["hits"] = hydrated_hits
+    return out
 
 
 def _polish_doc_list_payload_hits(
@@ -5510,7 +5637,29 @@ def build_doc_list_refs_payload(
     guide_mode: bool = False,
     guide_source_path: str = "",
     guide_source_name: str = "",
+    pdf_root: Path | None = None,
+    md_root: Path | None = None,
+    lib_store: LibraryStore | None = None,
+    allow_citation_prefetch: bool = False,
 ) -> dict:
+    preloaded_citation_meta = _doc_list_citation_meta(
+        doc_list,
+        pdf_root=pdf_root,
+        md_root=md_root,
+        lib_store=lib_store,
+        allow_citation_prefetch=bool(allow_citation_prefetch),
+    )
+
+    build_doc_list_payload_hits = _build_doc_list_payload_hits
+    if preloaded_citation_meta:
+        def _build_payload_hits_with_citation_meta(**kwargs) -> list[dict]:
+            return _build_doc_list_payload_hits(
+                **kwargs,
+                preloaded_citation_meta=preloaded_citation_meta,
+            )
+
+        build_doc_list_payload_hits = _build_payload_hits_with_citation_meta
+
     return _doc_list._build_doc_list_refs_payload(
         user_msg_id=user_msg_id,
         pack=pack,
@@ -5523,7 +5672,7 @@ def build_doc_list_refs_payload(
         guide_source_name=guide_source_name,
         prompt_likely_cross_paper_refs=_prompt_likely_cross_paper_refs,
         filter_doc_list_rows_for_guide=_filter_doc_list_rows_for_guide,
-        build_doc_list_payload_hits=_build_doc_list_payload_hits,
+        build_doc_list_payload_hits=build_doc_list_payload_hits,
         polish_doc_list_payload_hits=_polish_doc_list_payload_hits,
         suppress_non_llm_ref_card_copy_hits=_suppress_non_llm_ref_card_copy_hits,
         finalize_doc_list_payload_pack=_finalize_doc_list_payload_pack,
@@ -6036,6 +6185,48 @@ def build_hit_ui_meta(
         score=score,
         prompt=prompt,
     )
+    if bool(meta.get("section_intent_rescue")):
+        rescue_snippet = str(meta.get("section_intent_evidence_snippet") or "").strip()
+        if rescue_snippet:
+            primary_evidence = dict(primary_evidence or {})
+            primary_evidence.update(
+                {
+                    "source_path": source_path,
+                    "source_name": display_name,
+                    "heading_path": heading_path or heading,
+                    "snippet": rescue_snippet,
+                    "highlight_snippet": rescue_snippet,
+                    "selection_reason": "section_intent_rescue",
+                    "strict_locate": bool(
+                        str(meta.get("section_intent_block_id") or meta.get("section_intent_anchor_id") or "").strip()
+                    ),
+                }
+            )
+            block_id = str(meta.get("section_intent_block_id") or "").strip()
+            anchor_id = str(meta.get("section_intent_anchor_id") or "").strip()
+            anchor_kind = str(meta.get("section_intent_anchor_kind") or "").strip().lower()
+            if block_id:
+                primary_evidence["block_id"] = block_id
+            if anchor_id:
+                primary_evidence["anchor_id"] = anchor_id
+            if anchor_kind:
+                primary_evidence["anchor_kind"] = anchor_kind
+            if isinstance(reader_open, dict):
+                reader_open = dict(reader_open)
+                reader_open.update(
+                    {
+                        "headingPath": heading_path or heading,
+                        "snippet": rescue_snippet,
+                        "highlightSnippet": rescue_snippet,
+                        "strictLocate": bool(primary_evidence.get("strict_locate")),
+                    }
+                )
+                if block_id:
+                    reader_open["blockId"] = block_id
+                if anchor_id:
+                    reader_open["anchorId"] = anchor_id
+                if anchor_kind:
+                    reader_open["anchorKind"] = anchor_kind
     if isinstance(reader_open, dict) and primary_evidence:
         reader_open = dict(reader_open)
         reader_open["primaryEvidence"] = dict(primary_evidence)
@@ -6324,10 +6515,43 @@ def _section_intent_block_score(*, prompt: str, block: dict) -> float:
     if intent == "experiments":
         h_norm = _normalize_title_identity(heading)
         text_norm = _normalize_title_identity(text)
+        if re.match(r"^(?:fig(?:ure)?|table)\s*\.?\s*\d+\b", text_norm, flags=re.I):
+            score -= 4.0 if len(text) < 240 else 2.0
         if "additional study" in h_norm and not re.search(r"\b(additional|ablation|compression|mask)\b", str(prompt or ""), flags=re.I):
             score -= 1.2
         if re.search(r"\b(empirical evidence|quantitative|qualitative|sota|state of the art|results demonstrate)\b", text_norm, flags=re.I):
             score += 1.4
+        metric_signals = (
+            r"\bsampling ratios?\b",
+            r"\bmeasurements?\b",
+            r"\bundersampl(?:e|ed|ing)\b",
+            r"\bpsnr\b",
+            r"\bssim\b",
+            r"\brmse\b",
+            r"\bquantitative(?:ly)?\b",
+        )
+        metric_hits = sum(1 for pattern in metric_signals if re.search(pattern, text_norm, flags=re.I))
+        score += min(3.2, 0.8 * float(metric_hits))
+        if metric_hits >= 2 and re.search(
+            r"\b(outperform|better|worse|higher|lower|advantage|trade-?off|in short|in contrast|whereas)\w*\b",
+            text_norm,
+            flags=re.I,
+        ):
+            score += 1.2
+    if intent == "method" and re.search(
+        r"\b(?:refocus|refocusing|out[ -]of[ -]focus)\b|重聚焦|重新对焦|离焦.{0,8}对焦",
+        str(prompt or ""),
+        flags=re.I,
+    ):
+        text_norm = _normalize_title_identity(text)
+        if re.search(r"\btwo steps?\b", text_norm, flags=re.I):
+            score += 1.5
+        if re.search(r"\bray[ -]tracing\b", text_norm, flags=re.I) and re.search(
+            r"\bwave propagation\b",
+            text_norm,
+            flags=re.I,
+        ):
+            score += 5.5
     surface = _normalize_title_identity(f"{heading} {text}")
     for term in _refs_section_intent_terms(prompt, intent):
         norm = _normalize_title_identity(term)
@@ -6338,6 +6562,67 @@ def _section_intent_block_score(*, prompt: str, block: dict) -> float:
     if len(text) < 80:
         score -= 0.5
     return score
+
+
+def _section_intent_evidence_excerpt(*, prompt: str, intent: str, text: str) -> str:
+    if intent == "experiments":
+        sentences = [
+            part.strip()
+            for part in re.split(r"(?<=[。！？?\.])\s+", _clean_summary_line(text))
+            if part.strip()
+        ]
+        signal_groups = (
+            (r"\bsampling ratios?\b", r"\bmeasurements?\b", r"\bundersampl(?:e|ed|ing)\b"),
+            (r"\bpsnr\b", r"\bssim\b", r"\brmse\b", r"\bquantitative(?:ly)?\b"),
+            (r"\boutperform\w*\b", r"\bbetter\b", r"\bworse\b", r"\bhigher\b", r"\blower\b", r"\btrade-?off\b"),
+        )
+        picked_indices: set[int] = set()
+        for patterns in signal_groups:
+            scored = [
+                (sum(1 for pattern in patterns if re.search(pattern, sentence, flags=re.I)), idx)
+                for idx, sentence in enumerate(sentences)
+            ]
+            hits, idx = max(scored, default=(0, -1))
+            if hits > 0 and idx >= 0:
+                picked_indices.add(idx)
+        if picked_indices:
+            focused = " ".join(sentences[idx] for idx in sorted(picked_indices)).strip()
+            excerpt = _summary_excerpt(focused, max_sentences=3, max_len=420)
+            if excerpt:
+                return excerpt
+    terms = list(_refs_section_intent_terms(prompt, intent))
+    refocus_request = bool(
+        re.search(
+            r"\b(?:refocus|refocusing|out[ -]of[ -]focus)\b|重聚焦|重新对焦|离焦.{0,8}对焦",
+            str(prompt or ""),
+            flags=re.I,
+        )
+    )
+    if intent == "method" and refocus_request:
+        terms.extend(["digital refocusing", "two steps", "ray tracing", "wave propagation"])
+    if intent == "problem" and re.search(
+        r"主线.{0,8}关系|关系大吗|相关大吗|值得.{0,8}读|\b(?:relevant|relevance|worth reading|research line)\b",
+        str(prompt or ""),
+        flags=re.I,
+    ):
+        terms.extend(["dual-cavity", "perovskite", "device", "lasing", "laser"])
+    if intent == "experiments":
+        terms.extend(
+            [
+                "sampling ratio",
+                "measurement",
+                "undersampling",
+                "PSNR",
+                "SSIM",
+                "RMSE",
+                "outperform",
+                "better performance",
+                "higher",
+                "lower",
+            ]
+        )
+    excerpt = _answer_aligned_block_snippet(text, terms=list(dict.fromkeys(terms)))
+    return excerpt or _summary_excerpt(text, max_sentences=3, max_len=420) or _compact_reader_open_text(text, max_len=420)
 
 
 def _build_section_intent_rescue_hit(prompt: str, hits: list[dict]) -> dict | None:
@@ -6411,6 +6696,12 @@ def _build_section_intent_rescue_hit(prompt: str, hits: list[dict]) -> dict | No
             "section_intent": intent,
             "section_intent_block_id": str(block.get("block_id") or "").strip(),
             "section_intent_anchor_id": str(block.get("anchor_id") or "").strip(),
+            "section_intent_anchor_kind": str(block.get("kind") or "").strip().lower(),
+            "section_intent_evidence_snippet": _section_intent_evidence_excerpt(
+                prompt=prompt,
+                intent=intent,
+                text=text,
+            ),
         }
     )
     rescue = dict(template)

@@ -3177,6 +3177,81 @@ def test_effective_reference_pack_keeps_raw_hit_order_and_exposes_enriched_hits(
     assert effective["enriched_hits"][0]["text"] == "enriched reference hit"
 
 
+def test_effective_reference_pack_prefers_authoritative_doc_list_hits():
+    from api.chat_render import _effective_reference_render_pack
+
+    pack = {
+        "hits": [{"text": "raw generation hit", "meta": {"source_path": "paper.md"}}],
+        "rendered_payload": {
+            "hits": [
+                {
+                    "text": "authoritative card hit",
+                    "meta": {"source_path": "paper.md"},
+                    "ui_meta": {"citation_meta": {"doi": "10.1000/example", "journal_if": 12.3}},
+                }
+            ],
+            "pipeline_debug": {"doc_list_authoritative": True},
+        },
+    }
+
+    effective = _effective_reference_render_pack(pack)
+
+    assert effective["hits"][0]["text"] == "authoritative card hit"
+    assert effective["hits"][0]["ui_meta"]["citation_meta"]["doi"] == "10.1000/example"
+    assert effective["retrieval_hits"][0]["text"] == "raw generation hit"
+    assert "enriched_hits" not in effective
+
+
+def test_effective_reference_pack_keeps_newer_top_level_authoritative_hits():
+    from api.chat_render import _effective_reference_render_pack
+
+    pack = {
+        "hits": [
+            {
+                "text": "new authoritative hit",
+                "ui_meta": {"citation_meta": {"doi": "10.1000/new"}},
+            }
+        ],
+        "pipeline_debug": {"doc_list_authoritative": True},
+        "rendered_payload": {
+            "hits": [{"text": "stale nested hit", "ui_meta": {"citation_meta": {}}}],
+            "pipeline_debug": {"doc_list_authoritative": True},
+        },
+    }
+
+    effective = _effective_reference_render_pack(pack)
+
+    assert effective["hits"][0]["text"] == "new authoritative hit"
+    assert effective["hits"][0]["ui_meta"]["citation_meta"]["doi"] == "10.1000/new"
+
+
+def test_enrich_messages_does_not_mutate_reference_pack() -> None:
+    from api.chat_render import enrich_messages_with_reference_render
+
+    refs_by_user = {
+        1: {
+            "hits": [{"text": "new hit", "meta": {"source_path": "new.md"}}],
+            "pipeline_debug": {"doc_list_authoritative": True},
+            "rendered_payload": {
+                "hits": [{"text": "stale hit", "meta": {"source_path": "stale.md"}}],
+                "pipeline_debug": {"doc_list_authoritative": True},
+            },
+        }
+    }
+
+    enrich_messages_with_reference_render(
+        [
+            {"id": 1, "role": "user", "content": "question"},
+            {"id": 2, "role": "assistant", "content": "answer"},
+        ],
+        refs_by_user,
+        conv_id="conv-no-ref-mutation",
+    )
+
+    assert refs_by_user[1]["hits"][0]["text"] == "new hit"
+    assert refs_by_user[1]["rendered_payload"]["hits"][0]["text"] == "stale hit"
+
+
 def test_answer_aligned_pack_primary_replaces_stale_precise_system_a_detail():
     from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
 
@@ -3259,6 +3334,73 @@ def test_answer_aligned_primary_matches_same_path_across_different_display_names
     assert out[0]["block_id"] == "blk_related"
 
 
+def test_system_a_primary_backfill_describes_quantitative_measurement_support():
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source_path = "hsi-fsi.en.md"
+    details = [
+        {
+            "num": 1,
+            "source_path": source_path,
+            "source_name": "Hadamard versus Fourier.pdf",
+            "citation_route": "system_a",
+            "answer_claim": "Hadamard 和 Fourier 的选择取决于实验目标。",
+        }
+    ]
+    pack = {
+        "primary_evidence": {
+            "source_path": source_path,
+            "source_name": "Hadamard versus Fourier.pdf",
+            "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+            "block_id": "blk_compare",
+            "anchor_id": "p_compare",
+            "snippet": (
+                "The sampling ratio increases across experiments. "
+                "PSNR and SSIM show that FSI converges faster than HSI."
+            ),
+            "selection_reason": "section_intent_rescue",
+            "strict_locate": True,
+        }
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, pack, render_locale="zh")
+
+    assert "测量指标" in out[0]["support_relation"]
+    assert "采样率" in out[0]["support_relation"]
+    assert "PSNR" in out[0]["support_relation"]
+    assert "SSIM" in out[0]["support_relation"]
+
+
+def test_system_a_primary_backfill_describes_device_scope_boundary():
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source_path = "perovskite-laser.en.md"
+    details = [
+        {
+            "num": 1,
+            "source_path": source_path,
+            "source_name": "Perovskite laser.pdf",
+            "citation_route": "system_a",
+            "answer_claim": "这是一篇器件论文，与单像素成像几乎没有交集。",
+        }
+    ]
+    pack = {
+        "primary_evidence": {
+            "source_path": source_path,
+            "source_name": "Perovskite laser.pdf",
+            "heading_path": "Abstract",
+            "snippet": "We demonstrate lasing from an electrically driven dual-cavity perovskite device.",
+            "selection_reason": "prompt_aligned",
+        }
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, pack, render_locale="zh")
+
+    assert "perovskite" in out[0]["support_relation"]
+    assert "器件" in out[0]["support_relation"]
+    assert "不是" in out[0]["support_relation"]
+
+
 def test_reading_guide_repair_adds_missing_system_a_source_to_matching_paragraph():
     from api.chat_render import _reading_guide_repair_missing_system_a_citations
 
@@ -3293,6 +3435,164 @@ def test_reading_guide_repair_adds_missing_system_a_source_to_matching_paragraph
 
     assert "死时间 [2]。" in repaired
     assert "噪声模型 [1]" in repaired
+
+
+def test_system_a_plan_slots_create_distinct_same_paper_evidence_hits():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots, _reading_slot_hit_nums
+
+    source_path = "dl-spi-review.en.md"
+    hits = [{"text": "Paper overview.", "meta": {"source_path": source_path}}]
+    benefit_slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "source_name": "DL SPI review",
+        "heading_path": "Abstract",
+        "evidence_quote": "Deep learning provides exceptional reconstruction quality and fast reconstruction speed.",
+    }
+    risk_slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "source_name": "DL SPI review",
+        "heading_path": "4. Strategy and Advantages",
+        "evidence_quote": "Data-driven training has limited generalization across imaging scenes.",
+    }
+    augmented = _augment_hits_with_system_a_plan_slots(
+        hits,
+        {"slots": [benefit_slot, risk_slot]},
+    )
+
+    assert len(augmented) == 3
+    assert _reading_slot_hit_nums(benefit_slot, augmented) == [2]
+    assert _reading_slot_hit_nums(risk_slot, augmented) == [3]
+
+    reserved = _augment_hits_with_system_a_plan_slots(
+        hits,
+        {"slots": [benefit_slot, risk_slot]},
+        reserved_count=3,
+    )
+    assert _reading_slot_hit_nums(benefit_slot, reserved, canonical_paths=[source_path] * 3) == [4]
+    assert _reading_slot_hit_nums(risk_slot, reserved, canonical_paths=[source_path] * 3) == [5]
+
+
+def test_reading_guide_does_not_add_duplicate_plan_slot_citations_to_multi_source_answer():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    source_paths = ["review.md", "comparison.md", "frontier.md"]
+    hits = [
+        {"text": f"Core evidence {idx}.", "meta": {"source_path": source_path}}
+        for idx, source_path in enumerate(source_paths, start=1)
+    ]
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_paths[0],
+                "heading_path": "Abstract",
+                "evidence_quote": "The review establishes the field overview.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_paths[1],
+                "heading_path": "Principles",
+                "evidence_quote": "The comparison explains the acquisition strategies.",
+            },
+        ],
+    }
+    augmented = _augment_hits_with_system_a_plan_slots(hits, plan, reserved_count=6)
+    answer = "Review evidence [1].\n\nComparison evidence [2].\n\nFrontier evidence [3]."
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        augmented,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=source_paths + ["extra-4.md", "extra-5.md", "extra-6.md"],
+    )
+
+    assert repaired == answer
+    assert "[7]" not in repaired
+    assert "[8]" not in repaired
+
+
+def test_reading_guide_system_a_plan_enables_linking_without_existing_marker():
+    from api.chat_render import _should_link_inpaper_citations_for_message
+
+    rec = {
+        "meta": {
+            "answer_quality": {
+                "output_mode": "reading_guide",
+                "citation_plan": {
+                    "slots": [
+                        {
+                            "preferred_system": "system_a",
+                            "candidate_hits": [],
+                            "source_path": "hsi-fsi.md",
+                        }
+                    ]
+                },
+            }
+        }
+    }
+
+    assert _should_link_inpaper_citations_for_message(
+        rec=rec,
+        content="追求采集速度选 Hadamard，追求物理可解释性选 Fourier。",
+        hits=[{"text": "Hadamard and Fourier comparison", "meta": {"source_path": "hsi-fsi.md"}}],
+    ) is True
+
+
+def test_reading_guide_repair_dedupes_system_a_slots_for_same_source():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    answer = (
+        "结论：追求采集速度选 Hadamard，追求物理可解释性选 Fourier。\n\n"
+        "| 维度 | Hadamard | Fourier |\n"
+        "|:---|:---|:---|\n"
+        "| 采集 | 快 | 慢 |\n\n"
+        "选择建议：\n"
+        "1. Hadamard 适合高速 DMD。\n"
+        "2. Fourier 适合分析空间频率。\n"
+        "3. 两者都属于全局变换。"
+    )
+    hits = [
+        {
+            "text": "Hadamard and Fourier single-pixel imaging are compared experimentally.",
+            "meta": {"source_path": "hsi-fsi.md"},
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "hsi-fsi.md",
+                "source_name": "Hadamard Fourier comparison",
+                "evidence_quote": "Hadamard and Fourier comparison.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "hsi-fsi.md",
+                "source_name": "Hadamard Fourier comparison",
+                "evidence_quote": "Fourier spatial frequency comparison.",
+            },
+        ]
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+    )
+
+    assert repaired.count("[1]") == 1
+    citation_line = next(line for line in repaired.splitlines() if "[1]" in line)
+    assert "Hadamard" in citation_line or "Fourier" in citation_line
+    assert "两者都属于全局变换 [1]" not in repaired
+    assert "| [1]" not in repaired
 
 
 def test_reading_guide_repair_does_not_add_ranked_sources_when_every_step_is_already_cited():
@@ -3629,3 +3929,125 @@ def test_unlinked_reference_candidate_promotes_retrieved_library_document(monkey
     assert detail["library_match_status"] == "in_library"
     assert detail["reference_source_path"] == parent_source
     assert detail["reference_ref_num"] == 12
+
+
+def test_reading_guide_repair_binds_benefit_and_risk_evidence_to_distinct_claims():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    source_path = "dl-spi-review.en.md"
+    risk_slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "heading_path": "4. Strategy and Advantages",
+        "evidence_quote": "Data-driven strategies have prolonged training and limited generalization across imaging scenes.",
+    }
+    benefit_slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "heading_path": "Abstract",
+        "evidence_quote": "Deep learning provides exceptional reconstruction quality and fast reconstruction speed.",
+    }
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [risk_slot, benefit_slot],
+    }
+    hits = _augment_hits_with_system_a_plan_slots(
+        [{"text": "Paper overview.", "meta": {"source_path": source_path}}],
+        plan,
+    )
+    answer = (
+        "深度学习给单像素成像带来了更高的重建质量和更快的重建速度。\n\n"
+        "主要风险：\n"
+        "- 数据驱动方法训练时间长，而且泛化能力有限，难以适应多样场景。"
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+    )
+
+    assert "重建速度 [3]。" in repaired
+    assert "多样场景 [2]。" in repaired
+
+
+def test_reading_guide_repair_bridges_perovskite_device_scope_to_chinese_claim():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    source_path = "perovskite-laser.en.md"
+    slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "heading_path": "Abstract",
+        "evidence_quote": "We demonstrate electrically driven lasing from a dual-cavity perovskite device.",
+    }
+    plan = {
+        "intent": "scope_boundary",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [slot],
+    }
+    hits = _augment_hits_with_system_a_plan_slots(
+        [{"text": "Paper overview.", "meta": {"source_path": source_path}}],
+        plan,
+    )
+    answer = "这篇论文研究电驱动钙钛矿激光器的器件结构，与单像素成像主线几乎没有交集。"
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+    )
+
+    assert "没有交集 [2]。" in repaired
+
+
+def test_reading_guide_repair_ignores_unrelated_same_paper_method_slot():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    source_path = "qclfm.en.md"
+    refocus_slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "heading_path": "A. Concept",
+        "evidence_quote": (
+            "Digital refocusing uses two steps. First, ray tracing reconstructs photon trajectories. "
+            "The second step applies wave propagation to reverse diffraction."
+        ),
+    }
+    unrelated_slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "heading_path": "Figure 1",
+        "evidence_quote": "Type-II spontaneous parametric down-conversion produces orthogonally polarized photon pairs.",
+    }
+    plan = {
+        "intent": "method_explain",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [refocus_slot, unrelated_slot],
+    }
+    hits = _augment_hits_with_system_a_plan_slots(
+        [{"text": "Paper overview.", "meta": {"source_path": source_path}}],
+        plan,
+    )
+    answer = "数字重聚焦分为两步：先用 ray tracing 重建轨迹，再用 wave propagation 反演衍射。"
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+    )
+
+    assert "反演衍射 [2]。" in repaired
+    assert "[3]" not in repaired

@@ -58,6 +58,13 @@ def test_problem_intent_handles_plain_beginner_question() -> None:
     )
 
 
+def test_problem_intent_handles_research_line_scope_question() -> None:
+    prompt = "这篇 perovskite laser 和我的单像素成像主线关系大吗？值得一起读吗？"
+
+    assert refs_prompt_section_intent(prompt) == "problem"
+    assert refs_section_intent_heading_score(prompt, "Abstract") > 0
+
+
 def test_experiment_intent_wins_when_user_asks_if_method_is_reliable() -> None:
     prompt = "这个方法靠谱吗？实验是不是有点少，结论能不能站得住？"
 
@@ -68,6 +75,14 @@ def test_method_intent_handles_reproduction_question() -> None:
     prompt = "我想复现这个方法，应该从哪个流程和关键步骤看起？"
 
     assert refs_prompt_section_intent(prompt) == "method"
+
+
+def test_method_intent_handles_chinese_digital_refocusing_question() -> None:
+    prompt = "这个量子关联光场显微镜怎么把离焦样品重新对焦？"
+
+    assert refs_prompt_section_intent(prompt) == "method"
+    assert refs_section_intent_heading_score(prompt, "A. Concept") > 0
+    assert refs_section_intent_heading_score(prompt, "Digital Refocusing Procedure") > 0
 
 
 def test_related_intent_handles_authorship_origin_question() -> None:

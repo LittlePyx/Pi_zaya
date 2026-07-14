@@ -22,6 +22,19 @@ def test_system_a_citation_detail_carries_reader_card_fields() -> None:
                     "page_end": 3,
                     "ref_rank": {"display_score": 8.75, "why": "Related Work names ADMM as prior optimization machinery."},
                 },
+                "ui_meta": {
+                    "citation_meta": {
+                        "title": "A grounded ADMM paper",
+                        "authors": "Jane Doe, John Smith",
+                        "venue": "Optics Express",
+                        "year": "2024",
+                        "doi": "10.1364/OE.123456",
+                        "citation_count": 42,
+                        "citation_source": "OpenAlex",
+                        "journal_if": 3.3,
+                        "journal_quartile": "Q2",
+                    }
+                },
             }
         ],
         anchor_ns="test",
@@ -51,7 +64,79 @@ def test_system_a_citation_detail_carries_reader_card_fields() -> None:
     assert detail["card_subtitle"].startswith("2. Related Work")
     assert detail["card_locator"].startswith("2. Related Work")
     assert detail["card_evidence"].startswith("Most existing methods employ")
+    assert detail["authors"] == "Jane Doe, John Smith"
+    assert detail["venue"] == "Optics Express"
+    assert detail["year"] == "2024"
+    assert detail["doi"] == "10.1364/OE.123456"
+    assert detail["citation_count"] == 42
+    assert detail["journal_if"] == 3.3
+    assert detail["journal_quartile"] == "Q2"
+    assert detail["bibliographic_title"] == "A grounded ADMM paper"
     assert detail["card_quality_label"] in {"候选依据", "证据匹配"}
+
+
+def test_system_a_uses_richest_metadata_from_duplicate_source_hits() -> None:
+    source_path = "db/demo/paper.en.md"
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "The paper compares Hadamard and Fourier sampling [1].",
+        [
+            {
+                "text": "The paper compares Hadamard and Fourier sampling.",
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "3. Comparison",
+                    "citation_plan_slot": True,
+                },
+                "ui_meta": {"summary_line": "The paper compares Hadamard and Fourier sampling."},
+            },
+            {
+                "text": "Hadamard sampling is more robust under the tested noise levels.",
+                "meta": {"source_path": source_path, "heading_path": "3.1 Simulation"},
+                "ui_meta": {
+                    "citation_meta": {
+                        "doi": "10.1364/OE.123456",
+                        "citation_count": 42,
+                        "journal_if": 3.3,
+                        "journal_quartile": "Q2",
+                    }
+                },
+            },
+        ],
+        anchor_ns="test-rich-meta",
+        canonical_paths=[source_path],
+    )
+
+    assert "#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["citation_plan_slot"] is True
+    assert details[0]["doi"] == "10.1364/OE.123456"
+    assert details[0]["citation_count"] == 42
+    assert details[0]["journal_if"] == 3.3
+    assert details[0]["journal_quartile"] == "Q2"
+
+
+def test_system_a_cleans_markdown_heading_from_evidence_quote() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Deep learning improves reconstruction speed and quality [1].",
+        [
+            {
+                "text": "## Abstract Deep learning improves reconstruction speed and image quality for single-pixel imaging.",
+                "meta": {
+                    "source_path": "db/demo/deep-learning.en.md",
+                    "heading_path": "Abstract",
+                    "evidence_quote": "## Abstract Deep learning improves reconstruction speed and image quality for single-pixel imaging.",
+                },
+            }
+        ],
+        anchor_ns="test-markdown",
+    )
+
+    assert "#kb-cite-" in rendered
+    assert len(details) == 1
+    assert "Deep learning improves" in details[0]["evidence_quote"]
+    assert "##" not in details[0]["evidence_quote"]
+    flags = set((details[0].get("card_view") or {}).get("quality", {}).get("flags") or [])
+    assert "missing_evidence_quote" not in flags
 
 
 def test_system_a_treats_synthetic_section_discussion_as_low_value_evidence() -> None:
@@ -93,6 +178,35 @@ def test_system_a_links_qclfm_refocusing_claim_across_chinese_and_english() -> N
     assert details[0]["citation_route"] == "system_a"
     assert details[0]["binding_status"] == "grounded"
     assert "digital refocusing" in details[0]["binding_overlap_terms"]
+
+
+def test_system_a_links_training_generalization_claim_across_chinese_and_english() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "数据驱动策略训练时间长、泛化能力有限，难以适应多样化成像场景 [1]。",
+        [
+            {
+                "text": (
+                    "Data-driven strategies have prolonged training duration and limited "
+                    "generalization across diverse imaging scenes."
+                ),
+                "meta": {
+                    "source_path": "db/demo/dl-spi-review.en.md",
+                    "heading_path": "4. Strategy and Advantages",
+                    "evidence_quote": (
+                        "Data-driven strategies have prolonged training duration and limited "
+                        "generalization across diverse imaging scenes."
+                    ),
+                    "citation_plan_slot": True,
+                },
+            }
+        ],
+        anchor_ns="test",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["binding_status"] == "grounded"
+    assert "training and generalization" in details[0]["binding_overlap_terms"]
 
 
 def test_system_a_suppresses_weak_candidate_binding_instead_of_linking() -> None:

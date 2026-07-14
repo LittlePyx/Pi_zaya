@@ -71,13 +71,15 @@ class DeepSeekChat:
             )
         self._settings = settings
         self._text_client = (
-            OpenAI(api_key=settings.text_api_key, base_url=settings.text_base_url)
+            OpenAI(api_key=settings.text_api_key, base_url=settings.text_base_url, max_retries=0)
             if settings.text_api_key
             else None
         )
         if settings.auto_route:
             self._vision_client = OpenAI(
-                api_key=settings.vision_api_key, base_url=settings.vision_base_url
+                api_key=settings.vision_api_key,
+                base_url=settings.vision_base_url,
+                max_retries=0,
             )
         else:
             self._vision_client = self._text_client
@@ -121,10 +123,16 @@ class DeepSeekChat:
         messages: list[dict],
         temperature: float = 0.2,
         max_tokens: int = 1200,
+        *,
+        timeout_s: float | None = None,
+        max_retries: int | None = None,
     ) -> str:
         client, model = self._select_model(messages)
+        request_timeout_s = float(timeout_s) if timeout_s is not None else float(self._settings.timeout_s)
+        retry_count = int(max_retries) if max_retries is not None else int(self._settings.max_retries)
+        retry_count = max(0, retry_count)
         last_err: Optional[Exception] = None
-        for attempt in range(self._settings.max_retries + 1):
+        for attempt in range(retry_count + 1):
             try:
                 resp = self._create_with_guard_timeout(
                     client=client,
@@ -132,12 +140,12 @@ class DeepSeekChat:
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout=self._settings.timeout_s,
+                    timeout=request_timeout_s,
                 )
                 return (resp.choices[0].message.content or "").strip()
             except Exception as e:  # noqa: BLE001
                 last_err = e
-                if attempt >= self._settings.max_retries:
+                if attempt >= retry_count:
                     break
                 time.sleep(0.6 * (attempt + 1))
         raise last_err  # type: ignore[misc]
@@ -213,24 +221,58 @@ class DeepSeekChat:
             return
 
         client, model = self._select_model(messages)
+        routes: list[tuple[OpenAI, str, float]] = [
+            (client, model, self._primary_stream_timeout_s())
+        ]
+        if (
+            bool(getattr(self._settings, "auto_route", False))
+            and self._vision_client is not None
+            and self._vision_client is not client
+        ):
+            routes.append(
+                (
+                    self._vision_client,
+                    str(getattr(self._settings, "vision_model", "") or "").strip(),
+                    float(self._settings.timeout_s),
+                )
+            )
 
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=self._settings.timeout_s,
-            stream=True,
-        )
-
-        for event in resp:
+        last_err: Optional[Exception] = None
+        for route_index, (route_client, route_model, route_timeout) in enumerate(routes):
+            emitted = False
             try:
-                choice0 = event.choices[0]
-                delta = getattr(choice0, "delta", None)
-                piece = ""
-                if delta is not None:
-                    piece = (getattr(delta, "content", None) or "")
-                if piece:
-                    yield piece
-            except Exception:
-                continue
+                resp = route_client.chat.completions.create(
+                    model=route_model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=route_timeout,
+                    stream=True,
+                )
+                for event in resp:
+                    try:
+                        choice0 = event.choices[0]
+                        delta = getattr(choice0, "delta", None)
+                        piece = ""
+                        if delta is not None:
+                            piece = (getattr(delta, "content", None) or "")
+                        if piece:
+                            emitted = True
+                            yield piece
+                    except Exception:
+                        continue
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                if emitted or route_index >= len(routes) - 1:
+                    raise
+        if last_err is not None:
+            raise last_err
+
+    def _primary_stream_timeout_s(self) -> float:
+        configured = str(os.environ.get("KB_LLM_PRIMARY_STREAM_TIMEOUT_S", "25") or "25").strip()
+        try:
+            timeout_s = float(configured)
+        except Exception:
+            timeout_s = 25.0
+        return max(8.0, min(float(self._settings.timeout_s), timeout_s))

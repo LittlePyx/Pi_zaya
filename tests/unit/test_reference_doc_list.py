@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from api import reference_doc_list as doc_list
+from api import reference_ui
 
 
 def test_collect_doc_list_ref_text_candidates_cleans_and_dedupes() -> None:
@@ -325,6 +326,47 @@ def test_apply_doc_list_summary_fallbacks_uses_candidate_fallback() -> None:
     assert out["summary_generation"] == "deterministic_grounded"
     assert out["summary_basis"] == "basis"
     assert source == "doc_list_fallback"
+
+
+def test_apply_doc_list_summary_fallbacks_keeps_authoritative_evidence_over_generic_why_copy() -> None:
+    authoritative = "The paper compares Hadamard and Fourier single-pixel imaging in efficiency and noise robustness."
+    generic = "This section contains a source clue that can be used to verify the definition or method."
+    out, source = doc_list._apply_doc_list_summary_fallbacks(
+        raw_item={"source_path": "/kb/paper.md", "summary_line": authoritative},
+        prompt="我应该先读哪几篇？",
+        source_name="Paper",
+        heading_path="2. Comparison",
+        ui_meta={
+            "display_name": "Paper",
+            "heading_path": "2. Comparison",
+            "summary_kind": "guide",
+            "summary_line": generic,
+            "summary_generation": "deterministic_grounded",
+        },
+        primary_evidence={"snippet": authoritative},
+        effective_primary_evidence={"snippet": authoritative},
+        summary_source="doc_list_prompt_aligned",
+        summary_line_needs_polish=lambda **kwargs: False,
+        looks_like_title_echo=lambda summary, title: False,
+        looks_why_like_ref_summary=lambda summary: summary == generic,
+        pick_ref_card_summary_fallback=lambda **kwargs: "",
+        collect_doc_list_ref_text_candidates=lambda **kwargs: [authoritative],
+        build_ref_summary_basis_meta=lambda **kwargs: {
+            "summary_generation": kwargs["summary_generation"],
+            "summary_basis": "grounded source evidence",
+        },
+        looks_fragmentary_ref_summary=lambda summary: False,
+        looks_surface_like_ref_summary=lambda summary: False,
+        looks_formula_heavy_ref_text=lambda summary: False,
+        build_prompt_aligned_ref_summary_fallback=lambda **kwargs: "",
+        compact_reader_open_text=lambda text, max_len=360: str(text or "").strip(),
+        primary_ref_evidence_summary_seed=lambda primary: str((primary or {}).get("snippet") or ""),
+    )
+
+    assert out["summary_line"] == authoritative
+    assert out["summary_generation"] == "section_grounded"
+    assert out["summary_basis"] == "grounded source evidence"
+    assert source == "doc_list_authoritative_fast"
 
 
 def test_apply_doc_list_summary_fallbacks_uses_raw_fallback_when_empty() -> None:
@@ -821,6 +863,106 @@ def test_build_doc_list_payload_hits_shapes_hits_without_reindexing_skipped_rows
         "/kb/paper-a.md",
         "/kb/paper-b.md",
     ]
+
+
+def test_build_doc_list_payload_hits_restores_authoritative_summary_when_copy_repeats() -> None:
+    authoritative = "The paper compares Hadamard and Fourier sampling under equal measurement budgets."
+    repeated = "This paper helps compare sampling bases under the same measurement budget."
+
+    hits = doc_list._build_doc_list_payload_hits(
+        doc_rows=[
+            {
+                "source_path": "/kb/paper-a.md",
+                "summary_line": authoritative,
+                "summary_generation": "section_grounded",
+            }
+        ],
+        prompt="Which paper should I read first?",
+        allow_expensive_llm=False,
+        allow_exact_locate=False,
+        build_doc_list_hit_ui_meta=lambda **kwargs: {
+            "summary_line": repeated,
+            "summary_generation": "deterministic_grounded",
+            "why_line": repeated,
+            "why_generation": "deterministic_grounded",
+        },
+        normalize_ref_copy_ui_meta=lambda ui_meta: dict(ui_meta or {}),
+        apply_doc_list_topic_match_hints=lambda **kwargs: dict(kwargs["ui_meta"]),
+    )
+
+    ui_meta = hits[0]["ui_meta"]
+    assert ui_meta["summary_line"] == authoritative
+    assert ui_meta["summary_generation"] == "section_grounded"
+    assert ui_meta["why_line"] == repeated
+    assert ui_meta["summary_source"] == "doc_list_authoritative_fast"
+
+
+def test_build_doc_list_payload_hits_drops_repeated_why_without_distinct_summary() -> None:
+    repeated = "This paper provides evidence for comparing single-pixel imaging sampling strategies."
+
+    hits = doc_list._build_doc_list_payload_hits(
+        doc_rows=[{"source_path": "/kb/paper-a.md"}],
+        prompt="compare sampling strategies",
+        allow_expensive_llm=False,
+        allow_exact_locate=False,
+        build_doc_list_hit_ui_meta=lambda **kwargs: {
+            "summary_line": repeated,
+            "why_line": "Initially distinct relevance explanation.",
+            "why_generation": "deterministic_grounded",
+            "why_basis": "same copy",
+        },
+        normalize_ref_copy_ui_meta=lambda ui_meta: dict(ui_meta or {}),
+        apply_doc_list_topic_match_hints=lambda **kwargs: {
+            **dict(kwargs["ui_meta"]),
+            "why_line": repeated,
+        },
+    )
+
+    ui_meta = hits[0]["ui_meta"]
+    assert ui_meta["summary_line"] == repeated
+    assert "why_line" not in ui_meta
+    assert "why_generation" not in ui_meta
+    assert "why_basis" not in ui_meta
+
+
+def test_hydrate_doc_list_refs_payload_adds_local_metadata_and_sanitizes_copy(monkeypatch) -> None:
+    source_path = "/kb/paper-a.md"
+    authoritative = "The paper compares Hadamard and Fourier sampling under equal budgets."
+    repeated = "This paper helps compare Hadamard and Fourier sampling under equal budgets."
+    monkeypatch.setattr(
+        reference_ui,
+        "_cached_doc_list_citation_meta",
+        lambda *args, **kwargs: {
+            source_path: {
+                "doi": "10.1364/OE.123456",
+                "citation_count": 42,
+                "journal_if": 3.3,
+                "journal_quartile": "Q2",
+            }
+        },
+    )
+
+    out = reference_ui.hydrate_doc_list_refs_payload_citation_meta(
+        {
+            "hits": [
+                {
+                    "meta": {"source_path": source_path},
+                    "ui_meta": {"summary_line": repeated, "why_line": repeated},
+                }
+            ]
+        },
+        doc_list=[{"source_path": source_path, "summary_line": authoritative}],
+        pdf_root=None,
+        lib_store=None,
+    )
+
+    ui_meta = out["hits"][0]["ui_meta"]
+    assert ui_meta["citation_meta"]["doi"] == "10.1364/OE.123456"
+    assert ui_meta["citation_meta"]["citation_count"] == 42
+    assert ui_meta["citation_meta"]["journal_if"] == 3.3
+    assert ui_meta["citation_meta"]["journal_quartile"] == "Q2"
+    assert ui_meta["summary_line"] == authoritative
+    assert ui_meta["why_line"] == repeated
 
 
 def test_polish_doc_list_payload_hits_uses_batch_then_single_leftovers() -> None:
@@ -1964,3 +2106,60 @@ def test_reference_ui_build_doc_list_refs_payload_uses_doc_list_module(monkeypat
             "finalize_legacy_doc_list_payload_pack": reference_ui._finalize_legacy_doc_list_payload_pack,
         }
     ]
+
+
+def test_build_doc_list_refs_payload_keeps_cached_library_bibliometrics(monkeypatch, tmp_path) -> None:
+    from api import reference_ui
+
+    source_path = r"db\NatPhoton-2019\NatPhoton-2019.en.md"
+    pdf_path = tmp_path / "NatPhoton-2019.pdf"
+    citation_meta = {
+        "title": "Principles and prospects for single-pixel imaging",
+        "doi": "10.1038/s41566-018-0300-7",
+        "citation_count": 910,
+        "citation_source": "OpenAlex",
+        "journal_if": 32.9,
+        "journal_quartile": "Q1",
+    }
+
+    class _LibraryStore:
+        def get_citation_meta(self, requested_path):
+            assert requested_path == pdf_path
+            return citation_meta
+
+    monkeypatch.setattr(reference_ui, "_resolve_pdf_for_source", lambda pdf_root, source: pdf_path)
+    monkeypatch.setattr(
+        reference_ui,
+        "_prefetch_refs_citation_meta",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fast doc-list cards must stay local")),
+    )
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=42,
+        pack={"prompt": "给出单像素成像入门路线图"},
+        doc_list=[
+            {
+                "source_path": source_path,
+                "source_name": "NatPhoton-2019.pdf",
+                "heading_path": "Abstract",
+                "summary_line": "该综述解释了单像素相机的基本原理和主要应用。",
+                "primary_evidence": {
+                    "source_path": source_path,
+                    "source_name": "NatPhoton-2019.pdf",
+                    "heading_path": "Abstract",
+                    "snippet": "The review explains the principles and applications of single-pixel imaging.",
+                    "block_id": "block-1",
+                },
+            }
+        ],
+        apply_copy_polish=False,
+        pdf_root=tmp_path,
+        lib_store=_LibraryStore(),
+    )
+
+    hit = list(out.get("hits") or [])[0]
+    ui_meta = dict(hit.get("ui_meta") or {})
+    assert ui_meta.get("citation_meta") == citation_meta
+    assert ui_meta["citation_meta"]["doi"] == "10.1038/s41566-018-0300-7"
+    assert ui_meta["citation_meta"]["citation_count"] == 910
+    assert ui_meta["citation_meta"]["journal_if"] == 32.9

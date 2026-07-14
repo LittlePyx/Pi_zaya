@@ -123,6 +123,16 @@ def _refs_payload_is_full(refs_payload: Any, *, user_msg_id: int | str | None = 
     return True
 
 
+def _case_requires_full_refs_wait(expected: dict[str, Any] | None) -> bool:
+    contract = expected if isinstance(expected, dict) else {}
+    return bool(
+        "maxCardsCompleteMs" in contract
+        or contract.get("requireRefsReady")
+        or contract.get("requirePolishStatus")
+        or contract.get("requireCitationShelfQuality")
+    )
+
+
 def _latency_budget_checks(expected: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     for expected_key, result_key in (
@@ -528,8 +538,37 @@ def _citation_details(result: dict[str, Any]) -> list[dict[str, Any]]:
     final_payload = result.get("final_payload")
     if isinstance(final_payload, dict):
         details.extend(_as_list(final_payload.get("cite_details")))
-    details.extend(_inline_inpaper_citation_details(_answer_text(result)))
-    return [item for item in details if isinstance(item, dict)]
+    structured: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, str, str, str]] = set()
+    detailed_system_b_nums: set[int] = set()
+    for raw in details:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        route = _citation_route(item)
+        try:
+            num = int(item.get("num") or item.get("ref_num") or item.get("refNum") or 0)
+        except Exception:
+            num = 0
+        source_path = str(item.get("source_path") or item.get("sourcePath") or "").strip().lower()
+        title = str(item.get("title") or item.get("card_title") or "").strip().lower()
+        doi = str(item.get("doi") or "").strip().lower()
+        key = (route, num, source_path, title, doi)
+        if key in seen:
+            continue
+        seen.add(key)
+        structured.append(item)
+        if route == "system_b" and num > 0:
+            detailed_system_b_nums.add(num)
+    for item in _inline_inpaper_citation_details(_answer_text(result)):
+        try:
+            ref_num = int(item.get("ref_num") or 0)
+        except Exception:
+            ref_num = 0
+        if ref_num > 0 and ref_num in detailed_system_b_nums:
+            continue
+        structured.append(item)
+    return structured
 
 
 def _extract_ref_packs(refs_payload: Any, user_msg_id: int | str | None = None) -> list[dict[str, Any]]:
@@ -1060,6 +1099,13 @@ def validate_case(
     min_ref_hits = _expected_int(expected, "minRefHits")
     if min_ref_hits:
         add_check("refs_min_hit_count", len(ref_hits) >= min_ref_hits, {"actual": len(ref_hits), "min": min_ref_hits})
+    max_ref_hits = _expected_optional_int(expected, "maxRefHits")
+    if max_ref_hits is not None:
+        add_check(
+            "refs_max_hit_count",
+            len(ref_hits) <= max_ref_hits,
+            {"actual": len(ref_hits), "max": max_ref_hits},
+        )
 
     min_ref_doc_count = _expected_int(expected, "minRefDocCount")
     if min_ref_doc_count:
@@ -1068,6 +1114,14 @@ def validate_case(
             "refs_min_doc_count",
             len(ref_doc_ids) >= min_ref_doc_count,
             {"actual": len(ref_doc_ids), "min": min_ref_doc_count, "doc_ids": ref_doc_ids},
+        )
+    max_ref_doc_count = _expected_optional_int(expected, "maxRefDocCount")
+    if max_ref_doc_count is not None:
+        ref_doc_ids = _unique_doc_ids_in_payload(fixture, refs_payload)
+        add_check(
+            "refs_max_doc_count",
+            len(ref_doc_ids) <= max_ref_doc_count,
+            {"actual": len(ref_doc_ids), "max": max_ref_doc_count, "doc_ids": ref_doc_ids},
         )
 
     if bool(expected.get("requireRefsReady")):
@@ -1096,6 +1150,25 @@ def validate_case(
         doc_id for doc_id in required_citation_doc_ids if not _doc_matches_payload(fixture, doc_id, citation_details)
     ]
     add_check("citations_include_required_docs", not missing_citation_docs, missing_citation_docs)
+
+    allowed_citation_doc_ids = {
+        str(item or "").strip()
+        for item in _as_list(expected.get("allowedCitationDocIds"))
+        if str(item or "").strip()
+    }
+    if allowed_citation_doc_ids:
+        citation_doc_ids = set(_unique_doc_ids_in_payload(fixture, citation_details))
+        unexpected_citation_docs = sorted(citation_doc_ids - allowed_citation_doc_ids)
+        max_unexpected_citation_docs = _expected_int(expected, "maxUnexpectedCitationDocCount")
+        add_check(
+            "citations_avoid_unexpected_docs",
+            len(unexpected_citation_docs) <= max_unexpected_citation_docs,
+            {
+                "unexpected": unexpected_citation_docs,
+                "allowed": sorted(allowed_citation_doc_ids),
+                "max": max_unexpected_citation_docs,
+            },
+        )
 
     required_route_counts = expected.get("requiredRouteCounts") if isinstance(expected.get("requiredRouteCounts"), dict) else {}
     if required_route_counts:
@@ -1144,8 +1217,23 @@ def validate_case(
             len(citation_doc_ids) >= min_citation_doc_count,
             {"actual": len(citation_doc_ids), "min": min_citation_doc_count, "doc_ids": citation_doc_ids},
         )
+    max_citation_doc_count = _expected_optional_int(expected, "maxCitationDocCount")
+    if max_citation_doc_count is not None:
+        citation_doc_ids = _unique_doc_ids_in_payload(fixture, citation_details)
+        add_check(
+            "citations_max_doc_count",
+            len(citation_doc_ids) <= max_citation_doc_count,
+            {"actual": len(citation_doc_ids), "max": max_citation_doc_count, "doc_ids": citation_doc_ids},
+        )
 
     inpaper_details = [item for item in citation_details if bool(item.get("is_inpaper"))]
+    max_system_b_count = _expected_optional_int(expected, "maxSystemBCount")
+    if max_system_b_count is not None:
+        add_check(
+            "system_b_max_count",
+            len(inpaper_details) <= max_system_b_count,
+            {"actual": len(inpaper_details), "max": max_system_b_count},
+        )
     min_system_b_count = _expected_int(expected, "minSystemBCount", 1 if bool(expected.get("requireSystemB")) else 0)
     if min_system_b_count:
         add_check(
@@ -1529,7 +1617,7 @@ def run_case(
     cards_complete_ms: float | None = None
     if _refs_payload_is_full(refs_payload, user_msg_id=gen.get("user_msg_id")):
         cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
-    elif "maxCardsCompleteMs" in (case.get("expected") or {}):
+    elif _case_requires_full_refs_wait(case.get("expected") if isinstance(case.get("expected"), dict) else {}):
         card_wait_deadline = time.perf_counter() + min(45.0, max(1.0, float(timeout_s)))
         while time.perf_counter() < card_wait_deadline:
             time.sleep(0.35)
