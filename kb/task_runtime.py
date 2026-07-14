@@ -1658,6 +1658,7 @@ def _merge_refs_display_docs_with_answer_hits(
     answer_hits: list[dict] | None,
     limit: int,
     answer: str = "",
+    allowed_source_paths: list[str] | None = None,
 ) -> list[dict]:
     try:
         cap = max(1, int(limit))
@@ -1665,6 +1666,11 @@ def _merge_refs_display_docs_with_answer_hits(
         cap = 4
     out: list[dict] = []
     seen: set[str] = set()
+    allowed_source_keys = {
+        identity
+        for source_path in list(allowed_source_paths or [])
+        for identity in _refs_document_identity_keys(source_path)
+    }
     cited_doc_indexes: list[int] = []
     seen_cited_indexes: set[int] = set()
     for match in re.finditer(r"(?<!\[)\[\s*(\d{1,2})\s*\](?!\])", str(answer or "")):
@@ -1679,7 +1685,20 @@ def _merge_refs_display_docs_with_answer_hits(
 
     def _source(hit: dict) -> str:
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-        return str((meta or {}).get("source_path") or "").strip()
+        return str((meta or {}).get("source_path") or hit.get("source_path") or "").strip()
+
+    def _source_keys(hit: dict) -> tuple[str, ...]:
+        return _refs_document_identity_keys(_source(hit))
+
+    def _source_allowed(hit: dict) -> bool:
+        return bool(set(_source_keys(hit)) & allowed_source_keys)
+
+    seed_by_source: dict[str, dict] = {}
+    for seed in list(refs_seed_docs or []):
+        if not isinstance(seed, dict):
+            continue
+        for source_key in _source_keys(seed):
+            seed_by_source.setdefault(source_key, seed)
 
     def _push(
         rows: list[dict] | None,
@@ -1690,12 +1709,23 @@ def _merge_refs_display_docs_with_answer_hits(
         for idx, raw in enumerate(list(rows or []), start=1):
             if not isinstance(raw, dict):
                 continue
-            src = _source(raw)
-            key = src or f"idx:{id(raw)}"
-            if key in seen:
+            source_keys = _source_keys(raw)
+            if allowed_source_keys and not _source_allowed(raw):
                 continue
-            seen.add(key)
-            hit = copy.deepcopy(raw)
+            if source_keys and any(key in seen for key in source_keys):
+                continue
+            if source_keys:
+                seen.update(source_keys)
+            else:
+                fallback_key = f"idx:{id(raw)}"
+                if fallback_key in seen:
+                    continue
+                seen.add(fallback_key)
+            rich_seed = next(
+                (seed_by_source[key] for key in source_keys if key in seed_by_source),
+                None,
+            )
+            hit = copy.deepcopy(rich_seed if isinstance(rich_seed, dict) else raw)
             meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
             meta2 = dict(meta or {})
             if str(meta2.get("ref_pack_state") or "").strip().lower() == "pending":
@@ -1714,7 +1744,10 @@ def _merge_refs_display_docs_with_answer_hits(
     cited_nums: list[int] = []
     for cited_index in cited_doc_indexes:
         if 1 <= cited_index <= len(answer_rows) and isinstance(answer_rows[cited_index - 1], dict):
-            cited_rows.append(answer_rows[cited_index - 1])
+            cited_row = answer_rows[cited_index - 1]
+            if allowed_source_keys and not _source_allowed(cited_row):
+                continue
+            cited_rows.append(cited_row)
             cited_nums.append(cited_index)
     if cited_rows:
         _push(
@@ -1723,6 +1756,8 @@ def _merge_refs_display_docs_with_answer_hits(
             answer_citation_nums=cited_nums,
         )
         return out[:cap]
+    if cited_doc_indexes and allowed_source_keys:
+        return []
 
     # Without usable answer citations, preserve the previous ranking behavior:
     # answer sources first, then fill with the original refs seed.
@@ -1730,6 +1765,246 @@ def _merge_refs_display_docs_with_answer_hits(
     if len(out) < cap:
         _push(refs_seed_docs)
     return out[:cap]
+
+
+def _refs_document_identity_keys(source_path: object) -> tuple[str, ...]:
+    """Return exact and stable filename identities for a PDF/Markdown document."""
+    normalized = str(source_path or "").replace("\\", "/").strip().casefold()
+    if not normalized:
+        return ()
+    keys = [f"path:{normalized}"]
+    filename = normalized.rsplit("/", 1)[-1]
+    document_name = re.sub(
+        r"(?i)(?:\.(?:en|zh|zh-cn|zh-tw))?\.md$|\.pdf$",
+        "",
+        filename,
+    )
+    document_name = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", document_name).strip()
+    if document_name:
+        keys.append(f"doc:{document_name}")
+    return tuple(dict.fromkeys(keys))
+
+
+def _selected_research_context_source_paths(items: list[dict] | None) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for item in list(items or []):
+        if not isinstance(item, dict):
+            continue
+        candidates: list[str] = []
+        if _selected_context_library_match_usable(item):
+            candidates.append(
+                _selected_context_first_text(item, "libraryMatchPath", "library_match_path")
+            )
+        candidates.append(_selected_context_first_text(item, "sourcePath", "source_path"))
+        for source_path in candidates:
+            source_key = source_path.replace("\\", "/").strip().casefold()
+            if not source_key or source_key in seen:
+                continue
+            seen.add(source_key)
+            paths.append(source_path)
+    return paths
+
+
+def _citation_plan_system_a_source_paths(citation_plan: dict | None) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    plan = citation_plan if isinstance(citation_plan, dict) else {}
+    for slot in list(plan.get("slots") or []):
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
+            continue
+        source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+        source_key = source_path.replace("\\", "/").casefold()
+        if not source_key or source_key in seen:
+            continue
+        seen.add(source_key)
+        paths.append(source_path)
+    return paths
+
+
+def _filter_reference_rows_to_allowed_sources(
+    rows: list[dict] | None,
+    allowed_source_paths: list[str] | None,
+) -> list[dict]:
+    allowed_keys = {
+        identity
+        for source_path in list(allowed_source_paths or [])
+        for identity in _refs_document_identity_keys(source_path)
+    }
+    if not allowed_keys:
+        return [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+    filtered: list[dict] = []
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+        source_path = str(
+            (meta or {}).get("source_path")
+            or row.get("source_path")
+            or row.get("sourcePath")
+            or ""
+        ).strip()
+        if set(_refs_document_identity_keys(source_path)) & allowed_keys:
+            filtered.append(dict(row))
+    return filtered
+
+
+def _trim_multi_paper_answer_to_planned_sources(
+    answer: str,
+    *,
+    answer_hits: list[dict] | None,
+    planned_source_paths: list[str] | None,
+) -> str:
+    text = str(answer or "")
+    allowed_keys = {
+        identity
+        for source_path in list(planned_source_paths or [])
+        for identity in _refs_document_identity_keys(source_path)
+    }
+    if not text.strip() or not allowed_keys:
+        return text
+
+    allowed_nums: set[int] = set()
+    disallowed_nums: set[int] = set()
+    for idx, hit in enumerate(list(answer_hits or []), start=1):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or hit.get("source_path") or "").strip()
+        if not source_path:
+            continue
+        if set(_refs_document_identity_keys(source_path)) & allowed_keys:
+            allowed_nums.add(idx)
+        else:
+            disallowed_nums.add(idx)
+    if not disallowed_nums:
+        return text
+
+    marker_re = re.compile(r"(?<!\[)\[\s*(\d{1,3})\s*\](?!\])")
+
+    def _nums(value: str) -> set[int]:
+        return {int(match.group(1)) for match in marker_re.finditer(str(value or ""))}
+
+    kept_parts: list[str] = []
+    for paragraph in re.split(r"\n{2,}", text):
+        paragraph_nums = _nums(paragraph)
+        paragraph_disallowed = paragraph_nums & disallowed_nums
+        if not paragraph_disallowed:
+            kept_parts.append(paragraph)
+            continue
+        if not (paragraph_nums & allowed_nums):
+            continue
+        kept_lines: list[str] = []
+        for line in paragraph.splitlines():
+            line_nums = _nums(line)
+            if line_nums & disallowed_nums and not (line_nums & allowed_nums):
+                continue
+            for num in sorted(line_nums & disallowed_nums):
+                line = re.sub(rf"(?<!\[)\[\s*{int(num)}\s*\](?!\])", "", line)
+            if line.strip():
+                kept_lines.append(line.rstrip())
+        if kept_lines:
+            kept_parts.append("\n".join(kept_lines))
+    return "\n\n".join(part for part in kept_parts if str(part or "").strip()).strip()
+
+
+def _align_refs_hits_to_source_order(
+    hits: list[dict] | None,
+    source_paths: list[str] | None,
+    *,
+    stable_document_identity: bool = False,
+) -> list[dict]:
+    if not stable_document_identity:
+        ordered_keys = [
+            str(source_path or "").replace("\\", "/").strip().casefold()
+            for source_path in list(source_paths or [])
+            if str(source_path or "").strip()
+        ]
+        if not ordered_keys:
+            return [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
+        hits_by_source: dict[str, dict] = {}
+        for hit in list(hits or []):
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            source_path = str(
+                (meta or {}).get("source_path") or hit.get("source_path") or ""
+            ).strip()
+            source_key = source_path.replace("\\", "/").strip().casefold()
+            if source_key and source_key not in hits_by_source:
+                hits_by_source[source_key] = hit
+        return [
+            copy.deepcopy(hits_by_source[key])
+            for key in ordered_keys
+            if key in hits_by_source
+        ]
+    ordered_identities = [
+        _refs_document_identity_keys(source_path)
+        for source_path in list(source_paths or [])
+        if str(source_path or "").strip()
+    ]
+    if not ordered_identities:
+        return [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
+    candidates: list[tuple[dict, set[str]]] = []
+    for hit in list(hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or hit.get("source_path") or "").strip()
+        identities = set(_refs_document_identity_keys(source_path))
+        if identities:
+            candidates.append((hit, identities))
+    aligned: list[dict] = []
+    used_indexes: set[int] = set()
+    for identities in ordered_identities:
+        wanted = set(identities)
+        for idx, (hit, hit_identities) in enumerate(candidates):
+            if idx in used_indexes or not (wanted & hit_identities):
+                continue
+            used_indexes.add(idx)
+            aligned.append(copy.deepcopy(hit))
+            break
+    return aligned
+
+
+def _align_async_refs_to_finalized_selected_sources(
+    hits: list[dict] | None,
+    task_snapshot: dict | None,
+    *,
+    selected_context_guarded: bool,
+) -> tuple[list[dict], bool]:
+    rows = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
+    if not selected_context_guarded:
+        snapshot = task_snapshot if isinstance(task_snapshot, dict) else {}
+        final_source_paths = (
+            list(snapshot.get("refs_final_source_paths") or [])
+            if isinstance(snapshot.get("refs_final_source_paths"), list)
+            else []
+        )
+        if not final_source_paths:
+            return rows, True
+        aligned = _align_refs_hits_to_source_order(rows, final_source_paths)
+        return (aligned, True) if len(aligned) == len(final_source_paths) else ([], False)
+    snapshot = task_snapshot if isinstance(task_snapshot, dict) else {}
+    if not bool(snapshot.get("refs_final_source_paths_finalized")):
+        return [], False
+    final_source_paths = (
+        list(snapshot.get("refs_final_source_paths") or [])
+        if isinstance(snapshot.get("refs_final_source_paths"), list)
+        else []
+    )
+    if not final_source_paths:
+        return [], False
+    aligned = _align_refs_hits_to_source_order(
+        rows,
+        final_source_paths,
+        stable_document_identity=True,
+    )
+    if len(aligned) != len(final_source_paths):
+        return [], False
+    return aligned, True
 
 
 def _select_answer_seed_for_generation(
@@ -3825,6 +4100,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         prompt = str(task.get("prompt") or "").strip()
         selected_research_context = task.get("selected_research_context") if isinstance(task.get("selected_research_context"), dict) else {}
         selected_research_context_items = _selected_research_context_items(selected_research_context)
+        selected_context_refs_source_paths = _selected_research_context_source_paths(
+            selected_research_context_items,
+        )
+        selected_context_refs_guarded = bool(selected_context_refs_source_paths)
         selected_research_context_block = _format_selected_research_context_block(selected_research_context)
         selected_research_context_evidence_hits: list[dict] = []
         raw_image_atts = task.get("image_attachments") or []
@@ -4983,6 +5262,16 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 snap0 = _gen_get_task(session_id) or {}
                 same_task = str(snap0.get("id") or "") == str(task_id or "")
                 answer_ready0 = bool(snap0.get("answer_ready") or False)
+                refs_async_guard_blocked = False
+                if enriched:
+                    enriched, refs_async_can_persist = _align_async_refs_to_finalized_selected_sources(
+                        list(enriched),
+                        snap0,
+                        selected_context_guarded=selected_context_refs_guarded,
+                    )
+                    refs_async_guard_blocked = bool(
+                        selected_context_refs_guarded and not refs_async_can_persist
+                    )
                 # If another task has already replaced this session slot, still allow refs
                 # enrichment to be persisted for the original answered message.
                 if same_task and _gen_should_cancel(session_id, task_id) and (not answer_ready0):
@@ -5065,29 +5354,51 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         render_evidence_sig = ""
                     else:
                         render_evidence_sig = str(rendered_payload_sig or "").strip()
-                    try:
-                        cs = ChatStore(chat_db)
-                        cs.upsert_message_refs(
-                            user_msg_id=umid,
-                            conv_id=conv_id,
-                            prompt=prompt,
-                            prompt_sig=str(task.get("prompt_sig") or ""),
-                            hits=list(enriched),
-                            scores=list(scores_raw or []),
-                            used_query=str(used_query or ""),
-                            used_translation=bool(used_translation),
-                            rendered_payload=rendered_payload,
-                            rendered_payload_sig=rendered_payload_sig,
-                            render_status=render_status,
-                            render_error=render_error,
-                            render_error_detail=render_error_detail,
-                            render_built_at=render_built_at,
-                            render_attempts=1,
-                            render_evidence_sig=render_evidence_sig,
+                    refs_async_can_persist = True
+                    if selected_context_refs_guarded:
+                        write_snapshot = _gen_get_task(session_id) or {}
+                        enriched, refs_async_can_persist = _align_async_refs_to_finalized_selected_sources(
+                            list(enriched),
+                            write_snapshot,
+                            selected_context_guarded=True,
                         )
-                    except Exception:
-                        pass
-                    refs_async_state = "done" if render_status == "full" else ("awaiting_authoritative_doc_list" if render_status == "pending" else "failed")
+                        refs_async_guard_blocked = not refs_async_can_persist
+                    if refs_async_can_persist:
+                        try:
+                            cs = ChatStore(chat_db)
+                            cs.upsert_message_refs(
+                                user_msg_id=umid,
+                                conv_id=conv_id,
+                                prompt=prompt,
+                                prompt_sig=str(task.get("prompt_sig") or ""),
+                                hits=list(enriched),
+                                scores=list(scores_raw or []),
+                                used_query=str(used_query or ""),
+                                used_translation=bool(used_translation),
+                                rendered_payload=rendered_payload,
+                                rendered_payload_sig=rendered_payload_sig,
+                                render_status=render_status,
+                                render_error=render_error,
+                                render_error_detail=render_error_detail,
+                                render_built_at=render_built_at,
+                                render_attempts=1,
+                                render_evidence_sig=render_evidence_sig,
+                            )
+                        except Exception:
+                            pass
+                    refs_async_state = (
+                        "filtered"
+                        if refs_async_guard_blocked
+                        else (
+                            "done"
+                            if render_status == "full"
+                            else (
+                                "awaiting_authoritative_doc_list"
+                                if render_status == "pending"
+                                else "failed"
+                            )
+                        )
+                    )
                     _gen_update_task(
                         session_id,
                         task_id,
@@ -5110,6 +5421,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         )
                     except Exception:
                         pass
+                elif refs_async_guard_blocked:
+                    _gen_update_task(
+                        session_id,
+                        task_id,
+                        refs_async_pending=False,
+                        refs_async_state="filtered",
+                        refs_async_docs=0,
+                    )
                 else:
                     try:
                         cs = ChatStore(chat_db)
@@ -5796,6 +6115,28 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         answer = str(finalize_state.get("answer") or "")
         paper_guide_support_resolution = list(finalize_state.get("paper_guide_support_resolution") or [])
         paper_guide_contracts = dict(finalize_state.get("paper_guide_contracts") or {})
+        finalized_citation_plan = (
+            dict(paper_guide_contracts.get("citation_plan") or {})
+            if isinstance(paper_guide_contracts.get("citation_plan"), dict)
+            else dict(citation_plan or {})
+        )
+        planned_multi_paper_source_paths = (
+            _citation_plan_system_a_source_paths(finalized_citation_plan)
+            if prompt_multi_paper_list
+            else []
+        )
+        if planned_multi_paper_source_paths:
+            trimmed_answer = _trim_multi_paper_answer_to_planned_sources(
+                answer,
+                answer_hits=list(answer_hits or []),
+                planned_source_paths=planned_multi_paper_source_paths,
+            )
+            if trimmed_answer and trimmed_answer != answer:
+                answer = trimmed_answer
+                paper_guide_contracts = _sync_runtime_repaired_answer_contracts(
+                    paper_guide_contracts,
+                    answer=answer,
+                )
         if selected_research_context_items:
             paper_guide_contracts["selected_research_context"] = dict(selected_research_context or {})
         if selected_research_context_evidence_contract:
@@ -5820,8 +6161,18 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 limit=refs_hit_limit,
                 answer=answer,
             )
+            if planned_multi_paper_source_paths:
+                multi_paper_refs_hits = _filter_reference_rows_to_allowed_sources(
+                    multi_paper_refs_hits,
+                    planned_multi_paper_source_paths,
+                )
             had_doc_list_contract_key = "doc_list" in paper_guide_contracts
             doc_list_contract = _extract_doc_list_contract(paper_guide_contracts)
+            if planned_multi_paper_source_paths:
+                doc_list_contract = _filter_reference_rows_to_allowed_sources(
+                    doc_list_contract,
+                    planned_multi_paper_source_paths,
+                )
             if paper_guide_cross_paper_refs:
                 doc_list_contract = _finalize_runtime_exclude_bound_source_from_multi_paper_doc_list_contract(
                     doc_list=doc_list_contract,
@@ -5983,11 +6334,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     chat_store.merge_message_meta(cur_assistant_msg_id, {"canonical_hit_paths": _canon_paths})
             except Exception:
                 pass
+        refs_precompute_enabled = _generation_refs_precompute_enabled()
         if (
-            _generation_refs_precompute_enabled()
+            (refs_precompute_enabled or bool(selected_context_refs_source_paths))
             and (not prompt_multi_paper_list)
             and umid > 0
-            and answer_hits
+            and (answer_hits or selected_context_refs_guarded)
             and (not paper_guide_exact_preflight)
         ):
             try:
@@ -5996,7 +6348,27 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     answer_hits=list(answer_hits or []),
                     limit=max(1, min(int(top_k or 4), 6 if prompt_multi_source_synthesis else 4)),
                     answer=answer,
+                    allowed_source_paths=selected_context_refs_source_paths,
                 )
+                final_refs_source_paths = [
+                    str((hit.get("meta") or {}).get("source_path") or hit.get("source_path") or "").strip()
+                    for hit in list(final_refs_docs or [])
+                    if isinstance(hit, dict)
+                    and str((hit.get("meta") or {}).get("source_path") or hit.get("source_path") or "").strip()
+                ]
+                if selected_context_refs_guarded:
+                    _gen_update_task(
+                        session_id,
+                        task_id,
+                        refs_final_source_paths=final_refs_source_paths,
+                        refs_final_source_paths_finalized=True,
+                    )
+                elif final_refs_source_paths:
+                    _gen_update_task(
+                        session_id,
+                        task_id,
+                        refs_final_source_paths=final_refs_source_paths,
+                    )
                 _trace_section(
                     "refs",
                     {
@@ -6006,7 +6378,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 )
                 rendered_payload = None
                 rendered_payload_sig = ""
-                if final_refs_docs:
+                if final_refs_docs and refs_precompute_enabled:
                     t_refs_render0 = time.perf_counter()
                     rendered_payload, rendered_payload_sig = _build_precomputed_refs_render_payload(
                         user_msg_id=umid,
@@ -6049,6 +6421,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                             "primary_evidence_terms": list(primary_alignment.get("matched_answer_terms") or [])[:8],
                         },
                     )
+                if final_refs_docs or selected_context_refs_guarded:
                     chat_store.upsert_message_refs(
                         user_msg_id=umid,
                         conv_id=conv_id,
@@ -6060,11 +6433,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         used_translation=bool(used_translation),
                         rendered_payload=rendered_payload,
                         rendered_payload_sig=rendered_payload_sig,
-                        render_status="full" if rendered_payload and rendered_payload_sig else None,
-                        render_error="" if rendered_payload and rendered_payload_sig else None,
-                        render_error_detail="" if rendered_payload and rendered_payload_sig else None,
-                        render_built_at=time.time() if rendered_payload and rendered_payload_sig else None,
-                        render_attempts=1 if rendered_payload and rendered_payload_sig else None,
+                        render_status="full" if rendered_payload and rendered_payload_sig else "",
+                        render_error="",
+                        render_error_detail="",
+                        render_built_at=time.time() if rendered_payload and rendered_payload_sig else 0.0,
+                        render_attempts=1 if rendered_payload and rendered_payload_sig else 0,
                         render_evidence_sig=str(rendered_payload_sig or "").strip(),
                         query_variants=list(query_variants or []),
                     )

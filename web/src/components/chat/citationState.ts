@@ -1,3 +1,9 @@
+import {
+  isSystemBArticleSummarySource,
+  isSystemBContextSummarySource,
+  resolveSystemBArticleSummary,
+} from './systemBArticleSummary'
+
 export interface CitationCardViewSection {
   id: string
   label: string
@@ -1449,16 +1455,7 @@ function trimShelfSummary(value: string, maxLen = 220): string {
 }
 
 function trustedShelfSummarySource(source: string): boolean {
-  const s = String(source || '').trim().toLowerCase()
-  return [
-    'abstract',
-    'fulltext',
-    'navigation',
-    'exact_anchor',
-    'section_intent_rescue',
-    'doc_list_seed',
-    'doc_list_prompt_aligned',
-  ].includes(s)
+  return isSystemBArticleSummarySource(source)
 }
 
 export function looksLowValueShelfSummary(value: string): boolean {
@@ -1487,30 +1484,26 @@ function looksMetadataOnlyShelfSummary(value: string): boolean {
 }
 
 function isArticleSummaryTextSource(source: string): boolean {
-  return [
-    'abstract',
-    'fulltext',
-    'navigation',
-    'exact_anchor',
-    'section_intent_rescue',
-    'doc_list_seed',
-    'doc_list_prompt_aligned',
-  ].includes(String(source || '').trim().toLowerCase())
+  return isSystemBArticleSummarySource(source)
 }
 
 function deriveShelfSummary(detail: CiteDetail): { line: string; source: string } {
+  const systemBDecision = resolveSystemBArticleSummary(detail)
+  if (systemBDecision.isSystemB) {
+    if (
+      systemBDecision.visible
+      && !looksLowValueShelfSummary(systemBDecision.line)
+      && !looksMetadataOnlyShelfSummary(systemBDecision.line)
+    ) {
+      return { line: systemBDecision.line, source: systemBDecision.source }
+    }
+    return { line: '', source: '' }
+  }
   const existing = trimShelfSummary(detail.summaryLine, 420)
   const existingSource = String(detail.summarySource || '').trim().toLowerCase()
   const summaryQuality = detail.summaryQuality || {}
   const qualityOk = summaryQuality.ok === true || String(summaryQuality.status || '').trim().toLowerCase() === 'grounded'
-  const contextOnlyExisting = [
-    'citation_context',
-    'citation_card',
-    'citation_card_view',
-    'metadata',
-    'reference_primary_evidence',
-    'references_panel_hit',
-  ].includes(existingSource)
+  const contextOnlyExisting = isSystemBContextSummarySource(existingSource)
   const inpaperContextSummary = detail.isInpaper && existingSource === 'citation_context'
   const metadataOnlyExisting = existingSource === 'metadata' && looksMetadataOnlyShelfSummary(existing)
   const inpaperLowValueContext = detail.isInpaper
@@ -1546,6 +1539,7 @@ export function toShelfItem(detail: CiteDetail): CiteShelfItem {
   const main = citationMain(detail)
   const baseKey = `${detail.anchor}|${detail.sourceName || detail.sourcePath}|${detail.num}`
   const summary = deriveShelfSummary(detail)
+  const systemBDecision = resolveSystemBArticleSummary(detail)
   const shelfItemKind = inferShelfItemKind(detail)
   const shelfOrigin = cleanCitationDisplayText(inferShelfOrigin(detail, shelfItemKind))
   const shelfExcerpt = inferShelfExcerpt(detail, shelfItemKind)
@@ -1553,8 +1547,13 @@ export function toShelfItem(detail: CiteDetail): CiteShelfItem {
   return {
     ...detail,
     summaryLine: summary.line,
-    summarySource: summary.line ? summary.source : detail.summarySource,
-    summaryProvider: detail.summaryProvider,
+    summarySource: summary.line ? summary.source : systemBDecision.isSystemB ? '' : detail.summarySource,
+    summaryProvider: systemBDecision.isSystemB
+      ? systemBDecision.visible ? systemBDecision.provider : ''
+      : detail.summaryProvider,
+    summaryQuality: systemBDecision.isSystemB
+      ? systemBDecision.visible ? systemBDecision.quality : null
+      : detail.summaryQuality,
     shelfItemKind,
     shelfOrigin,
     shelfExcerpt,
@@ -1703,46 +1702,6 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
   return normalizeCiteDetail(merged) || detail
 }
 
-const ARTICLE_SUMMARY_SOURCES = new Set([
-  'abstract',
-  'fulltext',
-  'navigation',
-  'exact_anchor',
-  'section_intent_rescue',
-  'doc_list_seed',
-  'doc_list_prompt_aligned',
-])
-
-const LOCAL_ARTICLE_SUMMARY_PROVIDERS = new Set(['local_markdown'])
-const LOCAL_ARTICLE_SUMMARY_GENERATIONS = new Set(['extractive_local_markdown'])
-
-function recordValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
-function firstTextValue(record: Record<string, unknown>, ...keys: string[]): string {
-  for (const key of keys) {
-    const value = String(record[key] || '').trim()
-    if (value) return value
-  }
-  return ''
-}
-
-function systemBSummaryIdentityMatches(
-  detail: CiteDetail,
-  identityTitle: string,
-  identityDoi: string,
-): boolean {
-  const upstreamDoi = normalizeDoiLike(detail.doi || detail.doiUrl)
-  const candidateDoi = normalizeDoiLike(identityDoi)
-  if (upstreamDoi && candidateDoi) return upstreamDoi === candidateDoi
-  const upstreamTitle = cleanCitationDisplayText(detail.title || detail.cardTitle)
-  const candidateTitle = cleanCitationDisplayText(identityTitle)
-  return Boolean(upstreamTitle && candidateTitle && substantiallySameText(upstreamTitle, candidateTitle))
-}
-
 function removeSummaryContract(meta: Record<string, unknown>): Record<string, unknown> {
   const cleaned = { ...meta }
   for (const key of [
@@ -1767,74 +1726,12 @@ function prepareCitationMetaForMerge(
   meta: Record<string, unknown>,
 ): Record<string, unknown> {
   const prepared = { ...(meta || {}) }
-  if (!detail.isInpaper) return prepared
-  const summaryLine = firstTextValue(prepared, 'summary_line', 'summaryLine')
+  const summaryLine = String(prepared.summary_line || prepared.summaryLine || '').trim()
   if (!summaryLine) return prepared
-
-  const quality = recordValue(prepared.summary_quality || prepared.summaryQuality)
-  const identity = recordValue(quality.identity)
-  const summarySource = (
-    firstTextValue(prepared, 'summary_source', 'summarySource')
-    || firstTextValue(quality, 'source')
-  ).toLowerCase()
-  if (!ARTICLE_SUMMARY_SOURCES.has(summarySource)) return removeSummaryContract(prepared)
-
-  const summaryProvider = (
-    firstTextValue(prepared, 'summary_provider', 'summaryProvider')
-    || firstTextValue(quality, 'provider')
-  ).toLowerCase()
-  const summaryGeneration = (
-    firstTextValue(prepared, 'summary_generation', 'summaryGeneration')
-    || firstTextValue(quality, 'generation')
-  ).toLowerCase()
-  const explicitIdentityTitle = (
-    firstTextValue(quality, 'identity_title', 'identityTitle', 'source_title', 'sourceTitle')
-    || firstTextValue(identity, 'title')
-  )
-  const explicitIdentityDoi = (
-    firstTextValue(quality, 'identity_doi', 'identityDoi', 'source_doi', 'sourceDoi')
-    || firstTextValue(identity, 'doi')
-  )
-  const hasExplicitIdentity = Boolean(explicitIdentityTitle || explicitIdentityDoi)
-  const isLocalArticleSummary = (
-    LOCAL_ARTICLE_SUMMARY_PROVIDERS.has(summaryProvider)
-    || LOCAL_ARTICLE_SUMMARY_GENERATIONS.has(summaryGeneration)
-  )
-  const identityTitle = hasExplicitIdentity
-    ? explicitIdentityTitle
-    : isLocalArticleSummary
-      ? firstTextValue(prepared, 'library_match_title', 'libraryMatchTitle')
-      : firstTextValue(
-        prepared,
-        'external_title',
-        'externalTitle',
-        'library_match_title',
-        'libraryMatchTitle',
-        'title',
-      )
-  const identityDoi = hasExplicitIdentity
-    ? explicitIdentityDoi
-    : isLocalArticleSummary
-      ? firstTextValue(prepared, 'library_match_doi', 'libraryMatchDoi')
-      : firstTextValue(
-        prepared,
-        'external_doi',
-        'externalDoi',
-        'library_match_doi',
-        'libraryMatchDoi',
-        'doi',
-        'doi_url',
-        'doiUrl',
-      )
-  if (!systemBSummaryIdentityMatches(detail, identityTitle, identityDoi)) {
-    return removeSummaryContract(prepared)
-  }
-
-  prepared.summary_quality = {
-    ...quality,
-    identity_title: identityTitle,
-    identity_doi: normalizeDoiLike(identityDoi),
-  }
+  const decision = resolveSystemBArticleSummary(detail, prepared, { identityMode: 'metadata' })
+  if (!decision.isSystemB) return prepared
+  if (!decision.visible) return removeSummaryContract(prepared)
+  prepared.summary_quality = decision.quality || {}
   delete prepared.summaryQuality
   return prepared
 }

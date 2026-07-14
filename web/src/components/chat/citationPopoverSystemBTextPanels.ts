@@ -1,7 +1,6 @@
 import type { CiteDetail, CitationCardViewSection } from './citationState'
-import { cleanCitationDisplayText, looksLowValueCitationContext, normalizeDoiLike } from './citationState'
+import { cleanCitationDisplayText, looksLowValueCitationContext } from './citationState'
 import {
-  SYSTEM_B_ARTICLE_OVERVIEW_SOURCES,
   compact,
   evidencePreview,
   isReferenceEntryLikeText,
@@ -9,6 +8,7 @@ import {
   looksNarrativeMetadataText,
   substantiallySame,
 } from './citationPopoverUtils'
+import { resolveSystemBArticleSummary } from './systemBArticleSummary'
 
 interface SystemBTextPanelStrings extends Record<string, string> {
   cite_context: string
@@ -46,50 +46,6 @@ export interface SystemBTextPanelsModel {
   citationContextLabel: string
 }
 
-function summaryIdentityText(
-  quality: Record<string, unknown>,
-  identity: Record<string, unknown>,
-  ...keys: string[]
-): string {
-  for (const key of keys) {
-    const value = String(quality[key] || identity[key] || '').trim()
-    if (value) return value
-  }
-  return ''
-}
-
-function systemBOverviewMatchesUpstream(detail: CiteDetail): boolean {
-  const quality = detail.summaryQuality && typeof detail.summaryQuality === 'object'
-    ? detail.summaryQuality
-    : {}
-  const identity = quality.identity && typeof quality.identity === 'object' && !Array.isArray(quality.identity)
-    ? quality.identity as Record<string, unknown>
-    : {}
-  const identityDoi = normalizeDoiLike(summaryIdentityText(
-    quality,
-    identity,
-    'identity_doi',
-    'identityDoi',
-    'source_doi',
-    'sourceDoi',
-    'doi',
-  ))
-  const upstreamDoi = normalizeDoiLike(detail.doi || detail.doiUrl)
-  if (identityDoi && upstreamDoi) return identityDoi === upstreamDoi
-
-  const identityTitle = summaryIdentityText(
-    quality,
-    identity,
-    'identity_title',
-    'identityTitle',
-    'source_title',
-    'sourceTitle',
-    'title',
-  )
-  const upstreamTitle = cleanCitationDisplayText(detail.title || detail.cardTitle)
-  return Boolean(identityTitle && upstreamTitle && substantiallySame(identityTitle, upstreamTitle))
-}
-
 export function buildSystemBTextPanelsModel({
   detail,
   S,
@@ -103,7 +59,7 @@ export function buildSystemBTextPanelsModel({
 }: BuildSystemBTextPanelsModelOptions): SystemBTextPanelsModel {
   const systemBExplicitReferenceText = localizeKnownBody(cleanCitationDisplayText(referenceSection?.text || detail.cardReferenceEntry))
   const systemBReferenceText = systemBExplicitReferenceText || cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
-  const systemBOverviewSource = compact(detail.summarySource).toLowerCase()
+  const systemBOverview = resolveSystemBArticleSummary(detail, detail, { forceSystemB: isSystemB })
   const systemBContextSource = compact(detail.citationContextSource).toLowerCase()
   const systemBReferenceIdentityText = cleanCitationDisplayText(systemBReferenceText)
   const normalizeSystemBTextCandidate = (value: string, opts: { allowCitationContext?: boolean } = {}): string => {
@@ -122,18 +78,10 @@ export function buildSystemBTextPanelsModel({
     }
     return ''
   }
-  const systemBOverviewSourceIsContext = [
-    'answer_context',
-    'citation_context',
-    'reader_occurrence',
-    'reader_reference_link',
-    'reader_references',
-  ].includes(systemBOverviewSource)
-  const systemBOverviewSourceIsArticle = SYSTEM_B_ARTICLE_OVERVIEW_SOURCES.has(systemBOverviewSource)
-  const paperOverviewText = isSystemB && systemBOverviewSourceIsArticle && systemBOverviewMatchesUpstream(detail)
+  const paperOverviewText = isSystemB && systemBOverview.visible
     ? firstSystemBText([
-      systemBOverviewSourceIsContext ? '' : detail.summaryLine,
-    ], { allowCitationContext: systemBOverviewSourceIsArticle })
+      systemBOverview.line,
+    ], { allowCitationContext: true })
     : ''
   const paperOverviewPreview = evidencePreview(paperOverviewText, 360)
   const paperOverviewLabel = S.cite_paper_overview || 'Article overview'

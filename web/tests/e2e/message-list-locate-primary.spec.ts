@@ -974,6 +974,99 @@ test('historical System B shelf item opens local full text and preserves citatio
   })
 })
 
+test('historical System B shelf and async backfill hide a misbound summary from public exports', async ({ page }) => {
+  const boydTitle = 'Distributed optimization and statistical learning via the alternating direction method of multipliers'
+  const scinerfSummary = 'SCINeRF reconstructs a neural radiance field from one snapshot compressive image.'
+  await mockProjectCitationShelf(page, [
+    {
+      key: 'historical-boyd-misbound-summary',
+      main: boydTitle,
+      num: 4,
+      anchor: 'historical-boyd-r4',
+      sourceName: '',
+      sourcePath: 'F:\\private\\research\\CVPR-2024-SCINeRF.en.md',
+      raw: `[4] Boyd et al. ${boydTitle}. Foundations and Trends in Machine Learning, 2011. doi:10.1561/2200000016.`,
+      citeFmt: `[4] Boyd et al. ${boydTitle}. Foundations and Trends in Machine Learning, 2011. doi:10.1561/2200000016.`,
+      isInpaper: true,
+      citationRoute: 'system_b',
+      shelfItemKind: 'reference',
+      shelfOrigin: 'reader_references',
+      title: boydTitle,
+      authors: 'Stephen Boyd; Neal Parikh; Eric Chu; Borja Peleato; Jonathan Eckstein',
+      venue: 'Foundations and Trends in Machine Learning',
+      year: '2011',
+      doi: '10.1561/2200000016',
+      doiUrl: 'https://doi.org/10.1561/2200000016',
+      summaryLine: scinerfSummary,
+      summarySource: 'abstract',
+      summaryProvider: 'crossref',
+      bibliometricsChecked: true,
+      libraryMatchStatus: 'not_in_library',
+      metadataQuality: { ok: true, status: 'ready', score: 100, missing_fields: [], issues: [] },
+      metadataExportAcceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+      tags: [],
+      note: '=HYPERLINK("https://example.invalid","open")',
+    },
+  ])
+  let bibliometricsRequests = 0
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    bibliometricsRequests += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        title: 'SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image',
+        doi: '10.1109/cvpr52733.2024.01469',
+        external_title: 'SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image',
+        external_doi: '10.1109/cvpr52733.2024.01469',
+        summary_line: scinerfSummary,
+        summary_source: 'abstract',
+        summary_provider: 'crossref',
+        summary_quality: { ok: true, status: 'grounded', score: 96 },
+        bibliometrics_checked: true,
+      }),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  const item = page.getByTestId('citation-shelf-item').filter({ hasText: boydTitle })
+  await expect(item).toHaveCount(1)
+  await expandFocusedShelfDetails(page)
+  await expect(item.getByTestId('citation-shelf-summary')).not.toContainText(scinerfSummary)
+  await expect.poll(() => bibliometricsRequests).toBeGreaterThan(0)
+  await expect(item.getByTestId('citation-shelf-summary')).not.toContainText(scinerfSummary)
+
+  await page.locator('.kb-shelf-advanced-toggle').click()
+  await page.getByTestId('citation-shelf-add-visible').click()
+  await page.getByTestId('citation-shelf-export-selected').click()
+
+  const markdownDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-main-md').click()
+  const markdownPath = await (await markdownDownloadPromise).path()
+  expect(markdownPath).not.toBeNull()
+  if (markdownPath) {
+    const markdown = await readFile(markdownPath, 'utf8')
+    expect(markdown).toContain(boydTitle)
+    expect(markdown).not.toContain(scinerfSummary)
+    expect(markdown).toContain('CVPR-2024-SCINeRF.en.md')
+    expect(markdown).not.toContain('F:\\private\\research')
+  }
+
+  await expect(page.getByTestId('citation-shelf-export-main-csv').locator('xpath=..')).toContainText(/Download|下载/)
+  const csvDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-main-csv').click()
+  const csvPath = await (await csvDownloadPromise).path()
+  expect(csvPath).not.toBeNull()
+  if (csvPath) {
+    const csv = await readFile(csvPath, 'utf8')
+    expect(csv).toContain(boydTitle)
+    expect(csv).not.toContain(scinerfSummary)
+    expect(csv).toContain('CVPR-2024-SCINeRF.en.md')
+    expect(csv).not.toContain('F:\\private\\research')
+    expect(csv).toContain("'=HYPERLINK")
+  }
+})
+
 test('citation shelf migrates legacy conversation storage into project shelf', async ({ page }) => {
   await mockEmptyCitationShelf(page)
   await page.addInitScript(() => {

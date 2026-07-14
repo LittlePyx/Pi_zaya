@@ -1120,10 +1120,10 @@ export function MessageList({
       .then((meta) => {
         if (!currentShelfItemForAsync(scopeToken, item.key)) return
         if (!meta || Object.keys(meta).length === 0) return
-        const articleSummaryPatch = articleSummaryPatchFromMeta(meta)
         setShelfItems((current) => current.map((entry) => {
           if (entry.key !== item.key && shelfPaperIdentity(entry) !== itemIdentity) return entry
           const merged = mergeCiteMeta(entry, meta)
+          const articleSummaryPatch = articleSummaryPatchFromMeta(entry, meta)
           return {
             ...toShelfItem(merged),
             ...articleSummaryPatch,
@@ -1192,7 +1192,7 @@ export function MessageList({
           const result = usable.find((item) => item.key === entry.key)
           if (!result) return entry
           const merged = mergeCiteMeta(entry, result.meta)
-          const articleSummaryPatch = articleSummaryPatchFromMeta(result.meta)
+          const articleSummaryPatch = articleSummaryPatchFromMeta(entry, result.meta)
           return {
             ...toShelfItem(merged),
             ...articleSummaryPatch,

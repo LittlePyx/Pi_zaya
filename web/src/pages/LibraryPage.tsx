@@ -722,10 +722,14 @@ export default function LibraryPage() {
   const {
     applyMetaSuggestionAction,
     closeMetaEditor,
+    continueMetaEditing,
+    discardMetaEditor,
     metaDraft,
     metaDraftCategory,
     metaDraftTags,
     metaDrawerOpen,
+    metaBusy,
+    metaCloseConfirmOpen,
     metaItem,
     metaSaving,
     metaSuggestionCount,
@@ -1657,14 +1661,18 @@ export default function LibraryPage() {
         draftCategory={metaDraftCategory}
         draftTags={metaDraftTags}
         suggestionCount={metaSuggestionCount}
+        busy={metaBusy}
         saving={metaSaving}
         suggestionSaving={metaSuggestionSaving}
+        closeConfirmOpen={metaCloseConfirmOpen}
         S={S}
         paperCategoryOptions={paperCategoryOptions}
         paperTagOptions={paperTagOptions}
         readingStatusOptions={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
         tagInputSeparators={TAG_INPUT_SEPARATORS}
         onClose={closeMetaEditor}
+        onContinueEditing={continueMetaEditing}
+        onDiscardAndClose={discardMetaEditor}
         onDraftChange={setMetaDraft}
         onSave={() => { void saveMetaEditor() }}
         onRegenerateSuggestions={() => { void regenerateMetaSuggestions() }}

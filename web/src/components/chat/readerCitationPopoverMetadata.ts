@@ -2,6 +2,11 @@ import { referencesApi } from '../../api/references'
 import { withBibliometricsLocale } from './bibliometricsLocale'
 import { looksLowValueShelfSummary } from './citeShelfRuntime'
 import { type CiteDetail } from './citationState'
+import {
+  isSystemBArticleSummarySource,
+  isSystemBContextSummarySource,
+  resolveSystemBArticleSummary,
+} from './systemBArticleSummary'
 
 export interface ReaderCitationPopoverMetadataClient {
   bibliometrics: (meta: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -31,42 +36,19 @@ export interface ReaderCitationPopoverMetadataResult {
   plan: ReaderCitationPopoverMetadataPlan
 }
 
-const READER_ARTICLE_SUMMARY_SOURCES = new Set([
-  'abstract',
-  'fulltext',
-  'reference_primary_evidence',
-  'navigation',
-  'exact_anchor',
-  'section_intent_rescue',
-  'doc_list_seed',
-  'doc_list_prompt_aligned',
-])
-
-const READER_CONTEXT_SUMMARY_SOURCES = new Set([
-  'answer_context',
-  'citation_context',
-  'citation_card',
-  'citation_card_view',
-  'metadata',
-  'references_panel_hit',
-  'reader_occurrence',
-  'reader_reference_link',
-  'reader_references',
-])
-
 function emptyMetaOnFailure(request: Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
   return request.catch(() => ({}))
 }
 
 function readerCitationLooksContextOnly(detail: CiteDetail, summaryLine: string, summarySource: string): boolean {
-  if (READER_ARTICLE_SUMMARY_SOURCES.has(summarySource)) return false
+  if (isSystemBArticleSummarySource(summarySource)) return false
   const contextSource = String(
     detail.citationContextSource
     || detail.evidenceSource
     || detail.shelfOrigin
     || '',
   ).trim().toLowerCase()
-  if (READER_CONTEXT_SUMMARY_SOURCES.has(summarySource) || READER_CONTEXT_SUMMARY_SOURCES.has(contextSource)) {
+  if (isSystemBContextSummarySource(summarySource) || isSystemBContextSummarySource(contextSource)) {
     return true
   }
   if (detail.isInpaper && !summarySource) return true
@@ -76,17 +58,19 @@ function readerCitationLooksContextOnly(detail: CiteDetail, summaryLine: string,
 export function readerCitationHasArticleSummary(detail: CiteDetail): boolean {
   const summaryLine = String(detail.summaryLine || '').trim()
   if (!summaryLine || looksLowValueShelfSummary(summaryLine)) return false
+  const systemBDecision = resolveSystemBArticleSummary(detail)
+  if (systemBDecision.isSystemB) return systemBDecision.visible
   const summarySource = String(detail.summarySource || '').trim().toLowerCase()
   if (readerCitationLooksContextOnly(detail, summaryLine, summarySource)) return false
   const quality = detail.summaryQuality || {}
   const qualityOk = quality.ok === true || String(quality.status || '').trim().toLowerCase() === 'grounded'
-  return Boolean(READER_ARTICLE_SUMMARY_SOURCES.has(summarySource) || (!detail.isInpaper && qualityOk))
+  return Boolean(isSystemBArticleSummarySource(summarySource) || (!detail.isInpaper && qualityOk))
 }
 
 export function readerMetaHasArticleSummary(meta: Record<string, unknown>): boolean {
   const summaryLine = String(meta.summary_line || meta.summaryLine || '').trim()
   const summarySource = String(meta.summary_source || meta.summarySource || '').trim().toLowerCase()
-  return Boolean(summaryLine && READER_ARTICLE_SUMMARY_SOURCES.has(summarySource))
+  return Boolean(summaryLine && isSystemBArticleSummarySource(summarySource))
 }
 
 export function readerCitationHasMissingReferenceEntry(detail: CiteDetail): boolean {

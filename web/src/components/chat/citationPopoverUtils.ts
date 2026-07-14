@@ -3,16 +3,6 @@ import { cleanCitationDisplayText } from './citationState'
 import { previewClaimText, previewEvidenceText } from './evidenceCardViewModel'
 
 export const SYSTEM_B_TRACE_ENABLED = false
-export const SYSTEM_B_ARTICLE_OVERVIEW_SOURCES = new Set([
-  'abstract',
-  'fulltext',
-  'reference_primary_evidence',
-  'navigation',
-  'exact_anchor',
-  'section_intent_rescue',
-  'doc_list_seed',
-  'doc_list_prompt_aligned',
-])
 
 export function compact(value: string | null | undefined) {
   return String(value || '').trim()

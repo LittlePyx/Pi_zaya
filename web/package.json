@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "test:e2e": "node scripts/playwright-with-port.mjs",
     "test:e2e:smoke": "node scripts/playwright-with-port.mjs auth-gate.spec.ts api-client.spec.ts chat-refs-perf.spec.ts reader-locate-guard.spec.ts settings-api-guidance.spec.ts agent-trace-actions.spec.ts research-qa-acceptance.spec.ts",
+    "test:e2e:core": "node scripts/playwright-with-port.mjs library-metadata-draft.spec.ts citation-metadata-quality.spec.ts message-list-locate-primary.spec.ts reader-regression.spec.ts",
+    "test:e2e:public-surface": "node scripts/playwright-public-surface.mjs",
     "test:e2e:headed": "node scripts/playwright-with-port.mjs --headed"
   },
   "dependencies": {

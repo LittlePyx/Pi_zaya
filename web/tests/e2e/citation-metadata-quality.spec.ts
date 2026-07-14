@@ -13,6 +13,7 @@ import {
 } from '../../src/components/chat/citeShelfDisplay'
 import {
   SHELF_MAX_ITEMS,
+  articleSummaryPatchFromMeta,
   dedupeShelfItems,
   mergeShelfItemWithLive,
   shelfDiscoverySourceDetail,
@@ -21,6 +22,7 @@ import {
   shelfItemNeedsPersistedMetadataHydrate,
   shelfLibraryFullTextDetail,
 } from '../../src/components/chat/citeShelfRuntime'
+import { restoreShelfItems } from '../../src/components/chat/citeShelfStorage'
 import type { ReaderLocateResult } from '../../src/components/chat/reader/readerTypes'
 import { prepareRefsPanelHits } from '../../src/components/refs/refsPanelDisplay'
 
@@ -222,6 +224,79 @@ test('citation shelf live merge upgrades context-only summary as a full article 
   expect(merged.summaryProvider).toBe('crossref')
   expect(merged.summaryQuality?.source).toBe('abstract')
   expect(shelfItemHasDisplayableArticleSummary(merged)).toBe(true)
+})
+
+test('legacy System B article summary remains displayable when its text aligns with the upstream title', () => {
+  const detail = normalizeCiteDetail({
+    anchor: 'legacy-cassi-r1',
+    is_inpaper: true,
+    citation_route: 'system_b',
+    shelf_item_kind: 'reference',
+    title: 'Single-shot compressive spectral imaging with a dual-disperser architecture',
+    doi: '10.1364/OE.15.014013',
+    raw: '[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007.',
+    summary_line: 'This paper introduces a dual-disperser architecture for single-shot compressive spectral imaging.',
+    summary_source: 'abstract',
+  })
+  if (!detail) throw new Error('legacy System B fixture failed to normalize')
+
+  const item = toShelfItem(detail)
+
+  expect(item.summaryLine).toContain('dual-disperser architecture')
+  expect(shelfItemHasDisplayableArticleSummary(item)).toBe(true)
+})
+
+test('historical System B hydration and async summary patch reject a SCINeRF summary bound to Boyd ADMM', () => {
+  const historical = restoreShelfItems([{
+    key: 'historical-boyd-r4',
+    anchor: 'historical-boyd-r4',
+    isInpaper: true,
+    citationRoute: 'system_b',
+    shelfItemKind: 'reference',
+    main: 'Distributed optimization and statistical learning via the alternating direction method of multipliers',
+    title: 'Distributed optimization and statistical learning via the alternating direction method of multipliers',
+    doi: '10.1561/2200000016',
+    raw: '[4] Boyd et al. Distributed optimization and statistical learning via the alternating direction method of multipliers.',
+    summaryLine: 'SCINeRF reconstructs a neural radiance field from one snapshot compressive image.',
+    summarySource: 'abstract',
+  }])
+
+  expect(historical).toHaveLength(1)
+  expect(historical[0].summaryLine).toBe('')
+  expect(shelfItemHasDisplayableArticleSummary(historical[0])).toBe(false)
+
+  const mismatchedPatch = articleSummaryPatchFromMeta(historical[0], {
+    summary_line: 'SCINeRF reconstructs a neural radiance field from one snapshot compressive image.',
+    summary_source: 'abstract',
+    summary_provider: 'crossref',
+    external_title: 'SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image',
+    external_doi: '10.1109/cvpr52733.2024.01469',
+    summary_quality: { ok: true, status: 'grounded', score: 96 },
+  })
+
+  expect(mismatchedPatch).toEqual({})
+})
+
+test('embedded System B summary rejects similar text when the external DOI identifies another article', () => {
+  const detail = normalizeCiteDetail({
+    anchor: 'legacy-cassi-external-conflict',
+    is_inpaper: true,
+    citation_route: 'system_b',
+    shelf_item_kind: 'reference',
+    title: 'Single-shot compressive spectral imaging with a dual-disperser architecture',
+    doi: '10.1364/OE.15.014013',
+    raw: '[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture.',
+    summary_line: 'This paper introduces a dual-disperser architecture for single-shot compressive spectral imaging.',
+    summary_source: 'abstract',
+    external_title: 'Single-shot compressive spectral imaging with a dual-disperser architecture: an erratum',
+    external_doi: '10.1364/OE.99.999999',
+  })
+  if (!detail) throw new Error('external identity conflict fixture failed to normalize')
+
+  const item = toShelfItem(detail)
+
+  expect(item.summaryLine).toBe('')
+  expect(shelfItemHasDisplayableArticleSummary(item)).toBe(false)
 })
 
 test('historical System B shelf item opens matched library full text without losing discovery source', () => {

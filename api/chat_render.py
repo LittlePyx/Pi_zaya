@@ -98,7 +98,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 21
+_RENDER_CACHE_SCHEMA_VERSION = 22
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -440,6 +440,121 @@ def _primary_evidence_from_ref_hit(hit: dict | None) -> dict:
     return best
 
 
+def _abstract_primary_evidence_from_source(source_path: str) -> dict:
+    raw_path = str(source_path or "").strip()
+    if not raw_path:
+        return {}
+    path = Path(raw_path)
+    if not path.is_file() or path.suffix.lower() != ".md":
+        return {}
+    try:
+        blocks = task_runtime.load_source_blocks(path)
+    except Exception:
+        return {}
+    candidates: list[dict] = []
+    for block in list(blocks or []):
+        if not isinstance(block, dict):
+            continue
+        heading = str(block.get("heading_path") or block.get("heading") or "").strip()
+        text = str(block.get("text") or block.get("raw_text") or "").strip()
+        if "abstract" not in heading.lower() or not text or text.lower() == "abstract":
+            continue
+        candidates.append(
+            {
+                "source_path": raw_path,
+                "heading_path": heading,
+                "snippet": text,
+                "highlight_snippet": text,
+                "block_id": str(block.get("block_id") or "").strip(),
+                "anchor_id": str(block.get("anchor_id") or "").strip(),
+                "anchor_kind": str(block.get("anchor_kind") or "paragraph").strip() or "paragraph",
+                "page_start": int(block.get("page_start") or 0),
+                "page_end": int(block.get("page_end") or 0),
+                "strict_locate": True,
+            }
+        )
+    if not candidates:
+        return {}
+    candidates.sort(key=lambda item: len(str(item.get("snippet") or "")), reverse=True)
+    return dict(candidates[0])
+
+
+def _claim_aligned_abstract_primary_evidence(
+    ref_pack: dict | None,
+    detail: dict | None,
+) -> dict:
+    if not isinstance(ref_pack, dict) or not isinstance(detail, dict):
+        return {}
+    claim = str(detail.get("answer_claim") or "").strip()
+    if not claim or re.search(
+        r"(?i)(?:性能|实验|结果|指标|数据集|outperform|surpass|sota|psnr|ssim|rmse)",
+        claim,
+    ):
+        return {}
+    claim_low = claim.lower()
+    wants_dynamic_3d = bool(("动态" in claim or "dynamic" in claim_low) and "3d" in claim_low)
+    wants_nerf_definition = bool(
+        re.search(r"(?i)\bnerf\b", claim)
+        and re.search(
+            r"(?i)(?:定义|表示|表征|隐式|基于|物理成像|训练|"
+            r"definition|representation|represent(?:s|ed|ing)?|implicit|"
+            r"based\s+on|physical\s+imaging|train(?:ing|ed)?)",
+            claim,
+        )
+    )
+    if not wants_dynamic_3d and not wants_nerf_definition:
+        return {}
+    detail_source_key = _render_primary_source_identity(detail)
+    if not detail_source_key:
+        return {}
+    for hit in list(ref_pack.get("hits") or []) + list(ref_pack.get("enriched_hits") or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or "").strip()
+        if not source_path or _render_primary_source_identity(meta) != detail_source_key:
+            continue
+        abstract = _abstract_primary_evidence_from_source(source_path)
+        abstract_text = _primary_evidence_text(abstract)
+        if not abstract_text:
+            continue
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", abstract_text)
+            if sentence.strip()
+        ]
+        aligned_sentence = ""
+        if wants_dynamic_3d:
+            aligned_sentence = next(
+                (
+                    sentence
+                    for sentence in sentences
+                    if "dynamic" in sentence.lower() and "3d" in sentence.lower()
+                    and ("scigs" not in claim_low or "scigs" in sentence.lower())
+                ),
+                "",
+            )
+        if not aligned_sentence and wants_nerf_definition:
+            aligned_sentence = next(
+                (
+                    sentence
+                    for sentence in sentences
+                    if "physical imaging process" in sentence.lower()
+                    and re.search(r"(?i)\bnerf\b", sentence)
+                ),
+                "",
+            )
+        if not aligned_sentence:
+            continue
+        out = dict(abstract)
+        out["source_name"] = str((meta or {}).get("source_name") or "").strip()
+        out["snippet"] = aligned_sentence
+        out["highlight_snippet"] = aligned_sentence
+        out["selection_reason"] = "answer_aligned_block"
+        return out
+    return {}
+
+
 def _ref_pack_primary_evidence_by_source(ref_pack: dict | None) -> dict[str, dict]:
     if not isinstance(ref_pack, dict):
         return {}
@@ -476,10 +591,12 @@ def _system_a_detail_needs_ref_primary_backfill(detail: dict) -> bool:
         return False
     if str(detail.get("citation_route") or "").strip().lower() == "system_b":
         return False
-    if bool(detail.get("citation_plan_slot")) and str(
+    plan_evidence = str(
         detail.get("evidence_quote") or detail.get("summary_line") or detail.get("raw") or ""
-    ).strip():
-        return False
+    ).strip()
+    if bool(detail.get("citation_plan_slot")) and plan_evidence:
+        if not re.match(r"(?i)^\s*(?:title|paper title)\s*:", plan_evidence):
+            return False
     flags = {str(item or "").strip().lower() for item in list(detail.get("card_quality_flags") or [])}
     if flags & {"evidence_quote_filtered", "missing_evidence_quote", "missing_precise_location"}:
         return True
@@ -499,6 +616,39 @@ def _system_a_detail_needs_ref_primary_backfill(detail: dict) -> bool:
     if re.search(r"\$\^\{|\bdagger\b|\\dagger|\*[, ]", evidence[:360], re.IGNORECASE):
         return True
     return False
+
+
+def _answer_aligned_primary_improves_claim_coverage(detail: dict, primary: dict) -> bool:
+    if not (
+        str(primary.get("selection_reason") or "").strip().lower() == "answer_aligned_block"
+        and bool(primary.get("strict_locate"))
+        and str(primary.get("block_id") or primary.get("anchor_id") or "").strip()
+    ):
+        return False
+    claim = str(detail.get("answer_claim") or "").lower()
+    if not claim:
+        return False
+    stopwords = {
+        "about", "after", "also", "based", "been", "being", "from", "into",
+        "only", "paper", "that", "their", "these", "this", "using", "with",
+    }
+    claim_terms = {
+        token
+        for token in re.findall(r"[a-z][a-z0-9-]{3,}", claim)
+        if token not in stopwords
+    }
+    if not claim_terms:
+        return False
+    existing = str(
+        detail.get("evidence_quote")
+        or detail.get("summary_line")
+        or detail.get("raw")
+        or ""
+    ).lower()
+    candidate = _primary_evidence_text(primary).lower()
+    existing_overlap = len(claim_terms & set(re.findall(r"[a-z][a-z0-9-]{3,}", existing)))
+    candidate_overlap = len(claim_terms & set(re.findall(r"[a-z][a-z0-9-]{3,}", candidate)))
+    return candidate_overlap >= max(1, existing_overlap + 1)
 
 
 def _quantitative_primary_evidence_relation(*, answer_claim: str, evidence: str) -> str:
@@ -561,7 +711,13 @@ def _refocus_primary_evidence_relation(*, answer_claim: str, evidence: str) -> s
     return "The source defines refocusing in two steps: ray tracing followed by wave propagation."
 
 
-def _backfill_system_a_cite_details_from_ref_pack(cite_details: list[dict], ref_pack: dict | None, *, render_locale: str = "") -> list[dict]:
+def _backfill_system_a_cite_details_from_ref_pack(
+    cite_details: list[dict],
+    ref_pack: dict | None,
+    *,
+    render_locale: str = "",
+    answer_text: str = "",
+) -> list[dict]:
     if not cite_details or not isinstance(ref_pack, dict):
         return cite_details
     primary_by_source = _ref_pack_primary_evidence_by_source(ref_pack)
@@ -594,17 +750,29 @@ def _backfill_system_a_cite_details_from_ref_pack(cite_details: list[dict], ref_
             if relation:
                 detail["support_relation"] = relation
         source_key = _render_primary_source_identity(detail)
-        primary = primary_by_source.get(source_key) if source_key else None
+        claim_aligned_primary = _claim_aligned_abstract_primary_evidence(ref_pack, detail)
+        plan_evidence = str(
+            detail.get("evidence_quote") or detail.get("summary_line") or detail.get("raw") or ""
+        ).strip()
+        title_only_plan_slot = bool(
+            detail.get("citation_plan_slot")
+            and re.match(r"(?i)^\s*(?:title|paper title)\s*:", plan_evidence)
+        )
+        if title_only_plan_slot and not claim_aligned_primary:
+            out.append(detail)
+            continue
+        primary = (
+            claim_aligned_primary
+            or (primary_by_source.get(source_key) if source_key else None)
+        )
         snippet = _primary_evidence_text(primary if isinstance(primary, dict) else {})
         if not isinstance(primary, dict) or not snippet:
             out.append(detail)
             continue
-        authoritative_answer_alignment = bool(
-            str(primary.get("selection_reason") or "").strip().lower() == "answer_aligned_block"
-            and bool(primary.get("strict_locate"))
-            and str(primary.get("block_id") or primary.get("anchor_id") or "").strip()
-        )
-        if (not _system_a_detail_needs_ref_primary_backfill(detail)) and (not authoritative_answer_alignment):
+        if not (
+            _system_a_detail_needs_ref_primary_backfill(detail)
+            or _answer_aligned_primary_improves_claim_coverage(detail, primary)
+        ):
             out.append(detail)
             continue
         heading = str(primary.get("heading_path") or primary.get("headingPath") or "").strip()
@@ -1027,6 +1195,216 @@ def _reading_slot_source_key(value: object) -> str:
     return str(value or "").strip().replace("\\", "/").lower()
 
 
+def _reading_quantitative_categories(text: str) -> set[str]:
+    value = str(text or "")
+    categories: set[str] = set()
+    for category, pattern in (
+        ("sampling_ratio", r"\bsampling ratios?\b"),
+        ("measurement", r"\bmeasurements?\b"),
+        ("psnr", r"\bpsnr\b"),
+        ("ssim", r"\bssim\b"),
+        ("rmse", r"\brmse\b"),
+    ):
+        if re.search(pattern, value, flags=re.IGNORECASE):
+            categories.add(category)
+    return categories
+
+
+def _reading_comparison_primary_rescue(
+    hits: list[dict],
+    citation_plan: dict | None,
+) -> tuple[dict, dict]:
+    if not isinstance(citation_plan, dict):
+        return {}, {}
+    system_a_slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    if not (
+        str(citation_plan.get("intent") or "").strip().lower() == "comparison"
+        and system_a_slots
+        and all(not list(slot.get("candidate_hits") or []) for slot in system_a_slots)
+    ):
+        return {}, {}
+
+    planned_source_keys = {
+        _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+        for slot in system_a_slots
+        if _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+    }
+
+    def _qualified_primary(raw: object, meta: dict) -> tuple[dict, dict]:
+        if not isinstance(raw, dict):
+            return {}, {}
+        primary = dict(raw)
+        evidence = _primary_evidence_text(primary)
+        heading = str(
+            primary.get("heading_path")
+            or primary.get("headingPath")
+            or meta.get("heading_path")
+            or ""
+        ).strip()
+        source_path = str(
+            primary.get("source_path")
+            or primary.get("sourcePath")
+            or meta.get("source_path")
+            or ""
+        ).strip()
+        block_id = str(primary.get("block_id") or primary.get("blockId") or "").strip()
+        anchor_id = str(primary.get("anchor_id") or primary.get("anchorId") or "").strip()
+        has_precise_anchor = bool(
+            (primary.get("strict_locate") or primary.get("strictLocate"))
+            and (block_id or anchor_id)
+        )
+        quantitative_terms = _reading_quantitative_categories(evidence)
+        if (
+            not source_path
+            or "comparison" not in heading.lower()
+            or not has_precise_anchor
+            or len(quantitative_terms) < 2
+        ):
+            return {}, {}
+        source_name = str(
+            primary.get("source_name")
+            or primary.get("sourceName")
+            or meta.get("source_name")
+            or ""
+        ).strip()
+        primary.update(
+            {
+                "source_path": source_path,
+                "source_name": source_name,
+                "heading_path": heading,
+                "snippet": evidence,
+                "highlight_snippet": evidence,
+                "block_id": block_id,
+                "anchor_id": anchor_id,
+                "strict_locate": True,
+            }
+        )
+        return (
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": source_name,
+                "heading_path": heading,
+                "evidence_quote": evidence,
+                "candidate_hits": [],
+            },
+            primary,
+        )
+
+    for hit in list(hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        if bool((meta or {}).get("citation_plan_slot") or (meta or {}).get("citation_plan_padding")):
+            continue
+        hit_source_key = _reading_slot_source_key((meta or {}).get("source_path"))
+        if planned_source_keys and hit_source_key not in planned_source_keys:
+            continue
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        # Fully enriched refs already carry the precise locatable block selected
+        # for display. Prefer it before the general quality scorer, which can
+        # otherwise choose a fluent but weaker OTF alternative.
+        for primary in (
+            (ui_meta or {}).get("primary_evidence"),
+            _primary_evidence_from_ref_hit(hit),
+        ):
+            rescue_slot, rescue_primary = _qualified_primary(primary, meta or {})
+            if rescue_slot:
+                return rescue_slot, rescue_primary
+
+    # Reference-card enrichment is asynchronous. If message rendering wins that
+    # race, recover a strict quantitative comparison block from the selected
+    # source instead of exposing a fluent but weak citation-plan excerpt.
+    source_rows: list[tuple[str, str]] = []
+    seen_sources: set[str] = set()
+    source_candidates = system_a_slots if planned_source_keys else list(hits or []) + system_a_slots
+    for raw in source_candidates:
+        if not isinstance(raw, dict):
+            continue
+        meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else raw
+        source_path = str(
+            (meta or {}).get("source_path")
+            or (meta or {}).get("sourcePath")
+            or ""
+        ).strip()
+        source_name = str(
+            (meta or {}).get("source_name")
+            or (meta or {}).get("sourceName")
+            or ""
+        ).strip()
+        source_key = _reading_slot_source_key(source_path)
+        if not source_path or source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        source_rows.append((source_path, source_name))
+
+    block_candidates: list[tuple[float, dict, dict]] = []
+    for source_path, source_name in source_rows:
+        try:
+            blocks = task_runtime.load_source_blocks(source_path)
+        except Exception:
+            continue
+        for block in list(blocks or []):
+            if not isinstance(block, dict):
+                continue
+            heading = str(block.get("heading_path") or block.get("heading") or "").strip()
+            block_text = re.sub(
+                r"\s+",
+                " ",
+                str(block.get("text") or block.get("raw_text") or "").strip(),
+            )
+            block_id = str(block.get("block_id") or "").strip()
+            anchor_id = str(block.get("anchor_id") or "").strip()
+            if "comparison" not in heading.lower() or not block_text or not (block_id or anchor_id):
+                continue
+            sentences = [
+                item.strip()
+                for item in re.split(r"(?<=[.!?])\s+", block_text)
+                if item.strip()
+            ]
+            excerpts = list(sentences)
+            excerpts.extend(
+                f"{sentences[idx]} {sentences[idx + 1]}"
+                for idx in range(max(0, len(sentences) - 1))
+            )
+            for excerpt in excerpts:
+                terms = _reading_quantitative_categories(excerpt)
+                if len(terms) < 2:
+                    continue
+                score = float(len(terms))
+                if "sampling_ratio" in terms:
+                    score += 2.0
+                if "experiment" in heading.lower():
+                    score += 1.0
+                primary = {
+                    "source_path": source_path,
+                    "source_name": source_name or _source_name_from_path(source_path),
+                    "heading_path": heading,
+                    "snippet": excerpt[:520],
+                    "highlight_snippet": excerpt[:520],
+                    "block_id": block_id,
+                    "anchor_id": anchor_id,
+                    "anchor_kind": str(block.get("anchor_kind") or "paragraph").strip() or "paragraph",
+                    "selection_reason": "comparison_source_block_rescue",
+                    "strict_locate": True,
+                }
+                rescue_slot, rescue_primary = _qualified_primary(primary, primary)
+                if rescue_slot:
+                    block_candidates.append((score, rescue_slot, rescue_primary))
+    if block_candidates:
+        block_candidates.sort(
+            key=lambda item: (item[0], len(_primary_evidence_text(item[2]))),
+            reverse=True,
+        )
+        return block_candidates[0][1], block_candidates[0][2]
+    return {}, {}
+
+
 def _augment_hits_with_system_a_plan_slots(
     hits: list[dict],
     citation_plan: dict | None,
@@ -1036,6 +1414,7 @@ def _augment_hits_with_system_a_plan_slots(
     rows = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
     if not isinstance(citation_plan, dict):
         return rows
+    rescue_slot, rescue_primary = _reading_comparison_primary_rescue(rows, citation_plan)
     while len(rows) < max(0, int(reserved_count or 0)):
         rows.append({"text": "", "meta": {"citation_plan_padding": True}})
     seen: set[tuple[str, str, str]] = set()
@@ -1046,6 +1425,53 @@ def _augment_hits_with_system_a_plan_slots(
                 _reading_slot_source_key((meta or {}).get("source_path")),
                 str((meta or {}).get("heading_path") or "").strip().lower(),
                 re.sub(r"\s+", " ", str(hit.get("text") or "").strip()).lower()[:240],
+            )
+        )
+    if rescue_slot:
+        source_path = str(rescue_slot.get("source_path") or "").strip()
+        source_name = str(rescue_slot.get("source_name") or "").strip()
+        heading_path = str(rescue_slot.get("heading_path") or "").strip()
+        evidence_quote = re.sub(
+            r"\s+", " ", str(rescue_slot.get("evidence_quote") or "").strip()
+        )
+        primary_payload = dict(rescue_primary)
+        primary_payload["source_path"] = source_path
+        primary_payload["source_name"] = source_name
+        primary_payload["heading_path"] = heading_path
+        primary_payload["snippet"] = evidence_quote
+        primary_payload["highlight_snippet"] = evidence_quote
+        # Keep this as a dedicated hit after the canonical reservation. Reusing a
+        # canonical number can merge the repaired claim into an earlier marker.
+        rows.append(
+            {
+                "text": evidence_quote,
+                "score": 10.0,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "heading_path": heading_path,
+                    "ref_best_heading_path": heading_path,
+                    "citation_plan_slot": True,
+                    "citation_plan_comparison_rescue": True,
+                    "primary_block_id": str(primary_payload.get("block_id") or "").strip(),
+                    "primary_anchor_id": str(primary_payload.get("anchor_id") or "").strip(),
+                    "anchor_kind": str(primary_payload.get("anchor_kind") or "").strip(),
+                    "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+                },
+                "ui_meta": {
+                    "display_name": source_name,
+                    "source_path": source_path,
+                    "heading_path": heading_path,
+                    "summary_line": evidence_quote,
+                    "primary_evidence": primary_payload,
+                },
+            }
+        )
+        seen.add(
+            (
+                _reading_slot_source_key(source_path),
+                heading_path.lower(),
+                evidence_quote.lower()[:240],
             )
         )
     plan_slots = list(citation_plan.get("slots") or [])
@@ -1245,6 +1671,207 @@ def _reading_guide_numbered_sections_have_sources(text: str) -> bool:
     return True
 
 
+def _reading_comparison_evidence_bridge(
+    text: str,
+    *,
+    num: int,
+    slot: dict,
+) -> str:
+    evidence = re.sub(
+        r"\s+",
+        " ",
+        str(
+            slot.get("evidence_quote")
+            or slot.get("evidence_atom_text")
+            or slot.get("locate_anchor")
+            or slot.get("snippet")
+            or ""
+        ).strip(),
+    )
+    if len(_reading_quantitative_categories(evidence)) < 2:
+        return str(text or "")
+    for paragraph in re.split(r"\n{2,}", str(text or "")):
+        if paragraph.lstrip().startswith("|"):
+            continue
+        if len(_reading_quantitative_categories(paragraph)) >= 2:
+            return str(text or "")
+
+    source_name = str(slot.get("source_name") or slot.get("sourceName") or "").strip()
+    if not source_name:
+        source_name = _source_name_from_path(
+            str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+        )
+    source_name = re.sub(r"(?i)(?:(?:\.(?:en|zh|zh-cn|zh-tw))?\.md|\.pdf)$", "", source_name)
+    source_name = re.sub(r"\s+", " ", source_name).strip()[:180]
+    if not source_name:
+        return str(text or "")
+
+    if re.search(r"[\u4e00-\u9fff]", str(text or "")):
+        bridge = (
+            f"**定量对比依据：**《{source_name}》的测量实验直接报告："
+            f"{evidence} [{int(num)}]。"
+        )
+        final_heading = re.compile(r"(?m)^#{1,6}\s*(?:一句话建议|下一步(?:建议)?)(?:\s|[:：]|$)")
+    else:
+        bridge = (
+            f"**Quantitative comparison evidence:** The measurements in *{source_name}* "
+            f"directly report: {evidence} [{int(num)}]."
+        )
+        final_heading = re.compile(r"(?im)^#{1,6}\s*(?:recommendation|next steps?)(?:\s|:|$)")
+
+    matches = list(final_heading.finditer(str(text or "")))
+    if matches:
+        insert_at = matches[-1].start()
+        return f"{str(text or '')[:insert_at].rstrip()}\n\n{bridge}\n\n{str(text or '')[insert_at:].lstrip()}"
+    return f"{str(text or '').rstrip()}\n\n{bridge}"
+
+
+def _reading_guide_repair_claim_aligned_abstract_citations(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+    *,
+    canonical_paths: list[str] | None = None,
+) -> str:
+    text = str(md or "")
+    if not text.strip():
+        return text
+    lines = text.splitlines()
+    slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    seen_sources: set[str] = set()
+    marker_counts: dict[int, int] = {}
+    for marker in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", text):
+        num = int(marker.group(1))
+        marker_counts[num] = int(marker_counts.get(num) or 0) + 1
+
+    def marker_source_key(num: int) -> str:
+        source_path = ""
+        if isinstance(canonical_paths, list) and 1 <= int(num) <= len(canonical_paths):
+            source_path = str(canonical_paths[int(num) - 1] or "").strip()
+        if not source_path and 1 <= int(num) <= len(hits):
+            hit = hits[int(num) - 1]
+            if isinstance(hit, dict):
+                meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+                source_path = str((meta or {}).get("source_path") or "").strip()
+        return _reading_slot_source_key(source_path)
+
+    for slot in slots:
+        source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+        source_name = str(slot.get("source_name") or slot.get("sourceName") or "").strip()
+        source_key = _reading_slot_source_key(source_path)
+        if not source_path or source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        identity_tokens = [
+            token
+            for token in re.findall(r"[A-Za-z][A-Za-z0-9]{3,}", source_name)
+            if re.search(r"[A-Z]{2}", token)
+            and token.upper() not in {"CVPR", "ICIP", "IEEE", "ARXIV"}
+        ]
+        if not identity_tokens:
+            continue
+        ref_pack = {
+            "hits": [
+                {
+                    "meta": {
+                        "source_path": source_path,
+                        "source_name": source_name,
+                    }
+                }
+            ]
+        }
+        candidates: list[tuple[int, int, dict, list[int]]] = []
+        for line_idx, raw_line in enumerate(lines):
+            if not raw_line.strip() or raw_line.lstrip().startswith("|"):
+                continue
+            if not any(token.lower() in raw_line.lower() for token in identity_tokens):
+                continue
+            claim = _md_to_plain_text(raw_line).strip()
+            probe = {
+                "source_path": source_path,
+                "source_name": source_name,
+                "answer_claim": claim,
+            }
+            primary = _claim_aligned_abstract_primary_evidence(ref_pack, probe)
+            if not primary:
+                continue
+            same_source_nums = [
+                int(match.group(1))
+                for match in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", raw_line)
+                if marker_source_key(int(match.group(1))) == source_key
+            ]
+            if any(int(marker_counts.get(num) or 0) == 1 for num in same_source_nums):
+                candidates = []
+                break
+            candidates.append(
+                (
+                    (1000 if same_source_nums else 0) + len(claim),
+                    line_idx,
+                    primary,
+                    same_source_nums,
+                )
+            )
+        if not candidates:
+            continue
+        candidates.sort(reverse=True)
+        _score, line_idx, primary, same_source_nums = candidates[0]
+        synthetic_num = 0
+        for idx, hit in enumerate(hits, start=1):
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            if not bool((meta or {}).get("citation_plan_claim_abstract")):
+                continue
+            if _reading_slot_source_key((meta or {}).get("source_path")) == source_key:
+                synthetic_num = int(idx)
+                break
+        if synthetic_num <= 0:
+            evidence = _primary_evidence_text(primary)
+            heading = str(primary.get("heading_path") or primary.get("headingPath") or "").strip()
+            primary_payload = dict(primary)
+            hits.append(
+                {
+                    "text": evidence,
+                    "score": 10.0,
+                    "meta": {
+                        "source_path": source_path,
+                        "source_name": source_name,
+                        "heading_path": heading,
+                        "ref_best_heading_path": heading,
+                        "citation_plan_slot": True,
+                        "citation_plan_claim_abstract": True,
+                        "primary_block_id": str(primary.get("block_id") or "").strip(),
+                        "primary_anchor_id": str(primary.get("anchor_id") or "").strip(),
+                        "anchor_kind": str(primary.get("anchor_kind") or "paragraph").strip(),
+                        "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+                    },
+                    "ui_meta": {
+                        "display_name": source_name,
+                        "source_path": source_path,
+                        "heading_path": heading,
+                        "summary_line": evidence,
+                        "primary_evidence": primary_payload,
+                    },
+                }
+            )
+            synthetic_num = len(hits)
+        if same_source_nums:
+            old_num = int(same_source_nums[0])
+            old_marker = re.compile(rf"(?<![!\\])\[{old_num}\](?!\()")
+            lines[line_idx] = old_marker.sub(f"[{synthetic_num}]", lines[line_idx], count=1)
+        else:
+            lines[line_idx] = _append_numeric_citation_to_paragraph(
+                lines[line_idx],
+                synthetic_num,
+            )
+    return "\n".join(lines)
+
+
 def _reading_guide_repair_missing_system_a_citations(
     md: str,
     hits: list[dict],
@@ -1260,6 +1887,12 @@ def _reading_guide_repair_missing_system_a_citations(
     text = str(md or "")
     if not text.strip():
         return text
+    text = _reading_guide_repair_claim_aligned_abstract_citations(
+        text,
+        hits,
+        citation_plan,
+        canonical_paths=canonical_paths,
+    )
     if _reading_guide_numbered_sections_have_sources(text):
         return text
     existing_source_keys: set[str] = set()
@@ -1288,10 +1921,30 @@ def _reading_guide_repair_missing_system_a_citations(
     multi_source_answer = len(existing_source_keys) >= 2
     candidates: list[tuple[int, dict]] = []
     seen_candidate_nums: set[int] = set()
-    for slot in list(citation_plan.get("slots") or []):
+    system_a_slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    rescue_slot, _ = _reading_comparison_primary_rescue(hits, citation_plan)
+    if rescue_slot:
+        for num in _reading_slot_hit_nums(
+            rescue_slot,
+            hits,
+            canonical_paths=canonical_paths,
+        )[:1]:
+            if int(num) in seen_candidate_nums:
+                continue
+            seen_candidate_nums.add(int(num))
+            candidates.append((int(num), rescue_slot))
+            text = _reading_comparison_evidence_bridge(
+                text,
+                num=int(num),
+                slot=rescue_slot,
+            )
+    for slot in system_a_slots:
         if not isinstance(slot, dict):
-            continue
-        if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
             continue
         slot_source_key = _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
         if multi_source_answer and slot_source_key in existing_source_keys:
@@ -1309,7 +1962,10 @@ def _reading_guide_repair_missing_system_a_citations(
     candidate_limit = min(6, _citation_plan_system_a_budget(citation_plan))
     if candidate_limit <= 0:
         return text
-    for num, slot in candidates[:candidate_limit]:
+    bound_count = 0
+    for num, slot in candidates:
+        if bound_count >= candidate_limit:
+            break
         evidence_surface = str(
             slot.get("evidence_quote")
             or slot.get("evidence_atom_text")
@@ -1325,6 +1981,8 @@ def _reading_guide_repair_missing_system_a_citations(
         for idx in range(0, len(parts), 2):
             paragraph = parts[idx]
             if not paragraph.strip() or f"[{num}]" in paragraph:
+                continue
+            if "定量对比依据" in paragraph or "Quantitative comparison evidence" in paragraph:
                 continue
             if paragraph.lstrip().startswith("|"):
                 # Appending after a whole Markdown table creates an orphan cell
@@ -1358,6 +2016,7 @@ def _reading_guide_repair_missing_system_a_citations(
                 parts[best_idx] = "\n".join(paragraph_lines)
             else:
                 parts[best_idx] = _append_numeric_citation_to_paragraph(parts[best_idx], num)
+            bound_count += 1
     return "".join(parts)
 
 
@@ -2410,8 +3069,19 @@ def _merge_render_packet_contract_meta(
         if isinstance(item, dict)
     ]
     if isinstance(ref_pack, dict):
-        existing_cite_details = _backfill_system_a_cite_details_from_ref_pack(existing_cite_details, ref_pack, render_locale=render_locale)
-        current_cite_details = _backfill_system_a_cite_details_from_ref_pack(current_cite_details, ref_pack, render_locale=render_locale)
+        answer_text = str(rec.get("content") or "")
+        existing_cite_details = _backfill_system_a_cite_details_from_ref_pack(
+            existing_cite_details,
+            ref_pack,
+            render_locale=render_locale,
+            answer_text=answer_text,
+        )
+        current_cite_details = _backfill_system_a_cite_details_from_ref_pack(
+            current_cite_details,
+            ref_pack,
+            render_locale=render_locale,
+            answer_text=answer_text,
+        )
     allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
         rec=rec,
         content=str(rec.get("content") or ""),

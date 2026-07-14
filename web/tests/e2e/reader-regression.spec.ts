@@ -50,7 +50,7 @@ async function mockReaderDoc(page: Page, scenario: ReaderRegressionScenario = 's
 async function openHarness(page: Page, scenario: ReaderRegressionScenario) {
   await mockReaderDoc(page, scenario)
   await page.goto(`/__reader_test__?scenario=${scenario}`, { waitUntil: 'domcontentloaded' })
-  const expectedTitle = scenario === 'citation-links'
+  const expectedTitle = scenario === 'citation-links' || scenario === 'citation-links-identity-conflict'
     ? 'Citation Fixture'
     : scenario === 'render-polish'
       ? 'Render Polish Fixture'
@@ -389,7 +389,7 @@ test('reader normalizes glued microsecond latex units before KaTeX render', asyn
   await expect(referenceEntries.nth(2)).toContainText('Third reference already starts')
 })
 
-test('reader in-paper citations and reference entries open system-b cards', async ({ page }) => {
+test('legacy reader System B payload keeps its title-aligned article overview', async ({ page }) => {
   await page.route('**/api/references/bibliometrics', async (route) => {
     await route.fulfill({
       status: 200,
@@ -443,6 +443,28 @@ test('reader in-paper citations and reference entries open system-b cards', asyn
 
   await popover.locator('.kb-cite-pop-add').click()
   await expect(page.getByTestId('reader-citation-shelf-count')).toHaveText('1 citation refs')
+})
+
+test('reader hides a title-aligned System B overview when top-level external DOI conflicts', async ({ page }) => {
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ bibliometrics_checked: true }) })
+  })
+  await page.route('**/api/references/citation-card-polish', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ citation_card_polish_status: 'disabled', citation_card_polish_checked: true }),
+    })
+  })
+
+  await openHarness(page, 'citation-links-identity-conflict')
+  await page.locator('[data-testid="reader-content"] .kb-cite-chip-sysb').first().click()
+
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await expect(popover).toContainText('Single-shot compressive spectral imaging')
+  await expect(page.getByTestId('citation-popover-system-b-overview')).toHaveCount(0)
+  await expect(popover).not.toContainText('This paper introduces a dual-disperser architecture')
 })
 
 test('reader figure, equation, and table blocks can be added directly to the research basket', async ({ page }) => {

@@ -375,7 +375,7 @@ export function CiteShelf({
     }
     const sourceName = String(item.sourceName || '').trim()
     const sourcePath = String(item.sourcePath || '').trim()
-    const sourceLabel = sourceName || basenameFromPath(sourcePath)
+    const sourceLabel = basenameFromPath(sourceName || sourcePath)
     const pageStart = Number(item.pageStart || 0)
     const pageEnd = Number(item.pageEnd || 0)
     const pageLabel = Number.isFinite(pageStart) && pageStart > 0
@@ -385,24 +385,24 @@ export function CiteShelf({
       : ''
     const rawLocation = String(item.locationLabel || '').trim()
       || [item.headingPath, pageLabel].map((part) => String(part || '').trim()).filter(Boolean).join(' / ')
-    const normalizedSourceLabel = normalizeTitle(sourceLabel)
+    const rawSourceLabel = sourceName || sourcePath
+    const normalizedSourceLabel = normalizeTitle(rawSourceLabel)
     const normalizedLocation = normalizeTitle(rawLocation)
     const location = normalizedSourceLabel && normalizedLocation.startsWith(normalizedSourceLabel)
-      ? rawLocation.slice(sourceLabel.length).replace(/^(?:\s*[/\\]\s*)+/, '').trim()
+      ? rawLocation.slice(rawSourceLabel.length).replace(/^(?:\s*[/\\]\s*)+/, '').trim()
       : rawLocation
     const refNum = Number(item.num || 0)
     const refLabel = Number.isFinite(refNum) && refNum > 0 ? S.shelf_ref_num.replace('{n}', String(refNum)) : ''
     const anchor = String(item.anchor || '').trim()
     const hasLibraryFullText = shelfItemHasUsableLibraryFullText(item)
     const libraryFullTextPath = hasLibraryFullText ? String(item.libraryMatchPath || '').trim() : ''
-    const libraryFullTextLabel = String(item.libraryMatchTitle || '').trim() || basenameFromPath(libraryFullTextPath)
+    const libraryFullTextLabel = basenameFromPath(String(item.libraryMatchTitle || '').trim() || libraryFullTextPath)
 
-    push('fulltext', S.shelf_trace_full_text || 'Local full text', libraryFullTextLabel, libraryFullTextPath)
+    push('fulltext', S.shelf_trace_full_text || 'Local full text', libraryFullTextLabel)
     push(
       'source',
       hasLibraryFullText ? S.shelf_trace_discovery_source || 'Discovered in' : S.shelf_trace_source,
       sourceLabel,
-      sourcePath || sourceLabel,
     )
     push('location', S.shelf_trace_location, location)
     push('reference', S.shelf_trace_reference, refLabel, anchor ? S.shelf_anchor.replace('{anchor}', anchor) : refLabel)
@@ -419,7 +419,8 @@ export function CiteShelf({
         ? S.shelf_library_match_title
         : S.shelf_library_match_local
     if (status === 'in_library') {
-      const matched = String(item.libraryMatchTitle || item.libraryMatchPath || item.libraryMatchDoi || '').trim()
+      const matchedSource = String(item.libraryMatchTitle || item.libraryMatchPath || '').trim()
+      const matched = basenameFromPath(matchedSource) || String(item.libraryMatchDoi || '').trim()
       return {
         label: S.shelf_library_full_text || S.shelf_library_in_library,
         title: matched ? `${methodLabel}: ${matched}` : methodLabel,
@@ -635,9 +636,10 @@ export function CiteShelf({
         groupKey = `kind:${kind}`
         groupLabel = (S.shelf_type_prefix || 'Type · {type}').replace('{type}', shelfItemKindLabel(kind, S))
       } else {
-        const src = String(item.sourceName || item.sourcePath || '').trim() || S.shelf_unknown_source
-        groupKey = `source:${src}`
-        groupLabel = S.shelf_source_prefix.replace('{src}', src)
+        const sourceIdentity = String(item.sourceName || item.sourcePath || '').trim()
+        const sourceLabel = basenameFromPath(sourceIdentity) || S.shelf_unknown_source
+        groupKey = `source:${normalizeSourceIdentity(sourceIdentity) || normalizeTitle(sourceLabel)}`
+        groupLabel = S.shelf_source_prefix.replace('{src}', sourceLabel)
       }
       const existing = groups.get(groupKey)
       if (existing) {
@@ -802,14 +804,40 @@ export function CiteShelf({
     return 'CSV'
   }
 
+  const publicExportSourceName = (item: CiteShelfItem): string => cleanCitationDisplayText(
+    basenameFromPath(String(item.sourceName || item.sourcePath || '')),
+  )
+
+  const publicShelfTitleText = (item: CiteShelfItem, value: string): string => {
+    const title = cleanCitationDisplayText(value).trim()
+    const sourceIdentity = String(item.sourceName || item.sourcePath || '').trim()
+    return sourceIdentity && normalizeTitle(title) === normalizeTitle(sourceIdentity)
+      ? basenameFromPath(title)
+      : title
+  }
+
+  const publicExportItem = (item: CiteShelfItem): CiteShelfItem => {
+    const cardTitle = citationCardView(item).header.title || item.title || item.main
+    const title = publicShelfTitleText(item, cardTitle)
+    return {
+      ...item,
+      sourceName: publicExportSourceName(item),
+      title,
+      main: title,
+    }
+  }
+
   const markdownForExportItems = (exportItems: CiteShelfItem[]): string => exportItems.map((item, index) => {
     const card = citationCardView(item)
-    const title = cleanCitationDisplayText(card.header.title || item.title || item.main || `${S.shelf_export_reference_fallback} ${index + 1}`)
+    const title = publicShelfTitleText(
+      item,
+      card.header.title || item.title || item.main || `${S.shelf_export_reference_fallback} ${index + 1}`,
+    )
     const authors = cleanCitationDisplayText(item.authors || '')
     const year = cleanCitationDisplayText(item.year || '')
     const venue = cleanCitationDisplayText(item.venue || '')
     const doi = shelfItemDoiExportValue(item)
-    const source = cleanCitationDisplayText(item.sourceName || item.sourcePath || '')
+    const source = publicExportSourceName(item)
     const summaryDisplay = shelfSummaryDisplay(item, card, S)
     const summary = summaryDisplay.kind === 'article'
       ? cleanCitationDisplayText(summaryDisplay.line)
@@ -939,7 +967,8 @@ export function CiteShelf({
   }
 
   const csvEscape = (value: unknown): string => {
-    const text = String(value ?? '')
+    const raw = String(value ?? '')
+    const text = /^[\t\r ]*[=+\-@]/.test(raw) ? `'${raw}` : raw
     if (!text) return ''
     if (!/[",\n]/.test(text)) return text
     return `"${text.replace(/"/g, '""')}"`
@@ -974,14 +1003,14 @@ export function CiteShelf({
     try {
       const base = `cite_shelf_${scope}_${nowStamp()}`
       if (kind === 'bib') {
-        const bib = exportItems.map((item) => citationFormats(item).bibtex).join('\n\n').trim()
+        const bib = exportItems.map((item) => citationFormats(publicExportItem(item)).bibtex).join('\n\n').trim()
         if (!bib) return
         downloadTextFile(`${base}.bib`, bib, 'application/x-bibtex;charset=utf-8')
         message.success(S.shelf_export_bibtex.replace('{n}', String(exportItems.length)))
         return
       }
       if (kind === 'ris') {
-        const ris = exportItems.map((item) => citationFormats(item).ris).join('\n\n').trim()
+        const ris = exportItems.map((item) => citationFormats(publicExportItem(item)).ris).join('\n\n').trim()
         if (!ris) return
         downloadTextFile(`${base}.ris`, ris, 'application/x-research-info-systems;charset=utf-8')
         message.success(S.shelf_export_ris.replace('{n}', String(exportItems.length)))
@@ -1071,12 +1100,12 @@ export function CiteShelf({
         const summaryQuality = summaryDisplay.quality
         const hasArticleSummary = summaryDisplay.kind === 'article' && Boolean(summaryDisplay.line)
         const publicFields = [
-          citationCardView(item).header.title || item.title || item.main,
+          publicShelfTitleText(item, citationCardView(item).header.title || item.title || item.main),
           item.authors,
           item.year,
           item.venue,
           shelfItemDoiExportValue(item),
-          item.sourceName || item.sourcePath,
+          publicExportSourceName(item),
           item.headingPath,
           item.locationLabel,
           item.pageStart || '',
@@ -1505,6 +1534,15 @@ export function CiteShelf({
                   >
                     {S.shelf_export_markdown_btn}
                   </button>
+                  <button
+                    type="button"
+                    className="kb-shelf-export-command"
+                    onClick={() => void exportActiveScopeAs('csv')}
+                    disabled={exportTargetCount <= 0 || Boolean(exportRepairingKind && exportRepairingKind !== 'csv')}
+                    data-testid="citation-shelf-export-main-csv"
+                  >
+                    {S.shelf_export_csv_btn}
+                  </button>
                 </div>
                 <div className="kb-shelf-export-command-row">
                   <span>{S.shelf_export_copy_label || 'Copy'}</span>
@@ -1516,9 +1554,6 @@ export function CiteShelf({
                   </button>
                   <button type="button" className="kb-shelf-export-command" onClick={() => void copyShelfItemsAs(activeExportScope, 'md')} data-testid="citation-shelf-export-copy-md">
                     {S.shelf_export_copy_markdown}
-                  </button>
-                  <button type="button" className="kb-shelf-export-command" onClick={() => void exportActiveScopeAs('csv')} disabled={Boolean(exportRepairingKind)} data-testid="citation-shelf-export-main-csv">
-                    {S.shelf_export_csv_btn}
                   </button>
                 </div>
               </div>
@@ -1907,7 +1942,7 @@ export function CiteShelf({
                       const shelfSummaryQuality = shelfSummary.quality
                       const shelfSummaryHeading = shelfSummary.headingLabel
                       const shelfSummaryLines = splitSummary(shelfSummaryLine)
-                      const rawItemSourceLabel = String(item.sourceName || basenameFromPath(item.sourcePath) || '').trim()
+                      const rawItemSourceLabel = basenameFromPath(String(item.sourceName || item.sourcePath || '').trim())
                       const itemLocationLabel = String(item.locationLabel || item.headingPath || '').trim()
                       const shelfExcerpt = cleanCitationDisplayText(item.shelfExcerpt || '')
                       const rawShelfExcerptLabel = String(item.shelfExcerptLabel || '').trim()
@@ -1928,7 +1963,7 @@ export function CiteShelf({
                         shelfExcerpt,
                         shelfExcerptLabel,
                       })
-                      const shelfTitle = shelfCard.title
+                      const shelfTitle = publicShelfTitleText(item, shelfCard.title)
                       const publicationParts = shelfCard.showArticleSummary
                         ? uniqueCitationMetrics(citeVenueYearParts(item, display), citeImpactMetrics(item, S))
                         : []
@@ -1985,7 +2020,7 @@ export function CiteShelf({
                         >
                           <div className="kb-shelf-item-head">
                             <input
-                              aria-label={`select-${item.key}`}
+                              aria-label={`select-${shelfTitle}-${item.num || ''}`}
                               type="checkbox"
                               className="kb-shelf-check"
                               checked={isItemSelected}

@@ -64,6 +64,28 @@ jobs:
           VITE_PRIVATE_INSTANCE_AUTH: "0"
         run: npm run test:e2e:smoke
 
+      - name: Run core citation and library E2E regressions
+        working-directory: web
+        env:
+          PW_WORKERS: "4"
+          VITE_ENABLE_AUTH_GATE: "0"
+          VITE_ALLOW_LOCAL_AUTH_GATE: "0"
+          VITE_PRIVATE_INSTANCE_AUTH: "0"
+          VITE_ENABLE_INTERNAL_DEBUG: "1"
+          VITE_ENABLE_INTERNAL_ROUTES: "1"
+          VITE_SHOW_USER_QUALITY_DIAGNOSTICS: "0"
+        run: npm run test:e2e:core
+
+      - name: Check ordinary-user surface isolation
+        working-directory: web
+        env:
+          PW_WORKERS: "1"
+          VITE_ENABLE_INTERNAL_DEBUG: "0"
+          VITE_ENABLE_INTERNAL_ROUTES: "0"
+          VITE_SHOW_USER_QUALITY_DIAGNOSTICS: "0"
+          VITE_SHOW_INTERNAL_SETTINGS: "0"
+        run: npm run test:e2e:public-surface
+
   backend:
     name: Backend
     runs-on: ubuntu-latest

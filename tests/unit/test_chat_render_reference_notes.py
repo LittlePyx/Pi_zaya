@@ -3118,35 +3118,35 @@ def test_merge_render_packet_contract_meta_backfills_system_a_card_from_ref_prim
     assert "##" not in detail["card_evidence"]
 
 
-def test_chat_messages_merge_cached_reference_payload_prefers_enriched_hits(monkeypatch):
+def test_chat_messages_merge_cached_reference_payload_prefers_enriched_hits():
     from api.routers import chat, references
 
-    monkeypatch.setitem(
-        references._REFS_CONVERSATION_CACHE,
-        "conv-cached-refs",
-        {
-            "payload": {
-                101: {
-                    "prompt": "cached prompt",
-                    "hits": [
-                        {
-                            "text": "enriched",
-                            "ui_meta": {
-                                "primary_evidence": {
-                                    "snippet": "Precise cached evidence.",
-                                    "block_id": "blk_cached",
-                                }
-                            },
-                        }
-                    ],
-                }
+    raw_refs = {101: {"prompt": "raw prompt", "hits": [{"text": "raw only"}]}}
+    references._store_cached_conversation_refs_payload(
+        conv_id="conv-cached-refs",
+        signature="conversation-sig",
+        refs=raw_refs,
+        payload={
+            101: {
+                "prompt": "cached prompt",
+                "hits": [
+                    {
+                        "text": "enriched",
+                        "ui_meta": {
+                            "primary_evidence": {
+                                "snippet": "Precise cached evidence.",
+                                "block_id": "blk_cached",
+                            }
+                        },
+                    }
+                ],
             }
         },
     )
 
     merged = chat._merge_cached_reference_render_payload(
         "conv-cached-refs",
-        {101: {"prompt": "raw prompt", "hits": [{"text": "raw only"}]}},
+        raw_refs,
     )
 
     assert merged[101]["prompt"] == "raw prompt"
@@ -3154,6 +3154,142 @@ def test_chat_messages_merge_cached_reference_payload_prefers_enriched_hits(monk
     assert merged[101]["rendered_payload"]["prompt"] == "cached prompt"
     assert merged[101]["rendered_payload"]["hits"][0]["text"] == "enriched"
     assert merged[101]["rendered_payload"]["hits"][0]["ui_meta"]["primary_evidence"]["block_id"] == "blk_cached"
+
+
+def test_chat_messages_ignore_stale_cached_refs_and_rerender_current_primary_evidence():
+    from api.chat_render import enrich_messages_with_reference_render
+    from api.routers import chat, references
+
+    source_path = "db/paper/current.en.md"
+    old_refs = {
+        101: {
+            "prompt": "compare the evidence",
+            "prompt_sig": "prompt-sig",
+            "updated_at": 10.0,
+            "hits": [
+                {
+                    "text": "Old result evidence.",
+                    "meta": {"source_path": source_path, "heading_path": "Old results"},
+                }
+            ],
+        }
+    }
+    references._store_cached_conversation_refs_payload(
+        conv_id="conv-stale-cached-refs",
+        signature="old-conversation-sig",
+        refs=old_refs,
+        payload={
+            101: {
+                "hits": [
+                    {
+                        "text": "Old result evidence.",
+                        "meta": {"source_path": source_path, "heading_path": "Old results"},
+                        "ui_meta": {
+                            "primary_evidence": {
+                                "source_path": source_path,
+                                "heading_path": "Old results",
+                                "snippet": "Old result evidence.",
+                                "block_id": "blk_old",
+                                "anchor_id": "p_old",
+                            }
+                        },
+                    }
+                ]
+            }
+        },
+    )
+    current_primary = {
+        "source_path": source_path,
+        "source_name": "Current Paper.pdf",
+        "heading_path": "Abstract",
+        "snippet": "Current primary evidence supports the answer.",
+        "highlight_snippet": "Current primary evidence supports the answer.",
+        "block_id": "blk_current",
+        "anchor_id": "p_current",
+        "anchor_kind": "paragraph",
+        "strict_locate": True,
+    }
+    current_refs = {
+        101: {
+            "prompt": "compare the evidence",
+            "prompt_sig": "prompt-sig",
+            "updated_at": 20.0,
+            "hits": [
+                {
+                    "text": current_primary["snippet"],
+                    "meta": {
+                        "source_path": source_path,
+                        "source_name": current_primary["source_name"],
+                        "heading_path": current_primary["heading_path"],
+                    },
+                    "ui_meta": {"primary_evidence": current_primary},
+                }
+            ],
+            "primary_evidence": current_primary,
+        }
+    }
+
+    merged = chat._merge_cached_reference_render_payload(
+        "conv-stale-cached-refs",
+        current_refs,
+    )
+
+    assert "rendered_payload" not in merged[101]
+    rendered = enrich_messages_with_reference_render(
+        [
+            {"id": 101, "role": "user", "content": "compare the evidence"},
+            {
+                "id": 102,
+                "role": "assistant",
+                "content": "The current evidence supports this claim [1].",
+                "meta": {"canonical_hit_paths": [source_path]},
+            },
+        ],
+        merged,
+        conv_id="conv-stale-cached-refs",
+    )[-1]
+    details = list(rendered.get("cite_details") or [])
+    assert len(details) == 1
+    assert details[0]["block_id"] == "blk_current"
+    assert details[0]["heading_path"] == "Abstract"
+    assert "Current primary evidence" in details[0]["evidence_quote"]
+
+
+def test_chat_messages_do_not_overlay_unverifiable_authoritative_doc_list_cache():
+    from api.routers import chat, references
+
+    raw_refs = {
+        101: {
+            "prompt": "compare selected papers",
+            "prompt_sig": "same-prompt",
+            "updated_at": 10.0,
+            "hits": [{"text": "selected", "meta": {"source_path": "selected.en.md"}}],
+        }
+    }
+    references._store_cached_conversation_refs_payload(
+        conv_id="conv-authoritative-stale",
+        signature="cached-conversation",
+        refs=raw_refs,
+        payload={
+            101: {
+                "hits": [
+                    {"text": "selected", "meta": {"source_path": "selected.en.md"}},
+                    {"text": "stale extra", "meta": {"source_path": "extra.en.md"}},
+                ],
+                "pipeline_debug": {"doc_list_authoritative": True},
+            }
+        },
+    )
+
+    merged = chat._merge_cached_reference_render_payload(
+        "conv-authoritative-stale",
+        raw_refs,
+    )
+
+    assert "rendered_payload" not in merged[101]
+    assert [hit["meta"]["source_path"] for hit in merged[101]["hits"]] == [
+        "selected.en.md"
+    ]
 
 
 def test_effective_reference_pack_keeps_raw_hit_order_and_exposes_enriched_hits():
@@ -3313,6 +3449,7 @@ def test_answer_aligned_primary_matches_same_path_across_different_display_names
             "block_id": "blk_method",
             "anchor_id": "p_method",
             "evidence_quote": "A stale method excerpt.",
+            "answer_claim": "ADMM is prior work, not an original contribution.",
         }
     ]
     pack = {
@@ -3332,6 +3469,213 @@ def test_answer_aligned_primary_matches_same_path_across_different_display_names
 
     assert out[0]["heading_path"] == "2. Related Work"
     assert out[0]["block_id"] == "blk_related"
+
+
+def test_system_a_primary_backfill_selects_claim_aligned_abstracts_without_relabeling_results(
+    tmp_path: Path,
+):
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    scigs_path = tmp_path / "scigs.en.md"
+    scigs_path.write_text(
+        "# SCIGS\n\n"
+        "## Abstract\n\n"
+        "The proposed SCIGS is the first to reconstruct a 3D explicit scene from a "
+        "single compressed image, extending its application to dynamic 3D scenes.\n\n"
+        "## 4.2 Result and Analysis\n\n"
+        "The proposed method is evaluated on static datasets.\n",
+        encoding="utf-8",
+    )
+    scinerf_path = tmp_path / "scinerf.en.md"
+    scinerf_path.write_text(
+        "# SCINeRF\n\n"
+        "## Abstract\n\n"
+        "Specifically, we formulate the physical imaging process of SCI as part of "
+        "the training of NeRF, allowing recovery of complex scene structures.\n\n"
+        "## 5. Conclusion\n\n"
+        "SCINeRF exploits neural radiance fields as its scene representation.\n",
+        encoding="utf-8",
+    )
+    details = [
+        {
+            "num": 1,
+            "source_path": str(scigs_path),
+            "source_name": "SCIGS.pdf",
+            "citation_route": "system_a",
+            "citation_plan_slot": True,
+            "answer_claim": "SCIGS 从单张压缩图像恢复动态 3D 场景表示。",
+            "evidence_quote": "Title: SCIGS",
+        },
+        {
+            "num": 2,
+            "source_path": str(scinerf_path),
+            "source_name": "SCINeRF.pdf",
+            "citation_route": "system_a",
+            "citation_plan_slot": True,
+            "answer_claim": "SCINeRF 基于 NeRF 隐式表示。",
+            "evidence_quote": "Title: SCINeRF",
+        },
+        {
+            "num": 3,
+            "source_path": str(scigs_path),
+            "source_name": "SCIGS.pdf",
+            "citation_route": "system_a",
+            "answer_claim": "SCIGS 在静态数据集上的性能超过多种方法。",
+            "heading_path": "4.2 Result and Analysis",
+            "evidence_quote": "The proposed method is evaluated on static datasets.",
+            "block_id": "blk_results",
+            "anchor_id": "p_results",
+        },
+        {
+            "num": 4,
+            "source_path": str(scinerf_path),
+            "source_name": "SCINeRF.pdf",
+            "citation_route": "system_a",
+            "citation_plan_slot": True,
+            "answer_claim": "SCINeRF jointly optimizes NeRF parameters and camera poses.",
+            "heading_path": "3. Method / 3.3 Proposed Framework",
+            "evidence_quote": "The camera poses and NeRF parameters are jointly optimized.",
+            "block_id": "blk_camera_pose",
+            "anchor_id": "p_camera_pose",
+        },
+    ]
+    pack = {
+        "hits": [
+            {
+                "text": "The proposed method is evaluated on static datasets.",
+                "meta": {"source_path": str(scigs_path), "source_name": "SCIGS.pdf"},
+                "ui_meta": {
+                    "primary_evidence": {
+                        "source_path": str(scigs_path),
+                        "source_name": "SCIGS.pdf",
+                        "heading_path": "4.2 Result and Analysis",
+                        "snippet": "The proposed method is evaluated on static datasets.",
+                    }
+                },
+            },
+            {
+                "text": "SCINeRF exploits neural radiance fields as its scene representation.",
+                "meta": {"source_path": str(scinerf_path), "source_name": "SCINeRF.pdf"},
+                "ui_meta": {
+                    "primary_evidence": {
+                        "source_path": str(scinerf_path),
+                        "source_name": "SCINeRF.pdf",
+                        "heading_path": "5. Conclusion",
+                        "snippet": "SCINeRF exploits neural radiance fields as its scene representation.",
+                    }
+                },
+            },
+        ]
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, pack, render_locale="en")
+
+    scigs_abstract = next(
+        detail
+        for detail in out
+        if Path(detail["source_path"]) == scigs_path and "Abstract" in detail["heading_path"]
+    )
+    scinerf_abstract = next(
+        detail
+        for detail in out
+        if Path(detail["source_path"]) == scinerf_path and "Abstract" in detail["heading_path"]
+    )
+    scigs_results = next(
+        detail
+        for detail in out
+        if Path(detail["source_path"]) == scigs_path
+        and detail["heading_path"] == "4.2 Result and Analysis"
+    )
+    scinerf_camera_pose = next(
+        detail
+        for detail in out
+        if Path(detail["source_path"]) == scinerf_path
+        and detail["heading_path"] == "3. Method / 3.3 Proposed Framework"
+    )
+    assert "dynamic" in scigs_abstract["evidence_quote"]
+    assert "3D" in scigs_abstract["evidence_quote"]
+    assert scigs_abstract["block_id"] and scigs_abstract["anchor_id"]
+    assert "physical imaging process" in scinerf_abstract["evidence_quote"]
+    assert "NeRF" in scinerf_abstract["evidence_quote"]
+    assert scinerf_abstract["block_id"] and scinerf_abstract["anchor_id"]
+    assert scigs_results["evidence_quote"] == "The proposed method is evaluated on static datasets."
+    assert scinerf_camera_pose["block_id"] == "blk_camera_pose"
+    assert scinerf_camera_pose["anchor_id"] == "p_camera_pose"
+    assert scinerf_camera_pose["evidence_quote"] == (
+        "The camera poses and NeRF parameters are jointly optimized."
+    )
+
+
+def test_abstract_primary_evidence_refreshes_after_markdown_repair(tmp_path: Path):
+    from api.chat_render import _abstract_primary_evidence_from_source
+
+    source_path = tmp_path / "paper.en.md"
+    source_path.write_text(
+        "# Paper\n\n## Abstract\n\nThe original abstract describes static 3D scenes.\n",
+        encoding="utf-8",
+    )
+    first = _abstract_primary_evidence_from_source(str(source_path))
+
+    source_path.write_text(
+        "# Paper\n\n## Abstract\n\n"
+        "The repaired abstract now describes explicit dynamic 3D scenes in detail.\n",
+        encoding="utf-8",
+    )
+    second = _abstract_primary_evidence_from_source(str(source_path))
+
+    assert "original abstract" in first["snippet"]
+    assert "repaired abstract" in second["snippet"]
+    assert first["snippet"] != second["snippet"]
+
+
+def test_system_a_primary_backfill_does_not_relabel_repeated_citation_claim(tmp_path: Path):
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    scigs_path = tmp_path / "scigs.en.md"
+    scigs_path.write_text(
+        "# SCIGS\n\n"
+        "## Abstract\n\n"
+        "The proposed SCIGS is the first to reconstruct a 3D explicit scene from a "
+        "single compressed image, extending its application to dynamic 3D scenes.\n\n"
+        "## 4.2 Result and Analysis\n\n"
+        "The proposed method is evaluated on static datasets.\n",
+        encoding="utf-8",
+    )
+    details = [
+        {
+            "num": 4,
+            "source_path": str(scigs_path),
+            "source_name": "SCIGS.pdf",
+            "citation_route": "system_a",
+            "answer_claim": "SCIGS performs well on several static datasets.",
+            "heading_path": "4.2 Result and Analysis",
+            "evidence_quote": "The proposed method is evaluated on static datasets.",
+        }
+    ]
+    pack = {
+        "hits": [
+            {
+                "text": "The proposed method is evaluated on static datasets.",
+                "meta": {"source_path": str(scigs_path), "source_name": "SCIGS.pdf"},
+            }
+        ]
+    }
+    answer_text = (
+        "2. **Dynamic scenes**: SCIGS can reconstruct an explicit dynamic 3D scene "
+        "from a snapshot compressive image [4].\n\n"
+        "- SCIGS is competitive on static datasets [4]."
+    )
+
+    out = _backfill_system_a_cite_details_from_ref_pack(
+        details,
+        pack,
+        render_locale="en",
+        answer_text=answer_text,
+    )
+
+    assert out[0]["answer_claim"] == "SCIGS performs well on several static datasets."
+    assert out[0]["heading_path"] == "4.2 Result and Analysis"
+    assert out[0]["evidence_quote"] == "The proposed method is evaluated on static datasets."
 
 
 def test_system_a_primary_backfill_describes_quantitative_measurement_support():
@@ -3435,6 +3779,394 @@ def test_reading_guide_repair_adds_missing_system_a_source_to_matching_paragraph
 
     assert "死时间 [2]。" in repaired
     assert "噪声模型 [1]" in repaired
+
+
+def test_reading_guide_budget_counts_only_bound_comparison_citations():
+    source_path = "hsi-fsi.en.md"
+    comparison_heading = (
+        "Hadamard single-pixel imaging versus Fourier single-pixel imaging / "
+        "3. Comparison of experiment / 3.1 Numerical simulations"
+    )
+    comparison_evidence = (
+        "The coefficients are corrected gradually as the sampling ratio increases. "
+        "As indicated by the curves of PSNR, SSIM, and RMSE, the convergence of HSI "
+        "is lower than that of FSI."
+    )
+    otf_heading = (
+        "Hadamard single-pixel imaging versus Fourier single-pixel imaging / "
+        "2. Comparison of theory / 2.4 Efficiency"
+    )
+    otf_evidence = (
+        "The optical transfer function (OTF), defined as the Fourier transform of "
+        "the point spread function, shows how different spatial frequencies are "
+        "handled by the system and explains the practical efficiency tradeoff "
+        "between Hadamard and Fourier imaging."
+    )
+    answer = (
+        "## 核心对比\n\n"
+        "Hadamard 全采样需要 $2N^2$ 次测量，Fourier 需要 $4N^2$ 次；"
+        "实验还在不同采样率下比较了 PSNR 与 SSIM。\n\n"
+        "## 实用建议\n\n"
+        "追求速度时选 Hadamard。需要分析系统的 OTF 和空间频率响应时选 Fourier。"
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "2. Comparison of theory / 2.1 Principle of HSI and FSI",
+                "evidence_quote": "Computational ghost imaging uses a bucket detector.",
+                "candidate_hits": [],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "2. Comparison of theory / 2.1 Principle of HSI and FSI",
+                "evidence_quote": "The image is reconstructed by applying an inverse transform.",
+                "candidate_hits": [],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "2. Comparison of theory / 2.4 Efficiency",
+                "evidence_quote": (
+                    "The optical transfer function (OTF), defined as the Fourier transform "
+                    "of the point spread function, shows how different spatial frequencies "
+                    "are handled by the system."
+                ),
+                "candidate_hits": [],
+            },
+        ],
+    }
+    primary_evidence = {
+        "source_path": source_path,
+        "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        "heading_path": comparison_heading,
+        "snippet": comparison_evidence,
+        "highlight_snippet": comparison_evidence,
+        "block_id": "blk_comparison",
+        "anchor_id": "p_comparison",
+        "anchor_kind": "paragraph",
+        "strict_locate": True,
+    }
+    messages = [
+        {"id": 1, "role": "user", "content": "Hadamard 和 Fourier 到底该怎么选？"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": answer,
+            "meta": {
+                # Reserve the model's full citation-number range. The comparison
+                # rescue must use a new exact-evidence hit, not alias canonical [1].
+                "canonical_hit_paths": [source_path] * 6,
+                "answer_quality": {
+                    "output_mode": "reading_guide",
+                    "prompt_family": "compare",
+                    "citation_plan": plan,
+                },
+                "paper_guide_contracts": {"citation_plan": plan},
+            },
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    # This mirrors the fully enriched shape: the general hit surface
+                    # favors the fluent OTF passage, while primary_evidence carries
+                    # the strict quantitative Comparison/3.1 locate target.
+                    "text": otf_evidence,
+                    "meta": {
+                        "source_path": source_path,
+                        "source_name": primary_evidence["source_name"],
+                        "heading_path": otf_heading,
+                    },
+                    "ui_meta": {
+                        "display_name": primary_evidence["source_name"],
+                        "heading_path": otf_heading,
+                        "summary_line": "OTF and spatial-frequency efficiency comparison.",
+                        "primary_evidence": primary_evidence,
+                    },
+                }
+            ],
+            "primary_evidence": primary_evidence,
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(
+        messages,
+        refs_by_user,
+        conv_id="conv-hadamard-fourier",
+    )[-1]
+
+    assert rendered["content"] == answer
+    assert "#kb-cite-" in rendered["rendered_content"]
+    details = rendered["cite_details"]
+    assert len(details) == 2
+    assert all(detail["citation_route"] == "system_a" for detail in details)
+    assert all("Comparison" in detail["heading_path"] for detail in details)
+    comparison_detail = next(
+        detail
+        for detail in details
+        if "PSNR" in detail["evidence_quote"] and "SSIM" in detail["evidence_quote"]
+    )
+    assert comparison_detail["num"] > 6
+    assert comparison_detail["citation_plan_slot"] is True
+    assert comparison_detail["block_id"] == "blk_comparison"
+    assert comparison_detail["anchor_id"] == "p_comparison"
+    assert any(term in comparison_detail["answer_claim"] for term in ("测量", "采样"))
+
+
+def test_comparison_rescue_adds_grounded_bridge_when_model_omits_all_citations():
+    source_path = "hsi-fsi.en.md"
+    heading = (
+        "Hadamard single-pixel imaging versus Fourier single-pixel imaging / "
+        "3. Comparison of experiment / 3.1 Numerical simulations"
+    )
+    evidence = (
+        "The coefficients are corrected gradually as the sampling ratio increases. "
+        "As indicated by the curves of PSNR, SSIM, and RMSE, the convergence of HSI "
+        "is lower than that of FSI."
+    )
+    answer = (
+        "## 核心结论\n\n"
+        "追求速度时选 Hadamard；追求物理可解释性时选 Fourier。\n\n"
+        "## 证据支撑的权衡\n\n"
+        "Hadamard 的二值图案更适合高速 DMD。Fourier 更适合分析空间频率响应。\n\n"
+        "## 一句话建议\n\n"
+        "快速采集选 Hadamard，需要 OTF 解释时选 Fourier。"
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+                "heading_path": "2. Comparison of theory",
+                "evidence_quote": "A theoretical comparison of the two methods.",
+                "candidate_hits": [],
+            }
+        ],
+    }
+    primary_evidence = {
+        "source_path": source_path,
+        "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        "heading_path": heading,
+        "snippet": evidence,
+        "highlight_snippet": evidence,
+        "block_id": "blk_comparison",
+        "anchor_id": "p_comparison",
+        "anchor_kind": "paragraph",
+        "strict_locate": True,
+    }
+    messages = [
+        {"id": 1, "role": "user", "content": "Hadamard 和 Fourier 到底该怎么选？"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": answer,
+            "meta": {
+                "canonical_hit_paths": [source_path] * 6,
+                "answer_quality": {
+                    "output_mode": "reading_guide",
+                    "prompt_family": "compare",
+                    "citation_plan": plan,
+                },
+                "paper_guide_contracts": {"citation_plan": plan},
+            },
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "Fourier OTF and spatial-frequency interpretation.",
+                    "meta": {"source_path": source_path},
+                    "ui_meta": {"primary_evidence": primary_evidence},
+                }
+            ]
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(
+        messages,
+        refs_by_user,
+        conv_id="conv-hadamard-no-model-citations",
+    )[-1]
+
+    assert rendered["content"] == answer
+    assert "定量对比依据" in rendered["rendered_content"]
+    assert rendered["rendered_content"].index("定量对比依据") < rendered["rendered_content"].index("一句话建议")
+    detail = next(item for item in rendered["cite_details"] if item["citation_route"] == "system_a")
+    assert detail["num"] > 6
+    assert detail["heading_path"] == heading
+    assert "sampling ratio" in detail["answer_claim"]
+    assert "PSNR" in detail["evidence_quote"]
+    assert "SSIM" in detail["evidence_quote"]
+
+
+def test_reading_guide_repairs_uncited_source_definition_from_abstract(tmp_path: Path):
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    scigs_path = tmp_path / "scigs.en.md"
+    scigs_path.write_text(
+        "# SCIGS\n\n## Abstract\n\n"
+        "SCIGS reconstructs a 3D explicit scene and extends the task to dynamic 3D scenes.\n",
+        encoding="utf-8",
+    )
+    scinerf_path = tmp_path / "scinerf.en.md"
+    scinerf_path.write_text(
+        "# SCINeRF\n\n## Abstract\n\n"
+        "We formulate the physical imaging process of SCI as part of the training of NeRF.\n",
+        encoding="utf-8",
+    )
+    answer = (
+        "1. SCIGS can recover a dynamic 3D scene [1].\n"
+        "2. Both methods reconstruct a scene [2].\n\n"
+        "**Representation**: SCINeRF uses an implicit NeRF representation."
+    )
+    hits = [
+        {"text": "SCIGS title", "meta": {"source_path": str(scigs_path)}},
+        {"text": "SCINeRF title", "meta": {"source_path": str(scinerf_path)}},
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": str(scigs_path),
+                "source_name": "ICIP SCIGS",
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": str(scinerf_path),
+                "source_name": "CVPR SCINeRF",
+                "candidate_hits": [2],
+            },
+        ],
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=[str(scigs_path), str(scinerf_path)],
+    )
+
+    assert "SCIGS can recover a dynamic 3D scene [1]" in repaired
+    assert "SCINeRF uses an implicit NeRF representation [3]" in repaired
+    assert len(hits) == 3
+    assert hits[2]["meta"]["citation_plan_claim_abstract"] is True
+    assert "Abstract" in hits[2]["meta"]["heading_path"]
+
+
+def test_comparison_rescue_reads_strict_source_block_before_async_ref_enrichment(
+    tmp_path: Path,
+):
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = tmp_path / "hsi-fsi.en.md"
+    source_path.write_text(
+        "# Hadamard versus Fourier\n\n"
+        "## 2. Comparison of theory\n\n"
+        "The OTF is an ideal low-pass filter.\n\n"
+        "## 3. Comparison of experiment\n\n"
+        "### 3.1 Numerical simulations\n\n"
+        "The coefficients are corrected gradually as the sampling ratio increases. "
+        "As indicated by the curves of PSNR, SSIM, and RMSE, the convergence of HSI "
+        "is lower than that of FSI.\n",
+        encoding="utf-8",
+    )
+    weak_slot = {
+        "preferred_system": "system_a",
+        "source_path": str(source_path),
+        "source_name": "Hadamard versus Fourier.pdf",
+        "heading_path": "2. Comparison of theory",
+        "evidence_quote": "The OTF is an ideal low-pass filter.",
+        "candidate_hits": [],
+    }
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [weak_slot],
+    }
+    raw_hits = [
+        {
+            "text": "The OTF is an ideal low-pass filter.",
+            "meta": {
+                "source_path": str(source_path),
+                "source_name": "Hadamard versus Fourier.pdf",
+                "heading_path": "2. Comparison of theory",
+            },
+        }
+    ]
+
+    augmented = _augment_hits_with_system_a_plan_slots(
+        raw_hits,
+        plan,
+        reserved_count=6,
+    )
+
+    rescue = augmented[6]
+    assert rescue["meta"]["citation_plan_comparison_rescue"] is True
+    assert "3. Comparison of experiment" in rescue["meta"]["heading_path"]
+    assert "sampling ratio" in rescue["text"]
+    assert "PSNR" in rescue["text"]
+    assert "SSIM" in rescue["text"]
+    assert rescue["meta"]["primary_block_id"]
+    assert rescue["meta"]["primary_anchor_id"]
+
+
+def test_comparison_rescue_does_not_select_unplanned_retrieval_source(tmp_path: Path):
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    target_path = tmp_path / "target.en.md"
+    target_path.write_text(
+        "# Target\n\n## 3. Comparison of experiment\n\n"
+        "At each sampling ratio, PSNR and SSIM compare the two target methods.\n",
+        encoding="utf-8",
+    )
+    extra_path = tmp_path / "extra.en.md"
+    extra_path.write_text(
+        "# Extra\n\n## 9. Comparison of experiment\n\n"
+        "Sampling ratio, measurements, PSNR, SSIM, and RMSE describe an unrelated study.\n",
+        encoding="utf-8",
+    )
+    plan = {
+        "intent": "comparison",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": str(target_path),
+                "source_name": "Target.pdf",
+                "heading_path": "2. Comparison",
+                "evidence_quote": "Target overview.",
+                "candidate_hits": [],
+            }
+        ],
+    }
+    hits = [
+        {"text": "Unrelated", "meta": {"source_path": str(extra_path)}},
+        {"text": "Target overview", "meta": {"source_path": str(target_path)}},
+    ]
+
+    augmented = _augment_hits_with_system_a_plan_slots(hits, plan)
+
+    rescue = next(
+        hit
+        for hit in augmented
+        if bool((hit.get("meta") or {}).get("citation_plan_comparison_rescue"))
+    )
+    assert rescue["meta"]["source_path"] == str(target_path)
+    assert "target methods" in rescue["text"]
+    assert "unrelated study" not in rescue["text"]
 
 
 def test_system_a_plan_slots_create_distinct_same_paper_evidence_hits():

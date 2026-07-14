@@ -13,6 +13,11 @@ import {
   summarySourceLabel,
   type CiteShelfItem,
 } from './citationState'
+import {
+  isSystemBArticleSummarySource,
+  isSystemBContextSummarySource,
+  resolveSystemBArticleSummary,
+} from './systemBArticleSummary'
 
 export const TAG_PRESETS = ['baseline', 'idea', 'related-work'] as const
 
@@ -423,15 +428,7 @@ export const summaryQuality = (item: CiteShelfItem): Record<string, unknown> | n
   return raw
 }
 
-export const trustedSummarySource = (source: string): boolean => [
-  'abstract',
-  'fulltext',
-  'navigation',
-  'exact_anchor',
-  'section_intent_rescue',
-  'doc_list_seed',
-  'doc_list_prompt_aligned',
-].includes(String(source || '').trim().toLowerCase())
+export const trustedSummarySource = (source: string): boolean => isSystemBArticleSummarySource(source)
 
 export const summaryQualityView = (
   item: CiteShelfItem,
@@ -481,24 +478,9 @@ export const shelfSummarySourceLabels = (S: Record<string, string>) => ({
   metadata: S.shelf_summary_source_metadata,
 })
 
-export const trustedArticleSummarySource = (source: string): boolean => [
-  'abstract',
-  'fulltext',
-  'navigation',
-  'exact_anchor',
-  'section_intent_rescue',
-  'doc_list_seed',
-  'doc_list_prompt_aligned',
-].includes(String(source || '').trim().toLowerCase())
+export const trustedArticleSummarySource = (source: string): boolean => isSystemBArticleSummarySource(source)
 
-export const contextOnlySummarySource = (source: string): boolean => [
-  'citation_context',
-  'citation_card',
-  'citation_card_view',
-  'metadata',
-  'reference_primary_evidence',
-  'references_panel_hit',
-].includes(String(source || '').trim().toLowerCase())
+export const contextOnlySummarySource = (source: string): boolean => isSystemBContextSummarySource(source)
 
 export const compactShelfSummaryCandidate = (value: string, limit = 520): string => {
   const text = cleanCitationDisplayText(value)
@@ -523,8 +505,17 @@ export const shelfSummaryDisplay = (
   const quality = summaryQualityView(item, S)
   const sourceLabels = shelfSummarySourceLabels(S)
   const qualityContract = summaryQuality(item)
-  const source = String(item.summarySource || qualityContract?.source || '').trim().toLowerCase()
-  const existing = compactShelfSummaryCandidate(item.summaryLine)
+  const systemBDecision = resolveSystemBArticleSummary(item)
+  const source = String(
+    systemBDecision.isSystemB
+      ? systemBDecision.source
+      : item.summarySource || qualityContract?.source || '',
+  ).trim().toLowerCase()
+  const existing = compactShelfSummaryCandidate(
+    systemBDecision.isSystemB
+      ? systemBDecision.visible ? systemBDecision.line : ''
+      : item.summaryLine,
+  )
   if (
     existing
     && !looksLowValueShelfSummary(existing)
@@ -545,10 +536,18 @@ export const shelfSummaryDisplay = (
     }
   }
 
+  const rejectedSystemBSummary = systemBDecision.isSystemB && !systemBDecision.visible
+    ? compactShelfSummaryCandidate(item.summaryLine)
+    : ''
   const cardSummary = item.cardView
     ? compactShelfSummaryCandidate(cardView.summary)
     : ''
-  if (cardSummary && !looksLowValueShelfSummary(cardSummary) && !looksMetadataOnlyShelfSummary(cardSummary)) {
+  if (
+    cardSummary
+    && cardSummary !== rejectedSystemBSummary
+    && !looksLowValueShelfSummary(cardSummary)
+    && !looksMetadataOnlyShelfSummary(cardSummary)
+  ) {
     return {
       line: cardSummary,
       sourceLabel: sourceLabels.citationCard,

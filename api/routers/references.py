@@ -372,21 +372,109 @@ def _get_cached_conversation_refs_payload(*, conv_id: str, signature: str) -> di
     return payload if isinstance(payload, dict) else None
 
 
-def _store_cached_conversation_refs_payload(*, conv_id: str, signature: str, payload: dict, mode: str = "full") -> None:
+def _refs_cache_input_pack_signature(pack: dict | None) -> str:
+    src = pack if isinstance(pack, dict) else {}
+    try:
+        updated_at = float(src.get("updated_at") or 0.0)
+    except Exception:
+        updated_at = 0.0
+    payload = {
+        "prompt": str(src.get("prompt") or "").strip(),
+        "prompt_sig": str(src.get("prompt_sig") or "").strip(),
+        "used_query": str(src.get("used_query") or "").strip(),
+        "used_translation": bool(src.get("used_translation")),
+        "updated_at": updated_at,
+        "hits": list(src.get("hits") or []),
+        "scores": list(src.get("scores") or []),
+    }
+    blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
+def _refs_cache_input_signatures(refs: dict | None) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw_key, pack in dict(refs or {}).items():
+        if not isinstance(pack, dict):
+            continue
+        try:
+            key = str(int(raw_key))
+        except Exception:
+            continue
+        out[key] = _refs_cache_input_pack_signature(pack)
+    return out
+
+
+def _store_cached_conversation_refs_payload(
+    *,
+    conv_id: str,
+    signature: str,
+    payload: dict,
+    mode: str = "full",
+    refs: dict | None = None,
+) -> None:
     _REFS_CONVERSATION_CACHE[str(conv_id or "").strip()] = {
         "signature": str(signature or ""),
         "cached_at": time.time(),
         "mode": str(mode or "full").strip().lower() or "full",
         "payload": dict(payload or {}),
+        "refs_input_signatures": _refs_cache_input_signatures(refs),
     }
 
 
-def _get_any_cached_conversation_refs_payload(*, conv_id: str) -> dict | None:
+def _get_any_cached_conversation_refs_record(*, conv_id: str) -> dict | None:
+    ttl_s = _refs_conversation_cache_ttl_s()
+    if ttl_s <= 0:
+        return None
     rec = _REFS_CONVERSATION_CACHE.get(str(conv_id or "").strip())
+    if not isinstance(rec, dict):
+        return None
+    try:
+        cached_at = float(rec.get("cached_at") or 0.0)
+    except Exception:
+        cached_at = 0.0
+    if cached_at <= 0 or (time.time() - cached_at) > ttl_s:
+        return None
+    payload = rec.get("payload")
+    return rec if isinstance(payload, dict) else None
+
+
+def _get_any_cached_conversation_refs_payload(*, conv_id: str) -> dict | None:
+    rec = _get_any_cached_conversation_refs_record(conv_id=conv_id)
     if not isinstance(rec, dict):
         return None
     payload = rec.get("payload")
     return payload if isinstance(payload, dict) else None
+
+
+def _get_compatible_cached_conversation_refs_payload(*, conv_id: str, refs: dict | None) -> dict | None:
+    rec = _get_any_cached_conversation_refs_record(conv_id=conv_id)
+    if not isinstance(rec, dict):
+        return None
+    cached_payload = rec.get("payload")
+    recorded_signatures = rec.get("refs_input_signatures")
+    if not isinstance(cached_payload, dict) or not isinstance(recorded_signatures, dict):
+        return None
+    current_signatures = _refs_cache_input_signatures(refs)
+    compatible: dict[int, dict] = {}
+    for raw_key, pack in cached_payload.items():
+        if not isinstance(pack, dict):
+            continue
+        pipeline_debug = pack.get("pipeline_debug") if isinstance(pack.get("pipeline_debug"), dict) else {}
+        # The authoritative doc-list identity comes from the assistant message,
+        # not the raw refs row. Without that current input, a TTL-valid cache can
+        # resurrect documents removed by a newer answer contract.
+        if bool((pipeline_debug or {}).get("doc_list_authoritative")):
+            continue
+        try:
+            key = int(raw_key)
+        except Exception:
+            continue
+        signature_key = str(key)
+        cached_sig = str(recorded_signatures.get(signature_key) or "").strip()
+        current_sig = str(current_signatures.get(signature_key) or "").strip()
+        if cached_sig and current_sig and cached_sig == current_sig:
+            compatible[key] = pack
+    return compatible or None
 
 
 def _refs_perf_ms(started_at: float) -> float:
@@ -1285,6 +1373,7 @@ def _warm_conversation_refs_payload_async(
                 signature=sig_key,
                 payload=cached_payload,
                 mode="full",
+                refs=refs,
             )
         except Exception as exc:
             try:
@@ -1706,6 +1795,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             signature=signature,
             payload=stored_full_payload,
             mode="full",
+            refs=refs_norm,
         )
         return _finish(stored_full_payload, "stored_full")
 
@@ -1846,6 +1936,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             signature=signature,
             payload=payload,
             mode=cache_mode,
+            refs=refs_norm,
         )
     ready_refs_to_warm = {
         **authoritative_fast_refs,

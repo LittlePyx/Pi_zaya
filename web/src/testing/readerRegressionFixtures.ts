@@ -17,6 +17,7 @@ export type ReaderRegressionScenario =
   | 'multi-panel'
   | 'render-polish'
   | 'citation-links'
+  | 'citation-links-identity-conflict'
 
 export const READER_REGRESSION_SOURCE_PATH = '__reader_regression__/fixture.md'
 export const READER_REGRESSION_SOURCE_NAME = 'Fixture Paper'
@@ -323,7 +324,16 @@ const readerRegressionCitationDetails = [
 ]
 
 export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScenario) {
-  if (scenario === 'citation-links') {
+  if (scenario === 'citation-links' || scenario === 'citation-links-identity-conflict') {
+    const citationDetails = scenario === 'citation-links-identity-conflict'
+      ? readerRegressionCitationDetails.map((detail, index) => index === 0
+        ? {
+            ...detail,
+            external_title: 'Single-shot compressive spectral imaging with a dual-disperser architecture: an erratum',
+            external_doi: '10.1364/OE.99.999999',
+          }
+        : detail)
+      : readerRegressionCitationDetails
     return {
       ok: true,
       source_path: READER_REGRESSION_SOURCE_PATH,
@@ -332,8 +342,8 @@ export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScena
       markdown: readerRegressionCitationMarkdown,
       anchors: [] as ReaderDocAnchor[],
       blocks: [] as ReaderDocBlock[],
-      cite_details: readerRegressionCitationDetails,
-      reference_cite_details: readerRegressionCitationDetails,
+      cite_details: citationDetails,
+      reference_cite_details: citationDetails,
     }
   }
   if (scenario === 'render-polish') {
@@ -373,7 +383,7 @@ export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScena
 }
 
 export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario): ReaderOpenPayload {
-  if (scenario === 'citation-links') {
+  if (scenario === 'citation-links' || scenario === 'citation-links-identity-conflict') {
     return {
       sourcePath: READER_REGRESSION_SOURCE_PATH,
       sourceName: READER_REGRESSION_SOURCE_NAME,

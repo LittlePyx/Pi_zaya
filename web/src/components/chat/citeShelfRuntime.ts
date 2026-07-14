@@ -14,6 +14,11 @@ import {
   type CiteDetail,
   type CiteShelfItem,
 } from './citationState'
+import {
+  isSystemBArticleSummarySource,
+  isSystemBContextSummarySource,
+  resolveSystemBArticleSummary,
+} from './systemBArticleSummary'
 
 export { looksLowValueShelfSummary }
 export const SHELF_MAX_ITEMS = 120
@@ -575,28 +580,13 @@ export function shelfItemNeedsPersistedMetadataHydrate(item: CiteShelfItem): boo
 export function shelfItemHasDisplayableArticleSummary(item: CiteShelfItem): boolean {
   const summaryLine = String(item.summaryLine || '').trim()
   if (!summaryLine || looksLowValueShelfSummary(summaryLine)) return false
+  const systemBDecision = resolveSystemBArticleSummary(item)
+  if (systemBDecision.isSystemB) return systemBDecision.visible
   const summarySource = String(item.summarySource || '').trim().toLowerCase()
   const quality = item.summaryQuality || {}
   const qualityOk = quality.ok === true || String(quality.status || '').trim().toLowerCase() === 'grounded'
-  const contextOnlySource = [
-    'citation_context',
-    'citation_card',
-    'citation_card_view',
-    'metadata',
-    'reference_primary_evidence',
-    'references_panel_hit',
-  ].includes(summarySource)
-  if (contextOnlySource) return false
-  const articleSummarySource = [
-    'abstract',
-    'fulltext',
-    'navigation',
-    'exact_anchor',
-    'section_intent_rescue',
-    'doc_list_seed',
-    'doc_list_prompt_aligned',
-  ].includes(summarySource)
-  return Boolean(articleSummarySource || (!item.isInpaper && qualityOk))
+  if (isSystemBContextSummarySource(summarySource)) return false
+  return Boolean(isSystemBArticleSummarySource(summarySource) || (!item.isInpaper && qualityOk))
 }
 
 export function shelfItemNeedsSummaryBackfill(item: CiteShelfItem): boolean {
@@ -649,37 +639,24 @@ export function shelfSummaryBackfillAttemptKey(item: CiteShelfItem): string {
   ].join('|')
 }
 
-export function articleSummaryPatchFromMeta(meta: Record<string, unknown>): Partial<CiteShelfItem> {
-  const line = cleanCitationDisplayText(String(meta.summary_line || meta.summaryLine || '')).trim()
-  const source = String(meta.summary_source || meta.summarySource || '').trim()
-  const provider = String(meta.summary_provider || meta.summaryProvider || '').trim()
-  const sourceKey = source.toLowerCase()
-  if (!line || looksLowValueShelfSummary(line)) return {}
-  if ([
-    'citation_context',
-    'citation_card',
-    'citation_card_view',
-    'metadata',
-    'reference_primary_evidence',
-    'references_panel_hit',
-  ].includes(sourceKey)) {
-    return {}
-  }
-  const rawQuality = meta.summary_quality || meta.summaryQuality
-  const summaryQuality = rawQuality && typeof rawQuality === 'object'
-    ? rawQuality as Record<string, unknown>
-    : {
-      ok: true,
-      status: 'grounded',
-      source: source || 'abstract',
-      provider,
-      export_ready: true,
-    }
+export function articleSummaryPatchFromMeta(
+  target: CiteShelfItem,
+  meta: Record<string, unknown>,
+): Partial<CiteShelfItem> {
+  const decision = resolveSystemBArticleSummary(target, meta, { identityMode: 'metadata' })
+  const line = cleanCitationDisplayText(decision.line).trim()
+  if (!decision.visible || !line || looksLowValueShelfSummary(line)) return {}
   return {
     summaryLine: line,
-    summarySource: source || 'abstract',
-    summaryProvider: provider,
-    summaryQuality,
+    summarySource: decision.source,
+    summaryProvider: decision.provider,
+    summaryQuality: decision.quality || {
+      ok: true,
+      status: 'grounded',
+      source: decision.source,
+      provider: decision.provider,
+      export_ready: true,
+    },
   }
 }
 
@@ -779,10 +756,11 @@ export function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem)
   }
 
   const normalized = normalizeCiteDetail(mergedLike) || item
-  const autoMain = toShelfItem(normalized).main
+  const normalizedShelf = toShelfItem(normalized)
+  const autoMain = normalizedShelf.main
   return {
     ...item,
-    ...normalized,
+    ...normalizedShelf,
     key: item.key,
     main: preferRicherField('main', item.main, preferExistingText(live.main, autoMain)),
     tags: normalizeShelfTags(item.tags),

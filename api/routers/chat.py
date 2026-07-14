@@ -1605,9 +1605,12 @@ def get_conversation(conv_id: str):
 def _merge_cached_reference_render_payload(conv_id: str, refs_by_user: dict) -> dict:
     merged: dict = dict(refs_by_user or {}) if isinstance(refs_by_user, dict) else {}
     try:
-        from api.routers.references import _get_any_cached_conversation_refs_payload
+        from api.routers.references import _get_compatible_cached_conversation_refs_payload
 
-        cached = _get_any_cached_conversation_refs_payload(conv_id=conv_id)
+        cached = _get_compatible_cached_conversation_refs_payload(
+            conv_id=conv_id,
+            refs=merged,
+        )
     except Exception:
         cached = None
     if not isinstance(cached, dict):

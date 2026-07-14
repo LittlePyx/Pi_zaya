@@ -1,5 +1,5 @@
 import { type Dispatch, type SetStateAction } from 'react'
-import { Alert, AutoComplete, Button, Drawer, Input, Select, Space, Tag, Typography } from 'antd'
+import { Alert, AutoComplete, Button, Drawer, Input, Modal, Select, Space, Tag, Typography } from 'antd'
 import type { LibraryFileItem } from '../../api/library'
 import {
   normalizeTextList,
@@ -40,14 +40,18 @@ type LibraryMetadataDrawerProps = {
   draftCategory: string
   draftTags: string[]
   suggestionCount: number
+  busy: boolean
   saving: boolean
   suggestionSaving: boolean
+  closeConfirmOpen: boolean
   S: Record<string, string>
   paperCategoryOptions: TextOption[]
   paperTagOptions: TextOption[]
   readingStatusOptions: TextOption[]
   tagInputSeparators: string[]
   onClose: () => void
+  onContinueEditing: () => void
+  onDiscardAndClose: () => void
   onDraftChange: Dispatch<SetStateAction<LibraryMetaDraft>>
   onSave: () => void
   onRegenerateSuggestions: () => void
@@ -62,14 +66,18 @@ export function LibraryMetadataDrawer({
   draftCategory,
   draftTags,
   suggestionCount,
+  busy,
   saving,
   suggestionSaving,
+  closeConfirmOpen,
   S,
   paperCategoryOptions,
   paperTagOptions,
   readingStatusOptions,
   tagInputSeparators,
   onClose,
+  onContinueEditing,
+  onDiscardAndClose,
   onDraftChange,
   onSave,
   onRegenerateSuggestions,
@@ -82,6 +90,9 @@ export function LibraryMetadataDrawer({
       open={open}
       size={420}
       onClose={onClose}
+      closable={!busy}
+      keyboard={!busy}
+      maskClosable={!busy}
       destroyOnClose={false}
     >
       <div className="kb-lib-meta-drawer">
@@ -127,9 +138,11 @@ export function LibraryMetadataDrawer({
           <div className="kb-lib-meta-field">
             <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_category}</Text>
             <AutoComplete
+              data-testid="library-meta-category"
               value={draft.paper_category}
               allowClear
               options={paperCategoryOptions}
+              disabled={busy}
               placeholder={S.lib_meta_category_placeholder}
               filterOption={optionMatchesInput}
               onChange={(value) => onDraftChange((cur) => ({ ...cur, paper_category: String(value || '') }))}
@@ -143,10 +156,12 @@ export function LibraryMetadataDrawer({
           <div className="kb-lib-meta-field">
             <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_status}</Text>
             <Select
+              data-testid="library-meta-reading-status"
               value={draft.reading_status || undefined}
               allowClear
               placeholder={S.lib_meta_reading_placeholder}
               options={readingStatusOptions}
+              disabled={busy}
               onChange={(value) => onDraftChange((cur) => ({ ...cur, reading_status: String(value || '') as ReadingStatusValue }))}
             />
           </div>
@@ -154,6 +169,7 @@ export function LibraryMetadataDrawer({
           <div className="kb-lib-meta-field">
             <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_tags}</Text>
             <Select
+              data-testid="library-meta-tags"
               mode="tags"
               value={draft.user_tags}
               showSearch
@@ -161,6 +177,7 @@ export function LibraryMetadataDrawer({
               tokenSeparators={tagInputSeparators}
               placeholder={S.lib_meta_tag_placeholder}
               options={paperTagOptions}
+              disabled={busy}
               optionFilterProp="label"
               onChange={(value) => onDraftChange((cur) => ({ ...cur, user_tags: normalizeTextList(value as unknown[]) }))}
             />
@@ -172,8 +189,10 @@ export function LibraryMetadataDrawer({
           <div className="kb-lib-meta-field">
             <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_note}</Text>
             <Input.TextArea
+              data-testid="library-meta-note"
               autoSize={{ minRows: 5, maxRows: 9 }}
               value={draft.note}
+              disabled={busy}
               placeholder={S.lib_meta_note_placeholder}
               onChange={(event) => onDraftChange((cur) => ({ ...cur, note: event.target.value }))}
             />
@@ -189,7 +208,7 @@ export function LibraryMetadataDrawer({
               </Text>
             </div>
             <Space size={8} wrap>
-              <Button size="small" loading={suggestionSaving} onClick={() => { onRegenerateSuggestions() }}>
+              <Button size="small" disabled={busy} loading={suggestionSaving} onClick={() => { onRegenerateSuggestions() }}>
                 {S.lib_btn_refresh_suggestions}
               </Button>
               {item?.has_suggestions ? (
@@ -198,6 +217,8 @@ export function LibraryMetadataDrawer({
                     size="small"
                     type="primary"
                     ghost
+                    data-testid="library-meta-accept-all"
+                    disabled={busy}
                     loading={suggestionSaving}
                     onClick={() => {
                       onApplySuggestionAction({
@@ -210,6 +231,7 @@ export function LibraryMetadataDrawer({
                   </Button>
                   <Button
                     size="small"
+                    disabled={busy}
                     loading={suggestionSaving}
                     onClick={() => {
                       onApplySuggestionAction({
@@ -240,6 +262,7 @@ export function LibraryMetadataDrawer({
                       size="small"
                       type="primary"
                       ghost
+                      disabled={busy}
                       loading={suggestionSaving}
                       onClick={() => { onApplySuggestionAction({ category_action: 'accept' }) }}
                     >
@@ -247,6 +270,7 @@ export function LibraryMetadataDrawer({
                     </Button>
                     <Button
                       size="small"
+                      disabled={busy}
                       loading={suggestionSaving}
                       onClick={() => { onApplySuggestionAction({ category_action: 'dismiss' }) }}
                     >
@@ -269,6 +293,7 @@ export function LibraryMetadataDrawer({
                       size="small"
                       type="primary"
                       ghost
+                      disabled={busy}
                       loading={suggestionSaving}
                       onClick={() => { onApplySuggestionAction({ accept_tags: [tagValue] }) }}
                     >
@@ -276,6 +301,7 @@ export function LibraryMetadataDrawer({
                     </Button>
                     <Button
                       size="small"
+                      disabled={busy}
                       loading={suggestionSaving}
                       onClick={() => { onApplySuggestionAction({ dismiss_tags: [tagValue] }) }}
                     >
@@ -297,13 +323,35 @@ export function LibraryMetadataDrawer({
         </section>
 
         <div className="kb-lib-meta-actions">
-          <Button onClick={onClose}>
+          <Button data-testid="library-meta-cancel" disabled={busy} onClick={onClose}>
             {S.lib_btn_cancel}
           </Button>
-          <Button type="primary" loading={saving} onClick={() => { onSave() }}>
+          <Button data-testid="library-meta-save" type="primary" disabled={busy} loading={saving} onClick={() => { onSave() }}>
             {S.lib_btn_save}
           </Button>
         </div>
+        <Modal
+          open={closeConfirmOpen}
+          title={S.lib_meta_unsaved_title}
+          closable={!busy}
+          keyboard={!busy}
+          maskClosable={false}
+          onCancel={onContinueEditing}
+          footer={[
+            <Button key="continue" disabled={busy} onClick={onContinueEditing}>
+              {S.lib_meta_continue_editing}
+            </Button>,
+            <Button key="discard" danger disabled={busy} onClick={onDiscardAndClose}>
+              {S.lib_meta_discard_changes}
+            </Button>,
+            <Button key="save" type="primary" disabled={busy} loading={saving} onClick={() => { onSave() }}>
+              {S.lib_meta_save_changes}
+            </Button>,
+          ]}
+          data-testid="library-meta-unsaved-confirm"
+        >
+          <Text>{S.lib_meta_unsaved_description}</Text>
+        </Modal>
       </div>
     </Drawer>
   )
