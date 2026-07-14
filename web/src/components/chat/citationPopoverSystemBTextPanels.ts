@@ -1,5 +1,5 @@
 import type { CiteDetail, CitationCardViewSection } from './citationState'
-import { cleanCitationDisplayText, looksLowValueCitationContext } from './citationState'
+import { cleanCitationDisplayText, looksLowValueCitationContext, normalizeDoiLike } from './citationState'
 import {
   SYSTEM_B_ARTICLE_OVERVIEW_SOURCES,
   compact,
@@ -46,6 +46,50 @@ export interface SystemBTextPanelsModel {
   citationContextLabel: string
 }
 
+function summaryIdentityText(
+  quality: Record<string, unknown>,
+  identity: Record<string, unknown>,
+  ...keys: string[]
+): string {
+  for (const key of keys) {
+    const value = String(quality[key] || identity[key] || '').trim()
+    if (value) return value
+  }
+  return ''
+}
+
+function systemBOverviewMatchesUpstream(detail: CiteDetail): boolean {
+  const quality = detail.summaryQuality && typeof detail.summaryQuality === 'object'
+    ? detail.summaryQuality
+    : {}
+  const identity = quality.identity && typeof quality.identity === 'object' && !Array.isArray(quality.identity)
+    ? quality.identity as Record<string, unknown>
+    : {}
+  const identityDoi = normalizeDoiLike(summaryIdentityText(
+    quality,
+    identity,
+    'identity_doi',
+    'identityDoi',
+    'source_doi',
+    'sourceDoi',
+    'doi',
+  ))
+  const upstreamDoi = normalizeDoiLike(detail.doi || detail.doiUrl)
+  if (identityDoi && upstreamDoi) return identityDoi === upstreamDoi
+
+  const identityTitle = summaryIdentityText(
+    quality,
+    identity,
+    'identity_title',
+    'identityTitle',
+    'source_title',
+    'sourceTitle',
+    'title',
+  )
+  const upstreamTitle = cleanCitationDisplayText(detail.title || detail.cardTitle)
+  return Boolean(identityTitle && upstreamTitle && substantiallySame(identityTitle, upstreamTitle))
+}
+
 export function buildSystemBTextPanelsModel({
   detail,
   S,
@@ -86,7 +130,7 @@ export function buildSystemBTextPanelsModel({
     'reader_references',
   ].includes(systemBOverviewSource)
   const systemBOverviewSourceIsArticle = SYSTEM_B_ARTICLE_OVERVIEW_SOURCES.has(systemBOverviewSource)
-  const paperOverviewText = isSystemB
+  const paperOverviewText = isSystemB && systemBOverviewSourceIsArticle && systemBOverviewMatchesUpstream(detail)
     ? firstSystemBText([
       systemBOverviewSourceIsContext ? '' : detail.summaryLine,
     ], { allowCitationContext: systemBOverviewSourceIsArticle })

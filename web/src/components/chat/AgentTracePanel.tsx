@@ -1,5 +1,5 @@
 import { useT } from '../../i18n'
-import { internalDebugEnvEnabled } from '../../utils/internalDebug'
+import { internalDebugBrowserEnabled } from '../../utils/internalDebug'
 import { AgentTraceResolvedPanel } from './AgentTraceResolvedPanel'
 import { AgentTraceStoredPrompt } from './AgentTraceStoredPrompt'
 import { buildAgentTracePanelState } from './agentTracePanelState'
@@ -52,14 +52,14 @@ export function AgentTracePanel({
     )
   }
 
-  const showDiagnostics = internalDebugEnvEnabled()
+  const showInternalDetails = internalDebugBrowserEnabled()
 
   return (
     <AgentTraceResolvedPanel
       labels={S}
       viewModel={viewModel}
       loadStatus={loadStatus}
-      showDiagnostics={showDiagnostics}
+      showInternalDetails={showInternalDetails}
       onOpen={loadArchivedTrace}
       onOpenReference={onOpenReference}
       onAddReferenceToShelf={onAddReferenceToShelf}

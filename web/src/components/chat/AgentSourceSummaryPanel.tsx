@@ -9,10 +9,12 @@ import type { AgentSourceSummaryViewModel } from './agentTraceViewModel'
 export function AgentSourceSummaryPanel({
   labels,
   viewModel,
+  showInternalDetails,
   onOpenReference,
   onAddReferenceToShelf,
 }: AgentTraceReferenceHandlers & AgentTraceLabels & {
   viewModel: AgentSourceSummaryViewModel
+  showInternalDetails: boolean
 }) {
   const {
     evidenceMatrix,
@@ -23,8 +25,12 @@ export function AgentSourceSummaryPanel({
 
   return (
     <>
-      <AgentTraceSummaryStats labels={labels} viewModel={viewModel} />
-      <AgentEvidenceMatrix labels={labels} rows={evidenceMatrix} subtaskCount={subtaskCount} />
+      <AgentTraceSummaryStats labels={labels} viewModel={viewModel} showInternalDetails={showInternalDetails} />
+      <AgentEvidenceMatrix
+        labels={labels}
+        rows={evidenceMatrix}
+        subtaskCount={showInternalDetails ? subtaskCount : 0}
+      />
       <AgentUnsupportedClaims labels={labels} claims={unsupportedClaimRows} />
       <AgentTraceReferenceSection
         labels={labels}

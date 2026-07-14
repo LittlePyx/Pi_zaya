@@ -900,11 +900,15 @@ async function agentQualityGateTitle(page: Page, input: AgentTraceQualityGateTit
   }, input)
 }
 
-async function visibleSummaryChips(page: Page, viewModel: AgentSourceSummaryViewModel): Promise<SummaryChipSnapshot[]> {
+async function visibleSummaryChips(
+  page: Page,
+  viewModel: AgentSourceSummaryViewModel,
+  includeInternal = false,
+): Promise<SummaryChipSnapshot[]> {
   await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
-  return page.evaluate(async (model) => {
+  return page.evaluate(async ({ model, showInternal }) => {
     const { buildAgentTraceSummaryChips } = await import('/src/components/chat/agentTraceSummaryChips.ts')
-    return buildAgentTraceSummaryChips({}, model)
+    return buildAgentTraceSummaryChips({}, model, { includeInternal: showInternal })
       .filter((chip) => chip.visible !== false)
       .map((chip) => ({
         id: chip.id,
@@ -914,7 +918,7 @@ async function visibleSummaryChips(page: Page, viewModel: AgentSourceSummaryView
         title: chip.title,
         value: typeof chip.value === 'number' || typeof chip.value === 'string' ? chip.value : String(chip.value ?? ''),
       }))
-  }, viewModel)
+  }, { model: viewModel, showInternal: includeInternal })
 }
 
 test.beforeEach(async ({ page }) => {
@@ -2240,6 +2244,9 @@ test('citation popover view model assembles route-specific frame, status, and ca
       year: '2022',
       summarySource: 'abstract',
       summaryLine: 'This upstream work introduces a calibrated imaging pipeline.',
+      summaryQuality: {
+        identity_title: 'Upstream Work',
+      },
       citationContextSource: 'abstract',
       cardReferenceEntry: '[12] Doe, J. Upstream Work. Optics Letters, 2022. doi:10.1000/upstream.',
       cardContextSummary: 'The current paper cites this upstream work as calibration background.',
@@ -2558,8 +2565,14 @@ test('citation popover System B text panels filter overview and takeaway candida
   const referenceText = '[12] Doe, J. Upstream imaging method. IEEE Transactions on Imaging, 2024. doi:10.1000/example.'
   const model = await systemBTextPanelsModel(page, {
     detail: {
+      title: 'Upstream imaging method',
+      doi: '10.1000/example',
       summarySource: 'abstract',
       summaryLine: 'This article introduces a calibrated imaging pipeline for robust microscopy measurements.',
+      summaryQuality: {
+        identity_title: 'Upstream imaging method',
+        identity_doi: '10.1000/example',
+      },
       citationContextSource: 'reader_references',
       cardContextSummary: 'links the answer back to an upstream reference',
       upstreamWorkRole: referenceText,
@@ -2594,6 +2607,87 @@ test('citation popover System B text panels filter overview and takeaway candida
   expect(model.contextSummaryText).toBe('')
   expect(model.contextSummaryLabel).toBe('Reader usage')
   expect(model.citationContextLabel).toBe('Evidence focus')
+})
+
+test('citation popover System B omits a SCINeRF summary misbound to the Boyd ADMM reference', async ({ page }) => {
+  const boydReference = '[4] Stephen Boyd, Neal Parikh, Eric Chu, Borja Peleato, and Jonathan Eckstein. Distributed optimization and statistical learning via the alternating direction method of multipliers. Foundations and Trends in Machine Learning, 2011. doi:10.1561/2200000016.'
+  const model = await systemBTextPanelsModel(page, {
+    detail: {
+      title: 'Distributed optimization and statistical learning via the alternating direction method of multipliers',
+      doi: '10.1561/2200000016',
+      summarySource: 'abstract',
+      summaryLine: 'SCINeRF combines snapshot compressive imaging with a neural radiance field to recover a 3D scene from one compressed image.',
+      summaryQuality: {
+        identity_title: 'SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image',
+        identity_doi: '10.1109/cvpr52733.2024.01469',
+      },
+      citationContextSource: 'source_markdown',
+      cardContextSummary: 'SCINeRF Related Work says that existing SCI methods employ ADMM [4].',
+      upstreamWorkRole: 'Boyd et al. provide the upstream ADMM optimization framework used as existing-method background.',
+      citationContext: 'Most of the existing methods employ alternating direction method of multipliers (ADMM) [4].',
+    },
+    S: {
+      cite_context: 'Context',
+      cite_context_summary: 'Context summary',
+      cite_current_paper_usage: 'Current paper usage',
+      cite_paper_overview: 'Article overview',
+      cite_upstream_role: 'Upstream role',
+    },
+    referenceSection: {
+      text: boydReference,
+    },
+    cardTakeaway: '',
+    cardEvidenceLabel: 'Citation context',
+  })
+
+  expect(model.paperOverviewText).toBe('')
+  expect(model.paperOverviewPreview).toBe('')
+  expect(model.takeawayText).toContain('SCINeRF Related Work')
+  expect(model.takeawayText).toContain('ADMM [4]')
+  expect(model.systemBReferenceText).toBe(boydReference)
+})
+
+test('System B metadata merge keeps only an upstream-identity-matched article summary', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  const result = await page.evaluate(async () => {
+    const { mergeCiteMeta } = await import('/src/components/chat/citationState.ts')
+    const detail = {
+      anchor: 'scinerf-r4',
+      isInpaper: true,
+      title: 'Distributed optimization and statistical learning via the alternating direction method of multipliers',
+      doi: '10.1561/2200000016',
+    }
+    const mismatched = mergeCiteMeta(detail, {
+      summary_line: 'SCINeRF reconstructs a neural radiance field from one snapshot compressive image.',
+      summary_source: 'abstract',
+      summary_provider: 'crossref',
+      external_title: 'SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image',
+      external_doi: '10.1109/cvpr52733.2024.01469',
+      summary_quality: { ok: true, status: 'grounded', score: 96 },
+    })
+    const matched = mergeCiteMeta(detail, {
+      summary_line: 'This article develops the ADMM optimization framework and its convergence foundations.',
+      summary_source: 'abstract',
+      summary_provider: 'crossref',
+      external_title: 'Distributed optimization and statistical learning via the alternating direction method of multipliers',
+      external_doi: '10.1561/2200000016',
+      summary_quality: { ok: true, status: 'grounded', score: 96 },
+    })
+    return {
+      mismatchedSummary: mismatched.summaryLine,
+      mismatchedQuality: mismatched.summaryQuality,
+      matchedSummary: matched.summaryLine,
+      matchedQuality: matched.summaryQuality,
+    }
+  })
+
+  expect(result.mismatchedSummary).toBe('')
+  expect(result.mismatchedQuality).toBeNull()
+  expect(result.matchedSummary).toContain('ADMM optimization framework')
+  expect(result.matchedQuality).toMatchObject({
+    identity_title: 'Distributed optimization and statistical learning via the alternating direction method of multipliers',
+    identity_doi: '10.1561/2200000016',
+  })
 })
 
 test('citation popover System B source panels derive clean locations and missing-title references', async ({ page }) => {
@@ -2919,8 +3013,20 @@ test('agent trace header summary falls back from scope to task without evidence'
   })
 })
 
-test('agent trace summary chip builder preserves compact chip order and test ids', async ({ page }) => {
+test('agent trace summary chip builder hides internal evaluation and routing details by default', async ({ page }) => {
   const chips = await visibleSummaryChips(page, agentSummaryViewModel())
+
+  expect(chips.map((chip) => chip.id)).toEqual(['evidence'])
+  expect(chips.find((chip) => chip.id === 'evidence')).toMatchObject({
+    className: 'kb-agent-trace-evidence-status is-grounded',
+    testId: 'agent-trace-evidence-status',
+    value: 'Evidence grounded',
+  })
+  expect(chips.find((chip) => chip.id === 'quality-gate')).toBeUndefined()
+})
+
+test('agent trace summary chip builder retains evaluation details for internal debug', async ({ page }) => {
+  const chips = await visibleSummaryChips(page, agentSummaryViewModel(), true)
 
   expect(chips.map((chip) => chip.id)).toEqual([
     'evidence',
@@ -2933,11 +3039,6 @@ test('agent trace summary chip builder preserves compact chip order and test ids
     'research-run',
     'source-policy',
   ])
-  expect(chips.find((chip) => chip.id === 'evidence')).toMatchObject({
-    className: 'kb-agent-trace-evidence-status is-grounded',
-    testId: 'agent-trace-evidence-status',
-    value: 'Evidence grounded',
-  })
   expect(chips.find((chip) => chip.id === 'quality-gate')).toMatchObject({
     className: 'is-warning',
     testId: 'agent-trace-quality-gate',
@@ -2948,7 +3049,7 @@ test('agent trace summary chip builder preserves compact chip order and test ids
   expect(chips.find((chip) => chip.id === 'source-policy')?.value).toBe('Local KB')
 })
 
-test('agent trace summary chip builder hides empty optional chips but keeps task', async ({ page }) => {
+test('agent trace summary chip builder hides empty optional and routing chips', async ({ page }) => {
   const chips = await visibleSummaryChips(page, agentSummaryViewModel({
     evidenceLabel: '',
     evidenceStatus: '',
@@ -2964,11 +3065,7 @@ test('agent trace summary chip builder hides empty optional chips but keeps task
     sourcePolicy: '',
   }))
 
-  expect(chips.map((chip) => chip.id)).toEqual(['task'])
-  expect(chips[0]).toMatchObject({
-    label: 'Task',
-    value: 'Single paper',
-  })
+  expect(chips).toEqual([])
 })
 
 test('research agent trace references can open and enter the literature basket', async ({ page }) => {
@@ -2978,7 +3075,7 @@ test('research agent trace references can open and enter the literature basket',
   const traceSummary = page.locator('.kb-agent-trace > summary').first()
   await expect(traceSummary).toContainText(SOURCE_PANEL_RE)
   await expect(traceSummary).toContainText(NEEDS_REVIEW_RE)
-  await expect(traceSummary).toContainText(REVIEW_FRACTION_RE)
+  await expect(traceSummary).not.toContainText(REVIEW_FRACTION_RE)
   await expect(traceSummary).not.toContainText('reference_followup')
   await expect(traceSummary).not.toContainText('done')
   await expect(traceSummary).not.toContainText(ANSWER_QUALITY_RE)
@@ -2986,17 +3083,14 @@ test('research agent trace references can open and enter the literature basket',
   await expect(page.getByText('Tool Calls')).toHaveCount(0)
   await page.getByText(SOURCE_PANEL_RE).click()
   await expect(page.getByTestId('agent-trace-evidence-status')).toContainText(NEEDS_REVIEW_RE)
-  await expect(page.getByTestId('agent-trace-quality-gate')).toContainText(ANSWER_QUALITY_RE)
-  await expect(page.getByTestId('agent-trace-quality-gate')).toContainText(REPAIRED_RE)
+  await expect(page.getByTestId('agent-trace-quality-gate')).toHaveCount(0)
+  await expect(page.locator('.kb-agent-trace-summary')).not.toContainText(REVIEW_FRACTION_RE)
+  await expect(page.getByText(DIAGNOSTICS_RE)).toHaveCount(0)
   await expect(page.getByTestId('agent-evidence-matrix')).toContainText(EVIDENCE_MAP_RE)
   await expect(page.getByTestId('agent-evidence-matrix-row').first()).toContainText('Fast hyperspectral single-pixel imaging')
   await expect(page.getByTestId('agent-evidence-matrix-row').first()).toContainText('frequency-division multiplexed illumination')
   await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('fully solves every downstream limitation')
   await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText(MISMATCH_RE)
-  await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeHidden()
-  await page.getByText(DIAGNOSTICS_RE).click()
-  await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeVisible()
-
   const ref = page.getByTestId('agent-trace-reference').first()
   await expect(ref.getByTestId('agent-trace-ref-title')).toContainText('Fast hyperspectral single-pixel imaging')
 
@@ -3010,6 +3104,18 @@ test('research agent trace references can open and enter the literature basket',
   await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
   await expect(page.getByTestId('citation-shelf-item-title')).toContainText('Fast hyperspectral single-pixel imaging')
+})
+
+test('research agent evaluation and execution diagnostics require the internal debug switch', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-reference-actions&debug=1')
+
+  await page.getByText(SOURCE_PANEL_RE).click()
+  await expect(page.getByTestId('agent-trace-quality-gate')).toContainText(ANSWER_QUALITY_RE)
+  await expect(page.getByTestId('agent-trace-quality-gate')).toContainText(REPAIRED_RE)
+  await expect(page.getByText(DIAGNOSTICS_RE)).toBeVisible()
+  await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeHidden()
+  await page.getByText(DIAGNOSTICS_RE).click()
+  await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeVisible()
 })
 
 test('research agent trace can be loaded from stored audit endpoint on demand', async ({ page }) => {
@@ -3074,15 +3180,15 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
   await page.getByText(SOURCE_PANEL_RE).click()
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
   await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(GROUNDED_RE)
-  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(CHECKED_FRACTION_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).not.toContainText(CHECKED_FRACTION_RE)
   await expect(page.getByTestId('agent-trace-evidence-status')).toContainText(GROUNDED_RE)
-  await expect(page.locator('.kb-agent-trace-summary strong', { hasText: '1/1' })).toBeVisible()
-  await expect(page.locator('.kb-agent-trace-summary strong', { hasText: 'library' })).toBeVisible()
+  await expect(page.locator('.kb-agent-trace-summary strong', { hasText: '1/1' })).toHaveCount(0)
+  await expect(page.locator('.kb-agent-trace-summary strong', { hasText: 'library' })).toHaveCount(0)
   await expect(page.getByText('3/9')).toHaveCount(0)
   await expect(page.getByText('Research Agent Trace')).toHaveCount(0)
   await expect(page.getByText('Tool Calls')).toHaveCount(0)
-  await page.getByText(DIAGNOSTICS_RE).click()
-  await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeVisible()
+  await expect(page.getByText(DIAGNOSTICS_RE)).toHaveCount(0)
+  await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
   expect(requested).toBe(true)
 })
 

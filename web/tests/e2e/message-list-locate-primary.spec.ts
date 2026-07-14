@@ -1090,10 +1090,13 @@ test('citation shelf reflects actual reader locate result after opening source',
   expect(csvPath, 'CSV export should produce a downloadable file').not.toBeNull()
   if (csvPath) {
     const csv = await readFile(csvPath, 'utf8')
-    expect(csv).toContain('source_open_status,source_open_precision,source_open_reason')
+    expect(csv).toContain('title,authors,year,venue,doi,source,heading_path,location_label,page_start,page_end,excerpt,answer_claim,why_collected,note,tags,reference_num,citation_count,journal_if,journal_quartile,conference_tier,conference_ccf,summary')
     expect(csv).not.toContain('source_quality_status')
     expect(csv).not.toContain('source_quality_issues')
-    expect(csv).toContain('verified,phrase')
+    expect(csv).not.toContain('source_open_status')
+    expect(csv).not.toContain('trace_conversation_id')
+    expect(csv).not.toContain('library_match_method')
+    expect(csv).not.toContain('summary_quality_score')
   }
 })
 
@@ -1462,7 +1465,7 @@ test('citation shelf hydrates persisted quality-center metadata on open', async 
   await expect(page.getByTestId('citation-shelf-readiness')).toContainText(/1\/1/)
   await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
   await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
-  await expect(page.getByTestId('citation-shelf-summary-quality')).toContainText(/Q94/)
+  await expect(page.getByTestId('citation-shelf-summary-quality')).toHaveCount(0)
   expect(repairRequests).toBeLessThanOrEqual(1)
 })
 
@@ -1857,7 +1860,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   await expect(page.getByTestId('citation-shelf-repair-impact')).toContainText(/已自动补全|Auto-completed/)
   await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
   await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
-  await expect(page.getByTestId('citation-shelf-summary-quality')).toContainText(/Q94/)
+  await expect(page.getByTestId('citation-shelf-summary-quality')).toHaveCount(0)
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveCount(0)
   const repairCountAfterAutoFill = repairRequestCount
 
@@ -1912,17 +1915,18 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   expect(csvPath, 'CSV export should produce a downloadable file').not.toBeNull()
   if (csvPath) {
     const csv = await readFile(csvPath, 'utf8')
-    expect(csv).toContain('title,authors,year,venue,doi,source,source_open_status')
+    expect(csv).toContain('title,authors,year,venue,doi,source,heading_path,location_label,page_start,page_end,excerpt,answer_claim,why_collected,note,tags,reference_num,citation_count,journal_if,journal_quartile,conference_tier,conference_ccf,summary')
     expect(csv).not.toContain('source_quality_status')
     expect(csv).not.toContain('source_quality_issues')
-    expect(csv).toContain('source_open_status,source_open_precision,source_open_reason')
-    expect(csv).toContain('summary_source,summary_provider,summary_quality_status,summary_quality_score,summary')
+    expect(csv).not.toContain('source_open_status')
+    expect(csv).not.toContain('trace_conversation_id')
+    expect(csv).not.toContain('library_match_method')
+    expect(csv).not.toContain('summary_quality_score')
     expect(csv).toContain('The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
     expect(csv).toContain('Macias-Garza F, Bovik A C, Diller K R')
     expect(csv).toContain('IEEE Transactions on Acoustics, Speech, and Signal Processing')
     expect(csv).toContain('10.1109/tassp.1988.1164940')
-    expect(csv).toContain('partial,section')
-    expect(csv).toContain('abstract,crossref,grounded,94')
+    expect(csv).toContain('This citation should support the discussion of three-dimensional microscopic imaging limits.')
   }
 
   if (!(await page.getByTestId('citation-shelf-export-panel').isVisible().catch(() => false))) {
@@ -2080,7 +2084,7 @@ test('refs render after the latest user message while assistant is still streami
   await page.locator('.kb-refs-panel .ant-collapse-header').click()
   await expect(page.getByTestId('refs-panel-pending-note')).toBeVisible()
   await expect(page.locator('.kb-ref-title')).toContainText('Fixture Paper')
-  await expect(page.locator('.kb-ref-score')).toContainText('相关分评估中')
+  await expect(page.locator('.kb-ref-score')).toHaveCount(0)
 })
 
 test('negative evidence-note locate is suppressed instead of showing a misleading jump', async ({ page }) => {

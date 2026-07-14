@@ -61,7 +61,7 @@ export function unsupportedReasonText(value: unknown, labels?: Partial<StringMap
   if (reason === 'unbound_citation') return tx(labels, 'agent_trace_unbound_citation', 'Citation marker is not bound to a local evidence slot')
   if (reason === 'citation_index_out_of_range') return tx(labels, 'agent_trace_citation_index_out_of_range', 'Citation number is outside the retrieved evidence list')
   if (reason === 'citation_evidence_mismatch') return tx(labels, 'agent_trace_citation_evidence_mismatch', 'Citation points to evidence that does not support this claim')
-  return reason || tx(labels, 'agent_trace_unsupported', 'Unsupported')
+  return tx(labels, 'agent_trace_unsupported', 'Unsupported')
 }
 
 export function compactStringList(value: unknown, limit = 4): string[] {

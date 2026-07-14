@@ -57,7 +57,7 @@ test('refs panel renders provisional cards while refs enrichment is pending', as
   await page.getByRole('button').first().click()
   await expect(page.getByTestId('refs-panel-pending-note')).toBeVisible()
   await expect(page.locator('.kb-ref-title')).toContainText('Fixture Paper')
-  await expect(page.locator('.kb-ref-score')).toContainText('相关分评估中')
+  await expect(page.locator('.kb-ref-score')).toHaveCount(0)
   await page.locator('.kb-ref-action').first().click()
   await expect(page.getByTestId('refs-panel-open-payload')).toContainText('"strictLocate": false')
 })
@@ -71,6 +71,7 @@ test('refs panel renders synthetic research basket evidence as non-openable cont
   await expect(page.locator('.kb-ref-card').first()).toContainText('Research basket')
   await expect(page.locator('.kb-ref-card').first()).toContainText('Selected Context')
   await expect(page.locator('.kb-ref-card').first()).toContainText('10.1234/example.1')
+  await expect(page.locator('.kb-ref-score')).toHaveCount(0)
 
   const actions = page.locator('.kb-ref-action')
   await expect(actions).toHaveCount(4)
@@ -81,14 +82,32 @@ test('refs panel renders synthetic research basket evidence as non-openable cont
   await expect(page.getByTestId('refs-panel-open-payload')).toContainText('(empty)')
 })
 
-test('refs panel surfaces reference-card polish status', async ({ page }) => {
+test('refs panel hides reference scoring and polish diagnostics from ordinary users', async ({ page }) => {
   await page.goto('/__refs_panel_test__?scenario=polish-status')
+
+  await expect(page.getByTestId('refs-panel-test-scenario')).toHaveText('polish-status')
+  await page.getByRole('button').first().click()
+  await expect(page.locator('.kb-ref-score')).toHaveCount(0)
+  await expect(page.locator('[data-testid^="refs-panel-polish-status-"]')).toHaveCount(0)
+  await expect(page.locator('.kb-refs-panel')).not.toContainText('LLM polished')
+  await expect(page.locator('.kb-refs-panel')).not.toContainText('LLM 润色')
+})
+
+test('refs panel keeps scoring and polish diagnostics behind the internal debug switch', async ({ page }) => {
+  await page.goto('/__refs_panel_test__?scenario=polish-status&debug=1')
 
   await expect(page.getByTestId('refs-panel-test-scenario')).toHaveText('polish-status')
   await page.getByRole('button').first().click()
   await expect(page.getByTestId('refs-panel-polish-status-0')).toHaveAttribute('data-status', 'full')
   await expect(page.getByTestId('refs-panel-polish-status-0')).toContainText('LLM')
   await expect(page.getByTestId('refs-panel-polish-status-1')).toHaveAttribute('data-status', 'heuristic')
+})
+
+test('refs panel keeps relevance scores behind the internal debug switch', async ({ page }) => {
+  await page.goto('/__refs_panel_test__?scenario=research-basket-synthetic&debug=1')
+
+  await page.getByRole('button').first().click()
+  await expect(page.locator('.kb-ref-score')).toContainText(/Score 9\.20|相关分 9\.20/)
 })
 
 test('refs panel prefers the card_view contract over legacy card fields', async ({ page }) => {

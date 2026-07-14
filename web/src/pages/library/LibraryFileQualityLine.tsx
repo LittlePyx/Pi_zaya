@@ -55,7 +55,7 @@ export function LibraryFileQualityChips({
 
   return (
     <>
-      {qualityStatusVisible && quality ? (
+      {qualityDiagnosticsVisible && qualityStatusVisible && quality ? (
         <span
           className={`kb-lib-file-quality-chip ${conversionQualityToneClass(quality)}`}
           data-testid="library-file-quality-chip"

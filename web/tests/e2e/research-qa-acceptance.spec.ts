@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test'
 import { installAppShellMocks, installEmptyCitationShelfMock } from './mockAppShell'
 
@@ -8,6 +9,12 @@ const LPR_MD = 'db/LPR-2025-Advances and Challenges of Single-Pixel Imaging Base
 const OPTICS_MD = 'db/Optics-2024-Part-based image-loop network for single-pixel imaging/Optics-2024.en.md'
 const NATPHOTON_MD = 'db/NatPhoton-2019-Principles and prospects for single-pixel imaging/NatPhoton-2019.en.md'
 const SCINERF_MD = 'db/CVPR-2024-SCINeRF/CVPR-2024-SCINeRF.en.md'
+
+const exportReadyMetadata = {
+  bibliometrics_checked: true,
+  metadata_quality: { status: 'ready', ok: true, issues: [] },
+  metadata_export_acceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+}
 
 const conversation = {
   id: CONV_ID,
@@ -121,8 +128,8 @@ const messages = [
     id: 204,
     role: 'assistant',
     refs_user_msg_id: 203,
-    content: '不是作者在 SCINeRF 里新发明的。论文把 ADMM 放在已有压缩成像重建方法脉络里，意思是借用一个成熟优化框架作为相关工作背景 [4](#scinerf-r4)。ADMM-Net 则是把这种迭代优化思想展开成网络结构的代表性前作 [21](#scinerf-r21)。',
-    rendered_body: '不是作者在 SCINeRF 里新发明的。论文把 ADMM 放在已有压缩成像重建方法脉络里，意思是借用一个成熟优化框架作为相关工作背景 [4](#scinerf-r4)。ADMM-Net 则是把这种迭代优化思想展开成网络结构的代表性前作 [21](#scinerf-r21)。',
+    content: '不是作者在 SCINeRF 里新发明的。论文把 ADMM 放在已有压缩成像重建方法脉络里，意思是借用一个成熟优化框架作为相关工作背景 [4](#scinerf-r4)。',
+    rendered_body: '不是作者在 SCINeRF 里新发明的。论文把 ADMM 放在已有压缩成像重建方法脉络里，意思是借用一个成熟优化框架作为相关工作背景 [4](#scinerf-r4)。',
     cite_details: [
       {
         num: 4,
@@ -146,30 +153,116 @@ const messages = [
         upstream_work_role: 'ADMM 提供的是通用优化框架，帮助理解早期 SCI 重建方法的来源。',
         user_question_relation: '用户问“是不是借鉴了别人以前的想法”，这条参考正好说明它是上游方法背景，而不是原创贡献。',
       },
-      {
-        num: 21,
-        anchor: 'scinerf-r21',
-        source_name: 'CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf',
-        source_path: SCINERF_MD,
-        is_inpaper: true,
-        title: 'ADMM-Net: A Deep Learning Approach for Compressive Sensing MRI',
-        authors: 'Yang, Sun, Li, Xu',
-        venue: 'NeurIPS',
-        year: '2016',
-        raw: '[21] Yang Y., Sun J., Li H., Xu Z. ADMM-Net: A Deep Learning Approach for Compressive Sensing MRI. NeurIPS, 2016.',
-        answer_claim: 'ADMM-Net 是把迭代优化思想展开成网络结构的代表性前作。',
-        heading_path: 'SCINeRF / 2. Related Work / Snapshot Compressive Imaging',
-        location_label: 'SCINeRF / 2. Related Work / Snapshot Compressive Imaging',
-        card_locator_label: '引用出现位置',
-        card_locator: 'SCINeRF / 2. Related Work / Snapshot Compressive Imaging',
-        citation_context: 'ADMM-Net unfolds ADMM iterations into a trainable deep network.',
-        upstream_work_role: '它说明“优化算法展开成网络”的思想在 SCINeRF 之前已经存在。',
-        user_question_relation: '这能帮助用户沿着 Related Work 追溯方法线索。',
-      },
     ],
     copy_markdown: '',
     copy_text: '',
     created_at: BASE_TIME + 4,
+  },
+  {
+    id: 205,
+    role: 'user',
+    content: '我刚开始看单像素成像，想先建立主线，应该先读哪几篇？每篇主要看什么？',
+    created_at: BASE_TIME + 5,
+  },
+  {
+    id: 206,
+    role: 'assistant',
+    refs_user_msg_id: 205,
+    content: [
+      '### 1. 先建立原理全景',
+      '',
+      '先读 Nature Photonics 的综述 [1](#roadmap-natphoton)。为什么先读：它把单像素成像的物理原理、探测器优势和系统限制连成一条主线。主要看什么：调制、桶探测、压缩重建以及应用边界。',
+      '',
+      '### 2. 再比较编码选择',
+      '',
+      '接着读 Hadamard 与 Fourier 的实验比较 [2](#roadmap-optics)。为什么第二篇读：它把抽象原理落到真实编码选择。主要看什么：噪声、采样率、重建质量和实验实现的差异。',
+      '',
+      '### 3. 最后进入深度学习前沿',
+      '',
+      '最后读深度学习单像素成像综述 [3](#roadmap-lpr)。为什么最后读：先有物理与编码基线，才能判断网络真正改善了什么。主要看什么：端到端采样重建、泛化风险和物理约束。',
+      '',
+      '阅读顺序就是：原理综述 → 编码比较 → 深度学习前沿。',
+    ].join('\n'),
+    rendered_body: [
+      '### 1. 先建立原理全景',
+      '',
+      '先读 Nature Photonics 的综述 [1](#roadmap-natphoton)。为什么先读：它把单像素成像的物理原理、探测器优势和系统限制连成一条主线。主要看什么：调制、桶探测、压缩重建以及应用边界。',
+      '',
+      '### 2. 再比较编码选择',
+      '',
+      '接着读 Hadamard 与 Fourier 的实验比较 [2](#roadmap-optics)。为什么第二篇读：它把抽象原理落到真实编码选择。主要看什么：噪声、采样率、重建质量和实验实现的差异。',
+      '',
+      '### 3. 最后进入深度学习前沿',
+      '',
+      '最后读深度学习单像素成像综述 [3](#roadmap-lpr)。为什么最后读：先有物理与编码基线，才能判断网络真正改善了什么。主要看什么：端到端采样重建、泛化风险和物理约束。',
+      '',
+      '阅读顺序就是：原理综述 → 编码比较 → 深度学习前沿。',
+    ].join('\n'),
+    cite_details: [
+      {
+        num: 3,
+        display_num: 1,
+        anchor: 'roadmap-natphoton',
+        source_name: 'NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf',
+        source_path: NATPHOTON_MD,
+        title: 'Principles and prospects for single-pixel imaging',
+        authors: 'Edgar M, Gibson G, Padgett M',
+        venue: 'Nature Photonics',
+        year: '2019',
+        doi: '10.1038/s41566-018-0300-7',
+        doi_url: 'https://doi.org/10.1038/s41566-018-0300-7',
+        citation_count: 910,
+        journal_if: '32.9',
+        journal_quartile: 'Q1',
+        heading_path: 'Principles and prospects / Principles',
+        evidence_quote: 'Single-pixel imaging uses spatially structured illumination and a single-pixel detector.',
+        is_inpaper: false,
+        ...exportReadyMetadata,
+      },
+      {
+        num: 2,
+        display_num: 2,
+        anchor: 'roadmap-optics',
+        source_name: 'OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf',
+        source_path: OPTICS_MD,
+        title: 'Hadamard single-pixel imaging versus Fourier single-pixel imaging',
+        authors: 'Zhang Z, Wang X, Zheng G, et al',
+        venue: 'Optics Express',
+        year: '2017',
+        doi: '10.1364/OE.25.019619',
+        doi_url: 'https://doi.org/10.1364/OE.25.019619',
+        citation_count: 531,
+        journal_if: '3.3',
+        journal_quartile: 'Q2',
+        heading_path: 'Hadamard versus Fourier / Experiments',
+        evidence_quote: 'Hadamard and Fourier patterns show different noise and sampling behavior.',
+        is_inpaper: false,
+        ...exportReadyMetadata,
+      },
+      {
+        num: 1,
+        display_num: 3,
+        anchor: 'roadmap-lpr',
+        source_name: 'LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf',
+        source_path: LPR_MD,
+        title: 'Advances and Challenges of Single-Pixel Imaging Based on Deep Learning',
+        authors: 'Song K, Bian Y, Wang D, et al',
+        venue: 'Laser & Photonics Reviews',
+        year: '2025',
+        doi: '10.1002/lpor.202401397',
+        doi_url: 'https://doi.org/10.1002/lpor.202401397',
+        citation_count: 37,
+        journal_if: '10',
+        journal_quartile: 'Q1',
+        heading_path: 'Advances and Challenges / Outlook',
+        evidence_quote: 'Deep learning supports joint sampling and reconstruction but introduces generalization risks.',
+        is_inpaper: false,
+        ...exportReadyMetadata,
+      },
+    ],
+    copy_markdown: '',
+    copy_text: '',
+    created_at: BASE_TIME + 6,
   },
 ]
 
@@ -254,6 +347,76 @@ const refsPayload = {
       },
     ],
   },
+  '205': {
+    prompt: '我刚开始看单像素成像，想先建立主线，应该先读哪几篇？每篇主要看什么？',
+    display_state: 'ready',
+    payload_mode: 'stored_full',
+    hits: [
+      {
+        text: 'Single-pixel imaging uses spatially structured illumination and a single-pixel detector.',
+        meta: { source_path: NATPHOTON_MD, ref_pack_state: 'ready' },
+        ui_meta: {
+          display_name: 'NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf',
+          source_path: NATPHOTON_MD,
+          heading_path: 'Principles and prospects / Principles',
+          summary_line: '先用这篇综述建立单像素成像的物理原理、系统结构和应用边界。',
+          why_line: '它是三篇路线的第一篇，负责搭建后续编码比较和深度学习方法所需的共同基线。',
+          summary_generation: 'llm_grounded',
+          why_generation: 'llm_grounded',
+          score: 9.82,
+          citation_meta: {
+            title: 'Principles and prospects for single-pixel imaging',
+            doi: '10.1038/s41566-018-0300-7',
+            citation_count: 910,
+            journal_if: '32.9',
+            journal_quartile: 'Q1',
+          },
+        },
+      },
+      {
+        text: 'Hadamard and Fourier patterns show different noise and sampling behavior.',
+        meta: { source_path: OPTICS_MD, ref_pack_state: 'ready' },
+        ui_meta: {
+          display_name: 'OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf',
+          source_path: OPTICS_MD,
+          heading_path: 'Hadamard versus Fourier / Experiments',
+          summary_line: '这篇实验比较把原理落到 Hadamard 与 Fourier 编码的真实选择。',
+          why_line: '它是第二篇，负责连接物理原理与具体采样、噪声和重建质量权衡。',
+          summary_generation: 'llm_grounded',
+          why_generation: 'llm_grounded',
+          score: 9.47,
+          citation_meta: {
+            title: 'Hadamard single-pixel imaging versus Fourier single-pixel imaging',
+            doi: '10.1364/OE.25.019619',
+            citation_count: 531,
+            journal_if: '3.3',
+            journal_quartile: 'Q2',
+          },
+        },
+      },
+      {
+        text: 'Deep learning supports joint sampling and reconstruction but introduces generalization risks.',
+        meta: { source_path: LPR_MD, ref_pack_state: 'ready' },
+        ui_meta: {
+          display_name: 'LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf',
+          source_path: LPR_MD,
+          heading_path: 'Advances and Challenges / Outlook',
+          summary_line: '这篇综述梳理深度学习单像素成像的收益、挑战和物理约束。',
+          why_line: '它是第三篇；读者已有物理和编码基线后，才能判断网络真正改善了什么。',
+          summary_generation: 'llm_grounded',
+          why_generation: 'llm_grounded',
+          score: 9.21,
+          citation_meta: {
+            title: 'Advances and Challenges of Single-Pixel Imaging Based on Deep Learning',
+            doi: '10.1002/lpor.202401397',
+            citation_count: 37,
+            journal_if: '10',
+            journal_quartile: 'Q1',
+          },
+        },
+      },
+    ],
+  },
 }
 
 async function fulfillJson(route: Route, body: unknown, headers?: Record<string, string>) {
@@ -313,7 +476,7 @@ async function installResearchQaBackend(page: Page) {
       messages,
       has_more_before: false,
       oldest_loaded_id: 201,
-      newest_loaded_id: 204,
+      newest_loaded_id: 206,
     })
   })
 
@@ -321,7 +484,7 @@ async function installResearchQaBackend(page: Page) {
     await fulfillJson(route, refsPayload, {
       'server-timing': 'total;dur=12, stored_full;dur=4',
       'x-kb-refs-mode': 'stored_full',
-      'x-kb-refs-counts': 'packs=2,hits=4,pending=0',
+      'x-kb-refs-counts': 'packs=3,hits=7,pending=0',
     })
   })
 
@@ -389,6 +552,15 @@ async function expectCitationPopoverClean(page: Page) {
   await expect(popover).not.toContainText('has attrac')
 }
 
+async function addCitationToShelf(page: Page, chip: Locator) {
+  await chip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await popover.locator('.kb-cite-pop-add').click()
+  await expect(page.getByTestId('citation-shelf')).toHaveClass(/is-visible/)
+  await page.locator('.kb-cite-pop-close').click({ force: true })
+}
+
 test('research QA acceptance: polished refs and both citation systems stay clickable', async ({ page }) => {
   await installResearchQaBackend(page)
 
@@ -405,7 +577,7 @@ test('research QA acceptance: polished refs and both citation systems stay click
   await expect(page.locator('body')).not.toContainText('适合作为定位入口')
 
   const refsPanels = page.locator('.kb-refs-panel')
-  await expect(refsPanels).toHaveCount(2)
+  await expect(refsPanels).toHaveCount(3)
 
   const firstRefs = refsPanels.nth(0)
   await firstRefs.locator('.ant-collapse-header').click()
@@ -417,6 +589,7 @@ test('research QA acceptance: polished refs and both citation systems stay click
 
   const firstAssistant = page.locator('div[data-msg-id="202"]')
   await expect(firstAssistant.locator('.kb-cite-chip')).toHaveCount(3)
+  await expect(firstAssistant.locator('.kb-cite-chip-sysb')).toHaveCount(0)
   await expectCitationChipsAreClickableLinks(firstAssistant, '.kb-cite-chip')
   await expect(firstAssistant).not.toContainText('[1]')
   await expect(firstAssistant).not.toContainText('[2]')
@@ -439,7 +612,7 @@ test('research QA acceptance: polished refs and both citation systems stay click
 
   const secondAssistant = page.locator('div[data-msg-id="204"]')
   const systemBChips = secondAssistant.locator('.kb-cite-chip-sysb')
-  await expect(systemBChips).toHaveCount(2)
+  await expect(systemBChips).toHaveCount(1)
   await expectCitationChipsAreClickableLinks(secondAssistant, '.kb-cite-chip-sysb')
   await expect(systemBChips.first()).toHaveText('[R4]')
   await systemBChips.first().hover()
@@ -457,4 +630,115 @@ test('research QA acceptance: polished refs and both citation systems stay click
   await expect(page.getByTestId('citation-popover-system-b-location')).not.toContainText('尚未定位到具体章节或页码')
   await expect(page.getByTestId('citation-popover-system-b-reference')).toContainText('Alternating Direction')
   await expect(page.locator('.kb-cite-pop')).toContainText('10.1561/2200000016')
+})
+
+test('research QA contract: three-paper roadmap stays exact through refs, shelf, and export', async ({ page }) => {
+  test.setTimeout(60_000)
+  await installResearchQaBackend(page)
+  await page.setViewportSize({ width: 1440, height: 1000 })
+
+  await page.goto('/')
+  const conversationRow = page.locator('.kb-conv-row', { hasText: '科研验收：SPI 与 SCINeRF' })
+  await expect(conversationRow).toHaveCount(1)
+  await conversationRow.click()
+
+  const roadmapAssistant = page.locator('div[data-msg-id="206"]')
+  await expect(roadmapAssistant).toContainText('原理综述 → 编码比较 → 深度学习前沿')
+  await expect(roadmapAssistant).toContainText('为什么先读')
+  await expect(roadmapAssistant).toContainText('主要看什么')
+
+  const roadmapChips = roadmapAssistant.locator('.kb-cite-chip')
+  await expect(roadmapChips).toHaveCount(3)
+  await expect(roadmapAssistant.locator('.kb-cite-chip-sysb')).toHaveCount(0)
+  await expectCitationChipsAreClickableLinks(roadmapAssistant, '.kb-cite-chip')
+  await expect(roadmapChips.nth(0)).toHaveAttribute('aria-label', '1')
+  await expect(roadmapChips.nth(1)).toHaveAttribute('aria-label', '2')
+  await expect(roadmapChips.nth(2)).toHaveAttribute('aria-label', '3')
+
+  const roadmapRefs = page.locator('.kb-refs-panel').nth(2)
+  await roadmapRefs.locator('.ant-collapse-header').click()
+  const refTitles = (await roadmapRefs.locator('.kb-ref-title').allTextContents()).map((value) => value.trim())
+  expect(refTitles).toHaveLength(3)
+  expect(refTitles[0]).toContain('NatPhoton-2019')
+  expect(refTitles[1]).toContain('OE-2017-Hadamard')
+  expect(refTitles[2]).toContain('LPR-2025-Advances')
+
+  for (let index = 0; index < 3; index += 1) {
+    await addCitationToShelf(page, roadmapChips.nth(index))
+    if (index < 2) await page.getByTestId('citation-shelf-close').click()
+  }
+
+  const shelf = page.getByTestId('citation-shelf')
+  const shelfItems = shelf.getByTestId('citation-shelf-item')
+  await expect(shelfItems).toHaveCount(3)
+  const shelfTitles = (await shelf.getByTestId('citation-shelf-item-title').allTextContents()).map((value) => value.trim())
+  expect(shelfTitles).toEqual([
+    'NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf',
+    'OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf',
+    'LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf',
+  ])
+  await expect(shelfItems.nth(0)).toContainText('IF 32.9')
+  await expect(shelfItems.nth(0)).toContainText('JCR Q1')
+  await expect(shelfItems.nth(0)).toContainText('被引 910')
+  await expect(shelfItems.nth(1)).toContainText('IF 3.3')
+  await expect(shelfItems.nth(1)).toContainText('JCR Q2')
+  await expect(shelfItems.nth(1)).toContainText('被引 531')
+  await expect(shelfItems.nth(2)).toContainText('IF 10')
+  await expect(shelfItems.nth(2)).toContainText('JCR Q1')
+  await expect(shelfItems.nth(2)).toContainText('被引 37')
+  await shelfItems.nth(0).click()
+  await expect(shelfItems.nth(0)).toContainText('10.1038/s41566-018-0300-7')
+  await shelfItems.nth(1).click()
+  await expect(shelfItems.nth(1)).toContainText('10.1364/OE.25.019619')
+  await shelfItems.nth(2).click()
+  await expect(shelfItems.nth(2)).toContainText('10.1002/lpor.202401397')
+
+  const checkboxes = shelf.locator('input.kb-shelf-check')
+  await expect(checkboxes).toHaveCount(3)
+  for (let index = 0; index < 3; index += 1) await checkboxes.nth(index).click()
+  await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('3')
+  await page.getByTestId('citation-shelf-export-selected').click()
+  await expect(page.getByTestId('citation-shelf-export-scope-selected')).toHaveText('已勾选 3')
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-main-md').click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toMatch(/^cite_shelf_selected_\d{8}_\d{4}\.md$/)
+  const downloadPath = await download.path()
+  expect(downloadPath, 'selected Markdown export should produce a file').not.toBeNull()
+  if (downloadPath) {
+    const markdown = await readFile(downloadPath, 'utf8')
+    expect(markdown.match(/^## \d+\./gm)).toHaveLength(3)
+    const natIndex = markdown.indexOf('NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf')
+    const opticsIndex = markdown.indexOf('OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf')
+    const lprIndex = markdown.indexOf('LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf')
+    expect(natIndex).toBeGreaterThanOrEqual(0)
+    expect(opticsIndex).toBeGreaterThan(natIndex)
+    expect(lprIndex).toBeGreaterThan(opticsIndex)
+    expect(markdown).toContain('DOI: 10.1038/s41566-018-0300-7')
+    expect(markdown).toContain('DOI: 10.1364/oe.25.019619')
+    expect(markdown).toContain('DOI: 10.1002/lpor.202401397')
+    expect(markdown).not.toContain('ILNet reconstruction under low sampling ratio')
+    expect(markdown).not.toContain('ADMM-Net')
+  }
+
+  const csvDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-main-csv').click()
+  const csvDownload = await csvDownloadPromise
+  const csvPath = await csvDownload.path()
+  expect(csvPath, 'selected CSV export should produce a file').not.toBeNull()
+  if (csvPath) {
+    const csv = await readFile(csvPath, 'utf8')
+    expect(csv).toContain('title,authors,year,venue,doi,source,heading_path,location_label,page_start,page_end,excerpt,answer_claim,why_collected,note,tags,reference_num,citation_count,journal_if,journal_quartile,conference_tier,conference_ccf,summary')
+    const natIndex = csv.indexOf('Principles and prospects for single-pixel imaging')
+    const opticsIndex = csv.indexOf('Hadamard single-pixel imaging versus Fourier single-pixel imaging')
+    const lprIndex = csv.indexOf('Advances and Challenges of Single-Pixel Imaging Based on Deep Learning')
+    expect(natIndex).toBeGreaterThanOrEqual(0)
+    expect(opticsIndex).toBeGreaterThan(natIndex)
+    expect(lprIndex).toBeGreaterThan(opticsIndex)
+    expect(csv).not.toContain('trace_conversation_id')
+    expect(csv).not.toContain('source_open_status')
+    expect(csv).not.toContain('library_match_method')
+    expect(csv).not.toContain('summary_quality_score')
+  }
 })

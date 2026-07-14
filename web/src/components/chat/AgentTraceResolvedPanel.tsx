@@ -10,31 +10,36 @@ export function AgentTraceResolvedPanel({
   labels,
   viewModel,
   loadStatus,
-  showDiagnostics,
+  showInternalDetails,
   onOpen,
   onOpenReference,
   onAddReferenceToShelf,
 }: AgentTraceReferenceHandlers & AgentTraceLabels & {
   viewModel: AgentTraceViewModel
   loadStatus: ArchivedAgentTraceLoadStatus
-  showDiagnostics: boolean
+  showInternalDetails: boolean
   onOpen: () => void | Promise<void>
 }) {
   return (
     <AgentTraceFrame
       labels={labels}
-      summaryStatus={viewModel.headerEvidence}
-      summaryContext={viewModel.headerContext}
+      summaryStatus={showInternalDetails
+        ? viewModel.headerEvidence
+        : (viewModel.sourceSummary.evidenceLabel || labels.agent_trace_available || 'Sources available')}
+      summaryContext={showInternalDetails
+        ? viewModel.headerContext
+        : ''}
       open={loadStatus === 'loaded' ? true : undefined}
       onOpen={onOpen}
     >
       <AgentSourceSummaryPanel
         labels={labels}
         viewModel={viewModel.sourceSummary}
+        showInternalDetails={showInternalDetails}
         onOpenReference={onOpenReference}
         onAddReferenceToShelf={onAddReferenceToShelf}
       />
-      {showDiagnostics ? (
+      {showInternalDetails ? (
         <AgentTraceDiagnosticsPanel
           labels={labels}
           viewModel={viewModel.diagnostics}

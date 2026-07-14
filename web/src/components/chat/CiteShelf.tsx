@@ -454,7 +454,9 @@ export function CiteShelf({
       const needsRepair = metadataQualityNeedsRepair(item)
       const score = Number(contract.score || 0)
       const tip = needsRepair
-        ? S.shelf_metadata_repair_tip_score.replace('{score}', String(Number.isFinite(score) ? Math.round(score) : 0))
+        ? (showSourceQualityDiagnostics
+          ? S.shelf_metadata_repair_tip_score.replace('{score}', String(Number.isFinite(score) ? Math.round(score) : 0))
+          : S.shelf_metadata_repair_tip)
         : S.shelf_metadata_recorded_tip
       return { chips: chips.slice(0, 3), tip, needsRepair }
     }
@@ -992,18 +994,40 @@ export function CiteShelf({
         message.success(S.shelf_export_markdown.replace('{n}', String(exportItems.length)))
         return
       }
-      const includeSourceQualityColumns = showSourceQualityDiagnostics
-      const headers = [
+      const includeDiagnosticColumns = showSourceQualityDiagnostics
+      const publicHeaders = [
         'title',
         'authors',
         'year',
         'venue',
         'doi',
         'source',
-        ...(includeSourceQualityColumns ? [
-          'source_quality_status',
-          'source_quality_issues',
-        ] : []),
+        'heading_path',
+        'location_label',
+        'page_start',
+        'page_end',
+        'excerpt',
+        'answer_claim',
+        'why_collected',
+        'note',
+        'tags',
+        'reference_num',
+        'citation_count',
+        'journal_if',
+        'journal_quartile',
+        'conference_tier',
+        'conference_ccf',
+        'summary',
+      ]
+      const diagnosticHeaders = [
+        'title',
+        'authors',
+        'year',
+        'venue',
+        'doi',
+        'source',
+        'source_quality_status',
+        'source_quality_issues',
         'source_open_status',
         'source_open_precision',
         'source_open_reason',
@@ -1039,23 +1063,46 @@ export function CiteShelf({
         'summary_quality_score',
         'summary',
       ]
+      const headers = includeDiagnosticColumns ? diagnosticHeaders : publicHeaders
       const rows = exportItems.map((item) => {
         const sourceQuality = sourceQualityForItem(item, sourceQualityByPath)
         const sourceOpen = sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key])
         const summaryDisplay = shelfSummaryDisplay(item, citationCardView(item), S)
         const summaryQuality = summaryDisplay.quality
         const hasArticleSummary = summaryDisplay.kind === 'article' && Boolean(summaryDisplay.line)
-        return [
+        const publicFields = [
           citationCardView(item).header.title || item.title || item.main,
           item.authors,
           item.year,
           item.venue,
           shelfItemDoiExportValue(item),
           item.sourceName || item.sourcePath,
-          ...(includeSourceQualityColumns ? [
-            sourceQuality?.status || '',
-            (sourceQuality?.issues || []).map((issue) => issue.label || issue.code).filter(Boolean).join('; '),
-          ] : []),
+          item.headingPath,
+          item.locationLabel,
+          item.pageStart || '',
+          item.pageEnd || '',
+          cleanCitationDisplayText(item.shelfExcerpt || ''),
+          cleanCitationDisplayText(item.answerClaim || ''),
+          cleanCitationDisplayText(item.whyLine || item.supportRelation || item.upstreamWorkRole || ''),
+          item.note || '',
+          normalizeShelfTags(item.tags).join('; '),
+          item.num || '',
+          item.citationCount || 0,
+          item.journalIf,
+          item.journalQuartile,
+          item.conferenceTier,
+          item.conferenceCcf,
+          hasArticleSummary ? summaryDisplay.line : '',
+        ]
+        const diagnosticFields = [
+          citationCardView(item).header.title || item.title || item.main,
+          item.authors,
+          item.year,
+          item.venue,
+          shelfItemDoiExportValue(item),
+          item.sourceName || item.sourcePath,
+          sourceQuality?.status || '',
+          (sourceQuality?.issues || []).map((issue) => issue.label || issue.code).filter(Boolean).join('; '),
           sourceOpen.status,
           sourceOpen.precision,
           sourceOpen.reason,
@@ -1090,7 +1137,10 @@ export function CiteShelf({
           hasArticleSummary ? summaryQuality.status : 'missing',
           hasArticleSummary ? summaryQuality.score : 0,
           hasArticleSummary ? summaryDisplay.line : '',
-        ].map((field) => csvEscape(field)).join(',')
+        ]
+        return (includeDiagnosticColumns ? diagnosticFields : publicFields)
+          .map((field) => csvEscape(field))
+          .join(',')
       })
       const csv = `${headers.join(',')}\n${rows.join('\n')}`
       downloadTextFile(`${base}.csv`, csv, 'text/csv;charset=utf-8')
@@ -2120,7 +2170,7 @@ export function CiteShelf({
                                     {shelfSummarySource ? (
                                       <span className="kb-shelf-summary-source">/ {shelfSummarySource}</span>
                                     ) : null}
-                                    {shelfSummary.showQuality ? (
+                                    {showSourceQualityDiagnostics && shelfSummary.showQuality ? (
                                       <span
                                         className={`kb-shelf-summary-quality is-${shelfSummaryQuality.tone}`}
                                         data-testid="citation-shelf-summary-quality"

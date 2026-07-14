@@ -6,10 +6,12 @@ import type { AgentSourceSummaryViewModel } from './agentTraceViewModel'
 export function AgentTraceSummaryStats({
   labels,
   viewModel,
+  showInternalDetails,
 }: AgentTraceLabels & {
   viewModel: AgentSourceSummaryViewModel
+  showInternalDetails: boolean
 }) {
-  const summaryChips = buildAgentTraceSummaryChips(labels, viewModel)
+  const summaryChips = buildAgentTraceSummaryChips(labels, viewModel, { includeInternal: showInternalDetails })
 
   return (
     <div className="kb-agent-trace-summary">

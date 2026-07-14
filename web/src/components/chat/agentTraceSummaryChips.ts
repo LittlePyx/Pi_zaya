@@ -30,6 +30,7 @@ function researchRunSummaryLabel(
 export function buildAgentTraceSummaryChips(
   labels: AgentTraceLabels['labels'],
   viewModel: AgentSourceSummaryViewModel,
+  options: { includeInternal?: boolean } = {},
 ): AgentTraceSummaryChipConfig[] {
   const {
     evidenceLabel,
@@ -54,7 +55,7 @@ export function buildAgentTraceSummaryChips(
     : ''
   const sourcePolicyText = sourcePolicy ? sourcePolicyLabel(sourcePolicy, labels) : ''
 
-  return [
+  const chips: AgentTraceSummaryChipConfig[] = [
     {
       id: 'evidence',
       visible: Boolean(evidenceLabel),
@@ -117,4 +118,16 @@ export function buildAgentTraceSummaryChips(
       value: sourcePolicyText,
     },
   ]
+  if (options.includeInternal) return chips
+  const internalChipIds = new Set([
+    'claims',
+    'unsupported-claims',
+    'quality-gate',
+    'task',
+    'scope',
+    'run-errors',
+    'research-run',
+    'source-policy',
+  ])
+  return chips.filter((chip) => !internalChipIds.has(chip.id))
 }

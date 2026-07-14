@@ -1567,16 +1567,17 @@ export function toShelfItem(detail: CiteDetail): CiteShelfItem {
 }
 
 export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>): CiteDetail {
+  const incomingMeta = prepareCitationMetaForMerge(detail, meta)
   const merged: Record<string, unknown> = { ...detail }
   const currentDoi = normalizeDoiLike(detail.doi || detail.doiUrl)
   const currentRawDoi = extractDoiLike(detail.raw || detail.citeFmt)
   const incomingDoi = normalizeDoiLike(
-    asText(meta?.doi) || asText(meta?.doi_url) || asText(meta?.doiUrl),
+    asText(incomingMeta?.doi) || asText(incomingMeta?.doi_url) || asText(incomingMeta?.doiUrl),
   )
   const trustedSystemBRepair = Boolean(
     detail.isInpaper
     && !currentRawDoi
-    && metadataRepairMetaTrusted(meta),
+    && metadataRepairMetaTrusted(incomingMeta),
   )
   const hasDoiConflict = Boolean(currentDoi && incomingDoi && currentDoi !== incomingDoi && !trustedSystemBRepair)
   const overwriteKeys = new Set([
@@ -1667,7 +1668,7 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'pages',
     ...overwriteKeys,
   ])
-  for (const [key, rawValue] of Object.entries(meta || {})) {
+  for (const [key, rawValue] of Object.entries(incomingMeta)) {
     if (rawValue === null || rawValue === undefined || rawValue === '' || (Array.isArray(rawValue) && rawValue.length === 0)) {
       continue
     }
@@ -1700,6 +1701,142 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     }
   }
   return normalizeCiteDetail(merged) || detail
+}
+
+const ARTICLE_SUMMARY_SOURCES = new Set([
+  'abstract',
+  'fulltext',
+  'navigation',
+  'exact_anchor',
+  'section_intent_rescue',
+  'doc_list_seed',
+  'doc_list_prompt_aligned',
+])
+
+const LOCAL_ARTICLE_SUMMARY_PROVIDERS = new Set(['local_markdown'])
+const LOCAL_ARTICLE_SUMMARY_GENERATIONS = new Set(['extractive_local_markdown'])
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function firstTextValue(record: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = String(record[key] || '').trim()
+    if (value) return value
+  }
+  return ''
+}
+
+function systemBSummaryIdentityMatches(
+  detail: CiteDetail,
+  identityTitle: string,
+  identityDoi: string,
+): boolean {
+  const upstreamDoi = normalizeDoiLike(detail.doi || detail.doiUrl)
+  const candidateDoi = normalizeDoiLike(identityDoi)
+  if (upstreamDoi && candidateDoi) return upstreamDoi === candidateDoi
+  const upstreamTitle = cleanCitationDisplayText(detail.title || detail.cardTitle)
+  const candidateTitle = cleanCitationDisplayText(identityTitle)
+  return Boolean(upstreamTitle && candidateTitle && substantiallySameText(upstreamTitle, candidateTitle))
+}
+
+function removeSummaryContract(meta: Record<string, unknown>): Record<string, unknown> {
+  const cleaned = { ...meta }
+  for (const key of [
+    'summary_line',
+    'summaryLine',
+    'summary_source',
+    'summarySource',
+    'summary_provider',
+    'summaryProvider',
+    'summary_generation',
+    'summaryGeneration',
+    'summary_quality',
+    'summaryQuality',
+  ]) {
+    delete cleaned[key]
+  }
+  return cleaned
+}
+
+function prepareCitationMetaForMerge(
+  detail: CiteDetail,
+  meta: Record<string, unknown>,
+): Record<string, unknown> {
+  const prepared = { ...(meta || {}) }
+  if (!detail.isInpaper) return prepared
+  const summaryLine = firstTextValue(prepared, 'summary_line', 'summaryLine')
+  if (!summaryLine) return prepared
+
+  const quality = recordValue(prepared.summary_quality || prepared.summaryQuality)
+  const identity = recordValue(quality.identity)
+  const summarySource = (
+    firstTextValue(prepared, 'summary_source', 'summarySource')
+    || firstTextValue(quality, 'source')
+  ).toLowerCase()
+  if (!ARTICLE_SUMMARY_SOURCES.has(summarySource)) return removeSummaryContract(prepared)
+
+  const summaryProvider = (
+    firstTextValue(prepared, 'summary_provider', 'summaryProvider')
+    || firstTextValue(quality, 'provider')
+  ).toLowerCase()
+  const summaryGeneration = (
+    firstTextValue(prepared, 'summary_generation', 'summaryGeneration')
+    || firstTextValue(quality, 'generation')
+  ).toLowerCase()
+  const explicitIdentityTitle = (
+    firstTextValue(quality, 'identity_title', 'identityTitle', 'source_title', 'sourceTitle')
+    || firstTextValue(identity, 'title')
+  )
+  const explicitIdentityDoi = (
+    firstTextValue(quality, 'identity_doi', 'identityDoi', 'source_doi', 'sourceDoi')
+    || firstTextValue(identity, 'doi')
+  )
+  const hasExplicitIdentity = Boolean(explicitIdentityTitle || explicitIdentityDoi)
+  const isLocalArticleSummary = (
+    LOCAL_ARTICLE_SUMMARY_PROVIDERS.has(summaryProvider)
+    || LOCAL_ARTICLE_SUMMARY_GENERATIONS.has(summaryGeneration)
+  )
+  const identityTitle = hasExplicitIdentity
+    ? explicitIdentityTitle
+    : isLocalArticleSummary
+      ? firstTextValue(prepared, 'library_match_title', 'libraryMatchTitle')
+      : firstTextValue(
+        prepared,
+        'external_title',
+        'externalTitle',
+        'library_match_title',
+        'libraryMatchTitle',
+        'title',
+      )
+  const identityDoi = hasExplicitIdentity
+    ? explicitIdentityDoi
+    : isLocalArticleSummary
+      ? firstTextValue(prepared, 'library_match_doi', 'libraryMatchDoi')
+      : firstTextValue(
+        prepared,
+        'external_doi',
+        'externalDoi',
+        'library_match_doi',
+        'libraryMatchDoi',
+        'doi',
+        'doi_url',
+        'doiUrl',
+      )
+  if (!systemBSummaryIdentityMatches(detail, identityTitle, identityDoi)) {
+    return removeSummaryContract(prepared)
+  }
+
+  prepared.summary_quality = {
+    ...quality,
+    identity_title: identityTitle,
+    identity_doi: normalizeDoiLike(identityDoi),
+  }
+  delete prepared.summaryQuality
+  return prepared
 }
 
 function normalizeTextLite(value: string): string {

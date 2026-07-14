@@ -302,7 +302,7 @@ test('refs cards render during generation and perf logs prove polling continued'
   const locateChip = page.getByRole('button', { name: '定位到原文证据', exact: true }).first()
   await expect(locateChip).toBeVisible({ timeout: 5_000 })
   await expect(page.locator('.kb-ref-title')).toContainText('Fixture Paper.pdf')
-  await expect(page.locator('.kb-ref-score')).toContainText('相关分 8.60')
+  await expect(page.locator('.kb-ref-score')).toHaveCount(0)
 
   const refsSummary = await page.evaluate(() => window.__kbRefsPerf?.summary())
   const refsLogs = await page.evaluate(() => window.__kbRefsPerf?.getLogs() || [])

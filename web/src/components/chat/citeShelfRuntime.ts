@@ -177,6 +177,39 @@ export interface ShelfItemsMergeResult {
   summaryTarget: CiteShelfItem
 }
 
+function answerCitationOrder(item: CiteShelfItem): number {
+  const displayNum = Number(item.displayNum || 0)
+  if (Number.isFinite(displayNum) && displayNum > 0) return displayNum
+  const citationNum = Number(item.num || 0)
+  if (Number.isFinite(citationNum) && citationNum > 0) return citationNum
+  return Number.MAX_SAFE_INTEGER
+}
+
+function orderShelfCitationsFromSameAnswer(
+  items: CiteShelfItem[],
+  assistantMsgId: number,
+): CiteShelfItem[] {
+  const messageId = Number(assistantMsgId || 0)
+  if (!Number.isFinite(messageId) || messageId <= 0) return items
+  const grouped = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => Number(item.traceAssistantMsgId || 0) === messageId)
+  if (grouped.length <= 1) return items
+
+  const ordered = [...grouped].sort((left, right) => (
+    answerCitationOrder(left.item) - answerCitationOrder(right.item)
+    || left.index - right.index
+  ))
+  const firstIndex = grouped[0].index
+  const groupedIndexes = new Set(grouped.map(({ index }) => index))
+  const result: CiteShelfItem[] = []
+  items.forEach((item, index) => {
+    if (index === firstIndex) result.push(...ordered.map((entry) => entry.item))
+    if (!groupedIndexes.has(index)) result.push(item)
+  })
+  return result
+}
+
 export function mergeCitationDetailIntoShelfItems(
   currentItems: CiteShelfItem[],
   detail: CiteDetail,
@@ -199,8 +232,9 @@ export function mergeCitationDetailIntoShelfItems(
     },
     ...currentItems.filter((entry) => entry.key !== item.key && shelfPaperIdentity(entry) !== identity),
   ]
+  const nextItems = dedupeShelfItems(next).slice(0, SHELF_MAX_ITEMS)
   return {
-    nextItems: dedupeShelfItems(next).slice(0, SHELF_MAX_ITEMS),
+    nextItems: orderShelfCitationsFromSameAnswer(nextItems, item.traceAssistantMsgId),
     focusKey: summaryTarget.key,
     summaryTarget,
   }

@@ -5,6 +5,7 @@ import { useT } from '../../i18n'
 import { referenceSourcePathCacheKey, referencesApi } from '../../api/references'
 import { useChatStore } from '../../stores/chatStore'
 import { basenameFromSourcePath } from '../../utils/sourcePath'
+import { internalDebugBrowserEnabled } from '../../utils/internalDebug'
 import type { ReaderOpenPayload } from '../chat/reader/readerTypes'
 import { buildBasicReaderOpenPayload } from '../chat/reader/readerOpenPayloadUtils'
 import {
@@ -159,6 +160,7 @@ function polishStatusLabel(status: string, S: ReturnType<typeof useT>) {
 
 export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeSourceName }: Props) {
   const S = useT()
+  const showInternalRefDiagnostics = internalDebugBrowserEnabled()
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const nav = useNavigate()
   const expansionKey = refsPanelExpansionKey(msgId)
@@ -439,9 +441,9 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                               <div className="kb-ref-title">{title}</div>
                               <div className="kb-ref-meta-row mt-1">
                                 {heading ? <span>{heading}</span> : null}
-                                {scorePending ? <span className="kb-ref-score">{S.refs_score_pending}</span> : null}
-                                {!scorePending && score ? <span className="kb-ref-score">{S.refs_score_label.replace('{score}', score)}</span> : null}
-                                {polishStatus && polishLabel ? (
+                                {showInternalRefDiagnostics && scorePending ? <span className="kb-ref-score">{S.refs_score_pending}</span> : null}
+                                {showInternalRefDiagnostics && !scorePending && score ? <span className="kb-ref-score">{S.refs_score_label.replace('{score}', score)}</span> : null}
+                                {showInternalRefDiagnostics && polishStatus && polishLabel ? (
                                   <span
                                     className={`kb-ref-polish is-${polishStatus}`}
                                     data-testid={`refs-panel-polish-status-${index}`}
