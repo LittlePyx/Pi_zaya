@@ -30,6 +30,7 @@ function parseScenario(input: string | null): ReaderRegressionScenario {
   if (raw === 'render-polish') return 'render-polish'
   if (raw === 'citation-links') return 'citation-links'
   if (raw === 'citation-links-identity-conflict') return 'citation-links-identity-conflict'
+  if (raw === 'adjacent-tables') return 'adjacent-tables'
   return 'strict-quote'
 }
 

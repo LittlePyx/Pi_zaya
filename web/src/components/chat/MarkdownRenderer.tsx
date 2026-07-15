@@ -1336,6 +1336,36 @@ function _nodeLineRange(node: unknown): { start: number; end: number } | null {
   return { start: Math.floor(start), end: Math.floor(end) }
 }
 
+function _readerNodeText(node: unknown): string {
+  if (!node || typeof node !== 'object') return ''
+  const rec = node as { value?: unknown; children?: unknown[] }
+  const own = typeof rec.value === 'string' ? rec.value : ''
+  const childText = Array.isArray(rec.children)
+    ? rec.children.map((child) => _readerNodeText(child)).filter(Boolean).join(' ')
+    : ''
+  return `${own} ${childText}`.replace(/\s+/g, ' ').trim()
+}
+
+function _readerTextTokenCounts(text: string): Map<string, number> {
+  const counts = new Map<string, number>()
+  const tokens = String(text || '').toLowerCase().match(/[a-z][a-z0-9+_-]{1,}|[+-]?(?:\d+(?:\.\d+)?|\.\d+)/g) || []
+  for (const token of tokens) counts.set(token, Number(counts.get(token) || 0) + 1)
+  return counts
+}
+
+function _readerTextSimilarity(left: string, right: string): number {
+  const leftCounts = _readerTextTokenCounts(left)
+  const rightCounts = _readerTextTokenCounts(right)
+  const leftTotal = [...leftCounts.values()].reduce((sum, count) => sum + count, 0)
+  const rightTotal = [...rightCounts.values()].reduce((sum, count) => sum + count, 0)
+  if (Math.min(leftTotal, rightTotal) < 4) return 0
+  let shared = 0
+  for (const [token, count] of leftCounts.entries()) {
+    shared += Math.min(count, Number(rightCounts.get(token) || 0))
+  }
+  return (2 * shared) / Math.max(1, leftTotal + rightTotal)
+}
+
 function createReaderBlockResolver(readerBlocks: ReaderDocBlock[] | undefined): ReaderBlockResolver | null {
   const rows = Array.isArray(readerBlocks) ? readerBlocks : []
   if (rows.length <= 0) return null
@@ -1369,8 +1399,24 @@ function createReaderBlockResolver(readerBlocks: ReaderDocBlock[] | undefined): 
   return {
     pick: (node: unknown, kinds: string[]) => {
       const range = _nodeLineRange(node)
-      if (!range) return null
       const preferred = new Set((kinds || []).map((k) => normalizeReaderAnchorKind(k)))
+      if (preferred.has('table')) {
+        const nodeText = _readerNodeText(node)
+        const rankedByText = list
+          .filter((item) => item.kind === 'table' && item.token.text)
+          .map((item) => ({ item, score: _readerTextSimilarity(nodeText, String(item.token.text || '')) }))
+          .sort((left, right) => right.score - left.score)
+        const bestText = rankedByText[0]
+        const runnerUpText = rankedByText[1]
+        if (
+          bestText
+          && bestText.score >= 0.58
+          && (!runnerUpText || bestText.score - runnerUpText.score >= 0.08)
+        ) {
+          return bestText.item.token
+        }
+      }
+      if (!range) return null
       let best: (typeof list)[number] | null = null
       let bestScore = Number.NEGATIVE_INFINITY
 

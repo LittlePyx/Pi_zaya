@@ -26,7 +26,7 @@ from .post_layout_repairs import (
     _extract_box_sidebars,
     _repair_dangling_heading_continuations,
 )
-from .tables import normalize_markdown_table_block
+from .tables import normalize_markdown_tables_document
 from .heuristics import _looks_like_author_name_line
 from .text_utils import _looks_like_body_figure_reference_sentence, _normalize_text
 
@@ -145,27 +145,7 @@ def _convert_caption_following_tabular_lines(md: str) -> str:
 
 
 def _normalize_markdown_tables(md: str) -> str:
-    lines = md.splitlines()
-    out: list[str] = []
-    table_buf: list[str] = []
-
-    def flush_table() -> None:
-        nonlocal table_buf
-        if not table_buf:
-            return
-        block = "\n".join(table_buf)
-        out.extend(normalize_markdown_table_block(block).splitlines())
-        table_buf = []
-
-    for line in lines:
-        if line.lstrip().startswith("|"):
-            table_buf.append(line)
-            continue
-        flush_table()
-        out.append(line)
-
-    flush_table()
-    return "\n".join(out)
+    return normalize_markdown_tables_document(md)
 
 
 def _drop_standalone_journal_metadata_lines(md: str) -> str:

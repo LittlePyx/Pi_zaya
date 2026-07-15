@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from typing import Optional, List
 from pathlib import Path
 
@@ -88,7 +89,7 @@ def _table_rows_to_markdown(rows_raw) -> Optional[str]:
     ]
     for row in rows[1:]:
         md_lines.append("| " + " | ".join(row) + " |")
-    return "\n".join(md_lines)
+    return normalize_markdown_table_block("\n".join(md_lines))
 
 
 def _markdown_table_quality_score(md: str) -> float:
@@ -109,7 +110,7 @@ def _is_markdown_table_sane(md: str) -> bool:
     if len(lines) < 3:
         return False
     width = max(0, lines[0].count("|") - 1)
-    if width < 2 or width > 18:
+    if width < 2 or width > 32:
         return False
     cells: list[str] = []
     cols: list[list[str]] = [[] for _ in range(width)]
@@ -127,7 +128,9 @@ def _is_markdown_table_sane(md: str) -> bool:
                 non_empty_in_row += 1
                 cols[ci].append(p)
                 cells.append(p)
-                if re.fullmatch(r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:%|e[+-]?\d+)?", p, flags=re.IGNORECASE):
+                if re.fullmatch(r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:%|e[+-]?\d+)?", p, flags=re.IGNORECASE) or len(
+                    re.findall(r"(?<![A-Za-z0-9])[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:%|e[+-]?\d+)?", p, flags=re.IGNORECASE)
+                ) >= 2:
                     numeric_cells += 1
         row_non_empty.append(non_empty_in_row)
         filled_slots += non_empty_in_row
@@ -308,6 +311,147 @@ def _render_markdown_table(rows: list[list[str]]) -> str:
     return "\n".join(md_lines)
 
 
+_HTML_TABLE_BREAK_RE = re.compile(r"\s*<br\s*/?>\s*", flags=re.IGNORECASE)
+_TABLE_NUMBER_RE = re.compile(
+    r"(?<![A-Za-z0-9])[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:%|e[+-]?\d+)?",
+    flags=re.IGNORECASE,
+)
+_TABLE_VALUE_TOKEN_RE = re.compile(
+    r"(?:\*{1,2})?[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:%|e[+-]?\d+)?(?:\*{1,2})?",
+    flags=re.IGNORECASE,
+)
+_KNOWN_METRIC_LABEL_RE = re.compile(
+    r"(?:PSNR|SSIM|LPIPS|RMSE|MSE|MAE|FID|F1|AP|AR|IOU|AUC|ACCURACY|PRECISION|RECALL)[↑↓]?",
+    flags=re.IGNORECASE,
+)
+_TABLE_DEDUPE_WORD_STOP = {
+    "and", "col", "column", "down", "lpips", "method", "metric", "ours", "psnr",
+    "result", "results", "score", "ssim", "table", "the", "up", "value", "values",
+}
+
+
+def _split_html_table_breaks(cell: str) -> list[str]:
+    text = str(cell or "").strip()
+    if not _HTML_TABLE_BREAK_RE.search(text):
+        return [text]
+    parts = [part.strip() for part in _HTML_TABLE_BREAK_RE.split(text)]
+    while parts and not parts[0]:
+        parts.pop(0)
+    while parts and not parts[-1]:
+        parts.pop()
+    return parts or [""]
+
+
+def _collapsed_table_row_segment_count(row: list[str]) -> int:
+    split_cells = [_split_html_table_breaks(cell) for cell in row]
+    multi_counts = [len(parts) for parts in split_cells if len(parts) >= 2]
+    if not multi_counts:
+        return 0
+    dominant_count, dominant_cells = Counter(multi_counts).most_common(1)[0]
+    non_empty_cells = sum(1 for cell in row if str(cell or "").strip())
+    if dominant_count < 2 or dominant_cells < max(2, (non_empty_cells + 1) // 2):
+        return 0
+    if any(count != dominant_count for count in multi_counts):
+        return 0
+
+    first_cell_aligned = bool(split_cells and len(split_cells[0]) == dominant_count)
+    numeric_aligned_columns = sum(
+        1
+        for parts in split_cells[1:]
+        if len(parts) == dominant_count and all(_TABLE_NUMBER_RE.search(part or "") for part in parts)
+    )
+    if numeric_aligned_columns <= 0 and not (first_cell_aligned and dominant_cells >= 3):
+        return 0
+    return dominant_count
+
+
+def _expand_collapsed_table_rows(rows: list[list[str]]) -> list[list[str]]:
+    if len(rows) < 2:
+        return rows
+    expanded: list[list[str]] = [list(rows[0])]
+    for row in rows[1:]:
+        segment_count = _collapsed_table_row_segment_count(row)
+        if segment_count <= 0:
+            expanded.append(list(row))
+            continue
+        split_cells = [_split_html_table_breaks(cell) for cell in row]
+        for segment_index in range(segment_count):
+            split_row: list[str] = []
+            for parts in split_cells:
+                if len(parts) == segment_count:
+                    split_row.append(parts[segment_index])
+                elif segment_index == 0:
+                    split_row.append(parts[0] if parts else "")
+                else:
+                    split_row.append("")
+            expanded.append(split_row)
+    return expanded
+
+
+def _metric_header_parts(cell: str) -> tuple[str, list[str]] | None:
+    parts = _split_html_table_breaks(cell)
+    if len(parts) < 2 or not parts[0]:
+        return None
+    metric_text = " ".join(parts[1:]).strip()
+    labels = [match.group(0) for match in _KNOWN_METRIC_LABEL_RE.finditer(metric_text)]
+    if len(labels) < 2:
+        labels = [token for token in re.split(r"\s+", metric_text) if token]
+    if len(labels) < 2 or len(labels) > 8:
+        return None
+    return parts[0], labels
+
+
+def _metric_value_parts(cell: str, *, width: int) -> list[str] | None:
+    text = str(cell or "").strip()
+    if not text:
+        return [""] * width
+    values = [match.group(0) for match in _TABLE_VALUE_TOKEN_RE.finditer(text)]
+    leftover = _TABLE_VALUE_TOKEN_RE.sub(" ", text)
+    leftover = re.sub(r"[\s,;/]+", "", leftover)
+    if leftover or len(values) != width:
+        return None
+    return values
+
+
+def _expand_compact_metric_columns(rows: list[list[str]]) -> list[list[str]]:
+    if len(rows) < 2 or len(rows[0]) < 2:
+        return rows
+    header = rows[0]
+    parsed_headers = [_metric_header_parts(cell) for cell in header[1:]]
+    if not parsed_headers or any(item is None for item in parsed_headers):
+        return rows
+    metric_widths = [len(item[1]) for item in parsed_headers if item is not None]
+    if not metric_widths or len(set(metric_widths)) != 1:
+        return rows
+    metric_width = metric_widths[0]
+
+    expanded_data: list[list[str]] = []
+    for row in rows[1:]:
+        if len(row) != len(header):
+            return rows
+        expanded_row = [row[0]]
+        for cell in row[1:]:
+            values = _metric_value_parts(cell, width=metric_width)
+            if values is None:
+                return rows
+            expanded_row.extend(values)
+        expanded_data.append(expanded_row)
+
+    expanded_header = [header[0]]
+    metric_header = [""]
+    for parsed in parsed_headers:
+        assert parsed is not None
+        scene, labels = parsed
+        expanded_header.extend([scene] + ([""] * (metric_width - 1)))
+        metric_header.extend(labels)
+    return [expanded_header, metric_header, *expanded_data]
+
+
+def _flatten_html_table_breaks(cell: str) -> str:
+    parts = [part for part in _split_html_table_breaks(cell) if part]
+    return " · ".join(parts)
+
+
 def normalize_markdown_table_block(md: str) -> str:
     lines = [ln.rstrip() for ln in (md or "").splitlines() if ln.strip()]
     if len(lines) < 2 or not all(ln.lstrip().startswith("|") for ln in lines):
@@ -323,6 +467,10 @@ def normalize_markdown_table_block(md: str) -> str:
         rows.append(cells)
     if len(rows) < 2:
         return md
+
+    rows = _expand_collapsed_table_rows(rows)
+    rows = _expand_compact_metric_columns(rows)
+    rows = [[_flatten_html_table_breaks(cell) for cell in row] for row in rows]
 
     target_width = max(len(r) for r in rows)
     if target_width < 2:
@@ -353,6 +501,162 @@ def normalize_markdown_table_block(md: str) -> str:
         )
 
     return _render_markdown_table(normalized)
+
+
+def _markdown_table_spans(lines: list[str]) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, line in enumerate(lines + [""]):
+        stripped = str(line or "").lstrip()
+        is_table_line = stripped.startswith("|") and stripped.count("|") >= 2
+        if is_table_line and start is None:
+            start = index
+            continue
+        if is_table_line:
+            continue
+        if start is not None:
+            spans.append((start, index))
+            start = None
+    return spans
+
+
+def _normalize_markdown_table_blocks_document(md: str) -> str:
+    text = str(md or "")
+    trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    spans = _markdown_table_spans(lines)
+    if not spans:
+        return text
+    out: list[str] = []
+    cursor = 0
+    for start, end in spans:
+        out.extend(lines[cursor:start])
+        out.extend(normalize_markdown_table_block("\n".join(lines[start:end])).splitlines())
+        cursor = end
+    out.extend(lines[cursor:])
+    fixed = "\n".join(out)
+    if trailing_newline:
+        fixed += "\n"
+    return fixed
+
+
+def _normalized_table_number(value: str) -> str:
+    text = str(value or "").strip().lower().rstrip("%")
+    sign = ""
+    if text.startswith(("+", "-")):
+        sign, text = text[0], text[1:]
+    if text.startswith("0."):
+        text = text[1:]
+    return sign + text
+
+
+def _markdown_table_signature(lines: list[str], start: int, end: int) -> dict:
+    block_lines = lines[start:end]
+    rows = [
+        _split_md_table_cells(line)
+        for line in block_lines
+        if not all(_looks_separator_cell(cell) or not cell for cell in _split_md_table_cells(line))
+    ]
+    cells = [cell for row in rows for cell in row]
+    plain = " ".join(cells)
+    without_citations = re.sub(r"\[(?:\d{1,4}(?:\s*[,;\u2013-]\s*\d{1,4})*)\]", " ", plain)
+    numbers = Counter(_normalized_table_number(match.group(0)) for match in _TABLE_NUMBER_RE.finditer(without_citations))
+    words = {
+        token
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9+_-]{2,}", without_citations.lower())
+        if token not in _TABLE_DEDUPE_WORD_STOP
+    }
+    width = max((len(row) for row in rows), default=0)
+    non_empty = sum(1 for cell in cells if str(cell or "").strip())
+    score = float(width * max(1, len(rows))) + float(non_empty) * 0.2
+    return {
+        "start": start,
+        "end": end,
+        "numbers": numbers,
+        "words": words,
+        "score": score,
+    }
+
+
+def _nearby_duplicate_table_pairs(md: str) -> list[tuple[dict, dict]]:
+    lines = str(md or "").splitlines()
+    signatures = [_markdown_table_signature(lines, start, end) for start, end in _markdown_table_spans(lines)]
+    pairs: list[tuple[dict, dict]] = []
+    for left_index, left in enumerate(signatures):
+        for right in signatures[left_index + 1:]:
+            if int(right["start"]) - int(left["end"]) > 24:
+                break
+            left_numbers = left["numbers"]
+            right_numbers = right["numbers"]
+            left_total = sum(left_numbers.values())
+            right_total = sum(right_numbers.values())
+            if min(left_total, right_total) < 6:
+                continue
+            shared_numbers = sum((left_numbers & right_numbers).values())
+            numeric_coverage = shared_numbers / max(1, max(left_total, right_total))
+            if numeric_coverage < 0.90:
+                continue
+            left_words = set(left["words"])
+            right_words = set(right["words"])
+            shared_words = len(left_words & right_words)
+            word_coverage = shared_words / max(1, min(len(left_words), len(right_words)))
+            if shared_words < 2 or (word_coverage < 0.50 and numeric_coverage < 0.98):
+                continue
+            pairs.append((left, right))
+    return pairs
+
+
+def dedupe_nearby_markdown_tables(md: str) -> str:
+    text = str(md or "")
+    trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    drop_ranges: set[tuple[int, int]] = set()
+    for left, right in _nearby_duplicate_table_pairs(text):
+        left_range = (int(left["start"]), int(left["end"]))
+        right_range = (int(right["start"]), int(right["end"]))
+        if left_range in drop_ranges or right_range in drop_ranges:
+            continue
+        if float(left["score"]) > float(right["score"]):
+            drop_ranges.add(right_range)
+        else:
+            drop_ranges.add(left_range)
+    if not drop_ranges:
+        return text
+    drop_lines = {index for start, end in drop_ranges for index in range(start, end)}
+    fixed = "\n".join(line for index, line in enumerate(lines) if index not in drop_lines)
+    if trailing_newline:
+        fixed += "\n"
+    return fixed
+
+
+def normalize_markdown_tables_document(md: str) -> str:
+    normalized = _normalize_markdown_table_blocks_document(md)
+    return dedupe_nearby_markdown_tables(normalized)
+
+
+def markdown_table_issue_counts(md: str) -> dict[str, int]:
+    text = str(md or "")
+    lines = text.splitlines()
+    literal_break_count = 0
+    collapsed_row_count = 0
+    for start, end in _markdown_table_spans(lines):
+        for line in lines[start:end]:
+            literal_break_count += len(_HTML_TABLE_BREAK_RE.findall(line))
+        rows = [
+            _split_md_table_cells(line)
+            for line in lines[start:end]
+            if not all(_looks_separator_cell(cell) or not cell for cell in _split_md_table_cells(line))
+        ]
+        for row in rows[1:]:
+            if _collapsed_table_row_segment_count(row) >= 2:
+                collapsed_row_count += 1
+    normalized = _normalize_markdown_table_blocks_document(text)
+    duplicate_count = len(_nearby_duplicate_table_pairs(normalized))
+    return {
+        "literal_break_count": literal_break_count,
+        "collapsed_row_count": collapsed_row_count,
+        "duplicate_table_count": duplicate_count,
+    }
 
 
 def _extract_tables_by_pdfplumber(pdf_path: Optional[Path], page_index: int) -> list[tuple["fitz.Rect", str]]:

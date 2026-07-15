@@ -375,6 +375,16 @@ test('reader image shelf button survives non-figure anchor mismatch', async ({ p
   await expect(figureTail).toHaveCSS('opacity', '1')
 })
 
+test('adjacent tables with the same header keep distinct structured anchors', async ({ page }) => {
+  await openHarness(page, 'adjacent-tables')
+  const tables = page.getByTestId('reader-content').locator('table')
+  await expect(tables).toHaveCount(2)
+  await expect(tables.nth(0)).toHaveAttribute('data-kb-anchor-id', 'tb-reconstruction')
+  await expect(tables.nth(0)).toHaveAttribute('data-kb-block-id', 'tbl-reconstruction')
+  await expect(tables.nth(1)).toHaveAttribute('data-kb-anchor-id', 'tb-novel-view')
+  await expect(tables.nth(1)).toHaveAttribute('data-kb-block-id', 'tbl-novel-view')
+})
+
 test('reader normalizes glued microsecond latex units before KaTeX render', async ({ page }) => {
   await openHarness(page, 'render-polish')
   const reader = page.getByTestId('reader-content')

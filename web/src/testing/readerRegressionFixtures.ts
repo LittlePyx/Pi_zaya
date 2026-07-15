@@ -18,6 +18,7 @@ export type ReaderRegressionScenario =
   | 'render-polish'
   | 'citation-links'
   | 'citation-links-identity-conflict'
+  | 'adjacent-tables'
 
 export const READER_REGRESSION_SOURCE_PATH = '__reader_regression__/fixture.md'
 export const READER_REGRESSION_SOURCE_NAME = 'Fixture Paper'
@@ -162,6 +163,45 @@ const readerRegressionImageAnchorMismatchBlocks: ReaderDocBlock[] = [
 ]
 
 const readerRegressionImageAnchorMismatchAnchors: ReaderDocAnchor[] = readerRegressionImageAnchorMismatchBlocks.map((block) => ({
+  anchor_id: block.anchor_id,
+  block_id: block.block_id,
+  kind: block.kind,
+  heading_path: block.heading_path,
+  text: block.text,
+  line_start: block.line_start,
+  line_end: block.line_end,
+  number: block.number,
+}))
+
+const readerRegressionAdjacentTablesMarkdown = [
+  '# Fixture Paper',
+  '',
+  '## Results',
+  '',
+  '| Method | Airplants |  |  |',
+  '| --- | --- | --- | --- |',
+  '|  | PSNR↑ | SSIM↑ | LPIPS↓ |',
+  '| GAP-TV | 22.85 | .4057 | .4986 |',
+  '| ours | 30.69 | .9335 | .0728 |',
+  '',
+  '**Table 2.** Novel-view comparison.',
+  '',
+  '| Method | Airplants |  |  |',
+  '| --- | --- | --- | --- |',
+  '|  | PSNR↑ | SSIM↑ | LPIPS↓ |',
+  '| NeRF+GAP-TV | 23.72 | .4684 | .4195 |',
+  '| ours | 30.61 | .9384 | .0764 |',
+  '',
+].join('\n')
+
+const readerRegressionAdjacentTableBlocks: ReaderDocBlock[] = [
+  { doc_id: 'fixture-doc', block_id: 'h-results', anchor_id: 'a-h-results', kind: 'heading', heading_path: 'Fixture Paper / Results', text: 'Results', line_start: 3, line_end: 3 },
+  { doc_id: 'fixture-doc', block_id: 'tbl-reconstruction', anchor_id: 'tb-reconstruction', kind: 'table', heading_path: 'Fixture Paper / Results', text: 'Method Airplants PSNR SSIM LPIPS GAP-TV 22.85 .4057 .4986 ours 30.69 .9335 .0728', number: 1, line_start: 5, line_end: 9 },
+  { doc_id: 'fixture-doc', block_id: 'p-table-2', anchor_id: 'p-table-2', kind: 'paragraph', heading_path: 'Fixture Paper / Results', text: 'Table 2. Novel-view comparison.', line_start: 11, line_end: 11 },
+  { doc_id: 'fixture-doc', block_id: 'tbl-novel-view', anchor_id: 'tb-novel-view', kind: 'table', heading_path: 'Fixture Paper / Results', text: 'Method Airplants PSNR SSIM LPIPS NeRF+GAP-TV 23.72 .4684 .4195 ours 30.61 .9384 .0764', number: 2, line_start: 13, line_end: 17 },
+]
+
+const readerRegressionAdjacentTableAnchors: ReaderDocAnchor[] = readerRegressionAdjacentTableBlocks.map((block) => ({
   anchor_id: block.anchor_id,
   block_id: block.block_id,
   kind: block.kind,
@@ -379,6 +419,17 @@ export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScena
       blocks: readerRegressionImageAnchorMismatchBlocks,
     }
   }
+  if (scenario === 'adjacent-tables') {
+    return {
+      ok: true,
+      source_path: READER_REGRESSION_SOURCE_PATH,
+      source_name: READER_REGRESSION_SOURCE_NAME,
+      md_path: 'fixture-adjacent-tables.md',
+      markdown: readerRegressionAdjacentTablesMarkdown,
+      anchors: readerRegressionAdjacentTableAnchors,
+      blocks: readerRegressionAdjacentTableBlocks,
+    }
+  }
   return readerRegressionDocResponse
 }
 
@@ -423,6 +474,17 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
       headingPath: 'Anchor Mismatch Fixture / Figure Section',
       snippet: 'Figure 9',
       highlightSnippet: 'Figure 9',
+      strictLocate: false,
+    }
+  }
+
+  if (scenario === 'adjacent-tables') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Fixture Paper / Results',
+      snippet: 'NeRF+GAP-TV',
+      highlightSnippet: 'NeRF+GAP-TV',
       strictLocate: false,
     }
   }

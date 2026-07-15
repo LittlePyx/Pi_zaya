@@ -94,6 +94,57 @@ def test_repair_markdown_quality_fixes_safe_source_level_issues(tmp_path: Path):
     assert (tmp_path / "paper.en.md.bak").exists()
 
 
+def test_quality_repair_detects_and_repairs_collapsed_duplicate_tables(tmp_path: Path):
+    md_path = tmp_path / "table-structure.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "",
+            "# Table Structure Paper",
+            "",
+            "## Abstract",
+            "",
+            "This paper evaluates reconstruction methods on two benchmark scenes.",
+            "",
+            "## Results",
+            "",
+            "| Method | Airplants<br>PSNR↑SSIM↑LPIPS↓ | Hotdog<br>PSNR↑SSIM↑LPIPS↓ |",
+            "| --- | --- | --- |",
+            "| GAP-TV<br>PnP-FFDNet | 22.85 .4057 .4986<br>27.79 .9117 .1817 | 22.35 .7663 .3179<br>29.00 .9765 .0511 |",
+            "| ours | 30.69 .9335 .0728 | 31.35 .9878 .0310 |",
+            "",
+            "**Table 1.** Quantitative comparison.",
+            "",
+            "| Method | Airplants |  |  | Hotdog |  |  |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+            "|  | PSNR↑ | SSIM↑ | LPIPS↓ | PSNR↑ | SSIM↑ | LPIPS↓ |",
+            "| GAP-TV | 22.85 | .4057 | .4986 | 22.35 | .7663 | .3179 |",
+            "| PnP-FFDNet | 27.79 | .9117 | .1817 | 29.00 | .9765 | .0511 |",
+            "| ours | 30.69 | .9335 | .0728 | 31.35 | .9878 | .0310 |",
+            "",
+            "## References",
+            "",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    report = write_conversion_quality_result(md_path)
+
+    assert "collapsed_table_rows" in report["repair_plan"]["issue_codes"]
+    assert "duplicate_table_representations" in report["repair_plan"]["issue_codes"]
+    assert report["repair_plan"]["action"] == "autofix"
+
+    result = repair_markdown_text(md_path, original)
+
+    assert result["changed"] is True
+    assert "normalize_markdown_tables" in result["applied"]
+    assert "collapsed_table_rows" not in result["remaining_issue_codes"]
+    assert "duplicate_table_representations" not in result["remaining_issue_codes"]
+    assert "<br>" not in result["repaired_text"]
+    assert result["repaired_text"].count("GAP-TV") == 1
+
+
 def test_write_conversion_quality_result_accepts_author_year_references(tmp_path: Path):
     md_path = tmp_path / "author_year.md"
     md_path.write_text(

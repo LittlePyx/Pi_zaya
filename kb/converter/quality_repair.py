@@ -23,7 +23,7 @@ from .reference_markdown import (
 )
 from .pdf_reference_text import reference_ordered_page_text
 from .reference_page_vl import reference_markdown_entry_count
-from .tables import normalize_markdown_table_block
+from .tables import markdown_table_issue_counts, normalize_markdown_tables_document
 from kb.reference_index import extract_references_map_from_md
 
 try:
@@ -270,6 +270,22 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "action": "autofix",
         "scope": "markdown",
         "strategies": ["normalize_markdown_tables", "postprocess_markdown", "figure_metadata_captions", "pdf_text_captions"],
+    },
+    "collapsed_table_rows": {
+        "label": "Recover collapsed Markdown table rows",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "Multiple logical data rows were packed into cells with literal HTML break markers.",
+        "strategies": ["normalize_markdown_tables"],
+    },
+    "duplicate_table_representations": {
+        "label": "Remove a nearby lower-quality duplicate table",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "The same table data appears in nearby compact and structured representations.",
+        "strategies": ["normalize_markdown_tables"],
     },
     "missing_abstract": {
         "label": "Infer and insert Abstract heading from front matter",
@@ -751,6 +767,11 @@ def _issue_codes_from_context(
         codes.append("collapsed_heading_hierarchy")
     if _stray_inline_math_likely(text):
         codes.append("stray_inline_math")
+    table_issues = markdown_table_issue_counts(text)
+    if int(table_issues.get("literal_break_count") or 0) > 0 or int(table_issues.get("collapsed_row_count") or 0) > 0:
+        codes.append("collapsed_table_rows")
+    if int(table_issues.get("duplicate_table_count") or 0) > 0:
+        codes.append("duplicate_table_representations")
     return _dedupe_codes(codes)
 
 
@@ -1820,30 +1841,7 @@ def _move_early_references_to_end(md: str) -> tuple[str, bool]:
 
 
 def _normalize_markdown_tables_only(md: str) -> tuple[str, bool]:
-    lines = str(md or "").splitlines()
-    out: list[str] = []
-    table_buf: list[str] = []
-
-    def flush_table() -> None:
-        nonlocal table_buf
-        if not table_buf:
-            return
-        block = "\n".join(table_buf)
-        out.extend(normalize_markdown_table_block(block).splitlines())
-        table_buf = []
-
-    for line in lines:
-        stripped = str(line or "").lstrip()
-        if stripped.startswith("|") and stripped.count("|") >= 2:
-            table_buf.append(line)
-            continue
-        flush_table()
-        out.append(line)
-    flush_table()
-
-    fixed = "\n".join(out)
-    if str(md or "").endswith("\n"):
-        fixed += "\n"
+    fixed = normalize_markdown_tables_document(md)
     return fixed, fixed != str(md or "")
 
 
@@ -1962,6 +1960,15 @@ def _regression_reasons(base_text: str, candidate_text: str) -> list[str]:
     cand = comparison.get("candidate") if isinstance(comparison.get("candidate"), dict) else {}
     flags = comparison.get("regression_flags") if isinstance(comparison.get("regression_flags"), dict) else {}
     reasons = [str(key) for key, value in flags.items() if bool(value)]
+    if "tables_dropped" in reasons:
+        base_table_issues = markdown_table_issue_counts(base_text)
+        candidate_table_issues = markdown_table_issue_counts(candidate_text)
+        if (
+            int(base_table_issues.get("duplicate_table_count") or 0)
+            > int(candidate_table_issues.get("duplicate_table_count") or 0)
+            and int(candidate_table_issues.get("literal_break_count") or 0) == 0
+        ):
+            reasons = [reason for reason in reasons if reason != "tables_dropped"]
     base_chars = int(base.get("chars") or 0)
     cand_chars = int(cand.get("chars") or 0)
     if reasons == ["analyzer_warnings_increased"]:
