@@ -18,6 +18,7 @@ import {
 import {
   prepareRefsPanelHits,
   type RefsPanelRefEntry as RefEntry,
+  type RefsPanelRefHit as RefHit,
   type RefsPanelRefUiMeta as RefUiMeta,
 } from './refsPanelDisplay'
 
@@ -27,6 +28,14 @@ const expandedRefsPanelKeys = new Set<string>()
 
 function refsPanelExpansionKey(msgId: number) {
   return String(Number(msgId || 0) || 0)
+}
+
+function refSourceStateKey(hit: RefHit, index: number) {
+  const ui = hit.ui_meta || {}
+  const readerOpen = (ui.reader_open && typeof ui.reader_open === 'object') ? ui.reader_open : {}
+  const sourcePath = String(ui.source_path || readerOpen.sourcePath || hit.meta?.source_path || '').trim()
+  const sourceKey = referenceSourcePathCacheKey(sourcePath)
+  return sourceKey ? `source:${sourceKey}` : `row:${index}`
 }
 
 interface RefCardViewSection {
@@ -199,10 +208,10 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
         : suppressionReason === 'render_failed'
           ? S.refs_suppressed_render
           : S.refs_suppressed_default
-  const [citeIndex, setCiteIndex] = useState<number | null>(null)
-  const [loadingIndex, setLoadingIndex] = useState<number | null>(null)
-  const [guideLoadingIndex, setGuideLoadingIndex] = useState<number | null>(null)
-  const [remoteMeta, setRemoteMeta] = useState<Record<number, Record<string, unknown>>>({})
+  const [citeSourceKey, setCiteSourceKey] = useState<string | null>(null)
+  const [loadingSourceKey, setLoadingSourceKey] = useState<string | null>(null)
+  const [guideLoadingSourceKey, setGuideLoadingSourceKey] = useState<string | null>(null)
+  const [remoteMeta, setRemoteMeta] = useState<Record<string, Record<string, unknown>>>({})
   const autoFetchedCitationMetaRef = useRef<Set<string>>(new Set())
 
   const handleCollapseChange = (keys: string | string[]) => {
@@ -217,23 +226,23 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
     }
   }
 
-  const fetchCitationMeta = useCallback(async (index: number, ui: RefUiMeta, options?: { silent?: boolean }) => {
+  const fetchCitationMeta = useCallback(async (sourceKey: string, ui: RefUiMeta, options?: { silent?: boolean }) => {
     const sourcePath = String(ui.source_path || '').trim()
     if (!sourcePath) return
     const silent = Boolean(options?.silent)
     if (!silent) {
-      setLoadingIndex(index)
+      setLoadingSourceKey(sourceKey)
     }
     try {
       const meta = await referencesApi.citationMetaCached(sourcePath)
-      setRemoteMeta((current) => ({ ...current, [index]: meta }))
+      setRemoteMeta((current) => ({ ...current, [sourceKey]: meta }))
     } catch (err) {
       if (!silent) {
         message.error(err instanceof Error ? err.message : S.refs_fetch_meta_failed)
       }
     } finally {
       if (!silent) {
-        setLoadingIndex((current) => (current === index ? null : current))
+        setLoadingSourceKey((current) => (current === sourceKey ? null : current))
       }
     }
   }, [S.refs_fetch_meta_failed])
@@ -242,37 +251,40 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
     if (hasPending || visibleHits.length <= 0) return
     for (const [index, hit] of visibleHits.entries()) {
       const ui = hit.ui_meta || {}
+      const sourceKey = refSourceStateKey(hit, index)
       const sourcePath = String(ui.source_path || '').trim()
       if (!sourcePath) continue
-      const existingMeta = (remoteMeta[index] || ui.citation_meta || {}) as Record<string, unknown>
+      const existingMeta = (remoteMeta[sourceKey] || ui.citation_meta || {}) as Record<string, unknown>
       if (hasResolvedCitationMeta(existingMeta)) continue
-      const fetchKey = `${msgId}:${index}:${referenceSourcePathCacheKey(sourcePath)}`
+      const fetchKey = `${msgId}:${sourceKey}`
       if (autoFetchedCitationMetaRef.current.has(fetchKey)) continue
       autoFetchedCitationMetaRef.current.add(fetchKey)
-      void fetchCitationMeta(index, ui, { silent: true })
+      void fetchCitationMeta(sourceKey, ui, { silent: true })
     }
   }, [fetchCitationMeta, hasPending, msgId, remoteMeta, visibleHits])
 
   const citeDetail = useMemo<CiteDetail | null>(() => {
-    if (citeIndex === null || !visibleHits[citeIndex]) return null
+    if (citeSourceKey === null) return null
+    const citeIndex = visibleHits.findIndex((hit, index) => refSourceStateKey(hit, index) === citeSourceKey)
+    if (citeIndex < 0 || !visibleHits[citeIndex]) return null
     const ui = visibleHits[citeIndex]?.ui_meta || {}
-    const meta = remoteMeta[citeIndex] || ui.citation_meta
+    const meta = remoteMeta[citeSourceKey] || ui.citation_meta
     return buildCiteDetailFromMeta(meta as Record<string, unknown>, {
       sourceName: basenameFromSourcePath(ui.display_name || ui.source_path),
       sourcePath: ui.source_path,
       num: citeIndex + 1,
       anchor: `ref-source-${msgId}-${citeIndex}`,
     })
-  }, [citeIndex, visibleHits, msgId, remoteMeta])
+  }, [citeSourceKey, visibleHits, msgId, remoteMeta])
 
-  const startPaperGuideFromHit = async (index: number, ui: RefUiMeta) => {
+  const startPaperGuideFromHit = async (sourceKey: string, ui: RefUiMeta) => {
     const sourcePath = String(ui.source_path || '').trim()
     if (!sourcePath) {
       message.info(S.refs_reader_missing)
       return
     }
     const sourceName = basenameFromSourcePath(ui.display_name || sourcePath) || S.default_source_fallback
-    setGuideLoadingIndex(index)
+    setGuideLoadingSourceKey(sourceKey)
     try {
       await createPaperGuideConversation({
         sourcePath,
@@ -284,7 +296,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
     } catch (err) {
       message.error(err instanceof Error ? err.message : S.refs_guide_failed)
     } finally {
-      setGuideLoadingIndex((current) => (current === index ? null : current))
+      setGuideLoadingSourceKey((current) => (current === sourceKey ? null : current))
     }
   }
 
@@ -390,6 +402,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                 <div className="kb-ref-list">
                 {visibleHits.map((hit, index) => {
                   const ui = hit.ui_meta || {}
+                  const sourceKey = refSourceStateKey(hit, index)
                   const metaState = String(hit.meta?.ref_pack_state || '').trim().toLowerCase()
                   const isFailed = metaState === 'failed'
                   const title = basenameFromSourcePath(ui.display_name || hit.meta?.source_path) || 'Unknown PDF'
@@ -415,7 +428,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                     .filter((badge) => shouldShowSemanticBadge(badge.text))
                     .slice(0, 1)
                   const detail = buildCiteDetailFromMeta(
-                    (remoteMeta[index] || ui.citation_meta || {}) as Record<string, unknown>,
+                    (remoteMeta[sourceKey] || ui.citation_meta || {}) as Record<string, unknown>,
                     {
                       sourceName: title,
                       sourcePath: ui.source_path,
@@ -432,7 +445,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                   const canFetchMeta = Boolean(String(ui.source_path || '').trim())
 
                   return (
-                    <div key={`${msgId}-${index}`} className="kb-ref-item">
+                    <div key={`${msgId}-${sourceKey}`} className="kb-ref-item">
                       <div className="kb-ref-header">
                         <div className="kb-ref-rank">#{index + 1}</div>
                         <div className="kb-ref-main">
@@ -487,13 +500,13 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                               </Button>
                               <Button
                                 className="kb-ref-action"
-                                loading={loadingIndex === index}
+                                loading={loadingSourceKey === sourceKey}
                                 disabled={!canFetchMeta}
                                 onClick={async () => {
-                                  setCiteIndex(index)
-                                  const existingMeta = (remoteMeta[index] || ui.citation_meta || {}) as Record<string, unknown>
+                                  setCiteSourceKey(sourceKey)
+                                  const existingMeta = (remoteMeta[sourceKey] || ui.citation_meta || {}) as Record<string, unknown>
                                   if (!hasResolvedCitationMeta(existingMeta)) {
-                                    await fetchCitationMeta(index, ui)
+                                    await fetchCitationMeta(sourceKey, ui)
                                   }
                                 }}
                               >
@@ -501,9 +514,9 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                               </Button>
                               <Button
                                 className="kb-ref-action"
-                                loading={guideLoadingIndex === index}
+                                loading={guideLoadingSourceKey === sourceKey}
                                 disabled={!canFetchMeta}
-                                onClick={() => { void startPaperGuideFromHit(index, ui) }}
+                                onClick={() => { void startPaperGuideFromHit(sourceKey, ui) }}
                               >
                                 {S.refs_guide_btn}
                               </Button>
@@ -563,14 +576,14 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
       />
 
       <Modal
-        open={citeIndex !== null}
+        open={citeSourceKey !== null && citeDetail !== null}
         title={null}
         footer={null}
-        onCancel={() => setCiteIndex(null)}
+        onCancel={() => setCiteSourceKey(null)}
         width={640}
         className="kb-ref-cite-modal"
       >
-        {loadingIndex === citeIndex ? (
+        {loadingSourceKey === citeSourceKey ? (
           <div className="py-8 text-center text-sm text-neutral-500">{S.refs_cite_loading}</div>
         ) : citeDetail ? (
           <>

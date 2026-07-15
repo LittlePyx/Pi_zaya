@@ -88,9 +88,7 @@ function normalizeSourcePathForMatch(input: unknown): string {
 function sourceDocumentIdentityKey(input: unknown): string {
   const normalized = normalizeSourcePathForMatch(input)
   if (!normalized) return ''
-  const parts = normalized.split('/').map((item) => item.trim()).filter(Boolean)
-  const file = parts[parts.length - 1] || normalized
-  return file
+  return normalized
     .replace(/\.en\.md$/i, '')
     .replace(/\.md$/i, '')
     .replace(/\.pdf$/i, '')
@@ -127,9 +125,31 @@ function sourcePathsReferToSameDocument(left: unknown, right: unknown): boolean 
   const rightNorm = normalizeSourcePathForMatch(right)
   if (!leftNorm || !rightNorm) return false
   if (leftNorm === rightNorm) return true
-  const leftId = sourceDocumentIdentityKey(leftNorm)
-  const rightId = sourceDocumentIdentityKey(rightNorm)
-  return Boolean(leftId && rightId && leftId === rightId)
+  const leftHasDirectory = leftNorm.includes('/')
+  const rightHasDirectory = rightNorm.includes('/')
+  if (leftHasDirectory && rightHasDirectory) return false
+  const leftName = normalizeSourceNameIdentity(leftNorm)
+  const rightName = normalizeSourceNameIdentity(rightNorm)
+  return Boolean(leftName && rightName && leftName === rightName)
+}
+
+function sourcePathsFormPdfMarkdownPair(left: unknown, right: unknown): boolean {
+  const leftNorm = normalizeSourcePathForMatch(left)
+  const rightNorm = normalizeSourcePathForMatch(right)
+  if (!leftNorm || !rightNorm) return false
+  const leftKind = leftNorm.endsWith('.pdf') ? 'pdf' : /(?:\.en)?\.md$/.test(leftNorm) ? 'markdown' : ''
+  const rightKind = rightNorm.endsWith('.pdf') ? 'pdf' : /(?:\.en)?\.md$/.test(rightNorm) ? 'markdown' : ''
+  if (new Set([leftKind, rightKind]).size !== 2 || !leftKind || !rightKind) return false
+  const leftName = normalizeSourceNameIdentity(leftNorm)
+  const rightName = normalizeSourceNameIdentity(rightNorm)
+  if (!leftName || leftName !== rightName) return false
+  const leftParent = leftNorm.split('/').slice(0, -1).join('/')
+  const rightParent = rightNorm.split('/').slice(0, -1).join('/')
+  if (leftParent && leftParent === rightParent) return true
+  const markdownPath = leftKind === 'markdown' ? leftNorm : rightNorm
+  const markdownParts = markdownPath.split('/').filter(Boolean)
+  const markdownParentName = markdownParts.length >= 2 ? markdownParts[markdownParts.length - 2] : ''
+  return normalizeSourceNameIdentity(markdownParentName) === leftName
 }
 
 function refHitDocumentKey(hit: RefsPanelRefHit, index: number): string {
@@ -159,7 +179,13 @@ function hitMatchesActiveSource(hit: RefsPanelRefHit, activeSourcePath?: string,
   const activePath = String(activeSourcePath || '').trim()
   const activeName = String(activeSourceName || '').trim()
   const sourcePath = hitSourcePath(hit)
-  if (activePath && sourcePath && sourcePathsReferToSameDocument(sourcePath, activePath)) return true
+  if (activePath && sourcePath) {
+    if (sourcePathsReferToSameDocument(sourcePath, activePath)) return true
+    if (!sourcePathsFormPdfMarkdownPair(sourcePath, activePath)) return false
+    const activeNameKey = normalizeSourceNameIdentity(activeName || activePath)
+    const hitNameKey = normalizeSourceNameIdentity(hitSourceName(hit) || sourcePath)
+    return Boolean(activeNameKey && hitNameKey && activeNameKey === hitNameKey)
+  }
   const activeNameKey = normalizeSourceNameIdentity(activeName || activePath)
   const hitNameKey = normalizeSourceNameIdentity(hitSourceName(hit) || sourcePath)
   return Boolean(activeNameKey && hitNameKey && activeNameKey === hitNameKey)

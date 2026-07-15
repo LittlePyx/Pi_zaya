@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from math import log
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -272,6 +273,8 @@ def _system_a_slots(
     answer_hits: Sequence[Mapping[str, Any]] | None,
     max_items: int = 3,
     focus_multi_source_evidence: bool = False,
+    ranking_texts: Sequence[str] | None = None,
+    rank_answer_hits: bool = False,
 ) -> list[dict[str, Any]]:
     slots: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -335,7 +338,18 @@ def _system_a_slots(
         if len(slots) >= max(1, int(max_items)):
             return slots
 
-    for idx, hit0 in enumerate(list(answer_hits or []), start=1):
+    indexed_answer_hits = [
+        (idx, hit0)
+        for idx, hit0 in enumerate(list(answer_hits or []), start=1)
+        if isinstance(hit0, Mapping)
+    ]
+    if rank_answer_hits and indexed_answer_hits:
+        indexed_answer_hits = _rank_system_a_answer_hits(
+            indexed_answer_hits,
+            ranking_texts=ranking_texts,
+        )
+
+    for idx, hit0 in indexed_answer_hits:
         if not isinstance(hit0, Mapping):
             continue
         hit = dict(hit0)
@@ -351,6 +365,198 @@ def _system_a_slots(
         if len(slots) >= max(1, int(max_items)):
             break
     return slots
+
+
+_RANKING_STOPWORDS = {
+    "about",
+    "across",
+    "answer",
+    "article",
+    "articles",
+    "cite",
+    "cites",
+    "each",
+    "evidence",
+    "exact",
+    "explain",
+    "from",
+    "full",
+    "important",
+    "into",
+    "library",
+    "marker",
+    "multiple",
+    "only",
+    "organize",
+    "paper",
+    "papers",
+    "query",
+    "retrieved",
+    "scope",
+    "search",
+    "source",
+    "sources",
+    "support",
+    "synthesize",
+    "that",
+    "their",
+    "these",
+    "this",
+    "those",
+    "when",
+    "which",
+    "whole",
+    "with",
+}
+
+
+def _ranking_tokens(value: Any) -> set[str]:
+    tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if len(token) >= 3 and token not in _RANKING_STOPWORDS
+    }
+    if tokens.intersection({"review", "survey", "overview"}):
+        tokens.update({"principles", "prospects", "foundations", "advances", "challenges"})
+    return tokens
+
+
+def _answer_hit_ranking_fields(hit: Mapping[str, Any]) -> tuple[set[str], set[str]]:
+    meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), Mapping) else {}
+    title_tokens = _ranking_tokens(
+        " ".join(
+            [
+                str(meta.get("source_path") or ""),
+                str(meta.get("source_name") or ""),
+                str(meta.get("heading_path") or meta.get("ref_best_heading_path") or ""),
+            ]
+        )
+    )
+    evidence_tokens = _ranking_tokens(
+        " ".join(
+            [
+                str(meta.get("evidence_quote") or ""),
+                str(hit.get("text") or hit.get("snippet") or ""),
+            ]
+        )
+    )
+    return title_tokens, evidence_tokens
+
+
+def _rank_system_a_answer_hits(
+    indexed_hits: Sequence[tuple[int, Mapping[str, Any]]],
+    *,
+    ranking_texts: Sequence[str] | None,
+) -> list[tuple[int, Mapping[str, Any]]]:
+    """Rank explicit multi-paper candidates while retaining original hit numbers.
+
+    Retrieval can return several broadly related documents before the documents
+    named by a multi-paper request.  The citation plan must preserve the original
+    hit number used by ``[[CITE:...]]`` while choosing documents that collectively
+    cover the translated query facets.
+    """
+
+    query_tokens = _ranking_tokens(" ".join(str(item or "") for item in list(ranking_texts or [])))
+    if not query_tokens:
+        return list(indexed_hits)
+
+    prepared: list[tuple[int, Mapping[str, Any], set[str], set[str]]] = []
+    doc_frequency: dict[str, int] = {}
+    for idx, hit in indexed_hits:
+        title_tokens, evidence_tokens = _answer_hit_ranking_fields(hit)
+        matched = query_tokens & (title_tokens | evidence_tokens)
+        prepared.append((idx, hit, title_tokens, evidence_tokens))
+        for token in matched:
+            doc_frequency[token] = doc_frequency.get(token, 0) + 1
+
+    total = max(1, len(prepared))
+
+    def token_weight(token: str) -> float:
+        return 1.0 + log((total + 1.0) / (doc_frequency.get(token, 0) + 1.0))
+
+    remaining = list(prepared)
+    ranked: list[tuple[int, Mapping[str, Any]]] = []
+    covered_tokens: set[str] = set()
+    while remaining:
+        best_pos = 0
+        best_key: tuple[float, float, int] | None = None
+        for pos, (idx, _hit, title_tokens, evidence_tokens) in enumerate(remaining):
+            title_match = query_tokens & title_tokens
+            evidence_match = query_tokens & evidence_tokens
+            all_match = title_match | evidence_match
+            base_score = sum(token_weight(token) * 3.0 for token in title_match)
+            base_score += sum(token_weight(token) for token in evidence_match - title_match)
+            new_tokens = all_match - covered_tokens
+            coverage_score = sum(token_weight(token) for token in new_tokens)
+            # Marginal coverage prevents a second generic deep-learning paper
+            # from displacing the requested foundations or hardware paper.
+            key = (base_score + coverage_score * 2.0, coverage_score, -idx)
+            if best_key is None or key > best_key:
+                best_key = key
+                best_pos = pos
+        idx, hit, title_tokens, evidence_tokens = remaining.pop(best_pos)
+        ranked.append((idx, hit))
+        covered_tokens.update(query_tokens & (title_tokens | evidence_tokens))
+
+    # When the user gives an explicit reading sequence, keep the selected
+    # sources in that sequence. Translation variants provide the cross-language
+    # facet order even when the original prompt is Chinese.
+    facet_query = next(
+        (
+            str(item or "").strip()
+            for item in list(ranking_texts or [])
+            if str(item or "").strip()
+            and not re.search(r"[\u4e00-\u9fff]", str(item or ""))
+            and len(re.findall(r"[a-z0-9]+", str(item or "").lower())) >= 3
+        ),
+        "",
+    )
+    if not facet_query:
+        return ranked
+    facet_sequence = re.findall(r"[a-z0-9]+", facet_query.lower())
+    facet_positions: dict[str, int] = {}
+    for pos, token in enumerate(facet_sequence):
+        facet_positions.setdefault(token, pos)
+    generic_facet_tokens = _RANKING_STOPWORDS | {
+        "single",
+        "pixel",
+        "imaging",
+        "knowledge",
+        "dependency",
+        "reading",
+        "order",
+        "sequence",
+    }
+
+    def facet_position(row: tuple[int, Mapping[str, Any]]) -> int | None:
+        _idx, hit = row
+        title_tokens, _evidence_tokens = _answer_hit_ranking_fields(hit)
+        explicit = [
+            facet_positions[token]
+            for token in title_tokens
+            if token in facet_positions and token not in generic_facet_tokens
+        ]
+        if explicit:
+            return min(explicit)
+        if title_tokens.intersection({"principles", "prospects", "foundations", "overview"}):
+            review_positions = [
+                facet_positions[token]
+                for token in ("review", "survey", "overview")
+                if token in facet_positions
+            ]
+            if review_positions:
+                return min(review_positions)
+        return None
+
+    ranked_with_order = list(enumerate(ranked))
+    ranked_with_order.sort(
+        key=lambda item: (
+            facet_position(item[1]) is None,
+            facet_position(item[1]) if facet_position(item[1]) is not None else 10_000,
+            item[0],
+        )
+    )
+    return [row for _rank, row in ranked_with_order]
 
 
 def _s2ism_tradeoff_focus_slot(
@@ -439,6 +645,7 @@ def build_citation_plan(
     answer_hits: Sequence[Mapping[str, Any]] | None = None,
     support_slots: Sequence[Mapping[str, Any]] | None = None,
     reference_opportunities: Sequence[Mapping[str, Any]] | None = None,
+    retrieval_queries: Sequence[str] | None = None,
     max_slots: int = 5,
 ) -> dict[str, Any]:
     intent = _citation_intent(prompt, prompt_family=prompt_family)
@@ -461,7 +668,7 @@ def build_citation_plan(
         if int(budget.get("system_b") or 0) > 0
         else []
     )
-    system_a_limit = max(3, requested_system_a)
+    system_a_limit = requested_system_a if requested_paper_count is not None else max(3, requested_system_a)
     source_focus_keys: set[str] = set()
     for raw in [*list(support_slots or []), *list(answer_hits or [])]:
         if not isinstance(raw, Mapping):
@@ -478,6 +685,8 @@ def build_citation_plan(
             len(source_focus_keys) >= 2
             and _MULTI_SLOT_COVERAGE_RE.search(str(prompt or ""))
         ),
+        ranking_texts=[prompt, *list(retrieval_queries or [])],
+        rank_answer_hits=bool(requested_system_a > 1),
     )
     s2ism_focus = _s2ism_tradeoff_focus_slot(prompt, answer_hits)
     if s2ism_focus:

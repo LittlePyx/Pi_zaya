@@ -11,6 +11,9 @@ const LOCAL_PORT_SPAN = 1000
 const MAX_PORT_ATTEMPTS = 120
 const MAX_EPHEMERAL_ATTEMPTS = 20
 const STALE_LOCK_MS = 10 * 60 * 1000
+// Chromium blocks the SIP ports before a request reaches the dev server.
+// The local allocation span includes both, so skip them deterministically.
+const CHROMIUM_UNSAFE_PORTS = new Set([5060, 5061])
 
 function hasServerOverride(env) {
   return Boolean(env.PW_BASE_URL || env.PW_PORT || env.PLAYWRIGHT_PORT)
@@ -84,6 +87,7 @@ function getEphemeralPort() {
 async function reservePort() {
   for (let i = 0; i < MAX_PORT_ATTEMPTS; i += 1) {
     const port = DEFAULT_PORT + ((process.pid + i) % LOCAL_PORT_SPAN)
+    if (CHROMIUM_UNSAFE_PORTS.has(port)) continue
     const release = await lockPort(port)
     if (!release) continue
     if (await portIsFree(port)) return { port, release }
@@ -92,6 +96,7 @@ async function reservePort() {
 
   for (let i = 0; i < MAX_EPHEMERAL_ATTEMPTS; i += 1) {
     const port = await getEphemeralPort()
+    if (CHROMIUM_UNSAFE_PORTS.has(port)) continue
     const release = await lockPort(port)
     if (!release) continue
     if (await portIsFree(port)) return { port, release }

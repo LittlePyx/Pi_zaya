@@ -50,6 +50,40 @@ def test_flexible_english_count_phrase_extracts_one_paper() -> None:
     assert extract_requested_paper_count(prompt) == 1
 
 
+def test_demonstrative_multi_paper_phrase_extracts_count() -> None:
+    prompt = "如果先读综述，再读硬件论文，最后读算法综述，这三篇之间有什么知识依赖？正文只引用这三篇。"
+
+    assert extract_requested_paper_count(prompt) == 3
+    assert prompt_explicitly_requests_multi_paper_list(prompt) is False
+    assert prompt_likely_multi_paper_synthesis(prompt) is True
+    assert extract_requested_paper_count("Explain the dependency among these three papers.") == 3
+    assert prompt_explicitly_requests_multi_paper_list(
+        "Explain the dependency among these three papers."
+    ) is False
+
+
+def test_demonstrative_paper_set_with_selection_action_stays_list_request() -> None:
+    prompt = "请从刚才提到的候选中选出这三篇，并按相关性列出。"
+
+    assert extract_requested_paper_count(prompt) == 3
+    assert prompt_explicitly_requests_multi_paper_list(prompt) is True
+    assert prompt_explicitly_requests_multi_paper_list("请从候选库中选择这三篇论文。") is True
+    assert prompt_explicitly_requests_multi_paper_list("请从候选库中选这三篇论文。") is True
+
+
+def test_fixed_paper_set_format_and_reading_order_words_do_not_trigger_reselection() -> None:
+    prompts = [
+        "Compare these three papers and list their assumptions and limitations.",
+        "列出这三篇论文各自的假设和局限，不要推荐其他文献。",
+        "这三篇怎么选择阅读顺序？",
+        "请推荐这三篇论文的阅读顺序。",
+        "请推荐这三篇各自最值得看的章节。",
+    ]
+
+    assert all(extract_requested_paper_count(prompt) == 3 for prompt in prompts)
+    assert all(prompt_explicitly_requests_multi_paper_list(prompt) is False for prompt in prompts)
+
+
 def test_previous_answer_audit_is_not_a_multi_paper_list_request() -> None:
     prompt = (
         "审查上一条回答：是否严格只用了 4 篇？"

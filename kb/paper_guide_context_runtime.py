@@ -330,6 +330,7 @@ def _prepare_paper_guide_prompt_context(
     prompt_family: str,
     paper_guide_bound_source_path: str,
     db_dir,
+    query_variants: list[str] | None = None,
 ) -> dict:
     paper_guide_evidence_cards_block = ""
     paper_guide_support_slots_block = ""
@@ -445,6 +446,7 @@ def _prepare_paper_guide_prompt_context(
         answer_hits=answer_hits,
         support_slots=paper_guide_support_slots,
         reference_opportunities=paper_guide_reference_opportunities,
+        retrieval_queries=[retrieval_prompt, used_query, *list(query_variants or [])],
     )
     if (
         not paper_guide_mode
@@ -473,6 +475,7 @@ def _prepare_paper_guide_prompt_context(
                 answer_hits=answer_hits,
                 support_slots=paper_guide_support_slots,
                 reference_opportunities=paper_guide_reference_opportunities,
+                retrieval_queries=[retrieval_prompt, used_query, *list(query_variants or [])],
             )
     citation_plan_block = build_citation_plan_prompt_block(citation_plan)
     paper_guide_contracts_seed = {}

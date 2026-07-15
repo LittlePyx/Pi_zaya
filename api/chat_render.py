@@ -102,7 +102,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 23
+_RENDER_CACHE_SCHEMA_VERSION = 25
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -3714,32 +3714,41 @@ def _reading_guide_rebind_multi_source_plan_markers(
         )
         return identity_score + evidence_score
 
+    def marker_claim_context(source: str, start: int, end: int) -> str:
+        left_candidates = [source.rfind(char, 0, start) for char in "\n\u3002\uff01\uff1f.!?"]
+        left = max(left_candidates) + 1
+        right_candidates = [
+            pos
+            for char in "\n\u3002\uff01\uff1f.!?"
+            for pos in [source.find(char, end)]
+            if pos >= 0
+        ]
+        right = min(right_candidates) + 1 if right_candidates else len(source)
+        return source[left:right]
+
     original_text = text
-    best_rebind_by_source: dict[str, tuple[float, int, tuple[int, int]]] = {}
+    aligned_rebind_spans: set[tuple[int, int]] = set()
     for marker_match in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", original_text):
         old_num = int(marker_match.group(1))
-        source_key = marker_source_key(old_num)
-        row = slot_by_source.get(source_key)
+        row = slot_by_source.get(marker_source_key(old_num))
         if not row:
             continue
         slot, replacement = row
         if int(replacement) <= 0 or int(replacement) == old_num:
             continue
-        line_start = original_text.rfind("\n", 0, marker_match.start()) + 1
-        line_end = original_text.find("\n", marker_match.end())
-        if line_end < 0:
-            line_end = len(original_text)
-        score = local_alignment_score(original_text[line_start:line_end], slot)
-        if score < 2.0:
-            continue
-        candidate = (float(score), int(marker_match.start()), marker_match.span())
-        current = best_rebind_by_source.get(source_key)
-        if current is None or candidate[:2] > current[:2]:
-            best_rebind_by_source[source_key] = candidate
-    selected_rebind_spans = {item[2] for item in best_rebind_by_source.values()}
+        claim = marker_claim_context(original_text, marker_match.start(), marker_match.end())
+        disclaims_support = bool(
+            re.search(
+                r"(?i)\b(?:no|not|without|lacks?|missing)\s+(?:direct\s+)?support\b|"
+                r"\bunsupported\b|\u65e0(?:\u76f4\u63a5)?\u4f9d\u636e|\u672a(?:\u88ab)?\u652f\u6301|\u7f3a\u5c11(?:\u76f4\u63a5)?\u4f9d\u636e",
+                claim,
+            )
+        )
+        if (not disclaims_support) and local_alignment_score(claim, slot) >= 2.0:
+            aligned_rebind_spans.add(marker_match.span())
 
     def replace_marker(match: re.Match[str]) -> str:
-        if match.span() not in selected_rebind_spans:
+        if match.span() not in aligned_rebind_spans:
             return match.group(0)
         old_num = int(match.group(1))
         row = slot_by_source.get(marker_source_key(old_num))
@@ -3753,61 +3762,31 @@ def _reading_guide_rebind_multi_source_plan_markers(
 
     text = re.sub(r"(?<![!\\])\[(\d{1,5})\](?!\()", replace_marker, text)
 
-    # A beginner roadmap often paraphrases compressive sensing too broadly for
-    # occurrence binding even though the selected review contains an exact,
-    # useful statement. Surface that statement once beside the named paper so
-    # the answer and citation card share the same claim.
-    for source_key, row in slot_by_source.items():
-        slot, num = row
-        num = int(num)
-        evidence = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "")).strip()
-        evidence_low = evidence.lower()
-        if not (
-            "single-pixel camera" in evidence_low
-            and "number of measurements is fewer" in evidence_low
-            and (
-                "unknown pixels" in evidence_low
-                or "under-sampling" in evidence_low
-                or "sub-sampling" in evidence_low
-            )
-        ):
-            continue
-        direct_line_re = re.compile(
-            rf"(?im)^.*(?:测量次数|number\s+of\s+measurements).*(?:未知像素|unknown\s+pixels).*\[{num}\].*$"
-        )
-        if direct_line_re.search(text):
-            continue
-
-        def drop_source_marker(match: re.Match[str]) -> str:
-            return "" if marker_source_key(int(match.group(1))) == source_key else match.group(0)
-
-        text = re.sub(r"(?<![!\\])\[(\d{1,5})\](?!\()", drop_source_marker, text)
-        bridge = (
-            "该综述给出的直接依据是：单像素相机即使在测量次数少于图像未知像素总数时，"
-            f"也可以通过压缩感知的欠采样恢复图像 [{num}]。"
-            if re.search(r"[\u4e00-\u9fff]", text)
-            else "The review states that a single-pixel camera can recover an image with fewer "
-            f"measurements than unknown pixels through compressive under-sampling [{num}]."
-        )
-        source_title = str(slot.get("source_name") or slot.get("sourceName") or "").strip()
-        source_title = re.sub(r"(?i)(?:\.(?:en|zh|zh-cn|zh-tw))?\.md$|\.pdf$", "", source_title)
-        lines_for_insert = text.splitlines(keepends=True)
-        title_index = next(
-            (
-                idx
-                for idx, line in enumerate(lines_for_insert)
-                if source_title and source_title.lower() in line.lower()
-            ),
-            -1,
-        )
-        insert_at = title_index + 1 if title_index >= 0 else 0
-        lines_for_insert[insert_at:insert_at] = [f"\n{bridge}\n"]
-        text = "".join(lines_for_insert)
-
     # Ensure that every unique planned source has one occurrence-level marker
     # on its best aligned claim. This covers headings and acronym-only method
     # cards without treating a same-document System-B reference as System A.
     lines = text.splitlines(keepends=True)
+
+    def append_to_best_supported_sentence(body: str, slot: dict, num: int) -> str:
+        source_surface = _reading_source_surface(None, slot)
+        terms = _reading_coverage_terms(source_surface)
+        sentences = re.split(r"(?<=[\u3002\uff01\uff1f.!?])", str(body or ""))
+        ranked_sentences = [
+            (
+                _reading_paragraph_affinity(sentence, terms, source_surface=source_surface),
+                -idx,
+                idx,
+            )
+            for idx, sentence in enumerate(sentences)
+            if sentence.strip() and f"[{int(num)}]" not in sentence
+        ]
+        if ranked_sentences:
+            score, _negative_idx, idx = max(ranked_sentences)
+            if score >= 2.0:
+                sentences[idx] = _append_numeric_citation_to_paragraph(sentences[idx], num)
+                return "".join(sentences)
+        return _append_numeric_citation_to_paragraph(body, num)
+
     for _source_key, row in slot_by_source.items():
         slot, num = row
         num = int(num)
@@ -3832,7 +3811,7 @@ def _reading_guide_rebind_multi_source_plan_markers(
         if body.endswith("\r"):
             body = body[:-1]
             ending = "\r\n" if ending else "\r"
-        lines[idx] = f"{_append_numeric_citation_to_paragraph(body, num)}{ending}"
+        lines[idx] = f"{append_to_best_supported_sentence(body, slot, num)}{ending}"
     return "".join(lines)
 
 
@@ -3848,13 +3827,18 @@ def _reading_guide_repair_missing_system_a_citations(
         isinstance(citation_plan, dict)
         and str(citation_plan.get("intent") or "").strip().lower() == "scope_boundary"
     )
-    if "reading" not in str(output_mode or "") and not scope_boundary:
-        return str(md or "")
     if not isinstance(citation_plan, dict) or not hits:
         return str(md or "")
     text = str(md or "")
     if not text.strip():
         return text
+    if "reading" not in str(output_mode or "") and not scope_boundary:
+        return _reading_guide_rebind_multi_source_plan_markers(
+            text,
+            hits,
+            citation_plan,
+            canonical_paths=canonical_paths,
+        )
     text = _reading_guide_normalize_structured_citation_prose(text)
     text = _reading_guide_enforce_system_b_plan_budget(text, citation_plan)
     text = _reading_guide_repair_ilnet_position_answer(
@@ -3863,29 +3847,18 @@ def _reading_guide_repair_missing_system_a_citations(
         citation_plan,
         canonical_paths=canonical_paths,
     )
-    s2ism_repaired = _reading_guide_repair_s2ism_tradeoff_answer(
+    text = _reading_guide_repair_s2ism_tradeoff_answer(
         text,
         hits,
         citation_plan,
         canonical_paths=canonical_paths,
     )
-    s2ism_targeted = bool(
-        str(citation_plan.get("intent") or "").strip().lower() == "comparison"
-        and 1 <= _citation_plan_system_a_budget(citation_plan) <= 2
-        and _mentions_s2ism(text)
-        and re.search(r"(?i)trade-?off|权衡", text)
-        and re.search(r"(?i)thick\s+samples?|厚样本", text)
-    )
-    if s2ism_repaired != text or s2ism_targeted:
-        return s2ism_repaired
-    scope_repaired = _reading_guide_repair_scope_boundary_citation(
+    text = _reading_guide_repair_scope_boundary_citation(
         text,
         hits,
         citation_plan,
         canonical_paths=canonical_paths,
     )
-    if scope_repaired != text:
-        return scope_repaired
     comparison_repaired = _reading_guide_repair_scigs_scinerf_comparison_evidence(
         text,
         hits,

@@ -176,3 +176,31 @@ test('refs panel auto-fetches citation meta for visible cards without clicking C
   await expect(page.getByTestId('refs-panel-metrics-0')).toContainText('CORE A* (ICORE2026)')
   await expect(page.getByTestId('refs-panel-metrics-0')).toContainText('CCF A (CORE tier proxy)')
 })
+
+test('refs panel keeps delayed citation metadata bound to its source after reorder', async ({ page }) => {
+  await page.route('**/api/references/citation-meta', async (route) => {
+    const sourcePath = String(route.request().postDataJSON()?.source_path || '')
+    const isPaperA = sourcePath.includes('Paper-A.en.md')
+    if (isPaperA) await new Promise((resolve) => setTimeout(resolve, 300))
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        title: isPaperA ? 'Paper A' : 'Paper B',
+        year: isPaperA ? '2021' : '2022',
+        citation_count: isPaperA ? 11 : 22,
+        citation_source: 'OpenAlex',
+        bibliometrics_checked: true,
+      }),
+    })
+  })
+
+  await page.goto('/__refs_panel_test__?scenario=citation-meta-reorder')
+  await page.locator('.kb-refs-panel .ant-collapse-header').click()
+  await page.getByRole('button', { name: 'Swap reference order' }).click()
+
+  await expect(page.locator('.kb-ref-title').nth(0)).toContainText('Paper B.pdf')
+  await expect(page.getByTestId('refs-panel-metrics-0')).toContainText('22')
+  await expect(page.locator('.kb-ref-title').nth(1)).toContainText('Paper A.pdf')
+  await expect(page.getByTestId('refs-panel-metrics-1')).toContainText('11')
+})

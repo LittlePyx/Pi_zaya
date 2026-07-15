@@ -445,3 +445,81 @@ test('refs panel dedupes and filters source-path URL variants as one document', 
   expect(prepared.suppressedHitCount).toBe(0)
   expect(prepared.hiddenActiveSourceCount).toBe(1)
 })
+
+test('refs panel keeps same-basename papers from different directories distinct', () => {
+  const entry = {
+    hits: [
+      {
+        score: 9,
+        text: 'collection A evidence',
+        meta: { source_path: 'F:/library/collection-a/paper.en.md' },
+        ui_meta: { source_path: 'F:/library/collection-a/paper.en.md', display_name: 'paper.pdf' },
+      },
+      {
+        score: 8,
+        text: 'collection B evidence',
+        meta: { source_path: 'F:/library/collection-b/paper.en.md' },
+        ui_meta: { source_path: 'F:/library/collection-b/paper.en.md', display_name: 'paper.pdf' },
+      },
+    ],
+  }
+
+  const prepared = prepareRefsPanelHits(entry, {
+    activeSourcePath: 'F:/library/collection-c/paper.en.md',
+  })
+
+  expect(prepared.hits).toHaveLength(2)
+  expect(prepared.hits.map((hit) => hit.text)).toEqual([
+    'collection A evidence',
+    'collection B evidence',
+  ])
+  expect(prepared.hiddenActiveSourceCount).toBe(0)
+})
+
+test('refs panel filters the markdown converted from the active bound PDF', () => {
+  const entry = {
+    hits: [
+      {
+        score: 9,
+        text: 'current paper markdown evidence',
+        meta: { source_path: 'F:/library/db/Paper/Paper.en.md' },
+        ui_meta: { source_path: 'F:/library/db/Paper/Paper.en.md', display_name: 'Paper.pdf' },
+      },
+      {
+        score: 8,
+        text: 'another paper',
+        meta: { source_path: 'F:/library/db/Other/Other.en.md' },
+        ui_meta: { source_path: 'F:/library/db/Other/Other.en.md', display_name: 'Other.pdf' },
+      },
+    ],
+  }
+
+  const prepared = prepareRefsPanelHits(entry, {
+    activeSourcePath: 'F:/library/pdfs/Paper.pdf',
+    activeSourceName: 'Paper.pdf',
+  })
+
+  expect(prepared.hits.map((hit) => hit.text)).toEqual(['another paper'])
+  expect(prepared.hiddenActiveSourceCount).toBe(1)
+})
+
+test('refs panel keeps cross-format namesakes from different collections distinct', () => {
+  const entry = {
+    hits: [
+      {
+        score: 9,
+        text: 'collection A markdown evidence',
+        meta: { source_path: 'F:/library/collection-a/Paper.en.md' },
+        ui_meta: { source_path: 'F:/library/collection-a/Paper.en.md', display_name: 'Paper.pdf' },
+      },
+    ],
+  }
+
+  const prepared = prepareRefsPanelHits(entry, {
+    activeSourcePath: 'F:/library/collection-b/Paper.pdf',
+    activeSourceName: 'Paper.pdf',
+  })
+
+  expect(prepared.hits.map((hit) => hit.text)).toEqual(['collection A markdown evidence'])
+  expect(prepared.hiddenActiveSourceCount).toBe(0)
+})

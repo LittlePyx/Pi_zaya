@@ -38,6 +38,14 @@ _REQUESTED_PAPER_COUNT_PATTERNS = (
     r"(?:\u8bf7|\u5e2e\u6211|\u7ed9\u6211|\u6211\u8981|\u6211\u60f3|\u53ea|\u4ec5).{0,24}?"
     r"(?:\u9009|\u63a8\u8350|\u5217\u51fa|\u7ed9\u51fa|\u7ed9|\u6311)(?:\u51fa)?[^\u3002\uff01\uff1f\n]{0,16}?"
     r"(\d{1,2}|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24]{1,3})\s*\u7bc7(?:\u8bba\u6587|\u6587\u7ae0|\u6587\u732e)?",
+    r"\b(?:these|those)\s+"
+    r"(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:papers?|articles?|studies|references?)\b",
+    r"(?:\u53ea\s*(?:\u5f15\u7528|\u4f7f\u7528|\u7528)|\u6b63\u6587\s*(?:\u53ea|\u4ec5)?\s*\u5f15\u7528).{0,8}?"
+    r"(?:\u8fd9|\u9019|\u4e0a\u8ff0|\u524d\u8ff0)?\s*"
+    r"(\d{1,2}|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24]{1,3})\s*\u7bc7",
+    r"(?:\u8fd9|\u9019|\u4e0a\u8ff0|\u524d\u8ff0)\s*"
+    r"(\d{1,2}|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24]{1,3})\s*\u7bc7",
 )
 
 _CJK_PAPER_COUNT_DIGITS = {
@@ -53,6 +61,19 @@ _CJK_PAPER_COUNT_DIGITS = {
     "\u4e5d": 9,
 }
 
+_ENGLISH_PAPER_COUNT_DIGITS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+}
+
 _MULTI_PAPER_SYNTHESIS_PATTERNS = (
     r"\b(?:roadmap|lineage|reading\s+route|reading\s+order|how\s+to\s+read|how\s+.*relat(?:e|es)|position(?:ing)?|background)\b",
     r"\bfrom\b.{0,80}\bto\b",
@@ -60,6 +81,30 @@ _MULTI_PAPER_SYNTHESIS_PATTERNS = (
     r"\u4e3b\u7ebf|\u8109\u7edc|\u53d1\u5c55\u8def\u7ebf|\u8fd9\u6761\u7ebf|\u4ece.{0,40}\u5230",
     r"\u8fd9\u4e9b.{0,80}(?:\u65b9\u6cd5|\u6280\u672f|\u6587\u732e|\u8bba\u6587).{0,40}(?:\u5206\u522b|\u5173\u7cfb|\u89e3\u51b3)",
     r"(?:\u4e0e|\u548c).{0,40}(?:\u5173\u7cfb|\u533a\u522b|\u642d\u914d)",
+    r"(?:\u8fd9|\u9019|\u4e0a\u8ff0|\u524d\u8ff0).{0,8}\u7bc7.{0,60}(?:\u5173\u7cfb|\u4f9d\u8d56|\u533a\u522b|\u6bd4\u8f83|\u8def\u7ebf|\u987a\u5e8f)",
+    r"\b(?:these|those)\s+(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:papers?|articles?|studies).{0,80}\b(?:relat(?:e|ed|ion)|dependenc(?:y|ies)|difference|compare|order|route)\b",
+)
+
+_FIXED_PAPER_SET_REFERENCE_PATTERNS = (
+    r"(?:\u8fd9|\u9019|\u4e0a\u8ff0|\u524d\u8ff0)\s*"
+    r"(?:\d{1,2}|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24]{1,3})\s*\u7bc7",
+    r"\b(?:these|those)\s+(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:papers?|articles?|studies|references?)\b",
+)
+
+_MULTI_PAPER_SELECTION_ACTION_PATTERNS = (
+    r"\b(?:choose|select|recommend|find)\s+(?:out\s+)?(?:these|those|the)?\s*"
+    r"(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+    r"(?:papers?|articles?|studies|references?)\b",
+    r"(?:\u9009\u62e9|\u9009\u51fa|\u6311\u51fa|\u63a8\u8350|\u627e\u51fa|\u9009).{0,12}?"
+    r"(?:\u8fd9|\u9019|\u4e0a\u8ff0|\u524d\u8ff0)?\s*"
+    r"(?:\d{1,2}|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24]{1,3})\s*\u7bc7",
+)
+
+_FIXED_PAPER_SET_SELECTION_SCOPE_PATTERNS = (
+    r"\b(?:from|among)\b.{0,48}\b(?:candidates?|shortlist|results?|library)\b",
+    r"(?:从|在)[^。！？\n]{0,40}?(?:候选|文献库|论文库|库中|库里|检索结果|搜索结果)",
 )
 
 _SINGLE_PAPER_PICK_PATTERNS = (
@@ -120,7 +165,7 @@ def strip_negated_reference_trail_requests(prompt: str) -> str:
 
 
 def _parse_requested_paper_count_token(value: str) -> int | None:
-    raw = str(value or "").strip()
+    raw = str(value or "").strip().lower()
     if not raw:
         return None
     if raw.isdigit():
@@ -133,7 +178,7 @@ def _parse_requested_paper_count_token(value: str) -> int | None:
         ones = _CJK_PAPER_COUNT_DIGITS.get(right, 0) if right else 0
         count = tens * 10 + ones
     else:
-        count = _CJK_PAPER_COUNT_DIGITS.get(raw, 0)
+        count = _CJK_PAPER_COUNT_DIGITS.get(raw, _ENGLISH_PAPER_COUNT_DIGITS.get(raw, 0))
     return count if 1 <= count <= 20 else None
 
 
@@ -159,6 +204,11 @@ def prompt_explicitly_requests_multi_paper_list(prompt: str) -> bool:
         return False
     requested_count = extract_requested_paper_count(text)
     if requested_count is not None:
+        fixed_set_reference = _prompt_matches_any_pattern(text, _FIXED_PAPER_SET_REFERENCE_PATTERNS)
+        selection_action = _prompt_matches_any_pattern(text, _MULTI_PAPER_SELECTION_ACTION_PATTERNS)
+        if fixed_set_reference:
+            selection_scope = _prompt_matches_any_pattern(text, _FIXED_PAPER_SET_SELECTION_SCOPE_PATTERNS)
+            return bool(requested_count > 1 and selection_action and selection_scope)
         return requested_count > 1
     if any(pat in text for pat in _MULTI_PAPER_LIST_PATTERNS):
         return True

@@ -14,22 +14,20 @@ from kb.file_naming import citation_meta_display_pdf_name
 def _hit_matches_guide_source(meta: dict, *, guide_source_path: str, guide_source_name: str) -> bool:
     if not isinstance(meta, dict):
         return False
+    source_path = str(meta.get("source_path") or "").strip()
     candidates = [
-        str(meta.get("source_path") or "").strip(),
         str(meta.get("source_name") or "").strip(),
         str(meta.get("display_name") or "").strip(),
     ]
     candidates = [item for item in candidates if item]
-    if not candidates:
+    if not source_path and not candidates:
         return False
     guide_path = str(guide_source_path or "").strip()
     guide_name = str(guide_source_name or "").strip()
+    if guide_path and source_path:
+        return _same_source_identity(source_path, guide_path)
     for candidate in candidates:
-        if guide_path and _same_source_identity(candidate, guide_path):
-            return True
         if guide_name and _same_source_title_identity(candidate, guide_name):
-            return True
-        if guide_path and _same_source_title_identity(candidate, guide_path):
             return True
     return False
 

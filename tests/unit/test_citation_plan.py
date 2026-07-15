@@ -722,6 +722,68 @@ def test_multi_paper_source_marker_request_keeps_system_a_slots_for_every_reques
     assert [slot["candidate_hits"] for slot in system_a_slots] == [[1], [2], [3], [4]]
 
 
+def test_explicit_multi_paper_plan_ranks_translated_query_facets_without_renumbering_hits():
+    def hit(source: str, heading: str, text: str) -> dict:
+        return {
+            "text": text,
+            "meta": {"source_path": source, "heading_path": heading},
+        }
+
+    hits = [
+        hit("3D single-pixel video.en.md", "Custom system design", "single pixel imaging hardware"),
+        hit("Part-based image-loop network.en.md", "Keywords", "single pixel imaging deep learning"),
+        hit(
+            "Principles and prospects for single-pixel imaging.en.md",
+            "Acquisition and reconstruction strategies",
+            "compressive sensing laid the foundations for single-pixel imaging",
+        ),
+        hit("single-pixel compressive holography.en.md", "Results", "single pixel imaging"),
+        hit(
+            "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.en.md",
+            "Abstract",
+            "deep learning reconstruction quality and speed review",
+        ),
+        hit(
+            "Frequency-division-multiplexed single-pixel imaging with metamaterials.en.md",
+            "Principle",
+            "frequency division multiplexing metamaterials spatial light modulation",
+        ),
+    ]
+
+    plan = build_citation_plan(
+        prompt="这三篇之间的知识依赖是什么？正文只引用这三篇。",
+        answer_hits=hits,
+        retrieval_queries=[
+            "single-pixel imaging review frequency division multiplexing metamaterials deep learning survey",
+            "single-pixel imaging compressive sensing metamaterial spatial light modulation deep learning reconstruction",
+        ],
+    )
+
+    system_a_slots = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert plan["budget"]["system_a"] == 3
+    assert [slot["candidate_hits"][0] for slot in system_a_slots] == [3, 6, 5]
+
+
+def test_explicit_two_paper_fixed_set_hard_limits_authoritative_slots():
+    hits = [
+        {
+            "text": f"Evidence for paper {index}",
+            "meta": {"source_path": f"paper-{index}.en.md", "heading_path": "Results"},
+        }
+        for index in range(1, 4)
+    ]
+
+    plan = build_citation_plan(
+        prompt="正文只引用这两篇。",
+        answer_hits=hits,
+        retrieval_queries=["compare these two papers"],
+    )
+
+    system_a_slots = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert plan["budget"]["system_a"] == 2
+    assert len(system_a_slots) == 2
+
+
 def test_previous_answer_audit_uses_every_authoritative_source_without_system_b():
     hits = [
         {

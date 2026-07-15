@@ -22,6 +22,27 @@ def test_source_identity_keys_bridge_markdown_and_pdf_names():
     assert _same_source_identity("2025 - Neural Rendering.en.md", "2025 - Neural Rendering.pdf") is True
 
 
+def test_source_identity_keeps_same_format_namesakes_in_different_directories_distinct():
+    assert _same_source_identity(
+        r"F:\library\collection-a\Paper.en.md",
+        r"F:\library\collection-b\Paper.en.md",
+    ) is False
+
+
+def test_source_identity_bridges_bound_pdf_and_converted_markdown_across_roots():
+    assert _same_source_identity(
+        r"F:\library\db\Paper\Paper.en.md",
+        r"F:\library\pdfs\Paper.pdf",
+    ) is True
+
+
+def test_source_identity_does_not_bridge_cross_format_namesakes_in_other_collections():
+    assert _same_source_identity(
+        r"F:\library\collection-a\Paper.en.md",
+        r"F:\library\collection-b\Paper.pdf",
+    ) is False
+
+
 def test_title_identity_normalizes_extensions_and_punctuation():
     assert _normalize_title_identity("2025_Neural-Rendering.en.md") == "2025 neural rendering"
     assert _normalize_title_identity("Neural Rendering.pdf") == "neural rendering"

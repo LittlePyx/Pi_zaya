@@ -4900,7 +4900,7 @@ def test_reading_guide_does_not_add_duplicate_plan_slot_citations_to_multi_sourc
     assert "[8]" not in repaired
 
 
-def test_reading_guide_roadmap_pins_compressive_sensing_review_to_direct_evidence():
+def test_reading_guide_roadmap_keeps_review_evidence_without_inserting_bridge():
     from api.chat_render import (
         _augment_hits_with_system_a_plan_slots,
         _reading_guide_repair_missing_system_a_citations,
@@ -4962,8 +4962,10 @@ def test_reading_guide_roadmap_pins_compressive_sensing_review_to_direct_evidenc
         canonical_paths=source_paths + ["extra-4.md", "extra-5.md", "extra-6.md"],
     )
 
-    assert "fewer measurements than unknown pixels" in repaired
-    assert "compressive under-sampling [9]" in repaired
+    assert "### Principles and prospects for single-pixel imaging [9]" in repaired
+    assert "Compressive sensing enables undersampled reconstruction [3]." in repaired
+    assert repaired.count("[9]") == 1
+    assert "The review states that" not in repaired
     _rendered, details = _annotate_inpaper_citations_with_hover_meta(
         repaired,
         hits,
@@ -6065,6 +6067,186 @@ def test_s2ism_tradeoff_whole_paragraph_rewrite_requires_focused_comparison_plan
     repaired = _reading_guide_repair_s2ism_tradeoff_answer(answer, [], plan)
 
     assert repaired == answer
+
+
+def test_s2ism_repair_continues_binding_other_planned_sources():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    s2ism_evidence = (
+        "Spatial resolution and signal-to-noise trade-off. Current image scanning "
+        "microscopy approaches do not provide optical sectioning in thick samples "
+        "unless detector size is limited, sacrificing signal-to-noise."
+    )
+    method_x_evidence = "Method X improves axial resolution by phase diversity."
+    hits = [
+        {
+            "text": s2ism_evidence,
+            "meta": {"source_path": "s2ism.en.md", "heading_path": "Abstract"},
+        },
+        {
+            "text": method_x_evidence,
+            "meta": {"source_path": "method-x.en.md", "heading_path": "Results"},
+        },
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "s2ism.en.md",
+                "source_name": "Structured detection s2ISM",
+                "heading_path": "Abstract",
+                "evidence_quote": s2ism_evidence,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "method-x.en.md",
+                "source_name": "Method X",
+                "heading_path": "Results",
+                "evidence_quote": method_x_evidence,
+                "candidate_hits": [2],
+            },
+        ],
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        "s2ISM trade-off in thick samples.\n\n"
+        "Method X improves axial resolution by phase diversity.",
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=["s2ism.en.md", "method-x.en.md"],
+    )
+
+    assert "Method X improves axial resolution" in repaired
+    assert "[1]" in repaired
+    assert "[2]" in repaired
+
+
+def test_normal_answer_binds_three_planned_sources_without_inserting_topic_specific_prose():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    answer = (
+        "Paper Alpha establishes the measurement model.\n\n"
+        "Paper Beta parallelizes the hardware acquisition.\n\n"
+        "Paper Gamma adds learned reconstruction."
+    )
+    hits = [
+        {"text": "Alpha evidence.", "meta": {"source_path": "alpha.en.md"}},
+        {"text": "Beta evidence.", "meta": {"source_path": "beta.en.md"}},
+        {"text": "Gamma evidence.", "meta": {"source_path": "gamma.en.md"}},
+    ]
+    plan = {
+        "intent": "multi_source_synthesis",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "alpha.en.md",
+                "source_name": "Paper Alpha",
+                "evidence_quote": "Alpha evidence.",
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "beta.en.md",
+                "source_name": "Paper Beta",
+                "evidence_quote": "Beta evidence.",
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "gamma.en.md",
+                "source_name": "Paper Gamma",
+                "evidence_quote": "Gamma evidence.",
+                "candidate_hits": [3],
+            },
+        ],
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="answer",
+        canonical_paths=["alpha.en.md", "beta.en.md", "gamma.en.md"],
+    )
+
+    assert "Paper Alpha establishes the measurement model [1]." in repaired
+    assert "Paper Beta parallelizes the hardware acquisition [2]." in repaired
+    assert "Paper Gamma adds learned reconstruction [3]." in repaired
+    assert "single-pixel camera" not in repaired
+
+
+def test_multi_source_plan_normalizes_duplicate_canonical_markers_before_budgeting():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    canonical_paths = [
+        "distractor-a.en.md",
+        "distractor-b.en.md",
+        "review.en.md",
+        "distractor-c.en.md",
+        "deep-review.en.md",
+        "hardware.en.md",
+    ]
+    hits = [
+        {"text": "Hardware evidence.", "meta": {"source_path": "hardware.en.md"}},
+        {"text": "Deep review evidence.", "meta": {"source_path": "deep-review.en.md"}},
+        {"text": "Foundation review evidence.", "meta": {"source_path": "review.en.md"}},
+    ]
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "deep-review.en.md",
+                "source_name": "Deep Review",
+                "evidence_quote": "Deep review evidence.",
+                "candidate_hits": [5],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "hardware.en.md",
+                "source_name": "Hardware Paper",
+                "evidence_quote": "Hardware evidence.",
+                "candidate_hits": [6],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "review.en.md",
+                "source_name": "Foundation Review",
+                "evidence_quote": "Foundation review evidence.",
+                "candidate_hits": [3],
+            },
+        ],
+    }
+    augmented = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=len(canonical_paths),
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        "Foundation Review establishes the model.\n\n"
+        "Hardware Paper accelerates acquisition [6] and improves throughput [6].\n\n"
+        "Deep Review covers learned reconstruction [5] and deployment [5].",
+        augmented,
+        plan,
+        output_mode="answer",
+        canonical_paths=canonical_paths,
+    )
+
+    assert "[5]" not in repaired
+    assert "[6]" not in repaired
+    assert repaired.count("[7]") == 2
+    assert repaired.count("[8]") == 2
+    assert repaired.count("[9]") == 1
 
 
 def test_microscopy_method_map_repair_preserves_unrelated_numeric_citations(

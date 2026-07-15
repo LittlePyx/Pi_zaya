@@ -2407,6 +2407,7 @@ def _prepare_paper_guide_prompt_context(
     prompt_family: str,
     paper_guide_bound_source_path: str,
     db_dir,
+    query_variants: list[str] | None = None,
 ) -> dict:
     return _context_prepare_prompt_context(
         paper_guide_mode=paper_guide_mode,
@@ -2416,6 +2417,7 @@ def _prepare_paper_guide_prompt_context(
         prompt=prompt,
         retrieval_prompt=retrieval_prompt,
         used_query=used_query,
+        query_variants=query_variants,
         prompt_family=prompt_family,
         paper_guide_bound_source_path=paper_guide_bound_source_path,
         db_dir=db_dir,
@@ -5772,6 +5774,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 prompt=prompt,
                 retrieval_prompt=retrieval_prompt,
                 used_query=used_query,
+                query_variants=list(query_variants or []),
                 prompt_family=paper_guide_prompt_family,
                 paper_guide_bound_source_path=paper_guide_bound_source_path,
                 db_dir=db_dir,

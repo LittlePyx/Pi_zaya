@@ -30,6 +30,32 @@ def test_hit_matches_guide_source_by_path_and_title():
     ) is False
 
 
+def test_hit_matches_guide_source_does_not_collapse_same_markdown_name_in_other_directory():
+    meta = {
+        "source_path": r"F:\kb\collection-a\Paper.en.md",
+        "source_name": "Paper.pdf",
+    }
+
+    assert _hit_matches_guide_source(
+        meta,
+        guide_source_path=r"F:\kb\collection-b\Paper.en.md",
+        guide_source_name="",
+    ) is False
+
+
+def test_hit_matches_guide_source_does_not_collapse_cross_format_namesake():
+    meta = {
+        "source_path": r"F:\kb\collection-a\Paper.en.md",
+        "source_name": "Paper.pdf",
+    }
+
+    assert _hit_matches_guide_source(
+        meta,
+        guide_source_path=r"F:\kb\collection-b\Paper.pdf",
+        guide_source_name="Paper.pdf",
+    ) is False
+
+
 def test_display_source_name_prefers_library_citation_meta(tmp_path: Path):
     pdf_path = tmp_path / "stored.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n")

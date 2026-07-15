@@ -39,11 +39,59 @@ def _source_identity_keys(source_path: str) -> set[str]:
 
 
 def _same_source_identity(source_path: str, bound_source_path: str) -> bool:
-    left = _source_identity_keys(source_path)
-    right = _source_identity_keys(bound_source_path)
-    if not left or not right:
+    left_raw = str(source_path or "").strip()
+    right_raw = str(bound_source_path or "").strip()
+    if not left_raw or not right_raw:
         return False
-    return bool(left.intersection(right))
+    left_norm = left_raw.replace("\\", "/").strip().lower()
+    right_norm = right_raw.replace("\\", "/").strip().lower()
+    if left_norm == right_norm:
+        return True
+
+    left_name = _source_filename(left_raw).strip().lower()
+    right_name = _source_filename(right_raw).strip().lower()
+
+    def _kind(name: str) -> str:
+        if name.endswith(".pdf"):
+            return "pdf"
+        if name.endswith(".en.md") or name.endswith(".md"):
+            return "markdown"
+        return ""
+
+    def _stem(name: str) -> str:
+        if name.endswith(".en.md"):
+            return name[:-6]
+        if name.endswith(".pdf"):
+            return name[:-4]
+        if name.endswith(".md"):
+            return name[:-3]
+        return name
+
+    left_has_directory = "/" in left_norm
+    right_has_directory = "/" in right_norm
+    if left_has_directory and right_has_directory:
+        # A bound library PDF and its converted Markdown commonly live under
+        # different roots. Same-format namesakes in different directories are
+        # distinct documents and must not be collapsed.
+        left_kind = _kind(left_name)
+        right_kind = _kind(right_name)
+        left_stem = _stem(left_name)
+        right_stem = _stem(right_name)
+        if {left_kind, right_kind} != {"pdf", "markdown"} or not left_stem or left_stem != right_stem:
+            return False
+        left_parent = left_norm.rsplit("/", 1)[0]
+        right_parent = right_norm.rsplit("/", 1)[0]
+        if left_parent == right_parent:
+            return True
+        markdown_parent = left_parent if left_kind == "markdown" else right_parent
+        # Converted documents use ``db/<paper-stem>/<paper-stem>.en.md``.
+        # Requiring that document directory prevents an unrelated namesake PDF
+        # in another collection from being treated as the active paper.
+        return markdown_parent.rsplit("/", 1)[-1] == left_stem
+
+    left = _source_identity_keys(left_raw)
+    right = _source_identity_keys(right_raw)
+    return bool(left and right and left.intersection(right))
 
 
 def _normalize_title_identity(text: str) -> str:

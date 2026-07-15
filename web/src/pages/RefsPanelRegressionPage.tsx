@@ -11,6 +11,7 @@ const REFS_PANEL_SCENARIOS = new Set([
   'negative-suppressed',
   'section-target',
   'auto-citation-meta',
+  'citation-meta-reorder',
   'dedupe-active-source',
   'polish-status',
   'card-view-contract',
@@ -351,6 +352,37 @@ const REFS_PANEL_AUTO_CITATION_META_PAYLOAD: Record<string, unknown> = {
   },
 }
 
+const REFS_PANEL_CITATION_META_REORDER_HITS = [
+  {
+    meta: {
+      source_path: '__refs_panel_regression__/collection-a/Paper-A.en.md',
+      ref_pack_state: 'ready',
+    },
+    ui_meta: {
+      display_name: 'Paper A.pdf',
+      source_path: '__refs_panel_regression__/collection-a/Paper-A.en.md',
+      heading_path: 'Abstract',
+      summary_line: 'Paper A evidence.',
+      why_line: 'Paper A answers the first part.',
+      citation_meta: {},
+    },
+  },
+  {
+    meta: {
+      source_path: '__refs_panel_regression__/collection-b/Paper-B.en.md',
+      ref_pack_state: 'ready',
+    },
+    ui_meta: {
+      display_name: 'Paper B.pdf',
+      source_path: '__refs_panel_regression__/collection-b/Paper-B.en.md',
+      heading_path: 'Results',
+      summary_line: 'Paper B evidence.',
+      why_line: 'Paper B answers the second part.',
+      citation_meta: {},
+    },
+  },
+]
+
 const REFS_PANEL_DEDUPE_ACTIVE_SOURCE_PAYLOAD: Record<string, unknown> = {
   7: {
     prompt: 'What should I read next after the active paper?',
@@ -529,12 +561,22 @@ export default function RefsPanelRegressionPage() {
   })().trim().toLowerCase()
   const scenario = REFS_PANEL_SCENARIOS.has(scenarioParam) ? scenarioParam : 'rich-reader-open'
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
+  const [reverseCitationMetaHits, setReverseCitationMetaHits] = useState(false)
 
   const refsByScenario: Record<string, Record<string, unknown>> = {
     'guide-filter-note': REFS_PANEL_GUIDE_FILTER_ONLY_PAYLOAD,
     'negative-suppressed': REFS_PANEL_NEGATIVE_SUPPRESSED_PAYLOAD,
     'section-target': REFS_PANEL_SECTION_TARGET_PAYLOAD,
     'auto-citation-meta': REFS_PANEL_AUTO_CITATION_META_PAYLOAD,
+    'citation-meta-reorder': {
+      7: {
+        prompt: 'Compare Paper A and Paper B.',
+        display_state: 'ready',
+        hits: reverseCitationMetaHits
+          ? [...REFS_PANEL_CITATION_META_REORDER_HITS].reverse()
+          : REFS_PANEL_CITATION_META_REORDER_HITS,
+      },
+    },
     'dedupe-active-source': REFS_PANEL_DEDUPE_ACTIVE_SOURCE_PAYLOAD,
     'polish-status': REFS_PANEL_POLISH_STATUS_PAYLOAD,
     'card-view-contract': REFS_PANEL_CARD_VIEW_PAYLOAD,
@@ -556,6 +598,14 @@ export default function RefsPanelRegressionPage() {
         </div>
 
         <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-4">
+          {scenario === 'citation-meta-reorder' ? (
+            <button
+              type="button"
+              onClick={() => setReverseCitationMetaHits((current) => !current)}
+            >
+              Swap reference order
+            </button>
+          ) : null}
           <RefsPanel
             refs={refs}
             msgId={7}
