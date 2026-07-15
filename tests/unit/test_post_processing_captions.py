@@ -151,6 +151,37 @@ High compression ratio We study the performance of our model under different com
     assert "High compression ratio We study the performance of our model under different compression ratios." in out
 
 
+def test_do_not_move_next_page_figure_across_page_marker_to_matching_caption():
+    src = """
+<!-- kb_page: 10 -->
+
+**Figure 7.** Network comparison.
+
+<!-- kb_page: 11 -->
+
+![Figure 7](./assets/page_11_fig_1.png)
+
+Continued text.
+"""
+    out = postprocess_markdown(src)
+    assert out.index("<!-- kb_page: 11 -->") < out.index("![Figure 7](./assets/page_11_fig_1.png)")
+
+
+def test_do_not_move_next_page_table_fallback_across_page_marker():
+    src = """
+<!-- kb_page: 12 -->
+
+**Table B.** Static dataset results.
+
+<!-- kb_page: 13 -->
+
+![Table B](./assets/page_13_table_1.png)
+<!-- kb:asset kind=table_image_fallback page=13 index=1 label=Table B -->
+"""
+    out = postprocess_markdown(src)
+    assert out.index("<!-- kb_page: 13 -->") < out.index("![Table B](./assets/page_13_table_1.png)")
+
+
 def test_do_not_rewrite_body_subfigure_reference_sentence_as_caption():
     src = """
 Figure 1b, c compare the effects of linear and circular polarization on the illumination PSF.

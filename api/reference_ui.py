@@ -136,6 +136,7 @@ from kb.citation_meta import (
     fetch_best_crossref_for_reference,
     fetch_best_crossref_meta,
     fetch_crossref_work_by_doi,
+    fetch_crossref_work_by_doi_status,
 )
 from kb.evidence_text import clean_display_text as _clean_evidence_display_text
 from kb.evidence_text import finish_evidence_text as _finish_evidence_text
@@ -183,6 +184,7 @@ from api.reference_rendering import (
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_CROSSREF_WORK_FETCHER = fetch_crossref_work_by_doi
 
 
 def _display_source_name(source_path: str, pdf_path: Path | None, lib_store: LibraryStore | None) -> str:
@@ -9048,7 +9050,19 @@ def _metadata_summary_line(meta: dict) -> str:
 
 
 def _summary_from_crossref_abstract(meta: dict) -> str:
-    return _external_summary_from_crossref_abstract(meta, fetch_crossref_work_by_doi=fetch_crossref_work_by_doi)
+    # Production uses the status-aware, non-negative-cached request directly.
+    # Tests and embedders that replace the legacy callback still retain their
+    # injected deterministic fetcher.
+    legacy_fetcher = (
+        (lambda _doi: None)
+        if fetch_crossref_work_by_doi is _DEFAULT_CROSSREF_WORK_FETCHER
+        else fetch_crossref_work_by_doi
+    )
+    return _external_summary_from_crossref_abstract(
+        meta,
+        fetch_crossref_work_by_doi=legacy_fetcher,
+        fetch_crossref_work_by_doi_status=fetch_crossref_work_by_doi_status,
+    )
 
 
 def _summary_from_openalex_abstract(meta: dict) -> str:
@@ -9059,7 +9073,6 @@ def _valid_external_abstract_candidate(text: str, *, title: str = "") -> str:
     return _external_valid_external_abstract_candidate(text, title=title)
 
 
-@lru_cache(maxsize=512)
 def _semantic_scholar_paper_by_doi(doi: str) -> dict:
     return _external_semantic_scholar_paper_by_doi(doi)
 
@@ -9072,7 +9085,6 @@ def _summary_from_semantic_scholar_abstract(meta: dict) -> str:
     )
 
 
-@lru_cache(maxsize=256)
 def _doi_landing_page_abstract(doi: str) -> str:
     return _external_doi_landing_page_abstract(doi)
 

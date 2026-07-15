@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections import Counter
 from typing import Optional, List
 from pathlib import Path
@@ -17,6 +18,13 @@ except ImportError:
 
 from .text_utils import _normalize_text
 from .geometry_utils import _bbox_width, _rect_area, _rect_intersection_area, _overlap_1d
+
+
+# PyMuPDF's table finder uses shared native state and can fail with
+# ``not a textpage of this page`` when invoked concurrently, even when each
+# worker owns a separate document. Keep only the native finder call serialized;
+# the rest of page preparation and table rendering remains parallel.
+_PYMUPDF_TABLE_FINDER_LOCK = threading.Lock()
 
 
 def _ensure_pdfplumber_module():
@@ -956,7 +964,8 @@ def _extract_tables_by_layout(
         )
         strategy_start = time.time()
         try:
-            table_finder = page.find_tables(**kwargs)
+            with _PYMUPDF_TABLE_FINDER_LOCK:
+                table_finder = page.find_tables(**kwargs)
             strategy_time = time.time() - strategy_start
             if strategy_time > 1.0:
                 print(f"      [Table extraction] Strategy {strategy_idx+1} ({kwargs.get('vertical_strategy', '?')}/{kwargs.get('horizontal_strategy', '?')}): {strategy_time:.2f}s (SLOW!)", flush=True)

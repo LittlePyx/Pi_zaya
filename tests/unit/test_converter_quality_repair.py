@@ -978,6 +978,60 @@ def test_repair_markdown_text_recovers_real_page_markers_from_pdf(tmp_path: Path
     assert repaired.index("<!-- kb_page: 2 -->") < repaired.index("The second page reports")
 
 
+def test_page_marker_alignment_cache_reuses_exact_pdf_and_markdown(tmp_path: Path, monkeypatch):
+    import fitz
+
+    from kb.converter import quality_repair
+
+    pdf_path = tmp_path / "Alignment Cache.pdf"
+    page_texts = [
+        " ".join(f"alpha{i:03d}" for i in range(90)),
+        " ".join(f"bravo{i:03d}" for i in range(90)),
+        " ".join(f"charlie{i:03d}" for i in range(90)),
+    ]
+    doc = fitz.open()
+    for text in page_texts:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 560, 760), text, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_text = "\n\n".join(page_texts)
+    original_select = quality_repair._select_page_alignment_offsets
+    calls = 0
+
+    def counted_select(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_select(*args, **kwargs)
+
+    monkeypatch.setattr(quality_repair, "_select_page_alignment_offsets", counted_select)
+
+    first = quality_repair._page_marker_offsets_from_pdf_text(
+        md_text,
+        pdf_path,
+        snap_to_line_start=False,
+    )
+    first_call_count = calls
+    assert first_call_count > 0
+
+    first[99] = 123
+    second = quality_repair._page_marker_offsets_from_pdf_text(
+        md_text,
+        pdf_path,
+        snap_to_line_start=False,
+    )
+    assert calls == first_call_count
+    assert 99 not in second
+
+    quality_repair._page_marker_offsets_from_pdf_text(
+        md_text + "\nnew cache-key content",
+        pdf_path,
+        snap_to_line_start=False,
+    )
+    assert calls > first_call_count
+
+
 def test_write_conversion_quality_result_flags_collapsed_source_page_markers(tmp_path: Path):
     import fitz
 

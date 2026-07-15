@@ -63,6 +63,84 @@ def test_crossref_meta_preserves_cited_by_count(monkeypatch):
     assert out["crossref_cited_by_count"] == 642
 
 
+def test_crossref_work_status_does_not_cache_transient_failures(monkeypatch):
+    calls = 0
+
+    class Response:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+        def json(self):
+            return {"message": {"DOI": "10.1000/retry", "abstract": "Recovered abstract"}}
+
+    def fake_get(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("temporary timeout")
+        return Response(200)
+
+    monkeypatch.setattr(citation_meta.requests, "get", fake_get)
+
+    first, first_status = citation_meta.fetch_crossref_work_by_doi_status("10.1000/retry")
+    second, second_status = citation_meta.fetch_crossref_work_by_doi_status("10.1000/retry")
+
+    assert first is None
+    assert first_status == "failed"
+    assert second_status == "ready"
+    assert second and second["abstract"] == "Recovered abstract"
+    assert calls == 2
+
+
+def test_general_crossref_work_cache_keeps_successes_but_not_failures(monkeypatch):
+    citation_meta._CROSSREF_WORK_CACHE.clear()
+    calls = 0
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"message": {"DOI": "10.1000/cache-retry", "title": ["Recovered"]}}
+
+    def fake_get(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("temporary timeout")
+        return Response()
+
+    monkeypatch.setattr(citation_meta.requests, "get", fake_get)
+
+    assert citation_meta._crossref_get_work_by_doi("10.1000/cache-retry") is None
+    assert citation_meta._crossref_get_work_by_doi("10.1000/cache-retry") == {
+        "DOI": "10.1000/cache-retry",
+        "title": ["Recovered"],
+    }
+    assert citation_meta._crossref_get_work_by_doi("10.1000/cache-retry") == {
+        "DOI": "10.1000/cache-retry",
+        "title": ["Recovered"],
+    }
+    assert calls == 2
+
+
+def test_crossref_status_reuses_success_cache_without_network(monkeypatch):
+    citation_meta._CROSSREF_WORK_CACHE.clear()
+    citation_meta._CROSSREF_WORK_CACHE["10.1000/cached"] = {
+        "DOI": "10.1000/cached",
+        "abstract": "A cached exact Crossref abstract.",
+    }
+    monkeypatch.setattr(
+        citation_meta.requests,
+        "get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cache hit should not use network")),
+    )
+
+    work, status = citation_meta.fetch_crossref_work_by_doi_status("10.1000/cached")
+
+    assert status == "ready"
+    assert work and work["abstract"] == "A cached exact Crossref abstract."
+
+
 def test_fetch_best_openalex_meta_uses_title_year_author_gate(monkeypatch):
     q = "Optical imaging by means of two-photon quantum entanglement"
 

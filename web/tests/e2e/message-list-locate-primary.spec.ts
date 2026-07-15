@@ -1562,6 +1562,43 @@ test('citation shelf hydrates persisted quality-center metadata on open', async 
   expect(repairRequests).toBeLessThanOrEqual(1)
 })
 
+test('citation shelf exposes retry when abstract providers fail transiently', async ({ page }) => {
+  await page.route('**/api/references/citation-meta', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+  })
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    const payload = route.request().postDataJSON() as { meta?: Record<string, unknown> } | undefined
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...(payload?.meta || {}),
+        summary_line: '',
+        summary_source: '',
+        summary_provider: '',
+        summary_fetch_status: 'retryable',
+        summary_fetch_providers: {
+          crossref: 'not_provided',
+          semantic_scholar: 'failed',
+        },
+        bibliometrics_checked: true,
+      }),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  const citeChip = page.locator('.kb-cite-chip-sysb').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
+  await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
+  await expandFocusedShelfDetails(page)
+  await expect(page.getByTestId('citation-shelf-summary-retry')).toBeVisible()
+})
+
 test('citation popover upgrades to waited LLM polish when it is ready', async ({ page }) => {
   await mockReaderDoc(page)
   let observedWaitSeconds = 0

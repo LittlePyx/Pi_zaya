@@ -4,6 +4,7 @@ import difflib
 import html
 import os
 import re
+import threading
 from functools import lru_cache
 from typing import Any
 
@@ -588,11 +589,19 @@ def fetch_best_openalex_meta(
     return out
 
 
-@lru_cache(maxsize=512)
+_CROSSREF_WORK_CACHE_MAX = 512
+_CROSSREF_WORK_CACHE: dict[str, dict[str, Any]] = {}
+_CROSSREF_WORK_CACHE_LOCK = threading.RLock()
+
+
 def _crossref_get_work_by_doi(doi: str) -> dict[str, Any] | None:
     d = _clean_doi(doi)
     if not d:
         return None
+    with _CROSSREF_WORK_CACHE_LOCK:
+        cached = _CROSSREF_WORK_CACHE.get(d)
+        if isinstance(cached, dict):
+            return dict(cached)
     url = f"https://api.crossref.org/works/{d}"
     headers = {"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"}
     try:
@@ -603,6 +612,12 @@ def _crossref_get_work_by_doi(doi: str) -> dict[str, Any] | None:
         item = data.get("message", {})
         if not isinstance(item, dict):
             return None
+        with _CROSSREF_WORK_CACHE_LOCK:
+            if len(_CROSSREF_WORK_CACHE) >= _CROSSREF_WORK_CACHE_MAX:
+                oldest = next(iter(_CROSSREF_WORK_CACHE), "")
+                if oldest:
+                    _CROSSREF_WORK_CACHE.pop(oldest, None)
+            _CROSSREF_WORK_CACHE[d] = dict(item)
         return item
     except Exception:
         return None
@@ -614,6 +629,47 @@ def fetch_crossref_work_by_doi(doi: str) -> dict[str, Any] | None:
         return None
     item = _crossref_get_work_by_doi(d)
     return item if isinstance(item, dict) else None
+
+
+def fetch_crossref_work_by_doi_status(doi: str) -> tuple[dict[str, Any] | None, str]:
+    """Fetch one exact Crossref work without caching transient failures.
+
+    The shared work cache stores successful exact DOI responses only. A timeout
+    or 429 remains retryable instead of looking like a durable "no abstract"
+    result for the rest of the process lifetime.
+    """
+
+    d = _clean_doi(doi)
+    if not d:
+        return None, "missing_identity"
+    with _CROSSREF_WORK_CACHE_LOCK:
+        cached = _CROSSREF_WORK_CACHE.get(d)
+        if isinstance(cached, dict):
+            return dict(cached), "ready"
+    url = f"https://api.crossref.org/works/{d}"
+    headers = {"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=4.5)
+    except Exception:
+        return None, "failed"
+    if int(resp.status_code or 0) == 404:
+        return None, "not_found"
+    if int(resp.status_code or 0) != 200:
+        return None, "failed"
+    try:
+        data = resp.json()
+    except Exception:
+        return None, "failed"
+    item = data.get("message", {}) if isinstance(data, dict) else {}
+    if not isinstance(item, dict) or not item:
+        return None, "failed"
+    with _CROSSREF_WORK_CACHE_LOCK:
+        if len(_CROSSREF_WORK_CACHE) >= _CROSSREF_WORK_CACHE_MAX:
+            oldest = next(iter(_CROSSREF_WORK_CACHE), "")
+            if oldest:
+                _CROSSREF_WORK_CACHE.pop(oldest, None)
+        _CROSSREF_WORK_CACHE[d] = dict(item)
+    return item, "ready"
 
 
 def fetch_crossref_references_by_doi(doi: str) -> list[dict[str, Any]]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Callable
 
 from api.reference_summary_text import _summary_excerpt
@@ -57,6 +58,7 @@ def _ensure_summary_line(
             out["summary_source"] = "abstract"
             out["summary_generation"] = generation or "translated_abstract"
             out["summary_provider"] = "crossref"
+            out["summary_fetch_status"] = "ready"
             return attach_summary_quality(out)
         openalex_line = summary_from_openalex_abstract(out)
         if openalex_line:
@@ -65,6 +67,7 @@ def _ensure_summary_line(
             out["summary_source"] = "abstract"
             out["summary_generation"] = generation or "translated_abstract"
             out["summary_provider"] = "openalex"
+            out["summary_fetch_status"] = "ready"
             return attach_summary_quality(out)
         semantic_line = summary_from_semantic_scholar_abstract(out)
         if semantic_line:
@@ -73,6 +76,7 @@ def _ensure_summary_line(
             out["summary_source"] = "abstract"
             out["summary_generation"] = generation or "translated_abstract"
             out["summary_provider"] = "semantic_scholar"
+            out["summary_fetch_status"] = "ready"
             return attach_summary_quality(out)
         landing_line = summary_from_doi_landing_page(out)
         if landing_line:
@@ -81,7 +85,20 @@ def _ensure_summary_line(
             out["summary_source"] = "abstract"
             out["summary_generation"] = generation or "translated_abstract"
             out["summary_provider"] = "doi_landing_page"
+            out["summary_fetch_status"] = "ready"
             return attach_summary_quality(out)
+
+        provider_status = out.get("summary_fetch_providers")
+        provider_values = {
+            str(value or "").strip().lower()
+            for value in provider_status.values()
+        } if isinstance(provider_status, dict) else set()
+        if "failed" in provider_values:
+            out["summary_fetch_status"] = "retryable"
+        elif _normalize_summary_doi(out):
+            out["summary_fetch_status"] = "not_provided"
+        else:
+            out["summary_fetch_status"] = "missing_identity"
 
     context_fallback = contextual_summary_line(out)
     if context_fallback:
@@ -96,3 +113,9 @@ def _ensure_summary_line(
         out["summary_source"] = "metadata"
         out["summary_generation"] = "metadata_only"
     return attach_summary_quality(out)
+
+
+def _normalize_summary_doi(meta: dict) -> str:
+    value = str((meta or {}).get("doi") or (meta or {}).get("doi_url") or "").strip().lower()
+    value = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", value)
+    return value if value.startswith("10.") and "/" in value else ""

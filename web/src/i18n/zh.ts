@@ -987,7 +987,7 @@ export const S = {
   shelf_evidence_note_head: '证据说明',
   shelf_citation_count: '被引 {n}',
   shelf_summary_empty: '文献摘要待补',
-  shelf_summary_unavailable: '暂无公开摘要',
+  shelf_summary_unavailable: '已连接来源暂未提供摘要',
   shelf_summary_failed_retry: '摘要获取失败，点击重试',
   shelf_summary_source_fulltext: '全文',
   shelf_summary_source_crossref: 'Crossref 摘要',

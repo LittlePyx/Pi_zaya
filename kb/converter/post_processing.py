@@ -1721,6 +1721,7 @@ def _pull_images_to_matching_previous_captions(md: str) -> str:
     lines = md.splitlines()
     image_re = re.compile(r"^\s*!\[(Figure|Table)\s+([A-Za-z0-9]+)\]\([^)]+\)\s*$")
     caption_re = re.compile(r"^\s*\*\*(Figure|Table)\s+([A-Za-z0-9]+)\.\*\*")
+    page_marker_re = re.compile(r"^\s*<!--\s*kb_page:\s*\d{1,5}\s*-->\s*$", re.IGNORECASE)
     heading_re = re.compile(r"^\s*#{1,6}\s+")
     table_re = re.compile(r"^\s*\|")
 
@@ -1733,6 +1734,8 @@ def _pull_images_to_matching_previous_captions(md: str) -> str:
             if not s:
                 j += 1
                 continue
+            if page_marker_re.match(raw):
+                return False
             if heading_re.match(raw) or image_re.match(raw) or table_re.match(raw):
                 return False
             m_cap = caption_re.match(s)
@@ -1767,6 +1770,8 @@ def _pull_images_to_matching_previous_captions(md: str) -> str:
             if not s:
                 j -= 1
                 continue
+            if page_marker_re.match(prev_raw):
+                break
             if image_re.match(prev_raw) or heading_re.match(prev_raw) or table_re.match(prev_raw):
                 break
             m_cap = caption_re.match(s)

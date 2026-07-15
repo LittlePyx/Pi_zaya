@@ -89,6 +89,44 @@ def test_external_abstract_providers_are_tried_in_order() -> None:
     assert out["summary_generation"] == "llm_abstract"
 
 
+def test_transient_provider_failure_marks_missing_summary_retryable() -> None:
+    def crossref(meta: dict) -> str:
+        meta["summary_fetch_providers"] = {"crossref": "not_provided"}
+        return ""
+
+    def semantic(meta: dict) -> str:
+        meta.setdefault("summary_fetch_providers", {})["semantic_scholar"] = "failed"
+        return ""
+
+    out = _run_pipeline(
+        {"doi": "10.1000/retryable", "title": "Retryable summary"},
+        summary_from_crossref_abstract=crossref,
+        summary_from_semantic_scholar_abstract=semantic,
+    )
+
+    assert out["summary_fetch_status"] == "retryable"
+    assert out["summary_source"] == "metadata"
+
+
+def test_all_connected_sources_empty_marks_summary_not_provided() -> None:
+    def crossref(meta: dict) -> str:
+        meta["summary_fetch_providers"] = {
+            "crossref": "not_provided",
+            "openalex": "not_provided",
+            "semantic_scholar": "not_provided",
+            "doi_landing_page": "not_provided",
+        }
+        return ""
+
+    out = _run_pipeline(
+        {"doi": "10.1000/no-abstract", "title": "No connected abstract"},
+        summary_from_crossref_abstract=crossref,
+    )
+
+    assert out["summary_fetch_status"] == "not_provided"
+    assert out["summary_source"] == "metadata"
+
+
 def test_contextual_fallback_precedes_metadata_when_external_lookup_disabled() -> None:
     out = _run_pipeline(
         {"title": "No external lookup"},

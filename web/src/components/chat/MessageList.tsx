@@ -236,6 +236,11 @@ interface RefEntryLite {
   guide_filter?: { hidden_self_source?: boolean; filtered_hit_count?: number }
 }
 
+function bibliometricsSummaryFetchFailed(meta: Record<string, unknown>): boolean {
+  const status = String(meta.summary_fetch_status || meta.summaryFetchStatus || '').trim().toLowerCase()
+  return status === 'failed' || status === 'retryable'
+}
+
 function AssistantAvatar() {
   return (
     <div className="kb-msg-avatar kb-msg-avatar-assistant">
@@ -1150,7 +1155,11 @@ export function MessageList({
         }))
         setShelfSummaryStatusByKey((current) => ({
           ...current,
-          [item.key]: summaryReady ? 'ready' : 'unavailable',
+          [item.key]: summaryReady
+            ? 'ready'
+            : bibliometricsSummaryFetchFailed(meta)
+              ? 'failed'
+              : 'unavailable',
         }))
       })
       .catch(() => {
@@ -1236,7 +1245,9 @@ export function MessageList({
           }
           statusPatch[result.key] = shelfItemHasDisplayableArticleSummary(candidate)
             ? 'ready'
-            : 'unavailable'
+            : bibliometricsSummaryFetchFailed(result.meta)
+              ? 'failed'
+              : 'unavailable'
         }
         setShelfSummaryStatusByKey((current) => ({ ...current, ...statusPatch }))
         const usable = results.filter((entry) => !entry.failed && entry.meta && Object.keys(entry.meta).length > 0)

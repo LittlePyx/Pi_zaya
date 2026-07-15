@@ -18,6 +18,35 @@ def test_summary_from_crossref_abstract_uses_injected_fetcher() -> None:
     assert "<jats" not in out
 
 
+def test_crossref_summary_bypasses_stale_none_with_status_fetcher() -> None:
+    meta = {"doi": "10.1000/retry"}
+    out = abstracts._summary_from_crossref_abstract(
+        meta,
+        fetch_crossref_work_by_doi=lambda doi: None,
+        fetch_crossref_work_by_doi_status=lambda doi: (
+            {"abstract": "We recover an abstract after a transient Crossref timeout."},
+            "ready",
+        ),
+    )
+
+    assert "recover an abstract" in out
+    assert meta["summary_fetch_providers"]["crossref"] == "ready"
+
+
+def test_crossref_summary_records_not_provided_separately_from_failure() -> None:
+    meta = {"doi": "10.1000/no-abstract"}
+    out = abstracts._summary_from_crossref_abstract(
+        meta,
+        fetch_crossref_work_by_doi=lambda doi: {"title": ["No abstract work"]},
+        fetch_crossref_work_by_doi_status=lambda doi: (_ for _ in ()).throw(
+            AssertionError("ready work should not be refetched")
+        ),
+    )
+
+    assert out == ""
+    assert meta["summary_fetch_providers"]["crossref"] == "not_provided"
+
+
 def test_summary_from_openalex_abstract_uses_injected_fetcher() -> None:
     out = abstracts._summary_from_openalex_abstract(
         {"doi": "10.1000/openalex"},
@@ -34,6 +63,18 @@ def test_summary_from_openalex_abstract_uses_injected_fetcher() -> None:
     )
 
     assert out == "We improve single-pixel imaging reconstruction quality."
+
+
+def test_openalex_legacy_none_does_not_claim_a_transient_failure() -> None:
+    meta = {"doi": "10.1000/openalex-missing"}
+
+    out = abstracts._summary_from_openalex_abstract(
+        meta,
+        openalex_work_by_doi=lambda doi: None,
+    )
+
+    assert out == ""
+    assert meta["summary_fetch_providers"]["openalex"] == "not_provided"
 
 
 def test_summary_from_semantic_scholar_rejects_doi_mismatch() -> None:
@@ -70,6 +111,37 @@ def test_summary_from_semantic_scholar_accepts_valid_abstract() -> None:
     assert "limited measurements" in out
 
 
+def test_semantic_scholar_429_is_retryable_and_not_cached(monkeypatch) -> None:
+    calls = 0
+
+    class Response:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+        def json(self):
+            return {
+                "title": "Adaptive sampling for single-pixel imaging",
+                "abstract": "A valid abstract becomes available after the rate limit clears.",
+                "externalIds": {"DOI": "10.1000/semantic-retry"},
+            }
+
+    def fake_get(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return Response(429 if calls == 1 else 200)
+
+    monkeypatch.setattr(abstracts.requests, "get", fake_get)
+
+    first = abstracts._semantic_scholar_paper_by_doi("10.1000/semantic-retry")
+    second = abstracts._semantic_scholar_paper_by_doi("10.1000/semantic-retry")
+
+    assert first["_kb_fetch_status"] == "failed"
+    assert first["_kb_http_status"] == 429
+    assert second["_kb_fetch_status"] == "ready"
+    assert second["abstract"].startswith("A valid abstract")
+    assert calls == 2
+
+
 def test_valid_external_abstract_candidate_rejects_landing_page_boilerplate() -> None:
     out = abstracts._valid_external_abstract_candidate(
         "Access through your institution. Sign in to access this article navigation page.",
@@ -80,7 +152,6 @@ def test_valid_external_abstract_candidate_rejects_landing_page_boilerplate() ->
 
 
 def test_doi_landing_page_abstract_reads_html_meta(monkeypatch) -> None:
-    abstracts._doi_landing_page_abstract.cache_clear()
     calls: list[str] = []
 
     class Response:

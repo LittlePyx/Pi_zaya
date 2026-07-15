@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
+import threading
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -47,6 +49,59 @@ BODY_SECTION_HEADING_RE = re.compile(
     r"experiment(?:s|al)?|results?|discussion|conclusions?|implementation|analysis|system|structure)\b",
     re.IGNORECASE,
 )
+
+
+_PAGE_MARKER_OFFSETS_CACHE_MAX_ITEMS = 32
+_PAGE_MARKER_OFFSETS_CACHE_LOCK = threading.Lock()
+_PAGE_MARKER_OFFSETS_CACHE: dict[tuple[str, int, int, int, str, bool], dict[int, int]] = {}
+
+
+def _page_marker_offsets_cache_key(
+    md_text: str,
+    pdf_path: Path,
+    *,
+    snap_to_line_start: bool,
+) -> tuple[str, int, int, int, str, bool] | None:
+    try:
+        path = Path(pdf_path).expanduser().resolve()
+        stat = path.stat()
+        text = str(md_text or "")
+        digest = hashlib.sha256(text.encode("utf-8", "ignore")).hexdigest()
+        return (
+            os.path.normcase(str(path)),
+            int(stat.st_mtime_ns),
+            int(stat.st_size),
+            len(text),
+            digest,
+            bool(snap_to_line_start),
+        )
+    except Exception:
+        return None
+
+
+def _get_cached_page_marker_offsets(
+    key: tuple[str, int, int, int, str, bool] | None,
+) -> dict[int, int] | None:
+    if key is None:
+        return None
+    with _PAGE_MARKER_OFFSETS_CACHE_LOCK:
+        cached = _PAGE_MARKER_OFFSETS_CACHE.get(key)
+        return dict(cached) if cached is not None else None
+
+
+def _cache_page_marker_offsets(
+    key: tuple[str, int, int, int, str, bool] | None,
+    offsets: dict[int, int],
+) -> None:
+    if key is None:
+        return
+    with _PAGE_MARKER_OFFSETS_CACHE_LOCK:
+        _PAGE_MARKER_OFFSETS_CACHE[key] = dict(offsets)
+        while len(_PAGE_MARKER_OFFSETS_CACHE) > _PAGE_MARKER_OFFSETS_CACHE_MAX_ITEMS:
+            oldest = next(iter(_PAGE_MARKER_OFFSETS_CACHE), None)
+            if oldest is None:
+                break
+            _PAGE_MARKER_OFFSETS_CACHE.pop(oldest, None)
 
 
 def _reference_map_missing_numbers(ref_map: dict[int, str]) -> list[int]:
@@ -2420,6 +2475,15 @@ def _page_marker_offsets_from_pdf_text(
     except Exception:
         return {}
 
+    cache_key = _page_marker_offsets_cache_key(
+        md_text,
+        path,
+        snap_to_line_start=snap_to_line_start,
+    )
+    cached = _get_cached_page_marker_offsets(cache_key)
+    if cached is not None:
+        return cached
+
     md_tokens = _word_tokens_with_offsets(md_text)
     if len(md_tokens) < min(PAGE_ALIGNMENT_NGRAMS):
         return {}
@@ -2455,14 +2519,15 @@ def _page_marker_offsets_from_pdf_text(
 
     matched_later_pages = len([p for p in offsets if p > 1])
     if matched_later_pages <= 0:
-        return {1: 0}
-    if pdf_page_count >= 6 and matched_later_pages < 2:
-        return {1: 0}
-    if snap_to_line_start:
+        offsets = {1: 0}
+    elif pdf_page_count >= 6 and matched_later_pages < 2:
+        offsets = {1: 0}
+    elif snap_to_line_start:
         offsets = {
             int(page_no): _line_start_for_offset(md_text, int(offset))
             for page_no, offset in offsets.items()
         }
+    _cache_page_marker_offsets(cache_key, offsets)
     return offsets
 
 
