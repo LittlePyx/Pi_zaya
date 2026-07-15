@@ -20,7 +20,11 @@ def main() -> int:
         return 2
 
     base_url = (os.environ.get("QWEN_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1").strip().rstrip("/")
-    model = (os.environ.get("QWEN_MODEL") or os.environ.get("OPENAI_MODEL") or "qwen3-vl-plus").strip()
+    model = (
+        os.environ.get("QWEN_MODEL")
+        or os.environ.get("OPENAI_MODEL")
+        or "qwen3.7-plus-2026-05-26"
+    ).strip()
 
     def _crc32(tag: bytes, data: bytes) -> bytes:
         return struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)

@@ -2404,8 +2404,8 @@ def test_enrich_refs_payload_polishes_top_hit_card_copy_with_llm(monkeypatch):
         reference_ui,
         "_llm_polish_ref_card_copy_v2",
         lambda **kwargs: (
-            "该文系统比较了 Hadamard 与 Fourier 单像素成像在重建质量和效率上的差异。",
-            "标题与当前问题中的 Fourier single-pixel imaging 直接对齐，且该小节给出了对应比较。",
+            "The paper compares Hadamard and Fourier single-pixel imaging in reconstruction quality and efficiency.",
+            "The matched numerical-simulation section compares reconstruction quality and efficiency for Hadamard and Fourier sampling.",
         ),
     )
 
@@ -2415,8 +2415,8 @@ def test_enrich_refs_payload_polishes_top_hit_card_copy_with_llm(monkeypatch):
     assert len(hits) == 1
     ui_meta = (hits[0].get("ui_meta") if isinstance(hits[0].get("ui_meta"), dict) else {}) or {}
     assert "Fourier" in str(ui_meta.get("summary_line") or "")
-    assert "单像素" in str(ui_meta.get("summary_line") or "")
-    assert "直接对齐" in str(ui_meta.get("why_line") or "")
+    assert "single-pixel" in str(ui_meta.get("summary_line") or "")
+    assert "reconstruction quality" in str(ui_meta.get("why_line") or "")
     assert str(ui_meta.get("summary_generation") or "") == "llm_grounded"
     assert str(ui_meta.get("why_generation") or "") == "llm_grounded"
 
@@ -2498,7 +2498,7 @@ def test_enrich_refs_payload_prefers_llm_grounded_guide_summary_over_english_sur
     assert str(ui_meta.get("why_generation") or "") == "llm_grounded"
     assert "LLM" in str(ui_meta.get("summary_basis") or "")
     assert "This paper proposes" not in str(ui_meta.get("summary_line") or "")
-def test_maybe_polish_single_ref_hit_card_strict_mode_uses_llm_output_without_rule_fallback(monkeypatch):
+def test_maybe_polish_single_ref_hit_card_rejects_unusable_llm_copy(monkeypatch):
     hit = {
         "text": (
             "This paper proposes a NeRF-based SCI reconstruction pipeline and shows that a single "
@@ -2545,9 +2545,8 @@ def test_maybe_polish_single_ref_hit_card_strict_mode_uses_llm_output_without_ru
     )
 
     assert str(out.get("summary_line") or "") == str(ui_meta.get("summary_line") or "")
-    assert str(out.get("why_line") or "") == "This hit is directly relevant because it is a good entry point for the user's question."
-    assert str(out.get("summary_generation") or "") == "llm_grounded"
-    assert str(out.get("why_generation") or "") == "llm_grounded"
+    assert str(out.get("why_line") or "") != "This hit is directly relevant because it is a good entry point for the user's question."
+    assert str(out.get("why_generation") or "") != "llm_grounded"
 
 
 def test_maybe_polish_single_ref_hit_card_falls_back_to_real_snippet_when_llm_empty(monkeypatch):
@@ -5654,7 +5653,8 @@ def test_enrich_refs_payload_can_polish_from_hit_text_without_extra_snippets(mon
     assert len(hits) == 1
     ui_meta = (hits[0].get("ui_meta") if isinstance(hits[0].get("ui_meta"), dict) else {}) or {}
     assert "defines dynamic supersampling" in str(ui_meta.get("summary_line") or "")
-    assert "directly relevant" in str(ui_meta.get("why_line") or "").lower()
+    assert "dynamic supersampling" in str(ui_meta.get("why_line") or "").lower()
+    assert "directly relevant" not in str(ui_meta.get("why_line") or "").lower()
 
 
 def test_enrich_refs_payload_polishes_explicit_multi_paper_list(monkeypatch):

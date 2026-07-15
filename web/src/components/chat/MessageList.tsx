@@ -178,7 +178,7 @@ const SHELF_AUTO_REPAIR_BATCH_SIZE = 8
 const SHELF_AUTO_REPAIR_RETRY_MS = 15000
 const SHELF_METADATA_HYDRATE_BATCH_SIZE = 8
 const SHELF_METADATA_HYDRATE_RETRY_MS = 15000
-const SHELF_SUMMARY_BACKFILL_BATCH_SIZE = 4
+const SHELF_SUMMARY_BACKFILL_BATCH_SIZE = 24
 const SHELF_SUMMARY_BACKFILL_RETRY_MS = 60000
 
 type ShelfAsyncScopeToken = {
@@ -300,6 +300,7 @@ export function MessageList({
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
   const [shelfSummaryLoadingKey, setShelfSummaryLoadingKey] = useState('')
+  const [shelfSummaryStatusByKey, setShelfSummaryStatusByKey] = useState<Record<string, 'loading' | 'unavailable' | 'failed' | 'ready'>>({})
   const [shelfRepairLoadingKey, setShelfRepairLoadingKey] = useState('')
   const [shelfAutoRepairingKeys, setShelfAutoRepairingKeys] = useState<string[]>([])
   const [shelfBackgroundBusy, setShelfBackgroundBusy] = useState(false)
@@ -719,6 +720,7 @@ export function MessageList({
     }
     setShelfAutoRepairingKeySet(new Set())
     setShelfSummaryLoadingKey('')
+    setShelfSummaryStatusByKey({})
     setShelfRepairLoadingKey('')
     setShelfRepairImpact(null)
     shelfAutoRepairFingerprintsRef.current = {}
@@ -1116,22 +1118,44 @@ export function MessageList({
     const loadBibliometrics = options?.force
       ? referencesApi.bibliometrics
       : referencesApi.bibliometricsCached
+    shelfSummaryBackfillAttemptedAtRef.current[shelfSummaryBackfillAttemptKey(item)] = Date.now()
+    setShelfSummaryStatusByKey((current) => ({ ...current, [item.key]: 'loading' }))
     loadBibliometrics(withBibliometricsLocale(requestItem as unknown as Record<string, unknown>))
       .then((meta) => {
-        if (!currentShelfItemForAsync(scopeToken, item.key)) return
-        if (!meta || Object.keys(meta).length === 0) return
+        const currentItem = currentShelfItemForAsync(scopeToken, item.key)
+        if (!currentItem) return
+        if (!meta || Object.keys(meta).length === 0) {
+          setShelfSummaryStatusByKey((current) => ({ ...current, [item.key]: 'unavailable' }))
+          return
+        }
+        const currentMerged = mergeCiteMeta(currentItem, meta)
+        const currentPatch = articleSummaryPatchFromMeta(currentItem, meta)
+        const summaryReady = shelfItemHasDisplayableArticleSummary({
+          ...toShelfItem(currentMerged),
+          ...currentPatch,
+          key: currentItem.key,
+        })
         setShelfItems((current) => current.map((entry) => {
           if (entry.key !== item.key && shelfPaperIdentity(entry) !== itemIdentity) return entry
           const merged = mergeCiteMeta(entry, meta)
           const articleSummaryPatch = articleSummaryPatchFromMeta(entry, meta)
-          return {
+          const next = {
             ...toShelfItem(merged),
             ...articleSummaryPatch,
             key: entry.key,
             tags: normalizeShelfTags(entry.tags),
             note: normalizeShelfNote(entry.note),
           }
+          return next
         }))
+        setShelfSummaryStatusByKey((current) => ({
+          ...current,
+          [item.key]: summaryReady ? 'ready' : 'unavailable',
+        }))
+      })
+      .catch(() => {
+        if (!shelfAsyncScopeIsCurrent(scopeToken)) return
+        setShelfSummaryStatusByKey((current) => ({ ...current, [item.key]: 'failed' }))
       })
       .finally(() => {
         if (!shelfAsyncScopeIsCurrent(scopeToken)) return
@@ -1152,6 +1176,7 @@ export function MessageList({
       for (const item of shelfItems) {
         if (targets.length >= SHELF_SUMMARY_BACKFILL_BATCH_SIZE) break
         if (shelfSummaryBackfillInFlightRef.current.has(item.key)) continue
+        if (shelfSummaryStatusByKey[item.key] === 'loading') continue
         if (!shelfItemNeedsSummaryBackfill(item)) continue
         const attemptKey = shelfSummaryBackfillAttemptKey(item)
         const lastAttempt = Number(shelfSummaryBackfillAttemptedAtRef.current[attemptKey] || 0)
@@ -1167,6 +1192,11 @@ export function MessageList({
       }
       shelfSummaryBackfillInFlightRef.current = inFlight
       setShelfSummaryLoadingKey((current) => current || targets[0]?.item.key || '')
+      setShelfSummaryStatusByKey((current) => {
+        const next = { ...current }
+        for (const target of targets) next[target.item.key] = 'loading'
+        return next
+      })
       const scopeToken = captureShelfAsyncScope()
 
       void Promise.all(targets.map(({ item }) => (
@@ -1181,12 +1211,35 @@ export function MessageList({
           summary_provider: '',
           summary_quality: null,
         } as unknown as Record<string, unknown>))
-          .catch(() => ({}))
-          .then((meta) => ({ key: item.key, meta }))
+          .then((meta) => ({ key: item.key, meta, failed: false }))
+          .catch(() => ({ key: item.key, meta: {} as Record<string, unknown>, failed: true }))
       ))).then((results) => {
         if (!shelfAsyncScopeIsCurrent(scopeToken)) return
-        const usable = results.filter((entry) => entry.meta && Object.keys(entry.meta).length > 0)
-        if (usable.length <= 0) return
+        const targetByKey = new Map(targets.map((target) => [target.item.key, target.item]))
+        const statusPatch: Record<string, 'unavailable' | 'failed' | 'ready'> = {}
+        for (const result of results) {
+          if (result.failed) {
+            statusPatch[result.key] = 'failed'
+            continue
+          }
+          const target = targetByKey.get(result.key)
+          if (!target || !result.meta || Object.keys(result.meta).length <= 0) {
+            statusPatch[result.key] = 'unavailable'
+            continue
+          }
+          const merged = mergeCiteMeta(target, result.meta)
+          const articleSummaryPatch = articleSummaryPatchFromMeta(target, result.meta)
+          const candidate = {
+            ...toShelfItem(merged),
+            ...articleSummaryPatch,
+            key: target.key,
+          }
+          statusPatch[result.key] = shelfItemHasDisplayableArticleSummary(candidate)
+            ? 'ready'
+            : 'unavailable'
+        }
+        setShelfSummaryStatusByKey((current) => ({ ...current, ...statusPatch }))
+        const usable = results.filter((entry) => !entry.failed && entry.meta && Object.keys(entry.meta).length > 0)
         setShelfItems((current) => current.map((entry) => {
           if (!currentShelfItemForAsync(scopeToken, entry.key)) return entry
           const result = usable.find((item) => item.key === entry.key)
@@ -1217,7 +1270,7 @@ export function MessageList({
         shelfSummaryBackfillTimerRef.current = null
       }
     }
-  }, [captureShelfAsyncScope, currentShelfItemForAsync, shelfAsyncScopeIsCurrent, shelfItems, shelfOpen])
+  }, [captureShelfAsyncScope, currentShelfItemForAsync, shelfAsyncScopeIsCurrent, shelfItems, shelfOpen, shelfSummaryStatusByKey])
 
   const applyShelfMetadataRepairCandidates = useCallback((
     updates: Array<{ key: string; metas: Array<Record<string, unknown>> }>,
@@ -1896,6 +1949,7 @@ export function MessageList({
       sourceQualityRefreshToken={sourceQualityRefreshToken}
       focusedKey={focusedShelfKey}
       summaryLoadingKey={shelfSummaryLoadingKey}
+      summaryStatusByKey={shelfSummaryStatusByKey}
       repairLoadingKey={shelfRepairLoadingKey}
       repairingKeys={shelfAutoRepairingKeys}
       repairImpact={shelfRepairImpact}
@@ -1908,6 +1962,7 @@ export function MessageList({
         setFocusedShelfKey(item.key)
         fetchShelfSummaryForItem(item)
       }}
+      onRetrySummary={(item) => fetchShelfSummaryForItem(item, { force: true })}
       onOpenSource={(item) => {
         openReaderFromDetail(shelfLibraryFullTextDetail(item) || item as unknown as CiteDetail)
       }}
@@ -1922,6 +1977,12 @@ export function MessageList({
         setShelfItems((current) => current.filter((item) => item.key !== key))
         if (focusedShelfKey === key) setFocusedShelfKey('')
         if (shelfSummaryLoadingKey === key) setShelfSummaryLoadingKey('')
+        setShelfSummaryStatusByKey((current) => {
+          if (!(key in current)) return current
+          const next = { ...current }
+          delete next[key]
+          return next
+        })
         if (shelfRepairLoadingKey === key) setShelfRepairLoadingKey('')
         const nextRepairing = new Set(shelfAutoRepairingKeySetRef.current)
         nextRepairing.delete(key)
@@ -1934,6 +1995,7 @@ export function MessageList({
         setShelfItems([])
         setFocusedShelfKey('')
         setShelfSummaryLoadingKey('')
+        setShelfSummaryStatusByKey({})
         setShelfRepairLoadingKey('')
         setShelfAutoRepairingKeySet(new Set())
         shelfAutoRepairFingerprintsRef.current = {}

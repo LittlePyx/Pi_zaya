@@ -153,6 +153,65 @@ def test_process_vision_direct_page_logs_stage_timing_when_enabled(tmp_path, mon
     assert "TOTAL:" in captured
 
 
+def test_ultra_fast_page_failure_rerenders_once_with_normal_profile(tmp_path, monkeypatch):
+    _patch_page_pipeline(monkeypatch)
+    calls: list[tuple[str, int]] = []
+
+    class _FastFallbackConverter(_DummyConverter):
+        def _convert_page_with_vision_guardrails(self, **kwargs):
+            calls.append((str(kwargs["speed_mode"]), len(kwargs["png_bytes"])))
+            return None if kwargs["speed_mode"] == "ultra_fast" else "normal-md"
+
+        def _get_speed_mode_config(self, speed_mode, total_pages):
+            assert speed_mode == "normal"
+            return {"compress": 2, "dpi": 220, "max_tokens": 4096}
+
+    out = page_module.process_vision_direct_page(
+        _FastFallbackConverter(),
+        page=_DummyPage(),
+        page_index=0,
+        total_pages=1,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+        speed_mode="ultra_fast",
+        speed_config={"compress": 5, "dpi": 150, "max_tokens": 2048},
+        dpi=150,
+        mat=(1, 1),
+    )
+
+    assert out == "normal-md-post"
+    assert [mode for mode, _ in calls] == ["ultra_fast", "normal"]
+
+
+def test_ultra_fast_successful_local_fallback_does_not_rerender_normal(tmp_path, monkeypatch):
+    _patch_page_pipeline(monkeypatch)
+    calls: list[str] = []
+
+    class _LocalFallbackConverter(_DummyConverter):
+        def _convert_page_with_vision_guardrails(self, **kwargs):
+            calls.append(str(kwargs["speed_mode"]))
+            return "local-fallback-md"
+
+        def _get_speed_mode_config(self, speed_mode, total_pages):
+            raise AssertionError("normal rerender must not run after a successful local fallback")
+
+    out = page_module.process_vision_direct_page(
+        _LocalFallbackConverter(),
+        page=_DummyPage(),
+        page_index=0,
+        total_pages=1,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+        speed_mode="ultra_fast",
+        speed_config={"compress": 5, "dpi": 150, "max_tokens": 2048},
+        dpi=150,
+        mat=(1, 1),
+    )
+
+    assert out == "local-fallback-md-post"
+    assert calls == ["ultra_fast"]
+
+
 def test_process_vision_direct_page_skips_visual_assets_on_references_pages(tmp_path, monkeypatch):
     called = {"assets": 0}
     monkeypatch.setattr(page_module, "_detect_references_page", lambda page: True)

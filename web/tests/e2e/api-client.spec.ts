@@ -201,6 +201,46 @@ test('api client normalizes runtime backend base URL for API requests only', asy
   }
 })
 
+test('bibliometrics cached empty summaries expire quickly and can be retried', async ({ page }) => {
+  let requestCount = 0
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    requestCount += 1
+    await fulfillJson(route, {
+      bibliometrics_checked: true,
+      doi: '10.1000/no-public-summary',
+      metadata_export_acceptance: {
+        summary_export_ready: false,
+        summary_status: 'missing',
+      },
+    })
+  })
+  await page.goto('/')
+
+  const counts = await page.evaluate(async () => {
+    const originalNow = Date.now
+    let now = 1_000_000
+    Date.now = () => now
+    try {
+      const { referencesApi } = await import('/src/api/references.ts')
+      const meta = { doi: '10.1000/no-public-summary', target_locale: 'zh' }
+      await referencesApi.bibliometricsCached(meta)
+      await referencesApi.bibliometricsCached(meta)
+      const beforeExpiry = performance.getEntriesByType('resource')
+        .filter((entry) => entry.name.includes('/api/references/bibliometrics')).length
+      now += 16_000
+      await referencesApi.bibliometricsCached(meta)
+      const afterExpiry = performance.getEntriesByType('resource')
+        .filter((entry) => entry.name.includes('/api/references/bibliometrics')).length
+      return { beforeExpiry, afterExpiry }
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  expect(requestCount).toBe(2)
+  expect(counts.afterExpiry).toBeGreaterThanOrEqual(counts.beforeExpiry)
+})
+
 test('api client preserves falsy JSON bodies and accepts empty success responses', async ({ page }) => {
   const seenBodies: string[] = []
   await installClientMocks(page, seenBodies)

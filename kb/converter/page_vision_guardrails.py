@@ -51,8 +51,16 @@ def _fallback_to_extraction_pipeline(
     pdf_path: Path,
     assets_dir: Path,
     reason: str,
+    local_only: bool = False,
 ) -> Optional[str]:
     try:
+        if local_only and hasattr(converter, "_process_page_local_only"):
+            return converter._process_page_local_only(
+                page,
+                page_index=page_index,
+                pdf_path=pdf_path,
+                assets_dir=assets_dir,
+            )
         return converter._process_page(
             page,
             page_index=page_index,
@@ -99,6 +107,8 @@ def _retry_empty_vision_output(
         retry_n = 0
     else:
         retry_n = converter._vision_empty_retry_attempts()
+        if str(speed_mode or "").strip().lower() == "ultra_fast":
+            retry_n = min(1, retry_n)
 
     retry_sleep = converter._vision_empty_retry_backoff_s()
     for k in range(1, retry_n + 1):
@@ -222,8 +232,18 @@ def convert_page_with_vision_guardrails(
         )
 
     if not md:
+        last_vl_err = ""
+        try:
+            last_vl_err = str(converter.llm_worker.get_last_vl_error_code() or "").strip().lower()
+        except Exception:
+            last_vl_err = ""
+        local_only_timeout_fallback = (
+            str(speed_mode or "").strip().lower() == "ultra_fast"
+            and last_vl_err == "timeout"
+        )
         print(
-            f"[VISION_DIRECT] VL returned empty for page {page_index+1}, falling back to extraction pipeline",
+            f"[VISION_DIRECT] VL returned empty for page {page_index+1}, falling back to "
+            f"{'local-only extraction' if local_only_timeout_fallback else 'extraction pipeline'}",
             flush=True,
         )
         return _fallback_to_extraction_pipeline(
@@ -233,6 +253,7 @@ def convert_page_with_vision_guardrails(
             pdf_path=pdf_path,
             assets_dir=assets_dir,
             reason="fallback extraction failed",
+            local_only=local_only_timeout_fallback,
         )
 
     # References pages should not contain math; skip fragmented-math checks there.
@@ -240,6 +261,23 @@ def convert_page_with_vision_guardrails(
         return md
 
     if not converter._looks_fragmented_math_output(md):
+        return md
+
+    # Output-only heuristics can mistake OCR fragments or code for equations.
+    # Retry only when the source page itself provides formula evidence.
+    has_formula_evidence = bool(formula_placeholders)
+    if not has_formula_evidence:
+        try:
+            has_formula_evidence = bool(
+                converter._collect_display_math_candidates(
+                    page,
+                    page_index=page_index,
+                    is_references_page=False,
+                )
+            )
+        except Exception:
+            has_formula_evidence = False
+    if not has_formula_evidence:
         return md
 
     print(
@@ -252,7 +290,9 @@ def convert_page_with_vision_guardrails(
         page_index=page_index,
         total_pages=total_pages,
         page_hint=converter._vision_math_retry_hint(page_hint),
-        speed_mode=speed_mode,
+        # A difficult formula page is the quality fallback for ultra-fast:
+        # retain the current screenshot, but restore the normal token policy.
+        speed_mode="normal" if str(speed_mode or "").strip().lower() == "ultra_fast" else speed_mode,
         is_references_page=is_references_page,
         max_tokens_override=max_tokens_override,
         formula_placeholders=formula_placeholders,

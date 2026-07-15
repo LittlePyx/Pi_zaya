@@ -56,6 +56,7 @@ def render_blocks_to_markdown(
     page=None,
     assets_dir: Path | None = None,
     is_references_page: bool = False,
+    allow_llm_calls: bool = True,
 ) -> str:
     import time
     render_start = time.time()
@@ -273,9 +274,11 @@ def render_blocks_to_markdown(
         Whether to use vision-capable math recovery from equation screenshots.
         Priority:
         - explicit env KB_PDF_LLM_VISION_MATH
-        - otherwise auto-enable for VL/vision models (e.g. qwen3-vl-plus)
+        - otherwise auto-enable for VL/vision models (e.g. qwen3.7-plus)
         """
         try:
+            if not allow_llm_calls:
+                return False
             if (not self.cfg.llm) or (not self.llm_worker) or (not getattr(self.llm_worker, "_client", None)):
                 return False
             if page is None:
@@ -717,7 +720,11 @@ def render_blocks_to_markdown(
             latex_text = None
             speed_cfg = getattr(self, "_active_speed_config", None) or {}
             # Check both use_llm_for_all and use_llm_in_render (balanced mode disables render LLM)
-            use_llm_in_render = speed_cfg.get("use_llm_in_render", speed_cfg.get("use_llm_for_all", True)) if self.cfg.llm else False
+            use_llm_in_render = (
+                speed_cfg.get("use_llm_in_render", speed_cfg.get("use_llm_for_all", True))
+                if allow_llm_calls and self.cfg.llm
+                else False
+            )
             # Don't ask the LLM to "repair" tiny fragments; it tends to hallucinate.
             prefer_llm_repair = (
                 (len(text_stripped) >= 18)
@@ -991,7 +998,11 @@ LaTeX:"""
                 if is_inline:
                     # Inline math: use LLM to polish for better quality (only if enabled in speed mode)
                     speed_cfg = getattr(self, "_active_speed_config", None) or {}
-                    use_llm_in_render = speed_cfg.get("use_llm_in_render", speed_cfg.get("use_llm_for_all", True)) if self.cfg.llm else False
+                    use_llm_in_render = (
+                        speed_cfg.get("use_llm_in_render", speed_cfg.get("use_llm_for_all", True))
+                        if allow_llm_calls and self.cfg.llm
+                        else False
+                    )
                     # Avoid polishing very short expressions; LLM often over-edits/hallucinates.
                     if use_llm_in_render and self.cfg.llm and self.llm_worker._client and len(latex_text.strip()) >= 12:
                         try:
@@ -1065,7 +1076,7 @@ LaTeX:"""
         else:
             # Regular text - use LLM to fix mojibake if available
             text = b.text
-            if self.cfg.llm and hasattr(self.llm_worker, '_client') and self.llm_worker._client:
+            if allow_llm_calls and self.cfg.llm and hasattr(self.llm_worker, '_client') and self.llm_worker._client:
                 # Check if text has mojibake
                 if any(pattern in text for pattern in ['膹殴', '膸', '脦麓', '脦膮', '芒']):
                     try:

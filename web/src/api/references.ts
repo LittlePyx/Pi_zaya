@@ -2,8 +2,15 @@ import { api, authFetch, responseError } from './client'
 import { normalizeSourcePathForMatch } from '../utils/sourcePath'
 
 const citationMetaCache = new Map<string, Promise<Record<string, unknown>>>()
-const bibliometricsCache = new Map<string, Promise<Record<string, unknown>>>()
+type TimedReferenceCacheEntry = {
+  expiresAt: number
+  promise: Promise<Record<string, unknown>>
+}
+
+const bibliometricsCache = new Map<string, TimedReferenceCacheEntry>()
 const citationCardPolishCache = new Map<string, Promise<Record<string, unknown>>>()
+const BIBLIOMETRICS_READY_CACHE_MS = 5 * 60 * 1000
+const BIBLIOMETRICS_EMPTY_CACHE_MS = 15 * 1000
 
 export interface ReaderDocAnchor {
   anchor_id: string
@@ -324,6 +331,42 @@ function withCache(
   return pending
 }
 
+function bibliometricsHasSummary(result: Record<string, unknown>): boolean {
+  return Boolean(String(result.summary_line || result.summaryLine || '').trim())
+}
+
+function withTimedBibliometricsCache(
+  key: string,
+  loader: () => Promise<Record<string, unknown>>,
+): Promise<Record<string, unknown>> {
+  const now = Date.now()
+  const cached = bibliometricsCache.get(key)
+  if (cached && cached.expiresAt > now) return cached.promise
+  if (cached) bibliometricsCache.delete(key)
+
+  const entry: TimedReferenceCacheEntry = {
+    expiresAt: Number.POSITIVE_INFINITY,
+    promise: Promise.resolve({}),
+  }
+  entry.promise = loader()
+    .then((result) => {
+      if (bibliometricsCache.get(key) === entry) {
+        entry.expiresAt = Date.now() + (
+          bibliometricsHasSummary(result)
+            ? BIBLIOMETRICS_READY_CACHE_MS
+            : BIBLIOMETRICS_EMPTY_CACHE_MS
+        )
+      }
+      return result
+    })
+    .catch((err) => {
+      if (bibliometricsCache.get(key) === entry) bibliometricsCache.delete(key)
+      throw err
+    })
+  bibliometricsCache.set(key, entry)
+  return entry.promise
+}
+
 export function referenceSourcePathCacheKey(sourcePath: unknown): string {
   return normalizeSourcePathForMatch(sourcePath) || String(sourcePath || '').trim()
 }
@@ -389,9 +432,8 @@ export const referencesApi = {
       meta,
     }),
   bibliometricsCached: (meta: Record<string, unknown>) =>
-    withCache(
-      bibliometricsCache,
-      stableStringify({ bibliometrics_client_version: 2, meta }),
+    withTimedBibliometricsCache(
+      stableStringify({ bibliometrics_client_version: 3, meta }),
       () => api.post<Record<string, unknown>>('/api/references/bibliometrics', {
         meta,
       }),

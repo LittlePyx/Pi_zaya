@@ -383,6 +383,151 @@ def test_bibliometrics_route_prefers_local_markdown_abstract_for_shelf_summary(t
     assert payload["metadata_export_acceptance"]["summary_export_ready"] is True
 
 
+def test_bibliometrics_route_hydrates_upstream_summary_without_using_citing_paper(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    md_dir = tmp_path / "md_output"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    citing_md = md_dir / "citing-paper.en.md"
+    citing_md.write_text(
+        "# Citing paper\n\n## Abstract\nThis abstract belongs only to the citing paper and must never be reused.\n",
+        encoding="utf-8",
+    )
+    (db_dir / "crossref_cache.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doi": {
+                    "10.1000/upstream": {
+                        "title": "The upstream article",
+                        "authors": "Upstream A",
+                        "venue": "Journal of Upstream Work",
+                        "year": "2024",
+                        "doi": "10.1000/upstream",
+                        "summary_line": "该研究提出一种可靠的方法并完成实验验证。",
+                        "summary_source": "abstract",
+                        "summary_provider": "crossref",
+                    }
+                },
+                "bib": {},
+                "title": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(references_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        references_router,
+        "enrich_citation_detail_meta",
+        lambda _detail: (_ for _ in ()).throw(AssertionError("durable summary should return before enrichment")),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_match_citation_meta_to_library",
+        lambda _meta: {
+            "status": "not_in_library",
+            "matched": False,
+            "confidence": 0,
+            "method": "",
+            "reason": "no_match",
+            "path": "",
+            "sha1": "",
+            "title": "",
+            "doi": "",
+            "year": "",
+        },
+    )
+    response = TestClient(app).post(
+        "/api/references/bibliometrics",
+        json={
+            "target_locale": "zh",
+            "meta": {
+                "key": "upstream-ref",
+                "is_inpaper": True,
+                "source_path": str(citing_md),
+                "source_name": "citing-paper.pdf",
+                "title": "The upstream article",
+                "doi": "10.1000/upstream",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary_line"] == "该研究提出一种可靠的方法并完成实验验证。"
+    assert payload["summary_provider"] == "crossref"
+    assert payload["metadata_export_acceptance"]["summary_export_ready"] is True
+    assert "citing paper" not in payload["summary_line"].lower()
+
+
+def test_bibliometrics_route_marks_upstream_summary_missing_instead_of_using_citing_paper(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    md_dir = tmp_path / "md_output"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    citing_md = md_dir / "citing-paper.en.md"
+    citing_md.write_text(
+        "# Citing paper\n\n## Abstract\nThis abstract belongs only to the citing paper and must never be reused.\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(references_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(references_router, "enrich_citation_detail_meta", lambda detail: dict(detail))
+    monkeypatch.setattr(
+        references_router,
+        "_match_citation_meta_to_library",
+        lambda _meta: {
+            "status": "not_in_library",
+            "matched": False,
+            "confidence": 0,
+            "method": "",
+            "reason": "no_match",
+            "path": "",
+            "sha1": "",
+            "title": "",
+            "doi": "",
+            "year": "",
+        },
+    )
+
+    response = TestClient(app).post(
+        "/api/references/bibliometrics",
+        json={
+            "target_locale": "zh",
+            "meta": {
+                "key": "upstream-ref-no-abstract",
+                "is_inpaper": True,
+                "source_path": str(citing_md),
+                "source_name": "citing-paper.pdf",
+                "title": "The upstream article without a public abstract",
+                "authors": "Upstream A",
+                "venue": "Journal of Upstream Work",
+                "year": "2024",
+                "doi": "10.1000/no-public-abstract",
+                "metadataExportAcceptance": {
+                    "export_ready": True,
+                    "summary": {"present": True, "export_ready": True, "status": "grounded"},
+                    "summary_export_ready": True,
+                    "summary_status": "grounded",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert not payload.get("summary_line")
+    assert payload["summary_quality"]["status"] == "missing"
+    assert payload["summary_quality"]["export_ready"] is False
+    assert payload["metadata_export_acceptance"]["summary_status"] == "missing"
+    assert payload["metadata_export_acceptance"]["summary_export_ready"] is False
+    assert "metadataExportAcceptance" not in payload
+
+
 def test_bibliometrics_route_rejects_local_summary_outside_reference_asset_roots(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     md_dir = tmp_path / "md_output"

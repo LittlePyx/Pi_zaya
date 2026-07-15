@@ -5,6 +5,38 @@ import json
 from api import reference_metadata_quality as mq
 
 
+def test_summary_acceptance_downgrades_stale_ready_contract_when_text_is_missing() -> None:
+    detail = {
+        "source_path": "paper.en.md",
+        "title": "A complete article identity",
+        "authors": "A Researcher",
+        "venue": "Journal of Tests",
+        "year": "2025",
+        "doi": "10.1000/summary-missing",
+        "summary_quality": {
+            "ok": True,
+            "status": "grounded",
+            "source": "abstract",
+            "provider": "crossref",
+            "export_ready": True,
+        },
+    }
+
+    acceptance = mq.citation_metadata_export_acceptance(detail)
+
+    assert acceptance["summary_export_ready"] is False
+    assert acceptance["summary_status"] == "missing"
+    assert acceptance["summary"] == {
+        "present": False,
+        "export_ready": False,
+        "status": "missing",
+        "score": 0,
+        "source": "",
+        "provider": "",
+        "issues": ["summary_missing"],
+    }
+
+
 def test_metadata_accepts_initial_surname_author() -> None:
     quality = mq.citation_metadata_quality(
         {

@@ -27,6 +27,9 @@ OpenAI = None  # type: ignore[assignment]
 pdfplumber = None  # type: ignore[assignment]
 _PROGRESS_PRINT_LOCK = threading.Lock()
 ASSET_REV_TAG = "r2"
+# Versioned default keeps repeated conversions reproducible.  --model and the
+# provider environment variables remain explicit overrides.
+DEFAULT_QWEN_VISION_MODEL = "qwen3.7-plus-2026-05-26"
 
 
 def _configure_stdio_error_policy() -> None:
@@ -6589,7 +6592,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> ConvertConfig:
     # If QWEN_API_KEY is set, default to Qwen's compatible-mode endpoint and a vision-capable model.
     if os.environ.get("QWEN_API_KEY"):
         default_base_url = os.environ.get("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        default_model = os.environ.get("QWEN_MODEL", os.environ.get("OPENAI_MODEL", "qwen3-vl-plus"))
+        default_model = (
+            os.environ.get("QWEN_MODEL")
+            or os.environ.get("OPENAI_MODEL")
+            or DEFAULT_QWEN_VISION_MODEL
+        )
         default_key_env = os.environ.get("QWEN_API_KEY_ENV", "QWEN_API_KEY")
     else:
         # DeepSeek's OpenAI-compatible endpoint uses the /v1 prefix.
@@ -6658,7 +6665,10 @@ def _parse_args(argv: Optional[list[str]] = None) -> ConvertConfig:
         locked_env = {
             "KB_PDF_LEGACY_EXTRA_CLEANUP": "0",
             "KB_PDF_VISION_MATH_QUALITY_GATE": "1",
-            "KB_PDF_VISION_EMPTY_RETRY": "3",
+            # The initial call plus two retries is enough to absorb transient
+            # empty provider responses without turning one bad page into four
+            # full multimodal requests.  Ultra-fast is capped further below.
+            "KB_PDF_VISION_EMPTY_RETRY": "2",
             "KB_PDF_VISION_EMPTY_RETRY_BACKOFF_S": "1.5",
             "KB_PDF_VISION_REFS_COLUMN_MODE": "1",
             "KB_PDF_VISION_FRAGMENT_FALLBACK": "0",
@@ -6666,14 +6676,15 @@ def _parse_args(argv: Optional[list[str]] = None) -> ConvertConfig:
         }
         for k, v in locked_env.items():
             os.environ[k] = v
+        # Ultra-fast must fail over quickly on a slow vision request.  Keep this
+        # as a default (rather than a forced guardrail) so an operator can tune
+        # it for their provider before launching the converter.
+        os.environ.setdefault("KB_PDF_ULTRA_FAST_VISION_TIMEOUT_S", "45")
 
-        # Keep quality-first route deterministic under locked profile.
-        if str(args.speed_mode).lower() != "normal":
-            print(
-                f"[PROFILE] locked: forcing --speed-mode normal (ignore {args.speed_mode!r})",
-                flush=True,
-            )
-            args.speed_mode = "normal"
+        # The locked profile owns quality guardrails, not the user's speed
+        # selection.  In particular, ultra_fast must reach the converter so its
+        # lower render DPI/token budget can take effect.  The CLI default remains
+        # normal when no speed mode is supplied.
 
         # Timeout guardrail to reduce random mid-run aborts on heavy pages.
         try:

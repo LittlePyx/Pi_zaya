@@ -2482,6 +2482,17 @@ class PDFConverter:
     def _process_page(self, page, page_index: int, pdf_path: Path, assets_dir: Path) -> str:
         return process_page(self, page, page_index=page_index, pdf_path=pdf_path, assets_dir=assets_dir)
 
+    def _process_page_local_only(self, page, page_index: int, pdf_path: Path, assets_dir: Path) -> str:
+        """Local extraction fallback that never enters Step 6 LLM enhancement."""
+        return process_page(
+            self,
+            page,
+            page_index=page_index,
+            pdf_path=pdf_path,
+            assets_dir=assets_dir,
+            allow_llm_enhance=False,
+        )
+
     def _merge_adjacent_math_fragments(self, blocks: List[TextBlock], *, page_wh: tuple[float, float]) -> List[TextBlock]:
         """
         Merge adjacent math fragments split by PDF extraction.
@@ -2893,6 +2904,7 @@ class PDFConverter:
         page=None,
         assets_dir: Path | None = None,
         is_references_page: bool = False,
+        allow_llm_calls: bool = True,
     ) -> str:
         return render_blocks_to_markdown(
             self,
@@ -2901,6 +2913,7 @@ class PDFConverter:
             page=page,
             assets_dir=assets_dir,
             is_references_page=is_references_page,
+            allow_llm_calls=allow_llm_calls,
         )
 
     def _merge_split_formulas(self, md: str) -> str:

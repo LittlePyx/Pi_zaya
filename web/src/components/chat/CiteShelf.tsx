@@ -71,6 +71,7 @@ interface Props {
   snapshotDiff: string
   focusedKey: string
   summaryLoadingKey: string
+  summaryStatusByKey?: Record<string, 'loading' | 'unavailable' | 'failed' | 'ready'>
   repairLoadingKey: string
   repairImpact: ShelfMetadataRepairImpact | null
   repairingKeys?: string[]
@@ -86,6 +87,7 @@ interface Props {
   onUpdateTags: (key: string, tags: string[]) => void
   onUpdateNote: (key: string, note: string) => void
   onRepair: (item: CiteShelfItem, options?: { silent?: boolean }) => void
+  onRetrySummary?: (item: CiteShelfItem) => void
   onApplyRepairCandidates?: (updates: Array<{ key: string; metas: Array<Record<string, unknown>> }>) => boolean
   onSelectSnapshot: (id: string) => void
   onSaveSnapshot: () => void
@@ -108,6 +110,7 @@ export function CiteShelf({
   snapshotDiff,
   focusedKey,
   summaryLoadingKey,
+  summaryStatusByKey = {},
   repairLoadingKey,
   repairImpact,
   repairingKeys = [],
@@ -123,6 +126,7 @@ export function CiteShelf({
   onUpdateTags,
   onUpdateNote,
   onRepair,
+  onRetrySummary,
   onApplyRepairCandidates,
   onSelectSnapshot,
   onSaveSnapshot,
@@ -1946,6 +1950,9 @@ export function CiteShelf({
                       const shelfSummaryQuality = shelfSummary.quality
                       const shelfSummaryHeading = shelfSummary.headingLabel
                       const shelfSummaryLines = splitSummary(shelfSummaryLine)
+                      const shelfSummaryStatus = shelfSummaryLine
+                        ? 'ready'
+                        : summaryStatusByKey[item.key] || (summaryLoadingKey === item.key ? 'loading' : 'pending')
                       const rawItemSourceLabel = basenameFromPath(String(item.sourceName || item.sourcePath || '').trim())
                       const itemLocationLabel = String(item.locationLabel || item.headingPath || '').trim()
                       const shelfExcerpt = cleanCitationDisplayText(item.shelfExcerpt || '')
@@ -2199,8 +2206,12 @@ export function CiteShelf({
                             </div>
                           ) : null}
                           {isDetailsExpanded && shelfCard.showArticleSummary ? (
-                            <div className="kb-shelf-summary" data-testid="citation-shelf-summary">
-                              {summaryLoadingKey === item.key ? (
+                            <div
+                              className="kb-shelf-summary"
+                              data-summary-status={shelfSummaryStatus}
+                              data-testid="citation-shelf-summary"
+                            >
+                              {shelfSummaryStatus === 'loading' ? (
                                 <div className="kb-shelf-summary-text">{S.shelf_summary_loading}</div>
                               ) : shelfSummaryLine ? (
                                 <>
@@ -2246,6 +2257,20 @@ export function CiteShelf({
                                     )
                                   })()}
                                 </>
+                              ) : shelfSummaryStatus === 'failed' ? (
+                                <button
+                                  type="button"
+                                  className="kb-shelf-summary-empty kb-shelf-summary-retry"
+                                  data-testid="citation-shelf-summary-retry"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    onRetrySummary?.(item)
+                                  }}
+                                >
+                                  {S.shelf_summary_failed_retry}
+                                </button>
+                              ) : shelfSummaryStatus === 'unavailable' ? (
+                                <div className="kb-shelf-summary-empty">{S.shelf_summary_unavailable}</div>
                               ) : (
                                 <div className="kb-shelf-summary-empty">{S.shelf_summary_empty}</div>
                               )}

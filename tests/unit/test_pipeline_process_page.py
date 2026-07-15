@@ -1,8 +1,9 @@
 from pathlib import Path
+from dataclasses import replace
 
 import fitz
 
-from kb.converter.config import ConvertConfig
+from kb.converter.config import ConvertConfig, LlmConfig
 from kb.converter.models import TextBlock
 from kb.converter.pipeline import PDFConverter
 import kb.converter.page_local_pipeline as page_local_pipeline
@@ -125,3 +126,97 @@ def test_render_prepared_page_uses_reference_text_fastpath(tmp_path):
     assert out.startswith("# References")
     assert "[1] A. Author. First paper. Journal, 2020. 3" in out
     assert "\n10\n" not in f"\n{out}\n"
+
+
+def test_process_page_local_only_skips_llm_enhance(tmp_path, monkeypatch):
+    converter = _make_converter(tmp_path)
+    converter.cfg = replace(
+        converter.cfg,
+        llm=LlmConfig(
+            api_key="test-key",
+            base_url="https://example.com/v1",
+            model="vision-model",
+        ),
+    )
+    page = _DummyPage()
+
+    monkeypatch.setattr(page_local_pipeline, "detect_body_font_size", lambda pages: 11.0)
+    monkeypatch.setattr(page_local_pipeline, "_page_has_references_heading", lambda page: False)
+    monkeypatch.setattr(page_local_pipeline, "_page_looks_like_references_content", lambda page: False)
+    monkeypatch.setattr(page_local_pipeline, "_collect_visual_rects", lambda page: [])
+    monkeypatch.setattr(page_local_pipeline, "_page_maybe_has_table_from_dict", lambda d: False)
+    monkeypatch.setattr(page_local_pipeline, "_extract_tables_by_layout", lambda *args, **kwargs: [])
+    monkeypatch.setattr(converter, "_extract_page_figure_caption_candidates", lambda page: [])
+    monkeypatch.setattr(converter, "_split_visual_rects_by_internal_captions", lambda **kwargs: [])
+    monkeypatch.setattr(
+        converter,
+        "_extract_text_blocks",
+        lambda *args, **kwargs: [TextBlock(bbox=(10, 10, 50, 30), text="Local body.")],
+    )
+    monkeypatch.setattr(converter, "_merge_adjacent_math_fragments", lambda blocks, *, page_wh: blocks)
+    monkeypatch.setattr(
+        converter,
+        "_enhance_blocks_with_llm",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("LLM enhance must be skipped")),
+    )
+    monkeypatch.setattr(converter, "_render_blocks_to_markdown", lambda *args, **kwargs: "LOCAL_MD")
+
+    out = converter._process_page_local_only(
+        page,
+        page_index=0,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+    )
+
+    assert out == "LOCAL_MD"
+
+
+def test_local_only_render_disables_math_and_text_llm_calls(tmp_path, monkeypatch):
+    converter = _make_converter(tmp_path)
+    converter.cfg = replace(
+        converter.cfg,
+        llm=LlmConfig(
+            api_key="test-key",
+            base_url="https://example.com/v1",
+            model="vision-model",
+        ),
+    )
+    converter.llm_worker._client = object()
+    converter._active_speed_config = {"use_llm_for_all": True, "use_llm_in_render": True}
+    calls = {"math": 0, "math_image": 0, "body": 0, "raw": 0}
+
+    monkeypatch.setattr(
+        converter.llm_worker,
+        "call_llm_repair_math",
+        lambda *args, **kwargs: calls.__setitem__("math", calls["math"] + 1),
+    )
+    monkeypatch.setattr(
+        converter.llm_worker,
+        "call_llm_repair_math_from_image",
+        lambda *args, **kwargs: calls.__setitem__("math_image", calls["math_image"] + 1),
+    )
+    monkeypatch.setattr(
+        converter.llm_worker,
+        "call_llm_repair_body_paragraph",
+        lambda *args, **kwargs: calls.__setitem__("body", calls["body"] + 1),
+    )
+    monkeypatch.setattr(
+        converter.llm_worker,
+        "_llm_create",
+        lambda **kwargs: calls.__setitem__("raw", calls["raw"] + 1),
+    )
+
+    out = converter._render_blocks_to_markdown(
+        [
+            TextBlock(bbox=(10, 20, 190, 50), text="x = sum of all sample values", is_math=True),
+            TextBlock(bbox=(10, 60, 190, 90), text="鑶规 local extraction text"),
+        ],
+        0,
+        page=_DummyPage(),
+        assets_dir=tmp_path,
+        is_references_page=False,
+        allow_llm_calls=False,
+    )
+
+    assert out
+    assert calls == {"math": 0, "math_image": 0, "body": 0, "raw": 0}

@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from .chunking import chunk_markdown
 from .llm import DeepSeekChat
+from .paper_guide_prompting import _paper_guide_prompt_requests_citation_lookup
 from .retrieval_heuristics import (
     _aspects_from_snippets,
     _clean_snippet_for_display,
@@ -201,7 +202,23 @@ def _wants_reference_navigation(question: str) -> bool:
     q = (question or "").strip()
     if not q:
         return False
-    return bool(re.search(r"(参考文献|引用|cite|citation|reference|bibliography)", q, flags=re.I))
+    # Keep bibliography navigation aligned with the centralized paper-guide
+    # intent classifier.  In particular, output constraints such as
+    # “给出对应引用” / “give supporting citations” ask for answer grounding;
+    # they are not requests to retrieve the paper's References section.
+    if _paper_guide_prompt_requests_citation_lookup(q):
+        return True
+    return bool(
+        re.search(
+            r"(?i)(?:"
+            r"(?:打开|查看|跳转到?|定位到?|展示|列出).{0,12}(?:参考文献|文献列表|引用列表)|"
+            r"(?:参考文献|文献列表|引用列表).{0,12}(?:章节|部分|列表|第\s*\d+\s*条)|"
+            r"(?:open|show|view|navigate\s+to|go\s+to|list).{0,16}(?:references?|bibliography)|"
+            r"(?:references?|bibliography).{0,16}(?:section|list|entry\s*\[?\d+\]?)"
+            r")",
+            q,
+        )
+    )
 
 
 def _is_reference_heading_like(h: str) -> bool:

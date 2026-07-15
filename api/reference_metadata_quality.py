@@ -695,14 +695,22 @@ def _summary_export_state(detail: Mapping[str, Any]) -> dict[str, Any]:
     summary = _text(detail.get("summary_line") or detail.get("summaryLine"))
     raw_contract = detail.get("summary_quality") or detail.get("summaryQuality")
     contract = raw_contract if isinstance(raw_contract, Mapping) else {}
+    if not summary:
+        return {
+            "present": False,
+            "export_ready": False,
+            "status": "missing",
+            "score": 0,
+            "source": "",
+            "provider": "",
+            "issues": ["summary_missing"],
+        }
     status = _text(contract.get("status")).lower()
     source = _text(contract.get("source") or detail.get("summary_source") or detail.get("summarySource")).lower()
     provider = _text(contract.get("provider") or detail.get("summary_provider") or detail.get("summaryProvider")).lower()
     score = _int_value(contract.get("score")) if contract else 0
     contract_ready = bool(contract.get("ok")) or status == "grounded"
     export_ready = bool(contract.get("export_ready")) if "export_ready" in contract else bool(summary and (contract_ready or (source and source != "metadata")))
-    if not summary:
-        export_ready = False
     return {
         "present": bool(summary),
         "export_ready": bool(export_ready),

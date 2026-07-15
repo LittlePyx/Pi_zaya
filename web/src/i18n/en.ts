@@ -986,6 +986,8 @@ export const S = {
   shelf_evidence_note_head: 'Evidence note',
   shelf_citation_count: 'Cited by {n}',
   shelf_summary_empty: 'Article summary pending',
+  shelf_summary_unavailable: 'No public abstract available',
+  shelf_summary_failed_retry: 'Summary fetch failed. Click to retry',
   shelf_summary_source_fulltext: 'Full text',
   shelf_summary_source_crossref: 'Crossref abstract',
   shelf_summary_source_openalex: 'OpenAlex abstract',

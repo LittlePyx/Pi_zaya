@@ -157,7 +157,7 @@ def test_call_llm_page_to_markdown_applies_lower_max_tokens_override(tmp_path, m
     captured = {}
 
     def _fake_llm_create(**kwargs):
-        captured["max_tokens"] = kwargs.get("max_tokens")
+        captured.update(kwargs)
         return _FakeResp("token-capped markdown")
 
     monkeypatch.setattr(worker, "_llm_create", _fake_llm_create)
@@ -174,6 +174,67 @@ def test_call_llm_page_to_markdown_applies_lower_max_tokens_override(tmp_path, m
 
     assert out == "token-capped markdown"
     assert captured["max_tokens"] == 3072
+    assert "_request_timeout_s" not in captured
+    assert "_hard_timeout_s" not in captured
+
+
+def test_call_llm_page_to_markdown_ultra_fast_keeps_2048_token_budget(tmp_path, monkeypatch):
+    monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
+    LLMWorker._shared_page_ocr_cache.clear()
+    LLMWorker._reset_shared_llm_gate_for_tests()
+    worker = LLMWorker(_make_cfg(tmp_path))
+    captured = {}
+
+    def _fake_llm_create(**kwargs):
+        captured.update(kwargs)
+        return _FakeResp("fast markdown")
+
+    monkeypatch.setattr(worker, "_llm_create", _fake_llm_create)
+    monkeypatch.setenv("KB_PDF_ULTRA_FAST_VISION_TIMEOUT_S", "33")
+
+    out = worker.call_llm_page_to_markdown(
+        b"fast-image",
+        page_number=1,
+        total_pages=4,
+        speed_mode="ultra_fast",
+        is_references_page=False,
+    )
+
+    assert out == "fast markdown"
+    assert captured["max_tokens"] == 2048
+    assert captured["_request_timeout_s"] == 33.0
+    assert captured["_hard_timeout_s"] == 43.0
+    assert captured["_semaphore_timeout_s"] == 30.0
+    assert captured["_max_retries"] == 0
+
+
+def test_llm_create_applies_explicit_fast_request_and_hard_timeouts(tmp_path, monkeypatch):
+    monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
+    LLMWorker._reset_shared_llm_gate_for_tests()
+    worker = LLMWorker(_make_cfg(tmp_path))
+    worker._llm_gate = None
+    captured = {}
+
+    def _fake_guard(**kwargs):
+        captured.update(kwargs)
+        return _FakeResp("ok")
+
+    monkeypatch.setattr(worker, "_client_create_with_guard_timeout", _fake_guard)
+
+    out = worker._llm_create(
+        messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}}]}],
+        max_tokens=32,
+        _request_timeout_s=24,
+        _hard_timeout_s=34,
+        _semaphore_timeout_s=12,
+        _max_retries=0,
+    )
+
+    assert out.choices[0].message.content == "ok"
+    assert captured["timeout_s"] == 24.0
+    assert captured["hard_timeout_s_override"] == 34
+    assert captured["has_image_payload"] is True
+    assert "_request_timeout_s" not in captured
 
 
 def test_multiple_workers_share_process_level_inflight_gate(tmp_path, monkeypatch):

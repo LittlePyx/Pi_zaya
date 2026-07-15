@@ -857,6 +857,53 @@ def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):
     assert settings.vision_model == "vision-model"
 
 
+def test_load_settings_uses_versioned_qwen_default_model(monkeypatch):
+    monkeypatch.setattr(config_module, "_load_runtime_prefs", lambda: {})
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("QWEN_MODEL", "")
+    monkeypatch.setenv("OPENAI_MODEL", "")
+
+    settings = config_module.load_settings()
+
+    assert settings.vision_model == "qwen3.7-plus-2026-05-26"
+
+
+def test_load_settings_keeps_explicit_saved_vision_model_with_qwen_env_key(monkeypatch):
+    monkeypatch.setattr(
+        config_module,
+        "_load_runtime_prefs",
+        lambda: {"vision_model": "saved-vision-model"},
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("QWEN_MODEL", "")
+    monkeypatch.setenv("OPENAI_MODEL", "")
+
+    settings = config_module.load_settings()
+
+    assert settings.vision_model == "saved-vision-model"
+
+
+def test_load_settings_qwen_env_model_overrides_saved_vision_model(monkeypatch):
+    monkeypatch.setattr(
+        config_module,
+        "_load_runtime_prefs",
+        lambda: {"vision_model": "saved-vision-model"},
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("QWEN_MODEL", "environment-vision-model")
+    monkeypatch.setenv("OPENAI_MODEL", "")
+
+    settings = config_module.load_settings()
+
+    assert settings.vision_model == "environment-vision-model"
+
+
 def test_load_settings_keeps_public_auth_off_by_default_in_production(monkeypatch):
     monkeypatch.setattr(config_module, "_load_runtime_prefs", lambda: {})
     monkeypatch.setenv("KB_ENV", "production")

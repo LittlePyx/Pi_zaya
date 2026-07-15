@@ -143,6 +143,9 @@ from kb.evidence_text import pick_readable_evidence_text as _pick_readable_evide
 from kb.library_store import LibraryStore
 from kb.llm import DeepSeekChat
 from kb.path_safety import clean_file_source_path_input, root_relative_file_id
+from kb.paper_guide_prompting import (
+    _paper_guide_prompt_requests_citation_lookup as _prompt_requests_citation_lookup,
+)
 from kb.reference_query_family import (
     extract_multi_paper_topic as _shared_extract_multi_paper_topic,
     prompt_explicitly_requests_multi_paper_list as _shared_prompt_explicitly_requests_multi_paper_list,
@@ -2514,10 +2517,103 @@ def _why_line_needs_polish(
     return bool(_render_focus_terms_for_ref_card(prompt) and (not matched_terms))
 
 
-def _collect_ref_card_polish_candidates(hit: dict, *, ui_meta: dict, max_items: int = 4) -> list[str]:
+_REF_CARD_BIBLIOGRAPHY_HEADING_RE = re.compile(
+    r"(?i)(?:^|[/›>])\s*(?:references?|bibliography|works?\s+cited|参考文献|引用文献)\s*(?:$|[/›>])"
+)
+
+
+def _ref_card_heading_is_bibliography(heading_path: str) -> bool:
+    heading = " ".join(str(heading_path or "").strip().split())
+    if not heading:
+        return False
+    if _REF_CARD_BIBLIOGRAPHY_HEADING_RE.search(heading):
+        return True
+    leaf = re.split(r"[/›>]", heading)[-1].strip()
+    return bool(re.fullmatch(r"(?i)(?:references?|bibliography|works?\s+cited|参考文献|引用文献)", leaf))
+
+
+def _ref_card_allows_bibliography_evidence(prompt: str) -> bool:
+    try:
+        return bool(_prompt_requests_citation_lookup(str(prompt or "")))
+    except Exception:
+        return False
+
+
+def _ref_card_primary_evidence(ui_meta: dict) -> dict:
+    ui = dict(ui_meta or {})
+    candidates: list[dict] = []
+    for key in ("primary_evidence", "synthesized_primary_evidence", "authoritative_primary_evidence"):
+        raw = ui.get(key)
+        if isinstance(raw, dict):
+            candidates.append(dict(raw))
+    reader_open = ui.get("reader_open") if isinstance(ui.get("reader_open"), dict) else {}
+    for key in ("primaryEvidence", "primary_evidence"):
+        raw = reader_open.get(key)
+        if isinstance(raw, dict):
+            candidates.append(dict(raw))
+    for raw in candidates:
+        if any(str(raw.get(key) or "").strip() for key in ("snippet", "highlight_snippet", "highlightSnippet", "quote", "text")):
+            return raw
+    return candidates[0] if candidates else {}
+
+
+def _ref_card_primary_evidence_heading(primary_evidence: dict) -> str:
+    return str(
+        (primary_evidence or {}).get("heading_path")
+        or (primary_evidence or {}).get("headingPath")
+        or (primary_evidence or {}).get("section_label")
+        or ""
+    ).strip()
+
+
+def _sync_ref_card_ui_to_primary_evidence(ui_meta: dict, *, primary_evidence: dict) -> dict:
+    ui = dict(ui_meta or {})
+    primary = dict(primary_evidence or {})
+    heading_path = _ref_card_primary_evidence_heading(primary)
+    if not heading_path:
+        return ui
+    ui["heading_path"] = heading_path
+    ui["section_label"] = heading_path
+    page_start = _positive_int(primary.get("page_start") or primary.get("pageStart"))
+    ui["location_label"] = f"{heading_path} P.{page_start}" if page_start > 0 else heading_path
+
+    reader_open = dict(ui.get("reader_open") or {}) if isinstance(ui.get("reader_open"), dict) else {}
+    reader_open["headingPath"] = heading_path
+    snippet = str(primary.get("snippet") or primary.get("quote") or primary.get("text") or "").strip()
+    highlight = str(primary.get("highlight_snippet") or primary.get("highlightSnippet") or snippet).strip()
+    if snippet:
+        reader_open["snippet"] = snippet
+    if highlight:
+        reader_open["highlightSnippet"] = highlight
+    reader_open["primaryEvidence"] = primary
+    for source_key, reader_key in (
+        ("source_path", "sourcePath"),
+        ("source_name", "sourceName"),
+        ("page_start", "pageStart"),
+        ("page_end", "pageEnd"),
+        ("block_id", "blockId"),
+        ("anchor_id", "anchorId"),
+        ("anchor_kind", "anchorKind"),
+        ("strict_locate", "strictLocate"),
+    ):
+        value = primary.get(source_key)
+        if value not in (None, ""):
+            reader_open[reader_key] = value
+    ui["reader_open"] = reader_open
+    return ui
+
+
+def _collect_ref_card_polish_candidates(
+    hit: dict,
+    *,
+    ui_meta: dict,
+    prompt: str = "",
+    max_items: int = 4,
+) -> list[str]:
     meta = (hit or {}).get("meta") if isinstance((hit or {}).get("meta"), dict) else {}
     out: list[str] = []
     seen: set[str] = set()
+    allow_bibliography = _ref_card_allows_bibliography_evidence(prompt)
 
     def _push(raw: str) -> None:
         cand = _summary_excerpt(str(raw or ""), max_sentences=2, max_len=220)
@@ -2544,7 +2640,31 @@ def _collect_ref_card_polish_candidates(hit: dict, *, ui_meta: dict, max_items: 
         if heading and sentences:
             _push(f"{heading}: {sentences[0]}")
 
-    if isinstance(meta, dict):
+    primary = _ref_card_primary_evidence(ui_meta)
+    primary_heading = _ref_card_primary_evidence_heading(primary)
+    primary_is_eligible = bool(primary) and (
+        allow_bibliography or not _ref_card_heading_is_bibliography(primary_heading)
+    )
+    if primary_is_eligible:
+        for key in ("highlight_snippet", "highlightSnippet", "snippet", "quote", "text"):
+            raw_primary = str(primary.get(key) or "").strip()
+            _push(raw_primary)
+            _push_sentence_variants(raw_primary)
+        # A selected primary-evidence block is authoritative for card copy.
+        # Do not dilute it with a top retrieval hit from another section.
+        if out:
+            return out[: max(1, int(max_items or 4))]
+
+    hit_heading = str(
+        (ui_meta or {}).get("heading_path")
+        or (ui_meta or {}).get("section_label")
+        or (meta or {}).get("ref_best_heading_path")
+        or (meta or {}).get("heading_path")
+        or ""
+    ).strip()
+    hit_is_eligible = allow_bibliography or not _ref_card_heading_is_bibliography(hit_heading)
+
+    if isinstance(meta, dict) and hit_is_eligible:
         for key, limit in (("ref_show_snippets", 2), ("ref_snippets", 2), ("ref_overview_snippets", 1)):
             raw_arr = meta.get(key)
             if not isinstance(raw_arr, list):
@@ -2562,10 +2682,12 @@ def _collect_ref_card_polish_candidates(hit: dict, *, ui_meta: dict, max_items: 
                     raw_loc = str(loc.get(key) or "")
                     _push(raw_loc)
                     _push_sentence_variants(raw_loc)
+    # `why_line` is generated card copy, not evidence, so it must never be fed
+    # back into the grounding prompt.  That feedback loop previously preserved
+    # a wrong References/author explanation across retries.
     for raw in (
-        str((ui_meta or {}).get("summary_line") or ""),
-        str((ui_meta or {}).get("why_line") or ""),
-        str((hit or {}).get("text") or ""),
+        str((ui_meta or {}).get("summary_line") or "") if hit_is_eligible else "",
+        str((hit or {}).get("text") or "") if hit_is_eligible else "",
     ):
         _push(raw)
         _push_sentence_variants(raw)
@@ -2616,6 +2738,55 @@ def _looks_extractive_ref_card_copy(text: str, *, evidence_snippets: list[str]) 
     return False
 
 
+def _llm_ref_copy_conflicts_with_evidence(
+    text: str,
+    *,
+    prompt: str,
+    title: str,
+    heading_path: str,
+    evidence_snippets: list[str],
+    summary_line: str = "",
+) -> bool:
+    """Reject copy that switches from the selected evidence to a third party.
+
+    The LLM may paraphrase, but it may not turn a body-evidence card into a
+    bibliography explanation or introduce an author/paper name absent from all
+    grounding surfaces.
+    """
+    candidate = " ".join(str(text or "").strip().split())
+    if not candidate:
+        return False
+    if not _ref_card_allows_bibliography_evidence(prompt):
+        if re.search(
+            r"(?i)(?:在|从|见|位于|in|from|under|see)\s*[‘’“”\"']*"
+            r"(?:references?|bibliography|works?\s+cited|参考文献|引用文献)[‘’“”\"']*"
+            r"(?:中|里|章节|部分|列表|section|list)?",
+            candidate,
+        ):
+            return True
+
+    allowed_surface = " ".join(
+        str(item or "").strip()
+        for item in [prompt, title, heading_path, summary_line, *(evidence_snippets or [])]
+        if str(item or "").strip()
+    ).lower()
+    if not allowed_surface:
+        return False
+    ignored = {
+        "the", "this", "that", "these", "those", "paper", "section", "study",
+        "article", "authors", "results", "methods", "abstract", "use", "using",
+        "based", "because", "here", "evidence", "user", "current", "matched",
+        "it", "its", "such", "when", "while", "however", "therefore",
+    }
+    for match in re.finditer(r"\b[A-Z][A-Za-z]{2,}\b", candidate):
+        token = match.group(0)
+        token_low = token.lower()
+        if token_low in ignored or token_low in allowed_surface:
+            continue
+        return True
+    return False
+
+
 def _looks_templated_llm_ref_why_line(text: str) -> bool:
     s = _clean_summary_line(text)
     if not s:
@@ -2652,6 +2823,7 @@ def _accept_llm_ref_summary_line(
     *,
     prompt: str,
     title: str,
+    heading_path: str = "",
     summary_line: str,
     evidence_snippets: list[str],
 ) -> str:
@@ -2659,6 +2831,14 @@ def _accept_llm_ref_summary_line(
     if not out:
         return ""
     if _looks_extractive_ref_card_copy(out, evidence_snippets=evidence_snippets):
+        return ""
+    if _llm_ref_copy_conflicts_with_evidence(
+        out,
+        prompt=prompt,
+        title=title,
+        heading_path=heading_path,
+        evidence_snippets=evidence_snippets,
+    ):
         return ""
     if _looks_like_title_echo(out, title) or _looks_formula_heavy_ref_text(out):
         return ""
@@ -2682,6 +2862,15 @@ def _accept_llm_ref_why_line(
     if _looks_templated_llm_ref_why_line(out):
         return ""
     if _looks_extractive_ref_card_copy(out, evidence_snippets=evidence_snippets):
+        return ""
+    if _llm_ref_copy_conflicts_with_evidence(
+        out,
+        prompt=prompt,
+        title=display_name,
+        heading_path=heading_path,
+        evidence_snippets=evidence_snippets,
+        summary_line=summary_line,
+    ):
         return ""
     if _why_line_needs_polish(
         prompt=prompt,
@@ -2722,6 +2911,7 @@ def _reuse_existing_llm_guide_copy(
     accepted_summary = _accept_llm_ref_summary_line(
         prompt=prompt,
         title=title,
+        heading_path=heading_path,
         summary_line=summary_line,
         evidence_snippets=effective_evidence,
     )
@@ -3131,17 +3321,54 @@ def _prepare_ref_hit_card_llm_grounding(
     candidates: list[str] | None = None,
 ) -> dict:
     ui = dict(ui_meta or {})
+    primary = _ref_card_primary_evidence(ui)
+    primary_heading = _ref_card_primary_evidence_heading(primary)
+    if (
+        primary
+        and primary_heading
+        and not _ref_card_allows_bibliography_evidence(prompt)
+        and not _ref_card_heading_is_bibliography(primary_heading)
+    ):
+        ui = _sync_ref_card_ui_to_primary_evidence(ui, primary_evidence=primary)
     title = str(ui.get("display_name") or "").strip()
     heading_path = str(ui.get("heading_path") or ui.get("section_label") or "").strip()
     summary_kind = str(ui.get("summary_kind") or "").strip().lower() or "guide"
     candidate_rows = [str(item).strip() for item in (candidates or []) if str(item).strip()]
     if not candidate_rows:
-        candidate_rows = _collect_ref_card_polish_candidates(hit, ui_meta=ui, max_items=4)
+        candidate_rows = _collect_ref_card_polish_candidates(
+            hit,
+            ui_meta=ui,
+            prompt=prompt,
+            max_items=4,
+        )
     candidate_rows = [item for item in candidate_rows if item]
     if not candidate_rows:
         return {}
     summary_seed = _normalize_ref_copy_text(str(ui.get("summary_line") or "").strip())
     why_seed = _normalize_ref_copy_text(str(ui.get("why_line") or "").strip())
+    if summary_seed and _llm_ref_copy_conflicts_with_evidence(
+        summary_seed,
+        prompt=prompt,
+        title=title,
+        heading_path=heading_path,
+        evidence_snippets=candidate_rows,
+    ):
+        summary_seed = ""
+        ui["summary_line"] = ""
+        ui.pop("summary_generation", None)
+        ui.pop("summary_basis", None)
+    if why_seed and _llm_ref_copy_conflicts_with_evidence(
+        why_seed,
+        prompt=prompt,
+        title=title,
+        heading_path=heading_path,
+        evidence_snippets=candidate_rows,
+        summary_line=summary_seed,
+    ):
+        why_seed = ""
+        ui["why_line"] = ""
+        ui.pop("why_generation", None)
+        ui.pop("why_basis", None)
     fallback_summary = _normalize_ref_copy_text(
         _pick_ref_card_summary_fallback(
             prompt=prompt,
@@ -3166,6 +3393,14 @@ def _prepare_ref_hit_card_llm_grounding(
     )
     if deterministic_why and (not _looks_generic_ref_why_line(deterministic_why)):
         why_seed = deterministic_why
+        ui["why_line"] = deterministic_why
+        ui["why_generation"] = "deterministic_grounded"
+        why_basis_meta = _build_ref_why_basis_meta(
+            prompt=prompt,
+            why_generation="deterministic_grounded",
+            why_line=deterministic_why,
+        )
+        ui["why_basis"] = str(why_basis_meta.get("why_basis") or "")
     candidate_payload = "\n".join(f"- {item}" for item in candidate_rows if item)
     if not candidate_payload:
         return {}
@@ -3194,16 +3429,16 @@ def _apply_llm_grounded_ref_hit_card_copy(
     summary_kind = str(prepared.get("summary_kind") or "guide").strip().lower() or "guide"
     summary_seed = str(prepared.get("summary_seed") or "").strip()
     candidates = [str(item).strip() for item in list(prepared.get("candidates") or []) if str(item).strip()]
-    strict_llm_copy = True
     raw_polished_summary = _normalize_ref_copy_text(str(polished_summary or "").strip())
     raw_polished_why = _normalize_ref_copy_text(str(polished_why or "").strip())
     accepted_summary = _accept_llm_ref_summary_line(
         prompt=prompt,
         title=title,
+        heading_path=heading_path,
         summary_line=raw_polished_summary,
         evidence_snippets=candidates,
     )
-    polished_summary = raw_polished_summary if strict_llm_copy and raw_polished_summary else accepted_summary
+    polished_summary = accepted_summary
     effective_summary = polished_summary or summary_seed
     accepted_why = _accept_llm_ref_why_line(
         prompt=prompt,
@@ -3213,7 +3448,7 @@ def _apply_llm_grounded_ref_hit_card_copy(
         why_line=raw_polished_why,
         evidence_snippets=candidates,
     )
-    polished_why = raw_polished_why if strict_llm_copy and raw_polished_why else accepted_why
+    polished_why = accepted_why
     if polished_summary:
         ui["summary_line"] = polished_summary
         summary_generation = "llm_grounded"
@@ -3549,7 +3784,12 @@ def _maybe_polish_single_ref_hit_card(
         summary_generation=summary_generation,
         allow_llm_polish=allow_llm_polish,
     )
-    candidates = _collect_ref_card_polish_candidates(hit, ui_meta=ui, max_items=4)
+    candidates = _collect_ref_card_polish_candidates(
+        hit,
+        ui_meta=ui,
+        prompt=prompt,
+        max_items=4,
+    )
     reusable_summary, reusable_why = _reuse_existing_llm_guide_copy(
         prompt=prompt,
         title=title,
@@ -3724,6 +3964,7 @@ def _maybe_polish_single_ref_hit_card(
     polished_summary = _accept_llm_ref_summary_line(
         prompt=prompt,
         title=title,
+        heading_path=heading_path,
         summary_line=polished_summary,
         evidence_snippets=candidates,
     )

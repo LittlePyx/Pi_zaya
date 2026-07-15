@@ -127,6 +127,7 @@ $$
         is_references_page=False,
         pdf_path=Path("dummy.pdf"),
         assets_dir=tmp_path,
+        formula_placeholders={"[[EQ_1]]": "$$x=y$$"},
     )
 
     assert out == "FALLBACK_OK"
@@ -172,6 +173,7 @@ $$
         is_references_page=False,
         pdf_path=Path("dummy.pdf"),
         assets_dir=tmp_path,
+        formula_placeholders={"[[EQ_1]]": "$$x=y$$"},
     )
 
     assert out == clean
@@ -208,10 +210,134 @@ N
         is_references_page=True,
         pdf_path=Path("dummy.pdf"),
         assets_dir=tmp_path,
+        formula_placeholders={"[[EQ_1]]": "$$x=y$$"},
+    )
+
+    assert out == broken
+
+
+def test_guardrails_do_not_retry_fragmented_output_without_source_formula_evidence(tmp_path, monkeypatch):
+    broken = "$$N$$\n\nN\n\n$$\\sum^N$$\n\n)(15)"
+    converter = _make_converter(tmp_path)
+    dummy = _DummyLLMWorker([broken, "SHOULD_NOT_BE_USED"])
+    converter.llm_worker = dummy
+    monkeypatch.setattr(converter, "_collect_display_math_candidates", lambda *args, **kwargs: [])
+
+    out = converter._convert_page_with_vision_guardrails(
+        png_bytes=b"fake",
+        page=object(),
+        page_index=3,
+        total_pages=8,
+        page_hint="",
+        speed_mode="normal",
+        is_references_page=False,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
     )
 
     assert out == broken
     assert len(dummy.calls) == 1
+
+
+def test_ultra_fast_empty_output_is_capped_to_one_retry(tmp_path, monkeypatch):
+    converter = _make_converter(tmp_path)
+    dummy = _DummyLLMWorker([None, None, "late-result-must-not-be-used"])
+    converter.llm_worker = dummy
+    monkeypatch.setenv("KB_PDF_VISION_EMPTY_RETRY", "5")
+    monkeypatch.setenv("KB_PDF_VISION_EMPTY_RETRY_BACKOFF_S", "0")
+    monkeypatch.setattr(
+        converter,
+        "_process_page",
+        lambda page, page_index, pdf_path, assets_dir: "LOCAL_FALLBACK",
+    )
+
+    out = converter._convert_page_with_vision_guardrails(
+        png_bytes=b"fake",
+        page=object(),
+        page_index=3,
+        total_pages=8,
+        page_hint="",
+        speed_mode="ultra_fast",
+        is_references_page=False,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+    )
+
+    assert out == "LOCAL_FALLBACK"
+    assert len(dummy.calls) == 2
+
+
+def test_ultra_fast_timeout_uses_local_only_extraction_fallback(tmp_path, monkeypatch):
+    converter = _make_converter(tmp_path)
+    dummy = _DummyLLMWorker([None])
+    dummy.get_last_vl_error_code = lambda: "timeout"
+    converter.llm_worker = dummy
+    calls = {"local_only": 0, "regular": 0}
+
+    def _local_only(page, *, page_index, pdf_path, assets_dir):
+        calls["local_only"] += 1
+        return "LOCAL_ONLY_MD"
+
+    def _regular(page, *, page_index, pdf_path, assets_dir):
+        calls["regular"] += 1
+        raise AssertionError("timeout fallback must not enter LLM-enhanced extraction")
+
+    monkeypatch.setattr(converter, "_process_page_local_only", _local_only)
+    monkeypatch.setattr(converter, "_process_page", _regular)
+
+    out = converter._convert_page_with_vision_guardrails(
+        png_bytes=b"fake",
+        page=object(),
+        page_index=0,
+        total_pages=4,
+        page_hint="",
+        speed_mode="ultra_fast",
+        is_references_page=False,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+    )
+
+    assert out == "LOCAL_ONLY_MD"
+    assert calls == {"local_only": 1, "regular": 0}
+
+
+def test_ultra_fast_math_quality_retry_uses_normal_token_policy(tmp_path, monkeypatch):
+    broken = """
+$$
+\\frac{N}{T}
+$$
+
+N
+
+$$
+\\sum^{N}
+$$
+
+( DNN ( u n
+), u n
+)(16)
+"""
+    clean = "$$N = \\sum_{i=1}^{m} x_i \\tag{15}$$"
+    converter = _make_converter(tmp_path)
+    dummy = _DummyLLMWorker([broken, clean])
+    converter.llm_worker = dummy
+
+    out = converter._convert_page_with_vision_guardrails(
+        png_bytes=b"fake",
+        page=object(),
+        page_index=3,
+        total_pages=8,
+        page_hint="",
+        speed_mode="ultra_fast",
+        is_references_page=False,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+        formula_placeholders={"[[EQ_1]]": "$$x=y$$"},
+    )
+
+    assert out == clean
+    assert [call["speed_mode"] for call in dummy.calls] == ["ultra_fast", "normal"]
+    assert len(dummy.calls) == 2
 
 
 def test_restore_formula_placeholders_exact_and_fuzzy():

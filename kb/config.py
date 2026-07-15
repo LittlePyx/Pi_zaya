@@ -14,6 +14,11 @@ from dotenv import load_dotenv
 # heuristic needed — the number itself tells you which system it belongs to.
 CITATION_OFFSET = 10000
 
+# Keep the default versioned so a conversion rerun does not silently change
+# behavior when the provider advances an unversioned alias.  Explicit
+# environment variables and saved user preferences still take precedence.
+DEFAULT_QWEN_VISION_MODEL = "qwen3.7-plus-2026-05-26"
+
 
 def _clean_env_key(raw: str) -> str | None:
     v = str(raw or "").strip()
@@ -161,7 +166,9 @@ def load_settings() -> Settings:
             _env("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ).strip().rstrip("/")
         text_model = (
-            _env("QWEN_MODEL") or _env("OPENAI_MODEL") or "qwen3-vl-plus"
+            _env("QWEN_MODEL")
+            or _env("OPENAI_MODEL")
+            or DEFAULT_QWEN_VISION_MODEL
         ).strip()
     elif stored_text_api_key:
         text_base_url = (
@@ -186,13 +193,16 @@ def load_settings() -> Settings:
             _env("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ).strip().rstrip("/")
         vision_model = (
-            _env("QWEN_MODEL") or _env("OPENAI_MODEL") or "qwen3-vl-plus"
+            _env("QWEN_MODEL")
+            or _env("OPENAI_MODEL")
+            or stored_vision_model
+            or DEFAULT_QWEN_VISION_MODEL
         ).strip()
     elif stored_vision_api_key:
         vision_base_url = (
             stored_vision_base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ).strip().rstrip("/")
-        vision_model = (stored_vision_model or "qwen3-vl-plus").strip()
+        vision_model = (stored_vision_model or DEFAULT_QWEN_VISION_MODEL).strip()
     else:
         # No dedicated vision key — fall back to text model for everything.
         vision_base_url = text_base_url

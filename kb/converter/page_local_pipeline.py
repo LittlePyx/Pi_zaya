@@ -25,6 +25,7 @@ def prepare_page_render_input(
     page_index: int,
     pdf_path: Path,
     assets_dir: Path,
+    allow_llm_enhance: bool = True,
 ) -> dict:
     page_start = time.time()
 
@@ -166,7 +167,7 @@ def prepare_page_render_input(
     # 6. LLM Classification / Repair
     step_start = time.time()
     speed_cfg = getattr(converter, "_active_speed_config", None) or {}
-    if converter.cfg.llm and speed_cfg.get("use_llm_for_all", True):
+    if allow_llm_enhance and converter.cfg.llm and speed_cfg.get("use_llm_for_all", True):
         # Enhance blocks with LLM
         blocks = converter._enhance_blocks_with_llm(blocks, page_index, page)
         print(f"  [Page {page_index+1}] Step 6 (LLM enhance): {time.time()-step_start:.2f}s", flush=True)
@@ -183,7 +184,7 @@ def prepare_page_render_input(
     # The classifier often flips is_math flags on blocks that heuristics missed; merging again
     # prevents one display equation from being rendered as many tiny $$ blocks (bad LaTeX).
     try:
-        if converter.cfg.llm and speed_cfg.get("use_llm_for_all", True):
+        if allow_llm_enhance and converter.cfg.llm and speed_cfg.get("use_llm_for_all", True):
             step_start2 = time.time()
             blocks = converter._merge_adjacent_math_fragments(blocks, page_wh=(page.rect.width, page.rect.height))
             if bool(int(os.environ.get("KB_PDF_DEBUG_MATH", "0") or "0")):
@@ -225,6 +226,7 @@ def prepare_page_render_input(
         "pdf_path": str(pdf_path),
         "visual_rects": visual_rects,
         "prepare_elapsed": time.time() - page_start,
+        "allow_llm_calls": bool(allow_llm_enhance),
     }
 
 
@@ -249,6 +251,7 @@ def render_prepared_page(
             page=page,
             assets_dir=assets_dir,
             is_references_page=is_references_page,
+            allow_llm_calls=bool(prepared.get("allow_llm_calls", True)),
         )
     image_names = [str(x).strip() for x in list(prepared.get("image_names") or []) if str(x).strip()]
     figure_meta_by_asset = prepared.get("figure_meta_by_asset") if isinstance(prepared.get("figure_meta_by_asset"), dict) else None
@@ -275,13 +278,22 @@ def render_prepared_page(
     return result
 
 
-def process_page(converter, page, page_index: int, pdf_path: Path, assets_dir: Path) -> str:
+def process_page(
+    converter,
+    page,
+    page_index: int,
+    pdf_path: Path,
+    assets_dir: Path,
+    *,
+    allow_llm_enhance: bool = True,
+) -> str:
     prepared = prepare_page_render_input(
         converter,
         page,
         page_index=page_index,
         pdf_path=pdf_path,
         assets_dir=assets_dir,
+        allow_llm_enhance=allow_llm_enhance,
     )
     return render_prepared_page(
         converter,

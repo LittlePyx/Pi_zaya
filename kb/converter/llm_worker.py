@@ -195,14 +195,26 @@ class LLMWorker:
         # Give some slack above SDK timeout while keeping a hard upper bound.
         return max(base + 20.0, base * 1.35, 90.0)
 
-    def _client_create_with_guard_timeout(self, *, timeout_s: float, has_image_payload: bool, **kwargs):
+    def _client_create_with_guard_timeout(
+        self,
+        *,
+        timeout_s: float,
+        has_image_payload: bool,
+        hard_timeout_s_override: float | None = None,
+        **kwargs,
+    ):
         if not self._client:
             raise RuntimeError("LLM client not initialized")
 
-        hard_timeout_s = self._resolve_llm_hard_timeout_s(
-            has_image_payload=bool(has_image_payload),
-            request_timeout_s=float(timeout_s or 0.0),
-        )
+        try:
+            hard_timeout_s = float(hard_timeout_s_override or 0.0)
+        except Exception:
+            hard_timeout_s = 0.0
+        if hard_timeout_s <= 0:
+            hard_timeout_s = self._resolve_llm_hard_timeout_s(
+                has_image_payload=bool(has_image_payload),
+                request_timeout_s=float(timeout_s or 0.0),
+            )
         if hard_timeout_s <= 0:
             return self._client.chat.completions.create(
                 model=self.cfg.llm.model,
@@ -270,6 +282,10 @@ class LLMWorker:
     def _llm_create(self, **kwargs):
         if not self._client:
             raise RuntimeError("LLM client not initialized")
+        request_timeout_override = kwargs.pop("_request_timeout_s", None)
+        hard_timeout_override = kwargs.pop("_hard_timeout_s", None)
+        semaphore_timeout_override = kwargs.pop("_semaphore_timeout_s", None)
+        max_retries_override = kwargs.pop("_max_retries", None)
         # Keep call-timeouts and retries configurable; defaults are conservative.
         timeout_s = 45.0
         max_retries = 0
@@ -280,11 +296,18 @@ class LLMWorker:
         except Exception:
             timeout_s = 45.0
             max_retries = 0
+        try:
+            if request_timeout_override is not None:
+                timeout_s = max(1.0, float(request_timeout_override))
+            if max_retries_override is not None:
+                max_retries = max(0, int(max_retries_override))
+        except Exception:
+            pass
 
         # Vision page OCR is heavier than text-only calls; keep a safer timeout floor.
         try:
             has_image_payload = self._messages_contain_image_payload(kwargs.get("messages"))
-            if has_image_payload:
+            if has_image_payload and request_timeout_override is None:
                 raw_v_to = str(os.environ.get("KB_PDF_VISION_TIMEOUT_S", "120") or "120").strip()
                 try:
                     vision_timeout_floor = float(raw_v_to)
@@ -304,6 +327,7 @@ class LLMWorker:
                     return self._client_create_with_guard_timeout(
                         timeout_s=timeout_s,
                         has_image_payload=has_image_payload,
+                        hard_timeout_s_override=hard_timeout_override,
                         **kwargs,
                     )
                 # Increase semaphore acquire timeout for vision-direct mode (full-page screenshots take longer)
@@ -311,6 +335,11 @@ class LLMWorker:
                 sem_timeout = max(60.0, float(timeout_s) * 2.0)
                 # But cap at 120s to avoid infinite waits
                 sem_timeout = min(120.0, sem_timeout)
+                try:
+                    if semaphore_timeout_override is not None:
+                        sem_timeout = max(1.0, float(semaphore_timeout_override))
+                except Exception:
+                    pass
                 acquired = self._llm_gate.acquire(timeout=sem_timeout)
                 if not acquired:
                     raise TimeoutError(
@@ -321,6 +350,7 @@ class LLMWorker:
                     return self._client_create_with_guard_timeout(
                         timeout_s=timeout_s,
                         has_image_payload=has_image_payload,
+                        hard_timeout_s_override=hard_timeout_override,
                         **kwargs,
                     )
                 finally:
@@ -380,7 +410,12 @@ class LLMWorker:
                 default = min(default, 2048)
         config_val = int(getattr(self.cfg.llm, "max_tokens", 0) or 0)
         if config_val > 0:
-            if is_references_page:
+            if str(speed_mode or "").strip().lower() == "ultra_fast":
+                # LlmConfig.max_tokens is a global ceiling.  Ultra-fast has a
+                # deliberately tighter per-call budget and must not be widened
+                # back to the global 4096-token default.
+                chosen = min(config_val, default)
+            elif is_references_page:
                 chosen = min(config_val, 3072)
             else:
                 chosen = min(config_val, 4096)  # Respect config but cap at 4096
@@ -394,6 +429,17 @@ class LLMWorker:
         if override_val > 0:
             chosen = min(chosen, max(1024, min(4096, override_val)))
         return chosen
+
+    @staticmethod
+    def _ultra_fast_vision_timeout_s() -> float:
+        try:
+            raw = str(os.environ.get("KB_PDF_ULTRA_FAST_VISION_TIMEOUT_S", "45") or "45").strip()
+            value = float(raw)
+        except Exception:
+            value = 45.0
+        # Values below 15s tend to abort before the provider accepts the image;
+        # values above 120s no longer match the ultra-fast contract.
+        return max(15.0, min(120.0, value))
 
     def _sanitize_vl_markdown(self, md: str, *, is_references_page: bool = False) -> str:
         """
@@ -902,6 +948,17 @@ class LLMWorker:
                 "Return ONLY Markdown plain-text lines."
             )
 
+        fast_timeout_kwargs = {}
+        if str(speed_mode or "").strip().lower() == "ultra_fast":
+            fast_timeout_s = self._ultra_fast_vision_timeout_s()
+            fast_timeout_kwargs = {
+                "_request_timeout_s": fast_timeout_s,
+                "_hard_timeout_s": max(fast_timeout_s + 10.0, fast_timeout_s * 1.2),
+                "_semaphore_timeout_s": min(30.0, fast_timeout_s),
+                # Page guardrails own the one intentional retry.  Avoid a
+                # hidden SDK retry multiplying the fast-page latency.
+                "_max_retries": 0,
+            }
         try:
             resp = self._llm_create(
                 messages=[
@@ -923,6 +980,7 @@ class LLMWorker:
                     is_references_page=is_references_page,
                     max_tokens_override=max_tokens_override,
                 ),
+                **fast_timeout_kwargs,
             )
         except Exception as e:
             if isinstance(e, TimeoutError):

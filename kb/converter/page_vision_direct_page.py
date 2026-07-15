@@ -854,6 +854,36 @@ def process_vision_direct_page(
         f"chars={len(md or '')} max_tokens={max_tokens_override if max_tokens_override is not None else 'default'}",
     )
     if not md:
+        if str(speed_mode or "").strip().lower() == "ultra_fast":
+            # Preserve the speed/quality contract at page granularity: most
+            # pages use the fast 150-DPI path, while a page that fails every VL
+            # and local fallback attempt gets one normal-quality rerender.
+            print(
+                f"[VISION_DIRECT] ultra-fast page {page_index+1} failed; retrying once with normal quality",
+                flush=True,
+            )
+            normal_config = converter._get_speed_mode_config("normal", total_pages)
+            try:
+                normal_dpi = int(normal_config.get("dpi", 220) or 220)
+            except Exception:
+                normal_dpi = 220
+            try:
+                normal_mat = fitz.Matrix(normal_dpi / 72.0, normal_dpi / 72.0)
+            except Exception:
+                normal_mat = mat
+            return process_vision_direct_page(
+                converter,
+                page=page,
+                page_index=page_index,
+                total_pages=total_pages,
+                pdf_path=pdf_path,
+                assets_dir=assets_dir,
+                speed_mode="normal",
+                speed_config=normal_config,
+                dpi=normal_dpi,
+                mat=normal_mat,
+                started_at=t0,
+            )
         print(f"[VISION_DIRECT] page {page_index+1} failed in both VL and fallback paths", flush=True)
         return None
 

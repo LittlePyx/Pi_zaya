@@ -2929,6 +2929,12 @@ def _bibliometrics_local_summary_input(meta: dict | None) -> dict:
     if status == "in_library" and reason in {"doi_exact", "title_exact"} and match_path:
         data["source_path"] = match_path
         data["sourcePath"] = match_path
+    elif _bibliometrics_is_upstream_reference_context(data):
+        # The source path on a System-B card is the paper containing the
+        # bibliography entry, not the referenced article.  Reading that path
+        # here would bind the citing paper's abstract to the upstream work.
+        for key in ("source_path", "sourcePath", "md_path", "mdPath"):
+            data.pop(key, None)
     return data
 
 
@@ -2987,9 +2993,40 @@ def get_reference_citation_meta(body: CitationMetaBody):
 
 def _bibliometrics_quality_contract(meta: dict | None) -> dict:
     data = dict(meta or {})
-    quality = data.get("metadata_quality") if isinstance(data.get("metadata_quality"), dict) else None
-    if not quality:
-        quality = citation_metadata_quality(data)
+    for key in (
+        "metadata_export_acceptance",
+        "metadataExportAcceptance",
+        "export_acceptance",
+        "exportAcceptance",
+        "metadataQuality",
+    ):
+        data.pop(key, None)
+    summary = str(data.get("summary_line") or data.get("summaryLine") or "").strip()
+    if not summary:
+        for key in (
+            "summary_source",
+            "summarySource",
+            "summary_provider",
+            "summaryProvider",
+            "summary_generation",
+            "summaryGeneration",
+            "summary_locale",
+            "summaryLocale",
+            "summary_quality",
+            "summaryQuality",
+        ):
+            data.pop(key, None)
+        data["summary_quality"] = {
+            "contract_version": 1,
+            "ok": False,
+            "status": "missing",
+            "score": 0,
+            "source": "",
+            "provider": "",
+            "issues": ["summary_missing"],
+            "export_ready": False,
+        }
+    quality = citation_metadata_quality(data)
     acceptance = citation_metadata_export_acceptance({**data, "metadata_quality": quality})
     data["metadata_quality"] = quality
     data["metadata_export_acceptance"] = acceptance

@@ -144,6 +144,20 @@
   line-height: 1.5;
 }
 
+.kb-shelf-summary-retry {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.kb-shelf-summary-retry:hover,
+.kb-shelf-summary-retry:focus-visible {
+  color: color-mix(in srgb, var(--accent) 76%, var(--text-main));
+}
+
 .kb-shelf-scroll {
   overscroll-behavior: contain;
 }
