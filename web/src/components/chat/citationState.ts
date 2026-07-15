@@ -1549,10 +1549,23 @@ export function toShelfItem(detail: CiteDetail): CiteShelfItem {
   const systemBDecision = resolveSystemBArticleSummary(detail)
   const shelfItemKind = inferShelfItemKind(detail)
   const shelfOrigin = cleanCitationDisplayText(inferShelfOrigin(detail, shelfItemKind))
+  const rawSummaryLine = trimShelfSummary(detail.summaryLine, 420)
+  const rawSummarySource = String(detail.summarySource || '').trim().toLowerCase()
+  const readerContextSummary = (
+    !summary.line
+    && shelfOrigin.toLowerCase() === 'reader_references'
+    && (!rawSummarySource || isSystemBContextSummarySource(rawSummarySource))
+    && rawSummaryLine
+    && !looksLowValueShelfSummary(rawSummaryLine)
+    && !looksMetadataOnlyShelfSummary(rawSummaryLine)
+  )
+    ? rawSummaryLine
+    : ''
   const shelfExcerpt = inferShelfExcerpt(detail, shelfItemKind)
   const shelfExcerptLabel = cleanCitationDisplayText(detail.shelfExcerptLabel || defaultShelfExcerptLabel(shelfItemKind))
   return {
     ...detail,
+    cardContextSummary: detail.cardContextSummary || readerContextSummary,
     summaryLine: summary.line,
     summarySource: summary.line ? summary.source : systemBDecision.isSystemB ? '' : detail.summarySource,
     summaryProvider: systemBDecision.isSystemB

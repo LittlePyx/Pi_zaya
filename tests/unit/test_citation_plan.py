@@ -784,6 +784,46 @@ def test_explicit_two_paper_fixed_set_hard_limits_authoritative_slots():
     assert len(system_a_slots) == 2
 
 
+def test_explicit_acronym_pair_reserves_exact_title_variants_over_generic_review():
+    hits = [
+        {
+            "text": "A calibrated physical noise model supports SPAD reconstruction.",
+            "meta": {
+                "source_path": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.en.md",
+                "heading_path": "High-resolution single-photon imaging with physics-informed deep learning / Abstract",
+            },
+        },
+        {
+            "text": "The image-loop network uses bucket measurements and random speckle patterns.",
+            "meta": {
+                "source_path": "Optics-2024-Part-based image-loop network for single-pixel imaging.en.md",
+                "heading_path": "Part-based image-loop network for single-pixel imaging / Methods",
+            },
+        },
+        {
+            "text": "A broad review of model-driven deep-learning reconstruction methods.",
+            "meta": {
+                "source_path": "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.en.md",
+                "heading_path": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning / Abstract",
+            },
+        },
+    ]
+
+    plan = build_citation_plan(
+        prompt="Compare PIDL and PILN, and cite only these two papers.",
+        answer_hits=hits,
+        retrieval_queries=[
+            "physics-informed deep learning computational single-photon imaging physical prior data generator neural network loss inference",
+            "part-based image-loop network single-pixel imaging ILNet physical model untrained neural network inference",
+            "physics-informed deep learning training priors comparison",
+            "physics-informed neural networks training inference input output",
+        ],
+    )
+
+    system_a_slots = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert [slot["candidate_hits"] for slot in system_a_slots] == [[1], [2]]
+
+
 def test_previous_answer_audit_uses_every_authoritative_source_without_system_b():
     hits = [
         {

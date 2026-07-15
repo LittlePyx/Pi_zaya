@@ -77,6 +77,7 @@ from kb.generation_answer_finalize_runtime import (
     _exclude_bound_source_from_multi_paper_doc_list_contract as _finalize_runtime_exclude_bound_source_from_multi_paper_doc_list_contract,
     _filter_multi_paper_doc_list_contract as _finalize_runtime_filter_multi_paper_doc_list_contract,
     _finalize_generation_answer as _finalize_runtime_finalize_generation_answer,
+    _sanitize_canceled_generation_answer as _finalize_runtime_sanitize_canceled_generation_answer,
 )
 from kb.paper_guide_contracts import (
     _build_paper_guide_render_packet_model,
@@ -4121,6 +4122,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
     agent_answer_mode = ""
     agent_generation_result_for_trace: dict = {}
     prompt = ""
+    prompt_for_user = ""
+    paper_guide_prompt_family = ""
+    answer_hits: list[dict] = []
     settings_obj = None
 
     try:
@@ -6101,7 +6105,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             direct_override=bool(direct_answer_override),
         )
         if _gen_should_cancel(session_id, task_id):
-            answer = (str(partial or "").strip() + "\n\n(Generation canceled)").strip() or "(Generation canceled)"
+            answer = _finalize_runtime_sanitize_canceled_generation_answer(
+                str(partial or ""),
+                prompt=prompt_for_user or prompt,
+                prompt_family=paper_guide_prompt_family,
+                has_hits=bool(answer_hits),
+            )
             _gen_store_answer(task, answer)
             research_trace = _trace_finish(research_trace, status="canceled", total_elapsed_s=time.perf_counter() - worker_t0)
             _gen_store_research_trace_meta(task, research_trace=research_trace)
@@ -6673,7 +6682,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         )
         if cancel_requested:
             partial = str(snap.get("partial") or "").strip()
-            answer = (partial + "\n\n(Generation canceled)").strip() or "(Generation canceled)"
+            answer = _finalize_runtime_sanitize_canceled_generation_answer(
+                partial,
+                prompt=prompt_for_user or prompt,
+                prompt_family=paper_guide_prompt_family,
+                has_hits=bool(answer_hits),
+            )
             try:
                 _gen_store_answer(task, answer)
             except Exception:

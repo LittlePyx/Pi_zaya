@@ -443,6 +443,43 @@ def _answer_hit_ranking_fields(hit: Mapping[str, Any]) -> tuple[set[str], set[st
     return title_tokens, evidence_tokens
 
 
+def _ranking_token_sequence(value: Any) -> list[str]:
+    return [
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if len(token) >= 3 and token not in _RANKING_STOPWORDS
+    ]
+
+
+def _answer_hit_title_sequence(hit: Mapping[str, Any]) -> list[str]:
+    meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), Mapping) else {}
+    return _ranking_token_sequence(
+        " ".join(
+            [
+                str(meta.get("source_path") or ""),
+                str(meta.get("source_name") or ""),
+                str(meta.get("heading_path") or meta.get("ref_best_heading_path") or ""),
+            ]
+        )
+    )
+
+
+def _longest_shared_token_phrase(left: Sequence[str], right: Sequence[str]) -> int:
+    if not left or not right:
+        return 0
+    previous = [0] * (len(right) + 1)
+    best = 0
+    for left_token in left:
+        current = [0] * (len(right) + 1)
+        for right_pos, right_token in enumerate(right, start=1):
+            if left_token != right_token:
+                continue
+            current[right_pos] = previous[right_pos - 1] + 1
+            best = max(best, current[right_pos])
+        previous = current
+    return best
+
+
 def _rank_system_a_answer_hits(
     indexed_hits: Sequence[tuple[int, Mapping[str, Any]]],
     *,
@@ -477,6 +514,40 @@ def _rank_system_a_answer_hits(
     remaining = list(prepared)
     ranked: list[tuple[int, Mapping[str, Any]]] = []
     covered_tokens: set[str] = set()
+
+    # Deterministic retrieval variants often spell out a paper or method that
+    # the user's prompt names only by acronym.  Reserve a unique, long title
+    # phrase match before the broad token-coverage ranking.  Keeping each
+    # variant separate prevents several generic "deep learning" queries from
+    # collectively displacing the explicitly named source.
+    reserved_indices: set[int] = set()
+    for ranking_text in list(ranking_texts or []):
+        variant_tokens = _ranking_token_sequence(ranking_text)
+        if len(variant_tokens) < 4:
+            continue
+        phrase_scores = [
+            (
+                _longest_shared_token_phrase(variant_tokens, _answer_hit_title_sequence(hit)),
+                idx,
+            )
+            for idx, hit, _title_tokens, _evidence_tokens in prepared
+        ]
+        phrase_scores.sort(key=lambda item: (-item[0], item[1]))
+        best_score, best_idx = phrase_scores[0] if phrase_scores else (0, 0)
+        runner_up = phrase_scores[1][0] if len(phrase_scores) > 1 else 0
+        if best_score < 4 or best_score <= runner_up or best_idx in reserved_indices:
+            continue
+        reserved_pos = next(
+            (pos for pos, (idx, _hit, _title_tokens, _evidence_tokens) in enumerate(remaining) if idx == best_idx),
+            -1,
+        )
+        if reserved_pos < 0:
+            continue
+        idx, hit, title_tokens, evidence_tokens = remaining.pop(reserved_pos)
+        ranked.append((idx, hit))
+        reserved_indices.add(idx)
+        covered_tokens.update(query_tokens & (title_tokens | evidence_tokens))
+
     while remaining:
         best_pos = 0
         best_key: tuple[float, float, int] | None = None
@@ -501,6 +572,12 @@ def _rank_system_a_answer_hits(
     # When the user gives an explicit reading sequence, keep the selected
     # sources in that sequence. Translation variants provide the cross-language
     # facet order even when the original prompt is Chinese.
+    # Identity reservations already carry the order of the explicit variants.
+    # A later broad facet reorder would be able to put a generic review back in
+    # front of one of those reserved sources.
+    if reserved_indices:
+        return ranked
+
     facet_query = next(
         (
             str(item or "").strip()

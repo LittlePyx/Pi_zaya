@@ -1376,7 +1376,7 @@ def test_gen_worker_keeps_canceled_status_when_cancel_flag_precedes_error(tmp_pa
             "assistant_msg_id": assistant_msg_id,
             "status": "running",
             "stage": "starting",
-            "partial": "",
+            "partial": "The first claim is grounded [10001]. [[SUPPORT:DOC-1]]",
             "cancel": True,
             "created_at": 1.0,
             "updated_at": 1.0,
@@ -1391,8 +1391,10 @@ def test_gen_worker_keeps_canceled_status_when_cancel_flag_precedes_error(tmp_pa
 
         assert snap["status"] == "canceled"
         assert snap["stage"] == "canceled"
-        assert snap["answer"] == "(Generation canceled)"
-        assert assistant["content"] == "(Generation canceled)"
+        assert snap["answer"] == "The first claim is grounded [1].\n\n(Generation canceled)"
+        assert assistant["content"] == snap["answer"]
+        assert "10001" not in snap["answer"]
+        assert "SUPPORT" not in snap["answer"]
     finally:
         with RUNTIME.GEN_LOCK:
             RUNTIME.GEN_TASKS.pop(session_id, None)

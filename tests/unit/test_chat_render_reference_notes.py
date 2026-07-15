@@ -6538,6 +6538,57 @@ def test_system_a_render_backfills_public_bibliography_without_primary_evidence(
     assert detail["card_view"]["header"]["subtitle"] == "3. Results"
 
 
+def test_reading_guide_does_not_bind_piln_evidence_to_pidl_retrieval_notice():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    source_path = "F:/library/Part-based image-loop network for single-pixel imaging.en.md"
+    evidence = (
+        "Researchers embed an untrained neural network into the physical model for "
+        "single-pixel image reconstruction."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "Part-based image-loop network for single-pixel imaging.pdf",
+                "heading_path": "1. Introduction",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+    hits = _augment_hits_with_system_a_plan_slots(
+        [
+            {
+                "text": "PILN is an untrained network for single-pixel imaging.",
+                "meta": {"source_path": source_path},
+            }
+        ],
+        plan,
+    )
+    answer = (
+        "根据检索到的文献，PIDL 的相关内容未出现在本次检索结果中，"
+        "因此以下比较仅基于检索到的 PILN 信息。\n\n"
+        "PILN 将单像素成像物理模型嵌入未训练神经网络 [1]。"
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+    )
+
+    retrieval_notice, piln_claim = repaired.split("\n\n", 1)
+    assert "[2]" not in retrieval_notice
+    assert "[2]" in piln_claim
+
+
 def test_system_a_bibliography_priority_is_existing_then_ref_pack_then_local(monkeypatch):
     from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
 

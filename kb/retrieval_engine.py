@@ -545,6 +545,20 @@ def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
     if wants_perovskite_laser and is_perovskite_laser_source:
         score = max(score, 7.5)
 
+    # Some method acronyms are user-facing shorthand rather than literal title
+    # tokens. Resolve only high-specificity aliases here so the downstream
+    # explicit-focus filter does not discard a paper that an alias expansion
+    # correctly retrieved.
+    source_identity_aliases = (
+        ("pidl", ("physics informed deep learning", "single photon imaging")),
+        ("piln", ("part based image loop network",)),
+    )
+    for alias, required_source_phrases in source_identity_aliases:
+        if re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", prompt_low) and all(
+            phrase in source_surface for phrase in required_source_phrases
+        ):
+            score = max(score, 7.5)
+
     prompt_tokens = [t for t in tokenize(prompt_norm) if len(t) >= 3 and t not in _DOC_HINT_STOP_TOKENS]
     src_tokens = [
         t
@@ -1759,6 +1773,16 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
         add(
             "deep learning single-pixel imaging advantages challenges data generalization "
             "interpretability speed reconstruction quality"
+        )
+    if has_any("pidl"):
+        add(
+            "physics-informed deep learning computational single-photon imaging "
+            "physical prior data generator neural network loss inference"
+        )
+    if has_any("piln", "part-based image-loop", "image-loop network"):
+        add(
+            "part-based image-loop network single-pixel imaging ILNet physical model "
+            "untrained neural network inference"
         )
     if has_any("piln", "part-based image-loop", "image-loop network") and has_any(
         "review",

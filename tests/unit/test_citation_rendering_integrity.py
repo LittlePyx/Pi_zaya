@@ -119,6 +119,33 @@ def test_num_cite_maps_to_second_source(monkeypatch):
     assert PAPER2 in d["source_path"], f"Expected {PAPER2}, got {d['source_path']}"
 
 
+def test_missing_canonical_source_does_not_fall_back_to_wrong_display_hit(monkeypatch):
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *a, **kw: None)
+
+    hits = [
+        {
+            "meta": {"source_path": PAPER1, "ref_answer_citation_num": 1},
+            "text": "Evidence from the first requested paper.",
+        },
+        {
+            "meta": {"source_path": "review.pdf", "ref_answer_citation_num": 3},
+            "text": "Evidence from an unrelated review.",
+        },
+    ]
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
+        "The second requested paper supports this claim [2].",
+        hits,
+        anchor_ns="t-missing-canonical",
+        canonical_paths=[PAPER1, PAPER2, "review.pdf"],
+    )
+
+    assert "[2]" not in out
+    assert "review.pdf" not in out
+    assert not any(str(detail.get("source_path") or "") == "review.pdf" for detail in details)
+    assert _find_payload_by_num(details, 2) is None
+
+
 def test_num_cite_out_of_range_stripped(monkeypatch):
     """System A: [999] out of range with 2 hits → stripped."""
     monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})

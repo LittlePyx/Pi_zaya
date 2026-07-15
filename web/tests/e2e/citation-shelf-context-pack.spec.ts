@@ -257,6 +257,10 @@ test('selected citation shelf items are sent as next-turn prompt context', async
   await expect(page.getByTestId('chat-context-pack')).toContainText('1 excerpts')
   await expect(page.getByTestId('citation-shelf-context-badge')).toBeVisible()
   await expect.poll(() => Boolean(backend.getResearchState().selected_research_context)).toBe(true)
+  await expect.poll(() => {
+    const pack = backend.getResearchState().selected_research_context as { items?: Array<{ summary?: string }> } | undefined
+    return pack?.items?.[0]?.summary || ''
+  }).toContain('denoising baseline')
 
   await page.evaluate(() => {
     for (const key of Object.keys(window.localStorage)) {
@@ -282,6 +286,10 @@ test('selected citation shelf items are sent as next-turn prompt context', async
   await page.getByTestId('citation-shelf-use-context').click()
   await expect(page.getByTestId('chat-context-pack')).toContainText('1 excerpts')
   await expect.poll(() => Boolean(backend.getResearchState().selected_research_context)).toBe(true)
+  await expect.poll(() => {
+    const pack = backend.getResearchState().selected_research_context as { items?: Array<{ summary?: string }> } | undefined
+    return pack?.items?.[0]?.summary || ''
+  }).toContain('denoising baseline')
 
   await page.locator('textarea.kb-chat-textarea').fill('Compare with my selected baseline.')
   await page.getByRole('button', { name: 'Send' }).click()

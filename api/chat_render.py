@@ -79,6 +79,15 @@ _STRUCT_SID_HEADER_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _VISIBLE_NUMERIC_CITE_RE = re.compile(r"\[\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*\]")
+_RETRIEVAL_ABSENCE_CLAIM_RE = re.compile(
+    r"(?:"
+    r"(?:\u672a|\u6ca1\u6709|\u65e0\u6cd5).{0,36}(?:\u68c0\u7d22\u7ed3\u679c|\u68c0\u7d22\u7247\u6bb5|\u68c0\u7d22\u4e0a\u4e0b\u6587)|"
+    r"(?:\u68c0\u7d22\u7ed3\u679c|\u68c0\u7d22\u7247\u6bb5|\u68c0\u7d22\u4e0a\u4e0b\u6587).{0,36}(?:\u672a|\u6ca1\u6709|\u4e0d\u5305\u542b|\u4ec5\u5305\u542b|\u53ea\u5305\u542b|\u65e0\u6cd5)|"
+    r"\b(?:not|never)\b.{0,48}\b(?:retrieved|retrieval\s+results?|retrieved\s+context)\b|"
+    r"\b(?:retrieval\s+results?|retrieved\s+context)\b.{0,48}\b(?:not|missing|absent|only)\b"
+    r")",
+    re.IGNORECASE,
+)
 _EQ_SOURCE_NOTE_RE = re.compile(
     r"\*\s*.*?\((\d{1,4})\).*?`([^`]+)`.*?(?:Open/Page)?[^\n]*\*",
     re.IGNORECASE,
@@ -102,7 +111,15 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 25
+_RENDER_CACHE_SCHEMA_VERSION = 27
+
+
+def _reading_claim_is_retrieval_notice(value: str) -> bool:
+    """Return true for retrieval-state disclosures, not scientific claims."""
+
+    plain = _md_to_plain_text(str(value or ""))
+    plain = re.sub(r"\s+", " ", plain).strip()
+    return bool(plain and _RETRIEVAL_ABSENCE_CLAIM_RE.search(plain))
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -2332,6 +2349,8 @@ def _reading_guide_repair_claim_aligned_abstract_citations(
             if not any(token.lower() in raw_line.lower() for token in identity_tokens):
                 continue
             claim = _md_to_plain_text(raw_line).strip()
+            if _reading_claim_is_retrieval_notice(claim):
+                continue
             probe = {
                 "source_path": source_path,
                 "source_name": source_name,
@@ -3743,7 +3762,7 @@ def _reading_guide_rebind_multi_source_plan_markers(
                 r"\bunsupported\b|\u65e0(?:\u76f4\u63a5)?\u4f9d\u636e|\u672a(?:\u88ab)?\u652f\u6301|\u7f3a\u5c11(?:\u76f4\u63a5)?\u4f9d\u636e",
                 claim,
             )
-        )
+        ) or _reading_claim_is_retrieval_notice(claim)
         if (not disclaims_support) and local_alignment_score(claim, slot) >= 2.0:
             aligned_rebind_spans.add(marker_match.span())
 
@@ -3778,7 +3797,11 @@ def _reading_guide_rebind_multi_source_plan_markers(
                 idx,
             )
             for idx, sentence in enumerate(sentences)
-            if sentence.strip() and f"[{int(num)}]" not in sentence
+            if (
+                sentence.strip()
+                and f"[{int(num)}]" not in sentence
+                and not _reading_claim_is_retrieval_notice(sentence)
+            )
         ]
         if ranked_sentences:
             score, _negative_idx, idx = max(ranked_sentences)
@@ -3997,6 +4020,8 @@ def _reading_guide_repair_missing_system_a_citations(
             paragraph = parts[idx]
             if not paragraph.strip() or f"[{num}]" in paragraph:
                 continue
+            if _reading_claim_is_retrieval_notice(paragraph):
+                continue
             if "定量对比依据" in paragraph or "Quantitative comparison evidence" in paragraph:
                 continue
             if paragraph.lstrip().startswith("|"):
@@ -4010,13 +4035,11 @@ def _reading_guide_repair_missing_system_a_citations(
                     _reading_paragraph_affinity(line, terms, source_surface=surface),
                 )
                 for line_idx, line in enumerate(paragraph_lines)
-                if line.strip()
+                if line.strip() and not _reading_claim_is_retrieval_notice(line)
             ]
-            if len(line_scores) > 1:
-                line_idx, score = max(line_scores, key=lambda item: float(item[1]))
-            else:
-                line_idx = -1
-                score = _reading_paragraph_affinity(paragraph, terms, source_surface=surface)
+            if not line_scores:
+                continue
+            line_idx, score = max(line_scores, key=lambda item: float(item[1]))
             if score > best_score:
                 best_score = score
                 best_idx = idx

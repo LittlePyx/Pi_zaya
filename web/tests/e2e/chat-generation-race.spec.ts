@@ -94,6 +94,7 @@ async function installBackend(
     terminalStreamError?: boolean
     completionMessageFailure?: boolean
     generateStartFailure?: boolean
+    delayedCancelFinalize?: boolean
     uiLocale?: 'en' | 'zh'
   },
 ) {
@@ -109,6 +110,7 @@ async function installBackend(
   let uploadStatusCalls = 0
   let uploadCancelCalls = 0
   let generationCancelCalls = 0
+  let cancelFinalizePageLoads = 0
   const deletedConversationIds = new Set<string>()
   const streamReleased = new Promise<void>((resolve) => {
     releaseStream = resolve
@@ -212,6 +214,18 @@ async function installBackend(
   })
 
   await page.route(`**/api/conversations/${CONV_A_ID}/messages_page**`, async (route) => {
+    if (generationCanceled && opts?.delayedCancelFinalize && !generationDone) {
+      cancelFinalizePageLoads += 1
+      if (cancelFinalizePageLoads >= 2) {
+        generationDone = true
+      } else {
+        await fulfillJson(route, messagePage([
+          { id: 101, role: 'user', content: 'Question for A', created_at: 3 },
+          { id: 102, role: 'assistant', content: 'Draft answer [10001]', created_at: 4 },
+        ]))
+        return
+      }
+    }
     if (generationDone || generationStartFailed) convADonePageLoads += 1
     if (generationDone && opts?.completionMessageFailure) {
       await route.fulfill({
@@ -357,7 +371,7 @@ async function installBackend(
   await page.route('**/api/generate/session-generation-race-a/cancel**', async (route) => {
     generationCancelCalls += 1
     generationCanceled = true
-    generationDone = true
+    generationDone = !opts?.delayedCancelFinalize
     await fulfillJson(route, { ok: true })
   })
 
@@ -615,6 +629,23 @@ test('canceling an in-flight generation refreshes the stored canceled assistant 
   await expect(page.locator('body')).toContainText('Question for A')
   await expect(page.locator('body')).toContainText(A_CANCELED_ANSWER, { timeout: 5_000 })
   await expect(page.locator('body')).not.toContainText(A_GENERATED_ANSWER)
+})
+
+test('cancel refresh waits for the finalized user-safe assistant message', async ({ page }) => {
+  const backend = await installBackend(page, { delayedCancelFinalize: true })
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill('Question for A')
+  await page.locator('button.kb-send-btn').click()
+  await expect(page.locator('button.kb-stop-btn')).toBeVisible({ timeout: 5_000 })
+
+  await page.locator('button.kb-stop-btn').click()
+
+  await expect.poll(() => backend.getGenerationCancelCalls(), { timeout: 5_000 }).toBe(1)
+  await expect(page.locator('body')).toContainText(A_CANCELED_ANSWER, { timeout: 5_000 })
+  await expect(page.locator('body')).not.toContainText('Draft answer [10001]')
+  await expect(page.locator('body')).not.toContainText('[10001]')
 })
 
 test('in-flight PDF upload stays scoped to its conversation while switching', async ({ page }) => {

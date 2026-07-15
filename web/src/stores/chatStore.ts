@@ -352,14 +352,24 @@ function scheduleRefreshLatestMessagesAfterCancel(
     try {
       const { page } = await getMessagesPageWithFallback(targetConvId, { limit: MESSAGE_PAGE_SIZE })
       const latestMessages = Array.isArray(page?.messages) ? page.messages : []
-      const hasCanceledAssistant = assistantMsgId > 0
-        ? latestMessages.some((item) => Number(item.id || 0) === assistantMsgId)
-        : true
-      if (!hasCanceledAssistant && attempt < 4) {
+      const canceledAssistant = assistantMsgId > 0
+        ? latestMessages.find((item) => Number(item.id || 0) === assistantMsgId)
+        : null
+      const canceledAssistantStatus = String(canceledAssistant?.meta?.generation_status || '').trim().toLowerCase()
+      const canceledAssistantContent = String(canceledAssistant?.content || '').trim()
+      const hasCanceledAssistant = assistantMsgId > 0 ? Boolean(canceledAssistant) : true
+      const hasFinalCanceledAssistant = assistantMsgId <= 0 || Boolean(
+        canceledAssistant
+        && (
+          canceledAssistantStatus === 'canceled'
+          || /generation\s+cancell?ed(?:\s+by\s+user)?[.)]?\s*$/i.test(canceledAssistantContent)
+        )
+      )
+      if ((!hasCanceledAssistant || !hasFinalCanceledAssistant) && attempt < 4) {
         schedule(attempt + 1)
         return
       }
-      if (!hasCanceledAssistant) return
+      if (!hasCanceledAssistant || !hasFinalCanceledAssistant) return
 
       set((state) => {
         const previousCache = state.conversationCacheById[targetConvId]

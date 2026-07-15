@@ -4491,6 +4491,18 @@ def _annotate_inpaper_citations_with_hover_meta(
     visible_detail_anchors: set[str] = set()
     visible_system_a_evidence_keys: set[str] = set()
     plan = dict(citation_plan or {}) if isinstance(citation_plan, dict) else {}
+    authoritative_answer_numbering = bool(canonical_paths)
+    if not authoritative_answer_numbering:
+        for hit in hits or []:
+            if not isinstance(hit, dict):
+                continue
+            try:
+                answer_num = int((((hit or {}).get("meta", {}) or {}).get("ref_answer_citation_num") or 0))
+            except Exception:
+                answer_num = 0
+            if answer_num > 0:
+                authoritative_answer_numbering = True
+                break
 
     def _plan_budget(system_name: str, default: int) -> int:
         budget = (
@@ -4904,6 +4916,32 @@ def _annotate_inpaper_citations_with_hover_meta(
                             hit = _h
                             sp = str(_mh.get("source_path") or "").strip()
                             break
+                    # A canonical source contract is authoritative.  If its
+                    # source is absent from the display hits, do not guess by
+                    # display position and attach a different paper.
+                    if hit is None:
+                        return None
+            if hit is None:
+                numbered_hits: list[tuple[int, dict]] = []
+                for _h in hits or []:
+                    if not isinstance(_h, dict):
+                        continue
+                    _mh = (_h or {}).get("meta", {}) or {}
+                    try:
+                        answer_num = int(_mh.get("ref_answer_citation_num") or 0)
+                    except Exception:
+                        answer_num = 0
+                    if answer_num > 0:
+                        numbered_hits.append((answer_num, _h))
+                for answer_num, numbered_hit in numbered_hits:
+                    if answer_num != int(n):
+                        continue
+                    hit = numbered_hit
+                    meta_h = (hit or {}).get("meta", {}) or {}
+                    sp = str(meta_h.get("source_path") or "").strip()
+                    break
+                if hit is None and numbered_hits:
+                    return None
             if hit is None:
                 if not (0 <= idx < len(hits)):
                     return None
@@ -5378,8 +5416,9 @@ def _annotate_inpaper_citations_with_hover_meta(
                     if render_locale:
                         detail["render_locale"] = render_locale
                     if not _system_b_reference_index_fallback_is_grounded(detail):
-                        items.append(f"[{int(n)}]")
-                        plain_fallback_count += 1
+                        if not authoritative_answer_numbering:
+                            items.append(f"[{int(n)}]")
+                            plain_fallback_count += 1
                         changed = True
                         continue
                 else:
@@ -5399,7 +5438,12 @@ def _annotate_inpaper_citations_with_hover_meta(
                 changed = True
             if not changed:
                 return "" if _STRICT_STRUCTURED_CITATION_LINKING else raw
-            if linked_count == 0 and plain_fallback_count > 0 and plain_fallback_count == len(items):
+            if (
+                not authoritative_answer_numbering
+                and linked_count == 0
+                and plain_fallback_count > 0
+                and plain_fallback_count == len(items)
+            ):
                 return raw
             return "".join(items)
 

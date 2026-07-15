@@ -44,6 +44,28 @@ def test_answer_audit_strips_internal_citation_format_review_unless_requested() 
     assert "10001" in preserved
 
 
+def test_canceled_generation_answer_keeps_prose_and_hides_internal_markers() -> None:
+    out = finalize_runtime._sanitize_canceled_generation_answer(
+        "## Partial answer\n\nDOC-1 supports the first claim [10001]. "
+        "DOC-3 supports the comparison [10003]. [[SUPPORT:DOC-1]]",
+        prompt="Compare the selected papers.",
+        has_hits=True,
+    )
+
+    assert "Partial answer" in out
+    assert "first claim [1]" in out
+    assert "comparison [3]" in out
+    assert "10001" not in out
+    assert "10003" not in out
+    assert "DOC-" not in out
+    assert "SUPPORT" not in out
+    assert out.endswith("(Generation canceled)")
+
+
+def test_canceled_generation_answer_without_partial_is_stable() -> None:
+    assert finalize_runtime._sanitize_canceled_generation_answer("") == "(Generation canceled)"
+
+
 def test_negative_boundary_answer_clarifies_not_core_paper() -> None:
     answer = finalize_runtime._maybe_clarify_negative_boundary_answer(
         "**\u7ed3\u8bba\uff1a\u5173\u7cfb\u4e0d\u5927\uff0c\u4e0d\u5efa\u8bae\u4e00\u8d77\u8bfb\u3002** "

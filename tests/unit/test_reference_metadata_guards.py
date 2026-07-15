@@ -844,6 +844,38 @@ def test_numeric_citation_stays_plain_when_unique_but_ungrounded(monkeypatch):
     assert details == []
 
 
+def test_authoritative_answer_numbering_hides_ungrounded_numeric_fallbacks(monkeypatch):
+    def fake_resolve(_index_data, source_path, ref_num, *, source_sha1=""):
+        del _index_data, source_sha1
+        if str(source_path).endswith("a.en.md") and int(ref_num) in {3, 9}:
+            return {
+                "source_path": "a.en.md",
+                "source_name": "a.pdf",
+                "ref_num": int(ref_num),
+                "ref": {"raw": f"[{int(ref_num)}] Unique but ungrounded bibliography entry"},
+            }
+        return None
+
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda sp: "a.pdf" if sp.endswith("a.en.md") else "b.pdf")
+
+    hits = [
+        {"meta": {"source_path": "a.en.md", "source_sha1": "aaa", "ref_answer_citation_num": 1}},
+        {"meta": {"source_path": "b.en.md", "source_sha1": "bbb", "ref_answer_citation_num": 2}},
+    ]
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
+        "An excluded source marker [3] and a synthetic marker [9] must not leak.",
+        hits,
+        anchor_ns="t-authoritative",
+        canonical_paths=["a.en.md", "b.en.md", "excluded.en.md"],
+    )
+
+    assert "[3]" not in out
+    assert "[9]" not in out
+    assert details == []
+
+
 def test_numeric_citation_range_stays_compact_when_ungrounded(monkeypatch):
     def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
         del _index_data, _source_path, source_sha1

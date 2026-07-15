@@ -360,6 +360,36 @@ def _strip_citation_offset(
     return _FREEFORM_NUMERIC_CITE_RE.sub(_repl, answer)
 
 
+def _sanitize_canceled_generation_answer(
+    partial: str,
+    *,
+    prompt: str = "",
+    prompt_family: str = "",
+    has_hits: bool = False,
+) -> str:
+    """Return a user-safe canceled answer without rebuilding its content.
+
+    Cancellation can happen before the normal finalization pipeline runs.  Keep
+    the useful streamed prose, but still remove internal grounding tokens and
+    convert offset citations such as ``[10001]`` to their public numbering.
+    """
+
+    answer = _normalize_math_markdown(
+        _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
+    ).strip()
+    answer = _sanitize_empty_markdown_label_fragments(answer)
+    answer = _strip_citation_offset(answer)
+    answer = _strip_latex_footnote_markers(answer)
+    if answer:
+        answer = _sanitize_paper_guide_answer_for_user(
+            answer,
+            has_hits=bool(has_hits),
+            prompt=prompt,
+            prompt_family=prompt_family,
+        ).strip()
+    return (answer + "\n\n(Generation canceled)").strip() if answer else "(Generation canceled)"
+
+
 def _as_positive_int(value: object) -> int:
     try:
         n = int(value)
