@@ -147,7 +147,7 @@ test('strict quote locate keeps the exact phrase target', async ({ page }) => {
   await openHarness(page, 'strict-quote')
   await expect(page.getByTestId('reader-locate-mode')).toHaveText(STRICT_LOCATE_LABEL_RE)
   await expect(page.getByTestId('reader-locate-resolution')).toHaveText(EXACT_TARGET_LABEL_RE)
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Exact (?:source )?phrase/i)
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "exact"')
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"ok": true')
   await expect(page.locator('.kb-reader-inline-hit')).toContainText('SCI compresses a short video into one coded measurement.')
@@ -168,7 +168,7 @@ test('reader clears rendered markdown when the source payload becomes empty', as
 
 test('multi-panel caption locate highlights the combined target snippet', async ({ page }) => {
   await openHarness(page, 'multi-panel')
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Exact (?:source )?phrase/i)
   await expect(page.locator('.kb-reader-focus[data-kb-block-id="p-fig-panels"]')).toHaveCount(1)
   await expect(page.locator('.kb-reader-inline-hit')).toContainText('g Line profiles of the iPSF')
 })
@@ -178,7 +178,7 @@ test('discussion-only locate can open the reader at section level without an exa
   await openHarness(page, 'discussion-only')
   await expect(page.getByTestId('reader-locate-mode')).toHaveText(STRICT_LOCATE_LABEL_RE)
   await expect(page.getByTestId('reader-locate-resolution')).toHaveText(SECTION_ONLY_LABEL_RE)
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Heading.*match/i)
   await expect(page.locator('.kb-reader-focus')).toContainText('4. Discussion')
   await expect(page.getByRole('heading', { name: '4. Discussion' })).toBeInViewport()
   await page.getByTestId('reader-outline-toggle').click()
@@ -188,7 +188,7 @@ test('discussion-only locate can open the reader at section level without an exa
 test('limitations-only locate can open the reader at section level without an exact block id', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 640 })
   await openHarness(page, 'limitations-only')
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Heading.*match/i)
   await expect(page.locator('.kb-reader-focus')).toContainText('5. Limitations')
   await expect(page.getByRole('heading', { name: '5. Limitations' })).toBeInViewport()
   await page.getByTestId('reader-outline-toggle').click()
@@ -198,7 +198,7 @@ test('limitations-only locate can open the reader at section level without an ex
 test('future-work-only locate can open the reader at section level without an exact block id', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 640 })
   await openHarness(page, 'future-work-only')
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Heading.*match/i)
   await expect(page.locator('.kb-reader-focus')).toContainText('6. Future Work')
   await expect(page.getByRole('heading', { name: '6. Future Work' })).toBeInViewport()
   await page.getByTestId('reader-outline-toggle').click()
@@ -243,7 +243,7 @@ test('structured fallback switches to the resolved alternative instead of re-ran
   await openHarness(page, 'candidate-fallback')
   await expect(page.getByTestId('reader-locate-switch')).toHaveText(AUTO_SWITCHED_LABEL_RE)
   await expect(page.getByTestId('reader-locate-decision')).toHaveText(/best backup evidence|最接近的备用证据/)
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Exact (?:source )?phrase/i)
   await expect(page.getByTestId('reader-candidate-chip-0')).toContainText(REQUESTED_LABEL_RE)
   await expect(page.getByTestId('reader-candidate-chip-1')).toHaveClass(/is-active/)
   await expect(page.getByTestId('reader-candidate-chip-1')).toContainText(RESOLVED_LABEL_RE)
@@ -254,7 +254,7 @@ test('structured fallback switches to the resolved alternative instead of re-ran
 test('strict exact locate does not degrade to heading fallback when direct identity is missing', async ({ page }) => {
   await openHarness(page, 'strict-missing-exact')
   await expect(page.getByTestId('reader-locate-resolution')).toHaveText(UNRESOLVED_LABEL_RE)
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Strict stopped')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Strict locate stopped/i)
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "failed"')
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"repairable": true')
   await expect(page.locator('.kb-reader-focus')).toHaveCount(0)
@@ -315,21 +315,21 @@ test('evidence navigation walks a stable ordered list under strict locate', asyn
   await openHarness(page, 'evidence-nav')
   await expect(page.getByTestId('reader-evidence-nav')).toBeVisible()
   await expect(page.getByTestId('reader-evidence-position')).toHaveText('1 / 3')
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Exact (?:source )?phrase/i)
 
   await page.getByTestId('reader-evidence-next').click()
   await expect(page.getByTestId('reader-evidence-position')).toHaveText('2 / 3')
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Equation block')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Equation block/i)
   await expect(page.locator('.kb-reader-focus')).toContainText('C(r)')
 
   await page.getByTestId('reader-evidence-next').click()
   await expect(page.getByTestId('reader-evidence-position')).toHaveText('3 / 3')
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Figure block')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Figure block/i)
   await expect(page.locator('.kb-reader-focus[data-kb-block-id="fig-1"]')).toHaveCount(1)
 
   await page.getByTestId('reader-evidence-prev').click()
   await expect(page.getByTestId('reader-evidence-position')).toHaveText('2 / 3')
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Equation block')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Equation block/i)
 })
 
 test('duplicate section alternatives collapse to distinct visible entries', async ({ page }) => {
@@ -516,11 +516,11 @@ test('reader figure, equation, and table blocks can be added directly to the res
 
 test('equation and figure fixtures resolve through the same structured target contract', async ({ page }) => {
   await openHarness(page, 'equation')
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Equation block')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Equation block/i)
   await expect(page.locator('.kb-reader-focus')).toContainText('C(r)')
 
   await openHarness(page, 'figure')
-  await expect(page.getByTestId('reader-locate-status')).toHaveText('Figure block')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Figure block/i)
   await expect(page.locator('.kb-reader-focus[data-kb-block-id="fig-1"]')).toHaveCount(1)
 })
 
