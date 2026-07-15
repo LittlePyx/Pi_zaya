@@ -57,6 +57,24 @@ def test_paper_guide_prompt_family_does_not_treat_clickable_answer_sources_as_up
     assert _paper_guide_prompt_family(prompt) == "compare"
 
 
+def test_paper_guide_prompt_family_does_not_treat_corresponding_answer_citations_as_reference_lookup():
+    prompt = "这篇论文建模了哪些真实退化？请只根据本文用三点回答，并给出对应引用。"
+
+    assert _paper_guide_prompt_family(prompt) != "citation_lookup"
+
+
+def test_paper_guide_prompt_family_does_not_treat_english_answer_citations_as_reference_lookup():
+    prompt = "What degradations are modeled? Give corresponding citations for each claim."
+
+    assert _paper_guide_prompt_family(prompt) != "citation_lookup"
+
+
+def test_paper_guide_prompt_family_keeps_explicit_upstream_reference_number_lookup():
+    prompt = "本文在介绍退化模型时引用了哪篇工作？给出参考文献编号。"
+
+    assert _paper_guide_prompt_family(prompt) == "citation_lookup"
+
+
 def test_negated_upstream_recommendation_does_not_flip_comparison_to_citation_lookup():
     prompt = (
         "只依据本文，简洁比较 HSI 与 FSI 的采样基和重建原理；"

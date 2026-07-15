@@ -156,6 +156,84 @@ test('library file filter helper derives visible lists and taxonomy cards', asyn
   expect(result.tagOptionValues).toContain('triage')
 })
 
+test('library source readiness respects repair action precedence over quality-blocked index state', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const { conversionSourceReadiness } = await import('/src/pages/library/libraryPageUtils.ts')
+    const S = {
+      lib_source_status_blocked: 'Needs reconvert',
+      lib_source_status_blocked_detail: 'Reconvert detail',
+      lib_source_status_review: 'Can repair',
+      lib_source_status_review_detail: 'Repair detail',
+      lib_source_status_unknown: 'Unknown',
+      lib_source_status_unknown_detail: 'Unknown detail',
+    }
+    const makeItem = ({
+      repairPlanAction = '',
+      centerAction = '',
+      gateAction = '',
+      reportStale = false,
+    }: {
+      repairPlanAction?: string
+      centerAction?: string
+      gateAction?: string
+      reportStale?: boolean
+    }) => ({
+      md_exists: true,
+      task_state: 'idle',
+      index_state: 'quality_blocked',
+      quality_gate: gateAction ? { action: gateAction } : null,
+      conversion_quality: {
+        status: 'warning',
+        has_review_issue: true,
+        conversion_report: {
+          stale: reportStale,
+          needs_reconvert: false,
+          remaining_issue_codes: ['page_marker_gaps'],
+          repair_plan: repairPlanAction ? { action: repairPlanAction } : null,
+          quality_center: centerAction ? { action: centerAction, status: 'reconvert' } : null,
+        },
+      },
+    })
+
+    return {
+      planAutofix: conversionSourceReadiness(makeItem({
+        repairPlanAction: 'autofix',
+        centerAction: 'reconvert',
+        gateAction: 'reconvert',
+      }), S),
+      centerReview: conversionSourceReadiness(makeItem({
+        centerAction: 'review',
+        gateAction: 'reconvert',
+      }), S),
+      gateAutofix: conversionSourceReadiness(makeItem({ gateAction: 'autofix' }), S),
+      gateReconvert: conversionSourceReadiness(makeItem({ gateAction: 'reconvert' }), S),
+      planNone: conversionSourceReadiness(makeItem({
+        repairPlanAction: 'none',
+        centerAction: 'reconvert',
+        gateAction: 'reconvert',
+      }), {
+        ...S,
+        lib_source_status_index_stale: 'Needs index refresh',
+        lib_source_status_index_stale_detail: 'Index refresh detail',
+      }),
+      stalePlan: conversionSourceReadiness(makeItem({
+        repairPlanAction: 'autofix',
+        centerAction: 'reconvert',
+        gateAction: 'reconvert',
+        reportStale: true,
+      }), S),
+    }
+  })
+
+  expect(result.planAutofix).toMatchObject({ kind: 'review', action: 'repair', blocked: false })
+  expect(result.centerReview).toMatchObject({ kind: 'review', action: 'repair', blocked: false })
+  expect(result.gateAutofix).toMatchObject({ kind: 'review', action: 'repair', blocked: false })
+  expect(result.gateReconvert).toMatchObject({ kind: 'blocked', action: 'reconvert', blocked: true })
+  expect(result.planNone).toMatchObject({ kind: 'index_stale', action: 'reindex', blocked: false })
+  expect(result.stalePlan).toMatchObject({ kind: 'blocked', action: 'reconvert', blocked: true })
+})
+
 test('library quality focus helper plans current and cross-scope history targets', async ({ page }) => {
   await page.goto('/library')
   const result = await page.evaluate(async () => {

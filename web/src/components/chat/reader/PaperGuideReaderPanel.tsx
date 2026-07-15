@@ -7,6 +7,7 @@ import { ReaderEvidenceNav } from './ReaderEvidenceNav'
 import type { ReaderSessionHighlight } from './readerTypes'
 import type { ReaderOutlineItem } from './useReaderOutline'
 import { useT } from '../../../i18n'
+import { readerLocateBadgesHaveReturnTarget } from '../readerLocateStatusViewModel'
 
 interface ReaderCandidateOption {
   displayIndex: number
@@ -170,7 +171,14 @@ export function PaperGuideReaderPanel({
 }: PaperGuideReaderPanelProps) {
   const S = useT()
   const showSidebar = (hasOutline && outlineOpen) || (hasHighlights && highlightsOpen)
-  const canReturnToEvidence = Boolean(activeHeadingPath || statusTextCompact || activeEvidenceLabel || hasEvidenceNav || hasDistinctAlternatives)
+  const canReturnToEvidence = Boolean(
+    activeHeadingPath
+    || statusTextCompact
+    || activeEvidenceLabel
+    || hasEvidenceNav
+    || hasDistinctAlternatives
+    || readerLocateBadgesHaveReturnTarget(locateBadges),
+  )
   const visibleLocateBadges = isPageSurface
     ? locateBadges.filter((badge) => badge.key !== 'mode')
     : locateBadges

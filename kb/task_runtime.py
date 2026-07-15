@@ -344,6 +344,7 @@ from kb.paper_guide_prompting import (
     _paper_guide_evidence_card_use_hint as _prompting_evidence_card_use_hint,
     _paper_guide_box_header_number,
     _paper_guide_prompt_family,
+    _paper_guide_prompt_requests_citation_lookup,
     _paper_guide_prompt_requests_exact_method_support,
     _paper_guide_requested_heading_hints,
     _requested_figure_number as _prompting_requested_figure_number,
@@ -3241,6 +3242,7 @@ def _build_exact_preflight_citation_contract(
     *,
     bound_source_path: str,
     bound_source_name: str,
+    prompt: str = "",
 ) -> dict:
     rows = [dict(item) for item in list(support_rows or []) if isinstance(item, dict)]
     candidate_refs = _candidate_refs_from_support_resolution(rows)
@@ -3254,6 +3256,7 @@ def _build_exact_preflight_citation_contract(
     source_path = str(support.get("source_path") or bound_source_path or "").strip()
     ref_nums = list(candidate_refs.get(source_path) or [])
     ref_num = int(ref_nums[0]) if ref_nums else 0
+    allow_system_b = bool(_paper_guide_prompt_requests_citation_lookup(prompt))
     sid = _cite_source_id(source_path) if source_path else ""
     heading = str(support.get("heading_path") or "").strip()
     evidence = str(
@@ -3270,7 +3273,7 @@ def _build_exact_preflight_citation_contract(
                 "evidence_quote": evidence,
             }
         ]
-        if sid and ref_num > 0
+        if allow_system_b and sid and ref_num > 0
         else []
     )
     slots = [
@@ -3287,7 +3290,7 @@ def _build_exact_preflight_citation_contract(
             "candidate_refs": ref_nums,
         }
     ]
-    if sid and ref_num > 0:
+    if allow_system_b and sid and ref_num > 0:
         slots.append(
             {
                 "claim_type": "origin",
@@ -3305,10 +3308,10 @@ def _build_exact_preflight_citation_contract(
     citation_plan = {
         "version": 1,
         "source": "exact_support_preflight",
-        "intent": "origin_lookup",
-        "budget": {"system_a": 1, "system_b": 1 if ref_num > 0 else 0},
+        "intent": "origin_lookup" if allow_system_b else "evidence_lookup",
+        "budget": {"system_a": 1, "system_b": 1 if allow_system_b and ref_num > 0 else 0},
         "system_a_enabled": True,
-        "system_b_enabled": bool(ref_num > 0),
+        "system_b_enabled": bool(allow_system_b and ref_num > 0),
         "slots": slots,
     }
     return {
@@ -5741,6 +5744,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 exact_support_rows,
                 bound_source_path=paper_guide_bound_source_path,
                 bound_source_name=paper_guide_bound_source_name,
+                prompt=prompt_for_user or prompt,
             )
             exact_candidate_refs = dict(
                 exact_citation_contract.get("candidate_refs_by_source") or {}
@@ -6967,6 +6971,7 @@ _SOURCE_CONVERSION_RETRY_ISSUES = {
     "source_text_loss",
     "missing_source_pages",
     "page_marker_gaps",
+    "source_page_marker_alignment",
     "reference_index_truncated",
 }
 

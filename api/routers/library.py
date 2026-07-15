@@ -581,6 +581,27 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
         }
 
 
+def _quality_repair_plan_from_summary(quality: dict | None) -> dict:
+    summary = quality if isinstance(quality, dict) else {}
+    conversion_report = summary.get("conversion_report") if isinstance(summary.get("conversion_report"), dict) else {}
+    reported_plan = (conversion_report or {}).get("repair_plan")
+    if (
+        isinstance(reported_plan, dict)
+        and reported_plan
+        and not bool((conversion_report or {}).get("stale"))
+    ):
+        return dict(reported_plan)
+    issue_codes = [
+        str(issue.get("code") or "")
+        for issue in list(summary.get("issues") or [])
+        if isinstance(issue, dict) and str(issue.get("code") or "").strip()
+    ]
+    return plan_conversion_quality_repair(
+        issue_codes,
+        metrics=summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {},
+    )
+
+
 def _load_docs_index_state() -> dict:
     db_dir: Path | None = None
     try:
@@ -7519,10 +7540,7 @@ def repair_library_quality(request: Request, body: QualityRepairBody):
                     for issue in list(after_quality.get("issues") or [])
                     if isinstance(issue, dict) and str(issue.get("code") or "").strip()
                 ]
-                after_plan = plan_conversion_quality_repair(
-                    after_issue_codes,
-                    metrics=after_quality.get("metrics") if isinstance(after_quality.get("metrics"), dict) else {},
-                )
+                after_plan = _quality_repair_plan_from_summary(after_quality)
                 active_plan = after_plan
                 after_issue_set = set(after_issue_codes)
                 fixed_issue_codes = [code for code in before_issue_codes if code and code not in after_issue_set]
@@ -7586,10 +7604,7 @@ def repair_library_quality(request: Request, body: QualityRepairBody):
                 for issue in list(before_quality.get("issues") or [])
                 if isinstance(issue, dict) and str(issue.get("code") or "").strip()
             ]
-            active_plan = plan_conversion_quality_repair(
-                before_issue_codes,
-                metrics=before_quality.get("metrics") if isinstance(before_quality.get("metrics"), dict) else {},
-            )
+            active_plan = _quality_repair_plan_from_summary(before_quality)
             repair_payload = {
                 "md_path": str(md_path),
                 "quality_before": before_quality,

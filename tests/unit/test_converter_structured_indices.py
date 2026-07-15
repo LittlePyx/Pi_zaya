@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 
 from kb.converter.structured_indices import rebuild_structured_indices_for_markdown
+from kb.reference_index import REFERENCE_PARSER_VERSION
 
 
 def test_rebuild_structured_indices_emits_anchor_equation_reference_indices(tmp_path: Path):
@@ -111,7 +112,7 @@ def test_rebuild_structured_indices_enriches_reference_index_from_catalog_metada
     (tmp_path / "reference_catalog.json").write_text(
         json.dumps(
             {
-                "version": 1,
+                "version": REFERENCE_PARSER_VERSION,
                 "ref_count": 1,
                 "tail_continuity_status": "continuous",
                 "missing_numbers": [],

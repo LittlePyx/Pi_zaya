@@ -191,6 +191,27 @@ def _paper_guide_prompt_requests_naive_source_trace(prompt: str) -> bool:
     if _PAPER_GUIDE_ANSWER_SOURCE_MARKER_RE.search(q):
         return False
     return bool(_PAPER_GUIDE_NAIVE_SOURCE_TRACE_OBJECT_RE.search(q))
+
+
+def _paper_guide_prompt_requests_citation_lookup(prompt: str) -> bool:
+    """Return whether the user is asking which upstream work the paper cites.
+
+    Requests to attach citations to an answer are output constraints, not
+    requests to resolve entries from the paper's bibliography.
+    """
+    q = strip_negated_reference_trail_requests(str(prompt or "").strip())
+    if not q:
+        return False
+    if _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE_CLEAN.search(q):
+        return True
+    if _paper_guide_prompt_requests_naive_source_trace(q):
+        return True
+    return bool(
+        _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE.search(q)
+        and not _PAPER_GUIDE_ANSWER_SOURCE_MARKER_RE.search(q)
+    )
+
+
 _PAPER_GUIDE_METHOD_PROMPT_RE_CLEAN = re.compile(
     r"(\u8fd9\u4e2a?\u65b9\u6cd5.{0,8}(?:\u5177\u4f53)?\u4ecb\u7ecd|\u65b9\u6cd5.{0,4}\u4ecb\u7ecd|"
     r"\u600e\u4e48\u5de5\u4f5c|\u600e\u4e48\u5b9e\u73b0|\u539f\u7406|\u673a\u5236|\u7b97\u6cd5)",
@@ -410,7 +431,6 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
     q = str(prompt or "").strip()
     if not q:
         return ""
-    reference_routing_q = strip_negated_reference_trail_requests(q)
     if _PAPER_GUIDE_BOX_ONLY_PROMPT_RE.search(q):
         return "box_only"
     if _PAPER_GUIDE_DISCUSSION_ONLY_PROMPT_RE.search(q) and (
@@ -421,11 +441,7 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
         return "discussion_only"
     if _PAPER_GUIDE_FIGURE_PROMPT_RE.search(q):
         return "figure_walkthrough"
-    if (
-        _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE.search(reference_routing_q)
-        or _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE_CLEAN.search(reference_routing_q)
-        or _paper_guide_prompt_requests_naive_source_trace(reference_routing_q)
-    ):
+    if _paper_guide_prompt_requests_citation_lookup(q):
         return "citation_lookup"
     # Allow citation lookup to explicitly scope to "in the Abstract" without being misclassified as abstract.
     if _PAPER_GUIDE_ABSTRACT_PROMPT_RE.search(q):

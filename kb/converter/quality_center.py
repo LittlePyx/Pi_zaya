@@ -339,8 +339,8 @@ def repair_quality_targets(
                     auto_repair_result=repair_result,
                     source_pdf_path=source_pdf,
                 )
-                stats.repaired += 1
                 if bool(repair_result.get("changed")):
+                    stats.repaired += 1
                     stats.changed += 1
                     if len(stats.changed_paths) < 20:
                         stats.changed_paths.append(str(md_path))

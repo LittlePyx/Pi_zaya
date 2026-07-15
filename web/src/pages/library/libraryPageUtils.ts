@@ -570,24 +570,25 @@ export function conversionSourceReadiness(item: LibraryFileItem, S: Record<strin
   const report = quality?.conversion_report || null
   const center = report?.quality_center || null
   const sourceQuality = report?.source_quality || center?.source_quality || null
-  const repairPlan = report?.repair_plan || null
+  const repairPlan = report?.stale === true ? null : (report?.repair_plan || null)
   const latestAttempt = report?.latest_repair_attempt || null
   const latestStatus = normalizeTextValue(latestAttempt?.status).toLowerCase()
-  const centerStatus = normalizeTextValue(center?.status).toLowerCase()
   const centerAction = normalizeTextValue(center?.action).toLowerCase()
+  const gateAction = normalizeTextValue(item.quality_gate?.action).toLowerCase()
   const centerMessage = normalizeTextValue(center?.message || report?.source_quality_message)
-  const planAction = normalizeTextValue(repairPlan?.action || centerAction).toLowerCase()
+  const repairAction = [
+    normalizeTextValue(repairPlan?.action).toLowerCase(),
+    centerAction,
+    gateAction,
+  ].find((action) => ['none', 'autofix', 'review', 'reconvert'].includes(action)) || ''
   const qualityStatus = conversionQualityStatus(quality)
   const needsReview = conversionQualityNeedsReview(quality)
   const remainingCodes = Array.isArray(report?.remaining_issue_codes) ? report?.remaining_issue_codes || [] : []
   const indexState = normalizeTextValue(item.index_state).toLowerCase()
   const hasAuthoritativeIndexState = Boolean(indexState)
-  const isBlocked = Boolean(report?.needs_reconvert)
-    || centerStatus === 'reconvert'
-    || Boolean(sourceQuality?.source_text_loss)
-    || planAction === 'reconvert'
-    || ['blocked', 'failed', 'error'].includes(latestStatus)
-    || indexState === 'quality_blocked'
+  const needsQualityRepair = ['review', 'autofix'].includes(repairAction)
+  const isBlocked = repairAction === 'reconvert'
+    || (!repairAction && (Boolean(report?.needs_reconvert) || Boolean(sourceQuality?.source_text_loss)))
   const wasAutofixed = Boolean(report?.auto_repair_changed) || ['autofixed', 'fixed'].includes(latestStatus)
 
   if (item.task_state === 'running' || item.task_state === 'queued') {
@@ -612,7 +613,9 @@ export function conversionSourceReadiness(item: LibraryFileItem, S: Record<strin
       blocked: false,
     }
   }
-  if (!isBlocked && ['not_indexed', 'index_stale', 'not_ready'].includes(indexState)) {
+  const needsIndexRefresh = ['not_indexed', 'index_stale', 'not_ready'].includes(indexState)
+    || (indexState === 'quality_blocked' && repairAction === 'none')
+  if (!isBlocked && !needsQualityRepair && needsIndexRefresh) {
     return {
       kind: 'index_stale',
       tone: 'index_stale',
@@ -673,7 +676,7 @@ export function conversionSourceReadiness(item: LibraryFileItem, S: Record<strin
       blocked: false,
     }
   }
-  if (needsReview || remainingCodes.length > 0 || ['review', 'autofix'].includes(planAction) || ['review', 'autofix'].includes(centerStatus)) {
+  if (needsReview || remainingCodes.length > 0 || needsQualityRepair) {
     return {
       kind: 'review',
       tone: 'review',

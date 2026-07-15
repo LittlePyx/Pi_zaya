@@ -23,6 +23,165 @@ def _enable_internal_quality_api_for_sanity(monkeypatch):
         pass
 
 
+def test_quality_repair_plan_uses_fresh_report_escalation():
+    from api.routers import library as library_router
+
+    quality = {
+        "issues": [{"code": "page_marker_gaps"}],
+        "metrics": {"page_marker_gaps": 1},
+        "conversion_report": {
+            "stale": False,
+            "repair_plan": {
+                "action": "reconvert",
+                "scope": "document",
+                "issue_codes": ["page_marker_gaps"],
+                "reconvert_issue_codes": ["page_marker_gaps"],
+            },
+        },
+    }
+
+    plan = library_router._quality_repair_plan_from_summary(quality)
+
+    assert plan["action"] == "reconvert"
+    assert plan["reconvert_issue_codes"] == ["page_marker_gaps"]
+
+
+def test_quality_repair_route_honors_fresh_persisted_reconvert_plan(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir()
+    md_dir.mkdir()
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    md_path = md_dir / "paper" / "paper.en.md"
+    md_path.parent.mkdir()
+    md_path.write_text("<!-- kb_page: 1 -->\n# Paper\nBody.\n", encoding="utf-8")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    monkeypatch.setattr(library_router, "_reader_locate_source_problem_events", lambda **_kwargs: [])
+    monkeypatch.setattr(library_router, "append_conversion_repair_attempt", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        library_router,
+        "_conversion_quality_summary",
+        lambda _path: {
+            "status": "warning",
+            "score": 70,
+            "has_review_issue": True,
+            "issues": [{"code": "source_page_marker_alignment"}],
+            "metrics": {},
+            "conversion_report": {
+                "stale": False,
+                "repair_plan": {
+                    "action": "reconvert",
+                    "scope": "document",
+                    "issue_codes": ["source_page_marker_alignment"],
+                    "reconvert_issue_codes": ["source_page_marker_alignment"],
+                    "speed_mode": "no_llm",
+                    "no_llm": True,
+                    "replace": True,
+                },
+            },
+        },
+    )
+    queued: list[dict] = []
+    monkeypatch.setattr(
+        library_router,
+        "_build_bg_task",
+        lambda **kwargs: {"_tid": "task-paper", **kwargs},
+    )
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: queued.append(task) or True)
+
+    response = TestClient(app).post(
+        "/api/library/quality/repair",
+        json={
+            "sources": [{"source_path": str(md_path), "source_name": md_path.name}],
+            "md_autofix": False,
+        },
+    )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["enqueued"] is True
+    assert item["repair_plan"]["action"] == "reconvert"
+    assert item["planned_speed_mode"] == "no_llm"
+    assert item["planned_no_llm"] is True
+    assert queued[0]["repair_context"]["issue_codes"] == ["source_page_marker_alignment"]
+
+
+def test_quality_repair_route_keeps_exhausted_source_issue_in_review_without_pdf(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir()
+    md_dir.mkdir()
+    md_path = md_dir / "standalone" / "standalone.en.md"
+    md_path.parent.mkdir()
+    md_path.write_text("<!-- kb_page: 1 -->\n# Standalone\nBody.\n", encoding="utf-8")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    monkeypatch.setattr(library_router, "_reader_locate_source_problem_events", lambda **_kwargs: [])
+    monkeypatch.setattr(library_router, "append_conversion_repair_attempt", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        library_router,
+        "_conversion_quality_summary",
+        lambda _path: {
+            "status": "review",
+            "score": 60,
+            "has_review_issue": True,
+            "issues": [{"code": "source_page_marker_alignment"}],
+            "metrics": {},
+            "conversion_report": {
+                "stale": False,
+                "repair_plan": {
+                    "action": "review",
+                    "scope": "document",
+                    "issue_codes": ["source_page_marker_alignment"],
+                    "review_issue_codes": ["source_page_marker_alignment"],
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_bg_enqueue",
+        lambda _task: pytest.fail("a review-only source without a PDF must not be queued"),
+    )
+
+    response = TestClient(app).post(
+        "/api/library/quality/repair",
+        json={
+            "sources": [{"source_path": str(md_path), "source_name": md_path.name}],
+            "md_autofix": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    item = payload["items"][0]
+    assert item["ok"] is True
+    assert item["enqueued"] is False
+    assert item["planned_action"] == "review"
+    assert item["repair_plan"]["review_issue_codes"] == ["source_page_marker_alignment"]
+    assert payload["enqueued"] == 0
+
+
 def test_library_files_route_classifies_queue_and_reconvert(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 

@@ -16,6 +16,7 @@ _BLOCKING_ACTIONS = {"reconvert", "review"}
 _CRITICAL_AUTOFIX_ISSUES = {
     "missing_source_pages",
     "page_marker_gaps",
+    "source_page_marker_alignment",
     "reference_index_truncated",
 }
 

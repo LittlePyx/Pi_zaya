@@ -893,6 +893,54 @@ def test_apply_paper_guide_answer_postprocess_citation_lookup_backfills_resolved
     assert support_resolution and int(support_resolution[0].get("resolved_ref_num") or 0) == 33
 
 
+def test_citation_lookup_does_not_promote_own_result_locate_support_to_upstream_reference(monkeypatch):
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_support_markers", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "_resolve_paper_guide_support_markers",
+        lambda answer, **kwargs: (
+            answer,
+            [
+                {
+                    "heading_path": "Results / Structured degradation modeling",
+                    "locate_anchor": "We model additive Gaussian read noise in the sensor.",
+                    "claim_type": "own_result",
+                    "cite_policy": "locate_only",
+                    "candidate_refs": [6],
+                    "support_ref_candidates": [6],
+                    "resolved_ref_num": 6,
+                }
+            ],
+        ),
+    )
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_focus_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_card_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_drop_paper_guide_locate_only_line_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_sanitize_paper_guide_answer_for_user", lambda answer, **kwargs: answer)
+
+    _out, support_resolution = answer_post_runtime._apply_paper_guide_answer_postprocess(
+        "The paper models additive Gaussian read noise.",
+        paper_guide_mode=True,
+        prompt="这篇论文建模了哪些真实退化？请给出对应引用。",
+        prompt_for_user="这篇论文建模了哪些真实退化？请给出对应引用。",
+        prompt_family="citation_lookup",
+        special_focus_block="",
+        focus_source_path="",
+        direct_source_path="",
+        bound_source_path="bound.md",
+        db_dir="db",
+        answer_hits=[],
+        support_slots=[],
+        cards=[],
+        locked_citation_source=None,
+    )
+
+    assert support_resolution
+    assert support_resolution[0]["claim_type"] == "own_result"
+    assert int(support_resolution[0].get("resolved_ref_num") or 0) == 0
+    assert not support_resolution[0].get("candidate_refs")
+
+
 def test_apply_paper_guide_answer_postprocess_citation_lookup_backfills_from_support_ref_candidates(monkeypatch):
     monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_support_markers", lambda answer, **kwargs: answer)
     monkeypatch.setattr(

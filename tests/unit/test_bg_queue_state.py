@@ -169,6 +169,33 @@ def test_update_page_progress_allows_stage_message_after_pages_finish():
     assert snap["cur_page_msg"] == "ingesting: updating knowledge base index"
 
 
+def test_update_page_progress_keeps_converter_profile_out_of_public_progress_message():
+    state = _make_state()
+    lock = Lock()
+
+    enqueue(state, lock, {"_tid": "t1", "pdf": "a.pdf", "name": "a.pdf", "replace": False})
+    begin_next_task_or_idle(state, lock)
+    update_page_progress(state, lock, 0, 12, "converter starting...", task_id="t1")
+    raw_profile = "converter profile: script=C:/private/convert.py, workers=8, llm_timeout=300s"
+    update_page_progress(state, lock, 0, 0, raw_profile, task_id="t1")
+
+    snap = snapshot(state, lock)
+    task = snap["active_tasks"][0]
+    assert snap["cur_page_msg"] == "converter starting..."
+    assert task["cur_profile"] == raw_profile
+    assert raw_profile not in task["cur_log_tail"]
+
+    update_page_progress(state, lock, 0, 12, "converter pid=37664", task_id="t1")
+    pid_snap = snapshot(state, lock)
+    assert pid_snap["cur_page_msg"] == "converter starting..."
+    assert "converter pid=37664" not in pid_snap["active_tasks"][0]["cur_log_tail"]
+
+    update_page_progress(state, lock, 0, 12, "=" * 80, task_id="t1")
+    separator_snap = snapshot(state, lock)
+    assert separator_snap["cur_page_msg"] == "converter starting..."
+    assert "=" * 80 not in separator_snap["active_tasks"][0]["cur_log_tail"]
+
+
 def test_cancel_all_clears_queued_tasks_but_keeps_active_cancelable():
     state = _make_state()
     lock = Lock()

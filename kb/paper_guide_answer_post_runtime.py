@@ -2252,6 +2252,18 @@ def _apply_paper_guide_answer_postprocess(
             if not isinstance(rec, dict):
                 continue
             rec_out = dict(rec)
+            claim_type = str(rec_out.get("claim_type") or "").strip().lower()
+            cite_policy = str(rec_out.get("cite_policy") or "").strip().lower()
+            may_resolve_upstream_ref = bool(
+                cite_policy == "prefer_ref"
+                or claim_type in {"prior_work", "borrowed_tool", "origin", "upstream_reference"}
+            )
+            if not may_resolve_upstream_ref:
+                rec_out.pop("resolved_ref_num", None)
+                rec_out.pop("candidate_refs", None)
+                rec_out.pop("support_ref_candidates", None)
+                normalized_support.append(rec_out)
+                continue
             try:
                 resolved_ref_num = int(rec_out.get("resolved_ref_num") or 0)
             except Exception:

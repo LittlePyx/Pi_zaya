@@ -18,7 +18,7 @@ from kb.paper_guide_contracts import (
     _paper_guide_model_dump,
 )
 from kb.paper_guide.router import _resolve_paper_guide_intent
-from kb.paper_guide_prompting import _paper_guide_prompt_requests_naive_source_trace
+from kb.paper_guide_prompting import _paper_guide_prompt_requests_citation_lookup
 from kb.paper_guide_postprocess import (
     _sanitize_paper_guide_answer_for_user,
     _sanitize_structured_cite_tokens,
@@ -455,39 +455,10 @@ def _collect_inline_reference_numbers(text: str, *, max_items: int = 6) -> list[
 
 
 def _prompt_explicitly_requests_citation_lookup(prompt: str) -> bool:
-    text = str(prompt or "").strip().lower()
-    if not text:
-        return False
     try:
-        if _paper_guide_prompt_requests_naive_source_trace(prompt):
-            return True
+        return _paper_guide_prompt_requests_citation_lookup(prompt)
     except Exception:
-        pass
-    patterns = (
-        "citation",
-        "cited",
-        "cite",
-        "reference number",
-        "reference numbers",
-        "which reference",
-        "which references",
-        "what in-paper citation",
-        "prior work is",
-        "attributed to",
-        "invented",
-        "original to",
-        "come from",
-        "引用",
-        "引文",
-        "参考文献",
-        "编号",
-        "发明",
-        "原创",
-        "新东西",
-        "借鉴",
-        "来源",
-    )
-    return any(pattern in text for pattern in patterns)
+        return False
 
 
 def _prompt_prefers_chinese_answer(prompt: str) -> bool:
@@ -3071,6 +3042,21 @@ def _finalize_fast_exact_generation_answer(
     validate_structured_citations,
 ) -> dict:
     prompt_text = str(prompt_for_user or prompt or "").strip()
+    citation_plan = (
+        dict((paper_guide_contracts_seed or {}).get("citation_plan") or {})
+        if isinstance((paper_guide_contracts_seed or {}).get("citation_plan"), dict)
+        else {}
+    )
+    citation_plan_budget = (
+        dict(citation_plan.get("budget") or {})
+        if isinstance(citation_plan.get("budget"), dict)
+        else {}
+    )
+    system_b_explicitly_disabled = bool(
+        citation_plan
+        and "system_b" in citation_plan_budget
+        and int(citation_plan_budget.get("system_b") or 0) <= 0
+    )
     support_resolution = [
         dict(item)
         for item in list(paper_guide_precomputed_support_resolution or [])
@@ -3080,6 +3066,12 @@ def _finalize_fast_exact_generation_answer(
         _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
     ).strip() or "(No text returned)"
     answer = _sanitize_empty_markdown_label_fragments(answer)
+    if system_b_explicitly_disabled:
+        answer = _strip_final_answer_citation_markers(
+            answer,
+            preserve_numeric_markers=True,
+            preserve_structured_markers=False,
+        )
     structured_ref_nums = {
         int(match.group(2) or 0)
         for match in _CITE_CANON_RE.finditer(answer)
@@ -3107,19 +3099,27 @@ def _finalize_fast_exact_generation_answer(
         getattr(resolved_intent, "family", "") or paper_guide_prompt_family or "overview"
     ).strip().lower()
     source_path = str(paper_guide_bound_source_path or "").strip()
-    opportunities = detect_paper_guide_reference_opportunities(
-        prompt=prompt_text,
-        answer=answer,
-        prompt_family=effective_family,
-        source_path=source_path,
-        support_resolution=support_resolution,
-        support_slots=list(paper_guide_support_slots or []),
-        cards=list(paper_guide_evidence_cards or []),
-        max_items=3,
+    opportunities = (
+        []
+        if system_b_explicitly_disabled
+        else detect_paper_guide_reference_opportunities(
+            prompt=prompt_text,
+            answer=answer,
+            prompt_family=effective_family,
+            source_path=source_path,
+            support_resolution=support_resolution,
+            support_slots=list(paper_guide_support_slots or []),
+            cards=list(paper_guide_evidence_cards or []),
+            max_items=3,
+        )
     )
-    candidate_refs = merge_reference_opportunity_candidate_refs(
-        dict(paper_guide_candidate_refs_by_source or {}),
-        opportunities,
+    candidate_refs = (
+        {}
+        if system_b_explicitly_disabled
+        else merge_reference_opportunity_candidate_refs(
+            dict(paper_guide_candidate_refs_by_source or {}),
+            opportunities,
+        )
     )
     answer, citation_validation = validate_structured_citations(
         answer,
@@ -3224,11 +3224,6 @@ def _finalize_fast_exact_generation_answer(
     )
     if research_plan:
         answer_quality["research_answer_plan"] = research_plan
-    citation_plan = (
-        dict((paper_guide_contracts_seed or {}).get("citation_plan") or {})
-        if isinstance((paper_guide_contracts_seed or {}).get("citation_plan"), dict)
-        else {}
-    )
     if citation_plan:
         answer_quality["citation_plan"] = citation_plan
     if opportunities:
@@ -3514,16 +3509,20 @@ def _finalize_generation_answer(
             opportunities=paper_guide_reference_opportunities,
         )
         reference_opportunities_for_validation = paper_guide_reference_opportunities
-        if not bool(paper_guide_mode):
-            applied_refs: set[int] = set()
-            for key in ("injected_refs", "tail_refs"):
-                for raw_ref in list(paper_guide_reference_apply_meta.get(key) or []):
-                    try:
-                        ref_num = int(raw_ref)
-                    except Exception:
-                        continue
-                    if ref_num > 0:
-                        applied_refs.add(ref_num)
+        applied_refs: set[int] = {
+            int(match.group(2) or 0)
+            for match in _CITE_CANON_RE.finditer(str(answer or ""))
+            if int(match.group(2) or 0) > 0
+        }
+        for key in ("injected_refs", "tail_refs"):
+            for raw_ref in list(paper_guide_reference_apply_meta.get(key) or []):
+                try:
+                    ref_num = int(raw_ref)
+                except Exception:
+                    continue
+                if ref_num > 0:
+                    applied_refs.add(ref_num)
+        if applied_refs:
             filtered_reference_opportunities: list[dict[str, object]] = []
             for item in paper_guide_reference_opportunities:
                 try:
@@ -3756,7 +3755,7 @@ def _finalize_generation_answer(
             "mode": str(paper_guide_reference_apply_meta.get("mode") or "none"),
             "injected_refs": list(paper_guide_reference_apply_meta.get("injected_refs") or []),
             "rendered_refs": list(rendered_refs),
-            "refs": opportunity_refs,
+            "refs": list(rendered_refs),
         }
     if dict(citation_validation or {}).get("raw_count"):
         answer_quality["citation_validation"] = dict(citation_validation or {})

@@ -76,6 +76,62 @@ def test_ingest_quality_gate_blocks_bad_markdown_before_chunks(tmp_path: Path):
     assert "quality_blocked: 1" in proc.stdout
 
 
+def test_incremental_ingest_rebuilds_unchanged_doc_when_chunk_artifact_is_missing(tmp_path: Path):
+    repo_root = Path(__file__).resolve().parents[2]
+    src = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src.mkdir(parents=True)
+    md_path = src / "paper.en.md"
+    md_path.write_text(_good_markdown(), encoding="utf-8")
+
+    first = subprocess.run(
+        [sys.executable, "ingest.py", "--src", str(src), "--db", str(db_dir)],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert first.returncode == 0, first.stderr
+
+    doc_id = compute_doc_id(md_path)
+    docs = load_docs_index(db_dir)
+    docs[doc_id]["num_chunks"] = 0
+    save_docs_index(db_dir, docs)
+    doc_chunks_path(db_dir, doc_id).unlink()
+
+    second = subprocess.run(
+        [sys.executable, "ingest.py", "--src", str(src), "--db", str(db_dir), "--incremental"],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+    assert second.returncode == 0, second.stderr
+    rebuilt = load_docs_index(db_dir)[doc_id]
+    assert int(rebuilt["num_chunks"]) > 0
+    assert doc_chunks_path(db_dir, doc_id).stat().st_size > 0
+    assert "updated: 1" in second.stdout
+    assert "skipped: 0" in second.stdout
+
+    # A non-empty but truncated/corrupt JSONL artifact must also be rebuilt.
+    doc_chunks_path(db_dir, doc_id).write_text('{"text": "truncated"', encoding="utf-8")
+    third = subprocess.run(
+        [sys.executable, "ingest.py", "--src", str(src), "--db", str(db_dir), "--incremental"],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+    assert third.returncode == 0, third.stderr
+    assert "updated: 1" in third.stdout
+    assert "skipped: 0" in third.stdout
+    rebuilt_lines = doc_chunks_path(db_dir, doc_id).read_text(encoding="utf-8").splitlines()
+    assert len(rebuilt_lines) == int(load_docs_index(db_dir)[doc_id]["num_chunks"])
+    assert all(isinstance(json.loads(line), dict) for line in rebuilt_lines)
+
+
 def test_ingest_prune_removes_existing_nonpaper_artifact_docs(tmp_path: Path):
     repo_root = Path(__file__).resolve().parents[2]
     src = tmp_path / "src"

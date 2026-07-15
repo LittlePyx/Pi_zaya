@@ -233,17 +233,22 @@ def update_page_progress(
         target["cur_page_total"] = int(total)
         line = str(msg or "")[:220]
         is_profile = line.startswith("converter profile:") or line.startswith("LLM concurrency:")
-        regressed = (new_done < old_done) and (new_total <= old_total) and (not is_profile)
-        if regressed:
-            line = str(target.get("cur_page_msg") or "")
-        target["cur_page_msg"] = line
-
+        stripped_line = line.strip()
+        is_log_separator = len(stripped_line) >= 8 and set(stripped_line).issubset({"=", "-", "_"})
+        is_private_diagnostic = is_profile or line.startswith("converter pid=") or is_log_separator
         if line.startswith("converter profile:"):
             target["cur_profile"] = line
             target["cur_profile_ts"] = float(time.time())
         elif line.startswith("LLM concurrency:"):
             target["cur_llm_profile"] = line
             target["cur_llm_profile_ts"] = float(time.time())
+        if is_private_diagnostic:
+            _sync_legacy_summary_fields(state)
+            return
+        regressed = (new_done < old_done) and (new_total <= old_total) and (not is_profile)
+        if regressed:
+            line = str(target.get("cur_page_msg") or "")
+        target["cur_page_msg"] = line
 
         tail = list(target.get("cur_log_tail") or [])
         if line and (not regressed):

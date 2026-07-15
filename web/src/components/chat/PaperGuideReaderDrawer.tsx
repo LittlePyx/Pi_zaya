@@ -273,7 +273,7 @@ export function PaperGuideReaderDrawer({
     ? `${S.reader_binding_equations || 'Binding equations'}${equationBindingBoundCount > 0 ? ` (${equationBindingBoundCount})` : ''}`
     : ''
   const statusTextFull = String(locateHint || bindingStatusText).trim()
-  const statusTextCompact = compactLocateHintLabel(statusTextFull)
+  const statusTextCompactRaw = compactLocateHintLabel(statusTextFull)
   const {
     activeCandidateDistinctKey,
     candidateOptions,
@@ -350,6 +350,9 @@ export function PaperGuideReaderDrawer({
     statusTextFull,
     strictLocate,
   ])
+  const statusTextCompact = locateBadges.some((badge) => badge.key === 'result')
+    ? ''
+    : statusTextCompactRaw
 
   useReaderCandidatePickerSync({
     payloadKey: openPayloadViewModel,

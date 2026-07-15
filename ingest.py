@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from kb.chunking import chunk_markdown
@@ -12,11 +13,37 @@ from kb.store import (
     compute_doc_id,
     compute_file_sha1,
     delete_doc_chunks,
+    doc_chunks_path,
     load_docs_index,
     prune_missing_docs,
     save_docs_index,
     write_doc_chunks,
 )
+
+
+def _incremental_chunks_are_usable(db_dir: Path, doc_id: str, record: dict | None) -> bool:
+    if not isinstance(record, dict):
+        return False
+    expected_count = int(record.get("num_chunks") or 0)
+    if expected_count <= 0:
+        return False
+    path = doc_chunks_path(db_dir, doc_id)
+    try:
+        if not path.is_file() or path.stat().st_size <= 0:
+            return False
+        actual_count = 0
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    return False
+                chunk = json.loads(raw)
+                if not isinstance(chunk, dict) or not str(chunk.get("text") or "").strip():
+                    return False
+                actual_count += 1
+        return actual_count == expected_count
+    except Exception:
+        return False
 
 
 def _iter_md_files(src: Path, glob: str, exclude_dirs: set[str], exclude_names: set[str]) -> list[Path]:
@@ -217,7 +244,12 @@ def main() -> None:
             quality_blocked += 1
             continue
 
-        if args.incremental and prev and prev.get("sha1") == sha1:
+        if (
+            args.incremental
+            and prev
+            and prev.get("sha1") == sha1
+            and _incremental_chunks_are_usable(db_dir, doc_id, prev)
+        ):
             if quality_fields:
                 merged = dict(prev)
                 merged.update(quality_fields)

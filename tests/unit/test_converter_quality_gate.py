@@ -124,6 +124,32 @@ def test_quality_gate_blocks_persistent_critical_autofix_issue(tmp_path: Path):
     assert result["blocking_issue_codes"] == ["missing_source_pages"]
 
 
+def test_quality_gate_blocks_unresolved_source_page_marker_alignment(tmp_path: Path):
+    md_path = tmp_path / "misaligned.en.md"
+    md_path.write_text(_good_markdown(), encoding="utf-8")
+
+    result = assess_markdown_index_quality(
+        md_path,
+        quality_result={
+            "repair_plan": {
+                "action": "autofix",
+                "scope": "markdown",
+                "reason": "Source page anchors remain misaligned.",
+                "issue_codes": ["source_page_marker_alignment"],
+                "autofix_issue_codes": ["source_page_marker_alignment"],
+                "reconvert_issue_codes": [],
+                "review_issue_codes": [],
+            },
+            "metrics": {},
+        },
+        refresh_stale=False,
+    )
+
+    assert result["indexable"] is False
+    assert result["status"] == "blocked"
+    assert result["blocking_issue_codes"] == ["source_page_marker_alignment"]
+
+
 def test_quality_gate_blocks_source_level_conversion_damage(tmp_path: Path):
     md_path = tmp_path / "broken.en.md"
     md_path.write_text(

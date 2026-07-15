@@ -27,6 +27,10 @@ export interface ReaderLocateStatusViewModel {
   locateBadges: ReaderLocateMetaBadge[]
 }
 
+export function readerLocateBadgesHaveReturnTarget(badges: ReaderLocateMetaBadge[]): boolean {
+  return badges.some((badge) => badge.key === 'result' && badge.tone !== 'danger')
+}
+
 export function buildReaderLocateResultBadge({
   activeAnchorKind,
   activeHeadingPath,
@@ -43,7 +47,10 @@ export function buildReaderLocateResultBadge({
   const anchorKind = String(activeAnchorKind || '').trim().toLowerCase()
   const title = statusTextFull || undefined
 
-  if (/\b(strict locate stopped|not found)\b/i.test(hint)) {
+  if (
+    /\b(strict locate stopped|not found)\b/i.test(hint)
+    && !/\b(?:neighbor )?evidence block matched\b/i.test(hint)
+  ) {
     return {
       key: 'result',
       label: S.reader_locate_unresolved || 'Unresolved',

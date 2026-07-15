@@ -71,6 +71,15 @@ def test_summarize_conversion_quality_counts_research_paper_surfaces(tmp_path):
     assert metrics.body_citation_expanded_index_count == 2
 
 
+def test_summarize_conversion_quality_uses_shared_mojibake_detection(tmp_path):
+    md_path = tmp_path / "paper.md"
+    md_path.write_text("# Paper\n\nHusz \u0301ar and FranÃ§ois", encoding="utf-8")
+
+    metrics = summarize_conversion_quality(md_path)
+
+    assert metrics.mojibake_count == 2
+
+
 def test_summarize_conversion_quality_counts_unheaded_references_before_methods(tmp_path):
     body = "\n".join(f"Main result paragraph {idx}." for idx in range(70))
     refs = "\n".join(
@@ -88,6 +97,23 @@ def test_summarize_conversion_quality_counts_unheaded_references_before_methods(
     assert metrics.extracted_reference_count == 12
     assert metrics.reference_line_count == 12
     assert metrics.max_reference_index == 12
+
+
+def test_summarize_conversion_quality_uses_cleaned_reference_index_max(tmp_path):
+    md_path = tmp_path / "wrapped_page_range.md"
+    md_path.write_text(
+        "# Demo\n\n"
+        "## References\n"
+        "[10] Dauphin, Y. N. et al. Language modeling with gated convolutional networks. pp. 933-\n"
+        "[941] PMLR (2017)\n"
+        "[11] De, S. and Smith, S. Batch normalization biases residual blocks. NeurIPS (2020)\n",
+        encoding="utf-8",
+    )
+
+    metrics = summarize_conversion_quality(md_path)
+
+    assert metrics.extracted_reference_count == 2
+    assert metrics.max_reference_index == 11
 
 
 def test_page_marker_quality_allows_textless_pdf_page_skips(tmp_path):

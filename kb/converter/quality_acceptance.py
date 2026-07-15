@@ -8,38 +8,13 @@ from typing import Any
 from urllib.parse import unquote
 
 from kb.converter.quality_compare import summarize_markdown_quality
+from kb.converter.text_utils import count_mojibake
 from kb.reference_index import extract_references_map_from_md
 
 
 _PAGE_MARKER_RE = re.compile(r"<!--\s*kb_page:\s*(\d+)\s*-->", re.IGNORECASE)
 _IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
-_MOJIBAKE_RE = re.compile(
-    "|".join(
-        [
-            r"\ufffd",
-            r"\u951b",
-            r"\u9428",
-            r"\u7ecb",
-            r"\u9225",
-            r"\u9286",
-            r"\u7039",
-            r"\u6d93",
-            r"\u6769",
-            r"\u934f",
-            r"\u7ed4",
-            r"\u6d63",
-            r"\u93c4",
-            r"\u5bee",
-            r"\u95c2",
-            r"\u71b6",
-            r"\u52ec",
-            r"\u579a",
-            r"\u70b2",
-            r"\u53e7",
-        ]
-    )
-)
 _DISPLAY_MATH_DELIMITER_RE = re.compile(r"^\s*\$\$\s*$")
 
 
@@ -147,7 +122,11 @@ def summarize_conversion_quality(md_path: Path, md_text: str | None = None) -> C
     page_count, page_min, page_max, page_gaps = _page_marker_stats(text)
     references = extract_references_map_from_md(text)
     detected_reference_count = max(int(base.reference_line_count), len(references))
-    max_reference_index = max(int(base.max_reference_index), max(references.keys(), default=0))
+    max_reference_index = (
+        max(references.keys(), default=0)
+        if references
+        else int(base.max_reference_index)
+    )
     return ConversionQualityMetrics(
         chars=base.chars,
         lines=base.lines,
@@ -174,7 +153,7 @@ def summarize_conversion_quality(md_path: Path, md_text: str | None = None) -> C
         max_reference_index=max_reference_index,
         body_citation_marker_count=base.body_citation_marker_count,
         body_citation_expanded_index_count=base.body_citation_expanded_index_count,
-        mojibake_count=len(_MOJIBAKE_RE.findall(text)),
+        mojibake_count=count_mojibake(text),
         analyzer_error_count=base.analyzer_error_count,
         analyzer_warning_count=base.analyzer_warning_count,
     )

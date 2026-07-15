@@ -1,16 +1,20 @@
 import {
   buildReaderLocateResultBadge,
   buildReaderLocateStatusViewModel,
+  readerLocateBadgesHaveReturnTarget,
   type ReaderLocateMetaBadge,
   type ReaderLocateStatusViewModel,
 } from '../components/chat/readerLocateStatusViewModel'
 
 export interface ReaderLocateStatusViewModelSmokeResult {
+  exactCanReturn: boolean
   exactBadge: ReaderLocateMetaBadge | null
+  fallbackBlock: ReaderLocateStatusViewModel
   manualSwitch: ReaderLocateStatusViewModel
   quiet: ReaderLocateStatusViewModel
   systemSwitch: ReaderLocateStatusViewModel
   unresolved: ReaderLocateStatusViewModel
+  unresolvedCanReturn: boolean
 }
 
 const labels = {
@@ -86,11 +90,29 @@ export function runReaderLocateStatusViewModelSmoke(): ReaderLocateStatusViewMod
     statusTextFull: 'Exact target matched',
     strictLocate: true,
   })
+  const fallbackBlock = buildReaderLocateStatusViewModel({
+    activeAltIndex: 0,
+    activeAnchorKind: 'sentence',
+    activeHeadingPath: 'Results / Structured degradation modeling',
+    activeHitLevel: 'block',
+    altChangeSource: '',
+    hasDistinctAlternatives: false,
+    requestedAltIndex: 0,
+    S: {
+      ...labels,
+      reader_locate_fallback_evidence: 'Fallback evidence',
+    },
+    statusTextFull: 'Evidence block matched, but exact inline phrase was not found.',
+    strictLocate: true,
+  })
   return {
+    exactCanReturn: readerLocateBadgesHaveReturnTarget(exactBadge ? [exactBadge] : []),
     exactBadge,
+    fallbackBlock,
     manualSwitch,
     quiet,
     systemSwitch,
     unresolved,
+    unresolvedCanReturn: readerLocateBadgesHaveReturnTarget(unresolved.locateBadges),
   }
 }

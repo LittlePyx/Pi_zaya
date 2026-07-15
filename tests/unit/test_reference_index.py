@@ -552,6 +552,38 @@ def test_extract_references_map_does_not_use_body_fig_or_section_numbers_as_refs
     assert "Second real reference" in str(out.get(2) or "")
 
 
+def test_extract_references_map_folds_bracketed_page_range_continuation():
+    md_text = (
+        "# Demo\n\n"
+        "## References\n"
+        "[10] Dauphin, Y. N., Fan, A., Auli, M., and Grangier, D. Language modeling with gated "
+        "convolutional networks. In International Conference on Machine Learning. pp. 933-\n"
+        "[941] PMLR (2017)\n"
+        "[11] De, S. and Smith, S. Batch normalization biases residual blocks. NeurIPS (2020)\n"
+    )
+
+    out = ref_index.extract_references_map_from_md(md_text)
+
+    assert sorted(out.keys()) == [10, 11]
+    assert "pp. 933-941 PMLR (2017)" in out[10]
+    assert out[11].startswith("[11] De, S.")
+
+
+def test_extract_references_map_keeps_sequential_reference_after_open_page_range():
+    md_text = (
+        "# Demo\n\n"
+        "## References\n"
+        "[10] A. Author. Entry with a damaged page range. Demo Journal, pp. 9-\n"
+        "[11] B. Author. Next real entry. Demo Conference, 2021.\n"
+    )
+
+    out = ref_index.extract_references_map_from_md(md_text)
+
+    assert sorted(out.keys()) == [10, 11]
+    assert out[10].endswith("pp. 9-")
+    assert out[11].startswith("[11] B. Author.")
+
+
 def test_extract_references_map_recovers_unheaded_references_before_methods():
     body = "\n".join(f"Main result paragraph {idx} with Fig. {idx}." for idx in range(70))
     refs = "\n".join(
@@ -729,6 +761,61 @@ def test_build_reference_index_rebuilds_incremental_doc_when_refs_lag_catalog(tm
     refs = doc.get("refs") or {}
     assert sorted(int(k) for k in refs.keys()) == [1, 2, 3]
     assert "Zenodo" in str((refs.get("2") or {}).get("raw") or "")
+
+
+def test_build_reference_index_rebuilds_unchanged_doc_after_parser_upgrade(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src_root.mkdir()
+    db_dir.mkdir()
+    md_path = src_root / "demo.en.md"
+    md_path.write_text(
+        (
+            "# Demo\n\n"
+            "## References\n"
+            "[10] A. Author. A real reference with pages 933-941. PMLR, 2017.\n"
+            "[11] B. Author. The next real reference. Journal of Testing, 2024.\n"
+        ),
+        encoding="utf-8",
+    )
+    src_key = ref_index._norm_source_key(str(md_path.resolve()))
+    sha1 = ref_index.compute_file_sha1(md_path)
+    (db_dir / ref_index.INDEX_FILE_NAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "docs": {
+                    src_key: {
+                        "path": str(md_path.resolve()),
+                        "name": md_path.name,
+                        "stem": md_path.stem,
+                        "sha1": sha1,
+                        "reference_parser_version": ref_index.REFERENCE_PARSER_VERSION - 1,
+                        "refs": {
+                            "10": {"num": 10, "raw": "[10] A. Author. A real reference, pp. 933-"},
+                            "941": {"num": 941, "raw": "[941] PMLR, 2017."},
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **kwargs: False)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
+
+    out = ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=True,
+        enable_title_lookup=False,
+    )
+
+    assert int(out.get("docs_updated") or 0) == 1
+    doc = next(iter((ref_index.load_reference_index(db_dir).get("docs") or {}).values()))
+    assert int(doc.get("reference_parser_version") or 0) == ref_index.REFERENCE_PARSER_VERSION
+    assert sorted(int(key) for key in (doc.get("refs") or {}).keys()) == [10, 11]
 
 
 def test_cleanup_reference_number_noise_removes_large_gap_outlier():
@@ -1479,6 +1566,7 @@ def test_build_reference_index_incremental_reuses_recent_unresolved_crossref_att
                 "crossref_sparse_promising": 0,
                 "crossref_retry_ttl_s": 24 * 60 * 60,
                 "reference_lookup_version": ref_index.REFERENCE_LOOKUP_VERSION,
+                "reference_parser_version": ref_index.REFERENCE_PARSER_VERSION,
                 "index_status": "ready",
                 "quality_gate": {"status": "ready", "indexable": True, "action": "none"},
                 "refs": {
@@ -1650,6 +1738,7 @@ def test_build_reference_index_incremental_hydrates_recent_unresolved_from_cross
                 "crossref_sparse_promising": 0,
                 "crossref_retry_ttl_s": 24 * 60 * 60,
                 "reference_lookup_version": ref_index.REFERENCE_LOOKUP_VERSION,
+                "reference_parser_version": ref_index.REFERENCE_PARSER_VERSION,
                 "index_status": "ready",
                 "quality_gate": {"status": "ready", "indexable": True, "action": "none"},
                 "refs": {
@@ -1753,6 +1842,7 @@ def test_build_reference_index_incremental_reuses_sparse_but_resolved_doc(tmp_pa
                 "sha1": ref_index.compute_file_sha1(md_path),
                 "source_doi": "",
                 "crossref_enriched": False,
+                "reference_parser_version": ref_index.REFERENCE_PARSER_VERSION,
                 "refs": {
                     "1": {
                         "num": 1,
@@ -1849,6 +1939,7 @@ def test_build_reference_index_incremental_keeps_previous_doc_when_rebuild_is_wo
                 "sha1": ref_index.compute_file_sha1(md_path),
                 "source_doi": "",
                 "crossref_enriched": False,
+                "reference_parser_version": ref_index.REFERENCE_PARSER_VERSION,
                 "refs": {
                     "1": {
                         "num": 1,

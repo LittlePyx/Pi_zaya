@@ -31,6 +31,10 @@ INDEX_FILE_NAME = "references_index.json"
 CROSSREF_CACHE_FILE_NAME = "crossref_cache.json"
 REFERENCE_CATALOG_FILE_NAME = "reference_catalog.json"
 REFERENCE_LOOKUP_VERSION = 12
+# Increment this independently of metadata lookup behavior whenever Markdown
+# reference parsing changes. It prevents unchanged documents from reusing refs
+# produced by an older parser.
+REFERENCE_PARSER_VERSION = 2
 
 _REF_HEAD_RE = re.compile(
     r"^#{1,6}\s+(references(?:\s+and\s+(?:notes|links))?|bibliography)\b",
@@ -40,6 +44,10 @@ _REF_START_BRACKET_RE = re.compile(r"^\[(\d{1,4})\]\s*(.*\S)?\s*$")
 _REF_START_DOT_RE = re.compile(r"^(\d{1,4})\.\s+(.*\S)?\s*$")
 _REF_ANY_START_RE = re.compile(r"(?:\[\d{1,4}\]|\d{1,4}\.)\s+")
 _REF_EMBED_BRACKET_SPLIT_RE = re.compile(r"\[\d{1,4}\]\s+")
+_WRAPPED_PAGE_RANGE_TAIL_RE = re.compile(
+    r"\b(?:pp?\.?|pages?)\s*(\d{1,5})\s*([-\u2013\u2014])\s*$",
+    re.IGNORECASE,
+)
 _POST_REFERENCES_PLAIN_STOP_RE = re.compile(
     r"^(?:#{1,6}\s+)?(?:appendix|appendices|annex|"
     r"supplementary(?:\s+materials?)?|supplemental(?:\s+(?:information|materials?))?)\b",
@@ -364,6 +372,36 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
                 out_segs.append(seg)
         return out_segs
 
+    def _merge_wrapped_page_range_candidate(candidate_n: int, rest: str) -> bool:
+        """Fold a page-range tail misread as a bracketed reference number."""
+        if cur_n is None or (not cur_buf) or int(candidate_n) == int(cur_n) + 1:
+            return False
+        current_text = " ".join(str(x or "").strip() for x in cur_buf if str(x or "").strip())
+        match = _WRAPPED_PAGE_RANGE_TAIL_RE.search(current_text)
+        if not match:
+            return False
+        try:
+            page_start = int(match.group(1))
+            page_end = int(candidate_n)
+        except Exception:
+            return False
+        if page_end <= page_start or page_end > page_start + 300:
+            return False
+
+        for idx in range(len(cur_buf) - 1, -1, -1):
+            fragment = str(cur_buf[idx] or "").rstrip()
+            if not fragment:
+                continue
+            cur_buf[idx] = re.sub(
+                r"([-\u2013\u2014])\s*$",
+                lambda m: f"{m.group(1)}{page_end}",
+                fragment,
+            )
+            break
+        if rest:
+            cur_buf.append(rest)
+        return True
+
     for raw in lines[ref_i + 1 :]:
         for s in _split_embedded_ref_segments(raw):
             if not s:
@@ -382,13 +420,15 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
 
             m = _REF_START_BRACKET_RE.match(s) or _REF_START_DOT_RE.match(s)
             if m:
-                _flush()
                 try:
-                    cur_n = int(m.group(1))
+                    candidate_n = int(m.group(1))
                 except Exception:
-                    cur_n = None
                     continue
                 rest = (m.group(2) or "").strip()
+                if _merge_wrapped_page_range_candidate(candidate_n, rest):
+                    continue
+                _flush()
+                cur_n = candidate_n
                 if rest:
                     cur_buf = [f"[{int(cur_n)}] {rest}"]
                 else:
@@ -517,7 +557,7 @@ def build_reference_catalog_from_ref_map(
         )
 
     return {
-        "version": 1,
+        "version": int(REFERENCE_PARSER_VERSION),
         "source_path": str(source_path or "").strip(),
         "source_name": str(source_name or "").strip(),
         "source_sha1": str(source_sha1 or "").strip(),
@@ -555,6 +595,12 @@ def load_reference_catalog_for_md(md_path: Path | str) -> dict:
     p = _reference_catalog_path_for_md(md_path)
     data = _load_json(p)
     if not isinstance(data, dict):
+        return {}
+    try:
+        catalog_version = int(data.get("version") or 0)
+    except Exception:
+        catalog_version = 0
+    if catalog_version < int(REFERENCE_PARSER_VERSION):
         return {}
     refs = data.get("refs")
     if not isinstance(refs, list):
@@ -3797,6 +3843,14 @@ def build_reference_index(
                 prev_lookup_version = int(prev_doc.get("reference_lookup_version") or 1) if isinstance(prev_doc, dict) else 0
             except Exception:
                 prev_lookup_version = 0
+            try:
+                prev_parser_version = int(prev_doc.get("reference_parser_version") or 0) if isinstance(prev_doc, dict) else 0
+            except Exception:
+                prev_parser_version = 0
+            prev_parser_stale = bool(
+                isinstance(prev_doc, dict)
+                and int(prev_parser_version) < int(REFERENCE_PARSER_VERSION)
+            )
             prev_lookup_stale = bool(
                 need_crossref_enrich
                 and prev_needs_rebuild_for_enrich
@@ -3815,6 +3869,7 @@ def build_reference_index(
                 and str(prev_doc.get("sha1") or "") == str(sha1 or "")
                 and isinstance(prev_refs_obj, dict)
                 and ((not bool(quality_gate)) or prev_has_quality_gate)
+                and (not prev_parser_stale)
                 and (not prev_needs_rebuild_for_catalog)
                 and (
                     (not need_crossref_enrich)
@@ -4362,6 +4417,7 @@ def build_reference_index(
                 "crossref_sparse_promising": int(sparse_promising),
                 "crossref_retry_ttl_s": int(_reference_sync_retry_ttl_s()) if need_crossref_enrich else 0,
                 "reference_lookup_version": int(REFERENCE_LOOKUP_VERSION),
+                "reference_parser_version": int(REFERENCE_PARSER_VERSION),
                 "reference_catalog_status": str(reference_catalog.get("tail_continuity_status") or "").strip(),
                 "reference_catalog_ref_count": int(reference_catalog.get("ref_count") or 0),
                 "reference_catalog_missing_numbers": list(reference_catalog.get("missing_numbers") or []),
@@ -4374,6 +4430,7 @@ def build_reference_index(
                 and isinstance(prev_doc, dict)
                 and str(prev_doc.get("sha1") or "") == str(sha1 or "")
                 and isinstance(prev_doc.get("refs"), dict)
+                and (not prev_parser_stale)
                 and (not prev_needs_rebuild_for_catalog)
                 and (not (prev_lookup_stale and _doc_refs_have_parser_generated_metadata(prev_doc.get("refs"))))
                 and _prefer_previous_doc_refs(prev_doc.get("refs"), refs_obj)

@@ -111,3 +111,82 @@ def test_references_format_preserves_author_year_references_without_fake_numbers
     assert "[2020]" not in out
     assert "[2021]" not in out
     assert "[2022]" not in out
+
+
+def test_references_format_splits_collapsed_initial_first_author_year_entries():
+    page_text = (
+        "References\n"
+        "D. Ciregan, U. Meier, and J. Schmidhuber. Multi-column deep neural networks for image classification. "
+        "In Computer Vision and Pattern Recognition, pages 3642-3649. IEEE, 2012. "
+        "G. Cohen, S. Afshar, J. Tapson, and A. van Schaik. Emnist: an extension of mnist to handwritten letters. "
+        "arXiv preprint arXiv:1702.05373, 2017. "
+        "J. Deng, W. Dong, R. Socher, L.-J. Li, K. Li, and L. Fei-Fei. Imagenet: A large-scale hierarchical image database. "
+        "In Computer Vision and Pattern Recognition, pages 248-255. IEEE, 2009. "
+        "A. Krizhevsky and G. Hinton. Learning multiple layers of features from tiny images. 2009. "
+        "Y. LeCun, L. Bottou, Y. Bengio, and P. Haffner. Gradient-based learning applied to document recognition. "
+        "Proceedings of the IEEE, 86(11):2278-2324, 1998. "
+        "L. Wan, M. Zeiler, S. Zhang, Y. L. Cun, and R. Fergus. Regularization of neural networks using dropconnect. "
+        "In Proceedings of ICML, pages 1058-1066, 2013."
+    )
+
+    out = fix_references_format(normalize_references_page_text(page_text))
+    ref_lines = [line for line in out.splitlines() if line.strip() and not line.startswith("#")]
+
+    assert len(ref_lines) == 6
+    assert ref_lines[0].startswith("D. Ciregan")
+    assert ref_lines[1].startswith("G. Cohen")
+    assert ref_lines[2].startswith("J. Deng")
+    assert ref_lines[3].startswith("A. Krizhevsky")
+    assert ref_lines[4].startswith("Y. LeCun")
+    assert ref_lines[5].startswith("L. Wan")
+
+
+def test_references_format_keeps_wrapped_page_range_inside_current_reference():
+    ref_lines = [
+        (
+            1,
+            "[10] Dauphin, Y. N., Fan, A., Auli, M., and Grangier, D. Language modeling with gated "
+            "convolutional networks. In International Conference on Machine Learning. pp. 933-",
+        ),
+        (2, "[941] PMLR (2017)"),
+        (3, "[11] De, S. and Smith, S. Batch normalization biases residual blocks. NeurIPS (2020)"),
+    ]
+
+    out = format_references_block(ref_lines)
+
+    assert len(out) == 2
+    assert out[0].startswith("[10] Dauphin")
+    assert "pp. 933-941 PMLR (2017)" in out[0]
+    assert out[1].startswith("[11] De, S.")
+    assert not any(line.startswith("[941]") for line in out)
+
+
+def test_references_format_keeps_sequential_reference_after_page_range_hyphen():
+    ref_lines = [
+        (1, "[10] A. Author. A real paper with an incomplete page range, pp. 9-"),
+        (2, "[11] B. Author. The next real paper. Journal of Testing, 2024."),
+    ]
+
+    out = format_references_block(ref_lines)
+
+    assert len(out) == 2
+    assert out[0].startswith("[10] A. Author")
+    assert out[1].startswith("[11] B. Author")
+
+
+def test_normalize_references_does_not_treat_method_title_continuation_as_body_heading():
+    page_text = "\n".join(
+        [
+            "References",
+            "[13] Earlier Author. Earlier paper. Journal, 2018.",
+            "[14] Beck, A. and Teboulle, M. A fast iterative shrinkage-thresholding algorithm for linear inverse",
+            "methods. SIAM Journal on Imaging Sciences, 7(3):1588-",
+            "1623, 2014.",
+            "[15] Next Author. Next paper. Conference, 2020.",
+        ]
+    )
+
+    out = fix_references_format(normalize_references_page_text(page_text))
+
+    assert "methods. SIAM Journal on Imaging Sciences" in out
+    assert "[15] Next Author" in out

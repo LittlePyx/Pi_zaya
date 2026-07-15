@@ -103,6 +103,7 @@ def test_exact_preflight_hit_keeps_locate_and_reference_identity():
         [support],
         bound_source_path="paper.md",
         bound_source_name="SCINeRF",
+        prompt="Which reference is cited for ADMM, and where exactly?",
     )
     assert contract["citation_plan"]["budget"] == {"system_a": 1, "system_b": 1}
     assert [slot["preferred_system"] for slot in contract["citation_plan"]["slots"]] == [
@@ -110,6 +111,18 @@ def test_exact_preflight_hit_keeps_locate_and_reference_identity():
         "system_b",
     ]
     assert contract["reference_opportunities"][0]["ref_num"] == 4
+
+    ordinary_contract = _build_exact_preflight_citation_contract(
+        [support],
+        bound_source_path="paper.md",
+        bound_source_name="SCINeRF",
+        prompt="Explain the degradation model in three points and give supporting citations.",
+    )
+    assert ordinary_contract["citation_plan"]["budget"] == {"system_a": 1, "system_b": 0}
+    assert [slot["preferred_system"] for slot in ordinary_contract["citation_plan"]["slots"]] == [
+        "system_a",
+    ]
+    assert ordinary_contract["reference_opportunities"] == []
 
 
 def test_reference_ui_does_not_replace_authoritative_exact_hit_with_section_rescue(monkeypatch):

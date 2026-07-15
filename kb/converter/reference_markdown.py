@@ -24,13 +24,20 @@ _REF_SECTION_STOP_RE = re.compile(
 _POST_REFERENCE_BODY_SECTION_RE = re.compile(
     r"^(?:\d+(?:\.\d+)*\.?\s+)?(?:abstract|introduction|background|related\s+work|"
     r"method(?:s|ology)?|materials?|experiment(?:s|al)?|results?|discussion|"
-    r"conclusions?|appendix|supplementary|supplemental)\b",
+    r"conclusions?|appendix|supplementary|supplemental)\b\s*[:.]?\s*$",
     re.IGNORECASE,
 )
 _STANDALONE_REF_NUMBER_RE = re.compile(r"^\[?(\d{1,4})\]?[.)]\s*$")
 _INLINE_REF_START_RE = re.compile(r"^(?:\[(\d{1,4})\]|(\d{1,4})[.)])\s+(.+)$")
 _MID_REF_START_RE = re.compile(r"(?<!\S)(?:\[(\d{1,4})\]|(\d{1,4})[.)])\s+([A-Z][^.]{10,})")
 _AUTHOR_YEAR_RE = re.compile(r"\b(?:18|19|20)\d{2}[a-z]?\.\s+\S")
+_TERMINAL_YEAR_RE = re.compile(r"\b(?:18|19|20)\d{2}[a-z]?\.")
+_REFERENCE_YEAR_RE = re.compile(r"\b(?:18|19|20)\d{2}[a-z]?\.?(?=\s|$)")
+_AUTHOR_ENTRY_START_RE = re.compile(
+    r"^(?:(?:[A-Z]\.(?:-[A-Z]\.)?\s*){1,4}[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'`.-]{1,}|"
+    r"[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'`.-]{1,}(?:\s+(?:[A-Z]\.?|[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'`.-]{1,})){0,5})"
+    r"(?:\s*,|\s+and\b)"
+)
 _PAGE_MARKER_LINE_RE = re.compile(r"^<!--\s*kb_page:\s*\d+\s*-->$", re.IGNORECASE)
 _INLINE_PAGE_MARKER_RE = re.compile(r"(<!--\s*kb_page:\s*\d+\s*-->)", re.IGNORECASE)
 
@@ -72,11 +79,7 @@ def _looks_like_author_list_prefix(prefix: str) -> bool:
     words = re.findall(r"\b[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'`.-]{1,}\b", text)
     if len(words) < 2:
         return False
-    name_word = r"[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'`.-]{1,}"
-    starts_like_author_list = re.match(
-        rf"^{name_word}(?:\s+(?:[A-Z]\.?|{name_word})){{0,5}}(?:\s*,|\s+and\b)",
-        text,
-    )
+    starts_like_author_list = _AUTHOR_ENTRY_START_RE.match(text)
     return bool(starts_like_author_list and ("," in text or re.search(r"\band\b", text, flags=re.IGNORECASE)))
 
 
@@ -84,11 +87,10 @@ def _looks_like_author_year_reference_text(text: str) -> bool:
     src = re.sub(r"\s+", " ", str(text or "")).strip()
     if not src or _is_reference_start_line(src):
         return False
-    match = _AUTHOR_YEAR_RE.search(src)
+    match = _REFERENCE_YEAR_RE.search(src)
     if not match:
         return False
-    prefix = src[: int(match.start())]
-    return _looks_like_author_list_prefix(prefix)
+    return bool(_AUTHOR_ENTRY_START_RE.match(src))
 
 
 def _author_year_entry_start_offsets(text: str) -> list[int]:
@@ -119,6 +121,21 @@ def _split_author_year_collapsed_line(text: str) -> list[str]:
     src = re.sub(r"\s+", " ", str(text or "")).strip()
     if not src:
         return []
+    terminal_boundaries = [
+        int(match.end())
+        for match in _TERMINAL_YEAR_RE.finditer(src)
+        if _AUTHOR_ENTRY_START_RE.match(src[int(match.end()) :].lstrip())
+    ]
+    if terminal_boundaries:
+        starts = [0, *terminal_boundaries]
+        terminal_parts = [
+            src[starts[idx] : (starts[idx + 1] if idx + 1 < len(starts) else len(src))].strip(" ,;")
+            for idx in range(len(starts))
+        ]
+        terminal_parts = [part for part in terminal_parts if part]
+        if len(terminal_parts) >= 2:
+            return terminal_parts
+
     starts = _author_year_entry_start_offsets(src)
     if not starts:
         return [src]
@@ -175,6 +192,10 @@ def _reference_lines_look_author_year(ref_lines: list[tuple[int, str]]) -> bool:
     for idx, line in enumerate(lines):
         if not _AUTHOR_YEAR_RE.search(line):
             continue
+        collapsed_parts = _split_author_year_collapsed_line(line)
+        if len(collapsed_parts) >= 2:
+            author_year_hits += len(collapsed_parts)
+            continue
         if _looks_like_author_year_reference_text(line):
             author_year_hits += max(1, len(_AUTHOR_YEAR_RE.findall(line)))
             continue
@@ -201,11 +222,41 @@ def _join_reference_fragments(parts: list[str]) -> str:
         return ""
     text = " ".join(chunks)
     text = re.sub(r"(?<=[A-Za-z])-\s+(?=[A-Za-z])", "", text)
+    text = re.sub(r"(?<=\d)([-\u2013\u2014])\s+(?=\d)", r"\1", text)
     text = re.sub(r"(https?://\S*/)\s+(?=\S)", r"\1", text)
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
     text = re.sub(r"\s+", " ", text).strip()
     text = _strip_reference_backref_suffix(text)
     return text.strip()
+
+
+def _looks_like_wrapped_page_range_continuation(
+    current_ref: list[str],
+    candidate_number: str | int | None,
+    current_ref_number: str | int | None = None,
+) -> bool:
+    current_text = _join_reference_fragments(list(current_ref or []))
+    match = re.search(
+        r"\b(?:pp?\.?|pages?)\s*(\d{1,5})\s*[-\u2013\u2014]\s*$",
+        current_text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return False
+    try:
+        start = int(match.group(1))
+        end = int(str(candidate_number or "").strip())
+    except Exception:
+        return False
+    try:
+        current_number = int(str(current_ref_number or "").strip())
+    except Exception:
+        current_number = 0
+    # A sequential marker is overwhelmingly likely to start the next reference,
+    # even when the preceding entry happens to end in a hyphenated page number.
+    if current_number > 0 and end == current_number + 1:
+        return False
+    return start < end <= start + 300
 
 
 def _should_keep_reference_open_on_blank(
@@ -442,6 +493,15 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
 
         ref_match = _INLINE_REF_START_RE.match(stripped)
         if ref_match and _is_plausible_reference_number(ref_match.group(1) or ref_match.group(2)):
+            raw_ref_number = ref_match.group(1) or ref_match.group(2)
+            ref_content = ref_match.group(3).strip()
+            if current_ref and _looks_like_wrapped_page_range_continuation(
+                current_ref,
+                raw_ref_number,
+                current_ref_number,
+            ):
+                current_ref.append(f"{raw_ref_number} {ref_content}".strip())
+                continue
             if current_ref:
                 ref_text = _join_reference_fragments(current_ref)
                 if ref_text:
@@ -452,8 +512,7 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
                 current_ref = []
                 current_ref_number = None
 
-            ref_content = ref_match.group(3).strip()
-            current_ref_number = int(ref_match.group(1) or ref_match.group(2))
+            current_ref_number = int(raw_ref_number)
             if ref_content:
                 current_ref.append(ref_content)
         else:
@@ -496,7 +555,7 @@ def _format_author_year_references_block(ref_lines: list[tuple[int, str]]) -> li
     current_ref: list[str] = []
 
     def has_year(parts: list[str]) -> bool:
-        return bool(_AUTHOR_YEAR_RE.search(_join_reference_fragments(parts)))
+        return bool(_REFERENCE_YEAR_RE.search(_join_reference_fragments(parts)))
 
     def flush_current() -> None:
         nonlocal current_ref

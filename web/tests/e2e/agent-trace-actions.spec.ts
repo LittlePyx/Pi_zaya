@@ -1715,6 +1715,10 @@ test('reader locate status view model derives badges and decision text', async (
     { key: 'mode', label: 'Strict', tone: 'accent', title: 'Strict title' },
     { key: 'result', label: 'Unresolved', tone: 'danger', title: 'Strict locate stopped: not found' },
   ])
+  expect(result.fallbackBlock.locateBadges).toMatchObject([
+    { key: 'mode', label: 'Strict', tone: 'accent' },
+    { key: 'result', label: 'Bound block', tone: 'success' },
+  ])
   expect(result.systemSwitch.decisionText).toBe('Auto note')
   expect(result.systemSwitch.decisionTitle).toBe('Equation block matched')
   expect(result.systemSwitch.locateBadges).toMatchObject([
@@ -1742,6 +1746,8 @@ test('reader locate status view model derives badges and decision text', async (
     tone: 'success',
     title: 'Exact target matched',
   })
+  expect(result.exactCanReturn).toBe(true)
+  expect(result.unresolvedCanReturn).toBe(false)
 })
 
 test('reader locate candidate view model derives options and picker state', async ({ page }) => {

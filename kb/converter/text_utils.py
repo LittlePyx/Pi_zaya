@@ -44,6 +44,57 @@ def _build_mojibake_repl() -> dict[str, str]:
 
 _MOJIBAKE_REPL: dict[str, str] = _build_mojibake_repl()
 
+# Some PDF text layers detach an acute accent from the following letter.  NFKC
+# also turns the spacing acute accent (U+00B4) into a space plus U+0301, so keep
+# this rule deliberately narrow: an accent must occur between two letters.
+_DETACHED_ACUTE_RE = re.compile(
+    r"(?P<left>[^\W\d_])(?:(?:[ \t]+\u0301)|(?:[ \t]*[\u00b4\u02ca][ \t]*))(?P<right>[^\W\d_])"
+)
+
+_KNOWN_MOJIBAKE_CODEPOINTS = (
+    "\ufffd",
+    "\u951b",
+    "\u9428",
+    "\u7ecb",
+    "\u9225",
+    "\u9286",
+    "\u7039",
+    "\u6d93",
+    "\u6769",
+    "\u934f",
+    "\u7ed4",
+    "\u6d63",
+    "\u93c4",
+    "\u5bee",
+    "\u95c2",
+    "\u71b6",
+    "\u52ec",
+    "\u579a",
+    "\u70b2",
+    "\u53e7",
+)
+
+
+def _build_mojibake_detection_re() -> re.Pattern[str]:
+    generated = sorted(_MOJIBAKE_REPL, key=len, reverse=True)
+    literal_patterns = [re.escape(value) for value in (*generated, *_KNOWN_MOJIBAKE_CODEPOINTS)]
+    common_utf8_decode_patterns = [
+        # UTF-8 bytes decoded as Latin-1/cp1252, including names such as
+        # ``FranÃ§ois`` and stray non-breaking-space markers such as ``Â±``.
+        r"Ã[\x80-\u00bf]",
+        r"Â[\x80-\u00bf]",
+        # Broken punctuation/math sequences commonly start with UTF-8 E2.
+        # Requiring a non-ASCII follower avoids matching ordinary words with â.
+        r"â[\x80-\u00bf\u0100-\u017f\u02c0-\u02ff\u2000-\u206f]{1,3}",
+        r"ð\u0178[\x80-\u00bf\u0100-\u017f\u2000-\u206f]?",
+        r"ï¿½",
+        _DETACHED_ACUTE_RE.pattern,
+    ]
+    return re.compile("|".join([*literal_patterns, *common_utf8_decode_patterns]))
+
+
+_MOJIBAKE_DETECTION_RE = _build_mojibake_detection_re()
+
 # PDF font mapping sometimes substitutes Greek/math symbols with random CJK glyphs.
 # These are paper-dependent; keep to the ones we have observed repeatedly.
 _GARBLED_SYMBOL_REPL: dict[str, str] = {
@@ -88,10 +139,33 @@ def _fix_garbled_symbols(s: str) -> str:
     return s
 
 
+def _fix_detached_acute(s: str) -> str:
+    if not s:
+        return ""
+
+    def _reattach(match: re.Match[str]) -> str:
+        return f"{match.group('left')}{match.group('right')}\u0301"
+
+    return unicodedata.normalize("NFC", _DETACHED_ACUTE_RE.sub(_reattach, s))
+
+
+def count_mojibake(s: str) -> int:
+    """Count known mojibake sequences without double-counting overlaps."""
+    if not s:
+        return 0
+    return sum(1 for _ in _MOJIBAKE_DETECTION_RE.finditer(s))
+
+
+def contains_mojibake(s: str) -> bool:
+    """Return whether text contains a known mojibake sequence."""
+    return bool(s and _MOJIBAKE_DETECTION_RE.search(s))
+
+
 def _normalize_text(s: str) -> str:
     if not s:
         return ""
     s = unicodedata.normalize("NFKC", s)
+    s = _fix_detached_acute(s)
     for k, v in LIGATURES.items():
         s = s.replace(k, v)
     s = _fix_common_mojibake(s)
@@ -115,6 +189,7 @@ def _normalize_line_keep_indent(s: str) -> str:
     indent = " " * indent_len
     body = s.lstrip(" ")
     body = unicodedata.normalize("NFKC", body)
+    body = _fix_detached_acute(body)
     for k, v in LIGATURES.items():
         body = body.replace(k, v)
     body = _fix_common_mojibake(body)

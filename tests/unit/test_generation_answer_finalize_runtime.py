@@ -11,6 +11,18 @@ def test_origin_question_requests_upstream_citation_lookup() -> None:
     )
 
 
+def test_answer_source_request_does_not_request_upstream_citation_lookup() -> None:
+    assert not finalize_runtime._prompt_explicitly_requests_citation_lookup(
+        "这篇论文建模了哪些真实退化？请只根据本文用三点回答，并给出对应引用。"
+    )
+
+
+def test_english_answer_source_request_does_not_request_upstream_citation_lookup() -> None:
+    assert not finalize_runtime._prompt_explicitly_requests_citation_lookup(
+        "What degradations are modeled? Give corresponding citations for each claim."
+    )
+
+
 def test_answer_audit_doc_labels_become_user_facing_source_labels() -> None:
     out = finalize_runtime._replace_answer_audit_doc_labels(
         "来源核对：DOC-2 的正文与标题一致 [10002]。"
@@ -358,6 +370,61 @@ def test_finalize_fast_exact_reuses_support_without_full_text_rescan(monkeypatch
     assert system_a["citation_route"] == "system_a"
     assert system_a["block_id"] == "blk_admm"
     assert system_a["anchor_id"] == "p_admm"
+
+
+def test_finalize_fast_exact_honors_disabled_system_b_budget(monkeypatch):
+    support = {
+        "source_path": "paper.md",
+        "heading_path": "3. Degradation Model",
+        "block_id": "blk_model",
+        "anchor_id": "p_model",
+        "locate_anchor": "The observation includes blur and additive noise [4].",
+        "resolved_ref_num": 4,
+    }
+    seen: dict[str, object] = {}
+
+    def _validate(answer, **kwargs):
+        seen.update(kwargs)
+        return answer, {"kept": 0}
+
+    out = finalize_runtime._finalize_generation_answer(
+        "The model includes blur and noise [[CITE:s1234abcd:4]].",
+        prompt="Explain the degradation model with supporting citations.",
+        prompt_for_user="Explain the degradation model with supporting citations.",
+        answer_hits=[{"text": support["locate_anchor"], "meta": {"source_path": "paper.md"}}],
+        db_dir=Path("db"),
+        locked_citation_source={"sid": "s1234abcd", "source_path": "paper.md"},
+        answer_intent="reading",
+        answer_depth="L2",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=True,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="method",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="paper.md",
+        paper_guide_direct_source_path="paper.md",
+        paper_guide_bound_source_path="paper.md",
+        paper_guide_candidate_refs_by_source={"paper.md": [4]},
+        paper_guide_support_slots=[support],
+        paper_guide_evidence_cards=[],
+        paper_guide_precomputed_support_resolution=[support],
+        paper_guide_fast_exact=True,
+        paper_guide_contracts_seed={
+            "citation_plan": {
+                "intent": "evidence_lookup",
+                "budget": {"system_a": 1, "system_b": 0},
+            }
+        },
+        apply_paper_guide_answer_postprocess=lambda *_args, **_kwargs: pytest.fail(
+            "fast exact path must reuse precomputed support"
+        ),
+        maybe_append_library_figure_markdown=lambda answer, **_kwargs: answer,
+        validate_structured_citations=_validate,
+    )
+
+    assert "[[CITE:" not in out["answer"]
+    assert seen["paper_guide_candidate_refs_by_source"] == {}
+    assert out["answer_quality"]["citation_plan"]["budget"]["system_b"] == 0
 
 
 def test_finalize_generation_answer_passes_shared_primary_evidence_into_answer_contract(monkeypatch):

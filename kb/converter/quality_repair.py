@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -306,7 +307,7 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "safe": True,
         "action": "autofix",
         "scope": "markdown",
-        "strategies": ["normalize_page_markers", "postprocess_markdown"],
+        "strategies": ["realign_page_markers_from_pdf", "normalize_page_markers", "postprocess_markdown"],
     },
     "missing_captions": {
         "label": "Recover visible captions from alt text and figure metadata sidecars",
@@ -582,10 +583,32 @@ def write_conversion_quality_result(
         for code in list(repair.get("remaining_issue_codes") or _issue_codes_from_context(path, text, metrics, source_quality=source_quality))
         if str(code or "").strip()
     ]
-    repair_plan = plan_conversion_quality_repair(remaining, metrics=metrics)
-    recommended_action = str(repair_plan.get("action") or "review")
     md_stat = _current_markdown_stat(path)
     prev = load_conversion_quality_result(path)
+    exhausted_issue_codes = _persistent_source_autofix_codes(repair) if auto_repair_result is not None else set()
+    if auto_repair_result is None:
+        prev_stat_matches = (
+            int(prev.get("md_mtime_ns") or 0) == md_stat["mtime_ns"]
+            and int(prev.get("md_size") or 0) == md_stat["size"]
+        )
+        prev_auto_repair = prev.get("auto_repair") if isinstance(prev.get("auto_repair"), dict) else {}
+        if prev_stat_matches:
+            exhausted_issue_codes = {
+                str(code or "").strip().lower()
+                for code in list((prev_auto_repair or {}).get("exhausted_issue_codes") or [])
+                if str(code or "").strip().lower() in remaining
+            }
+    repair_plan = plan_conversion_quality_repair(remaining, metrics=metrics)
+    if exhausted_issue_codes:
+        repair_plan = _escalate_persistent_source_autofix(
+            repair_plan,
+            {
+                "issue_codes_before": sorted(exhausted_issue_codes),
+                "remaining_issue_codes": remaining,
+            },
+            source_available=bool(source_quality.get("source_pdf_available")),
+        )
+    recommended_action = str(repair_plan.get("action") or "review")
     prev_attempts = prev.get("repair_attempts") if isinstance(prev.get("repair_attempts"), list) else []
     prev_attempts = [item for item in prev_attempts if isinstance(item, dict)][-MAX_CONVERSION_REPAIR_ATTEMPTS:]
     latest_attempt = prev.get("latest_repair_attempt") if isinstance(prev.get("latest_repair_attempt"), dict) else (prev_attempts[-1] if prev_attempts else {})
@@ -601,9 +624,15 @@ def write_conversion_quality_result(
             "changed": bool(repair.get("changed")),
             "unsafe": bool(repair.get("unsafe")),
             "applied": [str(item) for item in list(repair.get("applied") or []) if str(item or "").strip()][:20],
+            "attempted_issue_codes": [
+                str(item)
+                for item in list(repair.get("attempted_issue_codes") or [])
+                if str(item or "").strip()
+            ][:30],
             "issue_codes_before": [str(item) for item in list(repair.get("issue_codes_before") or []) if str(item or "").strip()][:30],
             "issue_codes_after": [str(item) for item in list(repair.get("issue_codes_after") or []) if str(item or "").strip()][:30],
             "remaining_issue_codes": remaining[:30],
+            "exhausted_issue_codes": sorted(exhausted_issue_codes)[:30],
             "regression_reasons": [str(item) for item in list(repair.get("regression_reasons") or []) if str(item or "").strip()][:20],
         },
         "repair_plan": repair_plan,
@@ -616,6 +645,106 @@ def write_conversion_quality_result(
     }
     report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return payload
+
+
+_PERSISTENT_SOURCE_AUTOFIX_ISSUES = {
+    "page_marker_gaps",
+    "source_page_marker_alignment",
+}
+
+
+def _persistent_source_autofix_codes(repair_result: Mapping[str, Any]) -> set[str]:
+    attempted = {
+        str(code or "").strip().lower()
+        for code in list(repair_result.get("attempted_issue_codes") or repair_result.get("issue_codes_before") or [])
+        if str(code or "").strip()
+    }
+    remaining = {
+        str(code or "").strip().lower()
+        for code in list(repair_result.get("remaining_issue_codes") or [])
+        if str(code or "").strip()
+    }
+    return attempted & remaining & _PERSISTENT_SOURCE_AUTOFIX_ISSUES
+
+
+def _escalate_persistent_source_autofix(
+    repair_plan: dict[str, Any],
+    repair_result: Mapping[str, Any],
+    *,
+    source_available: bool,
+) -> dict[str, Any]:
+    """Stop offering a deterministic repair when the same source issue survives it."""
+    persistent = _persistent_source_autofix_codes(repair_result)
+    if not persistent:
+        return repair_plan
+
+    plan = dict(repair_plan)
+    issue_actions: list[dict[str, Any]] = []
+    for raw in list(plan.get("issue_actions") or []):
+        row = dict(raw) if isinstance(raw, Mapping) else {}
+        code = str(row.get("code") or "").strip().lower()
+        if code in persistent:
+            row.update(
+                {
+                    "action": "reconvert",
+                    "safe": False,
+                    "scope": "document",
+                    "reason": "Page anchors remain inconsistent after deterministic Markdown repair.",
+                    "speed_mode": "normal",
+                    "strategies": ["source_reconversion"],
+                }
+            )
+        issue_actions.append(row)
+
+    autofix_codes = [
+        str(code)
+        for code in list(plan.get("autofix_issue_codes") or [])
+        if str(code).strip().lower() not in persistent
+    ]
+    if source_available:
+        plan.update(
+            {
+                "action": "reconvert",
+                "scope": "document",
+                "speed_mode": "normal",
+                "no_llm": False,
+                "replace": True,
+                "md_autofix_first": bool(autofix_codes),
+                "reason": "Page anchors remain inconsistent after deterministic repair; rerun source conversion.",
+                "reconvert_issue_codes": sorted(persistent),
+                "autofix_issue_codes": autofix_codes,
+                "issue_actions": issue_actions,
+            }
+        )
+    else:
+        for row in issue_actions:
+            if str(row.get("code") or "").strip().lower() in persistent:
+                row.update(
+                    {
+                        "action": "review",
+                        "scope": "manual",
+                        "speed_mode": "",
+                        "reason": "Page anchors remain inconsistent, but the source PDF is unavailable.",
+                        "strategies": [],
+                    }
+                )
+        review_codes = list(plan.get("review_issue_codes") or []) + sorted(persistent)
+        plan.update(
+            {
+                "action": "review",
+                "scope": "manual",
+                "speed_mode": "",
+                "no_llm": False,
+                "replace": False,
+                "md_autofix_first": bool(autofix_codes),
+                "reason": "Page anchors need review because the source PDF is unavailable.",
+                "reconvert_issue_codes": [],
+                "autofix_issue_codes": autofix_codes,
+                "review_issue_codes": list(dict.fromkeys(str(code) for code in review_codes)),
+                "issue_actions": issue_actions,
+            }
+        )
+    return plan
 
 
 def _metric_view(md_path: Path, text: str) -> dict[str, Any]:
@@ -790,35 +919,18 @@ def _normalize_page_marker_sequence(md: str) -> tuple[str, bool]:
     matches = list(PAGE_MARKER_RE.finditer(text))
     if len(matches) <= 1:
         return text, False
-    pages: list[int] = []
-    for match in matches:
-        try:
-            pages.append(int(match.group(1)))
-        except Exception:
-            pages.append(0)
-    has_duplicate = len(set(pages)) != len(pages)
-    has_backward = any(cur <= prev for prev, cur in zip(pages, pages[1:]))
-    if not has_duplicate and not has_backward:
+    removable_spans: list[tuple[int, int]] = []
+    for previous, current in zip(matches, matches[1:]):
+        if int(previous.group(1)) != int(current.group(1)):
+            continue
+        if text[int(previous.end()) : int(current.start())].strip():
+            continue
+        removable_spans.append((int(current.start()), int(current.end())))
+    if not removable_spans:
         return text, False
-
-    next_pages: list[int] = []
-    previous = 0
-    for raw in pages:
-        current = int(raw or 0)
-        if current <= previous:
-            current = previous + 1
-        next_pages.append(current)
-        previous = current
-
-    idx = 0
-
-    def repl(_match: re.Match[str]) -> str:
-        nonlocal idx
-        page_no = next_pages[idx]
-        idx += 1
-        return f"<!-- kb_page: {page_no} -->"
-
-    fixed = PAGE_MARKER_RE.sub(repl, text)
+    fixed = text
+    for start, end in reversed(removable_spans):
+        fixed = fixed[:start] + fixed[end:]
     return fixed, fixed != text
 
 
@@ -2405,6 +2517,27 @@ def _page_marker_insert_offset(md_text: str, offset: int) -> int:
     return int(pos)
 
 
+def _is_existing_converter_page_asset(md_path: Path, raw_target: str) -> bool:
+    target = unquote(str(raw_target or "").strip())
+    if target.startswith("<") and ">" in target:
+        target = target[1 : target.index(">")].strip()
+    else:
+        target = re.split(r"\s+[\"']", target, maxsplit=1)[0].strip()
+    target = target.split("#", 1)[0].split("?", 1)[0].strip()
+    if not target or re.match(r"^(?:[a-z][a-z0-9+.-]*:|//)", target, flags=re.IGNORECASE):
+        return False
+    relative = Path(target)
+    if relative.is_absolute():
+        return False
+    try:
+        candidate = (md_path.parent / relative).resolve()
+        assets_root = (md_path.parent / "assets").resolve()
+        candidate.relative_to(assets_root)
+        return candidate.is_file()
+    except Exception:
+        return False
+
+
 def _realign_page_markers_from_pdf_text(md_text: str, md_path: Path, source_pdf_path: Path | str | None = None) -> tuple[str, bool]:
     text = str(md_text or "")
     if not PAGE_MARKER_RE.search(text):
@@ -2431,6 +2564,22 @@ def _realign_page_markers_from_pdf_text(md_text: str, md_path: Path, source_pdf_
         required = max(2, int((pdf_page_count - 1) * 0.45))
         if matched_later < required:
             return text, False
+
+    # Text alignment cannot place an image-only page. Converter-owned asset names
+    # retain the physical PDF page number, so use the first page asset as a safe
+    # anchor for otherwise unmatched pages.
+    if pdf_page_count > 0:
+        asset_pattern = re.compile(
+            r"(?im)^.*?!\[[^\]]*]\(([^\n)]*?page[_-](\d{1,5})[_-][^\n)]*)\).*$"
+        )
+        for match in asset_pattern.finditer(markerless):
+            page_no = int(match.group(2))
+            if (
+                1 <= page_no <= pdf_page_count
+                and page_no not in offsets
+                and _is_existing_converter_page_asset(md_path, match.group(1))
+            ):
+                offsets[page_no] = _line_start_for_offset(markerless, int(match.start()))
 
     cleaned_offsets: dict[int, int] = {}
     last_offset = -1
@@ -2971,9 +3120,9 @@ def _post_reference_body_heading_line(line: str) -> bool:
         return False
     st = re.sub(r"^#{1,6}\s+", "", st).strip()
     return bool(
-        re.match(
-            r"^(?:\d+(?:\.\d+)*\.?\s+)?(?:conclusions?|method(?:s|ology)?|discussion|"
-            r"funding|acknowledg(?:e)?ments?)\b",
+        re.fullmatch(
+            r"(?:\d+(?:\.\d+)*\.?\s+)?(?:conclusions?|method(?:s|ology)?|discussion|"
+            r"funding|acknowledg(?:e)?ments?)\s*[:.]?",
             st,
             re.IGNORECASE,
         )
@@ -3149,6 +3298,7 @@ def repair_markdown_text(
     ):
         regression_reasons = []
     safe_to_use = changed_text and not regression_reasons
+    attempted_applied = list(applied)
     final_applied = list(applied)
 
     if changed_text and regression_reasons:
@@ -3205,6 +3355,9 @@ def repair_markdown_text(
                 safe_to_use = True
 
     final_text = text if safe_to_use or not changed_text else before_text
+    rolled_back = bool(final_text == before_text and attempted_applied and changed_text and regression_reasons)
+    if rolled_back:
+        final_applied = []
 
     return {
         "ok": bool(safe_to_use or not changed_text),
@@ -3213,6 +3366,9 @@ def repair_markdown_text(
         "path": str(path),
         "backup_path": "",
         "applied": final_applied,
+        "attempted_applied": attempted_applied,
+        "rolled_back": rolled_back,
+        "attempted_issue_codes": active_codes,
         "issue_codes_before": before_issue_codes,
         "issue_codes_after": after_issue_codes if safe_to_use or not changed_text else before_issue_codes,
         "remaining_issue_codes": after_issue_codes if safe_to_use or not changed_text else before_issue_codes,

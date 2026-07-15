@@ -258,7 +258,7 @@ def test_plan_conversion_quality_repair_keeps_safe_issues_local():
     assert plan["replace"] is False
 
 
-def test_repair_markdown_text_normalizes_duplicate_or_out_of_order_page_markers(tmp_path: Path):
+def test_repair_markdown_text_does_not_invent_numbers_for_duplicate_or_out_of_order_page_markers(tmp_path: Path):
     md_path = tmp_path / "paper.en.md"
     original = "\n".join(
         [
@@ -278,12 +278,261 @@ def test_repair_markdown_text_normalizes_duplicate_or_out_of_order_page_markers(
 
     result = repair_markdown_text(md_path, original, issue_codes=["page_marker_gaps"])
 
-    assert result["changed"] is True
-    assert "normalize_page_markers" in result["applied"]
-    assert "<!-- kb_page: 6 -->" in result["repaired_text"]
-    assert "<!-- kb_page: 7 -->" in result["repaired_text"]
+    assert "normalize_page_markers" not in result["applied"]
+    assert "<!-- kb_page: 6 -->" not in result["repaired_text"]
+    assert "<!-- kb_page: 7 -->" not in result["repaired_text"]
+    assert result["repaired_text"].count("<!-- kb_page: 4 -->") == 2
     after = summarize_conversion_quality(md_path, result["repaired_text"])
-    assert after.page_marker_gap_count == 0
+    assert after.page_marker_gap_count > 0
+
+
+def test_repair_markdown_text_clears_applied_metadata_when_regression_rolls_back(tmp_path: Path, monkeypatch):
+    md_path = tmp_path / "rollback.en.md"
+    original = "# Demo\n\nBody text.\n"
+    md_path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(
+        "kb.converter.quality_repair._regression_reasons",
+        lambda before, after: ["forced_regression"] if before != after else [],
+    )
+
+    result = repair_markdown_text(md_path, original, issue_codes=["missing_page_markers"])
+
+    assert result["changed"] is False
+    assert result["unsafe"] is True
+    assert result["rolled_back"] is True
+    assert result["applied"] == []
+    assert "ensure_page_anchor" in result["attempted_applied"]
+    assert result["repaired_text"] == original
+
+
+def test_repair_markdown_text_removes_only_adjacent_empty_duplicate_page_marker(tmp_path: Path):
+    md_path = tmp_path / "paper.en.md"
+    original = "<!-- kb_page: 1 -->\n\n<!-- kb_page: 1 -->\n\n# Demo\n"
+
+    result = repair_markdown_text(md_path, original, issue_codes=["page_marker_gaps"])
+
+    assert result["repaired_text"].count("<!-- kb_page: 1 -->") == 1
+    assert "normalize_page_markers" in result["applied"]
+
+
+def test_repair_markdown_text_uses_page_asset_to_restore_image_only_source_anchor(tmp_path: Path, monkeypatch):
+    import fitz
+
+    pdf_path = tmp_path / "paper.pdf"
+    doc = fitz.open()
+    for page_no in range(1, 5):
+        page = doc.new_page()
+        page.insert_text((72, 72), f"Source page {page_no} with stable alignment text.")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "page_3_fig_1.png").write_bytes(b"png")
+    md_path = tmp_path / "paper.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Demo Paper",
+            "## Abstract",
+            "First page text.",
+            "<!-- kb_page: 2 -->",
+            "Second page text.",
+            "![Figure 1](./assets/page_3_fig_1.png)",
+            "**Figure 1.** Image-only page.",
+            "<!-- kb_page: 4 -->",
+            "## References",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            "<!-- kb_page: 4 -->",
+            "Repeated footer text.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    def fake_offsets(text, _pdf_path, *, snap_to_line_start=True):
+        return {
+            1: 0,
+            2: text.index("Second page text."),
+            4: text.index("## References"),
+        }
+
+    monkeypatch.setattr("kb.converter.quality_repair._page_marker_offsets_from_pdf_text", fake_offsets)
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["page_marker_gaps"],
+        source_pdf_path=pdf_path,
+    )
+    markers = [
+        int(match.group(1))
+        for match in re.finditer(r"<!--\s*kb_page:\s*(\d+)\s*-->", result["repaired_text"])
+    ]
+
+    assert result["changed"] is True
+    assert "realign_page_markers_from_pdf" in result["applied"]
+    assert markers == [1, 2, 3, 4]
+    assert "page_marker_gaps" not in result["remaining_issue_codes"]
+
+
+def test_repair_markdown_text_does_not_trust_missing_page_asset(tmp_path: Path, monkeypatch):
+    import fitz
+
+    pdf_path = tmp_path / "paper.pdf"
+    doc = fitz.open()
+    for page_no in range(1, 5):
+        page = doc.new_page()
+        page.insert_text((72, 72), f"Source page {page_no} with stable alignment text.")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "paper.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Demo Paper",
+            "First page text.",
+            "<!-- kb_page: 2 -->",
+            "Second page text.",
+            "![Figure 1](./assets/page_3_fig_1.png)",
+            "<!-- kb_page: 4 -->",
+            "## References",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+
+    def fake_offsets(text, _pdf_path, *, snap_to_line_start=True):
+        return {
+            1: 0,
+            2: text.index("Second page text."),
+            4: text.index("## References"),
+        }
+
+    monkeypatch.setattr("kb.converter.quality_repair._page_marker_offsets_from_pdf_text", fake_offsets)
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["page_marker_gaps"],
+        source_pdf_path=pdf_path,
+    )
+    markers = [
+        int(match.group(1))
+        for match in re.finditer(r"<!--\s*kb_page:\s*(\d+)\s*-->", result["repaired_text"])
+    ]
+
+    assert 3 not in markers
+    assert "missing_images" in result["remaining_issue_codes"]
+
+
+def test_quality_result_escalates_page_marker_gap_when_safe_repair_cannot_change_it(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "kb.converter.quality_repair._source_quality_view",
+        lambda *args, **kwargs: {"document_type": "research_article", "source_pdf_available": True},
+    )
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Demo Paper",
+                "## Abstract",
+                "Body text on the first page.",
+                "<!-- kb_page: 3 -->",
+                "More body text after a missing source page anchor.",
+                "<!-- kb_page: 3 -->",
+                "A second non-empty block incorrectly reuses the same page anchor.",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    repair_result = repair_markdown_quality(md_path, issue_codes=["page_marker_gaps"])
+
+    assert "page_marker_gaps" in repair_result["remaining_issue_codes"]
+
+    payload = write_conversion_quality_result(md_path, auto_repair_result=repair_result)
+
+    assert payload["recommended_action"] == "reconvert"
+    assert payload["needs_reconvert"] is True
+    assert payload["repair_plan"]["reconvert_issue_codes"] == ["page_marker_gaps"]
+    assert "page_marker_gaps" not in payload["repair_plan"]["autofix_issue_codes"]
+
+    refreshed = write_conversion_quality_result(md_path)
+
+    assert refreshed["recommended_action"] == "reconvert"
+    assert refreshed["auto_repair"]["exhausted_issue_codes"] == ["page_marker_gaps"]
+
+
+def test_quality_result_escalates_persistent_source_page_alignment(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "kb.converter.quality_repair._source_quality_view",
+        lambda *args, **kwargs: {"document_type": "research_article", "source_pdf_available": True},
+    )
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text("<!-- kb_page: 1 -->\n# Demo\nBody text.\n", encoding="utf-8")
+
+    payload = write_conversion_quality_result(
+        md_path,
+        auto_repair_result={
+            "attempted_issue_codes": ["source_page_marker_alignment"],
+            "issue_codes_before": ["source_page_marker_alignment"],
+            "remaining_issue_codes": ["source_page_marker_alignment"],
+        },
+    )
+
+    assert payload["recommended_action"] == "reconvert"
+    assert payload["repair_plan"]["reconvert_issue_codes"] == ["source_page_marker_alignment"]
+
+
+def test_quality_result_does_not_escalate_unattempted_page_marker_gap(tmp_path: Path):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Demo Paper",
+                "Body text without an abstract heading.",
+                "<!-- kb_page: 3 -->",
+                "More body text.",
+                "<!-- kb_page: 3 -->",
+                "A second non-empty block reuses the page anchor.",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    repair_result = repair_markdown_quality(md_path, issue_codes=["missing_abstract"])
+
+    assert repair_result["attempted_issue_codes"] == ["missing_abstract"]
+    assert "page_marker_gaps" in repair_result["remaining_issue_codes"]
+
+    payload = write_conversion_quality_result(md_path, auto_repair_result=repair_result)
+
+    assert payload["recommended_action"] == "autofix"
+    assert payload["auto_repair"]["exhausted_issue_codes"] == []
+
+
+def test_quality_result_requires_review_when_exhausted_source_issue_has_no_pdf(tmp_path: Path):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text(
+        "<!-- kb_page: 1 -->\n# Demo\n<!-- kb_page: 1 -->\nNon-empty duplicate block.\n",
+        encoding="utf-8",
+    )
+    payload = write_conversion_quality_result(
+        md_path,
+        auto_repair_result={
+            "attempted_issue_codes": ["page_marker_gaps"],
+            "issue_codes_before": ["page_marker_gaps"],
+            "remaining_issue_codes": ["page_marker_gaps"],
+        },
+    )
+
+    assert payload["recommended_action"] == "review"
+    assert payload["needs_reconvert"] is False
+    assert payload["repair_plan"]["review_issue_codes"] == ["page_marker_gaps"]
 
 
 def test_repair_markdown_text_uses_table_only_fallback_for_analyzer_errors(tmp_path: Path):
