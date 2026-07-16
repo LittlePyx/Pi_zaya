@@ -46,6 +46,64 @@ def test_quality_repair_plan_uses_fresh_report_escalation():
     assert plan["reconvert_issue_codes"] == ["page_marker_gaps"]
 
 
+def test_library_quality_fallback_detects_new_table_rules_in_legacy_report(tmp_path: Path):
+    from api.routers import library as library_router
+    from kb.converter.quality_repair import conversion_quality_result_path, write_conversion_quality_result
+
+    md_path = tmp_path / "legacy-table.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Legacy Table Paper",
+                "## Abstract",
+                "This paper compares restoration methods.",
+                "## Results",
+                "| Method | PSNR | SSIM |",
+                "| --- | --- | --- |",
+                "| BM3D | 20.1 | 0.71 |",
+                "| SwinIR | 23.2 | 0.82 |",
+                "| NAFNet | 24.8 | 0.86 |",
+                "",
+                "| Method | PSNR | SSIM |",
+                "| --- | --- | --- |",
+                "| BM3D | 20.1 | 0.71 |",
+                "| SwinIR | 23.2 | 0.82 |",
+                "| NAFNet | 24.8 | 0.86 |",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    legacy = write_conversion_quality_result(md_path)
+    legacy.pop("quality_rules_version", None)
+    legacy["repair_plan"] = {
+        "action": "none",
+        "issue_codes": [],
+        "autofix_issue_codes": [],
+        "reconvert_issue_codes": [],
+        "review_issue_codes": [],
+    }
+    legacy["recommended_action"] = "none"
+    legacy["auto_repair"]["remaining_issue_codes"] = []
+    conversion_quality_result_path(md_path).write_text(json.dumps(legacy), encoding="utf-8")
+    library_router._CONVERSION_QUALITY_CACHE.clear()
+
+    summary = library_router._conversion_quality_summary(md_path)
+    plan = library_router._quality_repair_plan_from_summary(summary)
+
+    assert summary["conversion_report"]["stale"] is True
+    assert summary["conversion_report"]["repair_plan"] == {}
+    assert summary["conversion_report"]["quality_center"] == {}
+    assert summary["conversion_report"]["recommended_action"] == ""
+    assert summary["status"] == "warning"
+    assert "duplicate_table_representations" in {
+        str(issue.get("code") or "") for issue in summary["issues"]
+    }
+    assert plan["action"] == "autofix"
+
+
 def test_quality_repair_route_honors_fresh_persisted_reconvert_plan(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 

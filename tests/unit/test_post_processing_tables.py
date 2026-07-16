@@ -118,3 +118,139 @@ def test_postprocess_markdown_keeps_nearby_tables_with_different_values():
     assert out.count("Airplants") == 2
     assert "22.85" in out
     assert "23.72" in out
+
+
+def test_postprocess_markdown_keeps_ambiguous_break_rows_unmodified():
+    src = "\n".join(
+        [
+            "| Method | PSNR | SSIM |",
+            "| --- | --- | --- |",
+            "| A<br>B<br>C | 30.1<br>31.2 | .91<br>.92<br>.93 |",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "A<br>B<br>C" in out
+    assert "30.1<br>31.2" in out
+    assert "A · B · C" not in out
+
+
+def test_postprocess_markdown_flattens_non_numeric_multiline_cells():
+    src = "\n".join(
+        [
+            "| Method | Notes | PSNR |",
+            "| --- | --- | --- |",
+            "| NAFNet<br>(ours) | high quality<br>low noise<br>fast inference | 40.30 |",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "<br>" not in out
+    assert "NAFNet · (ours)" in out
+    assert "high quality · low noise · fast inference" in out
+    assert "40.30" in out
+
+
+def test_postprocess_markdown_keeps_legitimate_wide_tables():
+    tables = [
+        [
+            "| Method | PSNR | SSIM | Dice | IoU | EPE | WER | SAM |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            *[f"| M{i} | {39 + i} | .9{i} | .8{i} | .7{i} | .6{i} | .5{i} | .4{i} |" for i in range(4)],
+        ],
+        [
+            "| Method | Setting | 5 | 10 | 25 | 50 | 100 | 200 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            *[f"| N{i} | base | {39 + i} | .9{i} | {25 + i} | {50 + i} | {100 + i} | {200 + i} |" for i in range(4)],
+        ],
+        [
+            "| Method | PSNR | SSIM | Size | Depth | Batch | Epoch | Time |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            *[f"| P{i} | {39 + i} | .9{i} | 256 | 8 | 16 | 100 | {20 + i} |" for i in range(4)],
+        ],
+    ]
+    src = "\n\n".join("\n".join(table) for table in tables)
+
+    out = postprocess_markdown(src)
+
+    assert out.count("| Method |") == 3
+    assert "| M3 | 42 | .93 |" in out
+    assert "| N3 | base | 42 | .93 |" in out
+    assert "| P3 | 42 | .93 |" in out
+
+
+def test_postprocess_markdown_keeps_fragmented_table_with_unique_numbers():
+    src = "\n".join(
+        [
+            "| Model | blocks | SIDD PSNR SSIM | GoPro PSNR SSIM | Latency-256 | Latency-720 |",
+            "| --- | --- | --- | --- | --- | --- |",
+            "| NAFNet | 9 | 39.78 0.959 | 31.79 0.951 | 11.8 | 154.7 |",
+            "| NAFNet | 18 | 39.90 0.960 | 32.64 0.951 | 19.9 | 151.7 |",
+            "| NAFNet | 36 | 39.96 0.960 | 32.85 0.959 | 39.1 | 177.1 |",
+            "| NAFNet | 72 | 39.95 0.960 | 32.88 0.961 | 73.8 | 230.1 |",
+            "",
+            "| sigma | SIDD PSNR SSIM | GoPro PSNR SSIM |",
+            "| --- | --- | --- |",
+            "| Identity | 39.96 0.960 | 32.85 0.960 |",
+            "| ReLU | 39.98 0.960 | 32.59 0.958 |",
+            "| GELU | 39.97 0.960 | 32.72 0.959 |",
+            "| Sigmoid | 39.99 0.960 | 32.50 0.958 |",
+            "",
+            "| Model | blocks | SIDD PSNR SSIM P | GoPro SNR SSIM | ate | ncy- | metric | Latenc |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| WideA | 9 | 39 | .96 | 31.79 | 0.951 | 101 | 201 |",
+            "| WideB | 18 | 39 | .96 | 32.64 | 0.951 | 202 | 302 |",
+            "| WideC | 36 | 39 | .96 | 32.85 | 0.959 | 303 | 403 |",
+            "| WideD | 72 | 39 | .96 | 32.88 | 0.961 | 304 | 406 |",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "ncy-" in out
+    assert "WideD" in out
+    assert "406" in out
+
+
+def test_postprocess_markdown_drops_fragmented_aggregate_duplicate():
+    src = "\n".join(
+        [
+            "| Model | blocks | SIDD PSNR SSIM | GoPro PSNR SSIM | Latency-256 | Latency-720 |",
+            "| --- | --- | --- | --- | --- | --- |",
+            "| NAFNet | 9 | 39.78 0.959 | 31.79 0.951 | 11.8 | 154.7 |",
+            "|  | 18 | 39.90 0.960 | 32.64 0.951 | 19.9 | 151.7 |",
+            "|  | 36 | 39.96 0.960 | 32.85 0.959 | 39.1 | 177.1 |",
+            "|  | 72 | 39.95 0.960 | 32.88 0.961 | 73.8 | 230.1 |",
+            "",
+            "| sigma | SIDD PSNR SSIM | GoPro PSNR SSIM |",
+            "| --- | --- | --- |",
+            "| Identity (ours) | 39.96 0.960 | 32.85 0.960 |",
+            "| ReLU | 39.98 0.960 | 32.59 0.958 |",
+            "| GELU | 39.97 0.960 | 32.72 0.959 |",
+            "| Sigmoid | 39.99 0.960 | 32.50 0.958 |",
+            "| SiLU | 39.96 0.960 | 32.74 0.960 |",
+            "",
+            "|  | blocks | SIDD PSNR SSIM P | GoPro L SNR SSIM | ate | ncy- | 25 | 6 | Latenc |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "|  | 9 | 39.78 0.959 | 31.79 0.951 |  | 11.8 |  |  | 154 |",
+            "|  | 18 | 39.90 0.960 | 32.64 0.951 |  | 19.9 |  |  | 151 |",
+            "|  | 36 | 39.96 0.960 | 32.85 0.959 |  | 39.1 |  |  | 177 |",
+            "|  | 72 | 39.95 0.960 | 32.88 0.961 |  | 73.8 |  |  | 230 |",
+            "|  | variants |  | Table 5 variants | of | sigma in | Si | mpl | eGate |",
+            "| patches | TLC |  | sigma | PS | SIDD NR S | SI | M | GoPro PSNR |",
+            "| NAFNet | 3 3 3 |  |  |  |  |  |  |  |",
+            "|  |  |  | Identity | 39 | .96 0 | .9 | 60 | 32.85 |",
+            "|  |  |  | ReLU | 39 | .98 0 | .9 | 60 | 32.59 |",
+            "|  |  |  | GELU | 39 | .97 0 | .9 | 60 | 32.72 |",
+            "|  |  |  | Sigmoid | 39 | .99 0 | .9 | 60 | 32.50 |",
+            "|  |  |  | SiLU | 39 | .96 0 | .9 | 60 | 32.74 |",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "| ate | ncy- | 25 | 6 | Latenc |" not in out
+    assert out.count("Identity (ours)") == 1
+    assert "| NAFNet | 9 | 39.78 0.959 | 31.79 0.951 | 11.8 | 154.7 |" in out

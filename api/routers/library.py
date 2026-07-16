@@ -59,8 +59,10 @@ from kb.file_ops import (
 )
 from kb.converter.quality_acceptance import summarize_conversion_quality
 from kb.converter.quality_repair import (
+    CONVERSION_QUALITY_RULES_VERSION,
     append_conversion_repair_attempt,
     conversion_quality_result_path,
+    conversion_quality_report_is_stale,
     conversion_repair_strategy_for_issue,
     load_conversion_quality_result,
     plan_conversion_quality_repair,
@@ -98,7 +100,7 @@ from kb.user_issue_store import record_library_quality_issues
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 _RENAME_SUGGEST_CACHE: dict[str, dict] = {}
-_CONVERSION_QUALITY_CACHE: dict[str, tuple[int, int, int, int, dict]] = {}
+_CONVERSION_QUALITY_CACHE: dict[str, tuple[int, int, int, int, int, dict]] = {}
 _RESEARCH_QA_EVAL_ROOT = Path("test_results") / "research_qa_eval"
 _QUALITY_REPAIR_RUN_LOCK = threading.RLock()
 _QUALITY_REPAIR_ADVANCE_IN_FLIGHT: set[str] = set()
@@ -352,15 +354,9 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
     repair_attempts = [item for item in list(report.get("repair_attempts") or []) if isinstance(item, dict)]
     latest_attempt = report.get("latest_repair_attempt") if isinstance(report.get("latest_repair_attempt"), dict) else (repair_attempts[-1] if repair_attempts else {})
     source_quality = report.get("source_quality") if isinstance(report.get("source_quality"), dict) else {}
-    center_summary = quality_center_summary(report)
-    try:
-        stat = md_path.stat()
-        stale = (
-            int(report.get("md_mtime_ns") or 0) != int(stat.st_mtime_ns)
-            or int(report.get("md_size") or 0) != int(stat.st_size)
-        )
-    except Exception:
-        stale = True
+    stale = conversion_quality_report_is_stale(md_path, report)
+    center_summary = {} if stale else quality_center_summary(report)
+    repair_plan = {} if stale else (report.get("repair_plan") if isinstance(report.get("repair_plan"), dict) else {})
     return {
         "available": True,
         "stale": bool(stale),
@@ -373,12 +369,12 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
         "issue_codes_before": [str(item) for item in list(repair.get("issue_codes_before") or []) if str(item or "").strip()][:30],
         "remaining_issue_codes": [str(item) for item in list(repair.get("remaining_issue_codes") or []) if str(item or "").strip()][:30],
         "regression_reasons": [str(item) for item in list(repair.get("regression_reasons") or []) if str(item or "").strip()][:20],
-        "repair_plan": report.get("repair_plan") if isinstance(report.get("repair_plan"), dict) else {},
+        "repair_plan": repair_plan,
         "repair_attempt_count": len(repair_attempts),
         "latest_repair_attempt": latest_attempt,
         "repair_attempts": repair_attempts[-5:],
-        "recommended_action": str(report.get("recommended_action") or ""),
-        "needs_reconvert": bool(report.get("needs_reconvert")),
+        "recommended_action": "" if stale else str(report.get("recommended_action") or ""),
+        "needs_reconvert": False if stale else bool(report.get("needs_reconvert")),
         "source_quality": source_quality,
         "quality_center": center_summary,
         "source_quality_status": str(center_summary.get("status") or ""),
@@ -408,13 +404,14 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
         cached = _CONVERSION_QUALITY_CACHE.get(cache_key)
         if (
             cached
-            and len(cached) >= 5
+            and len(cached) >= 6
             and cached[0] == int(stat.st_mtime_ns)
             and cached[1] == int(stat.st_size)
             and cached[2] == report_mtime_ns
             and cached[3] == report_size
+            and cached[4] == CONVERSION_QUALITY_RULES_VERSION
         ):
-            return dict(cached[4])
+            return dict(cached[5])
 
         metrics = summarize_conversion_quality(path)
         report_payload = load_conversion_quality_result(path)
@@ -445,6 +442,12 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
             "missing_images": int(metrics.missing_image_count),
             "captions": int(metrics.caption_count),
             "tables": int(metrics.table_block_count),
+            "table_literal_breaks": int(metrics.table_literal_break_count),
+            "collapsed_table_rows": int(metrics.collapsed_table_row_count),
+            "ambiguous_table_break_rows": int(metrics.ambiguous_table_break_row_count),
+            "duplicate_tables": int(metrics.duplicate_table_count),
+            "fragmented_table_columns": int(metrics.fragmented_table_column_count),
+            "fragmented_table_duplicates": int(metrics.fragmented_table_duplicate_count),
             "display_math": int(metrics.display_math_block_count),
             "inline_math": int(metrics.inline_math_count),
             "unclosed_display_math": int(metrics.unclosed_display_math_block_count),
@@ -487,6 +490,17 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
                 return int(metrics.analyzer_warning_count)
             if code == "heading_level_jumps":
                 return int(metrics.heading_level_jump_count)
+            if code == "collapsed_table_rows":
+                return int(metrics.table_literal_break_count) + int(metrics.collapsed_table_row_count)
+            if code == "ambiguous_table_break_rows":
+                return int(metrics.ambiguous_table_break_row_count)
+            if code == "duplicate_table_representations":
+                return int(metrics.duplicate_table_count) + int(metrics.fragmented_table_duplicate_count)
+            if code == "fragmented_table_columns":
+                return max(
+                    0,
+                    int(metrics.fragmented_table_column_count) - int(metrics.fragmented_table_duplicate_count),
+                )
             return 1
 
         def issue_label_for_code(code: str) -> str:
@@ -532,6 +546,40 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
                 add_issue("analyzer_warnings", "Markdown analyzer warnings", count=metrics.analyzer_warning_count, penalty=3)
             if metrics.heading_level_jump_count > 0:
                 add_issue("heading_level_jumps", "Heading level jumps", count=metrics.heading_level_jump_count, penalty=4)
+            if metrics.collapsed_table_row_count > 0 or (
+                metrics.table_literal_break_count > 0 and metrics.ambiguous_table_break_row_count <= 0
+            ):
+                add_issue(
+                    "collapsed_table_rows",
+                    issue_label_for_code("collapsed_table_rows"),
+                    count=metrics.table_literal_break_count + metrics.collapsed_table_row_count,
+                    penalty=6,
+                )
+            if metrics.ambiguous_table_break_row_count > 0:
+                add_issue(
+                    "ambiguous_table_break_rows",
+                    issue_label_for_code("ambiguous_table_break_rows"),
+                    count=metrics.ambiguous_table_break_row_count,
+                    penalty=10,
+                )
+            if metrics.duplicate_table_count > 0 or metrics.fragmented_table_duplicate_count > 0:
+                add_issue(
+                    "duplicate_table_representations",
+                    issue_label_for_code("duplicate_table_representations"),
+                    count=metrics.duplicate_table_count + metrics.fragmented_table_duplicate_count,
+                    penalty=6,
+                )
+            unresolved_fragmented_tables = max(
+                0,
+                metrics.fragmented_table_column_count - metrics.fragmented_table_duplicate_count,
+            )
+            if unresolved_fragmented_tables > 0:
+                add_issue(
+                    "fragmented_table_columns",
+                    issue_label_for_code("fragmented_table_columns"),
+                    count=unresolved_fragmented_tables,
+                    penalty=10,
+                )
 
         hard_issue = any(str(item.get("severity") or "") == "error" for item in issues)
         status = "error" if hard_issue else ("warning" if issues else "good")
@@ -561,6 +609,7 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
             int(stat.st_size),
             report_mtime_ns,
             report_size,
+            CONVERSION_QUALITY_RULES_VERSION,
             dict(result),
         )
         return result

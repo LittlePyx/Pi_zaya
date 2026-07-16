@@ -327,11 +327,13 @@ def repair_quality_targets(
             report = write_conversion_quality_result(md_path, source_pdf_path=source_pdf)
             plan = report.get("repair_plan") if isinstance(report.get("repair_plan"), Mapping) else {}
             action = str((plan or {}).get("action") or report.get("recommended_action") or "").strip().lower()
-            if action == "autofix":
-                issue_codes = _clean_strings(list((plan or {}).get("issue_codes") or []))
+            autofix_issue_codes = _clean_strings(list((plan or {}).get("autofix_issue_codes") or []))
+            if action == "autofix" and not autofix_issue_codes:
+                autofix_issue_codes = _clean_strings(list((plan or {}).get("issue_codes") or []))
+            if autofix_issue_codes:
                 repair_result = repair_markdown_quality(
                     md_path,
-                    issue_codes=issue_codes,
+                    issue_codes=autofix_issue_codes,
                     source_pdf_path=source_pdf,
                 )
                 report = write_conversion_quality_result(

@@ -373,6 +373,97 @@ def _collapsed_table_row_segment_count(row: list[str]) -> int:
     return dominant_count
 
 
+def _ambiguous_table_break_row(row: list[str]) -> bool:
+    if _collapsed_table_row_segment_count(row) >= 2:
+        return False
+    split_cells = [_split_html_table_breaks(cell) for cell in row]
+    first_count = len(split_cells[0]) if split_cells else 1
+    numeric_counts = [
+        len(parts)
+        for parts in split_cells[1:]
+        if len(parts) >= 2 and all(_TABLE_NUMBER_RE.search(part or "") for part in parts)
+    ]
+    if len(set(numeric_counts)) > 1:
+        return True
+    return first_count >= 2 and any(count != first_count for count in numeric_counts)
+
+
+def markdown_table_block_has_ambiguous_breaks(md: str) -> bool:
+    lines = [line for line in str(md or "").splitlines() if line.strip()]
+    rows = [
+        _split_md_table_cells(line)
+        for line in lines
+        if line.lstrip().startswith("|")
+        and not all(_looks_separator_cell(cell) or not cell for cell in _split_md_table_cells(line))
+    ]
+    return any(_ambiguous_table_break_row(row) for row in rows[1:])
+
+
+_FRAGMENTED_HEADER_SAFE_TOKENS = {
+    "accuracy", "ap", "ar", "auc", "batch", "depth", "dice", "epe", "epoch",
+    "f1", "fid", "fps", "gopro", "iou", "lpips", "mae", "method", "mse",
+    "nmse", "precision", "psnr", "recall", "rmse", "sam", "sidd", "size",
+    "ssim", "time", "wer",
+}
+_FRAGMENTED_HEADER_STEMS = {"ate", "latenc", "mpl", "ncy", "ness"}
+
+
+def _fragmented_header_evidence(header: list[str]) -> bool:
+    suspicious = 0
+    explicit_hyphen_fragment = False
+    for cell in header[2:]:
+        raw = str(cell or "").strip()
+        if not raw or re.search(r"\d", raw):
+            continue
+        clean = re.sub(r"[^A-Za-z-]+", "", raw).strip()
+        token = clean.strip("-").lower()
+        if not token or token in _FRAGMENTED_HEADER_SAFE_TOKENS:
+            continue
+        hyphen_fragment = bool(re.fullmatch(r"[A-Za-z]{2,6}-", clean))
+        stem_fragment = token in _FRAGMENTED_HEADER_STEMS
+        if not (hyphen_fragment or stem_fragment):
+            continue
+        suspicious += 1
+        explicit_hyphen_fragment = explicit_hyphen_fragment or hyphen_fragment
+    return suspicious >= 3 or (explicit_hyphen_fragment and suspicious >= 2)
+
+
+def _fragmented_table_column_score(rows: list[list[str]]) -> int:
+    if len(rows) < 5:
+        return 0
+    width = max((len(row) for row in rows), default=0)
+    if width < 8:
+        return 0
+
+    header = rows[0] + ([""] * max(0, width - len(rows[0])))
+    if not _fragmented_header_evidence(header):
+        return 0
+
+    split_rows = 0
+    for row in rows[1:]:
+        clean_cells = [re.sub(r"[*_`]", "", str(cell or "")).strip() for cell in row]
+        has_split_decimal = any(
+            re.fullmatch(r"\d{1,3}", left or "")
+            and re.match(r"^\.\d{1,3}(?:\s|$)", right or "")
+            for left, right in zip(clean_cells, clean_cells[1:])
+        )
+        if has_split_decimal:
+            split_rows += 1
+    return split_rows if split_rows >= 3 else 0
+
+
+def markdown_table_block_is_fragmented(md: str) -> bool:
+    lines = [line for line in str(md or "").splitlines() if line.strip()]
+    if len(lines) < 2 or not all(line.lstrip().startswith("|") for line in lines):
+        return False
+    rows = [
+        _split_md_table_cells(line)
+        for line in lines
+        if not all(_looks_separator_cell(cell) or not cell for cell in _split_md_table_cells(line))
+    ]
+    return _fragmented_table_column_score(rows) > 0
+
+
 def _expand_collapsed_table_rows(rows: list[list[str]]) -> list[list[str]]:
     if len(rows) < 2:
         return rows
@@ -474,6 +565,8 @@ def normalize_markdown_table_block(md: str) -> str:
             continue
         rows.append(cells)
     if len(rows) < 2:
+        return md
+    if any(_ambiguous_table_break_row(row) for row in rows[1:]):
         return md
 
     rows = _expand_collapsed_table_rows(rows)
@@ -614,11 +707,84 @@ def _nearby_duplicate_table_pairs(md: str) -> list[tuple[dict, dict]]:
     return pairs
 
 
+def _number_is_fragment_of_any(value: str, candidates: Counter[str]) -> bool:
+    digits = re.sub(r"\D", "", str(value or ""))
+    if not digits:
+        return False
+    for candidate in candidates:
+        candidate_digits = re.sub(r"\D", "", str(candidate or ""))
+        if not candidate_digits:
+            continue
+        shorter, longer = sorted((digits, candidate_digits), key=len)
+        if shorter == longer:
+            return True
+        if shorter in longer and (len(shorter) >= 2 or len(longer) <= 4):
+            return True
+    return False
+
+
+def _fragment_aware_numeric_coverage(numbers: Counter[str], candidates: Counter[str]) -> float:
+    total = sum(numbers.values())
+    if total <= 0:
+        return 0.0
+    covered = 0
+    for value, count in numbers.items():
+        exact = min(int(count), int(candidates.get(value, 0)))
+        covered += exact
+        remaining = int(count) - exact
+        if remaining > 0 and _number_is_fragment_of_any(value, candidates):
+            covered += remaining
+    return covered / total
+
+
+def _fragmented_aggregate_duplicate_ranges(md: str) -> set[tuple[int, int]]:
+    lines = str(md or "").splitlines()
+    spans = _markdown_table_spans(lines)
+    signatures = [_markdown_table_signature(lines, start, end) for start, end in spans]
+    fragmented = {
+        index
+        for index, (start, end) in enumerate(spans)
+        if markdown_table_block_is_fragmented("\n".join(lines[start:end]))
+    }
+    drop_ranges: set[tuple[int, int]] = set()
+    for index in sorted(fragmented):
+        start, end = spans[index]
+        nearby_indices = [
+            candidate
+            for candidate, (_, candidate_end) in enumerate(spans[:index])
+            if candidate not in fragmented and start - candidate_end <= 30
+        ][-4:]
+        if len(nearby_indices) < 2:
+            continue
+
+        aggregate_numbers: Counter[str] = Counter()
+        aggregate_words: set[str] = set()
+        for candidate in nearby_indices:
+            aggregate_numbers += signatures[candidate]["numbers"]
+            aggregate_words.update(signatures[candidate]["words"])
+
+        signature = signatures[index]
+        shared_numbers = sum((signature["numbers"] & aggregate_numbers).values())
+        numeric_coverage = _fragment_aware_numeric_coverage(signature["numbers"], aggregate_numbers)
+        meaningful_words = {word for word in signature["words"] if len(word) >= 5}
+        shared_words = meaningful_words & aggregate_words
+        word_coverage = len(shared_words) / max(1, len(meaningful_words))
+        if (
+            shared_numbers < 12
+            or numeric_coverage < 0.90
+            or len(shared_words) < 4
+            or word_coverage < 0.55
+        ):
+            continue
+        drop_ranges.add((start, end))
+    return drop_ranges
+
+
 def dedupe_nearby_markdown_tables(md: str) -> str:
     text = str(md or "")
     trailing_newline = text.endswith("\n")
     lines = text.splitlines()
-    drop_ranges: set[tuple[int, int]] = set()
+    drop_ranges: set[tuple[int, int]] = set(_fragmented_aggregate_duplicate_ranges(text))
     for left, right in _nearby_duplicate_table_pairs(text):
         left_range = (int(left["start"]), int(left["end"]))
         right_range = (int(right["start"]), int(right["end"]))
@@ -647,7 +813,12 @@ def markdown_table_issue_counts(md: str) -> dict[str, int]:
     lines = text.splitlines()
     literal_break_count = 0
     collapsed_row_count = 0
+    ambiguous_break_row_count = 0
+    fragmented_column_count = 0
     for start, end in _markdown_table_spans(lines):
+        block = "\n".join(lines[start:end])
+        if markdown_table_block_is_fragmented(block):
+            fragmented_column_count += 1
         for line in lines[start:end]:
             literal_break_count += len(_HTML_TABLE_BREAK_RE.findall(line))
         rows = [
@@ -658,12 +829,18 @@ def markdown_table_issue_counts(md: str) -> dict[str, int]:
         for row in rows[1:]:
             if _collapsed_table_row_segment_count(row) >= 2:
                 collapsed_row_count += 1
+            elif _ambiguous_table_break_row(row):
+                ambiguous_break_row_count += 1
     normalized = _normalize_markdown_table_blocks_document(text)
     duplicate_count = len(_nearby_duplicate_table_pairs(normalized))
+    fragmented_duplicate_count = len(_fragmented_aggregate_duplicate_ranges(text))
     return {
         "literal_break_count": literal_break_count,
         "collapsed_row_count": collapsed_row_count,
+        "ambiguous_break_row_count": ambiguous_break_row_count,
         "duplicate_table_count": duplicate_count,
+        "fragmented_column_count": fragmented_column_count,
+        "fragmented_duplicate_count": fragmented_duplicate_count,
     }
 
 

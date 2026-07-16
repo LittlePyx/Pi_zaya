@@ -5,6 +5,7 @@ from typing import Any
 
 from .quality_repair import (
     conversion_quality_result_path,
+    conversion_quality_report_is_stale,
     load_conversion_quality_result,
     plan_conversion_quality_repair,
     repair_markdown_quality,
@@ -22,16 +23,7 @@ _CRITICAL_AUTOFIX_ISSUES = {
 
 
 def _report_is_stale(md_path: Path, report: dict[str, Any]) -> bool:
-    if not isinstance(report, dict) or not report:
-        return True
-    try:
-        stat = md_path.stat()
-        return (
-            int(report.get("md_mtime_ns") or 0) != int(stat.st_mtime_ns)
-            or int(report.get("md_size") or 0) != int(stat.st_size)
-        )
-    except Exception:
-        return True
+    return conversion_quality_report_is_stale(md_path, report)
 
 
 def _issue_codes_from_report(report: dict[str, Any]) -> list[str]:

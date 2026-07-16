@@ -139,6 +139,126 @@ def test_exact_dataset_metric_label_beats_generic_metric_column() -> None:
     assert "NAFNet = 39.96" in hit["text"]
 
 
+def test_fragmented_table_is_excluded_from_structured_chunks() -> None:
+    md = "\n".join(
+        [
+            "# Ablations",
+            "| Model | blocks | SIDD PSNR SSIM | GoPro PSNR SSIM | Latency-256 | Latency-720 |",
+            "| --- | --- | --- | --- | --- | --- |",
+            "| NAFNet | 9 | 39.78 0.959 | 31.79 0.951 | 11.8 | 154.7 |",
+            "|  | 18 | 39.90 0.960 | 32.64 0.951 | 19.9 | 151.7 |",
+            "|  | 36 | 39.96 0.960 | 32.85 0.959 | 39.1 | 177.1 |",
+            "|  | 72 | 39.95 0.960 | 32.88 0.961 | 73.8 | 230.1 |",
+            "",
+            "| sigma | SIDD PSNR SSIM | GoPro PSNR SSIM |",
+            "| --- | --- | --- |",
+            "| Identity (ours) | 39.96 0.960 | 32.85 0.960 |",
+            "| ReLU | 39.98 0.960 | 32.59 0.958 |",
+            "| GELU | 39.97 0.960 | 32.72 0.959 |",
+            "| Sigmoid | 39.99 0.960 | 32.50 0.958 |",
+            "| SiLU | 39.96 0.960 | 32.74 0.960 |",
+            "",
+            "|  | blocks | SIDD PSNR SSIM P | GoPro L SNR SSIM | ate | ncy- | 25 | 6 | Latenc |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "|  | 9 | 39.78 0.959 | 31.79 0.951 |  | 11.8 |  |  | 154 |",
+            "|  | 18 | 39.90 0.960 | 32.64 0.951 |  | 19.9 |  |  | 151 |",
+            "|  | 36 | 39.96 0.960 | 32.85 0.959 |  | 39.1 |  |  | 177 |",
+            "|  | 72 | 39.95 0.960 | 32.88 0.961 |  | 73.8 |  |  | 230 |",
+            "|  | variants |  | Table 5 variants | of | sigma in | Si | mpl | eGate |",
+            "| patches | TLC |  | sigma | PS | SIDD NR S | SI | M | GoPro PSNR |",
+            "| NAFNet | 3 3 3 |  |  |  |  |  |  |  |",
+            "|  |  |  | Identity | 39 | .96 0 | .9 | 60 | 32.85 |",
+            "|  |  |  | ReLU | 39 | .98 0 | .9 | 60 | 32.59 |",
+            "|  |  |  | GELU | 39 | .97 0 | .9 | 60 | 32.72 |",
+            "|  |  |  | Sigmoid | 39 | .99 0 | .9 | 60 | 32.50 |",
+            "|  |  |  | SiLU | 39 | .96 0 | .9 | 60 | 32.74 |",
+        ]
+    )
+
+    chunks = chunk_markdown(md, source_path="fragmented.md", overlap=0)
+    structured = [chunk for chunk in chunks if str(chunk["meta"].get("structured_kind") or "").startswith("table_")]
+    row_chunks = [chunk for chunk in structured if chunk["meta"].get("structured_kind") == "table_row"]
+
+    assert len(row_chunks) == 9
+    assert sum("Identity (ours)" in chunk["text"] for chunk in row_chunks) == 1
+    assert all("ncy-" not in chunk["text"] for chunk in structured)
+
+
+def test_legitimate_wide_and_multiline_tables_are_indexed() -> None:
+    md = "\n".join(
+        [
+            "# Results",
+            "| Method | PSNR | SSIM | Dice | IoU | EPE | WER | SAM |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| M0 | 39 | .90 | .80 | .70 | .60 | .50 | .40 |",
+            "| M1 | 40 | .91 | .81 | .71 | .61 | .51 | .41 |",
+            "| M2 | 41 | .92 | .82 | .72 | .62 | .52 | .42 |",
+            "| M3 | 42 | .93 | .83 | .73 | .63 | .53 | .43 |",
+            "",
+            "| Method | Notes | PSNR |",
+            "| --- | --- | --- |",
+            "| NAFNet<br>(ours) | high quality<br>low noise<br>fast inference | 40.30 |",
+        ]
+    )
+
+    chunks = chunk_markdown(md, source_path="legitimate.md", overlap=0)
+    structured = [chunk for chunk in chunks if str(chunk["meta"].get("structured_kind") or "").startswith("table_")]
+
+    assert any("M3" in chunk["text"] and "42" in chunk["text"] for chunk in structured)
+    assert any("NAFNet" in chunk["text"] and "40.30" in chunk["text"] for chunk in structured)
+
+
+def test_metric_discriminator_column_groups_subframe_metrics_for_retrieval() -> None:
+    md = "\n".join(
+        [
+            "# Results",
+            "**Table 2.** Network evaluation on different bit depth.",
+            "| Subframes | index | BM3D | SwinIR | Ours |",
+            "| --- | --- | --- | --- | --- |",
+            "| 16 | PSNR | 11.85 | 20.48 | 22.36 |",
+            "|  | SSIM | 0.18 | 0.64 | 0.71 |",
+            "| 32 | PSNR | 13.74 | 20.78 | 22.84 |",
+            "|  | SSIM | 0.31 | 0.66 | 0.73 |",
+        ]
+    )
+
+    chunks = chunk_markdown(md, source_path="subframes.md", overlap=0)
+    metric_chunks = [chunk for chunk in chunks if chunk["meta"].get("structured_kind") == "table_metric"]
+    ours = next(chunk for chunk in metric_chunks if chunk["meta"].get("table_metric_label") == "Ours")
+
+    assert all(chunk["meta"].get("table_metric_label") != "index" for chunk in metric_chunks)
+    assert "16 / PSNR = 22.36" in ours["text"]
+    assert "16 / SSIM = 0.71" in ours["text"]
+
+    hit = BM25Retriever(chunks).search(
+        "What are Ours PSNR and SSIM at 16 subframes in Table 2?",
+        top_k=1,
+    )[0]
+    assert hit["meta"]["structured_kind"] == "table_metric"
+    assert hit["meta"]["table_metric_label"] == "Ours"
+    assert "16 / PSNR = 22.36" in hit["text"]
+    assert "16 / SSIM = 0.71" in hit["text"]
+
+
+def test_numeric_identifier_column_is_not_emitted_as_metric_series() -> None:
+    md = "\n".join(
+        [
+            "# Results",
+            "| Method | index | Note |",
+            "| --- | --- | --- |",
+            "| A | 1 | fast |",
+            "| B | 2 | robust |",
+        ]
+    )
+
+    chunks = chunk_markdown(md, source_path="numeric-index.md", overlap=0)
+    metric_chunks = [chunk for chunk in chunks if chunk["meta"].get("structured_kind") == "table_metric"]
+    row_chunks = [chunk for chunk in chunks if chunk["meta"].get("structured_kind") == "table_row"]
+
+    assert all(str(chunk["meta"].get("table_metric_label") or "").lower() != "index" for chunk in metric_chunks)
+    assert any("index = 1" in chunk["text"] and "Note = fast" in chunk["text"] for chunk in row_chunks)
+
+
 def test_transposed_metric_table_beats_ablation_for_dataset_best_query() -> None:
     md = "\n".join(
         [

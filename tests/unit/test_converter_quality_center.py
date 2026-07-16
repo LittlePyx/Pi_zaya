@@ -116,6 +116,44 @@ def test_repair_quality_targets_autofixes_markdown_and_rebuilds_indices(tmp_path
     assert (assets / "anchor_index.json").exists()
 
 
+def test_repair_quality_targets_runs_safe_part_of_mixed_reconvert_plan(tmp_path: Path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    md_path = tmp_path / "mixed.en.md"
+    table = "\n".join(
+        [
+            "| Method | PSNR | SSIM |",
+            "| --- | --- | --- |",
+            "| BM3D | 20.1 | 0.71 |",
+            "| SwinIR | 23.2 | 0.82 |",
+            "| NAFNet | 24.8 | 0.86 |",
+        ]
+    )
+    md_path.write_text(
+        "\n\n".join(
+            [
+                "<!-- kb_page: 1 -->\n# Mixed Quality Paper",
+                "## Abstract\nFran\u00c3\u00a7ois compares restoration methods.",
+                "## Results",
+                table,
+                "**Table 1.** Restoration comparison.",
+                table,
+                "## References\n[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = repair_quality_targets([md_path], rebuild_indices=True)
+    repaired = md_path.read_text(encoding="utf-8")
+
+    assert result["changed"] == 1
+    assert result["rebuilt"] == 1
+    assert result["reconvert"] == 1
+    assert repaired.count("| BM3D | 20.1 | 0.71 |") == 1
+    assert "Fran\u00c3\u00a7ois" in repaired
+
+
 def test_discover_quality_markdown_files_prefers_converted_outputs(tmp_path: Path):
     converted_dir = tmp_path / "Paper"
     converted_dir.mkdir()

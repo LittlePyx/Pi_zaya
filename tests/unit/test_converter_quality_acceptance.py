@@ -63,12 +63,47 @@ def test_summarize_conversion_quality_counts_research_paper_surfaces(tmp_path):
     assert metrics.missing_image_count == 0
     assert metrics.caption_count == 1
     assert metrics.table_block_count == 1
+    assert metrics.table_literal_break_count == 0
+    assert metrics.collapsed_table_row_count == 0
+    assert metrics.ambiguous_table_break_row_count == 0
+    assert metrics.duplicate_table_count == 0
+    assert metrics.fragmented_table_column_count == 0
+    assert metrics.fragmented_table_duplicate_count == 0
     assert metrics.display_math_block_count == 1
     assert metrics.unclosed_display_math_block_count == 0
     assert metrics.inline_math_count == 1
     assert metrics.reference_line_count == 2
     assert metrics.extracted_reference_count == 2
     assert metrics.body_citation_expanded_index_count == 2
+
+
+def test_summarize_conversion_quality_counts_duplicate_table_representations(tmp_path):
+    md_path = tmp_path / "duplicate-table.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "| Method | PSNR | SSIM |",
+                "| --- | --- | --- |",
+                "| BM3D | 20.1 | 0.71 |",
+                "| SwinIR | 23.2 | 0.82 |",
+                "| NAFNet | 24.8 | 0.86 |",
+                "",
+                "**Table 1.** Reconstruction comparison.",
+                "",
+                "| Method | PSNR | SSIM |",
+                "| --- | --- | --- |",
+                "| BM3D | 20.1 | 0.71 |",
+                "| SwinIR | 23.2 | 0.82 |",
+                "| NAFNet | 24.8 | 0.86 |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metrics = summarize_conversion_quality(md_path)
+
+    assert metrics.table_block_count == 2
+    assert metrics.duplicate_table_count == 1
 
 
 def test_summarize_conversion_quality_uses_shared_mojibake_detection(tmp_path):

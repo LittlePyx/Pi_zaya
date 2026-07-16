@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from kb.converter.quality_compare import summarize_markdown_quality
+from kb.converter.tables import markdown_table_issue_counts
 from kb.converter.text_utils import count_mojibake
 from kb.reference_index import extract_references_map_from_md
 
@@ -37,6 +38,12 @@ class ConversionQualityMetrics:
     missing_image_count: int
     caption_count: int
     table_block_count: int
+    table_literal_break_count: int
+    collapsed_table_row_count: int
+    ambiguous_table_break_row_count: int
+    duplicate_table_count: int
+    fragmented_table_column_count: int
+    fragmented_table_duplicate_count: int
     display_math_block_count: int
     unclosed_display_math_block_count: int
     inline_math_count: int
@@ -121,6 +128,7 @@ def summarize_conversion_quality(md_path: Path, md_text: str | None = None) -> C
     base = summarize_markdown_quality(text)
     page_count, page_min, page_max, page_gaps = _page_marker_stats(text)
     references = extract_references_map_from_md(text)
+    table_issues = markdown_table_issue_counts(text)
     detected_reference_count = max(int(base.reference_line_count), len(references))
     max_reference_index = (
         max(references.keys(), default=0)
@@ -145,6 +153,12 @@ def summarize_conversion_quality(md_path: Path, md_text: str | None = None) -> C
         missing_image_count=_missing_image_count(path, text),
         caption_count=base.caption_count,
         table_block_count=base.table_block_count,
+        table_literal_break_count=int(table_issues.get("literal_break_count") or 0),
+        collapsed_table_row_count=int(table_issues.get("collapsed_row_count") or 0),
+        ambiguous_table_break_row_count=int(table_issues.get("ambiguous_break_row_count") or 0),
+        duplicate_table_count=int(table_issues.get("duplicate_table_count") or 0),
+        fragmented_table_column_count=int(table_issues.get("fragmented_column_count") or 0),
+        fragmented_table_duplicate_count=int(table_issues.get("fragmented_duplicate_count") or 0),
         display_math_block_count=base.display_math_block_count,
         unclosed_display_math_block_count=_display_math_unclosed_count(text),
         inline_math_count=base.inline_math_count,

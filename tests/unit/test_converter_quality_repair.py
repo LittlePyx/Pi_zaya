@@ -145,6 +145,188 @@ def test_quality_repair_detects_and_repairs_collapsed_duplicate_tables(tmp_path:
     assert result["repaired_text"].count("GAP-TV") == 1
 
 
+def test_quality_repair_escalates_ambiguous_break_rows_without_flattening(tmp_path: Path):
+    md_path = tmp_path / "ambiguous-table.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Ambiguous Table Paper",
+            "## Abstract",
+            "This paper compares three restoration methods.",
+            "## Results",
+            "| Method | PSNR | SSIM |",
+            "| --- | --- | --- |",
+            "| A<br>B<br>C | 30.1<br>31.2 | .91<br>.92<br>.93 |",
+            "## References",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    report = write_conversion_quality_result(md_path)
+    repaired = repair_markdown_text(md_path, original)
+
+    assert "ambiguous_table_break_rows" in report["repair_plan"]["issue_codes"]
+    assert report["repair_plan"]["action"] == "reconvert"
+    assert "A<br>B<br>C" in repaired["repaired_text"]
+    assert "30.1<br>31.2" in repaired["repaired_text"]
+    assert "ambiguous_table_break_rows" in repaired["remaining_issue_codes"]
+
+
+def test_quality_repair_flags_uncovered_fragmented_table_columns(tmp_path: Path):
+    md_path = tmp_path / "fragmented-table.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Fragmented Table Paper",
+                "## Abstract",
+                "This paper reports restoration ablations.",
+                "## Results",
+                "| Model | SIDD PSNR SSIM | ate | ncy- | 25 | 6 | Latenc | extra |",
+                "| --- | --- | --- | --- | --- | --- | --- | --- |",
+                "| Identity | 39 | .96 0 | .9 | 60 | 32.85 | 1 | 2 |",
+                "| ReLU | 39 | .98 0 | .9 | 60 | 32.59 | 1 | 2 |",
+                "| GELU | 39 | .97 0 | .9 | 60 | 32.72 | 1 | 2 |",
+                "| Sigmoid | 39 | .99 0 | .9 | 60 | 32.50 | 1 | 2 |",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = write_conversion_quality_result(md_path)
+
+    assert "fragmented_table_columns" in report["repair_plan"]["issue_codes"]
+    assert report["repair_plan"]["action"] == "reconvert"
+
+
+def test_quality_repair_moves_next_page_anchor_before_high_confidence_table(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "table-pages.pdf"
+    doc = fitz.open()
+    page_one = doc.new_page()
+    page_one.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "Introduction calibration optics acquisition overview alpha beta gamma delta epsilon zeta.",
+        fontsize=10,
+    )
+    page_two = doc.new_page()
+    page_two.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        (
+            "Table 2. Photon detector benchmark under low illumination. "
+            "Detector Avalanche Photodiode CMOS Sensor Quantum Efficiency Dark Count. "
+            "SPAD 42.1 0.91 18.4. EMCCD 38.7 0.88 24.2. "
+            "The detector discussion continues with timing jitter and photon flux calibration."
+        ),
+        fontsize=10,
+    )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "table-pages.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Detector Paper",
+                "## Abstract",
+                "This paper benchmarks photon detectors.",
+                "## Results",
+                "Introduction calibration optics acquisition overview.",
+                "",
+                "**Table 2.** Photon detector benchmark under low illumination.",
+                "",
+                "| Detector | Quantum Efficiency | Dark Count |",
+                "| --- | --- | --- |",
+                "| SPAD | 42.1 0.91 | 18.4 |",
+                "| EMCCD | 38.7 0.88 | 24.2 |",
+                "",
+                "<!-- kb_page: 2 -->",
+                "",
+                "The detector discussion continues with timing jitter and photon flux calibration.",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+    result = repair_markdown_quality(
+        md_path,
+        issue_codes=["source_table_page_alignment"],
+        source_pdf_path=pdf_path,
+    )
+    repaired = md_path.read_text(encoding="utf-8")
+
+    assert "source_table_page_alignment" in report["repair_plan"]["issue_codes"]
+    assert result["changed"] is True
+    assert "realign_table_page_markers_from_pdf" in result["applied"]
+    assert repaired.index("<!-- kb_page: 2 -->") < repaired.index("| Detector | Quantum Efficiency | Dark Count |")
+
+
+def test_quality_repair_keeps_table_anchor_when_current_page_is_full_match(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "table-current-page.pdf"
+    doc = fitz.open()
+    page_one = doc.new_page()
+    page_one.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        (
+            "Table 2. Photon detector benchmark under low illumination. "
+            "Detector Quantum Efficiency Dark Count SPAD 42.1 0.91 18.4 EMCCD 38.7 0.88 24.2."
+        ),
+        fontsize=10,
+    )
+    page_two = doc.new_page()
+    page_two.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "The detector discussion mentions SPAD efficiency and dark count without repeating the table values.",
+        fontsize=10,
+    )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "table-current-page.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Detector Paper",
+                "## Abstract",
+                "This paper benchmarks photon detectors.",
+                "## Results",
+                "**Table 2.** Photon detector benchmark under low illumination.",
+                "| Detector | Quantum Efficiency | Dark Count |",
+                "| --- | --- | --- |",
+                "| SPAD | 42.1 0.91 | 18.4 |",
+                "| EMCCD | 38.7 0.88 | 24.2 |",
+                "<!-- kb_page: 2 -->",
+                "The detector discussion mentions SPAD efficiency and dark count.",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+    result = repair_markdown_quality(
+        md_path,
+        issue_codes=["source_table_page_alignment"],
+        source_pdf_path=pdf_path,
+    )
+
+    assert "source_table_page_alignment" not in report["repair_plan"]["issue_codes"]
+    assert result["changed"] is False
+    assert md_path.read_text(encoding="utf-8").index("<!-- kb_page: 1 -->") < md_path.read_text(encoding="utf-8").index("| Detector | Quantum Efficiency | Dark Count |")
+
+
 def test_write_conversion_quality_result_accepts_author_year_references(tmp_path: Path):
     md_path = tmp_path / "author_year.md"
     md_path.write_text(
@@ -484,6 +666,27 @@ def test_quality_result_escalates_persistent_source_page_alignment(tmp_path: Pat
 
     assert payload["recommended_action"] == "reconvert"
     assert payload["repair_plan"]["reconvert_issue_codes"] == ["source_page_marker_alignment"]
+
+
+def test_quality_result_escalates_persistent_source_table_page_alignment(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "kb.converter.quality_repair._source_quality_view",
+        lambda *args, **kwargs: {"document_type": "research_article", "source_pdf_available": True},
+    )
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text("<!-- kb_page: 1 -->\n# Demo\nBody text.\n", encoding="utf-8")
+
+    payload = write_conversion_quality_result(
+        md_path,
+        auto_repair_result={
+            "attempted_issue_codes": ["source_table_page_alignment"],
+            "issue_codes_before": ["source_table_page_alignment"],
+            "remaining_issue_codes": ["source_table_page_alignment"],
+        },
+    )
+
+    assert payload["recommended_action"] == "reconvert"
+    assert payload["repair_plan"]["reconvert_issue_codes"] == ["source_table_page_alignment"]
 
 
 def test_quality_result_does_not_escalate_unattempted_page_marker_gap(tmp_path: Path):

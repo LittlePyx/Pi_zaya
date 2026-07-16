@@ -206,6 +206,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
+CONVERSION_QUALITY_RULES_VERSION = 2
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
@@ -298,6 +299,14 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "reason": "The source PDF page starts do not line up with the Markdown page anchors.",
         "strategies": ["realign_page_markers_from_pdf", "recover_missing_source_pages"],
     },
+    "source_table_page_alignment": {
+        "label": "Move page anchors before tables found on the next source page",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "A table has a high-confidence source-page match, but the next page anchor is currently placed after it.",
+        "strategies": ["realign_table_page_markers_from_pdf"],
+    },
     "reference_index_truncated": {
         "label": "Rebuild the reference section from the source PDF text layer",
         "safe": True,
@@ -335,6 +344,15 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "reason": "Multiple logical data rows were packed into cells with literal HTML break markers.",
         "strategies": ["normalize_markdown_tables"],
     },
+    "ambiguous_table_break_rows": {
+        "label": "Reconvert ambiguous multi-row table cells",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "document",
+        "speed_mode": "normal",
+        "reason": "Table cells contain inconsistent row counts, so method-to-value coordinates cannot be recovered safely from Markdown alone.",
+        "strategies": [],
+    },
     "duplicate_table_representations": {
         "label": "Remove a nearby lower-quality duplicate table",
         "safe": True,
@@ -342,6 +360,15 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "scope": "markdown",
         "reason": "The same table data appears in nearby compact and structured representations.",
         "strategies": ["normalize_markdown_tables"],
+    },
+    "fragmented_table_columns": {
+        "label": "Reconvert a table with fragmented columns",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "document",
+        "speed_mode": "normal",
+        "reason": "A wide table contains broken header and decimal fragments that cannot be safely realigned from Markdown alone.",
+        "strategies": [],
     },
     "missing_abstract": {
         "label": "Infer and insert Abstract heading from front matter",
@@ -540,6 +567,18 @@ def _current_markdown_stat(path: Path) -> dict[str, int]:
         return {"mtime_ns": 0, "size": 0}
 
 
+def conversion_quality_report_is_stale(md_path: Path | str, report: Mapping[str, Any] | None) -> bool:
+    path = Path(md_path).expanduser()
+    payload = report if isinstance(report, Mapping) else {}
+    if int(payload.get("quality_rules_version") or 0) != CONVERSION_QUALITY_RULES_VERSION:
+        return True
+    current = _current_markdown_stat(path)
+    return (
+        int(payload.get("md_mtime_ns") or 0) != current["mtime_ns"]
+        or int(payload.get("md_size") or 0) != current["size"]
+    )
+
+
 def load_conversion_quality_result(md_path: Path | str) -> dict[str, Any]:
     report_path = conversion_quality_result_path(md_path)
     try:
@@ -649,10 +688,7 @@ def write_conversion_quality_result(
     prev = load_conversion_quality_result(path)
     exhausted_issue_codes = _persistent_source_autofix_codes(repair) if auto_repair_result is not None else set()
     if auto_repair_result is None:
-        prev_stat_matches = (
-            int(prev.get("md_mtime_ns") or 0) == md_stat["mtime_ns"]
-            and int(prev.get("md_size") or 0) == md_stat["size"]
-        )
+        prev_stat_matches = not conversion_quality_report_is_stale(path, prev)
         prev_auto_repair = prev.get("auto_repair") if isinstance(prev.get("auto_repair"), dict) else {}
         if prev_stat_matches:
             exhausted_issue_codes = {
@@ -676,6 +712,7 @@ def write_conversion_quality_result(
     latest_attempt = prev.get("latest_repair_attempt") if isinstance(prev.get("latest_repair_attempt"), dict) else (prev_attempts[-1] if prev_attempts else {})
     payload = {
         "schema_version": 1,
+        "quality_rules_version": CONVERSION_QUALITY_RULES_VERSION,
         "kind": "conversion_quality_result",
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "md_path": str(path),
@@ -712,6 +749,7 @@ def write_conversion_quality_result(
 _PERSISTENT_SOURCE_AUTOFIX_ISSUES = {
     "page_marker_gaps",
     "source_page_marker_alignment",
+    "source_table_page_alignment",
 }
 
 
@@ -840,6 +878,23 @@ def _issue_codes_from_metrics(metrics: dict[str, Any]) -> list[str]:
         out.append("analyzer_warnings")
     if int(metrics.get("heading_level_jump_count") or 0) > 0:
         out.append("heading_level_jumps")
+    ambiguous_break_rows = int(metrics.get("ambiguous_table_break_row_count") or 0)
+    if int(metrics.get("collapsed_table_row_count") or 0) > 0 or (
+        int(metrics.get("table_literal_break_count") or 0) > 0 and ambiguous_break_rows <= 0
+    ):
+        out.append("collapsed_table_rows")
+    if ambiguous_break_rows > 0:
+        out.append("ambiguous_table_break_rows")
+    if (
+        int(metrics.get("duplicate_table_count") or 0) > 0
+        or int(metrics.get("fragmented_table_duplicate_count") or 0) > 0
+    ):
+        out.append("duplicate_table_representations")
+    if (
+        int(metrics.get("fragmented_table_column_count") or 0)
+        > int(metrics.get("fragmented_table_duplicate_count") or 0)
+    ):
+        out.append("fragmented_table_columns")
     return out
 
 
@@ -950,6 +1005,8 @@ def _issue_codes_from_context(
         codes.append("missing_source_pages")
     if int(quality.get("source_page_anchor_issue_count") or 0) > 0:
         codes.append("source_page_marker_alignment")
+    if int(quality.get("source_table_page_anchor_issue_count") or 0) > 0:
+        codes.append("source_table_page_alignment")
     if bool(quality.get("reference_index_truncated")):
         codes.append("reference_index_truncated")
     if bool(quality.get("references_before_body")):
@@ -958,11 +1015,6 @@ def _issue_codes_from_context(
         codes.append("collapsed_heading_hierarchy")
     if _stray_inline_math_likely(text):
         codes.append("stray_inline_math")
-    table_issues = markdown_table_issue_counts(text)
-    if int(table_issues.get("literal_break_count") or 0) > 0 or int(table_issues.get("collapsed_row_count") or 0) > 0:
-        codes.append("collapsed_table_rows")
-    if int(table_issues.get("duplicate_table_count") or 0) > 0:
-        codes.append("duplicate_table_representations")
     return _dedupe_codes(codes)
 
 
@@ -1816,6 +1868,133 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
     }
 
 
+_TABLE_PAGE_ALIGNMENT_STOP_WORDS = {
+    "and", "comparison", "comparisons", "different", "figure", "for", "from", "index",
+    "method", "methods", "network", "ours", "psnr", "result", "results", "ssim", "table",
+    "the", "under", "with",
+}
+
+
+def _table_page_alignment_tokens(value: str) -> set[str]:
+    cleaned = PAGE_MARKER_RE.sub(" ", str(value or "")).lower()
+    tokens: set[str] = set()
+    for token in re.findall(r"[a-z][a-z0-9+\-]{2,}|(?<![a-z0-9])\d+(?:\.\d+)?", cleaned):
+        normalized = token.lstrip("0") or "0" if token[0].isdigit() else token
+        if normalized not in _TABLE_PAGE_ALIGNMENT_STOP_WORDS:
+            tokens.add(normalized)
+    return tokens
+
+
+def _source_table_page_anchor_alignment_quality(text: str, pdf_path: Path | None) -> dict[str, Any]:
+    empty = {
+        "source_table_page_anchor_issue_count": 0,
+        "source_table_page_anchor_issues": [],
+    }
+    if fitz is None or pdf_path is None:
+        return empty
+    path = Path(pdf_path).expanduser()
+    if not path.exists() or not path.is_file():
+        return empty
+
+    lines = str(text or "").splitlines()
+    marker_lines: dict[int, int] = {}
+    current_page = 0
+    tables: list[dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        marker = PAGE_MARKER_RE.search(lines[index])
+        if marker:
+            current_page = int(marker.group(1))
+            marker_lines.setdefault(current_page, index)
+        if lines[index].lstrip().startswith("|") and lines[index].count("|") >= 2:
+            start = index
+            block: list[str] = []
+            while index < len(lines) and lines[index].lstrip().startswith("|") and lines[index].count("|") >= 2:
+                block.append(lines[index])
+                index += 1
+            if len(block) >= 3 and current_page > 0:
+                context = " ".join(line for line in lines[max(0, start - 5) : start] if line.strip())
+                probe_tokens = _table_page_alignment_tokens(context + " " + " ".join(block[:4]))
+                if len(probe_tokens) >= 8:
+                    tables.append(
+                        {
+                            "line": start,
+                            "current_page": current_page,
+                            "probe_tokens": probe_tokens,
+                            "header": block[0][:240],
+                        }
+                    )
+            continue
+        index += 1
+
+    if not tables:
+        return empty
+    try:
+        doc = fitz.open(str(path))
+    except Exception:
+        return empty
+    try:
+        page_tokens = [
+            _table_page_alignment_tokens(str(doc.load_page(page_index).get_text("text") or ""))
+            for page_index in range(len(doc))
+        ]
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+    issues: list[dict[str, Any]] = []
+    for table in tables:
+        probe_tokens = set(table["probe_tokens"])
+        scores = [len(probe_tokens.intersection(tokens)) / max(1, len(probe_tokens)) for tokens in page_tokens]
+        if not scores:
+            continue
+        ranked = sorted(range(len(scores)), key=lambda page_index: scores[page_index], reverse=True)
+        best_page = ranked[0] + 1
+        best_score = scores[ranked[0]]
+        second_score = scores[ranked[1]] if len(ranked) > 1 else 0.0
+        current_page = int(table["current_page"])
+        table_line = int(table["line"])
+        if best_page != current_page + 1:
+            continue
+        if best_score < 0.60 or best_score - second_score < 0.12:
+            continue
+        if int(marker_lines.get(best_page, -1)) <= table_line:
+            continue
+        context_range = range(max(0, table_line - 5), table_line)
+        asset_anchor_lines = [
+            line_index
+            for line_index in context_range
+            if re.search(rf"page[_-]0*{best_page}[_-]", lines[line_index], flags=re.IGNORECASE)
+        ]
+        caption_anchor_lines = [
+            line_index
+            for line_index in context_range
+            if CAPTION_LINE_RE.match(lines[line_index].strip())
+        ]
+        anchor_line = (
+            min(asset_anchor_lines)
+            if asset_anchor_lines
+            else (min(caption_anchor_lines) if caption_anchor_lines else table_line)
+        )
+        issues.append(
+            {
+                "line": anchor_line + 1,
+                "table_line": table_line + 1,
+                "current_page": current_page,
+                "source_page": best_page,
+                "source_score": round(float(best_score), 4),
+                "source_margin": round(float(best_score - second_score), 4),
+                "header": str(table.get("header") or ""),
+            }
+        )
+    return {
+        "source_table_page_anchor_issue_count": len(issues),
+        "source_table_page_anchor_issues": issues[:20],
+    }
+
+
 def _source_page_anchor_alignment_quality(text: str, pdf_path: Path | None) -> dict[str, Any]:
     empty = {
         "source_page_anchor_issue_count": 0,
@@ -1962,6 +2141,10 @@ def _source_quality_view(
     page_quality = _page_alignment_quality(metrics, pdf_stats)
     page_coverage = _source_page_coverage_quality(text, pdf_path if pdf_path and bool(pdf_stats.get("available")) else None)
     page_anchor_quality = _source_page_anchor_alignment_quality(text, pdf_path if pdf_path and bool(pdf_stats.get("available")) else None)
+    table_page_anchor_quality = _source_table_page_anchor_alignment_quality(
+        text,
+        pdf_path if pdf_path and bool(pdf_stats.get("available")) else None,
+    )
     return {
         **profile,
         "source_pdf_path": str((pdf_stats or {}).get("path") or (pdf_path or "")),
@@ -1971,6 +2154,7 @@ def _source_quality_view(
         **page_quality,
         **page_coverage,
         **page_anchor_quality,
+        **table_page_anchor_quality,
         **ref_layout,
         "abstract_autofix_likely": abstract_autofix_likely,
         "source_text_loss": bool(source_text_loss),
@@ -2142,10 +2326,21 @@ def _regression_reasons(base_text: str, candidate_text: str) -> list[str]:
     if "tables_dropped" in reasons:
         base_table_issues = markdown_table_issue_counts(base_text)
         candidate_table_issues = markdown_table_issue_counts(candidate_text)
+        base_duplicate_count = int(base_table_issues.get("duplicate_table_count") or 0) + int(
+            base_table_issues.get("fragmented_duplicate_count") or 0
+        )
+        candidate_duplicate_count = int(candidate_table_issues.get("duplicate_table_count") or 0) + int(
+            candidate_table_issues.get("fragmented_duplicate_count") or 0
+        )
+        tables_dropped = max(
+            0,
+            int(base.get("table_block_count") or 0) - int(cand.get("table_block_count") or 0),
+        )
+        duplicate_delta = max(0, base_duplicate_count - candidate_duplicate_count)
         if (
-            int(base_table_issues.get("duplicate_table_count") or 0)
-            > int(candidate_table_issues.get("duplicate_table_count") or 0)
+            0 < tables_dropped <= duplicate_delta
             and int(candidate_table_issues.get("literal_break_count") or 0) == 0
+            and int(candidate_table_issues.get("fragmented_column_count") or 0) == 0
         ):
             reasons = [reason for reason in reasons if reason != "tables_dropped"]
     base_chars = int(base.get("chars") or 0)
@@ -2675,6 +2870,47 @@ def _realign_page_markers_from_pdf_text(md_text: str, md_path: Path, source_pdf_
     fixed = markerless
     for page_no, offset in sorted(cleaned_offsets.items(), key=lambda item: int(item[1]), reverse=True):
         fixed = _insert_page_marker_at_offset(fixed, int(offset), int(page_no))
+    return fixed, fixed != text
+
+
+def _realign_table_page_markers_from_pdf_text(
+    md_text: str,
+    md_path: Path,
+    source_pdf_path: Path | str | None = None,
+) -> tuple[str, bool]:
+    text = str(md_text or "")
+    pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
+    if pdf_path is None:
+        return text, False
+    quality = _source_table_page_anchor_alignment_quality(text, pdf_path)
+    issues = [item for item in list(quality.get("source_table_page_anchor_issues") or []) if isinstance(item, dict)]
+    moves: dict[int, int] = {}
+    for issue in issues:
+        page_no = int(issue.get("source_page") or 0)
+        line_index = int(issue.get("line") or 0) - 1
+        if page_no > 1 and line_index >= 0:
+            moves[page_no] = min(line_index, moves.get(page_no, line_index))
+    if not moves:
+        return text, False
+
+    trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    move_lines = {line_index: page_no for page_no, line_index in moves.items()}
+    output: list[str] = []
+    for line_index, line in enumerate(lines):
+        marker = PAGE_MARKER_RE.search(line)
+        if marker and int(marker.group(1)) in moves:
+            continue
+        page_no = move_lines.get(line_index)
+        if page_no is not None:
+            if output and output[-1].strip():
+                output.append("")
+            output.append(f"<!-- kb_page: {page_no} -->")
+            output.append("")
+        output.append(line)
+    fixed = "\n".join(output)
+    if trailing_newline:
+        fixed += "\n"
     return fixed, fixed != text
 
 
@@ -3296,6 +3532,11 @@ def repair_markdown_text(
             if changed:
                 applied.append("realign_page_markers_from_pdf")
 
+        if source_repairs_enabled and "realign_table_page_markers_from_pdf" in active_strategy_names:
+            text, changed = _realign_table_page_markers_from_pdf_text(text, path, source_pdf_path)
+            if changed:
+                applied.append("realign_table_page_markers_from_pdf")
+
         if "normalize_page_markers" in active_strategy_names:
             text, changed = _normalize_page_marker_sequence(text)
             if changed:
@@ -3406,6 +3647,8 @@ def repair_markdown_text(
                 candidate, changed = _ensure_page_anchor(fallback_text)
             elif source_repairs_enabled and label == "realign_page_markers_from_pdf":
                 candidate, changed = _realign_page_markers_from_pdf_text(fallback_text, path, source_pdf_path)
+            elif source_repairs_enabled and label == "realign_table_page_markers_from_pdf":
+                candidate, changed = _realign_table_page_markers_from_pdf_text(fallback_text, path, source_pdf_path)
             elif label == "normalize_page_markers":
                 candidate, changed = _normalize_page_marker_sequence(fallback_text)
             elif label == "figure_metadata_captions":

@@ -20,6 +20,9 @@ _METRIC_RE = re.compile(
 _DIRECTION_WORDS = {"↑": "higher is better", "↓": "lower is better"}
 
 
+_IDENTIFIER_HEADER_RE = re.compile(r"(?:id|index|no\.?|number|rank)", flags=re.I)
+
+
 def _clean_cell(value: Any) -> str:
     text = html.unescape(str(value or "")).replace("\u00a0", " ")
     text = text.replace(r"\|", "|")
@@ -215,7 +218,22 @@ def _metric_facts(header: str, value: str) -> list[dict[str, str]]:
     ]
 
 
-def _label_column_count(headers: list[str]) -> int:
+def _metric_discriminator_column(headers: list[str], rows: list[list[str]]) -> int | None:
+    for index, header in enumerate(headers[1:5], start=1):
+        if not re.fullmatch(r"(?:index|metric|metrics|measure|measurement|criterion)", str(header or "").strip(), flags=re.I):
+            continue
+        values = [str(row[index] if index < len(row) else "").strip() for row in rows]
+        values = [value for value in values if value]
+        metric_values = sum(1 for value in values if _metric_specs(value))
+        if len(values) >= 2 and metric_values >= max(2, int(len(values) * 0.6)):
+            return index
+    return None
+
+
+def _label_column_count(headers: list[str], rows: list[list[str]] | None = None) -> int:
+    discriminator = _metric_discriminator_column(headers, rows or [])
+    if discriminator is not None:
+        return discriminator + 1
     for index, header in enumerate(headers):
         if index <= 0:
             continue
@@ -283,7 +301,12 @@ def _table_subject_kind(label: str) -> str:
 
 
 def _build_table_record(block: dict[str, Any], *, table_index: int) -> dict[str, Any] | None:
-    headers, raw_rows = parse_markdown_table(str(block.get("raw_text") or ""))
+    from .converter.tables import markdown_table_block_has_ambiguous_breaks, markdown_table_block_is_fragmented
+
+    raw_table = str(block.get("raw_text") or "")
+    if markdown_table_block_is_fragmented(raw_table) or markdown_table_block_has_ambiguous_breaks(raw_table):
+        return None
+    headers, raw_rows = parse_markdown_table(raw_table)
     if not headers or not raw_rows:
         return None
 
@@ -306,8 +329,16 @@ def _build_table_record(block: dict[str, Any], *, table_index: int) -> dict[str,
         table["page_start"] = page_start
         table["page_end"] = page_end or page_start
 
-    label_column_count = min(max(1, _label_column_count(headers)), max(1, len(headers) - 1))
-    row_headers = [headers[index] or f"Row field {index + 1}" for index in range(label_column_count)]
+    metric_discriminator = _metric_discriminator_column(headers, raw_rows)
+    label_column_count = min(max(1, _label_column_count(headers, raw_rows)), max(1, len(headers) - 1))
+    row_headers = [
+        (
+            "Metric"
+            if index == metric_discriminator and str(headers[index] or "").strip().lower() == "index"
+            else (headers[index] or f"Row field {index + 1}")
+        )
+        for index in range(label_column_count)
+    ]
     row_header = " / ".join(row_headers)
     row_subject_kind = _table_subject_kind(row_header)
     carried_labels = [""] * label_column_count
@@ -373,18 +404,19 @@ def _build_table_record(block: dict[str, Any], *, table_index: int) -> dict[str,
                 cell["metrics"] = cell_facts
             else:
                 fact_texts.append(f"{header} = {value}")
-                series = metric_series.setdefault(
-                    header,
-                    {
-                        "label": header,
-                        "metric": header,
-                        "direction": "",
-                        "subject_label": row_header,
-                        "subject_kind": row_subject_kind,
-                        "values": [],
-                    },
-                )
-                series["values"].append({"row_label": label, "value": value})
+                if _NUMBER_RE.search(value) and not _IDENTIFIER_HEADER_RE.fullmatch(header):
+                    series = metric_series.setdefault(
+                        header,
+                        {
+                            "label": header,
+                            "metric": header,
+                            "direction": "",
+                            "subject_label": row_header,
+                            "subject_kind": row_subject_kind,
+                            "values": [],
+                        },
+                    )
+                    series["values"].append({"row_label": label, "value": value})
             cells.append(cell)
 
         prefix = _table_location_prefix(table)
