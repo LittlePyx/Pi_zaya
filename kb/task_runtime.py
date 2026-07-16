@@ -265,6 +265,7 @@ from kb.paper_guide_direct_answer_runtime import (
     _build_paper_guide_exact_answer_preflight as _direct_answer_build_exact_preflight,
     _build_paper_guide_direct_answer_override as _direct_answer_build_override,
 )
+from kb.paper_guide.router import _paper_guide_prompt_requests_exact_citation_support
 from kb.paper_guide_message_builder import (
     _build_generation_prompt_bundle as _message_builder_build_generation_prompt_bundle,
 )
@@ -2217,6 +2218,24 @@ def _needs_conversational_source_hint(prompt: str) -> bool:
     if _EXPLICIT_DOC_RE.search(q):
         return False
     return bool(_DEICTIC_DOC_RE.search(q))
+
+
+def _conversational_exact_citation_source_hint(
+    *,
+    prompt: str,
+    prompt_family: str,
+    paper_guide_source_scoped: bool,
+    inferred_source_hint: str,
+) -> str:
+    """Return the prior-turn paper only for an explicit numbered-reference follow-up."""
+    source_hint = str(inferred_source_hint or "").strip()
+    if paper_guide_source_scoped or (not source_hint):
+        return ""
+    if str(prompt_family or "").strip().lower() != "citation_lookup":
+        return ""
+    if not _paper_guide_prompt_requests_exact_citation_support(prompt):
+        return ""
+    return source_hint
 
 
 def _pick_recent_source_hint(*, conv_id: str, user_msg_id: int, chat_store: ChatStore) -> str:
@@ -4521,7 +4540,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         inferred_source_hint = ""
         if paper_guide_source_scoped and preferred_source_hints:
             retrieval_prompt = _apply_bound_source_hints(retrieval_prompt, preferred_source_hints, limit=2)
-        if allow_implicit_source_hints and retrieval_prompt and _needs_conversational_source_hint(retrieval_prompt):
+        # Detect deictic follow-ups from the user's text, before scope/context blocks add
+        # English phrases that can look like an explicit document title.
+        if allow_implicit_source_hints and prompt and _needs_conversational_source_hint(prompt):
             inferred_source_hint = _pick_recent_source_hint(
                 conv_id=conv_id,
                 user_msg_id=cur_user_msg_id,
@@ -4529,6 +4550,34 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             )
             if inferred_source_hint:
                 retrieval_prompt = _augment_prompt_with_source_hint(retrieval_prompt, inferred_source_hint)
+        conversational_prompt_family = _paper_guide_prompt_family(prompt, intent=answer_intent)
+        conversational_exact_source_hint = _conversational_exact_citation_source_hint(
+            prompt=prompt,
+            prompt_family=conversational_prompt_family,
+            paper_guide_source_scoped=bool(paper_guide_source_scoped),
+            inferred_source_hint=inferred_source_hint,
+        )
+        if conversational_exact_source_hint and (not paper_guide_exact_preflight):
+            t_preflight0 = time.perf_counter()
+            try:
+                paper_guide_exact_preflight = _direct_answer_build_exact_preflight(
+                    paper_guide_mode=True,
+                    prompt_family=conversational_prompt_family,
+                    prompt_for_user=prompt,
+                    source_path=conversational_exact_source_hint,
+                    db_dir=db_dir,
+                )
+            except Exception:
+                paper_guide_exact_preflight = {}
+            exact_preflight_elapsed_s = time.perf_counter() - t_preflight0
+            if paper_guide_exact_preflight:
+                paper_guide_prompt_family = conversational_prompt_family
+            _trace_event(
+                "conversational_exact_support_preflight",
+                elapsed_s=exact_preflight_elapsed_s,
+                matched=bool(paper_guide_exact_preflight),
+                source_hint=conversational_exact_source_hint,
+            )
         if allow_implicit_source_hints and retrieval_prompt and _needs_bound_source_hint(retrieval_prompt):
             if preferred_source_hints:
                 for h in preferred_source_hints[:2]:
@@ -5984,10 +6033,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             else:
                 ds = DeepSeekChat(settings_obj)
                 direct_answer_override = _build_paper_guide_direct_answer_override(
-                    paper_guide_mode=bool(paper_guide_source_scoped),
+                    paper_guide_mode=bool(paper_guide_source_scoped or conversational_exact_source_hint),
                     prompt_family=paper_guide_prompt_family,
                     prompt_for_user=prompt_for_user,
-                    paper_guide_focus_source_path=paper_guide_focus_source_path,
+                    paper_guide_focus_source_path=(
+                        paper_guide_focus_source_path or conversational_exact_source_hint
+                    ),
                     paper_guide_direct_source_path=paper_guide_direct_source_path,
                     paper_guide_bound_source_path=paper_guide_bound_source_path,
                     answer_hits=answer_hits,

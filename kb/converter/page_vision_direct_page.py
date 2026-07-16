@@ -14,7 +14,7 @@ except ImportError:
 
 from .geometry_utils import _bbox_width, _overlap_1d, _rect_area
 from .figure_assets import figure_asset_needs_refresh, resolve_figure_asset_dpi
-from .heuristics import _page_has_references_heading, _page_looks_like_references_content
+from .heuristics import _page_is_predominantly_references
 from .layout_analysis import _collect_visual_rects, _detect_column_split_x, page_has_full_page_image_layer
 from .page_figure_metadata import infer_visual_rects_from_caption_candidates
 from .reference_page_vl import reference_markdown_entry_count, reference_markdown_is_usable
@@ -30,9 +30,7 @@ def _stage_timing_enabled() -> bool:
 
 def _detect_references_page(page) -> bool:
     try:
-        return bool(
-            _page_has_references_heading(page) or _page_looks_like_references_content(page)
-        )
+        return bool(_page_is_predominantly_references(page))
     except Exception:
         return False
 

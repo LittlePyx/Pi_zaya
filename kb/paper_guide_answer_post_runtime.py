@@ -1394,6 +1394,12 @@ def _paper_guide_prompt_requests_exact_citation_support(prompt: str) -> bool:
     q = str(prompt or "").strip()
     if not q:
         return False
+    if re.search(
+        r"(?:参考文献|文献|引用)\s*(?:第\s*)?[\[(（【]?\s*\d{1,4}|"
+        r"(?i:\b(?:reference|ref\.?|citation)\s*(?:entry\s*)?(?:no\.?\s*)?[\[(]?\s*\d{1,4})",
+        q,
+    ):
+        return True
     return bool(_PAPER_GUIDE_CITATION_EXACT_SUPPORT_RE.search(q))
 
 
@@ -1659,6 +1665,78 @@ def _resolve_exact_citation_lookup_support_from_source(
     if (not src) or (not q):
         return {}
     md_path = _resolve_paper_guide_md_path(src, db_dir=db_dir)
+
+    explicit_ref_num = 0
+    for pattern in (
+        r"(?:参考文献|文献|引用)\s*(?:第\s*)?[\[(（【]?\s*(\d{1,4})",
+        r"(?i)\b(?:reference|ref\.?|citation)\s*(?:entry\s*)?(?:no\.?\s*)?[\[(]?\s*(\d{1,4})",
+    ):
+        match = re.search(pattern, q)
+        if not match:
+            continue
+        try:
+            explicit_ref_num = int(match.group(1))
+        except Exception:
+            explicit_ref_num = 0
+        if explicit_ref_num > 0:
+            break
+
+    if explicit_ref_num > 0 and isinstance(md_path, Path) and md_path.exists():
+        exact_reference = next(
+            (
+                dict(raw)
+                for raw in list(load_paper_guide_reference_index(md_path) or [])
+                if isinstance(raw, dict) and int(raw.get("ref_num") or 0) == explicit_ref_num
+            ),
+            {},
+        )
+        if exact_reference:
+            reference_entry = str(exact_reference.get("text") or "").strip()
+            reference_title = str(exact_reference.get("title") or "").strip()
+            exact_block: dict = {}
+            try:
+                candidate_blocks = list(load_source_blocks(md_path) or [])
+            except Exception:
+                candidate_blocks = []
+            block_matches: list[tuple[int, dict]] = []
+            for block in candidate_blocks:
+                if not isinstance(block, dict):
+                    continue
+                raw_text = str(block.get("raw_text") or block.get("text") or "").strip()
+                if not raw_text:
+                    continue
+                if reference_title and reference_title.lower() not in raw_text.lower():
+                    continue
+                if (not reference_title) and reference_entry and reference_entry.lower() not in raw_text.lower():
+                    continue
+                kind = str(block.get("kind") or "").strip().lower()
+                score = (0 if kind == "list_item" else 1) * 10000 + len(raw_text)
+                block_matches.append((score, dict(block)))
+            if block_matches:
+                block_matches.sort(key=lambda item: item[0])
+                exact_block = dict(block_matches[0][1])
+            locate_anchor = str(
+                exact_block.get("raw_text")
+                or exact_block.get("text")
+                or reference_entry
+                or reference_title
+            ).strip()
+            return {
+                "source_path": str(md_path),
+                "block_id": str(exact_block.get("block_id") or "").strip(),
+                "anchor_id": str(exact_block.get("anchor_id") or "").strip(),
+                "heading_path": str(exact_block.get("heading_path") or "References").strip(),
+                "locate_anchor": locate_anchor,
+                "claim_type": "reference_entry",
+                "cite_policy": "prefer_ref",
+                "segment_text": locate_anchor,
+                "segment_index": -1,
+                "ref_nums": [explicit_ref_num],
+                "candidate_refs": [explicit_ref_num],
+                "resolved_ref_num": explicit_ref_num,
+                "reference_title": reference_title,
+                "reference_entry": reference_entry,
+            }
 
     requested_title = ""
     quote_pattern = r"[\"\u201c\u201d\u300c\u300d\u300e\u300f]([^\"\u201c\u201d\u300c\u300d\u300e\u300f\n]{8,240})[\"\u201c\u201d\u300c\u300d\u300e\u300f]"

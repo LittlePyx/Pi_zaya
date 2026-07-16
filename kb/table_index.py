@@ -22,6 +22,8 @@ _DIRECTION_WORDS = {"↑": "higher is better", "↓": "lower is better"}
 
 _IDENTIFIER_HEADER_RE = re.compile(r"(?:id|index|no\.?|number|rank)", flags=re.I)
 
+_WITH_WITHOUT_HEADER_RE = re.compile(r"^(?:w\s*/(?:\s*o)?|with(?:out)?)$", flags=re.I)
+
 
 def _clean_cell(value: Any) -> str:
     text = html.unescape(str(value or "")).replace("\u00a0", " ")
@@ -117,13 +119,23 @@ def _header_continuation_score(cells: list[str], next_cells: list[str]) -> int:
     surface = " ".join(cleaned)
     percentage_count = len(re.findall(r"(?<!\d)\d+(?:\.\d+)?%", surface))
     metric_count = len(list(_METRIC_RE.finditer(surface)))
-    if percentage_count < 2 and metric_count < 2:
+    qualifiers = [
+        value
+        for value in cleaned[1:]
+        if value and _WITH_WITHOUT_HEADER_RE.fullmatch(value)
+    ]
+    qualifier_kinds = {
+        "without" if re.fullmatch(r"(?:w\s*/\s*o|without)", value, flags=re.I) else "with"
+        for value in qualifiers
+    }
+    paired_with_without_header = len(qualifiers) >= 2 and qualifier_kinds == {"with", "without"}
+    if percentage_count < 2 and metric_count < 2 and not paired_with_without_header:
         return 0
     next_cleaned = [" ".join(_cell_segments(cell)).strip() for cell in next_cells]
     if not next_cleaned or not any(next_cleaned):
         return 0
     next_numeric_count = len(list(_NUMBER_RE.finditer(" ".join(next_cleaned))))
-    return percentage_count + metric_count + (1 if next_numeric_count >= 2 else 0)
+    return percentage_count + metric_count + len(qualifiers) + (1 if next_numeric_count >= 2 else 0)
 
 
 def _combine_header_rows(headers: list[str], continuation: list[str]) -> list[str]:
@@ -189,11 +201,20 @@ def _metric_specs(header: str) -> list[dict[str, str]]:
     prefix = text[: matches[0].start()].strip(" \t:/,;-_")
     out: list[dict[str, str]] = []
     seen: set[str] = set()
-    for match in matches:
+    for match_index, match in enumerate(matches):
         name = str(match.group(0) or "").strip()
-        suffix = text[match.end() : match.end() + 3]
+        next_start = matches[match_index + 1].start() if match_index + 1 < len(matches) else len(text)
+        suffix = text[match.end() : next_start]
         direction = next((symbol for symbol in ("↑", "↓") if symbol in suffix), "")
-        label = " ".join(part for part in (prefix, name, direction) if part).strip()
+        qualifier_surface = suffix.replace("↑", " ").replace("↓", " ").strip(" \t:,;-_()[]")
+        qualifier = ""
+        if _WITH_WITHOUT_HEADER_RE.fullmatch(qualifier_surface):
+            qualifier = (
+                "w/o"
+                if re.fullmatch(r"(?:w\s*/\s*o|without)", qualifier_surface, flags=re.I)
+                else "w/"
+            )
+        label = " ".join(part for part in (prefix, name, direction, qualifier) if part).strip()
         key = label.lower()
         if not label or key in seen:
             continue
@@ -216,6 +237,15 @@ def _metric_facts(header: str, value: str) -> list[dict[str, str]]:
         }
         for spec, number in zip(specs, numbers)
     ]
+
+
+def _metric_label_search_surface(label: str) -> str:
+    surface = str(label or "").strip()
+    if re.search(r"w\s*/\s*o\s*$", surface, flags=re.I):
+        return f"{surface} (without)"
+    if re.search(r"w\s*/\s*$", surface, flags=re.I):
+        return f"{surface} (with)"
+    return surface
 
 
 def _metric_discriminator_column(headers: list[str], rows: list[list[str]]) -> int | None:
@@ -377,9 +407,11 @@ def _build_table_record(block: dict[str, Any], *, table_index: int) -> dict[str,
                     cell_fact = {**fact, "label": fact_label}
                     cell_facts.append(cell_fact)
                     if transposed_metric_row:
-                        fact_texts.append(f"{header} {fact_label} = {fact['value']}")
+                        fact_texts.append(
+                            f"{header} {_metric_label_search_surface(fact_label)} = {fact['value']}"
+                        )
                     else:
-                        fact_texts.append(f"{fact_label} = {fact['value']}")
+                        fact_texts.append(f"{_metric_label_search_surface(fact_label)} = {fact['value']}")
                     series = metric_series.setdefault(
                         fact_label,
                         {
@@ -512,7 +544,8 @@ def table_index_to_chunks(payload: dict[str, Any], *, source_path: str, schema_v
                 continue
             direction = _DIRECTION_WORDS.get(str(series.get("direction") or ""), "")
             direction_text = f" ({direction})" if direction else ""
-            text = f"{prefix}. {label}{direction_text}: {'; '.join(values)}"[:6000]
+            search_label = _metric_label_search_surface(label)
+            text = f"{prefix}. {search_label}{direction_text}: {'; '.join(values)}"[:6000]
             meta = {
                 **base_meta,
                 "structured_kind": "table_metric",

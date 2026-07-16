@@ -380,6 +380,51 @@ def test_resolve_exact_citation_lookup_rejects_absent_quoted_title(tmp_path, mon
     assert rec == {"not_found": True, "requested_title": "First-Photon Imaging", "source_path": "demo.pdf"}
 
 
+def test_resolve_exact_citation_lookup_support_from_source_uses_explicit_reference_number(tmp_path, monkeypatch):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text("placeholder", encoding="utf-8")
+    title = "Restormer: Efficient Transformer for High-Resolution Image Restoration"
+    entry = f"[39] S. W. Zamir et al. {title}. CVPR, 2022."
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "load_paper_guide_reference_index",
+        lambda _path: [{"ref_num": 39, "title": title, "text": entry}],
+    )
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "load_source_blocks",
+        lambda _path: [
+            {
+                "kind": "paragraph",
+                "block_id": "wide",
+                "heading_path": "References",
+                "raw_text": f"[38] Another work.\n{entry}\n[40] Final work.",
+            },
+            {
+                "kind": "list_item",
+                "block_id": "ref39",
+                "anchor_id": "ref_0039",
+                "heading_path": "References",
+                "raw_text": entry,
+            },
+        ],
+    )
+
+    rec = answer_post_runtime._resolve_exact_citation_lookup_support_from_source(
+        "demo.pdf",
+        prompt="\u8fd9\u7bc7\u8bba\u6587\u7684\u53c2\u8003\u6587\u732e [39] \u662f\u54ea\u7bc7\uff1f\u53ea\u56de\u7b54\u9898\u540d\u3002",
+        db_dir=tmp_path,
+    )
+
+    assert rec["ref_nums"] == [39]
+    assert rec["resolved_ref_num"] == 39
+    assert rec["reference_title"] == title
+    assert rec["block_id"] == "ref39"
+    assert rec["heading_path"] == "References"
+    assert rec["locate_anchor"] == entry
+
+
 def test_resolve_exact_citation_lookup_support_from_source_falls_back_to_reference_index(tmp_path, monkeypatch):
     md_path = tmp_path / "paper.en.md"
     assets_dir = tmp_path / "assets"

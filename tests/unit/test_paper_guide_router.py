@@ -72,6 +72,15 @@ def test_resolve_paper_guide_intent_extracts_exact_citation_lookup_target():
     assert out2.exact_support is True
 
 
+def test_resolve_paper_guide_intent_marks_numbered_reference_as_exact_lookup():
+    out = _resolve_paper_guide_intent(
+        "\u8fd9\u7bc7\u8bba\u6587\u7684\u53c2\u8003\u6587\u732e [39] \u662f\u54ea\u7bc7\uff1f\u53ea\u56de\u7b54\u9898\u540d\u3002"
+    )
+
+    assert out.family == "citation_lookup"
+    assert out.exact_support is True
+
+
 def test_resolve_paper_guide_intent_marks_naive_source_trace_as_citation_lookup():
     out = _resolve_paper_guide_intent("这个 APR 听起来不是他们原创的吧，源头是哪篇工作？")
 

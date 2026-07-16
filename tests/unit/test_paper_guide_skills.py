@@ -58,6 +58,36 @@ def test_run_exact_citation_lookup_skill_extracts_inline_refs_when_record_missin
     ]
 
 
+def test_run_exact_citation_lookup_skill_returns_only_full_title_and_reference_location_when_requested():
+    title = "Restormer: Efficient Transformer for High-Resolution Image Restoration"
+    result = paper_guide_skills.run_exact_citation_lookup_skill(
+        prompt_text="\u8fd9\u7bc7\u8bba\u6587\u7684\u53c2\u8003\u6587\u732e [39] \u662f\u54ea\u7bc7\uff1f\u53ea\u56de\u7b54\u9898\u540d\uff0c\u5e76\u7ed9\u51fa\u539f\u6587\u5b9a\u4f4d\u3002",
+        prompt_family="citation_lookup",
+        source_path="bound.md",
+        db_dir="db",
+        has_hits=True,
+        prompt_requests_exact_support=lambda _prompt: True,
+        resolve_exact_support=lambda source_path, **_kwargs: {
+            "source_path": source_path,
+            "block_id": "ref39",
+            "heading_path": "References",
+            "locate_anchor": f"[39] {title}. CVPR, 2022.",
+            "reference_title": title,
+            "ref_nums": [39],
+        },
+        extract_inline_reference_numbers=lambda _anchor, **_kwargs: [39],
+        sanitize_answer=lambda answer, **_kwargs: answer,
+    )
+
+    assert result is not None
+    assert title in result.answer_text
+    assert "References" in result.answer_text
+    assert "39" in result.answer_text
+    assert ">" not in result.answer_text
+    assert "CVPR, 2022" not in result.answer_text
+
+
+
 def test_run_exact_figure_panel_skill_surfaces_clause_references():
     result = paper_guide_skills.run_exact_figure_panel_skill(
         prompt_text="For Figure 3 panel (f), show me the exact caption clause.",

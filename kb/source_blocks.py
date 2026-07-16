@@ -45,6 +45,7 @@ _MD_TABLE_RE = re.compile(r"^\s*\|.*\|\s*$")
 _MD_FENCE_RE = re.compile(r"^\s*(```+|~~~+)\s*")
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _PAGE_MARKER_RE = re.compile(r"^\s*<!--\s*kb_page\s*:\s*(\d{1,5})\s*-->\s*$", re.IGNORECASE)
+_TABLE_CAPTION_START_RE = re.compile(r"^\s*(?:table\.?\s*#?\s*)(\d{1,4})\b", re.IGNORECASE)
 _BOX_START_RE = re.compile(r"^\s*<!--\s*box:start\s+id=(\d+)\s*-->\s*$", re.IGNORECASE)
 _BOX_END_RE = re.compile(r"^\s*<!--\s*box:end(?:\s+id=(\d+))?\s*-->\s*$", re.IGNORECASE)
 _BOX_TITLE_RE = re.compile(r"^\s*\*\*\[\s*Box\s+(\d+)\b[^\]]*\]\*\*\s*$", re.IGNORECASE)
@@ -412,6 +413,80 @@ def _load_figure_identity_by_asset(md_path: Path | str) -> dict[str, dict]:
     return out
 
 
+def _bind_table_captions_monotonically(blocks: list[SourceBlock]) -> None:
+    """Bind authored table captions to grids once, in local document order."""
+    tables = sorted(
+        (block for block in blocks if str(block.get("kind") or "").strip().lower() == "table"),
+        key=lambda block: int(block.get("line_start") or 0),
+    )
+    captions: list[dict[str, object]] = []
+    for block in blocks:
+        if str(block.get("kind") or "").strip().lower() != "paragraph":
+            continue
+        raw_text = str(block.get("raw_text") or block.get("text") or "")
+        raw_lines = raw_text.splitlines() or [raw_text]
+        matched_lines: list[tuple[int, re.Match[str], str]] = []
+        for offset, raw_line in enumerate(raw_lines):
+            line_text = normalize_inline_markdown(raw_line)
+            match = _TABLE_CAPTION_START_RE.match(line_text)
+            if match:
+                matched_lines.append((offset, match, line_text))
+        if not matched_lines:
+            continue
+        full_caption_text = normalize_inline_markdown(raw_text)
+        for offset, match, line_text in matched_lines:
+            captions.append(
+                {
+                    "line": int(block.get("line_start") or 0) + int(offset),
+                    "number": int(match.group(1)),
+                    "text": (full_caption_text if len(matched_lines) == 1 else line_text)[:1200],
+                }
+            )
+    if not tables or not captions:
+        return
+
+    events: list[tuple[int, int, str, object]] = []
+    events.extend((int(item["line"]), 0, "caption", item) for item in captions)
+    events.extend((int(table.get("line_start") or 0), 1, "table", table) for table in tables)
+    events.sort(key=lambda item: (item[0], item[1]))
+
+    pending: list[dict[str, object]] = []
+    bound_table_ids: set[str] = set()
+    last_table: SourceBlock | None = None
+
+    def bind(table: SourceBlock, caption: dict[str, object]) -> None:
+        number = int(caption.get("number") or 0)
+        if number <= 0:
+            return
+        table["number"] = number
+        table["table_number"] = number
+        table["caption_text"] = str(caption.get("text") or "").strip()[:1200]
+        bound_table_ids.add(str(table.get("block_id") or id(table)))
+
+    for line_no, _order, event_kind, payload in events:
+        if event_kind == "caption":
+            caption = payload if isinstance(payload, dict) else {}
+            last_id = str((last_table or {}).get("block_id") or (id(last_table) if last_table else ""))
+            gap = int(line_no - int((last_table or {}).get("line_end") or 0)) if last_table else 10_000
+            if last_table is not None and last_id not in bound_table_ids and 0 <= gap <= 4:
+                bind(last_table, caption)
+                continue
+            pending.append(caption)
+            continue
+
+        table = payload if isinstance(payload, dict) else None
+        if table is None:
+            continue
+        pending = [
+            caption
+            for caption in pending
+            if 0 <= int(line_no - int(caption.get("line") or 0)) <= 80
+        ]
+        if pending:
+            bind(table, pending.pop(0))
+        last_table = table
+
+
 def build_source_blocks(
     md_text: str,
     *,
@@ -496,7 +571,11 @@ def build_source_blocks(
         para_buf = []
         if not raw:
             return
-        is_equation = is_display_equation_block(raw)
+        is_table_caption = any(
+            _TABLE_CAPTION_START_RE.match(normalize_inline_markdown(raw_line))
+            for raw_line in raw.splitlines()
+        )
+        is_equation = is_display_equation_block(raw) and not is_table_caption
         extras: dict[str, object] | None = None
         next_caption_follow_context: dict[str, object] | None = None
         if pending_figure_context:
@@ -899,6 +978,7 @@ def build_source_blocks(
     flush_paragraph(len(lines))
     if in_fence:
         flush_code(len(lines))
+    _bind_table_captions_monotonically(blocks)
     return blocks
 
 

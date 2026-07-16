@@ -5,6 +5,7 @@ from kb.inpaper_citation_grounding import (
     extract_candidate_ref_cue_texts,
     extract_citation_context_hints,
     has_explicit_reference_conflict,
+    iter_inpaper_numeric_citations,
     parse_ref_num_set,
     reference_alignment_score,
 )
@@ -15,6 +16,31 @@ def test_parse_ref_num_set_supports_ascii_and_unicode_dashes():
     assert parse_ref_num_set("11\u201313") == [11, 12, 13]
     assert parse_ref_num_set("11\u201413") == [11, 12, 13]
     assert parse_ref_num_set("11\u221213") == [11, 12, 13]
+    assert parse_ref_num_set("³⁰⁻³³,⁴³") == [30, 31, 32, 33, 43]
+
+
+def test_iter_inpaper_numeric_citations_accepts_nature_superscripts_but_not_exponents():
+    text = (
+        "Optical cavity designs remain challenging³⁰⁻³³. "
+        "The accepted lasing protocol is used⁴³. "
+        "The area is 0.02 mm², current density is 280 A cm⁻², Pb²⁺ is present, and R² is 0.99."
+    )
+
+    markers = iter_inpaper_numeric_citations(text)
+
+    assert [parse_ref_num_set(spec) for spec, *_rest in markers] == [[30, 31, 32, 33], [43]]
+
+
+def test_iter_inpaper_numeric_citations_ignores_numeric_brackets_inside_math():
+    text = (
+        "The architecture follows prior work [21]. "
+        "Its convolution weights have dimensions [9,9,1,64], the dataset has [20,000] images, "
+        "and the sum is $\\sum_{i=1}^{[20,000]} y^i$."
+    )
+
+    markers = iter_inpaper_numeric_citations(text)
+
+    assert [parse_ref_num_set(spec) for spec, *_rest in markers] == [[21]]
 
 
 def test_parse_ref_num_set_dedupes_and_skips_large_ranges():
@@ -44,6 +70,17 @@ def test_extract_candidate_ref_nums_from_hits_reads_text_and_snippets():
     ]
 
     assert extract_candidate_ref_nums_from_hits(hits, source_path="doc.en.md") == [24, 30, 31, 45, 46]
+
+
+def test_extract_candidate_ref_nums_from_hits_reads_unicode_superscripts():
+    hits = [
+        {
+            "text": "Prior cavity designs are difficult³⁰⁻³³, while lasing follows accepted protocols⁴³.",
+            "meta": {"source_path": "nature.en.md"},
+        }
+    ]
+
+    assert extract_candidate_ref_nums_from_hits(hits, source_path="nature.en.md") == [30, 31, 32, 33, 43]
 
 
 def test_extract_candidate_ref_cue_texts_keeps_numeric_citation_windows():

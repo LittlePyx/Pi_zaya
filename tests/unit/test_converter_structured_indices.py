@@ -358,3 +358,36 @@ We compare the reconstruction baseline against compressed sensing systems [1,2].
     anchors = anchor_payload.get("anchors") or []
     intro_anchor = next(item for item in anchors if "Earlier systems" in str(item.get("text") or ""))
     assert intro_anchor["page_start"] == 1
+
+
+def test_rebuild_structured_indices_records_nature_unicode_superscript_mentions(tmp_path: Path):
+    refs = "\n".join(f"[{number}] Author {number}. Reference title {number}. 2025." for number in range(1, 44))
+    md = f"""# Nature-style Paper
+
+<!-- kb_page: 1 -->
+## Results
+
+Standard cavity designs remain difficult³⁰⁻³³. The lasing criteria follow established protocols⁴³.
+
+The active area is 0.02 mm², the current density is 280 A cm⁻², and R² is 0.99.
+
+## References
+
+{refs}
+"""
+    md_path = tmp_path / "nature.en.md"
+    assets_dir = tmp_path / "assets"
+
+    out = rebuild_structured_indices_for_markdown(md_path, md_text=md, assets_dir=assets_dir)
+
+    ref_payload = out.get("reference_index") or {}
+    refs_out = ref_payload.get("references") or []
+    by_num = {int(item.get("ref_num") or 0): item for item in refs_out}
+    assert ref_payload["citation_mention_count"] == 5
+    assert set(by_num[43]["citation_mentions"][0]["citation_context"].split()) >= {
+        "lasing",
+        "criteria",
+        "protocols⁴³.",
+    }
+    assert by_num[43]["citation_mentions"][0]["page_start"] == 1
+    assert not by_num[2].get("citation_mentions")

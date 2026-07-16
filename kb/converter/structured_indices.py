@@ -7,7 +7,7 @@ from typing import Any
 
 from kb.citation_meta import extract_first_author_family_hint, extract_first_doi, extract_year_hint
 from kb.evidence_text import looks_author_list_context, looks_bibliography_entry_context
-from kb.inpaper_citation_grounding import parse_ref_num_set
+from kb.inpaper_citation_grounding import iter_inpaper_numeric_citations, parse_ref_num_set
 from kb.reference_index import (
     _fallback_title_from_raw_reference,
     build_reference_catalog_from_md,
@@ -18,12 +18,9 @@ from kb.reference_index import (
 from kb.source_blocks import build_source_blocks, doc_id_for_path, normalize_inline_markdown
 from kb.table_index import build_table_index_payload
 
-STRUCTURED_INDEX_VERSION = 5
+STRUCTURED_INDEX_VERSION = 6
 _INDEX_VERSION = STRUCTURED_INDEX_VERSION
 _EQUATION_CONTEXT_KINDS = {"paragraph", "list_item", "blockquote", "table"}
-_INLINE_REF_RE = re.compile(
-    r"(?<!\[)\[(\d{1,4}(?:\s*(?:[-\u2013\u2014\u2212,;\uff0c\u3001\uff1b])\s*\d{1,4})*)\](?!\])"
-)
 _REFERENCE_HEADING_RE = re.compile(
     r"(?:^|/)\s*(?:\d{1,3}\s*[.)]?\s*)?(?:references?|bibliography|literature\s+cited|"
     r"works\s+cited|cited\s+references|reference\s+list|references\s+and\s+notes|"
@@ -212,17 +209,10 @@ def _normalize_ref_marker_spec(value: Any) -> str:
     return re.sub(r"[\uff0c\u3001;\uff1b]", ",", str(value or "").strip())
 
 
-def _looks_like_inline_reference_marker(text: str, match: re.Match[str]) -> bool:
+def _looks_like_inline_reference_span(text: str, start: int, end: int) -> bool:
     source = str(text or "")
-    try:
-        start = int(match.start())
-        end = int(match.end())
-    except Exception:
-        return True
     before = source[start - 1] if start > 0 else ""
     after = source[end] if end < len(source) else ""
-    # Converted OCR/Markdown can split notation like s2ISM into "s [2]ISM".
-    # That is not a bibliography citation and should not seed SystemB cards.
     if after and re.match(r"[A-Za-z0-9_]", after):
         return False
     if before and re.match(r"[A-Za-z0-9_]", before) and not before.isspace():
@@ -283,13 +273,17 @@ def _collect_reference_mentions(blocks: list[dict[str, Any]]) -> dict[int, list[
             continue
         if looks_author_list_context(text) or looks_bibliography_entry_context(text):
             continue
-        for match in _INLINE_REF_RE.finditer(text):
-            if not _looks_like_inline_reference_marker(text, match):
+        for spec, marker_start, marker_end, marker_style in iter_inpaper_numeric_citations(text):
+            if marker_style == "bracket" and not _looks_like_inline_reference_span(
+                text,
+                int(marker_start),
+                int(marker_end),
+            ):
                 continue
-            nums = parse_ref_num_set(_normalize_ref_marker_spec(match.group(1)), max_items=64)
+            nums = parse_ref_num_set(_normalize_ref_marker_spec(spec), max_items=64)
             if not nums:
                 continue
-            context = _mention_context(text, int(match.start()), int(match.end()), max_chars=520)
+            context = _mention_context(text, int(marker_start), int(marker_end), max_chars=520)
             if not context:
                 continue
             if looks_author_list_context(context) or looks_bibliography_entry_context(context):

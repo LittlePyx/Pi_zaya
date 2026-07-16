@@ -8,6 +8,7 @@ from kb.converter.structured_indices import STRUCTURED_INDEX_VERSION, rebuild_st
 from kb.paper_guide_structured_index_runtime import load_paper_guide_table_index
 from kb.retriever import BM25Retriever
 from kb.store import compute_doc_id, write_doc_chunks
+from kb.table_index import parse_markdown_table
 
 
 def _comparison_markdown() -> str:
@@ -92,6 +93,42 @@ def test_multi_level_headers_keep_dataset_method_and_sampling_ratio_together() -
     ratio_4 = next(chunk for chunk in metrics if chunk["meta"]["table_metric_label"] == "Sampling Ratio (SR) 4%")
     assert "Set11 / ReconNet [22] = 20.93/0.5897" in ratio_4["text"]
     assert "Set11 / ISTA-Net+ [69] = 21.32/0.6037" in ratio_4["text"]
+
+
+def test_with_without_metric_subheaders_are_merged_and_not_indexed_as_data() -> None:
+    md = "\n".join(
+        [
+            "# Ablation",
+            "**Table 4.** High-frequency filter ablation.",
+            "| Filter | PSNR↑ |  | SSIM↑ |  |",
+            "| --- | --- | --- | --- | --- |",
+            "|  | w/ | w/o | w/ | w/o |",
+            "| Factory | 37.75 | 33.08 | .9646 | .9230 |",
+            "| Vender | 36.00 | 31.60 | .9641 | .9334 |",
+        ]
+    )
+
+    headers, rows = parse_markdown_table("\n".join(md.splitlines()[2:]))
+    assert headers == ["Filter", "PSNR↑ w/", "PSNR↑ w/o", "SSIM↑ w/", "SSIM↑ w/o"]
+    assert [row[0] for row in rows] == ["Factory", "Vender"]
+
+    chunks = chunk_markdown(md, source_path="scigs.md", overlap=0)
+    table_rows = [chunk for chunk in chunks if chunk["meta"].get("structured_kind") == "table_row"]
+    table_metrics = [chunk for chunk in chunks if chunk["meta"].get("structured_kind") == "table_metric"]
+
+    assert [row["meta"]["table_row_label"] for row in table_rows] == ["Factory", "Vender"]
+    assert {metric["meta"]["table_metric_label"] for metric in table_metrics} == {
+        "PSNR ↑ w/",
+        "PSNR ↑ w/o",
+        "SSIM ↑ w/",
+        "SSIM ↑ w/o",
+    }
+    psnr_without = next(
+        metric for metric in table_metrics if metric["meta"]["table_metric_label"] == "PSNR ↑ w/o"
+    )
+    assert "PSNR ↑ w/o (without)" in psnr_without["text"]
+    assert "Factory = 33.08" in psnr_without["text"]
+    assert "Vender = 31.60" in psnr_without["text"]
 
 
 def test_multi_level_metric_headers_label_paired_values() -> None:
@@ -335,6 +372,40 @@ def test_uncaptioned_table_does_not_invent_authored_table_number() -> None:
     assert metric["meta"]["table_number"] == 0
     assert metric["text"].startswith("Table data.")
     assert not metric["text"].startswith("Table 1.")
+
+
+def test_adjacent_nafnet_table_captions_keep_table_8_and_9_facts_separate(tmp_path) -> None:
+    md_path = tmp_path / "nafnet.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "# Results",
+                "<!-- kb_page: 14 -->",
+                "**Table 8.** Raw image denoising results on 4Scenes [35]",
+                "**Table 9.** Image deblurring results on REDS-val-300 [27]",
+                "| Method | PSNR | SSIM | MACs(G) |",
+                "| --- | --- | --- | --- |",
+                "| PMRID[35] | 39.76 | 0.975 | 1.2 |",
+                "| NAFNet(ours) | 40.05 | 0.977 | 1.1 |",
+                "",
+                "| Method | PSNR | SSIM | MACs(G) |",
+                "| --- | --- | --- | --- |",
+                "| MPRNet[37] | 28.79 | 0.811 | 776.7 |",
+                "| HINet[5] | 28.83 | 0.862 | 170.7 |",
+                "| MAXIM[32] | 28.93 | 0.865 | 169.5 |",
+                "| NAFNet(ours) | 29.09 | 0.867 | 65 |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = rebuild_structured_indices_for_markdown(md_path)["table_index"]
+    tables = payload["tables"]
+
+    assert [table["table_number"] for table in tables] == [8, 9]
+    assert "PMRID[35]" in tables[0]["rows"][0]["search_text"]
+    assert "MPRNet[37]" in tables[1]["rows"][0]["search_text"]
+    assert all("PMRID" not in row["search_text"] for row in tables[1]["rows"])
 
 
 def test_comparison_words_do_not_make_unrelated_tables_searchable() -> None:

@@ -234,7 +234,26 @@ def run_exact_citation_lookup_skill(
     ref_label = _structured_reference_label(str(source_path or ""), ref_nums[:4])
     reference_title = str((rec or {}).get("reference_title") or "").strip()
     naive_source_trace = _paper_guide_prompt_requests_naive_source_trace(prompt)
-    if _contains_cjk(prompt) and reference_title:
+    title_only = bool(
+        reference_title
+        and re.search(
+            r"(?:只(?:回答|给出|返回).{0,8}(?:题名|标题)|"
+            r"(?i:\bonly\s+(?:answer|give|return)\b.{0,20}\btitle\b))",
+            prompt,
+        )
+    )
+    include_quote = True
+    if title_only and _contains_cjk(prompt):
+        lines = [f"**{reference_title}** {ref_label}"]
+        location = str(heading_path or "References").strip()
+        lines.append(f"原文位置：{location}，参考文献第 {int(ref_nums[0])} 条。")
+        include_quote = False
+    elif title_only:
+        lines = [f'**{reference_title}** {ref_label}']
+        location = str(heading_path or "References").strip()
+        lines.append(f"Source location: {location}, reference entry {int(ref_nums[0])}.")
+        include_quote = False
+    elif _contains_cjk(prompt) and reference_title:
         if re.search(r"(?i)compress(?:ed|ive)\s+sensing", locate_anchor) and re.search(
             r"(?i)reduce(?:d|s)?\s+measurements?", locate_anchor
         ):
@@ -277,7 +296,8 @@ def run_exact_citation_lookup_skill(
             f"Use {ref_label} as the cited source for this passage.",
             _source_location_label(heading_path, prefer_zh=False),
         ]
-    lines.append(f"> {locate_anchor}")
+    if include_quote:
+        lines.append(f"> {locate_anchor}")
 
     rec_out = dict(rec or {})
     if ref_nums and (not list(rec_out.get("candidate_refs") or [])):

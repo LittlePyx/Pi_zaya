@@ -221,6 +221,60 @@ def test_build_anchor_index_table_number_in_buffer(tmp_path):
     assert entry["number"] == 3
 
 
+def test_table_captions_bind_monotonically_across_page_marker(tmp_path):
+    md_text = "\n".join(
+        [
+            "# Paper",
+            "**Table 1.** First comparison.",
+            "<!-- kb_page: 2 -->",
+            "continued caption text",
+            "| Method | PSNR |",
+            "| --- | --- |",
+            "| A | 40.1 |",
+            "**Table 2.** Second comparison.",
+            "| Method | SSIM |",
+            "| --- | --- |",
+            "| B | 0.97 |",
+        ]
+    )
+
+    blocks = _make_blocks(md_text, doc_dir=tmp_path)
+    tables = [block for block in blocks if block.get("kind") == "table"]
+
+    assert [table.get("number") for table in tables] == [1, 2]
+    assert [table.get("caption_text") for table in tables] == [
+        "Table 1. First comparison.",
+        "Table 2. Second comparison.",
+    ]
+
+
+def test_consecutive_table_captions_pair_with_consecutive_grids(tmp_path):
+    md_text = "\n".join(
+        [
+            "# Paper",
+            "**Table 4.** TLC effectiveness.",
+            "**Table 5.** Activation variants for $f(x)=x$.",
+            "| patches | TLC | PSNR |",
+            "| --- | --- | --- |",
+            "| yes | yes | 33.69 |",
+            "",
+            "| sigma | SIDD |",
+            "| --- | --- |",
+            "| Identity | 39.96 |",
+        ]
+    )
+
+    blocks = _make_blocks(md_text, doc_dir=tmp_path)
+    tables = [block for block in blocks if block.get("kind") == "table"]
+
+    assert [table.get("number") for table in tables] == [4, 5]
+    assert [table.get("caption_text") for table in tables] == [
+        "Table 4. TLC effectiveness.",
+        "Table 5. Activation variants for $f(x)=x$.",
+    ]
+    assert not any(block.get("kind") == "equation" for block in blocks)
+
+
 def test_build_anchor_index_deduplicates_figures(tmp_path):
     """Multiple blocks for same figure should not create duplicate index entries."""
     assets_dir = tmp_path / "assets"

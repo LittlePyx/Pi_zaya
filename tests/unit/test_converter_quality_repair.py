@@ -1381,6 +1381,56 @@ def test_repair_markdown_text_keeps_article_page_numbers_when_pdf_cover_is_skipp
     assert repaired.index("<!-- kb_page: 3 -->") < repaired.index("articlebravo000")
 
 
+def test_quality_detects_and_repairs_missing_leading_page_marker(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Missing Leading Marker.pdf"
+    page_texts = [
+        " ".join(f"alpha{i:03d}" for i in range(90)),
+        " ".join(f"bravo{i:03d}" for i in range(90)),
+        " ".join(f"charlie{i:03d}" for i in range(90)),
+    ]
+    doc = fitz.open()
+    for text in page_texts:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 560, 760), text, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Missing Leading Marker.en.md"
+    original = "\n\n".join(
+        [
+            "<!-- kb_page: 2 -->",
+            page_texts[0],
+            page_texts[1],
+            "<!-- kb_page: 3 -->",
+            page_texts[2],
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    payload = write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+
+    assert payload["source_quality"]["missing_pdf_page_markers"] == [1]
+    assert payload["source_quality"]["page_marker_count_shortfall"] == 1
+    assert "source_page_marker_alignment" in payload["repair_plan"]["issue_codes"]
+    assert "source_page_count_mismatch" not in payload["repair_plan"]["issue_codes"]
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["source_page_marker_alignment"],
+        source_pdf_path=pdf_path,
+    )
+    repaired = str(result.get("repaired_text") or "")
+    markers = [int(match.group(1)) for match in re.finditer(r"<!--\s*kb_page:\s*(\d+)\s*-->", repaired)]
+
+    assert result["changed"] is True
+    assert markers == [1, 2, 3]
+    assert repaired.index("<!-- kb_page: 1 -->") < repaired.index("alpha000")
+    assert repaired.index("<!-- kb_page: 2 -->") < repaired.index("bravo000")
+
+
 def test_repair_markdown_text_recovers_missing_caption_from_pdf_text(tmp_path: Path):
     import fitz
 
@@ -1690,6 +1740,58 @@ def test_repair_markdown_text_recovers_missing_source_page_from_pdf(tmp_path: Pa
     assert "<!-- kb_page: 2 -->" in repaired
     assert "bravo00 bravo01 bravo02" in repaired
     assert repaired.index("<!-- kb_page: 2 -->") < repaired.index("<!-- kb_page: 3 -->")
+    assert "missing_source_pages" not in result["remaining_issue_codes"]
+
+
+def test_empty_page_marker_does_not_hide_missing_source_page_text(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Empty Marker Paper.pdf"
+    page_texts = [
+        " ".join(f"alpha{i:02d}" for i in range(90)),
+        " ".join(
+            f"biographyperson{i:02d}researchinterestsinopticalimaging"
+            for i in range(30)
+        ),
+        " ".join(f"charlie{i:02d}" for i in range(90)),
+    ]
+    doc = fitz.open()
+    for text in page_texts:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 560, 760), text, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Empty Marker Paper.en.md"
+    original = "\n\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Empty Marker Paper",
+            page_texts[0],
+            "<!-- kb_page: 2 -->",
+            "<!-- kb_page: 3 -->",
+            page_texts[2],
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    payload = write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+    missing = payload["source_quality"]["missing_source_pages"]
+    assert [(item["page"], item["reason"]) for item in missing] == [
+        (2, "empty_page_marker_segment")
+    ]
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["missing_source_pages"],
+        source_pdf_path=pdf_path,
+    )
+
+    repaired = str(result.get("repaired_text") or "")
+    assert result["changed"] is True
+    assert repaired.count("<!-- kb_page: 2 -->") == 1
+    assert "biographyperson00researchinterestsinopticalimaging" in repaired
     assert "missing_source_pages" not in result["remaining_issue_codes"]
 
 
@@ -2150,6 +2252,58 @@ def test_write_conversion_quality_result_flags_missing_leading_reference_entries
     assert payload["source_quality"]["reference_index_truncated"] is True
     assert "reference_index_truncated" in payload["repair_plan"]["issue_codes"]
     assert payload["repair_plan"]["action"] == "autofix"
+
+
+def test_write_conversion_quality_result_flags_citations_beyond_reference_tail(tmp_path: Path):
+    md_path = tmp_path / "Missing Reference Tail.en.md"
+    refs = [
+        f"[{idx}] REF{idx}, A. Complete reference {idx}. Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(1, 9)
+    ]
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Missing Reference Tail",
+                "## Abstract",
+                "This paper cites the complete range [1-10] in its body.",
+                "## References",
+                *refs,
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert payload["source_quality"]["reference_index_truncated"] is True
+    assert "reference_index_truncated" in payload["repair_plan"]["issue_codes"]
+
+
+def test_reference_tail_check_compares_max_citation_not_unique_citation_count(tmp_path: Path):
+    md_path = tmp_path / "Complete Reference Tail.en.md"
+    refs = [
+        f"[{idx}] REF{idx}, A. Complete reference {idx}. Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(1, 37)
+    ]
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Complete Reference Tail",
+                "## Abstract",
+                "The body contains an OCR-like zero marker [0] and cites the full valid range [1-36].",
+                "## References",
+                *refs,
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert payload["source_quality"]["reference_index_truncated"] is False
+    assert "reference_index_truncated" not in payload["repair_plan"]["issue_codes"]
 
 
 def test_write_conversion_quality_result_reconverts_when_multiple_pdf_pages_lack_markers(tmp_path: Path):

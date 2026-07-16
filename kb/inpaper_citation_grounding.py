@@ -6,6 +6,23 @@ from kb.citation_meta import extract_first_doi, extract_year_hint
 
 _RANGE_DASH_CLASS = r"\-\u2013\u2014\u2212"
 _INPAPER_NUMERIC_RE = re.compile(rf"\[(\d{{1,4}}(?:\s*(?:[{_RANGE_DASH_CLASS},])\s*\d{{1,4}})*)\]")
+_SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+_SUPERSCRIPT_TRANSLATION = str.maketrans(
+    {
+        **{char: str(index) for index, char in enumerate(_SUPERSCRIPT_DIGITS)},
+        "⁻": "-",
+        "⁺": "+",
+    }
+)
+_SUPERSCRIPT_NUMERIC_RE = re.compile(
+    rf"(?<![{_SUPERSCRIPT_DIGITS}⁻⁺])"
+    rf"([{_SUPERSCRIPT_DIGITS}]{{1,4}}(?:\s*(?:[⁻{_RANGE_DASH_CLASS},;，、；])\s*[{_SUPERSCRIPT_DIGITS}]{{1,4}})*)"
+    rf"(?![{_SUPERSCRIPT_DIGITS}⁻⁺ⁱⁿ])"
+)
+_SUPERSCRIPT_UNIT_TAIL_RE = re.compile(
+    r"(?:^|[^A-Za-zµμΩ])(?:mm|cm|nm|pm|µm|μm|km|m|s|ms|µs|μs|ns|Hz|kHz|MHz|GHz|W|mW|A|V|K|Pa|mol)$",
+    flags=re.IGNORECASE,
+)
 _LATIN_SURNAME_RE = r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'`-]{1,40}"
 _AUTHOR_ETAL_RE = re.compile(r"\b([A-Z][A-Za-z'`-]{1,40})\s+et\s+al\.?\b", flags=re.I)
 _AUTHOR_YEAR_PAREN_RE = re.compile(r"\b([A-Z][A-Za-z'`-]{1,40})\s*\(\s*((?:19|20)\d{2})\s*\)")
@@ -17,7 +34,8 @@ _AUTHOR_YEAR_INLINE_RE = re.compile(r"\b([A-Z][A-Za-z'`-]{1,40})\s*,?\s+((?:19|2
 
 
 def parse_ref_num_set(spec: str, *, max_items: int = 48) -> list[int]:
-    text = str(spec or "").strip()
+    text = str(spec or "").translate(_SUPERSCRIPT_TRANSLATION).strip()
+    text = re.sub(r"[，、;；]", ",", text)
     if not text:
         return []
     out: list[int] = []
@@ -60,6 +78,78 @@ def parse_ref_num_set(spec: str, *, max_items: int = 48) -> list[int]:
     return out
 
 
+def _inside_markdown_math(text: str, offset: int) -> bool:
+    prefix = str(text or "")[: max(0, int(offset))]
+    return len(re.findall(r"(?<!\\)\$", prefix)) % 2 == 1
+
+
+def _looks_like_superscript_citation(text: str, start: int, end: int, spec: str) -> bool:
+    source = str(text or "")
+    before = source[start - 1] if start > 0 else ""
+    after = source[end] if end < len(source) else ""
+    if before in {"⁻", "⁺", "^", "_"} or before.isdigit():
+        return False
+    if after and (after.isalnum() or after in _SUPERSCRIPT_DIGITS or after in "ⁱⁿ"):
+        return False
+    if _inside_markdown_math(source, start):
+        return False
+    prefix = source[:start].rstrip()
+    if _SUPERSCRIPT_UNIT_TAIL_RE.search(prefix):
+        return False
+    token_match = re.search(r"([A-Za-z])$", prefix)
+    if token_match and len(parse_ref_num_set(spec, max_items=16)) == 1:
+        # A lone superscript after a one-letter variable is overwhelmingly likely
+        # to be an exponent (R², x³), not a bibliography marker.
+        previous_token = re.search(r"([A-Za-z]+)$", prefix)
+        if previous_token and len(previous_token.group(1)) == 1:
+            return False
+    return bool(parse_ref_num_set(spec, max_items=64))
+
+
+def _looks_like_bracket_citation(text: str, start: int, spec: str) -> bool:
+    marker = str(spec or "").strip()
+    if re.fullmatch(r"\d{1,3},\d{3}", marker):
+        return False
+    numbers = [part for part in re.split(r"\s*[,;]\s*", marker) if part]
+    if len(numbers) >= 3:
+        prefix = str(text or "")[max(0, int(start) - 100) : int(start)]
+        if re.search(
+            r"\b(?:dimensions?|shape|size|kernel|weights?|vector|matrix|tensor|resolution)"
+            r"\b[^.!?]{0,70}$",
+            prefix,
+            flags=re.IGNORECASE,
+        ):
+            return False
+    return True
+
+
+def iter_inpaper_numeric_citations(text: str) -> list[tuple[str, int, int, str]]:
+    """Return numeric citation specs as ``(spec, start, end, style)`` rows.
+
+    Besides bracket markers, Nature-style Unicode superscripts such as
+    ``³⁰⁻³³`` and ``⁴³`` are supported. Unit exponents and inline math are
+    deliberately excluded.
+    """
+
+    source = str(text or "")
+    out: list[tuple[str, int, int, str]] = []
+    for match in _INPAPER_NUMERIC_RE.finditer(source):
+        if _inside_markdown_math(source, int(match.start())):
+            continue
+        if not _looks_like_bracket_citation(source, int(match.start()), str(match.group(1) or "")):
+            continue
+        out.append((str(match.group(1) or ""), int(match.start()), int(match.end()), "bracket"))
+    for match in _SUPERSCRIPT_NUMERIC_RE.finditer(source):
+        spec = str(match.group(1) or "")
+        start = int(match.start())
+        end = int(match.end())
+        if not _looks_like_superscript_citation(source, start, end, spec):
+            continue
+        out.append((spec, start, end, "unicode_superscript"))
+    out.sort(key=lambda item: (int(item[1]), int(item[2])))
+    return out
+
+
 def extract_candidate_ref_nums_from_hits(
     answer_hits: list[dict],
     *,
@@ -72,8 +162,8 @@ def extract_candidate_ref_nums_from_hits(
 
     def _push_from_text(text: str) -> None:
         nonlocal out
-        for m in _INPAPER_NUMERIC_RE.finditer(str(text or "")):
-            for n in parse_ref_num_set(m.group(1), max_items=max_candidates):
+        for spec, _start, _end, _style in iter_inpaper_numeric_citations(str(text or "")):
+            for n in parse_ref_num_set(spec, max_items=max_candidates):
                 if n in seen:
                     continue
                 seen.add(n)
@@ -111,10 +201,10 @@ def _trim_candidate_cue_text(text: str, *, max_chars: int) -> str:
         limit = 180
     if len(s) <= limit:
         return s
-    m = _INPAPER_NUMERIC_RE.search(s)
-    if not m:
+    markers = iter_inpaper_numeric_citations(s)
+    if not markers:
         return s[: max(0, limit - 3)].rstrip() + "..."
-    start = max(0, int(m.start()) - max(0, limit // 3))
+    start = max(0, int(markers[0][1]) - max(0, limit // 3))
     end = min(len(s), start + limit)
     chunk = s[start:end].strip()
     if start > 0:
@@ -152,7 +242,7 @@ def extract_candidate_ref_cue_texts(
     out: list[str] = []
     seen: set[str] = set()
     for raw in texts:
-        if not _INPAPER_NUMERIC_RE.search(raw):
+        if not iter_inpaper_numeric_citations(raw):
             continue
         cue = _trim_candidate_cue_text(raw, max_chars=max_chars)
         if not cue:

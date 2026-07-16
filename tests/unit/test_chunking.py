@@ -1,4 +1,4 @@
-from kb.chunking import _semantic_overlap_tail, chunk_markdown
+from kb.chunking import CHUNK_SCHEMA_VERSION, _semantic_overlap_tail, chunk_markdown
 
 
 def test_chunking_short_text():
@@ -68,7 +68,7 @@ The simulator computes lifetime values from the measured phase.
     assert body["text"].startswith("## Numerical simulations")
     assert body["meta"]["page_start"] == 2
     assert body["meta"]["page_end"] == 2
-    assert body["meta"]["chunk_schema_version"] == 7
+    assert body["meta"]["chunk_schema_version"] == CHUNK_SCHEMA_VERSION
 
 
 def test_overlap_tail_does_not_start_mid_word():

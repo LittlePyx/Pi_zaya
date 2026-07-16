@@ -32,6 +32,7 @@ from kb.task_runtime import (
     _build_paper_guide_support_slots,
     _build_paper_guide_support_slots_block,
     _collect_paper_guide_candidate_refs_by_source,
+    _conversational_exact_citation_source_hint,
     _candidate_refs_from_support_resolution,
     _drop_paper_guide_locate_only_line_citations,
     _extract_inline_reference_numbers,
@@ -452,6 +453,32 @@ def test_conversational_source_hint_detection_and_augmentation():
             "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
         )
         == "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf 那这篇文章里的公式8写的是什么"
+    )
+
+
+def test_conversational_exact_citation_source_hint_requires_numbered_reference_followup():
+    source = "ECCV-2022-Simple Baselines for Image Restoration.pdf"
+
+    assert (
+        _conversational_exact_citation_source_hint(
+            prompt="\u8fd9\u7bc7\u8bba\u6587\u7684\u53c2\u8003\u6587\u732e [39] \u662f\u54ea\u7bc7\uff1f",
+            prompt_family="citation_lookup",
+            paper_guide_source_scoped=False,
+            inferred_source_hint=source,
+        )
+        == source
+    )
+    assert not _conversational_exact_citation_source_hint(
+        prompt="\u8fd9\u7bc7\u8bba\u6587\u5f15\u7528\u4e86\u54ea\u4e9b\u56fe\u50cf\u6062\u590d\u5de5\u4f5c\uff1f",
+        prompt_family="citation_lookup",
+        paper_guide_source_scoped=False,
+        inferred_source_hint=source,
+    )
+    assert not _conversational_exact_citation_source_hint(
+        prompt="\u8fd9\u7bc7\u8bba\u6587\u7684\u53c2\u8003\u6587\u732e [39] \u662f\u54ea\u7bc7\uff1f",
+        prompt_family="citation_lookup",
+        paper_guide_source_scoped=True,
+        inferred_source_hint=source,
     )
 
 

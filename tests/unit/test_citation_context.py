@@ -60,6 +60,32 @@ def test_extract_inpaper_reference_context_expands_ranges(tmp_path) -> None:
     assert out["heading_path"].endswith("Method")
 
 
+def test_extract_inpaper_reference_context_reads_nature_unicode_superscript(tmp_path) -> None:
+    md = tmp_path / "nature.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# Nature-style Paper",
+                "<!-- kb_page: 4 -->",
+                "## Results",
+                "The device demonstrates lasing according to established measurement protocols⁴³.",
+                "The active area is 0.02 mm² and the concentration contains Pb²⁺.",
+                "",
+                "## References",
+                "[43] Samuel et al. How to recognize lasing. 2009.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    out = extract_inpaper_reference_context(str(md), 43, answer_context="established lasing protocols")
+
+    assert out["citation_context_source"] == "source_markdown"
+    assert "measurement protocols⁴³" in out["citation_context"]
+    assert out["page_start"] == 4
+    assert out["heading_path"].endswith("Results")
+
+
 def test_extract_inpaper_reference_context_skips_author_affiliation_list(tmp_path) -> None:
     md = tmp_path / "paper.en.md"
     md.write_text(

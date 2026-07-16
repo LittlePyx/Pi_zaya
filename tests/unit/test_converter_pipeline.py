@@ -162,6 +162,18 @@ def test_ensure_page_marker_inserts_and_normalizes_marker():
     assert PDFConverter._ensure_page_marker("", 0) == "<!-- kb_page: 1 -->"
 
 
+def test_join_selected_page_markdown_keeps_anchor_for_empty_conversion_page():
+    joined = PDFConverter._join_selected_page_markdown(
+        [None, "# Page two", "# Unselected page"],
+        selected_start=0,
+        selected_end=2,
+    )
+
+    assert joined.startswith("<!-- kb_page: 1 -->")
+    assert "<!-- kb_page: 2 -->\n\n# Page two" in joined
+    assert "<!-- kb_page: 3 -->" not in joined
+
+
 def test_title_fallback_from_filename_preserves_numbered_outline_depth(tmp_path):
     title = "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning"
     cfg = ConvertConfig(

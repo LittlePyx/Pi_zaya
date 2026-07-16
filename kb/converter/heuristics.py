@@ -855,6 +855,105 @@ def _page_looks_like_references_content(page, *, page_text: str | None = None) -
     return len(years) >= 28 and len(ref_like_lines) >= 8
 
 
+def _page_is_predominantly_references(
+    page,
+    *,
+    page_text: str | None = None,
+    page_dict: dict | None = None,
+) -> bool:
+    """Return whether references occupy approximately the whole page.
+
+    A references heading alone is not enough: many papers start their reference
+    list below acknowledgements, appendices, proofs, or other body content. Such
+    mixed pages must stay on the full-page conversion path so the text above the
+    heading is not discarded by the references-only prompt.
+    """
+    try:
+        text = page_text if page_text is not None else (page.get_text("text") or "")
+    except Exception:
+        text = ""
+    text = _normalize_text(text)
+    if not text.strip():
+        return False
+
+    heading_pat = re.compile(
+        r"^\s*(?:REFERENCES|BIBLIOGRAPHY|REFERENCES\s+AND\s+NOTES|LITERATURE\s+CITED)\s*$",
+        flags=re.IGNORECASE,
+    )
+    lines = [ln.strip() for ln in text.splitlines() if (ln or "").strip()]
+    heading_indices = [idx for idx, ln in enumerate(lines) if heading_pat.fullmatch(ln)]
+    if not heading_indices:
+        # Continued reference pages legitimately have no repeated heading. The
+        # existing density heuristic already rejects body/reference mixtures.
+        return _page_looks_like_references_content(page, page_text=text)
+
+    heading_idx = heading_indices[0]
+    prefix_lines = lines[:heading_idx]
+    suffix_lines = lines[heading_idx + 1 :]
+
+    ref_line_pat = re.compile(
+        r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}[.)]\s*$|\d{1,4}[.)]\s+[A-Z])"
+    )
+    ref_starts = sum(1 for ln in suffix_lines if ref_line_pat.match(ln))
+    suffix_text = "\n".join(suffix_lines)
+    suffix_years = len(re.findall(r"(?:19|20)\d{2}", suffix_text))
+    if ref_starts < 2 and suffix_years < 8:
+        return False
+
+    # A heading well below the top is strong layout evidence that this is a
+    # mixed page even when PDF text extraction happens to reorder columns.
+    try:
+        data = page_dict if page_dict is not None else (page.get_text("dict") or {})
+        page_h = float(page.rect.height)
+        heading_y0: float | None = None
+        for block in data.get("blocks", []) or []:
+            block_bbox = block.get("bbox")
+            for line in block.get("lines", []) or []:
+                spans = line.get("spans", []) or []
+                line_text = _normalize_text("".join(str(span.get("text", "")) for span in spans)).strip()
+                if not heading_pat.fullmatch(line_text):
+                    continue
+                line_bbox = line.get("bbox") or block_bbox
+                if line_bbox:
+                    y0 = float(line_bbox[1])
+                    heading_y0 = y0 if heading_y0 is None else min(heading_y0, y0)
+        if heading_y0 is not None and heading_y0 > max(180.0, page_h * 0.30):
+            return False
+    except Exception:
+        pass
+
+    prefix_text = "\n".join(prefix_lines)
+    prefix_words = re.findall(r"[A-Za-z]{2,}", prefix_text)
+    mixed_section_pat = re.compile(
+        r"^\s*(?:acknowledg(?:e)?ments?|appendix|proof|supplementary\s+material|"
+        r"conclusions?|discussion)\b",
+        flags=re.IGNORECASE,
+    )
+    if any(mixed_section_pat.match(ln) for ln in prefix_lines):
+        return False
+
+    bodyish_prefix_lines = 0
+    for line in prefix_lines:
+        words = re.findall(r"[A-Za-z]{3,}", line)
+        stop_n = len(
+            re.findall(
+                r"\b(?:the|and|with|from|that|this|these|into|through|between|while|"
+                r"where|which|during|using|for|are|was|were|has|have)\b",
+                line,
+                flags=re.IGNORECASE,
+            )
+        )
+        if len(words) >= 8 and (stop_n >= 2 or bool(re.search(r"[.!?;:]\s*$", line))):
+            bodyish_prefix_lines += 1
+    if bodyish_prefix_lines or len(prefix_words) >= 32:
+        return False
+
+    suffix_words = re.findall(r"[A-Za-z]{2,}", suffix_text)
+    return ref_starts >= 2 and (
+        ref_starts >= 4 or len(suffix_words) >= 60 or len(suffix_lines) >= 8
+    )
+
+
 def _is_frontmatter_noise_line(text: str) -> bool:
     t = _normalize_text(text)
     if not t:

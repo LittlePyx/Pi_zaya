@@ -34,7 +34,7 @@ REFERENCE_LOOKUP_VERSION = 12
 # Increment this independently of metadata lookup behavior whenever Markdown
 # reference parsing changes. It prevents unchanged documents from reusing refs
 # produced by an older parser.
-REFERENCE_PARSER_VERSION = 2
+REFERENCE_PARSER_VERSION = 3
 
 _REF_HEAD_RE = re.compile(
     r"^#{1,6}\s+(references(?:\s+and\s+(?:notes|links))?|bibliography)\b",
@@ -402,8 +402,27 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
             cur_buf.append(rest)
         return True
 
+    reference_tail = lines[ref_i + 1 :]
+
+    def _running_header_before_next_reference(raw_index: int) -> bool:
+        current_number = int(cur_n or max(out, default=0))
+        if current_number <= 0:
+            return False
+        for candidate_raw in reference_tail[raw_index + 1 : raw_index + 8]:
+            candidate = str(candidate_raw or "").strip()
+            if not candidate or re.match(r"^<!--\s*kb_page:\s*\d+\s*-->$", candidate, re.IGNORECASE):
+                continue
+            match = _REF_START_BRACKET_RE.match(candidate) or _REF_START_DOT_RE.match(candidate)
+            if not match:
+                return False
+            try:
+                return int(match.group(1)) == current_number + 1
+            except Exception:
+                return False
+        return False
+
     in_references = True
-    for raw in lines[ref_i + 1 :]:
+    for raw_index, raw in enumerate(reference_tail):
         for s in _split_embedded_ref_segments(raw):
             if not s:
                 continue
@@ -417,6 +436,8 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
                 continue
 
             if (out or cur_n is not None) and _is_reference_map_post_references_stop_line(s):
+                if _running_header_before_next_reference(raw_index):
+                    continue
                 _flush()
                 in_references = False
                 continue

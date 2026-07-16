@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -29,6 +31,35 @@ class _DummyPage:
         raise AssertionError(mode)
 
 
+class _TextPage(_DummyPage):
+    def __init__(self, text: str, *, references_heading_y: float | None = None):
+        super().__init__()
+        self._text = text
+        self._references_heading_y = references_heading_y
+
+    def get_text(self, mode: str):
+        if mode == "text":
+            return self._text
+        if mode == "dict":
+            if self._references_heading_y is None:
+                return {"blocks": []}
+            y0 = self._references_heading_y
+            return {
+                "blocks": [
+                    {
+                        "bbox": (40.0, y0, 180.0, y0 + 14.0),
+                        "lines": [
+                            {
+                                "bbox": (40.0, y0, 180.0, y0 + 14.0),
+                                "spans": [{"text": "REFERENCES"}],
+                            }
+                        ],
+                    }
+                ]
+            }
+        raise AssertionError(mode)
+
+
 class _DummyConverter:
     def _mask_rects_on_png(self, png_bytes, rects, page_width, page_height):
         return png_bytes
@@ -38,6 +69,47 @@ class _DummyConverter:
 
     def _postprocess_vision_page_markdown(self, md, **kwargs):
         return md + "-post"
+
+
+def test_detect_references_page_accepts_near_full_references_page():
+    page = _TextPage(
+        "\n".join(
+            [
+                "Journal running header",
+                "REFERENCES",
+                *[
+                    f"[{idx}] A. Author and B. Writer, Journal of Imaging {idx}, 1-10 ({2013 + idx})."
+                    for idx in range(1, 11)
+                ],
+            ]
+        ),
+        references_heading_y=72.0,
+    )
+
+    assert page_module._detect_references_page(page) is True
+
+
+def test_detect_references_page_rejects_ssp_style_body_references_mixed_page():
+    body = [
+        "The reconstruction remains stable when the sensing operator satisfies the stated assumptions.",
+        "The following proof uses the restricted isometry property and shows that the error is bounded.",
+        "Case 1: the measurement residual is smaller than the noise term and the desired claim follows.",
+        "Case 2: the remaining terms are controlled using Lemma 1 and the triangle inequality.",
+        "ACKNOWLEDGMENTS",
+        "The authors thank the anonymous reviewers for their useful comments and suggestions.",
+        "APPENDIX",
+        "Proof of Lemma 1. Let the support be partitioned into disjoint subsets of equal size.",
+    ]
+    references = [
+        f"[{idx}] A. Author and B. Writer, Journal of Signal Processing {idx}, 1-10 (20{idx:02d})."
+        for idx in range(1, 16)
+    ]
+    page = _TextPage(
+        "\n".join([*body, "REFERENCES", *references]),
+        references_heading_y=342.0,
+    )
+
+    assert page_module._detect_references_page(page) is False
 
 
 def test_extract_page_visual_assets_reuses_existing_asset_without_resaving(tmp_path, monkeypatch):

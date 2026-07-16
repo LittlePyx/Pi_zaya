@@ -36,6 +36,7 @@ from .pdf_reference_text import (
 from .reference_page_vl import reference_markdown_entry_count
 from .tables import markdown_table_issue_counts, normalize_markdown_tables_document
 from .text_utils import contains_only_detached_accent_mojibake, normalize_detached_accents
+from kb.inpaper_citation_grounding import iter_inpaper_numeric_citations, parse_ref_num_set
 from kb.reference_index import extract_references_map_from_md
 
 try:
@@ -223,12 +224,13 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 4
+CONVERSION_QUALITY_RULES_VERSION = 6
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
 SOURCE_PAGE_COVERAGE_THRESHOLD = 0.66
 SOURCE_PAGE_MIN_RARE_TOKENS = 60
+SOURCE_PAGE_EMPTY_MARKER_MIN_ALNUM_CHARS = 500
 SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD = 0.32
 PAGE_ALIGNMENT_ANCHOR_DRIFT_CHARS = 1200
 PAGE_ALIGNMENT_BEAM_SIZE = 300
@@ -1074,6 +1076,11 @@ def _issue_codes_from_context(
     if int(quality.get("source_page_anchor_issue_count") or 0) > 0:
         codes.append("source_page_marker_alignment")
     if (
+        int(quality.get("missing_pdf_page_marker_count") or 0) > 0
+        or int(quality.get("duplicate_pdf_page_marker_count") or 0) > 0
+    ):
+        codes.append("source_page_marker_alignment")
+    if (
         int(quality.get("page_marker_shortfall") or 0) >= 1
         or int(quality.get("out_of_range_page_marker_count") or 0) > 0
     ):
@@ -1771,8 +1778,13 @@ def _page_alignment_quality(metrics: dict[str, Any], pdf_stats: dict[str, Any], 
     ]
     valid_marker_numbers = [number for number in marker_numbers if pdf_pages <= 0 or 1 <= number <= pdf_pages]
     out_of_range_markers = sorted({number for number in marker_numbers if pdf_pages > 0 and not 1 <= number <= pdf_pages})
-    valid_markers = len(valid_marker_numbers)
-    max_marker = max(valid_marker_numbers, default=0)
+    valid_marker_set = set(valid_marker_numbers)
+    valid_markers = len(valid_marker_set)
+    missing_markers = [number for number in range(1, pdf_pages + 1) if number not in valid_marker_set]
+    duplicate_markers = sorted(
+        number for number in valid_marker_set if valid_marker_numbers.count(number) > 1
+    )
+    max_marker = max(valid_marker_set, default=0)
     ratio = float(valid_markers / max(1, pdf_pages)) if pdf_pages > 0 else 0.0
     if pdf_pages <= 0:
         confidence = "unknown"
@@ -1788,13 +1800,18 @@ def _page_alignment_quality(metrics: dict[str, Any], pdf_stats: dict[str, Any], 
         "pdf_pages": int(pdf_pages),
         "page_marker_count": int(markers),
         "valid_page_marker_count": int(valid_markers),
+        "valid_page_marker_occurrence_count": int(len(valid_marker_numbers)),
         "out_of_range_page_markers": out_of_range_markers,
         "out_of_range_page_marker_count": int(len(out_of_range_markers)),
+        "missing_pdf_page_markers": missing_markers,
+        "missing_pdf_page_marker_count": int(len(missing_markers)),
+        "duplicate_pdf_page_markers": duplicate_markers,
+        "duplicate_pdf_page_marker_count": int(len(duplicate_markers)),
         # A sparse-but-correct anchor set (for example pages 1 and 4 of a
         # four-page PDF) can be safely realigned. Only a missing terminal page
         # range proves that conversion stopped before the source PDF ended.
         "page_marker_shortfall": max(0, int(pdf_pages - max_marker)),
-        "page_marker_count_shortfall": max(0, int(pdf_pages - valid_markers)),
+        "page_marker_count_shortfall": int(len(missing_markers)),
         "max_page_marker": int(max_marker),
         "matched_page_ratio": round(ratio, 4) if pdf_pages > 0 else 0.0,
         "page_alignment_confidence": confidence,
@@ -1920,14 +1937,52 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
                 continue
             page_tokens = _rare_source_tokens(page_text)
             if len(page_tokens) < SOURCE_PAGE_MIN_RARE_TOKENS:
+                local_segment = local_segment_for_page(page_no)
+                source_alnum_chars = len(re.findall(r"[A-Za-z0-9]", page_text))
+                if (
+                    page_no in marker_segments
+                    and not _rare_source_tokens(local_segment)
+                    and source_alnum_chars >= SOURCE_PAGE_EMPTY_MARKER_MIN_ALNUM_CHARS
+                ):
+                    assessed += 1
+                    min_coverage = 0.0
+                    low_pages.append(
+                        {
+                            "page": int(page_no),
+                            "coverage": 0.0,
+                            "local_coverage": 0.0,
+                            "source_token_count": int(len(page_tokens)),
+                            "has_page_marker": True,
+                            "reason": "empty_page_marker_segment",
+                        }
+                    )
                 continue
             assessed += 1
             coverage = len(page_tokens.intersection(md_tokens)) / max(1, len(page_tokens))
             local_segment = local_segment_for_page(page_no)
             local_coverage: float | None = None
+            local_token_count: int | None = None
+            if page_no in marker_segments:
+                local_token_count = len(_rare_source_tokens(local_segment))
             if local_segment:
                 local_tokens = _rare_source_tokens(local_segment)
                 local_coverage = len(page_tokens.intersection(local_tokens)) / max(1, len(page_tokens))
+            empty_marked_page_segment = bool(
+                page_no in marker_segments and int(local_token_count or 0) == 0
+            )
+            if empty_marked_page_segment:
+                low_pages.append(
+                    {
+                        "page": int(page_no),
+                        "coverage": round(float(coverage), 4),
+                        "local_coverage": 0.0,
+                        "source_token_count": int(len(page_tokens)),
+                        "has_page_marker": True,
+                        "reason": "empty_page_marker_segment",
+                    }
+                )
+                min_coverage = min(min_coverage, 0.0)
+                continue
             min_coverage = min(min_coverage, coverage)
             local_low_without_inferred_anchor = (
                 local_coverage is not None
@@ -2204,9 +2259,16 @@ def _reference_index_truncated(text: str, metrics: dict[str, Any]) -> bool:
         return True
     ref_map = extract_references_map_from_md(text)
     first_index = min(ref_map) if ref_map else 0
+    ref_heading = re.search(r"(?mi)^#{1,6}\s+(?:References|Bibliography)\s*$", str(text or ""))
+    body = str(text or "")[: int(ref_heading.start())] if ref_heading else str(text or "")
+    cited_indices = {
+        ref_num
+        for spec, _start, _end, _style in iter_inpaper_numeric_citations(body)
+        for ref_num in parse_ref_num_set(spec, max_items=256)
+    }
+    if first_index == 1 and max(cited_indices, default=0) > max_index:
+        return True
     if first_index > 1:
-        ref_heading = re.search(r"(?mi)^#{1,6}\s+References\s*$", str(text or ""))
-        body = str(text or "")[: int(ref_heading.start())] if ref_heading else str(text or "")
         if re.search(r"\[\s*1(?:\s*[,;\-–]\s*\d{1,4})*\s*\]", body):
             return True
     if _reference_gap_is_material(ref_map):
@@ -2755,8 +2817,25 @@ def _adjust_offsets_for_skipped_leading_pdf_pages(
             pass
 
     best_previous = max(previous_coverages, default=0.0)
+    skipped_pages_are_landing_pages = bool(previous_coverages)
+    if skipped_pages_are_landing_pages:
+        try:
+            doc = fitz.open(str(pdf_path))
+            try:
+                skipped_pages_are_landing_pages = all(
+                    _pdf_page_looks_like_download_landing_page(
+                        str(doc.load_page(page_index).get_text("text") or "")
+                    )
+                    for page_index in range(0, max(0, first_page - 1))
+                )
+            finally:
+                doc.close()
+        except Exception:
+            skipped_pages_are_landing_pages = False
+
     if (
-        first_coverage >= SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD
+        skipped_pages_are_landing_pages
+        and first_coverage >= SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD
         and best_previous < LEADING_PAGE_DROP_MAX_PREVIOUS_COVERAGE
         and (first_coverage - best_previous) >= LEADING_PAGE_DROP_MIN_COVERAGE_MARGIN
     ):
@@ -3291,6 +3370,21 @@ def _recover_missing_source_pages_from_pdf_text(md_text: str, md_path: Path, sou
         fallback = _pdf_page_fallback_markdown(pdf_path, page_no)
         if not fallback:
             continue
+        existing_marker = next(
+            (
+                item
+                for item in _page_marker_occurrences(fixed)
+                if int(item.get("page") or 0) == int(page_no)
+            ),
+            None,
+        )
+        if existing_marker is not None:
+            segment_start = int(existing_marker.get("segment_start") or 0)
+            segment_end = int(existing_marker.get("segment_end") or len(fixed))
+            if not _rare_source_tokens(fixed[segment_start:segment_end]):
+                marker_start = int(existing_marker.get("start") or 0)
+                fixed = fixed[:marker_start] + fallback.strip() + "\n\n" + fixed[segment_end:]
+                continue
         pos = _insertion_offset_for_missing_page(fixed, page_no)
         insert = fallback.strip() + "\n\n"
         if pos > 0 and not fixed[:pos].endswith("\n\n"):

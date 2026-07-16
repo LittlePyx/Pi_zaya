@@ -536,6 +536,29 @@ def test_extract_references_map_stops_at_plain_supplementary_material_heading():
     assert "Supplementary Material" not in out[44]
 
 
+def test_extract_references_map_skips_appendix_running_header_before_sequential_tail():
+    md_text = (
+        "# Demo\n\n"
+        "## References\n"
+        "[35] A. Author. Reference thirty five. Journal, 2020.\n"
+        "[36] B. Author. Reference thirty six. Journal, 2021.\n"
+        "Appendix\n"
+        "<!-- kb_page: 21 -->\n"
+        "[37] C. Author. Reference thirty seven. Journal, 2022.\n"
+        "[38] D. Author. Reference thirty eight. Journal, 2023.\n"
+        "[39] E. Author. Restormer. Conference, 2024.\n"
+        "[40] F. Author. Reference forty. Conference, 2025.\n"
+        "Appendix\n"
+        "37. Duplicate publisher footer text.\n"
+    )
+
+    out = ref_index.extract_references_map_from_md(md_text)
+
+    assert sorted(out) == [35, 36, 37, 38, 39, 40]
+    assert "Restormer" in out[39]
+    assert "Duplicate publisher footer" not in out[40]
+
+
 def test_extract_references_map_does_not_use_body_fig_or_section_numbers_as_refs():
     md_text = (
         "# Demo\n\n"

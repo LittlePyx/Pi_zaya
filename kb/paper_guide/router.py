@@ -139,6 +139,12 @@ def _paper_guide_prompt_requests_exact_citation_support(prompt: str) -> bool:
     q = str(prompt or "").strip()
     if not q:
         return False
+    if re.search(
+        r"(?:参考文献|文献|引用)\s*(?:第\s*)?[\[(（【]?\s*\d{1,4}|"
+        r"(?i:\b(?:reference|ref\.?|citation)\s*(?:entry\s*)?(?:no\.?\s*)?[\[(]?\s*\d{1,4})",
+        q,
+    ):
+        return True
     return bool(
         _PAPER_GUIDE_CITATION_EXACT_SUPPORT_RE.search(q)
         or _paper_guide_prompt_requests_naive_source_trace(q)

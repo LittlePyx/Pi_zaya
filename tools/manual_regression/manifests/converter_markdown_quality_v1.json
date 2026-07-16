@@ -52,7 +52,7 @@
         "require_abstract_heading": true,
         "min_images": 6,
         "min_captions": 7,
-        "min_tables": 3,
+        "min_tables": 2,
         "min_display_math": 8,
         "min_inline_math": 60,
         "min_references": 50,
@@ -61,6 +61,8 @@
         "must_contain_text": [
           "High-resolution single-photon imaging with physics-informed deep learning",
           "physics-informed deep learning",
+          "**Table 1.** Quantitative enhancement comparison",
+          "**Table 2.** Network evaluation on different bit depth",
           "## References"
         ]
       }

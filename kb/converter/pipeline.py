@@ -463,6 +463,19 @@ class PDFConverter:
             return page_marker_re.sub(f"{marker}\n\n", text, count=1).strip()
         return f"{marker}\n\n{text}"
 
+    @classmethod
+    def _join_selected_page_markdown(
+        cls,
+        md_pages: List[Optional[str]],
+        *,
+        selected_start: int,
+        selected_end: int,
+    ) -> str:
+        """Keep one physical-page anchor for every page selected for conversion."""
+        start = max(0, int(selected_start))
+        end = min(len(md_pages), max(start, int(selected_end)))
+        return "\n\n".join(cls._ensure_page_marker(md_pages[idx], idx) for idx in range(start, end))
+
     def convert(self, pdf_path: str, save_dir: str) -> None:
         """Convert PDF to Markdown using the new converter."""
         print("=" * 60, flush=True)
@@ -564,10 +577,10 @@ class PDFConverter:
         if self._page_cache is not None:
             self._page_cache.finish()
             
-        final_md = "\n\n".join(
-            self._ensure_page_marker(page_md, idx)
-            for idx, page_md in enumerate(md_pages)
-            if page_md
+        final_md = self._join_selected_page_markdown(
+            md_pages,
+            selected_start=selected_start,
+            selected_end=selected_end,
         )
 
         # Post-process: run as best-effort to avoid whole-job failure on one cleanup stage.
