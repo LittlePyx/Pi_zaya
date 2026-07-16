@@ -401,7 +401,92 @@ def _nearest_equation_context(blocks: list[dict[str, Any]], index: int, *, step:
     return ""
 
 
-def _build_equation_index_payload(md_path: Path, blocks: list[dict[str, Any]]) -> dict[str, Any]:
+_CONVERSION_RETRY_MARKER_RE = re.compile(r"<!--\s*kb:conversion_retry\s+(.+?)\s*-->", flags=re.I)
+_CONVERSION_MARKER_ATTR_RE = re.compile(r"([A-Za-z_][\w-]*)=(?:\"([^\"]*)\"|'([^']*)'|([^\s]+))")
+
+
+def _conversion_equation_fallbacks(md_text: str, blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    fallbacks: list[dict[str, Any]] = []
+    for match in _CONVERSION_RETRY_MARKER_RE.finditer(str(md_text or "")):
+        attrs = {
+            item.group(1).lower(): next((value for value in item.groups()[1:] if value is not None), "")
+            for item in _CONVERSION_MARKER_ATTR_RE.finditer(match.group(1))
+        }
+        if str(attrs.get("kind") or "").lower() != "equation":
+            continue
+        line_number = str(md_text or "").count("\n", 0, match.start()) + 1
+        try:
+            page = int(attrs.get("page") or 0)
+        except Exception:
+            page = 0
+        try:
+            equation_number = int(attrs.get("number") or 0)
+        except Exception:
+            equation_number = 0
+
+        before: tuple[int, dict[str, Any]] | None = None
+        after: tuple[int, dict[str, Any]] | None = None
+        nearest: tuple[int, dict[str, Any]] | None = None
+        heading_path = ""
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            line_start = int(block.get("line_start") or 0)
+            line_end = int(block.get("line_end") or line_start)
+            distance_to_marker = min(abs(line_number - line_start), abs(line_number - line_end))
+            if nearest is None or distance_to_marker < nearest[0]:
+                nearest = (distance_to_marker, block)
+            kind = str(block.get("kind") or "").lower()
+            if kind not in _EQUATION_CONTEXT_KINDS:
+                continue
+            if line_end <= line_number:
+                distance = line_number - line_end
+                if before is None or distance < before[0]:
+                    before = (distance, block)
+            elif line_start >= line_number:
+                distance = line_start - line_number
+                if after is None or distance < after[0]:
+                    after = (distance, block)
+        if nearest:
+            heading_path = str(nearest[1].get("heading_path") or "").strip()
+        if not heading_path and before:
+            heading_path = str(before[1].get("heading_path") or "").strip()
+        if not heading_path and after:
+            heading_path = str(after[1].get("heading_path") or "").strip()
+
+        def _context(row: tuple[int, dict[str, Any]] | None) -> str:
+            if not row:
+                return ""
+            block = row[1]
+            if str(block.get("kind") or "").lower() not in _EQUATION_CONTEXT_KINDS:
+                return ""
+            return _clean_text(block.get("raw_text") or block.get("text") or "", limit=1000)
+
+        label = f"Equation ({equation_number})" if equation_number > 0 else "Equation"
+        locate_anchor = f"{label} is preserved as a source image"
+        if page > 0:
+            locate_anchor += f" on page {page}"
+        locate_anchor += "; use the source image for exact notation."
+        fallbacks.append({
+            "equation_number": equation_number,
+            "equation_markdown": "",
+            "normalized_tex": "",
+            "evidence_status": "image_only",
+            "asset_name": str(attrs.get("asset") or "").strip(),
+            "locate_anchor": locate_anchor,
+            "context_before": _context(before),
+            "context_after": _context(after),
+            "block_id": "",
+            "anchor_id": "",
+            "heading_path": heading_path,
+            "line_start": line_number,
+            "line_end": line_number,
+            **({"page_start": page, "page_end": page} if page > 0 else {}),
+        })
+    return fallbacks
+
+
+def _build_equation_index_payload(md_path: Path, blocks: list[dict[str, Any]], md_text: str = "") -> dict[str, Any]:
     equations: list[dict[str, Any]] = []
     for idx, block in enumerate(blocks):
         if not isinstance(block, dict):
@@ -427,6 +512,7 @@ def _build_equation_index_payload(md_path: Path, blocks: list[dict[str, Any]]) -
                 **({"page_start": page, "page_end": page} if page > 0 else {}),
             }
         )
+    equations.extend(_conversion_equation_fallbacks(md_text, blocks))
     return {
         "version": _INDEX_VERSION,
         "doc_id": doc_id_for_path(md_path),
@@ -838,7 +924,7 @@ def rebuild_structured_indices_for_markdown(
     )
 
     anchor_payload = _build_anchor_index_payload(path, blocks)
-    equation_payload = _build_equation_index_payload(path, blocks)
+    equation_payload = _build_equation_index_payload(path, blocks, md_text)
     reference_payload = _build_reference_index_payload(path, md_text, blocks=blocks)
     figure_payload = _build_figure_index_payload(path, blocks=blocks, rows=figure_rows)
 

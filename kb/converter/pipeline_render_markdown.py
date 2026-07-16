@@ -465,6 +465,32 @@ def render_blocks_to_markdown(
                 safe_regions.append(rect)
     safe_regions_emitted: set[int] = set()
 
+    def _safe_formula_region_number(region) -> int:
+        isolated: list[tuple[float, int]] = []
+        trailing: list[int] = []
+        for candidate in blocks:
+            try:
+                candidate_rect = fitz.Rect(candidate.bbox)
+                inter = candidate_rect & region
+                if inter.width <= 0 or inter.height <= 0:
+                    continue
+            except Exception:
+                continue
+            text = re.sub(r"\s+", " ", str(getattr(candidate, "text", "") or "")).strip()
+            match = re.fullmatch(r"\(?\s*(\d{1,4})\s*\)?", text)
+            if match:
+                parenthesized = text.lstrip().startswith("(") and text.rstrip().endswith(")")
+                right_aligned = float(candidate_rect.x0) >= float(region.x0) + (float(region.width) * 0.65)
+                if parenthesized or right_aligned:
+                    isolated.append((float(candidate_rect.x0), int(match.group(1))))
+                continue
+            match = re.search(r"(?:\\tag\{|\()\s*(\d{1,4})\s*(?:\}|\))\s*$", text)
+            if match:
+                trailing.append(int(match.group(1)))
+        if isolated:
+            return max(isolated, key=lambda value: value[0])[1]
+        return trailing[-1] if trailing else 0
+
     def _safe_formula_region_index(block: TextBlock) -> int | None:
         if not safe_regions:
             return None
@@ -522,7 +548,19 @@ def render_blocks_to_markdown(
                     img_md = _save_eq_image(tuple(safe_regions[safe_region_idx]), force=True)
                     if img_md:
                         out.append(img_md)
-                        out.append(f"<!-- kb:conversion_retry kind=equation page={page_index+1} -->")
+                        asset_match = re.search(r"\./assets/([^\s)]+)", img_md)
+                        asset_name = asset_match.group(1) if asset_match else ""
+                        equation_number = _safe_formula_region_number(safe_regions[safe_region_idx])
+                        marker_parts = [
+                            "<!-- kb:conversion_retry",
+                            "kind=equation",
+                            f"page={page_index+1}",
+                        ]
+                        if asset_name:
+                            marker_parts.append(f"asset={asset_name}")
+                        if equation_number > 0:
+                            marker_parts.append(f"number={equation_number}")
+                        out.append(" ".join(marker_parts) + " -->")
                         out.append("")
                     else:
                         out.append("Equation region preserved in the source PDF; retry conversion for editable math.")

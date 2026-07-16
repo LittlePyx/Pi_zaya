@@ -178,8 +178,30 @@ const SHELF_AUTO_REPAIR_BATCH_SIZE = 8
 const SHELF_AUTO_REPAIR_RETRY_MS = 15000
 const SHELF_METADATA_HYDRATE_BATCH_SIZE = 8
 const SHELF_METADATA_HYDRATE_RETRY_MS = 15000
-const SHELF_SUMMARY_BACKFILL_BATCH_SIZE = 24
+const SHELF_SUMMARY_BACKFILL_BATCH_SIZE = 12
+const SHELF_SUMMARY_BACKFILL_CONCURRENCY = 3
 const SHELF_SUMMARY_BACKFILL_RETRY_MS = 60000
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      results[index] = await mapper(items[index])
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(Math.max(1, concurrency), items.length) },
+    () => worker(),
+  ))
+  return results
+}
 
 type ShelfAsyncScopeToken = {
   epoch: number
@@ -1182,15 +1204,19 @@ export function MessageList({
       shelfSummaryBackfillTimerRef.current = null
       const now = Date.now()
       const targets: Array<{ item: CiteShelfItem; attemptKey: string }> = []
+      const targetIdentities = new Set<string>()
       for (const item of shelfItems) {
         if (targets.length >= SHELF_SUMMARY_BACKFILL_BATCH_SIZE) break
         if (shelfSummaryBackfillInFlightRef.current.has(item.key)) continue
         if (shelfSummaryStatusByKey[item.key] === 'loading') continue
         if (!shelfItemNeedsSummaryBackfill(item)) continue
         const attemptKey = shelfSummaryBackfillAttemptKey(item)
+        const identity = shelfPaperIdentity(item)
+        if (targetIdentities.has(identity)) continue
         const lastAttempt = Number(shelfSummaryBackfillAttemptedAtRef.current[attemptKey] || 0)
         if (lastAttempt > 0 && now - lastAttempt < SHELF_SUMMARY_BACKFILL_RETRY_MS) continue
         targets.push({ item, attemptKey })
+        targetIdentities.add(identity)
       }
       if (targets.length <= 0) return
 
@@ -1208,8 +1234,8 @@ export function MessageList({
       })
       const scopeToken = captureShelfAsyncScope()
 
-      void Promise.all(targets.map(({ item }) => (
-        referencesApi.bibliometrics(withBibliometricsLocale({
+      void mapWithConcurrency(targets, SHELF_SUMMARY_BACKFILL_CONCURRENCY, async ({ item }) => (
+        referencesApi.bibliometricsCached(withBibliometricsLocale({
           ...item,
           summaryLine: '',
           summarySource: '',
@@ -1222,7 +1248,7 @@ export function MessageList({
         } as unknown as Record<string, unknown>))
           .then((meta) => ({ key: item.key, meta, failed: false }))
           .catch(() => ({ key: item.key, meta: {} as Record<string, unknown>, failed: true }))
-      ))).then((results) => {
+      )).then((results) => {
         if (!shelfAsyncScopeIsCurrent(scopeToken)) return
         const targetByKey = new Map(targets.map((target) => [target.item.key, target.item]))
         const statusPatch: Record<string, 'unavailable' | 'failed' | 'ready'> = {}
@@ -1253,7 +1279,10 @@ export function MessageList({
         const usable = results.filter((entry) => !entry.failed && entry.meta && Object.keys(entry.meta).length > 0)
         setShelfItems((current) => current.map((entry) => {
           if (!currentShelfItemForAsync(scopeToken, entry.key)) return entry
-          const result = usable.find((item) => item.key === entry.key)
+          const result = usable.find((item) => {
+            const target = targetByKey.get(item.key)
+            return target && shelfPaperIdentity(target) === shelfPaperIdentity(entry)
+          })
           if (!result) return entry
           const merged = mergeCiteMeta(entry, result.meta)
           const articleSummaryPatch = articleSummaryPatchFromMeta(entry, result.meta)

@@ -1,8 +1,39 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 
 from api import reference_metadata_quality as mq
+
+
+def test_concurrent_summary_persistence_keeps_every_successful_abstract(tmp_path) -> None:
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+
+    def persist(index: int) -> None:
+        mq.persist_repaired_citation_metadata(
+            {
+                "title": f"Concurrent abstract {index}",
+                "doi": f"10.1000/concurrent-{index}",
+                "summary_line": f"Verified abstract {index}.",
+                "summary_source": "abstract",
+                "summary_provider": "datacite",
+                "summary_fetch_status": "ready",
+                "summary_locale": "en",
+            },
+            db_dir=db_dir,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(persist, range(16)))
+
+    cache = json.loads((db_dir / "crossref_cache.json").read_text(encoding="utf-8"))
+    assert len(cache["doi"]) == 16
+    for index in range(16):
+        record = cache["doi"][f"10.1000/concurrent-{index}"]
+        assert record["summary_line"] == f"Verified abstract {index}."
+        assert record["summary_fetch_status"] == "ready"
+        assert record["summary_locale"] == "en"
 
 
 def test_summary_acceptance_downgrades_stale_ready_contract_when_text_is_missing() -> None:

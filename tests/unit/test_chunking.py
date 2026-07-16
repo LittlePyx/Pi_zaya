@@ -63,3 +63,22 @@ def test_chunk_overlap_prefers_sentence_boundary():
     assert len(chunks) >= 2
     assert chunks[1]["text"].startswith("This sentence carries")
 
+
+def test_equation_image_retry_marker_becomes_safe_searchable_locator():
+    md = """# Method
+
+<!-- kb_page: 4 -->
+
+![Equation](./assets/page_4_eq_1.png)
+<!-- kb:conversion_retry kind=equation page=4 asset=page_4_eq_1.png number=3 -->
+<!-- kb:conversion_retry kind=math_text page=4 -->
+"""
+
+    chunks = chunk_markdown(md, source_path="paper.md", overlap=0)
+
+    assert len(chunks) == 1
+    assert "Equation (3) is preserved as a source image on page 4" in chunks[0]["text"]
+    assert "kb:conversion_retry" not in chunks[0]["text"]
+    assert chunks[0]["meta"]["conversion_fallback_kinds"] == ["equation_image"]
+    assert chunks[0]["meta"]["equation_numbers"] == [3]
+    assert chunks[0]["meta"]["equation_assets"] == ["page_4_eq_1.png"]

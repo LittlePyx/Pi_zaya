@@ -492,6 +492,62 @@ def test_resolve_exact_equation_support_from_source_uses_equation_index_when_blo
     assert "where Y is the measurement" in rec["explanation_text"]
 
 
+def test_exact_equation_image_only_index_locates_without_inventing_formula(tmp_path, monkeypatch):
+    doc_dir = tmp_path / "DemoEquationImage"
+    assets_dir = doc_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_path = doc_dir / "DemoEquationImage.en.md"
+    md_path.write_text("placeholder", encoding="utf-8")
+    (assets_dir / "equation_index.json").write_text(
+        json.dumps(
+            {
+                "equations": [
+                    {
+                        "equation_number": 3,
+                        "equation_markdown": "",
+                        "evidence_status": "image_only",
+                        "asset_name": "page_4_eq_1.png",
+                        "locate_anchor": "Equation (3) is preserved as a source image on page 4; use the source image for exact notation.",
+                        "context_before": "The measurement model is defined below.",
+                        "context_after": "where Y is the measurement and M is the mask.",
+                        "heading_path": "Method / SCI formulation",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "load_source_blocks",
+        lambda _path: [
+            {
+                "kind": "paragraph",
+                "number": 3,
+                "raw_text": "(3)",
+                "text": "(3)",
+                "heading_path": "Method / SCI formulation",
+            }
+        ],
+    )
+
+    rec = answer_post_runtime._resolve_exact_equation_support_from_source(
+        "demo.pdf",
+        prompt="Explain equation (3) and point me to the exact formula.",
+        db_dir=tmp_path,
+    )
+    answer, support = answer_post_runtime._build_exact_equation_support_answer(rec)
+
+    assert rec["equation_evidence_status"] == "image_only"
+    assert rec["equation_markdown"] == ""
+    assert rec["equation_asset_name"] == "page_4_eq_1.png"
+    assert "won't reconstruct unverified editable notation" in answer
+    assert support[0]["claim_type"] == "formula_location_claim"
+    assert support[0]["asset_name"] == "page_4_eq_1.png"
+
+
 def test_apply_paper_guide_answer_postprocess_runs_focus_support_and_sanitize(monkeypatch):
     calls = []
 

@@ -40,6 +40,37 @@ $$
     assert int(ref_payload.get("ref_count") or 0) >= 1
 
 
+def test_rebuild_structured_indices_records_image_only_equation_fallback(tmp_path: Path):
+    md = """# Demo Paper
+
+## Method
+
+The measurement model is defined below.
+
+<!-- kb_page: 4 -->
+![Equation](./assets/page_4_eq_1.png)
+<!-- kb:conversion_retry kind=equation page=4 asset=page_4_eq_1.png number=3 -->
+
+where Y is the measurement and M is the mask.
+"""
+    md_path = tmp_path / "output.md"
+    assets_dir = tmp_path / "assets"
+
+    payload = rebuild_structured_indices_for_markdown(md_path, md_text=md, assets_dir=assets_dir)
+    equations = (payload.get("equation_index") or {}).get("equations") or []
+
+    assert len(equations) == 1
+    equation = equations[0]
+    assert equation["equation_number"] == 3
+    assert equation["evidence_status"] == "image_only"
+    assert equation["asset_name"] == "page_4_eq_1.png"
+    assert equation["page_start"] == 4
+    assert equation["equation_markdown"] == ""
+    assert "source image" in equation["locate_anchor"]
+    assert "measurement model" in equation["context_before"]
+    assert "where Y is the measurement" in equation["context_after"]
+
+
 def test_rebuild_structured_indices_emits_figure_index_without_preexisting_figure_rows(tmp_path: Path):
     md = """# Demo
 

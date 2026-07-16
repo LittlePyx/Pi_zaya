@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -39,7 +40,10 @@ _PERSIST_FIELDS = (
     "summary_line",
     "summary_source",
     "summary_provider",
+    "summary_fetch_status",
+    "summary_locale",
 )
+_PERSIST_LOCK = threading.RLock()
 _EXPORT_IDENTITY_FIELDS = ("source", "title", "authors", "venue", "year", "doi")
 _WEAK_VENUE_SINGLE_TOKENS = {
     "abstract",
@@ -972,6 +976,8 @@ def _should_replace_field(field: str, old: Any, new: Any) -> bool:
         return False
     if field in {"citation_count", "journal_if", "summary_line"}:
         return False
+    if field in {"summary_source", "summary_provider", "summary_fetch_status", "summary_locale"}:
+        return not old_text
     return False
 
 
@@ -1391,16 +1397,19 @@ def persist_repaired_citation_metadata(meta: Mapping[str, Any], db_dir: str | Pa
     data = _canonicalize_detail(meta)
     root = Path(db_dir)
     targets: list[str] = []
-    try:
-        if _persist_crossref_cache(data, root):
-            targets.append("crossref_cache")
-    except Exception:
-        pass
-    try:
-        if _persist_reference_index(data, root):
-            targets.append("reference_index")
-    except Exception:
-        pass
+    # Bibliometrics requests can finish concurrently. Keep each read/merge/write
+    # transaction serialized so one successful abstract cannot erase another.
+    with _PERSIST_LOCK:
+        try:
+            if _persist_crossref_cache(data, root):
+                targets.append("crossref_cache")
+        except Exception:
+            pass
+        try:
+            if _persist_reference_index(data, root):
+                targets.append("reference_index")
+        except Exception:
+            pass
     return targets
 
 

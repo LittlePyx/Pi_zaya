@@ -1110,6 +1110,7 @@ def _resolve_exact_equation_support_from_source(
         equation_number=equation_number,
         cue_tokens=cue_tokens,
     )
+    indexed_image_only = str(indexed_entry.get("evidence_status") or "").strip().lower() == "image_only"
 
     best_index = -1
     best_block: dict = {}
@@ -1137,6 +1138,10 @@ def _resolve_exact_equation_support_from_source(
 
     for idx, block in enumerate(blocks):
         if not isinstance(block, dict):
+            continue
+        if indexed_image_only:
+            # The source-backed conversion deliberately rejected editable math.
+            # Do not let an adjacent number fragment override that decision.
             continue
         kind = str(block.get("kind") or "").strip().lower()
         raw_text = str(block.get("raw_text") or block.get("text") or "").strip()
@@ -1167,10 +1172,12 @@ def _resolve_exact_equation_support_from_source(
             best_score = score
             best_index = idx
             best_block = block
-    if best_index < 0 and not best_block:
+    if best_index < 0 and not best_block and not indexed_image_only:
         return {}
 
-    target_heading = str(best_block.get("heading_path") or "").strip()
+    target_heading = str(
+        best_block.get("heading_path") or indexed_entry.get("heading_path") or ""
+    ).strip()
 
     def _same_heading(block: dict) -> bool:
         heading = str(block.get("heading_path") or "").strip()
@@ -1251,17 +1258,21 @@ def _resolve_exact_equation_support_from_source(
                 explanation_block = block
 
     equation_markdown = str(best_block.get("raw_text") or best_block.get("text") or "").strip()
-    if not equation_markdown:
+    if not equation_markdown and not indexed_image_only:
         return {}
+
+    image_locate_anchor = str(indexed_entry.get("locate_anchor") or "").strip()
 
     return {
         "source_path": src,
         "heading_path": target_heading,
         "equation_number": int(equation_number),
         "equation_markdown": equation_markdown,
-        "equation_block_id": str(best_block.get("block_id") or "").strip(),
-        "equation_anchor_id": str(best_block.get("anchor_id") or "").strip(),
-        "equation_anchor": normalize_inline_markdown(equation_markdown)[:900],
+        "equation_block_id": str(best_block.get("block_id") or indexed_entry.get("block_id") or "").strip(),
+        "equation_anchor_id": str(best_block.get("anchor_id") or indexed_entry.get("anchor_id") or "").strip(),
+        "equation_anchor": normalize_inline_markdown(equation_markdown)[:900] or image_locate_anchor,
+        "equation_evidence_status": "image_only" if indexed_image_only else "text",
+        "equation_asset_name": str(indexed_entry.get("asset_name") or "").strip(),
         "leadin_text": str(leadin_text or "").strip(),
         "leadin_block_id": str((leadin_block or {}).get("block_id") or "").strip(),
         "leadin_anchor_id": str((leadin_block or {}).get("anchor_id") or "").strip(),
@@ -1278,13 +1289,18 @@ def _build_exact_equation_support_answer(record: dict) -> tuple[str, list[dict]]
     equation_markdown = str(rec.get("equation_markdown") or "").strip()
     explanation_text = str(rec.get("explanation_text") or "").strip()
     leadin_text = str(rec.get("leadin_text") or "").strip()
+    image_only = str(rec.get("equation_evidence_status") or "").strip().lower() == "image_only"
 
     lines: list[str] = []
     intro = f"Equation ({int(equation_number)}) is stated"
     if heading_path:
-        intro += f" in {heading_path}:"
+        intro += f" in {heading_path}"
     else:
-        intro += " in the paper:"
+        intro += " in the paper"
+    if image_only:
+        intro += ". The verified conversion preserved it as a source image, so I won't reconstruct unverified editable notation."
+    else:
+        intro += ":"
     lines.append(intro)
     if leadin_text:
         lines.append(f"The lead-in sentence says: {leadin_text}")
@@ -1306,6 +1322,23 @@ def _build_exact_equation_support_answer(record: dict) -> tuple[str, list[dict]]
                 "segment_text": equation_markdown,
                 "segment_index": -1,
                 "equation_number": int(equation_number or 0),
+            }
+        )
+    elif image_only:
+        locate_anchor = str(rec.get("equation_anchor") or "").strip()
+        support_resolution.append(
+            {
+                "source_path": str(rec.get("source_path") or "").strip(),
+                "block_id": str(rec.get("equation_block_id") or "").strip(),
+                "anchor_id": str(rec.get("equation_anchor_id") or "").strip(),
+                "heading_path": heading_path,
+                "locate_anchor": locate_anchor,
+                "claim_type": "formula_location_claim",
+                "cite_policy": "locate_only",
+                "segment_text": intro,
+                "segment_index": -1,
+                "equation_number": int(equation_number or 0),
+                "asset_name": str(rec.get("equation_asset_name") or "").strip(),
             }
         )
 

@@ -10,6 +10,9 @@ class Block:
     text: str
     heading_path: str
     page: int | None = None
+    conversion_fallback_kind: str = ""
+    equation_number: int = 0
+    asset_name: str = ""
 
 
 def _parse_blocks(md: str) -> list[Block]:
@@ -20,6 +23,11 @@ def _parse_blocks(md: str) -> list[Block]:
     # Page marker inserted by our converter:
     # <!-- kb_page: 12 -->
     re_page = re.compile(r"^<!--\s*kb_page\s*:\s*(\d+)\s*-->$", flags=re.IGNORECASE)
+    re_conversion_retry = re.compile(
+        r"^<!--\s*kb:conversion_retry\s+(.+?)\s*-->$",
+        flags=re.IGNORECASE,
+    )
+    re_marker_attr = re.compile(r"([A-Za-z_][\w-]*)=(?:\"([^\"]*)\"|'([^']*)'|([^\s]+))")
 
     def current_heading_path() -> str:
         return " / ".join([t for _, t in heading_stack])
@@ -44,6 +52,40 @@ def _parse_blocks(md: str) -> list[Block]:
                 cur_page = int(m_page.group(1))
             except Exception:
                 cur_page = cur_page
+            continue
+
+        m_retry = re_conversion_retry.match(stripped)
+        if m_retry:
+            # Internal diagnostics must never leak into retrieval text. Equation
+            # image fallbacks get a small, factual locator so queries such as
+            # "Equation (3)" can still reach the source without inventing TeX.
+            attrs = {
+                match.group(1).lower(): next((value for value in match.groups()[1:] if value is not None), "")
+                for match in re_marker_attr.finditer(m_retry.group(1))
+            }
+            try:
+                marker_page = int(attrs.get("page") or 0)
+            except Exception:
+                marker_page = 0
+            if marker_page > 0:
+                cur_page = marker_page
+            if str(attrs.get("kind") or "").lower() == "equation":
+                flush_buf()
+                try:
+                    equation_number = int(attrs.get("number") or 0)
+                except Exception:
+                    equation_number = 0
+                label = f"Equation ({equation_number})" if equation_number > 0 else "An equation"
+                page_label = f" on page {marker_page}" if marker_page > 0 else ""
+                blocks.append(Block(
+                    kind="text",
+                    text=f"{label} is preserved as a source image{page_label}; use the source image for exact notation.",
+                    heading_path=current_heading_path(),
+                    page=cur_page,
+                    conversion_fallback_kind="equation_image",
+                    equation_number=equation_number,
+                    asset_name=str(attrs.get("asset") or ""),
+                ))
             continue
 
         if stripped.startswith("#"):
@@ -113,9 +155,13 @@ def _merge_blocks_into_chunks(
     cur_heading_path = ""
     cur_page_start: int | None = None
     cur_page_end: int | None = None
+    cur_fallback_kinds: set[str] = set()
+    cur_equation_numbers: set[int] = set()
+    cur_equation_assets: set[str] = set()
 
     def flush(force: bool = False) -> None:
         nonlocal cur, cur_len, cur_heading_path, cur_page_start, cur_page_end
+        nonlocal cur_fallback_kinds, cur_equation_numbers, cur_equation_assets
         if not cur:
             return
         text = "\n".join(cur).strip()
@@ -135,6 +181,12 @@ def _merge_blocks_into_chunks(
             meta["page_start"] = int(cur_page_start)
         if cur_page_end is not None:
             meta["page_end"] = int(cur_page_end)
+        if cur_fallback_kinds:
+            meta["conversion_fallback_kinds"] = sorted(cur_fallback_kinds)
+        if cur_equation_numbers:
+            meta["equation_numbers"] = sorted(cur_equation_numbers)
+        if cur_equation_assets:
+            meta["equation_assets"] = sorted(cur_equation_assets)
 
         chunks.append(
             {
@@ -148,6 +200,9 @@ def _merge_blocks_into_chunks(
             cur_len = 0
             cur_page_start = None
             cur_page_end = None
+            cur_fallback_kinds = set()
+            cur_equation_numbers = set()
+            cur_equation_assets = set()
             return
 
         # Keep tail as overlap, but avoid starting the next chunk in the
@@ -156,6 +211,9 @@ def _merge_blocks_into_chunks(
         tail = _semantic_overlap_tail(text, overlap)
         cur = [tail]
         cur_len = len(tail)
+        cur_fallback_kinds = set()
+        cur_equation_numbers = set()
+        cur_equation_assets = set()
         # Overlap keeps the same approximate page range.
 
     for b in blocks:
@@ -179,6 +237,12 @@ def _merge_blocks_into_chunks(
 
         cur.append(b.text)
         cur_len += len(b.text) + 1
+        if b.conversion_fallback_kind:
+            cur_fallback_kinds.add(b.conversion_fallback_kind)
+        if b.equation_number > 0:
+            cur_equation_numbers.add(b.equation_number)
+        if b.asset_name:
+            cur_equation_assets.add(b.asset_name)
         if b.page is not None:
             if cur_page_start is None:
                 cur_page_start = b.page

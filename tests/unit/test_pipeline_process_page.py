@@ -323,7 +323,7 @@ def test_safe_complex_render_uses_one_equation_image_and_never_emits_fragmented_
     )
 
     assert out.count("![Equation](./assets/page_4_eq_1.png)") == 1
-    assert "<!-- kb:conversion_retry kind=equation page=4 -->" in out
+    assert "<!-- kb:conversion_retry kind=equation page=4 asset=page_4_eq_1.png number=3 -->" in out
     assert "where the source text remains readable" in out
     assert "$$" not in out
     assert (tmp_path / "page_4_eq_1.png").stat().st_size > 256

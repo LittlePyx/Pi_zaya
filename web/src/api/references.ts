@@ -311,6 +311,36 @@ function stableStringify(value: unknown): string {
   return `{${Object.keys(rec).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(rec[key])}`).join(',')}}`
 }
 
+function normalizedBibliometricsDoi(meta: Record<string, unknown>): string {
+  return String(meta.doi || meta.doi_url || meta.doiUrl || '')
+    .trim()
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
+    .replace(/^doi\s*:\s*/i, '')
+    .replace(/[?#].*$/, '')
+    .replace(/[\s.,;]+$/, '')
+    .toLowerCase()
+}
+
+export function bibliometricsCacheKey(meta: Record<string, unknown>): string {
+  const locale = String(
+    meta.refs_card_locale || meta.target_locale || meta.ui_locale || meta.summary_locale || '',
+  ).trim().toLowerCase()
+  const doi = normalizedBibliometricsDoi(meta)
+  if (doi) return stableStringify({ bibliometrics_client_version: 4, identity: `doi:${doi}`, locale })
+
+  const title = String(meta.title || meta.card_title || meta.cardTitle || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+  const year = String(meta.year || '').trim()
+  const source = String(meta.source_path || meta.sourcePath || '').trim().toLowerCase()
+  return stableStringify({
+    bibliometrics_client_version: 4,
+    identity: title ? `title:${title}|year:${year}` : `source:${source}`,
+    locale,
+  })
+}
+
 function withCache(
   cache: Map<string, Promise<Record<string, unknown>>>,
   key: string,
@@ -433,7 +463,7 @@ export const referencesApi = {
     }),
   bibliometricsCached: (meta: Record<string, unknown>) =>
     withTimedBibliometricsCache(
-      stableStringify({ bibliometrics_client_version: 3, meta }),
+      bibliometricsCacheKey(meta),
       () => api.post<Record<string, unknown>>('/api/references/bibliometrics', {
         meta,
       }),
