@@ -4,7 +4,8 @@ import json
 import os
 import re
 import uuid
-from decimal import Decimal, InvalidOperation
+from collections.abc import Iterable
+from decimal import Decimal, DecimalException, InvalidOperation
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -65,6 +66,462 @@ from kb.table_index import parse_markdown_table
 _PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION = 4
 _CITE_MARKER_RE = re.compile(r"\[\[\s*CITE\s*:\s*[A-Za-z0-9_-]{4,24}\s*:\s*\d{1,4}\s*\]\]", re.IGNORECASE)
 _SUPPORT_MARKER_RE = re.compile(r"\[\[\s*SUPPORT\s*:\s*[A-Za-z0-9_-]{4,32}\s*\]\]", re.IGNORECASE)
+_TABLE_METRIC_ALIASES = {
+    "acc": "accuracy",
+    "accuracy": "accuracy",
+    "ap": "ap",
+    "ap50": "ap50",
+    "ap75": "ap75",
+    "auc": "auc",
+    "ber": "ber",
+    "bleu": "bleu",
+    "brisque": "brisque",
+    "dice": "dice",
+    "epe": "epe",
+    "fid": "fid",
+    "flop": "flops",
+    "flops": "flops",
+    "fps": "fps",
+    "f1": "f1",
+    "f1-score": "f1",
+    "iou": "iou",
+    "latency": "latency",
+    "lpips": "lpips",
+    "mae": "mae",
+    "map": "map",
+    "memory": "memory",
+    "miou": "miou",
+    "mse": "mse",
+    "niqe": "niqe",
+    "param": "params",
+    "parameter": "params",
+    "parameters": "params",
+    "params": "params",
+    "precision": "precision",
+    "psnr": "psnr",
+    "recall": "recall",
+    "rmse": "rmse",
+    "runtime": "runtime",
+    "sam": "sam",
+    "snr": "snr",
+    "ssim": "ssim",
+    "top1": "top1",
+    "top-1": "top1",
+    "top5": "top5",
+    "top-5": "top5",
+    "wer": "wer",
+}
+_SHORT_RESULT_NON_SUBJECT_TERMS = {
+    "achieve",
+    "achieved",
+    "achieves",
+    "attain",
+    "attained",
+    "attains",
+    "are",
+    "been",
+    "being",
+    "bs",
+    "and",
+    "best",
+    "demonstrate",
+    "demonstrated",
+    "demonstrates",
+    "deliver",
+    "delivered",
+    "delivers",
+    "for",
+    "from",
+    "give",
+    "gives",
+    "given",
+    "has",
+    "have",
+    "higher",
+    "is",
+    "lower",
+    "method",
+    "model",
+    "network",
+    "obtain",
+    "obtained",
+    "obtains",
+    "performance",
+    "perform",
+    "performed",
+    "performs",
+    "outperform",
+    "outperformed",
+    "outperforming",
+    "outperforms",
+    "produce",
+    "produced",
+    "produces",
+    "reach",
+    "reached",
+    "reaches",
+    "report",
+    "reported",
+    "reports",
+    "record",
+    "recorded",
+    "records",
+    "result",
+    "scale",
+    "scene",
+    "score",
+    "scored",
+    "scores",
+    "show",
+    "showed",
+    "shown",
+    "shows",
+    "the",
+    "top",
+    "train",
+    "trained",
+    "training",
+    "trains",
+    "using",
+    "value",
+    "was",
+    "were",
+    "with",
+    "yield",
+    "yielded",
+    "yields",
+    "sigma",
+    "quality",
+    "q",
+}
+_TABLE_SUBJECT_QUALIFIER_TERMS = {
+    "b",
+    "batch",
+    "bs",
+    "db",
+    "gmac",
+    "gmacs",
+    "mac",
+    "macs",
+    "method",
+    "ms",
+    "model",
+    "na",
+    "network",
+    "quality",
+    "q",
+    "scale",
+    "scene",
+    "sec",
+    "second",
+    "seconds",
+    "sigma",
+    "size",
+    "top",
+}
+_NUMBER_TOKEN_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+
+
+def _canonical_decimal_text(value: object) -> str | None:
+    try:
+        number = Decimal(str(value if value is not None else "").strip())
+    except DecimalException:
+        return None
+    if not number.is_finite():
+        return None
+    if number.is_zero():
+        return "0"
+    sign, raw_digits, exponent = number.as_tuple()
+    digits = list(raw_digits)
+    while len(digits) > 1 and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    adjusted = exponent + len(digits) - 1
+    if abs(adjusted) > 1000:
+        coefficient = str(digits[0])
+        if len(digits) > 1:
+            coefficient += "." + "".join(str(digit) for digit in digits[1:])
+        return f"{'-' if sign else ''}{coefficient}e{adjusted}"
+    digit_text = "".join(str(digit) for digit in digits)
+    if exponent >= 0:
+        plain_text = digit_text + ("0" * exponent)
+    else:
+        decimal_position = len(digit_text) + exponent
+        if decimal_position > 0:
+            plain_text = f"{digit_text[:decimal_position]}.{digit_text[decimal_position:]}"
+        else:
+            plain_text = f"0.{('0' * -decimal_position)}{digit_text}"
+    return f"{'-' if sign else ''}{plain_text}"
+
+
+def _normalize_numeric_surface(value: object) -> str:
+    text = str(value or "").translate(
+        str.maketrans({"−": "-", "–": "-", "—": "-", "﹣": "-", "－": "-"})
+    )
+    text = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", text)
+    return re.sub(r"\[\s*\d+(?:\s*(?:[,;]|-|–|—)\s*\d+)*\s*\]", " ", text)
+
+
+def _table_label_terms(value: object) -> list[str]:
+    normalized = normalize_match_text(_normalize_numeric_surface(value))
+    token_re = re.compile(
+        rf"(?<![a-z0-9_])\d+[a-z][a-z0-9_]*(?:[+\-]+[a-z0-9_+]*)?"
+        rf"|(?<![a-z0-9_])[a-z][a-z0-9_]*(?:[+\-]+[a-z0-9_+]*)?"
+        rf"|(?<![a-z0-9_]){_NUMBER_TOKEN_PATTERN}(?![a-z0-9_])"
+    )
+    terms: list[str] = []
+    for match in token_re.finditer(normalized):
+        token = str(match.group(0) or "").strip().lower()
+        if not token:
+            continue
+        if re.fullmatch(_NUMBER_TOKEN_PATTERN, token):
+            canonical_number = _canonical_decimal_text(token)
+            if canonical_number is None:
+                continue
+            token = f"#{canonical_number}"
+        if token not in terms:
+            terms.append(token)
+    return terms
+
+
+def _canonical_table_metric_terms(values: Iterable[str]) -> set[str]:
+    metrics = {
+        _TABLE_METRIC_ALIASES[component]
+        for token in values
+        for component in str(token or "").split("_")
+        if component in _TABLE_METRIC_ALIASES
+    }
+    # "Top-1 Accuracy" and "Top-5 Accuracy" are each one compound metric,
+    # not ambiguous claims mentioning both a rank metric and generic accuracy.
+    if metrics.intersection({"top1", "top5"}):
+        metrics.discard("accuracy")
+    return metrics
+
+
+def _table_metric_terms(value: object) -> set[str]:
+    surface = normalize_match_text(str(value or ""))
+    metrics = _canonical_table_metric_terms(_table_label_terms(value))
+    if re.search(r"\btop\s*[-_]?\s*1\b", surface):
+        metrics.add("top1")
+        metrics.discard("accuracy")
+    if re.search(r"\btop\s*[-_]?\s*5\b", surface):
+        metrics.add("top5")
+        metrics.discard("accuracy")
+    if re.search(r"\bap\s*[-_]?\s*50\b", surface):
+        metrics.add("ap50")
+        metrics.discard("ap")
+    if re.search(r"\bap\s*[-_]?\s*75\b", surface):
+        metrics.add("ap75")
+        metrics.discard("ap")
+    return metrics
+
+
+def _table_axis_terms(value: object) -> set[str]:
+    surface = _normalize_numeric_surface(value).lower()
+    axes: set[str] = set()
+    axis_patterns = {
+        "sigma": rf"(?:\bsigma\b|σ)\s*(?:=|:)?\s*({_NUMBER_TOKEN_PATTERN})",
+        "batch": (
+            rf"(?:\b(?:bs|b)\b\s*(?:=|:)\s*({_NUMBER_TOKEN_PATTERN})"
+            rf"|\bbatch(?:\s+size)?\b\s*(?:=|:)?\s*({_NUMBER_TOKEN_PATTERN}))"
+        ),
+        "scene": rf"\bscene\b\s*(?:=|:)?\s*({_NUMBER_TOKEN_PATTERN})",
+        "quality": (
+            rf"(?:\bq\b\s*(?:=|:)\s*({_NUMBER_TOKEN_PATTERN})"
+            rf"|\bquality\b\s*(?:=|:)?\s*({_NUMBER_TOKEN_PATTERN}))"
+        ),
+        "scale": rf"\bscale\b\s*(?:=|:)?\s*({_NUMBER_TOKEN_PATTERN})",
+    }
+    for axis_name, pattern in axis_patterns.items():
+        for match in re.finditer(pattern, surface):
+            raw_number = next(
+                (group for group in match.groups() if group is not None),
+                "",
+            )
+            canonical_number = _canonical_decimal_text(raw_number)
+            if canonical_number is None:
+                continue
+            axes.add(f"{axis_name}={canonical_number}")
+    for match in re.finditer(rf"(?:×|\bx)\s*({_NUMBER_TOKEN_PATTERN})(?![a-z0-9_])", surface):
+        canonical_number = _canonical_decimal_text(match.group(1))
+        if canonical_number is None:
+            continue
+        axes.add(f"scale={canonical_number}")
+    for metric_name in ("map", "iou", "ap"):
+        for match in re.finditer(
+            rf"\b{metric_name}\s*@\s*({_NUMBER_TOKEN_PATTERN})",
+            surface,
+        ):
+            canonical_number = _canonical_decimal_text(match.group(1))
+            if canonical_number is None:
+                continue
+            axes.add(f"{metric_name}_threshold={canonical_number}")
+    return axes
+
+
+def _strip_table_axis_expressions(value: object) -> str:
+    surface = _normalize_numeric_surface(value)
+    patterns = (
+        rf"(?:\bsigma\b|σ)\s*(?:=|:)?\s*{_NUMBER_TOKEN_PATTERN}",
+        rf"\b(?:bs|b)\b\s*(?:=|:)\s*{_NUMBER_TOKEN_PATTERN}",
+        rf"\bbatch(?:\s+size)?\b\s*(?:=|:)?\s*{_NUMBER_TOKEN_PATTERN}",
+        rf"\bscene\b\s*(?:=|:)?\s*{_NUMBER_TOKEN_PATTERN}",
+        rf"\bq\b\s*(?:=|:)\s*{_NUMBER_TOKEN_PATTERN}",
+        rf"\bquality\b\s*(?:=|:)?\s*{_NUMBER_TOKEN_PATTERN}",
+        rf"\bscale\b\s*(?:=|:)?\s*{_NUMBER_TOKEN_PATTERN}",
+        rf"(?:×|\bx)\s*{_NUMBER_TOKEN_PATTERN}(?![a-z0-9_])",
+    )
+    for pattern in patterns:
+        surface = re.sub(pattern, " ", surface, flags=re.IGNORECASE)
+    return surface
+
+
+def _axis_number_terms(values: Iterable[str]) -> set[str]:
+    terms: set[str] = set()
+    for value in values:
+        _separator, _equals, number = str(value or "").partition("=")
+        if number:
+            terms.add(f"#{number}")
+    return terms
+
+
+def _table_metric_number_terms(value: object) -> set[str]:
+    surface = _normalize_numeric_surface(value).lower()
+    terms: set[str] = set()
+    patterns = (
+        rf"\btop\s*[-_]?\s*({_NUMBER_TOKEN_PATTERN})",
+        rf"\bap\s*[-_]?\s*({_NUMBER_TOKEN_PATTERN})",
+        rf"\b(?:map|iou)\s*@\s*({_NUMBER_TOKEN_PATTERN})",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, surface):
+            canonical_number = _canonical_decimal_text(match.group(1))
+            if canonical_number is None:
+                continue
+            terms.add(f"#{canonical_number}")
+    return terms
+
+
+def _normalize_table_subject_terms(
+    values: Iterable[str],
+    *,
+    excluded_metric_terms: Iterable[str] = (),
+    excluded_number_terms: Iterable[str] = (),
+) -> set[str]:
+    ordered_values = list(values)
+    excluded_metrics = {str(value or "").strip().lower() for value in excluded_metric_terms}
+    excluded_numbers = {str(value or "").strip().lower() for value in excluded_number_terms}
+
+    def _is_excluded_axis_token(token: str) -> bool:
+        match = re.fullmatch(rf"x({_NUMBER_TOKEN_PATTERN})", token)
+        if not match:
+            return False
+        canonical_number = _canonical_decimal_text(match.group(1))
+        if canonical_number is None:
+            return False
+        return f"#{canonical_number}" in excluded_numbers
+
+    terms = {
+        token
+        for token in ordered_values
+        if _TABLE_METRIC_ALIASES.get(token, "") not in excluded_metrics
+        and token not in excluded_numbers
+        and not _is_excluded_axis_token(token)
+        and token not in _TABLE_SUBJECT_QUALIFIER_TERMS
+        and not re.fullmatch(r"e[+\-]?\d+", token)
+    }
+    # "Baseline ours" and "proposed NAFNet" use ours/proposed as qualifiers,
+    # while standalone "Ours" and "Proposed" are valid row/column labels.
+    if len(terms) > 1:
+        if "ours" in terms and ordered_values.index("ours") > 0:
+            terms.discard("ours")
+        if "proposed" in terms:
+            terms.discard("proposed")
+    return terms
+
+
+def _table_subject_terms(
+    value: object,
+    *,
+    excluded_metric_terms: Iterable[str] = (),
+    excluded_number_terms: Iterable[str] = (),
+) -> set[str]:
+    return _normalize_table_subject_terms(
+        _table_label_terms(value),
+        excluded_metric_terms=excluded_metric_terms,
+        excluded_number_terms=excluded_number_terms,
+    )
+
+
+def _extract_short_result_claim(raw_segment: str) -> tuple[str, list[str]]:
+    surface = re.sub(r"^\s*\d+[.)]\s+", "", _normalize_numeric_surface(raw_segment))
+    trailing_condition_re = re.compile(
+        rf"\s*\([^()]*?(?:\b(?:b|bs|batch(?:\s+size)?|sigma|scale|scene|quality|q)\b|σ)\s*=\s*"
+        rf"{_NUMBER_TOKEN_PATTERN}[^()]*\)\s*$",
+        re.IGNORECASE,
+    )
+    while True:
+        trimmed = trailing_condition_re.sub("", surface)
+        if trimmed == surface:
+            break
+        surface = trimmed
+    surface = _strip_table_axis_expressions(surface)
+
+    def _values_from_match(value_match: re.Match[str]) -> tuple[str, list[str]]:
+        values = [str(value_match.group(1) or "").strip()]
+        uncertainty = re.match(
+            rf"\s*(?:±|\+/-)\s*({_NUMBER_TOKEN_PATTERN})",
+            surface[value_match.end(1) :],
+        )
+        if uncertainty:
+            values.append(str(uncertainty.group(1) or "").strip())
+        return surface[: value_match.start()], values
+
+    # Prefer an explicit result colon. Equality is considered only when no
+    # colon-delimited result exists, so conditions such as sigma=25 cannot
+    # displace the actual value after the colon.
+    delimited_values = list(re.finditer(rf"[:：]\s*({_NUMBER_TOKEN_PATTERN})", surface))
+    if delimited_values:
+        return _values_from_match(delimited_values[-1])
+
+    equality_values = [
+        match
+        for match in re.finditer(rf"=\s*({_NUMBER_TOKEN_PATTERN})", surface)
+        if not re.search(
+            r"(?:\b(?:b|bs|batch(?:\s+size)?|sigma|scale|scene|quality|q)\b|σ)\s*$",
+            surface[: match.start()],
+            flags=re.IGNORECASE,
+        )
+    ]
+    if equality_values:
+        return _values_from_match(equality_values[-1])
+
+    uncertainty_values = list(
+        re.finditer(
+            rf"({_NUMBER_TOKEN_PATTERN})\s*(?:±|\+/-)\s*({_NUMBER_TOKEN_PATTERN})",
+            surface,
+        )
+    )
+    if uncertainty_values:
+        value_match = uncertainty_values[-1]
+        return surface[: value_match.start()], [
+            str(value_match.group(1) or "").strip(),
+            str(value_match.group(2) or "").strip(),
+        ]
+
+    all_values = [
+        match
+        for match in re.finditer(rf"(?<![A-Za-z0-9_]){_NUMBER_TOKEN_PATTERN}", surface)
+        if not re.search(
+            r"(?:\b(?:b|bs|batch(?:\s+size)?|sigma|scale|scene|quality|q)\b|σ)\s*=\s*$",
+            surface[: match.start()],
+            flags=re.IGNORECASE,
+        )
+    ]
+    value_match = all_values[-1] if all_values else None
+    if value_match is None:
+        return surface, []
+    return surface[: value_match.start()], [str(value_match.group(0) or "").strip()]
 
 
 def _table_has_name_value_pair(
@@ -72,18 +529,79 @@ def _table_has_name_value_pair(
     *,
     name_terms: list[str],
     numeric_terms: list[str],
+    metric_terms: list[str] | None = None,
+    axis_terms: list[str] | None = None,
 ) -> bool:
     headers, rows = parse_markdown_table(raw_table)
     if not headers or not rows or not name_terms or not numeric_terms:
         return False
 
-    def _has_names(value: object) -> bool:
-        normalized = normalize_match_text(str(value or ""))
-        return bool(normalized) and all(term in normalized for term in name_terms)
+    expected_names = {str(term or "").strip().lower() for term in name_terms if str(term or "").strip()}
+    expected_metrics = _canonical_table_metric_terms(
+        str(term or "").strip().lower()
+        for term in list(metric_terms or [])
+        if str(term or "").strip()
+    )
+    expected_axes = {
+        str(term or "").strip().lower()
+        for term in list(axis_terms or [])
+        if str(term or "").strip()
+    }
+    # A multi-metric claim needs explicit metric-to-value parsing. Do not grant
+    # exact evidence when the terse claim does not expose that mapping safely.
+    if len(expected_metrics) > 1:
+        return False
+
+    def _values_match_names(
+        values: Iterable[object],
+        *,
+        metric_values: Iterable[object],
+        inline_value: bool = False,
+    ) -> bool:
+        actual_metric_terms: set[str] = set()
+        raw_metric_aliases: set[str] = set()
+        for value in metric_values:
+            actual_metric_terms.update(_table_metric_terms(value))
+            raw_metric_aliases.update(
+                _TABLE_METRIC_ALIASES[component]
+                for term in _table_label_terms(value)
+                for component in term.split("_")
+                if component in _TABLE_METRIC_ALIASES
+            )
+        if inline_value:
+            excluded_metrics = expected_metrics or actual_metric_terms
+        else:
+            excluded_metrics = expected_metrics.union(actual_metric_terms, raw_metric_aliases)
+        actual: set[str] = set()
+        for value in values:
+            excluded_numbers = _axis_number_terms(_table_axis_terms(value))
+            excluded_numbers.update(_table_metric_number_terms(value))
+            if inline_value:
+                excluded_numbers.update(
+                    f"#{canonical_number}"
+                    for number in expected_numbers
+                    if (canonical_number := _canonical_decimal_text(number)) is not None
+                )
+            actual.update(
+                _table_subject_terms(
+                    value,
+                    excluded_metric_terms=excluded_metrics,
+                    excluded_number_terms=excluded_numbers,
+                )
+            )
+        if not actual:
+            return False
+        if actual == expected_names:
+            return True
+        # Ours/proposed can be a standalone method name or a qualifier around
+        # a concrete method name ("Ours NAFNet", "proposed NAFNet").
+        without_contextual = expected_names.difference({"ours", "proposed"})
+        return bool(without_contextual) and actual == without_contextual
 
     def _number_values(value: object) -> list[Decimal]:
         out: list[Decimal] = []
-        for token in re.findall(r"(?<![A-Za-z0-9_])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", str(value or "")):
+        surface = _normalize_numeric_surface(value)
+        for token in re.findall(rf"(?<![A-Za-z0-9_]){_NUMBER_TOKEN_PATTERN}", surface):
             try:
                 out.append(Decimal(token))
             except InvalidOperation:
@@ -97,21 +615,244 @@ def _table_has_name_value_pair(
 
     def _has_numbers(value: object) -> bool:
         actual = _number_values(value)
-        return all(expected in actual for expected in expected_numbers)
+        if len(expected_numbers) == 1:
+            return expected_numbers[0] in actual
+        width = len(expected_numbers)
+        return any(actual[index : index + width] == expected_numbers for index in range(len(actual) - width + 1))
 
-    # Transposed metric table: subject names are column headers and the value
-    # must occur in that same column, not merely elsewhere in the table.
-    for column_index, header in enumerate(headers):
-        if not _has_names(header):
-            continue
-        if any(column_index < len(row) and _has_numbers(row[column_index]) for row in rows):
-            return True
+    def _axis_names(value: object) -> set[str]:
+        surface = _normalize_numeric_surface(value).lower()
+        names: set[str] = set()
+        if re.search(r"(?:\bsigma\b|σ)", surface):
+            names.add("sigma")
+        if re.search(r"\b(?:batch(?:\s+size)?|bs|b)\b", surface):
+            names.add("batch")
+        if re.search(r"\bscene\b", surface):
+            names.add("scene")
+        if re.search(r"\b(?:quality|q)\b", surface):
+            names.add("quality")
+        if re.search(r"\bscale\b", surface):
+            names.add("scale")
+        return names
 
-    # Row-oriented metric table: the subject is the first cell and all values
-    # on that row describe that same subject.
+    def _record_axis_terms(row: list[object]) -> set[str]:
+        axes: set[str] = set()
+        for cell in row:
+            axes.update(_table_axis_terms(cell))
+        for column_index, header in enumerate(headers):
+            axis_names = _axis_names(header)
+            if not axis_names or _table_metric_terms(header) or column_index >= len(row):
+                continue
+            for number in _number_values(row[column_index]):
+                normalized_number = _canonical_decimal_text(number)
+                if normalized_number is None:
+                    continue
+                for axis_name in axis_names:
+                    axes.add(f"{axis_name}={normalized_number}")
+        return axes
+
+    available_axes = _table_axis_terms(raw_table)
     for row in rows:
-        if row and _has_names(row[0]) and any(_has_numbers(cell) for cell in row[1:]):
+        available_axes.update(_record_axis_terms(list(row)))
+
+    def _axes_by_name(values: Iterable[str]) -> dict[str, set[str]]:
+        grouped: dict[str, set[str]] = {}
+        for value in values:
+            axis_name, separator, axis_value = str(value or "").partition("=")
+            if not separator or not axis_name or not axis_value:
+                continue
+            grouped.setdefault(axis_name, set()).add(axis_value)
+        return grouped
+
+    available_axes_by_name = _axes_by_name(available_axes)
+
+    def _matches_metric_axis(
+        metric_values: Iterable[object],
+        *,
+        actual_axes: set[str],
+        allow_identity_metric_aliases: bool = False,
+    ) -> bool:
+        actual_metrics: set[str] = set()
+        for value in metric_values:
+            actual_metrics.update(_table_metric_terms(value))
+        if expected_metrics:
+            if not expected_metrics.issubset(actual_metrics):
+                return False
+            extra_metrics = actual_metrics.difference(expected_metrics)
+            expected_name_metrics = _canonical_table_metric_terms(expected_names)
+            if extra_metrics and (
+                not allow_identity_metric_aliases
+                or not extra_metrics.issubset(expected_name_metrics)
+            ):
+                return False
+        actual_axes_by_name = _axes_by_name(actual_axes)
+        if expected_axes:
+            expected_axes_by_name = _axes_by_name(expected_axes)
+            for axis_name, expected_values in expected_axes_by_name.items():
+                if axis_name not in available_axes_by_name:
+                    return False
+                if actual_axes_by_name.get(axis_name, set()) != expected_values:
+                    return False
+        # An omitted qualifier is safe only when the table exposes one value
+        # for that axis. Repeated axes (for example sigma=25 and sigma=50)
+        # require the answer to name which coordinate it uses.
+        for axis_name, actual_values in actual_axes_by_name.items():
+            if axis_name in _axes_by_name(expected_axes):
+                continue
+            if len(available_axes_by_name.get(axis_name, set())) > 1 and actual_values:
+                return False
+        return True
+
+    identity_header_terms = {
+        "algorithm",
+        "algorithms",
+        "approach",
+        "approaches",
+        "architecture",
+        "architectures",
+        "data",
+        "dataset",
+        "method",
+        "methods",
+        "model",
+        "models",
+        "name",
+        "names",
+        "network",
+        "networks",
+    }
+    auxiliary_header_terms = {
+        "backbone",
+        "batch",
+        "epoch",
+        "epochs",
+        "loss",
+        "measure",
+        "measures",
+        "metric",
+        "metrics",
+        "optimizer",
+        "quality",
+        "q",
+        "scale",
+        "scene",
+        "sigma",
+    }
+    has_explicit_identity_header = any(
+        {
+            component
+            for term in _table_label_terms(header)
+            for component in term.split("_")
+        }.intersection(identity_header_terms)
+        for header in headers
+    )
+    first_column_has_metric_rows = any(
+        bool(row) and bool(_table_metric_terms(row[0]))
+        for row in rows
+    )
+    later_header_has_metric = any(
+        _table_metric_terms(header)
+        for header in headers[1:]
+    )
+    allow_transposed_layout = (
+        not has_explicit_identity_header
+        or (first_column_has_metric_rows and not later_header_has_metric)
+    )
+
+    def _is_identity_column(column_index: int) -> bool:
+        if column_index >= len(headers):
+            return False
+        label_terms = {
+            component
+            for term in _table_label_terms(headers[column_index])
+            for component in term.split("_")
+        }
+        if label_terms.intersection(identity_header_terms):
             return True
+        if label_terms.intersection(auxiliary_header_terms):
+            return False
+        return column_index == 0 and not _table_metric_terms(headers[column_index])
+
+    def _row_identity_values(row: list[object], value_column: int) -> list[object]:
+        values: list[object] = [headers[value_column]]
+        values.extend(
+            row[column_index]
+            for column_index in range(min(len(headers), len(row)))
+            if column_index != value_column and _is_identity_column(column_index)
+        )
+        return values
+
+    def _transposed_identity_values(row: list[object], value_column: int) -> list[object]:
+        values: list[object] = [headers[value_column]]
+        values.extend(
+            row[column_index]
+            for column_index in range(min(len(headers), len(row)))
+            if column_index != value_column
+            and (
+                _is_identity_column(column_index)
+                or set(_table_label_terms(headers[column_index])).intersection(
+                    {"measure", "measures", "metric", "metrics"}
+                )
+            )
+        )
+        return values
+
+    # Compact inline table cells such as "Baseline PSNR: 40.30" carry the
+    # complete association themselves. Include their header/row label only to
+    # resolve an explicit metric axis.
+    for row in rows:
+        for column_index, cell in enumerate(row):
+            if not _has_numbers(cell):
+                continue
+            metric_context: list[object] = [cell]
+            if column_index < len(headers):
+                metric_context.append(headers[column_index])
+            if row:
+                metric_context.append(row[0])
+            actual_axes = _record_axis_terms(list(row))
+            if column_index < len(headers):
+                actual_axes.update(_table_axis_terms(headers[column_index]))
+            if _matches_metric_axis(
+                metric_context,
+                actual_axes=actual_axes,
+                allow_identity_metric_aliases=True,
+            ) and _values_match_names(
+                [cell],
+                metric_values=metric_context,
+                inline_value=True,
+            ):
+                return True
+
+    for row0 in rows:
+        row = list(row0)
+        record_axes = _record_axis_terms(row)
+        for column_index, cell in enumerate(row):
+            if column_index >= len(headers) or not _has_numbers(cell):
+                continue
+
+            # Row-oriented table: method/dataset cells identify the record and
+            # the target metric (plus any dataset qualifier) lives in the
+            # current column header.
+            row_axes = set(record_axes)
+            row_axes.update(_table_axis_terms(headers[column_index]))
+            row_metric_values = [headers[column_index]]
+            if _matches_metric_axis(row_metric_values, actual_axes=row_axes) and _values_match_names(
+                _row_identity_values(row, column_index),
+                metric_values=row_metric_values,
+            ):
+                return True
+
+            # Transposed metric table: the method is the value-column header
+            # and the requested metric/condition lives on this record row.
+            if (
+                allow_transposed_layout
+                and _matches_metric_axis(row, actual_axes=record_axes)
+                and _values_match_names(
+                _transposed_identity_values(row, column_index),
+                metric_values=row,
+                )
+            ):
+                return True
     return False
 
 
@@ -4659,29 +5400,107 @@ def _build_paper_guide_answer_provenance(
         # deterministically so citations stay on the result bullet itself.
         if str(seg_kind or "").strip().lower() == "list_item":
             raw_segment = str(seg_text or "")
-            normalized_segment = normalize_match_text(raw_segment)
-            numeric_terms = list(dict.fromkeys(re.findall(r"\b\d+(?:\.\d+)+\b", raw_segment)))
-            name_terms = [
-                term
-                for term in dict.fromkeys(re.findall(r"\b[a-z][a-z0-9+\-]{2,}\b", normalized_segment))
-                if term not in {"ours", "model", "method", "network", "psnr", "ssim"}
-            ]
+            claim_prefix, numeric_terms = _extract_short_result_claim(raw_segment)
+            word_terms = _table_label_terms(claim_prefix)
+            all_metric_terms = _table_metric_terms(claim_prefix)
+            metric_terms = sorted(all_metric_terms)
+            if len(all_metric_terms) > 1:
+                ordered_metrics = [
+                    _TABLE_METRIC_ALIASES[component]
+                    for term in word_terms
+                    for component in term.split("_")
+                    if component in _TABLE_METRIC_ALIASES
+                    and _TABLE_METRIC_ALIASES[component] in all_metric_terms
+                ]
+                if ordered_metrics:
+                    metric_terms = [ordered_metrics[-1]]
+                if "of" in word_terms:
+                    of_index = word_terms.index("of")
+                    metrics_before_of = [
+                        _TABLE_METRIC_ALIASES[component]
+                        for term in word_terms[:of_index]
+                        for component in term.split("_")
+                        if component in _TABLE_METRIC_ALIASES
+                        and _TABLE_METRIC_ALIASES[component] in all_metric_terms
+                    ]
+                    metrics_after_of = [
+                        _TABLE_METRIC_ALIASES[component]
+                        for term in word_terms[of_index + 1 :]
+                        for component in term.split("_")
+                        if component in _TABLE_METRIC_ALIASES
+                        and _TABLE_METRIC_ALIASES[component] in all_metric_terms
+                    ]
+                    if metrics_before_of and metrics_after_of:
+                        metric_terms = [metrics_before_of[-1]]
+            axis_terms = sorted(_table_axis_terms(raw_segment))
+            excluded_number_terms = _axis_number_terms(axis_terms)
+            excluded_number_terms.update(_table_metric_number_terms(claim_prefix))
+            excluded_metric_terms = set(metric_terms)
+            if len(all_metric_terms) == 1:
+                excluded_metric_terms.update(
+                    _TABLE_METRIC_ALIASES[component]
+                    for term in word_terms
+                    for component in term.split("_")
+                    if component in _TABLE_METRIC_ALIASES
+                )
+            name_terms = sorted(
+                _normalize_table_subject_terms(
+                    [
+                        term
+                        for term in word_terms
+                        if (
+                            len(term) >= 3
+                            or term == "y"
+                            or term.startswith("#")
+                            or re.match(r"\d+[a-z]", term)
+                        )
+                        and term not in _SHORT_RESULT_NON_SUBJECT_TERMS
+                    ],
+                    excluded_metric_terms=excluded_metric_terms,
+                    excluded_number_terms=excluded_number_terms,
+                )
+            )
             exact_block_rows: list[tuple[float, dict]] = []
-            if numeric_terms and name_terms:
-                for block0 in blocks or blocks_for_match or []:
-                    if not isinstance(block0, dict):
-                        continue
-                    raw_block_text = str(block0.get("raw_text") or block0.get("text") or "")
-                    block_kind = str(block0.get("kind") or "").strip().lower()
-                    if block_kind != "table" or not _table_has_name_value_pair(
-                        raw_block_text,
-                        name_terms=name_terms,
-                        numeric_terms=numeric_terms,
-                    ):
-                        continue
-                    score = 2.8 + (0.35 * len(name_terms))
-                    exact_block_rows.append((score, block0))
-            if exact_block_rows:
+            table_blocks_seen = False
+            structured_numeric_claim = bool(
+                numeric_terms and (name_terms or metric_terms)
+            )
+            allow_exact_table_claim = bool(
+                numeric_terms
+                and name_terms
+                and (metric_terms or len(name_terms) == 1)
+            )
+            primary_selected_block = block_lookup.get(chosen_ids[0]) if chosen_ids else {}
+            selected_table_match = (
+                str((primary_selected_block or {}).get("kind") or "").strip().lower()
+                == "table"
+            )
+            for block0 in blocks or blocks_for_match or []:
+                if not isinstance(block0, dict):
+                    continue
+                block_kind = str(block0.get("kind") or "").strip().lower()
+                if block_kind != "table":
+                    continue
+                table_blocks_seen = True
+                if not allow_exact_table_claim:
+                    continue
+                raw_block_text = str(block0.get("raw_text") or block0.get("text") or "")
+                if not _table_has_name_value_pair(
+                    raw_block_text,
+                    name_terms=name_terms,
+                    numeric_terms=numeric_terms,
+                    metric_terms=metric_terms,
+                    axis_terms=axis_terms,
+                ):
+                    continue
+                score = (
+                    2.8
+                    + (0.35 * len(name_terms))
+                    + (0.25 * len(metric_terms))
+                    + (0.20 * len(axis_terms))
+                )
+                exact_block_rows.append((score, block0))
+            if len(exact_block_rows) == 1:
                 exact_block_rows.sort(key=lambda item: item[0], reverse=True)
                 exact_score, exact_block = exact_block_rows[0]
                 exact_block_id = str(exact_block.get("block_id") or "").strip()
@@ -4699,6 +5518,25 @@ def _build_paper_guide_answer_provenance(
                     }
                     best_score = max(best_score, exact_score)
                     segment_mapping_source = "short_list_exact"
+            elif (
+                structured_numeric_claim
+                and table_blocks_seen
+                and selected_table_match
+            ):
+                # A numeric table claim that fails coordinate validation (or
+                # matches multiple tables) must not inherit an earlier fuzzy
+                # table choice with full direct-evidence semantics.
+                chosen_ids = []
+                primary_support_metrics = {
+                    "quote": "",
+                    "quote_score": 0.0,
+                    "support_score": 0.0,
+                    "heading_adjust": 0.0,
+                    "generic_heading": False,
+                    "summary_adjust": 0.0,
+                }
+                best_score = 0.0
+                segment_mapping_source = "short_list_rejected"
 
         if is_formula and not chosen_ids:
             eq_ranked = match_source_blocks(

@@ -777,6 +777,1298 @@ def test_build_paper_guide_answer_provenance_keeps_name_value_column_pairing(
     assert "| PSNR | 40.30 | 40.20 |" in str(bullet["evidence_quote"])
 
 
+def _build_short_table_bullet_provenance(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    table_text: str,
+    answer: str,
+    disable_general_match: bool = True,
+) -> dict:
+    from kb import paper_guide_provenance, task_runtime
+
+    if disable_general_match:
+        monkeypatch.setattr(paper_guide_provenance, "match_source_blocks", lambda *args, **kwargs: [])
+    source_pdf = tmp_path / "MetricPaper.pdf"
+    md_dir = tmp_path / "MetricPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    (md_dir / "MetricPaper.en.md").write_text(
+        f"# Results\n\n## Quantitative comparison\n\n{table_text}\n",
+        encoding="utf-8",
+    )
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer=answer,
+        answer_hits=[],
+        bound_source_path=str(source_pdf),
+        bound_source_name="MetricPaper.pdf",
+        db_dir=None,
+        llm_rerank=False,
+    )
+    return next(
+        segment
+        for segment in list(provenance.get("segments") or [])
+        if str(segment.get("kind") or "") == "list_item"
+    )
+
+
+def test_table_subject_normalization_is_order_stable():
+    from kb.paper_guide_provenance import _table_label_terms, _table_subject_terms
+
+    assert _table_label_terms("Baseline ours") == ["baseline", "ours"]
+    assert _table_subject_terms("Baseline ours") == {"baseline"}
+    assert _table_subject_terms("Ours") == {"ours"}
+    assert _table_subject_terms("Proposed") == {"proposed"}
+    assert _table_label_terms("MSE 1e1000000") == ["mse", "#1e1000000"]
+
+
+@pytest.mark.parametrize(
+    ("table_text", "answer"),
+    [
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR | SSIM |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 39.90 | 40.30 |",
+                    "| NAFNet | 40.20 | 0.96 |",
+                ]
+            ),
+            "- Baseline PSNR: 40.30 dB",
+            id="different-metric-column",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Metric | Baseline | NAFNet |",
+                    "| --- | --- | --- |",
+                    "| PSNR | 39.90 | 40.30 |",
+                    "| SSIM | 0.95 | 0.96 |",
+                ]
+            ),
+            "- Baseline PSNR: 0.95",
+            id="different-metric-row",
+        ),
+    ],
+)
+def test_build_paper_guide_answer_provenance_rejects_value_from_different_metric_axis(
+    tmp_path: Path,
+    monkeypatch,
+    table_text: str,
+    answer: str,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text=table_text,
+        answer=answer,
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == "synthesis"
+    assert bullet["mapping_source"] != "short_list_exact"
+    assert float(bullet["mapping_quality"]) == 0.0
+    assert float(bullet["evidence_confidence"]) == 0.0
+    assert str(bullet["primary_block_id"] or "") == ""
+    assert list(bullet["evidence_block_ids"] or []) == []
+
+
+@pytest.mark.parametrize(
+    ("table_text", "answer", "expected_fragment"),
+    [
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR | SSIM |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 40.30 | 0.95 |",
+                    "| NAFNet | 40.20 | 0.96 |",
+                ]
+            ),
+            "- Baseline PSNR: 40.30 dB",
+            "| Baseline | 40.30 | 0.95 |",
+            id="row-oriented-psnr",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Metric | Baseline | NAFNet |",
+                    "| --- | --- | --- |",
+                    "| PSNR | 40.30 | 40.20 |",
+                    "| SSIM | 0.95 | 0.96 |",
+                ]
+            ),
+            "- Baseline PSNR: 40.30 dB",
+            "| PSNR | 40.30 | 40.20 |",
+            id="transposed-psnr",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR | SSIM | LPIPS |",
+                    "| --- | --- | --- | --- |",
+                    "| Baseline | 40.30 | 0.95 | 0.050 |",
+                    "| NAFNet | 40.20 | 0.96 | 0.045 |",
+                ]
+            ),
+            "- Baseline LPIPS: 0.050",
+            "| Baseline | 40.30 | 0.95 | 0.050 |",
+            id="row-oriented-lpips",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Dataset | Method | PSNR |",
+                    "| --- | --- | --- |",
+                    "| SIDD | Baseline | 40.30 |",
+                    "| SIDD | NAFNet | 40.20 |",
+                ]
+            ),
+            "- SIDD Baseline PSNR: 40.30 dB",
+            "| SIDD | Baseline | 40.30 |",
+            id="method-column-not-first",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Params | MSE |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 12 | 1e-3 |",
+                    "| NAFNet | 16 | 8e-4 |",
+                ]
+            ),
+            "- Baseline Params: 12 M",
+            "| Baseline | 12 | 1e-3 |",
+            id="integer-params",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Params | MSE |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 12 | 1e-3 |",
+                    "| NAFNet | 16 | 8e-4 |",
+                ]
+            ),
+            "- Baseline MSE: 1e-3",
+            "| Baseline | 12 | 1e-3 |",
+            id="scientific-notation-mse",
+        ),
+    ],
+)
+def test_build_paper_guide_answer_provenance_keeps_metric_axis_pairing(
+    tmp_path: Path,
+    monkeypatch,
+    table_text: str,
+    answer: str,
+    expected_fragment: str,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text=table_text,
+        answer=answer,
+    )
+
+    assert bullet["evidence_mode"] == "direct"
+    assert bullet["mapping_source"] == "short_list_exact"
+    assert float(bullet["mapping_quality"]) == 1.0
+    assert expected_fragment in str(bullet["evidence_quote"])
+
+
+def test_build_paper_guide_answer_provenance_rejects_method_name_substring_variant(
+    tmp_path: Path,
+    monkeypatch,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text="\n".join(
+            [
+                "| Method | PSNR |",
+                "| --- | --- |",
+                "| Baseline++ | 40.30 |",
+            ]
+        ),
+        answer="- Baseline PSNR: 40.30 dB",
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == "synthesis"
+    assert bullet["mapping_source"] != "short_list_exact"
+    assert float(bullet["mapping_quality"]) == 0.0
+
+
+def test_build_paper_guide_answer_provenance_rejects_ambiguous_duplicate_table_pair(
+    tmp_path: Path,
+    monkeypatch,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text="\n".join(
+            [
+                "### Dataset A",
+                "",
+                "| Method | PSNR |",
+                "| --- | --- |",
+                "| Baseline | 40.30 |",
+                "",
+                "### Dataset B",
+                "",
+                "| Method | PSNR |",
+                "| --- | --- |",
+                "| Baseline | 40.30 |",
+            ]
+        ),
+        answer="- Baseline PSNR: 40.30 dB",
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == "synthesis"
+    assert bullet["mapping_source"] != "short_list_exact"
+    assert float(bullet["mapping_quality"]) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("table_text", "answer", "expected_mode"),
+    [
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | IoU | Dice |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 0.70 | 0.80 |",
+                ]
+            ),
+            "- Baseline Dice: 0.70",
+            "synthesis",
+            id="dice-value-from-iou-column",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | IoU | Dice |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 0.70 | 0.80 |",
+                ]
+            ),
+            "- Baseline Dice: 0.80",
+            "direct",
+            id="dice-value-from-dice-column",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | MAE |",
+                    "| --- | --- |",
+                    "| Baseline | +1.2 |",
+                ]
+            ),
+            "- Baseline MAE: −1.2",
+            "synthesis",
+            id="unicode-minus-keeps-sign",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | MAE |",
+                    "| --- | --- |",
+                    "| Baseline | −1.2 |",
+                ]
+            ),
+            "- Baseline MAE: -1.2",
+            "direct",
+            id="unicode-minus-matches-ascii-minus",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline [12] | 40.30 |",
+                ]
+            ),
+            "- Baseline: 12",
+            "synthesis",
+            id="citation-number-is-not-result",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline | 30.5 |",
+                ]
+            ),
+            "- Baseline PSNR at σ=25: 30.5 dB",
+            "synthesis",
+            id="condition-number-is-not-result",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | σ=25 PSNR | σ=50 PSNR |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 30.5 | 27.0 |",
+                ]
+            ),
+            "- Baseline PSNR at σ=25: 27.0",
+            "synthesis",
+            id="wrong-noise-condition-axis",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | σ=25 PSNR | σ=50 PSNR |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 30.5 | 27.0 |",
+                ]
+            ),
+            "- Baseline PSNR at σ=25: 30.5",
+            "direct",
+            id="matching-greek-noise-condition-axis",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | sigma=25 PSNR | sigma=50 PSNR |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 30.5 | 27.0 |",
+                ]
+            ),
+            "- Baseline PSNR at sigma=50: 27.0",
+            "direct",
+            id="matching-ascii-noise-condition-axis",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | σ=25 PSNR | σ=50 PSNR |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 30.5 | 27.0 |",
+                ]
+            ),
+            "- Baseline PSNR: 27.0",
+            "synthesis",
+            id="noise-condition-axis-needs-qualifier",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Top-1 Accuracy |",
+                    "| --- | --- |",
+                    "| Baseline | 95.2 |",
+                ]
+            ),
+            "- Baseline Top-1 Accuracy: 95.2%",
+            "direct",
+            id="compound-top1-accuracy",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | mAP@0.5 |",
+                    "| --- | --- |",
+                    "| Baseline | 42.1 |",
+                ]
+            ),
+            "- Baseline mAP@0.5: 42.1",
+            "direct",
+            id="map-threshold-is-not-result",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR | SSIM |",
+                    "| --- | --- | --- |",
+                    "| Ours | 39.90 | 40.30 |",
+                ]
+            ),
+            "- Ours PSNR: 40.30",
+            "synthesis",
+            id="standalone-ours-wrong-metric",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Proposed | 40.30 |",
+                ]
+            ),
+            "- Proposed PSNR: 40.30",
+            "direct",
+            id="standalone-proposed-subject",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Metric | Ours |",
+                    "| --- | --- |",
+                    "| EPE | 0.70 |",
+                    "| PSNR | 30.0 |",
+                ]
+            ),
+            "- Ours EPE: 30.0",
+            "synthesis",
+            id="standalone-ours-wrong-transposed-metric",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline | 40.30 |",
+                ]
+            ),
+            "- The Baseline achieves a PSNR of 40.30",
+            "direct",
+            id="natural-language-achieves",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline | 40.30 |",
+                ]
+            ),
+            "- Baseline yields PSNR: 40.30",
+            "direct",
+            id="natural-language-yields",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Latency |",
+                    "| --- | --- |",
+                    "| Baseline | 1 |",
+                ]
+            ),
+            "- Baseline Latency: 12 ms (b=1)",
+            "synthesis",
+            id="trailing-batch-condition-is-not-result",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline | 30.5 ± 0.1 |",
+                ]
+            ),
+            "- Baseline PSNR: 30.5 ± 9.9",
+            "synthesis",
+            id="uncertainty-must-match",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline | 30.5 ± 0.1 |",
+                ]
+            ),
+            "- Baseline PSNR: 30.5 ± 0.1",
+            "direct",
+            id="matching-uncertainty",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Airplants PSNR | Hotdog PSNR |",
+                    "| --- | --- | --- |",
+                    "| Ours | 31.5 | 29.0 |",
+                ]
+            ),
+            "- Ours Airplants PSNR: 31.5",
+            "direct",
+            id="dataset-qualifier-in-column-header",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Airplants PSNR | Hotdog PSNR |",
+                    "| --- | --- | --- |",
+                    "| Ours | 31.5 | 29.0 |",
+                ]
+            ),
+            "- Ours Hotdog PSNR: 31.5",
+            "synthesis",
+            id="wrong-dataset-qualifier-in-column-header",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR (RGB) | PSNR (Y) |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 30.0 | 31.5 |",
+                ]
+            ),
+            "- Baseline PSNR: 31.5",
+            "synthesis",
+            id="repeated-metric-axis-needs-qualifier",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR (RGB) | PSNR (Y) |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 30.0 | 31.5 |",
+                ]
+            ),
+            "- Baseline Y PSNR: 31.5",
+            "direct",
+            id="repeated-metric-axis-with-qualifier",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Metric | Baseline |",
+                    "| --- | --- |",
+                    "| PSNR (RGB) | 30.0 |",
+                    "| PSNR (Y) | 31.5 |",
+                ]
+            ),
+            "- Baseline PSNR: 31.5",
+            "synthesis",
+            id="repeated-transposed-metric-axis-needs-qualifier",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Metric | Baseline |",
+                    "| --- | --- |",
+                    "| PSNR (RGB) | 30.0 |",
+                    "| PSNR (Y) | 31.5 |",
+                ]
+            ),
+            "- Baseline Y PSNR: 31.5",
+            "direct",
+            id="repeated-transposed-metric-axis-with-qualifier",
+        ),
+    ],
+)
+def test_build_paper_guide_answer_provenance_handles_metric_coordinate_edge_cases(
+    tmp_path: Path,
+    monkeypatch,
+    table_text: str,
+    answer: str,
+    expected_mode: str,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text=table_text,
+        answer=answer,
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == expected_mode
+    if expected_mode == "direct":
+        assert bullet["mapping_source"] == "short_list_exact"
+        assert float(bullet["mapping_quality"]) == 1.0
+    else:
+        assert bullet["mapping_source"] != "short_list_exact"
+        assert float(bullet["mapping_quality"]) == 0.0
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param("- Baseline attains a PSNR of 40.30", id="attains"),
+        pytest.param("- Baseline records PSNR: 40.30", id="records"),
+        pytest.param("- Baseline outperforms with PSNR: 40.30", id="outperforms"),
+        pytest.param("- Baseline delivers PSNR: 40.30", id="delivers"),
+        pytest.param("- Baseline produces PSNR: 40.30", id="produces"),
+    ],
+)
+def test_build_paper_guide_answer_provenance_accepts_common_result_predicates(
+    tmp_path: Path,
+    monkeypatch,
+    answer: str,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text="\n".join(
+            [
+                "| Method | PSNR |",
+                "| --- | --- |",
+                "| Baseline | 40.30 |",
+            ]
+        ),
+        answer=answer,
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == "direct"
+    assert bullet["mapping_source"] == "short_list_exact"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param("- Baseline Latency = 12 ms, bs=1", id="comma-batch-condition"),
+        pytest.param("- Baseline Latency = 12 ms at b=1", id="at-batch-condition"),
+    ],
+)
+def test_build_paper_guide_answer_provenance_rejects_trailing_equality_condition_as_result(
+    tmp_path: Path,
+    monkeypatch,
+    answer: str,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text="\n".join(
+            [
+                "| Method | Latency |",
+                "| --- | --- |",
+                "| Baseline | 1 |",
+            ]
+        ),
+        answer=answer,
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == "synthesis"
+    assert bullet["mapping_source"] != "short_list_exact"
+    assert float(bullet["mapping_quality"]) == 0.0
+
+
+def test_build_paper_guide_answer_provenance_accepts_trailing_noise_condition(
+    tmp_path: Path,
+    monkeypatch,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text="\n".join(
+            [
+                "| Method | sigma=25 PSNR | sigma=50 PSNR |",
+                "| --- | --- | --- |",
+                "| Baseline | 30.5 | 27.0 |",
+            ]
+        ),
+        answer="- Baseline PSNR = 30.5 at sigma=25",
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == "direct"
+    assert bullet["mapping_source"] == "short_list_exact"
+
+
+@pytest.mark.parametrize(
+    ("table_text", "answer", "expected_mode"),
+    [
+        pytest.param(
+            "\n".join(
+                [
+                    "| Dataset | Sigma | Method | PSNR |",
+                    "| --- | --- | --- | --- |",
+                    "| SIDD | 25 | Baseline | 30.5 |",
+                    "| SIDD | 50 | Baseline | 27.0 |",
+                ]
+            ),
+            "- SIDD Baseline PSNR at sigma=50: 30.5",
+            "synthesis",
+            id="separate-sigma-column-wrong-row",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Dataset | Sigma | Method | PSNR |",
+                    "| --- | --- | --- | --- |",
+                    "| SIDD | 25 | Baseline | 30.5 |",
+                    "| SIDD | 50 | Baseline | 27.0 |",
+                ]
+            ),
+            "- SIDD Baseline PSNR at sigma=25: 30.5",
+            "direct",
+            id="separate-sigma-column-correct-row",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Dataset | Sigma | Method | PSNR |",
+                    "| --- | --- | --- | --- |",
+                    "| SIDD | sigma=25 | Baseline | 30.5 |",
+                    "| SIDD | sigma=50 | Baseline | 27.0 |",
+                ]
+            ),
+            "- SIDD Baseline PSNR at sigma=50: 27.0",
+            "direct",
+            id="explicit-sigma-cell-correct-row",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline | 30.5 ± 0.1 / 27.0 ± 0.2 |",
+                ]
+            ),
+            "- Baseline PSNR: 30.5 ± 0.2",
+            "synthesis",
+            id="uncertainty-cannot-cross-pairs",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR (dB) |",
+                    "| --- | --- |",
+                    "| Baseline | 40.30 dB |",
+                ]
+            ),
+            "- Baseline PSNR: 40.30 dB",
+            "direct",
+            id="metric-unit-is-not-subject",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR | SSIM |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 40.30 | N/A |",
+                ]
+            ),
+            "- Baseline PSNR: 40.30",
+            "direct",
+            id="missing-other-metric-is-ignored",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Backbone | Method | PSNR |",
+                    "| --- | --- | --- |",
+                    "| Swin | Baseline | 40.30 |",
+                ]
+            ),
+            "- Baseline PSNR: 40.30",
+            "direct",
+            id="backbone-is-auxiliary",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Latency (b=1) |",
+                    "| --- | --- |",
+                    "| Baseline | 12 ms |",
+                ]
+            ),
+            "- Baseline Latency: 12 ms",
+            "direct",
+            id="batch-condition-in-header",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline [12-14] | 40.30 |",
+                ]
+            ),
+            "- Baseline: 12",
+            "synthesis",
+            id="hyphen-citation-range-is-not-value",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline [12–14] | 40.30 |",
+                ]
+            ),
+            "- Baseline: 12",
+            "synthesis",
+            id="en-dash-citation-range-is-not-value",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | MAE |",
+                    "| --- | --- |",
+                    "| Baseline | +1.2 |",
+                ]
+            ),
+            "- Baseline MAE: –1.2",
+            "synthesis",
+            id="en-dash-preserves-negative-sign",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | MAE |",
+                    "| --- | --- |",
+                    "| Baseline | +1.2 |",
+                ]
+            ),
+            "- Baseline MAE: —1.2",
+            "synthesis",
+            id="em-dash-preserves-negative-sign",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Latency |",
+                    "| --- | --- |",
+                    "| Baseline | 12 |",
+                ]
+            ),
+            "- Baseline Latency 12 ms, bs=1",
+            "synthesis",
+            id="no-delimiter-comma-condition",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Latency |",
+                    "| --- | --- |",
+                    "| Baseline | 12 |",
+                ]
+            ),
+            "- Baseline Latency 12 ms at b=1",
+            "synthesis",
+            id="no-delimiter-at-condition",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline | 30.5 |",
+                ]
+            ),
+            "- Baseline PSNR 30.5 at sigma=25",
+            "synthesis",
+            id="no-delimiter-noise-condition",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| Baseline | 40.30 |",
+                ]
+            ),
+            "- Baseline performs best with PSNR: 40.30",
+            "direct",
+            id="performs-result-predicate",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | PSNR |",
+                    "| --- | --- |",
+                    "| NAFNet ours | 40.30 |",
+                ]
+            ),
+            "- Ours NAFNet PSNR: 40.30",
+            "direct",
+            id="ours-prefix-qualifier",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Top 1 Acc |",
+                    "| --- | --- |",
+                    "| Baseline | 95.2 |",
+                ]
+            ),
+            "- Baseline Top 1 Acc: 95.2",
+            "direct",
+            id="spaced-top1-accuracy",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | AP_50 |",
+                    "| --- | --- |",
+                    "| Baseline | 42.1 |",
+                ]
+            ),
+            "- Baseline AP_50: 42.1",
+            "direct",
+            id="underscored-ap50",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | BER | WER | BLEU |",
+                    "| --- | --- | --- | --- |",
+                    "| Baseline | 0.1 | 0.2 | 31.0 |",
+                ]
+            ),
+            "- Baseline WER: 0.2",
+            "direct",
+            id="wer-metric",
+        ),
+    ],
+)
+def test_build_paper_guide_answer_provenance_handles_common_table_layouts(
+    tmp_path: Path,
+    monkeypatch,
+    table_text: str,
+    answer: str,
+    expected_mode: str,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text=table_text,
+        answer=answer,
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == expected_mode
+    if expected_mode == "direct":
+        assert bullet["mapping_source"] == "short_list_exact"
+        assert float(bullet["mapping_quality"]) == 1.0
+    else:
+        assert bullet["mapping_source"] != "short_list_exact"
+        assert float(bullet["mapping_quality"]) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("table_text", "answer", "expected_mode"),
+    [
+        pytest.param(
+            "| Method | Latency (b=1) |\n| --- | --- |\n| Baseline | 12 |",
+            "- Baseline Latency at b=4: 12 ms",
+            "synthesis",
+            id="wrong-batch-header-axis",
+        ),
+        pytest.param(
+            "| Method | Latency (b=1) |\n| --- | --- |\n| Baseline | 12 |",
+            "- Baseline Latency at b=1: 12 ms",
+            "direct",
+            id="matching-batch-header-axis",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Batch | Latency |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 1 | 12 |",
+                    "| Baseline | 4 | 19 |",
+                ]
+            ),
+            "- Baseline Latency at b=4: 12 ms",
+            "synthesis",
+            id="wrong-separate-batch-row",
+        ),
+        pytest.param(
+            "\n".join(
+                [
+                    "| Method | Batch | Latency |",
+                    "| --- | --- | --- |",
+                    "| Baseline | 1 | 12 |",
+                    "| Baseline | 4 | 19 |",
+                ]
+            ),
+            "- Baseline Latency at b=4: 19 ms",
+            "direct",
+            id="matching-separate-batch-row",
+        ),
+        pytest.param(
+            "| Method | PSNR ×2 | PSNR ×4 |\n| --- | --- | --- |\n| Baseline | 30.5 | 28.0 |",
+            "- Baseline PSNR ×4: 30.5",
+            "synthesis",
+            id="wrong-scale-column",
+        ),
+        pytest.param(
+            "| Method | PSNR ×2 | PSNR ×4 |\n| --- | --- | --- |\n| Baseline | 30.5 | 28.0 |",
+            "- Baseline PSNR ×4: 28.0",
+            "direct",
+            id="matching-scale-column",
+        ),
+        pytest.param(
+            "| Method | PSNR x2 | PSNR x4 |\n| --- | --- | --- |\n| Baseline | 30.5 | 28.0 |",
+            "- Baseline PSNR x4: 28.0",
+            "direct",
+            id="matching-ascii-scale-column",
+        ),
+        pytest.param(
+            "| Method | Scene 1 PSNR | Scene 2 PSNR |\n| --- | --- | --- |\n| Baseline | 31.0 | 29.0 |",
+            "- Baseline PSNR Scene 2: 31.0",
+            "synthesis",
+            id="wrong-scene-column",
+        ),
+        pytest.param(
+            "| Method | Scene 1 PSNR | Scene 2 PSNR |\n| --- | --- | --- |\n| Baseline | 31.0 | 29.0 |",
+            "- Baseline PSNR Scene 2: 29.0",
+            "direct",
+            id="matching-scene-column",
+        ),
+        pytest.param(
+            "| Method | Top-1 |\n| --- | --- |\n| ViT-B/16 | 81.5 |",
+            "- ViT-B/32 Top-1: 81.5",
+            "synthesis",
+            id="wrong-vit-patch-size",
+        ),
+        pytest.param(
+            "| Method | Top-1 |\n| --- | --- |\n| ViT-B/16 | 81.5 |",
+            "- ViT-B/16 Top-1: 81.5",
+            "direct",
+            id="matching-vit-patch-size",
+        ),
+        pytest.param(
+            "| Method | PSNR |\n| --- | --- |\n| 3DFlowNet | 30.5 |",
+            "- 4DFlowNet PSNR: 30.5",
+            "synthesis",
+            id="wrong-digit-leading-model",
+        ),
+        pytest.param(
+            "| Method | PSNR |\n| --- | --- |\n| 3D U-Net | 30.5 |",
+            "- 3D U-Net PSNR: 30.5",
+            "direct",
+            id="matching-short-digit-leading-model-token",
+        ),
+        pytest.param(
+            "| Method | Accuracy |\n| --- | --- |\n| Swin-B 224 | 83.5 |",
+            "- Swin-B 384 Accuracy: 83.5",
+            "synthesis",
+            id="wrong-swin-resolution",
+        ),
+        pytest.param(
+            "| Method | PSNR |\n| --- | --- |\n| SAM | 40.3 |",
+            "- SAM PSNR: 40.3",
+            "direct",
+            id="sam-is-model-name",
+        ),
+        pytest.param(
+            "| Method | PSNR |\n| --- | --- |\n| SAM | 40.3 |",
+            "- PSNR of SAM: 40.3",
+            "direct",
+            id="metric-of-alias-model",
+        ),
+        pytest.param(
+            "| Method | PSNR |\n| --- | --- |\n| SAM | 40.3 |",
+            "- SAM PSNR: 99.9",
+            "synthesis",
+            id="sam-model-wrong-value",
+        ),
+        pytest.param(
+            "| Method | SAM |\n| --- | --- |\n| MAE | 0.12 |",
+            "- MAE SAM: 0.12",
+            "direct",
+            id="mae-model-sam-metric",
+        ),
+        pytest.param(
+            "| Method | SAM |\n| --- | --- |\n| MAE | 0.12 |",
+            "- SAM MAE: 0.12",
+            "synthesis",
+            id="model-and-metric-cannot-swap",
+        ),
+        pytest.param(
+            "| Method | PSNR / SSIM |\n| --- | --- |\n| Baseline | 30.5 / 0.9 |",
+            "- Baseline PSNR: 0.9",
+            "synthesis",
+            id="combined-metric-cell-has-no-coordinate-map",
+        ),
+        pytest.param(
+            "| Method | Airplants PSNR SSIM LPIPS |\n| --- | --- |\n| Baseline | 22.85 .4057 .4986 |",
+            "- Baseline Airplants PSNR: 0.4057",
+            "synthesis",
+            id="packed-converter-table-has-no-coordinate-map",
+        ),
+        pytest.param(
+            "| Method | mAP@0.5 | mAP@0.75 |\n| --- | --- | --- |\n| Baseline | 42.1 | 21.0 |",
+            "- Baseline mAP@0.75: 42.1",
+            "synthesis",
+            id="wrong-map-threshold-column",
+        ),
+        pytest.param(
+            "| Method | mAP@0.5 | mAP@0.75 |\n| --- | --- | --- |\n| Baseline | 42.1 | 21.0 |",
+            "- Baseline mAP@0.75: 21.0",
+            "direct",
+            id="matching-map-threshold-column",
+        ),
+        pytest.param(
+            "| Method | IoU@0.5 | IoU@0.75 |\n| --- | --- | --- |\n| Baseline | 0.8 | 0.6 |",
+            "- Baseline IoU@0.75: 0.8",
+            "synthesis",
+            id="wrong-iou-threshold-column",
+        ),
+        pytest.param(
+            "| Method | PSNR_RGB | PSNR_Y |\n| --- | --- | --- |\n| Baseline | 30.0 | 31.5 |",
+            "- Baseline PSNR_Y: 30.0",
+            "synthesis",
+            id="wrong-underscore-metric-qualifier",
+        ),
+        pytest.param(
+            "| Method | PSNR_RGB | PSNR_Y |\n| --- | --- | --- |\n| Baseline | 30.0 | 31.5 |",
+            "- Baseline PSNR_Y: 31.5",
+            "direct",
+            id="matching-underscore-metric-qualifier",
+        ),
+        pytest.param(
+            "| Method | mAP_small | mAP_large |\n| --- | --- | --- |\n| Baseline | 20.0 | 40.0 |",
+            "- Baseline mAP_large: 20.0",
+            "synthesis",
+            id="wrong-underscore-map-qualifier",
+        ),
+        pytest.param(
+            "| Methods | SAM |\n| --- | --- |\n| MAE | 0.12 |",
+            "- SAM MAE: 0.12",
+            "synthesis",
+            id="plural-method-header-keeps-direction",
+        ),
+        pytest.param(
+            "| Models | SAM |\n| --- | --- |\n| MAE | 0.12 |",
+            "- SAM MAE: 0.12",
+            "synthesis",
+            id="plural-model-header-keeps-direction",
+        ),
+        pytest.param(
+            "| Architectures | SAM |\n| --- | --- |\n| MAE | 0.12 |",
+            "- SAM MAE: 0.12",
+            "synthesis",
+            id="architecture-header-keeps-direction",
+        ),
+        pytest.param(
+            "| Metrics | Baseline |\n| --- | --- |\n| PSNR | 30.5 |",
+            "- Baseline PSNR: 30.5",
+            "direct",
+            id="plural-metric-header-is-transposed",
+        ),
+        pytest.param(
+            "| Method | Params |\n| --- | --- |\n| Baseline | 1,999 |",
+            "- Baseline Params: 1,234",
+            "synthesis",
+            id="wrong-thousands-separated-value",
+        ),
+        pytest.param(
+            "| Method | Params |\n| --- | --- |\n| Baseline | 1,234 |",
+            "- Baseline Params: 1,234",
+            "direct",
+            id="matching-thousands-separated-value",
+        ),
+    ],
+)
+def test_build_paper_guide_answer_provenance_validates_extended_table_coordinates(
+    tmp_path: Path,
+    monkeypatch,
+    table_text: str,
+    answer: str,
+    expected_mode: str,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text=table_text,
+        answer=answer,
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == expected_mode
+    if expected_mode == "direct":
+        assert bullet["mapping_source"] == "short_list_exact"
+        assert float(bullet["mapping_quality"]) == 1.0
+    else:
+        assert bullet["mapping_source"] != "short_list_exact"
+        assert float(bullet["mapping_quality"]) == 0.0
+
+
+def test_build_paper_guide_answer_provenance_rejects_metric_only_wrong_table_value(
+    tmp_path: Path,
+    monkeypatch,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text="| Method | Accuracy |\n| --- | --- |\n| Baseline | 90.0 |",
+        answer="- Accuracy: 99.9",
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == "synthesis"
+    assert bullet["mapping_source"] != "short_list_exact"
+    assert float(bullet["mapping_quality"]) == 0.0
+
+
+def test_build_paper_guide_answer_provenance_rejects_stricter_method_variant(
+    tmp_path: Path,
+    monkeypatch,
+):
+    bullet = _build_short_table_bullet_provenance(
+        tmp_path,
+        monkeypatch,
+        table_text="\n".join(
+            [
+                "| Method | PSNR |",
+                "| --- | --- |",
+                "| NAFNet Small | 40.30 |",
+            ]
+        ),
+        answer="- NAFNet PSNR: 40.30 dB",
+        disable_general_match=False,
+    )
+
+    assert bullet["evidence_mode"] == "synthesis"
+    assert bullet["mapping_source"] != "short_list_exact"
+    assert float(bullet["mapping_quality"]) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("sentence", "answer"),
+    [
+        pytest.param(
+            "The network was trained for 100 epochs using Adam.",
+            "- The network was trained for 100 epochs using Adam.",
+            id="training-sentence",
+        ),
+        pytest.param("Epochs: 100", "- Epochs: 100", id="single-name-epochs"),
+        pytest.param("Temperature: 300 K", "- Temperature: 300 K", id="single-name-temperature"),
+        pytest.param("Resolution: 512", "- Resolution: 512", id="single-name-resolution"),
+    ],
+)
+def test_build_paper_guide_answer_provenance_keeps_unrelated_numeric_prose_evidence(
+    tmp_path: Path,
+    sentence: str,
+    answer: str,
+):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "TrainingPaper.pdf"
+    md_dir = tmp_path / "TrainingPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    (md_dir / "TrainingPaper.en.md").write_text(
+        "\n".join(
+            [
+                "# Training",
+                "",
+                sentence,
+                "",
+                "| Method | PSNR |",
+                "| --- | --- |",
+                "| Baseline | 40.30 |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer=answer,
+        answer_hits=[],
+        bound_source_path=str(source_pdf),
+        bound_source_name="TrainingPaper.pdf",
+        db_dir=None,
+        llm_rerank=False,
+    )
+    bullet = next(
+        segment
+        for segment in list((provenance or {}).get("segments") or [])
+        if str(segment.get("kind") or "") == "list_item"
+    )
+
+    assert bullet["evidence_mode"] == "direct"
+    assert bullet["mapping_source"] != "short_list_rejected"
+    assert str(bullet["primary_block_id"] or "")
+
+
 def test_build_paper_guide_answer_provenance_preserves_shared_primary_evidence(tmp_path: Path):
     from kb import task_runtime
 
