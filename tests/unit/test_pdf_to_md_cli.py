@@ -41,6 +41,43 @@ def test_locked_profile_keeps_explicit_balanced_legacy_mode(tmp_path, monkeypatc
     cfg = pdf_to_md._parse_args(_base_args(tmp_path, "--speed-mode", "balanced"))
 
     assert cfg.speed_mode == "balanced"
+    assert PDFConverter._get_speed_mode_config(
+        PDFConverter.__new__(PDFConverter),
+        cfg.speed_mode,
+        10,
+    ) == PDFConverter._get_speed_mode_config(
+        PDFConverter.__new__(PDFConverter),
+        "normal",
+        10,
+    )
+
+
+def test_legacy_fast_mode_uses_ultra_fast_execution_profile(tmp_path, monkeypatch):
+    _use_fake_qwen(monkeypatch)
+
+    cfg = pdf_to_md._parse_args(_base_args(tmp_path, "--speed-mode", "fast"))
+
+    assert cfg.speed_mode == "fast"
+    assert PDFConverter._get_speed_mode_config(
+        PDFConverter.__new__(PDFConverter),
+        cfg.speed_mode,
+        10,
+    )["dpi"] == 150
+
+
+def test_full_llm_keeps_quality_first_execution_profile(tmp_path, monkeypatch):
+    _use_fake_qwen(monkeypatch)
+
+    cfg = pdf_to_md._parse_args(_base_args(tmp_path, "--speed-mode", "full_llm"))
+
+    assert cfg.speed_mode == "full_llm"
+    profile = PDFConverter._get_speed_mode_config(
+        PDFConverter.__new__(PDFConverter),
+        cfg.speed_mode,
+        10,
+    )
+    assert profile["dpi"] == 220
+    assert profile["max_tokens"] == 4096
 
 
 def test_locked_profile_defaults_to_normal_mode(tmp_path, monkeypatch):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from kb.converter.config import ConvertConfig, LlmConfig
@@ -83,6 +84,21 @@ def test_page_cache_invalidates_when_conversion_config_or_model_changes(tmp_path
 
     assert changed_tables.load_page(0, assets_dir=assets_dir) is None
     assert changed_model.load_page(0, assets_dir=assets_dir) is None
+
+
+def test_page_cache_reuses_equivalent_speed_mode_aliases(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    save_dir = tmp_path / "out"
+    assets_dir = save_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    balanced = replace(_config(tmp_path), speed_mode="balanced")
+    normal = replace(_config(tmp_path), speed_mode="normal")
+    first = PageConversionCache(save_dir=save_dir, pdf_path=source, cfg=balanced, total_pages=1)
+    assert first.store_page(0, "Converted page text.", assets_dir=assets_dir) is True
+
+    second = PageConversionCache(save_dir=save_dir, pdf_path=source, cfg=normal, total_pages=1)
+
+    assert second.load_page(0, assets_dir=assets_dir) == "Converted page text."
 
 
 def test_page_cache_invalidates_when_pdf_content_changes(tmp_path: Path) -> None:

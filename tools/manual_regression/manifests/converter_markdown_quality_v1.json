@@ -5,6 +5,7 @@
     "min_chars": 20000,
     "min_headings": 5,
     "min_h1": 1,
+    "min_page_markers": 1,
     "max_missing_images": 0,
     "max_page_marker_gaps": 0,
     "max_unclosed_display_math": 0,
@@ -17,6 +18,7 @@
       "title": "SCINeRF CVPR paper keeps title, abstract, figures, tables, equations, and references",
       "md_path": "db/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
       "checks": {
+        "min_page_markers": 11,
         "min_chars": 45000,
         "min_nonempty_lines": 150,
         "min_headings": 12,
@@ -42,6 +44,7 @@
       "title": "NatCommun single-photon paper keeps abstract, figure/table density, math, and references",
       "md_path": "db/NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning/NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.en.md",
       "checks": {
+        "min_page_markers": 13,
         "min_chars": 58000,
         "min_nonempty_lines": 240,
         "min_headings": 20,
@@ -67,6 +70,7 @@
       "title": "Image denoising review keeps section structure, formulas, table, and long bibliography",
       "md_path": "db/Visual Computing for Industry, Biomedicine, and Art-2019-Brief review...techniques/Visual Computing for Industry, Biomedicine, and Art-2019-Brief review...techniques.en.md",
       "checks": {
+        "min_page_markers": 12,
         "min_chars": 55000,
         "min_nonempty_lines": 260,
         "min_headings": 24,
@@ -100,6 +104,7 @@
       "title": "Science Advances foveated SPI paper keeps figures, equations, title, and references",
       "md_path": "db/SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling/SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md",
       "checks": {
+        "min_page_markers": 10,
         "min_chars": 45000,
         "min_nonempty_lines": 130,
         "min_headings": 18,
@@ -122,6 +127,205 @@
         "must_contain_text": [
           "Adaptive foveated single-pixel imaging with dynamic supersampling",
           "single-pixel cameras capture images",
+          "## References"
+        ]
+      }
+    },
+    {
+      "id": "eccv_simple_baselines_sidd_table",
+      "title": "ECCV image-restoration paper keeps its SIDD comparison table and tied best result",
+      "md_path": "db/ECCV-2022-Simple Baselines for Image Restoration/ECCV-2022-Simple Baselines for Image Restoration.en.md",
+      "checks": {
+        "min_page_markers": 21,
+        "min_chars": 40000,
+        "min_nonempty_lines": 250,
+        "min_headings": 20,
+        "min_h2": 8,
+        "min_images": 8,
+        "min_captions": 12,
+        "min_tables": 8,
+        "min_display_math": 8,
+        "min_inline_math": 45,
+        "min_references": 30,
+        "min_reference_lines": 30,
+        "min_body_citations": 30,
+        "must_contain_text": [
+          "Simple Baselines for Image Restoration",
+          "**Table 6.** Image Denoising Results on SIDD",
+          "Baseline ours",
+          "NAFNet ours",
+          "## References"
+        ],
+        "min_text_occurrences": {
+          "40.30": 2
+        }
+      }
+    },
+    {
+      "id": "natphoton_spi_principles",
+      "title": "Single-pixel imaging perspective keeps figures, citations, and bibliography",
+      "md_path": "db/NatPhoton-2019-Principles and prospects for single-pixel imaging/NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+      "checks": {
+        "min_page_markers": 8,
+        "min_chars": 40000,
+        "min_nonempty_lines": 120,
+        "min_headings": 6,
+        "min_h2": 2,
+        "min_images": 4,
+        "min_captions": 4,
+        "min_inline_math": 18,
+        "min_references": 75,
+        "min_reference_lines": 75,
+        "min_body_citations": 70,
+        "must_contain_text": [
+          "Principles and prospects for single-pixel imaging",
+          "## References"
+        ]
+      }
+    },
+    {
+      "id": "lsa_iism_resolution",
+      "title": "Interferometric microscopy paper keeps method structure, equations, figures, and references",
+      "md_path": "db/LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells/LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells.en.md",
+      "checks": {
+        "min_page_markers": 13,
+        "min_chars": 52000,
+        "min_nonempty_lines": 160,
+        "min_headings": 18,
+        "min_h2": 5,
+        "min_images": 3,
+        "min_captions": 5,
+        "min_display_math": 10,
+        "min_inline_math": 65,
+        "min_references": 35,
+        "min_reference_lines": 35,
+        "min_body_citations": 30,
+        "must_contain_text": [
+          "Interferometric Image Scanning Microscopy",
+          "120 nm lateral resolution",
+          "## References"
+        ]
+      }
+    },
+    {
+      "id": "natcomm_compressive_holography",
+      "title": "Compressive holography paper keeps figures, table, equations, and references",
+      "md_path": "db/NatCommun-2021-Imaging biological tissue with...pixel compressive holography/NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+      "checks": {
+        "min_page_markers": 12,
+        "min_chars": 47000,
+        "min_nonempty_lines": 140,
+        "min_headings": 9,
+        "min_h2": 5,
+        "min_images": 5,
+        "min_captions": 6,
+        "min_tables": 1,
+        "min_display_math": 2,
+        "min_inline_math": 125,
+        "min_references": 55,
+        "min_reference_lines": 55,
+        "min_body_citations": 50,
+        "must_contain_text": [
+          "Imaging biological tissue with high-throughput single-pixel compressive holography",
+          "## References"
+        ]
+      }
+    },
+    {
+      "id": "oe_hadamard_fourier_comparison",
+      "title": "Hadamard versus Fourier comparison keeps dense figures, tables, math, and references",
+      "md_path": "db/OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging/OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+      "checks": {
+        "min_page_markers": 21,
+        "min_chars": 52000,
+        "min_nonempty_lines": 260,
+        "min_headings": 10,
+        "min_h2": 4,
+        "min_images": 24,
+        "min_captions": 30,
+        "min_tables": 3,
+        "min_display_math": 9,
+        "min_inline_math": 70,
+        "min_references": 35,
+        "min_reference_lines": 35,
+        "min_body_citations": 10,
+        "max_analyzer_warnings": 3,
+        "must_contain_text": [
+          "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+          "## References"
+        ]
+      }
+    },
+    {
+      "id": "frontiers_single_photon_review",
+      "title": "Single-photon detector review keeps broad section, figure, citation, and reference coverage",
+      "md_path": "db/Frontiers of Physics-2024-Emerging single-photon...performance photodetector/Frontiers of Physics-2024-Emerging single-photon...performance photodetector.en.md",
+      "checks": {
+        "min_page_markers": 26,
+        "min_chars": 90000,
+        "min_nonempty_lines": 310,
+        "min_headings": 25,
+        "min_h2": 5,
+        "min_images": 9,
+        "min_captions": 12,
+        "min_tables": 1,
+        "min_display_math": 4,
+        "min_inline_math": 80,
+        "min_references": 140,
+        "min_reference_lines": 140,
+        "min_body_citations": 135,
+        "must_contain_text": [
+          "Emerging single-photon detection technique for high-performance photodetector",
+          "## References"
+        ]
+      }
+    },
+    {
+      "id": "icip_scigs_3d",
+      "title": "SCIGS paper keeps 3D method structure, figures, tables, equations, and references",
+      "md_path": "db/ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image/ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.en.md",
+      "checks": {
+        "min_page_markers": 13,
+        "min_chars": 38000,
+        "min_nonempty_lines": 180,
+        "min_headings": 15,
+        "min_h2": 8,
+        "min_images": 8,
+        "min_captions": 10,
+        "min_tables": 3,
+        "min_display_math": 9,
+        "min_inline_math": 40,
+        "min_references": 38,
+        "min_reference_lines": 38,
+        "min_body_citations": 38,
+        "must_contain_text": [
+          "SCIGS: 3D Gaussians Splattering from a Snapshot Compressive Image",
+          "## References"
+        ]
+      }
+    },
+    {
+      "id": "journal_optics_3d_spi_video",
+      "title": "3D single-pixel video paper keeps figures, table, math, and bibliography",
+      "md_path": "db/Journal of Optics-2016-3D single-pixel video/Journal of Optics-2016-3D single-pixel video.en.md",
+      "checks": {
+        "min_page_markers": 8,
+        "min_chars": 20000,
+        "min_nonempty_lines": 90,
+        "min_headings": 9,
+        "min_h2": 5,
+        "min_images": 5,
+        "min_captions": 7,
+        "min_tables": 1,
+        "min_display_math": 1,
+        "min_inline_math": 40,
+        "min_references": 32,
+        "min_reference_lines": 32,
+        "min_body_citations": 12,
+        "min_body_citation_indices": 32,
+        "max_analyzer_warnings": 2,
+        "must_contain_text": [
+          "3D single-pixel video",
           "## References"
         ]
       }

@@ -23,10 +23,14 @@ _TABLE_METHOD_QUERY_RE = re.compile(
     r"\b(?:method|model|network|algorithm|architecture)\b|方法|模型|网络|算法|架构",
     flags=re.I,
 )
+_TABLE_BENCHMARK_QUERY_RE = re.compile(
+    r"\b(?:benchmark|leaderboard|test\s+set|dataset)\b|基准|榜单|测试集|数据集",
+    flags=re.I,
+)
 _TABLE_VARIANT_QUERY_RE = re.compile(
-    r"\b(?:blocks?|layers?|depth|width|variant|setting|configuration|component|activation|sigma|"
+    r"\b(?:ablation|blocks?|layers?|depth|width|variant|setting|configuration|component|activation|sigma|"
     r"sampling\s+ratio|CS\s+ratio|SR|patch(?:es)?)\b|"
-    r"块数|层数|深度|宽度|变体|设置|配置|组件|激活|采样率",
+    r"消融|块数|层数|深度|宽度|变体|设置|配置|组件|激活|采样率",
     flags=re.I,
 )
 
@@ -62,6 +66,7 @@ class BM25Retriever:
         if _TABLE_QUERY_RE.search(str(query or "")):
             comparison_intent = bool(_TABLE_COMPARISON_RE.search(str(query or "")))
             method_intent = bool(_TABLE_METHOD_QUERY_RE.search(str(query or "")))
+            benchmark_intent = bool(_TABLE_BENCHMARK_QUERY_RE.search(str(query or "")))
             variant_intent = bool(_TABLE_VARIANT_QUERY_RE.search(str(query or "")))
             query_tokens = {str(token or "").lower() for token in q if str(token or "").strip()}
             for idx, chunk in enumerate(self._chunks):
@@ -87,11 +92,17 @@ class BM25Retriever:
                             adjusted_scores[idx] += 0.5 + (0.8 * min(4, len(label_tokens)))
                     subject_kind = str(meta.get("table_subject_kind") or "").strip().lower()
                     if subject_kind == "method" and not variant_intent:
-                        adjusted_scores[idx] += 4.0 if method_intent else (2.5 if comparison_intent else 0.0)
+                        adjusted_scores[idx] += (
+                            7.0
+                            if method_intent or benchmark_intent
+                            else (2.5 if comparison_intent else 0.0)
+                        )
                     elif subject_kind == "variant":
                         if variant_intent:
                             adjusted_scores[idx] += 4.0
-                        elif method_intent or comparison_intent:
+                        elif method_intent or benchmark_intent:
+                            adjusted_scores[idx] -= 3.0
+                        elif comparison_intent:
                             adjusted_scores[idx] -= 1.0
                 elif kind == "table_row":
                     if adjusted_scores[idx] <= 0.0:

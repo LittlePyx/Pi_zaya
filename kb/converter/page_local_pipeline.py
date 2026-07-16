@@ -163,14 +163,29 @@ def prepare_page_render_input(
 ) -> dict:
     page_start = time.time()
 
+    # MuPDF parsing is one of the largest page-local costs. Take one immutable
+    # snapshot and share it with layout, references, tables, figures, and blocks.
+    try:
+        page_dict = page.get_text("dict") or {}
+    except Exception:
+        page_dict = {}
+    try:
+        page_text = page.get_text("text") or ""
+    except Exception:
+        page_text = ""
+
     # 1. Analyze Layout
     step_start = time.time()
-    body_size = detect_body_font_size([page])  # Heuristic was on full doc, but per-page is okay fallback
+    body_size = detect_body_font_size([page], page_dicts=[page_dict])
     print(f"  [Page {page_index+1}] Step 1 (layout analysis): {time.time()-step_start:.2f}s", flush=True)
 
     # 2. Check if this is a references page (for special handling)
     step_start = time.time()
-    is_references_page = _page_has_references_heading(page) or _page_looks_like_references_content(page)
+    is_references_page = _page_has_references_heading(
+        page,
+        page_text=page_text,
+        page_dict=page_dict,
+    ) or _page_looks_like_references_content(page, page_text=page_text)
     print(f"  [Page {page_index+1}] Step 2 (refs check): {time.time()-step_start:.2f}s", flush=True)
 
     # 3. Extract specific rects (excluding header/footer regions)
@@ -179,10 +194,23 @@ def prepare_page_render_input(
     H = float(page.rect.height)
     header_threshold = H * 0.12
     footer_threshold = H * 0.88
-    scan_backed_page = page_has_full_page_image_layer(page)
-    visual_rects = _collect_visual_rects(page)
+    scan_backed_page = page_has_full_page_image_layer(page, page_text=page_text)
+    visual_rects = _collect_visual_rects(page, page_text=page_text)
     try:
-        cap_candidates = converter._extract_page_figure_caption_candidates(page) if (visual_rects or scan_backed_page) else []
+        cap_candidates = (
+            converter._extract_page_figure_caption_candidates(page, page_dict=page_dict)
+            if (visual_rects or scan_backed_page)
+            else []
+        )
+    except TypeError:
+        try:
+            cap_candidates = (
+                converter._extract_page_figure_caption_candidates(page)
+                if (visual_rects or scan_backed_page)
+                else []
+            )
+        except Exception:
+            cap_candidates = []
     except Exception:
         cap_candidates = []
 
@@ -235,8 +263,7 @@ def prepare_page_render_input(
         # Fast hint gate to enable more aggressive table strategies on table-heavy pages.
         # This significantly improves table extraction for dense CVPR/ICCV two-column PDFs.
         try:
-            d0 = page.get_text("dict")
-            has_table_hint = _page_maybe_has_table_from_dict(d0) if isinstance(d0, dict) else False
+            has_table_hint = _page_maybe_has_table_from_dict(page_dict) if isinstance(page_dict, dict) else False
         except Exception:
             has_table_hint = False
         try:
@@ -252,6 +279,7 @@ def prepare_page_render_input(
             # Only enable pdfplumber fallback when page likely has a table.
             # If pdfplumber isn't installed, the fallback is a no-op.
             use_pdfplumber_fallback=bool(has_table_hint),
+            page_dict=page_dict,
         )
         table_time = time.time() - step_start
         if table_time > 2.0:
@@ -273,6 +301,8 @@ def prepare_page_render_input(
         visual_rects=visual_rects,
         assets_dir=assets_dir,
         is_references_page=is_references_page,
+        page_dict=page_dict,
+        caption_candidates=cap_candidates,
     )
     print(f"  [Page {page_index+1}] Step 5 (text blocks): {time.time()-step_start:.2f}s, found {len(blocks)} blocks", flush=True)
 
@@ -354,7 +384,7 @@ def prepare_page_render_input(
     prepared = {
         "blocks": blocks,
         "is_references_page": bool(is_references_page),
-        "reference_page_text": (page.get_text("text") if bool(is_references_page) else ""),
+        "reference_page_text": (page_text if bool(is_references_page) else ""),
         "image_names": image_names,
         "figure_meta_by_asset": figure_meta_by_asset,
         "pdf_path": str(pdf_path),

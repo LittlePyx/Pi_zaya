@@ -15,12 +15,12 @@ from .geometry_utils import _overlap_1d
 from .text_utils import _normalize_text
 
 
-def extract_page_figure_caption_candidates(page) -> list[dict]:
+def extract_page_figure_caption_candidates(page, *, page_dict: dict | None = None) -> list[dict]:
     if fitz is None or page is None:
         return []
     out: list[dict] = []
     try:
-        d = page.get_text("dict") or {}
+        d = page_dict if page_dict is not None else (page.get_text("dict") or {})
     except Exception:
         return out
 

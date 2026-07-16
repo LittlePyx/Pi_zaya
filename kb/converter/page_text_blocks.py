@@ -34,14 +34,16 @@ def extract_text_blocks(
     visual_rects: List["fitz.Rect"],
     assets_dir: Path,
     is_references_page: bool = False,
+    page_dict: dict | None = None,
+    caption_candidates: list[dict] | None = None,
 ) -> List[TextBlock]:
     extract_start = time.time()
 
     text_blocks = []
     # Get raw blocks
     step_start = time.time()
-    page_dict = page.get_text("dict")
-    raw_blocks = page_dict.get("blocks", [])
+    page_dict = page_dict if page_dict is not None else page.get_text("dict")
+    raw_blocks = page_dict.get("blocks", []) if isinstance(page_dict, dict) else []
     print(f"    [Page {page_index+1}] get_text('dict'): {time.time()-step_start:.2f}s, {len(raw_blocks)} raw blocks", flush=True)
 
     W = float(page.rect.width)
@@ -546,7 +548,9 @@ def extract_text_blocks(
     print(f"    [Page {page_index+1}] Image processing: {time.time()-step_start:.2f}s, processed {img_count}/{len(visual_rects)} images", flush=True)
     try:
         if figure_entries:
-            cap_candidates = converter._extract_page_figure_caption_candidates(page)
+            cap_candidates = caption_candidates
+            if cap_candidates is None:
+                cap_candidates = converter._extract_page_figure_caption_candidates(page)
             figure_entries = converter._match_figure_entries_with_captions(
                 page=page,
                 figure_entries=figure_entries,

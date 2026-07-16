@@ -13,10 +13,12 @@ from .text_utils import _normalize_text
 from .geometry_utils import _bbox_width, _rect_area, _rect_intersection_area, _overlap_1d, _union_rect
 
 
-def detect_body_font_size(doc) -> float:
+def detect_body_font_size(doc, *, page_dicts=None) -> float:
     sizes: list[float] = []
-    for page in doc:
-        d = page.get_text("dict")
+    dict_iter = page_dicts if page_dicts is not None else (page.get_text("dict") for page in doc)
+    for d in dict_iter:
+        if not isinstance(d, dict):
+            continue
         for b in d.get("blocks", []):
             for l in b.get("lines", []) or []:
                 for s in l.get("spans", []) or []:
@@ -135,7 +137,7 @@ def _looks_like_running_header_image_rect(
     return True
 
 
-def page_has_full_page_image_layer(page) -> bool:
+def page_has_full_page_image_layer(page, *, page_text: str | None = None) -> bool:
     if fitz is None or page is None:
         return False
     try:
@@ -143,7 +145,7 @@ def page_has_full_page_image_layer(page) -> bool:
         page_h = float(page.rect.height)
     except Exception:
         return False
-    text_chars = _page_text_char_count(page)
+    text_chars = len(str(page_text).strip()) if page_text is not None else _page_text_char_count(page)
     try:
         image_info = page.get_image_info() or []
     except Exception:
@@ -160,7 +162,7 @@ def page_has_full_page_image_layer(page) -> bool:
     return False
 
 
-def _collect_image_rects(page) -> list["fitz.Rect"]:
+def _collect_image_rects(page, *, page_text: str | None = None) -> list["fitz.Rect"]:
     if fitz is None:
         return []
     out: list[fitz.Rect] = []
@@ -185,7 +187,7 @@ def _collect_image_rects(page) -> list["fitz.Rect"]:
             continue
         if page_w > 0.0 and page_h > 0.0:
             if text_chars is None:
-                text_chars = _page_text_char_count(page)
+                text_chars = len(str(page_text).strip()) if page_text is not None else _page_text_char_count(page)
             if _looks_like_full_page_scan_image_rect(r, page_w=page_w, page_h=page_h, text_chars=int(text_chars or 0)):
                 continue
             if _looks_like_running_header_image_rect(r, page_w=page_w, page_h=page_h):
@@ -277,7 +279,12 @@ def _merge_nearby_visual_rects(rects: list["fitz.Rect"], *, page_w: float, page_
     return merged
 
 
-def _collect_visual_rects(page, *, image_rects: Optional[list["fitz.Rect"]] = None) -> list["fitz.Rect"]:
+def _collect_visual_rects(
+    page,
+    *,
+    image_rects: Optional[list["fitz.Rect"]] = None,
+    page_text: str | None = None,
+) -> list["fitz.Rect"]:
     """
     Collect visual regions that may represent figures/charts:
     - embedded image bboxes
@@ -291,7 +298,16 @@ def _collect_visual_rects(page, *, image_rects: Optional[list["fitz.Rect"]] = No
     page_area = max(1.0, page_w * page_h)
     out: list[fitz.Rect] = []
 
-    out.extend([fitz.Rect(r) for r in (image_rects if image_rects is not None else _collect_image_rects(page))])
+    out.extend(
+        [
+            fitz.Rect(r)
+            for r in (
+                image_rects
+                if image_rects is not None
+                else _collect_image_rects(page, page_text=page_text)
+            )
+        ]
+    )
 
     # Vector charts/diagrams may not appear in get_image_info().
     try:

@@ -71,8 +71,8 @@ def test_assistant_message_by_id_prefers_refetched_converged_message():
 def test_research_qa_fixture_loads_shared_docs_and_cases():
     fixture = load_fixture()
 
-    assert len(fixture.docs) == 21
-    assert len(fixture.cases) == 14
+    assert len(fixture.docs) == 22
+    assert len(fixture.cases) == 15
     case_ids = {str(item.get("id") or "") for item in fixture.cases}
     assert {
         "spi-roadmap-beginner",
@@ -80,10 +80,15 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
         "microscopy-methods-map",
         "single-photon-reading-pair",
         "piln-dl-spi-position",
+        "simple-baselines-sidd-best",
     }.issubset(case_ids)
     assert source_path_for_doc(fixture, "scinerf").endswith(
         "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image/"
         "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
+    )
+    assert source_path_for_doc(fixture, "simple-baselines").endswith(
+        "ECCV-2022-Simple Baselines for Image Restoration/"
+        "ECCV-2022-Simple Baselines for Image Restoration.en.md"
     )
 
 

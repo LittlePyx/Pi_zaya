@@ -15,7 +15,7 @@ try:
 except ImportError:
     fitz = None
 
-from .config import ConvertConfig
+from .config import ConvertConfig, canonical_speed_mode
 from .models import TextBlock
 from .geometry_utils import _rect_area, _union_rect, _rect_intersection_area, _overlap_1d
 from .text_utils import _normalize_text
@@ -503,7 +503,9 @@ class PDFConverter:
         # or use ThreadPool if configured.
         
         md_pages = [None] * total_pages
-        speed_mode = getattr(self.cfg, 'speed_mode', 'normal')
+        # Execute public and legacy aliases through one canonical profile. The page
+        # cache canonicalizes the same field so equivalent aliases share entries.
+        speed_mode = canonical_speed_mode(getattr(self.cfg, 'speed_mode', 'normal'))
         speed_config = self._get_speed_mode_config(speed_mode, total_pages)
         self._active_speed_config = speed_config
         
@@ -519,19 +521,17 @@ class PDFConverter:
             print("LLM not configured, using fast mode", flush=True)
         
         # Only use vision-direct mode: screenshot -> VL -> Markdown
-        speed_mode = getattr(self.cfg, 'speed_mode', 'normal')
-        
         if speed_mode == 'no_llm':
             # No LLM mode: use basic text extraction (fallback)
             print("[MODE] No LLM: basic text extraction only", flush=True)
             md_pages = self._process_batch_no_llm(doc, pdf_path, assets_dir)
         else:
-            # Vision-direct mode with LLM (normal or ultra_fast)
+            # Vision-direct mode with LLM (normal, full_llm, or ultra_fast)
             if not use_llm or not llm_config:
                 print("[WARN] LLM not configured, falling back to no_llm mode", flush=True)
                 md_pages = self._process_batch_no_llm(doc, pdf_path, assets_dir)
             else:
-                mode_name = "ultra_fast" if speed_mode == "ultra_fast" else "normal"
+                mode_name = speed_mode if speed_mode in {"full_llm", "ultra_fast"} else "normal"
                 print(f"[MODE] Vision-direct ({mode_name}): each page screenshot -> VL model -> Markdown", flush=True)
                 md_pages = self._process_batch_vision_direct(doc, pdf_path, assets_dir, speed_mode=speed_mode)
 
@@ -2235,8 +2235,8 @@ class PDFConverter:
             figure_meta_by_asset=figure_meta_by_asset,
         )
 
-    def _extract_page_figure_caption_candidates(self, page) -> list[dict]:
-        return extract_page_figure_caption_candidates(page)
+    def _extract_page_figure_caption_candidates(self, page, *, page_dict: dict | None = None) -> list[dict]:
+        return extract_page_figure_caption_candidates(page, page_dict=page_dict)
 
     def _match_figure_entries_with_captions(
         self,
@@ -2759,7 +2759,9 @@ class PDFConverter:
         tables: List[Tuple[fitz.Rect, str]], 
         visual_rects: List[fitz.Rect],
         assets_dir: Path,
-        is_references_page: bool = False
+        is_references_page: bool = False,
+        page_dict: dict | None = None,
+        caption_candidates: list[dict] | None = None,
     ) -> List[TextBlock]:
         return extract_text_blocks(
             self,
@@ -2770,6 +2772,8 @@ class PDFConverter:
             visual_rects=visual_rects,
             assets_dir=assets_dir,
             is_references_page=is_references_page,
+            page_dict=page_dict,
+            caption_candidates=caption_candidates,
         )
 
     def _enhance_blocks_with_llm(self, blocks: List[TextBlock], page_index: int, page) -> List[TextBlock]:
@@ -3281,6 +3285,15 @@ class PDFConverter:
                 'compress': 2,
                 'max_tokens': 4096,
             },
+            # Keep this profile distinct from normal.  Downstream page logic uses
+            # the name to skip plain-page DPI and token-budget reductions.
+            'full_llm': {
+                'max_parallel_pages': normal_parallel,
+                'max_inflight': normal_inflight,
+                'dpi': 220,
+                'compress': 2,
+                'max_tokens': 4096,
+            },
             'ultra_fast': {
                 'max_parallel_pages': ultra_parallel,
                 'max_inflight': ultra_inflight,
@@ -3297,4 +3310,4 @@ class PDFConverter:
             }
         }
 
-        return configs.get(speed_mode, configs['normal'])
+        return configs[canonical_speed_mode(speed_mode)]

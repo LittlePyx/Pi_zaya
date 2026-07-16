@@ -181,10 +181,12 @@ def test_evaluate_conversion_quality_accepts_good_markdown(tmp_path):
             "min_inline_math": 1,
             "min_references": 2,
             "min_body_citations": 1,
+            "min_body_citation_indices": 1,
             "max_missing_images": 0,
             "max_unclosed_display_math": 0,
             "max_mojibake": 0,
             "must_contain_text": ["Demo Paper"],
+            "min_text_occurrences": {"reference": 2},
             "must_start_with": ["<!-- kb_page: 1 -->"],
             "must_not_start_with": ["# Method"],
             "ordered_text": ["# Demo Paper", "## Abstract", "## Method", "## References"],
@@ -193,6 +195,19 @@ def test_evaluate_conversion_quality_accepts_good_markdown(tmp_path):
 
     assert result["ok"] is True
     assert result["failures"] == []
+
+
+def test_evaluate_conversion_quality_checks_text_occurrence_counts(tmp_path):
+    md_path = tmp_path / "paper.md"
+    md_path.write_text("Table 6\nBaseline 40.30\nNAFNet 40.30\n", encoding="utf-8")
+
+    result = evaluate_conversion_quality(
+        md_path,
+        checks={"min_text_occurrences": {"40.30": 3}},
+    )
+
+    assert result["ok"] is False
+    assert "text_occurrences:40.30:2<3" in result["failures"]
 
 
 def test_evaluate_conversion_quality_flags_broken_markdown(tmp_path):

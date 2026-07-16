@@ -176,6 +176,25 @@ def test_transposed_metric_table_beats_ablation_for_dataset_best_query() -> None
     variant_hit = BM25Retriever(chunks).search("Which block count has the highest SIDD PSNR?", top_k=1)[0]
     assert variant_hit["meta"]["table_number"] == 3
 
+    chinese_hit = BM25Retriever(chunks).search(
+        "SIDD 基准测试里 PSNR 最高的模型是谁？如果并列请全部列出。",
+        top_k=1,
+    )[0]
+    assert chinese_hit["meta"]["table_number"] == 6
+    assert chinese_hit["meta"]["table_subject_kind"] == "method"
+
+    english_ablation_hit = BM25Retriever(chunks).search(
+        "Which ablation setting has the highest SIDD PSNR?",
+        top_k=1,
+    )[0]
+    assert english_ablation_hit["meta"]["table_number"] == 3
+
+    chinese_ablation_hit = BM25Retriever(chunks).search(
+        "SIDD 基准消融实验里 PSNR 最高是多少？",
+        top_k=1,
+    )[0]
+    assert chinese_ablation_hit["meta"]["table_number"] == 3
+
 
 def test_uncaptioned_table_does_not_invent_authored_table_number() -> None:
     md = "\n".join(

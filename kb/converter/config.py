@@ -5,6 +5,18 @@ from pathlib import Path
 from typing import Optional
 
 
+def canonical_speed_mode(value: str | None) -> str:
+    """Map public and legacy speed names to converter execution profiles."""
+    mode = str(value or "").strip().lower()
+    if mode in {"fast", "ultra_fast"}:
+        return "ultra_fast"
+    if mode == "full_llm":
+        return "full_llm"
+    if mode == "no_llm":
+        return "no_llm"
+    return "normal"
+
+
 @dataclass(frozen=True)
 class LlmConfig:
     api_key: str
@@ -44,7 +56,7 @@ class ConvertConfig:
     llm_auto_page_render_threshold: int = 12
     llm_workers: int = 1
     workers: int = 1
-    speed_mode: str = "normal"  # "normal" (vision-direct with max parallelism), "ultra_fast" (faster, lower quality), "no_llm" (basic text extraction)
+    speed_mode: str = "normal"  # "normal", "full_llm" (quality-first), "ultra_fast" (faster, lower quality), or "no_llm"
 
 
 @dataclass(frozen=True)

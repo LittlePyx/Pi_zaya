@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
+from .config import canonical_speed_mode
+
 
 PAGE_CACHE_SCHEMA_VERSION = 1
 PAGE_CACHE_DIR_NAME = ".conversion_cache"
@@ -123,7 +125,7 @@ def _config_payload(cfg: Any) -> dict[str, Any]:
         "llm_repair": bool(getattr(cfg, "llm_repair", True)),
         "llm_repair_body_math": bool(getattr(cfg, "llm_repair_body_math", False)),
         "llm_smart_math_repair": bool(getattr(cfg, "llm_smart_math_repair", True)),
-        "speed_mode": str(getattr(cfg, "speed_mode", "normal") or "normal").strip().lower(),
+        "speed_mode": canonical_speed_mode(getattr(cfg, "speed_mode", "normal")),
         "llm": {
             "model": str(getattr(llm, "model", "") or "").strip(),
             "temperature": float(getattr(llm, "temperature", 0.0) or 0.0),

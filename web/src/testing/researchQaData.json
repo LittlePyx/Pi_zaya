@@ -147,6 +147,13 @@
       "dir": "Visual Computing for Industry, Biomedicine, and Art-2019-Brief review...techniques",
       "topic": "image denoising review",
       "shortLabel": "Denoising review"
+    },
+    {
+      "id": "simple-baselines",
+      "title": "Simple Baselines for Image Restoration",
+      "dir": "ECCV-2022-Simple Baselines for Image Restoration",
+      "topic": "image restoration and denoising benchmarks",
+      "shortLabel": "Simple Baselines"
     }
   ],
   "forbiddenPhrases": [
@@ -728,6 +735,58 @@
         "minCitationShelfSourceClickCount": 1,
         "maxCitationShelfMetadataReviewCount": 0,
         "allowedRefPolishStatuses": ["full", "heuristic"]
+      }
+    },
+    {
+      "id": "simple-baselines-sidd-best",
+      "queryScope": "current_paper",
+      "docIds": ["simple-baselines"],
+      "question": "ECCV-2022 Simple Baselines 论文的 SIDD 基准测试里，PSNR 最高的模型是谁？如果并列请全部列出。",
+      "acceptance": [
+        "回答必须识别 40.30 dB 的并列结果，同时列出 Baseline 和 NAFNet。",
+        "证据和定位必须落到 SIDD 的 Table 6，不能只依据摘要中的单个模型描述。",
+        "参考卡只展示支持该表格结论的当前论文，不引入无关文献。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["Baseline", "NAFNet", "40.30"],
+        "requiredRefDocIds": ["simple-baselines"],
+        "requiredCitationDocIds": ["simple-baselines"],
+        "allowedRefDocIds": ["simple-baselines"],
+        "maxUnexpectedRefDocCount": 0,
+        "allowedCitationDocIds": ["simple-baselines"],
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "sidd-baseline-best-table-result",
+            "docId": "simple-baselines",
+            "route": "system_a",
+            "answerTerms": ["Baseline", "40.30"],
+            "evidenceTerms": ["SIDD", "Baseline", "40.30"]
+          },
+          {
+            "id": "sidd-nafnet-best-table-result",
+            "docId": "simple-baselines",
+            "route": "system_a",
+            "answerTerms": ["NAFNet", "40.30"],
+            "evidenceTerms": ["SIDD", "NAFNet", "40.30"]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "sidd-table-six-locate",
+            "docId": "simple-baselines",
+            "route": "system_a",
+            "locatorTerms": ["5.2 Applications"],
+            "evidenceTerms": ["Table 6", "SIDD", "Baseline", "NAFNet", "40.30"]
+          }
+        ],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false,
+        "maxFirstAnswerMs": 15000,
+        "maxAnswerCompleteMs": 15000,
+        "maxCardsCompleteMs": 45000
       }
     }
   ]

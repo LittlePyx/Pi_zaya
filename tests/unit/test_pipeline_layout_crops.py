@@ -106,7 +106,7 @@ def test_layout_crops_preserve_region_order_and_restore_missing_tables(tmp_path,
 
     monkeypatch.setattr(page_layout_crops, "_page_maybe_has_table_from_dict", lambda d: True)
     monkeypatch.setattr(page_layout_crops, "_extract_tables_by_layout", lambda *args, **kwargs: ["table"])
-    monkeypatch.setattr(page_layout_crops, "detect_body_font_size", lambda pages: 10.0)
+    monkeypatch.setattr(page_layout_crops, "detect_body_font_size", lambda pages, **kwargs: 10.0)
     monkeypatch.setattr(page_layout_crops, "_detect_column_split_x", lambda blocks, page_width: 100.0)
 
     blocks = [
@@ -148,7 +148,7 @@ def test_layout_crops_auto_enable_for_two_column_cross_reading_risk_without_tabl
     page = _DummyPage()
 
     monkeypatch.setattr(page_layout_crops, "_page_maybe_has_table_from_dict", lambda d: False)
-    monkeypatch.setattr(page_layout_crops, "detect_body_font_size", lambda pages: 10.0)
+    monkeypatch.setattr(page_layout_crops, "detect_body_font_size", lambda pages, **kwargs: 10.0)
     monkeypatch.setattr(page_layout_crops, "_detect_column_split_x", lambda blocks, page_width: 100.0)
 
     blocks = [
@@ -190,7 +190,7 @@ def test_layout_crops_drop_running_header_footer_noise_blocks(tmp_path, monkeypa
     monkeypatch.setenv("KB_PDF_VISION_LAYOUT_CROP_MODE", "1")
 
     monkeypatch.setattr(page_layout_crops, "_page_maybe_has_table_from_dict", lambda d: False)
-    monkeypatch.setattr(page_layout_crops, "detect_body_font_size", lambda pages: 10.0)
+    monkeypatch.setattr(page_layout_crops, "detect_body_font_size", lambda pages, **kwargs: 10.0)
     monkeypatch.setattr(page_layout_crops, "_detect_column_split_x", lambda blocks, page_width: 100.0)
 
     blocks = [

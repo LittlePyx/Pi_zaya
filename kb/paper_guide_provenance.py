@@ -4,6 +4,7 @@ import json
 import os
 import re
 import uuid
+from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -59,10 +60,59 @@ from kb.path_safety import (
     resolved_path,
     unique_resolved_roots,
 )
+from kb.table_index import parse_markdown_table
 
 _PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION = 4
 _CITE_MARKER_RE = re.compile(r"\[\[\s*CITE\s*:\s*[A-Za-z0-9_-]{4,24}\s*:\s*\d{1,4}\s*\]\]", re.IGNORECASE)
 _SUPPORT_MARKER_RE = re.compile(r"\[\[\s*SUPPORT\s*:\s*[A-Za-z0-9_-]{4,32}\s*\]\]", re.IGNORECASE)
+
+
+def _table_has_name_value_pair(
+    raw_table: str,
+    *,
+    name_terms: list[str],
+    numeric_terms: list[str],
+) -> bool:
+    headers, rows = parse_markdown_table(raw_table)
+    if not headers or not rows or not name_terms or not numeric_terms:
+        return False
+
+    def _has_names(value: object) -> bool:
+        normalized = normalize_match_text(str(value or ""))
+        return bool(normalized) and all(term in normalized for term in name_terms)
+
+    def _number_values(value: object) -> list[Decimal]:
+        out: list[Decimal] = []
+        for token in re.findall(r"(?<![A-Za-z0-9_])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", str(value or "")):
+            try:
+                out.append(Decimal(token))
+            except InvalidOperation:
+                continue
+        return out
+
+    try:
+        expected_numbers = [Decimal(term) for term in numeric_terms]
+    except InvalidOperation:
+        return False
+
+    def _has_numbers(value: object) -> bool:
+        actual = _number_values(value)
+        return all(expected in actual for expected in expected_numbers)
+
+    # Transposed metric table: subject names are column headers and the value
+    # must occur in that same column, not merely elsewhere in the table.
+    for column_index, header in enumerate(headers):
+        if not _has_names(header):
+            continue
+        if any(column_index < len(row) and _has_numbers(row[column_index]) for row in rows):
+            return True
+
+    # Row-oriented metric table: the subject is the first cell and all values
+    # on that row describe that same subject.
+    for row in rows:
+        if row and _has_names(row[0]) and any(_has_numbers(cell) for cell in row[1:]):
+            return True
+    return False
 
 
 def _positive_int(value: object) -> int:
@@ -4603,6 +4653,53 @@ def _build_paper_guide_answer_provenance(
                 if len(chosen_ids) >= keep_limit:
                     break
 
+        # Short result bullets (for example, "Baseline: 40.30 dB") can be
+        # too terse for the general prose scorer even when every distinctive
+        # token appears in one table block. Bind that exact numeric/name pair
+        # deterministically so citations stay on the result bullet itself.
+        if str(seg_kind or "").strip().lower() == "list_item":
+            raw_segment = str(seg_text or "")
+            normalized_segment = normalize_match_text(raw_segment)
+            numeric_terms = list(dict.fromkeys(re.findall(r"\b\d+(?:\.\d+)+\b", raw_segment)))
+            name_terms = [
+                term
+                for term in dict.fromkeys(re.findall(r"\b[a-z][a-z0-9+\-]{2,}\b", normalized_segment))
+                if term not in {"ours", "model", "method", "network", "psnr", "ssim"}
+            ]
+            exact_block_rows: list[tuple[float, dict]] = []
+            if numeric_terms and name_terms:
+                for block0 in blocks or blocks_for_match or []:
+                    if not isinstance(block0, dict):
+                        continue
+                    raw_block_text = str(block0.get("raw_text") or block0.get("text") or "")
+                    block_kind = str(block0.get("kind") or "").strip().lower()
+                    if block_kind != "table" or not _table_has_name_value_pair(
+                        raw_block_text,
+                        name_terms=name_terms,
+                        numeric_terms=numeric_terms,
+                    ):
+                        continue
+                    score = 2.8 + (0.35 * len(name_terms))
+                    exact_block_rows.append((score, block0))
+            if exact_block_rows:
+                exact_block_rows.sort(key=lambda item: item[0], reverse=True)
+                exact_score, exact_block = exact_block_rows[0]
+                exact_block_id = str(exact_block.get("block_id") or "").strip()
+                if exact_block_id:
+                    chosen_ids = [exact_block_id]
+                    _ensure_provenance_block_entry(block_map, exact_block)
+                    exact_quote = str(exact_block.get("raw_text") or exact_block.get("text") or "").strip()
+                    primary_support_metrics = {
+                        "quote": exact_quote[:900],
+                        "quote_score": 1.0,
+                        "support_score": 1.0,
+                        "heading_adjust": 0.0,
+                        "generic_heading": False,
+                        "summary_adjust": 0.0,
+                    }
+                    best_score = max(best_score, exact_score)
+                    segment_mapping_source = "short_list_exact"
+
         if is_formula and not chosen_ids:
             eq_ranked = match_source_blocks(
                 global_formula_blocks or blocks,
@@ -4697,7 +4794,7 @@ def _build_paper_guide_answer_provenance(
         primary_block_id = str(chosen_ids[0] or "").strip() if chosen_ids else ""
         support_block_ids = [str(item or "").strip() for item in chosen_ids[1:] if str(item or "").strip()]
         primary_block = block_lookup.get(primary_block_id) if primary_block_id else None
-        if primary_block and (not is_formula) and segment_mapping_source not in {"llm_refined", "quote_exact"} and (not used_translated_probe):
+        if primary_block and (not is_formula) and segment_mapping_source not in {"llm_refined", "quote_exact", "short_list_exact"} and (not used_translated_probe):
             support_score = float(primary_support_metrics.get("support_score") or 0.0)
             generic_heading = bool(primary_support_metrics.get("generic_heading"))
             summary_adjust = float(primary_support_metrics.get("summary_adjust") or 0.0)

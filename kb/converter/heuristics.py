@@ -707,7 +707,12 @@ def build_repeated_noise_texts(doc) -> set[str]:
     return noise
 
 
-def _page_has_references_heading(page) -> bool:
+def _page_has_references_heading(
+    page,
+    *,
+    page_text: str | None = None,
+    page_dict: dict | None = None,
+) -> bool:
     """
     Best-effort detection of a REFERENCES page.
     """
@@ -717,7 +722,7 @@ def _page_has_references_heading(page) -> bool:
     )
     # 1) Fast path: plain text contains an isolated line.
     try:
-        t = page.get_text("text") or ""
+        t = page_text if page_text is not None else (page.get_text("text") or "")
         if any(heading_pat.match((ln or "").strip()) for ln in t.splitlines()):
             return True
     except Exception:
@@ -725,7 +730,7 @@ def _page_has_references_heading(page) -> bool:
 
     # 2) Structured path: find a span/line equal to REFERENCES near the top.
     try:
-        d = page.get_text("dict") or {}
+        d = page_dict if page_dict is not None else (page.get_text("dict") or {})
         H = float(page.rect.height)
         for b in d.get("blocks", []) or []:
             if "lines" not in b:
@@ -753,10 +758,10 @@ def _page_has_references_heading(page) -> bool:
     return False
 
 
-def _page_looks_like_references_content(page) -> bool:
+def _page_looks_like_references_content(page, *, page_text: str | None = None) -> bool:
     """Heuristic for pages where the REFERENCES heading is missing (continued pages, odd layouts)."""
     try:
-        t = page.get_text("text") or ""
+        t = page_text if page_text is not None else (page.get_text("text") or "")
     except Exception:
         t = ""
     t = _normalize_text(t)

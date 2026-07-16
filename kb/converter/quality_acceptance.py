@@ -179,6 +179,19 @@ def _contains_failures(md_text: str, checks: dict[str, Any]) -> list[str]:
         needle = str(item or "")
         if needle and needle not in md_text:
             failures.append(f"missing_text:{needle[:80]}")
+    occurrence_checks = checks.get("min_text_occurrences")
+    if isinstance(occurrence_checks, dict):
+        for item, raw_expected in occurrence_checks.items():
+            needle = str(item or "")
+            if not needle:
+                continue
+            try:
+                expected = max(0, int(raw_expected or 0))
+            except Exception:
+                expected = 0
+            actual = md_text.count(needle)
+            if actual < expected:
+                failures.append(f"text_occurrences:{needle[:60]}:{actual}<{expected}")
     for item in list(checks.get("must_not_contain_text") or []):
         needle = str(item or "")
         if needle and needle in md_text:
@@ -234,6 +247,7 @@ def evaluate_conversion_quality(
         "min_reference_lines": "reference_line_count",
         "min_max_reference_index": "max_reference_index",
         "min_body_citations": "body_citation_marker_count",
+        "min_body_citation_indices": "body_citation_expanded_index_count",
     }
     for check_key, metric_key in minimum_checks.items():
         if check_key not in cfg:

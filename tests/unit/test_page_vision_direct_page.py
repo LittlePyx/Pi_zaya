@@ -760,6 +760,35 @@ def test_choose_page_render_dpi_lowers_plain_middle_body_pages(monkeypatch):
     assert profile == "plain_body"
 
 
+def test_full_llm_keeps_quality_first_plain_page_budget(monkeypatch):
+    converter = SimpleNamespace(_vision_formula_overlay_enabled=lambda: False)
+    monkeypatch.delenv("KB_PDF_VISION_DPI", raising=False)
+    monkeypatch.delenv("KB_PDF_VISION_PLAIN_PAGE_DPI", raising=False)
+
+    dpi, profile = page_module._choose_page_render_dpi(
+        converter,
+        speed_mode="full_llm",
+        page_index=2,
+        is_references_page=False,
+        image_names=[],
+        visual_rects=[],
+        base_dpi=220,
+    )
+    max_tokens = page_module._choose_page_max_tokens_override(
+        speed_mode="full_llm",
+        page_index=2,
+        is_references_page=False,
+        page_hint="",
+        image_names=[],
+        visual_rects=[],
+        formula_placeholders={},
+        plain_text_density="light",
+    )
+
+    assert (dpi, profile) == (220, "base")
+    assert max_tokens is None
+
+
 def test_process_vision_direct_page_uses_lighter_render_dpi_for_plain_body_pages(tmp_path, monkeypatch):
     page = _DummyPage()
     captured = {}

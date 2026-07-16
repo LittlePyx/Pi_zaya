@@ -664,6 +664,119 @@ def test_build_paper_guide_answer_provenance_contains_snippet_aliases(tmp_path: 
     assert str(direct_segment.get("hit_level") or "").strip().lower() in {"exact", "block"}
 
 
+def test_build_paper_guide_answer_provenance_binds_short_result_bullets_to_table(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from kb import task_runtime
+    from kb import paper_guide_provenance
+
+    monkeypatch.setattr(paper_guide_provenance, "match_source_blocks", lambda *args, **kwargs: [])
+
+    source_pdf = tmp_path / "SimpleBaselines.pdf"
+    md_dir = tmp_path / "SimpleBaselines"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "SimpleBaselines.en.md"
+    table_text = "\n".join(
+        [
+            "**Table 6.** Image Denoising Results on SIDD",
+            "",
+            "| Method | Baseline ours | NAFNet ours |",
+            "| --- | --- | --- |",
+            "| PSNR | 40.30 | 40.30 |",
+        ]
+    )
+    md_main.write_text(f"# Results\n\n## Applications\n\n{table_text}\n", encoding="utf-8")
+    answer = "\n".join(
+        [
+            "SIDD 基准测试中有两个模型并列第一：",
+            "",
+            "- Baseline (ours)：40.30 dB",
+            "- NAFNet (ours)：40.30 dB",
+        ]
+    )
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer=answer,
+        answer_hits=[
+            {
+                "text": "Table 6. SIDD PSNR: Baseline ours = 40.30; NAFNet ours = 40.30",
+                "meta": {
+                    "source_path": str(source_pdf),
+                    "ref_show_snippets": [table_text],
+                    "ref_best_heading_path": "Results / Applications",
+                },
+            }
+        ],
+        bound_source_path=str(source_pdf),
+        bound_source_name="SimpleBaselines.pdf",
+        db_dir=None,
+        llm_rerank=False,
+    )
+
+    bullets = [
+        segment
+        for segment in list(provenance.get("segments") or [])
+        if str(segment.get("kind") or "") == "list_item"
+    ]
+    assert len(bullets) == 2
+    assert all(str(segment.get("evidence_mode") or "") == "direct" for segment in bullets)
+    assert all(str(segment.get("mapping_source") or "") == "short_list_exact" for segment in bullets)
+    assert len({str(segment.get("primary_block_id") or "") for segment in bullets}) == 1
+    assert all("40.30" in str(segment.get("evidence_quote") or "") for segment in bullets)
+
+
+def test_build_paper_guide_answer_provenance_keeps_name_value_column_pairing(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from kb import paper_guide_provenance, task_runtime
+
+    monkeypatch.setattr(paper_guide_provenance, "match_source_blocks", lambda *args, **kwargs: [])
+    source_pdf = tmp_path / "SimpleBaselines.pdf"
+    md_dir = tmp_path / "SimpleBaselines"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "SimpleBaselines.en.md"
+    md_main.write_text(
+        "\n".join(
+            [
+                "# Results",
+                "",
+                "## Wrong association",
+                "",
+                "| Method | Baseline | NAFNet |",
+                "| --- | --- | --- |",
+                "| PSNR | 39.90 | 40.30 |",
+                "",
+                "## Correct association",
+                "",
+                "| Method | Baseline | NAFNet |",
+                "| --- | --- | --- |",
+                "| PSNR | 40.30 | 40.20 |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer="- Baseline：40.30 dB",
+        answer_hits=[],
+        bound_source_path=str(source_pdf),
+        bound_source_name="SimpleBaselines.pdf",
+        db_dir=None,
+        llm_rerank=False,
+    )
+
+    bullet = next(
+        segment
+        for segment in list(provenance.get("segments") or [])
+        if str(segment.get("kind") or "") == "list_item"
+    )
+    assert bullet["mapping_source"] == "short_list_exact"
+    assert str(bullet["primary_heading_path"]).endswith("Correct association")
+    assert "| PSNR | 40.30 | 40.20 |" in str(bullet["evidence_quote"])
+
+
 def test_build_paper_guide_answer_provenance_preserves_shared_primary_evidence(tmp_path: Path):
     from kb import task_runtime
 

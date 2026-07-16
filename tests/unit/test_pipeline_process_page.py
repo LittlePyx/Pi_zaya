@@ -27,9 +27,13 @@ def _make_converter(tmp_path):
 class _DummyPage:
     def __init__(self):
         self.rect = fitz.Rect(0, 0, 200, 300)
+        self.get_text_calls = {"dict": 0, "text": 0}
 
     def get_text(self, mode: str):
-        assert mode == "dict"
+        assert mode in self.get_text_calls
+        self.get_text_calls[mode] += 1
+        if mode == "text":
+            return "Body paragraph."
         return {"blocks": []}
 
 
@@ -54,10 +58,14 @@ def test_process_page_orchestrates_local_pipeline_steps(tmp_path, monkeypatch):
     header_rect = fitz.Rect(0, 0, 100, 20)
     table_rect = fitz.Rect(15, 190, 185, 240)
 
-    monkeypatch.setattr(page_local_pipeline, "detect_body_font_size", lambda pages: 11.0)
-    monkeypatch.setattr(page_local_pipeline, "_page_has_references_heading", lambda page: False)
-    monkeypatch.setattr(page_local_pipeline, "_page_looks_like_references_content", lambda page: False)
-    monkeypatch.setattr(page_local_pipeline, "_collect_visual_rects", lambda page: [header_rect, kept_visual_rect])
+    monkeypatch.setattr(page_local_pipeline, "detect_body_font_size", lambda pages, **kwargs: 11.0)
+    monkeypatch.setattr(page_local_pipeline, "_page_has_references_heading", lambda page, **kwargs: False)
+    monkeypatch.setattr(page_local_pipeline, "_page_looks_like_references_content", lambda page, **kwargs: False)
+    monkeypatch.setattr(
+        page_local_pipeline,
+        "_collect_visual_rects",
+        lambda page, **kwargs: [header_rect, kept_visual_rect],
+    )
     monkeypatch.setattr(page_local_pipeline, "_page_maybe_has_table_from_dict", lambda d: True)
     monkeypatch.setattr(
         page_local_pipeline,
@@ -65,7 +73,7 @@ def test_process_page_orchestrates_local_pipeline_steps(tmp_path, monkeypatch):
         lambda *args, **kwargs: [(table_rect, "| H |\n| --- |\n| 1 |")],
     )
 
-    monkeypatch.setattr(converter, "_extract_page_figure_caption_candidates", lambda page: [])
+    monkeypatch.setattr(converter, "_extract_page_figure_caption_candidates", lambda page, **kwargs: [])
     monkeypatch.setattr(
         converter,
         "_split_visual_rects_by_internal_captions",
@@ -79,6 +87,7 @@ def test_process_page_orchestrates_local_pipeline_steps(tmp_path, monkeypatch):
         extracted["tables"] = kwargs["tables"]
         extracted["visual_rects"] = kwargs["visual_rects"]
         extracted["is_references_page"] = kwargs["is_references_page"]
+        extracted["caption_candidates"] = kwargs["caption_candidates"]
         return [TextBlock(bbox=(10, 10, 50, 30), text="Body paragraph.")]
 
     merge_calls = {"count": 0}
@@ -111,11 +120,13 @@ def test_process_page_orchestrates_local_pipeline_steps(tmp_path, monkeypatch):
     assert extracted["tables"] == [(table_rect, "| H |\n| --- |\n| 1 |")]
     assert extracted["visual_rects"] == [kept_visual_rect]
     assert extracted["is_references_page"] is False
+    assert extracted["caption_candidates"] == []
     assert getattr(page, "has_table_hint") is True
     assert merge_calls["count"] == 1
     assert rendered["page_index"] == 2
     assert rendered["is_references_page"] is False
     assert len(rendered["blocks"]) == 1
+    assert page.get_text_calls == {"dict": 1, "text": 1}
 
 
 def test_render_prepared_page_uses_reference_text_fastpath(tmp_path):
@@ -154,13 +165,13 @@ def test_process_page_local_only_skips_llm_enhance(tmp_path, monkeypatch):
     )
     page = _DummyPage()
 
-    monkeypatch.setattr(page_local_pipeline, "detect_body_font_size", lambda pages: 11.0)
-    monkeypatch.setattr(page_local_pipeline, "_page_has_references_heading", lambda page: False)
-    monkeypatch.setattr(page_local_pipeline, "_page_looks_like_references_content", lambda page: False)
-    monkeypatch.setattr(page_local_pipeline, "_collect_visual_rects", lambda page: [])
+    monkeypatch.setattr(page_local_pipeline, "detect_body_font_size", lambda pages, **kwargs: 11.0)
+    monkeypatch.setattr(page_local_pipeline, "_page_has_references_heading", lambda page, **kwargs: False)
+    monkeypatch.setattr(page_local_pipeline, "_page_looks_like_references_content", lambda page, **kwargs: False)
+    monkeypatch.setattr(page_local_pipeline, "_collect_visual_rects", lambda page, **kwargs: [])
     monkeypatch.setattr(page_local_pipeline, "_page_maybe_has_table_from_dict", lambda d: False)
     monkeypatch.setattr(page_local_pipeline, "_extract_tables_by_layout", lambda *args, **kwargs: [])
-    monkeypatch.setattr(converter, "_extract_page_figure_caption_candidates", lambda page: [])
+    monkeypatch.setattr(converter, "_extract_page_figure_caption_candidates", lambda page, **kwargs: [])
     monkeypatch.setattr(converter, "_split_visual_rects_by_internal_captions", lambda **kwargs: [])
     monkeypatch.setattr(
         converter,

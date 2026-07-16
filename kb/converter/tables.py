@@ -892,6 +892,7 @@ def _extract_tables_by_layout(
     page_index: int = 0,
     visual_rects: Optional[list["fitz.Rect"]] = None,
     use_pdfplumber_fallback: bool = False,
+    page_dict: dict | None = None,
 ) -> list[tuple["fitz.Rect", str]]:
     if fitz is None:
         return []
@@ -905,7 +906,7 @@ def _extract_tables_by_layout(
     # Heuristic: detect captions like "Table 1:" to anchor the table search.
     caption_rects: list[fitz.Rect] = []
     try:
-        d = page.get_text("dict")
+        d = page_dict if page_dict is not None else page.get_text("dict")
         for b in d.get("blocks", []):
             if "lines" not in b:
                 continue

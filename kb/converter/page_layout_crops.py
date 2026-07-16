@@ -474,12 +474,13 @@ def convert_page_with_layout_crops(
                 page_index=page_index,
                 visual_rects=[],
                 use_pdfplumber_fallback=True,
+                page_dict=page_dict,
             )
         except Exception:
             tables = []
 
     try:
-        body_size = detect_body_font_size([page])
+        body_size = detect_body_font_size([page], page_dicts=[page_dict])
     except Exception:
         body_size = 10.0
 
@@ -492,6 +493,7 @@ def convert_page_with_layout_crops(
             visual_rects=[],
             assets_dir=assets_dir,
             is_references_page=False,
+            page_dict=page_dict,
         )
     except Exception:
         return None
