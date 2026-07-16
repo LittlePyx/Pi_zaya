@@ -12,10 +12,10 @@ from kb.source_filters import is_excluded_source_path
 from kb.store import (
     compute_doc_id,
     compute_file_sha1,
+    db_write_lock,
     delete_doc_chunks,
     doc_chunks_path,
     load_docs_index,
-    prune_missing_docs,
     save_docs_index,
     write_doc_chunks,
 )
@@ -87,21 +87,15 @@ def _annotate_chunks_with_quality(chunks: list[dict], assessment: dict) -> list[
     return out
 
 
-def _prune_excluded_docs(db_dir: Path, docs_index: dict) -> int:
-    removed = 0
-    to_delete: list[str] = []
-    for doc_id, rec in list(docs_index.items()):
+def _doc_ids_to_prune(docs_index: dict) -> set[str]:
+    to_delete: set[str] = set()
+    for doc_id, rec in docs_index.items():
         if not isinstance(rec, dict):
             continue
         path = str(rec.get("path") or "")
-        if path and is_excluded_source_path(path):
-            to_delete.append(str(doc_id))
-
-    for doc_id in to_delete:
-        docs_index.pop(doc_id, None)
-        delete_doc_chunks(db_dir, doc_id)
-        removed += 1
-    return removed
+        if (path and not Path(path).exists()) or (path and is_excluded_source_path(path)):
+            to_delete.add(str(doc_id))
+    return to_delete
 
 
 def _empty_structured_stats() -> dict:
@@ -140,6 +134,176 @@ def _rebuild_structured_for_markdown(md_path: Path, *, force: bool, stats: dict)
             stats["errors"] = errors
         if len(errors) < 20:
             errors.append({"path": str(md_path), "error": str(exc)})
+
+
+def _prepare_ingest_document(
+    args: argparse.Namespace,
+    *,
+    db_dir: Path,
+    path: Path,
+    previous: dict | None,
+    allow_incremental_shortcut: bool,
+) -> dict:
+    quality_assessment: dict = {
+        "indexable": True,
+        "status": "ready",
+        "action": "none",
+        "issue_codes": [],
+    }
+    if bool(args.quality_gate):
+        quality_assessment = prepare_markdown_for_index(
+            path,
+            auto_repair=bool(args.quality_autofix),
+            allow_blocked=bool(args.allow_blocked_quality),
+        )
+
+    doc_id = compute_doc_id(path)
+    sha1 = compute_file_sha1(path)
+    quality_fields = index_quality_document_fields(quality_assessment) if bool(args.quality_gate) else {}
+    blocked = bool(args.quality_gate) and not bool(quality_assessment.get("indexable"))
+    chunks: list[dict] | None = None
+    if not blocked:
+        incremental_ready = (
+            allow_incremental_shortcut
+            and bool(args.incremental)
+            and bool(previous)
+            and previous.get("sha1") == sha1
+            and _incremental_chunks_are_usable(db_dir, doc_id, previous)
+        )
+        if not incremental_ready:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            chunks = chunk_markdown(
+                text,
+                source_path=str(path),
+                chunk_size=args.chunk_size,
+                overlap=args.chunk_overlap,
+            )
+            if bool(args.quality_gate):
+                chunks = _annotate_chunks_with_quality(chunks, quality_assessment)
+
+    record = {
+        "doc_id": doc_id,
+        "path": str(path),
+        "sha1": sha1,
+        "mtime": path.stat().st_mtime,
+        "num_chunks": 0 if blocked else len(chunks or []),
+        "chunk_schema_version": int(CHUNK_SCHEMA_VERSION),
+        **quality_fields,
+    }
+    return {
+        "path": path,
+        "doc_id": doc_id,
+        "sha1": sha1,
+        "quality_fields": quality_fields,
+        "blocked": blocked,
+        "chunks": chunks,
+        "record": record,
+    }
+
+
+def _prepare_ingest_documents(args: argparse.Namespace, *, db_dir: Path, md_files: list[Path]) -> list[dict]:
+    snapshot = load_docs_index(db_dir)
+    return [
+        _prepare_ingest_document(
+            args,
+            db_dir=db_dir,
+            path=path,
+            previous=snapshot.get(compute_doc_id(path)),
+            allow_incremental_shortcut=True,
+        )
+        for path in md_files
+    ]
+
+
+def _commit_prepared_ingest(
+    args: argparse.Namespace,
+    *,
+    db_dir: Path,
+    prepared_documents: list[dict],
+) -> tuple[int, int, int, int, int, list[Path]]:
+    """Merge prepared documents into the latest index while holding the writer lock."""
+
+    docs_index = load_docs_index(db_dir)
+    changed = 0
+    skipped = 0
+    quality_blocked = 0
+    total_chunks = 0
+    indexed_paths: list[Path] = []
+    chunks_to_delete_after_commit: set[str] = set()
+
+    for prepared in prepared_documents:
+        item = prepared
+        path = Path(item["path"])
+        doc_id = str(item["doc_id"])
+        previous = docs_index.get(doc_id)
+
+        # Quality repair or a concurrent converter can change the source while
+        # this process waits for the commit lock. Re-prepare only that rare case.
+        if compute_file_sha1(path) != str(item["sha1"]):
+            item = _prepare_ingest_document(
+                args,
+                db_dir=db_dir,
+                path=path,
+                previous=previous,
+                allow_incremental_shortcut=True,
+            )
+
+        if bool(item["blocked"]):
+            docs_index[doc_id] = dict(item["record"])
+            chunks_to_delete_after_commit.add(doc_id)
+            quality_blocked += 1
+            continue
+
+        if (
+            args.incremental
+            and previous
+            and previous.get("sha1") == item["sha1"]
+            and _incremental_chunks_are_usable(db_dir, doc_id, previous)
+        ):
+            quality_fields = dict(item["quality_fields"])
+            if quality_fields:
+                merged = dict(previous)
+                merged.update(quality_fields)
+                docs_index[doc_id] = merged
+            indexed_paths.append(path)
+            skipped += 1
+            continue
+
+        chunks = item.get("chunks")
+        if chunks is None:
+            item = _prepare_ingest_document(
+                args,
+                db_dir=db_dir,
+                path=path,
+                previous=None,
+                allow_incremental_shortcut=False,
+            )
+            if bool(item["blocked"]):
+                docs_index[doc_id] = dict(item["record"])
+                chunks_to_delete_after_commit.add(doc_id)
+                quality_blocked += 1
+                continue
+            chunks = item["chunks"]
+
+        write_doc_chunks(db_dir, doc_id, chunks)
+        docs_index[doc_id] = dict(item["record"])
+        indexed_paths.append(path)
+        changed += 1
+        total_chunks += len(chunks)
+
+    if args.prune:
+        prune_doc_ids = _doc_ids_to_prune(docs_index)
+        for doc_id in prune_doc_ids:
+            docs_index.pop(doc_id, None)
+        chunks_to_delete_after_commit.update(prune_doc_ids)
+        removed = len(prune_doc_ids)
+    else:
+        removed = 0
+
+    save_docs_index(db_dir, docs_index)
+    for doc_id in sorted(chunks_to_delete_after_commit):
+        delete_doc_chunks(db_dir, doc_id)
+    return changed, skipped, quality_blocked, total_chunks, removed, indexed_paths
 
 
 def main() -> None:
@@ -187,13 +351,18 @@ def main() -> None:
         action="store_true",
         help="Index documents even when the conversion-quality gate recommends reconversion or manual review.",
     )
+    ap.add_argument(
+        "--lock-timeout-s",
+        type=float,
+        default=None,
+        help="Maximum seconds to wait for another knowledge-base writer. Default: KB_DB_WRITE_LOCK_TIMEOUT_S or 600.",
+    )
     args = ap.parse_args()
 
     src = Path(args.src).expanduser().resolve()
     db_dir = Path(args.db).expanduser().resolve()
     db_dir.mkdir(parents=True, exist_ok=True)
 
-    docs_index = load_docs_index(db_dir)
     md_files = _iter_md_files(src, args.glob, set(args.exclude_dir), set(args.exclude_name))
     if not md_files:
         raise SystemExit(f"No markdown files found under: {src}")
@@ -211,102 +380,26 @@ def main() -> None:
     elif defer_structured_rebuild:
         structured_stats = _empty_structured_stats()
 
-    changed = 0
-    skipped = 0
-    quality_blocked = 0
-    total_chunks = 0
-
-    for p in md_files:
-        doc_id = compute_doc_id(p)
-        prev = docs_index.get(doc_id)
-        quality_assessment: dict = {
-            "indexable": True,
-            "status": "ready",
-            "action": "none",
-            "issue_codes": [],
-        }
-
-        if bool(args.quality_gate):
-            quality_assessment = prepare_markdown_for_index(
-                p,
-                auto_repair=bool(args.quality_autofix),
-                allow_blocked=bool(args.allow_blocked_quality),
-            )
-
-        sha1 = compute_file_sha1(p)
-        quality_fields = index_quality_document_fields(quality_assessment) if bool(args.quality_gate) else {}
-        if bool(args.quality_gate) and not bool(quality_assessment.get("indexable")):
-            delete_doc_chunks(db_dir, doc_id)
-            docs_index[doc_id] = {
-                "doc_id": doc_id,
-                "path": str(p),
-                "sha1": sha1,
-                "mtime": p.stat().st_mtime,
-                "num_chunks": 0,
-                "chunk_schema_version": int(CHUNK_SCHEMA_VERSION),
-                **quality_fields,
-            }
-            quality_blocked += 1
-            continue
-
-        if (
-            args.incremental
-            and prev
-            and prev.get("sha1") == sha1
-            and _incremental_chunks_are_usable(db_dir, doc_id, prev)
-        ):
-            if quality_fields:
-                merged = dict(prev)
-                merged.update(quality_fields)
-                docs_index[doc_id] = merged
-            if defer_structured_rebuild and structured_stats is not None:
-                _rebuild_structured_for_markdown(
-                    p,
-                    force=bool(args.force_structured_indices),
-                    stats=structured_stats,
+    prepared_documents = _prepare_ingest_documents(args, db_dir=db_dir, md_files=md_files)
+    try:
+        with db_write_lock(db_dir, timeout_s=args.lock_timeout_s):
+            changed, skipped, quality_blocked, total_chunks, removed, deferred_structured_paths = (
+                _commit_prepared_ingest(
+                    args,
+                    db_dir=db_dir,
+                    prepared_documents=prepared_documents,
                 )
-            skipped += 1
-            continue
+            )
+    except TimeoutError as exc:
+        raise SystemExit(f"Knowledge-base index is busy: {exc}") from exc
 
-        text = p.read_text(encoding="utf-8", errors="replace")
-        chunks = chunk_markdown(
-            text,
-            source_path=str(p),
-            chunk_size=args.chunk_size,
-            overlap=args.chunk_overlap,
-        )
-        if bool(args.quality_gate):
-            chunks = _annotate_chunks_with_quality(chunks, quality_assessment)
-
-        write_doc_chunks(db_dir, doc_id, chunks)
-
-        docs_index[doc_id] = {
-            "doc_id": doc_id,
-            "path": str(p),
-            "sha1": sha1,
-            "mtime": p.stat().st_mtime,
-            "num_chunks": len(chunks),
-            "chunk_schema_version": int(CHUNK_SCHEMA_VERSION),
-            **quality_fields,
-        }
-
-        if defer_structured_rebuild and structured_stats is not None:
+    if defer_structured_rebuild and structured_stats is not None:
+        for p in deferred_structured_paths:
             _rebuild_structured_for_markdown(
                 p,
                 force=bool(args.force_structured_indices),
                 stats=structured_stats,
             )
-
-        changed += 1
-        total_chunks += len(chunks)
-
-    if args.prune:
-        removed = prune_missing_docs(db_dir, docs_index)
-        removed += _prune_excluded_docs(db_dir, docs_index)
-    else:
-        removed = 0
-
-    save_docs_index(db_dir, docs_index)
 
     print(f"Docs: {len(md_files)} | updated: {changed} | skipped: {skipped} | quality_blocked: {quality_blocked} | removed: {removed}")
     if structured_stats is not None:

@@ -24,7 +24,7 @@ from kb.citation_meta import (
     is_promising_reference_text,
     normalize_title_for_match,
 )
-from kb.store import compute_file_sha1
+from kb.store import atomic_write_json, compute_file_sha1
 
 
 INDEX_FILE_NAME = "references_index.json"
@@ -2714,9 +2714,7 @@ def _load_json(path: Path) -> dict:
 
 
 def _save_json(path: Path, obj: dict) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(Path(path), obj)
 
 
 def _crossref_negative_cache_ttl_s() -> float:

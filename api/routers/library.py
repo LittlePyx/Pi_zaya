@@ -85,8 +85,10 @@ from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf
 from kb.reference_index import INDEX_FILE_NAME as REFERENCE_INDEX_FILE_NAME
 from kb.reference_sync import start_reference_sync
 from kb.store import (
+    atomic_write_json,
     compute_doc_id,
     compute_file_sha1,
+    db_write_lock,
     delete_doc_chunks,
     doc_chunks_path,
     load_docs_index,
@@ -779,36 +781,32 @@ def _purge_library_index_for_markdown(db_dir: Path, md_path: Path) -> dict:
         return {item for item in ids if item}
 
     try:
-        docs_index = load_docs_index(db_root)
-        if isinstance(docs_index, dict) and docs_index:
-            remove_ids: set[str] = set()
-            for doc_id, rec in list(docs_index.items()):
-                if not isinstance(rec, dict):
-                    continue
-                rec_key = _normalized_path_key(rec.get("path") or "")
-                rec_compare_key = _normalized_path_compare_key(rec.get("path") or "")
-                if (
-                    str(doc_id) in candidate_doc_ids
-                    or (source_key and rec_key == source_key)
-                    or (source_compare_key and rec_compare_key == source_compare_key)
-                ):
-                    remove_ids.add(str(doc_id))
-            remove_ids.update(_chunk_doc_ids_for_source())
-            docs_removed = 0
+        with db_write_lock(db_root):
+            docs_index = load_docs_index(db_root)
+            remove_ids: set[str] = set(candidate_doc_ids)
+            if isinstance(docs_index, dict):
+                for doc_id, rec in list(docs_index.items()):
+                    if not isinstance(rec, dict):
+                        continue
+                    rec_key = _normalized_path_key(rec.get("path") or "")
+                    rec_compare_key = _normalized_path_compare_key(rec.get("path") or "")
+                    if (
+                        str(doc_id) in candidate_doc_ids
+                        or (source_key and rec_key == source_key)
+                        or (source_compare_key and rec_compare_key == source_compare_key)
+                    ):
+                        remove_ids.add(str(doc_id))
+                remove_ids.update(_chunk_doc_ids_for_source())
+                docs_removed = sum(1 for doc_id in remove_ids if docs_index.pop(doc_id, None) is not None)
+                if remove_ids:
+                    # Publish the index removal before deleting chunks so readers never
+                    # observe an index entry pointing at an already-deleted chunk file.
+                    save_docs_index(db_root, docs_index)
+                    out["docs_removed"] = docs_removed
             for doc_id in sorted(remove_ids):
-                if docs_index.pop(doc_id, None) is not None:
-                    docs_removed += 1
                 _delete_chunks_for_doc(doc_id)
-            if remove_ids:
-                save_docs_index(db_root, docs_index)
-                out["docs_removed"] = docs_removed
     except Exception as exc:
         out["errors"].append(f"docs_index: {str(exc)[:240]}")
-
-    for doc_id in _chunk_doc_ids_for_source():
-        _delete_chunks_for_doc(doc_id)
-    for doc_id in list(candidate_doc_ids):
-        _delete_chunks_for_doc(doc_id)
 
     ref_index_path = db_root / REFERENCE_INDEX_FILE_NAME
     try:
@@ -829,7 +827,7 @@ def _purge_library_index_for_markdown(db_dir: Path, md_path: Path) -> dict:
                     data["docs"] = docs
                     data["doc_count"] = len(docs)
                     data["updated_at"] = time.time()
-                    ref_index_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    atomic_write_json(ref_index_path, data)
                     out["reference_docs_removed"] = len(remove_keys)
     except Exception as exc:
         out["errors"].append(f"reference_index: {str(exc)[:240]}")
