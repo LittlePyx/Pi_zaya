@@ -1870,7 +1870,11 @@ def _search_hits_with_fallback(
     """
     Returns: (hits_raw, scores, used_query, used_translation, query_variants)
     """
-    q1 = (prompt_text or "").strip()
+    q1 = re.split(
+        r"(?im)^QUERY SCOPE:\s*(?:Current paper|Research basket|Full library)\.\s*$",
+        str(prompt_text or ""),
+        maxsplit=1,
+    )[0].strip()
     hits1 = retriever.search(q1, top_k=max(10, top_k * 6)) if q1 else []
     hits1 = [h for h in (hits1 or []) if not _is_temp_source_path(str((h.get("meta") or {}).get("source_path") or ""))]
     scores1 = [float(h.get("score", 0.0) or 0.0) for h in hits1]
@@ -2056,6 +2060,22 @@ def _group_hits_by_doc_for_refs(
     for _best, src in doc_order[:max_docs_consider]:
         hs = by_doc.get(src) or []
         hs2 = sorted(hs, key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
+        primary_table_hit = next(
+            (
+                h
+                for h in hs2[:1]
+                if str(((h.get("meta") or {}).get("structured_kind") or "")).strip().lower()
+                in {"table_metric", "table_row"}
+                and str(h.get("text") or "").strip()
+            ),
+            None,
+        )
+        primary_table_text = str((primary_table_hit or {}).get("text") or "").strip()
+        primary_table_meta = (
+            dict((primary_table_hit or {}).get("meta") or {})
+            if isinstance((primary_table_hit or {}).get("meta"), dict)
+            else {}
+        )
         best_score = float(hs2[0].get("score", 0.0) or 0.0) if hs2 else 0.0
         doc_hint_score = float(doc_hint_scores.get(src, 0.0) or 0.0)
         doc_focus_score = float(doc_focus_scores.get(src, 0.0) or 0.0)
@@ -2310,6 +2330,16 @@ def _group_hits_by_doc_for_refs(
         scored_snips.sort(key=lambda x: x[0], reverse=True)
         show_snips = [_clean_snippet_for_display(s, max_chars=900) for _, s in scored_snips[:2]]
         show_snips = [s for s in show_snips if str(s or "").strip()]
+        if primary_table_text:
+            # A document group can contain many tables that share the same
+            # dataset and metric tokens.  The raw retriever has already chosen
+            # the best structured table hit using table type, metric label and
+            # method-vs-ablation intent.  Do not discard that decision here by
+            # re-ranking only on token density (which favors shorter ablation
+            # rows over the complete benchmark series).
+            primary_table_show = _clean_snippet_for_display(primary_table_text, max_chars=900)
+            if primary_table_show:
+                show_snips = [primary_table_show]
         if force_anchor_focus:
             anchored_raw = [
                 s
@@ -2429,6 +2459,12 @@ def _group_hits_by_doc_for_refs(
             )
         else:
             meta_out["ref_snippets"] = snippets[:3]
+        if primary_table_text:
+            # Keep the card, locator and async reference summary grounded on
+            # the same table series used by the answer.  Competing tables from
+            # the same paper are intentionally excluded from this one-card
+            # evidence surface.
+            meta_out["ref_snippets"] = [primary_table_text]
         meta_out["ref_show_snippets"] = show_snips[:3]
         meta_out["ref_overview_snippets"] = [x for x in overview_snips if str(x or "").strip()][:3]
         meta_out["ref_locs"] = locs2
@@ -2438,6 +2474,33 @@ def _group_hits_by_doc_for_refs(
         if direct_score > 0.0:
             meta_out["direct_prompt_match_score"] = float(direct_score)
             meta_out["direct_prompt_match_terms"] = list(direct_terms)
+        if primary_table_text:
+            for key in (
+                "structured_kind",
+                "table_index",
+                "table_number",
+                "table_metric",
+                "table_metric_label",
+                "table_metric_direction",
+                "table_subject_label",
+                "table_subject_kind",
+                "block_id",
+                "table_block_id",
+                "anchor_id",
+                "line_start",
+                "line_end",
+            ):
+                value = primary_table_meta.get(key)
+                if value not in (None, "", 0):
+                    meta_out[key] = value
+            meta_out["structured_evidence_locked"] = True
+            primary_heading = str(primary_table_meta.get("heading_path") or "").strip()
+            if primary_heading:
+                meta_out["heading_path"] = primary_heading
+            primary_page_start, primary_page_end = _page_range_from_meta(primary_table_meta)
+            if primary_page_start is not None and primary_page_start > 0:
+                meta_out["page_start"] = int(primary_page_start)
+                meta_out["page_end"] = int(primary_page_end or primary_page_start)
         if force_anchor_focus and anchor_hint:
             meta_out["anchor_target_kind"] = str(anchor_hint.get("kind") or "")
             meta_out["anchor_target_number"] = int(anchor_hint.get("number") or 0)

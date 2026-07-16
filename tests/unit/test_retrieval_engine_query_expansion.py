@@ -202,6 +202,31 @@ def test_search_hits_fallback_basic():
     assert "test query" in variants
 
 
+def test_search_hits_fallback_does_not_index_internal_query_scope_instructions():
+    retriever = _FakeRetriever({
+        "highest SIDD PSNR model": [
+            {"text": "Table 6 comparison", "score": 8.0, "meta": {"source_path": "paper.md"}},
+        ],
+    })
+    prompt = (
+        "highest SIDD PSNR model\n\n"
+        "QUERY SCOPE: Full library.\n"
+        "- Search and synthesize across the whole indexed literature library.\n"
+        "- When multiple papers are relevant, organize the answer by paper."
+    )
+
+    hits, _scores, used_query, _used_trans, variants = _search_hits_with_fallback(
+        prompt,
+        retriever,
+        top_k=10,
+        settings=_FakeSettings(),
+    )
+
+    assert hits[0]["text"] == "Table 6 comparison"
+    assert used_query == "highest SIDD PSNR model"
+    assert variants == ["highest SIDD PSNR model"]
+
+
 def test_search_hits_fallback_with_expansion(monkeypatch):
     """Expansion path is triggered when allow_expand=True and settings enable it."""
 

@@ -116,7 +116,6 @@ export function useChatActivityItems({
   conversationLoading,
   messagesLoadingMore,
   liveRunning,
-  generationStage,
   uploading,
   shelfActivity,
   researchContext,
@@ -127,7 +126,6 @@ export function useChatActivityItems({
   conversationLoading: boolean
   messagesLoadingMore: boolean
   liveRunning: boolean
-  generationStage?: string
   uploading: boolean
   shelfActivity: ShelfActivityState
   researchContext: ResearchRuntimeContext
@@ -140,10 +138,9 @@ export function useChatActivityItems({
       items.push({ key: 'messages', label: labels.chat_activity_messages, tone: 'active' })
     }
     if (liveRunning) {
-      const stage = String(generationStage || '').trim()
       items.push({
         key: 'generation',
-        label: stage ? `${labels.chat_activity_generation} - ${stage}` : labels.chat_activity_generation,
+        label: labels.chat_activity_generation,
         tone: 'active',
       })
     }
@@ -174,7 +171,6 @@ export function useChatActivityItems({
   }, [
     apiConnectionAlertTarget,
     conversationLoading,
-    generationStage,
     labels.chat_activity_api_attention,
     labels.chat_activity_generation,
     labels.chat_activity_messages,

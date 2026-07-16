@@ -1172,6 +1172,7 @@ export const S = {
   lib_refsync_running: '运行中',
   lib_refsync_idle: '空闲',
   lib_refsync_waiting: '等待同步任务',
+  lib_refsync_current: '正在整理：{current}',
   lib_search_placeholder: '搜索标题、分类、标签或备注',
   lib_search_category: '分类',
   lib_search_tag: '标签',

@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from kb.chunking import chunk_markdown
+from kb.chunking import CHUNK_SCHEMA_VERSION, chunk_markdown
 from kb.converter.quality_gate import index_quality_document_fields, prepare_markdown_for_index
 from kb.converter.structured_index_batch import rebuild_structured_indices_for_root, structured_indices_need_rebuild
 from kb.converter.structured_indices import STRUCTURED_INDEX_VERSION, rebuild_structured_indices_for_markdown
@@ -24,6 +24,8 @@ from kb.store import (
 def _incremental_chunks_are_usable(db_dir: Path, doc_id: str, record: dict | None) -> bool:
     if not isinstance(record, dict):
         return False
+    if int(record.get("chunk_schema_version") or 0) != int(CHUNK_SCHEMA_VERSION):
+        return False
     expected_count = int(record.get("num_chunks") or 0)
     if expected_count <= 0:
         return False
@@ -39,6 +41,8 @@ def _incremental_chunks_are_usable(db_dir: Path, doc_id: str, record: dict | Non
                     return False
                 chunk = json.loads(raw)
                 if not isinstance(chunk, dict) or not str(chunk.get("text") or "").strip():
+                    return False
+                if int((chunk.get("meta") or {}).get("chunk_schema_version") or 0) != int(CHUNK_SCHEMA_VERSION):
                     return False
                 actual_count += 1
         return actual_count == expected_count
@@ -239,6 +243,7 @@ def main() -> None:
                 "sha1": sha1,
                 "mtime": p.stat().st_mtime,
                 "num_chunks": 0,
+                "chunk_schema_version": int(CHUNK_SCHEMA_VERSION),
                 **quality_fields,
             }
             quality_blocked += 1
@@ -281,6 +286,7 @@ def main() -> None:
             "sha1": sha1,
             "mtime": p.stat().st_mtime,
             "num_chunks": len(chunks),
+            "chunk_schema_version": int(CHUNK_SCHEMA_VERSION),
             **quality_fields,
         }
 

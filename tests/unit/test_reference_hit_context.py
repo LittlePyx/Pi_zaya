@@ -171,3 +171,62 @@ def test_reference_ui_apply_section_intent_rescue_context_proxy_uses_hit_context
     assert calls
     assert calls[0]["top_heading"] is reference_ui._top_heading
     assert calls[0]["summary_excerpt"] is reference_ui._summary_excerpt
+
+
+def test_reference_ui_locked_table_card_keeps_metric_summary_and_exact_anchor() -> None:
+    from api import reference_ui
+
+    evidence = (
+        "Table 6. Image Denoising Results on SIDD. SIDD PSNR: "
+        "MPRNet [37] = 39.71; Restormer [39] = 40.02; "
+        "Baseline ours = 40.30; NAFNet ours = 40.30"
+    )
+    hit = {
+        "score": 14.6,
+        "text": evidence,
+        "meta": {
+            "source_path": "paper.md",
+            "heading_path": "Simple Baselines / 5 Experiments / 5.2 Applications",
+            "ref_best_heading_path": "5 Experiments / 5.2 Applications",
+            "ref_section": "5 Experiments",
+            "ref_subsection": "5.2 Applications",
+            "page_start": 13,
+            "page_end": 13,
+            "ref_show_snippets": [evidence],
+            "ref_snippets": [evidence],
+            "structured_kind": "table_metric",
+            "structured_evidence_locked": True,
+            "table_number": 6,
+            "table_metric": "PSNR",
+            "table_metric_label": "SIDD PSNR",
+            "table_subject_kind": "method",
+            "block_id": "table-6",
+            "table_block_id": "table-6",
+            "anchor_id": "tb_00006",
+            "ref_rank": {"display_score": 8.8, "llm": 88.0},
+        },
+    }
+
+    ui = reference_ui.build_hit_ui_meta(
+        hit,
+        prompt="SIDD 基准测试里 PSNR 最高的模型是谁？如果并列请全部列出。",
+        pdf_root=None,
+        lib_store=None,
+        allow_expensive_llm=False,
+        allow_exact_locate=True,
+    )
+
+    assert ui["summary_line"] == (
+        "表 6 汇总了 SIDD PSNR 的方法对比；最高值为 40.30，"
+        "由 Baseline (ours)、NAFNet (ours) 并列取得。"
+    )
+    assert "直接比较了问题所问的 SIDD PSNR" in ui["why_line"]
+    assert ui["heading_path"].endswith("5 Experiments / 5.2 Applications")
+    assert ui["page_start"] == 13
+    assert ui["primary_evidence"]["block_id"] == "table-6"
+    assert ui["primary_evidence"]["anchor_id"] == "tb_00006"
+    assert ui["primary_evidence"]["anchor_kind"] == "table"
+    assert "Baseline ours = 40.30" in ui["primary_evidence"]["snippet"]
+    assert ui["reader_open"]["blockId"] == "table-6"
+    assert ui["reader_open"]["anchorId"] == "tb_00006"
+    assert ui["reader_open"]["anchorKind"] == "table"

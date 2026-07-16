@@ -15,6 +15,7 @@ _STRUCTURED_INDEX_FILES = (
     "equation_index.json",
     "figure_index.json",
     "reference_index.json",
+    "table_index.json",
 )
 
 

@@ -460,6 +460,18 @@ def _rescue_multi_source_answer_hits(
         if not isinstance(grouped, dict):
             continue
         key = source_key(grouped)
+        grouped_meta = grouped.get("meta", {}) or {}
+        if str(grouped_meta.get("structured_kind") or "").strip().lower() in {
+            "table_metric",
+            "table_row",
+        }:
+            # The grouped reference has already preserved the table-aware
+            # retriever's winning metric series.  Re-scoring raw hits here with
+            # the generic paper-guide heuristic can favor a shorter ablation
+            # row from the same paper and make the generated answer disagree
+            # with both retrieval rank and the reference card.
+            rescued.append(dict(grouped))
+            continue
         candidates = [grouped, *raw_by_source.get(key, [])]
         ranked: list[tuple[float, int, dict]] = []
         seen: set[tuple[str, str]] = set()

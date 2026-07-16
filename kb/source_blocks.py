@@ -548,14 +548,26 @@ def build_source_blocks(
         if raw:
             table_number = 0
             caption = ""
-            # Scan backward (line before table_start), table buffer, and up to 3 lines
-            # after the table for number + caption.
+            # Scan nearby non-empty lines as well as the table itself. Converted
+            # Markdown commonly leaves one blank line between a caption and the
+            # table, so inspecting only the immediately preceding line loses the
+            # authoritative table number.
             candidates = [raw]
             try:
-                if table_start > 1 and (table_start - 2) < len(lines):
-                    prev = str(lines[table_start - 2]).strip()
-                    if prev and not _MD_TABLE_RE.match(prev):
-                        candidates.insert(0, prev)
+                previous: list[str] = []
+                for before in range(table_start - 2, max(-1, table_start - 6), -1):
+                    if before < 0 or before >= len(lines):
+                        continue
+                    prev = str(lines[before]).strip()
+                    if not prev:
+                        continue
+                    if _MD_TABLE_RE.match(prev) or _MD_HEADING_RE.match(prev):
+                        break
+                    previous.append(prev)
+                    if len(previous) >= 2:
+                        break
+                for prev in reversed(previous):
+                    candidates.insert(0, prev)
             except Exception:
                 pass
             try:

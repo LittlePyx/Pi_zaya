@@ -14,7 +14,7 @@ from kb.converter.structured_indices import STRUCTURED_INDEX_VERSION
 def _write_current_empty_indices(md_path: Path) -> None:
     assets = md_path.parent / "assets"
     assets.mkdir(parents=True, exist_ok=True)
-    for name in ("anchor_index.json", "equation_index.json", "figure_index.json"):
+    for name in ("anchor_index.json", "equation_index.json", "figure_index.json", "table_index.json"):
         (assets / name).write_text(
             json.dumps({"version": STRUCTURED_INDEX_VERSION}, ensure_ascii=False),
             encoding="utf-8",
@@ -52,7 +52,7 @@ def test_structured_index_batch_rebuilds_stale_assets_and_records_mentions(tmp_p
     )
     assets = paper_dir / "assets"
     assets.mkdir()
-    for name in ("anchor_index.json", "equation_index.json", "figure_index.json", "reference_index.json"):
+    for name in ("anchor_index.json", "equation_index.json", "figure_index.json", "reference_index.json", "table_index.json"):
         (assets / name).write_text(json.dumps({"version": 1}), encoding="utf-8")
 
     assert structured_indices_need_rebuild(md_path) is True

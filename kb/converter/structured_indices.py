@@ -16,8 +16,9 @@ from kb.reference_index import (
     reference_catalog_to_map,
 )
 from kb.source_blocks import build_source_blocks, doc_id_for_path, normalize_inline_markdown
+from kb.table_index import build_table_index_payload
 
-STRUCTURED_INDEX_VERSION = 2
+STRUCTURED_INDEX_VERSION = 3
 _INDEX_VERSION = STRUCTURED_INDEX_VERSION
 _EQUATION_CONTEXT_KINDS = {"paragraph", "list_item", "blockquote", "table"}
 _INLINE_REF_RE = re.compile(
@@ -927,10 +928,12 @@ def rebuild_structured_indices_for_markdown(
     equation_payload = _build_equation_index_payload(path, blocks, md_text)
     reference_payload = _build_reference_index_payload(path, md_text, blocks=blocks)
     figure_payload = _build_figure_index_payload(path, blocks=blocks, rows=figure_rows)
+    table_payload = build_table_index_payload(path, blocks, version=_INDEX_VERSION)
 
     _write_json(resolved_assets_dir / "anchor_index.json", anchor_payload)
     _write_json(resolved_assets_dir / "equation_index.json", equation_payload)
     _write_json(resolved_assets_dir / "reference_index.json", reference_payload)
+    _write_json(resolved_assets_dir / "table_index.json", table_payload)
     if figure_payload is None:
         figure_payload = {
             "version": _INDEX_VERSION,
@@ -945,4 +948,5 @@ def rebuild_structured_indices_for_markdown(
         "equation_index": equation_payload,
         "reference_index": reference_payload,
         "figure_index": figure_payload,
+        "table_index": table_payload,
     }

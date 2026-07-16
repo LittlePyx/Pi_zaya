@@ -1171,6 +1171,7 @@ export const S = {
   lib_refsync_running: 'Running',
   lib_refsync_idle: 'Idle',
   lib_refsync_waiting: 'Waiting for sync task',
+  lib_refsync_current: 'Processing: {current}',
   lib_search_placeholder: 'Search title, category, tag or note',
   lib_search_category: 'Category',
   lib_search_tag: 'Tag',

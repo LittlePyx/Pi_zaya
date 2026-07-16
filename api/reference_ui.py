@@ -4032,6 +4032,9 @@ def _maybe_polish_refs_card_copy(*, prompt: str, hits: list[dict], guide_mode: b
         ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
         if idx >= limit or not isinstance(ui_meta, dict):
             continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        if bool((meta or {}).get("structured_evidence_locked")):
+            continue
         jobs.append((idx, hit, ui_meta))
     if not jobs:
         return polished
@@ -6568,6 +6571,151 @@ def _build_ref_card_basis_bundle(
     )
 
 
+def _locked_structured_table_card_context(*, meta: dict, prompt: str, hit_text: str) -> dict[str, str]:
+    kind = str((meta or {}).get("structured_kind") or "").strip().lower()
+    if not bool((meta or {}).get("structured_evidence_locked")) or kind not in {
+        "table_metric",
+        "table_row",
+    }:
+        return {}
+    snippets = [
+        str(item or "").strip()
+        for key in ("ref_show_snippets", "ref_snippets")
+        for item in (list((meta or {}).get(key) or [])[:1] if isinstance((meta or {}).get(key), list) else [])
+        if str(item or "").strip()
+    ]
+    evidence = snippets[0] if snippets else str(hit_text or "").strip()
+    if not evidence:
+        return {}
+
+    metric_label = str(
+        (meta or {}).get("table_metric_label")
+        or (meta or {}).get("table_metric")
+        or "table metric"
+    ).strip()
+    try:
+        table_number = int((meta or {}).get("table_number") or 0)
+    except Exception:
+        table_number = 0
+    series_blob = evidence.rsplit(": ", 1)[-1]
+    values: list[tuple[str, str, float]] = []
+    for raw_part in series_blob.split(";"):
+        part = str(raw_part or "").strip()
+        if "=" not in part:
+            continue
+        name, raw_value = part.rsplit("=", 1)
+        name = re.sub(r"\s+ours$", " (ours)", str(name or "").strip(), flags=re.I)
+        value = str(raw_value or "").strip()
+        match = re.fullmatch(r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))(%)?", value)
+        if not name or not match:
+            continue
+        try:
+            numeric = float(match.group(1))
+        except Exception:
+            continue
+        values.append((name, value, numeric))
+
+    prompt_low = str(prompt or "").lower()
+    wants_lowest = bool(
+        re.search(r"\b(?:lowest|minimum|smallest|worst)\b|最低|最小|最差", prompt_low, flags=re.I)
+    )
+    wants_extreme = wants_lowest or bool(
+        re.search(r"\b(?:highest|maximum|largest|best|top)\b|最高|最大|最好|最佳", prompt_low, flags=re.I)
+    )
+    winners: list[tuple[str, str, float]] = []
+    if values and wants_extreme:
+        target = min(item[2] for item in values) if wants_lowest else max(item[2] for item in values)
+        winners = [item for item in values if abs(item[2] - target) <= 1e-12]
+
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", str(prompt or "")))
+    if prefer_zh:
+        location = f"表 {table_number}" if table_number > 0 else "该表"
+        if winners:
+            winner_names = "、".join(item[0] for item in winners)
+            extreme_label = "最低值" if wants_lowest else "最高值"
+            tie_text = "并列取得" if len(winners) > 1 else "取得"
+            summary = (
+                f"{location} 汇总了 {metric_label} 的方法对比；{extreme_label}为 "
+                f"{winners[0][1]}，由 {winner_names} {tie_text}。"
+            )
+        else:
+            preview = "；".join(f"{name} = {value}" for name, value, _number in values[:4])
+            summary = f"{location} 汇总了 {metric_label} 的逐项对比结果"
+            if preview:
+                summary += f"：{preview}"
+            summary += "。"
+        why = f"这张表直接比较了问题所问的 {metric_label}，可据此核对各方法数值、最优结果及并列情况。"
+        locale = "zh"
+    else:
+        location = f"Table {table_number}" if table_number > 0 else "This table"
+        if winners:
+            winner_names = ", ".join(item[0] for item in winners)
+            extreme_label = "minimum" if wants_lowest else "maximum"
+            summary = (
+                f"{location} compares {metric_label}; the {extreme_label} is {winners[0][1]}, "
+                f"achieved by {winner_names}."
+            )
+        else:
+            preview = "; ".join(f"{name} = {value}" for name, value, _number in values[:4])
+            summary = f"{location} provides the itemized {metric_label} comparison"
+            if preview:
+                summary += f": {preview}"
+            summary += "."
+        why = (
+            f"This table directly compares the requested {metric_label}, so it can verify each value, "
+            "the best result, and any ties."
+        )
+        locale = "en"
+    return {
+        "summary_line": summary,
+        "why_line": why,
+        "evidence": evidence,
+        "heading_path": str((meta or {}).get("heading_path") or (meta or {}).get("ref_best_heading_path") or "").strip(),
+        "locale": locale,
+    }
+
+
+def _locked_structured_table_reader_open(
+    *,
+    meta: dict,
+    source_path: str,
+    display_name: str,
+    card_context: dict,
+) -> dict:
+    evidence = str((card_context or {}).get("evidence") or "").strip()
+    heading_path = str((card_context or {}).get("heading_path") or "").strip()
+    block_id = str((meta or {}).get("table_block_id") or (meta or {}).get("block_id") or "").strip()
+    anchor_id = str((meta or {}).get("anchor_id") or "").strip()
+    locate_target = {
+        "headingPath": heading_path,
+        "snippet": evidence,
+        "highlightSnippet": evidence,
+        "anchorKind": "table",
+        "hitLevel": "block",
+    }
+    if block_id:
+        locate_target["blockId"] = block_id
+        locate_target["relatedBlockIds"] = [block_id]
+    if anchor_id:
+        locate_target["anchorId"] = anchor_id
+    reader_open = {
+        "sourcePath": source_path,
+        "sourceName": display_name,
+        "headingPath": heading_path,
+        "snippet": evidence,
+        "highlightSnippet": evidence,
+        "anchorKind": "table",
+        "strictLocate": bool(block_id or anchor_id),
+        "locateTarget": locate_target,
+    }
+    if block_id:
+        reader_open["blockId"] = block_id
+        reader_open["relatedBlockIds"] = [block_id]
+    if anchor_id:
+        reader_open["anchorId"] = anchor_id
+    return reader_open
+
+
 def _select_primary_ref_evidence(
     *,
     meta: dict,
@@ -6755,6 +6903,11 @@ def build_hit_ui_meta(
         if isinstance(hit_context.get("citation_meta"), dict)
         else {}
     )
+    structured_table_card = _locked_structured_table_card_context(
+        meta=meta,
+        prompt=prompt,
+        hit_text=str((hit or {}).get("text") or ""),
+    )
 
     primary_evidence = _select_primary_ref_evidence(
         meta=meta,
@@ -6799,6 +6952,29 @@ def build_hit_ui_meta(
     subsection_label = str(rescue_context.get("subsection_label") or "").strip()
     summary_line = str(rescue_context.get("summary_line") or "").strip()
     summary_source = str(rescue_context.get("summary_source") or "").strip()
+    if structured_table_card:
+        locked_heading_context = _resolve_ref_ui_heading_context(
+            prompt=prompt,
+            source_path=source_path,
+            heading_path=str(structured_table_card.get("heading_path") or "").strip(),
+            heading_fallback=str(meta.get("top_heading") or "").strip(),
+            section_label="",
+            subsection_label="",
+        )
+        heading_path = str(
+            locked_heading_context.get("heading_path")
+            or structured_table_card.get("heading_path")
+            or ""
+        ).strip()
+        heading = str(
+            locked_heading_context.get("heading")
+            or heading_path.split(" / ")[-1]
+            or ""
+        ).strip()
+        section_label = str(locked_heading_context.get("section_label") or "").strip()
+        subsection_label = str(locked_heading_context.get("subsection_label") or "").strip()
+        summary_line = str(structured_table_card.get("summary_line") or "").strip()
+        summary_source = "structured_table"
     preferred_exact_candidate = (
         dict(primary_evidence.get("preferred_exact_candidate") or {})
         if isinstance(primary_evidence.get("preferred_exact_candidate"), dict)
@@ -6834,21 +7010,34 @@ def build_hit_ui_meta(
     why_generation = str(copy_flow.get("why_generation") or "").strip()
     summary_kind = str(copy_flow.get("summary_kind") or "").strip()
     render_locale = str(copy_flow.get("render_locale") or "").strip()
-    reader_open = _build_refs_reader_open_payload(
-        meta=meta,
-        prompt=prompt,
-        source_path=source_path,
-        display_name=display_name,
-        heading_path=heading_path,
-        heading=heading,
-        summary_line=summary_line,
-        why_line=why_line,
-        anchor_target_kind=anchor_target_kind,
-        anchor_target_number=anchor_target_number,
-        preferred_exact_candidate=preferred_exact_candidate,
-        allow_llm_disambiguation=allow_expensive_llm,
-        allow_exact_locate=allow_exact_locate,
-    )
+    if structured_table_card:
+        summary_line = str(structured_table_card.get("summary_line") or summary_line).strip()
+        why_line = str(structured_table_card.get("why_line") or why_line).strip()
+        why_generation = "deterministic_grounded"
+        summary_kind = "guide"
+        render_locale = str(structured_table_card.get("locale") or render_locale).strip()
+        reader_open = _locked_structured_table_reader_open(
+            meta=meta,
+            source_path=source_path,
+            display_name=display_name,
+            card_context={**structured_table_card, "heading_path": heading_path},
+        )
+    else:
+        reader_open = _build_refs_reader_open_payload(
+            meta=meta,
+            prompt=prompt,
+            source_path=source_path,
+            display_name=display_name,
+            heading_path=heading_path,
+            heading=heading,
+            summary_line=summary_line,
+            why_line=why_line,
+            anchor_target_kind=anchor_target_kind,
+            anchor_target_number=anchor_target_number,
+            preferred_exact_candidate=preferred_exact_candidate,
+            allow_llm_disambiguation=allow_expensive_llm,
+            allow_exact_locate=allow_exact_locate,
+        )
     if isinstance(reader_open, dict) and anchor_target_kind and anchor_target_number > 0:
         summary_line, summary_source = _apply_reader_anchor_summary_override(
             reader_open=reader_open,
@@ -7408,6 +7597,22 @@ def _maybe_add_section_intent_rescue_hit(prompt: str, hits: list[dict]) -> list[
     ):
         return rows
     if any(bool(((hit.get("meta") if isinstance(hit.get("meta"), dict) else {}) or {}).get("section_intent_rescue")) for hit in rows):
+        return rows
+    intended_source_path = _pick_section_intent_source_path(prompt, rows)
+    if intended_source_path and any(
+        str(((hit.get("meta") if isinstance(hit.get("meta"), dict) else {}) or {}).get("source_path") or "").strip()
+        == intended_source_path
+        and bool(
+            ((hit.get("meta") if isinstance(hit.get("meta"), dict) else {}) or {}).get(
+                "structured_evidence_locked"
+            )
+        )
+        for hit in rows
+    ):
+        # A table-aware retrieval winner is already the exact evidence surface
+        # for this source.  Generic section-intent rescue (for example treating
+        # the word "model" as a method request) must not replace a benchmark
+        # table with an unrelated method paragraph from the same paper.
         return rows
     rescue = _build_section_intent_rescue_hit(prompt, rows)
     if not isinstance(rescue, dict):

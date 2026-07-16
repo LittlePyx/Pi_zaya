@@ -35,5 +35,9 @@ def load_paper_guide_figure_index(md_path: Path | str) -> list[dict]:
     return _load_paper_guide_index_rows(md_path, file_name="figure_index.json", key="figures")
 
 
+def load_paper_guide_table_index(md_path: Path | str) -> list[dict]:
+    return _load_paper_guide_index_rows(md_path, file_name="table_index.json", key="tables")
+
+
 def load_paper_guide_reference_index(md_path: Path | str) -> list[dict]:
     return _load_paper_guide_index_rows(md_path, file_name="reference_index.json", key="references")

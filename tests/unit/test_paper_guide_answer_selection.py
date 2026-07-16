@@ -297,6 +297,62 @@ def test_multi_source_answer_rescue_replaces_low_value_representative_from_same_
     assert all("dl-spi" not in str((item.get("meta") or {}).get("source_path") or "") for item in out)
 
 
+def test_multi_source_rescue_preserves_grouped_structured_table_evidence():
+    source = r"db\Simple Baselines for Image Restoration.md"
+    benchmark = (
+        "Table 6. SIDD PSNR: MPRNet = 39.71; Restormer = 40.02; "
+        "Baseline ours = 40.30; NAFNet ours = 40.30"
+    )
+    ablation = "Table 3. SIDD PSNR: 9 = 39.78; 18 = 39.90; 36 = 39.96; 72 = 39.95"
+    grouped_docs = [
+        {
+            "score": 14.6,
+            "text": benchmark,
+            "meta": {
+                "source_path": source,
+                "heading_path": "5 Experiments / 5.2 Applications",
+                "structured_kind": "table_metric",
+                "table_number": 6,
+                "table_metric_label": "SIDD PSNR",
+                "table_subject_kind": "method",
+            },
+        }
+    ]
+    raw_hits = [
+        {
+            "score": 31.2,
+            "text": benchmark,
+            "meta": {
+                "source_path": source,
+                "heading_path": "5 Experiments / 5.2 Applications",
+                "structured_kind": "table_metric",
+                "table_number": 6,
+            },
+        },
+        {
+            "score": 99.0,
+            "text": ablation,
+            "meta": {
+                "source_path": source,
+                "heading_path": "5 Experiments / 5.1 Ablations",
+                "structured_kind": "table_metric",
+                "table_number": 3,
+            },
+        },
+    ]
+
+    out = _rescue_multi_source_answer_hits(
+        grouped_docs=grouped_docs,
+        raw_hits=raw_hits,
+        prompt="Which model has the highest SIDD PSNR?",
+    )
+
+    assert len(out) == 1
+    assert out[0]["text"] == benchmark
+    assert out[0]["meta"]["table_number"] == 6
+    assert ablation not in out[0]["text"]
+
+
 def test_has_anchor_grounded_answer_hits_detects_positive_anchor_match():
     hits = [
         {

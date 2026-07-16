@@ -2416,7 +2416,7 @@ export function MessageList({
                   <div className="mb-2 flex items-center gap-2">
                     <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[var(--accent)]" />
                     <Text type="secondary" className="text-xs">
-                      {generationStage}
+                      {S.chat_activity_generation}
                     </Text>
                   </div>
                 ) : null}

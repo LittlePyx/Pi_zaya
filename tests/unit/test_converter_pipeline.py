@@ -77,6 +77,7 @@ def test_convert_pipeline_fast_mode(sample_pdf, output_dir):
     assert (output_dir / "assets" / "anchor_index.json").exists()
     assert (output_dir / "assets" / "equation_index.json").exists()
     assert (output_dir / "assets" / "reference_index.json").exists()
+    assert (output_dir / "assets" / "table_index.json").exists()
 
 
 def test_convert_pipeline_reuses_completed_page_without_reprocessing(sample_pdf, output_dir, monkeypatch):

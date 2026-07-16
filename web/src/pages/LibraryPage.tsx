@@ -613,7 +613,9 @@ export default function LibraryPage() {
   }, [S, refSyncStats])
   const refSyncDisplayMessage = useMemo(() => {
     if (!store.refSync) return S.lib_refsync_waiting
-    if (store.refSync.current) return `${store.refSync.stage || S.lib_refsync_running} | ${store.refSync.current}`
+    if (store.refSync.current) {
+      return S.lib_refsync_current.replace('{current}', store.refSync.current)
+    }
     const refsTotal = numericStat(refSyncStats, 'refs_total')
     if (store.refSync.status === 'done' && refsTotal > 0) {
       const statusReady = numericStat(refSyncStats, 'refs_metadata_status_complete')
@@ -662,7 +664,11 @@ export default function LibraryPage() {
         : 'neutral'
   const refSyncStatusLabel = store.refSync?.running
     ? S.lib_refsync_running
-    : (store.refSync?.status === 'idle' ? S.lib_refsync_idle : String(store.refSync?.status || ''))
+    : store.refSync?.status === 'done'
+      ? S.run_ok
+      : store.refSync?.status === 'error'
+        ? S.lib_draft_error
+        : S.lib_refsync_idle
 
   const {
     batchDraft,

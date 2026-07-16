@@ -443,7 +443,6 @@ export default function ChatPage() {
     conversationLoading,
     messagesLoadingMore,
     liveRunning,
-    generationStage: generation?.stage,
     uploading,
     shelfActivity,
     researchContext,

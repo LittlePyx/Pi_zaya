@@ -490,6 +490,104 @@ def test_group_hits_by_doc_for_refs_does_not_mistake_reference_index_for_equatio
     assert all("[1] Ben Mildenhall" not in item for item in show_snips)
 
 
+def test_grouped_reference_keeps_top_structured_table_as_its_only_metric_evidence(
+    tmp_path: Path,
+    monkeypatch,
+):
+    md = tmp_path / "Simple Baselines for Image Restoration.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# Simple Baselines for Image Restoration",
+                "## 5 Experiments",
+                "### 5.1 Ablations",
+                "**Table 3.** The effect of the number of blocks.",
+                "| blocks | SIDD PSNR |",
+                "| --- | --- |",
+                "| 36 | 39.96 |",
+                "### 5.2 Applications",
+                "**Table 6.** Image Denoising Results on SIDD.",
+                "| Method | Baseline ours | NAFNet ours |",
+                "| --- | --- | --- |",
+                "| PSNR | 40.30 | 40.30 |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(retrieval_engine, "_is_temp_source_path", lambda _src: False)
+    benchmark = (
+        "Table 6. Image Denoising Results on SIDD. SIDD PSNR: "
+        "Baseline ours = 40.30; NAFNet ours = 40.30"
+    )
+    ablation = "Table 3. SIDD PSNR: 9 = 39.78; 18 = 39.90; 36 = 39.96; 72 = 39.95"
+    hits_raw = [
+        {
+            "score": 31.2,
+            "id": "benchmark",
+            "text": benchmark,
+            "meta": {
+                "source_path": str(md),
+                "heading_path": "5 Experiments / 5.2 Applications",
+                "structured_kind": "table_metric",
+                "table_index": 2,
+                "table_number": 6,
+                "table_metric": "PSNR",
+                "table_metric_label": "SIDD PSNR",
+                "table_subject_kind": "method",
+                "block_id": "table-6",
+                "anchor_id": "tb_00002",
+                "page_start": 13,
+                "page_end": 13,
+            },
+        },
+        {
+            "score": 27.4,
+            "id": "ablation",
+            "text": ablation,
+            "meta": {
+                "source_path": str(md),
+                "heading_path": "5 Experiments / 5.1 Ablations",
+                "structured_kind": "table_metric",
+                "table_index": 1,
+                "table_number": 3,
+                "table_metric": "PSNR",
+                "table_metric_label": "SIDD PSNR",
+                "table_subject_kind": "variant",
+                "block_id": "table-3",
+                "anchor_id": "tb_00001",
+                "page_start": 12,
+                "page_end": 12,
+            },
+        },
+    ]
+
+    docs = _group_hits_by_doc_for_refs(
+        hits_raw,
+        prompt_text="Which model has the highest SIDD PSNR?",
+        top_k_docs=1,
+        deep_query="Which model has the highest SIDD PSNR?",
+        deep_read=False,
+        llm_rerank=False,
+        settings=None,
+    )
+
+    assert len(docs) == 1
+    doc = docs[0]
+    meta = doc["meta"]
+    assert doc["text"] == benchmark
+    assert meta["ref_show_snippets"] == [benchmark]
+    assert meta["ref_snippets"] == [benchmark]
+    assert meta["structured_kind"] == "table_metric"
+    assert meta["structured_evidence_locked"] is True
+    assert meta["table_number"] == 6
+    assert meta["table_subject_kind"] == "method"
+    assert meta["block_id"] == "table-6"
+    assert meta["anchor_id"] == "tb_00002"
+    assert meta["heading_path"] == "5 Experiments / 5.2 Applications"
+    assert meta["page_start"] == 13
+    assert ablation not in meta["ref_show_snippets"]
+
+
 def test_postprocess_refs_pack_overrides_conflicting_why_when_anchor_hit():
     docs = [
         {

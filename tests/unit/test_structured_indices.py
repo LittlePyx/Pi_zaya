@@ -54,6 +54,7 @@ def test_rebuild_structured_indices_writes_expected_assets_and_enriches_figure_i
     equation_payload = json.loads((assets_dir / "equation_index.json").read_text(encoding="utf-8"))
     reference_payload = json.loads((assets_dir / "reference_index.json").read_text(encoding="utf-8"))
     figure_payload = json.loads((assets_dir / "figure_index.json").read_text(encoding="utf-8"))
+    table_payload = json.loads((assets_dir / "table_index.json").read_text(encoding="utf-8"))
 
     assert out["anchor_index"]["anchor_count"] == anchor_payload["anchor_count"]
     assert any(item["kind"] == "figure" for item in anchor_payload["anchors"])
@@ -81,3 +82,5 @@ def test_rebuild_structured_indices_writes_expected_assets_and_enriches_figure_i
     assert fig["page"] == 2
     assert "Results / Figure 4" in fig["heading_path"]
     assert "Noise-robustness comparison" in fig["locate_anchor"]
+    assert table_payload["version"] == anchor_payload["version"]
+    assert table_payload["table_count"] == 0

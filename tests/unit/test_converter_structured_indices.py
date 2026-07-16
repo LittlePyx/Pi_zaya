@@ -30,6 +30,7 @@ $$
     assert (assets_dir / "anchor_index.json").exists()
     assert (assets_dir / "equation_index.json").exists()
     assert (assets_dir / "reference_index.json").exists()
+    assert (assets_dir / "table_index.json").exists()
 
     anchor_payload = out.get("anchor_index") or {}
     equation_payload = out.get("equation_index") or {}

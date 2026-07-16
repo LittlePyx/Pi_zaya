@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from .table_index import table_chunks_from_markdown
+
+
+CHUNK_SCHEMA_VERSION = 4
+
 
 @dataclass
 class Block:
@@ -262,9 +267,21 @@ def chunk_markdown(
     overlap: int = 200,
 ) -> list[dict]:
     blocks = _parse_blocks(md)
-    return _merge_blocks_into_chunks(
+    chunks = _merge_blocks_into_chunks(
         blocks=blocks,
         source_path=source_path,
         chunk_size=chunk_size,
         overlap=overlap,
     )
+    for chunk in chunks:
+        meta = dict(chunk.get("meta") or {})
+        meta["chunk_schema_version"] = CHUNK_SCHEMA_VERSION
+        chunk["meta"] = meta
+    chunks.extend(
+        table_chunks_from_markdown(
+            md,
+            source_path=source_path,
+            schema_version=CHUNK_SCHEMA_VERSION,
+        )
+    )
+    return chunks

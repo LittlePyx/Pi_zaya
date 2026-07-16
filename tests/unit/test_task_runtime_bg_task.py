@@ -142,6 +142,32 @@ def test_reference_ui_does_not_replace_authoritative_exact_hit_with_section_resc
     assert reference_ui._maybe_add_section_intent_rescue_hit("Where does ADMM come from?", [hit]) == [hit]
 
 
+def test_reference_ui_does_not_replace_locked_table_hit_with_section_rescue(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_refs_prompt_section_intent", lambda _prompt: "method")
+    monkeypatch.setattr(reference_ui, "_pick_section_intent_source_path", lambda _prompt, _hits: "paper.md")
+    monkeypatch.setattr(
+        reference_ui,
+        "_build_section_intent_rescue_hit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("locked table evidence must not be replaced by section rescue")
+        ),
+    )
+    hit = {
+        "text": "Table 6. SIDD PSNR: Baseline ours = 40.30; NAFNet ours = 40.30",
+        "meta": {
+            "source_path": "paper.md",
+            "structured_kind": "table_metric",
+            "structured_evidence_locked": True,
+            "table_number": 6,
+        },
+    }
+
+    assert reference_ui._maybe_add_section_intent_rescue_hit(
+        "Which model has the highest SIDD PSNR?",
+        [hit],
+    ) == [hit]
+
+
 def test_reference_ui_score_gate_force_keeps_fast_exact_hit():
     from api.reference_ui_score import _should_force_keep_ref_hit
 
