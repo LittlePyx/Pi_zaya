@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import traceback
 from pathlib import Path
@@ -17,6 +18,138 @@ from .layout_analysis import _collect_visual_rects, detect_body_font_size, page_
 from .page_figure_metadata import infer_visual_rects_from_caption_candidates
 from .tables import _extract_tables_by_layout, _page_maybe_has_table_from_dict
 from .reference_markdown import normalize_references_page_text
+from .pipeline_render_markdown import render_blocks_to_markdown
+
+
+def _safe_formula_candidate_rects(converter, page, *, page_index: int) -> list[tuple[float, float, float, float]]:
+    """Return source-backed display-formula rectangles, excluding prose false positives."""
+    try:
+        candidates = converter._collect_display_math_candidates(
+            page,
+            page_index=page_index,
+            is_references_page=False,
+        )
+    except Exception:
+        return []
+
+    out: list[tuple[float, float, float, float]] = []
+    for candidate in candidates or []:
+        text = re.sub(r"\s+", " ", str(candidate.get("text") or "")).strip()
+        if not text:
+            continue
+        word_n = len(re.findall(r"\b[A-Za-z]{2,}\b", text))
+        has_equals = "=" in text or "＝" in text
+        has_eq_number = bool(re.search(r"\(\s*\d{1,4}\s*\)\s*$", text))
+        has_strong_math = bool(
+            re.search(r"(?:[∑∫∏√]|\\(?:sum|int|prod|frac|sqrt|exp|log)\b)", text)
+        )
+        if not (has_equals or has_eq_number or has_strong_math):
+            continue
+        if word_n >= 14 and not has_equals:
+            continue
+        try:
+            rect = fitz.Rect(candidate.get("rect"))
+        except Exception:
+            continue
+        if rect.width <= 2 or rect.height <= 2:
+            continue
+        out.append((float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)))
+    return out
+
+
+def _has_explicit_two_column_evidence(blocks, *, page_width: float, page_height: float) -> bool:
+    """Require substantial text in both page halves with overlapping vertical flow."""
+    mid = float(page_width) * 0.5
+    left: list[tuple[float, float]] = []
+    right: list[tuple[float, float]] = []
+    for block in blocks or []:
+        if bool(getattr(block, "is_table", False)) or bool(getattr(block, "is_code", False)):
+            continue
+        text = re.sub(r"\s+", " ", str(getattr(block, "text", "") or "")).strip()
+        if len(text) < 36 or text.startswith("!["):
+            continue
+        try:
+            x0, y0, x1, y1 = (float(v) for v in block.bbox)
+        except Exception:
+            continue
+        width = max(0.0, x1 - x0)
+        height = max(0.0, y1 - y0)
+        if width < float(page_width) * 0.18 or width >= float(page_width) * 0.62:
+            continue
+        if height < max(18.0, float(page_height) * 0.02):
+            continue
+        target = left if ((x0 + x1) * 0.5) < mid else right
+        target.append((y0, y1))
+    if not left or not right:
+        return False
+    min_overlap = max(12.0, float(page_height) * 0.015)
+    return any(min(ly1, ry1) - max(ly0, ry0) >= min_overlap for ly0, ly1 in left for ry0, ry1 in right)
+
+
+def _sort_complex_fallback_blocks(blocks, *, page_width: float) -> list:
+    """Keep full-width bands, then read each two-column band left before right."""
+    if not blocks:
+        return []
+    mid = float(page_width) * 0.5
+    spanning_width = float(page_width) * 0.62
+    cross_margin = max(10.0, float(page_width) * 0.025)
+    by_y = sorted(blocks, key=lambda block: (float(block.bbox[1]), float(block.bbox[0])))
+    out: list = []
+    segment: list = []
+
+    def _is_spanning(block) -> bool:
+        x0, _, x1, _ = (float(v) for v in block.bbox)
+        width = max(0.0, x1 - x0)
+        if width >= spanning_width:
+            return True
+        return x0 < (mid - cross_margin) and x1 > (mid + cross_margin)
+
+    def _flush() -> None:
+        if not segment:
+            return
+        left = [block for block in segment if (float(block.bbox[0]) + float(block.bbox[2])) * 0.5 < mid]
+        right = [block for block in segment if (float(block.bbox[0]) + float(block.bbox[2])) * 0.5 >= mid]
+        left.sort(key=lambda block: (float(block.bbox[1]), float(block.bbox[0])))
+        right.sort(key=lambda block: (float(block.bbox[1]), float(block.bbox[0])))
+        out.extend(left)
+        out.extend(right)
+        segment.clear()
+
+    for block in by_y:
+        if _is_spanning(block):
+            _flush()
+            out.append(block)
+        else:
+            segment.append(block)
+    _flush()
+    return out
+
+
+def _prepare_safe_complex_fallback(converter, prepared: dict, page, *, page_index: int) -> None:
+    """Enable screenshot-based formula degradation only for proven two-column formula pages."""
+    if bool(prepared.get("is_references_page", False)):
+        return
+    blocks = list(prepared.get("blocks") or [])
+    if not any(bool(getattr(block, "is_math", False)) for block in blocks):
+        return
+    try:
+        page_width = float(page.rect.width)
+        page_height = float(page.rect.height)
+    except Exception:
+        return
+    if not _has_explicit_two_column_evidence(blocks, page_width=page_width, page_height=page_height):
+        return
+    formula_rects = _safe_formula_candidate_rects(converter, page, page_index=page_index)
+    if not formula_rects:
+        return
+    prepared["blocks"] = _sort_complex_fallback_blocks(blocks, page_width=page_width)
+    prepared["safe_complex_fallback"] = True
+    prepared["safe_formula_rects"] = formula_rects
+    print(
+        f"  [Page {page_index+1}] Safe local fallback: two-column formula risk; "
+        f"preserving {len(formula_rects)} equation region(s) as images",
+        flush=True,
+    )
 
 
 def prepare_page_render_input(
@@ -26,6 +159,7 @@ def prepare_page_render_input(
     pdf_path: Path,
     assets_dir: Path,
     allow_llm_enhance: bool = True,
+    safe_complex_fallback: bool = False,
 ) -> dict:
     page_start = time.time()
 
@@ -217,7 +351,7 @@ def prepare_page_render_input(
         figure_meta_by_asset = {}
         image_names = []
 
-    return {
+    prepared = {
         "blocks": blocks,
         "is_references_page": bool(is_references_page),
         "reference_page_text": (page.get_text("text") if bool(is_references_page) else ""),
@@ -228,6 +362,9 @@ def prepare_page_render_input(
         "prepare_elapsed": time.time() - page_start,
         "allow_llm_calls": bool(allow_llm_enhance),
     }
+    if safe_complex_fallback:
+        _prepare_safe_complex_fallback(converter, prepared, page, page_index=page_index)
+    return prepared
 
 
 def render_prepared_page(
@@ -245,14 +382,27 @@ def render_prepared_page(
     if is_references_page and reference_page_text.strip():
         result = normalize_references_page_text(reference_page_text)
     else:
-        result = converter._render_blocks_to_markdown(
-            blocks,
-            page_index,
-            page=page,
-            assets_dir=assets_dir,
-            is_references_page=is_references_page,
-            allow_llm_calls=bool(prepared.get("allow_llm_calls", True)),
-        )
+        render_kwargs = {
+            "page": page,
+            "assets_dir": assets_dir,
+            "is_references_page": is_references_page,
+            "allow_llm_calls": bool(prepared.get("allow_llm_calls", True)),
+        }
+        if bool(prepared.get("safe_complex_fallback", False)):
+            result = render_blocks_to_markdown(
+                converter,
+                blocks,
+                page_index,
+                safe_complex_fallback=True,
+                safe_formula_rects=list(prepared.get("safe_formula_rects") or []),
+                **render_kwargs,
+            )
+        else:
+            result = converter._render_blocks_to_markdown(
+                blocks,
+                page_index,
+                **render_kwargs,
+            )
     image_names = [str(x).strip() for x in list(prepared.get("image_names") or []) if str(x).strip()]
     figure_meta_by_asset = prepared.get("figure_meta_by_asset") if isinstance(prepared.get("figure_meta_by_asset"), dict) else None
     pdf_path_raw = str(prepared.get("pdf_path") or "").strip()
@@ -286,6 +436,7 @@ def process_page(
     assets_dir: Path,
     *,
     allow_llm_enhance: bool = True,
+    safe_complex_fallback: bool = False,
 ) -> str:
     prepared = prepare_page_render_input(
         converter,
@@ -294,6 +445,7 @@ def process_page(
         pdf_path=pdf_path,
         assets_dir=assets_dir,
         allow_llm_enhance=allow_llm_enhance,
+        safe_complex_fallback=safe_complex_fallback,
     )
     return render_prepared_page(
         converter,

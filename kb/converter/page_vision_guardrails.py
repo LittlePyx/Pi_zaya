@@ -54,12 +54,20 @@ def _fallback_to_extraction_pipeline(
     local_only: bool = False,
 ) -> Optional[str]:
     try:
-        if local_only and hasattr(converter, "_process_page_local_only"):
-            return converter._process_page_local_only(
+        if local_only:
+            # Health failures must not cascade into more remote calls. Use the
+            # local pipeline directly so it can apply the source-backed safe
+            # degradation for proven two-column formula pages.
+            from .page_local_pipeline import process_page as process_local_page
+
+            return process_local_page(
+                converter,
                 page,
                 page_index=page_index,
                 pdf_path=pdf_path,
                 assets_dir=assets_dir,
+                allow_llm_enhance=False,
+                safe_complex_fallback=True,
             )
         return converter._process_page(
             page,
@@ -93,9 +101,14 @@ def _retry_empty_vision_output(
     except Exception:
         last_vl_err = ""
 
-    if last_vl_err == "timeout":
+    if last_vl_err in {"timeout", "rate_limited", "circuit_open"}:
+        reason = {
+            "timeout": "hard-timeout",
+            "rate_limited": "rate-limit",
+            "circuit_open": "circuit-open",
+        }.get(last_vl_err, last_vl_err)
         print(
-            f"[VISION_DIRECT] VL hard-timeout on page {page_index+1}, skip empty retries and fallback",
+            f"[VISION_DIRECT] VL {reason} on page {page_index+1}, skip empty retries and fallback",
             flush=True,
         )
         retry_n = 0
@@ -237,13 +250,10 @@ def convert_page_with_vision_guardrails(
             last_vl_err = str(converter.llm_worker.get_last_vl_error_code() or "").strip().lower()
         except Exception:
             last_vl_err = ""
-        local_only_timeout_fallback = (
-            str(speed_mode or "").strip().lower() == "ultra_fast"
-            and last_vl_err == "timeout"
-        )
+        local_only_health_fallback = last_vl_err in {"timeout", "rate_limited", "circuit_open"}
         print(
             f"[VISION_DIRECT] VL returned empty for page {page_index+1}, falling back to "
-            f"{'local-only extraction' if local_only_timeout_fallback else 'extraction pipeline'}",
+            f"{'local-only extraction' if local_only_health_fallback else 'extraction pipeline'}",
             flush=True,
         )
         return _fallback_to_extraction_pipeline(
@@ -253,7 +263,7 @@ def convert_page_with_vision_guardrails(
             pdf_path=pdf_path,
             assets_dir=assets_dir,
             reason="fallback extraction failed",
-            local_only=local_only_timeout_fallback,
+            local_only=local_only_health_fallback,
         )
 
     # References pages should not contain math; skip fragmented-math checks there.

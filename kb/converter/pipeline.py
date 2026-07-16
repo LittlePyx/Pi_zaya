@@ -453,6 +453,10 @@ class PDFConverter:
         print(f"Opening PDF: {pdf_path}", flush=True)
         doc = fitz.open(pdf_path)
         total_pages = len(doc)
+        selected_start = max(0, int(getattr(self.cfg, "start_page", 0) or 0))
+        configured_end = int(getattr(self.cfg, "end_page", -1) or -1)
+        selected_end = total_pages if configured_end < 0 else min(total_pages, max(0, configured_end))
+        partial_range = selected_start > 0 or selected_end < total_pages
         print(f"PDF opened successfully, {total_pages} pages", flush=True)
         try:
             self._cleanup_stale_page_assets(assets_dir=assets_dir, total_pages=total_pages)
@@ -460,8 +464,10 @@ class PDFConverter:
             print(f"[WARN] stale asset cleanup skipped: {e}", flush=True)
         
         # Output total pages for progress tracking (must match expected format)
-        print(f"Detected body font size: 12.0 | pages: {total_pages} | range: 1-{total_pages}", flush=True)
-        print(f"Starting conversion of {total_pages} pages...", flush=True)
+        selected_count = max(0, selected_end - selected_start)
+        selected_label = f"{selected_start + 1}-{selected_end}" if selected_count else "empty"
+        print(f"Detected body font size: 12.0 | pages: {total_pages} | range: {selected_label}", flush=True)
+        print(f"Starting conversion of {selected_count} pages...", flush=True)
         
         # Pre-scan for noise
         self.noise_texts = build_repeated_noise_texts(doc)
@@ -542,10 +548,16 @@ class PDFConverter:
             except Exception as e:
                 print(f"[WARN] _llm_polish_references failed, keep previous markdown: {e}", flush=True)
         source_repair_result: dict[str, Any] = {}
-        try:
-            final_md, source_repair_result = self._recover_references_from_pdf_if_needed(final_md, doc)
-        except Exception as e:
-            print(f"[WARN] PDF reference recovery skipped: {e}", flush=True)
+        if partial_range:
+            print(
+                "[PARTIAL_RANGE] source-wide page and reference recovery disabled for selected pages",
+                flush=True,
+            )
+        else:
+            try:
+                final_md, source_repair_result = self._recover_references_from_pdf_if_needed(final_md, doc)
+            except Exception as e:
+                print(f"[WARN] PDF reference recovery skipped: {e}", flush=True)
         try:
             # Run one final text-level normalization after image/caption/title repairs.
             # Several repair stages can legitimately reinsert blank lines or raw caption
@@ -565,7 +577,11 @@ class PDFConverter:
         out_file = save_dir / "output.md"
         auto_repair_result: dict[str, Any] = {}
         try:
-            final_md, auto_repair_result = self._auto_repair_final_markdown(final_md, out_file=out_file)
+            final_md, auto_repair_result = self._auto_repair_final_markdown(
+                final_md,
+                out_file=out_file,
+                allow_source_pdf_inference=not partial_range,
+            )
         except Exception as e:
             print(f"[WARN] conversion quality auto-repair skipped: {e}", flush=True)
         auto_repair_result = self._merge_auto_repair_results(source_repair_result, auto_repair_result)
@@ -577,7 +593,8 @@ class PDFConverter:
                 out_file,
                 auto_repair_result=auto_repair_result,
                 auto_repair_enabled=self._quality_auto_repair_enabled(),
-                source_pdf_path=self.cfg.pdf_path,
+                source_pdf_path=self.cfg.pdf_path if not partial_range else None,
+                allow_source_pdf_inference=not partial_range,
             )
             print(f"[OK] conversion quality result saved to {Path(sidecar.get('md_path') or out_file).parent / 'conversion_quality_result.json'}", flush=True)
         except Exception as e:
@@ -1383,10 +1400,21 @@ class PDFConverter:
             "regression_reasons": regressions,
         }
 
-    def _auto_repair_final_markdown(self, md: str, *, out_file: Path) -> tuple[str, dict[str, Any]]:
+    def _auto_repair_final_markdown(
+        self,
+        md: str,
+        *,
+        out_file: Path,
+        allow_source_pdf_inference: bool = True,
+    ) -> tuple[str, dict[str, Any]]:
         if not self._quality_auto_repair_enabled():
             return md, {}
-        result = repair_markdown_text(out_file, md, source_pdf_path=self.cfg.pdf_path)
+        result = repair_markdown_text(
+            out_file,
+            md,
+            source_pdf_path=self.cfg.pdf_path if allow_source_pdf_inference else None,
+            allow_source_pdf_inference=allow_source_pdf_inference,
+        )
         if bool(result.get("changed")):
             applied = ", ".join(str(x) for x in list(result.get("applied") or []) if str(x or "").strip())
             print(f"[OK] conversion quality auto-repair applied: {applied or 'safe repairs'}", flush=True)

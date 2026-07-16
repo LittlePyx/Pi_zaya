@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from kb.converter.config import ConvertConfig
 from kb.converter.pipeline import PDFConverter
+import kb.converter.page_local_pipeline as page_local_pipeline
 
 
 def _make_converter(tmp_path):
@@ -274,7 +277,10 @@ def test_ultra_fast_timeout_uses_local_only_extraction_fallback(tmp_path, monkey
     converter.llm_worker = dummy
     calls = {"local_only": 0, "regular": 0}
 
-    def _local_only(page, *, page_index, pdf_path, assets_dir):
+    def _local_only(converter_arg, page, *, page_index, pdf_path, assets_dir, allow_llm_enhance, safe_complex_fallback):
+        assert converter_arg is converter
+        assert allow_llm_enhance is False
+        assert safe_complex_fallback is True
         calls["local_only"] += 1
         return "LOCAL_ONLY_MD"
 
@@ -282,7 +288,7 @@ def test_ultra_fast_timeout_uses_local_only_extraction_fallback(tmp_path, monkey
         calls["regular"] += 1
         raise AssertionError("timeout fallback must not enter LLM-enhanced extraction")
 
-    monkeypatch.setattr(converter, "_process_page_local_only", _local_only)
+    monkeypatch.setattr(page_local_pipeline, "process_page", _local_only)
     monkeypatch.setattr(converter, "_process_page", _regular)
 
     out = converter._convert_page_with_vision_guardrails(
@@ -298,6 +304,51 @@ def test_ultra_fast_timeout_uses_local_only_extraction_fallback(tmp_path, monkey
     )
 
     assert out == "LOCAL_ONLY_MD"
+    assert calls == {"local_only": 1, "regular": 0}
+
+
+@pytest.mark.parametrize("speed_mode", ["ultra_fast", "normal"])
+@pytest.mark.parametrize("error_code", ["timeout", "rate_limited", "circuit_open"])
+def test_vision_health_failures_use_safe_local_extraction_without_retry(
+    tmp_path,
+    monkeypatch,
+    speed_mode,
+    error_code,
+):
+    converter = _make_converter(tmp_path)
+    dummy = _DummyLLMWorker([None, "SHOULD_NOT_RETRY"])
+    dummy.get_last_vl_error_code = lambda: error_code
+    converter.llm_worker = dummy
+    calls = {"local_only": 0, "regular": 0}
+
+    def _local_only(converter_arg, page, *, page_index, pdf_path, assets_dir, allow_llm_enhance, safe_complex_fallback):
+        assert converter_arg is converter
+        assert allow_llm_enhance is False
+        assert safe_complex_fallback is True
+        calls["local_only"] += 1
+        return "LOCAL_ONLY_MD"
+
+    def _regular(page, *, page_index, pdf_path, assets_dir):
+        calls["regular"] += 1
+        raise AssertionError("vision health failures must not enter LLM-enhanced extraction")
+
+    monkeypatch.setattr(page_local_pipeline, "process_page", _local_only)
+    monkeypatch.setattr(converter, "_process_page", _regular)
+
+    out = converter._convert_page_with_vision_guardrails(
+        png_bytes=b"fake",
+        page=object(),
+        page_index=0,
+        total_pages=4,
+        page_hint="",
+        speed_mode=speed_mode,
+        is_references_page=False,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+    )
+
+    assert out == "LOCAL_ONLY_MD"
+    assert len(dummy.calls) == 1
     assert calls == {"local_only": 1, "regular": 0}
 
 

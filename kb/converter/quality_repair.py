@@ -625,12 +625,19 @@ def write_conversion_quality_result(
     auto_repair_result: dict[str, Any] | None = None,
     auto_repair_enabled: bool = True,
     source_pdf_path: Path | str | None = None,
+    allow_source_pdf_inference: bool = True,
 ) -> dict[str, Any]:
     path = Path(md_path).expanduser()
     report_path = conversion_quality_result_path(path)
     text = path.read_text(encoding="utf-8", errors="replace")
     metrics = _metric_view(path, text)
-    source_quality = _source_quality_view(path, text, metrics, source_pdf_path=source_pdf_path)
+    source_quality = _source_quality_view(
+        path,
+        text,
+        metrics,
+        source_pdf_path=source_pdf_path,
+        allow_source_pdf_inference=allow_source_pdf_inference,
+    )
     repair = dict(auto_repair_result or {})
     repair.pop("repaired_text", None)
     remaining = [
@@ -1938,8 +1945,13 @@ def _source_quality_view(
     metrics: dict[str, Any],
     *,
     source_pdf_path: Path | str | None = None,
+    allow_source_pdf_inference: bool = True,
 ) -> dict[str, Any]:
-    pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
+    pdf_path = (
+        Path(source_pdf_path).expanduser()
+        if source_pdf_path
+        else (_guess_source_pdf_for_md(md_path) if allow_source_pdf_inference else None)
+    )
     pdf_stats = _pdf_source_stats(pdf_path)
     profile = _document_profile(md_path, text)
     ref_layout = _reference_layout(text)
@@ -3241,11 +3253,19 @@ def repair_markdown_text(
     issue_codes: list[str] | None = None,
     default_to_postprocess: bool = False,
     source_pdf_path: Path | str | None = None,
+    allow_source_pdf_inference: bool = True,
 ) -> dict[str, Any]:
     path = Path(md_path).expanduser()
     before_text = str(md_text or "")
     before_metrics = _metric_view(path, before_text)
-    before_source_quality = _source_quality_view(path, before_text, before_metrics, source_pdf_path=source_pdf_path)
+    source_repairs_enabled = bool(source_pdf_path) or bool(allow_source_pdf_inference)
+    before_source_quality = _source_quality_view(
+        path,
+        before_text,
+        before_metrics,
+        source_pdf_path=source_pdf_path,
+        allow_source_pdf_inference=allow_source_pdf_inference,
+    )
     requested_codes = [str(code or "").strip().lower() for code in list(issue_codes or []) if str(code or "").strip()]
     before_issue_codes = _issue_codes_from_context(path, before_text, before_metrics, source_quality=before_source_quality)
     active_codes = requested_codes or before_issue_codes
@@ -3261,15 +3281,17 @@ def repair_markdown_text(
 
     if active_strategy_names:
         if "ensure_page_anchor" in active_strategy_names:
-            text, changed = _recover_page_markers_from_pdf_text(text, path, source_pdf_path)
-            if changed:
-                applied.append("recover_page_markers_from_pdf")
-            else:
+            changed = False
+            if source_repairs_enabled:
+                text, changed = _recover_page_markers_from_pdf_text(text, path, source_pdf_path)
+                if changed:
+                    applied.append("recover_page_markers_from_pdf")
+            if not changed:
                 text, changed = _ensure_page_anchor(text)
                 if changed:
                     applied.append("ensure_page_anchor")
 
-        if "realign_page_markers_from_pdf" in active_strategy_names:
+        if source_repairs_enabled and "realign_page_markers_from_pdf" in active_strategy_names:
             text, changed = _realign_page_markers_from_pdf_text(text, path, source_pdf_path)
             if changed:
                 applied.append("realign_page_markers_from_pdf")
@@ -3289,7 +3311,7 @@ def repair_markdown_text(
             if changed:
                 applied.append("figure_metadata_captions")
 
-        if "pdf_text_captions" in active_strategy_names:
+        if source_repairs_enabled and "pdf_text_captions" in active_strategy_names:
             text, changed = _inject_pdf_text_captions(path, text, source_pdf_path)
             if changed:
                 applied.append("pdf_text_captions")
@@ -3319,12 +3341,12 @@ def repair_markdown_text(
             if changed:
                 applied.append("normalize_heading_levels")
 
-        if "recover_missing_source_pages" in active_strategy_names:
+        if source_repairs_enabled and "recover_missing_source_pages" in active_strategy_names:
             text, changed = _recover_missing_source_pages_from_pdf_text(text, path, source_pdf_path)
             if changed:
                 applied.append("recover_missing_source_pages")
 
-        if "pdf_reference_backfill" in active_strategy_names:
+        if source_repairs_enabled and "pdf_reference_backfill" in active_strategy_names:
             text, changed = _backfill_references_from_pdf_text(text, path, source_pdf_path)
             if changed:
                 applied.append("pdf_reference_backfill")
@@ -3347,7 +3369,13 @@ def repair_markdown_text(
             applied.append("ensure_page_anchor")
 
     after_metrics = _metric_view(path, text)
-    after_source_quality = _source_quality_view(path, text, after_metrics, source_pdf_path=source_pdf_path)
+    after_source_quality = _source_quality_view(
+        path,
+        text,
+        after_metrics,
+        source_pdf_path=source_pdf_path,
+        allow_source_pdf_inference=allow_source_pdf_inference,
+    )
     after_issue_codes = _issue_codes_from_context(path, text, after_metrics, source_quality=after_source_quality)
     changed_text = text != before_text
     regression_reasons = _regression_reasons(before_text, text) if changed_text else []
@@ -3372,17 +3400,17 @@ def repair_markdown_text(
         for label in applied:
             candidate = fallback_text
             changed = False
-            if label == "recover_page_markers_from_pdf":
+            if source_repairs_enabled and label == "recover_page_markers_from_pdf":
                 candidate, changed = _recover_page_markers_from_pdf_text(fallback_text, path, source_pdf_path)
             elif label == "ensure_page_anchor":
                 candidate, changed = _ensure_page_anchor(fallback_text)
-            elif label == "realign_page_markers_from_pdf":
+            elif source_repairs_enabled and label == "realign_page_markers_from_pdf":
                 candidate, changed = _realign_page_markers_from_pdf_text(fallback_text, path, source_pdf_path)
             elif label == "normalize_page_markers":
                 candidate, changed = _normalize_page_marker_sequence(fallback_text)
             elif label == "figure_metadata_captions":
                 candidate, changed = _inject_figure_metadata_captions(path, fallback_text)
-            elif label == "pdf_text_captions":
+            elif source_repairs_enabled and label == "pdf_text_captions":
                 candidate, changed = _inject_pdf_text_captions(path, fallback_text, source_pdf_path)
             elif label == "repair_missing_image_links":
                 candidate, changed = _repair_missing_image_links(path, fallback_text)
@@ -3396,9 +3424,9 @@ def repair_markdown_text(
                 candidate, changed = _normalize_heading_level_jumps(fallback_text)
             elif label == "promote_collapsed_review_headings":
                 candidate, changed = _promote_collapsed_review_headings(fallback_text)
-            elif label == "recover_missing_source_pages":
+            elif source_repairs_enabled and label == "recover_missing_source_pages":
                 candidate, changed = _recover_missing_source_pages_from_pdf_text(fallback_text, path, source_pdf_path)
-            elif label == "pdf_reference_backfill":
+            elif source_repairs_enabled and label == "pdf_reference_backfill":
                 candidate, changed = _backfill_references_from_pdf_text(fallback_text, path, source_pdf_path)
             if not changed or candidate == fallback_text:
                 continue
@@ -3413,7 +3441,13 @@ def repair_markdown_text(
                 text = fallback_text
                 final_applied = fallback_applied
                 after_metrics = _metric_view(path, text)
-                after_source_quality = _source_quality_view(path, text, after_metrics, source_pdf_path=source_pdf_path)
+                after_source_quality = _source_quality_view(
+                    path,
+                    text,
+                    after_metrics,
+                    source_pdf_path=source_pdf_path,
+                    allow_source_pdf_inference=allow_source_pdf_inference,
+                )
                 after_issue_codes = _issue_codes_from_context(path, text, after_metrics, source_quality=after_source_quality)
                 changed_text = True
                 regression_reasons = []

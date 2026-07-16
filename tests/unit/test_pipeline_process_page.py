@@ -7,6 +7,7 @@ from kb.converter.config import ConvertConfig, LlmConfig
 from kb.converter.models import TextBlock
 from kb.converter.pipeline import PDFConverter
 import kb.converter.page_local_pipeline as page_local_pipeline
+from kb.converter.pipeline_render_markdown import render_blocks_to_markdown
 
 
 def _make_converter(tmp_path):
@@ -30,6 +31,19 @@ class _DummyPage:
     def get_text(self, mode: str):
         assert mode == "dict"
         return {"blocks": []}
+
+
+class _EquationPixmap:
+    def save(self, path):
+        Path(path).write_bytes(b"equation-image" * 32)
+
+
+class _EquationPage(_DummyPage):
+    def __init__(self):
+        self.rect = fitz.Rect(0, 0, 600, 800)
+
+    def get_pixmap(self, **_kwargs):
+        return _EquationPixmap()
 
 
 def test_process_page_orchestrates_local_pipeline_steps(tmp_path, monkeypatch):
@@ -220,3 +234,96 @@ def test_local_only_render_disables_math_and_text_llm_calls(tmp_path, monkeypatc
 
     assert out
     assert calls == {"math": 0, "math_image": 0, "body": 0, "raw": 0}
+
+
+def test_safe_complex_fallback_requires_two_columns_and_source_formula_rect(tmp_path, monkeypatch):
+    converter = _make_converter(tmp_path)
+    page = _EquationPage()
+    left_body = TextBlock(
+        bbox=(40, 140, 275, 250),
+        text="Left-column body text continues with enough content to establish a reliable reading lane.",
+    )
+    formula = TextBlock(bbox=(100, 270, 250, 300), text="Y = sum fragments", is_math=True)
+    right_heading = TextBlock(bbox=(330, 120, 520, 145), text="3.3. Proposed Framework", heading_level="[H2]")
+    right_body = TextBlock(
+        bbox=(330, 150, 560, 260),
+        text="Right-column body text provides overlapping vertical flow and a second reliable reading lane.",
+    )
+    prepared = {
+        "blocks": [right_heading, left_body, formula, right_body],
+        "is_references_page": False,
+    }
+    monkeypatch.setattr(
+        converter,
+        "_collect_display_math_candidates",
+        lambda *args, **kwargs: [{"rect": fitz.Rect(90, 265, 270, 310), "text": "Y = sum_i X_i (3)"}],
+    )
+
+    page_local_pipeline._prepare_safe_complex_fallback(converter, prepared, page, page_index=3)
+
+    assert prepared["safe_complex_fallback"] is True
+    assert prepared["safe_formula_rects"] == [(90.0, 265.0, 270.0, 310.0)]
+    assert prepared["blocks"].index(left_body) < prepared["blocks"].index(right_heading)
+    assert prepared["blocks"].index(formula) < prepared["blocks"].index(right_body)
+
+
+def test_safe_complex_fallback_does_not_change_table_or_single_column_pages(tmp_path, monkeypatch):
+    converter = _make_converter(tmp_path)
+    page = _EquationPage()
+    monkeypatch.setattr(
+        converter,
+        "_collect_display_math_candidates",
+        lambda *args, **kwargs: [{"rect": fitz.Rect(90, 265, 270, 310), "text": "Y = X (3)"}],
+    )
+    table_prepared = {
+        "blocks": [
+            TextBlock(bbox=(40, 140, 275, 250), text="Left-column reliable text that is long enough for the layout gate."),
+            TextBlock(bbox=(330, 140, 560, 250), text="Right-column reliable text that is long enough for the layout gate."),
+            TextBlock(bbox=(40, 280, 560, 380), text="[TABLE]", is_table=True, table_markdown="| A |\n| --- |\n| 1 |"),
+        ],
+        "is_references_page": False,
+    }
+    page_local_pipeline._prepare_safe_complex_fallback(converter, table_prepared, page, page_index=0)
+    assert "safe_complex_fallback" not in table_prepared
+
+    single_column_prepared = {
+        "blocks": [
+            TextBlock(bbox=(80, 120, 520, 260), text="A reliable single-column paragraph with an equation below it."),
+            TextBlock(bbox=(180, 280, 420, 315), text="Y = X", is_math=True),
+        ],
+        "is_references_page": False,
+    }
+    page_local_pipeline._prepare_safe_complex_fallback(converter, single_column_prepared, page, page_index=0)
+    assert "safe_complex_fallback" not in single_column_prepared
+
+
+def test_safe_complex_render_uses_one_equation_image_and_never_emits_fragmented_latex(tmp_path):
+    converter = _make_converter(tmp_path)
+    page = _EquationPage()
+    blocks = [
+        TextBlock(bbox=(100, 270, 135, 290), text="N X", is_math=True),
+        TextBlock(bbox=(120, 280, 235, 305), text="X_i + Z", is_math=True),
+        TextBlock(bbox=(245, 280, 270, 300), text="(3)"),
+        TextBlock(
+            bbox=(40, 330, 275, 360),
+            text="where the source text remains readable even though it was misclassified as math",
+            is_math=True,
+        ),
+    ]
+
+    out = render_blocks_to_markdown(
+        converter,
+        blocks,
+        3,
+        page=page,
+        assets_dir=tmp_path,
+        allow_llm_calls=False,
+        safe_complex_fallback=True,
+        safe_formula_rects=[(90, 265, 275, 315)],
+    )
+
+    assert out.count("![Equation](./assets/page_4_eq_1.png)") == 1
+    assert "<!-- kb:conversion_retry kind=equation page=4 -->" in out
+    assert "where the source text remains readable" in out
+    assert "$$" not in out
+    assert (tmp_path / "page_4_eq_1.png").stat().st_size > 256

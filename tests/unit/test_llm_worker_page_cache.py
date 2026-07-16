@@ -283,3 +283,74 @@ def test_multiple_workers_share_process_level_inflight_gate(tmp_path, monkeypatc
     assert errs == []
     assert state["calls"] == 2
     assert state["max_active"] == 1
+
+
+def test_ultra_fast_vision_circuit_skips_later_requests_after_timeouts(tmp_path, monkeypatch):
+    monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
+    monkeypatch.setenv("KB_PDF_VISION_PAGE_CACHE", "0")
+    monkeypatch.setenv("KB_PDF_VISION_CIRCUIT_BREAKER", "1")
+    monkeypatch.setenv("KB_PDF_VISION_CIRCUIT_ULTRA_FAST_THRESHOLD", "2")
+    monkeypatch.setenv("KB_PDF_VISION_CIRCUIT_ULTRA_FAST_COOLDOWN_S", "60")
+    LLMWorker._reset_shared_vision_circuit_for_tests()
+    worker = LLMWorker(_make_cfg(tmp_path))
+    calls = 0
+
+    def _timeout(**kwargs):
+        nonlocal calls
+        calls += 1
+        raise TimeoutError("simulated provider timeout")
+
+    monkeypatch.setattr(worker, "_llm_create", _timeout)
+
+    outputs = [
+        worker.call_llm_page_to_markdown(
+            f"page-{page}".encode(),
+            page_number=page,
+            total_pages=6,
+            speed_mode="ultra_fast",
+            is_references_page=False,
+        )
+        for page in range(6)
+    ]
+
+    assert outputs == [None] * 6
+    assert calls == 2
+    assert worker.get_last_vl_error_code() == "circuit_open"
+
+
+def test_ordinary_vision_business_error_does_not_open_circuit(tmp_path, monkeypatch):
+    monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
+    monkeypatch.setenv("KB_PDF_VISION_PAGE_CACHE", "0")
+    monkeypatch.setenv("KB_PDF_VISION_CIRCUIT_BREAKER", "1")
+    monkeypatch.setenv("KB_PDF_VISION_CIRCUIT_ULTRA_FAST_THRESHOLD", "1")
+    LLMWorker._reset_shared_vision_circuit_for_tests()
+    worker = LLMWorker(_make_cfg(tmp_path))
+    calls = 0
+
+    def _business_then_success(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("ordinary document validation error")
+        return _FakeResp("recovered markdown")
+
+    monkeypatch.setattr(worker, "_llm_create", _business_then_success)
+
+    first = worker.call_llm_page_to_markdown(
+        b"page-a",
+        page_number=0,
+        total_pages=2,
+        speed_mode="ultra_fast",
+        is_references_page=False,
+    )
+    second = worker.call_llm_page_to_markdown(
+        b"page-b",
+        page_number=1,
+        total_pages=2,
+        speed_mode="ultra_fast",
+        is_references_page=False,
+    )
+
+    assert first is None
+    assert second == "recovered markdown"
+    assert calls == 2

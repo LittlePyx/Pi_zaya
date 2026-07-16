@@ -19,6 +19,12 @@ from .config import ConvertConfig
 from .models import TextBlock
 from .text_utils import _normalize_text
 from .tables import _is_markdown_table_sane
+from .vision_circuit_breaker import (
+    VisionCircuitBreaker,
+    build_vision_circuit_key,
+    load_vision_circuit_policy,
+    vision_circuit_failure_kind,
+)
 from .post_processing import (
     fix_math_markdown,
     _normalize_math_for_typora,
@@ -74,6 +80,7 @@ class LLMWorker:
     _shared_page_ocr_cache: dict[str, str] = {}
     _shared_llm_gate_lock = threading.Lock()
     _shared_llm_gate: _SharedInflightLimiter | None = None
+    _shared_vision_circuit = VisionCircuitBreaker()
 
     @classmethod
     def _get_or_create_shared_llm_gate(cls, limit: int) -> _SharedInflightLimiter:
@@ -90,6 +97,10 @@ class LLMWorker:
     def _reset_shared_llm_gate_for_tests(cls, limit: int = 8) -> None:
         with cls._shared_llm_gate_lock:
             cls._shared_llm_gate = _SharedInflightLimiter(limit)
+
+    @classmethod
+    def _reset_shared_vision_circuit_for_tests(cls, *, clock=None) -> None:
+        cls._shared_vision_circuit = VisionCircuitBreaker(clock=clock)
 
     def __init__(self, cfg: ConvertConfig):
         self.cfg = cfg
@@ -959,6 +970,26 @@ class LLMWorker:
                 # hidden SDK retry multiplying the fast-page latency.
                 "_max_retries": 0,
             }
+        circuit_policy = load_vision_circuit_policy(speed_mode)
+        circuit_key = build_vision_circuit_key(
+            base_url=str(getattr(self.cfg.llm, "base_url", "") or ""),
+            model=str(getattr(self.cfg.llm, "model", "") or ""),
+            speed_mode=speed_mode,
+        )
+        circuit_decision = self._shared_vision_circuit.before_request(circuit_key, circuit_policy)
+        if not circuit_decision.allow_request:
+            self._set_last_vl_error_code("circuit_open")
+            retry_after = (
+                f", retry_in={float(circuit_decision.retry_after_s):.1f}s"
+                if float(circuit_decision.retry_after_s) > 0
+                else ""
+            )
+            print(
+                f"[VISION_CIRCUIT] skip page={page_number + 1} mode={circuit_key[2]} "
+                f"model={circuit_key[1]} reason={circuit_decision.reason}{retry_after}",
+                flush=True,
+            )
+            return None
         try:
             resp = self._llm_create(
                 messages=[
@@ -983,9 +1014,22 @@ class LLMWorker:
                 **fast_timeout_kwargs,
             )
         except Exception as e:
-            if isinstance(e, TimeoutError):
-                self._set_last_vl_error_code("timeout")
+            failure_kind = vision_circuit_failure_kind(e)
+            if failure_kind:
+                opened = self._shared_vision_circuit.record_failure(
+                    circuit_key,
+                    failure_kind=failure_kind,
+                    policy=circuit_policy,
+                )
+                self._set_last_vl_error_code(failure_kind)
+                if opened:
+                    print(
+                        f"[VISION_CIRCUIT] opened mode={circuit_key[2]} model={circuit_key[1]} "
+                        f"after={failure_kind} cooldown={float(circuit_policy.cooldown_s):.1f}s",
+                        flush=True,
+                    )
             else:
+                self._shared_vision_circuit.record_neutral(circuit_key)
                 self._set_last_vl_error_code("error")
             error_str = str(e)
             error_msg = f"[VISION_PAGE] error page={page_number + 1} err={e!a}"
@@ -1023,8 +1067,10 @@ class LLMWorker:
                 print("[VISION_PAGE] API rate limited (429). Retry later.", flush=True)
             else:
                 print(f"{error_msg}", flush=True)
-            
+
             return None
+
+        self._shared_vision_circuit.record_success(circuit_key)
 
         out = (resp.choices[0].message.content or "").strip()
         self._mark_vision_message_format_supported(True)

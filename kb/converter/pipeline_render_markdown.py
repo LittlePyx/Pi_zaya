@@ -57,6 +57,8 @@ def render_blocks_to_markdown(
     assets_dir: Path | None = None,
     is_references_page: bool = False,
     allow_llm_calls: bool = True,
+    safe_complex_fallback: bool = False,
+    safe_formula_rects: list[tuple[float, float, float, float]] | None = None,
 ) -> str:
     import time
     render_start = time.time()
@@ -231,9 +233,13 @@ def render_blocks_to_markdown(
 
         return "\n".join(out_lines).strip()
 
-    def _save_eq_image(bbox: tuple[float, float, float, float]) -> str | None:
+    def _save_eq_image(
+        bbox: tuple[float, float, float, float],
+        *,
+        force: bool = False,
+    ) -> str | None:
         nonlocal eq_img_idx
-        if (not self.cfg.eq_image_fallback) or (page is None) or (assets_dir is None):
+        if ((not self.cfg.eq_image_fallback) and (not force)) or (page is None) or (assets_dir is None):
             return None
         try:
             assets_dir.mkdir(parents=True, exist_ok=True)
@@ -245,8 +251,8 @@ def render_blocks_to_markdown(
             return None
         # Pad a bit to include equation number / surrounding symbols
         try:
-            pad_x = max(2.0, float(r.width) * 0.04)
-            pad_y = max(2.0, float(r.height) * 0.10)
+            pad_x = max(2.0, float(r.width) * (0.12 if force else 0.04))
+            pad_y = max(8.0 if force else 2.0, float(r.height) * (0.35 if force else 0.10))
             clip = fitz.Rect(
                 max(0.0, float(r.x0) - pad_x),
                 max(0.0, float(r.y0) - pad_y),
@@ -261,7 +267,10 @@ def render_blocks_to_markdown(
         img_name = f"page_{page_index+1}_eq_{eq_img_idx}.png"
         img_path = assets_dir / img_name
         try:
-            pix = page.get_pixmap(clip=clip, dpi=int(getattr(self, "dpi", 200) or 200))
+            dpi = int(getattr(self, "dpi", 200) or 200)
+            if force:
+                dpi = max(240, dpi)
+            pix = page.get_pixmap(clip=clip, dpi=dpi)
             pix.save(img_path)
             if (not img_path.exists()) or (img_path.stat().st_size < 256):
                 return None
@@ -445,6 +454,41 @@ def render_blocks_to_markdown(
         return r
     
     out = []
+    safe_regions: list["fitz.Rect"] = []
+    if safe_complex_fallback and fitz is not None:
+        for raw_rect in safe_formula_rects or []:
+            try:
+                rect = fitz.Rect(raw_rect)
+            except Exception:
+                continue
+            if rect.width > 2 and rect.height > 2:
+                safe_regions.append(rect)
+    safe_regions_emitted: set[int] = set()
+
+    def _safe_formula_region_index(block: TextBlock) -> int | None:
+        if not safe_regions:
+            return None
+        try:
+            block_rect = fitz.Rect(block.bbox)
+        except Exception:
+            return None
+        if block_rect.width <= 0 or block_rect.height <= 0:
+            return None
+        best_idx: int | None = None
+        best_score = 0.0
+        for idx, region in enumerate(safe_regions):
+            try:
+                inter = block_rect & region
+                inter_area = max(0.0, float(inter.width) * float(inter.height))
+                denom = max(1.0, min(float(block_rect.width * block_rect.height), float(region.width * region.height)))
+                score = inter_area / denom
+            except Exception:
+                score = 0.0
+            if score > best_score:
+                best_idx = idx
+                best_score = score
+        return best_idx if best_score >= 0.08 else None
+
     try:
         if bool(int(os.environ.get("KB_PDF_DEBUG_MATH_BLOCKS", "0") or "0")):
             print(f"[DEBUG] Page {page_index+1} blocks dump (n={len(blocks)}):", flush=True)
@@ -469,6 +513,30 @@ def render_blocks_to_markdown(
     block_times = []
     for block_idx, b in enumerate(blocks):
         block_start = time.time()
+        if safe_complex_fallback:
+            safe_region_idx = _safe_formula_region_index(b)
+            text_for_safe_check = re.sub(r"\s+", " ", str(getattr(b, "text", "") or "")).strip()
+            is_equation_number = bool(re.fullmatch(r"\(?\s*\d{1,4}\s*\)?", text_for_safe_check))
+            if safe_region_idx is not None and (bool(getattr(b, "is_math", False)) or is_equation_number):
+                if safe_region_idx not in safe_regions_emitted:
+                    img_md = _save_eq_image(tuple(safe_regions[safe_region_idx]), force=True)
+                    if img_md:
+                        out.append(img_md)
+                        out.append(f"<!-- kb:conversion_retry kind=equation page={page_index+1} -->")
+                        out.append("")
+                    else:
+                        out.append("Equation region preserved in the source PDF; retry conversion for editable math.")
+                        out.append("")
+                    safe_regions_emitted.add(safe_region_idx)
+                continue
+            if bool(getattr(b, "is_math", False)):
+                # The source-backed detector did not validate this as a display
+                # equation. Preserve its extracted text without inventing LaTeX.
+                if text_for_safe_check:
+                    out.append(_normalize_text(text_for_safe_check))
+                    out.append(f"<!-- kb:conversion_retry kind=math_text page={page_index+1} -->")
+                    out.append("")
+                continue
         # Check if this is an image block (images are stored as text blocks with markdown image syntax)
         if b.text and (b.text.startswith("![") or re.match(r'^!\[.*?\]\(.*?\)', b.text)):
             # This is an image block - output it directly

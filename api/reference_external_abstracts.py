@@ -62,6 +62,181 @@ def _summary_from_crossref_abstract(
     return summary
 
 
+def _europe_pmc_work_by_doi(doi: str) -> dict:
+    d = _normalize_doi_like(doi)
+    if not d:
+        return {"_kb_fetch_status": "missing_identity"}
+    try:
+        resp = requests.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            params={
+                "query": f'DOI:"{d}"',
+                "format": "json",
+                "pageSize": 3,
+                "resultType": "core",
+            },
+            headers={"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"},
+            timeout=4.5,
+        )
+    except Exception:
+        return {"_kb_fetch_status": "failed"}
+    if resp.status_code != 200:
+        return {
+            "_kb_fetch_status": "not_found" if resp.status_code == 404 else "failed",
+            "_kb_http_status": int(resp.status_code or 0),
+        }
+    try:
+        data = resp.json()
+    except Exception:
+        return {"_kb_fetch_status": "failed"}
+    result_list = data.get("resultList") if isinstance(data, dict) else {}
+    rows = result_list.get("result") if isinstance(result_list, dict) else []
+    if not isinstance(rows, list):
+        return {"_kb_fetch_status": "failed"}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if _normalize_doi_like(str(row.get("doi") or "")) == d:
+            return {**row, "_kb_fetch_status": "ready"}
+    return {"_kb_fetch_status": "not_provided"}
+
+
+def _summary_from_europe_pmc_abstract(
+    meta: dict,
+    *,
+    europe_pmc_work_by_doi: Callable[[str], dict],
+    title_similarity: Callable[[str, str], float],
+) -> str:
+    doi_like = str((meta or {}).get("doi") or (meta or {}).get("doi_url") or "").strip()
+    doi = _normalize_doi_like(doi_like)
+    if not doi:
+        return ""
+    try:
+        work = europe_pmc_work_by_doi(doi)
+    except Exception:
+        work = {"_kb_fetch_status": "failed"}
+    if not isinstance(work, dict):
+        work = {"_kb_fetch_status": "failed"}
+    provider_status = dict(meta.get("summary_fetch_providers") or {})
+    fetch_status = str(work.get("_kb_fetch_status") or "").strip().lower()
+    provider_status["europe_pmc"] = fetch_status or "failed"
+    meta["summary_fetch_providers"] = provider_status
+    if provider_status["europe_pmc"] != "ready":
+        return ""
+    found_doi = _normalize_doi_like(str(work.get("doi") or ""))
+    if found_doi != doi:
+        provider_status["europe_pmc"] = "identity_mismatch"
+        meta["summary_fetch_providers"] = provider_status
+        return ""
+    title = str((meta or {}).get("title") or "").strip()
+    found_title = str(work.get("title") or "").strip()
+    if title and found_title and title_similarity(title, found_title) < 0.78:
+        provider_status["europe_pmc"] = "identity_mismatch"
+        meta["summary_fetch_providers"] = provider_status
+        return ""
+    abstract = _valid_external_abstract_candidate(
+        str(work.get("abstractText") or ""),
+        title=title or found_title,
+    )
+    if not abstract:
+        provider_status["europe_pmc"] = "not_provided"
+        meta["summary_fetch_providers"] = provider_status
+    return abstract
+
+
+def _datacite_doi_record(doi: str) -> dict:
+    d = _normalize_doi_like(doi)
+    if not d:
+        return {"_kb_fetch_status": "missing_identity"}
+    try:
+        resp = requests.get(
+            f"https://api.datacite.org/dois/{quote(d, safe='')}",
+            headers={"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"},
+            timeout=4.5,
+        )
+    except Exception:
+        return {"_kb_fetch_status": "failed"}
+    if resp.status_code != 200:
+        return {
+            "_kb_fetch_status": "not_found" if resp.status_code == 404 else "failed",
+            "_kb_http_status": int(resp.status_code or 0),
+        }
+    try:
+        data = resp.json()
+    except Exception:
+        return {"_kb_fetch_status": "failed"}
+    item = data.get("data") if isinstance(data, dict) else {}
+    attrs = item.get("attributes") if isinstance(item, dict) else {}
+    if not isinstance(attrs, dict):
+        return {"_kb_fetch_status": "failed"}
+    return {**attrs, "_kb_fetch_status": "ready"}
+
+
+def _summary_from_datacite_description(
+    meta: dict,
+    *,
+    datacite_doi_record: Callable[[str], dict],
+    title_similarity: Callable[[str, str], float],
+) -> str:
+    doi_like = str((meta or {}).get("doi") or (meta or {}).get("doi_url") or "").strip()
+    doi = _normalize_doi_like(doi_like)
+    if not doi:
+        return ""
+    crossref_status = str(
+        (meta.get("summary_fetch_providers") or {}).get("crossref")
+        if isinstance(meta.get("summary_fetch_providers"), dict)
+        else ""
+    ).strip().lower()
+    if crossref_status in {"ready", "not_provided"}:
+        provider_status = dict(meta.get("summary_fetch_providers") or {})
+        provider_status["datacite"] = "not_applicable"
+        meta["summary_fetch_providers"] = provider_status
+        return ""
+    try:
+        work = datacite_doi_record(doi)
+    except Exception:
+        work = {"_kb_fetch_status": "failed"}
+    if not isinstance(work, dict):
+        work = {"_kb_fetch_status": "failed"}
+    provider_status = dict(meta.get("summary_fetch_providers") or {})
+    fetch_status = str(work.get("_kb_fetch_status") or "").strip().lower()
+    provider_status["datacite"] = fetch_status or "failed"
+    meta["summary_fetch_providers"] = provider_status
+    if provider_status["datacite"] != "ready":
+        return ""
+    found_doi = _normalize_doi_like(str(work.get("doi") or ""))
+    if found_doi != doi:
+        provider_status["datacite"] = "identity_mismatch"
+        meta["summary_fetch_providers"] = provider_status
+        return ""
+    title = str((meta or {}).get("title") or "").strip()
+    titles = work.get("titles") if isinstance(work.get("titles"), list) else []
+    found_title = ""
+    for row in titles:
+        if isinstance(row, dict) and str(row.get("title") or "").strip():
+            found_title = str(row.get("title") or "").strip()
+            break
+    if title and found_title and title_similarity(title, found_title) < 0.78:
+        provider_status["datacite"] = "identity_mismatch"
+        meta["summary_fetch_providers"] = provider_status
+        return ""
+    descriptions = work.get("descriptions") if isinstance(work.get("descriptions"), list) else []
+    for row in descriptions:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("descriptionType") or "").strip().lower() != "abstract":
+            continue
+        abstract = _valid_external_abstract_candidate(
+            str(row.get("description") or ""),
+            title=title or found_title,
+        )
+        if abstract:
+            return abstract
+    provider_status["datacite"] = "not_provided"
+    meta["summary_fetch_providers"] = provider_status
+    return ""
+
+
 def _summary_from_openalex_abstract(meta: dict, *, openalex_work_by_doi: Callable[[str], dict | None]) -> str:
     doi_like = str((meta or {}).get("doi") or (meta or {}).get("doi_url") or "").strip()
     doi = _normalize_doi_like(doi_like)

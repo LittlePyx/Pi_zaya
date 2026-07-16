@@ -79,6 +79,52 @@ def test_convert_pipeline_fast_mode(sample_pdf, output_dir):
     assert (output_dir / "assets" / "reference_index.json").exists()
 
 
+def test_convert_partial_page_range_does_not_recover_unselected_pdf_pages(tmp_path):
+    pdf_path = tmp_path / "partial-range-source.pdf"
+    output_dir = tmp_path / "partial-output"
+    page_texts = [
+        "SELECTED PAGE CONTENT " + " ".join(f"selected{idx:03d}" for idx in range(80)),
+        "SECOND PAGE FORBIDDEN CONTENT " + " ".join(f"second{idx:03d}" for idx in range(80)),
+        "THIRD PAGE FORBIDDEN CONTENT " + " ".join(f"third{idx:03d}" for idx in range(80)),
+        "References FOURTH PAGE FORBIDDEN CONTENT " + " ".join(
+            f"reference{idx:03d}" for idx in range(80)
+        ),
+    ]
+    doc = fitz.open()
+    for text in page_texts:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 560, 760), text, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    cfg = ConvertConfig(
+        pdf_path=pdf_path,
+        out_dir=output_dir,
+        translate_zh=False,
+        start_page=0,
+        end_page=1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+        speed_mode="no_llm",
+    )
+    converter = PDFConverter(cfg)
+
+    converter.convert(str(pdf_path), str(output_dir))
+
+    content = (output_dir / "output.md").read_text(encoding="utf-8")
+    assert "SELECTED PAGE CONTENT" in content
+    assert "<!-- kb_page: 1 -->" in content
+    assert "<!-- kb_page: 2 -->" not in content
+    assert "SECOND PAGE FORBIDDEN CONTENT" not in content
+    assert "THIRD PAGE FORBIDDEN CONTENT" not in content
+    assert "FOURTH PAGE FORBIDDEN CONTENT" not in content
+
+    quality = json.loads((output_dir / "conversion_quality_result.json").read_text(encoding="utf-8"))
+    assert quality["source_quality"]["source_pdf_available"] is False
+    assert quality["source_quality"]["pdf_page_count"] == 0
+
+
 def test_ensure_page_marker_inserts_and_normalizes_marker():
     assert PDFConverter._ensure_page_marker("# Page body", 2).startswith("<!-- kb_page: 3 -->")
     assert PDFConverter._ensure_page_marker("<!-- kb_page: 99 -->\n\n# Page body", 2).startswith("<!-- kb_page: 3 -->")

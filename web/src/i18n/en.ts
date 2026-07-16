@@ -990,6 +990,8 @@ export const S = {
   shelf_summary_failed_retry: 'Summary fetch failed. Click to retry',
   shelf_summary_source_fulltext: 'Full text',
   shelf_summary_source_crossref: 'Crossref abstract',
+  shelf_summary_source_datacite: 'DataCite abstract',
+  shelf_summary_source_europe_pmc: 'Europe PMC abstract',
   shelf_summary_source_openalex: 'OpenAlex abstract',
   shelf_summary_source_semantic_scholar: 'Semantic Scholar abstract',
   shelf_summary_source_doi_landing_page: 'Publisher page',

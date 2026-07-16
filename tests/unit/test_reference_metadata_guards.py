@@ -3,9 +3,17 @@ import types
 from pathlib import Path
 
 import api.reference_ui as reference_ui
+import pytest
 from api.reference_ui import _ensure_summary_line, _merge_meta_prefer_richer, enrich_citation_detail_meta
 from ui.chat_widgets import _normalize_math_markdown
 from ui import refs_renderer
+
+
+@pytest.fixture(autouse=True)
+def _disable_unmocked_external_abstract_requests(monkeypatch):
+    """Keep unit tests deterministic when they exercise a later provider."""
+    monkeypatch.setattr(reference_ui, "_summary_from_datacite_description", lambda meta: "")
+    monkeypatch.setattr(reference_ui, "_summary_from_europe_pmc_abstract", lambda meta: "")
 
 
 def test_normalize_math_markdown_protects_table_inline_math_pipes():

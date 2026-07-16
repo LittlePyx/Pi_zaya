@@ -17,6 +17,8 @@ def _ensure_summary_line(
     translate_summary_to_zh: Callable[[str], str],
     attach_summary_quality: Callable[[dict], dict],
     summary_from_crossref_abstract: Callable[[dict], str],
+    summary_from_datacite_description: Callable[[dict], str],
+    summary_from_europe_pmc_abstract: Callable[[dict], str],
     summary_from_openalex_abstract: Callable[[dict], str],
     summary_from_semantic_scholar_abstract: Callable[[dict], str],
     summary_from_doi_landing_page: Callable[[dict], str],
@@ -58,6 +60,24 @@ def _ensure_summary_line(
             out["summary_source"] = "abstract"
             out["summary_generation"] = generation or "translated_abstract"
             out["summary_provider"] = "crossref"
+            out["summary_fetch_status"] = "ready"
+            return attach_summary_quality(out)
+        datacite_line = summary_from_datacite_description(out)
+        if datacite_line:
+            final_line, generation = finalize_abstract_summary_line(title=title, abstract_text=datacite_line)
+            out["summary_line"] = final_line or translate_summary_to_zh(datacite_line)
+            out["summary_source"] = "abstract"
+            out["summary_generation"] = generation or "translated_abstract"
+            out["summary_provider"] = "datacite"
+            out["summary_fetch_status"] = "ready"
+            return attach_summary_quality(out)
+        europe_pmc_line = summary_from_europe_pmc_abstract(out)
+        if europe_pmc_line:
+            final_line, generation = finalize_abstract_summary_line(title=title, abstract_text=europe_pmc_line)
+            out["summary_line"] = final_line or translate_summary_to_zh(europe_pmc_line)
+            out["summary_source"] = "abstract"
+            out["summary_generation"] = generation or "translated_abstract"
+            out["summary_provider"] = "europe_pmc"
             out["summary_fetch_status"] = "ready"
             return attach_summary_quality(out)
         openalex_line = summary_from_openalex_abstract(out)

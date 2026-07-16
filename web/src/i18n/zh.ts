@@ -991,6 +991,8 @@ export const S = {
   shelf_summary_failed_retry: '摘要获取失败，点击重试',
   shelf_summary_source_fulltext: '全文',
   shelf_summary_source_crossref: 'Crossref 摘要',
+  shelf_summary_source_datacite: 'DataCite 摘要',
+  shelf_summary_source_europe_pmc: 'Europe PMC 摘要',
   shelf_summary_source_openalex: 'OpenAlex 摘要',
   shelf_summary_source_semantic_scholar: 'Semantic Scholar 摘要',
   shelf_summary_source_doi_landing_page: '出版商页面',

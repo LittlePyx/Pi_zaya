@@ -23,6 +23,8 @@ def _run_pipeline(meta: dict, **overrides) -> dict:
         "translate_summary_to_zh": lambda text: f"Translated: {text}",
         "attach_summary_quality": _attach,
         "summary_from_crossref_abstract": lambda meta: "",
+        "summary_from_datacite_description": lambda meta: "",
+        "summary_from_europe_pmc_abstract": lambda meta: "",
         "summary_from_openalex_abstract": lambda meta: "",
         "summary_from_semantic_scholar_abstract": lambda meta: "",
         "summary_from_doi_landing_page": lambda meta: "",
@@ -78,12 +80,14 @@ def test_external_abstract_providers_are_tried_in_order() -> None:
     out = _run_pipeline(
         {"title": "Adaptive sampling for single-pixel imaging"},
         summary_from_crossref_abstract=empty("crossref"),
+        summary_from_datacite_description=empty("datacite"),
+        summary_from_europe_pmc_abstract=empty("europe_pmc"),
         summary_from_openalex_abstract=empty("openalex"),
         summary_from_semantic_scholar_abstract=semantic,
         summary_from_doi_landing_page=empty("landing"),
     )
 
-    assert calls == ["crossref", "openalex", "semantic"]
+    assert calls == ["crossref", "datacite", "europe_pmc", "openalex", "semantic"]
     assert out["summary_provider"] == "semantic_scholar"
     assert out["summary_source"] == "abstract"
     assert out["summary_generation"] == "llm_abstract"
@@ -106,6 +110,44 @@ def test_transient_provider_failure_marks_missing_summary_retryable() -> None:
 
     assert out["summary_fetch_status"] == "retryable"
     assert out["summary_source"] == "metadata"
+
+
+def test_europe_pmc_precedes_openalex_when_crossref_has_no_abstract() -> None:
+    calls: list[str] = []
+
+    def europe_pmc(meta: dict) -> str:
+        calls.append("europe_pmc")
+        return "We present a DOI-matched biomedical imaging method and experiments show improved reconstruction."
+
+    out = _run_pipeline(
+        {"doi": "10.1000/europe-pmc", "title": "Biomedical imaging"},
+        summary_from_crossref_abstract=lambda meta: "",
+        summary_from_datacite_description=lambda meta: calls.append("datacite") or "",
+        summary_from_europe_pmc_abstract=europe_pmc,
+        summary_from_openalex_abstract=lambda meta: (_ for _ in ()).throw(
+            AssertionError("Europe PMC success should stop later providers")
+        ),
+    )
+
+    assert calls == ["datacite", "europe_pmc"]
+    assert out["summary_provider"] == "europe_pmc"
+    assert out["summary_fetch_status"] == "ready"
+
+
+def test_datacite_precedes_article_sources_for_datacite_doi() -> None:
+    out = _run_pipeline(
+        {"doi": "10.5281/zenodo.11284050", "title": "Dataset record"},
+        summary_from_crossref_abstract=lambda meta: "",
+        summary_from_datacite_description=lambda meta: (
+            "We publish a calibrated imaging dataset and describe its acquisition and validation results."
+        ),
+        summary_from_europe_pmc_abstract=lambda meta: (_ for _ in ()).throw(
+            AssertionError("DataCite success should stop later providers")
+        ),
+    )
+
+    assert out["summary_provider"] == "datacite"
+    assert out["summary_fetch_status"] == "ready"
 
 
 def test_all_connected_sources_empty_marks_summary_not_provided() -> None:

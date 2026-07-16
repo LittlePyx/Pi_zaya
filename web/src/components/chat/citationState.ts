@@ -2137,6 +2137,8 @@ export function summarySourceLabel(
   labels?: {
     fulltext: string
     crossref: string
+    datacite: string
+    europePmc: string
     openalex: string
     semanticScholar: string
     doiLandingPage: string
@@ -2151,6 +2153,8 @@ export function summarySourceLabel(
   const text = labels || {
     fulltext: '全文',
     crossref: 'Crossref 摘要',
+    datacite: 'DataCite 摘要',
+    europePmc: 'Europe PMC 摘要',
     openalex: 'OpenAlex 摘要',
     semanticScholar: 'Semantic Scholar 摘要',
     doiLandingPage: '出版商页面',
@@ -2162,6 +2166,8 @@ export function summarySourceLabel(
   if (s === 'fulltext') return text.fulltext
   if (s === 'abstract') {
     if (p === 'crossref') return text.crossref
+    if (p === 'datacite') return text.datacite
+    if (p === 'europe_pmc') return text.europePmc
     if (p === 'openalex') return text.openalex
     if (p === 'semantic_scholar') return text.semanticScholar
     if (p === 'doi_landing_page') return text.doiLandingPage

@@ -47,9 +47,13 @@ from api.reference_external_ids import (
     build_doi_url,
 )
 from api.reference_external_abstracts import (
+    _datacite_doi_record as _external_datacite_doi_record,
     _doi_landing_page_abstract as _external_doi_landing_page_abstract,
+    _europe_pmc_work_by_doi as _external_europe_pmc_work_by_doi,
     _semantic_scholar_paper_by_doi as _external_semantic_scholar_paper_by_doi,
+    _summary_from_datacite_description as _external_summary_from_datacite_description,
     _summary_from_crossref_abstract as _external_summary_from_crossref_abstract,
+    _summary_from_europe_pmc_abstract as _external_summary_from_europe_pmc_abstract,
     _summary_from_doi_landing_page as _external_summary_from_doi_landing_page,
     _summary_from_openalex_abstract as _external_summary_from_openalex_abstract,
     _summary_from_semantic_scholar_abstract as _external_summary_from_semantic_scholar_abstract,
@@ -9065,6 +9069,22 @@ def _summary_from_crossref_abstract(meta: dict) -> str:
     )
 
 
+def _summary_from_datacite_description(meta: dict) -> str:
+    return _external_summary_from_datacite_description(
+        meta,
+        datacite_doi_record=_external_datacite_doi_record,
+        title_similarity=_title_similarity_for_openalex,
+    )
+
+
+def _summary_from_europe_pmc_abstract(meta: dict) -> str:
+    return _external_summary_from_europe_pmc_abstract(
+        meta,
+        europe_pmc_work_by_doi=_external_europe_pmc_work_by_doi,
+        title_similarity=_title_similarity_for_openalex,
+    )
+
+
 def _summary_from_openalex_abstract(meta: dict) -> str:
     return _external_summary_from_openalex_abstract(meta, openalex_work_by_doi=_openalex_work_by_doi)
 
@@ -9162,6 +9182,8 @@ def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
         translate_summary_to_zh=_translate_summary_to_zh,
         attach_summary_quality=_attach_summary_quality,
         summary_from_crossref_abstract=_summary_from_crossref_abstract,
+        summary_from_datacite_description=_summary_from_datacite_description,
+        summary_from_europe_pmc_abstract=_summary_from_europe_pmc_abstract,
         summary_from_openalex_abstract=_summary_from_openalex_abstract,
         summary_from_semantic_scholar_abstract=_summary_from_semantic_scholar_abstract,
         summary_from_doi_landing_page=_summary_from_doi_landing_page,

@@ -469,6 +469,8 @@ export type ShelfSummaryDisplay = {
 export const shelfSummarySourceLabels = (S: Record<string, string>) => ({
   fulltext: S.shelf_summary_source_fulltext,
   crossref: S.shelf_summary_source_crossref,
+  datacite: S.shelf_summary_source_datacite,
+  europePmc: S.shelf_summary_source_europe_pmc,
   openalex: S.shelf_summary_source_openalex,
   semanticScholar: S.shelf_summary_source_semantic_scholar,
   doiLandingPage: S.shelf_summary_source_doi_landing_page,
