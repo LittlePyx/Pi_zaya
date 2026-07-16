@@ -6866,6 +6866,33 @@ def _safe_rmtree_child(path_obj: Path, root_obj: Path) -> None:
     except Exception:
         return
 
+
+def _safe_clear_conversion_output(path_obj: Path, root_obj: Path, *, preserve_page_cache: bool) -> None:
+    """Clear generated conversion output while optionally retaining resumable page artifacts."""
+    if not preserve_page_cache:
+        _safe_rmtree_child(path_obj, root_obj)
+        return
+    try:
+        root = Path(root_obj).expanduser().resolve()
+        target = Path(path_obj).expanduser().resolve()
+        target.relative_to(root)
+        if target == root or not target.is_dir():
+            return
+        import shutil
+
+        for child in target.iterdir():
+            if child.name == ".conversion_cache" and child.is_dir():
+                continue
+            try:
+                if child.is_symlink() or child.is_file():
+                    child.unlink(missing_ok=True)
+                elif child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+            except Exception:
+                continue
+    except Exception:
+        return
+
 def _bg_cancel_all() -> None:
     bg_cancel_all(_BG_STATE, _BG_LOCK, "Canceling current background conversion")
 
@@ -7145,7 +7172,11 @@ def _bg_worker_loop() -> None:
         try:
             md_folder = out_root / pdf.stem
             if replace and md_folder.exists():
-                _safe_rmtree_child(md_folder, out_root)
+                _safe_clear_conversion_output(
+                    md_folder,
+                    out_root,
+                    preserve_page_cache=not bool(repair_context),
+                )
 
             last_page_done = 0
             last_page_total = 0

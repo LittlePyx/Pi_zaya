@@ -116,6 +116,7 @@ from .md_analyzer import MarkdownAnalyzer
 from .pipeline_vision_direct import process_batch_vision_direct
 from .pipeline_render_markdown import render_blocks_to_markdown
 from .page_asset_cleanup import cleanup_stale_page_assets, cleanup_unreferenced_assets
+from .page_cache import PageConversionCache
 from .page_image_markdown import (
     cleanup_page_local_image_markdown,
     extract_figure_number_from_text,
@@ -422,6 +423,8 @@ class PDFConverter:
         self.seen_headings: Set[str] = set()
         # Track heading hierarchy across pages
         self.heading_stack: List[Tuple[int, str]] = []  # (level, text)
+        self._page_cache: PageConversionCache | None = None
+        self._page_cache_hits: dict[int, str] = {}
 
     @staticmethod
     def _ensure_page_marker(md: str | None, page_index: int) -> str:
@@ -462,6 +465,27 @@ class PDFConverter:
             self._cleanup_stale_page_assets(assets_dir=assets_dir, total_pages=total_pages)
         except Exception as e:
             print(f"[WARN] stale asset cleanup skipped: {e}", flush=True)
+
+        self._page_cache = PageConversionCache(
+            save_dir=save_dir,
+            pdf_path=pdf_path,
+            cfg=self.cfg,
+            total_pages=total_pages,
+        )
+        self._page_cache_hits = {}
+        if self._page_cache.enabled:
+            for page_index in range(selected_start, selected_end):
+                cached_markdown = self._page_cache.load_page(page_index, assets_dir=assets_dir)
+                if cached_markdown is not None:
+                    self._page_cache_hits[page_index] = cached_markdown
+            selected_cache_count = max(0, selected_end - selected_start)
+            reused_count = len(self._page_cache_hits)
+            remaining_count = max(0, selected_cache_count - reused_count)
+            print(
+                f"Reused {reused_count}/{selected_cache_count} completed pages; "
+                f"converting {remaining_count} page(s)",
+                flush=True,
+            )
         
         # Output total pages for progress tracking (must match expected format)
         selected_count = max(0, selected_end - selected_start)
@@ -510,6 +534,9 @@ class PDFConverter:
                 mode_name = "ultra_fast" if speed_mode == "ultra_fast" else "normal"
                 print(f"[MODE] Vision-direct ({mode_name}): each page screenshot -> VL model -> Markdown", flush=True)
                 md_pages = self._process_batch_vision_direct(doc, pdf_path, assets_dir, speed_mode=speed_mode)
+
+        if self._page_cache is not None:
+            self._page_cache.finish()
             
         final_md = "\n\n".join(
             self._ensure_page_marker(page_md, idx)
@@ -2386,6 +2413,10 @@ class PDFConverter:
         """
         total_pages = len(doc)
         results: List[Optional[str]] = [None] * total_pages
+        cached_pages = dict(getattr(self, "_page_cache_hits", {}) or {})
+        for page_index, markdown in cached_pages.items():
+            if 0 <= int(page_index) < total_pages:
+                results[int(page_index)] = str(markdown)
 
         start = max(0, int(getattr(self.cfg, "start_page", 0) or 0))
         end = int(getattr(self.cfg, "end_page", -1) or -1)
@@ -2393,6 +2424,14 @@ class PDFConverter:
             end = total_pages
         end = min(total_pages, end)
         if start >= end:
+            return results
+
+        for page_index in range(start, end):
+            if page_index in cached_pages:
+                print(f"Finished page {page_index+1}/{total_pages} (reused)", flush=True)
+
+        missing_pages = [page_index for page_index in range(start, end) if page_index not in cached_pages]
+        if not missing_pages:
             return results
 
         speed_config = self._get_speed_mode_config("no_llm", total_pages)
@@ -2437,12 +2476,14 @@ class PDFConverter:
 
         if num_workers <= 1:
             print(f"[NO_LLM] Processing pages {start+1}-{end} with local extraction (sequential)", flush=True)
-            for i in range(start, end):
+            for i in missing_pages:
                 t0 = time.time()
                 try:
                     page = doc.load_page(i)
                     print(f"Processing page {i+1}/{total_pages} (no-llm) ...", flush=True)
                     results[i] = self._process_page(page, page_index=i, pdf_path=pdf_path, assets_dir=assets_dir)
+                    if self._page_cache is not None:
+                        self._page_cache.store_page(i, results[i], assets_dir=assets_dir)
                     print(f"Finished page {i+1}/{total_pages} ({time.time()-t0:.1f}s)", flush=True)
                 except Exception as e:
                     print(f"[NO_LLM] error page {i+1}: {e}", flush=True)
@@ -2460,7 +2501,7 @@ class PDFConverter:
             with ThreadPoolExecutor(max_workers=num_workers) as pool:
                 future_map = {
                     pool.submit(_prepare_page_task, i): i
-                    for i in range(start, end)
+                    for i in missing_pages
                 }
                 for fut in as_completed(future_map):
                     page_idx = future_map[fut]
@@ -2480,7 +2521,7 @@ class PDFConverter:
                 except Exception:
                     pass
 
-        for i in range(start, end):
+        for i in missing_pages:
             t0 = time.time()
             if errors_by_page.get(i):
                 print(f"[NO_LLM] error page {i+1}: {errors_by_page[i]}", flush=True)
@@ -2501,6 +2542,8 @@ class PDFConverter:
                     page_index=i,
                     assets_dir=assets_dir,
                 )
+                if self._page_cache is not None:
+                    self._page_cache.store_page(i, results[i], assets_dir=assets_dir)
                 print(f"Finished page {i+1}/{total_pages} ({time.time()-t0:.1f}s)", flush=True)
             except Exception as e:
                 print(f"[NO_LLM] error page {i+1}: {e}", flush=True)

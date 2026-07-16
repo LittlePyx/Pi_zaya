@@ -23,6 +23,10 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
     """
     total_pages = len(doc)
     results: List[Optional[str]] = [None] * total_pages
+    cached_pages = dict(getattr(self, "_page_cache_hits", {}) or {})
+    for page_index, markdown in cached_pages.items():
+        if 0 <= int(page_index) < total_pages:
+            results[int(page_index)] = str(markdown)
 
     start = max(0, int(getattr(self.cfg, "start_page", 0) or 0))
     end = int(getattr(self.cfg, "end_page", -1) or -1)
@@ -30,6 +34,12 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
         end = total_pages
     end = min(total_pages, end)
     if start >= end:
+        return results
+    for page_index in range(start, end):
+        if page_index in cached_pages:
+            print(f"Finished page {page_index+1}/{total_pages} (reused)", flush=True)
+    missing_pages = [page_index for page_index in range(start, end) if page_index not in cached_pages]
+    if not missing_pages:
         return results
 
     import multiprocessing
@@ -130,7 +140,7 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
 
     if num_workers <= 1 or total_pages <= 1:
         print(f"[VISION_DIRECT] Converting pages {start+1}-{end} via VL screenshots (dpi={dpi}, sequential)", flush=True)
-        for i in range(start, end):
+        for i in missing_pages:
             t0 = time.time()
             print(f"Processing page {i+1}/{total_pages} (vision-direct) ...", flush=True)
             try:
@@ -148,6 +158,9 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
                     mat=mat,
                     started_at=t0,
                 )
+                page_cache = getattr(self, "_page_cache", None)
+                if page_cache is not None:
+                    page_cache.store_page(i, results[i], assets_dir=assets_dir)
             except Exception as e:
                 error_str = str(e)
                 print(f"[VISION_DIRECT] error page {i+1}: {e}", flush=True)
@@ -193,6 +206,9 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
                 mat=mat,
                 started_at=t0,
             )
+            page_cache = getattr(self, "_page_cache", None)
+            if page_cache is not None:
+                page_cache.store_page(i, result, assets_dir=assets_dir)
             return i, result
         except Exception as e:
             error_str = str(e)
@@ -205,7 +221,7 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
             return i, None
 
     executor = ThreadPoolExecutor(max_workers=num_workers)
-    futures = {executor.submit(process_single_page, i): i for i in range(start, end)}
+    futures = {executor.submit(process_single_page, i): i for i in missing_pages}
     pending = set(futures.keys())
 
     hb_every_s = 8.0

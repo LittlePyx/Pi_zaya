@@ -79,6 +79,36 @@ def test_convert_pipeline_fast_mode(sample_pdf, output_dir):
     assert (output_dir / "assets" / "reference_index.json").exists()
 
 
+def test_convert_pipeline_reuses_completed_page_without_reprocessing(sample_pdf, output_dir, monkeypatch):
+    monkeypatch.setenv("KB_PDF_NO_LLM_PAGE_WORKERS", "1")
+    cfg = ConvertConfig(
+        pdf_path=sample_pdf,
+        out_dir=output_dir,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    first = PDFConverter(cfg)
+    first.convert(str(sample_pdf), str(output_dir))
+
+    second = PDFConverter(cfg)
+
+    def fail_if_reprocessed(*_args, **_kwargs):
+        raise AssertionError("completed page should have been reused from the durable page cache")
+
+    monkeypatch.setattr(second, "_process_page", fail_if_reprocessed)
+    second.convert(str(sample_pdf), str(output_dir))
+
+    content = (output_dir / "output.md").read_text(encoding="utf-8")
+    manifest = json.loads((output_dir / ".conversion_cache" / "manifest.json").read_text(encoding="utf-8"))
+    assert "This is a test paragraph with some content." in content
+    assert manifest["status"] == "ready"
+    assert manifest["hits"] == [1]
+
+
 def test_convert_partial_page_range_does_not_recover_unselected_pdf_pages(tmp_path):
     pdf_path = tmp_path / "partial-range-source.pdf"
     output_dir = tmp_path / "partial-output"

@@ -163,3 +163,33 @@ def test_process_batch_no_llm_parallel_reuses_worker_local_documents(tmp_path, m
     assert fake_fitz.open_calls < total_pages
     assert fake_fitz.open_calls <= 2
     assert fake_fitz.close_calls == fake_fitz.open_calls
+
+
+def test_process_batch_no_llm_reuses_completed_pages_and_stores_only_misses(tmp_path, monkeypatch):
+    total_pages = 3
+    doc = _DummyDoc(total_pages)
+    converter = _make_converter(tmp_path)
+    processed = []
+    stored = []
+
+    class _Cache:
+        def store_page(self, page_index, markdown, *, assets_dir):
+            stored.append((page_index, markdown))
+            return True
+
+    converter._page_cache_hits = {1: "CACHED_1"}
+    converter._page_cache = _Cache()
+    monkeypatch.setenv("KB_PDF_NO_LLM_PAGE_WORKERS", "1")
+    monkeypatch.setattr(converter, "_get_speed_mode_config", lambda speed_mode, total: {"max_parallel_pages": 1})
+
+    def _process(page, page_index, pdf_path, assets_dir):
+        processed.append(page_index)
+        return f"MD_{page_index}"
+
+    monkeypatch.setattr(converter, "_process_page", _process)
+
+    out = converter._process_batch_no_llm(doc, pdf_path=Path("dummy.pdf"), assets_dir=tmp_path)
+
+    assert out == ["MD_0", "CACHED_1", "MD_2"]
+    assert processed == [0, 2]
+    assert stored == [(0, "MD_0"), (2, "MD_2")]
