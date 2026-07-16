@@ -18,6 +18,11 @@ from kb.paper_guide_provenance import (
     _figure_block_number,
     _resolve_paper_guide_md_path,
 )
+from kb.paper_guide_structured_index_runtime import (
+    extract_figure_scope_from_text,
+    filter_figure_index_rows,
+    normalize_figure_scope,
+)
 from kb.retrieval_engine import _deep_read_md_for_context
 from kb.source_blocks import load_source_blocks, normalize_match_text
 
@@ -564,7 +569,13 @@ def _extract_bound_paper_method_focus(
     return ""
 
 
-def _extract_bound_paper_figure_caption(source_path: str, *, figure_num: int, db_dir: Path | None) -> str:
+def _extract_bound_paper_figure_caption(
+    source_path: str,
+    *,
+    figure_num: int,
+    db_dir: Path | None,
+    figure_scope: str = "",
+) -> str:
     try:
         target_num = int(figure_num)
     except Exception:
@@ -598,13 +609,19 @@ def _extract_bound_paper_figure_caption(source_path: str, *, figure_num: int, db
         except Exception:
             return 0
 
+    requested_scope = normalize_figure_scope(figure_scope)
     figure_block: dict | None = None
-    figure_blocks = [
+    numbered_figure_blocks = [
         dict(block)
         for block in blocks
         if str(block.get("kind") or "").strip().lower() == "figure"
         and _figure_block_number(dict(block)) == target_num
     ]
+    figure_blocks = filter_figure_index_rows(
+        numbered_figure_blocks,
+        figure_number=target_num,
+        figure_scope=requested_scope,
+    )
     if figure_blocks:
         figure_blocks.sort(key=lambda block: (_order_of(block) if _order_of(block) > 0 else 10**9, str(block.get("block_id") or "")))
         figure_block = figure_blocks[0]
@@ -618,7 +635,13 @@ def _extract_bound_paper_figure_caption(source_path: str, *, figure_num: int, db
         text = str(block_dict.get("raw_text") or block_dict.get("text") or "").strip()
         if _extract_figure_number(text) != target_num:
             continue
+        block_dict.setdefault("paper_figure_number", target_num)
         caption_candidates.append(block_dict)
+    caption_candidates = filter_figure_index_rows(
+        caption_candidates,
+        figure_number=target_num,
+        figure_scope=requested_scope,
+    )
     if not caption_candidates:
         return ""
 
@@ -651,6 +674,37 @@ def _extract_bound_paper_figure_caption(source_path: str, *, figure_num: int, db
     )
     caption_text = str(caption_candidates[0].get("raw_text") or caption_candidates[0].get("text") or "").strip()
     return _trim_paper_guide_prompt_snippet(caption_text, max_chars=1400)
+
+
+def _call_bound_figure_caption(
+    extractor: Callable[..., str],
+    source_path: str,
+    *,
+    figure_num: int,
+    db_dir: Path | None,
+    figure_scope: str,
+) -> str:
+    """Request a scoped caption without breaking older injected extractors."""
+    try:
+        return extractor(
+            source_path,
+            figure_num=figure_num,
+            db_dir=db_dir,
+            figure_scope=figure_scope,
+        )
+    except TypeError as exc:
+        if "figure_scope" not in str(exc):
+            raise
+        return extractor(source_path, figure_num=figure_num, db_dir=db_dir)
+
+
+def _paper_guide_figure_label(figure_scope: str, figure_num: int) -> str:
+    scope = normalize_figure_scope(figure_scope)
+    if scope == "extended_data":
+        return f"Extended Data Figure {int(figure_num)}"
+    if scope == "supplementary":
+        return f"Supplementary Figure {int(figure_num)}"
+    return f"Figure {int(figure_num)}"
 
 
 def _extract_paper_guide_method_focus_terms(prompt: str) -> list[str]:
@@ -1451,11 +1505,18 @@ def _build_paper_guide_special_focus_block(
     if family == "figure_walkthrough":
         figure_num = figure_number_resolver(q, list(answer_hits or []))
         if figure_num > 0:
-            caption = bound_figure_caption(resolved_source_path, figure_num=figure_num, db_dir=db_dir)
+            figure_scope = extract_figure_scope_from_text(q, default_main=True)
+            caption = _call_bound_figure_caption(
+                bound_figure_caption,
+                resolved_source_path,
+                figure_num=figure_num,
+                db_dir=db_dir,
+                figure_scope=figure_scope,
+            )
             if caption:
                 return (
                     "Paper-guide figure focus:\n"
-                    f"- Requested figure: Figure {int(figure_num)}.\n"
+                    f"- Requested figure: {_paper_guide_figure_label(figure_scope, figure_num)}.\n"
                     "- Preserve panel letters exactly as they appear in the caption; do not omit listed panels.\n"
                     "- Prefer this caption excerpt over broader setup/result summaries when explaining panel roles.\n"
                     f"- Caption excerpt:\n{caption}"

@@ -64,6 +64,64 @@ def test_build_anchor_index_figures(tmp_path):
     assert entry["heading_path"] == "Paper / Results"
 
 
+def test_extended_data_figure_keeps_separate_identity_and_binds_caption_before_image(tmp_path):
+    md_text = """# Paper
+
+<!-- kb_page: 7 -->
+![Figure 5](./assets/page_7_fig_1.png)
+**Figure 5.** Main FLIM result.
+
+<!-- kb_page: 18 -->
+Extended Data Fig. 5 | Live-cell imaging of mitochondria at 25 seconds per frame.
+
+![Figure 5](./assets/page_18_fig_1.png)
+"""
+    doc_id = doc_id_for_path(tmp_path / "paper.en.md")
+
+    blocks = build_source_blocks(md_text, doc_id=doc_id)
+    figures = [block for block in blocks if block.get("kind") == "figure"]
+    ext_caption = next(
+        block
+        for block in blocks
+        if block.get("figure_role") == "caption" and block.get("figure_key") == "extended_data:5"
+    )
+    anchors = build_anchor_index(blocks)["figures"]
+
+    assert {block.get("figure_key") for block in figures} == {"main:5", "extended_data:5"}
+    assert ext_caption["page_start"] == 18
+    assert ext_caption["linked_figure_block_id"]
+    assert {entry.get("figure_key") for entry in anchors if entry.get("number") == 5} == {
+        "main:5",
+        "extended_data:5",
+    }
+    assert len([entry for entry in anchors if entry.get("number") == 5]) == 2
+
+
+def test_anchor_index_does_not_deduplicate_same_caption_across_figure_scopes():
+    blocks = [
+        {
+            "kind": "figure",
+            "paper_figure_number": 5,
+            "figure_scope": "main",
+            "figure_key": "main:5",
+            "caption_text": "Shared caption text.",
+            "block_id": "fig-main-5",
+        },
+        {
+            "kind": "figure",
+            "paper_figure_number": 5,
+            "figure_scope": "extended_data",
+            "figure_key": "extended_data:5",
+            "caption_text": "Shared caption text.",
+            "block_id": "fig-ext-5",
+        },
+    ]
+
+    figures = build_anchor_index(blocks)["figures"]
+
+    assert {entry["figure_key"] for entry in figures} == {"main:5", "extended_data:5"}
+
+
 def test_build_anchor_index_tables(tmp_path):
     md_text = "\n".join([
         "# Paper",

@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from .post_processing import postprocess_markdown
+from .post_math_rules import contains_bare_tagged_display_math
 from .post_references import _is_post_references_resume_heading_line
 from .quality_acceptance import summarize_conversion_quality
 from .quality_compare import compare_markdown_quality
@@ -24,9 +25,17 @@ from .reference_markdown import (
     _is_plausible_reference_number,
     _looks_like_author_year_reference_text,
 )
-from .pdf_reference_text import reference_ordered_page_text
+from .pdf_reference_text import (
+    consecutive_reference_chain_positions,
+    is_ambiguous_reference_running_line,
+    is_reference_running_line,
+    merge_standalone_reference_continuations,
+    reference_ordered_page_text,
+    trim_reference_publisher_tail,
+)
 from .reference_page_vl import reference_markdown_entry_count
 from .tables import markdown_table_issue_counts, normalize_markdown_tables_document
+from .text_utils import contains_only_detached_accent_mojibake, normalize_detached_accents
 from kb.reference_index import extract_references_map_from_md
 
 try:
@@ -159,6 +168,14 @@ def _reference_map_has_short_truncated_entries(ref_map: dict[int, str]) -> bool:
             continue
         if re.search(r"\b(?:18|19|20)\d{2}\b|https?://|www\.|\bdoi\s*:|10\.\d{4,9}/", body, flags=re.IGNORECASE):
             continue
+        if re.search(
+            r"\b(?:journal|proceedings?|proc\.?|ieee|acm|spie|springer|wiley|opt\.?|optics?|"
+            r"photonics?|phys\.?|nature|science|letters?|review|commun\.?|express|trans\.?)\b"
+            r".*(?:\b\d{1,4}\s*,\s*)?[A-Za-z]?\d{3,}\s*$",
+            body,
+            flags=re.IGNORECASE,
+        ):
+            continue
         words = re.findall(r"[A-Za-z][A-Za-z'\-]*", body)
         if len(body) <= 32 and len(words) <= 5 and re.search(r"\bet\s+al\.?$", body, flags=re.IGNORECASE):
             return True
@@ -206,7 +223,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 2
+CONVERSION_QUALITY_RULES_VERSION = 4
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
@@ -256,6 +273,14 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "reason": "Encoding artifacts usually originate in extraction and should not be indexed.",
         "strategies": [],
     },
+    "detached_accents": {
+        "label": "Reattach detached accents in extracted names",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "The detected encoding artifacts are limited to safely reattachable name accents.",
+        "strategies": ["normalize_detached_accents"],
+    },
     "weak_structure": {
         "label": "Reconvert with higher-quality structure extraction",
         "safe": False,
@@ -298,6 +323,15 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "scope": "markdown",
         "reason": "The source PDF page starts do not line up with the Markdown page anchors.",
         "strategies": ["realign_page_markers_from_pdf", "recover_missing_source_pages"],
+    },
+    "source_page_count_mismatch": {
+        "label": "Reconvert pages missing from the Markdown page sequence",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "document",
+        "speed_mode": "normal",
+        "reason": "Multiple source PDF pages are absent from the Markdown page-marker sequence.",
+        "strategies": [],
     },
     "source_table_page_alignment": {
         "label": "Move page anchors before tables found on the next source page",
@@ -427,6 +461,14 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "scope": "markdown",
         "reason": "Prose contains bare LaTeX or OCR math leftovers that should be normalized as inline math.",
         "strategies": ["postprocess_markdown", "promote_collapsed_review_headings"],
+    },
+    "out_of_order_sections": {
+        "label": "Review numbered sections that appear out of source order",
+        "safe": False,
+        "action": "review",
+        "scope": "document",
+        "reason": "A later numbered section appears before an earlier one, which can indicate cross-page text displacement.",
+        "strategies": [],
     },
 }
 
@@ -953,6 +995,8 @@ _STRAY_INLINE_UNCLOSED_SENTENCE_RE = re.compile(
 
 
 def _stray_inline_math_likely(text: str) -> bool:
+    if contains_bare_tagged_display_math(text):
+        return True
     if not text or ("\\" not in text and "$" not in text and "cdot" not in text):
         return False
     in_fence = False
@@ -985,6 +1029,28 @@ def _stray_inline_math_likely(text: str) -> bool:
     return False
 
 
+def _out_of_order_numbered_sections_likely(text: str) -> bool:
+    sections: list[int] = []
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if REFERENCES_HEADING_RE.match(stripped):
+            break
+        match = re.match(r"^##\s+(\d{1,2})(?:\.\d+)*[.)]?\s+\S", stripped)
+        if not match:
+            continue
+        number = int(match.group(1))
+        if 1 <= number <= 12:
+            sections.append(number)
+    if len(sections) < 2:
+        return False
+    highest = sections[0]
+    for number in sections[1:]:
+        if number < highest:
+            return True
+        highest = max(highest, number)
+    return False
+
+
 def _issue_codes_from_context(
     md_path: Path,
     text: str,
@@ -994,6 +1060,8 @@ def _issue_codes_from_context(
 ) -> list[str]:
     quality = source_quality if isinstance(source_quality, dict) else _source_quality_view(md_path, text, metrics)
     codes = _issue_codes_from_metrics(metrics)
+    if "mojibake" in codes and contains_only_detached_accent_mojibake(text):
+        codes = ["detached_accents" if code == "mojibake" else code for code in codes]
     if bool(quality.get("abstract_not_applicable")):
         codes = [code for code in codes if code not in {"missing_abstract", "missing_references", "weak_structure"}]
     elif "missing_abstract" in codes and not bool(quality.get("abstract_autofix_likely")):
@@ -1005,6 +1073,11 @@ def _issue_codes_from_context(
         codes.append("missing_source_pages")
     if int(quality.get("source_page_anchor_issue_count") or 0) > 0:
         codes.append("source_page_marker_alignment")
+    if (
+        int(quality.get("page_marker_shortfall") or 0) >= 1
+        or int(quality.get("out_of_range_page_marker_count") or 0) > 0
+    ):
+        codes.append("source_page_count_mismatch")
     if int(quality.get("source_table_page_anchor_issue_count") or 0) > 0:
         codes.append("source_table_page_alignment")
     if bool(quality.get("reference_index_truncated")):
@@ -1015,6 +1088,8 @@ def _issue_codes_from_context(
         codes.append("collapsed_heading_hierarchy")
     if _stray_inline_math_likely(text):
         codes.append("stray_inline_math")
+    if _out_of_order_numbered_sections_likely(text):
+        codes.append("out_of_order_sections")
     return _dedupe_codes(codes)
 
 
@@ -1686,13 +1761,22 @@ def _source_text_loss_likely(text: str, metrics: dict[str, Any], pdf_stats: dict
     return False
 
 
-def _page_alignment_quality(metrics: dict[str, Any], pdf_stats: dict[str, Any]) -> dict[str, Any]:
+def _page_alignment_quality(metrics: dict[str, Any], pdf_stats: dict[str, Any], text: str = "") -> dict[str, Any]:
     pdf_pages = int(pdf_stats.get("page_count") or 0)
     markers = int(metrics.get("page_marker_count") or 0)
-    ratio = float(markers / max(1, pdf_pages)) if pdf_pages > 0 else 0.0
+    marker_numbers = [
+        int(match.group(1))
+        for match in PAGE_MARKER_RE.finditer(str(text or ""))
+        if str(match.group(1) or "").isdigit()
+    ]
+    valid_marker_numbers = [number for number in marker_numbers if pdf_pages <= 0 or 1 <= number <= pdf_pages]
+    out_of_range_markers = sorted({number for number in marker_numbers if pdf_pages > 0 and not 1 <= number <= pdf_pages})
+    valid_markers = len(valid_marker_numbers)
+    max_marker = max(valid_marker_numbers, default=0)
+    ratio = float(valid_markers / max(1, pdf_pages)) if pdf_pages > 0 else 0.0
     if pdf_pages <= 0:
         confidence = "unknown"
-    elif markers <= 0:
+    elif valid_markers <= 0:
         confidence = "missing"
     elif ratio >= 0.8:
         confidence = "high"
@@ -1703,6 +1787,15 @@ def _page_alignment_quality(metrics: dict[str, Any], pdf_stats: dict[str, Any]) 
     return {
         "pdf_pages": int(pdf_pages),
         "page_marker_count": int(markers),
+        "valid_page_marker_count": int(valid_markers),
+        "out_of_range_page_markers": out_of_range_markers,
+        "out_of_range_page_marker_count": int(len(out_of_range_markers)),
+        # A sparse-but-correct anchor set (for example pages 1 and 4 of a
+        # four-page PDF) can be safely realigned. Only a missing terminal page
+        # range proves that conversion stopped before the source PDF ended.
+        "page_marker_shortfall": max(0, int(pdf_pages - max_marker)),
+        "page_marker_count_shortfall": max(0, int(pdf_pages - valid_markers)),
+        "max_page_marker": int(max_marker),
         "matched_page_ratio": round(ratio, 4) if pdf_pages > 0 else 0.0,
         "page_alignment_confidence": confidence,
     }
@@ -2110,6 +2203,12 @@ def _reference_index_truncated(text: str, metrics: dict[str, Any]) -> bool:
     if extracted <= 0:
         return True
     ref_map = extract_references_map_from_md(text)
+    first_index = min(ref_map) if ref_map else 0
+    if first_index > 1:
+        ref_heading = re.search(r"(?mi)^#{1,6}\s+References\s*$", str(text or ""))
+        body = str(text or "")[: int(ref_heading.start())] if ref_heading else str(text or "")
+        if re.search(r"\[\s*1(?:\s*[,;\-–]\s*\d{1,4})*\s*\]", body):
+            return True
     if _reference_gap_is_material(ref_map):
         return True
     if _reference_map_has_short_truncated_entries(ref_map):
@@ -2138,7 +2237,7 @@ def _source_quality_view(
     _ = abstract_candidate_text
     abstract_autofix_likely = bool(abstract_changed)
     source_text_loss = False if bool(profile.get("abstract_not_applicable")) else _source_text_loss_likely(text, metrics, pdf_stats, ref_layout)
-    page_quality = _page_alignment_quality(metrics, pdf_stats)
+    page_quality = _page_alignment_quality(metrics, pdf_stats, text)
     page_coverage = _source_page_coverage_quality(text, pdf_path if pdf_path and bool(pdf_stats.get("available")) else None)
     page_anchor_quality = _source_page_anchor_alignment_quality(text, pdf_path if pdf_path and bool(pdf_stats.get("available")) else None)
     table_page_anchor_quality = _source_table_page_anchor_alignment_quality(
@@ -2993,32 +3092,41 @@ def _pdf_page_has_reference_block_text(text: str) -> bool:
     numbers = _pdf_page_reference_start_numbers(text)
     if len(numbers) < 3:
         return False
-    increasing_pairs = sum(1 for left, right in zip(numbers, numbers[1:]) if int(right) > int(left))
-    return increasing_pairs >= max(1, len(numbers) - 2)
+    return len(consecutive_reference_chain_positions(numbers)) >= 3
 
 
 def _trim_pdf_page_text_to_first_reference(text: str) -> str:
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     lines = raw.split("\n")
+    candidates: list[tuple[int, int]] = []
     for idx, raw_line in enumerate(lines):
         line = str(raw_line or "").strip()
         match = PDF_REFERENCE_START_LINE_RE.match(line)
         standalone = PDF_REFERENCE_STANDALONE_NUMBER_RE.match(line)
         raw_num = (match.group(1) or match.group(2)) if match else (standalone.group(1) if standalone else None)
         if raw_num and _is_plausible_reference_number(raw_num) and _pdf_reference_window_has_signal(lines, idx):
-            return "\n".join(lines[idx:]).strip()
+            candidates.append((idx, int(raw_num)))
+    chain = consecutive_reference_chain_positions([number for _, number in candidates])
+    if chain:
+        line_idx = candidates[chain[0]][0]
+        return "\n".join(lines[line_idx:]).strip()
     return raw.strip()
 
 
 def _drop_pdf_reference_running_lines(text: str) -> str:
     lines: list[str] = []
     raw_lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    seen_reference_start = False
     for idx, raw in enumerate(raw_lines):
         line = str(raw or "").strip()
         prev_line = str(raw_lines[idx - 1] or "").strip() if idx > 0 else ""
         next_line = str(raw_lines[idx + 1] or "").strip() if idx + 1 < len(raw_lines) else ""
         if not line:
             lines.append(raw)
+            continue
+        if is_reference_running_line(line) and (
+            not is_ambiguous_reference_running_line(line) or not seen_reference_start
+        ):
             continue
         if re.fullmatch(r"Research\s+Article", line, flags=re.IGNORECASE):
             continue
@@ -3047,7 +3155,9 @@ def _drop_pdf_reference_running_lines(text: str) -> str:
         if re.fullmatch(r"\d{1,4}", line):
             continue
         lines.append(raw)
-    return "\n".join(lines).strip()
+        if PDF_REFERENCE_START_LINE_RE.match(line) or PDF_REFERENCE_STANDALONE_NUMBER_RE.match(line):
+            seen_reference_start = True
+    return merge_standalone_reference_continuations("\n".join(lines).strip())
 
 
 def _merge_pdf_page_paragraphs(parts: list[str]) -> list[str]:
@@ -3219,6 +3329,7 @@ def _extract_pdf_reference_markdown(pdf_path: Path) -> tuple[str, int]:
             elif not has_heading and not has_reference_block:
                 break
             page_text = _drop_pdf_reference_running_lines(page_text)
+            page_text = trim_reference_publisher_tail(page_text)
             if page_text:
                 page_texts.append((page_index + 1, page_text))
     finally:
@@ -3516,6 +3627,12 @@ def repair_markdown_text(
     applied: list[str] = []
 
     if active_strategy_names:
+        if "normalize_detached_accents" in active_strategy_names:
+            normalized = normalize_detached_accents(text)
+            if normalized != text:
+                text = normalized
+                applied.append("normalize_detached_accents")
+
         if "ensure_page_anchor" in active_strategy_names:
             changed = False
             if source_repairs_enabled:

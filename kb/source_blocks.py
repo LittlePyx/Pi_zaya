@@ -29,6 +29,8 @@ class SourceBlock(TypedDict, total=False):
     figure_id: str
     figure_ident: str
     paper_figure_number: int
+    figure_scope: str
+    figure_key: str
     figure_role: str
     linked_figure_block_id: str
     asset_name: str
@@ -213,6 +215,43 @@ def extract_figure_number(text: str) -> int:
     except Exception:
         return 0
     return number if number > 0 else 0
+
+
+def extract_figure_identity(text: str) -> dict[str, object]:
+    """Extract a stable figure scope/key from an explicit caption or image alt."""
+    src = normalize_inline_markdown(text)
+    if not src:
+        return {}
+    patterns = (
+        ("extended_data", re.compile(r"^Extended\s+Data\s+Fig(?:ure)?\.?\s*(\d{1,4})\b", re.IGNORECASE)),
+        ("supplementary", re.compile(r"^(?:Supplementary|Supplemental)\s+Fig(?:ure)?\.?\s*S?\s*(\d{1,4})\b", re.IGNORECASE)),
+        ("supplementary", re.compile(r"^Fig(?:ure)?\.?\s*S\s*(\d{1,4})\b", re.IGNORECASE)),
+        ("main", re.compile(r"^Fig(?:ure)?\.?\s*#?\s*(\d{1,4})\b", re.IGNORECASE)),
+    )
+    for scope, pattern in patterns:
+        match = pattern.search(src)
+        if not match:
+            continue
+        try:
+            number = int(match.group(1) or 0)
+        except Exception:
+            number = 0
+        if number <= 0:
+            continue
+        return {
+            "paper_figure_number": number,
+            "figure_scope": scope,
+            "figure_key": f"{scope}:{number}",
+        }
+    return {}
+
+
+def _figure_heading_label(number: int, scope: str = "") -> str:
+    if str(scope or "").strip().lower() == "extended_data":
+        return f"Extended Data Figure {int(number)}"
+    if str(scope or "").strip().lower() == "supplementary":
+        return f"Supplementary Figure {int(number)}"
+    return f"Figure {int(number)}"
 
 
 def _extract_panel_marker_letters(text: str) -> list[str]:
@@ -462,21 +501,33 @@ def build_source_blocks(
         next_caption_follow_context: dict[str, object] | None = None
         if pending_figure_context:
             pending_number = int(pending_figure_context.get("paper_figure_number") or pending_figure_context.get("number") or 0)
-            caption_number = extract_figure_number(raw)
+            caption_identity = extract_figure_identity(raw)
+            caption_number = int(caption_identity.get("paper_figure_number") or extract_figure_number(raw) or 0)
             effective_number = pending_number if pending_number > 0 else caption_number
             if effective_number > 0 and (pending_number <= 0 or caption_number == pending_number):
                 linked_figure_block_id = str(pending_figure_context.get("figure_block_id") or "").strip()
-                figure_heading = _join_heading_path(heading_path(), f"Figure {effective_number}")
+                figure_scope = str(
+                    caption_identity.get("figure_scope")
+                    or pending_figure_context.get("figure_scope")
+                    or "main"
+                ).strip().lower()
+                figure_key = str(caption_identity.get("figure_key") or f"{figure_scope}:{effective_number}").strip()
+                figure_heading = _join_heading_path(
+                    heading_path(),
+                    _figure_heading_label(effective_number, figure_scope),
+                )
                 if linked_figure_block_id:
                     for block in reversed(blocks):
                         if str(block.get("block_id") or "").strip() != linked_figure_block_id:
                             continue
                         block["number"] = int(effective_number)
                         block["paper_figure_number"] = int(effective_number)
+                        block["figure_scope"] = figure_scope
+                        block["figure_key"] = figure_key
                         if str(block.get("text") or "").strip().lower() in {"figure", "fig", "fig."}:
-                            block["text"] = f"Figure {effective_number}"
+                            block["text"] = _figure_heading_label(effective_number, figure_scope)
                         if str(block.get("raw_text") or "").strip().lower() in {"figure", "fig", "fig."}:
-                            block["raw_text"] = f"Figure {effective_number}"
+                            block["raw_text"] = _figure_heading_label(effective_number, figure_scope)
                         block["heading_path"] = figure_heading or heading_path()
                         if not str(block.get("caption_text") or "").strip():
                             block["caption_text"] = normalize_inline_markdown(raw)[:1200]
@@ -485,6 +536,8 @@ def build_source_blocks(
                     "figure_id": str(pending_figure_context.get("figure_id") or "").strip(),
                     "figure_ident": str(pending_figure_context.get("figure_ident") or "").strip(),
                     "paper_figure_number": effective_number,
+                    "figure_scope": figure_scope,
+                    "figure_key": figure_key,
                     "figure_role": "caption",
                     "linked_figure_block_id": linked_figure_block_id,
                     "asset_name": str(pending_figure_context.get("asset_name") or "").strip(),
@@ -497,6 +550,8 @@ def build_source_blocks(
                     "figure_id": str(pending_figure_context.get("figure_id") or "").strip(),
                     "figure_ident": str(pending_figure_context.get("figure_ident") or "").strip(),
                     "paper_figure_number": effective_number,
+                    "figure_scope": figure_scope,
+                    "figure_key": figure_key,
                     "asset_name": str(pending_figure_context.get("asset_name") or "").strip(),
                     "asset_name_alias": str(pending_figure_context.get("asset_name_alias") or "").strip(),
                     "heading_path": figure_heading or heading_path(),
@@ -512,6 +567,8 @@ def build_source_blocks(
                 "figure_id": str(caption_follow_context.get("figure_id") or "").strip(),
                 "figure_ident": str(caption_follow_context.get("figure_ident") or "").strip(),
                 "paper_figure_number": follow_number if follow_number > 0 else None,
+                "figure_scope": str(caption_follow_context.get("figure_scope") or "").strip(),
+                "figure_key": str(caption_follow_context.get("figure_key") or "").strip(),
                 "figure_role": "caption_continuation",
                 "linked_figure_block_id": str(caption_follow_context.get("figure_block_id") or "").strip(),
                 "asset_name": str(caption_follow_context.get("asset_name") or "").strip(),
@@ -709,19 +766,56 @@ def build_source_blocks(
             raw_path = str(image_match.group(2) or "").strip().strip('"').strip("'")
             asset_name = Path(raw_path).name
             meta = dict((figure_meta_by_asset or {}).get(asset_name) or {})
-            figure_number = 0
+            caption_before_block: SourceBlock | None = None
+            caption_before_identity: dict[str, object] = {}
+            if blocks:
+                candidate = blocks[-1]
+                candidate_page = int(candidate.get("page_start") or 0)
+                candidate_line_end = int(candidate.get("line_end") or 0)
+                candidate_identity = extract_figure_identity(
+                    str(candidate.get("raw_text") or candidate.get("text") or "")
+                )
+                if (
+                    str(candidate.get("kind") or "").strip().lower() == "paragraph"
+                    and candidate_page == int(current_page or 0)
+                    and candidate_line_end >= max(1, line_no - 3)
+                    and candidate_identity
+                ):
+                    caption_before_block = candidate
+                    caption_before_identity = candidate_identity
+            alt_identity = extract_figure_identity(alt_text or line)
+            meta_number = 0
             try:
-                figure_number = int(meta.get("paper_figure_number") or meta.get("fig_no") or 0)
+                meta_number = int(meta.get("paper_figure_number") or meta.get("fig_no") or 0)
             except Exception:
-                figure_number = 0
-            if figure_number <= 0:
-                figure_number = extract_figure_number(alt_text or line)
+                meta_number = 0
+            caption_before_number = int(caption_before_identity.get("paper_figure_number") or 0)
+            alt_number = int(alt_identity.get("paper_figure_number") or extract_figure_number(alt_text or line) or 0)
+            if meta_number > 0 and caption_before_number > 0 and meta_number != caption_before_number:
+                caption_before_block = None
+                caption_before_identity = {}
+                caption_before_number = 0
+            figure_number = meta_number or caption_before_number or alt_number
+            figure_scope = str(
+                meta.get("figure_scope")
+                or caption_before_identity.get("figure_scope")
+                or alt_identity.get("figure_scope")
+                or ("main" if figure_number > 0 else "")
+            ).strip().lower()
+            figure_key = str(
+                meta.get("figure_key")
+                or (f"{figure_scope}:{figure_number}" if figure_scope and figure_number > 0 else "")
+            ).strip()
             generic_alt = bool(re.fullmatch(r"fig(?:ure)?\.?", alt_text, flags=re.IGNORECASE))
             figure_text = alt_text or str(line or "").strip()
-            if (not alt_text or generic_alt) and figure_number > 0:
-                figure_text = f"Figure {figure_number}"
+            if (not alt_text or generic_alt or figure_scope != "main") and figure_number > 0:
+                figure_text = _figure_heading_label(figure_number, figure_scope)
             if figure_text:
-                figure_heading = _join_heading_path(heading_path(), f"Figure {figure_number}") if figure_number > 0 else ""
+                figure_heading = (
+                    _join_heading_path(heading_path(), _figure_heading_label(figure_number, figure_scope))
+                    if figure_number > 0
+                    else ""
+                )
                 figure_block = push(
                     "figure",
                     figure_text,
@@ -732,20 +826,42 @@ def build_source_blocks(
                         "figure_id": str(meta.get("figure_id") or "").strip(),
                         "figure_ident": str(meta.get("figure_ident") or meta.get("fig_ident") or "").strip(),
                         "paper_figure_number": figure_number if figure_number > 0 else None,
+                        "figure_scope": figure_scope,
+                        "figure_key": figure_key,
                         "asset_name": asset_name,
                         "asset_name_alias": str(meta.get("asset_name_alias") or "").strip(),
                         "caption_text": str(meta.get("caption") or "").strip(),
                         "heading_path": figure_heading or heading_path(),
                     },
                 )
-                pending_figure_context = {
-                    "figure_block_id": str((figure_block or {}).get("block_id") or "").strip(),
-                    "figure_id": str(meta.get("figure_id") or "").strip(),
-                    "figure_ident": str(meta.get("figure_ident") or meta.get("fig_ident") or "").strip(),
-                    "paper_figure_number": figure_number,
-                    "asset_name": asset_name,
-                    "asset_name_alias": str(meta.get("asset_name_alias") or "").strip(),
-                }
+                figure_block_id = str((figure_block or {}).get("block_id") or "").strip()
+                if caption_before_block is not None:
+                    caption_before_block["number"] = int(figure_number)
+                    caption_before_block["paper_figure_number"] = int(figure_number)
+                    caption_before_block["figure_scope"] = figure_scope
+                    caption_before_block["figure_key"] = figure_key
+                    caption_before_block["figure_role"] = "caption"
+                    caption_before_block["linked_figure_block_id"] = figure_block_id
+                    caption_before_block["asset_name"] = asset_name
+                    caption_before_block["asset_name_alias"] = str(meta.get("asset_name_alias") or "").strip()
+                    caption_before_block["caption_text"] = normalize_inline_markdown(
+                        str(caption_before_block.get("raw_text") or caption_before_block.get("text") or "")
+                    )[:1200]
+                    caption_before_block["heading_path"] = figure_heading or heading_path()
+                    if figure_block is not None:
+                        figure_block["caption_text"] = str(caption_before_block.get("caption_text") or "")
+                    pending_figure_context = None
+                else:
+                    pending_figure_context = {
+                        "figure_block_id": figure_block_id,
+                        "figure_id": str(meta.get("figure_id") or "").strip(),
+                        "figure_ident": str(meta.get("figure_ident") or meta.get("fig_ident") or "").strip(),
+                        "paper_figure_number": figure_number,
+                        "figure_scope": figure_scope,
+                        "figure_key": figure_key,
+                        "asset_name": asset_name,
+                        "asset_name_alias": str(meta.get("asset_name_alias") or "").strip(),
+                    }
             continue
 
         if not line.strip():
@@ -800,7 +916,7 @@ def build_anchor_index(blocks: list[SourceBlock]) -> dict[str, list[dict]]:
     seen_texts: dict[str, set[str]] = {"figures": set(), "tables": set(), "equations": set()}
 
     # First pass: collect figure-anchor blocks and caption blocks separately.
-    figure_entries: dict[int, dict] = {}
+    figure_entries: dict[str, dict] = {}
     caption_blocks: list[SourceBlock] = []
 
     for block in blocks or []:
@@ -809,10 +925,14 @@ def build_anchor_index(blocks: list[SourceBlock]) -> dict[str, list[dict]]:
             number = int(block.get("paper_figure_number") or block.get("number") or 0)
             if number <= 0:
                 continue
+            figure_scope = str(block.get("figure_scope") or "main").strip().lower() or "main"
+            figure_key = str(block.get("figure_key") or f"{figure_scope}:{number}").strip()
             caption = str(block.get("caption_text") or block.get("text") or "").strip()
             parent_heading = _ANCHOR_HEADING_TAIL_RE.sub("", str(block.get("heading_path") or "").strip()).strip()
             entry = {
                 "number": number,
+                "figure_scope": figure_scope,
+                "figure_key": figure_key,
                 "caption_text": caption,
                 "block_id": str(block.get("block_id") or "").strip(),
                 "heading_path": parent_heading or str(block.get("heading_path") or "").strip(),
@@ -820,8 +940,8 @@ def build_anchor_index(blocks: list[SourceBlock]) -> dict[str, list[dict]]:
                 "line_end": int(block.get("line_end") or 0),
                 "kind": "figure",
             }
-            if number not in figure_entries:
-                figure_entries[number] = entry
+            if figure_key not in figure_entries:
+                figure_entries[figure_key] = entry
         elif kind == "table":
             number = int(block.get("number") or 0)
             if number <= 0:
@@ -866,20 +986,24 @@ def build_anchor_index(blocks: list[SourceBlock]) -> dict[str, list[dict]]:
     # Merge caption blocks into figure entries.
     for cb in caption_blocks:
         number = int(cb.get("paper_figure_number") or 0)
+        figure_scope = str(cb.get("figure_scope") or "main").strip().lower() or "main"
+        figure_key = str(cb.get("figure_key") or f"{figure_scope}:{number}").strip()
         caption_text = str(cb.get("caption_text") or "").strip()
         if not caption_text:
             caption_text = str(cb.get("text") or "").strip()[:300]
         if number > 0 and caption_text:
-            if number in figure_entries:
-                existing = figure_entries[number]
+            if figure_key in figure_entries:
+                existing = figure_entries[figure_key]
                 existing_caption = str(existing.get("caption_text") or "").strip()
                 # Only replace if the caption block has richer text.
                 if len(caption_text) > len(existing_caption):
                     existing["caption_text"] = caption_text
             else:
                 caption_parent_heading = _ANCHOR_HEADING_TAIL_RE.sub("", str(cb.get("heading_path") or "").strip()).strip()
-                figure_entries[number] = {
+                figure_entries[figure_key] = {
                     "number": number,
+                    "figure_scope": figure_scope,
+                    "figure_key": figure_key,
                     "caption_text": caption_text,
                     "block_id": str(cb.get("block_id") or "").strip(),
                     "heading_path": caption_parent_heading or str(cb.get("heading_path") or "").strip(),
@@ -889,10 +1013,14 @@ def build_anchor_index(blocks: list[SourceBlock]) -> dict[str, list[dict]]:
                 }
 
     # Add deduplicated figure entries to index.
-    for number in sorted(figure_entries.keys()):
-        entry = figure_entries[number]
+    for figure_key in sorted(figure_entries.keys(), key=lambda key: (int(figure_entries[key].get("number") or 0), key)):
+        entry = figure_entries[figure_key]
+        number = int(entry.get("number") or 0)
         caption = str(entry.get("caption_text") or "").strip()
-        dedup_key = f"{number}|{caption}"
+        # The same display number and caption text can legitimately occur in
+        # different namespaces (for example Figure 5 and Extended Data Figure
+        # 5).  Identity, rather than caption wording, is the deduplication key.
+        dedup_key = figure_key
         if dedup_key in seen_texts["figures"]:
             continue
         seen_texts["figures"].add(dedup_key)
@@ -921,6 +1049,10 @@ def source_blocks_to_reader_anchors(blocks: list[SourceBlock]) -> list[dict]:
             rec["figure_id"] = str(block.get("figure_id") or "").strip()
         if int(block.get("paper_figure_number") or 0) > 0:
             rec["paper_figure_number"] = int(block.get("paper_figure_number") or 0)
+        if str(block.get("figure_scope") or "").strip():
+            rec["figure_scope"] = str(block.get("figure_scope") or "").strip()
+        if str(block.get("figure_key") or "").strip():
+            rec["figure_key"] = str(block.get("figure_key") or "").strip()
         if str(block.get("figure_role") or "").strip():
             rec["figure_role"] = str(block.get("figure_role") or "").strip()
         out.append(rec)

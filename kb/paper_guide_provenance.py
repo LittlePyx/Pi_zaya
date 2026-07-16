@@ -11,9 +11,12 @@ from pathlib import Path
 
 from kb.paper_guide_contracts import _normalize_paper_guide_support_resolution
 from kb.paper_guide_structured_index_runtime import (
+    extract_figure_scope_from_text,
+    filter_figure_index_rows,
     load_paper_guide_anchor_index,
     load_paper_guide_equation_index,
     load_paper_guide_figure_index,
+    normalize_figure_scope,
 )
 from kb.paper_guide_shared import (
     DeepSeekChat,
@@ -1415,6 +1418,16 @@ def _annotate_segments_with_support_resolution(
                 support_target_fig = int(rec.get("figure_number") or support_target_scope.get("target_figure_num") or 0)
             except Exception:
                 support_target_fig = 0
+            support_target_figure_scope = normalize_figure_scope(
+                rec.get("figure_scope") or support_target_scope.get("target_figure_scope")
+            )
+            if support_target_fig > 0 and not support_target_figure_scope:
+                support_target_figure_scope = "main"
+            support_target_figure_key = str(rec.get("figure_key") or "").strip() or (
+                f"{support_target_figure_scope}:{support_target_fig}"
+                if support_target_figure_scope and support_target_fig > 0
+                else ""
+            )
             try:
                 support_target_box = int(rec.get("box_number") or 0)
             except Exception:
@@ -1446,6 +1459,11 @@ def _annotate_segments_with_support_resolution(
                 and not support_requested_sections
             )
             seg_out["support_slot_figure_number"] = int(support_target_fig or 0)
+            if support_target_figure_scope:
+                seg_out["support_slot_figure_scope"] = support_target_figure_scope
+                seg_out["figure_scope"] = support_target_figure_scope
+            if support_target_figure_key:
+                seg_out["figure_key"] = support_target_figure_key
             seg_out["support_slot_box_number"] = int(support_target_box or 0)
             seg_out["support_slot_panel_letters"] = list(support_panel_letters)
             block_id = str(rec.get("block_id") or "").strip()
@@ -1684,6 +1702,24 @@ def _anchor_row_to_provenance_block(raw: dict | None) -> dict:
         number = 0
     if number > 0:
         out["number"] = number
+    for key in (
+        "paper_figure_number",
+        "figure_scope",
+        "figure_key",
+        "figure_id",
+        "figure_ident",
+        "figure_role",
+        "linked_figure_block_id",
+        "asset_name",
+        "asset_name_alias",
+    ):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
+        elif isinstance(value, int) and value > 0:
+            out[key] = value
+    if number > 0 and str(row.get("kind") or "").strip().lower() == "figure":
+        out.setdefault("paper_figure_number", number)
     return out
 
 
@@ -3445,6 +3481,7 @@ def _select_figure_index_entry(
     entries: list[dict] | None,
     *,
     figure_number: int,
+    figure_scope: str = "main",
     lookup: dict[str, dict] | None = None,
     current_primary_id: str = "",
 ) -> dict:
@@ -3453,7 +3490,11 @@ def _select_figure_index_entry(
     block_lookup = lookup or {}
     best: dict = {}
     best_score = float("-inf")
-    for raw in list(entries or []):
+    for raw in filter_figure_index_rows(
+        entries,
+        figure_number=figure_number,
+        figure_scope=figure_scope,
+    ):
         if not isinstance(raw, dict):
             continue
         try:
@@ -3513,6 +3554,11 @@ def _select_figure_claim_binding(
         figure_number = _figure_block_number(current_primary)
     if figure_number <= 0:
         return None, None
+    figure_scope = normalize_figure_scope(
+        segment.get("figure_scope")
+        or segment.get("support_slot_figure_scope")
+        or segment.get("anchor_target_scope")
+    ) or extract_figure_scope_from_text(raw, default_main=True)
 
     def _order_of(block: dict | None) -> int:
         if not isinstance(block, dict):
@@ -3564,9 +3610,15 @@ def _select_figure_claim_binding(
         if str(block.get("kind") or "").strip().lower() == "figure"
         and _figure_block_number(block) == figure_number
     ]
+    figure_blocks = filter_figure_index_rows(
+        figure_blocks,
+        figure_number=figure_number,
+        figure_scope=figure_scope,
+    )
     indexed_entry = _select_figure_index_entry(
         figure_index_rows,
         figure_number=figure_number,
+        figure_scope=figure_scope,
         lookup=lookup,
         current_primary_id=current_primary_id,
     )
@@ -3599,6 +3651,19 @@ def _select_figure_claim_binding(
             or (figure_identity and str(block.get("figure_id") or "").strip() == figure_identity)
         )
     ]
+    caption_candidates = filter_figure_index_rows(
+        [
+            {
+                **block,
+                "paper_figure_number": int(block.get("paper_figure_number") or figure_number),
+                "figure_scope": normalize_figure_scope(block.get("figure_scope"))
+                or extract_figure_scope_from_text(str(block.get("raw_text") or block.get("text") or "")),
+            }
+            for block in caption_candidates
+        ],
+        figure_number=figure_number,
+        figure_scope=figure_scope,
+    )
     caption_block: dict | None = None
     indexed_caption_block_id = str(indexed_entry.get("caption_block_id") or "").strip()
     if indexed_caption_block_id:
@@ -4422,11 +4487,23 @@ def _apply_provenance_required_coverage_contract(
                 except Exception:
                     figure_number = 0
                 figure_id = str(figure_meta.get("figure_id") or "").strip()
+                figure_scope = normalize_figure_scope(figure_meta.get("figure_scope")) or normalize_figure_scope(
+                    seg.get("figure_scope") or seg.get("support_slot_figure_scope") or seg.get("anchor_target_scope")
+                )
+                figure_key = str(figure_meta.get("figure_key") or "").strip() or (
+                    f"{figure_scope}:{figure_number}" if figure_scope and figure_number > 0 else ""
+                )
                 if figure_id:
                     seg["figure_id"] = figure_id
                 if figure_number > 0:
                     seg["paper_figure_number"] = figure_number
                     seg["anchor_target_number"] = figure_number
+                if figure_scope:
+                    seg["figure_scope"] = figure_scope
+                    seg["anchor_target_scope"] = figure_scope
+                if figure_key:
+                    seg["figure_key"] = figure_key
+                    seg["anchor_target_key"] = figure_key
                 seg["caption_block_id"] = str((caption_block or {}).get("block_id") or "").strip()
                 seg["asset_name"] = str(figure_meta.get("asset_name") or "").strip()
                 seg["asset_name_alias"] = str(figure_meta.get("asset_name_alias") or "").strip()

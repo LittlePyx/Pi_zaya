@@ -117,6 +117,53 @@ def test_paper_guide_targeted_source_block_hits_uses_figure_index_panel_clause(t
     assert meta["block_id"] == "blk-fig-2-caption"
 
 
+def test_paper_guide_targeted_source_block_hits_selects_extended_data_same_number(tmp_path: Path):
+    source_pdf = tmp_path / "DemoScopes.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    db_root = tmp_path / "db"
+    md_dir = db_root / "DemoScopes"
+    assets_dir = md_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    (md_dir / "DemoScopes.en.md").write_text("## Results\n", encoding="utf-8")
+    (assets_dir / "figure_index.json").write_text(
+        json.dumps(
+            {
+                "figures": [
+                    {
+                        "paper_figure_number": 5,
+                        "figure_scope": "main",
+                        "figure_key": "main:5",
+                        "caption": "Figure 5. (a) Main lifetime simulation.",
+                        "caption_block_id": "main-caption",
+                    },
+                    {
+                        "paper_figure_number": 5,
+                        "figure_scope": "extended_data",
+                        "figure_key": "extended_data:5",
+                        "caption": "Extended Data Figure 5. (a) Live-cell mitochondria at 25 seconds per frame.",
+                        "caption_block_id": "extended-caption",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source_pdf),
+        prompt="Walk me through Extended Data Figure 5 panel a.",
+        db_dir=db_root,
+        limit=3,
+    )
+
+    assert len(hits) == 1
+    assert "Live-cell mitochondria" in str(hits[0].get("text") or "")
+    meta = hits[0].get("meta") or {}
+    assert meta["block_id"] == "extended-caption"
+    assert meta["figure_scope"] == "extended_data"
+    assert meta["figure_key"] == "extended_data:5"
+
+
 def test_paper_guide_fallback_deepread_hits_prefers_targeted_hits_for_box_query(tmp_path: Path):
     fixture = build_paper_guide_runtime_fixture(tmp_path)
     hits = _paper_guide_fallback_deepread_hits(

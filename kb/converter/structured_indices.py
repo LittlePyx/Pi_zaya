@@ -18,7 +18,7 @@ from kb.reference_index import (
 from kb.source_blocks import build_source_blocks, doc_id_for_path, normalize_inline_markdown
 from kb.table_index import build_table_index_payload
 
-STRUCTURED_INDEX_VERSION = 4
+STRUCTURED_INDEX_VERSION = 5
 _INDEX_VERSION = STRUCTURED_INDEX_VERSION
 _EQUATION_CONTEXT_KINDS = {"paragraph", "list_item", "blockquote", "table"}
 _INLINE_REF_RE = re.compile(
@@ -125,6 +125,7 @@ def _collect_caption_continuation(
     figure_number: int = 0,
 ) -> str:
     figure_block_id = str((figure_block or {}).get("block_id") or "").strip()
+    figure_key = str((figure_block or {}).get("figure_key") or "").strip().lower()
     ordered: list[tuple[int, str]] = []
     for block in blocks:
         if not isinstance(block, dict):
@@ -136,8 +137,12 @@ def _collect_caption_continuation(
         except Exception:
             block_fig_num = 0
         linked_figure_block_id = str(block.get("linked_figure_block_id") or "").strip()
+        block_key = str(block.get("figure_key") or "").strip().lower()
         if figure_block_id and linked_figure_block_id == figure_block_id:
             pass
+        elif figure_key and block_key:
+            if block_key != figure_key:
+                continue
         elif figure_number > 0 and block_fig_num == figure_number:
             pass
         else:
@@ -367,7 +372,16 @@ def _build_anchor_index_payload(md_path: Path, blocks: list[dict[str, Any]]) -> 
         if page > 0:
             rec["page_start"] = page
             rec["page_end"] = page
-        for key in ("number", "figure_id", "figure_ident", "figure_role", "asset_name", "asset_name_alias"):
+        for key in (
+            "number",
+            "figure_id",
+            "figure_ident",
+            "figure_scope",
+            "figure_key",
+            "figure_role",
+            "asset_name",
+            "asset_name_alias",
+        ):
             value = block.get(key)
             if isinstance(value, str) and value.strip():
                 rec[key] = value.strip()
@@ -537,8 +551,31 @@ def _block_figure_number(block: dict[str, Any]) -> int:
         return 0
 
 
+def _figure_key(value: dict[str, Any]) -> str:
+    key = str(value.get("figure_key") or "").strip().lower()
+    if key:
+        return key
+    number = _block_figure_number(value)
+    if number <= 0:
+        number = _row_figure_number(value)
+    scope = str(value.get("figure_scope") or "main").strip().lower() or "main"
+    return f"{scope}:{number}" if number > 0 else ""
+
+
 def _score_figure_row_match(row: dict[str, Any], block: dict[str, Any]) -> int:
     score = 0
+    explicit_row_key = str(row.get("figure_key") or "").strip().lower()
+    explicit_row_scope = str(row.get("figure_scope") or "").strip().lower()
+    row_key = explicit_row_key
+    if not row_key and explicit_row_scope:
+        row_number = _row_figure_number(row)
+        if row_number > 0:
+            row_key = f"{explicit_row_scope}:{row_number}"
+    block_key = _figure_key(block)
+    if row_key and block_key:
+        if row_key != block_key:
+            return -100
+        score += 14
     row_figure_id = str(row.get("figure_id") or "").strip()
     block_figure_id = str(block.get("figure_id") or "").strip()
     if row_figure_id and block_figure_id and row_figure_id == block_figure_id:
@@ -630,6 +667,8 @@ def _build_figure_index_payload(
                 figure_number = 0
             if figure_number <= 0:
                 continue
+            figure_scope = str(fig.get("figure_scope") or "main").strip().lower() or "main"
+            figure_key = str(fig.get("figure_key") or f"{figure_scope}:{figure_number}").strip()
             figure_block_id = str(fig.get("block_id") or "").strip()
             figure_anchor_id = str(fig.get("anchor_id") or "").strip()
             heading_path = str(fig.get("heading_path") or "").strip()
@@ -645,7 +684,8 @@ def _build_figure_index_payload(
                     cap_num = int(block.get("paper_figure_number") or 0)
                 except Exception:
                     cap_num = 0
-                if cap_num != figure_number:
+                cap_key = _figure_key(block)
+                if (figure_key and cap_key and cap_key != figure_key) or cap_num != figure_number:
                     continue
                 caption_block = block
                 break
@@ -663,6 +703,8 @@ def _build_figure_index_payload(
             locate_anchor = caption_text or _clean_text(fig.get("raw_text") or fig.get("text") or "", limit=600)
             rec = {
                 "paper_figure_number": int(figure_number),
+                "figure_scope": figure_scope,
+                "figure_key": figure_key,
                 "heading_path": heading_path,
                 "anchor_id": caption_anchor_id or figure_anchor_id,
                 "figure_block_id": figure_block_id,
@@ -702,6 +744,21 @@ def _build_figure_index_payload(
         rec = dict(row)
         figure_block = _find_best_figure_block(rec, blocks)
         caption_block = _find_best_caption_block(rec, blocks, figure_block=figure_block)
+        matched_identity = figure_block or caption_block or {}
+        matched_number = _block_figure_number(matched_identity)
+        if _row_figure_number(rec) <= 0 and matched_number > 0:
+            rec["paper_figure_number"] = matched_number
+        matched_scope = str(matched_identity.get("figure_scope") or "").strip().lower()
+        matched_key = _figure_key(matched_identity)
+        if matched_scope:
+            rec["figure_scope"] = matched_scope
+        if matched_key:
+            rec["figure_key"] = matched_key
+        if not _clean_text(rec.get("caption") or "", limit=1200) and caption_block:
+            rec["caption"] = _clean_text(
+                caption_block.get("raw_text") or caption_block.get("text") or "",
+                limit=1200,
+            )
         heading_path = (
             str((figure_block or {}).get("heading_path") or "").strip()
             or str((caption_block or {}).get("heading_path") or "").strip()

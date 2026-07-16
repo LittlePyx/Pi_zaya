@@ -259,7 +259,11 @@ function wrapPlainMathParentheticalsInLine(line: string): string {
     if (!isLikelyPlainMathExpression(inner)) return match
     return `（$${normalizePlainMathExpression(inner)}$）`
   })
-  out = out.replace(/\(([^()\n]{4,260})\)/g, (match, inner: string) => {
+  out = out.replace(/\(([^()\n]{4,260})\)/g, (match, inner: string, offset: number, source: string) => {
+    // Markdown link and image destinations use the same parenthesis syntax.
+    // Never reinterpret their URLs as inline math: relative asset routes often
+    // contain both `=` and `_`, which otherwise look formula-like here.
+    if (offset > 0 && source[offset - 1] === ']') return match
     if (!isLikelyPlainMathExpression(inner)) return match
     return `($${normalizePlainMathExpression(inner)}$)`
   })

@@ -144,7 +144,12 @@ def _fix_detached_acute(s: str) -> str:
         return ""
 
     def _reattach(match: re.Match[str]) -> str:
-        return f"{match.group('left')}{match.group('right')}\u0301"
+        right = match.group("right")
+        # PDF font maps commonly emit dotless i before a detached acute even
+        # though the source name contains a normal accented i.
+        if right == "\u0131":
+            right = "i"
+        return f"{match.group('left')}{right}\u0301"
 
     return unicodedata.normalize("NFC", _DETACHED_ACUTE_RE.sub(_reattach, s))
 
@@ -159,6 +164,39 @@ def count_mojibake(s: str) -> int:
 def contains_mojibake(s: str) -> bool:
     """Return whether text contains a known mojibake sequence."""
     return bool(s and _MOJIBAKE_DETECTION_RE.search(s))
+
+
+def contains_only_detached_accent_mojibake(s: str) -> bool:
+    """Return whether every detected artifact is a safely reattachable accent."""
+    matches = list(_MOJIBAKE_DETECTION_RE.finditer(str(s or "")))
+    return bool(matches) and all(_DETACHED_ACUTE_RE.fullmatch(match.group(0)) for match in matches)
+
+
+def normalize_detached_accents(s: str) -> str:
+    """Repair only detached acute accents without normalizing other Markdown."""
+    return _fix_detached_acute(str(s or ""))
+
+
+def normalize_known_superscript_tokens(s: str) -> str:
+    """Repair known OCR/VL spellings of superscripted algorithm names.
+
+    A superscript 2 in ``s²ISM`` is sometimes emitted as a question mark, a
+    citation-looking ``[2]``, or inline math. Keep this deliberately narrow so
+    real citations and ordinary question marks are untouched.
+    """
+    text = str(s or "")
+    text = re.sub(
+        r"(https?://github\.com/VicidominiLab/)s(?:\?|\s*\[\s*2\s*\]|\$\s*\^?\s*2\s*\$)ISM\b",
+        r"\1s2ISM",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(
+        r"\bs(?:\?|\s*\[\s*2\s*\]|\$\s*\^?\s*2\s*\$)(FLISM|ISM)\b",
+        lambda match: f"s²{match.group(1)}",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def _normalize_text(s: str) -> str:

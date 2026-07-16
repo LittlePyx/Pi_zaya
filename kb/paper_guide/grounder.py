@@ -11,7 +11,11 @@ from __future__ import annotations
 from importlib import import_module
 from pathlib import Path
 
-from ..paper_guide_structured_index_runtime import load_paper_guide_figure_index
+from ..paper_guide_structured_index_runtime import (
+    filter_figure_index_rows,
+    load_paper_guide_figure_index,
+    normalize_figure_scope,
+)
 
 
 def _legacy_runtime():
@@ -334,7 +338,16 @@ def _resolve_paper_guide_panel_clause_snippet(
         rows = load_paper_guide_figure_index(md_path_str)
     except Exception:
         rows = []
-    for row in list(rows or []):
+    figure_scope = normalize_figure_scope(
+        seg.get("figure_scope")
+        or seg.get("support_slot_figure_scope")
+        or seg.get("anchor_target_scope")
+    ) or "main"
+    for row in filter_figure_index_rows(
+        rows,
+        figure_number=fig_no,
+        figure_scope=figure_scope,
+    ):
         if not isinstance(row, dict):
             continue
         try:

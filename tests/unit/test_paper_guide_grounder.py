@@ -3,6 +3,40 @@ from pathlib import Path
 import kb.paper_guide.grounder as grounder
 
 
+def test_panel_clause_snippet_filters_same_number_by_figure_scope(monkeypatch):
+    monkeypatch.setattr(
+        grounder,
+        "load_paper_guide_figure_index",
+        lambda _path: [
+            {
+                "paper_figure_number": 5,
+                "figure_scope": "main",
+                "figure_key": "main:5",
+                "caption": "Figure 5. a Main lifetime simulation.",
+            },
+            {
+                "paper_figure_number": 5,
+                "figure_scope": "extended_data",
+                "figure_key": "extended_data:5",
+                "caption": "Extended Data Figure 5. a Live-cell mitochondria at 25 seconds per frame.",
+            },
+        ],
+    )
+
+    snippet = grounder._resolve_paper_guide_panel_clause_snippet(
+        {
+            "claim_type": "figure_panel",
+            "support_slot_figure_number": 5,
+            "support_slot_panel_letters": ["a"],
+            "figure_scope": "extended_data",
+        },
+        md_path="paper.en.md",
+    )
+
+    assert "Live-cell mitochondria" in snippet
+    assert "Main lifetime" not in snippet
+
+
 def test_ground_paper_guide_answer_support_runs_inject_then_resolve(monkeypatch):
     calls: list[tuple[str, str]] = []
 

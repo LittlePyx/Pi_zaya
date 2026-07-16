@@ -1004,6 +1004,26 @@ const plainMathWidthMessages: Message[] = [
   },
 ]
 
+const libraryFigureAssetUrlMessages: Message[] = [
+  {
+    id: 9251,
+    role: 'assistant',
+    content: [
+      '### Library Figure',
+      '',
+      '![NatPhoton Fig. 5](/api/references/asset?path=F%3A%5Cresearch%5Ckb_chat%5Cassets%5Cpage_7_fig_3.png)',
+    ].join('\n'),
+    rendered_body: [
+      '### Library Figure',
+      '',
+      '![NatPhoton Fig. 5](/api/references/asset?path=F%3A%5Cresearch%5Ckb_chat%5Cassets%5Cpage_7_fig_3.png)',
+    ].join('\n'),
+    copy_text: 'Library Figure',
+    copy_markdown: 'Library Figure',
+    created_at: Date.now(),
+  },
+]
+
 const plainMathWidthRefs: Record<string, unknown> = {
   '9201': {
     hits: [
@@ -1732,6 +1752,7 @@ type RegressionScenario =
   | 'plain-citation-refs-fallback'
   | 'plain-citation-refs-partial'
   | 'plain-math-width'
+  | 'library-figure-asset-url'
   | 'guide-filter-empty-external'
   | 'negative-evidence-locate'
   | 'normal-multi-doc-ambiguous-inline-locate'
@@ -1767,6 +1788,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'plain-citation-refs-fallback') return 'plain-citation-refs-fallback'
     if (scenarioParam === 'plain-citation-refs-partial') return 'plain-citation-refs-partial'
     if (scenarioParam === 'plain-math-width') return 'plain-math-width'
+    if (scenarioParam === 'library-figure-asset-url') return 'library-figure-asset-url'
     if (scenarioParam === 'guide-filter-empty-external') return 'guide-filter-empty-external'
     if (scenarioParam === 'negative-evidence-locate') return 'negative-evidence-locate'
     if (scenarioParam === 'normal-multi-doc-ambiguous-inline-locate') return 'normal-multi-doc-ambiguous-inline-locate'
@@ -1798,6 +1820,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'plain-citation-refs-fallback') return plainCitationRefsFallbackMessages
     if (scenario === 'plain-citation-refs-partial') return plainCitationRefsPartialFallbackMessages
     if (scenario === 'plain-math-width') return plainMathWidthMessages
+    if (scenario === 'library-figure-asset-url') return libraryFigureAssetUrlMessages
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyMessages
     if (scenario === 'negative-evidence-locate') return negativeEvidenceLocateMessages
     if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateMessages

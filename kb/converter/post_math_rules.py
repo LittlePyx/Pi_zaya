@@ -28,6 +28,61 @@ _UNCLOSED_INLINE_MATH_SENTENCE_RE = re.compile(
     r"\$(\\(?:alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|chi|psi|omega|"
     r"Theta|Sigma|hat|mathbf|boldsymbol)[^$\n]{1,180}?)([.?!])(?=\s+[A-Z])"
 )
+_BARE_TAGGED_DISPLAY_MATH_RE = re.compile(
+    r"(?mi)^(?=\\?(?:widehat|widetilde|underset|mathcal|left|right)\b)"
+    r"(?=[^\n]{1,1000}\btag\{\d{1,3}\}\s*$)(?=[^\n]*=)"
+    r"(?=[^\n]*\b(?:widehat|widetilde|underset|mathcal|left|right)\s*[{(])[^\n]+$"
+)
+
+
+def contains_bare_tagged_display_math(text: str) -> bool:
+    in_fence = False
+    in_math = False
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if re.match(r"^\s*```", line):
+            in_fence = not in_fence
+            continue
+        if stripped == "$$":
+            in_math = not in_math
+            continue
+        if not in_fence and not in_math and _BARE_TAGGED_DISPLAY_MATH_RE.fullmatch(stripped):
+            return True
+    return False
+
+
+def restore_bare_tagged_display_math(md: str) -> str:
+    """Restore OCR-stripped backslashes on a tagged display equation line."""
+    lines = str(md or "").splitlines()
+    out: list[str] = []
+    in_fence = False
+    in_math = False
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^\s*```", line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if stripped == "$$":
+            in_math = not in_math
+            out.append(line)
+            continue
+        if in_fence or in_math or not _BARE_TAGGED_DISPLAY_MATH_RE.fullmatch(stripped):
+            out.append(line)
+            continue
+
+        expr = stripped
+        for command in ("widehat", "widetilde", "underset", "mathcal", "arg", "min", "left", "right", "log", "tag"):
+            expr = re.sub(rf"(?<!\\)\b{command}\b", rf"\\{command}", expr)
+        expr = re.sub(r"(?<=\w)\s+in\s+(?=\\mathcal\{)", r" \\in ", expr)
+        expr = re.sub(r"\\left\s*\{", r"\\left\\{", expr)
+        expr = re.sub(r"\\right\s*\}", r"\\right\\}", expr)
+        expr = re.sub(r"(?<!\\)\bpen\s*\(", r"\\operatorname{pen}(", expr)
+        expr = re.sub(r"\{\s+", "{", expr)
+        expr = re.sub(r"\s+\}", "}", expr)
+        expr = re.sub(r",\s*(\\tag\{\d{1,3}\})\s*$", r" \1", expr)
+        out.extend(["$$", expr, "$$"])
+    return "\n".join(out)
 
 
 def _wrap_bare_inline_latex_math_segment(segment: str) -> str:

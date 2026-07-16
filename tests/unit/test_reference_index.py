@@ -599,6 +599,33 @@ def test_extract_references_map_recovers_unheaded_references_before_methods():
     assert "Reference title 12" in str(out.get(12) or "")
 
 
+def test_extract_references_map_collects_a_later_data_reference_section():
+    md_text = """# Demo
+
+## References
+[1] A. Author. First source. Journal of Tests, 2020.
+[2] B. Author. Second source. Journal of Tests, 2021.
+
+## Methods
+Experimental details and body citations [1].
+
+## Data availability
+The dataset is archived online (ref. 3).
+
+## References
+[3] C. Author. Data from the demo study. Zenodo https://doi.org/10.5281/zenodo.12345 (2025).
+
+## Acknowledgements
+Thanks to the research team.
+"""
+
+    out = ref_index.extract_references_map_from_md(md_text)
+
+    assert sorted(out) == [1, 2, 3]
+    assert "zenodo.12345" in out[3]
+    assert "Acknowledgements" not in out[3]
+
+
 def test_build_reference_catalog_from_md_marks_gapped_tail_and_confidence():
     md_text = (
         "# Demo\n\n"

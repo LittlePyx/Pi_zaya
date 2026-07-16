@@ -16,6 +16,7 @@ from .post_math_rules import (
     _cleanup_stray_latex_in_text,
     _normalize_math_for_typora,
     fix_math_markdown,
+    restore_bare_tagged_display_math,
 )
 from .post_references import (
     _format_references,
@@ -154,7 +155,25 @@ def _drop_standalone_journal_metadata_lines(md: str) -> str:
     lines = md.splitlines()
     out: list[str] = []
     for line in lines:
-        st = (line or "").strip()
+        line = re.sub(
+            r"\s+#\d{3,10}\s*-\s*\$\d+(?:\.\d+)?\s+USD\b.*$",
+            "",
+            str(line or ""),
+            flags=re.IGNORECASE,
+        ).rstrip()
+        st = line.strip()
+        if re.fullmatch(
+            r"#\d{3,10}\s*-\s*\\?\$\d+(?:\.\d+)?\s+USD(?:\s+\(C\)\s+\d{4}\s+OSA)?",
+            st,
+            flags=re.IGNORECASE,
+        ):
+            continue
+        if re.fullmatch(
+            r"#{1,6}\s+\d{1,2}\s+\w+\s+\d{4}\s*/\s*Vol\.\s*\d+.*OPTICS EXPRESS\s+\d+",
+            st,
+            flags=re.IGNORECASE,
+        ):
+            continue
         if st and (_is_journal_metadata_heading(st) or _looks_like_running_journal_header_line(st)):
             continue
         out.append(line)
@@ -188,7 +207,7 @@ def _reflow_hard_wrapped_paragraphs(md: str) -> str:
 
     fence_re = re.compile(r"^\s*```")
     heading_re = re.compile(r"^\s*#{1,6}\s+")
-    list_re = re.compile(r"^\s*(?:[-*+]\s+|\d+\.\s+)")
+    list_re = re.compile(r"^\s*(?:[-*+]\s+|\d+\.\s+|\[\d{1,4}\]\s+)")
     table_re = re.compile(r"^\s*\|")
     math_marker = re.compile(r"^\s*\$\$")
     caption_like_re = re.compile(r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?|table)\s*(?:\d+[A-Za-z]?|[A-Za-z](?:\.\d+)?|[IVXLC]+)\b", re.IGNORECASE)
@@ -2691,6 +2710,7 @@ def postprocess_markdown(md: str) -> str:
     md = _reflow_hard_wrapped_paragraphs(md)
     md = _split_inline_heading_markers(md)
     md = _split_inline_structural_heading_labels(md)
+    md = restore_bare_tagged_display_math(md)
     md = fix_math_markdown(md)
     md = _normalize_math_for_typora(md)
     md = _cleanup_stray_latex_in_text(md)

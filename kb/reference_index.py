@@ -402,21 +402,30 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
             cur_buf.append(rest)
         return True
 
+    in_references = True
     for raw in lines[ref_i + 1 :]:
         for s in _split_embedded_ref_segments(raw):
             if not s:
+                continue
+            if _REF_HEAD_RE.match(s):
+                _flush()
+                in_references = True
+                continue
+            if not in_references:
                 continue
             if re.match(r"^<!--\s*kb_page:\s*\d+\s*-->$", s, re.IGNORECASE):
                 continue
 
             if (out or cur_n is not None) and _is_reference_map_post_references_stop_line(s):
                 _flush()
-                return _cleanup_reference_number_noise(out)
+                in_references = False
+                continue
 
             if re.match(r"^#{1,6}\s+\S+", s) and (not _REF_HEAD_RE.match(s)):
                 if out:
                     _flush()
-                    return _cleanup_reference_number_noise(out)
+                    in_references = False
+                    continue
 
             m = _REF_START_BRACKET_RE.match(s) or _REF_START_DOT_RE.match(s)
             if m:

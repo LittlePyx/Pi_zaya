@@ -1,3 +1,5 @@
+import re
+
 from kb.converter.post_processing import postprocess_markdown
 from kb.converter.reference_markdown import normalize_references_page_text
 
@@ -367,3 +369,111 @@ def test_references_split_bare_numbered_following_item_after_period():
     assert any(ln.startswith("[21] Bolduc, E., Agnew, M. & Leach, J.") for ln in ref_lines)
     assert any(ln.startswith("[22] Chandramouli, P. et al.") for ln in ref_lines)
     assert "(2020). 21." not in refs
+
+
+def test_references_preserve_sequential_entries_and_page_anchors_through_full_postprocess():
+    refs_page_9 = [
+        f"[{idx}] Author {idx}, Complete reference {idx}. Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(1, 9)
+    ]
+    refs_page_10 = [
+        f"[{idx}] Author {idx}, Complete reference {idx}. Journal of Tests 2025, {idx}, {1000 + idx}."
+        for idx in range(9, 13)
+    ]
+    src = "\n".join(
+        [
+            "# Complete Paper",
+            "",
+            "## References",
+            "",
+            "<!-- kb_page: 9 -->",
+            *refs_page_9,
+            "<!-- kb_page: 10 -->",
+            *refs_page_10,
+        ]
+    )
+
+    out = postprocess_markdown(src)
+    ref_lines = [line.strip() for line in _refs_tail(out).splitlines() if line.strip()]
+    extracted_numbers = [
+        int(match.group(1))
+        for line in ref_lines
+        if (match := re.match(r"^\[(\d+)\]\s+", line))
+    ]
+
+    assert extracted_numbers == list(range(1, 13))
+    assert ref_lines.index("<!-- kb_page: 9 -->") < ref_lines.index("[1] Author 1, Complete reference 1. Journal of Tests 2024, 1, 1001.")
+    assert ref_lines.index("<!-- kb_page: 10 -->") < ref_lines.index("[9] Author 9, Complete reference 9. Journal of Tests 2025, 9, 1009.")
+
+
+def test_inferred_references_heading_keeps_following_supplementary_material():
+    refs = [
+        f"[{idx}] Author {idx}, Complete reference {idx}. Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(1, 9)
+    ]
+    src = "\n".join(
+        [
+            "# Complete Paper",
+            "",
+            "## Abstract",
+            "This article has enough main-body text before its bibliography to infer the missing heading safely. " * 8,
+            "",
+            "<!-- kb_page: 9 -->",
+            *refs[:4],
+            "<!-- kb_page: 10 -->",
+            *refs[4:],
+            "",
+            "## Supplementary Materials",
+            "",
+            "### Refocusing Operation",
+            "",
+            "$$",
+            r"I(x,y,z) = \mathcal{F}^{-1}\{F(k_x,k_y)e^{ik_z z}\}. \tag{8}",
+            "$$",
+            "",
+            "<!-- kb_page: 11 -->",
+            "The physical operation shifts each image before wave propagation.",
+            "",
+            "<!-- kb_page: 12 -->",
+            "![Figure 7](./assets/page_12_fig_1.png)",
+            "",
+            "Figure 7. Full supplementary dataset.",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "## References" in out
+    assert all(re.search(rf"(?m)^\[{idx}\]\s+", out) for idx in range(1, 9))
+    assert re.search(r"(?m)^## Supplementary Materials$", out)
+    assert not re.search(r"(?m)^### Supplementary Materials$", out)
+    assert "### Refocusing Operation" in out
+    assert r"\tag{8}" in out
+    assert "<!-- kb_page: 11 -->" in out
+    assert "<!-- kb_page: 12 -->" in out
+    assert "![Figure 7](./assets/page_12_fig_1.png)" in out
+    assert out.index("[8] Author 8") < out.index("## Supplementary Materials")
+
+
+def test_inferred_references_keeps_supplementary_words_inside_a_reference_entry():
+    src = "\n".join(
+        [
+            "# Complete Paper",
+            "",
+            "## Abstract",
+            "This article has enough main-body text before its bibliography to infer the missing heading safely. " * 8,
+            "",
+            "[1] A. Author. First source. Journal of Tests 2020, 1, 10.",
+            "[2] B. Author. Second source. Journal of Tests 2021, 2, 20.",
+            "[3] C. Author.",
+            "Supplementary material for the third source.",
+            "Journal of Tests 2022, 3, 30.",
+            "[4] D. Author. Fourth source. Journal of Tests 2023, 4, 40.",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "## Supplementary material for the third source" not in out
+    assert re.search(r"(?m)^\[3\]\s+C\. Author\. Supplementary material for the third source\.", out)
+    assert re.search(r"(?m)^\[4\]\s+D\. Author\.", out)

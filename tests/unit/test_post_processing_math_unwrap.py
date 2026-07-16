@@ -1,4 +1,5 @@
 from kb.converter.post_processing import postprocess_markdown
+from kb.converter.post_math_rules import contains_bare_tagged_display_math
 import re
 
 
@@ -199,3 +200,26 @@ $$
     assert "about 1.4 Airy units" in out
     assert "1 AU = 1.22" in out
     assert "445" in out
+
+
+def test_restore_ocr_stripped_tagged_display_equation():
+    src = "widehat{s} = underset{s in mathcal{S}}{ arg min} left { - log p(d|W widehat{s}) + pen( widetilde{s}) right }, tag{13}"
+
+    out = postprocess_markdown(src)
+
+    assert out.startswith("$$\n")
+    assert r"\widehat{s}" in out
+    assert r"\underset{s \in \mathcal{S}}{\arg \min}" in out
+    assert r"\left\{" in out
+    assert r"\right\}" in out
+    assert r"\tag{13}" in out
+    assert contains_bare_tagged_display_math(out) is False
+
+
+def test_tagged_math_restoration_does_not_wrap_a_natural_language_sentence():
+    src = "The estimator widehat{s} = underset{s in mathcal{S}}{ arg min} left { - log p(d|s) right }, tag{13}"
+
+    out = postprocess_markdown(src)
+
+    assert out == src
+    assert not out.startswith("$$")

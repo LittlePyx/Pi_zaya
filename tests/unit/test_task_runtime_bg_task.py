@@ -310,6 +310,10 @@ def test_post_convert_source_retry_targets_source_level_conversion_damage(monkey
     assert _post_convert_source_retry_needed(assessment) is True
 
     assessment["action"] = "reconvert"
+    assessment["blocking_issue_codes"] = ["source_page_count_mismatch"]
+    assessment["repair_plan"]["reconvert_issue_codes"] = ["source_page_count_mismatch"]
+    assert _post_convert_source_retry_needed(assessment) is True
+
     monkeypatch.setenv("KB_POST_CONVERT_SOURCE_RETRY", "0")
     assert _post_convert_source_retry_needed(assessment) is False
 

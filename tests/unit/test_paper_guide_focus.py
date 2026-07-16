@@ -200,6 +200,57 @@ def test_extract_bound_paper_figure_caption_returns_matching_caption(tmp_path: P
     assert "hardware" in out.lower()
 
 
+def test_extended_data_caption_does_not_fall_back_to_same_number_main_figure(tmp_path: Path):
+    doc_dir = tmp_path / "paper"
+    assets_dir = doc_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    (assets_dir / "page_7_fig_3.png").write_bytes(b"main")
+    (assets_dir / "page_18_fig_1.png").write_bytes(b"extended")
+    md = doc_dir / "paper.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# Results",
+                "![Figure 5](./assets/page_7_fig_3.png)",
+                "Figure 5. a, Simulation of tubulin filaments.",
+                "",
+                "# Extended Data",
+                "Extended Data Fig. 5 | Live-cell imaging of mitochondria. Field-of-view: 60 um x 60 um.",
+                "![Figure 5](./assets/page_18_fig_1.png)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    caption = _extract_bound_paper_figure_caption(
+        str(md),
+        figure_num=5,
+        figure_scope="extended_data",
+        db_dir=tmp_path,
+    )
+    focus = _build_paper_guide_special_focus_block(
+        [],
+        prompt="Explain Extended Data Figure 5.",
+        prompt_family="figure_walkthrough",
+        source_path=str(md),
+        db_dir=tmp_path,
+        requested_figure_number=lambda _prompt, _hits: 5,
+    )
+    repaired = _repair_paper_guide_focus_answer_generic(
+        "It reports the imaging parameters.",
+        prompt="Explain Extended Data Figure 5.",
+        prompt_family="figure_walkthrough",
+        special_focus_block=focus,
+    )
+
+    assert "live-cell imaging of mitochondria" in caption.lower()
+    assert "simulation of tubulin" not in caption.lower()
+    assert "Requested figure: Extended Data Figure 5" in focus
+    assert "Caption anchor:" in repaired
+    assert "live-cell imaging of mitochondria" in repaired.lower()
+    assert "simulation of tubulin" not in repaired.lower()
+
+
 def test_extract_caption_focus_fragment_prefers_missing_panel_clause_pair():
     excerpt = (
         "Figure 1. a Hardware. b Linear polarization iPSF. c Circular polarization iPSF. "

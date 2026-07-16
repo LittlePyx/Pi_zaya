@@ -348,6 +348,23 @@ test('formula locate chip remaps to the guide equation anchor', async ({ page })
   await expect(payload).toContainText('"anchorKind": "equation"')
 })
 
+test('library figure asset URL is not rewritten as inline math', async ({ page }) => {
+  const expectedUrl = '/api/references/asset?path=F%3A%5Cresearch%5Ckb_chat%5Cassets%5Cpage_7_fig_3.png'
+  await page.route('**/api/references/asset?path=*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="24"><rect width="32" height="24" fill="navy"/></svg>',
+    })
+  })
+  await page.goto('/__message_list_test__?scenario=library-figure-asset-url')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('library-figure-asset-url')
+  const image = page.getByRole('img', { name: 'NatPhoton Fig. 5' })
+  await expect(image).toHaveAttribute('src', expectedUrl)
+  await expect.poll(() => image.evaluate((node) => (node as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+})
+
 test('render packet contract can drive body render and strict locate without top-level render fields', async ({ page }) => {
   await mockReaderDoc(page)
   await page.goto('/__message_list_test__?scenario=render-packet-contract')

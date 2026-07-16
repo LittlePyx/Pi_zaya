@@ -56,9 +56,12 @@ from kb.paper_guide_prompting import (
     _requested_figure_number,
 )
 from kb.paper_guide_structured_index_runtime import (
+    extract_figure_scope_from_text,
+    filter_figure_index_rows,
     load_paper_guide_equation_index,
     load_paper_guide_figure_index,
     load_paper_guide_reference_index,
+    normalize_figure_scope,
 )
 from kb.paper_guide_target_scope import _extract_prompt_panel_letters
 from kb.inpaper_citation_grounding import parse_ref_num_set
@@ -966,10 +969,19 @@ def _select_exact_equation_index_entry(
     return best
 
 
-def _select_exact_figure_index_entry(entries: list[dict], *, figure_number: int) -> dict:
+def _select_exact_figure_index_entry(
+    entries: list[dict],
+    *,
+    figure_number: int,
+    figure_scope: str = "main",
+) -> dict:
     best: dict = {}
     best_score = float("-inf")
-    for raw in list(entries or []):
+    for raw in filter_figure_index_rows(
+        entries,
+        figure_number=figure_number,
+        figure_scope=figure_scope,
+    ):
         if not isinstance(raw, dict):
             continue
         try:
@@ -1510,7 +1522,12 @@ def _resolve_exact_figure_panel_caption_support_from_source(
 
     blocks = list(load_source_blocks(md_path) or [])
     figure_rows = load_paper_guide_figure_index(md_path)
-    indexed_figure = _select_exact_figure_index_entry(figure_rows, figure_number=fig_num)
+    figure_scope = extract_figure_scope_from_text(q, default_main=True)
+    indexed_figure = _select_exact_figure_index_entry(
+        figure_rows,
+        figure_number=fig_num,
+        figure_scope=figure_scope,
+    )
     if indexed_figure:
         figure_block_id = str(indexed_figure.get("figure_block_id") or "").strip()
         caption_block_id = str(indexed_figure.get("caption_block_id") or "").strip()
@@ -1550,6 +1567,8 @@ def _resolve_exact_figure_panel_caption_support_from_source(
                 "segment_text": clause,
                 "segment_index": -1,
                 "figure_number": int(fig_num),
+                "figure_scope": str(indexed_figure.get("figure_scope") or figure_scope).strip(),
+                "figure_key": str(indexed_figure.get("figure_key") or f"{figure_scope}:{fig_num}").strip(),
                 "panel_letters": [panel],
             }
 
@@ -1569,6 +1588,9 @@ def _resolve_exact_figure_panel_caption_support_from_source(
         if not text:
             continue
         heading = str(block.get("heading_path") or "").strip()
+        block_scope = normalize_figure_scope(block.get("figure_scope")) or extract_figure_scope_from_text(text)
+        if block_scope and block_scope != figure_scope:
+            continue
 
         # If we're entering another figure caption, close the current scope.
         m_other = caption_start_re.match(text)
@@ -1619,6 +1641,8 @@ def _resolve_exact_figure_panel_caption_support_from_source(
                 "segment_text": clause,
                 "segment_index": -1,
                 "figure_number": int(fig_num),
+                "figure_scope": figure_scope,
+                "figure_key": f"{figure_scope}:{fig_num}",
                 "panel_letters": [panel],
             }
     return best if best_score >= 8.0 else {}
@@ -2207,10 +2231,12 @@ def _apply_paper_guide_answer_postprocess(
     elif effective_family == "figure_walkthrough":
         figure_num = int(resolved_intent.target_figure or 0) or int(_requested_figure_number(prompt_text, answer_hits) or 0)
         if figure_num > 0:
+            figure_scope = extract_figure_scope_from_text(prompt_text, default_main=True)
             figure_caption = _extract_bound_paper_figure_caption(
                 source_path,
                 figure_num=figure_num,
                 db_dir=db_dir,
+                figure_scope=figure_scope,
             )
             if figure_caption:
                 text = _repair_paper_guide_focus_answer_generic(

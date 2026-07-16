@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from kb.paper_guide_focus import _extract_caption_panel_letters
+from kb.paper_guide_structured_index_runtime import extract_figure_scope_from_text, normalize_figure_scope
 from kb.paper_guide_prompting import (
     _paper_guide_prompt_family,
     _paper_guide_requested_box_numbers,
@@ -76,6 +77,11 @@ def _normalize_paper_guide_target_scope(scope: dict | None) -> dict:
         target_figure_num = int(raw.get("target_figure_num") or raw.get("target_figure_number") or 0)
     except Exception:
         target_figure_num = 0
+    target_figure_scope = normalize_figure_scope(
+        raw.get("target_figure_scope") or raw.get("figure_scope")
+    )
+    if target_figure_num > 0 and not target_figure_scope:
+        target_figure_scope = "main"
 
     panels: list[str] = []
     seen_panels: set[str] = set()
@@ -135,6 +141,7 @@ def _normalize_paper_guide_target_scope(scope: dict | None) -> dict:
         "requested_sections": sections,
         "requested_boxes": boxes,
         "target_figure_num": target_figure_num if target_figure_num > 0 else 0,
+        "target_figure_scope": target_figure_scope if target_figure_num > 0 else "",
         "target_panel_letters": panels,
         "heading_hints": heading_hints,
         "require_scope_match": require_scope_match,
@@ -156,6 +163,10 @@ def _build_paper_guide_target_scope(
     requested_sections = _paper_guide_requested_section_targets(q)
     requested_boxes = _paper_guide_requested_box_numbers(q)
     target_figure_num = _extract_figure_number(q)
+    target_figure_scope = extract_figure_scope_from_text(
+        q,
+        default_main=bool(target_figure_num),
+    )
     target_panel_letters = _extract_prompt_panel_letters(q)
     heading_hints = _paper_guide_requested_heading_hints(q)
 
@@ -164,6 +175,7 @@ def _build_paper_guide_target_scope(
         "requested_sections": requested_sections,
         "requested_boxes": requested_boxes,
         "target_figure_num": int(target_figure_num or 0),
+        "target_figure_scope": target_figure_scope,
         "target_panel_letters": target_panel_letters,
         "heading_hints": heading_hints,
         "require_scope_match": bool(

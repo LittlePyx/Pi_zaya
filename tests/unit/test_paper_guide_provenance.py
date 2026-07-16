@@ -3,6 +3,56 @@ from pathlib import Path
 import kb.paper_guide_provenance as provenance
 
 
+def test_anchor_row_to_provenance_block_preserves_figure_identity():
+    block = provenance._anchor_row_to_provenance_block(
+        {
+            "block_id": "extended-caption",
+            "anchor_id": "p_00018",
+            "kind": "paragraph",
+            "text": "Extended Data Figure 5. Live-cell mitochondria.",
+            "paper_figure_number": 5,
+            "figure_scope": "extended_data",
+            "figure_key": "extended_data:5",
+            "figure_id": "extended_data_fig_005",
+            "figure_role": "caption",
+            "linked_figure_block_id": "extended-figure",
+        }
+    )
+
+    assert block["paper_figure_number"] == 5
+    assert block["figure_scope"] == "extended_data"
+    assert block["figure_key"] == "extended_data:5"
+    assert block["linked_figure_block_id"] == "extended-figure"
+
+
+def test_select_figure_index_entry_uses_semantic_scope_before_richness_score():
+    rows = [
+        {
+            "paper_figure_number": 5,
+            "figure_scope": "main",
+            "figure_key": "main:5",
+            "caption_block_id": "main-caption",
+            "figure_block_id": "main-figure",
+            "caption": "Figure 5. Rich main caption.",
+        },
+        {
+            "paper_figure_number": 5,
+            "figure_scope": "extended_data",
+            "figure_key": "extended_data:5",
+            "caption_block_id": "extended-caption",
+            "caption": "Extended Data Figure 5. Live-cell mitochondria.",
+        },
+    ]
+
+    selected = provenance._select_figure_index_entry(
+        rows,
+        figure_number=5,
+        figure_scope="extended_data",
+    )
+
+    assert selected["caption_block_id"] == "extended-caption"
+
+
 def test_quote_exact_binding_preempts_weak_long_block_match_and_label_only_locates(monkeypatch, tmp_path):
     md_path = tmp_path / "paper.en.md"
     md_path.write_text("placeholder", encoding="utf-8")

@@ -19,7 +19,33 @@ from kb.paper_guide_grounding_runtime import (
     _paper_guide_refocus_support_excerpt,
     _paper_guide_support_focus_tokens,
     _score_paper_guide_evidence_atom,
+    _select_grounding_figure_index_entry,
 )
+
+
+def test_select_grounding_figure_index_entry_hard_filters_explicit_figure_scope():
+    rows = [
+        {
+            "paper_figure_number": 5,
+            "figure_scope": "main",
+            "figure_key": "main:5",
+            "caption": "Figure 5. Main result with a tissue sample.",
+            "caption_block_id": "main-caption",
+        },
+        {
+            "paper_figure_number": 5,
+            "figure_scope": "extended_data",
+            "figure_key": "extended_data:5",
+            "caption": "Extended Data Figure 5. Live-cell mitochondria.",
+            "caption_block_id": "extended-caption",
+        },
+    ]
+
+    main = _select_grounding_figure_index_entry(rows, figure_number=5, figure_scope="main")
+    extended = _select_grounding_figure_index_entry(rows, figure_number=5, figure_scope="extended_data")
+
+    assert main["caption_block_id"] == "main-caption"
+    assert extended["caption_block_id"] == "extended-caption"
 
 
 def test_extract_inline_reference_specs_supports_brackets_and_superscripts():

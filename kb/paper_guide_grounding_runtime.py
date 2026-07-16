@@ -36,8 +36,10 @@ from kb.paper_guide_shared import (
     _trim_paper_guide_prompt_snippet,
 )
 from kb.paper_guide_structured_index_runtime import (
+    filter_figure_index_rows,
     load_paper_guide_figure_index,
     load_paper_guide_reference_index,
+    normalize_figure_scope,
 )
 from kb.paper_guide_target_scope import (
     _build_paper_guide_target_scope,
@@ -816,6 +818,7 @@ def _select_grounding_figure_index_entry(
     entries: list[dict] | None,
     *,
     figure_number: int,
+    figure_scope: str = "main",
     panel_letters: set[str] | None = None,
     probe: str = "",
 ) -> dict:
@@ -832,7 +835,12 @@ def _select_grounding_figure_index_entry(
     }
     best: dict = {}
     best_score = float("-inf")
-    for raw in list(entries or []):
+    candidates = filter_figure_index_rows(
+        entries,
+        figure_number=target_fig,
+        figure_scope=figure_scope,
+    )
+    for raw in candidates:
         if not isinstance(raw, dict):
             continue
         try:
@@ -891,6 +899,7 @@ def _resolve_figure_panel_support_from_index(
     indexed = _select_grounding_figure_index_entry(
         figure_rows,
         figure_number=target_fig,
+        figure_scope=str(target_scope.get("target_figure_scope") or ""),
         panel_letters=target_panel_letters,
         probe=probe,
     )
@@ -919,6 +928,12 @@ def _resolve_figure_panel_support_from_index(
         return {}
 
     figure_number = int(indexed.get("paper_figure_number") or indexed.get("fig_no") or target_fig or 0)
+    figure_scope = normalize_figure_scope(indexed.get("figure_scope")) or normalize_figure_scope(
+        target_scope.get("target_figure_scope")
+    )
+    figure_key = str(indexed.get("figure_key") or "").strip() or (
+        f"{figure_scope}:{figure_number}" if figure_scope and figure_number > 0 else ""
+    )
     heading_path = _paper_guide_support_heading_with_figure(
         str((primary_block or {}).get("heading_path") or indexed.get("heading_path") or "").strip(),
         figure_number=figure_number,
@@ -952,6 +967,8 @@ def _resolve_figure_panel_support_from_index(
         "evidence_atom_kind": "caption_clause" if target_panel_letters else "caption",
         "evidence_atom_text": locate_anchor,
         "figure_number": int(figure_number or 0),
+        "figure_scope": figure_scope,
+        "figure_key": figure_key,
         "box_number": 0,
         "panel_letters": panel_letters,
         "candidate_refs": list(candidate_refs),

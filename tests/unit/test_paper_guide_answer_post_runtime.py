@@ -3,6 +3,33 @@ import json
 import kb.paper_guide_answer_post_runtime as answer_post_runtime
 
 
+def test_select_exact_figure_index_entry_does_not_mix_main_and_extended_data():
+    rows = [
+        {
+            "paper_figure_number": 5,
+            "figure_scope": "main",
+            "figure_key": "main:5",
+            "caption_block_id": "main-caption",
+            "caption": "Figure 5. Main result.",
+        },
+        {
+            "paper_figure_number": 5,
+            "figure_scope": "extended_data",
+            "figure_key": "extended_data:5",
+            "caption_block_id": "extended-caption",
+            "caption": "Extended Data Figure 5. Live-cell mitochondria.",
+        },
+    ]
+
+    selected = answer_post_runtime._select_exact_figure_index_entry(
+        rows,
+        figure_number=5,
+        figure_scope="extended_data",
+    )
+
+    assert selected["caption_block_id"] == "extended-caption"
+
+
 def test_repair_reconstruction_method_taxonomy_folds_basis_pursuit_third_class():
     raw = (
         "文中明确提到了三类主流重建方法，其优缺点与适用场景如下：\n\n"

@@ -18,7 +18,7 @@ except ImportError:
 from .config import ConvertConfig, canonical_speed_mode
 from .models import TextBlock
 from .geometry_utils import _rect_area, _union_rect, _rect_intersection_area, _overlap_1d
-from .text_utils import _normalize_text
+from .text_utils import _normalize_text, normalize_detached_accents, normalize_known_superscript_tokens
 
 # Greek letter to LaTeX mapping (expanded)
 GREEK_TO_LATEX = {
@@ -173,7 +173,14 @@ from .reference_markdown import (
     format_single_reference,
     normalize_references_page_text,
 )
-from .pdf_reference_text import reference_ordered_page_text
+from .pdf_reference_text import (
+    consecutive_reference_chain_positions,
+    is_ambiguous_reference_running_line,
+    is_reference_running_line,
+    merge_standalone_reference_continuations,
+    reference_ordered_page_text,
+    trim_reference_publisher_tail,
+)
 from kb.reference_index import extract_references_map_from_md
 from .heading_markdown import fix_heading_structure
 from .llm_math_cleanup import llm_fix_inline_formulas, llm_fix_display_math
@@ -233,6 +240,14 @@ def _reference_map_has_short_truncated_entries(ref_map: dict[int, str]) -> bool:
         if not body:
             continue
         if re.search(r"\b(?:18|19|20)\d{2}\b|https?://|www\.|\bdoi\s*:|10\.\d{4,9}/", body, flags=re.IGNORECASE):
+            continue
+        if re.search(
+            r"\b(?:journal|proceedings?|proc\.?|ieee|acm|spie|springer|wiley|opt\.?|optics?|"
+            r"photonics?|phys\.?|nature|science|letters?|review|commun\.?|express|trans\.?)\b"
+            r".*(?:\b\d{1,4}\s*,\s*)?[A-Za-z]?\d{3,}\s*$",
+            body,
+            flags=re.IGNORECASE,
+        ):
             continue
         words = re.findall(r"[A-Za-z][A-Za-z'\-]*", body)
         if len(body) <= 32 and len(words) <= 5 and re.search(r"\bet\s+al\.?$", body, flags=re.IGNORECASE):
@@ -325,32 +340,41 @@ def _pdf_page_has_reference_block_text(text: str) -> bool:
     numbers = _pdf_page_reference_start_numbers(text)
     if len(numbers) < 3:
         return False
-    increasing_pairs = sum(1 for left, right in zip(numbers, numbers[1:]) if int(right) > int(left))
-    return increasing_pairs >= max(1, len(numbers) - 2)
+    return len(consecutive_reference_chain_positions(numbers)) >= 3
 
 
 def _trim_pdf_page_text_to_first_reference(text: str) -> str:
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     lines = raw.split("\n")
+    candidates: list[tuple[int, int]] = []
     for idx, line in enumerate(lines):
         stripped = str(line or "").strip()
         match = PDF_REFERENCE_START_LINE_RE.match(stripped)
         standalone = PDF_REFERENCE_STANDALONE_NUMBER_RE.match(stripped)
         raw_num = (match.group(1) or match.group(2)) if match else (standalone.group(1) if standalone else None)
         if raw_num and _pdf_is_plausible_reference_number(raw_num) and _pdf_reference_window_has_signal(lines, idx):
-            return "\n".join(lines[idx:]).strip()
+            candidates.append((idx, int(raw_num)))
+    chain = consecutive_reference_chain_positions([number for _, number in candidates])
+    if chain:
+        line_idx = candidates[chain[0]][0]
+        return "\n".join(lines[line_idx:]).strip()
     return raw.strip()
 
 
 def _drop_pdf_reference_running_lines(text: str) -> str:
     out: list[str] = []
     raw_lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    seen_reference_start = False
     for idx, raw in enumerate(raw_lines):
         line = str(raw or "").strip()
         prev_line = str(raw_lines[idx - 1] or "").strip() if idx > 0 else ""
         next_line = str(raw_lines[idx + 1] or "").strip() if idx + 1 < len(raw_lines) else ""
         if not line:
             out.append(raw)
+            continue
+        if is_reference_running_line(line) and (
+            not is_ambiguous_reference_running_line(line) or not seen_reference_start
+        ):
             continue
         if re.fullmatch(r"Research\s+Article", line, flags=re.IGNORECASE):
             continue
@@ -379,7 +403,9 @@ def _drop_pdf_reference_running_lines(text: str) -> str:
         if re.fullmatch(r"\d{1,4}", line):
             continue
         out.append(raw)
-    return "\n".join(out).strip()
+        if PDF_REFERENCE_START_LINE_RE.match(line) or PDF_REFERENCE_STANDALONE_NUMBER_RE.match(line):
+            seen_reference_start = True
+    return merge_standalone_reference_continuations("\n".join(out).strip())
 
 
 def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: dict[int, str]) -> bool:
@@ -592,6 +618,7 @@ class PDFConverter:
             final_md = postprocess_markdown(final_md)
         except Exception as e:
             print(f"[WARN] final postprocess_markdown failed, keep current markdown: {e}", flush=True)
+        final_md = normalize_known_superscript_tokens(normalize_detached_accents(final_md))
         try:
             self._cleanup_unreferenced_assets(final_md, assets_dir=assets_dir)
         except Exception as e:
@@ -1315,6 +1342,7 @@ class PDFConverter:
             elif not has_heading and not has_reference_block:
                 break
             page_text = _drop_pdf_reference_running_lines(page_text)
+            page_text = trim_reference_publisher_tail(page_text)
             if page_text:
                 page_texts.append((page_index + 1, page_text))
         if not page_texts:

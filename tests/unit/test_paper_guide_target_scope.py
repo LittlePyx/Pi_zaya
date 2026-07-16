@@ -22,6 +22,17 @@ def test_build_paper_guide_target_scope_keeps_explicit_panel_list():
 
     assert scope["target_figure_num"] == 1
     assert scope["target_panel_letters"] == ["f", "g"]
+    assert scope["target_figure_scope"] == "main"
+
+
+def test_build_paper_guide_target_scope_preserves_extended_data_identity():
+    scope = _build_paper_guide_target_scope(
+        "Walk me through Extended Data Figure 5 panel a.",
+        prompt_family="figure_walkthrough",
+    )
+
+    assert scope["target_figure_num"] == 5
+    assert scope["target_figure_scope"] == "extended_data"
 
 
 def test_normalize_paper_guide_target_scope_accepts_target_figure_number_alias():

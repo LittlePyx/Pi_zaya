@@ -6997,6 +6997,7 @@ _SOURCE_CONVERSION_RETRY_ISSUES = {
     "missing_markdown",
     "source_text_loss",
     "missing_source_pages",
+    "source_page_count_mismatch",
     "page_marker_gaps",
     "source_page_marker_alignment",
     "reference_index_truncated",
@@ -8173,10 +8174,11 @@ def _collect_doc_figure_assets(md_path: Path) -> list[dict]:
     )
 
 
-def _build_doc_figure_card(*, source_path: str, figure_num: int) -> dict | None:
+def _build_doc_figure_card(*, source_path: str, figure_num: int, figure_scope: str = "") -> dict | None:
     return _figure_build_doc_figure_card(
         source_path=source_path,
         figure_num=figure_num,
+        figure_scope=figure_scope,
         collect_doc_figure_assets=_collect_doc_figure_assets,
         source_name_from_md_path=_source_name_from_md_path,
     )

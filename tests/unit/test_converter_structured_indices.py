@@ -92,6 +92,71 @@ def test_rebuild_structured_indices_emits_figure_index_without_preexisting_figur
     assert isinstance(figures, list) and len(figures) >= 1
 
 
+def test_rebuild_structured_indices_separates_main_and_extended_data_figure_with_same_number(tmp_path: Path):
+    md = """# Demo
+
+<!-- kb_page: 7 -->
+![Figure 5](./assets/page_7_fig_1.png)
+**Figure 5.** Main FLIM result.
+
+<!-- kb_page: 18 -->
+Extended Data Fig. 5 | Live-cell imaging of mitochondria at 25 seconds per frame.
+
+![Figure 5](./assets/page_18_fig_1.png)
+"""
+    md_path = tmp_path / "output.md"
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir(parents=True)
+    (assets_dir / "figure_index.json").write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "figures": [
+                    {"asset_name": "page_7_fig_1.png", "paper_figure_number": 5},
+                    {"asset_name": "page_18_fig_1.png", "paper_figure_number": 5},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = rebuild_structured_indices_for_markdown(md_path, md_text=md, assets_dir=assets_dir)
+    figures = (out.get("figure_index") or {}).get("figures") or []
+    by_key = {str(row.get("figure_key") or ""): row for row in figures}
+
+    assert set(by_key) == {"main:5", "extended_data:5"}
+    assert by_key["main:5"]["page"] == 7
+    assert by_key["extended_data:5"]["page"] == 18
+    assert "Live-cell imaging of mitochondria" in by_key["extended_data:5"]["caption"]
+    assert by_key["extended_data:5"]["caption_block_id"]
+
+
+def test_rebuild_structured_indices_does_not_mix_same_number_caption_continuations(tmp_path: Path):
+    md = """# Demo
+
+<!-- kb_page: 7 -->
+![Figure 5](./assets/page_7_fig_1.png)
+**Figure 5.** Main FLIM result.
+
+A Main panel shows cells; B Main panel shows tissue.
+
+<!-- kb_page: 18 -->
+![Extended Data Figure 5](./assets/page_18_fig_1.png)
+Extended Data Fig. 5 | Live-cell imaging of mitochondria.
+
+A Extended panel shows time; B Extended panel shows intensity.
+"""
+    md_path = tmp_path / "output.md"
+    assets_dir = tmp_path / "assets"
+
+    out = rebuild_structured_indices_for_markdown(md_path, md_text=md, assets_dir=assets_dir)
+    figures = (out.get("figure_index") or {}).get("figures") or []
+    by_key = {str(row.get("figure_key") or ""): row for row in figures}
+
+    assert "Extended panel" not in str(by_key["main:5"].get("caption_continuation") or "")
+    assert "Main panel" not in str(by_key["extended_data:5"].get("caption_continuation") or "")
+
+
 def test_rebuild_structured_indices_binds_generic_image_to_supplement_caption(tmp_path: Path):
     md = """# Demo Supplement
 

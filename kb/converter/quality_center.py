@@ -26,6 +26,7 @@ _ISSUE_LABELS = {
     "missing_markdown": "缺少 Markdown",
     "missing_images": "图片资产缺失",
     "mojibake": "编码异常",
+    "detached_accents": "姓名重音符待规范",
     "weak_structure": "结构过弱",
     "missing_references": "参考文献缺失",
     "source_text_loss": "正文疑似缺失",
@@ -38,11 +39,13 @@ _ISSUE_LABELS = {
     "missing_page_markers": "页码锚点缺失",
     "page_marker_gaps": "页码锚点不连续",
     "source_page_marker_alignment": "源 PDF 页码锚点错位",
+    "source_page_count_mismatch": "源 PDF 页面未完整转换",
     "missing_captions": "图题缺失",
     "unclosed_display_math": "公式块未闭合",
     "heading_level_jumps": "标题层级跳跃",
     "collapsed_heading_hierarchy": "Heading hierarchy collapsed",
     "stray_inline_math": "Stray inline math markup",
+    "out_of_order_sections": "Numbered sections out of order",
     "quality_scan_failed": "质量扫描失败",
 }
 

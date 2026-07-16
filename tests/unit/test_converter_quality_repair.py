@@ -1014,6 +1014,7 @@ def test_conversion_quality_detects_stray_inline_math(tmp_path: Path):
             "",
             r"The method is worse when the noise level is low (e.g., \sigma \leq 25).",
             r"The BSD68 dataset comes from BSD68 [110]$ and Set12.",
+            "widehat{s} = underset{s in mathcal{S}}{ arg min} left { - log p(d|W widehat{s}) right }, tag{13}",
             "",
             "## References",
             "",
@@ -2122,6 +2123,210 @@ def test_write_conversion_quality_result_flags_gapped_reference_index(tmp_path: 
 
     assert payload["source_quality"]["reference_index_truncated"] is True
     assert "reference_index_truncated" in payload["repair_plan"]["issue_codes"]
+
+
+def test_write_conversion_quality_result_flags_missing_leading_reference_entries(tmp_path: Path):
+    md_path = tmp_path / "Missing Leading References.en.md"
+    refs = [
+        f"[{idx}] REF{idx}, A. Complete reference {idx}. Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(5, 13)
+    ]
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Missing Leading References",
+                "## Abstract",
+                "This paper explicitly cites the first reference [1] in its body.",
+                "## References",
+                *refs,
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert payload["source_quality"]["reference_index_truncated"] is True
+    assert "reference_index_truncated" in payload["repair_plan"]["issue_codes"]
+    assert payload["repair_plan"]["action"] == "autofix"
+
+
+def test_write_conversion_quality_result_reconverts_when_multiple_pdf_pages_lack_markers(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Fourteen Page Paper.pdf"
+    doc = fitz.open()
+    for page_no in range(1, 15):
+        page = doc.new_page()
+        page.insert_textbox(
+            fitz.Rect(40, 60, 560, 760),
+            f"Source page {page_no} contains stable unique content token{page_no:02d} and enough body text for page alignment.",
+            fontsize=10,
+        )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Fourteen Page Paper.en.md"
+    md_path.write_text(
+        "\n\n".join(
+            [
+                f"<!-- kb_page: {page_no} -->\nSource page {page_no} contains stable unique content token{page_no:02d} and enough body text for page alignment."
+                for page_no in range(1, 11)
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+
+    assert payload["source_quality"]["pdf_page_count"] == 14
+    assert payload["source_quality"]["page_marker_shortfall"] == 4
+    assert "source_page_count_mismatch" in payload["repair_plan"]["issue_codes"]
+    assert payload["repair_plan"]["action"] == "reconvert"
+
+
+def test_write_conversion_quality_result_reconverts_when_one_terminal_pdf_page_lacks_a_marker(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Four Page Paper.pdf"
+    doc = fitz.open()
+    for page_no in range(1, 5):
+        page = doc.new_page()
+        if page_no < 4:
+            page.insert_textbox(
+                fitz.Rect(40, 60, 560, 760),
+                f"Source page {page_no} contains stable unique content token{page_no:02d} and enough body text for alignment.",
+                fontsize=10,
+            )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Four Page Paper.en.md"
+    md_path.write_text(
+        "\n\n".join(
+            f"<!-- kb_page: {page_no} -->\nSource page {page_no} contains stable unique content token{page_no:02d} and enough body text for alignment."
+            for page_no in range(1, 4)
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+
+    assert payload["source_quality"]["page_marker_shortfall"] == 1
+    assert "source_page_count_mismatch" in payload["repair_plan"]["issue_codes"]
+    assert payload["repair_plan"]["action"] == "reconvert"
+
+
+def test_out_of_range_page_marker_does_not_hide_a_missing_terminal_page(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Four Page Marker Guard.pdf"
+    doc = fitz.open()
+    for page_no in range(1, 5):
+        page = doc.new_page()
+        page.insert_textbox(
+            fitz.Rect(40, 60, 560, 760),
+            f"Source page {page_no} contains stable unique content token{page_no:02d} and enough body text for alignment.",
+            fontsize=10,
+        )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Four Page Marker Guard.en.md"
+    md_path.write_text(
+        "\n\n".join(
+            [
+                *[
+                    f"<!-- kb_page: {page_no} -->\nSource page {page_no} contains stable unique content token{page_no:02d} and enough body text for alignment."
+                    for page_no in range(1, 4)
+                ],
+                "<!-- kb_page: 99 -->\nSpurious marker must not satisfy source coverage.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+
+    source_quality = payload["source_quality"]
+    assert source_quality["page_marker_shortfall"] == 1
+    assert source_quality["max_page_marker"] == 3
+    assert source_quality["out_of_range_page_markers"] == [99]
+    assert "source_page_count_mismatch" in payload["repair_plan"]["issue_codes"]
+
+
+def test_short_reference_detector_accepts_compact_journal_article_records() -> None:
+    from kb.converter.quality_repair import _reference_map_has_short_truncated_entries
+
+    refs = {
+        idx: f"[{idx}] Author {idx}, Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(1, 9)
+    }
+    refs[7] = "[7] Y. Huang, W. Zhao, A. Zhai, D. Wang, Laser Photonics Rev. 18, 2301020."
+    refs[8] = "[8] S. An, W. Zhao, A. Zhai, G. Zhang, D. Wang, Laser Photonics Rev. 2401101."
+
+    assert _reference_map_has_short_truncated_entries(refs) is False
+
+
+def test_detached_name_accents_use_safe_markdown_autofix(tmp_path: Path) -> None:
+    md_path = tmp_path / "Detached Accents.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Detached Accents",
+            "## Abstract",
+            "A stable abstract.",
+            "## Method",
+            "The bibliography cites Roberto Ram \u0301\u0131rez.",
+            "## References",
+            *[f"[{idx}] Author {idx}. Journal of Tests 2024, {idx}, {100 + idx}." for idx in range(1, 9)],
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    report = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+    assert report["repair_plan"]["action"] == "autofix"
+    assert report["repair_plan"]["issue_codes"] == ["detached_accents"]
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["detached_accents"],
+        allow_source_pdf_inference=False,
+    )
+
+    assert result["changed"] is True
+    assert "normalize_detached_accents" in result["applied"]
+    assert "Ram\u00edrez" in result["repaired_text"]
+    assert "detached_accents" not in result["remaining_issue_codes"]
+
+
+def test_numbered_section_regression_requires_source_review(tmp_path: Path) -> None:
+    md_path = tmp_path / "Out Of Order.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Out Of Order",
+                "## Abstract",
+                "A stable abstract.",
+                "## 2. System design",
+                "System content was displaced too early.",
+                "<!-- kb_page: 2 -->",
+                "## 1. Introduction",
+                "Introduction content.",
+                "## References",
+                *[f"[{idx}] Author {idx}. Journal of Tests 2024, {idx}, {100 + idx}." for idx in range(1, 9)],
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert "out_of_order_sections" in report["repair_plan"]["issue_codes"]
+    assert report["repair_plan"]["action"] == "review"
 
 
 def test_write_conversion_quality_result_records_repair_trace(tmp_path: Path):

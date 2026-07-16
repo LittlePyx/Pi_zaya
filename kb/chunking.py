@@ -6,7 +6,7 @@ import re
 from .table_index import table_chunks_from_markdown
 
 
-CHUNK_SCHEMA_VERSION = 5
+CHUNK_SCHEMA_VERSION = 7
 
 
 @dataclass
@@ -232,10 +232,30 @@ def _merge_blocks_into_chunks(
             cur_page_end = b.page
             continue
 
+        # Page markers are exact reader-locate boundaries. Do not carry text or
+        # semantic overlap across them, otherwise a claim on page 18 can inherit
+        # a broad page range from unrelated material on pages 13–17.
+        next_page_heading_prefix = ""
+        if (
+            cur
+            and b.page is not None
+            and cur_page_end is not None
+            and int(b.page) != int(cur_page_end)
+        ):
+            # A PDF page can end immediately after a section heading. Keep the
+            # exact page boundary, but repeat that otherwise orphaned heading
+            # as a search prefix for the first body chunk on the next page.
+            if len(cur) == 1 and re.match(r"^#{1,6}\s+\S", str(cur[0]).strip()):
+                next_page_heading_prefix = str(cur[0]).strip()
+            flush(force=True)
+
         if not cur:
             cur_heading_path = b.heading_path
             cur_page_start = b.page
             cur_page_end = b.page
+            if next_page_heading_prefix:
+                cur = [next_page_heading_prefix]
+                cur_len = len(next_page_heading_prefix)
 
         if cur_len + len(b.text) + 1 > chunk_size and cur_len > 200:
             flush(force=False)

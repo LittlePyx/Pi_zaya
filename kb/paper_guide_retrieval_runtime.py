@@ -29,6 +29,11 @@ from kb.paper_guide_prompting import (
     _paper_guide_text_matches_requested_section,
     _paper_guide_text_matches_requested_targets,
 )
+from kb.paper_guide_structured_index_runtime import (
+    extract_figure_scope_from_text,
+    filter_figure_index_rows,
+    load_paper_guide_figure_index,
+)
 from kb.paper_guide_shared import (
     _trim_paper_guide_prompt_field,
     _trim_paper_guide_prompt_snippet,
@@ -427,13 +432,18 @@ def _paper_guide_targeted_source_block_hits(
     target_panels0 = _extract_caption_panel_letters(q)
     if family0 == "figure_walkthrough" and target_fig0 > 0 and target_panels0:
         try:
-            from kb.paper_guide_structured_index_runtime import load_paper_guide_figure_index
             from kb.paper_guide.grounder import (
                 _extract_caption_fragment_for_letters,
                 _extract_caption_fragment_for_letters_fallback,
             )
 
-            for row in load_paper_guide_figure_index(md_path):
+            figure_scope0 = extract_figure_scope_from_text(q, default_main=True)
+            figure_rows0 = filter_figure_index_rows(
+                load_paper_guide_figure_index(md_path),
+                figure_number=target_fig0,
+                figure_scope=figure_scope0,
+            )
+            for row in figure_rows0:
                 try:
                     fig_no = int(row.get("paper_figure_number") or 0)
                 except Exception:
@@ -464,6 +474,8 @@ def _paper_guide_targeted_source_block_hits(
                     "paper_guide_targeted_block": True,
                     "paper_guide_target_scope": "figure_panel",
                     "figure_number": int(target_fig0),
+                    "figure_scope": str(row.get("figure_scope") or figure_scope0).strip(),
+                    "figure_key": str(row.get("figure_key") or f"{figure_scope0}:{target_fig0}").strip(),
                     "panel_letters": sorted(target_panels0),
                 }
                 return [

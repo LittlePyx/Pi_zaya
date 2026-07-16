@@ -14,6 +14,11 @@ from typing import Any, Callable
 from .chunking import chunk_markdown
 from .llm import DeepSeekChat
 from .paper_guide_prompting import _paper_guide_prompt_requests_citation_lookup
+from .paper_guide_structured_index_runtime import (
+    figure_key_for_scope,
+    filter_figure_index_rows,
+    normalize_figure_scope,
+)
 from .retrieval_heuristics import (
     _aspects_from_snippets,
     _clean_snippet_for_display,
@@ -396,6 +401,7 @@ _SMALL_CN_NUMS = {
 }
 _ANCHOR_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("figure", re.compile(r"\bfig(?:ure)?\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
+    ("figure", re.compile(r"\bfig(?:ure)?\.?\s*S\s*([0-9ivxlcdm]+)\b", flags=re.I)),
     ("table", re.compile(r"\btable\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
     ("equation", re.compile(r"\b(?:eq(?:uation)?|formula)\.?\s*[\(\[（]?\s*([0-9ivxlcdm]+)\s*[\)\]）]?", flags=re.I)),
     ("theorem", re.compile(r"\btheorem\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
@@ -487,12 +493,34 @@ def _parse_anchor_number(text: str) -> int | None:
     return _parse_small_cn_number(s)
 
 
+def _figure_scope_for_anchor_match(text: str, match: re.Match[str]) -> str:
+    src = str(text or "")
+    start = max(0, int(match.start()) - 40)
+    window = src[start : int(match.end())]
+    matched = str(match.group(0) or "")
+    if re.search(r"(?:extended\s+data|扩展数据|扩展)\s*$", src[start : int(match.start())], re.IGNORECASE):
+        return "extended_data"
+    if re.search(r"(?:supplementary|supplemental|补充)\s*$", src[start : int(match.start())], re.IGNORECASE):
+        return "supplementary"
+    if re.search(r"\bfig(?:ure)?\.?\s*S\s*\d+\b", matched, re.IGNORECASE):
+        return "supplementary"
+    if re.search(r"\bextended\s+data\s+fig(?:ure)?\.?\s*\d+\b|(?:扩展数据|扩展)\s*图\s*\d+", window, re.IGNORECASE):
+        return "extended_data"
+    if re.search(
+        r"\b(?:supplementary|supplemental)\s+fig(?:ure)?\.?\s*S?\s*\d+\b|补充\s*图\s*\d+",
+        window,
+        re.IGNORECASE,
+    ):
+        return "supplementary"
+    return "main"
+
+
 def _extract_explicit_anchor_hint(question: str) -> dict[str, object]:
     q = str(question or "").strip()
     if not q:
         return {}
-    hints: list[dict] = []
-    for kind, pat in _ANCHOR_PATTERNS:
+    ranked_hints: list[tuple[int, int, dict]] = []
+    for pattern_index, (kind, pat) in enumerate(_ANCHOR_PATTERNS):
         for m in pat.finditer(q):
             num = _parse_anchor_number(m.group(1))
             if num is None or num <= 0:
@@ -511,12 +539,34 @@ def _extract_explicit_anchor_hint(question: str) -> dict[str, object]:
                     phrases.append(f"第{num}{lab}")
                 else:
                     phrases.append(f"{lab} {num}")
-            hints.append({
+            figure_scope = _figure_scope_for_anchor_match(q, m) if kind == "figure" else ""
+            if kind == "figure" and figure_scope == "extended_data":
+                phrases = [f"Extended Data Figure {num}", f"Extended Data Fig. {num}", f"扩展数据图{num}"]
+            elif kind == "figure" and figure_scope == "supplementary":
+                phrases = [f"Supplementary Figure {num}", f"Supplementary Fig. {num}", f"Fig. S{num}", f"补充图{num}"]
+            hint = {
                 "kind": kind,
                 "number": int(num),
                 "label": f"{kind} {num}",
                 "phrases": list(dict.fromkeys([p for p in phrases if str(p or "").strip()])),
-            })
+            }
+            if kind == "figure":
+                hint["figure_scope"] = figure_scope
+                hint["figure_key"] = figure_key_for_scope(figure_scope, int(num))
+            ranked_hints.append((int(m.start()), pattern_index, hint))
+    ranked_hints.sort(key=lambda item: (int(item[0]), int(item[1])))
+    hints: list[dict] = []
+    seen: set[tuple[str, int, str]] = set()
+    for _start, _pattern_index, hint in ranked_hints:
+        key = (
+            str(hint.get("kind") or ""),
+            int(hint.get("number") or 0),
+            str(hint.get("figure_scope") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        hints.append(hint)
     if not hints:
         return {}
     # Return primary (first) hint with all hints accessible via "all_hints".
@@ -1091,33 +1141,55 @@ def _find_anchor_snippets_in_md(
         hint_number = int(anchor_hint.get("number") or 0)
     except Exception:
         hint_number = 0
+    hint_figure_scope = normalize_figure_scope(anchor_hint.get("figure_scope")) if hint_kind == "figure" else ""
+    hint_figure_key = figure_key_for_scope(hint_figure_scope, hint_number)
     if hint_kind and hint_number > 0:
         kind_plural = hint_kind + "s" if hint_kind != "equation" else "equations"
         entries = anchor_index.get(kind_plural, []) if kind_plural in anchor_index else anchor_index.get(hint_kind + "s", [])
-        for entry in entries:
+        selected_entries = (
+            filter_figure_index_rows(
+                entries,
+                figure_number=hint_number,
+                figure_scope=hint_figure_scope,
+            )
+            if hint_kind == "figure"
+            else [entry for entry in entries if int(entry.get("number") or 0) == hint_number]
+        )
+        for entry in selected_entries:
             if int(entry.get("number") or 0) == hint_number:
                 caption = str(entry.get("caption_text") or entry.get("text_fragment") or "").strip()
                 heading = str(entry.get("heading_path") or "").strip()
                 block_id = str(entry.get("block_id") or "").strip()
                 if caption:
                     meta = {"source_path": str(md_path), "anchor_read": True, "heading_path": heading, "block_id": block_id}
+                    if hint_kind == "figure":
+                        meta["figure_scope"] = str(entry.get("figure_scope") or hint_figure_scope).strip()
+                        meta["figure_key"] = str(entry.get("figure_key") or hint_figure_key).strip()
+                        meta["anchor_target_scope"] = hint_figure_scope
+                        meta["anchor_target_key"] = hint_figure_key
                     out = [{"score": 95.0, "id": block_id, "text": caption, "meta": meta}]
                     # If we have more entries for the same figure/table (e.g., caption paragraphs),
                     # include them as additional snippets.
-                    for extra in entries:
+                    for extra in selected_entries:
                         if int(extra.get("number") or 0) != hint_number:
                             continue
                         if extra.get("block_id") == block_id:
                             continue
                         extra_text = str(extra.get("caption_text") or extra.get("text_fragment") or "").strip()
                         if extra_text and extra_text != caption:
+                            extra_meta = {"source_path": str(md_path), "anchor_read": True,
+                                          "heading_path": str(extra.get("heading_path") or heading),
+                                          "block_id": str(extra.get("block_id") or "")}
+                            if hint_kind == "figure":
+                                extra_meta["figure_scope"] = str(extra.get("figure_scope") or hint_figure_scope).strip()
+                                extra_meta["figure_key"] = str(extra.get("figure_key") or hint_figure_key).strip()
+                                extra_meta["anchor_target_scope"] = hint_figure_scope
+                                extra_meta["anchor_target_key"] = hint_figure_key
                             out.append({
                                 "score": 85.0,
                                 "id": str(extra.get("block_id") or ""),
                                 "text": extra_text,
-                                "meta": {"source_path": str(md_path), "anchor_read": True,
-                                         "heading_path": str(extra.get("heading_path") or heading),
-                                         "block_id": str(extra.get("block_id") or "")},
+                                "meta": extra_meta,
                             })
                     if len(out) >= max(1, int(max_snippets)):
                         out = out[:max(1, int(max_snippets))]
@@ -1138,6 +1210,12 @@ def _find_anchor_snippets_in_md(
         for pat in pats:
             try:
                 matches = list(pat.finditer(body))
+                if hint_kind == "figure" and hint_figure_scope:
+                    matches = [
+                        match
+                        for match in matches
+                        if _figure_scope_for_anchor_match(body, match) == hint_figure_scope
+                    ]
                 hits += len(matches)
                 if matches and ((first_match_pos is None) or (matches[0].start() < first_match_pos)):
                     first_match_pos = int(matches[0].start())
@@ -1152,6 +1230,11 @@ def _find_anchor_snippets_in_md(
         meta = dict((c.get("meta") or {}))
         meta.setdefault("source_path", str(md_path))
         meta["anchor_read"] = True
+        if hint_kind == "figure":
+            meta["figure_scope"] = hint_figure_scope
+            meta["figure_key"] = hint_figure_key
+            meta["anchor_target_scope"] = hint_figure_scope
+            meta["anchor_target_key"] = hint_figure_key
         body_out = body
         if first_match_pos is not None and len(body_out) > snippet_chars:
             start = max(0, int(first_match_pos) - min(240, max(80, snippet_chars // 5)))
@@ -2504,6 +2587,15 @@ def _group_hits_by_doc_for_refs(
         if force_anchor_focus and anchor_hint:
             meta_out["anchor_target_kind"] = str(anchor_hint.get("kind") or "")
             meta_out["anchor_target_number"] = int(anchor_hint.get("number") or 0)
+            if str(anchor_hint.get("kind") or "").strip().lower() == "figure":
+                target_scope = normalize_figure_scope(anchor_hint.get("figure_scope"))
+                target_key = str(anchor_hint.get("figure_key") or figure_key_for_scope(target_scope, int(anchor_hint.get("number") or 0))).strip()
+                if target_scope:
+                    meta_out["anchor_target_scope"] = target_scope
+                    meta_out["figure_scope"] = target_scope
+                if target_key:
+                    meta_out["anchor_target_key"] = target_key
+                    meta_out["figure_key"] = target_key
             meta_out["anchor_match_score"] = float(anchor_best)
         if locs2:
             loc0 = locs2[0]

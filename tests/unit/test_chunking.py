@@ -32,8 +32,43 @@ Page 1 content.
 Page 2 content.
 """
     chunks = chunk_markdown(md, source_path="test.md")
+    assert len(chunks) == 2
     assert chunks[0]["meta"]["page_start"] == 1
-    assert chunks[0]["meta"]["page_end"] == 2
+    assert chunks[0]["meta"]["page_end"] == 1
+    assert chunks[1]["meta"]["page_start"] == 2
+    assert chunks[1]["meta"]["page_end"] == 2
+
+
+def test_overlap_never_crosses_an_exact_page_marker():
+    md = """<!-- kb_page: 17 -->
+Page 17 has a long caption with unrelated optical settings and enough words to create overlap context.
+
+<!-- kb_page: 18 -->
+Extended Data Figure 5 shows live-cell mitochondria at 25 seconds per frame.
+"""
+
+    chunks = chunk_markdown(md, source_path="test.md", chunk_size=100, overlap=80)
+
+    page18 = next(chunk for chunk in chunks if "live-cell mitochondria" in chunk["text"])
+    assert page18["meta"]["page_start"] == 18
+    assert page18["meta"]["page_end"] == 18
+    assert "Page 17" not in page18["text"]
+
+
+def test_heading_at_previous_page_end_prefixes_next_page_body_without_widening_page_range():
+    md = """<!-- kb_page: 1 -->
+## Numerical simulations
+<!-- kb_page: 2 -->
+The simulator computes lifetime values from the measured phase.
+"""
+
+    chunks = chunk_markdown(md, source_path="test.md", overlap=0)
+
+    body = next(chunk for chunk in chunks if "computes lifetime" in chunk["text"])
+    assert body["text"].startswith("## Numerical simulations")
+    assert body["meta"]["page_start"] == 2
+    assert body["meta"]["page_end"] == 2
+    assert body["meta"]["chunk_schema_version"] == 7
 
 
 def test_overlap_tail_does_not_start_mid_word():

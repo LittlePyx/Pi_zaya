@@ -48,8 +48,14 @@ def _is_post_references_resume_heading_line(text: str) -> bool:
         return False
 
     # Plain-text appendix/supplementary headings (common after OCR/VL).
-    if re.match(
-        r"^(?:appendix|appendices|supplementary(?:\s+material)?|supplemental(?:\s+material)?|annex)\b",
+    if re.fullmatch(
+        r"(?:supplementary|supplemental)(?:\s+(?:materials?|information|notes?)(?:\s+[A-Z0-9.]+)?)?",
+        st,
+        re.IGNORECASE,
+    ):
+        return True
+    if re.fullmatch(
+        r"(?:appendix|appendices|annex)(?:\s+[A-Z0-9IVXLCM]+(?:[.:]\s*[^\n]{1,100})?)?",
         st,
         re.IGNORECASE,
     ):
@@ -64,15 +70,11 @@ def _is_post_references_resume_heading_line(text: str) -> bool:
             ref_markers = len(re.findall(r"\[\s*\d{1,4}\s*\]", st))
             if ref_markers >= 2 and len(st) >= 220:
                 return True
-        elif not re.search(r"\b(?:doi|arxiv|proc(?:eedings)?\.?)\b", st, re.IGNORECASE):
-            return True
     if re.search(r"\bsupplemental\s+material\b", st, re.IGNORECASE):
         if ref_start_match:
             ref_markers = len(re.findall(r"\[\s*\d{1,4}\s*\]", st))
             if ref_markers >= 2 and len(st) >= 220:
                 return True
-        elif not re.search(r"\b(?:doi|arxiv|proc(?:eedings)?\.?)\b", st, re.IGNORECASE):
-            return True
     # Catch merged headers like "SCIGS ... A. Additional Experiments" on one OCR line.
     if re.search(r"\b[A-Z]\.\s+Additional\s+Experiments\b", st, re.IGNORECASE):
         if ref_start_match:
@@ -177,8 +179,8 @@ def _format_references(md: str) -> str:
     plain_section_re = re.compile(
         r"^\s*(?:\d+(?:\.\d+)*\.?\s+)?"
         r"(?:introduction|background|related work|method(?:s|ology)?|"
-        r"experiment(?:s|al)?|results?|discussion|conclusion|appendix|"
-        r"acknowledg(?:e)?ments?|supplementary(?:\s+material)?|supplemental(?:\s+material)?)\b",
+        r"experiment(?:s|al)?|results?|discussion|conclusion|"
+        r"acknowledg(?:e)?ments?)\b",
         re.IGNORECASE,
     )
 
@@ -286,57 +288,71 @@ def _format_references(md: str) -> str:
 
     # Bound the references tail to avoid swallowing body content when a paper
     # places a references block early (or headings are partially missing).
+    # The same boundary scan is required when the References heading itself was
+    # inferred: supplementary material commonly begins immediately after the
+    # numbered list even when OCR omitted the heading above that list.
     tail_end = len(lines)
-    if not inferred_heading:
-        ref_signal = 0
-        non_ref_run = 0
-        non_ref_start = -1
-        for j in range(tail_start, len(lines)):
-            st = lines[j].strip()
-            if not st:
-                continue
-            if re.match(r"^#{1,6}\s+(?:References|Bibliography)\b", st, re.IGNORECASE):
-                continue
+    ref_signal = 0
+    non_ref_run = 0
+    non_ref_start = -1
+    for j in range(tail_start, len(lines)):
+        st = lines[j].strip()
+        if not st:
+            continue
+        if re.match(r"^#{1,6}\s+(?:References|Bibliography)\b", st, re.IGNORECASE):
+            continue
 
-            # Strong boundary: Appendix/Supplementary section after references.
-            # This must work even when the references section is short (<3 entries).
-            if _is_post_references_resume_heading_line(st):
+        # Strong boundary: Appendix/Supplementary section after references.
+        # This must work even when the references section is short (<3 entries).
+        if _is_post_references_resume_heading_line(st):
+            tail_end = j
+            break
+
+        # Strong section boundary (markdown heading).
+        if heading_any_re.match(st):
+            title = _heading_title(st)
+            if (
+                plain_section_re.match(title)
+                or re.match(r"^(?:\d+(?:\.\d+)*|[IVXLCM]+)\.?\s+", title, re.IGNORECASE)
+                or re.match(r"^(?:appendix|acknowledg(?:e)?ments?)\b", title, re.IGNORECASE)
+            ):
                 tail_end = j
                 break
 
-            # Strong section boundary (markdown heading).
-            if heading_any_re.match(st):
-                title = _heading_title(st)
-                if (
-                    plain_section_re.match(title)
-                    or re.match(r"^(?:\d+(?:\.\d+)*|[IVXLCM]+)\.?\s+", title, re.IGNORECASE)
-                    or re.match(r"^(?:appendix|acknowledg(?:e)?ments?)\b", title, re.IGNORECASE)
-                ):
-                    tail_end = j
-                    break
+        # Plain-text section boundary (no markdown heading marker).
+        if plain_section_re.match(st) and ref_signal >= 3:
+            tail_end = j
+            break
 
-            # Plain-text section boundary (no markdown heading marker).
-            if plain_section_re.match(st) and ref_signal >= 3:
-                tail_end = j
+        if _looks_reference_payload_line(st):
+            ref_signal += 1
+            non_ref_run = 0
+            non_ref_start = -1
+        else:
+            if non_ref_run == 0:
+                non_ref_start = j
+            non_ref_run += 1
+            # After enough reference signal, a long run of non-reference lines
+            # means we've crossed back into normal body content.
+            if ref_signal >= 8 and non_ref_run >= 8 and non_ref_start >= tail_start:
+                tail_end = non_ref_start
                 break
-
-            if _looks_reference_payload_line(st):
-                ref_signal += 1
-                non_ref_run = 0
-                non_ref_start = -1
-            else:
-                if non_ref_run == 0:
-                    non_ref_start = j
-                non_ref_run += 1
-                # After enough reference signal, a long run of non-reference lines
-                # means we've crossed back into normal body content.
-                if ref_signal >= 8 and non_ref_run >= 8 and non_ref_start >= tail_start:
-                    tail_end = non_ref_start
-                    break
 
     if tail_end < tail_start:
         tail_end = tail_start
     body_tail = lines[tail_end:]
+    # A resume section is a sibling of References, even if earlier heading
+    # normalization demoted it while the References heading was still missing.
+    # Restore that hierarchy so structured indices do not report supplementary
+    # formulas and figures as children of the bibliography.
+    for body_idx, body_line in enumerate(body_tail[:12]):
+        body_st = (body_line or "").strip()
+        if not body_st or re.fullmatch(r"<!--\s*kb_page:\s*\d+\s*-->", body_st, flags=re.IGNORECASE):
+            continue
+        if _is_post_references_resume_heading_line(body_st):
+            body_title = re.sub(r"^#{1,6}\s+", "", body_st).strip()
+            body_tail[body_idx] = f"## {body_title}"
+        break
     if pre_tail:
         tail = pre_tail + lines[tail_start:tail_end]
     else:
@@ -371,6 +387,17 @@ def _format_references(md: str) -> str:
     blob = blob.replace("$", "")
     blob = re.sub(r"[ \t]{2,}", " ", blob)
 
+    # Page anchors are structural metadata, not part of a bibliography entry.
+    # Put inline anchors on their own line before parsing so wrapped reference
+    # text cannot absorb and later discard them.
+    page_marker_pat = r"<!--\s*kb_page:\s*\d+\s*-->"
+    blob = re.sub(
+        rf"\s*({page_marker_pat})\s*",
+        lambda match: f"\n{(match.group(1) or '').strip()}\n",
+        blob,
+        flags=re.IGNORECASE,
+    ).strip()
+
     # Split multiple [n] items that got collapsed into one line.
     blob = re.sub(r"\s+(?=\[\d+\])", "\n", blob)
     # Some reference pages emit the next entry as a bare numbered marker after a
@@ -401,8 +428,11 @@ def _format_references(md: str) -> str:
     # as reference noise.
     try:
         inline_resume_pat = re.compile(
-            r"\b(?:supplementary\s+material|supplemental\s+material|appendix|appendices|[A-Z]\.\s+Additional\s+Experiments)\b",
-            re.IGNORECASE,
+            r"(?mi)^\s*(?:"
+            r"(?:supplementary|supplemental)(?:\s+(?:materials?|information|notes?)(?:\s+[A-Z0-9.]+)?)?"
+            r"|(?:appendix|appendices)(?:\s+[A-Z0-9IVXLCM]+(?:[.:]\s*[^\n]{1,100})?)?"
+            r"|[A-Z]\.\s+Additional\s+Experiments"
+            r")\s*$",
         )
         m_inline_resume = inline_resume_pat.search(blob)
         if m_inline_resume:
@@ -488,8 +518,6 @@ def _format_references(md: str) -> str:
             r"\bKeywords?\b",
             r"\bBiographies?\b",
             r"\bAbout the Authors?\b",
-            r"\bSupplementary\b",
-            r"\bSupporting Information\b",
             r"\bThis work was supported\b",
             r"\bReceived\b|\bAccepted\b|\bPublished\b",
             r"(?:copyright|\(c\)|©)\s*\d{4}",
@@ -588,11 +616,29 @@ def _format_references(md: str) -> str:
         return s
 
     entries: list[str] = []
+    page_markers_by_ref: dict[int, list[str]] = {}
+    pending_page_markers: list[str] = []
+    trailing_page_markers: list[str] = []
     cur: list[str] | None = None
     start_re = re.compile(r"^\[(\d+)\]\s+")
+
+    def _flush_current_reference() -> None:
+        nonlocal cur
+        if not cur:
+            cur = None
+            return
+        joined = _join_reference_fragments(cur)
+        if joined:
+            entries.append(joined)
+        cur = None
+
     for raw in blob.splitlines():
         s = raw.strip()
         if not s:
+            continue
+        if re.fullmatch(page_marker_pat, s, flags=re.IGNORECASE):
+            _flush_current_reference()
+            pending_page_markers.append(s)
             continue
         if re.fullmatch(r"\d{1,4}", s):
             continue
@@ -600,20 +646,19 @@ def _format_references(md: str) -> str:
             continue
         m = start_re.match(s)
         if m:
-            if cur:
-                joined = _join_reference_fragments(cur)
-                if joined:
-                    entries.append(joined)
+            _flush_current_reference()
+            if pending_page_markers:
+                ref_no = int(m.group(1))
+                page_markers_by_ref.setdefault(ref_no, []).extend(pending_page_markers)
+                pending_page_markers = []
             cur = [s]
             continue
         # Ignore garbage before first reference marker
         if cur is None:
             continue
         cur.append(s)
-    if cur:
-        joined = _join_reference_fragments(cur)
-        if joined:
-            entries.append(joined)
+    _flush_current_reference()
+    trailing_page_markers = list(pending_page_markers)
 
     if not entries:
         out0 = head + [""] + tail
@@ -648,13 +693,27 @@ def _format_references(md: str) -> str:
     parsed.sort(key=lambda x: x[0])
     seen_nums: set[int] = set()
     out_refs: list[str] = []
+    used_marker_anchors: set[int] = set()
     for n, e in parsed:
         if n in seen_nums:
             continue
         seen_nums.add(n)
+        for marker in page_markers_by_ref.get(n, []):
+            if marker not in out_refs:
+                out_refs.append(marker)
+        used_marker_anchors.add(n)
         out_refs.append(e)
     # Keep any unknown tail lines at the end (rare)
     out_refs.extend(unknown)
+    for ref_no, markers in page_markers_by_ref.items():
+        if ref_no in used_marker_anchors:
+            continue
+        for marker in markers:
+            if marker not in out_refs:
+                out_refs.append(marker)
+    for marker in trailing_page_markers:
+        if marker not in out_refs:
+            out_refs.append(marker)
 
     out1 = head + [""] + out_refs
     if body_tail:

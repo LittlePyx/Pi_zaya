@@ -6,6 +6,7 @@ import kb.retrieval_engine as retrieval_engine
 from kb.retrieval_engine import (
     _anchor_text_bonus,
     _extract_explicit_anchor_hint,
+    _find_anchor_snippets_in_md,
     _group_hits_by_doc_for_refs,
     _postprocess_refs_pack,
 )
@@ -27,6 +28,83 @@ def test_extract_explicit_anchor_hint_supports_figure_equation_and_theorem():
     thm = _extract_explicit_anchor_hint("what does theorem 2 mean in this paper")
     assert thm["kind"] == "theorem"
     assert thm["number"] == 2
+
+
+def test_extract_explicit_anchor_hint_distinguishes_figure_scopes():
+    main = _extract_explicit_anchor_hint("Explain Figure 5 panel a")
+    extended = _extract_explicit_anchor_hint("Explain Extended Data Figure 5 panel a")
+    supplementary = _extract_explicit_anchor_hint("Explain Fig. S5 panel a")
+
+    assert (main["figure_scope"], main["figure_key"]) == ("main", "main:5")
+    assert (extended["figure_scope"], extended["figure_key"]) == ("extended_data", "extended_data:5")
+    assert (supplementary["figure_scope"], supplementary["figure_key"]) == ("supplementary", "supplementary:5")
+
+
+def test_find_anchor_snippets_keeps_same_number_figure_scopes_separate(tmp_path: Path, monkeypatch):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text("# Demo\n\nFigure index fixture.", encoding="utf-8")
+    monkeypatch.setattr(
+        retrieval_engine,
+        "_load_anchor_index_cached",
+        lambda _path: {
+            "figures": [
+                {
+                    "number": 5,
+                    "figure_scope": "main",
+                    "figure_key": "main:5",
+                    "caption_text": "Figure 5. Main FLIM result.",
+                    "block_id": "main-caption",
+                    "heading_path": "Results / Figure 5",
+                },
+                {
+                    "number": 5,
+                    "figure_scope": "extended_data",
+                    "figure_key": "extended_data:5",
+                    "caption_text": "Extended Data Figure 5. Live-cell mitochondria at 25 seconds per frame.",
+                    "block_id": "extended-caption",
+                    "heading_path": "Extended Data / Extended Data Figure 5",
+                },
+            ]
+        },
+    )
+
+    main = _find_anchor_snippets_in_md(md_path, _extract_explicit_anchor_hint("Figure 5"))
+    extended = _find_anchor_snippets_in_md(md_path, _extract_explicit_anchor_hint("Extended Data Figure 5"))
+
+    assert [item["id"] for item in main] == ["main-caption"]
+    assert [item["id"] for item in extended] == ["extended-caption"]
+    assert extended[0]["meta"]["figure_scope"] == "extended_data"
+    assert extended[0]["meta"]["figure_key"] == "extended_data:5"
+
+
+def test_find_anchor_snippets_uses_only_unscoped_legacy_row_as_fallback(tmp_path: Path, monkeypatch):
+    md_path = tmp_path / "legacy.en.md"
+    md_path.write_text("# Demo\n\nLegacy figure index fixture.", encoding="utf-8")
+    monkeypatch.setattr(
+        retrieval_engine,
+        "_load_anchor_index_cached",
+        lambda _path: {
+            "figures": [
+                {
+                    "number": 5,
+                    "figure_scope": "main",
+                    "figure_key": "main:5",
+                    "caption_text": "Figure 5. Explicit main row must not satisfy an extended request.",
+                    "block_id": "main-caption",
+                },
+                {
+                    "number": 5,
+                    "caption_text": "Legacy Figure 5 row without semantic scope.",
+                    "block_id": "legacy-caption",
+                },
+            ]
+        },
+    )
+
+    extended = _find_anchor_snippets_in_md(md_path, _extract_explicit_anchor_hint("Extended Data Figure 5"))
+
+    assert [item["id"] for item in extended] == ["legacy-caption"]
+    assert extended[0]["meta"]["figure_scope"] == "extended_data"
 
 
 def test_anchor_text_bonus_prefers_direct_caption_at_snippet_start():

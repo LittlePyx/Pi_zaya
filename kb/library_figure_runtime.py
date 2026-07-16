@@ -5,6 +5,13 @@ import threading
 from pathlib import Path
 from urllib.parse import quote
 
+from kb.paper_guide_structured_index_runtime import (
+    extract_figure_scope_from_text,
+    figure_key_for_scope,
+    filter_figure_index_rows,
+    normalize_figure_scope,
+)
+
 _DOC_FIGURE_CACHE_LOCK = threading.Lock()
 _DOC_FIGURE_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _DOC_FIGURE_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -74,14 +81,44 @@ def _collect_doc_figure_assets(
             if sp in seen_paths:
                 continue
             seen_paths.add(sp)
-            next_line = str(lines[i + 1] or "").strip() if (i + 1) < len(lines) else ""
-            prev_line = str(lines[i - 1] or "").strip() if i > 0 else ""
-            caption = next_line if extract_figure_number(next_line) > 0 else ""
-            if (not caption) and (extract_figure_number(prev_line) > 0):
-                caption = prev_line
-            number = extract_figure_number(caption) or extract_figure_number(alt) or extract_figure_number(raw_img)
+            caption = ""
+            alt_number = extract_figure_number(alt) or extract_figure_number(raw_img)
+            # Converters commonly leave a blank line between an image and its
+            # caption (and Extended Data often places the caption above it).
+            # Inspect a small symmetric window instead of treating the image
+            # alt text as the semantic figure identity.
+            for distance in range(1, 5):
+                nearby: list[str] = []
+                if (i + distance) < len(lines):
+                    nearby.append(str(lines[i + distance] or "").strip())
+                if (i - distance) >= 0:
+                    nearby.append(str(lines[i - distance] or "").strip())
+                caption = next(
+                    (
+                        candidate
+                        for candidate in nearby
+                        if extract_figure_number(candidate) > 0
+                        and (
+                            int(alt_number or 0) <= 0
+                            or extract_figure_number(candidate) == int(alt_number)
+                        )
+                    ),
+                    "",
+                )
+                if caption:
+                    break
+            number = extract_figure_number(caption) or alt_number
             label = caption or alt or img_path.name
-            out.append({"path": sp, "number": int(number or 0), "label": str(label or "").strip()})
+            figure_scope = extract_figure_scope_from_text(label, default_main=bool(number))
+            out.append(
+                {
+                    "path": sp,
+                    "number": int(number or 0),
+                    "label": str(label or "").strip(),
+                    "figure_scope": figure_scope,
+                    "figure_key": figure_key_for_scope(figure_scope, int(number or 0)),
+                }
+            )
 
     with _DOC_FIGURE_CACHE_LOCK:
         _DOC_FIGURE_CACHE[key] = (mtime, [dict(x) for x in out])
@@ -98,6 +135,7 @@ def _build_doc_figure_card(
     *,
     source_path: str,
     figure_num: int,
+    figure_scope: str = "",
     collect_doc_figure_assets,
     source_name_from_md_path,
 ) -> dict | None:
@@ -107,7 +145,12 @@ def _build_doc_figure_card(
     items = collect_doc_figure_assets(src)
     if not items:
         return None
-    selected = next((it for it in items if int(it.get("number") or 0) == int(figure_num)), None)
+    matching_items = filter_figure_index_rows(
+        items,
+        figure_number=figure_num,
+        figure_scope=figure_scope,
+    )
+    selected = matching_items[0] if matching_items else None
     if selected is None:
         return None
     img_path = str(selected.get("path") or "").strip()
@@ -120,9 +163,34 @@ def _build_doc_figure_card(
     return {
         "source_name": src_name,
         "figure_num": int(figure_num),
+        "figure_scope": normalize_figure_scope(selected.get("figure_scope") or figure_scope),
+        "figure_key": str(selected.get("figure_key") or figure_key_for_scope(figure_scope, figure_num)),
         "label": label,
         "url": f"/api/references/asset?path={quote(img_path, safe='')}",
     }
+
+
+def _figure_display_label(figure_scope: str, figure_num: int) -> str:
+    scope = normalize_figure_scope(figure_scope)
+    if scope == "extended_data":
+        return f"Extended Data Fig. {int(figure_num)}"
+    if scope == "supplementary":
+        return f"Supplementary Fig. {int(figure_num)}"
+    return f"Fig. {int(figure_num)}"
+
+
+def _call_figure_card_builder(build_doc_figure_card, *, source_path: str, figure_num: int, figure_scope: str) -> dict | None:
+    """Pass semantic scope while keeping older injected test/build callables compatible."""
+    try:
+        return build_doc_figure_card(
+            source_path=source_path,
+            figure_num=figure_num,
+            figure_scope=figure_scope,
+        )
+    except TypeError as exc:
+        if "figure_scope" not in str(exc):
+            raise
+        return build_doc_figure_card(source_path=source_path, figure_num=figure_num)
 
 
 def _score_figure_card_source_binding(*, prompt: str, meta: dict, figure_num: int, source_path: str, source_name_from_md_path) -> float:
@@ -187,12 +255,18 @@ def _maybe_append_library_figure_markdown(
     target_num = requested_figure_number(prompt, answer_hits)
     if target_num <= 0:
         return base
+    target_scope = extract_figure_scope_from_text(prompt, default_main=True)
 
     cards_scored: list[tuple[float, dict]] = []
     seen_src: set[str] = set()
     preferred_src = str(bound_source_path or "").strip()
     if preferred_src:
-        preferred_card = build_doc_figure_card(source_path=preferred_src, figure_num=target_num)
+        preferred_card = _call_figure_card_builder(
+            build_doc_figure_card,
+            source_path=preferred_src,
+            figure_num=target_num,
+            figure_scope=target_scope,
+        )
         if preferred_card is not None:
             cards_scored.append((1000.0, preferred_card))
             seen_src.add(preferred_src)
@@ -204,7 +278,12 @@ def _maybe_append_library_figure_markdown(
         if (not src) or (src in seen_src):
             continue
         seen_src.add(src)
-        card = build_doc_figure_card(source_path=src, figure_num=target_num)
+        card = _call_figure_card_builder(
+            build_doc_figure_card,
+            source_path=src,
+            figure_num=target_num,
+            figure_scope=target_scope,
+        )
         if card is None:
             continue
         score = score_figure_card_source_binding(
@@ -225,13 +304,15 @@ def _maybe_append_library_figure_markdown(
     for card in cards:
         src_name = str(card.get("source_name") or "unknown-source")
         fig_num = int(card.get("figure_num") or target_num)
+        fig_scope = normalize_figure_scope(card.get("figure_scope") or target_scope)
+        figure_label = _figure_display_label(fig_scope, fig_num)
         url = str(card.get("url") or "").strip()
         label = str(card.get("label") or "").strip()
-        alt = f"{src_name} Fig. {fig_num}"
+        alt = f"{src_name} {figure_label}"
         lines.append(f"![{alt}]({url})")
         if label:
-            lines.append(f"*Source: {src_name}, Fig. {fig_num}. {label}*")
+            lines.append(f"*Source: {src_name}, {figure_label}. {label}*")
         else:
-            lines.append(f"*Source: {src_name}, Fig. {fig_num} (library asset)*")
+            lines.append(f"*Source: {src_name}, {figure_label} (library asset)*")
 
     return f"{base}\n\n" + "\n\n".join(lines)
