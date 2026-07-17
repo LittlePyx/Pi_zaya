@@ -82,11 +82,22 @@ def test_full_llm_keeps_quality_first_execution_profile(tmp_path, monkeypatch):
 
 def test_locked_profile_defaults_to_normal_mode(tmp_path, monkeypatch):
     _use_fake_qwen(monkeypatch)
+    monkeypatch.delenv("KB_PDF_LLM_TIMEOUT_S", raising=False)
 
     cfg = pdf_to_md._parse_args(_base_args(tmp_path))
 
     assert cfg.speed_mode == "normal"
+    assert cfg.llm is not None and cfg.llm.timeout_s == 120.0
     assert os.environ["KB_PDF_ULTRA_FAST_VISION_TIMEOUT_S"] == "45"
+
+
+def test_locked_profile_respects_explicit_llm_timeout(tmp_path, monkeypatch):
+    _use_fake_qwen(monkeypatch)
+
+    cfg = pdf_to_md._parse_args(_base_args(tmp_path, "--llm-timeout", "25"))
+
+    assert cfg.llm is not None
+    assert cfg.llm.timeout_s == 25.0
 
 
 def test_locked_profile_preserves_explicit_ultra_fast_timeout(tmp_path, monkeypatch):

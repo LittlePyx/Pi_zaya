@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import kb.converter.reference_page_vl as ref_module
@@ -26,6 +27,17 @@ class _DummyLlmWorker:
         self.calls = []
         self._lock = threading.Lock()
         self._idx = 0
+        self.budget_deadlines = []
+
+    def current_vision_page_deadline(self):
+        return 12345.0
+
+    @contextmanager
+    def vision_page_budget(self, speed_mode, *, deadline=None):
+        del speed_mode
+        with self._lock:
+            self.budget_deadlines.append(deadline)
+        yield deadline
 
     def call_llm_page_to_markdown(self, png_bytes, **kwargs):
         with self._lock:
@@ -79,3 +91,4 @@ def test_convert_references_page_with_column_vl_passes_crop_token_override(monke
     assert all(call["is_references_page"] is True for call in converter.llm_worker.calls)
     assert all(call["max_tokens_override"] == 1536 for call in converter.llm_worker.calls)
     assert all(int(call["dpi"]) == 240 for call in page.calls)
+    assert converter.llm_worker.budget_deadlines == [12345.0, 12345.0]

@@ -4,6 +4,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from typing import Optional
 
 try:
@@ -303,6 +304,9 @@ def convert_references_page_with_column_vl(
         except Exception:
             continue
 
+    deadline_getter = getattr(converter.llm_worker, "current_vision_page_deadline", None)
+    page_deadline = deadline_getter() if callable(deadline_getter) else None
+
     def _ocr_ref_crop(idx: int, part_png: bytes) -> tuple[int, Optional[str]]:
         t0 = time.time()
         col_hint = (
@@ -312,15 +316,22 @@ def convert_references_page_with_column_vl(
               "Do NOT output placeholders like '(incomplete visible)' or 'unreadable'. "
               "If an entry is clipped/uncertain, skip it."
         )
-        part_md = converter.llm_worker.call_llm_page_to_markdown(
-            part_png,
-            page_number=page_index,
-            total_pages=total_pages,
-            hint=col_hint,
-            speed_mode=speed_mode,
-            is_references_page=True,
-            max_tokens_override=crop_max_tokens,
+        budget = getattr(converter.llm_worker, "vision_page_budget", None)
+        budget_ctx = (
+            budget(speed_mode, deadline=page_deadline)
+            if callable(budget) and page_deadline is not None
+            else nullcontext()
         )
+        with budget_ctx:
+            part_md = converter.llm_worker.call_llm_page_to_markdown(
+                part_png,
+                page_number=page_index,
+                total_pages=total_pages,
+                hint=col_hint,
+                speed_mode=speed_mode,
+                is_references_page=True,
+                max_tokens_override=crop_max_tokens,
+            )
         part_md = sanitize_reference_crop_markdown((part_md or "").strip())
         part_md = part_md or None
         try:

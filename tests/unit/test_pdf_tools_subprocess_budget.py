@@ -211,6 +211,7 @@ def test_run_pdf_to_md_uses_adaptive_single_doc_budget_when_env_missing(monkeypa
     monkeypatch.delenv("KB_PDF_WORKERS", raising=False)
     monkeypatch.delenv("KB_PDF_LLM_WORKERS", raising=False)
     monkeypatch.delenv("KB_LLM_MAX_INFLIGHT", raising=False)
+    monkeypatch.delenv("KB_PDF_LLM_TIMEOUT_S", raising=False)
     monkeypatch.setattr(pdf_tools.os, "cpu_count", lambda: 16)
 
     captured: dict[str, object] = {}
@@ -256,3 +257,4 @@ def test_run_pdf_to_md_uses_adaptive_single_doc_budget_when_env_missing(monkeypa
     assert child_env["KB_LLM_MAX_INFLIGHT"] == "12"
     assert "--workers" in child_args and child_args[child_args.index("--workers") + 1] == "4"
     assert "--llm-workers" in child_args and child_args[child_args.index("--llm-workers") + 1] == "3"
+    assert "--llm-timeout" in child_args and child_args[child_args.index("--llm-timeout") + 1] == "120"

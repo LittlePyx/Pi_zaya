@@ -1380,7 +1380,9 @@ def run_pdf_to_md(
     if ui_llm_workers > 0:
         args.extend(["--llm-workers", str(ui_llm_workers)])
 
-    ui_llm_timeout = _env_int("KB_PDF_LLM_TIMEOUT_S", default=25, lo=1, hi=600)
+    # Match the converter's quality-first default. An explicit environment
+    # override is forwarded unchanged and is no longer raised by the child.
+    ui_llm_timeout = _env_int("KB_PDF_LLM_TIMEOUT_S", default=120, lo=1, hi=600)
     if ui_llm_timeout > 0:
         args.extend(["--llm-timeout", str(ui_llm_timeout)])
     ui_llm_retries = _env_int("KB_PDF_LLM_RETRIES", default=0, lo=0, hi=20)

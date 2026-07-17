@@ -6686,9 +6686,10 @@ def _parse_args(argv: Optional[list[str]] = None) -> ConvertConfig:
         # lower render DPI/token budget can take effect.  The CLI default remains
         # normal when no speed mode is supplied.
 
-        # Timeout guardrail to reduce random mid-run aborts on heavy pages.
+        # Keep the stable 120s parser default, but respect an explicit caller
+        # timeout. Page-level budgets and local fallbacks prevent tail stalls.
         try:
-            args.llm_timeout = max(120.0, float(args.llm_timeout))
+            args.llm_timeout = max(5.0, min(1800.0, float(args.llm_timeout)))
         except Exception:
             args.llm_timeout = 120.0
 

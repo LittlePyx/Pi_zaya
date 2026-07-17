@@ -9,9 +9,10 @@ from kb.converter.llm_worker import LLMWorker
 
 
 class _FakeClient:
-    def __init__(self, api_key: str, base_url: str):
+    def __init__(self, api_key: str, base_url: str, **kwargs):
         self.api_key = api_key
         self.base_url = base_url
+        self.max_retries = kwargs.get("max_retries")
 
 
 class _FakeResp:
@@ -73,6 +74,13 @@ def test_call_llm_page_to_markdown_reuses_cached_exact_request(tmp_path, monkeyp
     assert out1 == "cached markdown"
     assert out2 == "cached markdown"
     assert calls["n"] == 1
+
+
+def test_converter_client_disables_hidden_sdk_retries(tmp_path, monkeypatch):
+    monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
+    worker = LLMWorker(_make_cfg(tmp_path))
+
+    assert worker._client.max_retries == 0
 
 
 def test_call_llm_page_to_markdown_cache_key_changes_with_hint(tmp_path, monkeypatch):
@@ -235,6 +243,67 @@ def test_llm_create_applies_explicit_fast_request_and_hard_timeouts(tmp_path, mo
     assert captured["hard_timeout_s_override"] == 34
     assert captured["has_image_payload"] is True
     assert "_request_timeout_s" not in captured
+
+
+def test_normal_vision_call_is_clamped_to_shared_page_budget(tmp_path, monkeypatch):
+    monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
+    monkeypatch.setenv("KB_PDF_VISION_PAGE_BUDGET_S", "40")
+    monkeypatch.delenv("KB_PDF_VISION_TIMEOUT_S", raising=False)
+    LLMWorker._reset_shared_llm_gate_for_tests()
+    worker = LLMWorker(_make_cfg(tmp_path))
+    worker._llm_gate = None
+    captured = {}
+
+    def _fake_guard(**kwargs):
+        captured.update(kwargs)
+        return _FakeResp("ok")
+
+    monkeypatch.setattr(worker, "_client_create_with_guard_timeout", _fake_guard)
+    with worker.vision_page_budget("normal") as deadline:
+        out = worker._llm_create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}}
+                    ],
+                }
+            ],
+            max_tokens=32,
+        )
+        assert worker.current_vision_page_deadline() == deadline
+
+    assert out.choices[0].message.content == "ok"
+    assert 1.0 <= captured["timeout_s"] <= 40.0
+    assert 1.0 <= captured["hard_timeout_s_override"] <= 40.0
+    assert worker.current_vision_page_deadline() is None
+
+
+def test_vision_call_uses_configured_timeout_without_implicit_floor(tmp_path, monkeypatch):
+    monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
+    monkeypatch.delenv("KB_PDF_VISION_TIMEOUT_S", raising=False)
+    LLMWorker._reset_shared_llm_gate_for_tests()
+    worker = LLMWorker(_make_cfg(tmp_path))
+    worker._llm_gate = None
+    captured = {}
+
+    def _fake_guard(**kwargs):
+        captured.update(kwargs)
+        return _FakeResp("ok")
+
+    monkeypatch.setattr(worker, "_client_create_with_guard_timeout", _fake_guard)
+    out = worker._llm_create(
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}}],
+            }
+        ],
+        max_tokens=32,
+    )
+
+    assert out.choices[0].message.content == "ok"
+    assert captured["timeout_s"] == 45.0
 
 
 def test_multiple_workers_share_process_level_inflight_gate(tmp_path, monkeypatch):

@@ -4,6 +4,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 
@@ -14,8 +15,50 @@ except ImportError:
 
 from .layout_analysis import _detect_column_split_x, detect_body_font_size
 from .models import TextBlock
+from .pdf_reference_text import consecutive_reference_chain_positions
 from .tables import _extract_tables_by_layout, _page_maybe_has_table_from_dict
 from .text_utils import _normalize_text
+
+
+_PDF_LINEBREAK_COMPOUND_RIGHT_WORDS = {
+    "aware",
+    "based",
+    "dependent",
+    "dimensional",
+    "driven",
+    "field",
+    "first",
+    "free",
+    "guided",
+    "informed",
+    "level",
+    "limited",
+    "of",
+    "off",
+    "order",
+    "pixel",
+    "powered",
+    "related",
+    "resolved",
+    "specific",
+    "time",
+    "to",
+    "trained",
+}
+
+
+def repair_pdf_linebreak_hyphenation(text: str) -> str:
+    """Repair PDF line-wrap artifacts while retaining common real compounds."""
+    normalized = str(text or "")
+
+    def _replace(match: re.Match[str]) -> str:
+        left = match.group(1)
+        right = match.group(2)
+        if right.lower() in _PDF_LINEBREAK_COMPOUND_RIGHT_WORDS:
+            return f"{left}-{right}"
+        return f"{left}{right}"
+
+    return re.sub(r"\b([A-Za-z]{2,})-\s+([a-z]{2,})\b", _replace, normalized)
 
 
 def is_probable_page_number_block(block: TextBlock, *, page_w: float, page_h: float) -> bool:
@@ -82,7 +125,9 @@ def fallback_markdown_from_blocks(blocks: list[TextBlock]) -> str:
             if md:
                 parts.append(md)
             continue
-        txt = str(getattr(block, "text", "") or "").strip()
+        txt = repair_pdf_linebreak_hyphenation(
+            _normalize_text(str(getattr(block, "text", "") or ""))
+        ).strip()
         if (not txt) or txt == "[TABLE]":
             continue
         lvl = str(getattr(block, "heading_level", "") or "").strip()
@@ -93,7 +138,9 @@ def fallback_markdown_from_blocks(blocks: list[TextBlock]) -> str:
             parts.append(f"*{txt}*")
         else:
             parts.append(txt)
-    return "\n\n".join(p for p in parts if p.strip()).strip()
+    return repair_pdf_linebreak_hyphenation(
+        "\n\n".join(p for p in parts if p.strip()).strip()
+    )
 
 
 def _union_items(items: list[dict]) -> "fitz.Rect":
@@ -376,6 +423,115 @@ def _has_cross_column_reading_order_risk(
     return False
 
 
+_REFERENCE_ENTRY_AUTHOR_RE = re.compile(
+    r"(?<!\w)\[\s*(\d{1,4})\s*\]\s+(?=(?:[A-Z]\.\s*){1,4}|[A-Z][A-Za-z'\-]{2,},)"
+)
+
+
+def _has_mixed_reference_tail(blocks: list[TextBlock], *, page_h: float) -> bool:
+    """Detect a body page that transitions into a numbered bibliography.
+
+    This is deliberately stricter than reference-page detection: at least three
+    consecutive author-style entries must occur after a substantial body prefix.
+    Such pages need two-column crop ordering without being mislabeled as a pure
+    references page (which would drop conclusions, acknowledgements, or keywords).
+    """
+    candidates: list[tuple[float, str, int]] = []
+    for block in blocks or []:
+        text = _normalize_text(str(getattr(block, "text", "") or "")).strip()
+        matches = list(_REFERENCE_ENTRY_AUTHOR_RE.finditer(text))
+        if len(matches) < 3:
+            continue
+        numbers = [int(match.group(1)) for match in matches]
+        chain = consecutive_reference_chain_positions(numbers)
+        if len(chain) < 3:
+            continue
+        first_match = matches[chain[0]]
+        try:
+            y0 = float(block.bbox[1])
+        except Exception:
+            y0 = 0.0
+        candidates.append((y0, text[: first_match.start()].strip(), len(chain)))
+    if not candidates:
+        return False
+
+    reference_y, same_block_prefix, _ = min(candidates, key=lambda row: row[0])
+    if page_h > 0 and reference_y < page_h * 0.18:
+        return False
+
+    body_parts = [same_block_prefix] if same_block_prefix else []
+    for block in blocks or []:
+        text = _normalize_text(str(getattr(block, "text", "") or "")).strip()
+        # In a two-column transition page the full left column precedes the
+        # right-column bibliography even when its y coordinates extend lower.
+        # Count every non-reference block, not only geometrically higher ones.
+        if not text or _REFERENCE_ENTRY_AUTHOR_RE.search(text):
+            continue
+        body_parts.append(text)
+    body_text = " ".join(body_parts).strip()
+    body_chars = len(body_text)
+    body_words = len(re.findall(r"\b[A-Za-z]{2,}\b", body_text))
+    return body_chars >= 800 and body_words >= 100
+
+
+def _layout_crop_max_tokens_override(*, speed_mode: str, fallback_md: str) -> int:
+    try:
+        raw = str(os.environ.get("KB_PDF_VISION_LAYOUT_CROP_MAX_TOKENS", "") or "").strip()
+        if raw:
+            return max(1024, min(3072, int(raw)))
+    except Exception:
+        pass
+    chars = len(str(fallback_md or ""))
+    mode = str(speed_mode or "").strip().lower()
+    if chars <= 2200:
+        return 1536 if mode == "ultra_fast" else 2048
+    if chars <= 4200:
+        return 2048 if mode == "ultra_fast" else 2560
+    return 2560 if mode == "ultra_fast" else 3072
+
+
+def _safe_mixed_reference_local_markdown(
+    converter,
+    *,
+    page,
+    page_index: int,
+    blocks: list[TextBlock],
+    regions: list[dict],
+) -> str | None:
+    """Return source-backed Markdown only for a strong text-only transition page."""
+    if any(bool(getattr(block, "is_table", False)) for block in blocks):
+        return None
+    parts = [str(row.get("fallback_md", "") or "").strip() for row in regions]
+    if any(not part for part in parts):
+        return None
+    merged = repair_pdf_linebreak_hyphenation("\n\n".join(parts).strip())
+    if len(merged) < 4500 or len(re.findall(r"\b[A-Za-z]{2,}\b", merged)) < 550:
+        return None
+
+    matches = list(_REFERENCE_ENTRY_AUTHOR_RE.finditer(merged))
+    numbers = [int(match.group(1)) for match in matches]
+    chain = consecutive_reference_chain_positions(numbers)
+    if len(chain) < 8:
+        return None
+    first_ref = matches[chain[0]].start()
+    if first_ref < 800:
+        return None
+
+    # Text-layer formula detection is the final safety gate. If the page has a
+    # real display equation, retain VL OCR so LaTeX fidelity is not sacrificed.
+    try:
+        formula_candidates = converter._collect_display_math_candidates(
+            page,
+            page_index=page_index,
+            is_references_page=False,
+        )
+    except Exception:
+        return None
+    if formula_candidates:
+        return None
+    return merged
+
+
 def _ocr_layout_region(
     converter,
     *,
@@ -387,6 +543,7 @@ def _ocr_layout_region(
     dpi: int,
     region_count: int,
     row: dict,
+    page_deadline: float | None = None,
 ) -> tuple[int, str]:
     rid = int(row["order"])
     lane = str(row["lane"])
@@ -410,14 +567,25 @@ def _ocr_layout_region(
           "Do not invent or repeat content from other regions."
     )
     t0 = time.time()
-    md_part = converter.llm_worker.call_llm_page_to_markdown(
-        png,
-        page_number=page_index,
-        total_pages=total_pages,
-        hint=hint,
-        speed_mode=speed_mode,
-        is_references_page=False,
+    budget = getattr(converter.llm_worker, "vision_page_budget", None)
+    budget_ctx = (
+        budget(speed_mode, deadline=page_deadline)
+        if callable(budget) and page_deadline is not None
+        else nullcontext()
     )
+    with budget_ctx:
+        md_part = converter.llm_worker.call_llm_page_to_markdown(
+            png,
+            page_number=page_index,
+            total_pages=total_pages,
+            hint=hint,
+            speed_mode=speed_mode,
+            is_references_page=False,
+            max_tokens_override=_layout_crop_max_tokens_override(
+                speed_mode=speed_mode,
+                fallback_md=fallback_md,
+            ),
+        )
     md_part = (md_part or "").strip() or fallback_md
     md_part = _merge_missing_tables_back_into_region_markdown(md_part, blocks=blocks)
     try:
@@ -515,7 +683,8 @@ def convert_page_with_layout_crops(
         page_h=page_h,
         col_split=float(col_split),
     )
-    if (not tables) and (not manual_mode) and (not cross_column_risk):
+    mixed_reference_tail = _has_mixed_reference_tail(blocks, page_h=page_h)
+    if (not tables) and (not manual_mode) and (not cross_column_risk) and (not mixed_reference_tail):
         return None
 
     regions = _build_structured_crop_regions(
@@ -528,11 +697,31 @@ def convert_page_with_layout_crops(
     if len(regions) <= 1:
         return None
 
+    if mixed_reference_tail and (not tables):
+        local_md = _safe_mixed_reference_local_markdown(
+            converter,
+            page=page,
+            page_index=page_index,
+            blocks=blocks,
+            regions=regions,
+        )
+        if local_md:
+            try:
+                print(
+                    f"[VISION_DIRECT][LAYOUT] page {page_index+1}: source-backed mixed-reference fastpath "
+                    f"({len(regions)} regions, {len(local_md)} chars)",
+                    flush=True,
+                )
+            except Exception:
+                pass
+            return local_md
+
     dpi = _resolve_layout_crop_dpi(converter)
     try:
         print(
             f"[VISION_DIRECT][LAYOUT] page {page_index+1}: structured crop mode enabled "
-            f"({len(regions)} crops, dpi={int(dpi)}, tables={int(bool(tables))}, risk={int(bool(cross_column_risk))})",
+            f"({len(regions)} crops, dpi={int(dpi)}, tables={int(bool(tables))}, "
+            f"risk={int(bool(cross_column_risk))}, mixed_refs={int(bool(mixed_reference_tail))})",
             flush=True,
         )
     except Exception:
@@ -540,6 +729,8 @@ def convert_page_with_layout_crops(
 
     ordered_md: dict[int, str] = {}
     region_count = len(regions)
+    deadline_getter = getattr(converter.llm_worker, "current_vision_page_deadline", None)
+    page_deadline = deadline_getter() if callable(deadline_getter) else None
     max_workers = min(4, max(1, region_count))
     if max_workers <= 1:
         for row in regions:
@@ -553,6 +744,7 @@ def convert_page_with_layout_crops(
                 dpi=dpi,
                 region_count=region_count,
                 row=row,
+                page_deadline=page_deadline,
             )
             if md_part:
                 ordered_md[rid] = md_part
@@ -570,6 +762,7 @@ def convert_page_with_layout_crops(
                     dpi=dpi,
                     region_count=region_count,
                     row=row,
+                    page_deadline=page_deadline,
                 )
                 for row in regions
             ]

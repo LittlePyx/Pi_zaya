@@ -1540,6 +1540,8 @@ class PDFConverter:
         if not t:
             return False
         low = t.lower()
+        if "©" in t or re.search(r"\b(?:copyright|wiley(?:-vch)?|all rights reserved)\b", low):
+            return False
         # Fast reject of obvious prose/caption lines.
         if low.startswith(("fig.", "figure ", "table ", "where ", "this ", "we ", "in this ", "note that ")):
             return False
@@ -1585,6 +1587,8 @@ class PDFConverter:
         if not t:
             return False
         low = t.lower()
+        if "©" in t or re.search(r"\b(?:copyright|wiley(?:-vch)?|all rights reserved)\b", low):
+            return False
         if low.startswith(("fig.", "figure ", "table ", "where ")):
             return False
         if ("@" in t) or ("http://" in low) or ("https://" in low) or ("www." in low):

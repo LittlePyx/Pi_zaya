@@ -174,3 +174,34 @@ def test_process_batch_vision_direct_parallel_reuses_worker_local_documents(tmp_
     assert fake_fitz.open_calls < total_pages
     assert fake_fitz.open_calls <= 2
     assert fake_fitz.close_calls == fake_fitz.open_calls
+
+
+def test_process_batch_applies_page_budget_inside_parallel_workers(tmp_path, monkeypatch):
+    total_pages = 3
+    doc = _DummyDoc(total_pages)
+    converter = _make_converter(tmp_path)
+    deadlines = []
+    lock = threading.Lock()
+
+    monkeypatch.setenv("KB_PDF_LLM_PAGE_WORKERS", "2")
+    monkeypatch.setattr(
+        converter,
+        "_get_speed_mode_config",
+        lambda speed_mode, total: {"max_parallel_pages": 2, "dpi": 220, "compress": 3, "max_inflight": 8},
+    )
+    monkeypatch.setattr(converter.llm_worker, "get_llm_max_inflight", lambda: 4)
+    monkeypatch.setattr(vision_direct_module, "fitz", _FakeFitz(total_pages))
+
+    def _process_page(converter, **kwargs):
+        del kwargs
+        with lock:
+            deadlines.append(converter.llm_worker.current_vision_page_deadline())
+        return "MD"
+
+    monkeypatch.setattr(vision_direct_module, "process_vision_direct_page", _process_page)
+
+    out = converter._process_batch_vision_direct(doc, pdf_path=Path("dummy.pdf"), assets_dir=tmp_path)
+
+    assert out == ["MD", "MD", "MD"]
+    assert len(deadlines) == total_pages
+    assert all(deadline is not None for deadline in deadlines)

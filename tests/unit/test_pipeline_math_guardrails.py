@@ -7,6 +7,13 @@ from kb.converter.pipeline import PDFConverter
 import kb.converter.page_local_pipeline as page_local_pipeline
 
 
+def test_copyright_footer_is_not_formula_evidence():
+    footer = "© 2024 Wiley-VCH GmbH 2401397 (17 of 21)"
+
+    assert PDFConverter._looks_like_overlay_math_line(footer) is False
+    assert PDFConverter._is_display_math_candidate_text(footer) is False
+
+
 def _make_converter(tmp_path):
     cfg = ConvertConfig(
         pdf_path=tmp_path / "dummy.pdf",

@@ -116,6 +116,22 @@ def test_page_cache_invalidates_when_pdf_content_changes(tmp_path: Path) -> None
     assert changed.load_page(0, assets_dir=assets_dir) is None
 
 
+def test_page_cache_invalidates_when_vision_page_budget_changes(tmp_path: Path, monkeypatch) -> None:
+    source = _source(tmp_path)
+    cfg = _config(tmp_path)
+    save_dir = tmp_path / "out"
+    assets_dir = save_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    monkeypatch.setenv("KB_PDF_VISION_PAGE_BUDGET_S", "120")
+    first = PageConversionCache(save_dir=save_dir, pdf_path=source, cfg=cfg, total_pages=1)
+    assert first.store_page(0, "Completed page.", assets_dir=assets_dir) is True
+
+    monkeypatch.setenv("KB_PDF_VISION_PAGE_BUDGET_S", "90")
+    changed = PageConversionCache(save_dir=save_dir, pdf_path=source, cfg=cfg, total_pages=1)
+
+    assert changed.load_page(0, assets_dir=assets_dir) is None
+
+
 def test_page_cache_keeps_completed_pages_and_retries_incomplete_pages(tmp_path: Path) -> None:
     source = _source(tmp_path)
     cfg = _config(tmp_path)

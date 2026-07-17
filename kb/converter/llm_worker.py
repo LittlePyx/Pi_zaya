@@ -7,6 +7,7 @@ import time
 import base64
 import threading
 import queue
+from contextlib import contextmanager
 from typing import Optional, List, Callable, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -136,6 +137,10 @@ class LLMWorker:
                 self._client = self._ensure_openai_class()(
                     api_key=self.cfg.llm.api_key,
                     base_url=self.cfg.llm.base_url,
+                    # Retries are owned by _llm_create and the page guardrails.
+                    # The OpenAI SDK otherwise adds two hidden retries, which can
+                    # turn one slow vision page into a several-minute outlier.
+                    max_retries=0,
                 )
             except Exception as e:
                 print(f"[WARN] Failed to init OpenAI client: {e}")
@@ -151,6 +156,96 @@ class LLMWorker:
             return max(1, int(self._llm_max_inflight))
         except Exception:
             return 8
+
+    @staticmethod
+    def _vision_page_budget_s(speed_mode: str) -> float:
+        mode = str(speed_mode or "").strip().lower()
+        env_name = (
+            "KB_PDF_ULTRA_FAST_PAGE_BUDGET_S"
+            if mode in {"fast", "ultra_fast"}
+            else "KB_PDF_VISION_PAGE_BUDGET_S"
+        )
+        default = 75.0 if mode in {"fast", "ultra_fast"} else 120.0
+        try:
+            raw = str(os.environ.get(env_name, "") or "").strip()
+            value = float(raw) if raw else default
+        except Exception:
+            value = default
+        if value <= 0:
+            return 0.0
+        return max(15.0, min(1800.0, value))
+
+    @contextmanager
+    def vision_page_budget(self, speed_mode: str, *, deadline: float | None = None):
+        """Apply one cooperative deadline to all vision calls for a page.
+
+        The absolute deadline can be forwarded to nested crop-worker threads.
+        Local extraction remains available after the remote budget is exhausted.
+        """
+        previous = getattr(self._thread_state, "vision_page_deadline", None)
+        now = time.monotonic()
+        try:
+            requested = float(deadline) if deadline is not None else 0.0
+        except Exception:
+            requested = 0.0
+        if requested <= 0:
+            budget_s = self._vision_page_budget_s(speed_mode)
+            requested = (now + budget_s) if budget_s > 0 else 0.0
+        if previous is not None and float(previous or 0.0) > 0:
+            requested = min(float(previous), requested) if requested > 0 else float(previous)
+        if requested > 0:
+            self._thread_state.vision_page_deadline = requested
+        try:
+            yield requested if requested > 0 else None
+        finally:
+            if previous is not None:
+                self._thread_state.vision_page_deadline = previous
+            else:
+                try:
+                    delattr(self._thread_state, "vision_page_deadline")
+                except Exception:
+                    pass
+
+    def current_vision_page_deadline(self) -> float | None:
+        try:
+            value = float(getattr(self._thread_state, "vision_page_deadline", 0.0) or 0.0)
+        except Exception:
+            value = 0.0
+        return value if value > 0 else None
+
+    def _remaining_vision_page_budget_s(self) -> float | None:
+        deadline = self.current_vision_page_deadline()
+        if deadline is None:
+            return None
+        return max(0.0, float(deadline) - time.monotonic())
+
+    def _bound_call_to_page_budget(
+        self,
+        *,
+        timeout_s: float,
+        has_image_payload: bool,
+        hard_timeout_override: float | None,
+    ) -> tuple[float, float | None]:
+        remaining = self._remaining_vision_page_budget_s()
+        if remaining is None:
+            return float(timeout_s), hard_timeout_override
+        if remaining < 1.0:
+            raise TimeoutError("Vision page time budget exhausted")
+        request_timeout_s = min(float(timeout_s), remaining)
+        try:
+            hard_timeout_s = float(hard_timeout_override or 0.0)
+        except Exception:
+            hard_timeout_s = 0.0
+        if hard_timeout_s <= 0:
+            hard_timeout_s = self._resolve_llm_hard_timeout_s(
+                has_image_payload=bool(has_image_payload),
+                request_timeout_s=request_timeout_s,
+            )
+        # Text helpers invoked by a vision-page fallback normally have no hard
+        # guard. They must still share the page deadline.
+        if hard_timeout_s <= 0:
+            hard_timeout_s = remaining
+        return max(1.0, request_timeout_s), max(1.0, min(hard_timeout_s, remaining))
 
     def _set_last_vl_error_code(self, code: str) -> None:
         try:
@@ -319,12 +414,13 @@ class LLMWorker:
         try:
             has_image_payload = self._messages_contain_image_payload(kwargs.get("messages"))
             if has_image_payload and request_timeout_override is None:
-                raw_v_to = str(os.environ.get("KB_PDF_VISION_TIMEOUT_S", "120") or "120").strip()
-                try:
-                    vision_timeout_floor = float(raw_v_to)
-                except Exception:
-                    vision_timeout_floor = 120.0
-                timeout_s = max(float(timeout_s), max(30.0, min(300.0, vision_timeout_floor)))
+                raw_v_to = str(os.environ.get("KB_PDF_VISION_TIMEOUT_S", "") or "").strip()
+                if raw_v_to:
+                    try:
+                        vision_timeout_floor = float(raw_v_to)
+                    except Exception:
+                        vision_timeout_floor = float(timeout_s)
+                    timeout_s = max(float(timeout_s), max(5.0, min(300.0, vision_timeout_floor)))
         except Exception:
             has_image_payload = False
             pass
@@ -335,10 +431,15 @@ class LLMWorker:
         for attempt in range(max_retries + 1):
             try:
                 if self._llm_gate is None:
-                    return self._client_create_with_guard_timeout(
+                    call_timeout_s, call_hard_timeout_s = self._bound_call_to_page_budget(
                         timeout_s=timeout_s,
                         has_image_payload=has_image_payload,
-                        hard_timeout_s_override=hard_timeout_override,
+                        hard_timeout_override=hard_timeout_override,
+                    )
+                    return self._client_create_with_guard_timeout(
+                        timeout_s=call_timeout_s,
+                        has_image_payload=has_image_payload,
+                        hard_timeout_s_override=call_hard_timeout_s,
                         **kwargs,
                     )
                 # Increase semaphore acquire timeout for vision-direct mode (full-page screenshots take longer)
@@ -351,6 +452,13 @@ class LLMWorker:
                         sem_timeout = max(1.0, float(semaphore_timeout_override))
                 except Exception:
                     pass
+                remaining = self._remaining_vision_page_budget_s()
+                if remaining is not None:
+                    if remaining < 1.0:
+                        raise TimeoutError("Vision page time budget exhausted before provider slot acquisition")
+                    # Reserve roughly half the remaining budget for the provider
+                    # request instead of spending the whole page budget in queue.
+                    sem_timeout = min(sem_timeout, max(1.0, min(60.0, remaining * 0.5)))
                 acquired = self._llm_gate.acquire(timeout=sem_timeout)
                 if not acquired:
                     raise TimeoutError(
@@ -358,10 +466,15 @@ class LLMWorker:
                         f"Waited {sem_timeout:.1f}s for a slot. Consider increasing KB_LLM_MAX_INFLIGHT."
                     )
                 try:
-                    return self._client_create_with_guard_timeout(
+                    call_timeout_s, call_hard_timeout_s = self._bound_call_to_page_budget(
                         timeout_s=timeout_s,
                         has_image_payload=has_image_payload,
-                        hard_timeout_s_override=hard_timeout_override,
+                        hard_timeout_override=hard_timeout_override,
+                    )
+                    return self._client_create_with_guard_timeout(
+                        timeout_s=call_timeout_s,
+                        has_image_payload=has_image_payload,
+                        hard_timeout_s_override=call_hard_timeout_s,
                         **kwargs,
                     )
                 finally:

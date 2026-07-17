@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import List, Optional
 
@@ -12,6 +13,11 @@ except ImportError:
     fitz = None
 
 from .page_vision_direct_page import process_vision_direct_page
+
+
+def _vision_page_budget_context(converter, speed_mode: str):
+    budget = getattr(getattr(converter, "llm_worker", None), "vision_page_budget", None)
+    return budget(speed_mode) if callable(budget) else nullcontext()
 
 
 def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, speed_mode: str = "normal") -> List[Optional[str]]:
@@ -145,19 +151,20 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
             print(f"Processing page {i+1}/{total_pages} (vision-direct) ...", flush=True)
             try:
                 page = doc.load_page(i)
-                results[i] = process_vision_direct_page(
-                    self,
-                    page=page,
-                    page_index=i,
-                    total_pages=total_pages,
-                    pdf_path=pdf_path,
-                    assets_dir=assets_dir,
-                    speed_mode=speed_mode,
-                    speed_config=speed_config,
-                    dpi=dpi,
-                    mat=mat,
-                    started_at=t0,
-                )
+                with _vision_page_budget_context(self, speed_mode):
+                    results[i] = process_vision_direct_page(
+                        self,
+                        page=page,
+                        page_index=i,
+                        total_pages=total_pages,
+                        pdf_path=pdf_path,
+                        assets_dir=assets_dir,
+                        speed_mode=speed_mode,
+                        speed_config=speed_config,
+                        dpi=dpi,
+                        mat=mat,
+                        started_at=t0,
+                    )
                 page_cache = getattr(self, "_page_cache", None)
                 if page_cache is not None:
                     page_cache.store_page(i, results[i], assets_dir=assets_dir)
@@ -193,19 +200,20 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
             t0 = time.time()
             local_doc = _get_worker_doc()
             page = local_doc.load_page(i)
-            result = process_vision_direct_page(
-                self,
-                page=page,
-                page_index=i,
-                total_pages=total_pages,
-                pdf_path=pdf_path,
-                assets_dir=assets_dir,
-                speed_mode=speed_mode,
-                speed_config=speed_config,
-                dpi=dpi,
-                mat=mat,
-                started_at=t0,
-            )
+            with _vision_page_budget_context(self, speed_mode):
+                result = process_vision_direct_page(
+                    self,
+                    page=page,
+                    page_index=i,
+                    total_pages=total_pages,
+                    pdf_path=pdf_path,
+                    assets_dir=assets_dir,
+                    speed_mode=speed_mode,
+                    speed_config=speed_config,
+                    dpi=dpi,
+                    mat=mat,
+                    started_at=t0,
+                )
             page_cache = getattr(self, "_page_cache", None)
             if page_cache is not None:
                 page_cache.store_page(i, result, assets_dir=assets_dir)
