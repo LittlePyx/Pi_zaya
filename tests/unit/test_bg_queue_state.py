@@ -12,6 +12,7 @@ from kb.bg_queue_state import (
     snapshot,
     update_conversion_stage,
     update_page_progress,
+    update_running_pages,
 )
 
 
@@ -312,3 +313,47 @@ def test_enqueue_after_cancel_waits_for_active_task_without_losing_new_work():
     assert running_snap["queue"] == []
     assert running_snap["active_count"] == 1
     assert running_snap["current"] == "b.pdf"
+
+
+def test_running_pages_are_structured_isolated_and_cleared_by_later_stages():
+    state = _make_state()
+    lock = Lock()
+    enqueue(state, lock, {"_tid": "t1", "pdf": "a.pdf", "name": "a.pdf", "replace": False})
+    enqueue(state, lock, {"_tid": "t2", "pdf": "b.pdf", "name": "b.pdf", "replace": False})
+    begin_next_task_or_idle(state, lock)
+    begin_next_task_or_idle(state, lock)
+    update_page_progress(state, lock, 20, 21, "Processing page 17/21 ...", task_id="t1")
+    update_page_progress(state, lock, 4, 8, "Processing page 6/8 ...", task_id="t2")
+
+    update_running_pages(state, lock, [21, 17, 17, -1, 22], task_id="t1")
+    update_running_pages(state, lock, [6, 5], task_id="t2")
+    snap = snapshot(state, lock)
+
+    assert snap["running_pages"] == [17, 21]
+    assert snap["active_tasks"][0]["running_pages"] == [17, 21]
+    assert snap["active_tasks"][0]["running_page_count"] == 2
+    assert snap["active_tasks"][1]["running_pages"] == [5, 6]
+
+    # Snapshots own their list values and cannot mutate live queue state.
+    snap["active_tasks"][0]["running_pages"].append(3)
+    assert snapshot(state, lock)["active_tasks"][0]["running_pages"] == [17, 21]
+
+    update_conversion_stage(state, lock, "finalizing", task_id="t1")
+    finalizing = snapshot(state, lock)
+    assert finalizing["active_tasks"][0]["running_pages"] == []
+    assert finalizing["active_tasks"][0]["running_page_count"] == 0
+
+
+def test_cancel_clears_running_pages():
+    state = _make_state()
+    lock = Lock()
+    enqueue(state, lock, {"_tid": "t1", "pdf": "a.pdf", "name": "a.pdf", "replace": False})
+    begin_next_task_or_idle(state, lock)
+    update_page_progress(state, lock, 1, 4, "Processing page 2/4 ...", task_id="t1")
+    update_running_pages(state, lock, [2, 3], task_id="t1")
+
+    cancel_all(state, lock, "Canceling current background conversion")
+
+    snap = snapshot(state, lock)
+    assert snap["running_pages"] == []
+    assert snap["active_tasks"][0]["running_pages"] == []

@@ -26,6 +26,7 @@ from kb.bg_queue_state import (
     snapshot as bg_snapshot,
     update_conversion_stage as bg_update_conversion_stage,
     update_page_progress as bg_update_page_progress,
+    update_running_pages as bg_update_running_pages,
 )
 from kb.answer_contract import (
     _answer_contract_enabled,
@@ -3888,6 +3889,8 @@ if not hasattr(RUNTIME, "BG_STATE"):
         "cur_page_done": 0,
         "cur_page_total": 0,
         "cur_page_msg": "",
+        "running_pages": [],
+        "running_page_count": 0,
         "cancel": False,
         "last": "",
     }
@@ -7249,6 +7252,12 @@ def _bg_worker_loop() -> None:
                 except Exception:
                     pass
 
+            def _on_running_pages(pages: list[int]) -> None:
+                try:
+                    bg_update_running_pages(_BG_STATE, _BG_LOCK, pages, task_id=task_id)
+                except Exception:
+                    pass
+
             def _should_cancel() -> bool:
                 return bg_should_cancel(_BG_STATE, _BG_LOCK)
 
@@ -7265,6 +7274,7 @@ def _bg_worker_loop() -> None:
                 keep_debug=False,
                 eq_image_fallback=eq_image_fallback,
                 progress_cb=_on_progress,
+                running_pages_cb=_on_running_pages,
                 cancel_cb=_should_cancel,
                 speed_mode=speed_mode,
                 max_active_conversions=_bg_target_worker_count(),
@@ -7356,6 +7366,7 @@ def _bg_worker_loop() -> None:
                     keep_debug=False,
                     eq_image_fallback=False,
                     progress_cb=_on_progress,
+                    running_pages_cb=_on_running_pages,
                     cancel_cb=_should_cancel,
                     speed_mode=retry_speed_mode,
                     max_active_conversions=_bg_target_worker_count(),

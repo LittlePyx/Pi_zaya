@@ -84,6 +84,48 @@ export function conversionStageLabel(stage0: string, S: Record<string, string>) 
   return ''
 }
 
+export function normalizeRunningPages(value: unknown, total0 = 0): number[] {
+  const total = Number(total0 || 0)
+  if (!Array.isArray(value)) return []
+  return Array.from(new Set(
+    value
+      .map((item) => Number(item))
+      .filter((item) => (
+        Number.isInteger(item)
+        && item > 0
+        && (!(total > 0) || item <= total)
+      )),
+  )).sort((a, b) => a - b)
+}
+
+export function runningPagesLabel(
+  stage0: string,
+  pages0: unknown,
+  pageCount0: number,
+  pageTotal0: number,
+  S: Record<string, string>,
+): string {
+  if (String(stage0 || '').trim().toLowerCase() !== 'converting') return ''
+  const pages = normalizeRunningPages(pages0, pageTotal0)
+  if (!pages.length) return ''
+
+  const preview = pages.slice(0, 5)
+  const separator = String(S.lib_convert_running_pages_separator || '、')
+  const pageText = preview.join(separator)
+  const reportedCount = Number(pageCount0 || 0)
+  const totalCount = Math.max(
+    pages.length,
+    Number.isFinite(reportedCount) && reportedCount > 0 ? Math.floor(reportedCount) : 0,
+  )
+  const hasMore = totalCount > preview.length
+  const template = hasMore
+    ? String(S.lib_convert_running_pages_more || '剩余页：{pages}…（共 {count} 页）')
+    : String(S.lib_convert_running_pages || '剩余页：{pages}')
+  return template
+    .replace('{pages}', pageText)
+    .replace('{count}', String(totalCount))
+}
+
 export function conversionTaskFraction(stage0: string, pageDone: number, pageTotal: number) {
   const stage = String(stage0 || '').trim().toLowerCase() as ConversionStage
   const pageFraction = pageTotal > 0

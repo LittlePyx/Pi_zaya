@@ -1125,6 +1125,7 @@ def run_pdf_to_md(
     keep_debug: bool,
     eq_image_fallback: bool,
     progress_cb: Callable[[int, int, str], None] | None = None,
+    running_pages_cb: Callable[[list[int]], None] | None = None,
     cancel_cb: Callable[[], bool] | None = None,
     heartbeat_s: float = 1.0,
     stall_timeout_s: float | None = None,
@@ -1526,7 +1527,7 @@ def run_pdf_to_md(
         rd.start()
 
         re_pages = re.compile(r"\bpages\s*:\s*(\d+)\b", flags=re.IGNORECASE)
-        re_prog = re.compile(r"Processing\s+page\s+(\d+)\s*/\s*(\d+)", flags=re.IGNORECASE)
+        re_prog = re.compile(r"(?:Processing|Rendering)\s+page\s+(\d+)\s*/\s*(\d+)", flags=re.IGNORECASE)
         re_done = re.compile(r"Finished\s+page\s+(\d+)\s*/\s*(\d+)", flags=re.IGNORECASE)
         re_page_hint = re.compile(r"\bPage\s+(\d+)\s*:", flags=re.IGNORECASE)
         re_page_bracket = re.compile(r"\[\s*Page\s+(\d+)\s*\]", flags=re.IGNORECASE)
@@ -1535,7 +1536,31 @@ def run_pdf_to_md(
         re_fail_page_c = re.compile(r"\bpage\s+(\d+)\s+failed\b", flags=re.IGNORECASE)
         re_running_pages = re.compile(r"still\s+running\s+pages\s*:\s*\[([0-9,\s]+)\]", flags=re.IGNORECASE)
         done_pages: set[int] = set()
-        current_page_inflight = 0
+        running_pages: set[int] = set()
+
+        def _publish_running_pages() -> None:
+            if running_pages_cb is None:
+                return
+            try:
+                upper = int(p_total or 0)
+                visible = sorted(
+                    page
+                    for page in running_pages
+                    if page > 0 and page not in done_pages and (upper <= 0 or page <= upper)
+                )
+                running_pages_cb(visible)
+            except Exception:
+                pass
+
+        def _remaining_page_message() -> str:
+            active = sorted(page for page in running_pages if page > 0 and page not in done_pages)
+            if active:
+                if len(active) == 1:
+                    return f"Processing page {active[0]}/{p_total} ..."
+                return f"Processing {len(active)} remaining pages of {p_total} ..."
+            return f"Processing remaining pages of {p_total} ..."
+
+        _publish_running_pages()
         last_line_ts = time.time()
         last_done_ts = time.time()
         last_heartbeat_ts = 0.0
@@ -1566,8 +1591,10 @@ def run_pdf_to_md(
                 m2 = re_prog.search(s)
                 if m2:
                     try:
-                        current_page_inflight = max(current_page_inflight, int(m2.group(1)))
+                        page = int(m2.group(1))
                         p_total = max(p_total, int(m2.group(2)))
+                        if page > 0 and page not in done_pages and page <= p_total:
+                            running_pages.add(page)
                     except Exception:
                         pass
                 m3 = re_done.search(s)
@@ -1577,6 +1604,7 @@ def run_pdf_to_md(
                         pg = int(m3.group(1))
                         p_total = max(p_total, int(m3.group(2)))
                         done_pages.add(pg)
+                        running_pages.discard(pg)
                         p_done = max(p_done, len(done_pages))
                         if p_done > old_done:
                             last_done_ts = time.time()
@@ -1585,13 +1613,17 @@ def run_pdf_to_md(
                 m4 = re_page_hint.search(s)
                 if m4:
                     try:
-                        current_page_inflight = max(current_page_inflight, int(m4.group(1)))
+                        page = int(m4.group(1))
+                        if page > 0 and page not in done_pages and (p_total <= 0 or page <= p_total):
+                            running_pages.add(page)
                     except Exception:
                         pass
                 m5 = re_page_bracket.search(s)
                 if m5:
                     try:
-                        current_page_inflight = max(current_page_inflight, int(m5.group(1)))
+                        page = int(m5.group(1))
+                        if page > 0 and page not in done_pages and (p_total <= 0 or page <= p_total):
+                            running_pages.add(page)
                     except Exception:
                         pass
                 m6 = re_running_pages.search(s)
@@ -1599,7 +1631,17 @@ def run_pdf_to_md(
                     try:
                         vals = [int(x.strip()) for x in str(m6.group(1) or "").split(",") if x.strip().isdigit()]
                         if vals:
-                            current_page_inflight = max(current_page_inflight, max(vals))
+                            visible = {
+                                page for page in vals
+                                if page > 0 and page not in done_pages and (p_total <= 0 or page <= p_total)
+                            }
+                            # The converter marks truncated snapshots with "+N more".
+                            # A complete snapshot is authoritative and can clear stale
+                            # high page numbers after out-of-order completion.
+                            if re.search(r"\(\+\s*\d+\s+more\)", s, flags=re.IGNORECASE):
+                                running_pages.update(visible)
+                            else:
+                                running_pages = visible
                     except Exception:
                         pass
                 # Treat failed pages as "processed" for progress accounting.
@@ -1611,12 +1653,13 @@ def run_pdf_to_md(
                         pgf = int(fm.group(1))
                         if pgf > 0:
                             done_pages.add(pgf)
+                            running_pages.discard(pgf)
                             p_done = max(p_done, len(done_pages))
-                            current_page_inflight = max(current_page_inflight, pgf)
                             if p_done > old_done:
                                 last_done_ts = time.time()
                     except Exception:
                         pass
+                _publish_running_pages()
                 try:
                     progress_cb and progress_cb(p_done, p_total, s)
                 except Exception:
@@ -1647,12 +1690,13 @@ def run_pdf_to_md(
                 try:
                     if (p_total > 0) and (p_done < p_total) and ((now - last_done_ts) >= float(page_stall_timeout_s)):
                         rc_override = -4
-                        stalled_page = max(1, int(p_done) + 1, int(current_page_inflight or 0))
+                        stalled_pages = sorted(page for page in running_pages if page not in done_pages)
+                        stalled_at = str(stalled_pages[0]) if len(stalled_pages) == 1 else "remaining pages"
                         try:
                             progress_cb and progress_cb(
                                 p_done,
                                 p_total,
-                                f"converter page-progress stalled at {stalled_page}/{p_total} for {int(now-last_done_ts)}s; terminating",
+                                f"converter page-progress stalled at {stalled_at} for {int(now-last_done_ts)}s; terminating",
                             )
                         except Exception:
                             pass
@@ -1667,9 +1711,7 @@ def run_pdf_to_md(
                     if p_done >= p_total:
                         base_msg = f"Post-processing after pages {p_total}/{p_total} ..."
                     else:
-                        live_page = max(1, p_done + 1, current_page_inflight)
-                        live_page = min(p_total, live_page)
-                        base_msg = f"Processing page {live_page}/{p_total} ..."
+                        base_msg = _remaining_page_message()
                 else:
                     base_msg = "converter running..." if not cp_out else cp_out[-1]
                 heartbeat_msg = f"{base_msg} (alive {last_idle_s}s)"
@@ -1681,6 +1723,9 @@ def run_pdf_to_md(
 
             if (proc.poll() is not None) and line_q.empty():
                 break
+
+        running_pages.clear()
+        _publish_running_pages()
 
         if rc_override is not None:
             rc = int(rc_override)
@@ -1732,6 +1777,7 @@ def run_pdf_to_md(
                     keep_debug=keep_debug,
                     eq_image_fallback=eq_image_fallback,
                     progress_cb=progress_cb,
+                    running_pages_cb=running_pages_cb,
                     cancel_cb=cancel_cb,
                     heartbeat_s=heartbeat_s,
                     stall_timeout_s=stall_timeout_s,
@@ -1783,6 +1829,7 @@ def run_pdf_to_md(
                     keep_debug=keep_debug,
                     eq_image_fallback=eq_image_fallback,
                     progress_cb=progress_cb,
+                    running_pages_cb=running_pages_cb,
                     cancel_cb=cancel_cb,
                     heartbeat_s=heartbeat_s,
                     stall_timeout_s=stall_timeout_s,

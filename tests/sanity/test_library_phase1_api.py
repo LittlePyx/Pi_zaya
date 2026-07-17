@@ -421,6 +421,8 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
                     "cur_page_done": 1,
                     "cur_page_total": 4,
                     "cur_page_msg": "quality gate: provider=qwen model=private-name",
+                    "running_pages": [4],
+                    "running_page_count": 1,
                     "conversion_stage": "finalizing",
                 },
                 {
@@ -431,6 +433,8 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
                     "cur_page_done": 2,
                     "cur_page_total": 6,
                     "cur_page_msg": "page 2",
+                    "running_pages": [6, 5, 5, 99],
+                    "running_page_count": 2,
                     "conversion_stage": "converting",
                 },
             ],
@@ -457,6 +461,9 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
     assert by_name["a.pdf"]["cur_page_msg"] == ""
     assert "private-name" not in response.text
     assert by_name["b.pdf"]["cur_page_total"] == 6
+    assert by_name["b.pdf"]["running_pages"] == [5, 6]
+    assert by_name["b.pdf"]["running_page_count"] == 2
+    assert by_name["a.pdf"]["running_pages"] == []
     assert by_name["c.pdf"]["task_state"] == "queued"
     assert by_name["c.pdf"]["queue_pos"] == 1
     counts = payload.get("counts") or {}

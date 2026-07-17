@@ -22,6 +22,7 @@ type LibraryStickyStatusProps = {
   convertActiveSummary: string
   convertStageLabel: string
   convertPageLabel: string
+  convertRunningPagesLabel: string
   convertPageProgress: StickyPageProgress
   convertPercent: number
   convertPagePercent: number
@@ -41,6 +42,7 @@ export function LibraryStickyStatus({
   convertActiveSummary,
   convertStageLabel,
   convertPageLabel,
+  convertRunningPagesLabel,
   convertPageProgress,
   convertPercent,
   convertPagePercent,
@@ -68,6 +70,9 @@ export function LibraryStickyStatus({
                 <Text type="secondary" className="kb-lib-sticky-sub">
                   {convertPageLabel} {convertPageProgress.done}/{convertPageProgress.total}
                 </Text>
+              ) : null}
+              {convertRunningPagesLabel ? (
+                <Text type="secondary" className="kb-lib-sticky-sub">{convertRunningPagesLabel}</Text>
               ) : null}
             </div>
             <div className="kb-lib-sticky-progress-stack">

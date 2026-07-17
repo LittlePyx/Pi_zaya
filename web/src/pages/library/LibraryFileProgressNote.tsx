@@ -1,7 +1,7 @@
 import { Progress, Typography } from 'antd'
 import type { LibraryFileItem } from '../../api/library'
 import { useT } from '../../i18n'
-import { conversionStageLabel, derivePageProgress } from './libraryPageUtils'
+import { conversionStageLabel, derivePageProgress, runningPagesLabel } from './libraryPageUtils'
 import './LibraryFileProgressNote.css'
 
 const { Text } = Typography
@@ -14,6 +14,13 @@ export function LibraryFileProgressNote({ item }: LibraryFileProgressNoteProps) 
   const S = useT()
   const itemProgress = derivePageProgress(item.cur_page_done, item.cur_page_total, item.cur_page_msg)
   const stageLabel = conversionStageLabel(item.conversion_stage, S)
+  const remainingPagesLabel = runningPagesLabel(
+    item.conversion_stage,
+    item.running_pages,
+    Number(item.running_page_count || 0),
+    itemProgress.total,
+    S,
+  )
   const itemProgressPercent = itemProgress.total > 0
     ? Math.round((itemProgress.done / Math.max(1, itemProgress.total)) * 100)
     : 0
@@ -34,6 +41,11 @@ export function LibraryFileProgressNote({ item }: LibraryFileProgressNoteProps) 
           {stageLabel ? (
             <div>
               <Text type="secondary" className="text-xs">{stageLabel}</Text>
+            </div>
+          ) : null}
+          {remainingPagesLabel ? (
+            <div>
+              <Text type="secondary" className="text-xs">{remainingPagesLabel}</Text>
             </div>
           ) : null}
         </div>

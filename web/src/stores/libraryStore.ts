@@ -25,6 +25,8 @@ interface ConvertProgressState {
   curPageTotal: number
   curPageMsg: string
   conversionStage: string
+  runningPages: number[]
+  runningPageCount: number
   last: string
 }
 
@@ -169,6 +171,41 @@ function numberValue(value: unknown): number {
   return Number.isFinite(n) ? n : 0
 }
 
+function normalizedRunningPages(value: unknown): number[] {
+  if (!Array.isArray(value)) return []
+  return Array.from(new Set(
+    value
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item > 0),
+  )).sort((a, b) => a - b)
+}
+
+function sanitizedActiveTasks(value: ConvertActiveTask[] | null | undefined): ConvertActiveTask[] {
+  if (!Array.isArray(value)) return []
+  return value.map((task) => {
+    const runningPages = normalizedRunningPages(task.running_pages)
+    return {
+      ...task,
+      cur_page_msg: '',
+      running_pages: runningPages,
+      running_page_count: Math.max(runningPages.length, numberValue(task.running_page_count)),
+    }
+  })
+}
+
+function sanitizedLibraryFiles(value: LibraryFileItem[] | null | undefined): LibraryFileItem[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => {
+    const runningPages = normalizedRunningPages(item.running_pages)
+    return {
+      ...item,
+      cur_page_msg: '',
+      running_pages: runningPages,
+      running_page_count: Math.max(runningPages.length, numberValue(item.running_page_count)),
+    }
+  })
+}
+
 function queueSnapshotRunning(queue: LibraryFilesResponse['queue'] | null | undefined): boolean {
   if (!queue) return false
   const activeTasks = Array.isArray(queue.active_tasks) ? queue.active_tasks : []
@@ -182,8 +219,9 @@ function queueSnapshotRunning(queue: LibraryFilesResponse['queue'] | null | unde
 
 function progressFromQueueSnapshot(queue: LibraryFilesResponse['queue'] | null | undefined): ConvertProgressState | null {
   if (!queue) return null
-  const activeTasks = Array.isArray(queue.active_tasks) ? queue.active_tasks : []
+  const activeTasks = sanitizedActiveTasks(queue.active_tasks)
   const primary = activeTasks[0] || null
+  const primaryRunningPages = normalizedRunningPages(primary?.running_pages)
   return {
     total: numberValue(queue.total),
     completed: numberValue(queue.done),
@@ -192,8 +230,15 @@ function progressFromQueueSnapshot(queue: LibraryFilesResponse['queue'] | null |
     activeTasks,
     curPageDone: numberValue(primary?.cur_page_done),
     curPageTotal: numberValue(primary?.cur_page_total),
-    curPageMsg: String(primary?.cur_page_msg || ''),
+    // Converter stdout is private diagnostics. Public UI state uses only
+    // structured stage/page fields and never retains the raw message.
+    curPageMsg: '',
     conversionStage: String(primary?.conversion_stage || ''),
+    runningPages: primaryRunningPages,
+    runningPageCount: Math.max(
+      primaryRunningPages.length,
+      numberValue(primary?.running_page_count),
+    ),
     last: '',
   }
 }
@@ -209,6 +254,7 @@ function mergeActiveConversionProgress(files: LibraryFileItem[], activeTasks: Co
   return files.map((item) => {
     const task = byPath.get(conversionPathKey(item.path)) || byName.get(String(item.name || '').trim())
     if (!task) return item
+    const runningPages = normalizedRunningPages(task.running_pages)
     return {
       ...item,
       task_state: 'running' as const,
@@ -220,6 +266,11 @@ function mergeActiveConversionProgress(files: LibraryFileItem[], activeTasks: Co
       cur_page_total: Number(task.cur_page_total || 0),
       cur_page_msg: '',
       conversion_stage: task.conversion_stage || 'converting',
+      running_pages: runningPages,
+      running_page_count: Math.max(
+        runningPages.length,
+        numberValue(task.running_page_count),
+      ),
     }
   })
 }
@@ -275,7 +326,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
     if (filesRequestId !== filesLoadRequestSeq) return
     const view = viewResult.value
-    const files = Array.isArray(view.items) ? view.items : []
+    const files = sanitizedLibraryFiles(view.items)
     const queueRunning = queueSnapshotRunning(view.queue)
     const queueProgress = progressFromQueueSnapshot(view.queue)
     let overviewPatch: Partial<LibraryState>
@@ -498,7 +549,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const ctrl = libraryApi.streamConvertStatus(
       (data) => {
         if (!streamIsCurrent()) return
-        const activeTasks = Array.isArray(data.active_tasks) ? data.active_tasks : []
+        const activeTasks = sanitizedActiveTasks(data.active_tasks)
+        const runningPages = normalizedRunningPages(
+          data.running_pages ?? activeTasks[0]?.running_pages,
+        )
         set((state) => ({
           converting: data.running,
           files: mergeActiveConversionProgress(state.files, activeTasks),
@@ -510,8 +564,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             activeTasks,
             curPageDone: data.cur_page_done,
             curPageTotal: data.cur_page_total,
-            curPageMsg: data.cur_page_msg,
+            curPageMsg: '',
             conversionStage: String(data.conversion_stage || ''),
+            runningPages,
+            runningPageCount: Math.max(
+              runningPages.length,
+              numberValue(data.running_page_count ?? activeTasks[0]?.running_page_count),
+            ),
             last: data.last,
           },
         }))

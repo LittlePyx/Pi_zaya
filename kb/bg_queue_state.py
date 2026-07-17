@@ -14,6 +14,7 @@ PUBLIC_CONVERSION_STAGES = {
     "retrying",
     "cancelling",
 }
+PUBLIC_RUNNING_PAGES_LIMIT = 12
 
 
 def _public_conversion_stage(value: Any, *, fallback: str = "") -> str:
@@ -86,6 +87,27 @@ def _compact_repair_context(value: Any) -> dict[str, Any]:
     }
 
 
+def _normalize_running_pages(
+    value: Any,
+    *,
+    total: int = 0,
+    limit: int | None = PUBLIC_RUNNING_PAGES_LIMIT,
+) -> list[int]:
+    rows = value if isinstance(value, (list, tuple, set)) else []
+    clean: set[int] = set()
+    upper = max(0, int(total or 0))
+    for item in rows:
+        try:
+            page = int(item)
+        except Exception:
+            continue
+        if page <= 0 or (upper > 0 and page > upper):
+            continue
+        clean.add(page)
+    ordered = sorted(clean)
+    return ordered if limit is None else ordered[:max(0, int(limit))]
+
+
 def _task_info_from_active_record(rec: dict[str, Any]) -> dict[str, Any]:
     info = {
         "_tid": str(rec.get("_tid") or ""),
@@ -96,6 +118,11 @@ def _task_info_from_active_record(rec: dict[str, Any]) -> dict[str, Any]:
         "cur_page_done": int(rec.get("cur_page_done", 0) or 0),
         "cur_page_total": int(rec.get("cur_page_total", 0) or 0),
         "cur_page_msg": str(rec.get("cur_page_msg") or ""),
+        "running_pages": _normalize_running_pages(
+            rec.get("running_pages"),
+            total=int(rec.get("cur_page_total", 0) or 0),
+        ),
+        "running_page_count": max(0, int(rec.get("running_page_count", 0) or 0)),
         "conversion_stage": _public_conversion_stage(rec.get("conversion_stage"), fallback="converting"),
         "cur_profile": str(rec.get("cur_profile") or ""),
         "cur_llm_profile": str(rec.get("cur_llm_profile") or ""),
@@ -118,6 +145,11 @@ def _sync_legacy_summary_fields(state: dict[str, Any]) -> None:
     state["cur_page_done"] = int(primary.get("cur_page_done", 0) or 0)
     state["cur_page_total"] = int(primary.get("cur_page_total", 0) or 0)
     state["cur_page_msg"] = str(primary.get("cur_page_msg") or "")
+    state["running_pages"] = _normalize_running_pages(
+        primary.get("running_pages"),
+        total=int(primary.get("cur_page_total", 0) or 0),
+    )
+    state["running_page_count"] = max(0, int(primary.get("running_page_count", 0) or 0))
     state["conversion_stage"] = _public_conversion_stage(primary.get("conversion_stage"))
     state["cur_profile"] = str(primary.get("cur_profile") or "")
     state["cur_llm_profile"] = str(primary.get("cur_llm_profile") or "")
@@ -182,6 +214,8 @@ def cancel_all(state: dict[str, Any], lock: Lock, message: str) -> None:
             try:
                 task["cur_page_msg"] = str(message or "")
                 task["conversion_stage"] = "cancelling"
+                task["running_pages"] = []
+                task["running_page_count"] = 0
             except Exception:
                 pass
         _sync_legacy_summary_fields(state)
@@ -224,6 +258,8 @@ def begin_next_task_or_idle(state: dict[str, Any], lock: Lock) -> dict[str, Any]
                     "cur_page_done": 0,
                     "cur_page_total": 0,
                     "cur_page_msg": "",
+                    "running_pages": [],
+                    "running_page_count": 0,
                     "conversion_stage": "converting",
                     "cur_profile": "",
                     "cur_llm_profile": "",
@@ -300,6 +336,9 @@ def update_page_progress(
             line,
             current=str(target.get("conversion_stage") or ""),
         )
+        if target["conversion_stage"] in {"finalizing", "indexing", "cancelling"}:
+            target["running_pages"] = []
+            target["running_page_count"] = 0
 
         tail = list(target.get("cur_log_tail") or [])
         if line and (not regressed):
@@ -307,6 +346,30 @@ def update_page_progress(
             if len(tail) > 24:
                 tail = tail[-24:]
         target["cur_log_tail"] = tail
+        _sync_legacy_summary_fields(state)
+
+
+def update_running_pages(
+    state: dict[str, Any],
+    lock: Lock,
+    pages: list[int],
+    *,
+    task_id: str = "",
+) -> None:
+    with lock:
+        tid = str(task_id or "")
+        active = _active_tasks(state)
+        target: dict[str, Any] | None = None
+        if tid:
+            target = next((rec for rec in active if str(rec.get("_tid") or "") == tid), None)
+        elif len(active) == 1:
+            target = active[0]
+        if target is None:
+            return
+        total = int(target.get("cur_page_total", 0) or 0)
+        all_pages = _normalize_running_pages(pages, total=total, limit=None)
+        target["running_pages"] = all_pages[:PUBLIC_RUNNING_PAGES_LIMIT]
+        target["running_page_count"] = len(all_pages)
         _sync_legacy_summary_fields(state)
 
 
@@ -331,6 +394,9 @@ def update_conversion_stage(
         if target is None:
             return
         target["conversion_stage"] = clean_stage
+        if clean_stage != "converting":
+            target["running_pages"] = []
+            target["running_page_count"] = 0
         _sync_legacy_summary_fields(state)
 
 

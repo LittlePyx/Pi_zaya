@@ -112,6 +112,7 @@ import {
   normalizeTextList,
   normalizeTextValue,
   numericStat,
+  runningPagesLabel,
   saveResearchQaReplayFailureCase,
   stripKnownSourceExt,
   type QualityRepairHistoryRecord,
@@ -568,6 +569,16 @@ export default function LibraryPage() {
   }, [store.progress])
   const convertStageLabel = useMemo(
     () => conversionStageLabel(String(store.progress?.conversionStage || ''), S),
+    [store.progress, S],
+  )
+  const convertRunningPagesLabel = useMemo(
+    () => runningPagesLabel(
+      String(store.progress?.conversionStage || ''),
+      store.progress?.runningPages,
+      Number(store.progress?.runningPageCount || 0),
+      Number(store.progress?.curPageTotal || 0),
+      S,
+    ),
     [store.progress, S],
   )
   const refSyncPercent = useMemo(
@@ -1379,6 +1390,7 @@ export default function LibraryPage() {
         convertActiveSummary={convertActiveSummary}
         convertStageLabel={convertStageLabel}
         convertPageLabel={S.lib_convert_page_progress}
+        convertRunningPagesLabel={convertRunningPagesLabel}
         convertPageProgress={convertPageProgress}
         convertPercent={convertPercent}
         convertPagePercent={convertPagePercent}

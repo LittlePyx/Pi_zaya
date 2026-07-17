@@ -325,7 +325,14 @@ def _merge_task_map_entry(mapping: dict[str, dict], key: str, info: dict) -> Non
             merged["repair_run_id"] = merged_repair_run_ids[0]
     if (not isinstance(merged.get("repair_context"), dict)) and isinstance(info.get("repair_context"), dict):
         merged["repair_context"] = dict(info.get("repair_context") or {})
-    for field in ("cur_page_done", "cur_page_total", "cur_page_msg", "conversion_stage"):
+    for field in (
+        "cur_page_done",
+        "cur_page_total",
+        "cur_page_msg",
+        "running_pages",
+        "running_page_count",
+        "conversion_stage",
+    ):
         if field in info:
             merged[field] = info.get(field)
     mapping[k] = merged
@@ -1070,25 +1077,52 @@ def _compact_conversion_stage(value, *, fallback: str = "") -> str:
     return clean_fallback if clean_fallback in allowed else ""
 
 
+def _compact_running_pages(value, *, total: int = 0) -> list[int]:
+    rows = value if isinstance(value, (list, tuple, set)) else []
+    upper = max(0, int(total or 0))
+    pages: set[int] = set()
+    for item in rows:
+        try:
+            page = int(item)
+        except Exception:
+            continue
+        if page <= 0 or (upper > 0 and page > upper):
+            continue
+        pages.add(page)
+    return sorted(pages)[:12]
+
+
 def _compact_active_tasks(snap: dict) -> list[dict]:
     items: list[dict] = []
     for task in list((snap or {}).get("active_tasks") or []):
         if not isinstance(task, dict):
             continue
+        page_total = int(task.get("cur_page_total", 0) or 0)
+        conversion_stage = _compact_conversion_stage(
+            task.get("conversion_stage"),
+            fallback="converting",
+        )
+        running_pages = (
+            _compact_running_pages(task.get("running_pages"), total=page_total)
+            if conversion_stage == "converting"
+            else []
+        )
         item = {
             "task_id": str(task.get("_tid") or ""),
             "name": str(task.get("name") or ""),
             "pdf": str(task.get("pdf") or ""),
             "replace": bool(task.get("replace", False)),
             "cur_page_done": int(task.get("cur_page_done", 0) or 0),
-            "cur_page_total": int(task.get("cur_page_total", 0) or 0),
+            "cur_page_total": page_total,
             # Raw converter stdout remains in the private runtime snapshot. The
             # ordinary library API exposes only a stable, user-facing stage.
             "cur_page_msg": "",
-            "conversion_stage": _compact_conversion_stage(
-                task.get("conversion_stage"),
-                fallback="converting",
+            "running_pages": running_pages,
+            "running_page_count": max(
+                len(running_pages),
+                int(task.get("running_page_count", 0) or 0) if conversion_stage == "converting" else 0,
             ),
+            "conversion_stage": conversion_stage,
         }
         repair_context = _compact_task_repair_context(task.get("repair_context"))
         if repair_context:
@@ -1133,6 +1167,11 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
             "cur_page_done": int(task.get("cur_page_done", 0) or 0),
             "cur_page_total": int(task.get("cur_page_total", 0) or 0),
             "cur_page_msg": "",
+            "running_pages": _compact_running_pages(
+                task.get("running_pages"),
+                total=int(task.get("cur_page_total", 0) or 0),
+            ),
+            "running_page_count": max(0, int(task.get("running_page_count", 0) or 0)),
             "conversion_stage": _compact_conversion_stage(
                 task.get("conversion_stage"),
                 fallback="converting",
@@ -1219,6 +1258,8 @@ def _library_file_item(
     cur_page_done = int((info or {}).get("cur_page_done") or 0)
     cur_page_total = int((info or {}).get("cur_page_total") or 0)
     cur_page_msg = ""
+    running_pages = _compact_running_pages((info or {}).get("running_pages"), total=cur_page_total)
+    running_page_count = max(len(running_pages), int((info or {}).get("running_page_count") or 0))
     conversion_stage = _compact_conversion_stage(
         (info or {}).get("conversion_stage"),
         fallback="converting" if running else ("queued" if queued else ""),
@@ -1252,6 +1293,8 @@ def _library_file_item(
         "cur_page_done": int(cur_page_done),
         "cur_page_total": int(cur_page_total),
         "cur_page_msg": cur_page_msg,
+        "running_pages": running_pages,
+        "running_page_count": running_page_count,
         "conversion_stage": conversion_stage,
         "paper_category": str((meta_rec or {}).get("paper_category") or ""),
         "reading_status": str((meta_rec or {}).get("reading_status") or ""),
@@ -6337,6 +6380,8 @@ async def convert_status():
             "cur_page_done": snap.get("cur_page_done", 0),
             "cur_page_total": snap.get("cur_page_total", 0),
             "cur_page_msg": "",
+            "running_pages": list((public_active_tasks[0] if public_active_tasks else {}).get("running_pages") or []),
+            "running_page_count": int((public_active_tasks[0] if public_active_tasks else {}).get("running_page_count") or 0),
             "conversion_stage": str((public_active_tasks[0] if public_active_tasks else {}).get("conversion_stage") or ""),
             "last": snap.get("last", ""),
         }

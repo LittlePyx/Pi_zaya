@@ -21,6 +21,9 @@ const baseItem = {
   cur_page_done: 0,
   cur_page_total: 0,
   cur_page_msg: '',
+  conversion_stage: '',
+  running_pages: [],
+  running_page_count: 0,
   paper_category: 'Single-Photon Imaging',
   reading_status: 'reading',
   note: '',
@@ -232,6 +235,31 @@ test('library source readiness respects repair action precedence over quality-bl
   expect(result.gateReconvert).toMatchObject({ kind: 'blocked', action: 'reconvert', blocked: true })
   expect(result.planNone).toMatchObject({ kind: 'index_stale', action: 'reindex', blocked: false })
   expect(result.stalePlan).toMatchObject({ kind: 'blocked', action: 'reconvert', blocked: true })
+})
+
+test('library running-page label uses only structured page state while converting', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const { runningPagesLabel } = await import('/src/pages/library/libraryPageUtils.ts')
+    const S = {
+      lib_convert_running_pages: '剩余页：{pages}',
+      lib_convert_running_pages_more: '剩余页：{pages}…（共 {count} 页）',
+      lib_convert_running_pages_separator: '、',
+    }
+    return {
+      converting: runningPagesLabel('converting', [21, 17, 17, 0, 22], 2, 21, S),
+      truncated: runningPagesLabel('converting', [1, 2, 3, 4, 5], 9, 21, S),
+      finalizing: runningPagesLabel('finalizing', [17], 1, 21, S),
+      retrying: runningPagesLabel('retrying', [17], 1, 21, S),
+      empty: runningPagesLabel('converting', [], 0, 21, S),
+    }
+  })
+
+  expect(result.converting).toBe('剩余页：17、21')
+  expect(result.truncated).toBe('剩余页：1、2、3、4、5…（共 9 页）')
+  expect(result.finalizing).toBe('')
+  expect(result.retrying).toBe('')
+  expect(result.empty).toBe('')
 })
 
 test('library quality focus helper plans current and cross-scope history targets', async ({ page }) => {
@@ -2707,7 +2735,10 @@ test('library restores running conversion and keeps cancellation visible', async
     conversion_quality: null,
     cur_page_done: 1,
     cur_page_total: 3,
-    cur_page_msg: 'page 1/3',
+    cur_page_msg: 'quality gate: provider=qwen model=private-name',
+    conversion_stage: 'converting',
+    running_pages: [2],
+    running_page_count: 1,
   }
 
   await page.route('**/api/library/files**', async (route) => {
@@ -2740,7 +2771,10 @@ test('library restores running conversion and keeps cancellation visible', async
             replace: true,
             cur_page_done: 1,
             cur_page_total: 3,
-            cur_page_msg: cancelCalled ? 'Canceling current background conversion' : 'page 1/3',
+            cur_page_msg: cancelCalled ? 'Canceling current background conversion' : 'quality gate: provider=qwen model=private-name',
+            conversion_stage: cancelCalled ? 'cancelling' : 'converting',
+            running_pages: cancelCalled ? [] : [2],
+            running_page_count: cancelCalled ? 0 : 1,
           }],
           current: runningName,
           done: 0,
@@ -2751,7 +2785,7 @@ test('library restores running conversion and keeps cancellation visible', async
   })
   await page.route('**/api/library/convert/status', async (route) => {
     statusCalls += 1
-    const curPageMsg = cancelCalled ? 'Canceling current background conversion' : 'page 1/3'
+    const curPageMsg = cancelCalled ? 'Canceling current background conversion' : 'quality gate: provider=qwen model=private-name'
     await route.fulfill({
       status: 200,
       contentType: 'text/event-stream',
@@ -2770,10 +2804,16 @@ test('library restores running conversion and keeps cancellation visible', async
           cur_page_done: 1,
           cur_page_total: 3,
           cur_page_msg: curPageMsg,
+          conversion_stage: cancelCalled ? 'cancelling' : 'converting',
+          running_pages: cancelCalled ? [] : [2],
+          running_page_count: cancelCalled ? 0 : 1,
         }],
         cur_page_done: 1,
         cur_page_total: 3,
         cur_page_msg: curPageMsg,
+        conversion_stage: cancelCalled ? 'cancelling' : 'converting',
+        running_pages: cancelCalled ? [] : [2],
+        running_page_count: cancelCalled ? 0 : 1,
         last: '',
       })}\n\n`,
     })
@@ -2786,6 +2826,9 @@ test('library restores running conversion and keeps cancellation visible', async
   await page.goto('/library')
   await expect(page.getByRole('button', { name: /停止|Stop/ }).first()).toBeVisible()
   await expect.poll(() => statusCalls).toBeGreaterThan(0)
+  await expect(page.getByText(/剩余页：2|Remaining pages: 2/).first()).toBeVisible()
+  await expect(page.getByText('quality gate: provider=qwen model=private-name')).toHaveCount(0)
+  await expect(page.getByText(/private-name/)).toHaveCount(0)
 
   await page.getByRole('button', { name: /停止|Stop/ }).first().click()
   await expect.poll(() => cancelCalled).toBe(true)

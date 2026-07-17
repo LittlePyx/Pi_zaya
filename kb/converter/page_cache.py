@@ -13,28 +13,54 @@ from typing import Any, Mapping
 from .config import canonical_speed_mode
 
 
-PAGE_CACHE_SCHEMA_VERSION = 1
+PAGE_CACHE_SCHEMA_VERSION = 2
+PAGE_OUTPUT_ALGORITHM_VERSION = 1
 PAGE_CACHE_DIR_NAME = ".conversion_cache"
 
-_PIPELINE_COMPONENTS = (
+# Hash files whose whole purpose contributes to the cached, per-page Markdown
+# or page assets.  Document assembly/finalization modules deliberately do not
+# belong here: those stages run again after cached pages are loaded.
+#
+# ``pipeline.py`` currently mixes page-local helpers with document finalization,
+# and ``post_processing.py`` contains one page-local fence repair alongside the
+# document cleanup pipeline.  They are therefore governed by the explicit
+# PAGE_OUTPUT_ALGORITHM_VERSION above instead of whole-file hashes.  Bump that
+# version whenever a page-output helper in either mixed module changes.
+_PAGE_OUTPUT_COMPONENTS = (
+    "block_classifier.py",
     "config.py",
+    "figure_assets.py",
+    "formula_markdown.py",
+    "geometry_utils.py",
+    "heuristics.py",
+    "layout_analysis.py",
     "llm_worker.py",
-    "page_cache.py",
+    "models.py",
+    "page_figure_metadata.py",
+    "page_image_markdown.py",
     "page_layout_crops.py",
     "page_local_pipeline.py",
+    "page_table_fallback.py",
+    "page_text_blocks.py",
     "page_vision_direct_page.py",
     "page_vision_guardrails.py",
     "pdf_reference_text.py",
-    "pipeline.py",
     "pipeline_render_markdown.py",
     "pipeline_vision_direct.py",
-    "post_processing.py",
+    "post_heading_rules.py",
+    "post_math_rules.py",
+    "post_references.py",
+    "reference_markdown.py",
     "reference_page_vl.py",
+    "tables.py",
     "text_utils.py",
+    "vision_circuit_breaker.py",
 )
 _QUALITY_ENV_KEYS = (
+    "KB_LLM_HARD_TIMEOUT_S",
     "KB_PDF_COMPLEX_PAGE_FALLBACK",
     "KB_PDF_EQ_IMAGE_FALLBACK",
+    "KB_PDF_FIGURE_DPI",
     "KB_PDF_LLM_VISION_MATH",
     "KB_PDF_SAFE_COMPLEX_FALLBACK",
     "KB_PDF_ULTRA_FAST_VISION_TIMEOUT_S",
@@ -58,6 +84,7 @@ _QUALITY_ENV_KEYS = (
     "KB_PDF_VISION_PAGE_BUDGET_S",
     "KB_PDF_VISION_REFS_COLUMN_MODE",
     "KB_PDF_VISION_REFS_CROP_MAX_TOKENS",
+    "KB_PDF_VISION_REFS_LOCAL_MIN_ENTRIES",
     "KB_PDF_VISION_REFS_MAX_TOKENS",
     "KB_PDF_VISION_REFS_PREFER_LOCAL",
     "KB_PDF_VISION_TIMEOUT_S",
@@ -103,14 +130,15 @@ def page_markdown_is_reusable(markdown: str | None) -> bool:
     return bool(visible.strip())
 
 
-def _pipeline_fingerprint() -> str:
+def _page_output_fingerprint() -> str:
     root = Path(__file__).resolve().parent
     digest = hashlib.sha256()
-    for name in _PIPELINE_COMPONENTS:
+    digest.update(f"page-output-algorithm:{PAGE_OUTPUT_ALGORITHM_VERSION}".encode("utf-8"))
+    for name in _PAGE_OUTPUT_COMPONENTS:
         path = root / name
         digest.update(name.encode("utf-8"))
         try:
-            digest.update(path.read_bytes())
+            digest.update(_sha256_file(path).encode("ascii"))
         except Exception:
             digest.update(b"missing")
     return digest.hexdigest()
@@ -124,6 +152,8 @@ def _config_payload(cfg: Any) -> dict[str, Any]:
         "llm_classify": bool(getattr(cfg, "llm_classify", True)),
         "llm_render_page": bool(getattr(cfg, "llm_render_page", False)),
         "llm_classify_only_if_needed": bool(getattr(cfg, "llm_classify_only_if_needed", True)),
+        "classify_batch_size": int(getattr(cfg, "classify_batch_size", 40) or 40),
+        "dpi": int(getattr(cfg, "dpi", 200) or 200),
         "image_scale": float(getattr(cfg, "image_scale", 2.2) or 2.2),
         "figure_dpi": int(getattr(cfg, "figure_dpi", 0) or 0),
         "image_alpha": bool(getattr(cfg, "image_alpha", False)),
@@ -134,6 +164,7 @@ def _config_payload(cfg: Any) -> dict[str, Any]:
         "llm_repair": bool(getattr(cfg, "llm_repair", True)),
         "llm_repair_body_math": bool(getattr(cfg, "llm_repair_body_math", False)),
         "llm_smart_math_repair": bool(getattr(cfg, "llm_smart_math_repair", True)),
+        "llm_render_max_tokens": int(getattr(cfg, "llm_render_max_tokens", 0) or 0),
         "speed_mode": canonical_speed_mode(getattr(cfg, "speed_mode", "normal")),
         "llm": {
             "model": str(getattr(llm, "model", "") or "").strip(),
@@ -165,19 +196,16 @@ class PageConversionCache:
         self.rejected: set[int] = set()
 
         self.source_fingerprint = ""
-        self.pipeline_fingerprint = ""
+        self.page_output_fingerprint = ""
         self.config_payload: dict[str, Any] = {}
         self.config_fingerprint = ""
         if not self.enabled:
             return
         try:
             self.source_fingerprint = _sha256_file(self.pdf_path)
-            self.pipeline_fingerprint = _pipeline_fingerprint()
+            self.page_output_fingerprint = _page_output_fingerprint()
             self.config_payload = _config_payload(cfg)
-            self.config_fingerprint = _stable_json_hash({
-                "config": self.config_payload,
-                "pipeline_fingerprint": self.pipeline_fingerprint,
-            })
+            self.config_fingerprint = _stable_json_hash({"config": self.config_payload})
             self.pages_dir.mkdir(parents=True, exist_ok=True)
             self._write_manifest(status="active")
         except Exception:
@@ -208,7 +236,8 @@ class PageConversionCache:
             "status": str(status or "active"),
             "source_name": self.pdf_path.name,
             "source_fingerprint": self.source_fingerprint,
-            "pipeline_fingerprint": self.pipeline_fingerprint,
+            "page_output_algorithm_version": PAGE_OUTPUT_ALGORITHM_VERSION,
+            "page_output_fingerprint": self.page_output_fingerprint,
             "config_fingerprint": self.config_fingerprint,
             "config": self.config_payload,
             "total_pages": self.total_pages,
@@ -242,6 +271,8 @@ class PageConversionCache:
                 raise ValueError("page cache schema changed")
             if str(entry.get("page_fingerprint") or "") != self._page_fingerprint(page_index):
                 raise ValueError("page source changed")
+            if str(entry.get("page_output_fingerprint") or "") != self.page_output_fingerprint:
+                raise ValueError("page output algorithm changed")
             if str(entry.get("config_fingerprint") or "") != self.config_fingerprint:
                 raise ValueError("conversion configuration changed")
             # Keep cached text out of *.md discovery so ingestion cannot index
@@ -312,6 +343,7 @@ class PageConversionCache:
                 "page_index": int(page_index),
                 "page_number": int(page_index) + 1,
                 "page_fingerprint": self._page_fingerprint(page_index),
+                "page_output_fingerprint": self.page_output_fingerprint,
                 "config_fingerprint": self.config_fingerprint,
                 "markdown_sha256": _sha256_bytes(markdown_bytes),
                 "markdown_chars": len(text),

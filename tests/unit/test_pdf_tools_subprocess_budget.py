@@ -258,3 +258,99 @@ def test_run_pdf_to_md_uses_adaptive_single_doc_budget_when_env_missing(monkeypa
     assert "--workers" in child_args and child_args[child_args.index("--workers") + 1] == "4"
     assert "--llm-workers" in child_args and child_args[child_args.index("--llm-workers") + 1] == "3"
     assert "--llm-timeout" in child_args and child_args[child_args.index("--llm-timeout") + 1] == "120"
+
+
+def test_run_pdf_to_md_tracks_true_remaining_pages_after_out_of_order_completion(monkeypatch, tmp_path: Path):
+    pdf_path = tmp_path / "parallel.pdf"
+    doc = fitz.open()
+    for _ in range(21):
+        doc.new_page()
+    doc.save(pdf_path)
+    doc.close()
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdout = io.StringIO(
+                "Processing page 17/21 (vision-direct) ...\n"
+                "Processing page 21/21 (vision-direct) ...\n"
+                "Finished page 21/21 (1.0s, 100 chars)\n"
+                "[VISION_DIRECT] still running pages: [17] | workers=4 llm_inflight=8\n"
+            )
+            self.pid = 4321
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            return None
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(pdf_tools.subprocess, "Popen", lambda *_args, **_kwargs: _FakeProc())
+    snapshots: list[list[int]] = []
+
+    ok, _out = pdf_tools.run_pdf_to_md(
+        pdf_path=pdf_path,
+        out_root=tmp_path / "out",
+        no_llm=False,
+        keep_debug=False,
+        eq_image_fallback=False,
+        running_pages_cb=lambda pages: snapshots.append(list(pages)),
+    )
+
+    assert ok is True
+    assert [17, 21] in snapshots
+    remaining_index = snapshots.index([17], snapshots.index([17, 21]) + 1)
+    assert remaining_index > 0
+    assert snapshots[-1] == []
+
+
+def test_run_pdf_to_md_deduplicates_and_filters_running_page_updates(monkeypatch, tmp_path: Path):
+    pdf_path = tmp_path / "small.pdf"
+    doc = fitz.open()
+    for _ in range(3):
+        doc.new_page()
+    doc.save(pdf_path)
+    doc.close()
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdout = io.StringIO(
+                "Rendering page 2/3 ...\n"
+                "[Page 2] layout pass\n"
+                "[VISION_DIRECT] still running pages: [2, 2, 99] | workers=1 llm_inflight=1\n"
+                "Finished page 2/3\n"
+            )
+            self.pid = 4321
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            return None
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(pdf_tools.subprocess, "Popen", lambda *_args, **_kwargs: _FakeProc())
+    snapshots: list[list[int]] = []
+
+    pdf_tools.run_pdf_to_md(
+        pdf_path=pdf_path,
+        out_root=tmp_path / "out",
+        no_llm=False,
+        keep_debug=False,
+        eq_image_fallback=False,
+        running_pages_cb=lambda pages: snapshots.append(list(pages)),
+    )
+
+    assert [2] in snapshots
+    assert all(99 not in pages for pages in snapshots)
+    assert snapshots[-1] == []
