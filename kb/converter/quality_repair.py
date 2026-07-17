@@ -714,14 +714,23 @@ def write_conversion_quality_result(
     report_path = conversion_quality_result_path(path)
     text = path.read_text(encoding="utf-8", errors="replace")
     metrics = _metric_view(path, text)
-    source_quality = _source_quality_view(
-        path,
-        text,
-        metrics,
-        source_pdf_path=source_pdf_path,
-        allow_source_pdf_inference=allow_source_pdf_inference,
-    )
     repair = dict(auto_repair_result or {})
+    cached_metrics = repair.get("after") if isinstance(repair.get("after"), dict) else {}
+    cached_source_quality = (
+        repair.get("source_quality_after")
+        if isinstance(repair.get("source_quality_after"), dict)
+        else {}
+    )
+    if cached_source_quality and cached_metrics == metrics:
+        source_quality = dict(cached_source_quality)
+    else:
+        source_quality = _source_quality_view(
+            path,
+            text,
+            metrics,
+            source_pdf_path=source_pdf_path,
+            allow_source_pdf_inference=allow_source_pdf_inference,
+        )
     repair.pop("repaired_text", None)
     remaining = [
         str(code or "").strip().lower()
@@ -3820,16 +3829,21 @@ def repair_markdown_text(
         if changed:
             applied.append("ensure_page_anchor")
 
-    after_metrics = _metric_view(path, text)
-    after_source_quality = _source_quality_view(
-        path,
-        text,
-        after_metrics,
-        source_pdf_path=source_pdf_path,
-        allow_source_pdf_inference=allow_source_pdf_inference,
-    )
-    after_issue_codes = _issue_codes_from_context(path, text, after_metrics, source_quality=after_source_quality)
     changed_text = text != before_text
+    if changed_text:
+        after_metrics = _metric_view(path, text)
+        after_source_quality = _source_quality_view(
+            path,
+            text,
+            after_metrics,
+            source_pdf_path=source_pdf_path,
+            allow_source_pdf_inference=allow_source_pdf_inference,
+        )
+        after_issue_codes = _issue_codes_from_context(path, text, after_metrics, source_quality=after_source_quality)
+    else:
+        after_metrics = before_metrics
+        after_source_quality = before_source_quality
+        after_issue_codes = before_issue_codes
     regression_reasons = _regression_reasons(before_text, text) if changed_text else []
     if (
         changed_text

@@ -8,7 +8,10 @@ export interface ConvertActiveTask {
   cur_page_done: number
   cur_page_total: number
   cur_page_msg: string
+  conversion_stage: ConversionStage
 }
+
+export type ConversionStage = '' | 'queued' | 'converting' | 'finalizing' | 'indexing' | 'retrying' | 'cancelling'
 
 export interface ConvertProgress {
   running: boolean
@@ -21,6 +24,7 @@ export interface ConvertProgress {
   cur_page_done: number
   cur_page_total: number
   cur_page_msg: string
+  conversion_stage: ConversionStage
   last: string
 }
 
@@ -48,6 +52,7 @@ export interface LibraryFileItem {
   cur_page_done: number
   cur_page_total: number
   cur_page_msg: string
+  conversion_stage: ConversionStage
   paper_category: string
   reading_status: '' | 'unread' | 'reading' | 'done' | 'revisit'
   note: string

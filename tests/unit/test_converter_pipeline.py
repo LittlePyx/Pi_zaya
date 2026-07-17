@@ -80,6 +80,17 @@ def test_convert_pipeline_fast_mode(sample_pdf, output_dir):
     assert (output_dir / "assets" / "table_index.json").exists()
 
 
+def test_reference_llm_polish_is_opt_in(monkeypatch):
+    monkeypatch.delenv("KB_PDF_LLM_REFERENCE_POLISH", raising=False)
+    assert PDFConverter._llm_reference_polish_enabled() is False
+
+    monkeypatch.setenv("KB_PDF_LLM_REFERENCE_POLISH", "1")
+    assert PDFConverter._llm_reference_polish_enabled() is True
+
+    monkeypatch.setenv("KB_PDF_LLM_REFERENCE_POLISH", "0")
+    assert PDFConverter._llm_reference_polish_enabled() is False
+
+
 def test_convert_pipeline_reuses_completed_page_without_reprocessing(sample_pdf, output_dir, monkeypatch):
     monkeypatch.setenv("KB_PDF_NO_LLM_PAGE_WORKERS", "1")
     cfg = ConvertConfig(

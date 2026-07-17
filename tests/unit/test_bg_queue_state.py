@@ -10,6 +10,7 @@ from kb.bg_queue_state import (
     is_running_snapshot,
     remove_queued_tasks_for_pdf,
     snapshot,
+    update_conversion_stage,
     update_page_progress,
 )
 
@@ -26,6 +27,7 @@ def _make_state() -> dict:
         "cur_page_done": 0,
         "cur_page_total": 0,
         "cur_page_msg": "",
+        "conversion_stage": "",
         "cancel": False,
         "last": "",
     }
@@ -167,6 +169,41 @@ def test_update_page_progress_allows_stage_message_after_pages_finish():
     assert snap["cur_page_done"] == 11
     assert snap["cur_page_total"] == 11
     assert snap["cur_page_msg"] == "ingesting: updating knowledge base index"
+    assert snap["conversion_stage"] == "indexing"
+
+
+def test_conversion_public_stage_progresses_without_changing_completed_pages():
+    state = _make_state()
+    lock = Lock()
+
+    enqueue(state, lock, {"_tid": "t1", "pdf": "a.pdf", "name": "a.pdf", "replace": False})
+    begin_next_task_or_idle(state, lock)
+    update_page_progress(state, lock, 21, 21, "Finished page 21/21", task_id="t1")
+    update_page_progress(state, lock, 21, 21, "[CONVERTER_STAGE] source_check", task_id="t1")
+
+    finalizing = snapshot(state, lock)
+    assert finalizing["conversion_stage"] == "finalizing"
+    assert finalizing["cur_page_done"] == 21
+    assert finalizing["cur_page_total"] == 21
+
+    update_conversion_stage(state, lock, "indexing", task_id="t1")
+    indexing = snapshot(state, lock)
+    assert indexing["conversion_stage"] == "indexing"
+    assert indexing["cur_page_done"] == 21
+    assert indexing["cur_page_total"] == 21
+
+
+def test_update_conversion_stage_rejects_private_or_unknown_values():
+    state = _make_state()
+    lock = Lock()
+
+    enqueue(state, lock, {"_tid": "t1", "pdf": "a.pdf", "name": "a.pdf", "replace": False})
+    begin_next_task_or_idle(state, lock)
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        update_conversion_stage(state, lock, "quality_gate_model_failure", task_id="t1")
 
 
 def test_update_page_progress_keeps_converter_profile_out_of_public_progress_message():
@@ -194,6 +231,11 @@ def test_update_page_progress_keeps_converter_profile_out_of_public_progress_mes
     separator_snap = snapshot(state, lock)
     assert separator_snap["cur_page_msg"] == "converter starting..."
     assert "=" * 80 not in separator_snap["active_tasks"][0]["cur_log_tail"]
+
+    update_page_progress(state, lock, 12, 12, "[CONVERTER_TIMING] stage=verifying elapsed_s=1.234", task_id="t1")
+    timing_snap = snapshot(state, lock)
+    assert timing_snap["cur_page_msg"] == "converter starting..."
+    assert not any("CONVERTER_TIMING" in line for line in timing_snap["active_tasks"][0]["cur_log_tail"])
 
 
 def test_cancel_all_clears_queued_tasks_but_keeps_active_cancelable():

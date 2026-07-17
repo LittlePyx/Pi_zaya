@@ -24,6 +24,7 @@ from kb.bg_queue_state import (
     remove_queued_tasks_for_pdf as bg_remove_queued_tasks_for_pdf,
     should_cancel as bg_should_cancel,
     snapshot as bg_snapshot,
+    update_conversion_stage as bg_update_conversion_stage,
     update_page_progress as bg_update_page_progress,
 )
 from kb.answer_contract import (
@@ -7256,6 +7257,7 @@ def _bg_worker_loop() -> None:
 
             effective_speed_mode = speed_mode
             source_retry_done = False
+            bg_update_conversion_stage(_BG_STATE, _BG_LOCK, "converting", task_id=task_id)
             ok, out_folder = run_pdf_to_md(
                 pdf_path=pdf,
                 out_root=out_root,
@@ -7290,6 +7292,7 @@ def _bg_worker_loop() -> None:
             post_convert_quality: dict = {}
             if ok and md_exists and not _bg_cancel_requested(_should_cancel):
                 try:
+                    bg_update_conversion_stage(_BG_STATE, _BG_LOCK, "finalizing", task_id=task_id)
                     _on_progress(
                         last_page_done,
                         last_page_total,
@@ -7344,6 +7347,7 @@ def _bg_worker_loop() -> None:
                     last_page_total,
                     f"quality gate: retrying conversion with {retry_speed_mode} profile",
                 )
+                bg_update_conversion_stage(_BG_STATE, _BG_LOCK, "retrying", task_id=task_id)
                 _clear_md_folder_for_retry()
                 retry_ok, retry_out_folder = run_pdf_to_md(
                     pdf_path=pdf,
@@ -7411,11 +7415,16 @@ def _bg_worker_loop() -> None:
                 and bool(db_dir)
                 and (effective_speed_mode != "ultra_fast")
                 and not _bg_cancel_requested(_should_cancel)
+                and (
+                    not post_convert_quality
+                    or bool(post_convert_quality.get("indexable"))
+                )
             )
             if do_auto_ingest and db_dir:
                 try:
                     ingest_py = _bg_ingest_py_path()
                     if ingest_py.exists() and md_exists:
+                        bg_update_conversion_stage(_BG_STATE, _BG_LOCK, "indexing", task_id=task_id)
                         _on_progress(
                             last_page_done,
                             last_page_total,

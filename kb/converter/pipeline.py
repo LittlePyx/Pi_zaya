@@ -576,6 +576,23 @@ class PDFConverter:
 
         if self._page_cache is not None:
             self._page_cache.finish()
+
+        stage_name = ""
+        stage_started = time.perf_counter()
+
+        def _conversion_stage(name: str) -> None:
+            nonlocal stage_name, stage_started
+            now = time.perf_counter()
+            if stage_name:
+                print(
+                    f"[CONVERTER_TIMING] stage={stage_name} elapsed_s={max(0.0, now - stage_started):.3f}",
+                    flush=True,
+                )
+            stage_name = str(name or "finalizing").strip().lower()
+            stage_started = now
+            print(f"[CONVERTER_STAGE] {stage_name}", flush=True)
+
+        _conversion_stage("assembling")
             
         final_md = self._join_selected_page_markdown(
             md_pages,
@@ -610,6 +627,7 @@ class PDFConverter:
             print(f"[WARN] title metadata injection skipped: {e}", flush=True)
         if self._llm_reference_polish_enabled():
             try:
+                _conversion_stage("references")
                 final_md = self._llm_polish_references(final_md)
             except Exception as e:
                 print(f"[WARN] _llm_polish_references failed, keep previous markdown: {e}", flush=True)
@@ -621,6 +639,7 @@ class PDFConverter:
             )
         else:
             try:
+                _conversion_stage("source_check")
                 final_md, source_repair_result = self._recover_references_from_pdf_if_needed(final_md, doc)
             except Exception as e:
                 print(f"[WARN] PDF reference recovery skipped: {e}", flush=True)
@@ -644,6 +663,7 @@ class PDFConverter:
         out_file = save_dir / "output.md"
         auto_repair_result: dict[str, Any] = {}
         try:
+            _conversion_stage("verifying")
             final_md, auto_repair_result = self._auto_repair_final_markdown(
                 final_md,
                 out_file=out_file,
@@ -667,9 +687,11 @@ class PDFConverter:
         except Exception as e:
             print(f"[WARN] conversion quality result sidecar skipped: {e}", flush=True)
         try:
+            _conversion_stage("structured_index")
             rebuild_structured_indices_for_markdown(out_file, md_text=final_md, assets_dir=assets_dir)
         except Exception as e:
             print(f"[WARN] structured index build skipped: {e}", flush=True)
+        _conversion_stage("complete")
         print(f"Saved to {out_file}", flush=True)
         print(f"Conversion completed successfully!", flush=True)
         
@@ -1458,7 +1480,7 @@ class PDFConverter:
                     value = str(raw or "").strip()
                     if value and value not in target:
                         target.append(value)
-        return {
+        merged = {
             "changed": any(bool(item.get("changed")) for item in clean_items),
             "unsafe": any(bool(item.get("unsafe")) for item in clean_items),
             "applied": applied,
@@ -1467,6 +1489,15 @@ class PDFConverter:
             "remaining_issue_codes": remaining,
             "regression_reasons": regressions,
         }
+        # Preserve the final repair assessment so the sidecar writer can reuse
+        # already-computed Markdown and source-PDF quality views.
+        for key in ("before", "after", "source_quality_before", "source_quality_after"):
+            for item in reversed(clean_items):
+                value = item.get(key)
+                if isinstance(value, dict) and value:
+                    merged[key] = dict(value)
+                    break
+        return merged
 
     def _auto_repair_final_markdown(
         self,
@@ -2050,9 +2081,12 @@ class PDFConverter:
     @staticmethod
     def _llm_reference_polish_enabled() -> bool:
         try:
-            raw = str(os.environ.get("KB_PDF_LLM_REFERENCE_POLISH", "1") or "1").strip().lower()
+            # This is deliberately opt-in. Large reference lists are chunked into
+            # multiple LLM calls, so enabling it on the normal conversion path can
+            # add minutes after the last page has already completed.
+            raw = str(os.environ.get("KB_PDF_LLM_REFERENCE_POLISH", "0") or "0").strip().lower()
         except Exception:
-            raw = "1"
+            raw = "0"
         return raw in {"1", "true", "yes", "y", "on"}
 
     @staticmethod

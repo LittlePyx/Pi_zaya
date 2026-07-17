@@ -24,6 +24,7 @@ interface ConvertProgressState {
   curPageDone: number
   curPageTotal: number
   curPageMsg: string
+  conversionStage: string
   last: string
 }
 
@@ -192,8 +193,35 @@ function progressFromQueueSnapshot(queue: LibraryFilesResponse['queue'] | null |
     curPageDone: numberValue(primary?.cur_page_done),
     curPageTotal: numberValue(primary?.cur_page_total),
     curPageMsg: String(primary?.cur_page_msg || ''),
+    conversionStage: String(primary?.conversion_stage || ''),
     last: '',
   }
+}
+
+function conversionPathKey(value: unknown) {
+  return String(value || '').trim().replace(/\\/g, '/').toLowerCase()
+}
+
+function mergeActiveConversionProgress(files: LibraryFileItem[], activeTasks: ConvertActiveTask[]) {
+  if (!activeTasks.length) return files
+  const byPath = new Map(activeTasks.map((task) => [conversionPathKey(task.pdf), task]))
+  const byName = new Map(activeTasks.map((task) => [String(task.name || '').trim(), task]))
+  return files.map((item) => {
+    const task = byPath.get(conversionPathKey(item.path)) || byName.get(String(item.name || '').trim())
+    if (!task) return item
+    return {
+      ...item,
+      task_state: 'running' as const,
+      status: task.replace ? 'running_reconvert' : 'running',
+      replace_task: Boolean(task.replace),
+      category: 'pending' as const,
+      queue_pos: 0,
+      cur_page_done: Number(task.cur_page_done || 0),
+      cur_page_total: Number(task.cur_page_total || 0),
+      cur_page_msg: '',
+      conversion_stage: task.conversion_stage || 'converting',
+    }
+  })
 }
 
 let filesLoadRequestSeq = 0
@@ -470,20 +498,23 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const ctrl = libraryApi.streamConvertStatus(
       (data) => {
         if (!streamIsCurrent()) return
-        set({
+        const activeTasks = Array.isArray(data.active_tasks) ? data.active_tasks : []
+        set((state) => ({
           converting: data.running,
+          files: mergeActiveConversionProgress(state.files, activeTasks),
           progress: {
             total: data.total,
             completed: data.completed,
             current: data.current,
             activeCount: Number(data.active_count || 0),
-            activeTasks: Array.isArray(data.active_tasks) ? data.active_tasks : [],
+            activeTasks,
             curPageDone: data.cur_page_done,
             curPageTotal: data.cur_page_total,
             curPageMsg: data.cur_page_msg,
+            conversionStage: String(data.conversion_stage || ''),
             last: data.last,
           },
-        })
+        }))
       },
       () => {
         if (!streamIsCurrent()) return

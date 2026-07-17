@@ -1,5 +1,6 @@
 import type {
   ConversionRepairAttempt,
+  ConversionStage,
   ConversionQualitySummary,
   LibraryFileItem,
   LibraryConversionQualityBatchResponse,
@@ -70,6 +71,29 @@ export function derivePageProgress(done0: number, total0: number, msg0: string) 
     return { done: 0, total: 0 }
   }
   return { done: Math.max(0, parsedDone), total: Math.max(0, parsedTotal) }
+}
+
+export function conversionStageLabel(stage0: string, S: Record<string, string>) {
+  const stage = String(stage0 || '').trim().toLowerCase() as ConversionStage
+  if (stage === 'queued') return S.lib_convert_queued
+  if (stage === 'converting') return S.lib_convert_pages
+  if (stage === 'finalizing') return S.lib_convert_finalizing
+  if (stage === 'indexing') return S.lib_convert_ingesting
+  if (stage === 'retrying') return S.lib_convert_retrying
+  if (stage === 'cancelling') return S.lib_convert_cancelling
+  return ''
+}
+
+export function conversionTaskFraction(stage0: string, pageDone: number, pageTotal: number) {
+  const stage = String(stage0 || '').trim().toLowerCase() as ConversionStage
+  const pageFraction = pageTotal > 0
+    ? Math.max(0, Math.min(1, Number(pageDone || 0) / Math.max(1, Number(pageTotal || 0))))
+    : 0
+  if (stage === 'indexing') return 0.98
+  if (stage === 'finalizing') return 0.94
+  if (stage === 'retrying') return 0.9
+  if (stage === 'cancelling') return Math.min(0.98, pageFraction * 0.9)
+  return Math.min(0.9, pageFraction * 0.9)
 }
 
 export function matchesKeyword(name: string, keyword: string) {

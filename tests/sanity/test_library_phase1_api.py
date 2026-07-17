@@ -420,7 +420,8 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
                     "replace": False,
                     "cur_page_done": 1,
                     "cur_page_total": 4,
-                    "cur_page_msg": "page 1",
+                    "cur_page_msg": "quality gate: provider=qwen model=private-name",
+                    "conversion_stage": "finalizing",
                 },
                 {
                     "_tid": "r2",
@@ -430,6 +431,7 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
                     "cur_page_done": 2,
                     "cur_page_total": 6,
                     "cur_page_msg": "page 2",
+                    "conversion_stage": "converting",
                 },
             ],
             "queue": [
@@ -451,6 +453,9 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
     assert by_name["b.pdf"]["replace_task"] is True
     assert by_name["b.pdf"]["category"] == "pending"
     assert by_name["a.pdf"]["cur_page_done"] == 1
+    assert by_name["a.pdf"]["conversion_stage"] == "finalizing"
+    assert by_name["a.pdf"]["cur_page_msg"] == ""
+    assert "private-name" not in response.text
     assert by_name["b.pdf"]["cur_page_total"] == 6
     assert by_name["c.pdf"]["task_state"] == "queued"
     assert by_name["c.pdf"]["queue_pos"] == 1

@@ -18,6 +18,51 @@ from kb.converter.quality_repair import (
 )
 
 
+def test_unchanged_repair_reuses_source_quality_for_sidecar(monkeypatch, tmp_path: Path):
+    from kb.converter import quality_repair
+
+    md_path = tmp_path / "paper.en.md"
+    text = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Demo Paper",
+            "",
+            "## Abstract",
+            "A complete abstract explains the purpose, method, and result of this demonstration paper.",
+            "",
+            "## Method",
+            "The method paragraph contains stable searchable evidence for the converted document.",
+            "",
+            "## References",
+            "[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+        ]
+    )
+    md_path.write_text(text, encoding="utf-8")
+    calls: list[str] = []
+
+    def fake_source_quality(*args, **kwargs):
+        calls.append("scan")
+        return {
+            "document_type": "research_article",
+            "source_pdf_available": False,
+            "abstract_not_applicable": False,
+        }
+
+    monkeypatch.setattr(quality_repair, "_source_quality_view", fake_source_quality)
+
+    repair = repair_markdown_text(md_path, text, allow_source_pdf_inference=False)
+    assert repair["changed"] is False
+    assert calls == ["scan"]
+
+    payload = write_conversion_quality_result(
+        md_path,
+        auto_repair_result=repair,
+        allow_source_pdf_inference=False,
+    )
+    assert payload["source_quality"]["document_type"] == "research_article"
+    assert calls == ["scan"]
+
+
 def test_repair_markdown_quality_fixes_safe_source_level_issues(tmp_path: Path):
     assets = tmp_path / "assets"
     assets.mkdir()

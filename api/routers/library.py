@@ -325,7 +325,7 @@ def _merge_task_map_entry(mapping: dict[str, dict], key: str, info: dict) -> Non
             merged["repair_run_id"] = merged_repair_run_ids[0]
     if (not isinstance(merged.get("repair_context"), dict)) and isinstance(info.get("repair_context"), dict):
         merged["repair_context"] = dict(info.get("repair_context") or {})
-    for field in ("cur_page_done", "cur_page_total", "cur_page_msg"):
+    for field in ("cur_page_done", "cur_page_total", "cur_page_msg", "conversion_stage"):
         if field in info:
             merged[field] = info.get(field)
     mapping[k] = merged
@@ -1061,6 +1061,15 @@ def _compact_task_repair_context(value) -> dict:
     }
 
 
+def _compact_conversion_stage(value, *, fallback: str = "") -> str:
+    allowed = {"queued", "converting", "finalizing", "indexing", "retrying", "cancelling"}
+    stage = str(value or "").strip().lower()
+    if stage in allowed:
+        return stage
+    clean_fallback = str(fallback or "").strip().lower()
+    return clean_fallback if clean_fallback in allowed else ""
+
+
 def _compact_active_tasks(snap: dict) -> list[dict]:
     items: list[dict] = []
     for task in list((snap or {}).get("active_tasks") or []):
@@ -1073,7 +1082,13 @@ def _compact_active_tasks(snap: dict) -> list[dict]:
             "replace": bool(task.get("replace", False)),
             "cur_page_done": int(task.get("cur_page_done", 0) or 0),
             "cur_page_total": int(task.get("cur_page_total", 0) or 0),
-            "cur_page_msg": str(task.get("cur_page_msg") or ""),
+            # Raw converter stdout remains in the private runtime snapshot. The
+            # ordinary library API exposes only a stable, user-facing stage.
+            "cur_page_msg": "",
+            "conversion_stage": _compact_conversion_stage(
+                task.get("conversion_stage"),
+                fallback="converting",
+            ),
         }
         repair_context = _compact_task_repair_context(task.get("repair_context"))
         if repair_context:
@@ -1117,7 +1132,11 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
             "task_id": str(task.get("task_id") or ""),
             "cur_page_done": int(task.get("cur_page_done", 0) or 0),
             "cur_page_total": int(task.get("cur_page_total", 0) or 0),
-            "cur_page_msg": str(task.get("cur_page_msg") or ""),
+            "cur_page_msg": "",
+            "conversion_stage": _compact_conversion_stage(
+                task.get("conversion_stage"),
+                fallback="converting",
+            ),
         }
         if repair_context:
             info["repair_context"] = repair_context
@@ -1146,6 +1165,7 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
             "replace": bool(task.get("replace", False)),
             "queue_pos": int(idx),
             "task_id": str(task.get("_tid") or ""),
+            "conversion_stage": "queued",
         }
         if repair_context:
             info["repair_context"] = repair_context
@@ -1170,6 +1190,10 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
         }
         cur["running"] = True
         cur["replace"] = bool(cur.get("replace")) or current_replace
+        cur["conversion_stage"] = _compact_conversion_stage(
+            cur.get("conversion_stage"),
+            fallback="converting",
+        )
         _merge_task_map_entry(by_name, current_name, cur)
     return by_path, by_name
 
@@ -1194,7 +1218,11 @@ def _library_file_item(
     queue_pos = int((info or {}).get("queue_pos") or 0)
     cur_page_done = int((info or {}).get("cur_page_done") or 0)
     cur_page_total = int((info or {}).get("cur_page_total") or 0)
-    cur_page_msg = str((info or {}).get("cur_page_msg") or "")
+    cur_page_msg = ""
+    conversion_stage = _compact_conversion_stage(
+        (info or {}).get("conversion_stage"),
+        fallback="converting" if running else ("queued" if queued else ""),
+    )
     task_state = "running" if running else ("queued" if queued else "idle")
     queued_or_running = bool(queued or running)
     reconverting = bool(replace_task and queued_or_running)
@@ -1224,6 +1252,7 @@ def _library_file_item(
         "cur_page_done": int(cur_page_done),
         "cur_page_total": int(cur_page_total),
         "cur_page_msg": cur_page_msg,
+        "conversion_stage": conversion_stage,
         "paper_category": str((meta_rec or {}).get("paper_category") or ""),
         "reading_status": str((meta_rec or {}).get("reading_status") or ""),
         "note": str((meta_rec or {}).get("note") or ""),
@@ -6293,6 +6322,7 @@ async def convert_status():
     def poll():
         snap = _bg_snapshot()
         active_tasks = list(snap.get("active_tasks") or [])
+        public_active_tasks = _compact_active_tasks(snap)
         queued_tasks = list(snap.get("queue") or [])
         running = bool(snap.get("running", False)) or bool(active_tasks) or bool(queued_tasks)
         return {
@@ -6303,10 +6333,11 @@ async def convert_status():
             "current": snap.get("current", ""),
             "queued_count": len(queued_tasks),
             "active_count": int(snap.get("active_count", len(active_tasks)) or 0),
-            "active_tasks": _compact_active_tasks(snap),
+            "active_tasks": public_active_tasks,
             "cur_page_done": snap.get("cur_page_done", 0),
             "cur_page_total": snap.get("cur_page_total", 0),
-            "cur_page_msg": snap.get("cur_page_msg", ""),
+            "cur_page_msg": "",
+            "conversion_stage": str((public_active_tasks[0] if public_active_tasks else {}).get("conversion_stage") or ""),
             "last": snap.get("last", ""),
         }
     return sse_response(sse_generator(poll, interval=0.5))

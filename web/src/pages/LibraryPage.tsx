@@ -103,6 +103,8 @@ import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualit
 import {
   conversionQualityStatus,
   conversionSourceReadiness,
+  conversionStageLabel,
+  conversionTaskFraction,
   derivePageProgress,
   formatSeconds,
   hasConversionQualityIssue,
@@ -136,14 +138,6 @@ function READING_STATUS_OPTIONS(S: Record<string, string>) {
     { value: 'done', label: S.lib_reading_status_done },
     { value: 'revisit', label: S.lib_reading_status_revisit },
   ] as const
-}
-
-function deriveConvertStageLabel(msg0: string, S_?: Record<string, string>) {
-  const msg = String(msg0 || '').trim().toLowerCase()
-  if (!msg) return ''
-  if (msg.includes('ingesting')) return S_ ? S_.lib_convert_ingesting : '正在更新知识库索引...'
-  if (msg.includes('cancel')) return S_ ? S_.lib_convert_cancelling : '正在取消转换...'
-  return ''
 }
 
 function readingStatusLabel(value: string, S_?: Record<string, string>) {
@@ -521,8 +515,11 @@ export default function LibraryPage() {
     if (tasks.length > 0) {
       for (const task of tasks) {
         const taskProgress = derivePageProgress(task.cur_page_done, task.cur_page_total, task.cur_page_msg)
-        if (taskProgress.total <= 0) continue
-        activeFraction += Math.min(0.999, taskProgress.done / Math.max(1, taskProgress.total))
+        activeFraction += conversionTaskFraction(
+          task.conversion_stage,
+          taskProgress.done,
+          taskProgress.total,
+        )
       }
     } else {
       const fallback = derivePageProgress(
@@ -531,7 +528,11 @@ export default function LibraryPage() {
         store.progress.curPageMsg,
       )
       if (fallback.total > 0) {
-        activeFraction = Math.min(0.999, fallback.done / Math.max(1, fallback.total))
+        activeFraction = conversionTaskFraction(
+          store.progress.conversionStage,
+          fallback.done,
+          fallback.total,
+        )
       }
     }
     const rawPercent = Math.min(100, Math.round(((store.progress.completed + activeFraction) / Math.max(1, store.progress.total)) * 100))
@@ -566,7 +567,7 @@ export default function LibraryPage() {
     return `\u5e76\u884c\u4e2d ${tasks.length} \u7bc7\uff1a${preview}${suffix}`
   }, [store.progress])
   const convertStageLabel = useMemo(
-    () => deriveConvertStageLabel(String(store.progress?.curPageMsg || ''), S),
+    () => conversionStageLabel(String(store.progress?.conversionStage || ''), S),
     [store.progress, S],
   )
   const refSyncPercent = useMemo(

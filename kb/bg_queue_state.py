@@ -6,6 +6,44 @@ import time
 from typing import Any
 
 
+PUBLIC_CONVERSION_STAGES = {
+    "queued",
+    "converting",
+    "finalizing",
+    "indexing",
+    "retrying",
+    "cancelling",
+}
+
+
+def _public_conversion_stage(value: Any, *, fallback: str = "") -> str:
+    stage = str(value or "").strip().lower()
+    if stage in PUBLIC_CONVERSION_STAGES:
+        return stage
+    fallback_stage = str(fallback or "").strip().lower()
+    return fallback_stage if fallback_stage in PUBLIC_CONVERSION_STAGES else ""
+
+
+def _stage_from_progress_message(message: str, *, current: str = "") -> str:
+    line = str(message or "").strip().lower()
+    if not line:
+        return _public_conversion_stage(current)
+    if "cancel" in line:
+        return "cancelling"
+    if line.startswith("ingesting:"):
+        return "indexing"
+    if line.startswith("quality gate:") and "retry" in line:
+        return "retrying"
+    if line.startswith("quality gate:"):
+        return "finalizing"
+    if line.startswith("[converter_stage]") or line.startswith("post-processing after pages"):
+        return "finalizing"
+    if line.startswith("processing page") or line.startswith("finished page"):
+        if _public_conversion_stage(current) != "retrying":
+            return "converting"
+    return _public_conversion_stage(current)
+
+
 def _active_tasks(state: dict[str, Any]) -> list[dict[str, Any]]:
     tasks = state.get("active_tasks")
     if isinstance(tasks, list):
@@ -58,6 +96,7 @@ def _task_info_from_active_record(rec: dict[str, Any]) -> dict[str, Any]:
         "cur_page_done": int(rec.get("cur_page_done", 0) or 0),
         "cur_page_total": int(rec.get("cur_page_total", 0) or 0),
         "cur_page_msg": str(rec.get("cur_page_msg") or ""),
+        "conversion_stage": _public_conversion_stage(rec.get("conversion_stage"), fallback="converting"),
         "cur_profile": str(rec.get("cur_profile") or ""),
         "cur_llm_profile": str(rec.get("cur_llm_profile") or ""),
         "cur_log_tail": list(rec.get("cur_log_tail") or []),
@@ -79,6 +118,7 @@ def _sync_legacy_summary_fields(state: dict[str, Any]) -> None:
     state["cur_page_done"] = int(primary.get("cur_page_done", 0) or 0)
     state["cur_page_total"] = int(primary.get("cur_page_total", 0) or 0)
     state["cur_page_msg"] = str(primary.get("cur_page_msg") or "")
+    state["conversion_stage"] = _public_conversion_stage(primary.get("conversion_stage"))
     state["cur_profile"] = str(primary.get("cur_profile") or "")
     state["cur_llm_profile"] = str(primary.get("cur_llm_profile") or "")
     state["cur_log_tail"] = list(primary.get("cur_log_tail") or [])
@@ -141,6 +181,7 @@ def cancel_all(state: dict[str, Any], lock: Lock, message: str) -> None:
         for task in active:
             try:
                 task["cur_page_msg"] = str(message or "")
+                task["conversion_stage"] = "cancelling"
             except Exception:
                 pass
         _sync_legacy_summary_fields(state)
@@ -183,6 +224,7 @@ def begin_next_task_or_idle(state: dict[str, Any], lock: Lock) -> dict[str, Any]
                     "cur_page_done": 0,
                     "cur_page_total": 0,
                     "cur_page_msg": "",
+                    "conversion_stage": "converting",
                     "cur_profile": "",
                     "cur_llm_profile": "",
                     "cur_log_tail": [],
@@ -235,7 +277,12 @@ def update_page_progress(
         is_profile = line.startswith("converter profile:") or line.startswith("LLM concurrency:")
         stripped_line = line.strip()
         is_log_separator = len(stripped_line) >= 8 and set(stripped_line).issubset({"=", "-", "_"})
-        is_private_diagnostic = is_profile or line.startswith("converter pid=") or is_log_separator
+        is_private_diagnostic = (
+            is_profile
+            or line.startswith("converter pid=")
+            or line.startswith("[CONVERTER_TIMING]")
+            or is_log_separator
+        )
         if line.startswith("converter profile:"):
             target["cur_profile"] = line
             target["cur_profile_ts"] = float(time.time())
@@ -249,6 +296,10 @@ def update_page_progress(
         if regressed:
             line = str(target.get("cur_page_msg") or "")
         target["cur_page_msg"] = line
+        target["conversion_stage"] = _stage_from_progress_message(
+            line,
+            current=str(target.get("conversion_stage") or ""),
+        )
 
         tail = list(target.get("cur_log_tail") or [])
         if line and (not regressed):
@@ -256,6 +307,30 @@ def update_page_progress(
             if len(tail) > 24:
                 tail = tail[-24:]
         target["cur_log_tail"] = tail
+        _sync_legacy_summary_fields(state)
+
+
+def update_conversion_stage(
+    state: dict[str, Any],
+    lock: Lock,
+    stage: str,
+    *,
+    task_id: str = "",
+) -> None:
+    clean_stage = _public_conversion_stage(stage)
+    if not clean_stage:
+        raise ValueError(f"unsupported public conversion stage: {stage}")
+    with lock:
+        tid = str(task_id or "")
+        active = _active_tasks(state)
+        target: dict[str, Any] | None = None
+        if tid:
+            target = next((rec for rec in active if str(rec.get("_tid") or "") == tid), None)
+        elif len(active) == 1:
+            target = active[0]
+        if target is None:
+            return
+        target["conversion_stage"] = clean_stage
         _sync_legacy_summary_fields(state)
 
 
