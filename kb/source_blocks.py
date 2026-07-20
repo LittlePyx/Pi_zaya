@@ -25,6 +25,7 @@ class SourceBlock(TypedDict, total=False):
     line_end: int
     text: str
     raw_text: str
+    list_marker: str
     number: int
     figure_id: str
     figure_ident: str
@@ -39,7 +40,7 @@ class SourceBlock(TypedDict, total=False):
 
 
 _MD_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
-_MD_LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*)$")
+_MD_LIST_RE = re.compile(r"^\s*([-*+]|\d+[.)])\s+(.*)$")
 _MD_BLOCKQUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
 _MD_TABLE_RE = re.compile(r"^\s*\|.*\|\s*$")
 _MD_FENCE_RE = re.compile(r"^\s*(```+|~~~+)\s*")
@@ -960,7 +961,13 @@ def build_source_blocks(
         if list_match:
             flush_paragraph(max(1, line_no - 1))
             pending_figure_context = None
-            push("list_item", str(list_match.group(1) or ""), line_start=line_no, line_end=line_no)
+            push(
+                "list_item",
+                str(list_match.group(2) or ""),
+                line_start=line_no,
+                line_end=line_no,
+                extras={"list_marker": str(list_match.group(1) or "").strip()},
+            )
             continue
 
         quote_match = _MD_BLOCKQUOTE_RE.match(line)
@@ -1372,7 +1379,7 @@ def split_answer_segments(answer_markdown: str) -> list[dict]:
         list_match = _MD_LIST_RE.match(line)
         if list_match:
             flush()
-            push("list_item", str(list_match.group(1) or ""))
+            push("list_item", str(list_match.group(2) or ""))
             continue
         if _MD_TABLE_RE.match(line):
             flush()

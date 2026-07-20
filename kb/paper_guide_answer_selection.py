@@ -373,7 +373,16 @@ def _select_paper_guide_answer_hits(
 
     def _matches_effective_target(hit: dict) -> bool:
         meta_hit = hit.get("meta", {}) or {}
-        return _paper_guide_hit_matches_requested_targets(hit, prompt=prompt) or bool(meta_hit.get("paper_guide_targeted_block"))
+        if target_filtered:
+            # Supplemental SourceBlock scans mark every returned row as targeted,
+            # including high-scoring generic sections. When the question names a
+            # section, only an actual section match may satisfy the hard gate.
+            if _paper_guide_hit_matches_requested_targets(hit, prompt=prompt):
+                return True
+            if _paper_guide_requested_box_numbers(prompt) or (_extract_figure_number(prompt) > 0):
+                return bool(meta_hit.get("paper_guide_targeted_block"))
+            return False
+        return bool(meta_hit.get("paper_guide_targeted_block"))
 
     has_target_ranked = target_filtered and any(
         _matches_effective_target(hit)

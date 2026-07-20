@@ -1708,10 +1708,14 @@ body.kb-reader-resizing .kb-reader-content {
 }
 
 .kb-markdown.kb-markdown-reader p:has(.kb-md-page-marker) {
+  margin: 2rem 0 1.35rem;
+}
+
+.kb-markdown.kb-markdown-reader p > .kb-md-page-marker {
   display: flex;
   align-items: center;
+  width: 100%;
   gap: 12px;
-  margin: 2rem 0 1.35rem;
   color: color-mix(in srgb, var(--muted-text) 72%, transparent);
   font-family: var(--font-sans, system-ui, sans-serif);
   font-size: 12px;
@@ -1719,8 +1723,8 @@ body.kb-reader-resizing .kb-reader-content {
   text-align: center;
 }
 
-.kb-markdown.kb-markdown-reader p:has(.kb-md-page-marker)::before,
-.kb-markdown.kb-markdown-reader p:has(.kb-md-page-marker)::after {
+.kb-markdown.kb-markdown-reader p > .kb-md-page-marker::before,
+.kb-markdown.kb-markdown-reader p > .kb-md-page-marker::after {
   content: "";
   height: 1px;
   flex: 1 1 auto;

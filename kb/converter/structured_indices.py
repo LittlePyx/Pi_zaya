@@ -318,6 +318,39 @@ def _collect_reference_mentions(blocks: list[dict[str, Any]]) -> dict[int, list[
     return out
 
 
+def _collect_reference_source_locations(blocks: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    out: dict[int, dict[str, Any]] = {}
+    entry_re = re.compile(r"(?m)^\s*(?:\[\s*(\d{1,4})\s*\]|(\d{1,4})\s*[.)])\s+\S+")
+    for block in blocks or []:
+        if not isinstance(block, dict) or not _heading_is_references(block.get("heading_path")):
+            continue
+        raw = str(block.get("raw_text") or block.get("text") or "")
+        if not raw:
+            continue
+        list_marker = str(block.get("list_marker") or "").strip()
+        raw_for_entries = (
+            f"{list_marker} {raw}"
+            if list_marker and not raw.lstrip().startswith(list_marker)
+            else raw
+        )
+        page = _block_page(block)
+        for match in entry_re.finditer(raw_for_entries):
+            try:
+                ref_num = int(match.group(1) or match.group(2) or 0)
+            except Exception:
+                ref_num = 0
+            if ref_num <= 0 or ref_num in out:
+                continue
+            rec: dict[str, Any] = {
+                "source_block_id": str(block.get("block_id") or "").strip(),
+            }
+            if page > 0:
+                rec["source_page"] = int(page)
+                rec["page_start"] = int(page)
+            out[ref_num] = rec
+    return out
+
+
 def _reference_meta_text(meta: dict[str, Any], *keys: str, limit: int = 0) -> str:
     for key in keys:
         value = _clean_meta_text(meta.get(key), limit=limit)
@@ -895,6 +928,7 @@ def _build_reference_index_payload(
             refs_by_num[ref_num] = dict(item)
 
     mention_map = _collect_reference_mentions(list(blocks or []))
+    source_location_map = _collect_reference_source_locations(list(blocks or []))
     mention_total = sum(len(rows) for rows in mention_map.values())
     references: list[dict[str, Any]] = []
     for ref_num in sorted(ref_map.keys()):
@@ -927,6 +961,11 @@ def _build_reference_index_payload(
                 rec[field] = value
         if "crossref_ok" in meta:
             rec["crossref_ok"] = bool(meta.get("crossref_ok"))
+        source_location = source_location_map.get(int(ref_num)) or {}
+        for field in ("source_page", "page_start", "source_block_id"):
+            value = source_location.get(field)
+            if value not in (None, "", 0):
+                rec[field] = value
         mentions = [dict(item) for item in mention_map.get(int(ref_num), []) if isinstance(item, dict)]
         if mentions:
             rec["mention_count"] = int(len(mentions))

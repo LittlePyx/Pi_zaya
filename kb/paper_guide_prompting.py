@@ -319,6 +319,20 @@ def _paper_guide_requested_section_targets(prompt: str) -> list[str]:
         _add("abstract")
     if re.search(r"(?i)\b(?:references?|reference\s+list|works?\s+cited|bibliography)\b", q_low):
         _add("references")
+    if (
+        re.search(r"(?i)\b(?:author\s+)?biograph(?:y|ies)\b|\bauthor\s+profiles?\b", q_low)
+        or re.search(r"作者(?:简介|介绍|履历|信息)", q)
+        or (
+            re.search(r"作者|\bauthors?\b", q, flags=re.IGNORECASE)
+            and re.search(
+                r"学历|学位|教育经历|当前职位|研究方向|研究兴趣|"
+                r"\b(?:education|degrees?|current\s+position|research\s+(?:interests?|directions?))\b",
+                q,
+                flags=re.IGNORECASE,
+            )
+        )
+    ):
+        _add("author_biographies")
     for title in _paper_guide_requested_literal_section_titles(q):
         _add(title)
     return out
@@ -350,6 +364,7 @@ def _paper_guide_requested_heading_hints(prompt: str) -> list[str]:
         "acquisition_strategy": ["acquisition and image reconstruction strategies", "acquisition strategy"],
         "abstract": ["abstract"],
         "references": ["references", "reference list", "works cited"],
+        "author_biographies": ["author biographies", "author biography", "author profiles"],
     }
     for sec in _paper_guide_requested_section_targets(q):
         for alias in section_aliases.get(sec, [sec]):
@@ -381,6 +396,7 @@ def _paper_guide_text_matches_requested_section(text: str, section_name: str) ->
         "acquisition_strategy": ("acquisition and image reconstruction strategies", "acquisition strategy"),
         "abstract": ("abstract",),
         "references": ("references", "reference list", "works cited", "bibliography"),
+        "author_biographies": ("author biographies", "author biography", "author profiles"),
     }
     return any(normalize_match_text(alias) in low for alias in aliases.get(sec, (sec,)))
 

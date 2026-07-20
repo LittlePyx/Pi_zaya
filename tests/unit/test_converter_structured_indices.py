@@ -360,6 +360,67 @@ We compare the reconstruction baseline against compressed sensing systems [1,2].
     assert intro_anchor["page_start"] == 1
 
 
+def test_rebuild_structured_indices_records_reference_source_pages(tmp_path: Path):
+    md = """# Demo Paper
+
+<!-- kb_page: 20 -->
+## References
+
+[220] A. Author. Reference on physical page twenty. 2024.
+[236] B. Author. Final reference on physical page twenty. 2025.
+
+<!-- kb_page: 21 -->
+## Author Biographies
+
+**Kai Song** received his B.S. degree in 2019. His research interests include single-pixel imaging.
+"""
+    md_path = tmp_path / "output.md"
+    assets_dir = tmp_path / "assets"
+
+    out = rebuild_structured_indices_for_markdown(md_path, md_text=md, assets_dir=assets_dir)
+
+    references = ((out.get("reference_index") or {}).get("references") or [])
+    by_num = {int(item.get("ref_num") or 0): item for item in references}
+    assert by_num[220]["source_page"] == 20
+    assert by_num[220]["page_start"] == 20
+    assert by_num[220]["source_block_id"]
+    assert by_num[236]["source_page"] == 20
+    assert "Kai Song" not in by_num[236]["text"]
+    biography_anchor = next(
+        item
+        for item in ((out.get("anchor_index") or {}).get("anchors") or [])
+        if "Kai Song" in str(item.get("text") or "")
+    )
+    assert biography_anchor["page_start"] == 21
+    assert biography_anchor["heading_path"].endswith("Author Biographies")
+
+
+def test_rebuild_structured_indices_records_dotted_reference_source_pages(tmp_path: Path):
+    md = """# Demo Paper
+
+<!-- kb_page: 20 -->
+## References
+
+1. A. Author. Reference on physical page twenty. 2024.
+
+<!-- kb_page: 21 -->
+2. B. Author. Reference on physical page twenty-one. 2025.
+"""
+    md_path = tmp_path / "output.md"
+    assets_dir = tmp_path / "assets"
+
+    out = rebuild_structured_indices_for_markdown(md_path, md_text=md, assets_dir=assets_dir)
+
+    references = ((out.get("reference_index") or {}).get("references") or [])
+    by_num = {int(item.get("ref_num") or 0): item for item in references}
+    assert by_num[1]["source_page"] == 20
+    assert by_num[1]["page_start"] == 20
+    assert by_num[1]["source_block_id"]
+    assert by_num[2]["source_page"] == 21
+    assert by_num[2]["page_start"] == 21
+    assert by_num[2]["source_block_id"]
+
+
 def test_rebuild_structured_indices_records_nature_unicode_superscript_mentions(tmp_path: Path):
     refs = "\n".join(f"[{number}] Author {number}. Reference title {number}. 2025." for number in range(1, 44))
     md = f"""# Nature-style Paper

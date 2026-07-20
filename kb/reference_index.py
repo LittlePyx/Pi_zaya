@@ -404,6 +404,31 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
 
     reference_tail = lines[ref_i + 1 :]
 
+    def _page_after_marker_is_author_biography(raw_index: int) -> bool:
+        page_lines: list[str] = []
+        for candidate_raw in reference_tail[raw_index + 1 :]:
+            candidate = str(candidate_raw or "").strip()
+            if re.match(r"^<!--\s*kb_page:\s*\d+\s*-->$", candidate, re.IGNORECASE):
+                break
+            if candidate:
+                page_lines.append(candidate)
+        if any(
+            _REF_START_BRACKET_RE.match(candidate) or _REF_START_DOT_RE.match(candidate)
+            for candidate in page_lines
+        ):
+            return False
+        return bool(
+            re.search(
+                r"(?:"
+                r"^(?:\*\*|__)[^*_\n]{2,100}(?:\*\*|__)\s+(?:received|earned|obtained)\b"
+                r"|\breceived\s+(?:his|her|their|a|the)\b[^\n]{0,120}\bdegree\b"
+                r"|\b(?:his|her|their)\s+research\s+interests?\s+include\b"
+                r")",
+                "\n".join(page_lines),
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+        )
+
     def _running_header_before_next_reference(raw_index: int) -> bool:
         current_number = int(cur_n or max(out, default=0))
         if current_number <= 0:
@@ -433,6 +458,9 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
             if not in_references:
                 continue
             if re.match(r"^<!--\s*kb_page:\s*\d+\s*-->$", s, re.IGNORECASE):
+                if (out or cur_n is not None) and _page_after_marker_is_author_biography(raw_index):
+                    _flush()
+                    in_references = False
                 continue
 
             if (out or cur_n is not None) and _is_reference_map_post_references_stop_line(s):

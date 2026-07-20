@@ -48,13 +48,35 @@ from kb.source_blocks import load_source_blocks, normalize_inline_markdown, norm
 from kb.store import compute_file_sha1
 
 
+def _paper_guide_strip_bound_source_hint(prompt: str, bound_source_path: str) -> str:
+    """Remove the retrieval-only source prefix before classifying/scoring a question."""
+    q = str(prompt or "").strip()
+    raw_source = str(bound_source_path or "").strip()
+    if not q or not raw_source:
+        return q
+    try:
+        source_path = Path(raw_source)
+        source_hints = [raw_source, source_path.name, source_path.stem]
+    except Exception:
+        source_hints = [raw_source]
+    for hint in sorted({str(item or "").strip() for item in source_hints if str(item or "").strip()}, key=len, reverse=True):
+        if not q.casefold().startswith(hint.casefold()):
+            continue
+        remainder = q[len(hint) :]
+        if remainder and not (remainder[0].isspace() or remainder[0] in ":;,-—"):
+            continue
+        cleaned = remainder.lstrip(" \t\r\n:;,-—")
+        return cleaned or q
+    return q
+
+
 def _paper_guide_seed_query_tokens_for_targeted_scan(
     *,
     prompt: str,
     family: str,
     bound_source_path: str,
 ) -> set[str]:
-    q = str(prompt or "").strip()
+    q = _paper_guide_strip_bound_source_hint(prompt, bound_source_path)
     tokens = set(_paper_guide_cue_tokens(q))
     augmented = _augment_paper_guide_retrieval_prompt(
         q,
@@ -416,7 +438,7 @@ def _paper_guide_targeted_source_block_hits(
     )
     if md_path is None:
         return []
-    q = str(prompt or "").strip()
+    q = _paper_guide_strip_bound_source_hint(prompt, bound_source_path)
     if not q:
         return []
     # Index-first targeted hits: for figure panel requests, use figure_index.json caption clauses
@@ -754,6 +776,15 @@ def _paper_guide_targeted_source_block_hits(
             "kind": str(block.get("kind") or "").strip(),
             "paper_guide_targeted_block": True,
         }
+        try:
+            page_start = int(block.get("page_start") or 0)
+            page_end = int(block.get("page_end") or page_start or 0)
+        except Exception:
+            page_start = 0
+            page_end = 0
+        if page_start > 0:
+            meta["page_start"] = page_start
+            meta["page_end"] = page_end if page_end > 0 else page_start
         if box_context_match:
             meta["paper_guide_target_scope"] = "box_context"
         ranked.append(

@@ -215,11 +215,11 @@ const readerRegressionAdjacentTableAnchors: ReaderDocAnchor[] = readerRegression
 const readerRegressionRenderPolishMarkdown = [
   '# Render Polish Fixture',
   '',
+  'Lead paragraph immediately before a physical page marker.',
   '<!-- kb_page: 1 -->',
+  `![Figure 1. Centered preview image](${FIGURE_DATA_URI})`,
   '',
   '## Figure Check',
-  '',
-  `![Figure 1. Centered preview image](${FIGURE_DATA_URI})`,
   '',
   '*Figure 1. Centered preview image.*',
   '',

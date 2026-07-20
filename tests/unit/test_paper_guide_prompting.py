@@ -177,6 +177,20 @@ def test_paper_guide_requested_heading_hints_include_literal_section_title():
     assert "how a single-pixel camera works" in [item.lower() for item in hints]
 
 
+def test_paper_guide_requested_heading_hints_include_author_biographies():
+    hints = _paper_guide_requested_heading_hints(
+        "请说明作者的教育经历、当前职位和研究方向，并定位 Author Biographies。"
+    )
+    assert "author biographies" in [item.lower() for item in hints]
+
+
+def test_paper_guide_requested_heading_hints_infer_author_biographies_from_profile_request():
+    hints = _paper_guide_requested_heading_hints(
+        "论文最后一页介绍了哪些作者？请概括他们的学历、当前职位与研究兴趣。"
+    )
+    assert "author biographies" in [item.lower() for item in hints]
+
+
 def test_augment_paper_guide_retrieval_prompt_avoids_reference_list_bias_for_citation_lookup():
     out = _augment_paper_guide_retrieval_prompt(
         "Which prior work is RVT attributed to in this paper, and what in-paper citation do they use when introducing it?",

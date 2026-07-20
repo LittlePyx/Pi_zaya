@@ -399,6 +399,17 @@ test('reader normalizes glued microsecond latex units before KaTeX render', asyn
   await expect(referenceEntries.nth(2)).toContainText('Third reference already starts')
 })
 
+test('reader keeps page markers and figures out of an adjacent prose paragraph', async ({ page }) => {
+  await openHarness(page, 'render-polish')
+  const markerParagraph = page.locator('[data-testid="reader-content"] p:has(> #kb-page-1)')
+
+  await expect(markerParagraph).toHaveCount(1)
+  await expect(markerParagraph).not.toContainText('Lead paragraph immediately before a physical page marker.')
+  await expect(markerParagraph.locator('.kb-md-figure-shell')).toHaveCount(0)
+  await expect(page.locator('[data-testid="reader-content"] p:has(> .kb-md-figure-shell)')).toHaveCount(1)
+  await expect(page.locator('#kb-page-1')).toHaveCSS('display', 'flex')
+})
+
 test('legacy reader System B payload keeps its title-aligned article overview', async ({ page }) => {
   await page.route('**/api/references/bibliometrics', async (route) => {
     await route.fulfill({

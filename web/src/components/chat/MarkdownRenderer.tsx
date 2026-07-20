@@ -78,11 +78,18 @@ function isPageMarkerLine(text: string): boolean {
 }
 
 function normalizeReaderPageMarkers(text: string): string {
-  return String(text || '').split('\n').map((line) => {
+  const out: string[] = []
+  for (const line of String(text || '').split('\n')) {
     const pageNo = pageMarkerNumber(line)
-    if (!pageNo) return line
-    return `[Page ${pageNo}](#kb-page-${pageNo})`
-  }).join('\n')
+    if (!pageNo) {
+      out.push(line)
+      continue
+    }
+    while (out.length > 0 && !String(out[out.length - 1] || '').trim()) out.pop()
+    if (out.length > 0) out.push('')
+    out.push(`[Page ${pageNo}](#kb-page-${pageNo})`, '')
+  }
+  return out.join('\n')
 }
 
 function splitCollapsedReferenceEntries(line: string): string[] {

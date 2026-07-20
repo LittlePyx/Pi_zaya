@@ -15,8 +15,12 @@ _IMAGE_MD_RE = re.compile(r'!\[([^\]]*)\]\(([^)]*)\)')
 _CAPTION_PREFIX_RE = re.compile(
     r'^\s*(?:#{1,6}\s+)?(?:\*{1,2}\s*)?'
     r'(?:(?:Extended|Supplementary)\s+Data\s+)?'
-    r'(?:Fig\.?|Figure|Table|Algorithm)\s*'
+    r'(?:Fig\.?|Figure|Table|Algorithm)(?!s\b)\s*'
     r'(?:S?\d+[A-Za-z]?|[A-Z](?:\.\d+)?|[IVXLC]+)\b',
+    re.IGNORECASE,
+)
+_REFERENCE_HEADING_RE = re.compile(
+    r"^(?:References?(?:\s+and\s+Notes)?|Reference\s+List|Bibliography|Literature\s+Cited|Works\s+Cited)$",
     re.IGNORECASE,
 )
 
@@ -32,6 +36,19 @@ def _strip_caption_markup(text: str) -> str:
 
 def _looks_like_caption_line(text: str) -> bool:
     return bool(_CAPTION_PREFIX_RE.match(_strip_caption_markup(text)))
+
+
+def _is_equation_image(match: re.Match[str]) -> bool:
+    alt = str(match.group(1) or "").strip()
+    target = str(match.group(2) or "").strip()
+    return bool(
+        re.fullmatch(r"(?:equation|formula|math)", alt, flags=re.IGNORECASE)
+        or re.search(
+            r"(?:^|[/\\_.-])(?:eq|equation|formula)(?:[/\\_.-]|\d)",
+            target,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def _image_alt_has_descriptive_caption(text: str) -> bool:
@@ -292,7 +309,8 @@ class MarkdownAnalyzer:
         
         for i, line in enumerate(lines, 1):
             # Check for REFERENCES heading
-            if re.match(r'^#+\s*REFERENCES?\s*$', line, re.IGNORECASE):
+            heading = re.match(r'^#+\s*(.+?)\s*$', line)
+            if heading and _REFERENCE_HEADING_RE.fullmatch(str(heading.group(1) or "").strip()):
                 in_references = True
                 ref_start = i
                 self.reference_section_start = i
@@ -346,7 +364,9 @@ class MarkdownAnalyzer:
         
         for i, line in enumerate(lines, 1):
             # Check for images
-            image_matches = list(_IMAGE_MD_RE.finditer(line))
+            image_matches = [
+                match for match in _IMAGE_MD_RE.finditer(line) if not _is_equation_image(match)
+            ]
             if image_matches:
                 images_found.append(i)
                 if any(_image_alt_has_descriptive_caption(match.group(1) or "") for match in image_matches):
@@ -406,23 +426,40 @@ class MarkdownAnalyzer:
         # Check for very long paragraphs
         current_para = []
         para_start = 0
-        
+        in_references = False
+
+        def flush_paragraph() -> None:
+            nonlocal current_para
+            if len(current_para) > 20:
+                self.issues.append(QualityIssue(
+                    category='structure',
+                    severity='info',
+                    message=f'Very long paragraph: {len(current_para)} lines',
+                    line_number=para_start,
+                    suggestion='Consider breaking into smaller paragraphs'
+                ))
+            current_para = []
+
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
+            heading = re.match(r'^#{1,6}\s+(.+)$', stripped)
+            if heading:
+                flush_paragraph()
+                heading_text = str(heading.group(1) or "").strip()
+                if _REFERENCE_HEADING_RE.fullmatch(heading_text):
+                    in_references = True
+                elif in_references:
+                    in_references = False
+                continue
+            if in_references:
+                continue
             if not stripped:
-                if len(current_para) > 20:
-                    self.issues.append(QualityIssue(
-                        category='structure',
-                        severity='info',
-                        message=f'Very long paragraph: {len(current_para)} lines',
-                        line_number=para_start,
-                        suggestion='Consider breaking into smaller paragraphs'
-                    ))
-                current_para = []
+                flush_paragraph()
             elif not stripped.startswith('#') and not stripped.startswith('|') and not stripped.startswith('```'):
                 if not current_para:
                     para_start = i
                 current_para.append(line)
+        flush_paragraph()
         
         # Check heading distribution
         if self.heading_levels:

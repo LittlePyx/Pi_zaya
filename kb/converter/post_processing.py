@@ -1080,6 +1080,17 @@ def _repair_sentence_split_by_figure_blocks(md: str) -> str:
     return "\n".join(out)
 
 
+def _looks_like_numbered_formula_fragment(text: str) -> bool:
+    t = _normalize_text(text or "").strip()
+    return bool(
+        re.match(
+            r"^\d+(?:\.\d+)*\.?\s+(?:∥|‖|\|\||\\parallel\b|\$)",
+            t,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 def _looks_like_formulaish_heading_text(text: str) -> bool:
     t = _normalize_text(text or "").strip()
     if not t:
@@ -1088,10 +1099,13 @@ def _looks_like_formulaish_heading_text(text: str) -> bool:
     controlish = bool(re.search(r"[\x00-\x1f\ufffd]", t))
     if _is_common_section_heading(t):
         return False
-    if _parse_numbered_heading_level(t) is not None:
+    numbered_formula_fragment = _looks_like_numbered_formula_fragment(t)
+    if _parse_numbered_heading_level(t) is not None and not numbered_formula_fragment:
         return False
     if _is_caption_heading_text(t):
         return False
+    if numbered_formula_fragment:
+        return True
     if re.match(r"^(?:[A-Za-z]\s+){1,5}[A-Za-z]{1,3}\b.*\bwhich\s+follows\b", t, flags=re.IGNORECASE):
         return True
     if not (mathish or controlish):
@@ -2700,6 +2714,125 @@ def _fix_known_safe_ocr_terms(md: str) -> str:
 
     return "\n".join(out)
 
+_POST_REFERENCE_PAGE_MARKER_RE = re.compile(
+    r"^\s*<!--\s*kb_page:\s*\d{1,5}\s*-->\s*$",
+    re.IGNORECASE,
+)
+_POST_REFERENCE_PAGE_MARKER_TOKEN_RE = re.compile(
+    r"<!--\s*kb_page:\s*\d{1,5}\s*-->",
+    re.IGNORECASE,
+)
+_POST_REFERENCE_ENTRY_RE = re.compile(
+    r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\.)\s+\S+",
+)
+_POST_REFERENCE_BIO_RE = re.compile(
+    r"(?:"
+    r"^(?:\*\*|__)[^*_\n]{2,100}(?:\*\*|__)\s+(?:received|earned|obtained)\b"
+    r"|\breceived\s+(?:his|her|their|a|the)\b[^\n]{0,120}\bdegree\b"
+    r"|\b(?:his|her|their)\s+research\s+interests?\s+include\b"
+    r")",
+    re.IGNORECASE | re.MULTILINE,
+)
+_POST_REFERENCE_BIO_HEADING_RE = re.compile(
+    r"^(?:#{1,6}\s+)?(?:Author\s+Biograph(?:y|ies)|About\s+the\s+Authors?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_page_marker_block_spacing(md: str) -> str:
+    """Keep physical-page markers as standalone Markdown blocks."""
+    lines: list[str] = []
+    for raw in str(md or "").splitlines():
+        cursor = 0
+        matches = list(_POST_REFERENCE_PAGE_MARKER_TOKEN_RE.finditer(raw))
+        if not matches:
+            lines.append(raw)
+            continue
+        for match in matches:
+            before = str(raw[cursor : match.start()] or "").strip()
+            if before:
+                lines.append(before)
+            lines.append(str(match.group(0) or "").strip())
+            cursor = match.end()
+        after = str(raw[cursor:] or "").strip()
+        if after:
+            lines.append(after)
+    out: list[str] = []
+    for raw in lines:
+        marker = str(raw or "").strip()
+        if not _POST_REFERENCE_PAGE_MARKER_RE.match(marker):
+            out.append(raw)
+            continue
+        while out and not str(out[-1] or "").strip():
+            out.pop()
+        if out:
+            out.append("")
+        out.append(marker)
+        out.append("")
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+def _format_references_preserving_post_reference_pages(md: str) -> str:
+    """Keep non-bibliography physical pages after a references tail intact."""
+    normalized = re.sub(
+        r"\s*(<!--\s*kb_page:\s*\d{1,5}\s*-->)\s*",
+        lambda match: f"\n{str(match.group(1) or '').strip()}\n",
+        str(md or ""),
+        flags=re.IGNORECASE,
+    ).strip()
+    lines = normalized.splitlines()
+    ref_i = next(
+        (idx for idx, line in enumerate(lines) if _is_references_heading_line(line)),
+        None,
+    )
+    scan_start = int(ref_i + 1) if ref_i is not None else 0
+    min_ref_signal = 1 if ref_i is not None else 8
+    ref_signal = 0
+    for idx in range(scan_start, len(lines)):
+        line = str(lines[idx] or "")
+        if _POST_REFERENCE_ENTRY_RE.match(line):
+            ref_signal += 1
+            continue
+        if ref_signal < min_ref_signal or not _POST_REFERENCE_PAGE_MARKER_RE.match(line):
+            continue
+
+        page_end = idx + 1
+        while page_end < len(lines) and not _POST_REFERENCE_PAGE_MARKER_RE.match(lines[page_end]):
+            page_end += 1
+        page_lines = lines[idx + 1 : page_end]
+        if any(_POST_REFERENCE_ENTRY_RE.match(str(item or "")) for item in page_lines):
+            continue
+        page_text = "\n".join(page_lines)
+        has_bio_heading = any(
+            _POST_REFERENCE_BIO_HEADING_RE.match(str(item or "").strip())
+            for item in page_lines
+        )
+        if (not has_bio_heading) and (not _POST_REFERENCE_BIO_RE.search(page_text)):
+            continue
+
+        formatted_refs = _format_references("\n".join(lines[:idx])).rstrip()
+        preserved_tail_lines = list(lines[idx:])
+        first_content = next(
+            (tail_idx for tail_idx, value in enumerate(preserved_tail_lines[1:], start=1) if str(value or "").strip()),
+            len(preserved_tail_lines),
+        )
+        first_line = (
+            str(preserved_tail_lines[first_content] or "").strip()
+            if first_content < len(preserved_tail_lines)
+            else ""
+        )
+        if _POST_REFERENCE_BIO_HEADING_RE.match(first_line):
+            preserved_tail_lines[first_content] = "## Author Biographies"
+        else:
+            preserved_tail_lines[first_content:first_content] = ["## Author Biographies", ""]
+        preserved_tail = "\n".join(preserved_tail_lines).lstrip("\n")
+        if not formatted_refs:
+            return preserved_tail
+        return f"{formatted_refs}\n\n{preserved_tail}".rstrip()
+
+    return _format_references(md)
+
+
 def postprocess_markdown(md: str) -> str:
     md = _cleanup_noise_lines(md)
     md = _drop_standalone_journal_metadata_lines(md)
@@ -2735,7 +2868,7 @@ def postprocess_markdown(md: str) -> str:
     md = _drop_empty_figure_duplicate_headings(md)
     md = _extract_box_sidebars(md)
     md = _repair_dangling_heading_continuations(md)
-    md = _format_references(md)
+    md = _format_references_preserving_post_reference_pages(md)
     md = _move_early_references_block_to_end(md)
     md = _repair_body_figure_reference_captions(md)
     md = _normalize_figure_caption_blocks(md)
@@ -2752,4 +2885,5 @@ def postprocess_markdown(md: str) -> str:
     md = _normalize_common_rendering_artifacts(md)
     md = _fix_known_safe_ocr_terms(md)
     md = _split_inline_heading_markers(md)
+    md = _normalize_page_marker_block_spacing(md)
     return md

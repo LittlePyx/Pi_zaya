@@ -48,6 +48,25 @@ def test_summarize_markdown_quality_extracts_core_metrics():
     assert summary.body_citation_expanded_index_count == 4
 
 
+def test_summarize_markdown_quality_does_not_count_plural_algorithm_prose_as_caption():
+    summary = summarize_markdown_quality(
+        "# Title\n\nThese algorithms to enhance security are evaluated in the next section."
+    )
+
+    assert summary.caption_count == 0
+
+
+def test_compare_markdown_quality_allows_equation_image_to_become_display_math():
+    base = "# Title\n\n![Equation](./assets/page_4_eq_1.png)"
+    candidate = "# Title\n\n$$\na = b\n$$"
+
+    comparison = compare_markdown_quality(base, candidate)
+
+    assert summarize_markdown_quality(base).image_count == 0
+    assert comparison["regression_flags"]["images_dropped"] is False
+    assert comparison["regression_flags"]["display_math_dropped"] is False
+
+
 def test_compare_markdown_quality_flags_obvious_regressions():
     base = "\n".join(
         [

@@ -12,15 +12,28 @@ from .reference_markdown import _looks_like_author_year_reference_text
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", flags=re.MULTILINE)
-_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _REF_HEADING_RE = re.compile(r"^#{1,6}\s+References?\s*$", flags=re.IGNORECASE | re.MULTILINE)
 _REF_LINE_RE = re.compile(r"^\[(\d{1,4})\]\s+", flags=re.MULTILINE)
 _CAPTION_RE = re.compile(
-    r"^\s*(?:\*\*)?(?:Figure|Fig\.?|Table|Algorithm)\s*(?:S?\d+[A-Za-z]?|[A-Za-z](?:\.\d+)?|[IVXLC]+)\b",
+    r"^\s*(?:\*\*)?(?:Figure|Fig\.?|Table|Algorithm)(?!s\b)\s*(?:S?\d+[A-Za-z]?|[A-Za-z](?:\.\d+)?|[IVXLC]+)\b",
     flags=re.IGNORECASE,
 )
 _INLINE_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
 _CITATION_RE = re.compile(r"\[(\d{1,4}(?:\s*-\s*\d{1,4})?(?:\s*,\s*\d{1,4}(?:\s*-\s*\d{1,4})?)*)\]")
+
+
+def _is_equation_image(match: re.Match[str]) -> bool:
+    alt = str(match.group(1) or "").strip()
+    target = str(match.group(2) or "").strip()
+    return bool(
+        re.fullmatch(r"(?:equation|formula|math)", alt, flags=re.IGNORECASE)
+        or re.search(
+            r"(?:^|[/\\_.-])(?:eq|equation|formula)(?:[/\\_.-]|\d)",
+            target,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -190,7 +203,7 @@ def summarize_markdown_quality(md_text: str) -> MarkdownQualitySummary:
         h2_count=h2_count,
         h3_plus_count=h3_plus_count,
         has_abstract_heading=bool(re.search(r"^#{1,6}\s+Abstract\s*$", text, flags=re.IGNORECASE | re.MULTILINE)),
-        image_count=len(_IMAGE_RE.findall(text)),
+        image_count=sum(1 for match in _IMAGE_RE.finditer(text) if not _is_equation_image(match)),
         caption_count=sum(1 for raw in lines if _CAPTION_RE.match((raw or "").strip())),
         table_block_count=_count_table_blocks(text),
         display_math_block_count=display_math_blocks,

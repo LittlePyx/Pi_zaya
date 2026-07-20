@@ -26,6 +26,15 @@ def test_paper_guide_deepread_heading_prefers_meta_heading_then_markdown_header(
     assert _paper_guide_deepread_heading({"text": "# Discussion\nFuture work."}) == "Discussion"
 
 
+def test_paper_guide_strip_bound_source_hint_prevents_title_from_changing_question_intent(tmp_path: Path):
+    source_pdf = tmp_path / "Advances and Challenges of Imaging.pdf"
+    prompt = f"{source_pdf} Who are the authors and what are their backgrounds?"
+
+    assert retrieval_runtime._paper_guide_strip_bound_source_hint(prompt, str(source_pdf)) == (
+        "Who are the authors and what are their backgrounds?"
+    )
+
+
 def test_select_paper_guide_deepread_extras_skips_reference_like_snippets_for_abstract():
     out = _select_paper_guide_deepread_extras(
         [
@@ -246,6 +255,45 @@ def test_paper_guide_targeted_source_block_hits_respects_literal_section_title_t
     )
     assert hits
     assert "how a single-pixel camera works" in str((hits[0].get("meta") or {}).get("heading_path") or "").lower()
+
+
+def test_paper_guide_targeted_source_block_hits_returns_author_biographies_with_page(tmp_path: Path):
+    source_pdf = tmp_path / "Advances and Challenges of Imaging.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    db_root = tmp_path / "db"
+    md_dir = db_root / source_pdf.stem
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / f"{source_pdf.stem}.en.md"
+    md_main.write_text(
+        (
+            "<!-- kb_page: 1 -->\n"
+            "## Abstract\n\n"
+            "Reconstruction quality and reconstruction speed remain major challenges.\n\n"
+            "<!-- kb_page: 21 -->\n"
+            "## Author Biographies\n\n"
+            "**Kai Song** received his B.S. degree in 2019. His research interests include single-pixel imaging.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source_pdf),
+        prompt=(
+            f"{source_pdf} 请说明作者 Kai Song 的学历、当前职位和研究方向，"
+            "并定位 Author Biographies。"
+        ),
+        db_dir=db_root,
+        limit=3,
+        citation_lookup_query_tokens=lambda prompt: [tok for tok in prompt.lower().split() if tok],
+        citation_lookup_signal_score=lambda **_kwargs: 0.0,
+        resolve_support_slot_block=lambda **_kwargs: {},
+    )
+
+    assert hits
+    assert all("author biographies" in str((hit.get("meta") or {}).get("heading_path") or "").lower() for hit in hits)
+    biography = next(hit for hit in hits if "Kai Song" in str(hit.get("text") or ""))
+    assert (biography.get("meta") or {}).get("page_start") == 21
+    assert (biography.get("meta") or {}).get("page_end") == 21
 
 
 def test_paper_guide_targeted_source_block_hits_prioritizes_reconstruction_method_tradeoffs(tmp_path: Path):

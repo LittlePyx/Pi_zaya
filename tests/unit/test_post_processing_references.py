@@ -477,3 +477,84 @@ def test_inferred_references_keeps_supplementary_words_inside_a_reference_entry(
     assert "## Supplementary material for the third source" not in out
     assert re.search(r"(?m)^\[3\]\s+C\. Author\. Supplementary material for the third source\.", out)
     assert re.search(r"(?m)^\[4\]\s+D\. Author\.", out)
+
+
+def test_references_preserve_unheaded_author_biography_page_and_are_idempotent():
+    src = "\n".join(
+        [
+            "# Complete Paper",
+            "",
+            "<!-- kb_page: 20 -->",
+            "## References",
+            "",
+            "[235] A. Author. Complete reference 235. Journal of Tests 2024, 20, 2350.",
+            "[236] B. Author. Complete reference 236. Journal of Tests 2024, 20, 2360.",
+            "<!-- kb_page: 21 -->",
+            "**Kai Song** received his B.S. degree in 2019 and M.S. degree in 2022.",
+            "",
+            "**Yaoxing Bian** received his Ph.D. degree in 2022. His research interests include random lasers.",
+            "",
+            "**Liantuan Xiao** received his Ph.D. degree in 2001. His research interests include single-photon imaging.",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert out.index("[236] B. Author") < out.index("<!-- kb_page: 21 -->")
+    assert out.index("<!-- kb_page: 21 -->") < out.index("**Kai Song** received")
+    assert out.index("<!-- kb_page: 21 -->") < out.index("## Author Biographies") < out.index("**Kai Song** received")
+    assert out.count("## Author Biographies") == 1
+    assert "**Yaoxing Bian** received his Ph.D. degree in 2022." in out
+    assert "**Liantuan Xiao** received his Ph.D. degree in 2001." in out
+    assert postprocess_markdown(out) == out
+
+
+def test_references_preserve_explicit_author_biography_heading_without_degree_boilerplate():
+    src = "\n".join(
+        [
+            "# Complete Paper",
+            "",
+            "<!-- kb_page: 20 -->",
+            "## References",
+            "",
+            "[235] A. Author. Complete reference 235. Journal of Tests 2024, 20, 2350.",
+            "[236] B. Author. Complete reference 236. Journal of Tests 2024, 20, 2360.",
+            "<!-- kb_page: 21 -->",
+            "## Author Biographies",
+            "",
+            "Kai Song is a professor working on computational imaging.",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert out.index("[236] B. Author") < out.index("<!-- kb_page: 21 -->")
+    assert "Kai Song is a professor working on computational imaging." in out
+    assert out.count("## Author Biographies") == 1
+    assert postprocess_markdown(out) == out
+
+
+def test_inferred_references_preserve_author_biography_page():
+    refs = [
+        f"[{idx}] Author {idx}. Complete reference {idx}. Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(1, 9)
+    ]
+    src = "\n".join(
+        [
+            "# Complete Paper",
+            "",
+            "## Abstract",
+            "This paper contains enough body prose before the bibliography to make inference safe. " * 8,
+            "<!-- kb_page: 20 -->",
+            *refs,
+            "<!-- kb_page: 21 -->",
+            "**Kai Song** received his B.S. degree in 2019. His research interests include single-pixel imaging.",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "## References" in out
+    assert out.index("[8] Author 8") < out.index("<!-- kb_page: 21 -->")
+    assert out.index("<!-- kb_page: 21 -->") < out.index("## Author Biographies") < out.index("**Kai Song** received")
+    assert postprocess_markdown(out) == out

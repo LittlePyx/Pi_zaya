@@ -150,7 +150,6 @@ def test_page_cache_invalidates_when_vision_page_budget_changes(tmp_path: Path, 
     ("field", "original_value", "changed_value"),
     [
         ("dpi", 200, 240),
-        ("classify_batch_size", 40, 24),
         ("llm_render_max_tokens", 0, 2048),
     ],
 )
@@ -182,6 +181,87 @@ def test_page_cache_invalidates_when_page_output_config_changes(
     assert changed.config_fingerprint != first.config_fingerprint
     assert changed.page_output_fingerprint == first.page_output_fingerprint
     assert changed.load_page(0, assets_dir=assets_dir) is None
+
+
+def test_page_cache_reuses_pages_when_only_classify_batch_size_changes(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    save_dir = tmp_path / "out"
+    assets_dir = save_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    first = PageConversionCache(
+        save_dir=save_dir,
+        pdf_path=source,
+        cfg=_config_with_extra(tmp_path, classify_batch_size=40),
+        total_pages=1,
+    )
+    assert first.store_page(0, "Completed page.", assets_dir=assets_dir) is True
+
+    changed = PageConversionCache(
+        save_dir=save_dir,
+        pdf_path=source,
+        cfg=_config_with_extra(tmp_path, classify_batch_size=80),
+        total_pages=1,
+    )
+
+    assert changed.config_fingerprint == first.config_fingerprint
+    assert changed.load_page(0, assets_dir=assets_dir) == "Completed page."
+
+
+def test_page_cache_accepts_and_migrates_matching_legacy_config_fingerprint(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    cfg = _config_with_extra(tmp_path, classify_batch_size=80)
+    save_dir = tmp_path / "out"
+    assets_dir = save_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    first = PageConversionCache(save_dir=save_dir, pdf_path=source, cfg=cfg, total_pages=1)
+    assert first.store_page(0, "Completed page.", assets_dir=assets_dir) is True
+    entry_path = save_dir / ".conversion_cache" / "pages" / "00001" / "entry.json"
+    entry = json.loads(entry_path.read_text(encoding="utf-8"))
+    legacy_fingerprint = page_cache_module._stable_json_hash(
+        {"config": page_cache_module._legacy_config_payload(cfg)}
+    )
+    assert legacy_fingerprint != first.config_fingerprint
+    entry["config_fingerprint"] = legacy_fingerprint
+    entry_path.write_text(json.dumps(entry), encoding="utf-8")
+
+    current = PageConversionCache(save_dir=save_dir, pdf_path=source, cfg=cfg, total_pages=1)
+
+    assert current.load_page(0, assets_dir=assets_dir) == "Completed page."
+    migrated = json.loads(entry_path.read_text(encoding="utf-8"))
+    assert migrated["config_fingerprint"] == current.config_fingerprint
+
+
+def test_page_cache_accepts_legacy_fingerprint_when_batch_size_changed(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    legacy_cfg = _config_with_extra(tmp_path, classify_batch_size=40)
+    current_cfg = _config_with_extra(tmp_path, classify_batch_size=80)
+    save_dir = tmp_path / "out"
+    assets_dir = save_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    first = PageConversionCache(save_dir=save_dir, pdf_path=source, cfg=legacy_cfg, total_pages=1)
+    assert first.store_page(0, "Completed page.", assets_dir=assets_dir) is True
+    entry_path = save_dir / ".conversion_cache" / "pages" / "00001" / "entry.json"
+    entry = json.loads(entry_path.read_text(encoding="utf-8"))
+    entry["config_fingerprint"] = page_cache_module._stable_json_hash(
+        {
+            "config": page_cache_module._legacy_config_payload(
+                legacy_cfg,
+                classify_batch_size=40,
+            )
+        }
+    )
+    entry_path.write_text(json.dumps(entry), encoding="utf-8")
+
+    current = PageConversionCache(
+        save_dir=save_dir,
+        pdf_path=source,
+        cfg=current_cfg,
+        total_pages=1,
+    )
+
+    assert current.load_page(0, assets_dir=assets_dir) == "Completed page."
+    migrated = json.loads(entry_path.read_text(encoding="utf-8"))
+    assert migrated["config_fingerprint"] == current.config_fingerprint
 
 
 @pytest.mark.parametrize(

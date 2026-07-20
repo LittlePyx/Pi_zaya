@@ -304,6 +304,26 @@ is measured by projecting the scene onto the nth Hadamard mask.
     assert "is measured by projecting the scene" in out
 
 
+def test_demote_numbered_norm_formula_headings_without_harming_real_sections():
+    src = r"""# Paper Title
+
+## 2 ∥ D_θ(O)-T(x,y) ∥₂²
+
+## 2 \parallel D_\theta(O)-T(x,y) \parallel_2^2
+
+## 2. Fundamentals of single-pixel imaging
+
+## 3. L2-Regularized Reconstruction
+"""
+
+    out = postprocess_markdown(src)
+
+    assert "## 2 ∥ D_θ(O)-T(x,y) ∥₂²" not in out
+    assert r"## 2 \parallel D_\theta(O)-T(x,y) \parallel_2^2" not in out
+    assert "## 2. Fundamentals of single-pixel imaging" in out
+    assert "## 3. L2-Regularized Reconstruction" in out
+
+
 def test_do_not_promote_numeric_table_rows_as_numbered_headings():
     src = """
 # Paper Title

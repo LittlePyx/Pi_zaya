@@ -102,6 +102,45 @@ def test_select_paper_guide_answer_hits_prefers_target_paragraph_over_heading_on
     assert str((out[0].get("meta") or {}).get("block_id") or "") == "blk_para"
 
 
+def test_select_paper_guide_answer_hits_prefers_author_biographies_over_high_score_abstract():
+    src = r"db\demo\paper.en.md"
+    hits = [
+        {
+            "score": 272.0,
+            "text": "## Abstract\nThis review surveys deep-learning single-pixel imaging.",
+            "meta": {
+                "source_path": src,
+                "heading_path": "Abstract",
+                "block_id": "blk_abstract",
+                "paper_guide_targeted_block": True,
+            },
+        },
+        {
+            "score": 6.0,
+            "text": (
+                "Kai Song received his B.S. degree in 2019 and is currently pursuing his Ph.D. degree. "
+                "His research interests include single-photon imaging and single-pixel imaging."
+            ),
+            "meta": {
+                "source_path": src,
+                "heading_path": "Author Biographies",
+                "block_id": "blk_kai_song",
+                "paper_guide_targeted_block": True,
+            },
+        },
+    ]
+
+    out = _select_paper_guide_answer_hits(
+        grouped_docs=[],
+        heading_hits=hits,
+        prompt="请概括作者 Kai Song 的学历、当前职位和研究方向，并定位 Author Biographies。",
+        top_n=1,
+    )
+
+    assert len(out) == 1
+    assert str((out[0].get("meta") or {}).get("block_id") or "") == "blk_kai_song"
+
+
 def test_select_paper_guide_answer_hits_keeps_multiple_targeted_blocks_in_same_heading():
     src = r"db\demo\nat.en.md"
     hits = [

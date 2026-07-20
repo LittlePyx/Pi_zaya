@@ -559,6 +559,25 @@ def test_extract_references_map_skips_appendix_running_header_before_sequential_
     assert "Duplicate publisher footer" not in out[40]
 
 
+def test_extract_references_map_stops_before_unheaded_author_biography_page():
+    md_text = (
+        "# Demo\n\n"
+        "<!-- kb_page: 20 -->\n"
+        "## References\n"
+        "[235] A. Author. Complete reference 235. Journal of Tests, 2024.\n"
+        "[236] B. Author. Complete reference 236. Journal of Tests, 2025.\n"
+        "<!-- kb_page: 21 -->\n"
+        "**Kai Song** received his B.S. degree in 2019. His research interests include single-pixel imaging.\n"
+        "**Yaoxing Bian** received his Ph.D. degree in 2022.\n"
+    )
+
+    out = ref_index.extract_references_map_from_md(md_text)
+
+    assert sorted(out) == [235, 236]
+    assert "Kai Song" not in out[236]
+    assert "research interests" not in out[236]
+
+
 def test_extract_references_map_does_not_use_body_fig_or_section_numbers_as_refs():
     md_text = (
         "# Demo\n\n"

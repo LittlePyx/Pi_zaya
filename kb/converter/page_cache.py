@@ -152,7 +152,6 @@ def _config_payload(cfg: Any) -> dict[str, Any]:
         "llm_classify": bool(getattr(cfg, "llm_classify", True)),
         "llm_render_page": bool(getattr(cfg, "llm_render_page", False)),
         "llm_classify_only_if_needed": bool(getattr(cfg, "llm_classify_only_if_needed", True)),
-        "classify_batch_size": int(getattr(cfg, "classify_batch_size", 40) or 40),
         "dpi": int(getattr(cfg, "dpi", 200) or 200),
         "image_scale": float(getattr(cfg, "image_scale", 2.2) or 2.2),
         "figure_dpi": int(getattr(cfg, "figure_dpi", 0) or 0),
@@ -179,6 +178,22 @@ def _config_payload(cfg: Any) -> dict[str, Any]:
     }
 
 
+def _legacy_config_payload(
+    cfg: Any,
+    *,
+    classify_batch_size: int | None = None,
+) -> dict[str, Any]:
+    """Recreate the schema-v2 fingerprint used before batch size was ignored."""
+    payload = _config_payload(cfg)
+    batch_size = (
+        getattr(cfg, "classify_batch_size", 40)
+        if classify_batch_size is None
+        else classify_batch_size
+    )
+    payload["classify_batch_size"] = int(batch_size or 40)
+    return payload
+
+
 class PageConversionCache:
     """Durable, per-page conversion cache with content and configuration validation."""
 
@@ -199,6 +214,7 @@ class PageConversionCache:
         self.page_output_fingerprint = ""
         self.config_payload: dict[str, Any] = {}
         self.config_fingerprint = ""
+        self.compatible_config_fingerprints: set[str] = set()
         if not self.enabled:
             return
         try:
@@ -206,6 +222,26 @@ class PageConversionCache:
             self.page_output_fingerprint = _page_output_fingerprint()
             self.config_payload = _config_payload(cfg)
             self.config_fingerprint = _stable_json_hash({"config": self.config_payload})
+            # Schema-v2 accidentally included a scheduling-only batch size in the
+            # output fingerprint. Accept the two historical application defaults
+            # so upgrading from CLI (40) to UI (80), or vice versa, keeps valid pages.
+            legacy_batch_sizes = {
+                int(getattr(cfg, "classify_batch_size", 40) or 40),
+                40,
+                80,
+            }
+            self.compatible_config_fingerprints = {self.config_fingerprint}
+            self.compatible_config_fingerprints.update(
+                _stable_json_hash(
+                    {
+                        "config": _legacy_config_payload(
+                            cfg,
+                            classify_batch_size=batch_size,
+                        )
+                    }
+                )
+                for batch_size in legacy_batch_sizes
+            )
             self.pages_dir.mkdir(parents=True, exist_ok=True)
             self._write_manifest(status="active")
         except Exception:
@@ -273,7 +309,8 @@ class PageConversionCache:
                 raise ValueError("page source changed")
             if str(entry.get("page_output_fingerprint") or "") != self.page_output_fingerprint:
                 raise ValueError("page output algorithm changed")
-            if str(entry.get("config_fingerprint") or "") != self.config_fingerprint:
+            entry_config_fingerprint = str(entry.get("config_fingerprint") or "")
+            if entry_config_fingerprint not in self.compatible_config_fingerprints:
                 raise ValueError("conversion configuration changed")
             # Keep cached text out of *.md discovery so ingestion cannot index
             # page fragments as standalone documents.
@@ -300,6 +337,12 @@ class PageConversionCache:
                 name = str(row.get("name") or "").strip()
                 source = page_dir / "assets" / name
                 self._atomic_write(Path(assets_dir) / name, source.read_bytes())
+            if entry_config_fingerprint != self.config_fingerprint:
+                entry["config_fingerprint"] = self.config_fingerprint
+                self._atomic_write(
+                    entry_path,
+                    json.dumps(entry, ensure_ascii=False, indent=2).encode("utf-8"),
+                )
             with self._lock:
                 self.hits.add(int(page_index))
             return markdown
