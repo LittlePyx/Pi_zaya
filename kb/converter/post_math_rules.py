@@ -21,6 +21,10 @@ _BARE_LATEX_INLINE_EXPR_RE = re.compile(
     r"(?:[-+]?\d+(?:\.\d+)?|[A-Za-z](?:[_^]\{[^{}\n]{1,60}\}|[_^][A-Za-z0-9])?|"
     r"\\[A-Za-z]+(?:\{[^{}\n]{1,60}\})?|\[[^\]\n]{1,80}\]))+"
 )
+_BARE_LATEX_INLINE_UNIT_RE = re.compile(
+    r"(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?\s*(?:~|\\,)?\s*"
+    r"\\mu\\mathrm\{[A-Za-z]{1,8}\}",
+)
 _STRAY_CITATION_DOLLAR_RE = re.compile(
     r"(\[\s*\d{1,4}(?:\s*[,;\u2013-]\s*\d{1,4})*\s*\])\$\s*(?=(?:and|or|the|this|that|these|those|[A-Z]))"
 )
@@ -103,6 +107,7 @@ def _wrap_bare_inline_latex_math_segment(segment: str) -> str:
             return match.group(0)
         return f"${expr}$"
 
+    text = _BARE_LATEX_INLINE_UNIT_RE.sub(_wrap_expr, text)
     return _BARE_LATEX_INLINE_EXPR_RE.sub(_wrap_expr, text)
 
 
@@ -235,6 +240,29 @@ def fix_math_markdown(md: str) -> str:
         # Fix common spacing issues.
         t = re.sub(r"\\in\s*R\b", r"\\in R", t)
         t = re.sub(r"\\inR\b", r"\\in R", t)
+
+        def _restore_missing_sum_index(match: re.Match[str]) -> str:
+            command = str(match.group(0) or r"\sum")
+            tail = t[match.end() : match.end() + 180]
+            subscript_parts: list[str] = []
+            for braced, bare in re.findall(r"_\{([A-Za-z]{1,6})\}|_([A-Za-z])", tail):
+                value = str(braced or bare or "")
+                if value:
+                    subscript_parts.append(value)
+            candidates = [value for value in subscript_parts if len(value) == 1]
+            scored = [
+                (sum(1 for value in subscript_parts if candidate in value), candidate)
+                for candidate in candidates
+            ]
+            score, candidate = max(scored, default=(0, ""))
+            if score < 2 or not candidate:
+                return command
+            return command + "_{" + candidate + "}"
+
+        # If VL retained the summand subscripts but missed the tiny index under
+        # the summation sign, a repeated single-letter factor index identifies
+        # the omitted summation variable unambiguously.
+        t = re.sub(r"\\sum(?!\s*[_^])", _restore_missing_sum_index, t)
         t = re.sub(r"\s+", " ", t).strip()
         return t
 
@@ -386,6 +414,34 @@ def fix_math_markdown(md: str) -> str:
             return True
         return plain_norm[:1].islower()
 
+    def _looks_like_variable_definition_prose(block: str) -> bool:
+        """Recognize variable explanations that VL wrapped as display math.
+
+        Superscripts and subscripts are expected in these sentences, so the
+        generic hard-math-anchor test is insufficient.  A genuine equation
+        still has a relation or structural operator; ``O_k^l refers to ...``
+        does not.
+        """
+        t = str(block or "").strip()
+        if not t:
+            return False
+        plain = re.sub(r"\s+", " ", _latex_text_to_plain(t)).strip()
+        if len(re.findall(r"\b[A-Za-z]{2,}\b", plain)) < 5:
+            return False
+        if not re.search(
+            r"\b(?:refers\s+to|denotes|indicates|represents|is\s+the\s+(?:output|input|weight|bias|gradient))\b",
+            plain,
+            flags=re.IGNORECASE,
+        ):
+            return False
+        return not bool(
+            re.search(
+                r"(?:=|[<>]|\\(?:frac|sum|int|prod|sqrt|arg|min|max|partial|nabla|begin)\b)",
+                t,
+                flags=re.IGNORECASE,
+            )
+        )
+
     # Normalize single-line display math to fenced form:
     #   $$ ... $$ -> $$\n...\n$$
     # This prevents later inline-math regex from collapsing it into $...$.
@@ -477,7 +533,12 @@ def fix_math_markdown(md: str) -> str:
         # CRITICAL: Be very conservative - only unwrap if it's clearly prose/citation
         # Since we improved the LLM prompt, most $$ blocks should be real formulas
         # Only unwrap if it's OBVIOUSLY not math (e.g., full sentences with no math symbols)
+        variable_definition_prose = _looks_like_variable_definition_prose(raw)
         sentence_style_math = _looks_like_sentence_style_math_block(raw)
+        if variable_definition_prose:
+            out.append(_normalize_text(_latex_text_to_plain(raw)))
+            out.append("")
+            continue
         if sentence_style_math or _looks_like_not_math(raw):
             if sentence_style_math:
                 if raw:

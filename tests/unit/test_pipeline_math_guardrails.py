@@ -7,11 +7,58 @@ from kb.converter.pipeline import PDFConverter
 import kb.converter.page_local_pipeline as page_local_pipeline
 
 
+class _GeometryPage:
+    def __init__(self, lines):
+        import fitz
+
+        self.rect = fitz.Rect(0, 0, 600, 800)
+        self._lines = lines
+
+    def get_text(self, mode: str):
+        assert mode == "dict"
+        return {
+            "blocks": [
+                {
+                    "lines": [
+                        {
+                            "bbox": bbox,
+                            "spans": [{"text": text}],
+                        }
+                    ]
+                }
+                for bbox, text in self._lines
+            ]
+        }
+
+
 def test_copyright_footer_is_not_formula_evidence():
     footer = "© 2024 Wiley-VCH GmbH 2401397 (17 of 21)"
 
     assert PDFConverter._looks_like_overlay_math_line(footer) is False
     assert PDFConverter._is_display_math_candidate_text(footer) is False
+
+
+def test_formula_candidates_at_same_height_stay_in_their_pdf_columns(tmp_path):
+    converter = _make_converter(tmp_path)
+    page = _GeometryPage(
+        [
+            ((60, 280, 230, 305), "L = sum_i x_i"),
+            ((260, 282, 286, 304), "(12)"),
+            ((330, 280, 500, 305), "E = sum_i y_i"),
+            ((550, 282, 578, 304), "(15)"),
+        ]
+    )
+
+    candidates = converter._collect_display_math_candidates(
+        page,
+        page_index=5,
+        is_references_page=False,
+    )
+
+    assert len(candidates) == 2
+    assert [candidate["column_lane"] for candidate in candidates] == ["left", "right"]
+    assert float(candidates[0]["rect"].x1) < 300
+    assert float(candidates[1]["rect"].x0) > 300
 
 
 def _make_converter(tmp_path):
@@ -98,6 +145,52 @@ $$
 def test_fragmented_math_detector_accepts_coherent_equation():
     clean = "$$L = \\text{loss\\_func} \\sum_{n=1}^{N}(DNN(u_n),u_n) \\tag{16}$$"
     assert PDFConverter._looks_fragmented_math_output(clean) is False
+
+
+def test_fragmented_math_detector_rejects_prose_or_citations_inside_display_math():
+    citation = """
+Before text.
+
+$$
+olution of reconstructed images from 128\\times128 to 256\\times256.[66]
+$$
+
+After text.
+"""
+    explanation = """
+Before text.
+
+$$
+O^l refers to the output of the kth unit and denotes the previous layer.
+$$
+
+After text.
+"""
+
+    assert PDFConverter._looks_fragmented_math_output(citation) is True
+    assert PDFConverter._looks_fragmented_math_output(explanation) is True
+
+
+def test_fragmented_math_detector_rejects_lpr_variable_definition_fragments():
+    broken = r"""
+$$
+(\sum O_l = \sigma w_{kj}^{l-1}O_j^{l-1}
+$$
+
+$$
+)O^{l-1} + b(11)_j
+$$
+
+$O_l$
+
+$$
+O^{l}_{k} \text{ refers to the output of the kth unit in the lth layer}, O^{l-1}_{j}
+$$
+
+j
+"""
+
+    assert PDFConverter._looks_fragmented_math_output(broken) is True
 
 
 def test_guardrails_retry_then_fallback_when_still_fragmented(tmp_path, monkeypatch):
@@ -188,6 +281,47 @@ $$
 
     assert out == clean
     assert len(dummy.calls) == 2
+
+
+def test_guardrails_rejects_fragmented_layout_crop_before_returning_it(tmp_path, monkeypatch):
+    broken = """
+$$
+\\frac{N}{T}
+$$
+
+N
+
+$$
+\\sum^{N}
+$$
+
+( DNN ( u n
+), u n
+)(16)
+"""
+    clean = "$$L = \\sum_{n=1}^{N} x_n \\tag{15}$$"
+    converter = _make_converter(tmp_path)
+    dummy = _DummyLLMWorker([clean])
+    converter.llm_worker = dummy
+    monkeypatch.setattr(converter, "_convert_page_with_layout_crops", lambda **kwargs: broken)
+
+    out = converter._convert_page_with_vision_guardrails(
+        png_bytes=b"fake",
+        page=object(),
+        page_index=5,
+        total_pages=12,
+        page_hint="",
+        speed_mode="normal",
+        is_references_page=False,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+        image_names=["figure.png"],
+        visual_rects=[],
+        formula_placeholders={"[[EQ_1]]": "$$x=y$$"},
+    )
+
+    assert out == clean
+    assert len(dummy.calls) == 1
 
 
 def test_guardrails_skip_math_fragment_check_for_references_page(tmp_path, monkeypatch):

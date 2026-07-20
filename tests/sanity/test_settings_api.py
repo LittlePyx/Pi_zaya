@@ -832,6 +832,8 @@ def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):
         "QWEN_BASE_URL",
         "OPENAI_BASE_URL",
         "DEEPSEEK_MODEL",
+        "QWEN_TEXT_MODEL",
+        "QWEN_VISION_MODEL",
         "QWEN_MODEL",
         "OPENAI_MODEL",
     ):
@@ -857,17 +859,20 @@ def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):
     assert settings.vision_model == "vision-model"
 
 
-def test_load_settings_uses_versioned_qwen_default_model(monkeypatch):
+def test_load_settings_uses_separate_qwen_text_and_vision_defaults(monkeypatch):
     monkeypatch.setattr(config_module, "_load_runtime_prefs", lambda: {})
     monkeypatch.setenv("DEEPSEEK_API_KEY", "")
     monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
     monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("QWEN_TEXT_MODEL", "")
+    monkeypatch.setenv("QWEN_VISION_MODEL", "")
     monkeypatch.setenv("QWEN_MODEL", "")
     monkeypatch.setenv("OPENAI_MODEL", "")
 
     settings = config_module.load_settings()
 
-    assert settings.vision_model == "qwen3.7-plus-2026-05-26"
+    assert settings.text_model == "qwen3.7-plus-2026-05-26"
+    assert settings.vision_model == "qwen3-vl-plus"
 
 
 def test_load_settings_keeps_explicit_saved_vision_model_with_qwen_env_key(monkeypatch):
@@ -879,6 +884,7 @@ def test_load_settings_keeps_explicit_saved_vision_model_with_qwen_env_key(monke
     monkeypatch.setenv("DEEPSEEK_API_KEY", "")
     monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
     monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("QWEN_VISION_MODEL", "")
     monkeypatch.setenv("QWEN_MODEL", "")
     monkeypatch.setenv("OPENAI_MODEL", "")
 
@@ -887,7 +893,25 @@ def test_load_settings_keeps_explicit_saved_vision_model_with_qwen_env_key(monke
     assert settings.vision_model == "saved-vision-model"
 
 
-def test_load_settings_qwen_env_model_overrides_saved_vision_model(monkeypatch):
+def test_load_settings_keeps_explicit_saved_text_model_with_qwen_env_key(monkeypatch):
+    monkeypatch.setattr(
+        config_module,
+        "_load_runtime_prefs",
+        lambda: {"text_model": "saved-text-model"},
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("QWEN_TEXT_MODEL", "")
+    monkeypatch.setenv("QWEN_MODEL", "")
+    monkeypatch.setenv("OPENAI_MODEL", "")
+
+    settings = config_module.load_settings()
+
+    assert settings.text_model == "saved-text-model"
+
+
+def test_load_settings_saved_vision_model_overrides_legacy_shared_model(monkeypatch):
     monkeypatch.setattr(
         config_module,
         "_load_runtime_prefs",
@@ -896,12 +920,47 @@ def test_load_settings_qwen_env_model_overrides_saved_vision_model(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "")
     monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
     monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("QWEN_VISION_MODEL", "")
     monkeypatch.setenv("QWEN_MODEL", "environment-vision-model")
     monkeypatch.setenv("OPENAI_MODEL", "")
 
     settings = config_module.load_settings()
 
-    assert settings.vision_model == "environment-vision-model"
+    assert settings.vision_model == "saved-vision-model"
+
+
+def test_load_settings_dedicated_vision_env_overrides_saved_vision_model(monkeypatch):
+    monkeypatch.setattr(
+        config_module,
+        "_load_runtime_prefs",
+        lambda: {"vision_model": "saved-vision-model"},
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("QWEN_VISION_MODEL", "dedicated-vision-model")
+    monkeypatch.setenv("QWEN_MODEL", "legacy-shared-model")
+    monkeypatch.setenv("OPENAI_MODEL", "")
+
+    settings = config_module.load_settings()
+
+    assert settings.vision_model == "dedicated-vision-model"
+
+
+def test_load_settings_role_specific_qwen_models_override_legacy_shared_model(monkeypatch):
+    monkeypatch.setattr(config_module, "_load_runtime_prefs", lambda: {})
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("QWEN_TEXT_MODEL", "dedicated-text-model")
+    monkeypatch.setenv("QWEN_VISION_MODEL", "dedicated-vision-model")
+    monkeypatch.setenv("QWEN_MODEL", "legacy-shared-model")
+    monkeypatch.setenv("OPENAI_MODEL", "")
+
+    settings = config_module.load_settings()
+
+    assert settings.text_model == "dedicated-text-model"
+    assert settings.vision_model == "dedicated-vision-model"
 
 
 def test_load_settings_keeps_public_auth_off_by_default_in_production(monkeypatch):

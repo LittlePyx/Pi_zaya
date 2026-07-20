@@ -1293,6 +1293,7 @@ def _normalize_common_rendering_artifacts(md: str) -> str:
     lines = md.splitlines()
     out: list[str] = []
     in_fence = False
+    in_display_math = False
     caption_line_re = re.compile(r"^\s*\*\*(?:Figure|Table)\s+[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)?\.\*\*", re.IGNORECASE)
     unit_letters = "mWlLsSA"
     for ln in lines:
@@ -1301,6 +1302,10 @@ def _normalize_common_rendering_artifacts(md: str) -> str:
             out.append(ln)
             continue
         if in_fence:
+            out.append(ln)
+            continue
+        if ln.strip() == "$$":
+            in_display_math = not in_display_math
             out.append(ln)
             continue
         t = unicodedata.normalize("NFKC", ln)
@@ -1358,6 +1363,15 @@ def _normalize_common_rendering_artifacts(md: str) -> str:
         t = re.sub(r"\biISM\s+[’']\s+s\b", "iISM's", t)
         t = re.sub(r"(?<=[A-Za-z])\((see\s+(?:eq|fig(?:ure)?)\b)", lambda m: " (" + m.group(1), t, flags=re.IGNORECASE)
         t = re.sub(r"\(\s*([A-Za-z])\s*(\d+)\s*[−-]\s*([A-Za-z])\s*(\d+)\s*\)", lambda m: f"({m.group(1)}{m.group(2)}–{m.group(3)}{m.group(4)})" if m.group(1).lower() == m.group(3).lower() else m.group(0), t)
+        if not in_display_math and r"\mu\mathrm{" in t:
+            inline_parts = re.split(r"(\$[^$\n]*\$)", t)
+            for idx in range(0, len(inline_parts), 2):
+                inline_parts[idx] = re.sub(
+                    r"(?<![A-Za-z0-9])([-+]?\d+(?:\.\d+)?\s*(?:~|\\,)?\s*\\mu\\mathrm\{[A-Za-z]{1,8}\})",
+                    lambda m: f"${m.group(1)}$",
+                    inline_parts[idx],
+                )
+            t = "".join(inline_parts)
         out.append(t)
     return "\n".join(out)
 

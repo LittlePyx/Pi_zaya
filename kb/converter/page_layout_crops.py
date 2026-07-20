@@ -550,8 +550,27 @@ def _ocr_layout_region(
     rect = fitz.Rect(row["rect"])
     blocks = list(row.get("blocks") or [])
     fallback_md = str(row.get("fallback_md", "") or "").strip()
+    has_formula_blocks = any(bool(getattr(block, "is_math", False)) for block in blocks)
+    if bool(row.get("source_backed_preferred")) and fallback_md:
+        try:
+            print(
+                f"[VISION_DIRECT][LAYOUT] page {page_index+1} crop {rid}/{region_count} "
+                f"({lane}) source-backed ({len(fallback_md)} chars)",
+                flush=True,
+            )
+        except Exception:
+            pass
+        return rid, fallback_md
+    render_dpi = int(dpi)
+    if has_formula_blocks:
+        try:
+            configured_formula_dpi = int(str(os.environ.get("KB_PDF_VISION_FORMULA_DPI", "") or "0"))
+        except Exception:
+            configured_formula_dpi = 0
+        render_dpi = max(render_dpi, configured_formula_dpi or 320)
+        render_dpi = min(420, render_dpi)
     try:
-        pix = page.get_pixmap(clip=rect, dpi=int(dpi), alpha=False)
+        pix = page.get_pixmap(clip=rect, dpi=render_dpi, alpha=False)
         png = pix.tobytes("png")
     except Exception:
         return rid, fallback_md
@@ -566,6 +585,12 @@ def _ocr_layout_region(
           "Preserve formulas, tables, captions, and headings exactly when present. "
           "Do not invent or repeat content from other regions."
     )
+    if has_formula_blocks:
+        hint += (
+            " This crop contains a display equation. Transcribe every summation index, "
+            "subscript, superscript, operator, and equation number; keep variable-definition "
+            "prose outside the display-math delimiters."
+        )
     t0 = time.time()
     budget = getattr(converter.llm_worker, "vision_page_budget", None)
     budget_ctx = (
@@ -586,7 +611,55 @@ def _ocr_layout_region(
                 fallback_md=fallback_md,
             ),
         )
+    if md_part and converter._looks_fragmented_math_output(md_part):
+        # Keep the layout-safe crop boundary and retry only this lane.  Falling
+        # straight back to whole-page OCR can recover the formula while
+        # reintroducing the original right-column-before-left-column failure.
+        retry_hint = converter._vision_math_retry_hint(hint)
+        retry_budget_ctx = (
+            budget(
+                "normal" if str(speed_mode or "").strip().lower() == "ultra_fast" else speed_mode,
+                deadline=page_deadline,
+            )
+            if callable(budget) and page_deadline is not None
+            else nullcontext()
+        )
+        try:
+            with retry_budget_ctx:
+                md_retry = converter.llm_worker.call_llm_page_to_markdown(
+                    png,
+                    page_number=page_index,
+                    total_pages=total_pages,
+                    hint=retry_hint,
+                    speed_mode=(
+                        "normal"
+                        if str(speed_mode or "").strip().lower() == "ultra_fast"
+                        else speed_mode
+                    ),
+                    is_references_page=False,
+                    max_tokens_override=_layout_crop_max_tokens_override(
+                        speed_mode="normal",
+                        fallback_md=fallback_md,
+                    ),
+                )
+        except Exception:
+            md_retry = None
+        if md_retry:
+            md_part = md_retry
     md_part = (md_part or "").strip() or fallback_md
+    if has_formula_blocks and "$$" in md_part:
+        first_math_index = next(
+            (idx for idx, block in enumerate(blocks) if bool(getattr(block, "is_math", False))),
+            -1,
+        )
+        if first_math_index > 0:
+            source_prefix = fallback_markdown_from_blocks(blocks[:first_math_index]).strip()
+            math_offset = md_part.find("$$")
+            if source_prefix and math_offset >= 0:
+                # Text-layer prose is more faithful for the cross-column
+                # continuation immediately before a formula.  Keep VL only for
+                # the equation and the math-sensitive definition that follows.
+                md_part = source_prefix + "\n\n" + md_part[math_offset:].lstrip()
     md_part = _merge_missing_tables_back_into_region_markdown(md_part, blocks=blocks)
     try:
         print(
@@ -609,8 +682,14 @@ def convert_page_with_layout_crops(
     pdf_path: Path,
     assets_dir: Path,
     image_names: list[str],
+    visual_rects: Optional[list["fitz.Rect"]] = None,
 ) -> Optional[str]:
-    if page is None or image_names:
+    if page is None:
+        return None
+    visual_rects = [fitz.Rect(rect) for rect in (visual_rects or [])]
+    # Older callers only supplied asset names.  Without the source rectangles
+    # we cannot safely exclude figure-internal text from column OCR.
+    if image_names and not visual_rects:
         return None
     if page_index == 0:
         return None
@@ -640,7 +719,7 @@ def convert_page_with_layout_crops(
                 page,
                 pdf_path=pdf_path,
                 page_index=page_index,
-                visual_rects=[],
+                visual_rects=visual_rects,
                 use_pdfplumber_fallback=True,
                 page_dict=page_dict,
             )
@@ -658,7 +737,7 @@ def convert_page_with_layout_crops(
             page_index=page_index,
             body_size=body_size,
             tables=tables,
-            visual_rects=[],
+            visual_rects=visual_rects,
             assets_dir=assets_dir,
             is_references_page=False,
             page_dict=page_dict,
@@ -684,7 +763,22 @@ def convert_page_with_layout_crops(
         col_split=float(col_split),
     )
     mixed_reference_tail = _has_mixed_reference_tail(blocks, page_h=page_h)
-    if (not tables) and (not manual_mode) and (not cross_column_risk) and (not mixed_reference_tail):
+    wide_figure_column_transition = bool(
+        image_names
+        and any(
+            float(rect.width) >= page_w * 0.68
+            and float(rect.y0) <= page_h * 0.28
+            and float(rect.y1) <= page_h * 0.78
+            for rect in visual_rects
+        )
+    )
+    if (
+        (not tables)
+        and (not manual_mode)
+        and (not cross_column_risk)
+        and (not mixed_reference_tail)
+        and (not wide_figure_column_transition)
+    ):
         return None
 
     regions = _build_structured_crop_regions(
@@ -696,6 +790,21 @@ def convert_page_with_layout_crops(
     )
     if len(regions) <= 1:
         return None
+
+    right_has_formula = any(
+        str(row.get("lane") or "") == "right"
+        and any(bool(getattr(block, "is_math", False)) for block in list(row.get("blocks") or []))
+        for row in regions
+    )
+    if wide_figure_column_transition and right_has_formula:
+        for row in regions:
+            lane = str(row.get("lane") or "")
+            blocks_in_region = list(row.get("blocks") or [])
+            if lane in {"full", "left"} and not any(
+                bool(getattr(block, "is_math", False)) or bool(getattr(block, "is_table", False))
+                for block in blocks_in_region
+            ):
+                row["source_backed_preferred"] = True
 
     if mixed_reference_tail and (not tables):
         local_md = _safe_mixed_reference_local_markdown(
@@ -721,7 +830,8 @@ def convert_page_with_layout_crops(
         print(
             f"[VISION_DIRECT][LAYOUT] page {page_index+1}: structured crop mode enabled "
             f"({len(regions)} crops, dpi={int(dpi)}, tables={int(bool(tables))}, "
-            f"risk={int(bool(cross_column_risk))}, mixed_refs={int(bool(mixed_reference_tail))})",
+            f"risk={int(bool(cross_column_risk))}, mixed_refs={int(bool(mixed_reference_tail))}, "
+            f"figure_columns={int(bool(wide_figure_column_transition))})",
             flush=True,
         )
     except Exception:
@@ -777,5 +887,7 @@ def convert_page_with_layout_crops(
     parts = [ordered_md[k].strip() for k in sorted(ordered_md.keys()) if ordered_md.get(k)]
     if not parts:
         return None
-    merged = "\n\n".join(part for part in parts if part).strip()
+    merged = repair_pdf_linebreak_hyphenation(
+        "\n\n".join(part for part in parts if part).strip()
+    )
     return merged or None

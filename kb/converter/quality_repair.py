@@ -56,9 +56,23 @@ REFERENCES_HEADING_RE = re.compile(r"^#{1,6}\s+(?:References|Bibliography)\s*$",
 BODY_SECTION_HEADING_RE = re.compile(
     r"^#{1,6}\s+(?:\d+(?:\.\d+)*\.?\s+|[IVXLC]+\.\s+)?"
     r"(?:introduction|background|related\s+work|theory|principle|comparison|method(?:s|ology)?|"
-    r"experiment(?:s|al)?|results?|discussion|conclusions?|implementation|analysis|system|structure)\b",
+    r"experiment(?:s|al)?|results?|discussion|conclusions?|challenges?|outlooks?|future\s+work|"
+    r"implementation|analysis|system|structure)\b",
     re.IGNORECASE,
 )
+
+_TRANSACTIONAL_STRUCTURE_ISSUES = {
+    "missing_page_markers",
+    "page_marker_gaps",
+    "missing_source_pages",
+    "source_page_marker_alignment",
+    "source_page_count_mismatch",
+    "source_table_page_alignment",
+    "missing_references",
+    "reference_index_truncated",
+    "references_before_body",
+    "out_of_order_sections",
+}
 
 
 _PAGE_MARKER_OFFSETS_CACHE_MAX_ITEMS = 32
@@ -224,7 +238,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 6
+CONVERSION_QUALITY_RULES_VERSION = 8
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
@@ -440,6 +454,50 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "action": "autofix",
         "scope": "markdown",
         "strategies": ["balance_display_math"],
+    },
+    "conversion_retry_math_text": {
+        "label": "Reconvert unresolved math text",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "document",
+        "speed_mode": "normal",
+        "reason": "The converter left unresolved math-text retry markers, so formulas or nearby prose are not reliable enough to index.",
+        "strategies": [],
+    },
+    "conversion_retry_equation": {
+        "label": "Retry equation conversion",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "document",
+        "speed_mode": "normal",
+        "reason": "One or more equations fell back to images after conversion retries and need a quality conversion pass.",
+        "strategies": [],
+    },
+    "conversion_retry_other": {
+        "label": "Review unresolved conversion retries",
+        "safe": False,
+        "action": "review",
+        "scope": "document",
+        "reason": "The Markdown contains an unresolved converter retry marker with an unrecognized kind.",
+        "strategies": [],
+    },
+    "prose_dominant_display_math": {
+        "label": "Reconvert prose captured as display math",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "document",
+        "speed_mode": "normal",
+        "reason": "Natural-language prose was captured inside a display-math block, which breaks reading and formula rendering.",
+        "strategies": [],
+    },
+    "display_math_markdown_link": {
+        "label": "Reconvert Markdown links captured inside display math",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "document",
+        "speed_mode": "normal",
+        "reason": "A Markdown link appears inside display math and cannot be rendered as valid TeX.",
+        "strategies": [],
     },
     "heading_level_jumps": {
         "label": "Rebalance heading levels using the established heading policy",
@@ -911,6 +969,16 @@ def _issue_codes_from_metrics(metrics: dict[str, Any]) -> list[str]:
         out.append("missing_images")
     if int(metrics.get("unclosed_display_math_block_count") or 0) > 0:
         out.append("unclosed_display_math")
+    if int(metrics.get("conversion_retry_math_text_count") or 0) > 0:
+        out.append("conversion_retry_math_text")
+    if int(metrics.get("conversion_retry_equation_count") or 0) > 0:
+        out.append("conversion_retry_equation")
+    if int(metrics.get("conversion_retry_other_count") or 0) > 0:
+        out.append("conversion_retry_other")
+    if int(metrics.get("prose_dominant_display_math_block_count") or 0) > 0:
+        out.append("prose_dominant_display_math")
+    if int(metrics.get("display_math_markdown_link_count") or 0) > 0:
+        out.append("display_math_markdown_link")
     if int(metrics.get("mojibake_count") or 0) > 0:
         out.append("mojibake")
     if int(metrics.get("analyzer_error_count") or 0) > 0:
@@ -995,6 +1063,10 @@ _STRAY_INLINE_LATEX_RE = re.compile(
     r"(?:[-+]?\d+(?:\.\d+)?|[A-Za-z](?:[_^]\{[^{}\n]{1,60}\}|[_^][A-Za-z0-9])?|"
     r"\\[A-Za-z]+(?:\{[^{}\n]{1,60}\})?|\[[^\]\n]{1,80}\]))+",
 )
+_STRAY_INLINE_LATEX_UNIT_RE = re.compile(
+    r"(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?\s*(?:~|\\,)?\s*"
+    r"\\mu\\mathrm\{[A-Za-z]{1,8}\}",
+)
 _STRAY_INLINE_CITATION_DOLLAR_RE = re.compile(
     r"\[\s*\d{1,4}(?:\s*[,;\u2013-]\s*\d{1,4})*\s*\]\$\s*(?=(?:and|or|the|this|that|these|those|[A-Z]))"
 )
@@ -1035,7 +1107,42 @@ def _stray_inline_math_likely(text: str) -> bool:
         ):
             return True
         probe = re.sub(r"\$[^$\n]*\$", " ", line)
-        if _STRAY_INLINE_LATEX_RE.search(probe):
+        if _STRAY_INLINE_LATEX_RE.search(probe) or _STRAY_INLINE_LATEX_UNIT_RE.search(probe):
+            return True
+    return False
+
+
+def _fragmented_math_definition_likely(text: str) -> bool:
+    """Detect variable-definition prose split into OCR shards outside math."""
+    if not text:
+        return False
+    visible: list[str] = []
+    in_fence = False
+    in_math = False
+    in_refs = False
+    for raw in str(text or "").splitlines():
+        st = str(raw or "").strip()
+        if re.match(r"^\s*```", raw):
+            in_fence = not in_fence
+            continue
+        if st == "$$":
+            in_math = not in_math
+            continue
+        if REFERENCES_HEADING_RE.match(st):
+            in_refs = True
+            continue
+        if in_fence or in_math or in_refs or not st:
+            continue
+        visible.append(st)
+
+    definition_re = re.compile(r"\b(?:refers\s+to|denotes|indicates|represents)\b", re.IGNORECASE)
+    for idx, line in enumerate(visible):
+        probe = re.sub(r"[`*_{}$^\\]", " ", line)
+        probe = re.sub(r"\s+", " ", probe).strip()
+        if not re.fullmatch(r"where\s+[A-Za-z](?:\s+[A-Za-z0-9]){0,3}", probe, flags=re.IGNORECASE):
+            continue
+        following = " ".join(visible[idx + 1 : idx + 7])
+        if definition_re.search(following):
             return True
     return False
 
@@ -1104,6 +1211,8 @@ def _issue_codes_from_context(
         codes.append("collapsed_heading_hierarchy")
     if _stray_inline_math_likely(text):
         codes.append("stray_inline_math")
+    if _fragmented_math_definition_likely(text):
+        codes.append("conversion_retry_math_text")
     if _out_of_order_numbered_sections_likely(text):
         codes.append("out_of_order_sections")
     return _dedupe_codes(codes)
@@ -1745,7 +1854,11 @@ def _reference_layout(text: str) -> dict[str, Any]:
         if BODY_SECTION_HEADING_RE.match(st):
             body_after = idx
             break
-    before_body = bool(ref_idx >= 0 and body_after > ref_idx and ref_count >= 3 and char_ratio < 0.2)
+    # A normal main-body heading after three or more bibliography entries is a
+    # structural ordering error regardless of where the first References
+    # heading happens to fall.  The old 20% position threshold missed long
+    # reviews whose bibliography was accidentally inserted around mid-file.
+    before_body = bool(ref_idx >= 0 and body_after > ref_idx and ref_count >= 3)
     return {
         "references_line": int(ref_idx + 1),
         "references_char": int(char_pos),
@@ -2539,6 +2652,24 @@ def _regression_reasons(base_text: str, candidate_text: str) -> list[str]:
             reasons = []
     if base_chars > 1000 and cand_chars < int(base_chars * 0.82):
         reasons.append("content_shrank_too_much")
+    return reasons
+
+
+def _transactional_structure_reasons(
+    before_issue_codes: list[str],
+    after_issue_codes: list[str],
+    active_issue_codes: list[str],
+) -> list[str]:
+    """Reject a partial repair while page/reference structure is still unsafe."""
+    before = {str(code or "").strip().lower() for code in before_issue_codes if str(code or "").strip()}
+    after = {str(code or "").strip().lower() for code in after_issue_codes if str(code or "").strip()}
+    active = {str(code or "").strip().lower() for code in active_issue_codes if str(code or "").strip()}
+    reasons: list[str] = []
+    for code in sorted(after & _TRANSACTIONAL_STRUCTURE_ISSUES):
+        if code not in before:
+            reasons.append(f"blocking_structure_introduced:{code}")
+        elif code in active and code not in {"source_page_marker_alignment"}:
+            reasons.append(f"blocking_structure_remains:{code}")
     return reasons
 
 
@@ -3402,6 +3533,135 @@ def _recover_missing_source_pages_from_pdf_text(md_text: str, md_path: Path, sou
     return fixed, fixed != text
 
 
+_INLINE_NUMERIC_REFERENCE_MARKER_RE = re.compile(r"(?<!\S)\[\s*(\d{1,4})\s*\]\s+")
+
+
+def _split_collapsed_numeric_reference_lines(text: str) -> str:
+    """Split a line containing a verified ``[n] ... [n+1]`` reference chain."""
+    output: list[str] = []
+    for raw in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        matches = [
+            match
+            for match in _INLINE_NUMERIC_REFERENCE_MARKER_RE.finditer(raw)
+            if _is_plausible_reference_number(match.group(1))
+        ]
+        numbers = [int(match.group(1)) for match in matches]
+        chain = consecutive_reference_chain_positions(numbers)
+        if len(chain) < 3:
+            output.append(raw)
+            continue
+        chain_matches = [matches[index] for index in chain]
+        prefix = raw[: chain_matches[0].start()].strip()
+        if prefix:
+            output.append(prefix)
+        for idx, match in enumerate(chain_matches):
+            end = chain_matches[idx + 1].start() if idx + 1 < len(chain_matches) else len(raw)
+            fragment = raw[match.start() : end].strip()
+            if fragment:
+                output.append(fragment)
+    return "\n".join(output)
+
+
+def _reference_chain_matches(text: str) -> list[re.Match[str]]:
+    matches = [
+        match
+        for match in _INLINE_NUMERIC_REFERENCE_MARKER_RE.finditer(str(text or ""))
+        if _is_plausible_reference_number(match.group(1))
+    ]
+    # Converter page text may contain body citations before a collapsed
+    # bibliography on the same page.  The generic PDF helper deliberately
+    # rejects competing disjoint chains, but here the cache-page continuity
+    # checks below provide the stronger guard we need.  Prefer the longest
+    # ordered chain and, on a tie, one beginning at 1 and occurring later.
+    candidates: list[list[int]] = []
+    numbers = [int(match.group(1)) for match in matches]
+    for start, first in enumerate(numbers):
+        expected = int(first)
+        positions = [start]
+        for idx in range(start + 1, len(numbers)):
+            if numbers[idx] == expected + 1:
+                positions.append(idx)
+                expected = numbers[idx]
+        candidates.append(positions)
+    if not candidates:
+        return []
+    candidates.sort(
+        key=lambda positions: (
+            len(positions),
+            int(numbers[positions[0]] == 1),
+            positions[0],
+        ),
+        reverse=True,
+    )
+    return [matches[index] for index in candidates[0]]
+
+
+def _extract_cached_reference_markdown(md_path: Path) -> tuple[str, int]:
+    """Recover a bibliography from validated converter page-cache text.
+
+    Page-cache output preserves the original page order even when a later
+    Markdown repair misplaced the body and references.  Only a chain beginning
+    at reference 1 and containing at least five consecutive entries is trusted.
+    """
+    pages_dir = Path(md_path).expanduser().parent / ".conversion_cache" / "pages"
+    try:
+        page_dirs = sorted(
+            (path for path in pages_dir.iterdir() if path.is_dir() and path.name.isdigit()),
+            key=lambda path: int(path.name),
+        )
+    except Exception:
+        return "", 0
+
+    recovered_pages: list[tuple[int, str]] = []
+    last_reference_number = 0
+    for page_dir in page_dirs:
+        page_file = page_dir / "page.txt"
+        try:
+            page_text = page_file.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        chain = _reference_chain_matches(page_text)
+        if not chain:
+            if recovered_pages:
+                break
+            continue
+        first_number = int(chain[0].group(1))
+        last_number = int(chain[-1].group(1))
+        if not recovered_pages:
+            if first_number != 1 or len(chain) < 5:
+                continue
+        elif first_number > last_reference_number + 2 or last_number <= last_reference_number:
+            break
+
+        trimmed = page_text[chain[0].start() :]
+        trimmed = _drop_pdf_reference_running_lines(trimmed)
+        trimmed = trim_reference_publisher_tail(trimmed)
+        trimmed = _split_collapsed_numeric_reference_lines(trimmed).strip()
+        if not trimmed:
+            break
+        try:
+            page_no = int(page_dir.name)
+        except Exception:
+            break
+        recovered_pages.append((page_no, trimmed))
+        last_reference_number = last_number
+
+    if not recovered_pages:
+        return "", 0
+    raw_lines: list[str] = ["## References"]
+    for page_no, page_text in recovered_pages:
+        raw_lines.extend(["", f"<!-- kb_page: {int(page_no)} -->", page_text])
+    formatted = fix_references_format("\n".join(raw_lines)).strip()
+    count = reference_markdown_entry_count(formatted)
+    reference_map = extract_references_map_from_md(formatted)
+    if count < 5 or not reference_map:
+        return "", 0
+    numbers = sorted(int(number) for number in reference_map if int(number) > 0)
+    if numbers[0] != 1 or numbers != list(range(1, numbers[-1] + 1)):
+        return "", 0
+    return formatted, len(numbers)
+
+
 def _extract_pdf_reference_markdown(pdf_path: Path) -> tuple[str, int]:
     if fitz is None:
         return "", 0
@@ -3459,6 +3719,61 @@ def _extract_pdf_reference_markdown(pdf_path: Path) -> tuple[str, int]:
     return formatted.strip(), reference_markdown_entry_count(formatted)
 
 
+def _reference_run_start_in_tail(lines: list[str]) -> int:
+    numbered: list[tuple[int, int]] = []
+    for idx, raw in enumerate(lines):
+        st = str(raw or "").strip()
+        inline_chain = _reference_chain_matches(st)
+        if len(inline_chain) >= 3 and int(inline_chain[0].group(1)) == 1:
+            return idx
+        match = re.match(r"^\s*\[\s*(\d{1,4})\s*\]\s+", st)
+        if match and _is_plausible_reference_number(match.group(1)):
+            numbered.append((idx, int(match.group(1))))
+    positions = consecutive_reference_chain_positions([number for _, number in numbered])
+    if len(positions) >= 5 and int(numbered[positions[0]][1]) == 1:
+        return int(numbered[positions[0]][0])
+    return -1
+
+
+def _post_reference_preserved_tail_start(lines: list[str], start: int) -> int:
+    heading_re = re.compile(
+        r"^(?:#{1,6}\s+)?(?:author\s+biograph(?:y|ies)|author\s+information|"
+        r"about\s+the\s+authors?|biograph(?:y|ies))\s*$",
+        re.IGNORECASE,
+    )
+    for idx in range(max(0, int(start)), len(lines)):
+        st = str(lines[idx] or "").strip()
+        is_biography_heading = bool(heading_re.match(st))
+        is_biography_prose = bool(
+            re.match(
+                r"^[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){1,5}\s+"
+                r"received\s+(?:his|her|their)\b.{0,120}\bdegree\b",
+                st,
+                re.IGNORECASE,
+            )
+        )
+        if not (is_biography_heading or is_biography_prose):
+            continue
+        begin = idx
+        while begin > start and not str(lines[begin - 1] or "").strip():
+            begin -= 1
+        if begin > start and PAGE_MARKER_RE.fullmatch(str(lines[begin - 1] or "").strip()):
+            begin -= 1
+        return begin
+    return len(lines)
+
+
+def _partition_misplaced_reference_tail(lines: list[str]) -> tuple[list[str], list[str]]:
+    """Keep misplaced body before rebuilt refs and true post-ref material after."""
+    raw_reference_start = _reference_run_start_in_tail(lines)
+    if raw_reference_start < 0:
+        return _clean_post_reference_body_tail(lines), []
+    post_start = _post_reference_preserved_tail_start(lines, raw_reference_start + 1)
+    body = _clean_post_reference_body_tail(lines[:raw_reference_start])
+    post = [str(line or "") for line in lines[post_start:]] if post_start < len(lines) else []
+    return body, post
+
+
 def _replace_references_section(md: str, references_md: str) -> str:
     text = str(md or "")
     lines = text.splitlines()
@@ -3471,7 +3786,24 @@ def _replace_references_section(md: str, references_md: str) -> str:
     if not refs:
         return text
     if ref_idx < 0:
-        return (text.rstrip() + "\n\n" + refs).strip()
+        # Fresh converter output may contain the complete body followed by a
+        # collapsed numeric bibliography without ever emitting a References
+        # heading.  Replace that raw run in place instead of appending a second
+        # bibliography after author biographies.
+        raw_reference_start = _reference_run_start_in_tail(lines)
+        if raw_reference_start < 0:
+            return (text.rstrip() + "\n\n" + refs).strip()
+        post_start = _post_reference_preserved_tail_start(lines, raw_reference_start + 1)
+        body_lines = lines[:raw_reference_start]
+        post_reference_tail = lines[post_start:] if post_start < len(lines) else []
+        refs_for_tail = _drop_leading_duplicate_reference_page_marker(
+            refs,
+            _last_page_marker_in_lines(body_lines),
+        )
+        parts = [*body_lines, "", *refs_for_tail.splitlines()]
+        if post_reference_tail:
+            parts.extend(["", *post_reference_tail])
+        return "\n".join(parts).strip()
 
     start_idx = ref_idx
     stray_start = ref_idx
@@ -3521,12 +3853,14 @@ def _replace_references_section(md: str, references_md: str) -> str:
                 break
     tail_lines = lines[tail_idx:] if tail_idx < len(lines) else []
     if tail_lines and _post_reference_tail_should_precede_references(tail_lines):
-        clean_tail = _clean_post_reference_body_tail(tail_lines)
+        clean_tail, post_reference_tail = _partition_misplaced_reference_tail(tail_lines)
         refs_for_tail = _drop_leading_duplicate_reference_page_marker(
             refs,
             _last_page_marker_in_lines([*lines[:start_idx], *clean_tail]),
         )
         parts = [*lines[:start_idx], *clean_tail, "", *refs_for_tail.splitlines()]
+        if post_reference_tail:
+            parts.extend(["", *post_reference_tail])
         return "\n".join(parts).strip()
 
     parts = [*lines[:start_idx], *refs.splitlines()]
@@ -3649,7 +3983,7 @@ def _post_reference_body_heading_line(line: str) -> bool:
     return bool(
         re.fullmatch(
             r"(?:\d+(?:\.\d+)*\.?\s+)?(?:conclusions?|method(?:s|ology)?|discussion|"
-            r"funding|acknowledg(?:e)?ments?)\s*[:.]?",
+            r"challenges?|outlooks?|future\s+work|funding|acknowledg(?:e)?ments?)\s*[:.]?",
             st,
             re.IGNORECASE,
         )
@@ -3663,7 +3997,7 @@ def _post_reference_tail_should_precede_references(lines: list[str]) -> bool:
     return bool(
         re.search(
             r"(?mi)^\s*(?:#{1,6}\s+)?(?:\d+(?:\.\d+)*\.?\s+)?(?:conclusions?|method(?:s|ology)?|"
-            r"discussion|funding|acknowledg(?:e)?ments?)\b",
+            r"discussion|challenges?|outlooks?|future\s+work|funding|acknowledg(?:e)?ments?)\b",
             sample,
         )
     )
@@ -3672,12 +4006,13 @@ def _post_reference_tail_should_precede_references(lines: list[str]) -> bool:
 def _backfill_references_from_pdf_text(md_text: str, md_path: Path, source_pdf_path: Path | str | None = None) -> tuple[str, bool]:
     text = str(md_text or "")
     pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
-    if not pdf_path:
-        return text, False
     before_map = extract_references_map_from_md(text)
     before_extracted = len(before_map)
     before_missing = set(_reference_map_missing_numbers(before_map))
-    references_md, recovered_count = _extract_pdf_reference_markdown(pdf_path)
+    references_md, recovered_count = _extract_pdf_reference_markdown(pdf_path) if pdf_path else ("", 0)
+    cached_references_md, cached_count = _extract_cached_reference_markdown(md_path)
+    if cached_count >= max(5, recovered_count):
+        references_md, recovered_count = cached_references_md, cached_count
     recovered_map = extract_references_map_from_md(references_md)
     recovered_missing = set(_reference_map_missing_numbers(recovered_map))
     fills_existing_gap = bool(before_missing and len(recovered_missing) < len(before_missing))
@@ -3845,6 +4180,20 @@ def repair_markdown_text(
         after_source_quality = before_source_quality
         after_issue_codes = before_issue_codes
     regression_reasons = _regression_reasons(before_text, text) if changed_text else []
+    transactional_target_codes = [
+        code
+        for code in active_codes
+        if any(
+            str(name or "") in active_strategy_names
+            for name in conversion_repair_strategy_for_issue(code).get("strategies") or []
+        )
+    ]
+    transactional_reasons = (
+        _transactional_structure_reasons(before_issue_codes, after_issue_codes, transactional_target_codes)
+        if changed_text
+        else []
+    )
+    regression_reasons = _dedupe_codes([*regression_reasons, *transactional_reasons])
     if (
         changed_text
         and regression_reasons
@@ -3905,18 +4254,36 @@ def repair_markdown_text(
             fallback_applied.append(label)
         if fallback_text != before_text:
             fallback_reasons = _regression_reasons(before_text, fallback_text)
+            fallback_metrics = _metric_view(path, fallback_text)
+            fallback_source_quality = _source_quality_view(
+                path,
+                fallback_text,
+                fallback_metrics,
+                source_pdf_path=source_pdf_path,
+                allow_source_pdf_inference=allow_source_pdf_inference,
+            )
+            fallback_issue_codes = _issue_codes_from_context(
+                path,
+                fallback_text,
+                fallback_metrics,
+                source_quality=fallback_source_quality,
+            )
+            fallback_reasons = _dedupe_codes(
+                [
+                    *fallback_reasons,
+                    *_transactional_structure_reasons(
+                        before_issue_codes,
+                        fallback_issue_codes,
+                        transactional_target_codes,
+                    ),
+                ]
+            )
             if not fallback_reasons:
                 text = fallback_text
                 final_applied = fallback_applied
-                after_metrics = _metric_view(path, text)
-                after_source_quality = _source_quality_view(
-                    path,
-                    text,
-                    after_metrics,
-                    source_pdf_path=source_pdf_path,
-                    allow_source_pdf_inference=allow_source_pdf_inference,
-                )
-                after_issue_codes = _issue_codes_from_context(path, text, after_metrics, source_quality=after_source_quality)
+                after_metrics = fallback_metrics
+                after_source_quality = fallback_source_quality
+                after_issue_codes = fallback_issue_codes
                 changed_text = True
                 regression_reasons = []
                 safe_to_use = True

@@ -315,7 +315,8 @@ Common environment variables:
 
 - `QWEN_API_KEY`, `DEEPSEEK_API_KEY`, or `OPENAI_API_KEY`: text model access
 - `QWEN_BASE_URL`, `DEEPSEEK_BASE_URL`, `OPENAI_BASE_URL`: optional provider base URLs
-- `QWEN_MODEL`, `DEEPSEEK_MODEL`, `OPENAI_MODEL`: optional model names
+- `QWEN_TEXT_MODEL`, `QWEN_VISION_MODEL`: separate Qwen text and PDF-conversion model names
+- `QWEN_MODEL`, `DEEPSEEK_MODEL`, `OPENAI_MODEL`: optional legacy/shared model names (`QWEN_MODEL` remains a backward-compatible override)
 - `KB_AGENT_WEB_SEARCH_ENABLED`: enable or disable no-hit academic web fallback
 - `KB_AGENT_WEB_SEARCH_API_KEY`: optional OpenAI-compatible web-search key; falls back to `OPENAI_API_KEY`
 - `KB_AGENT_WEB_SEARCH_MODEL`: web-search model, default `gpt-5-search-api`

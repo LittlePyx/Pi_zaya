@@ -343,7 +343,9 @@ def _build_layout_page_hint(*, page, visual_rects: list["fitz.Rect"]) -> str:
 
 def _should_prefer_local_figure_order_pipeline(
     *,
+    converter,
     page,
+    page_index: int,
     image_names: list[str],
     visual_rects: list["fitz.Rect"],
 ) -> bool:
@@ -364,6 +366,23 @@ def _should_prefer_local_figure_order_pipeline(
         return False
     if float(rect.y1) < page_h * 0.46:
         return False
+
+    # The local figure-order route is deliberately text-first and can split a
+    # display equation into interleaved glyph/prose blocks.  Prefer structured
+    # column OCR whenever the source-backed formula detector finds an equation,
+    # including formulas whose individual PDF text fragments are too short for
+    # the lightweight raw-block heuristic below.
+    formula_collector = getattr(converter, "_collect_display_math_candidates", None)
+    if callable(formula_collector):
+        try:
+            if formula_collector(
+                page,
+                page_index=int(page_index),
+                is_references_page=False,
+            ):
+                return False
+        except Exception:
+            pass
 
     try:
         page_dict = page.get_text("dict") or {}
@@ -712,7 +731,9 @@ def process_vision_direct_page(
             return md_refs
 
     if (not is_references_page) and _should_prefer_local_figure_order_pipeline(
+        converter=converter,
         page=page,
+        page_index=page_index,
         image_names=image_names,
         visual_rects=visual_rects,
     ):
@@ -841,6 +862,7 @@ def process_vision_direct_page(
         pdf_path=pdf_path,
         assets_dir=assets_dir,
         image_names=image_names,
+        visual_rects=visual_rects,
         max_tokens_override=max_tokens_override,
         formula_placeholders=formula_placeholders,
         skip_references_column_mode=references_column_tried,

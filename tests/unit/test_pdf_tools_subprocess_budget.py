@@ -146,6 +146,67 @@ def test_run_pdf_to_md_overrides_child_env_for_split_budget(monkeypatch, tmp_pat
     assert child_env["KB_LLM_MAX_INFLIGHT"] == "4"
 
 
+def test_run_pdf_to_md_forwards_effective_vision_settings_to_child(monkeypatch, tmp_path: Path):
+    pdf_path = tmp_path / "tiny.pdf"
+    doc = fitz.open()
+    doc.new_page()
+    doc.save(pdf_path)
+    doc.close()
+
+    class _VisionSettings:
+        vision_model = "saved-vision-model"
+        vision_base_url = "https://vision.example/v1"
+        vision_api_key = "saved-vision-key"
+
+    import kb.config as config_module
+
+    monkeypatch.setattr(config_module, "load_settings", lambda: _VisionSettings())
+    captured: dict[str, object] = {}
+
+    class _FakeProc:
+        def __init__(self, *, env: dict[str, str], args: list[str]):
+            captured["env"] = dict(env)
+            captured["args"] = list(args)
+            self.stdout = io.StringIO("")
+            self.pid = 4321
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            return None
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(
+        pdf_tools.subprocess,
+        "Popen",
+        lambda args, **kwargs: _FakeProc(env=kwargs.get("env") or {}, args=list(args)),
+    )
+
+    ok, _out = pdf_tools.run_pdf_to_md(
+        pdf_path=pdf_path,
+        out_root=tmp_path / "out",
+        no_llm=False,
+        keep_debug=False,
+        eq_image_fallback=False,
+        speed_mode="normal",
+        max_active_conversions=1,
+    )
+
+    assert ok is True
+    child_args = list(captured["args"])
+    child_env = dict(captured["env"])
+    assert child_args[child_args.index("--model") + 1] == "saved-vision-model"
+    assert child_args[child_args.index("--base-url") + 1] == "https://vision.example/v1"
+    assert child_args[child_args.index("--api-key-env") + 1] == "KB_PDF_RUNTIME_VISION_API_KEY"
+    assert child_env["KB_PDF_RUNTIME_VISION_API_KEY"] == "saved-vision-key"
+
+
 def test_run_pdf_to_md_uses_adaptive_multi_doc_budget_when_env_missing(monkeypatch, tmp_path: Path):
     pdf_path = tmp_path / "tiny.pdf"
     doc = fitz.open()

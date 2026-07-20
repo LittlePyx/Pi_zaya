@@ -14,10 +14,13 @@ from dotenv import load_dotenv
 # heuristic needed — the number itself tells you which system it belongs to.
 CITATION_OFFSET = 10000
 
-# Keep the default versioned so a conversion rerun does not silently change
-# behavior when the provider advances an unversioned alias.  Explicit
-# environment variables and saved user preferences still take precedence.
-DEFAULT_QWEN_VISION_MODEL = "qwen3.7-plus-2026-05-26"
+# Text generation and PDF vision conversion have different quality profiles.
+# Keep their defaults separate so upgrading the text model cannot silently
+# replace the vision model used for layout, OCR, and equation conversion.
+# Explicit environment variables and saved user preferences still take
+# precedence over these defaults.
+DEFAULT_QWEN_TEXT_MODEL = "qwen3.7-plus-2026-05-26"
+DEFAULT_QWEN_VISION_MODEL = "qwen3-vl-plus"
 
 
 def _clean_env_key(raw: str) -> str | None:
@@ -166,9 +169,11 @@ def load_settings() -> Settings:
             _env("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ).strip().rstrip("/")
         text_model = (
-            _env("QWEN_MODEL")
+            _env("QWEN_TEXT_MODEL")
+            or stored_text_model
+            or _env("QWEN_MODEL")
             or _env("OPENAI_MODEL")
-            or DEFAULT_QWEN_VISION_MODEL
+            or DEFAULT_QWEN_TEXT_MODEL
         ).strip()
     elif stored_text_api_key:
         text_base_url = (
@@ -193,9 +198,10 @@ def load_settings() -> Settings:
             _env("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ).strip().rstrip("/")
         vision_model = (
-            _env("QWEN_MODEL")
-            or _env("OPENAI_MODEL")
+            _env("QWEN_VISION_MODEL")
             or stored_vision_model
+            or _env("QWEN_MODEL")
+            or _env("OPENAI_MODEL")
             or DEFAULT_QWEN_VISION_MODEL
         ).strip()
     elif stored_vision_api_key:

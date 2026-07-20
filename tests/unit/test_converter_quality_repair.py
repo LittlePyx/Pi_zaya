@@ -1074,6 +1074,62 @@ def test_conversion_quality_detects_stray_inline_math(tmp_path: Path):
     assert report["repair_plan"]["action"] == "autofix"
 
 
+def test_conversion_quality_detects_bare_numeric_latex_micro_unit(tmp_path: Path):
+    md_path = tmp_path / "paper.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "",
+            "# Example paper",
+            "",
+            "## Abstract",
+            "",
+            "This paper studies optical resolution.",
+            "",
+            "## Results",
+            "",
+            r"The optical resolution is 353.55~\mu\mathrm{m}.",
+            "",
+            "## References",
+            "",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    report = write_conversion_quality_result(md_path)
+
+    assert "stray_inline_math" in report["repair_plan"]["issue_codes"]
+    assert report["repair_plan"]["action"] == "autofix"
+
+
+def test_conversion_quality_routes_fragmented_variable_definitions_to_reconvert(tmp_path: Path):
+    md_path = tmp_path / "fragmented-formula.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Example paper",
+                "## Abstract",
+                "This paper explains a neural-network reconstruction method.",
+                "## 3.1. Principle of Neural Network",
+                "where O l",
+                "O_k^l refers to the output of the kth unit in the lth layer, O_j^{l-1}",
+                "j",
+                "O_j^{l-1} denotes the jth unit in the previous layer.",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert "conversion_retry_math_text" in report["repair_plan"]["reconvert_issue_codes"]
+    assert report["recommended_action"] == "reconvert"
+
+
 def test_repair_markdown_text_cleans_stray_inline_math_and_keeps_review_headings(tmp_path: Path):
     md_path = tmp_path / "Brief review of image denoising techniques.en.md"
     original = "\n".join(
@@ -2064,6 +2120,84 @@ def test_repair_markdown_text_backfills_references_without_pdf_heading(tmp_path:
     assert "Supplementary Materials" not in repaired
 
 
+def test_cache_reference_backfill_replaces_unheaded_raw_run_before_biographies(tmp_path: Path):
+    from kb.converter import quality_repair
+
+    md_path = tmp_path / "Review.en.md"
+    pages_dir = tmp_path / ".conversion_cache" / "pages"
+    page_texts: dict[int, str] = {
+        page: f"Body text for source page {page}." for page in range(1, 17)
+    }
+    page_texts[16] = "## 6. Challenges and Outlooks\nThe final body section remains before references."
+    reference_lines = {
+        number: f"[{number}] Author {number}. Recovered reference {number}. Journal of Tests, 20{number:02d}."
+        for number in range(1, 19)
+    }
+    page_texts[17] = "Acknowledgements\nSupported by the test fund.\n" + " ".join(
+        reference_lines[number] for number in range(1, 7)
+    )
+    page_texts[18] = " ".join(reference_lines[number] for number in range(7, 11))
+    page_texts[19] = " ".join(reference_lines[number] for number in range(11, 15))
+    page_texts[20] = " ".join(reference_lines[number] for number in range(15, 19))
+    page_texts[21] = (
+        "Kai Song received his B.S. degree in 2019 and M.S. degree in 2022. "
+        "He is currently pursuing his Ph.D. degree."
+    )
+    for page, page_text in page_texts.items():
+        page_dir = pages_dir / f"{page:05d}"
+        page_dir.mkdir(parents=True)
+        (page_dir / "page.txt").write_text(page_text, encoding="utf-8")
+
+    original = "\n\n".join(
+        item
+        for page in range(1, 22)
+        for item in (f"<!-- kb_page: {page} -->", page_texts[page])
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    repaired, changed = quality_repair._backfill_references_from_pdf_text(original, md_path)
+    markers = [int(match.group(1)) for match in re.finditer(r"<!--\s*kb_page:\s*(\d+)\s*-->", repaired)]
+
+    assert changed is True
+    assert markers == list(range(1, 22))
+    assert repaired.index("## 6. Challenges and Outlooks") < repaired.index("## References")
+    assert repaired.index("## References") < repaired.index("Kai Song received his B.S. degree")
+    assert repaired.count("[1] Author 1.") == 1
+    assert repaired.count("[18] Author 18.") == 1
+
+
+def test_reference_repair_rolls_back_when_blocking_structure_remains(monkeypatch, tmp_path: Path):
+    from kb.converter import quality_repair
+
+    md_path = tmp_path / "Transactional References.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Transactional References",
+            "## Abstract",
+            "A stable abstract describes this paper and its experiment.",
+            "## References",
+            "[1] Ada Lovelace. First reference. Journal of Tests, 2024.",
+            "[3] Grace Hopper. Third reference. Journal of Tests, 2026.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    def partial_backfill(text: str, *_args, **_kwargs):
+        return text + "\n<!-- kb_page: 1 -->\nPartial repair output.", True
+
+    monkeypatch.setattr(quality_repair, "_backfill_references_from_pdf_text", partial_backfill)
+
+    result = repair_markdown_text(md_path, original, issue_codes=["reference_index_truncated"])
+
+    assert result["changed"] is False
+    assert result["rolled_back"] is True
+    assert result["repaired_text"] == original
+    assert any(
+        reason.startswith("blocking_structure_") for reason in result["regression_reasons"]
+    )
+
+
 def test_repair_markdown_text_backfills_two_column_numeric_pdf_references(tmp_path: Path):
     import fitz
 
@@ -2609,3 +2743,37 @@ def test_conversion_quality_result_preserves_repair_attempt_history(tmp_path: Pa
     assert row["task_id"] == "task-1"
     assert payload["latest_repair_attempt"]["task_id"] == "task-1"
     assert payload["repair_attempts"][-1]["event"] == "reconvert_queued"
+
+
+def test_conversion_quality_result_routes_retry_markers_and_broken_math_to_reconvert(tmp_path: Path):
+    md_path = tmp_path / "retry.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Demo Paper",
+                "## Abstract",
+                "This paper contains stable introductory prose and cites prior work [1].",
+                "## Method",
+                "A damaged expression <!-- kb:conversion_retry kind=math_text page=1 -->",
+                "<!-- kb:conversion_retry kind=equation page=1 asset=page_1_eq_1.png number=3 -->",
+                "$$",
+                "O^l refers to the output of the kth unit in the previous layer and represents its value [1](#cite-1)",
+                "$$",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert payload["metrics"]["conversion_retry_kind_counts"] == {"equation": 1, "math_text": 1}
+    assert payload["recommended_action"] == "reconvert"
+    assert {
+        "conversion_retry_math_text",
+        "conversion_retry_equation",
+        "prose_dominant_display_math",
+        "display_math_markdown_link",
+    }.issubset(set(payload["repair_plan"]["reconvert_issue_codes"]))

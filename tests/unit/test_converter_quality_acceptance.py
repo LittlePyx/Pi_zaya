@@ -71,10 +71,57 @@ def test_summarize_conversion_quality_counts_research_paper_surfaces(tmp_path):
     assert metrics.fragmented_table_duplicate_count == 0
     assert metrics.display_math_block_count == 1
     assert metrics.unclosed_display_math_block_count == 0
+    assert metrics.prose_dominant_display_math_block_count == 0
+    assert metrics.display_math_markdown_link_count == 0
     assert metrics.inline_math_count == 1
+    assert metrics.conversion_retry_marker_count == 0
+    assert metrics.conversion_retry_kind_counts == {}
     assert metrics.reference_line_count == 2
     assert metrics.extracted_reference_count == 2
     assert metrics.body_citation_expanded_index_count == 2
+
+
+def test_summarize_conversion_quality_counts_retry_kinds_and_broken_display_math(tmp_path):
+    md_path = tmp_path / "retry.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "# Paper",
+                "",
+                "A damaged formula <!-- kb:conversion_retry kind=math_text page=4 -->",
+                "<!-- kb:conversion_retry kind=equation page=4 asset=page_4_eq_1.png number=5 -->",
+                "<!-- kb:conversion_retry kind=layout page=4 -->",
+                "",
+                "$$",
+                "O^l refers to the output of the kth unit in the previous layer and represents its value [66](#cite-66)",
+                "$$",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metrics = summarize_conversion_quality(md_path)
+
+    assert metrics.conversion_retry_marker_count == 3
+    assert metrics.conversion_retry_math_text_count == 1
+    assert metrics.conversion_retry_equation_count == 1
+    assert metrics.conversion_retry_other_count == 1
+    assert metrics.conversion_retry_kind_counts == {"equation": 1, "layout": 1, "math_text": 1}
+    assert metrics.prose_dominant_display_math_block_count == 1
+    assert metrics.display_math_markdown_link_count == 1
+
+
+def test_evaluate_conversion_quality_can_gate_conversion_retries(tmp_path):
+    md_path = tmp_path / "retry.md"
+    md_path.write_text(
+        "# Paper\n\n<!-- kb:conversion_retry kind=equation page=1 asset=page_1_eq_1.png -->\n",
+        encoding="utf-8",
+    )
+
+    result = evaluate_conversion_quality(md_path, checks={"max_conversion_retries": 0})
+
+    assert result["ok"] is False
+    assert result["failures"] == ["conversion_retry_marker_count:1>0"]
 
 
 def test_summarize_conversion_quality_counts_duplicate_table_representations(tmp_path):

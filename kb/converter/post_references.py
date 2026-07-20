@@ -123,6 +123,16 @@ def _format_references(md: str) -> str:
         t = (s or "").strip()
         if not t:
             return False
+        # Multi-panel figure/table captions often contain many citation markers
+        # and copyright years.  That density looks reference-like, but treating a
+        # late caption as the start of an unheaded bibliography can move every
+        # following body section behind a synthetic ``References`` heading.
+        if re.match(
+            r"^(?:!\[[^\]]*\]\([^)]+\)\s*)?(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?|table)\s*\w+\b",
+            t,
+            flags=re.IGNORECASE,
+        ):
+            return False
         if _looks_bare_numbered_reference_payload_line(t):
             return True
         if re.match(r"^\[\d{1,4}\]\s+[A-Z]", t):

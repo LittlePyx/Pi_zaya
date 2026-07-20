@@ -399,6 +399,20 @@ test('reader normalizes glued microsecond latex units before KaTeX render', asyn
   await expect(referenceEntries.nth(2)).toContainText('Third reference already starts')
 })
 
+test('reader hides conversion diagnostics and never linkifies citations inside math', async ({ page }) => {
+  await openHarness(page, 'render-polish')
+  const reader = page.getByTestId('reader-content')
+
+  await expect(reader).not.toContainText('kb:conversion_retry')
+  await expect(reader).toContainText('The updated bias remains visible')
+  await expect(reader).toContainText('and the gradient remains visible.')
+  await expect(reader.locator('.katex-error')).toHaveCount(0)
+  await expect(reader.locator('.katex a')).toHaveCount(0)
+
+  const proseCitation = reader.locator('.kb-cite-chip-sysb').filter({ hasText: '[66]' })
+  await expect(proseCitation).toHaveCount(1)
+})
+
 test('reader keeps page markers and figures out of an adjacent prose paragraph', async ({ page }) => {
   await openHarness(page, 'render-polish')
   const markerParagraph = page.locator('[data-testid="reader-content"] p:has(> #kb-page-1)')

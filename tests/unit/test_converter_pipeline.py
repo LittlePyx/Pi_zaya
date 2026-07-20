@@ -480,6 +480,60 @@ def test_recover_references_replaces_gapped_index_from_pdf_text_layer(tmp_path, 
     assert "Broken reference" not in fixed
 
 
+def test_recover_references_rejects_page_order_and_body_asset_regressions(tmp_path, monkeypatch):
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / "dummy.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+    recovered = "\n".join(
+        [
+            "## References",
+            "<!-- kb_page: 3 -->",
+            *[
+                f"[{idx}] Author {idx}. Recovered reference. Journal of Tests 2024, {idx}, {1000 + idx}."
+                for idx in range(1, 9)
+            ],
+        ]
+    )
+    monkeypatch.setattr(converter, "_extract_pdf_reference_markdown", lambda _doc: (recovered, 8))
+    broken = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Demo Paper",
+            "## Abstract",
+            "Body text.",
+            "## References",
+            "[1] Broken.",
+            "[2] Broken.",
+            "[4] Broken.",
+            "[5] Broken.",
+            "[6] Broken.",
+            "[7] Broken.",
+            "[8] Broken.",
+            "<!-- kb_page: 2 -->",
+            "## 2. Results",
+            "![Figure 1](./assets/page_2_fig_1.png)",
+            "Result body that must not be removed or moved behind page 3.",
+        ]
+    )
+
+    fixed, repair = converter._recover_references_from_pdf_if_needed(broken, object())
+
+    assert fixed == broken
+    assert repair["changed"] is False
+    assert repair["rejected"] is True
+    assert set(repair["rejection_reasons"]).intersection(
+        {"page_markers_dropped", "page_marker_sequence_regressed"}
+    )
+
+
 def test_recover_references_replaces_short_truncated_entries_from_pdf_text_layer(tmp_path, monkeypatch):
     import kb.converter.pipeline as pipeline_module
 

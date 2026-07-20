@@ -194,3 +194,21 @@ def test_quality_gate_blocks_source_level_conversion_damage(tmp_path: Path):
     assert result["action"] == "reconvert"
     assert "missing_images" in result["blocking_issue_codes"]
     assert conversion_quality_result_path(md_path).exists()
+
+
+def test_quality_gate_blocks_unresolved_conversion_retry_markers(tmp_path: Path):
+    md_path = tmp_path / "retry.en.md"
+    md_path.write_text(
+        _good_markdown().replace(
+            "The method section contains enough prose for retrieval.",
+            "The method contains damaged math. <!-- kb:conversion_retry kind=math_text page=1 -->",
+        ),
+        encoding="utf-8",
+    )
+
+    result = prepare_markdown_for_index(md_path)
+
+    assert result["indexable"] is False
+    assert result["status"] == "blocked"
+    assert result["action"] == "reconvert"
+    assert "conversion_retry_math_text" in result["blocking_issue_codes"]

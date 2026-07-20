@@ -83,6 +83,45 @@ Some normal paragraph.
     assert "$" not in refs
 
 
+def test_references_do_not_infer_bibliography_from_citation_dense_figure_caption():
+    caption = (
+        "Figure 9. Color SPI. a) First panel. Reproduced with permission.[184] "
+        "Copyright 2022, The Optical Society. b) Second panel.[181] Copyright 2013, "
+        "The Optical Society. c) Third panel.[31] Copyright 2024, Springer Nature. "
+        "d) Fourth panel.[182] Copyright 2021, The Optical Society. e) Fifth "
+        "panel.[183] Copyright 2018, The Optical Society."
+    )
+    refs = [
+        f"[{idx}] Author {idx}. Complete reference {idx}. Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(1, 9)
+    ]
+    src = "\n".join(
+        [
+            "# Complete Paper",
+            "",
+            "<!-- kb_page: 14 -->",
+            caption,
+            "",
+            "## 5.6. Image-Free Sensing",
+            "Body text that must remain before the bibliography.",
+            "",
+            "<!-- kb_page: 16 -->",
+            "## 6. Challenges and Outlooks",
+            "The final body section also must remain before the bibliography.",
+            "",
+            "<!-- kb_page: 17 -->",
+            *refs,
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert out.count("## References") == 1
+    assert out.index("Color SPI.") < out.index("Image-Free Sensing")
+    assert out.index("Challenges and Outlooks") < out.index("## References")
+    assert all(re.search(rf"(?m)^\[{idx}\]\s+", out) for idx in range(1, 9))
+
+
 def test_references_infer_heading_for_bare_numbered_reference_tail():
     src = """
 # Main Body

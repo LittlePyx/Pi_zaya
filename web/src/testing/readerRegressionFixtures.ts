@@ -227,6 +227,16 @@ const readerRegressionRenderPolishMarkdown = [
   '',
   'Under each illumination, the integration time is $0.02\\,\\mus$, and the frame time is $20\\,\\mus$.',
   '',
+  'The reconstructed resolution is $128\\times128 \\to 256\\times256 [66]$, while the supporting prose cites [66].',
+  '',
+  '$$',
+  'O_l^{1} = W_l O_{l-1} + b_l [66]',
+  '$$',
+  '',
+  'The updated bias remains visible <!-- kb:conversion_retry kind=math_text page=6 --> and the gradient remains visible.',
+  '',
+  '<!-- kb:conversion_retry kind=equation page=6 asset=page_6_eq_3.png number=14 -->',
+  '',
   '## References',
   '',
   '[1] Alpha A, Beta B. First reference title. Journal of Clean Rendering. 2024. [2] Chen C, Delta D. Second reference should split onto its own line. Optics Letters. 2025.',
@@ -363,6 +373,17 @@ const readerRegressionCitationDetails = [
   },
 ]
 
+const readerRegressionRenderPolishCitationDetails = [{
+  ...readerRegressionCitationDetails[0],
+  num: 66,
+  display_num: 66,
+  linked_nums: [66],
+  anchor: 'kb-cite-reader-fixture-66',
+  raw: '[66] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007.',
+  cite_fmt: '[66] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007.',
+  location_label: 'Fixture Paper / References / [66]',
+}]
+
 export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScenario) {
   if (scenario === 'citation-links' || scenario === 'citation-links-identity-conflict') {
     const citationDetails = scenario === 'citation-links-identity-conflict'
@@ -395,6 +416,8 @@ export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScena
       markdown: readerRegressionRenderPolishMarkdown,
       anchors: [] as ReaderDocAnchor[],
       blocks: [] as ReaderDocBlock[],
+      cite_details: readerRegressionRenderPolishCitationDetails,
+      reference_cite_details: readerRegressionRenderPolishCitationDetails,
     }
   }
   if (scenario === 'duplicate-images') {

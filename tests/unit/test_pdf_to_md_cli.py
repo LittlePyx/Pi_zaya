@@ -18,6 +18,7 @@ def _base_args(tmp_path, *extra: str) -> list[str]:
 
 def _use_fake_qwen(monkeypatch) -> None:
     monkeypatch.setenv("QWEN_API_KEY", "test-key")
+    monkeypatch.delenv("QWEN_VISION_MODEL", raising=False)
     monkeypatch.delenv("QWEN_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
 
@@ -110,7 +111,7 @@ def test_locked_profile_preserves_explicit_ultra_fast_timeout(tmp_path, monkeypa
     assert os.environ["KB_PDF_ULTRA_FAST_VISION_TIMEOUT_S"] == "72"
 
 
-def test_pdf_cli_uses_versioned_qwen_default_but_keeps_explicit_override(tmp_path, monkeypatch):
+def test_pdf_cli_uses_vision_qwen_default_but_keeps_explicit_override(tmp_path, monkeypatch):
     _use_fake_qwen(monkeypatch)
     default_cfg = pdf_to_md._parse_args(_base_args(tmp_path))
     explicit_cfg = pdf_to_md._parse_args(
@@ -118,6 +119,17 @@ def test_pdf_cli_uses_versioned_qwen_default_but_keeps_explicit_override(tmp_pat
     )
 
     assert default_cfg.llm is not None
-    assert default_cfg.llm.model == "qwen3.7-plus-2026-05-26"
+    assert default_cfg.llm.model == "qwen3-vl-plus"
     assert explicit_cfg.llm is not None
     assert explicit_cfg.llm.model == "user-selected-vision-model"
+
+
+def test_pdf_cli_prefers_role_specific_vision_model_over_legacy_shared_model(tmp_path, monkeypatch):
+    _use_fake_qwen(monkeypatch)
+    monkeypatch.setenv("QWEN_MODEL", "legacy-shared-model")
+    monkeypatch.setenv("QWEN_VISION_MODEL", "dedicated-vision-model")
+
+    cfg = pdf_to_md._parse_args(_base_args(tmp_path))
+
+    assert cfg.llm is not None
+    assert cfg.llm.model == "dedicated-vision-model"

@@ -249,14 +249,25 @@ def render_blocks_to_markdown(
             r = fitz.Rect(bbox)
         except Exception:
             return None
-        # Pad a bit to include equation number / surrounding symbols
+        # Pad a bit to include equation number / surrounding symbols.  On a
+        # two-column page, never let that padding cross the center gutter and
+        # pull unrelated text from the neighbouring column into the equation.
         try:
-            pad_x = max(2.0, float(r.width) * (0.12 if force else 0.04))
+            page_w = float(page.rect.width)
+            page_mid_x = page_w * 0.5
+            gutter = max(3.0, page_w * 0.008)
+            pad_x = max(2.0, float(r.width) * (0.04 if force else 0.04))
             pad_y = max(8.0 if force else 2.0, float(r.height) * (0.35 if force else 0.10))
+            clip_x0 = max(0.0, float(r.x0) - pad_x)
+            clip_x1 = min(page_w, float(r.x1) + pad_x)
+            if float(r.x1) <= page_mid_x + gutter:
+                clip_x1 = min(clip_x1, page_mid_x - gutter)
+            elif float(r.x0) >= page_mid_x - gutter:
+                clip_x0 = max(clip_x0, page_mid_x + gutter)
             clip = fitz.Rect(
-                max(0.0, float(r.x0) - pad_x),
+                clip_x0,
                 max(0.0, float(r.y0) - pad_y),
-                min(float(page.rect.width), float(r.x1) + pad_x),
+                clip_x1,
                 min(float(page.rect.height), float(r.y1) + pad_y),
             )
             if clip.width <= 2 or clip.height <= 2:
@@ -404,6 +415,21 @@ def render_blocks_to_markdown(
 
         def _can_merge(r0: "fitz.Rect", r1: "fitz.Rect") -> bool:
             try:
+                page_w = float(page.rect.width)
+                page_mid_x = page_w * 0.5
+                gutter = max(4.0, page_w * 0.008)
+
+                def _lane(rect: "fitz.Rect") -> str:
+                    if float(rect.x1) <= page_mid_x + gutter:
+                        return "left"
+                    if float(rect.x0) >= page_mid_x - gutter:
+                        return "right"
+                    return "full"
+
+                lane0 = _lane(r0)
+                lane1 = _lane(r1)
+                if lane0 != lane1 and "full" not in {lane0, lane1}:
+                    return False
                 y_ol = min(float(r0.y1), float(r1.y1)) - max(float(r0.y0), float(r1.y0))
                 y_gap = max(0.0, max(float(r1.y0) - float(r0.y1), float(r0.y0) - float(r1.y1)))
                 x_ol = min(float(r0.x1), float(r1.x1)) - max(float(r0.x0), float(r1.x0))

@@ -50,6 +50,16 @@ class _EquationPage(_DummyPage):
         return _EquationPixmap()
 
 
+class _RecordingEquationPage(_EquationPage):
+    def __init__(self):
+        super().__init__()
+        self.clips = []
+
+    def get_pixmap(self, **kwargs):
+        self.clips.append(fitz.Rect(kwargs["clip"]))
+        return _EquationPixmap()
+
+
 def test_process_page_orchestrates_local_pipeline_steps(tmp_path, monkeypatch):
     converter = _make_converter(tmp_path)
     page = _DummyPage()
@@ -338,3 +348,27 @@ def test_safe_complex_render_uses_one_equation_image_and_never_emits_fragmented_
     assert "where the source text remains readable" in out
     assert "$$" not in out
     assert (tmp_path / "page_4_eq_1.png").stat().st_size > 256
+
+
+def test_safe_equation_image_padding_never_crosses_two_column_gutter(tmp_path):
+    converter = _make_converter(tmp_path)
+    page = _RecordingEquationPage()
+    blocks = [
+        TextBlock(bbox=(210, 280, 282, 302), text="Y = X", is_math=True),
+        TextBlock(bbox=(270, 280, 288, 302), text="(3)"),
+    ]
+
+    out = render_blocks_to_markdown(
+        converter,
+        blocks,
+        3,
+        page=page,
+        assets_dir=tmp_path,
+        allow_llm_calls=False,
+        safe_complex_fallback=True,
+        safe_formula_rects=[(205, 270, 292, 312)],
+    )
+
+    assert "![Equation]" in out
+    assert len(page.clips) == 1
+    assert float(page.clips[0].x1) < 300.0

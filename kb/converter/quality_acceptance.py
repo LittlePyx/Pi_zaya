@@ -17,6 +17,36 @@ _PAGE_MARKER_RE = re.compile(r"<!--\s*kb_page:\s*(\d+)\s*-->", re.IGNORECASE)
 _IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _DISPLAY_MATH_DELIMITER_RE = re.compile(r"^\s*\$\$\s*$")
+_CONVERSION_RETRY_MARKER_RE = re.compile(r"<!--\s*kb:conversion_retry\s+(.+?)\s*-->", re.IGNORECASE)
+_CONVERSION_MARKER_ATTR_RE = re.compile(r"([A-Za-z_][\w-]*)=(?:\"([^\"]*)\"|'([^']*)'|([^\s]+))")
+_MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]{1,160}\]\([^)\n]+\)")
+_PROSE_DISPLAY_MATH_WORD_RE = re.compile(r"\b[A-Za-z]{2,}\b")
+_PROSE_DISPLAY_MATH_COMMON_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "by",
+    "denotes",
+    "for",
+    "from",
+    "in",
+    "indicates",
+    "is",
+    "of",
+    "or",
+    "refers",
+    "represents",
+    "that",
+    "the",
+    "this",
+    "to",
+    "where",
+    "which",
+    "with",
+}
 
 
 @dataclass(frozen=True)
@@ -46,7 +76,14 @@ class ConversionQualityMetrics:
     fragmented_table_duplicate_count: int
     display_math_block_count: int
     unclosed_display_math_block_count: int
+    prose_dominant_display_math_block_count: int
+    display_math_markdown_link_count: int
     inline_math_count: int
+    conversion_retry_marker_count: int
+    conversion_retry_math_text_count: int
+    conversion_retry_equation_count: int
+    conversion_retry_other_count: int
+    conversion_retry_kind_counts: dict[str, int]
     reference_line_count: int
     extracted_reference_count: int
     max_reference_index: int
@@ -103,6 +140,57 @@ def _display_math_unclosed_count(md_text: str) -> int:
     return unclosed
 
 
+def _display_math_blocks(md_text: str) -> list[str]:
+    blocks: list[str] = []
+    current: list[str] | None = None
+    for raw in str(md_text or "").splitlines():
+        if _DISPLAY_MATH_DELIMITER_RE.match(raw):
+            if current is None:
+                current = []
+            else:
+                blocks.append("\n".join(current))
+                current = None
+            continue
+        if current is not None:
+            current.append(raw)
+    if current:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+def _display_math_content_issue_counts(md_text: str) -> tuple[int, int]:
+    prose_dominant = 0
+    markdown_links = 0
+    for block in _display_math_blocks(md_text):
+        markdown_links += len(_MARKDOWN_LINK_RE.findall(block))
+        # Ignore TeX command names and count natural-language words that remain.
+        # Requiring both a long phrase and several connective/definition words
+        # avoids flagging ordinary equations with descriptive variable names.
+        prose_probe = re.sub(r"\\[A-Za-z]+\*?", " ", block)
+        words = [word.lower() for word in _PROSE_DISPLAY_MATH_WORD_RE.findall(prose_probe)]
+        common_count = sum(1 for word in words if word in _PROSE_DISPLAY_MATH_COMMON_WORDS)
+        alpha_chars = sum(len(word) for word in words)
+        if len(words) >= 8 and common_count >= 3 and alpha_chars >= 40:
+            prose_dominant += 1
+    return prose_dominant, markdown_links
+
+
+def _conversion_retry_stats(md_text: str) -> tuple[int, int, int, int, dict[str, int]]:
+    kind_counts: dict[str, int] = {}
+    for marker in _CONVERSION_RETRY_MARKER_RE.finditer(str(md_text or "")):
+        attrs = {
+            item.group(1).lower(): next((value for value in item.groups()[1:] if value is not None), "")
+            for item in _CONVERSION_MARKER_ATTR_RE.finditer(marker.group(1))
+        }
+        kind = str(attrs.get("kind") or "unknown").strip().lower() or "unknown"
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+    math_text = int(kind_counts.get("math_text") or 0)
+    equation = int(kind_counts.get("equation") or 0)
+    total = sum(kind_counts.values())
+    other = max(0, total - math_text - equation)
+    return total, math_text, equation, other, dict(sorted(kind_counts.items()))
+
+
 def _image_target_path(md_path: Path, target: str) -> Path | None:
     raw = str(target or "").strip().strip("<>")
     if not raw or raw.startswith(("http://", "https://", "data:", "#")):
@@ -129,6 +217,10 @@ def summarize_conversion_quality(md_path: Path, md_text: str | None = None) -> C
     page_count, page_min, page_max, page_gaps = _page_marker_stats(text)
     references = extract_references_map_from_md(text)
     table_issues = markdown_table_issue_counts(text)
+    prose_display_math_count, display_math_link_count = _display_math_content_issue_counts(text)
+    retry_count, retry_math_text_count, retry_equation_count, retry_other_count, retry_kind_counts = (
+        _conversion_retry_stats(text)
+    )
     detected_reference_count = max(int(base.reference_line_count), len(references))
     max_reference_index = (
         max(references.keys(), default=0)
@@ -161,7 +253,14 @@ def summarize_conversion_quality(md_path: Path, md_text: str | None = None) -> C
         fragmented_table_duplicate_count=int(table_issues.get("fragmented_duplicate_count") or 0),
         display_math_block_count=base.display_math_block_count,
         unclosed_display_math_block_count=_display_math_unclosed_count(text),
+        prose_dominant_display_math_block_count=prose_display_math_count,
+        display_math_markdown_link_count=display_math_link_count,
         inline_math_count=base.inline_math_count,
+        conversion_retry_marker_count=retry_count,
+        conversion_retry_math_text_count=retry_math_text_count,
+        conversion_retry_equation_count=retry_equation_count,
+        conversion_retry_other_count=retry_other_count,
+        conversion_retry_kind_counts=retry_kind_counts,
         reference_line_count=detected_reference_count,
         extracted_reference_count=len(references),
         max_reference_index=max_reference_index,
@@ -276,6 +375,11 @@ def evaluate_conversion_quality(
         "max_page_marker_gaps": "page_marker_gap_count",
         "max_heading_level_jumps": "heading_level_jump_count",
         "max_unclosed_display_math": "unclosed_display_math_block_count",
+        "max_prose_dominant_display_math": "prose_dominant_display_math_block_count",
+        "max_display_math_markdown_links": "display_math_markdown_link_count",
+        "max_conversion_retries": "conversion_retry_marker_count",
+        "max_conversion_retry_math_text": "conversion_retry_math_text_count",
+        "max_conversion_retry_equation": "conversion_retry_equation_count",
         "max_mojibake": "mojibake_count",
         "max_analyzer_errors": "analyzer_error_count",
         "max_analyzer_warnings": "analyzer_warning_count",

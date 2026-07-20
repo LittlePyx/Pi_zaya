@@ -1279,6 +1279,27 @@ def run_pdf_to_md(
     # -u: unbuffered, so we can parse per-page progress from stdout in real time.
     args = [sys.executable, "-u", str(script), "--pdf", str(pdf_path), "--out", str(out_root)]
 
+    # The web app can persist a dedicated vision provider/model in user_prefs.json.
+    # The converter runs in a child process, so relying only on inherited legacy
+    # variables such as QWEN_MODEL can silently route image work to the text model.
+    # Resolve the app's effective vision settings here and forward them explicitly.
+    runtime_vision_api_key = ""
+    try:
+        from .config import load_settings
+
+        vision_settings = load_settings()
+        runtime_vision_model = str(getattr(vision_settings, "vision_model", "") or "").strip()
+        runtime_vision_base_url = str(getattr(vision_settings, "vision_base_url", "") or "").strip()
+        runtime_vision_api_key = str(getattr(vision_settings, "vision_api_key", "") or "").strip()
+        if runtime_vision_base_url:
+            args.extend(["--base-url", runtime_vision_base_url])
+        if runtime_vision_model:
+            args.extend(["--model", runtime_vision_model])
+        if runtime_vision_api_key:
+            args.extend(["--api-key-env", "KB_PDF_RUNTIME_VISION_API_KEY"])
+    except Exception:
+        runtime_vision_api_key = ""
+
     def _env_int(name: str, default: int = 0, *, lo: int = 0, hi: int = 256) -> int:
         raw = (os.environ.get(name) or "").strip()
         if not raw:
@@ -1494,6 +1515,8 @@ def run_pdf_to_md(
         cp_out = []
         env = dict(os.environ)
         env["PYTHONUNBUFFERED"] = "1"
+        if runtime_vision_api_key:
+            env["KB_PDF_RUNTIME_VISION_API_KEY"] = runtime_vision_api_key
         if split_llm_inflight is not None:
             env["KB_LLM_MAX_INFLIGHT"] = str(int(split_llm_inflight))
         proc = subprocess.Popen(

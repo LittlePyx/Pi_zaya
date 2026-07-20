@@ -22,6 +22,7 @@ const REFERENCE_ENTRY_START_RE = /^\s*(?:\[\s*\d{1,4}\s*\](?:\([^)]+\))?|\d{1,4}
 const REFERENCE_ENTRY_LINKED_START_RE = /^\s*\d{1,4}\s+[A-Z\u4e00-\u9fff]/
 const PAGE_MARKER_LINE_RE = /^\s*(?:<!--\s*kb_page\s*:\s*(\d{1,5})\s*-->|&lt;!--\s*kb_page\s*:\s*(\d{1,5})\s*--&gt;)\s*$/i
 const PAGE_MARKER_HREF_RE = /^kb-page-(\d{1,5})$/i
+const INTERNAL_CONVERSION_RETRY_MARKER_RE = /<!--\s*kb:conversion_retry\b(?:(?!-->)[\s\S])*?-->/gi
 
 type ImagePreviewMode = 'fit' | 'actual'
 type ImagePreviewSize = { width: number; height: number }
@@ -90,6 +91,13 @@ function normalizeReaderPageMarkers(text: string): string {
     out.push(`[Page ${pageNo}](#kb-page-${pageNo})`, '')
   }
   return out.join('\n')
+}
+
+function stripInternalConversionRetryMarkers(text: string): string {
+  // Conversion retry comments are internal diagnostics. Replace only this exact
+  // marker family, leaving all surrounding reader content and unrelated comments
+  // untouched. A space prevents words on either side of an inline marker merging.
+  return String(text || '').replace(INTERNAL_CONVERSION_RETRY_MARKER_RE, ' ')
 }
 
 function splitCollapsedReferenceEntries(line: string): string[] {
@@ -643,7 +651,10 @@ function linkifyPlainCitationMarkers(
   if (!text || citeDetails.length <= 0 || !/\[[Rr]?\d/.test(text)) return text
   if (byNum.size <= 0) return text
 
-  const protectedRe = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g
+  // Citation-shaped text is valid LaTeX (for example, `[66]`). Protect math
+  // before rewriting plain prose citations, otherwise the injected Markdown
+  // destination is parsed by KaTeX and turns an otherwise valid formula red.
+  const protectedRe = /(```[\s\S]*?```|~~~[\s\S]*?~~~|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|`[^`\n]*`|\$(?:\\.|[^$\\\n])+\$|\\\((?:\\.|[^\\\n])*?\\\))/g
   let out = ''
   let last = 0
   for (const match of text.matchAll(protectedRe)) {
@@ -680,7 +691,8 @@ function dedupeRepeatedReaderImageMarkdown(text: string): string {
 }
 
 function normalizeReaderMarkdown(text: string): string {
-  return normalizeReaderPageMarkers(normalizeMicroUnitLatex(normalizeReferenceSectionSpacing(dedupeRepeatedReaderImageMarkdown(text))))
+  const withoutInternalMarkers = stripInternalConversionRetryMarkers(text)
+  return normalizeReaderPageMarkers(normalizeMicroUnitLatex(normalizeReferenceSectionSpacing(dedupeRepeatedReaderImageMarkdown(withoutInternalMarkers))))
 }
 
 interface Props {

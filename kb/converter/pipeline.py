@@ -651,15 +651,7 @@ class PDFConverter:
         except Exception as e:
             print(f"[WARN] final postprocess_markdown failed, keep current markdown: {e}", flush=True)
         final_md = normalize_known_superscript_tokens(normalize_detached_accents(final_md))
-        try:
-            self._cleanup_unreferenced_assets(final_md, assets_dir=assets_dir)
-        except Exception as e:
-            print(f"[WARN] unreferenced asset cleanup skipped: {e}", flush=True)
-        try:
-            self._reconcile_figure_metadata_from_markdown(md=final_md, assets_dir=assets_dir)
-        except Exception as e:
-            print(f"[WARN] figure metadata reconciliation skipped: {e}", flush=True)
-        
+
         out_file = save_dir / "output.md"
         auto_repair_result: dict[str, Any] = {}
         try:
@@ -672,6 +664,19 @@ class PDFConverter:
         except Exception as e:
             print(f"[WARN] conversion quality auto-repair skipped: {e}", flush=True)
         auto_repair_result = self._merge_auto_repair_results(source_repair_result, auto_repair_result)
+
+        # Quality repair may safely restore page text and image links from the
+        # conversion cache.  Asset cleanup must therefore run only after that
+        # transaction has accepted the final Markdown; otherwise referenced
+        # figures can be deleted before their links are restored.
+        try:
+            self._cleanup_unreferenced_assets(final_md, assets_dir=assets_dir)
+        except Exception as e:
+            print(f"[WARN] unreferenced asset cleanup skipped: {e}", flush=True)
+        try:
+            self._reconcile_figure_metadata_from_markdown(md=final_md, assets_dir=assets_dir)
+        except Exception as e:
+            print(f"[WARN] figure metadata reconciliation skipped: {e}", flush=True)
 
         # Write output
         out_file.write_text(final_md, encoding="utf-8")
@@ -1401,6 +1406,64 @@ class PDFConverter:
             return "", entry_count
         return formatted.strip(), entry_count
 
+    @staticmethod
+    def _reference_recovery_regression_reasons(before: str, candidate: str) -> list[str]:
+        """Protect non-reference structure during a bibliography replacement."""
+        before_text = str(before or "")
+        candidate_text = str(candidate or "")
+        reasons: list[str] = []
+
+        marker_re = re.compile(r"<!--\s*kb_page:\s*(\d+)\s*-->", re.IGNORECASE)
+        before_markers = [int(value) for value in marker_re.findall(before_text)]
+        after_markers = [int(value) for value in marker_re.findall(candidate_text)]
+        if before_markers:
+            if not set(before_markers).issubset(set(after_markers)):
+                reasons.append("page_markers_dropped")
+            if after_markers != sorted(set(after_markers)):
+                reasons.append("page_marker_sequence_regressed")
+
+        image_re = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+
+        def _image_targets(text: str) -> set[str]:
+            targets: set[str] = set()
+            for raw in image_re.findall(text):
+                target = str(raw or "").strip()
+                if target.startswith("<") and ">" in target:
+                    target = target[1 : target.index(">")].strip()
+                else:
+                    target = re.split(r"\s+[\"']", target, maxsplit=1)[0].strip()
+                if target:
+                    targets.add(target)
+            return targets
+
+        if not _image_targets(before_text).issubset(_image_targets(candidate_text)):
+            reasons.append("image_links_dropped")
+
+        strong_heading_re = re.compile(
+            r"^(?:\d+(?:\.\d+)*\.?\s+|abstract\b|introduction\b|background\b|"
+            r"related\s+work\b|method(?:s|ology)?\b|experiment(?:s|al)?\b|results?\b|"
+            r"discussion\b|conclusions?\b|challenges?\b|outlooks?\b|future\s+work\b|"
+            r"acknowledg(?:e)?ments?\b|conflict\s+of\s+interest\b|keywords?\b)",
+            re.IGNORECASE,
+        )
+
+        def _strong_headings(text: str) -> set[str]:
+            headings: set[str] = set()
+            for line in text.splitlines():
+                match = re.match(r"^#{1,6}\s+(.+?)\s*$", str(line or "").strip())
+                if not match:
+                    continue
+                title = re.sub(r"\s+", " ", str(match.group(1) or "")).strip().lower()
+                if title in {"references", "bibliography"}:
+                    continue
+                if strong_heading_re.match(title):
+                    headings.add(title)
+            return headings
+
+        if not _strong_headings(before_text).issubset(_strong_headings(candidate_text)):
+            reasons.append("body_headings_dropped")
+        return list(dict.fromkeys(reasons))
+
     def _recover_references_from_pdf_if_needed(self, md: str, doc) -> tuple[str, dict[str, Any]]:
         if not self._references_recovery_enabled():
             return md, {}
@@ -1435,6 +1498,31 @@ class PDFConverter:
             force_replace=truncated or gapped or short_truncated or inflated_tail,
         )
         changed = fixed != str(md or "")
+        regression_reasons = self._reference_recovery_regression_reasons(str(md or ""), fixed) if changed else []
+        if regression_reasons:
+            print(
+                "[WARN] rejected PDF References recovery because document structure would regress: "
+                + ", ".join(regression_reasons),
+                flush=True,
+            )
+            return md, {
+                "changed": False,
+                "unsafe": False,
+                "rejected": True,
+                "attempted_applied": ["pdf_reference_backfill"],
+                "rejection_reasons": regression_reasons,
+                "issue_codes_before": (
+                    ["missing_references"]
+                    if before_count <= 0
+                    else (
+                        ["reference_index_inflated"]
+                        if inflated_tail
+                        else (["reference_index_truncated"] if (truncated or gapped or short_truncated) else [])
+                    )
+                ),
+                "issue_codes_after": [],
+                "remaining_issue_codes": [],
+            }
         if changed:
             print(
                 f"[OK] recovered References from PDF text layer "
@@ -1639,8 +1727,23 @@ class PDFConverter:
 
         page_w = float(page.rect.width)
         page_h = float(page.rect.height)
+        page_mid_x = page_w * 0.5
         head_y = page_h * 0.08
         foot_y = page_h * 0.93
+
+        def _column_lane(rect: "fitz.Rect") -> str:
+            """Keep equation fragments from opposing PDF columns separate."""
+            gutter = max(4.0, page_w * 0.008)
+            if float(rect.x1) <= page_mid_x + gutter:
+                return "left"
+            if float(rect.x0) >= page_mid_x - gutter:
+                return "right"
+            return "full"
+
+        def _same_lane(r0: "fitz.Rect", r1: "fitz.Rect") -> bool:
+            lane0 = _column_lane(r0)
+            lane1 = _column_lane(r1)
+            return lane0 == lane1 or "full" in {lane0, lane1}
 
         line_items: list[tuple[fitz.Rect, str]] = []
         for b in blocks:
@@ -1684,7 +1787,11 @@ class PDFConverter:
             min_w = max(1.0, min(float(last_r.width), float(r.width)))
             x_ratio = x_ol / min_w
             near = y_gap <= max(12.0, min(float(last_r.height), float(r.height)) * 1.2)
-            if near and (x_ratio >= 0.12 or float(r.width) <= 70.0 or float(last_r.width) <= 70.0):
+            if (
+                near
+                and _same_lane(last_r, r)
+                and (x_ratio >= 0.12 or float(r.width) <= 70.0 or float(last_r.width) <= 70.0)
+            ):
                 cur.append((r, t))
             else:
                 groups.append(cur)
@@ -1709,7 +1816,14 @@ class PDFConverter:
                 continue
             if rect.height > page_h * 0.35:
                 continue
-            candidates.append({"group_index": gi, "rect": fitz.Rect(rect), "text": text})
+            candidates.append(
+                {
+                    "group_index": gi,
+                    "rect": fitz.Rect(rect),
+                    "text": text,
+                    "column_lane": _column_lane(rect),
+                }
+            )
 
         if not candidates:
             return []
@@ -1728,7 +1842,7 @@ class PDFConverter:
             x_ol = _overlap_1d(float(r0.x0), float(r0.x1), float(r1.x0), float(r1.x1))
             min_w = max(1.0, min(float(r0.width), float(r1.width)))
             y_gap = max(0.0, max(float(r0.y0), float(r1.y0)) - min(float(r0.y1), float(r1.y1)))
-            if inter > 0.0 or (x_ol / min_w >= 0.22 and y_gap <= 10.0):
+            if _same_lane(r0, r1) and (inter > 0.0 or (x_ol / min_w >= 0.22 and y_gap <= 10.0)):
                 last["rect"] = fitz.Rect(
                     min(float(r0.x0), float(r1.x0)),
                     min(float(r0.y0), float(r1.y0)),
@@ -1736,6 +1850,7 @@ class PDFConverter:
                     max(float(r0.y1), float(r1.y1)),
                 )
                 last["text"] = (str(last.get("text") or "") + "\n" + str(c.get("text") or "")).strip()
+                last["column_lane"] = _column_lane(last["rect"])
             else:
                 merged.append(c)
 
@@ -1933,7 +2048,7 @@ class PDFConverter:
             return False
 
         lines = text.splitlines()
-        if len(lines) < 8:
+        if len(lines) < 3:
             return False
 
         in_math = False
@@ -1975,6 +2090,7 @@ class PDFConverter:
 
         tiny_math = 0
         long_prose_in_math = 0
+        invalid_content_in_math = 0
         for b in math_blocks:
             bb = re.sub(r"\s+", " ", b).strip()
             if not bb:
@@ -1986,6 +2102,26 @@ class PDFConverter:
             # Sentence-like long text wrapped in $$ is usually a bad VL split.
             if word_n >= 18 and anchor_n <= 3 and re.search(r"[.,:;]", bb):
                 long_prose_in_math += 1
+            if re.search(r"\[(?:R)?\d{1,4}\](?:\([^)]*\))?", bb, flags=re.IGNORECASE):
+                invalid_content_in_math += 1
+            elif word_n >= 5 and re.search(
+                r"\b(?:refers\s+to|denotes|previous\s+layer|reconstructed\s+images|copyright|permission)\b",
+                bb,
+                flags=re.IGNORECASE,
+            ):
+                # Variable definitions often contain several subscripts and
+                # superscripts, so a raw anchor count alone cannot distinguish
+                # them from equations.  A sentence such as ``O_k^l refers to``
+                # is prose unless it also contains a real relation/operator.
+                has_equation_relation = bool(
+                    re.search(
+                        r"(?:=|[<>]|\\(?:frac|sum|int|prod|sqrt|arg|min|max|partial|nabla|begin)\b)",
+                        bb,
+                        flags=re.IGNORECASE,
+                    )
+                )
+                if not has_equation_relation:
+                    invalid_content_in_math += 1
 
         eqno_lines = 0
         fragment_lines = 0
@@ -2000,6 +2136,11 @@ class PDFConverter:
             if re.fullmatch(r"[A-Za-z]|\d{1,3}", st):
                 fragment_lines += 1
                 continue
+            # VL commonly leaves a detached inline variable between two
+            # broken display fragments, e.g. ``$O_l$`` followed by ``j``.
+            if re.fullmatch(r"\$[^$\n]{1,24}\$", st):
+                fragment_lines += 1
+                continue
             # OCR-spaced variable fragments with brackets/operators.
             spaced_var = bool(re.search(r"(?:\b[A-Za-z]\b\s+){2,}\b[A-Za-z]\b", st))
             has_math_punct = any(ch in st for ch in "()[]{}_=+-/*")
@@ -2008,7 +2149,9 @@ class PDFConverter:
             ):
                 fragment_lines += 1
 
-        if long_prose_in_math >= 1 and tiny_math >= 2:
+        if invalid_content_in_math >= 1:
+            return True
+        if long_prose_in_math >= 1:
             return True
         # Mixed case: one seemingly complete equation plus many orphan shard lines
         # (e.g., "M", "(DNN(u*),v*)", ")(15)", "n", "n").
@@ -2142,6 +2285,7 @@ class PDFConverter:
         pdf_path: Path,
         assets_dir: Path,
         image_names: list[str],
+        visual_rects: Optional[list["fitz.Rect"]] = None,
     ) -> Optional[str]:
         return convert_page_with_layout_crops(
             self,
@@ -2153,6 +2297,7 @@ class PDFConverter:
             pdf_path=pdf_path,
             assets_dir=assets_dir,
             image_names=image_names,
+            visual_rects=visual_rects,
         )
 
     @staticmethod
@@ -2205,6 +2350,7 @@ class PDFConverter:
         pdf_path: Path,
         assets_dir: Path,
         image_names: Optional[list[str]] = None,
+        visual_rects: Optional[list["fitz.Rect"]] = None,
         max_tokens_override: Optional[int] = None,
         formula_placeholders: Optional[dict[str, str]] = None,
         skip_references_column_mode: bool = False,
@@ -2221,6 +2367,7 @@ class PDFConverter:
             pdf_path=pdf_path,
             assets_dir=assets_dir,
             image_names=image_names,
+            visual_rects=visual_rects,
             max_tokens_override=max_tokens_override,
             formula_placeholders=formula_placeholders,
             skip_references_column_mode=skip_references_column_mode,

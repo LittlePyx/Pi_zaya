@@ -169,6 +169,118 @@ def test_layout_crops_preserve_region_order_and_restore_missing_tables(tmp_path,
     assert [call["tag"] for call in converter.llm_worker.calls] == ["left", "right"]
 
 
+def test_layout_crops_allow_existing_figure_assets_when_source_rects_are_known(tmp_path, monkeypatch):
+    converter = _make_converter(tmp_path)
+    converter.llm_worker = _DummyLLMWorker()
+    page = _DummyPage()
+    monkeypatch.setattr(page_layout_crops, "_page_maybe_has_table_from_dict", lambda d: False)
+    monkeypatch.setattr(page_layout_crops, "detect_body_font_size", lambda pages, **kwargs: 10.0)
+    monkeypatch.setattr(page_layout_crops, "_detect_column_split_x", lambda blocks, page_width: 100.0)
+    captured = {}
+    blocks = [
+        TextBlock(bbox=(10, 170, 90, 230), text="Left body after the figure with enough source text."),
+        TextBlock(bbox=(110, 170, 190, 230), text="Right body after the figure with enough source text."),
+        TextBlock(bbox=(10, 235, 90, 250), text="More left text."),
+    ]
+
+    def _extract(*args, **kwargs):
+        captured["visual_rects"] = kwargs["visual_rects"]
+        return blocks
+
+    monkeypatch.setattr(converter, "_extract_text_blocks", _extract)
+    figure_rect = fitz.Rect(10, 20, 190, 150)
+
+    out = converter._convert_page_with_layout_crops(
+        page=page,
+        page_index=4,
+        total_pages=6,
+        page_hint="",
+        speed_mode="normal",
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+        image_names=["page_5_fig_1.png"],
+        visual_rects=[figure_rect],
+    )
+
+    assert out is not None
+    assert captured["visual_rects"] == [figure_rect]
+    assert out.index("Left prose only") < out.index("Right body after the figure")
+
+
+def test_figure_then_two_columns_retries_formula_lane_without_losing_reading_order(tmp_path, monkeypatch):
+    converter = _make_converter(tmp_path)
+    page = _DummyPage()
+
+    class _FormulaLaneWorker(_DummyLLMWorker):
+        def call_llm_page_to_markdown(self, png_bytes, **kwargs):
+            tag = png_bytes.decode("utf-8")
+            self.calls.append({"tag": tag, **kwargs})
+            if tag == "left":
+                return (
+                    "## 3.1. Principle of Neural Network\n\n"
+                    "### 3.1.1. Basics of Neural Network\n\n"
+                    "Left-column introduction to the neural-network principle."
+                )
+            right_attempt = sum(1 for call in self.calls if call["tag"] == "right")
+            if right_attempt == 1:
+                return """Right-column continuation before the equation.
+
+$$
+O_k^l \\text{ refers to the output of the kth unit in the lth layer}
+$$
+"""
+            return r"""Right-column continuation before the equation.
+
+$$
+O_k^l = \sigma\left(\sum_j w_{kj}^{l-1}O_j^{l-1}+b_k^l\right) \tag{11}
+$$
+
+where O_k^l refers to the output of the kth unit in the lth layer.
+"""
+
+    converter.llm_worker = _FormulaLaneWorker()
+    monkeypatch.setattr(page_layout_crops, "_page_maybe_has_table_from_dict", lambda d: False)
+    monkeypatch.setattr(page_layout_crops, "detect_body_font_size", lambda pages, **kwargs: 10.0)
+    monkeypatch.setattr(page_layout_crops, "_detect_column_split_x", lambda blocks, page_width: 100.0)
+    blocks = [
+        TextBlock(bbox=(10, 170, 90, 185), text="3.1. Principle of Neural Network", heading_level="[H2]"),
+        TextBlock(
+            bbox=(10, 190, 90, 250),
+            text="Left-column introduction to the neural-network principle with enough source text.",
+        ),
+        TextBlock(
+            bbox=(110, 170, 190, 205),
+            text="Right-column continuation before the equation with enough source text for the lane.",
+        ),
+        TextBlock(bbox=(115, 210, 185, 225), text="O_k^l = sigma(sum_j w O + b) (11)", is_math=True),
+        TextBlock(
+            bbox=(110, 230, 190, 270),
+            text="where O_k^l refers to the output of the kth unit in the lth layer.",
+        ),
+    ]
+    monkeypatch.setattr(converter, "_extract_text_blocks", lambda *args, **kwargs: blocks)
+
+    out = converter._convert_page_with_layout_crops(
+        page=page,
+        page_index=4,
+        total_pages=21,
+        page_hint="",
+        speed_mode="normal",
+        pdf_path=Path("LPR.pdf"),
+        assets_dir=tmp_path,
+        image_names=["page_5_fig_1.png"],
+        visual_rects=[fitz.Rect(10, 20, 190, 150)],
+    )
+
+    assert out is not None
+    assert out.index("3.1. Principle of Neural Network") < out.index("Right-column continuation")
+    assert r"\tag{11}" in out
+    assert "where O_k^l refers to the output" in out
+    assert [call["tag"] for call in converter.llm_worker.calls] == ["right", "right"]
+    assert "Formula quality warning" in converter.llm_worker.calls[-1]["hint"]
+    assert "summation index" in converter.llm_worker.calls[0]["hint"]
+
+
 def test_layout_crops_auto_enable_for_two_column_cross_reading_risk_without_tables(tmp_path, monkeypatch):
     converter = _make_converter(tmp_path)
     converter.llm_worker = _DummyLLMWorker()

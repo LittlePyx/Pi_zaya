@@ -27,9 +27,10 @@ OpenAI = None  # type: ignore[assignment]
 pdfplumber = None  # type: ignore[assignment]
 _PROGRESS_PRINT_LOCK = threading.Lock()
 ASSET_REV_TAG = "r2"
-# Versioned default keeps repeated conversions reproducible.  --model and the
-# provider environment variables remain explicit overrides.
-DEFAULT_QWEN_VISION_MODEL = "qwen3.7-plus-2026-05-26"
+# Keep PDF conversion on the vision model that is validated for document OCR,
+# layout, and equations.  --model and provider environment variables remain
+# explicit overrides.
+DEFAULT_QWEN_VISION_MODEL = "qwen3-vl-plus"
 
 
 def _configure_stdio_error_policy() -> None:
@@ -6593,7 +6594,8 @@ def _parse_args(argv: Optional[list[str]] = None) -> ConvertConfig:
     if os.environ.get("QWEN_API_KEY"):
         default_base_url = os.environ.get("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
         default_model = (
-            os.environ.get("QWEN_MODEL")
+            os.environ.get("QWEN_VISION_MODEL")
+            or os.environ.get("QWEN_MODEL")
             or os.environ.get("OPENAI_MODEL")
             or DEFAULT_QWEN_VISION_MODEL
         )

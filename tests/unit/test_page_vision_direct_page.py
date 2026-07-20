@@ -605,6 +605,81 @@ def test_process_vision_direct_page_keeps_whole_page_vl_for_large_top_figure_pag
     assert called["vision"] == 1
 
 
+def test_process_vision_direct_page_skips_local_figure_route_for_source_detected_fragmented_formula(tmp_path, monkeypatch):
+    class _FigureWithShortFormulaFragments(_DummyPage):
+        def get_text(self, mode: str):
+            if mode == "text":
+                return ""
+            if mode == "dict":
+                return {
+                    "blocks": [
+                        {
+                            "bbox": (60, 540, 280, 620),
+                            "lines": [{"spans": [{"text": "A substantial left-column paragraph continues below the figure."}]}],
+                        },
+                        {
+                            "bbox": (310, 600, 370, 620),
+                            "lines": [{"spans": [{"text": "O l k = sigma"}]}],
+                        },
+                        {
+                            "bbox": (380, 600, 450, 620),
+                            "lines": [{"spans": [{"text": "sum w O + b"}]}],
+                        },
+                    ]
+                }
+            raise AssertionError(mode)
+
+    called = {"local": 0, "vision": 0, "formula": 0}
+
+    class _FormulaAwareConverter(_DummyConverter):
+        def _collect_display_math_candidates(self, page, *, page_index, is_references_page):
+            called["formula"] += 1
+            return [(310.0, 600.0, 450.0, 620.0)]
+
+        def _process_page(self, page, *, page_index, pdf_path, assets_dir):
+            called["local"] += 1
+            return "local-md"
+
+        def _convert_page_with_vision_guardrails(self, **kwargs):
+            called["vision"] += 1
+            return "raw-md"
+
+    monkeypatch.setattr(page_module, "_detect_references_page", lambda page: False)
+    monkeypatch.setattr(page_module, "_collect_metadata_rects", lambda converter, *, page, page_index, is_references_page: [])
+    monkeypatch.setattr(
+        page_module,
+        "_extract_page_visual_assets",
+        lambda converter, *, page, page_index, assets_dir, dpi: (
+            ["page_5_fig_1.png"],
+            {"page_5_fig_1.png": {"fig_no": 3}},
+            [page_module.fitz.Rect(52, 78, 545, 480)],
+        ),
+    )
+    monkeypatch.setattr(page_module, "_compress_png_bytes", lambda png_bytes, *, speed_config: png_bytes)
+    monkeypatch.setattr(page_module, "_build_page_hint", lambda converter, **kwargs: "hint")
+    monkeypatch.setattr(
+        page_module,
+        "_apply_formula_overlay",
+        lambda converter, **kwargs: (kwargs["png_bytes"], kwargs["page_hint"], {}),
+    )
+
+    out = page_module.process_vision_direct_page(
+        _FormulaAwareConverter(),
+        page=_FigureWithShortFormulaFragments(),
+        page_index=4,
+        total_pages=21,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+        speed_mode="normal",
+        speed_config={"compress": 3},
+        dpi=220,
+        mat=(1, 1),
+    )
+
+    assert out == "raw-md-post"
+    assert called == {"local": 0, "vision": 1, "formula": 1}
+
+
 def test_extract_page_visual_assets_skips_expensive_analysis_when_no_visual_rects(tmp_path, monkeypatch):
     class _AssetConverter:
         def __init__(self):

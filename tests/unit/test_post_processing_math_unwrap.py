@@ -122,6 +122,18 @@ Under each illumination, the integration time is $0.02\,\mus$, and the frame tim
     assert r"$20\,\mu\mathrm{s}$" in out
 
 
+def test_wraps_bare_numeric_latex_micro_units_without_touching_existing_math():
+    src = r"""
+The resolution improves from 683.59 to 353.55~\mu\mathrm{m}, while the smallest feature is (65~\mu\mathrm{m}).
+The existing value $16.25\,\mu\mathrm{m}$ must remain unchanged.
+"""
+    out = postprocess_markdown(src)
+    assert r"$353.55~\mu\mathrm{m}$" in out
+    assert r"($65~\mu\mathrm{m}$)" in out
+    assert r"$16.25\,\mu\mathrm{m}$" in out
+    assert "$$16.25" not in out
+
+
 def test_normalize_unit_wrapping_and_common_ocr_word_splits():
     src = r"""
 **Figure 3.** Example at 0.5 μ W and scale bar 10 μ m. Line pro fi les on fl at- fi elded background at ( t 0 − t 4 ).
@@ -200,6 +212,36 @@ $$
     assert "about 1.4 Airy units" in out
     assert "1 AU = 1.22" in out
     assert "445" in out
+
+
+def test_unwrap_variable_definition_with_superscripts_from_display_math():
+    src = r"""
+$$
+O^{l}_{k} \text{ refers to the output of the } k\text{th unit in the } l\text{th layer},\ O^{l-1}_{j}
+$$
+
+$$
+O_{j}^{l-1} \text{ denotes the } j\text{th unit in the previous layer, and } w_{kj}^{l-1}
+$$
+"""
+
+    out = postprocess_markdown(src)
+
+    assert "refers to the output" in out
+    assert "denotes the jth unit in the previous layer" in out
+    assert "$$" not in out
+
+
+def test_restore_unambiguous_missing_summation_index():
+    src = r"""
+$$
+O_k^l = \sigma \left( \sum w_{kj}^{l-1} O_j^{l-1} + b \right) \tag{11}
+$$
+"""
+
+    out = postprocess_markdown(src)
+
+    assert r"\sum_{j} w_{kj}^{l-1} O_j^{l-1}" in out
 
 
 def test_restore_ocr_stripped_tagged_display_equation():

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    import fitz
 
 
 def _restore_formula_placeholders_if_needed(
@@ -169,6 +172,7 @@ def convert_page_with_vision_guardrails(
     pdf_path: Path,
     assets_dir: Path,
     image_names: Optional[list[str]] = None,
+    visual_rects: Optional[list["fitz.Rect"]] = None,
     max_tokens_override: Optional[int] = None,
     formula_placeholders: Optional[dict[str, str]] = None,
     skip_references_column_mode: bool = False,
@@ -211,9 +215,16 @@ def convert_page_with_vision_guardrails(
                 pdf_path=pdf_path,
                 assets_dir=assets_dir,
                 image_names=image_names or [],
+                visual_rects=visual_rects or [],
             )
-            if md_layout:
+            if md_layout and not converter._looks_fragmented_math_output(md_layout):
                 return md_layout
+            if md_layout:
+                print(
+                    f"[VISION_DIRECT][LAYOUT] page {page_index+1} failed math health gate; "
+                    "continuing with whole-page vision OCR",
+                    flush=True,
+                )
         except Exception as e:
             print(
                 f"[VISION_DIRECT] structured layout OCR failed on page {page_index+1}: {e}",
