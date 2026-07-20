@@ -788,6 +788,585 @@
         "maxAnswerCompleteMs": 15000,
         "maxCardsCompleteMs": 45000
       }
+    },
+    {
+      "id": "three-d-video-real-time-mechanism",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["3d-sp-video"],
+      "question": "这篇 3D single-pixel video 为什么能对动态场景做实时三维重建？它用了几个探测器，速度是多少？",
+      "acceptance": [
+        "回答应说明高速结构照明、四个空间分离的单像素探测器和光度立体之间的关系。",
+        "速度和分辨率必须由论文摘要证据支持，不能只说可以实时成像。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["3D", "64"],
+        "requiredAnswerTermGroups": [["four", "4 个", "四个"], ["8 frames per second", "8 帧/秒", "8 fps"]],
+        "requiredRefDocIds": ["3d-sp-video"],
+        "requiredCitationDocIds": ["3d-sp-video"],
+        "allowedRefDocIds": ["3d-sp-video"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "three-d-video-abstract-result",
+          "docId": "3d-sp-video",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 2,
+          "answerTerms": ["64"],
+          "answerTermGroups": [["four", "4 个", "四个"], ["8 frames per second", "8 帧/秒", "8 fps"]],
+          "evidenceTerms": ["four spatially-separated", "8 frames per second", "64 \\times 64"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "three-d-video-abstract-locate",
+          "docId": "3d-sp-video",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["four spatially-separated", "8 frames per second"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "sph-throughput-mechanism",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["sph-biological"],
+      "question": "这篇生物组织单像素压缩全息是怎么提高吞吐量的？为什么不再主动做相移？",
+      "acceptance": [
+        "回答应说明信号光和参考光之间的拍频如何在时间上自然完成相移。",
+        "证据必须来自论文对高吞吐 SPH 机制的原文，而不是泛泛介绍单像素成像。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["beat frequency", "phase stepping", "heterodyne holography"],
+        "requiredRefDocIds": ["sph-biological"],
+        "requiredCitationDocIds": ["sph-biological"],
+        "allowedRefDocIds": ["sph-biological"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "sph-temporal-phase-stepping",
+          "docId": "sph-biological",
+          "route": "system_a",
+          "sourcePage": 2,
+          "answerTerms": ["beat frequency", "phase stepping"],
+          "evidenceTerms": ["beat frequency", "phase stepping naturally in time", "heterodyne holography"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "sph-introduction-locate",
+          "docId": "sph-biological",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["Introduction"],
+          "evidenceTerms": ["beat frequency", "heterodyne holography"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "spi-prospects-when-use-single-pixel",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["spi-prospects"],
+      "question": "什么场景真的值得用单像素相机，而不是普通面阵相机？这篇综述给了哪些代表性应用？",
+      "acceptance": [
+        "回答应把难探测波段、高帧率和三维成像作为条件，而不是宣称单像素相机普遍更好。",
+        "至少给出危险气体泄漏或自动驾驶三维感知中的一个原文应用例子。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["wavelengths", "high frame rates", "three dimensions"],
+        "requiredRefDocIds": ["spi-prospects"],
+        "requiredCitationDocIds": ["spi-prospects"],
+        "allowedRefDocIds": ["spi-prospects"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "spi-prospects-use-cases",
+          "docId": "spi-prospects",
+          "route": "system_a",
+          "sourcePage": 1,
+          "answerTerms": ["wavelengths", "high frame rates", "three dimensions"],
+          "evidenceTerms": ["wavelengths outside the reach of FPA technology", "high frame rates", "three dimensions"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "spi-prospects-abstract-locate",
+          "docId": "spi-prospects",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["hazardous gas leaks", "autonomous vehicles"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "s2ism-three-way-tradeoff",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["s2ism"],
+      "question": "s2ISM 具体打破了什么三方权衡？为什么普通 ISM 在厚样本里会失败？",
+      "acceptance": [
+        "回答必须同时说清空间分辨率、信噪比和光学层切三者。",
+        "厚样本问题应落到离焦光和探测器尺寸限制，不能只说散射更强。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["spatial resolution", "signal-to-noise ratio", "optical sectioning"],
+        "requiredRefDocIds": ["s2ism"],
+        "requiredCitationDocIds": ["s2ism"],
+        "allowedRefDocIds": ["s2ism"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "s2ism-abstract-tradeoff",
+          "docId": "s2ism",
+          "route": "system_a",
+          "sourcePage": 1,
+          "answerTerms": ["spatial resolution", "signal-to-noise ratio", "optical sectioning"],
+          "evidenceTerms": ["trade-off between spatial resolution and signal-to-noise ratio", "do not provide optical sectioning", "fail with thick samples"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "s2ism-abstract-locate",
+          "docId": "s2ism",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["optical sectioning", "thick samples"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "pidl-real-spad-noise",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["pidl-single-photon"],
+      "question": "为什么只用泊松噪声训练 SPAD 超分辨模型不够？这篇文章把哪些真实噪声放进了物理模型？",
+      "acceptance": [
+        "回答应指出单源泊松模型和真实多源 SPAD 噪声之间的差距。",
+        "至少列出串扰和暗计数率，并用论文第二页的原文证据支持。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["SPAD"],
+        "requiredAnswerTermGroups": [["Poisson", "泊松"], ["crosstalk", "串扰"], ["dark count rate", "暗计数率", "暗计数"]],
+        "requiredRefDocIds": ["pidl-single-photon"],
+        "requiredCitationDocIds": ["pidl-single-photon"],
+        "allowedRefDocIds": ["pidl-single-photon"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "pidl-multisource-noise",
+          "docId": "pidl-single-photon",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 2,
+          "answerTerms": ["SPAD"],
+          "answerTermGroups": [["Poisson", "泊松"], ["crosstalk", "串扰"], ["dark count rate", "暗计数率", "暗计数"]],
+          "evidenceTerms": ["multi-source physical noise model", "crosstalk", "dark count rate"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "pidl-noise-model-locate",
+          "docId": "pidl-single-photon",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["Introduction"],
+          "evidenceTerms": ["multi-source physical noise model", "crosstalk"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "cassi-dual-disperser-design",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["cassi"],
+      "question": "CASSI 的双色散结构具体怎么摆？为什么中间要放二值孔径编码？",
+      "acceptance": [
+        "回答应说明两个方向相反的色散元件包围二值孔径编码。",
+        "证据必须落到系统结构原文，不能用后来的 SCI 论文替代本论文。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["two dispersive elements", "binary-valued aperture"],
+        "requiredRefDocIds": ["cassi"],
+        "requiredCitationDocIds": ["cassi"],
+        "allowedRefDocIds": ["cassi"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "cassi-abstract-architecture",
+          "docId": "cassi",
+          "route": "system_a",
+          "sourcePage": 1,
+          "answerTerms": ["two dispersive elements", "binary-valued aperture"],
+          "evidenceTerms": ["two dispersive elements", "arranged in opposition", "binary-valued aperture code"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "cassi-abstract-locate",
+          "docId": "cassi",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["two dispersive elements", "binary-valued aperture code"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "fdm-speed-snr-tradeoff",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["fdm-metamaterials"],
+      "question": "频分复用单像素成像为什么能更快？它换来的代价是什么，是否需要改变探测器积分时间？",
+      "acceptance": [
+        "回答应说明频分并行化，而不是把速度提升归因于更快的探测器。",
+        "必须明确速度与信噪比权衡，并指出不改变探测器积分时间。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["parallelize", "signal-to-noise ratio", "acquisition speed"],
+        "requiredRefDocIds": ["fdm-metamaterials"],
+        "requiredCitationDocIds": ["fdm-metamaterials"],
+        "allowedRefDocIds": ["fdm-metamaterials"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "fdm-abstract-tradeoff",
+          "docId": "fdm-metamaterials",
+          "route": "system_a",
+          "sourcePage": 1,
+          "answerTerms": ["parallelize", "signal-to-noise ratio", "acquisition speed"],
+          "evidenceTerms": ["parallelize the single-pixel imaging process", "trade-off between signal-to-noise ratio and acquisition speed", "without altering detector integration time"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "fdm-abstract-locate",
+          "docId": "fdm-metamaterials",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["signal-to-noise ratio", "detector integration time"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "denoising-classical-map",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["denoising-review"],
+      "question": "这篇去噪综述怎样划分经典方法？空间域和变换域方法的主线是什么？",
+      "acceptance": [
+        "回答应先给出空间域与变换域两大类，再解释分类作用。",
+        "证据应定位到经典去噪方法章节，而不是只引用摘要。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["spatial domain", "transform domain"],
+        "requiredRefDocIds": ["denoising-review"],
+        "requiredCitationDocIds": ["denoising-review"],
+        "allowedRefDocIds": ["denoising-review"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "denoising-two-families",
+          "docId": "denoising-review",
+          "route": "system_a",
+          "sourcePage": 2,
+          "answerTerms": ["spatial domain", "transform domain"],
+          "evidenceTerms": ["spatial domain methods", "transform domain methods"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "denoising-classical-locate",
+          "docId": "denoising-review",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["Classical denoising method"],
+          "evidenceTerms": ["spatial domain methods", "transform domain methods"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "scinerf-physics-in-training",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["scinerf"],
+      "question": "SCINeRF 不是先解码视频再跑 NeRF 吗？SCI 的物理成像过程到底在哪里进入训练？",
+      "acceptance": [
+        "回答必须纠正两阶段流水线的误解，说明物理成像过程直接成为 NeRF 训练的一部分。",
+        "证据应来自摘要对方法核心的原文描述。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["SCINeRF", "NeRF"],
+        "requiredAnswerTermGroups": [["physical imaging process", "物理成像过程"], ["training of NeRF", "NeRF 的训练", "NeRF 训练"]],
+        "requiredRefDocIds": ["scinerf"],
+        "requiredCitationDocIds": ["scinerf"],
+        "allowedRefDocIds": ["scinerf"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "scinerf-physics-training",
+          "docId": "scinerf",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 1,
+          "answerTerms": ["SCI", "NeRF"],
+          "answerTermGroups": [["physical imaging process", "物理成像过程"], ["training of NeRF", "NeRF 的训练", "NeRF 训练"]],
+          "evidenceTerms": ["physical imaging process of SCI", "part of the training of NeRF"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "scinerf-abstract-physics-locate",
+          "docId": "scinerf",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["physical imaging process of SCI", "training of NeRF"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "scigs-explicit-dynamic-scene",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["scigs"],
+      "question": "SCIGS 的核心新意是 3DGS 本身吗？它对单张压缩图和动态场景具体声称了什么？",
+      "acceptance": [
+        "回答应区分采用 3DGS 与论文自己的 SCIGS 变体和变换网络。",
+        "必须准确复述从单张压缩图重建显式动态三维场景的论文声明。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["variant of 3DGS", "single compressed image", "dynamic 3D scenes"],
+        "requiredRefDocIds": ["scigs"],
+        "requiredCitationDocIds": ["scigs"],
+        "allowedRefDocIds": ["scigs"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "scigs-explicit-dynamic-claim",
+          "docId": "scigs",
+          "route": "system_a",
+          "sourcePage": 1,
+          "answerTerms": ["variant of 3DGS", "single compressed image", "dynamic 3D scenes"],
+          "evidenceTerms": ["variant of 3DGS", "single compressed image", "dynamic 3D scenes"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "scigs-abstract-explicit-locate",
+          "docId": "scigs",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["explicit scene", "dynamic 3D scenes"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "foveated-not-simple-zoom",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["foveated-spi"],
+      "question": "动态超采样是不是只对运动区域做局部放大？它和普通 zoom 的关键区别是什么？",
+      "acceptance": [
+        "回答应说明高分辨率中央区域跟踪运动，同时每帧仍从全视场获取新空间信息。",
+        "还要解释快速区域与慢变化区域在不同帧上积累细节的机制。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["foveal region", "entire field of view", "several consecutive frames"],
+        "requiredRefDocIds": ["foveated-spi"],
+        "requiredCitationDocIds": ["foveated-spi"],
+        "allowedRefDocIds": ["foveated-spi"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "foveated-whole-field-update",
+          "docId": "foveated-spi",
+          "route": "system_a",
+          "sourcePage": 1,
+          "answerTerms": ["foveal region", "entire field of view", "several consecutive frames"],
+          "evidenceTerms": ["high-resolution foveal region tracks motion", "entire field of view", "several consecutive frames"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "foveated-abstract-locate",
+          "docId": "foveated-spi",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["unlike a simple zoom", "entire field of view"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "sequential-cs-adaptive-advantage",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["seq-cs"],
+      "question": "Sequential compressed sensing 相比一次性随机测量多利用了什么信息？它主要保证恢复什么？",
+      "acceptance": [
+        "回答应说明测量按顺序设计并利用前序观测细化后续感知。",
+        "目标应准确说成稀疏信号支撑集恢复，不要泛化成任意图像重建都更好。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["sequential adaptive", "signal support recovery", "distilled sensing"],
+        "requiredRefDocIds": ["seq-cs"],
+        "requiredCitationDocIds": ["seq-cs"],
+        "allowedRefDocIds": ["seq-cs"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "sequential-cs-abstract-purpose",
+          "docId": "seq-cs",
+          "route": "system_a",
+          "sourcePage": 1,
+          "answerTerms": ["sequential adaptive", "signal support recovery", "distilled sensing"],
+          "evidenceTerms": ["sequential adaptive compressed sensing", "signal support recovery", "distilled sensing"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "sequential-cs-abstract-locate",
+          "docId": "seq-cs",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["signal support recovery", "distilled sensing"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "iism-live-cell-benefit",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["iism"],
+      "question": "iISM 在活细胞里同时改善了什么？120 nm 分辨率是用什么代价换来的？",
+      "acceptance": [
+        "回答应覆盖约 120 nm 横向分辨率、无标记成像、较低照明功率和光损伤。",
+        "不能把它描述成单纯提高分辨率而忽略对活细胞长时间观察的意义。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["120 nm", "tenfold lower", "photodamage"],
+        "requiredRefDocIds": ["iism"],
+        "requiredCitationDocIds": ["iism"],
+        "allowedRefDocIds": ["iism"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "iism-resolution-power-benefit",
+          "docId": "iism",
+          "route": "system_a",
+          "sourcePage": 1,
+          "answerTerms": ["120 nm", "tenfold lower", "photodamage"],
+          "evidenceTerms": ["120 nm lateral resolution", "tenfold lower incident illumination power", "reducing photodamage"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "iism-abstract-locate",
+          "docId": "iism",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["120 nm lateral resolution", "photodamage"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "spad-geiger-mechanism",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["spd-review"],
+      "question": "SPAD 为什么要工作在 Geiger 模式？雪崩之后为什么还需要淬灭电路？",
+      "acceptance": [
+        "回答应说明偏置高于反向击穿电压及载流子碰撞电离。",
+        "还要说明过量感应电流会损伤器件，因此必须淬灭雪崩。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["Geiger mode", "breakdown voltage", "quenching circuit"],
+        "requiredRefDocIds": ["spd-review"],
+        "requiredCitationDocIds": ["spd-review"],
+        "allowedRefDocIds": ["spd-review"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "spad-geiger-quenching",
+          "docId": "spd-review",
+          "route": "system_a",
+          "sourcePage": 2,
+          "answerTerms": ["Geiger mode", "breakdown voltage", "quenching circuit"],
+          "evidenceTerms": ["operates in Geiger mode", "reverse bias breakdown voltage", "quenching circuit"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "spad-principle-locate",
+          "docId": "spd-review",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["Principle of single photon detection avalanche diode"],
+          "evidenceTerms": ["Geiger mode", "quenching circuit"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "piln-self-supervised-loop",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["piln"],
+      "question": "ILNet 为什么叫 image-loop？part-based 设计具体想解决什么，训练是否依赖成对真值？",
+      "acceptance": [
+        "回答应识别它是自监督 image-loop 网络，并解释特征分块用于更细粒度学习。",
+        "证据必须来自方法章节，不能只靠标题猜测网络结构。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["self-supervised", "image-loop", "part-based"],
+        "requiredRefDocIds": ["piln"],
+        "requiredCitationDocIds": ["piln"],
+        "allowedRefDocIds": ["piln"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "piln-method-definition",
+          "docId": "piln",
+          "route": "system_a",
+          "sourcePage": 2,
+          "answerTerms": ["self-supervised", "image-loop", "part-based"],
+          "evidenceTerms": ["self-supervised image-loop neural network", "part-based model", "finer-grained learning"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "piln-method-locate",
+          "docId": "piln",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["2.1. Methods"],
+          "evidenceTerms": ["self-supervised image-loop neural network", "part-based model"]
+        }],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "requireSystemB": false
+      }
     }
   ]
 }

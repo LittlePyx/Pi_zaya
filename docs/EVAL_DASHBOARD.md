@@ -189,6 +189,13 @@ Research QA dry run:
 python tools\research_qa\run_research_qa_eval.py --dry-run
 ```
 
+The shared suite currently contains 30 natural paper questions. Fifteen are
+bound to reviewed Markdown pages and can be checked after conversion or repair:
+
+```powershell
+python tools\research_qa\run_research_qa_eval.py --validate-sources --db-root db
+```
+
 Research Agent golden prompt validation:
 
 ```powershell
@@ -294,7 +301,8 @@ Manual Research Agent review:
 
 ## Future Work
 
-- Add a curated research QA benchmark with paper IDs, expected evidence, and rubric notes.
+- Expand the 15 source-grounded cases and 6 human-reviewed answer replays as
+  additional papers and question families are accepted.
 - Add automated trace-schema validation for stored assistant messages.
 - Track citation support over time in a local dashboard.
 - Add source-specific comparison rubrics for multi-paper questions.

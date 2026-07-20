@@ -48,7 +48,7 @@ from kb.paper_guide_structured_index_runtime import (
     load_paper_guide_figure_index,
 )
 from kb.citation_meta import extract_first_doi
-from kb.citation_card import compose_citation_card
+from kb.citation_card import compose_citation_card, refresh_citation_card_contract
 from kb.inpaper_citation_enrichment import (
     enrich_inpaper_detail_context,
     extract_structured_cite_answer_context_line,
@@ -111,7 +111,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 27
+_RENDER_CACHE_SCHEMA_VERSION = 29
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -904,6 +904,23 @@ def _answer_aligned_primary_improves_claim_coverage(detail: dict, primary: dict)
     return candidate_overlap >= max(1, existing_overlap + 1)
 
 
+def _primary_evidence_matches_detail(detail: dict, primary: dict) -> bool:
+    for left_key, right_key in (("block_id", "block_id"), ("anchor_id", "anchor_id")):
+        left = str(detail.get(left_key) or "").strip()
+        right = str(primary.get(right_key) or primary.get("blockId" if right_key == "block_id" else "anchorId") or "").strip()
+        if left and right and left == right:
+            return True
+    existing = re.sub(
+        r"\s+",
+        " ",
+        str(detail.get("evidence_quote") or detail.get("summary_line") or detail.get("raw") or "").strip().lower(),
+    )
+    candidate = re.sub(r"\s+", " ", _primary_evidence_text(primary).strip().lower())
+    if min(len(existing), len(candidate)) < 48:
+        return False
+    return existing in candidate or candidate in existing
+
+
 def _quantitative_primary_evidence_relation(*, answer_claim: str, evidence: str) -> str:
     text = str(evidence or "").strip()
     if not text:
@@ -1092,9 +1109,35 @@ def _backfill_system_a_cite_details_from_ref_pack(
         if not isinstance(primary, dict) or not snippet:
             out.append(detail)
             continue
+        try:
+            primary_page_start = int(primary.get("page_start") or primary.get("pageStart") or 0)
+            primary_page_end = int(primary.get("page_end") or primary.get("pageEnd") or primary_page_start or 0)
+        except (TypeError, ValueError):
+            primary_page_start = 0
+            primary_page_end = 0
+        if (
+            primary_page_start > 0
+            and int(detail.get("page_start") or detail.get("pageStart") or 0) <= 0
+            and _primary_evidence_matches_detail(detail, primary)
+        ):
+            detail["page_start"] = primary_page_start
+            detail["page_end"] = primary_page_end if primary_page_end > 0 else primary_page_start
+            existing_location = str(detail.get("location_label") or detail.get("heading_path") or "").strip()
+            page_label = (
+                f"p. {primary_page_start}"
+                if primary_page_end <= primary_page_start
+                else f"pp. {primary_page_start}-{primary_page_end}"
+            )
+            detail["location_label"] = " · ".join(part for part in (existing_location, page_label) if part)
+        answer_aligned_expands_same_evidence = bool(
+            str(primary.get("selection_reason") or "").strip().lower() == "answer_aligned_block"
+            and _primary_evidence_matches_detail(detail, primary)
+            and len(snippet) >= len(existing_evidence) + 24
+        )
         if not (
             _system_a_detail_needs_ref_primary_backfill(detail)
             or _answer_aligned_primary_improves_claim_coverage(detail, primary)
+            or answer_aligned_expands_same_evidence
         ):
             out.append(detail)
             continue
@@ -1102,6 +1145,12 @@ def _backfill_system_a_cite_details_from_ref_pack(
         block_id = str(primary.get("block_id") or primary.get("blockId") or "").strip()
         anchor_id = str(primary.get("anchor_id") or primary.get("anchorId") or "").strip()
         anchor_kind = str(primary.get("anchor_kind") or primary.get("anchorKind") or detail.get("anchor_kind") or "").strip()
+        try:
+            page_start = int(primary.get("page_start") or primary.get("pageStart") or 0)
+            page_end = int(primary.get("page_end") or primary.get("pageEnd") or page_start or 0)
+        except (TypeError, ValueError):
+            page_start = 0
+            page_end = 0
         detail["heading_path"] = heading or str(detail.get("heading_path") or "").strip()
         if not str(detail.get("bibliographic_title") or "").strip():
             detail["title"] = detail["heading_path"] or str(detail.get("title") or "").strip()
@@ -1126,14 +1175,27 @@ def _backfill_system_a_cite_details_from_ref_pack(
         detail["block_id"] = block_id or str(detail.get("block_id") or "").strip()
         detail["anchor_id"] = anchor_id or str(detail.get("anchor_id") or "").strip()
         detail["anchor_kind"] = anchor_kind
+        if page_start > 0:
+            detail["page_start"] = page_start
+            detail["page_end"] = page_end if page_end > 0 else page_start
         location_bits: list[str] = []
         if detail.get("heading_path"):
             location_bits.append(str(detail.get("heading_path") or "").strip())
         if detail.get("anchor_kind"):
             location_bits.append(str(detail.get("anchor_kind") or "").strip())
+        if page_start > 0:
+            location_bits.append(f"p. {page_start}" if page_end <= page_start else f"pp. {page_start}-{page_end}")
         if location_bits:
             detail["location_label"] = " · ".join(part for part in location_bits if part)
-        out.append(compose_citation_card(detail, locale=render_locale))
+        composed = compose_citation_card(detail, locale=render_locale)
+        # The generic card composer may shorten a comma-heavy sentence to one
+        # clause. For an answer-aligned, page-locatable source block, retain the
+        # reviewed full sentence so one card can support all linked claim parts
+        # (for example detector count and frame rate together).
+        composed["summary_line"] = snippet
+        composed["evidence_quote"] = snippet
+        composed["card_evidence"] = snippet
+        out.append(refresh_citation_card_contract(composed, locale=render_locale))
     return out
 
 
@@ -1188,6 +1250,31 @@ def _effective_reference_render_pack(raw_pack: dict | None) -> dict:
             if value not in (None, "", [], {}):
                 merged[key] = value
     return attach_refs_pack_polish_contract(merged)
+
+
+def _answer_aligned_reference_render_pack(raw_pack: dict | None, answer_text: str) -> dict:
+    """Use the final answer to select the evidence used by answer citations.
+
+    Reference-card rendering may already have produced a useful retrieval pack,
+    but it cannot know which claims the final model answer will emphasize. Align
+    the pack here, before citation markers are repaired, so the answer cards and
+    the literature shelf share the same source block and page locator.
+    """
+
+    pack = _effective_reference_render_pack(raw_pack)
+    answer = str(answer_text or "").strip()
+    if not pack or not answer:
+        return pack
+    candidate = dict(pack)
+    candidate["answer"] = answer
+    candidate["answer_text"] = answer
+    try:
+        from api.reference_ui import _attach_pack_primary_ref_evidence
+
+        aligned = _attach_pack_primary_ref_evidence(candidate)
+    except Exception:
+        return pack
+    return aligned if isinstance(aligned, dict) and aligned else pack
 
 
 def _effective_citation_render_locale(ref_pack: dict | None = None) -> str:
@@ -1382,6 +1469,65 @@ def _message_citation_plan(rec: dict | None) -> dict:
     if isinstance(plan, dict) and plan:
         return dict(plan)
     return {}
+
+
+def _citation_plan_with_ref_primary(plan: dict | None, ref_pack: dict | None) -> dict:
+    """Give the generic citation repair the answer-aligned References evidence."""
+
+    out = dict(plan or {}) if isinstance(plan, dict) else {}
+    if not isinstance(ref_pack, dict):
+        return out
+    primary = ref_pack.get("primary_evidence")
+    if not isinstance(primary, dict):
+        return out
+    source_path = str(primary.get("source_path") or primary.get("sourcePath") or "").strip()
+    evidence_quote = _primary_evidence_text(primary)
+    if not source_path or not evidence_quote:
+        return out
+    block_id = str(primary.get("block_id") or primary.get("blockId") or "").strip()
+    anchor_id = str(primary.get("anchor_id") or primary.get("anchorId") or "").strip()
+    slots = [dict(item) for item in list(out.get("slots") or []) if isinstance(item, dict)]
+    for slot in slots:
+        same_block = bool(block_id and str(slot.get("block_id") or slot.get("blockId") or "").strip() == block_id)
+        same_anchor = bool(anchor_id and str(slot.get("anchor_id") or slot.get("anchorId") or "").strip() == anchor_id)
+        same_evidence = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "")).strip() == re.sub(
+            r"\s+", " ", evidence_quote
+        ).strip()
+        if same_block or same_anchor or same_evidence:
+            return out
+    primary_source_key = _reading_slot_source_key(source_path)
+    # Once final-answer alignment has selected a precise block, older generic
+    # slots from the same paper compete for a small citation budget and can hide
+    # the better evidence. Keep slots from other papers (and System B lineage),
+    # but replace same-paper System A slots with the aligned primary.
+    if str(out.get("intent") or "").strip().lower() != "comparison":
+        slots = [
+            slot
+            for slot in slots
+            if str(slot.get("preferred_system") or "").strip().lower() == "system_b"
+            or _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath")) != primary_source_key
+        ]
+    aligned_slot = {
+        "claim_type": "answer_aligned_primary",
+        "preferred_system": "system_a",
+        "topic": str(primary.get("heading_path") or primary.get("headingPath") or "").strip(),
+        "source_path": source_path,
+        "source_name": str(primary.get("source_name") or primary.get("sourceName") or "").strip(),
+        "heading_path": str(primary.get("heading_path") or primary.get("headingPath") or "").strip(),
+        "evidence_quote": evidence_quote,
+        "block_id": block_id,
+        "anchor_id": anchor_id,
+        "anchor_kind": str(primary.get("anchor_kind") or primary.get("anchorKind") or "").strip(),
+        "page_start": int(primary.get("page_start") or primary.get("pageStart") or 0),
+        "page_end": int(primary.get("page_end") or primary.get("pageEnd") or primary.get("page_start") or 0),
+        "strict_locate": bool(primary.get("strict_locate") or primary.get("strictLocate")),
+        "selection_reason": "answer_aligned_reference_primary",
+    }
+    out["slots"] = [aligned_slot, *slots]
+    budget = dict(out.get("budget") or {}) if isinstance(out.get("budget"), dict) else {}
+    budget["system_a"] = max(1, int(budget.get("system_a") or 0))
+    out["budget"] = budget
+    return out
 
 
 def _citation_plan_system_b_budget(plan: dict | None) -> int:
@@ -1969,6 +2115,11 @@ def _augment_hits_with_system_a_plan_slots(
                     "heading_path": heading_path,
                     "ref_best_heading_path": heading_path,
                     "citation_plan_slot": True,
+                    "primary_block_id": str(slot.get("block_id") or slot.get("blockId") or "").strip(),
+                    "primary_anchor_id": str(slot.get("anchor_id") or slot.get("anchorId") or "").strip(),
+                    "anchor_kind": str(slot.get("anchor_kind") or slot.get("anchorKind") or "").strip(),
+                    "page_start": int(slot.get("page_start") or slot.get("pageStart") or 0),
+                    "page_end": int(slot.get("page_end") or slot.get("pageEnd") or slot.get("page_start") or 0),
                     "ref_rank": {"display_score": 9.0, "semantic_score": 9.0},
                 },
                 "ui_meta": {
@@ -1983,7 +2134,12 @@ def _augment_hits_with_system_a_plan_slots(
                         "snippet": evidence_quote,
                         "highlight_snippet": evidence_quote,
                         "selection_reason": "citation_plan_slot",
-                        "strict_locate": False,
+                        "block_id": str(slot.get("block_id") or slot.get("blockId") or "").strip(),
+                        "anchor_id": str(slot.get("anchor_id") or slot.get("anchorId") or "").strip(),
+                        "anchor_kind": str(slot.get("anchor_kind") or slot.get("anchorKind") or "").strip(),
+                        "page_start": int(slot.get("page_start") or slot.get("pageStart") or 0),
+                        "page_end": int(slot.get("page_end") or slot.get("pageEnd") or slot.get("page_start") or 0),
+                        "strict_locate": bool(slot.get("strict_locate") or slot.get("strictLocate")),
                     },
                 },
             }
@@ -4837,7 +4993,13 @@ def _build_unlinked_reference_candidates(
     return out
 
 
-def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str, hits: list[dict] | None = None) -> bool:
+def _should_link_inpaper_citations_for_message(
+    *,
+    rec: dict | None,
+    content: str,
+    hits: list[dict] | None = None,
+    citation_plan: dict | None = None,
+) -> bool:
     raw = str(content or "")
     if not raw:
         return False
@@ -4845,15 +5007,15 @@ def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str
         return True
     if _message_answer_prompt_family(rec) == "citation_lookup":
         return True
-    citation_plan = _message_citation_plan(rec)
+    effective_plan = dict(citation_plan) if isinstance(citation_plan, dict) else _message_citation_plan(rec)
     plan_repairs_missing_system_a = bool(
         "reading" in _message_answer_output_mode(rec)
-        or str(citation_plan.get("intent") or "").strip().lower() == "scope_boundary"
+        or str(effective_plan.get("intent") or "").strip().lower() == "scope_boundary"
     )
     if hits and plan_repairs_missing_system_a and any(
         isinstance(slot, dict)
         and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
-        for slot in list(citation_plan.get("slots") or [])
+        for slot in list(effective_plan.get("slots") or [])
     ):
         # Reading-guide System A citations are repaired from the typed plan.
         # Requiring an existing marker here makes the repair branch unreachable
@@ -5769,7 +5931,10 @@ def enrich_messages_with_reference_render(
             continue
 
         raw_ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
-        ref_pack = _effective_reference_render_pack(raw_ref_pack if isinstance(raw_ref_pack, dict) else None)
+        ref_pack = _answer_aligned_reference_render_pack(
+            raw_ref_pack if isinstance(raw_ref_pack, dict) else None,
+            render_source,
+        )
         render_locale = _effective_citation_render_locale(ref_pack if isinstance(ref_pack, dict) else None)
         hits = list((ref_pack or {}).get("hits") or []) if isinstance(ref_pack, dict) else []
         provenance_raw = rec.get("provenance") if isinstance(rec.get("provenance"), dict) else None
@@ -5806,7 +5971,10 @@ def enrich_messages_with_reference_render(
             cite_details: list[dict] = []
             rendered_body = str(body or "")
             raw_body = rendered_body
-            citation_plan = _message_citation_plan(rec)
+            citation_plan = _citation_plan_with_ref_primary(
+                _message_citation_plan(rec),
+                ref_pack if isinstance(ref_pack, dict) else None,
+            )
             _rec_meta = rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
             _canon_paths = list(_rec_meta.get("canonical_hit_paths") or []) if isinstance(_rec_meta.get("canonical_hit_paths"), list) else []
             citation_hits = _augment_hits_with_system_a_plan_slots(
@@ -5818,6 +5986,7 @@ def enrich_messages_with_reference_render(
                 rec=rec,
                 content=render_source,
                 hits=citation_hits,
+                citation_plan=citation_plan,
             )
             if rendered_body.strip():
                 rendered_body = _annotate_equation_tags_with_sources(rendered_body, citation_hits)
@@ -5893,6 +6062,14 @@ def enrich_messages_with_reference_render(
                 else:
                     rendered_body = _strip_structured_cite_tokens_for_display(rendered_body)
                     rendered_body = _strip_freeform_numeric_citation_markers(rendered_body)
+
+            if cite_details and isinstance(ref_pack, dict):
+                cite_details = _backfill_system_a_cite_details_from_ref_pack(
+                    cite_details,
+                    ref_pack,
+                    render_locale=render_locale,
+                    answer_text=render_source,
+                )
 
             rendered_full = ""
             if notice and rendered_body:

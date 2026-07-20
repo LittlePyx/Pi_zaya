@@ -1,6 +1,6 @@
 # Research QA Eval Runbook
 
-Updated: 2026-05-26
+Updated: 2026-07-20
 
 ## Purpose
 
@@ -13,7 +13,9 @@ The research QA eval protects the real researcher-facing workflow:
 5. Reference locator card quality, including summary, relevance, polish state, and reader-open evidence.
 6. Citation shelf quality, so saved literature keeps a useful title, source/export identity, summary, and clean visible copy.
 
-The shared fixture is `web/src/testing/researchQaData.json`.
+The shared fixture is `web/src/testing/researchQaData.json`. It contains 30
+natural research questions. Fifteen are source-grounded cases whose claim and
+reader-locator contracts are pinned to a page in the current Markdown corpus.
 
 Six focused user journeys also have a human-reviewed deterministic replay in
 `docs/research_qa_grounded_replay_v1.jsonl`. The replay uses real paper identities
@@ -33,6 +35,17 @@ These commands do not call the API or an LLM. The first validates fixture covera
 the second sends reviewed answers and evidence payloads through the same validator
 used by live runs. The replay rejects unexpected source documents, unsupported
 claim/evidence bindings, wrong citation routes, and incorrect reader locators.
+
+When the local paper corpus is available, also verify that every reviewed
+source page still contains the expected evidence after conversion or repair:
+
+```bash
+python tools/research_qa/run_research_qa_eval.py --validate-sources --db-root db
+```
+
+This check reads page-marked Markdown only; it does not call the API or a model.
+It intentionally remains a local gate because `db/` is runtime data and is not
+committed to CI.
 
 Use this for every PR.
 
@@ -91,6 +104,9 @@ Use `go` only when:
 7. Every focused journey passes `claims_have_matching_evidence`,
    `refs_avoid_unexpected_docs`, `citations_match_required_routes`, and
    `citations_have_expected_locators`.
+8. Changed conversion output passes `--validate-sources`, and each
+   source-grounded live answer cites the reviewed `sourcePage` rather than only
+   the right paper or section.
 
 Use `no-go` when any strict case fails, even if the answer text looks plausible. A plausible answer with weak cards or untraceable citations is still a product regression.
 
@@ -106,6 +122,8 @@ Use `no-go` when any strict case fails, even if the answer text looks plausible.
 8. `claims_have_matching_evidence`: answer wording exists, but no citation payload binds that claim to the reviewed evidence terms.
 9. `citations_match_required_routes`: required System A current-paper evidence or System B upstream evidence is missing.
 10. `citations_have_expected_locators`: a citation points to the right paper but the wrong section or evidence span.
+11. Source validation errors: the reviewed evidence terms moved, disappeared,
+    or became corrupted on the pinned page after conversion/index changes.
 
 ## When Extending The Fixture
 
@@ -117,3 +135,6 @@ Every new case should include:
 4. `expected.requiredRefDocIds`.
 5. `expected.requiredCitationDocIds`.
 6. Stricter gates such as `requireRefsReady`, `requirePolishStatus`, `requireCitationShelfQuality`, `minRefHits`, `minCitationCount`, and System B trace checks when the case is meant to protect citation, card, or reading-list quality.
+7. For `sourceGrounded: true`, every claim and locate contract must include a
+   `sourcePage` and page-local `evidenceTerms` verified against the current
+   Markdown with `--validate-sources`.

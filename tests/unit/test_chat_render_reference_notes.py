@@ -6710,3 +6710,200 @@ def test_system_a_bibliography_keeps_same_basename_paths_and_dois_separate(monke
     assert out[1]["doi"] == "10.1234/collection-b"
     assert "bibliographic_title" not in out[2]
     assert "doi" not in out[2]
+
+
+def test_system_a_primary_evidence_backfill_preserves_page_locator():
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source_path = "db/Paper/Paper.en.md"
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source_path,
+            "answer_claim": "SCINeRF embeds the physical imaging process in NeRF training.",
+            "evidence_quote": "NeRF training.",
+        }
+    ]
+    primary = {
+        "source_path": source_path,
+        "source_name": "Paper",
+        "heading_path": "Abstract",
+        "snippet": "We formulate the physical imaging process of SCI as part of the training of NeRF.",
+        "highlight_snippet": "We formulate the physical imaging process of SCI as part of the training of NeRF.",
+        "block_id": "blk-1",
+        "anchor_id": "p-1",
+        "anchor_kind": "paragraph",
+        "page_start": 1,
+        "page_end": 1,
+    }
+    pack = {
+        "primary_evidence": primary,
+        "hits": [
+            {
+                "text": primary["snippet"],
+                "meta": {"source_path": source_path},
+                "ui_meta": {"source_path": source_path, "primary_evidence": primary},
+            }
+        ],
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, pack, render_locale="en")
+
+    assert out[0]["page_start"] == 1
+    assert out[0]["page_end"] == 1
+    assert "p. 1" in out[0]["location_label"]
+
+
+def test_answer_aligned_ref_primary_becomes_page_aware_citation_plan_hit():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _citation_plan_with_ref_primary,
+    )
+
+    primary = {
+        "source_path": "db/Paper/Paper.en.md",
+        "source_name": "Paper",
+        "heading_path": "Abstract",
+        "snippet": "The supported answer evidence.",
+        "block_id": "blk-2",
+        "anchor_id": "p-2",
+        "anchor_kind": "paragraph",
+        "page_start": 2,
+        "page_end": 2,
+        "strict_locate": True,
+    }
+    plan = _citation_plan_with_ref_primary(
+        {
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "db/Paper/Paper.en.md",
+                    "heading_path": "Introduction",
+                    "evidence_quote": "A generic same-paper passage.",
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "db/Other/Other.en.md",
+                    "heading_path": "Results",
+                    "evidence_quote": "A relevant passage from another paper.",
+                },
+            ],
+        },
+        {"primary_evidence": primary},
+    )
+    hits = _augment_hits_with_system_a_plan_slots([], plan)
+
+    assert plan["slots"][0]["selection_reason"] == "answer_aligned_reference_primary"
+    assert len(plan["slots"]) == 2
+    assert plan["slots"][1]["source_path"] == "db/Other/Other.en.md"
+    assert hits[0]["meta"]["page_start"] == 2
+    assert hits[0]["meta"]["primary_block_id"] == "blk-2"
+    assert hits[0]["ui_meta"]["primary_evidence"]["page_start"] == 2
+
+
+def test_final_answer_alignment_runs_before_citation_repair(tmp_path, monkeypatch):
+    monkeypatch.setattr("ui.refs_renderer._is_temp_source_path", lambda _path: False)
+    source_path = tmp_path / "three-d-video.en.md"
+    source_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 2 -->",
+                "## Abstract",
+                (
+                    "Performing high-speed structured illumination and sensing reflected light with four "
+                    "spatially-separated, single-pixel detectors, our system reconstructs real-time 3D video "
+                    "at 8 frames per second for image resolutions of 64 by 64 pixels."
+                ),
+                "<!-- kb_page: 5 -->",
+                "## Methods",
+                "Hadamard patterns are projected by the spatial light modulator.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    answer = (
+        "The system uses four spatially-separated single-pixel detectors and reconstructs real-time 3D video "
+        "at 8 frames per second for 64 by 64 pixels."
+    )
+    messages = [
+        {"id": 1, "role": "user", "content": "How many detectors are used, and what is the speed?"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": answer,
+            "meta": {
+                "answer_quality": {
+                    "output_mode": "reading_guide",
+                    "citation_plan": {"budget": {"system_a": 1, "system_b": 0}, "slots": []},
+                }
+            },
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "prompt": messages[0]["content"],
+            "hits": [
+                {
+                    "text": "Hadamard patterns are projected by the spatial light modulator.",
+                    "meta": {"source_path": str(source_path), "heading_path": "Methods"},
+                    "ui_meta": {
+                        "source_path": str(source_path),
+                        "display_name": "3D single-pixel video",
+                        "heading_path": "Methods",
+                    },
+                }
+            ],
+        }
+    }
+
+    from api.chat_render import (
+        _answer_aligned_reference_render_pack,
+        _augment_hits_with_system_a_plan_slots,
+        _citation_plan_with_ref_primary,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    aligned_pack = _answer_aligned_reference_render_pack(refs_by_user[1], answer)
+    assert aligned_pack["primary_evidence"]["heading_path"] == "Abstract"
+    plan = _citation_plan_with_ref_primary(messages[1]["meta"]["answer_quality"]["citation_plan"], aligned_pack)
+    assert plan["slots"][0]["heading_path"] == "Abstract"
+    citation_hits = _augment_hits_with_system_a_plan_slots(aligned_pack["hits"], plan)
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        citation_hits,
+        plan,
+        output_mode="reading_guide",
+    )
+    assert repaired != answer
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="answer-align")
+
+    details = rendered[-1]["cite_details"]
+    assert len(details) == 1
+    assert details[0]["heading_path"] == "Abstract"
+    assert details[0]["page_start"] == 2
+    assert "four spatially-separated" in details[0]["evidence_quote"]
+    assert "8 frames per second" in details[0]["evidence_quote"]
+
+
+def test_system_a_binding_bridges_chinese_spad_noise_claim_to_english_evidence():
+    from ui.refs_renderer import _assess_system_a_hit_binding
+
+    evidence = (
+        "The multi-source physical noise model of SPAD arrays consists of dark count rate, "
+        "afterpulsing and crosstalk noise."
+    )
+    binding = _assess_system_a_hit_binding(
+        answer_claim="后脉冲和串扰噪声会产生额外的虚假事件。",
+        hit={"text": evidence},
+        meta={},
+        heading="Introduction / Figure 1",
+        evidence_quote=evidence,
+        source_name="High-resolution single-photon imaging with physics-informed deep learning",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "crosstalk noise" in binding["overlap_terms"]

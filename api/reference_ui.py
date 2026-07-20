@@ -4563,7 +4563,7 @@ _ANSWER_EVIDENCE_ALIAS_GROUPS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ..
         ("ray tracing", "ray transfer", "ray transfer matrix", "ray optics"),
     ),
     (
-        ("wave optics", "diffraction", "propagation", "angular spectrum", "\u6ce2\u52a8\u5149\u5b66", "\u884d\u5c04", "\u4f20\u64ad"),
+        ("wave optics", "diffraction", "wave propagation", "angular spectrum", "\u6ce2\u52a8\u5149\u5b66", "\u884d\u5c04", "\u6ce2\u4f20\u64ad", "\u5149\u4f20\u64ad"),
         ("wave optics", "diffraction", "wave propagation", "angular spectrum method", "propagation"),
     ),
     (
@@ -4585,6 +4585,22 @@ _ANSWER_EVIDENCE_ALIAS_GROUPS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ..
     (
         ("physics informed", "physics-informed", "spad", "single photon", "single-photon"),
         ("physics-informed", "SPAD", "single-photon", "noise model"),
+    ),
+    (
+        ("poisson", "crosstalk", "dark count", "multi-source noise", "\u6cca\u677e\u566a\u58f0", "\u4e32\u6270", "\u6697\u8ba1\u6570", "\u591a\u6e90\u566a\u58f0"),
+        ("Poisson noise model", "crosstalk", "dark count rate", "multi-source noise model"),
+    ),
+    (
+        (
+            "photometric stereo", "real-time 3d", "3d video",
+            "\u5149\u5ea6\u7acb\u4f53", "\u5b9e\u65f6\u4e09\u7ef4", "\u4e09\u7ef4\u89c6\u9891",
+            "\u5b9e\u65f6\u91cd\u5efa", "\u63a2\u6d4b\u5668", "\u5e27/\u79d2", "\u901f\u5ea6",
+        ),
+        ("photometric stereo", "spatially-separated", "single-pixel detectors", "frames per second", "real-time 3D video"),
+    ),
+    (
+        ("scinerf", "physical imaging process", "\u7269\u7406\u6210\u50cf\u8fc7\u7a0b"),
+        ("SCINeRF", "physical imaging process of SCI", "training of NeRF"),
     ),
     (
         ("hadamard", "fourier"),
@@ -4623,11 +4639,24 @@ def _answer_evidence_terms(prompt: str, answer: str) -> list[str]:
         _answer_evidence_push_term(out, seen, term)
 
     combined_norm = _normalize_title_identity(combined)
+    prompt_norm = _normalize_title_identity(prompt_text)
     for triggers, aliases in _ANSWER_EVIDENCE_ALIAS_GROUPS:
         triggered = False
         for trigger in triggers:
             trigger_norm = _normalize_title_identity(trigger)
-            if trigger_norm and trigger_norm in combined_norm:
+            prompt_triggered = bool(trigger_norm and trigger_norm in prompt_norm)
+            # The prompt is the primary intent signal. Also accept an explicit
+            # multi-word technical phrase from the answer (for example "ray
+            # tracing" or "wave propagation") so a multi-step answer can be
+            # backed by all of its mechanisms without letting generic one-word
+            # answer vocabulary steer the evidence selector.
+            answer_triggered = bool(
+                trigger_norm
+                and " " in trigger_norm
+                and len(trigger_norm) >= 8
+                and trigger_norm in combined_norm
+            )
+            if prompt_triggered or answer_triggered:
                 triggered = True
                 break
         if triggered:
@@ -4640,6 +4669,13 @@ def _answer_evidence_terms(prompt: str, answer: str) -> list[str]:
         has_signal = raw.isupper() or any(ch.isdigit() for ch in raw) or ("-" in raw) or any(ch.isupper() for ch in raw[1:])
         if has_signal and low not in _ANSWER_EVIDENCE_STOPWORDS:
             _answer_evidence_push_term(out, seen, raw)
+
+    # Prompt focus, bilingual aliases, acronyms, and numeric identifiers are
+    # higher-signal than overlapping answer n-grams. Once they provide enough
+    # coverage, avoid letting repeated phrases from a long answer dominate a
+    # genuinely question-aligned source sentence.
+    if len(out) >= 4:
+        return out[:18]
 
     tokens = [
         tok
@@ -4900,10 +4936,11 @@ def _source_block_to_answer_primary_evidence(
         heading_path=str(block.get("heading_path") or "").strip(),
     )
     block_text = str(block.get("text") or block.get("raw_text") or "").strip()
-    snippet = _answer_aligned_block_snippet(block_text, terms=list(terms or []))
+    aligned_snippet = _answer_aligned_block_snippet(block_text, terms=list(terms or []))
+    snippet = aligned_snippet
     if not snippet:
         snippet = _summary_excerpt(block_text, max_sentences=2, max_len=420) or _compact_reader_open_text(block_text)
-    snippet = _clean_refs_evidence_snippet(
+    cleaned_snippet = _clean_refs_evidence_snippet(
         snippet,
         prompt=prompt,
         source_path=source_path,
@@ -4911,6 +4948,25 @@ def _source_block_to_answer_primary_evidence(
         heading_path=heading_path,
         max_len=460,
     )
+    if aligned_snippet:
+        evidence_terms = [
+            term
+            for term in list(terms or [])
+            if not _answer_evidence_identity_like(
+                term,
+                source_path=source_path,
+                display_name=display_name,
+            )
+        ]
+        raw_matches = sum(
+            1 for term in evidence_terms if _answer_evidence_term_matches_surface(term, aligned_snippet)
+        )
+        clean_matches = sum(
+            1 for term in evidence_terms if _answer_evidence_term_matches_surface(term, cleaned_snippet)
+        )
+        if clean_matches < raw_matches:
+            cleaned_snippet = _finish_evidence_text(aligned_snippet, max_len=460)
+    snippet = cleaned_snippet
     evidence = {
         "source_path": str(source_path or "").strip() or None,
         "source_name": str(display_name or "").strip() or None,
@@ -4921,6 +4977,8 @@ def _source_block_to_answer_primary_evidence(
         "highlight_snippet": snippet or None,
         "anchor_kind": str(block.get("kind") or "").strip().lower() or None,
         "anchor_number": _positive_int(block.get("number")) or None,
+        "page_start": _positive_int(block.get("page_start")) or None,
+        "page_end": _positive_int(block.get("page_end") or block.get("page_start")) or None,
         "selection_reason": selection_reason,
         "strict_locate": True,
     }
@@ -4934,7 +4992,7 @@ def _answer_aligned_block_snippet(block_text: str, *, terms: list[str]) -> str:
     sentences = [part.strip() for part in re.split(r"(?<=[。！？?\.])\s+", _clean_summary_line(text)) if part.strip()]
     if not sentences:
         return ""
-    rows: list[tuple[float, int, str]] = []
+    rows: list[tuple[float, int, str, list[str]]] = []
     for idx, sentence in enumerate(sentences):
         matched = [term for term in terms if _answer_evidence_term_matches_surface(term, sentence)]
         if not matched:
@@ -4945,13 +5003,37 @@ def _answer_aligned_block_snippet(block_text: str, *, terms: list[str]) -> str:
             score += 1.2
         if 50 <= len(sentence) <= 260:
             score += 0.4
-        rows.append((score, idx, sentence))
+        rows.append((score, idx, sentence, matched))
     if not rows:
         return ""
     rows.sort(key=lambda item: (item[0], -item[1]), reverse=True)
-    picked_idx = sorted(idx for _score, idx, _sentence in rows[:3])
-    picked = [sentences[idx] for idx in picked_idx]
-    snippet = " ".join(picked).strip()
+    # Keep the strongest sentence first so the evidence cleaner cannot truncate
+    # it behind weaker introductory sentences from the same source block. Add a
+    # small number of complementary sentences only when they contribute answer
+    # terms that the strongest sentence does not already cover. This preserves
+    # multi-step explanations such as ray tracing followed by wave propagation.
+    chosen = [str(rows[0][2] or "").strip()]
+    covered = {
+        _normalize_title_identity(term)
+        for term in list(rows[0][3] or [])
+        if _normalize_title_identity(term)
+    }
+    for _score, _idx, sentence, matched in rows[1:]:
+        new_terms = {
+            _normalize_title_identity(term)
+            for term in list(matched or [])
+            if _normalize_title_identity(term) not in covered
+        }
+        if not new_terms:
+            continue
+        candidate = " ".join([*chosen, str(sentence or "").strip()]).strip()
+        if len(candidate) > 420:
+            continue
+        chosen.append(str(sentence or "").strip())
+        covered.update(new_terms)
+        if len(chosen) >= 3:
+            break
+    snippet = " ".join(part for part in chosen if part).strip()
     return _summary_excerpt(snippet, max_sentences=3, max_len=420) or _compact_reader_open_text(snippet, max_len=420)
 
 

@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from tools.research_qa import run_research_qa_eval as eval_mod
 from tools.research_qa.run_research_qa_eval import (
+    ResearchQaFixture,
     _assistant_message_by_id,
     _build_report,
     _case_requires_full_refs_wait,
+    _claim_evidence_contract_failures,
+    _detail_matches_source_page,
     _latency_budget_checks,
+    _missing_term_groups,
     _refs_payload_is_full,
     evaluate_replay_rows,
     load_fixture,
@@ -13,6 +17,7 @@ from tools.research_qa.run_research_qa_eval import (
     source_path_for_doc,
     validate_case,
     validate_fixture_contracts,
+    validate_fixture_sources,
 )
 
 
@@ -72,7 +77,7 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
     fixture = load_fixture()
 
     assert len(fixture.docs) == 22
-    assert len(fixture.cases) == 15
+    assert len(fixture.cases) == 30
     case_ids = {str(item.get("id") or "") for item in fixture.cases}
     assert {
         "spi-roadmap-beginner",
@@ -90,6 +95,86 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
         "ECCV-2022-Simple Baselines for Image Restoration/"
         "ECCV-2022-Simple Baselines for Image Restoration.en.md"
     )
+    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 15
+
+
+def test_source_grounded_contracts_match_page_marked_markdown(tmp_path):
+    source_dir = tmp_path / "paper"
+    source_dir.mkdir()
+    (source_dir / "paper.en.md").write_text(
+        "<!-- kb_page: 1 -->\n## Abstract\nalpha evidence\n"
+        "<!-- kb_page: 2 -->\n## Method\nbeta evidence\n",
+        encoding="utf-8",
+    )
+    fixture = ResearchQaFixture(
+        db_root=str(tmp_path),
+        docs=[{"id": "paper", "dir": "paper", "file": "paper"}],
+        cases=[
+            {
+                "id": "grounded",
+                "sourceGrounded": True,
+                "expected": {
+                    "claimEvidenceContracts": [
+                        {"id": "claim", "docId": "paper", "sourcePage": 2, "evidenceTerms": ["beta"]}
+                    ],
+                    "requiredLocateContracts": [
+                        {"id": "locate", "docId": "paper", "sourcePage": 2, "evidenceTerms": ["evidence"]}
+                    ],
+                },
+            }
+        ],
+        forbidden_phrases=[],
+    )
+
+    assert validate_fixture_sources(fixture, db_root=tmp_path) == []
+
+    fixture.cases[0]["expected"]["claimEvidenceContracts"][0]["evidenceTerms"] = ["alpha"]
+    errors = validate_fixture_sources(fixture, db_root=tmp_path)
+    assert len(errors) == 1
+    assert "page 2 missing evidence terms: alpha" in errors[0]
+
+
+def test_source_page_contract_rejects_missing_or_wrong_citation_page():
+    assert _detail_matches_source_page({"page_start": 2}, 2)
+    assert _detail_matches_source_page({"page_start": 2, "page_end": 4}, 3)
+    assert not _detail_matches_source_page({"page_start": 3}, 2)
+    assert not _detail_matches_source_page({"location_label": "Method"}, 2)
+
+
+def test_multilingual_term_groups_accept_one_reviewed_surface_per_claim():
+    groups = [["Poisson", "泊松"], ["crosstalk", "串扰"], ["dark count rate", "暗计数"]]
+
+    assert _missing_term_groups("模型包含泊松噪声、串扰和暗计数。", groups) == []
+    assert _missing_term_groups("模型只包含泊松噪声。", groups) == groups[1:]
+
+
+def test_term_groups_ignore_spacing_between_numbers_and_cjk_units():
+    groups = [["four", "4 个", "四个"], ["8 frames per second", "8 帧/秒", "8 fps"]]
+
+    assert _missing_term_groups("系统使用4个探测器，速度约为8帧/秒。", groups) == []
+
+
+def test_claim_contract_can_validate_split_claims_against_full_response():
+    fixture = load_fixture()
+    case = _case_by_id(fixture, "three-d-video-real-time-mechanism")
+    contract = dict((case.get("expected") or {})["claimEvidenceContracts"][0])
+    source_path = source_path_for_doc(fixture, "3d-sp-video")
+    answer = "系统使用四个探测器，在 64 \\times 64 分辨率下约为 8 帧/秒。"
+    details = [
+        {
+            "citation_route": "system_a",
+            "source_path": source_path,
+            "page_start": 2,
+            "page_end": 2,
+            "answer_claim": "该方法支持动态场景重建。",
+            "evidence_quote": (
+                "The system uses four spatially-separated detectors and reconstructs video at "
+                "8 frames per second for 64 \\times 64 pixels."
+            ),
+        }
+    ]
+
+    assert _claim_evidence_contract_failures(fixture, details, [contract], answer=answer) == []
 
 
 def test_research_qa_fixture_enforces_system_b_trace_policy():

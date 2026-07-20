@@ -27,6 +27,7 @@ DEFAULT_FIXTURE = Path("web/src/testing/researchQaData.json")
 DEFAULT_REPLAY = Path("docs/research_qa_grounded_replay_v1.jsonl")
 DEFAULT_OUT_DIR = Path("test_results/research_qa_eval")
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+DEFAULT_DB_ROOT = Path("db")
 
 REQUIRED_EVALUATION_FOCUSES = {
     "paper_summary",
@@ -210,6 +211,29 @@ def validate_fixture_contracts(fixture: ResearchQaFixture) -> list[str]:
         unknown_docs = sorted(set(doc_ids) - known_docs)
         if unknown_docs:
             errors.append(f"{case_id}: unknown doc ids: {', '.join(unknown_docs)}")
+        if bool(case.get("sourceGrounded")):
+            source_contracts = [
+                item
+                for item in _as_list(expected.get("claimEvidenceContracts"))
+                if isinstance(item, dict)
+            ]
+            locate_contracts = [
+                item
+                for item in _as_list(expected.get("requiredLocateContracts"))
+                if isinstance(item, dict)
+            ]
+            if not source_contracts:
+                errors.append(f"{case_id}: source-grounded case requires claimEvidenceContracts")
+            if not locate_contracts:
+                errors.append(f"{case_id}: source-grounded case requires requiredLocateContracts")
+            for contract in [*source_contracts, *locate_contracts]:
+                contract_id = str(contract.get("id") or "<missing-contract-id>")
+                if not str(contract.get("docId") or "").strip():
+                    errors.append(f"{case_id}/{contract_id}: source-grounded contract requires docId")
+                if _contract_source_page(contract) is None:
+                    errors.append(f"{case_id}/{contract_id}: source-grounded contract requires sourcePage")
+                if not _contract_terms(contract.get("evidenceTerms")):
+                    errors.append(f"{case_id}/{contract_id}: source-grounded contract requires evidenceTerms")
         if not focus:
             continue
         if not _as_list(expected.get("allowedRefDocIds")):
@@ -226,7 +250,12 @@ def validate_fixture_contracts(fixture: ResearchQaFixture) -> list[str]:
     return errors
 
 
-def source_path_for_doc(fixture: ResearchQaFixture, doc_id: str) -> str:
+def source_path_for_doc(
+    fixture: ResearchQaFixture,
+    doc_id: str,
+    *,
+    db_root: Path | str | None = None,
+) -> str:
     doc = fixture.docs_by_id.get(str(doc_id or ""))
     if not isinstance(doc, dict):
         return ""
@@ -234,7 +263,80 @@ def source_path_for_doc(fixture: ResearchQaFixture, doc_id: str) -> str:
     file_stem = str(doc.get("file") or directory).strip()
     if not directory or not file_stem:
         return ""
-    return f"{fixture.db_root.rstrip('/')}/{directory}/{file_stem}.en.md"
+    if db_root is None:
+        root = fixture.db_root.rstrip("/\\")
+        return f"{root}/{directory}/{file_stem}.en.md"
+    return str(Path(db_root) / directory / f"{file_stem}.en.md")
+
+
+_PAGE_MARKER_RE = re.compile(r"<!--\s*kb_page:\s*(\d+)\s*-->", flags=re.IGNORECASE)
+
+
+def _source_pages(markdown: str) -> dict[int, str]:
+    matches = list(_PAGE_MARKER_RE.finditer(str(markdown or "")))
+    pages: dict[int, str] = {}
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        pages[int(match.group(1))] = markdown[start:end]
+    return pages
+
+
+def _contract_source_page(contract: dict[str, Any]) -> int | None:
+    try:
+        page = int(contract.get("sourcePage") or 0)
+    except (TypeError, ValueError):
+        return None
+    return page if page > 0 else None
+
+
+def validate_fixture_sources(
+    fixture: ResearchQaFixture,
+    *,
+    db_root: Path | str = DEFAULT_DB_ROOT,
+) -> list[str]:
+    """Verify reviewed source-grounded contracts against the current Markdown corpus."""
+
+    errors: list[str] = []
+    source_cache: dict[str, dict[int, str]] = {}
+    for case in fixture.cases:
+        if not bool(case.get("sourceGrounded")):
+            continue
+        case_id = str(case.get("id") or "<missing-id>")
+        expected = case.get("expected") if isinstance(case.get("expected"), dict) else {}
+        contracts = [
+            ("claim", item)
+            for item in _as_list(expected.get("claimEvidenceContracts"))
+            if isinstance(item, dict)
+        ]
+        contracts.extend(
+            ("locate", item)
+            for item in _as_list(expected.get("requiredLocateContracts"))
+            if isinstance(item, dict)
+        )
+        for contract_kind, contract in contracts:
+            contract_id = str(contract.get("id") or contract_kind)
+            doc_id = str(contract.get("docId") or "").strip()
+            page = _contract_source_page(contract)
+            source_path = Path(source_path_for_doc(fixture, doc_id, db_root=db_root))
+            if not source_path.is_file():
+                errors.append(f"{case_id}/{contract_id}: source markdown not found: {source_path}")
+                continue
+            cache_key = str(source_path.resolve())
+            if cache_key not in source_cache:
+                source_cache[cache_key] = _source_pages(source_path.read_text(encoding="utf-8", errors="ignore"))
+            pages = source_cache[cache_key]
+            if page not in pages:
+                errors.append(f"{case_id}/{contract_id}: source page {page} not found in {source_path.name}")
+                continue
+            page_text = pages[page]
+            evidence_terms = _contract_terms(contract.get("evidenceTerms"))
+            missing_terms = [term for term in evidence_terms if not _contains_term(page_text, term)]
+            if missing_terms:
+                errors.append(
+                    f"{case_id}/{contract_id}: page {page} missing evidence terms: {', '.join(missing_terms)}"
+                )
+    return errors
 
 
 def _norm(value: Any) -> str:
@@ -268,10 +370,15 @@ def _payload_text(value: Any) -> str:
 
 
 def _contains_term(haystack: Any, term: str) -> bool:
-    hay = _norm(haystack)
+    surface = _payload_text(haystack) if isinstance(haystack, (dict, list)) else haystack
+    hay = _norm(surface)
+    hay_compact = re.sub(r"\s+", "", hay)
     for needle in _term_aliases(term):
         needle_norm = _norm(needle)
-        if needle_norm and needle_norm in hay:
+        if needle_norm and (
+            needle_norm in hay
+            or re.sub(r"\s+", "", needle_norm) in hay_compact
+        ):
             return True
     return False
 
@@ -740,25 +847,58 @@ def _contract_terms(value: Any) -> list[str]:
     return [str(item or "").strip() for item in _as_list(value) if str(item or "").strip()]
 
 
+def _missing_term_groups(payload: Any, value: Any) -> list[list[str]]:
+    groups = [
+        _contract_terms(group)
+        for group in _as_list(value)
+        if _contract_terms(group)
+    ]
+    return [group for group in groups if not any(_contains_term(payload, term) for term in group)]
+
+
+def _detail_matches_source_page(detail: dict[str, Any], source_page: int | None) -> bool:
+    if source_page is None:
+        return True
+    try:
+        page_start = int(detail.get("page_start") or detail.get("pageStart") or 0)
+        page_end = int(detail.get("page_end") or detail.get("pageEnd") or page_start)
+    except (TypeError, ValueError):
+        return False
+    return page_start > 0 and page_start <= source_page <= max(page_start, page_end)
+
+
 def _claim_evidence_contract_failures(
     fixture: ResearchQaFixture,
     citation_details: list[dict[str, Any]],
     contracts: list[dict[str, Any]],
+    *,
+    answer: str = "",
 ) -> list[dict[str, Any]]:
     failures: list[dict[str, Any]] = []
     for index, contract in enumerate(contracts, start=1):
         contract_id = str(contract.get("id") or f"claim-{index}").strip()
         answer_terms = _contract_terms(contract.get("answerTerms"))
+        answer_term_groups = _as_list(contract.get("answerTermGroups"))
         evidence_terms = _contract_terms(contract.get("evidenceTerms"))
+        source_page = _contract_source_page(contract)
+        answer_scope = str(contract.get("answerScope") or "citation_claim").strip().lower()
         candidates = _matching_citation_details(fixture, citation_details, contract)
         matched = False
         for detail in candidates:
-            claim_payload = {
-                "answer_claim": detail.get("answer_claim"),
-                "support_relation": detail.get("support_relation"),
-                "user_question_relation": detail.get("user_question_relation"),
-            }
+            if not _detail_matches_source_page(detail, source_page):
+                continue
+            claim_payload: Any
+            if answer_scope in {"response", "full_answer", "answer"}:
+                claim_payload = answer
+            else:
+                claim_payload = {
+                    "answer_claim": detail.get("answer_claim"),
+                    "support_relation": detail.get("support_relation"),
+                    "user_question_relation": detail.get("user_question_relation"),
+                }
             if answer_terms and not all(_contains_term(claim_payload, term) for term in answer_terms):
+                continue
+            if _missing_term_groups(claim_payload, answer_term_groups):
                 continue
             evidence_payload = _detail_evidence_payload(detail)
             if evidence_terms and not all(_contains_term(evidence_payload, term) for term in evidence_terms):
@@ -773,7 +913,10 @@ def _claim_evidence_contract_failures(
                     "route": str(contract.get("route") or ""),
                     "candidate_count": len(candidates),
                     "answer_terms": answer_terms,
+                    "answer_term_groups": answer_term_groups,
+                    "answer_scope": answer_scope,
                     "evidence_terms": evidence_terms,
+                    "source_page": source_page,
                 }
             )
     return failures
@@ -789,9 +932,12 @@ def _locate_contract_failures(
         contract_id = str(contract.get("id") or f"locate-{index}").strip()
         locator_terms = _contract_terms(contract.get("locatorTerms"))
         evidence_terms = _contract_terms(contract.get("evidenceTerms"))
+        source_page = _contract_source_page(contract)
         candidates = _matching_citation_details(fixture, citation_details, contract)
         matched = False
         for detail in candidates:
+            if not _detail_matches_source_page(detail, source_page):
+                continue
             locator_payload = _detail_locator_payload(detail)
             if locator_terms and not all(_contains_term(locator_payload, term) for term in locator_terms):
                 continue
@@ -811,6 +957,7 @@ def _locate_contract_failures(
                     "candidate_count": len(candidates),
                     "locator_terms": locator_terms,
                     "evidence_terms": evidence_terms,
+                    "source_page": source_page,
                 }
             )
     return failures
@@ -1094,6 +1241,14 @@ def validate_case(
     required_terms = [str(item) for item in _as_list(expected.get("requiredAnswerTerms")) if str(item or "").strip()]
     missing_answer_terms = [term for term in required_terms if not _contains_term(answer, term)]
     add_check("answer_contains_required_terms", not missing_answer_terms, missing_answer_terms)
+    required_term_groups = _as_list(expected.get("requiredAnswerTermGroups"))
+    missing_answer_term_groups = _missing_term_groups(answer, required_term_groups)
+    if required_term_groups:
+        add_check(
+            "answer_contains_required_term_groups",
+            not missing_answer_term_groups,
+            missing_answer_term_groups,
+        )
 
     forbidden_answer_terms = _contract_terms(expected.get("forbiddenAnswerTerms"))
     if forbidden_answer_terms:
@@ -1222,6 +1377,7 @@ def validate_case(
             fixture,
             contract_citation_details,
             claim_evidence_contracts,
+            answer=answer,
         )
         add_check("claims_have_matching_evidence", not claim_contract_failures, claim_contract_failures)
 
@@ -1702,6 +1858,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Validate a human-reviewed deterministic JSONL replay without calling the API.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Load fixture and print planned cases without calling API.")
+    parser.add_argument(
+        "--validate-sources",
+        action="store_true",
+        help="Check source-grounded contracts against page-marked Markdown without calling the API.",
+    )
+    parser.add_argument(
+        "--db-root",
+        default=str(DEFAULT_DB_ROOT),
+        help="Markdown corpus root used by --validate-sources (default: db).",
+    )
     parser.add_argument("--fail-on-quality", action="store_true", help="Exit 1 when any quality check fails.")
     args = parser.parse_args(argv)
 
@@ -1721,6 +1887,25 @@ def main(argv: list[str] | None = None) -> int:
     if not selected_cases:
         print("[ERROR] no cases selected", file=sys.stderr)
         return 2
+
+    if args.validate_sources:
+        source_fixture = ResearchQaFixture(
+            db_root=fixture.db_root,
+            docs=fixture.docs,
+            cases=selected_cases,
+            forbidden_phrases=fixture.forbidden_phrases,
+        )
+        source_errors = validate_fixture_sources(source_fixture, db_root=args.db_root)
+        if source_errors:
+            for error in source_errors:
+                print(f"[ERROR] {error}", file=sys.stderr)
+            return 1
+        grounded_count = sum(1 for case in selected_cases if bool(case.get("sourceGrounded")))
+        print(
+            f"[OK] source grounding: cases={grounded_count} "
+            f"db_root={Path(args.db_root).resolve()}"
+        )
+        return 0
 
     if args.replay:
         summary = evaluate_replay_rows(
@@ -1743,6 +1928,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[OK] fixture: {fixture_path}")
         print(f"[OK] docs: {len(fixture.docs)}")
         print(f"[OK] cases: {len(selected_cases)}")
+        print(f"[OK] source-grounded cases: {sum(1 for case in selected_cases if bool(case.get('sourceGrounded')))}")
         focus_counts: dict[str, int] = {}
         for idx, case in enumerate(selected_cases, start=1):
             doc_ids = ", ".join(str(item) for item in _as_list(case.get("docIds")))

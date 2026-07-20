@@ -20,6 +20,30 @@ class _FakeStore:
         return self._refs
 
 
+def test_attach_assistant_answers_to_refs_keeps_alignment_text_internal():
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-answer"
+            return [
+                {"id": 10, "role": "user", "content": "question"},
+                {"id": 11, "role": "assistant", "content": "grounded final answer"},
+                {"id": 12, "role": "user", "content": "other"},
+                {"id": 13, "role": "assistant", "content": "other answer"},
+            ]
+
+    refs = {10: {"prompt": "question", "hits": []}}
+    attached = references_router._attach_assistant_answers_to_refs(
+        store=Store(),
+        conv_id="conv-answer",
+        refs=refs,
+    )
+
+    assert attached[10]["answer_text"] == "grounded final answer"
+    assert len(attached[10]["answer_sig"]) == 40
+    assert "answer_text" not in references_router.public_refs_payload_projection(attached)[10]
+    assert "answer_sig" not in references_router.public_refs_payload_projection(attached)[10]
+
+
 def test_get_conversation_refs_reuses_cached_payload_when_signature_is_unchanged(monkeypatch):
     references_router._REFS_CONVERSATION_CACHE.clear()
     references_router._REFS_CONVERSATION_WARMING.clear()

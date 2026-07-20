@@ -1032,6 +1032,8 @@ def _normalize_primary_ref_evidence_payload(
         "highlight_snippet": highlight_snippet or snippet or None,
         "anchor_kind": str(primary_evidence.get("anchor_kind") or primary_evidence.get("anchorKind") or "").strip().lower() or None,
         "anchor_number": _positive_int(primary_evidence.get("anchor_number") or primary_evidence.get("anchorNumber")) or None,
+        "page_start": _positive_int(primary_evidence.get("page_start") or primary_evidence.get("pageStart")) or None,
+        "page_end": _positive_int(primary_evidence.get("page_end") or primary_evidence.get("pageEnd")) or None,
         "selection_reason": str(primary_evidence.get("selection_reason") or primary_evidence.get("selectionReason") or "").strip() or None,
     }
     strict_locate_raw = primary_evidence.get("strict_locate")

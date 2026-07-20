@@ -105,7 +105,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 11
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 13
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000
@@ -286,6 +286,7 @@ def _refs_conversation_cache_signature(
         payload = {
             "user_msg_id": user_msg_key if user_msg_key > 0 else str(user_msg_id),
             "prompt_sig": str(pack.get("prompt_sig") or "").strip(),
+            "answer_sig": str(pack.get("answer_sig") or "").strip(),
             "used_query": str(pack.get("used_query") or "").strip(),
             "used_translation": bool(pack.get("used_translation")),
             "updated_at": float(pack.get("updated_at") or 0.0),
@@ -334,6 +335,7 @@ def _refs_pack_render_signature(
         "ui_locale": str((prefs or {}).get("ui_locale") or "").strip().lower(),
         "prompt": str((pack or {}).get("prompt") or "").strip(),
         "prompt_sig": str((pack or {}).get("prompt_sig") or "").strip(),
+        "answer_sig": str((pack or {}).get("answer_sig") or "").strip(),
         "used_query": str((pack or {}).get("used_query") or "").strip(),
         "used_translation": bool((pack or {}).get("used_translation")),
         "hits": list((pack or {}).get("hits") or []),
@@ -381,6 +383,7 @@ def _refs_cache_input_pack_signature(pack: dict | None) -> str:
     payload = {
         "prompt": str(src.get("prompt") or "").strip(),
         "prompt_sig": str(src.get("prompt_sig") or "").strip(),
+        "answer_sig": str(src.get("answer_sig") or "").strip(),
         "used_query": str(src.get("used_query") or "").strip(),
         "used_translation": bool(src.get("used_translation")),
         "updated_at": updated_at,
@@ -389,6 +392,49 @@ def _refs_cache_input_pack_signature(pack: dict | None) -> str:
     }
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
+def _attach_assistant_answers_to_refs(*, store, conv_id: str, refs: dict | None) -> dict:
+    """Keep final answers internal so evidence cards can align to supported claims."""
+
+    refs_out = {
+        int(key): dict(value)
+        for key, value in dict(refs or {}).items()
+        if (str(key).isdigit() or isinstance(key, int)) and isinstance(value, dict)
+    }
+    if not refs_out or not hasattr(store, "get_messages"):
+        return refs_out
+    try:
+        messages = store.get_messages(conv_id)
+    except Exception:
+        return refs_out
+    wanted = set(refs_out)
+    answers: dict[int, str] = {}
+    active_user_msg_id = 0
+    for message in list(messages or []):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        try:
+            message_id = int(message.get("id") or 0)
+        except (TypeError, ValueError):
+            message_id = 0
+        if role == "user":
+            active_user_msg_id = message_id if message_id in wanted else 0
+            continue
+        if role != "assistant" or active_user_msg_id <= 0:
+            continue
+        answer_text = str(message.get("content") or "").strip()
+        if not answer_text:
+            continue
+        answers[active_user_msg_id] = answer_text
+        active_user_msg_id = 0
+    for user_msg_id, answer_text in answers.items():
+        pack = dict(refs_out.get(user_msg_id) or {})
+        pack["answer_text"] = answer_text
+        pack["answer_sig"] = hashlib.sha1(answer_text.encode("utf-8")).hexdigest()
+        refs_out[user_msg_id] = pack
+    return refs_out
 
 
 def _refs_cache_input_signatures(refs: dict | None) -> dict[str, str]:
@@ -1656,7 +1702,11 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         cached_any = _get_any_cached_conversation_refs_payload(conv_id=conv_id)
         return _finish(cached_any if isinstance(cached_any, dict) else {}, "cache_fallback")
     _record("list_refs", phase_started_at)
-    refs_norm = refs if isinstance(refs, dict) else {}
+    refs_norm = _attach_assistant_answers_to_refs(
+        store=store,
+        conv_id=conv_id,
+        refs=refs if isinstance(refs, dict) else {},
+    )
     all_user_msg_ids: set[int] = set()
     for key in refs_norm.keys():
         try:
