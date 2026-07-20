@@ -1506,8 +1506,11 @@ def test_generate_stream_sanitizes_internal_support_markers(monkeypatch):
 
     assert "SUPPORT:" not in payload["partial"]
     assert "SUPPORT:" not in payload["answer"]
-    assert "[[CITE:ref-1:12]]" in payload["partial"]
-    assert "[[CITE:ref-2:34]]" in payload["answer"]
+    # Citation protocol tokens are internal too.  The streaming surface does
+    # not yet have hydrated citation metadata, so exposing them creates raw or
+    # empty bracket shells; real clickable citations arrive with hydration.
+    assert "CITE:" not in payload["partial"]
+    assert "CITE:" not in payload["answer"]
     assert payload["char_count"] == len(payload["partial"])
 
 
