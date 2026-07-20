@@ -181,7 +181,11 @@ def _refs_payload_has_primary_evidence(payload: dict | None) -> bool:
 
 def _sync_message_render_packets_with_refs_payload(*, store, conv_id: str, payload: dict | None, mode: str) -> None:
     mode_s = str(mode or "").strip().lower()
-    if mode_s in {"pending", "cache_pending"}:
+    # Fast/pending snapshots are intentionally non-authoritative.  Rebuilding
+    # all message render packets here adds several seconds to every references
+    # read and cannot improve the final citation contract.  The full background
+    # render performs the convergence sync once its evidence is complete.
+    if mode_s in {"pending", "cache_pending", "fast", "cache_fast"}:
         return
     if not _refs_payload_has_primary_evidence(payload):
         return
@@ -907,6 +911,25 @@ def _payload_is_authoritative_doc_list_pack(payload_pack: dict | None, authorita
     return bool(actual_paths) and actual_paths == expected_paths
 
 
+def _cached_payload_matches_authoritative_doc_lists(
+    cached_payload: dict | None,
+    authoritative_doc_lists: dict[int, list[dict]] | None,
+) -> bool:
+    if not isinstance(cached_payload, dict):
+        return False
+    for raw_user_msg_id, doc_list in dict(authoritative_doc_lists or {}).items():
+        try:
+            user_msg_id = int(raw_user_msg_id)
+        except Exception:
+            return False
+        payload_pack = cached_payload.get(user_msg_id)
+        if not isinstance(payload_pack, dict):
+            payload_pack = cached_payload.get(str(user_msg_id))
+        if not _payload_is_authoritative_doc_list_pack(payload_pack, doc_list):
+            return False
+    return True
+
+
 def _rebuild_authoritative_doc_list_from_pack(*, prompt: str, pack: dict, guide_mode: bool) -> list[dict]:
     prompt_text = str(prompt or "").strip()
     if guide_mode or (not prompt_explicitly_requests_multi_paper_list(prompt_text)):
@@ -1365,7 +1388,12 @@ def _warm_conversation_refs_payload_async(
                         guide_source_name=str(guide_source_name or "").strip(),
                         pending=False,
                         allow_expensive_llm=_refs_background_llm_polish_enabled(),
-                        allow_citation_prefetch=True,
+                        # Exact source positioning remains enabled below, but
+                        # remote metadata refresh must not hold the full-card
+                        # transition open.  Cached/local DOI and metrics are
+                        # hydrated on the read path and remote refresh can run
+                        # independently.
+                        allow_citation_prefetch=False,
                     )
                     if isinstance(rendered, dict) and rendered:
                         payload[user_msg_id] = rendered
@@ -1741,8 +1769,15 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
     _record("cache_lookup", phase_started_at)
     cached_payload = cached_rec.get("payload") if isinstance(cached_rec, dict) else None
     cached_mode = str(cached_rec.get("mode") or "").strip().lower() if isinstance(cached_rec, dict) else ""
-    if isinstance(cached_payload, dict) and cached_mode == "full" and (not has_authoritative_doc_list):
-        return _finish(cached_payload, "cache_full")
+    if isinstance(cached_payload, dict) and cached_mode == "full":
+        if (
+            (not has_authoritative_doc_list)
+            or _cached_payload_matches_authoritative_doc_lists(
+                cached_payload,
+                authoritative_doc_lists,
+            )
+        ):
+            return _finish(cached_payload, "cache_full")
 
     stored_full_payload: dict[int, dict] = {}
     pending_refs: dict[int, dict] = {}
@@ -1804,7 +1839,10 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                 guide_mode=bool(guide_mode),
                 guide_source_path=str(guide_source_path or "").strip(),
                 guide_source_name=str(guide_source_name or "").strip(),
-                pending=False,
+                # The first read is a fast snapshot.  Strict block matching is
+                # completed by the background full render below; doing it here
+                # can synchronously block the references endpoint for minutes.
+                pending=bool(authoritative_doc_list),
                 allow_expensive_llm=False,
             )
             if isinstance(authoritative_payload, dict) and authoritative_payload:

@@ -711,7 +711,7 @@ def test_get_conversation_refs_full_payload_prefers_authoritative_doc_list_over_
     assert pack["render_status"] == "fast"
     assert pack["payload_mode"] == "fast"
     assert pack["enrichment_pending"] is True
-    assert dict(calls.get("kwargs") or {}).get("allow_exact_locate") is True
+    assert dict(calls.get("kwargs") or {}).get("allow_exact_locate") is False
     assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is False
     assert dict(calls.get("kwargs") or {}).get("allow_citation_prefetch") is False
     assert dict(calls.get("kwargs") or {}).get("apply_copy_polish") is True
@@ -1547,7 +1547,7 @@ def test_warm_conversation_refs_payload_async_polishes_authoritative_doc_list_an
     assert calls["user_msg_id"] == 13
     assert calls["doc_list"] == doc_list
     assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is True
-    assert dict(calls.get("kwargs") or {}).get("allow_citation_prefetch") is True
+    assert dict(calls.get("kwargs") or {}).get("allow_citation_prefetch") is False
     assert dict(calls.get("persisted") or {}).get("payload") == {
         13: {"hits": [{"ui_meta": {"summary_generation": "llm_grounded"}}]}
     }
@@ -1625,6 +1625,50 @@ def test_fast_exact_refs_are_detected_for_two_stage_rendering():
 
     assert references_router._refs_payload_has_fast_exact_hit(refs) is True
     assert references_router._refs_payload_has_fast_exact_hit({13: {"hits": []}}) is False
+
+
+def test_full_cache_accepts_matching_authoritative_doc_list_only():
+    doc_list = [
+        {"source_path": r"db\A\A.en.md", "source_name": "A.pdf"},
+        {"source_path": r"db\B\B.en.md", "source_name": "B.pdf"},
+    ]
+    cached_payload = {
+        13: {
+            "pipeline_debug": {"doc_list_authoritative": True},
+            "hits": [
+                {"ui_meta": {"source_path": r"db\A\A.en.md"}},
+                {"ui_meta": {"source_path": r"db\B\B.en.md"}},
+            ],
+        }
+    }
+
+    assert references_router._cached_payload_matches_authoritative_doc_lists(
+        cached_payload,
+        {13: doc_list},
+    )
+    assert not references_router._cached_payload_matches_authoritative_doc_lists(
+        cached_payload,
+        {13: list(reversed(doc_list))},
+    )
+
+
+def test_fast_refs_snapshot_does_not_rebuild_message_render_packets():
+    class _Store:
+        def get_messages(self, conv_id: str):
+            raise AssertionError(f"fast snapshot must not load messages for {conv_id}")
+
+    references_router._sync_message_render_packets_with_refs_payload(
+        store=_Store(),
+        conv_id="conv-fast-snapshot",
+        payload={
+            13: {
+                "hits": [
+                    {"ui_meta": {"primary_evidence": {"snippet": "grounded evidence"}}},
+                ]
+            }
+        },
+        mode="fast",
+    )
 
 
 def test_get_conversation_refs_returns_fast_exact_card_then_kicks_llm_warm(monkeypatch):

@@ -8,6 +8,7 @@ from tools.research_qa.run_research_qa_eval import (
     _case_requires_full_refs_wait,
     _claim_evidence_contract_failures,
     _detail_matches_source_page,
+    _generation_should_wait_for_full_refs,
     _latency_budget_checks,
     _missing_term_groups,
     _refs_payload_is_full,
@@ -51,6 +52,19 @@ def test_quality_contract_waits_for_full_reference_cards() -> None:
     assert _case_requires_full_refs_wait({"requireCitationShelfQuality": True})
     assert _case_requires_full_refs_wait({"maxCardsCompleteMs": 30000})
     assert not _case_requires_full_refs_wait({"minRefHits": 3})
+
+
+def test_failed_generation_does_not_wait_for_full_reference_cards() -> None:
+    expected = {"maxCardsCompleteMs": 30000}
+
+    assert _generation_should_wait_for_full_refs(
+        {"done": True, "status": "done"},
+        expected,
+    )
+    assert not _generation_should_wait_for_full_refs(
+        {"done": True, "status": "error", "error": "not_found"},
+        expected,
+    )
 
 
 def _case_by_id(fixture, case_id: str):

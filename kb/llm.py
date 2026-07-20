@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import queue
+import threading
 import time
 from typing import Any, Iterator, Optional
 
@@ -221,8 +223,8 @@ class DeepSeekChat:
             return
 
         client, model = self._select_model(messages)
-        routes: list[tuple[OpenAI, str, float]] = [
-            (client, model, self._primary_stream_timeout_s())
+        routes: list[tuple[OpenAI, str, float, str]] = [
+            (client, model, self._primary_stream_timeout_s(), "text")
         ]
         if (
             bool(getattr(self._settings, "auto_route", False))
@@ -234,33 +236,25 @@ class DeepSeekChat:
                     self._vision_client,
                     str(getattr(self._settings, "vision_model", "") or "").strip(),
                     float(self._settings.timeout_s),
+                    "vision",
                 )
             )
 
         last_err: Optional[Exception] = None
-        for route_index, (route_client, route_model, route_timeout) in enumerate(routes):
+        for route_index, (route_client, route_model, route_timeout, route_kind) in enumerate(routes):
             emitted = False
             try:
-                resp = route_client.chat.completions.create(
+                for piece in self._stream_route_with_visible_deadlines(
+                    client=route_client,
+                    route_kind=route_kind,
                     model=route_model,
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout=route_timeout,
-                    stream=True,
-                )
-                for event in resp:
-                    try:
-                        choice0 = event.choices[0]
-                        delta = getattr(choice0, "delta", None)
-                        piece = ""
-                        if delta is not None:
-                            piece = (getattr(delta, "content", None) or "")
-                        if piece:
-                            emitted = True
-                            yield piece
-                    except Exception:
-                        continue
+                    request_timeout_s=route_timeout,
+                ):
+                    emitted = True
+                    yield piece
                 return
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
@@ -269,8 +263,130 @@ class DeepSeekChat:
         if last_err is not None:
             raise last_err
 
+    def _stream_route_with_visible_deadlines(
+        self,
+        *,
+        client: OpenAI,
+        route_kind: str,
+        model: str,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+        request_timeout_s: float,
+    ) -> Iterator[str]:
+        """Stream one route with wall-clock deadlines for visible output.
+
+        Provider streams may send HTTP keepalives or empty deltas indefinitely,
+        so the SDK read timeout alone cannot bound the wait users see.  The
+        request runs on a daemon worker and only non-empty text resets the
+        visible-output deadline.
+        """
+
+        events: queue.Queue[tuple[str, Any]] = queue.Queue()
+        stop = threading.Event()
+        resources: dict[str, Any] = {}
+
+        def run() -> None:
+            route_client = client
+            owns_client = False
+            try:
+                # Real SDK clients are recreated inside the worker.  Sharing a
+                # client created on another thread previously caused httpx pool
+                # corruption after a timed-out request.  Lightweight fake
+                # clients used by tests are intentionally reused.
+                if isinstance(client, OpenAI):
+                    if route_kind == "vision":
+                        api_key = self._settings.vision_api_key
+                        base_url = self._settings.vision_base_url
+                    else:
+                        api_key = self._settings.text_api_key
+                        base_url = self._settings.text_base_url
+                    route_client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+                    owns_client = True
+                resources["client"] = route_client
+                resp = route_client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=request_timeout_s,
+                    stream=True,
+                )
+                resources["response"] = resp
+                for event in resp:
+                    if stop.is_set():
+                        break
+                    try:
+                        choice0 = event.choices[0]
+                        delta = getattr(choice0, "delta", None)
+                        piece = (getattr(delta, "content", None) or "") if delta is not None else ""
+                    except Exception:
+                        continue
+                    if piece:
+                        events.put(("piece", piece))
+                events.put(("done", None))
+            except Exception as exc:  # noqa: BLE001
+                events.put(("error", exc))
+            finally:
+                if owns_client:
+                    try:
+                        route_client.close()
+                    except Exception:
+                        pass
+
+        worker = threading.Thread(target=run, name=f"llm-stream-{route_kind}", daemon=True)
+        worker.start()
+        emitted = False
+        try:
+            while True:
+                visible_timeout_s = (
+                    self._stream_idle_timeout_s()
+                    if emitted
+                    else self._first_visible_token_timeout_s()
+                )
+                try:
+                    kind, payload = events.get(timeout=visible_timeout_s)
+                except queue.Empty as exc:
+                    phase = "idle visible output" if emitted else "first visible token"
+                    raise TimeoutError(
+                        f"LLM stream timed out waiting for {phase} after {visible_timeout_s:.1f}s"
+                    ) from exc
+                if kind == "piece":
+                    emitted = True
+                    yield str(payload)
+                elif kind == "done":
+                    return
+                elif kind == "error":
+                    raise payload
+        finally:
+            stop.set()
+            for name in ("response", "client"):
+                resource = resources.get(name)
+                close = getattr(resource, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        pass
+
     def _primary_stream_timeout_s(self) -> float:
         configured = str(os.environ.get("KB_LLM_PRIMARY_STREAM_TIMEOUT_S", "25") or "25").strip()
+        try:
+            timeout_s = float(configured)
+        except Exception:
+            timeout_s = 25.0
+        return max(8.0, min(float(self._settings.timeout_s), timeout_s))
+
+    def _first_visible_token_timeout_s(self) -> float:
+        configured = str(os.environ.get("KB_LLM_FIRST_TOKEN_TIMEOUT_S", "12") or "12").strip()
+        try:
+            timeout_s = float(configured)
+        except Exception:
+            timeout_s = 12.0
+        return max(3.0, min(float(self._settings.timeout_s), timeout_s))
+
+    def _stream_idle_timeout_s(self) -> float:
+        configured = str(os.environ.get("KB_LLM_STREAM_IDLE_TIMEOUT_S", "25") or "25").strip()
         try:
             timeout_s = float(configured)
         except Exception:

@@ -2946,7 +2946,7 @@ def _refs_card_polish_llm_enabled() -> bool:
     return True
 
 
-def _refs_card_polish_timeout_s(default_s: float = 14.0) -> float:
+def _refs_card_polish_timeout_s(default_s: float = 7.0) -> float:
     try:
         raw = float(str(os.environ.get("KB_REFS_CARD_POLISH_TIMEOUT_S", str(default_s)) or str(default_s)))
     except Exception:
@@ -2956,10 +2956,15 @@ def _refs_card_polish_timeout_s(default_s: float = 14.0) -> float:
 
 def _refs_card_polish_max_retries() -> int:
     try:
-        raw = int(str(os.environ.get("KB_REFS_CARD_POLISH_MAX_RETRIES", "1") or "1"))
+        raw = int(str(os.environ.get("KB_REFS_CARD_POLISH_MAX_RETRIES", "0") or "0"))
     except Exception:
-        raw = 1
+        raw = 0
     return max(0, min(2, raw))
+
+
+def _refs_card_polish_second_pass_enabled() -> bool:
+    raw_flag = str(os.environ.get("KB_REFS_CARD_POLISH_SECOND_PASS", "0") or "").strip().lower()
+    return raw_flag in {"1", "true", "on", "yes"}
 
 
 def _refs_card_polish_top_n() -> int:
@@ -3734,7 +3739,7 @@ def _force_llm_ground_ref_hit_card_copy(
     needs_retry = not _is_llm_ref_summary_generation(
         str((result or {}).get("summary_generation") or "")
     )
-    if needs_retry and prepared.get("candidate_payload"):
+    if needs_retry and prepared.get("candidate_payload") and _refs_card_polish_second_pass_enabled():
         retry_summary, retry_why = _llm_polish_ref_card_copy_v2(
             prompt=prompt,
             display_name=str(prepared.get("title") or "").strip(),

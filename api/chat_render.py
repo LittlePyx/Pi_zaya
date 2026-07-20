@@ -1477,6 +1477,24 @@ def _citation_plan_with_ref_primary(plan: dict | None, ref_pack: dict | None) ->
     out = dict(plan or {}) if isinstance(plan, dict) else {}
     if not isinstance(ref_pack, dict):
         return out
+    existing_slots = [
+        dict(item)
+        for item in list(out.get("slots") or [])
+        if isinstance(item, dict)
+    ]
+    # Exact-support preflight has already resolved the occurrence, heading and
+    # upstream reference number from the source block.  A later References
+    # reader-open candidate may contain the same sentence duplicated under a
+    # nearby heading; replacing the exact slot would make the citation jump to
+    # the wrong section.
+    if str(out.get("source") or "").strip().lower() == "exact_support_preflight" and any(
+        str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+        and str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+        and str(slot.get("heading_path") or slot.get("headingPath") or "").strip()
+        and str(slot.get("evidence_quote") or "").strip()
+        for slot in existing_slots
+    ):
+        return out
     primary = ref_pack.get("primary_evidence")
     if not isinstance(primary, dict):
         return out
@@ -1486,7 +1504,7 @@ def _citation_plan_with_ref_primary(plan: dict | None, ref_pack: dict | None) ->
         return out
     block_id = str(primary.get("block_id") or primary.get("blockId") or "").strip()
     anchor_id = str(primary.get("anchor_id") or primary.get("anchorId") or "").strip()
-    slots = [dict(item) for item in list(out.get("slots") or []) if isinstance(item, dict)]
+    slots = existing_slots
     for slot in slots:
         same_block = bool(block_id and str(slot.get("block_id") or slot.get("blockId") or "").strip() == block_id)
         same_anchor = bool(anchor_id and str(slot.get("anchor_id") or slot.get("anchorId") or "").strip() == anchor_id)
@@ -2085,7 +2103,15 @@ def _augment_hits_with_system_a_plan_slots(
         and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
         and _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
     }
-    force_dedicated_plan_hits = len(plan_source_keys) >= 3
+    # Exact-support preflight resolves a concrete source occurrence before the
+    # slower reference-card enrichment runs.  Keep that occurrence as its own
+    # hit even when the retrieval row has identical text: the enriched row may
+    # point at a duplicate sentence under another heading, and reusing it would
+    # silently move the answer citation away from the verified block.
+    force_dedicated_plan_hits = (
+        len(plan_source_keys) >= 3
+        or str(citation_plan.get("source") or "").strip().lower() == "exact_support_preflight"
+    )
     for slot in plan_slots:
         if not isinstance(slot, dict):
             continue
@@ -3037,6 +3063,7 @@ def _reading_guide_repair_scigs_scinerf_comparison_evidence(
         if not source_path or not evidence:
             return text
         heading = str(primary.get("heading_path") or primary.get("headingPath") or "Abstract").strip()
+        answer_citation_num = len(hits) + 1
         hits.append(
             {
                 "text": evidence,
@@ -3049,6 +3076,11 @@ def _reading_guide_repair_scigs_scinerf_comparison_evidence(
                     "citation_plan_slot": True,
                     "citation_plan_claim_abstract": True,
                     "citation_plan_comparison_identity": kind,
+                    # Canonical answer numbering may be authoritative for the
+                    # original retrieval hits.  Give this repair hit an
+                    # explicit number too, otherwise the renderer refuses the
+                    # newly appended marker and falls back to a weaker hit.
+                    "ref_answer_citation_num": answer_citation_num,
                     "primary_block_id": str(primary.get("block_id") or "").strip(),
                     "primary_anchor_id": str(primary.get("anchor_id") or "").strip(),
                     "anchor_kind": str(primary.get("anchor_kind") or "paragraph").strip(),
@@ -3063,7 +3095,7 @@ def _reading_guide_repair_scigs_scinerf_comparison_evidence(
                 },
             }
         )
-        selected[kind] = len(hits)
+        selected[kind] = answer_citation_num
 
     scigs_num = int(selected["scigs"])
     scinerf_num = int(selected["scinerf"])

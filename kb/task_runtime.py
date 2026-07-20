@@ -379,8 +379,7 @@ from kb.retrieval_heuristics import (
     _should_bypass_kb_retrieval,
     _should_prioritize_attached_image,
 )
-from kb.store import load_all_chunks
-from kb.retriever import BM25Retriever
+from kb.retriever_cache import get_cached_retriever
 from kb.source_blocks import (
     extract_equation_number,
     has_equation_signal,
@@ -4615,10 +4614,19 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         retriever = None
         if not paper_guide_exact_preflight:
             t_load0 = time.perf_counter()
-            chunks = load_all_chunks(db_dir)
-            retriever = BM25Retriever(chunks)
-            _perf_log("gen.load_retriever", elapsed=time.perf_counter() - t_load0, chunks=len(chunks))
-            _trace_event("load_retriever", elapsed_s=time.perf_counter() - t_load0, chunks=len(chunks))
+            retriever, chunk_count, retriever_cache_hit = get_cached_retriever(db_dir)
+            _perf_log(
+                "gen.load_retriever",
+                elapsed=time.perf_counter() - t_load0,
+                chunks=chunk_count,
+                cache_hit=int(retriever_cache_hit),
+            )
+            _trace_event(
+                "load_retriever",
+                elapsed_s=time.perf_counter() - t_load0,
+                chunks=chunk_count,
+                cache_hit=bool(retriever_cache_hit),
+            )
         else:
             _trace_event("load_retriever_skipped", elapsed_s=0.0, reason="exact_support_preflight")
 

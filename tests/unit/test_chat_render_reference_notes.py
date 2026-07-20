@@ -6803,6 +6803,174 @@ def test_answer_aligned_ref_primary_becomes_page_aware_citation_plan_hit():
     assert hits[0]["ui_meta"]["primary_evidence"]["page_start"] == 2
 
 
+def test_exact_support_citation_plan_keeps_resolved_related_work_locator():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/SCINeRF/SCINeRF.en.md"
+    exact_plan = {
+        "source": "exact_support_preflight",
+        "intent": "origin_lookup",
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "SCINeRF / 2. Related Work",
+                "evidence_quote": "most existing methods employ ADMM [4]",
+                "block_id": "blk-related",
+            },
+            {
+                "preferred_system": "system_b",
+                "source_path": source_path,
+                "heading_path": "SCINeRF / 2. Related Work",
+                "candidate_refs": [4],
+            },
+        ],
+    }
+    refs_pack = {
+        "primary_evidence": {
+            "source_path": source_path,
+            "heading_path": "3. Method / 3.3. Proposed Framework",
+            "snippet": "Most existing methods employ ADMM.",
+            "block_id": "blk-duplicate-method",
+            "selection_reason": "reader_open_alt",
+            "strict_locate": True,
+        }
+    }
+
+    resolved = _citation_plan_with_ref_primary(exact_plan, refs_pack)
+
+    assert resolved["slots"] == exact_plan["slots"]
+    assert resolved["slots"][0]["heading_path"] == "SCINeRF / 2. Related Work"
+
+
+def test_exact_support_plan_gets_dedicated_hit_when_enriched_hit_reuses_text():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_slot_hit_nums,
+    )
+
+    source_path = "db/SCINeRF/SCINeRF.en.md"
+    evidence = "most existing methods employ ADMM [4]"
+    plan_slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "source_name": "SCINeRF",
+        "heading_path": "SCINeRF / 2. Related Work",
+        "evidence_quote": evidence,
+        "block_id": "blk-related",
+        "anchor_id": "p-related",
+        "strict_locate": True,
+    }
+    enriched_hit = {
+        "text": evidence,
+        "meta": {
+            "source_path": source_path,
+            "source_name": "SCINeRF",
+            "heading_path": "SCINeRF / 2. Related Work",
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "3. Method / 3.3. Proposed Framework",
+                "snippet": evidence,
+                "block_id": "blk-duplicate-method",
+            }
+        },
+    }
+
+    hits = _augment_hits_with_system_a_plan_slots(
+        [enriched_hit],
+        {
+            "source": "exact_support_preflight",
+            "intent": "origin_lookup",
+            "slots": [plan_slot],
+        },
+        reserved_count=1,
+    )
+
+    assert len(hits) == 2
+    assert hits[1]["meta"]["citation_plan_slot"] is True
+    assert hits[1]["ui_meta"]["primary_evidence"]["heading_path"] == "SCINeRF / 2. Related Work"
+    assert _reading_slot_hit_nums(plan_slot, hits, [source_path]) == [2]
+
+
+def test_scigs_comparison_abstract_repair_keeps_appended_citation_numbers(monkeypatch):
+    from api.chat_render import (
+        _annotate_inpaper_citations_with_hover_meta,
+        _reading_guide_repair_scigs_scinerf_comparison_evidence,
+    )
+
+    scigs_path = "db/SCIGS/SCIGS.en.md"
+    scinerf_path = "db/SCINeRF/SCINeRF.en.md"
+
+    def abstract_primary(_pack, detail):
+        source_path = str(detail.get("source_path") or "")
+        if "SCIGS" in source_path:
+            snippet = "SCIGS reconstructs an explicit 3D scene and extends it to dynamic 3D scenes."
+        else:
+            snippet = "We formulate the physical imaging process of SCI as part of training NeRF."
+        return {
+            "source_path": source_path,
+            "heading_path": "Abstract",
+            "snippet": snippet,
+            "block_id": f"blk-{source_path}",
+            "anchor_id": f"p-{source_path}",
+            "anchor_kind": "paragraph",
+            "strict_locate": True,
+        }
+
+    monkeypatch.setattr("api.chat_render._claim_aligned_abstract_primary_evidence", abstract_primary)
+    monkeypatch.setattr("ui.refs_renderer._is_temp_source_path", lambda _path: False)
+    monkeypatch.setattr("ui.refs_renderer._load_reference_index_cached", lambda: {})
+    hits = [
+        {
+            "text": "SCIGS experiment table.",
+            "meta": {
+                "source_path": scigs_path,
+                "source_name": "SCIGS",
+                "heading_path": "4. Experiments",
+                "ref_answer_citation_num": 1,
+            },
+        },
+        {
+            "text": "SCINeRF experiment table.",
+            "meta": {
+                "source_path": scinerf_path,
+                "source_name": "SCINeRF",
+                "heading_path": "4. Experiments",
+                "ref_answer_citation_num": 2,
+            },
+        },
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {"preferred_system": "system_a", "source_path": scigs_path, "source_name": "SCIGS"},
+            {"preferred_system": "system_a", "source_path": scinerf_path, "source_name": "SCINeRF"},
+        ],
+    }
+
+    repaired = _reading_guide_repair_scigs_scinerf_comparison_evidence(
+        "SCIGS 与 SCINeRF 的核心区别。",
+        hits,
+        plan,
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        repaired,
+        hits,
+        canonical_paths=[scigs_path, scinerf_path],
+        citation_plan=plan,
+    )
+
+    assert hits[2]["meta"]["ref_answer_citation_num"] == 3
+    assert hits[3]["meta"]["ref_answer_citation_num"] == 4
+    assert "[3](#" in rendered
+    assert "[4](#" in rendered
+    assert [detail["heading_path"] for detail in details] == ["Abstract", "Abstract"]
+
+
 def test_final_answer_alignment_runs_before_citation_repair(tmp_path, monkeypatch):
     monkeypatch.setattr("ui.refs_renderer._is_temp_source_path", lambda _path: False)
     source_path = tmp_path / "three-d-video.en.md"

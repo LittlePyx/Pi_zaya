@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from kb.llm import DeepSeekChat
 
 
@@ -119,6 +121,30 @@ def test_chat_stream_does_not_switch_provider_after_partial_output():
     else:
         raise AssertionError("partial stream failure should propagate")
     assert secondary_completions.calls == []
+
+
+def test_chat_stream_falls_back_when_primary_has_no_visible_token(monkeypatch):
+    class _SlowCompletions(_FakeCompletions):
+        def create(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            time.sleep(0.12)
+            return [_FakeEvent("too late")]
+
+    settings = _FakeSettings()
+    settings.auto_route = True
+    primary_completions = _SlowCompletions()
+    secondary_completions = _FakeCompletions(pieces=["timely", " fallback"])
+    ds = DeepSeekChat.__new__(DeepSeekChat)
+    ds._settings = settings
+    ds._text_client = _FakeClient(primary_completions)
+    ds._vision_client = _FakeClient(secondary_completions)
+    monkeypatch.setattr(ds, "_first_visible_token_timeout_s", lambda: 0.03)
+
+    out = list(ds.chat_stream(messages=[{"role": "user", "content": "hello"}]))
+
+    assert out == ["timely", " fallback"]
+    assert len(primary_completions.calls) == 1
+    assert len(secondary_completions.calls) == 1
 
 
 def test_chat_supports_bounded_single_attempt_retry() -> None:

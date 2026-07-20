@@ -134,6 +134,18 @@ def _case_requires_full_refs_wait(expected: dict[str, Any] | None) -> bool:
     )
 
 
+def _generation_should_wait_for_full_refs(
+    final_payload: dict[str, Any] | None,
+    expected: dict[str, Any] | None,
+) -> bool:
+    payload = final_payload if isinstance(final_payload, dict) else {}
+    return bool(
+        payload.get("done")
+        and str(payload.get("status") or "").strip().lower() == "done"
+        and _case_requires_full_refs_wait(expected)
+    )
+
+
 def _latency_budget_checks(expected: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     for expected_key, result_key in (
@@ -1804,7 +1816,10 @@ def run_case(
     cards_complete_ms: float | None = None
     if _refs_payload_is_full(refs_payload, user_msg_id=gen.get("user_msg_id")):
         cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
-    elif _case_requires_full_refs_wait(case.get("expected") if isinstance(case.get("expected"), dict) else {}):
+    elif _generation_should_wait_for_full_refs(
+        final_payload,
+        case.get("expected") if isinstance(case.get("expected"), dict) else {},
+    ):
         card_wait_deadline = time.perf_counter() + min(45.0, max(1.0, float(timeout_s)))
         while time.perf_counter() < card_wait_deadline:
             time.sleep(0.35)

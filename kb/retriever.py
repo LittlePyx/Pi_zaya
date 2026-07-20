@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 import re
 
@@ -124,7 +125,10 @@ class BM25Retriever:
                     "score": float(adjusted_scores[i]),
                     "id": c.get("id", str(i)),
                     "text": c.get("text", ""),
-                    "meta": c.get("meta", {}),
+                    # Callers enrich hit metadata in place.  Keep the cached
+                    # corpus immutable so one conversation cannot leak state
+                    # into a later retrieval.
+                    "meta": copy.deepcopy(c.get("meta", {})),
                 }
             )
         return hits
