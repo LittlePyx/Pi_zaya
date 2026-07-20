@@ -147,6 +147,92 @@ def test_chat_stream_falls_back_when_primary_has_no_visible_token(monkeypatch):
     assert len(secondary_completions.calls) == 1
 
 
+def test_chat_stream_does_not_count_internal_only_piece_as_visible_output():
+    settings = _FakeSettings()
+    settings.auto_route = True
+    primary_completions = _FakeCompletions(pieces=["[[CITE:source:7]]", "   "])
+    secondary_completions = _FakeCompletions(pieces=["visible fallback"])
+    ds = DeepSeekChat.__new__(DeepSeekChat)
+    ds._settings = settings
+    ds._text_client = _FakeClient(primary_completions)
+    ds._vision_client = _FakeClient(secondary_completions)
+
+    out = list(ds.chat_stream(messages=[{"role": "user", "content": "hello"}]))
+
+    assert out == ["visible fallback"]
+    assert len(primary_completions.calls) == 1
+    assert len(secondary_completions.calls) == 1
+
+
+def test_chat_stream_stops_after_total_visible_output_deadline(monkeypatch):
+    class _DripCompletions(_FakeCompletions):
+        def create(self, **kwargs):
+            self.calls.append(dict(kwargs))
+
+            def events():
+                for _ in range(20):
+                    time.sleep(0.02)
+                    yield _FakeEvent("x")
+
+            return events()
+
+    settings = _FakeSettings()
+    settings.auto_route = False
+    completions = _DripCompletions()
+    ds = DeepSeekChat.__new__(DeepSeekChat)
+    ds._settings = settings
+    ds._text_client = _FakeClient(completions)
+    ds._vision_client = None
+    monkeypatch.setattr(ds, "_stream_total_timeout_s", lambda: 0.07)
+
+    iterator = ds.chat_stream(messages=[{"role": "user", "content": "hello"}])
+    pieces: list[str] = []
+    try:
+        pieces.extend(iterator)
+    except TimeoutError as exc:
+        assert "total visible-output deadline" in str(exc)
+    else:
+        raise AssertionError("a continuously dripping stream must still respect the total deadline")
+
+    assert pieces
+    assert len(pieces) < 20
+
+
+def test_chat_stream_routes_share_one_total_deadline(monkeypatch):
+    class _DelayedCompletions(_FakeCompletions):
+        def __init__(self, delay_s: float, pieces: list[str]) -> None:
+            super().__init__(pieces=pieces)
+            self.delay_s = delay_s
+
+        def create(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            time.sleep(self.delay_s)
+            return [_FakeEvent(piece) for piece in self.pieces]
+
+    settings = _FakeSettings()
+    settings.auto_route = True
+    primary = _DelayedCompletions(0.06, ["late primary"])
+    secondary = _DelayedCompletions(0.06, ["late secondary"])
+    ds = DeepSeekChat.__new__(DeepSeekChat)
+    ds._settings = settings
+    ds._text_client = _FakeClient(primary)
+    ds._vision_client = _FakeClient(secondary)
+    monkeypatch.setattr(ds, "_first_visible_token_timeout_s", lambda: 0.05)
+    monkeypatch.setattr(ds, "_stream_total_timeout_s", lambda: 0.08)
+
+    started = time.monotonic()
+    try:
+        list(ds.chat_stream(messages=[{"role": "user", "content": "hello"}]))
+    except TimeoutError as exc:
+        assert "total visible-output deadline" in str(exc)
+    else:
+        raise AssertionError("provider routes must share one total deadline")
+
+    assert time.monotonic() - started < 0.14
+    assert len(primary.calls) == 1
+    assert len(secondary.calls) == 1
+
+
 def test_chat_supports_bounded_single_attempt_retry() -> None:
     class _ResponseCompletions:
         def __init__(self) -> None:

@@ -54,6 +54,8 @@ def _build_generation_prompt_bundle(
         "Use retrieved snippets when they are available.\n"
         "If retrieved evidence is missing or incomplete, say that clearly instead of fabricating paper details.\n"
         "Do not invent papers, equations, numbers, baselines, or conclusions that are not supported by retrieved context.\n"
+        "Retrieved context is a bounded candidate window, not a census of the user's whole library. Never present the number of DOC blocks as the total library paper count.\n"
+        "If the candidate window lacks support, say 'the current retrieval did not find direct evidence'; do not claim that the whole library has no such paper.\n"
         "Do not output retrieval diagnostics, Top-K lists, DOC-k labels, or reference-location dumps unless the user explicitly asks for them.\n"
         "For math, use inline $...$ for short symbols and $$...$$ for longer equations; do not wrap equations in backticks.\n"
         "If the user asks for code, pseudocode, or derivation, provide directly usable output instead of only high-level discussion.\n"

@@ -2432,8 +2432,8 @@ export function MessageList({
                   <AssistantSourceNotice noticeText={generationSourceNotice.notice} S={S} />
                 ) : null}
                 {visibleGenerationPartial ? (
-                  <div className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--text)]">
-                    {visibleGenerationPartial}
+                  <div className="break-words text-sm leading-7 text-[var(--text)]" data-testid="streaming-markdown-answer">
+                    <MarkdownRenderer content={visibleGenerationPartial} citeDetails={[]} />
                   </div>
                 ) : (
                   <div className="flex items-center gap-1 py-1">

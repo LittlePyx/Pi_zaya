@@ -238,14 +238,39 @@ def _claim_support_sentence(*, claim: str, evidence: str, route: str, locale: st
     ]
     if len(overlap) < 2:
         return ""
-    sample = " / ".join(overlap[:4])
-    if _prefer_en_locale(locale):
-        if route == "system_b":
-            return f"This upstream citation and the answer claim share key cues: {sample}."
-        return f"The answer sentence and source evidence share key cues: {sample}."
-    if route == "system_b":
-        return f"这条上游引用和回答中的说法共享关键线索：{sample}。"
-    return f"回答句和原文证据共享关键线索：{sample}。"
+    claim_low = str(claim or "").lower()
+    evidence_low = str(evidence or "").lower()
+    prefer_en = _prefer_en_locale(locale)
+    if (
+        re.search(r"\b(?:real[- ]?time|imaging speed|frame rate|faster)\b|实时|帧率", claim_low)
+        and re.search(r"\b(?:real[- ]?time|imaging speed|frame rate|faster|\d+\s*(?:fps|hz))\b|实时|帧率", evidence_low)
+    ):
+        return (
+            "The source reports the speed or real-time result stated in the answer."
+            if prefer_en
+            else "原文直接报告了回答所述的成像速度或实时性能。"
+        )
+    if (
+        re.search(r"\b(?:degradation[- ]?robust|domain shift|generalization|robustness)\b|退化鲁棒|域偏移|泛化", claim_low)
+        and re.search(r"\b(?:degradation[- ]?robust|domain shift|generalization|robustness)\b|退化鲁棒|域偏移|泛化", evidence_low)
+    ):
+        return (
+            "The source directly reports the robustness or cross-domain generalization claimed in the answer."
+            if prefer_en
+            else "原文直接报告了回答所述的退化鲁棒性或跨域泛化结果。"
+        )
+    if (
+        re.search(r"\b(?:resolution|image quality|psnr|ssim|low[- ]?light)\b|分辨率|图像质量|低照度", claim_low)
+        and re.search(r"\b(?:resolution|image quality|psnr|ssim|low[- ]?light)\b|分辨率|图像质量|低照度", evidence_low)
+    ):
+        return (
+            "The source provides the image-quality or resolution evidence used by the answer."
+            if prefer_en
+            else "原文给出了回答所依据的图像质量或分辨率证据。"
+        )
+    # Shared keywords alone are useful for ranking, but not meaningful enough
+    # to expose as a support explanation to the user.
+    return ""
 
 
 def _evidence_focus(*, claim: str, evidence: str, route: str) -> str:

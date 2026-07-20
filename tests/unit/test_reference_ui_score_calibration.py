@@ -687,12 +687,84 @@ def test_build_hit_ui_meta_falls_back_to_snippet_summary_when_ref_pack_missing(m
     )
 
     assert "SCINeRF" in str(ui_meta.get("summary_line") or "")
-    assert str(ui_meta.get("why_line") or "").strip()
+    assert "SCINeRF" in str(ui_meta.get("why_line") or "")
+    assert "三维场景" in str(ui_meta.get("why_line") or "")
     reader_open = ui_meta.get("reader_open") or {}
     assert str(reader_open.get("sourcePath") or "") == r"db\SCINeRF\SCINeRF.en.md"
     assert str(reader_open.get("headingPath") or "") == "3. Method / 3.1. Background on NeRF"
     assert "SCINeRF" in str(reader_open.get("snippet") or "")
     assert str(reader_open.get("highlightSnippet") or "") == str(reader_open.get("snippet") or "")
+
+
+def test_answer_cited_card_keeps_summary_primary_and_reader_on_same_direct_evidence():
+    evidence = (
+        "All tested samples were collected under realistic conditions involving mist, jitter, and sensor noise. "
+        "The proposed method consistently achieves the lowest LPIPS scores across all samples under real-world degradations."
+    )
+    ui_meta = build_hit_ui_meta(
+        {
+            "text": evidence,
+            "meta": {
+                "source_path": r"db\robust\robust.en.md",
+                "heading_path": "Results / Experimental results",
+                "ref_answer_citation_num": 2,
+            },
+        },
+        prompt="请说明真实退化鲁棒性的直接证据",
+        pdf_root=None,
+        lib_store=None,
+    )
+
+    summary = str(ui_meta.get("summary_line") or "")
+    primary = ui_meta.get("primary_evidence") or {}
+    reader = ui_meta.get("reader_open") or {}
+    assert "mist, jitter, and sensor noise" in summary
+    assert "lowest LPIPS" in summary
+    assert summary == str(primary.get("snippet") or "")
+    assert summary == str(reader.get("snippet") or "")
+    assert "LPIPS" in str(ui_meta.get("why_line") or "")
+
+
+def test_answer_cited_multi_block_summary_drops_stale_strict_locator(tmp_path: Path):
+    source = tmp_path / "hatnet.en.md"
+    evidence = (
+        "Full sampling forms a 64 x 64 image while HATNet reconstructs a 256 x 256 image. "
+        "HATNet shows great generalization ability in both low-light and high-light conditions."
+    )
+    source.write_text(
+        "# HATNet\n\n## Optical resolution\n\n"
+        "Full sampling forms a 64 x 64 image while HATNet reconstructs a 256 x 256 image.\n\n"
+        "## Illumination robustness\n\n"
+        "HATNet shows great generalization ability in both low-light and high-light conditions.\n",
+        encoding="utf-8",
+    )
+
+    ui_meta = build_hit_ui_meta(
+        {
+            "text": evidence,
+            "meta": {
+                "source_path": str(source),
+                "heading_path": "Optical resolution",
+                "block_id": "stale-block",
+                "ref_answer_citation_num": 1,
+            },
+        },
+        prompt="compare optical resolution and low-light robustness",
+        pdf_root=None,
+        lib_store=None,
+    )
+
+    primary = ui_meta.get("primary_evidence") or {}
+    reader = ui_meta.get("reader_open") or {}
+    summary = str(ui_meta.get("summary_line") or "")
+    assert "64 x 64" in summary
+    assert "low-light" in summary
+    assert summary == str(primary.get("snippet") or "")
+    assert summary == str(reader.get("snippet") or "")
+    assert primary.get("strict_locate") is False
+    assert not str(primary.get("block_id") or "")
+    assert reader.get("strictLocate") is False
+    assert not str(reader.get("blockId") or "")
 
 
 def test_build_hit_ui_meta_builds_reader_open_candidates_from_refs_signals(monkeypatch):
@@ -1184,7 +1256,7 @@ def _legacy_mojibake_build_hit_ui_meta_falls_back_to_citation_summary_when_ref_p
     )
 
     assert "当前仅检索到文献元数据" in str(ui_meta.get("summary_line") or "")
-    assert str(ui_meta.get("why_line") or "").strip()
+    assert str(ui_meta.get("why_line") or "").strip() == ""
 
 
 def test_build_hit_ui_meta_falls_back_to_citation_summary_when_ref_pack_missing_utf8_safe(monkeypatch):
@@ -1229,7 +1301,7 @@ def test_build_hit_ui_meta_falls_back_to_citation_summary_when_ref_pack_missing_
     )
 
     assert "\u5f53\u524d\u4ec5\u68c0\u7d22\u5230\u6587\u732e\u5143\u6570\u636e" in str(ui_meta.get("summary_line") or "")
-    assert str(ui_meta.get("why_line") or "").strip()
+    assert str(ui_meta.get("why_line") or "").strip() == ""
 
 
 def test_resolve_refs_exact_candidates_llm_can_reorder_ambiguous_block_choice(tmp_path, monkeypatch):
@@ -1820,6 +1892,51 @@ def test_filter_pending_refs_hits_by_prompt_focus_drops_related_work_only_admm_h
     filtered = reference_ui._filter_pending_refs_hits_by_prompt_focus(prompt, hits)
 
     assert filtered == []
+
+
+def test_filter_pending_refs_keeps_authoritative_answer_citations_across_languages():
+    cited = {
+        "text": "The system reconstructs real-time video at a frame rate of 30 Hz.",
+        "meta": {
+            "source_path": r"db\Scientific Reports-2018\paper.en.md",
+            "ref_answer_citation_num": 4,
+        },
+    }
+
+    filtered = reference_ui._filter_pending_refs_hits_by_prompt_focus(
+        "请从整个文献库检索深度学习单像素成像的主要优势，并给出论文证据。",
+        [cited],
+    )
+
+    assert filtered == [cited]
+    assert reference_ui._should_force_keep_ref_hit(cited) is True
+
+
+def test_sort_refs_hits_preserves_authoritative_answer_occurrence_order():
+    hits = [
+        {
+            "text": "Realtime result at 30 Hz.",
+            "score": 0.1,
+            "meta": {"source_path": "speed.md", "ref_answer_citation_num": 4},
+        },
+        {
+            "text": "High quality reconstruction.",
+            "score": 99.0,
+            "meta": {"source_path": "quality.md", "ref_answer_citation_num": 5},
+        },
+        {
+            "text": "Domain shift robustness.",
+            "score": 50.0,
+            "meta": {"source_path": "robust.md", "ref_answer_citation_num": 2},
+        },
+    ]
+
+    ordered = reference_ui._sort_refs_hits_for_display(
+        prompt="比较实时速度、图像质量和真实退化鲁棒性",
+        hits=hits,
+    )
+
+    assert [hit["meta"]["ref_answer_citation_num"] for hit in ordered] == [4, 5, 2]
 
 
 def test_filter_pending_refs_hits_by_prompt_focus_compare_prefers_explicit_versus_paper():
@@ -6262,3 +6379,129 @@ def test_source_block_answer_primary_evidence_strips_title_author_prefix():
     assert "Yaoxing" not in text
     assert "\\" not in text
     assert "Advances and Challenges" not in text
+
+
+def test_broad_advantage_answer_primary_prefers_claim_evidence_over_fundamentals():
+    prompt = "这篇综述如何概括深度学习给单像素成像带来的主要优势？"
+    answer = "深度学习可同时提高重建质量并加快重建速度。"
+    terms = ["deep learning", "single-pixel imaging", "reconstruction quality", "reconstruction speed"]
+    common = {
+        "source_path": r"db\LPR-2025\paper.en.md",
+        "source_name": "LPR-2025-Advances and Challenges.pdf",
+        "block_id": "blk",
+        "anchor_id": "p",
+        "strict_locate": True,
+    }
+    abstract = {
+        **common,
+        "heading_path": "Abstract",
+        "snippet": (
+            "Deep learning for single-pixel imaging has exceptional reconstruction quality "
+            "and fast reconstruction speed, overcoming practical limitations."
+        ),
+    }
+    fundamentals = {
+        **common,
+        "heading_path": "3. Fundamentals of Deep Learning / 3.1.1. Basics of Neural Network",
+        "snippet": "Artificial neural networks consist of an input layer, hidden layers, and an output layer.",
+    }
+
+    abstract_score, _ = reference_ui._score_primary_ref_evidence_against_answer(
+        primary_evidence=abstract,
+        prompt=prompt,
+        answer=answer,
+        terms=terms,
+        display_name=str(common["source_name"]),
+        source_path=str(common["source_path"]),
+    )
+    fundamentals_score, _ = reference_ui._score_primary_ref_evidence_against_answer(
+        primary_evidence=fundamentals,
+        prompt=prompt,
+        answer=answer,
+        terms=terms,
+        display_name=str(common["source_name"]),
+        source_path=str(common["source_path"]),
+    )
+
+    assert abstract_score > fundamentals_score + 4.0
+
+
+def test_attach_pack_primary_keeps_prompt_aligned_card_evidence_coherent():
+    source_path = r"db\LPR-2025\paper.en.md"
+    stale_primary = {
+        "source_path": source_path,
+        "source_name": "LPR-2025.pdf",
+        "block_id": "blk_ann",
+        "heading_path": "3. Fundamentals / Basics of Neural Network",
+        "snippet": "Artificial neural networks contain input and output layers.",
+    }
+    abstract_primary = {
+        "source_path": source_path,
+        "source_name": "LPR-2025.pdf",
+        "block_id": "blk_abs",
+        "heading_path": "Abstract",
+        "snippet": "Deep learning improves reconstruction quality and speed.",
+    }
+    pack = {
+        "prompt": "深度学习给单像素成像带来的主要优势是什么？",
+        "primary_evidence": stale_primary,
+        "hits": [
+            {
+                "meta": {"source_path": source_path},
+                "ui_meta": {
+                    "source_path": source_path,
+                    "summary_source": "prompt_aligned",
+                    "primary_evidence": abstract_primary,
+                    "primary_evidence_heading_path": "Abstract",
+                },
+            }
+        ],
+    }
+
+    out = reference_ui._attach_pack_primary_ref_evidence(pack)
+
+    assert out["primary_evidence"]["block_id"] == "blk_abs"
+    hit_ui = out["hits"][0]["ui_meta"]
+    assert hit_ui["primary_evidence"]["block_id"] == "blk_abs"
+    assert hit_ui["primary_evidence_heading_path"] == "Abstract"
+
+
+def test_pack_primary_does_not_overwrite_answer_cited_card_evidence(monkeypatch):
+    source_path = r"db\LSA-2025\paper.en.md"
+    pack_primary = {
+        "source_path": source_path,
+        "heading_path": "Introduction",
+        "snippet": "A generic introduction sentence.",
+    }
+    cited_primary = {
+        "source_path": source_path,
+        "heading_path": "Results / Simulation results",
+        "snippet": "The domain shift test achieves the best results with degradation-robust representations.",
+    }
+    monkeypatch.setattr(
+        reference_ui,
+        "_select_answer_aligned_primary_ref_evidence",
+        lambda **_kwargs: (dict(pack_primary), {"score": 9.0, "selected_source": source_path}),
+    )
+    pack = {
+        "prompt": "请说明真实退化鲁棒性的优势并给出证据",
+        "answer_text": "域偏移测试支持真实退化鲁棒性。[2]",
+        "hits": [
+            {
+                "meta": {"source_path": source_path, "ref_answer_citation_num": 2},
+                "ui_meta": {
+                    "source_path": source_path,
+                    "summary_line": cited_primary["snippet"],
+                    "why_line": "直接支持真实退化鲁棒性。",
+                    "primary_evidence": cited_primary,
+                    "primary_evidence_heading_path": cited_primary["heading_path"],
+                },
+            }
+        ],
+    }
+
+    out = reference_ui._attach_pack_primary_ref_evidence(pack)
+    hit_ui = out["hits"][0]["ui_meta"]
+
+    assert hit_ui["summary_line"] == cited_primary["snippet"]
+    assert hit_ui["primary_evidence_heading_path"] == "Results / Simulation results"

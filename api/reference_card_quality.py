@@ -1190,6 +1190,30 @@ def attach_ref_card_polish_contract(
         cleaned = _clean_ref_card_copy_field(ui.get(key), ui)
         if cleaned:
             ui[key] = cleaned
+    if (
+        str(ui.get("primary_evidence_source") or ui.get("summary_source") or "").strip().lower()
+        == "answer_citation"
+        and str(ui.get("summary_line") or "").strip()
+    ):
+        # Copy cleanup is the last public-payload transformation. Keep an
+        # answer-cited card atomic after that cleanup so the card, popover and
+        # reader all expose the same evidence excerpt.
+        summary = str(ui.get("summary_line") or "").strip()
+        primary = _as_dict(ui.get("primary_evidence"))
+        if primary:
+            primary["snippet"] = summary
+            primary["highlight_snippet"] = summary
+            ui["primary_evidence"] = primary
+        reader = _as_dict(ui.get("reader_open"))
+        if reader:
+            reader["snippet"] = summary
+            reader["highlightSnippet"] = summary
+            reader_primary = _as_dict(reader.get("primaryEvidence"))
+            if reader_primary:
+                reader_primary["snippet"] = summary
+                reader_primary["highlight_snippet"] = summary
+                reader["primaryEvidence"] = reader_primary
+            ui["reader_open"] = reader
     ui.update(
         ref_card_polish_status(
             ui,

@@ -2108,6 +2108,44 @@ def test_reference_ui_build_doc_list_refs_payload_uses_doc_list_module(monkeypat
     ]
 
 
+def test_reference_ui_seed_only_doc_list_stays_local_and_clickable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        reference_ui,
+        "_doc_list_citation_meta",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("seed-only rendering must not load citation metadata")
+        ),
+    )
+
+    source_path = r"db\SCINeRF\SCINeRF.en.md"
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=51,
+        pack={"prompt": "Which paper explains ADMM?"},
+        doc_list=[
+            {
+                "source_path": source_path,
+                "source_name": "SCINeRF.pdf",
+                "heading_path": "2. Related Work",
+                "summary_line": "Most existing methods employ ADMM [4].",
+                "primary_evidence": {
+                    "heading_path": "2. Related Work",
+                    "snippet": "Most existing methods employ ADMM [4].",
+                    "block_id": "blk-admm",
+                },
+            }
+        ],
+        seed_only=True,
+    )
+
+    assert out["pipeline_debug"]["fast_seed_contract"] is True
+    assert out["pipeline_debug"]["doc_list_authoritative"] is True
+    assert len(out["hits"]) == 1
+    ui_meta = out["hits"][0]["ui_meta"]
+    assert ui_meta["reader_open"]["sourcePath"] == source_path
+    assert ui_meta["reader_open"]["headingPath"] == "2. Related Work"
+    assert ui_meta["reader_open"]["blockId"] == "blk-admm"
+
+
 def test_build_doc_list_refs_payload_keeps_cached_library_bibliometrics(monkeypatch, tmp_path) -> None:
     from api import reference_ui
 
@@ -2170,3 +2208,28 @@ def test_build_doc_list_refs_payload_keeps_cached_library_bibliometrics(monkeypa
     assert "citation_source" not in ui_meta["citation_meta"]
     assert ui_meta["citation_meta"]["citation_count"] == 910
     assert ui_meta["citation_meta"]["journal_if"] == 32.9
+
+
+def test_doc_list_public_copy_sanitizer_removes_template_relevance_only() -> None:
+    hits = [
+        {
+            "ui_meta": {
+                "summary_line": "The experiment reports a 30 Hz reconstruction frame rate.",
+                "why_line": "Use this evidence to check how the paper discusses the current question.",
+                "why_generation": "deterministic_grounded",
+                "why_basis": "rule",
+            }
+        },
+        {
+            "ui_meta": {
+                "summary_line": "The experiment reports a 30 Hz reconstruction frame rate.",
+                "why_line": "The reported 30 Hz frame rate directly supports real-time imaging.",
+            }
+        },
+    ]
+
+    cleaned = doc_list._sanitize_doc_list_hit_copy(hits)
+
+    assert "why_line" not in cleaned[0]["ui_meta"]
+    assert "why_generation" not in cleaned[0]["ui_meta"]
+    assert "30 Hz" in cleaned[1]["ui_meta"]["why_line"]

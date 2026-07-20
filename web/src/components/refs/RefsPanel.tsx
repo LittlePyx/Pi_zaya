@@ -525,7 +525,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                         </div>
                       </div>
 
-                      <div className="kb-ref-evidence-grid">
+                      <div className={`kb-ref-evidence-grid${why ? '' : ' is-single'}`}>
                         <div className="kb-ref-card">
                           <div className="kb-ref-card-head">
                             <span className="kb-ref-chip">{summaryLabel}</span>
@@ -535,15 +535,15 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                             {summary || (isFailed ? S.refs_no_summary_failed : S.refs_no_summary)}
                           </Text>
                         </div>
-                        <div className="kb-ref-card">
-                          <div className="kb-ref-card-head">
-                            <span className="kb-ref-chip">{whyLabel}</span>
-                            <span className="kb-ref-card-title">{whyTitle}</span>
+                        {why ? (
+                          <div className="kb-ref-card">
+                            <div className="kb-ref-card-head">
+                              <span className="kb-ref-chip">{whyLabel}</span>
+                              <span className="kb-ref-card-title">{whyTitle}</span>
+                            </div>
+                            <Text className="kb-ref-card-text !block !whitespace-pre-wrap">{why}</Text>
                           </div>
-                          <Text className="kb-ref-card-text !block !whitespace-pre-wrap">
-                            {why || (isFailed ? S.refs_no_why_failed : S.refs_no_why)}
-                          </Text>
-                        </div>
+                        ) : null}
                       </div>
 
                       {metrics.length > 0 || doiUrl ? (

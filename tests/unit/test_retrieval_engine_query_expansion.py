@@ -5,9 +5,11 @@ import pytest
 
 from kb.retrieval_engine import (
     _expand_query_via_llm,
+    _group_hits_by_doc_for_refs,
     _merge_expanded_results,
     _search_hits_with_fallback,
 )
+from kb.retrieval_heuristics import _doc_term_bonus, _query_term_profile
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +170,32 @@ def test_merge_expanded_results_top_k():
     assert len(merged_hits) == 3
 
 
+def test_merge_expanded_results_uses_hit_id_before_text_fallback():
+    shared_prefix = "same text prefix " * 12
+    r1 = (
+        [
+            {"id": "hit-a", "text": f"{shared_prefix}a", "score": 1.0, "meta": {}},
+            {"id": "hit-b", "text": f"{shared_prefix}b", "score": 0.9, "meta": {}},
+        ],
+        [1.0, 0.9],
+        "q1",
+    )
+
+    merged_hits, _merged_scores = _merge_expanded_results([r1], top_k=10)
+
+    assert [hit["id"] for hit in merged_hits] == ["hit-a", "hit-b"]
+
+
+def test_merge_expanded_results_counts_identity_once_per_result_set():
+    duplicate = {"id": "hit-a", "text": "same hit", "score": 1.0, "meta": {}}
+    r1 = ([duplicate, dict(duplicate)], [1.0, 0.9], "q1")
+
+    merged_hits, merged_scores = _merge_expanded_results([r1], top_k=10)
+
+    assert [hit["id"] for hit in merged_hits] == ["hit-a"]
+    assert merged_scores == pytest.approx([1.0 / 20.0])
+
+
 # ---------------------------------------------------------------------------
 # _search_hits_with_fallback — expansion integration
 # ---------------------------------------------------------------------------
@@ -225,6 +253,153 @@ def test_search_hits_fallback_does_not_index_internal_query_scope_instructions()
     assert hits[0]["text"] == "Table 6 comparison"
     assert used_query == "highest SIDD PSNR model"
     assert variants == ["highest SIDD PSNR model"]
+
+
+def test_search_hits_fallback_keeps_translated_hits_when_original_has_weak_match(monkeypatch):
+    query = "中文伪命中"
+    translated = "english translated query"
+    retriever = _FakeRetriever(
+        {
+            query: [
+                {
+                    "id": "weak-cn",
+                    "text": "weak lexical match",
+                    "score": 0.2,
+                    "meta": {"source_path": "weak.md"},
+                }
+            ],
+            translated: [
+                {
+                    "id": "relevant-en",
+                    "text": "relevant English evidence",
+                    "score": 8.0,
+                    "meta": {"source_path": "relevant.md"},
+                }
+            ],
+        }
+    )
+
+    import kb.retrieval_engine as re
+
+    monkeypatch.setattr(re, "_translate_query_for_search", lambda _settings, _prompt: translated)
+    monkeypatch.setattr(re, "_deterministic_query_variants", lambda _prompt: [])
+
+    hits, scores, _used_query, used_trans, variants = _search_hits_with_fallback(
+        query,
+        retriever,
+        top_k=10,
+        settings=_FakeSettings(),
+    )
+
+    assert {hit["id"] for hit in hits} == {"weak-cn", "relevant-en"}
+    assert hits[0]["id"] == "relevant-en"
+    assert max(scores) < 0.2  # RRF scale; it must not be compared with BM25.
+    assert used_trans is True
+    assert variants == [query, translated]
+
+
+def test_search_hits_fallback_uses_wider_candidate_window_for_whole_library(monkeypatch):
+    requested_limits: list[int] = []
+
+    class RecordingRetriever(_FakeRetriever):
+        def search(self, query: str, top_k: int = 10) -> list[dict]:
+            requested_limits.append(top_k)
+            return super().search(query, top_k=top_k)
+
+    retriever = RecordingRetriever(
+        {
+            "library question": [
+                {"id": f"hit-{idx}", "text": f"result {idx}", "score": 10.0 - idx, "meta": {"source_path": f"doc-{idx}.md"}}
+                for idx in range(100)
+            ]
+        }
+    )
+    import kb.retrieval_engine as re
+
+    monkeypatch.setattr(re, "_translate_query_for_search", lambda _settings, _prompt: None)
+    monkeypatch.setattr(re, "_deterministic_query_variants", lambda _prompt: [])
+
+    hits, _scores, _used_query, _used_trans, _variants = _search_hits_with_fallback(
+        "library question",
+        retriever,
+        top_k=6,
+        settings=_FakeSettings(),
+        whole_library=True,
+    )
+
+    assert requested_limits == [96]
+    assert len(hits) == 96
+
+
+def test_deep_learning_topic_qualifier_penalizes_generic_single_pixel_paper():
+    profile = _query_term_profile(
+        "深度学习给单像素成像带来哪些优势？",
+        "deep learning single-pixel imaging advantages",
+    )
+
+    relevant = _doc_term_bonus(
+        profile,
+        "Deep learning for real-time single-pixel video.md",
+        ["A neural network reconstructs single-pixel measurements in real time."],
+    )
+    generic = _doc_term_bonus(
+        profile,
+        "Hadamard single-pixel imaging versus Fourier single-pixel imaging.md",
+        ["We compare two conventional single-pixel sampling bases."],
+    )
+    unrelated = _doc_term_bonus(
+        profile,
+        "Deep learning for classical literature.md",
+        ["A neural network classifies historical Japanese characters."],
+    )
+
+    assert relevant > generic
+    assert relevant - generic >= 4.0
+    assert relevant > unrelated
+    assert relevant - unrelated >= 4.0
+
+
+def test_doc_grouping_uses_topic_qualifier_before_bounded_candidate_cutoff(tmp_path, monkeypatch):
+    import kb.retrieval_engine as re
+
+    monkeypatch.setattr(re, "_is_temp_source_path", lambda _source_path: False)
+    generic_sources = []
+    hits = []
+    for idx in range(12):
+        source = tmp_path / f"generic-{idx}-single-pixel-imaging.md"
+        source.write_text("# Generic SPI\n\nConventional single-pixel sampling basis.", encoding="utf-8")
+        generic_sources.append(source)
+        hits.append(
+            {
+                "id": f"generic-{idx}",
+                "text": "Conventional single-pixel sampling basis.",
+                "score": 20.0 - idx,
+                "meta": {"source_path": str(source), "heading_path": "Introduction"},
+            }
+        )
+    relevant_source = tmp_path / "deep-learning-single-pixel-imaging.md"
+    relevant_source.write_text(
+        "# Deep learning SPI\n\nA neural network reconstructs single-pixel measurements in real time.",
+        encoding="utf-8",
+    )
+    hits.append(
+        {
+            "id": "relevant",
+            "text": "A neural network reconstructs single-pixel measurements in real time.",
+            "score": 8.5,
+            "meta": {"source_path": str(relevant_source), "heading_path": "Introduction"},
+        }
+    )
+
+    docs = _group_hits_by_doc_for_refs(
+        hits,
+        prompt_text="深度学习单像素成像有哪些优势？",
+        top_k_docs=1,
+        deep_query="deep learning single-pixel imaging advantages",
+    )
+
+    assert docs
+    assert (docs[0].get("meta") or {}).get("source_path") == str(relevant_source)
 
 
 def test_search_hits_fallback_with_expansion(monkeypatch):

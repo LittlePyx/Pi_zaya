@@ -11,6 +11,11 @@ export interface RefUiMetaLite {
   source_path?: string
   anchor_target_kind?: string
   anchor_target_number?: number
+  citation_meta?: {
+    doi?: string
+    doi_url?: string
+    title?: string
+  }
 }
 
 export interface RefMetaLite {
@@ -22,6 +27,7 @@ export interface RefMetaLite {
   ref_show_snippets?: unknown
   ref_overview_snippets?: unknown
   ref_snippets?: unknown
+  ref_answer_citation_num?: number
 }
 
 export interface RefHitLite {

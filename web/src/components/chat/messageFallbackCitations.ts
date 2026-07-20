@@ -125,7 +125,8 @@ export function buildFallbackCiteDetailsFromRefHits(opts: {
   if (nums.length <= 0 || opts.refHits.length <= 0) return []
   const out: CiteDetail[] = []
   for (const num of nums) {
-    const hit = opts.refHits[num - 1]
+    const hit = opts.refHits.find((item) => Number(item?.meta?.ref_answer_citation_num || 0) === num)
+      || opts.refHits[num - 1]
     if (!hit) continue
     const ui = hit.ui_meta || {}
     const meta = hit.meta || {}

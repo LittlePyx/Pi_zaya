@@ -155,6 +155,39 @@ def test_ref_card_polish_contract_unwraps_source_excerpt_summary():
     assert ui["card_view"]["summary"].startswith("However, the limited image quality")
 
 
+def test_answer_citation_copy_cleanup_keeps_summary_primary_and_reader_atomic():
+    raw_summary = (
+        "Clearly, the reconstructed results improve as illumination increases. "
+        "HATNet generalizes in both low-light and high-light conditions."
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "HATNet.pdf",
+            "source_path": "hatnet.en.md",
+            "summary_source": "answer_citation",
+            "primary_evidence_source": "answer_citation",
+            "summary_line": raw_summary,
+            "summary_generation": "section_grounded",
+            "primary_evidence": {
+                "snippet": raw_summary,
+                "highlight_snippet": raw_summary,
+            },
+            "reader_open": {
+                "snippet": raw_summary,
+                "highlightSnippet": raw_summary,
+                "primaryEvidence": {
+                    "snippet": raw_summary,
+                    "highlight_snippet": raw_summary,
+                },
+            },
+        }
+    )
+
+    assert ui["summary_line"] == ui["primary_evidence"]["snippet"]
+    assert ui["summary_line"] == ui["reader_open"]["snippet"]
+    assert ui["summary_line"] == ui["reader_open"]["primaryEvidence"]["snippet"]
+
+
 def test_ref_card_hit_quality_accepts_grounded_openable_card():
     quality = ref_card_hit_quality(
         {

@@ -1866,7 +1866,24 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
             "structured detection microscopy thick samples resolution SNR signal-to-noise "
             "optical sectioning out-of-focus background"
         )
-    if has_any("benefit", "risk", "advantage", "disadvantage", "\u597d\u5904", "\u574f\u5904", "\u98ce\u9669") and has_any(
+    if has_any(
+        "benefit",
+        "risk",
+        "advantage",
+        "advantages",
+        "disadvantage",
+        "challenge",
+        "challenges",
+        "limitation",
+        "limitations",
+        "\u597d\u5904",
+        "\u574f\u5904",
+        "\u98ce\u9669",
+        "\u4f18\u52bf",
+        "\u6311\u6218",
+        "\u5c40\u9650",
+        "\u7f3a\u70b9",
+    ) and has_any(
         "deep learning",
         "\u6df1\u5ea6\u5b66\u4e60",
     ):
@@ -1926,9 +1943,18 @@ def _merge_expanded_results(
 
     for result_idx, (hits, _scores, _query) in enumerate(results):
         weight = weights[result_idx] if weights else 1.0
+        seen_in_result: set[str] = set()
         for rank, h in enumerate(hits or []):
             meta = h.get("meta") if isinstance(h.get("meta"), dict) else {}
-            chunk_id = str(meta.get("chunk_id") or h.get("chunk_id") or h.get("text", "")[:120])
+            chunk_id = str(
+                meta.get("chunk_id")
+                or h.get("chunk_id")
+                or h.get("id")
+                or h.get("text", "")[:120]
+            )
+            if chunk_id in seen_in_result:
+                continue
+            seen_in_result.add(chunk_id)
             if chunk_id not in hit_map:
                 hit_map[chunk_id] = h
                 chunk_order.append(chunk_id)
@@ -1949,6 +1975,7 @@ def _search_hits_with_fallback(
     *,
     allow_translate: bool = True,
     allow_expand: bool = False,
+    whole_library: bool = False,
 ) -> tuple[list[dict], list[float], str, bool, list[str]]:
     """
     Returns: (hits_raw, scores, used_query, used_translation, query_variants)
@@ -1958,7 +1985,11 @@ def _search_hits_with_fallback(
         str(prompt_text or ""),
         maxsplit=1,
     )[0].strip()
-    hits1 = retriever.search(q1, top_k=max(10, top_k * 6)) if q1 else []
+    # A library query is allowed to inspect a wider internal candidate window.
+    # The answer path still selects only the best evidence-bearing documents, so
+    # this improves cross-document recall without exposing low-quality matches.
+    candidate_limit = max(10, top_k * (16 if whole_library else 6))
+    hits1 = retriever.search(q1, top_k=candidate_limit) if q1 else []
     hits1 = [h for h in (hits1 or []) if not _is_temp_source_path(str((h.get("meta") or {}).get("source_path") or ""))]
     scores1 = [float(h.get("score", 0.0) or 0.0) for h in hits1]
     best1 = float(max(scores1) if scores1 else 0.0)
@@ -1969,7 +2000,7 @@ def _search_hits_with_fallback(
     used_trans = False
     q2 = _translate_query_for_search(settings, q1) if bool(allow_translate) else None
     if q2:
-        hits2 = retriever.search(q2, top_k=max(10, top_k * 6))
+        hits2 = retriever.search(q2, top_k=candidate_limit)
         hits2 = [h for h in (hits2 or []) if not _is_temp_source_path(str((h.get("meta") or {}).get("source_path") or ""))]
         scores2 = [float(h.get("score", 0.0) or 0.0) for h in hits2]
         best2 = float(max(scores2) if scores2 else 0.0)
@@ -1980,15 +2011,22 @@ def _search_hits_with_fallback(
         if hits1 and hits2:
             merged_q1q2, merged_s1s2 = _merge_expanded_results(
                 [(hits1, scores1, q1), (hits2, scores2, q2)],
-                top_k=max(10, top_k * 6),
-                weights=[2.0, 1.0],
+                top_k=candidate_limit,
+                # For a CJK question over an English academic corpus, the
+                # translated query is the primary lexical signal.  Giving the
+                # untranslated query priority lets incidental CJK matches bury
+                # the actually relevant English papers.
+                weights=([0.35, 2.0] if _has_cjk(q1) else [2.0, 1.0]),
             )
             merged_best = float(max(merged_s1s2) if merged_s1s2 else 0.0)
-            if merged_best >= max(best1, best2) - 0.01:
-                hits1, scores1, best1 = merged_q1q2, merged_s1s2, merged_best
-                used_trans = True
-                for _h in hits1:
-                    _h["_bm25_score"] = _h.get("score", 0.0)
+            # RRF and BM25 scores live on different scales, so comparing their
+            # maxima can reject useful translated hits whenever the original
+            # query has even a weak lexical match. Both result sets are already
+            # represented in the fusion; accept the fused ranking directly.
+            hits1, scores1, best1 = merged_q1q2, merged_s1s2, merged_best
+            used_trans = True
+            for _h in hits1:
+                _h["_bm25_score"] = _h.get("score", 0.0)
         elif not hits1 and hits2:
             hits1, scores1, best1 = hits2, scores2, best2
             for _h in hits1:
@@ -2004,7 +2042,7 @@ def _search_hits_with_fallback(
     if deterministic_variants:
         all_results: list[tuple[list[dict], list[float], str]] = [(hits1, scores1, q1)]
         for variant in deterministic_variants:
-            v_hits = retriever.search(variant, top_k=max(10, top_k * 6))
+            v_hits = retriever.search(variant, top_k=candidate_limit)
             v_hits = [h for h in (v_hits or []) if not _is_temp_source_path(str((h.get("meta") or {}).get("source_path") or ""))]
             v_scores = [float(h.get("score", 0.0) or 0.0) for h in v_hits]
             all_results.append((v_hits, v_scores, variant))
@@ -2012,7 +2050,7 @@ def _search_hits_with_fallback(
                 query_variants.append(variant)
         merged_hits, merged_scores = _merge_expanded_results(
             all_results,
-            top_k=max(10, top_k * 6),
+            top_k=candidate_limit,
             weights=[1.5] + [2.5 for _ in deterministic_variants],
         )
         for _h in merged_hits:
@@ -2029,7 +2067,7 @@ def _search_hits_with_fallback(
             if q2 and not used_trans:
                 all_results.append((hits2, scores2, q2))
             for variant in new_variants:
-                v_hits = retriever.search(variant, top_k=max(10, top_k * 6))
+                v_hits = retriever.search(variant, top_k=candidate_limit)
                 v_hits = [h for h in (v_hits or []) if not _is_temp_source_path(str((h.get("meta") or {}).get("source_path") or ""))]
                 v_scores = [float(h.get("score", 0.0) or 0.0) for h in v_hits]
                 all_results.append((v_hits, v_scores, variant))
@@ -2041,7 +2079,7 @@ def _search_hits_with_fallback(
             # Original query (q1) is weighted 2x, all other variants 1x.
             merged_hits, merged_scores = _merge_expanded_results(
                 all_results,
-                top_k=max(10, top_k * 6),
+                top_k=candidate_limit,
                 weights=[2.0 if i == 0 else 1.0 for i in range(len(all_results))],
             )
             # Preserve original BM25 score so downstream sorters can use it.
@@ -2094,6 +2132,7 @@ def _group_hits_by_doc_for_refs(
     doc_direct_scores: dict[str, float] = {}
     doc_direct_terms: dict[str, tuple[str, ...]] = {}
     anchor_hint = _extract_explicit_anchor_hint(prompt_text or deep_query or "")
+    profile = _query_term_profile(prompt_text, deep_query or "")
     _bm25_scores: list[float] = []
     for src, hs in by_doc.items():
         try:
@@ -2126,11 +2165,27 @@ def _group_hits_by_doc_for_refs(
         doc_focus_scores[src] = float(doc_focus_score)
         doc_direct_scores[src] = float(direct_score)
         doc_direct_terms[src] = tuple(direct_terms or ())
-        doc_order.append((best_score + (1.6 * doc_hint_score) + (1.05 * doc_focus_score) + (1.8 * direct_score), src))
+        pre_term_bonus = _doc_term_bonus(
+            profile,
+            Path(src).name,
+            [str((h.get("text") or "")).strip() for h in hs[:6] if str((h.get("text") or "")).strip()],
+        )
+        # Candidate preselection must honor topic qualifiers too. Otherwise a
+        # wider full-library pool can fill the bounded document scorer with
+        # generic high-BM25 papers before relevant qualified papers are scored.
+        doc_order.append(
+            (
+                best_score
+                + (1.6 * doc_hint_score)
+                + (1.05 * doc_focus_score)
+                + (1.8 * direct_score)
+                + (4.0 * pre_term_bonus),
+                src,
+            )
+        )
     doc_order.sort(key=lambda x: x[0], reverse=True)
 
     docs: list[dict] = []
-    profile = _query_term_profile(prompt_text, deep_query or "")
     nav_question = (prompt_text or deep_query or "").strip()
     # Normalize BM25 scores across all candidate docs (0-1 range).
     _bm25_global_max = max(_bm25_scores) if _bm25_scores else 1.0
@@ -2654,6 +2709,19 @@ def _group_hits_by_doc_for_refs(
             docs = _apply_llm_pack_to_grouped_docs(docs, pack=pack, question=nav_question)
 
     docs.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
+
+    # Compound topic requests should not be padded with papers that match only
+    # one half of the topic (for example, generic deep learning or conventional
+    # SPI). Preserve the broad pool when no qualified document exists so a
+    # sparse library can still return a clearly bounded fallback.
+    if profile.get("wants_deep_learning") and profile.get("wants_single_pixel"):
+        qualified_docs = [
+            doc
+            for doc in docs
+            if float((((doc.get("meta") or {}).get("ref_rank") or {}).get("term_bonus") or 0.0)) >= 3.0
+        ]
+        if qualified_docs:
+            docs = qualified_docs
 
     # Precision-first filtering: when semantic rerank is available, drop weakly related docs
     # instead of filling the list with lexical look-alikes.

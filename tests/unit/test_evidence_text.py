@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-from kb.evidence_text import pick_readable_evidence_text
+from kb.evidence_text import (
+    looks_low_value_citation_context,
+    pick_readable_evidence_text,
+    strip_evidence_metadata_prefix,
+)
+
+
+def test_article_info_keywords_are_not_accepted_as_citation_evidence() -> None:
+    assert looks_low_value_citation_context(
+        "A R T I C L E I N F O Keywords: Single-pixel imaging Information extraction network Deep learning"
+    )
+    assert looks_low_value_citation_context(
+        "Keywords: single-pixel imaging; deep learning; reconstruction"
+    )
 
 
 def test_pick_readable_evidence_text_skips_broken_leading_fragment() -> None:
@@ -71,3 +84,12 @@ def test_pick_readable_evidence_text_trims_short_tail_phrase_before_ellipsis() -
 
     assert picked.endswith("explicit representation...")
     assert "in this..." not in picked
+
+
+def test_metadata_prefix_strip_preserves_complete_capitalized_evidence_sentence() -> None:
+    evidence = (
+        "All tested samples were collected under realistic conditions involving mist, jitter, and sensor noise. "
+        "The proposed method consistently achieves the lowest LPIPS scores across all samples."
+    )
+
+    assert strip_evidence_metadata_prefix(evidence) == evidence

@@ -62,6 +62,10 @@ _MULTI_SLOT_COVERAGE_RE = re.compile(
     r"which\s+papers?|each\s+paper|per\s+paper|each\s+method|respectively)"
 )
 _REVIEW_CONTEXT_RE = re.compile(r"(?i)\b(?:review|survey)\b|\u7efc\u8ff0")
+_BIBLIOGRAPHY_HEADING_RE = re.compile(
+    r"(?i)(?:^|\s/\s)(?:references?|bibliography|works\s+cited|\u53c2\u8003\u6587\u732e)\s*$"
+)
+_INLINE_REFERENCE_MARKER_RE = re.compile(r"(?<!\[)\[([^\[\]]{1,80})\](?!\])")
 
 
 def _compact_text(value: Any, *, max_len: int = 240) -> str:
@@ -220,6 +224,29 @@ def _budget_for_intent(intent: str) -> dict[str, int]:
     return {"system_a": 2, "system_b": 0}
 
 
+def _system_b_opportunity_is_grounded(raw: Mapping[str, Any], *, ref_num: int) -> bool:
+    """Require a same-context citation trace before authorizing System B.
+
+    System B represents an upstream bibliography item, so a matched title or a
+    candidate reference number is insufficient.  The current-paper evidence
+    must either contain the exact marker or carry the verifier flag emitted by
+    the same-sentence/ref-span detectors.
+    """
+
+    source_path = str(raw.get("source_path") or "").strip()
+    evidence = _first_text(raw, "evidence_quote", "quote", "snippet", max_len=520)
+    heading = _first_text(raw, "heading_path", "heading", max_len=180)
+    if not source_path or len(evidence) < 12 or _BIBLIOGRAPHY_HEADING_RE.search(heading):
+        return False
+    if raw.get("context_marker_verified") is True:
+        return True
+    for match in _INLINE_REFERENCE_MARKER_RE.finditer(evidence):
+        nums = {int(value) for value in re.findall(r"\d{1,4}", str(match.group(1) or ""))}
+        if int(ref_num) in nums:
+            return True
+    return False
+
+
 def _system_b_slots(
     opportunities: Sequence[Mapping[str, Any]] | None,
     *,
@@ -237,7 +264,7 @@ def _system_b_slots(
         except Exception:
             ref_num = 0
         sid = str(raw.get("sid") or "").strip()
-        if ref_num <= 0 or not sid:
+        if ref_num <= 0 or not sid or not _system_b_opportunity_is_grounded(raw, ref_num=ref_num):
             continue
         key = (sid.lower(), ref_num)
         if key in seen:
@@ -257,6 +284,10 @@ def _system_b_slots(
                 "source_name": _source_name(source_path),
                 "heading_path": _first_text(raw, "heading_path", "heading", max_len=180),
                 "evidence_quote": _first_text(raw, "evidence_quote", "quote", "snippet", max_len=220),
+                "grounding_contract": {
+                    "same_context_reference": True,
+                    "context_marker_verified": True,
+                },
                 "instruction": (
                     "Use this only on a sentence that explains where a method, concept, or prior-work thread comes from."
                 ),
@@ -312,7 +343,7 @@ def _system_a_slots(
                 snippet = focused
                 heading = "Principles and prospects for single-pixel imaging / Acquisition and image reconstruction strategies"
         identity = "|".join([source_path.lower(), heading.lower(), snippet[:120].lower(), str(hit_num)])
-        if not (source_path or heading or snippet) or identity in seen:
+        if not source_path or not snippet or identity in seen:
             return
         seen.add(identity)
         candidate_hits = [int(hit_num)] if int(hit_num or 0) > 0 else []
@@ -745,6 +776,12 @@ def build_citation_plan(
         if int(budget.get("system_b") or 0) > 0
         else []
     )
+    if int(budget.get("system_b") or 0) > 0 and not sys_b:
+        # Origin intent alone must never authorize an ungrounded bibliography
+        # citation.  This also lets final-answer sanitization remove any model-
+        # invented System-B marker when no verified opportunity exists.
+        budget["system_b"] = 0
+        per_paragraph_budget["system_b"] = 0
     system_a_limit = requested_system_a if requested_paper_count is not None else max(3, requested_system_a)
     source_focus_keys: set[str] = set()
     for raw in [*list(support_slots or []), *list(answer_hits or [])]:
@@ -815,6 +852,10 @@ def build_citation_plan(
         "per_paragraph_budget": dict(per_paragraph_budget),
         "system_a_enabled": bool(int(budget.get("system_a") or 0) > 0 and sys_a),
         "system_b_enabled": bool(int(budget.get("system_b") or 0) > 0 and sys_b),
+        "route_policy": {
+            "system_a": "retrieved_paper_text_only",
+            "system_b": "upstream_bibliography_with_same_context_marker_only",
+        },
         "slots": [dict(slot) for slot in slots if isinstance(slot, dict)],
     }
 

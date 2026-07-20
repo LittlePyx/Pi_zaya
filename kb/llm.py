@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import threading
 import time
 from typing import Any, Iterator, Optional
@@ -9,6 +10,25 @@ from typing import Any, Iterator, Optional
 from openai import OpenAI
 
 from .config import Settings
+
+
+def _stream_user_visible_probe(text: str) -> str:
+    """Project raw provider output onto the text the optimistic UI can show."""
+
+    from kb.generation_state_runtime import (
+        _strip_empty_citation_bracket_fragments,
+        _strip_internal_generation_markers,
+    )
+
+    cleaned = _strip_internal_generation_markers(str(text or ""))
+    cleaned = re.sub(
+        r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\[\[?\s*(?:CITE)?\s*:?[A-Za-z0-9_:-]*$", "", cleaned, flags=re.IGNORECASE)
+    return _strip_empty_citation_bracket_fragments(cleaned).strip()
 
 
 def _has_multimodal_content(messages: list[dict]) -> bool:
@@ -241,7 +261,13 @@ class DeepSeekChat:
             )
 
         last_err: Optional[Exception] = None
+        total_timeout_s = self._stream_total_timeout_s()
+        stream_deadline = time.monotonic() + total_timeout_s
         for route_index, (route_client, route_model, route_timeout, route_kind) in enumerate(routes):
+            if time.monotonic() >= stream_deadline:
+                raise TimeoutError(
+                    f"LLM stream exceeded the {total_timeout_s:.1f}s total visible-output deadline"
+                )
             emitted = False
             try:
                 for piece in self._stream_route_with_visible_deadlines(
@@ -252,6 +278,7 @@ class DeepSeekChat:
                     temperature=temperature,
                     max_tokens=max_tokens,
                     request_timeout_s=route_timeout,
+                    deadline=stream_deadline,
                 ):
                     emitted = True
                     yield piece
@@ -273,6 +300,7 @@ class DeepSeekChat:
         temperature: float,
         max_tokens: int,
         request_timeout_s: float,
+        deadline: float | None = None,
     ) -> Iterator[str]:
         """Stream one route with wall-clock deadlines for visible output.
 
@@ -337,6 +365,17 @@ class DeepSeekChat:
         worker = threading.Thread(target=run, name=f"llm-stream-{route_kind}", daemon=True)
         worker.start()
         emitted = False
+        stream_started_at = time.monotonic()
+        last_visible_at = stream_started_at
+        raw_probe = ""
+        visible_probe = ""
+        pending_pieces: list[str] = []
+        total_timeout_s = self._stream_total_timeout_s()
+        absolute_deadline = (
+            float(deadline)
+            if deadline is not None
+            else stream_started_at + total_timeout_s
+        )
         try:
             while True:
                 visible_timeout_s = (
@@ -344,17 +383,52 @@ class DeepSeekChat:
                     if emitted
                     else self._first_visible_token_timeout_s()
                 )
+                remaining_total_s = absolute_deadline - time.monotonic()
+                if remaining_total_s <= 0:
+                    raise TimeoutError(
+                        f"LLM stream exceeded the {total_timeout_s:.1f}s total visible-output deadline"
+                    )
+                remaining_visible_s = visible_timeout_s - (time.monotonic() - last_visible_at)
+                if remaining_visible_s <= 0:
+                    phase = "idle visible output" if emitted else "first visible token"
+                    raise TimeoutError(
+                        f"LLM stream timed out waiting for {phase} after {visible_timeout_s:.1f}s"
+                    )
                 try:
-                    kind, payload = events.get(timeout=visible_timeout_s)
+                    kind, payload = events.get(timeout=min(remaining_visible_s, remaining_total_s))
                 except queue.Empty as exc:
+                    if time.monotonic() >= absolute_deadline:
+                        raise TimeoutError(
+                            f"LLM stream exceeded the {total_timeout_s:.1f}s total visible-output deadline"
+                        ) from exc
                     phase = "idle visible output" if emitted else "first visible token"
                     raise TimeoutError(
                         f"LLM stream timed out waiting for {phase} after {visible_timeout_s:.1f}s"
                     ) from exc
                 if kind == "piece":
-                    emitted = True
-                    yield str(payload)
+                    piece = str(payload)
+                    raw_probe += piece
+                    next_visible_probe = _stream_user_visible_probe(raw_probe)
+                    visible_changed = bool(next_visible_probe) and next_visible_probe != visible_probe
+                    if visible_changed:
+                        visible_probe = next_visible_probe
+                        last_visible_at = time.monotonic()
+                    if not emitted:
+                        pending_pieces.append(piece)
+                        if not visible_changed:
+                            continue
+                        emitted = True
+                        for pending_piece in pending_pieces:
+                            yield pending_piece
+                        pending_pieces.clear()
+                    else:
+                        # Downstream SSE sanitation suppresses any incomplete
+                        # protocol tail; it must not reset the visible-idle
+                        # clock until the projected user text actually grows.
+                        yield piece
                 elif kind == "done":
+                    if not emitted:
+                        raise RuntimeError("LLM stream completed without user-visible output")
                     return
                 elif kind == "error":
                     raise payload
@@ -392,3 +466,11 @@ class DeepSeekChat:
         except Exception:
             timeout_s = 25.0
         return max(8.0, min(float(self._settings.timeout_s), timeout_s))
+
+    def _stream_total_timeout_s(self) -> float:
+        configured = str(os.environ.get("KB_LLM_STREAM_TOTAL_TIMEOUT_S", "35") or "35").strip()
+        try:
+            timeout_s = float(configured)
+        except Exception:
+            timeout_s = 35.0
+        return max(12.0, min(60.0, timeout_s))

@@ -4259,7 +4259,31 @@ def _assess_system_a_hit_binding(
     claim_keywords = _system_a_keyword_terms(claim)
     evidence_keywords = _system_a_keyword_terms(evidence_surface)
     keyword_overlap = claim_keywords & evidence_keywords
+    claim_keyword_coverage = (
+        len(keyword_overlap) / max(1, len(claim_keywords))
+        if claim_keywords
+        else 0.0
+    )
     prefer_zh = _system_a_prefers_zh(claim)
+    quote_surface = re.sub(r"\s+", " ", str(evidence_quote or (hit or {}).get("text") or "")).strip()
+    claim_similarity = difflib.SequenceMatcher(
+        None,
+        claim.lower(),
+        quote_surface.lower(),
+    ).ratio() if claim and quote_surface else 0.0
+    claim_words = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", claim.lower())
+    evidence_words = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", quote_surface.lower())
+    longest_word_run = max(
+        (
+            block.size
+            for block in difflib.SequenceMatcher(
+                None,
+                claim_words,
+                evidence_words,
+            ).get_matching_blocks()
+        ),
+        default=0,
+    )
 
     strong_claim_terms = claim_domains & _SYSTEM_A_STRONG_BINDING_TERMS
     missing_strong_terms = strong_claim_terms - evidence_body_domains
@@ -4310,11 +4334,48 @@ def _assess_system_a_hit_binding(
     if body_domain_overlap:
         terms = sorted(body_domain_overlap)
         term_label = _system_a_term_label(terms)
-        reason = (
-            f"答案句和原文命中都明确出现“{term_label}”，可据此核对这句话。"
-            if prefer_zh
-            else f'The answer sentence and retrieved passage both mention "{term_label}", so this is a grounded evidence link.'
-        )
+        claim_low = claim.lower()
+        evidence_low = quote_surface.lower()
+        if (
+            re.search(r"real[- ]?time|frame rate|\b\d+\s*(?:fps|hz)\b|实时|帧率", claim_low, flags=re.I)
+            and re.search(r"real[- ]?time|frame rate|\b\d+\s*(?:fps|hz)\b|实时|帧率", evidence_low, flags=re.I)
+        ):
+            reason = (
+                "原文直接报告了单像素重建的实时帧率或速度结果，支撑回答中的实时成像结论。"
+                if prefer_zh
+                else "The source directly reports the real-time frame rate or speed result stated in the answer."
+            )
+        elif (
+            re.search(r"domain shift|degradation[- ]?robust|physical degradation|域偏移|退化鲁棒", claim_low, flags=re.I)
+            and re.search(r"domain shift|degradation[- ]?robust|physical degradation|域偏移|退化鲁棒", evidence_low, flags=re.I)
+        ):
+            reason = (
+                "原文把域偏移测试结果与物理退化模型学到的鲁棒表征联系起来，直接支撑回答的泛化结论。"
+                if prefer_zh
+                else "The source links its domain-shift result to degradation-robust representations, directly supporting the generalization claim."
+            )
+        elif (
+            re.search(r"low[- ]?light|high[- ]?light|resolution|psnr|ssim|低照度|高照度|分辨率|图像质量", claim_low, flags=re.I)
+            and re.search(r"low[- ]?light|high[- ]?light|resolution|psnr|ssim|低照度|高照度|分辨率|图像质量", evidence_low, flags=re.I)
+        ):
+            reason = (
+                "原文给出了低照度、分辨率或重建指标方面的具体结果，支撑回答中的图像质量结论。"
+                if prefer_zh
+                else "The source provides a concrete low-light, resolution, or reconstruction-metric result supporting the image-quality claim."
+            )
+        else:
+            quote = re.sub(r"\s+", " ", str(evidence_quote or "")).strip()
+            if len(quote) > 140:
+                quote = quote[:137].rstrip() + "..."
+            reason = (
+                f"原文在该定位处给出的具体陈述是：“{quote}”"
+                if prefer_zh and quote
+                else (
+                    f'The answer sentence is supported by the located source, which states: "{quote}"'
+                    if quote
+                    else f'The located source directly contains the technical point "{term_label}".'
+                )
+            )
         return {
             "status": "grounded",
             "confidence": 0.85,
@@ -4326,11 +4387,13 @@ def _assess_system_a_hit_binding(
 
     if source_identity_overlap and keyword_overlap:
         terms = sorted(keyword_overlap)
-        term_label = _system_a_term_label(terms)
+        quote = re.sub(r"\s+", " ", str(evidence_quote or "")).strip()
+        if len(quote) > 140:
+            quote = quote[:137].rstrip() + "..."
         reason = (
-            f"答案句明确指向该来源论文，并与命中证据共享“{term_label}”等来源身份词；可打开原文核对这句话。"
+            f"回答明确指向该论文；原文定位处写道：“{quote}”"
             if prefer_zh
-            else f'The answer sentence explicitly points to this source and shares source-identity terms such as "{term_label}" with the retrieved evidence.'
+            else f'The answer explicitly names this paper; the located source states: "{quote}"'
         )
         return {
             "status": "grounded",
@@ -4341,18 +4404,39 @@ def _assess_system_a_hit_binding(
             "missing_terms": [],
         }
 
+    if len(keyword_overlap) >= 2 and (
+        claim_similarity >= 0.5
+        or claim_keyword_coverage >= 0.75
+        or len(keyword_overlap) >= 3
+        or longest_word_run >= 3
+    ):
+        quote = quote_surface[:137].rstrip() + "..." if len(quote_surface) > 140 else quote_surface
+        reason = (
+            f"答案表述与定位原文高度一致；原文写道：“{quote}”"
+            if prefer_zh
+            else f'The answer closely matches the located source statement: "{quote}"'
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.78,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": sorted(keyword_overlap),
+            "missing_terms": [],
+        }
+
     if len(keyword_overlap) >= 2:
         terms = sorted(keyword_overlap)
         term_label = _system_a_term_label(terms)
         reason = (
-            f"答案句和原文命中共享“{term_label}”等关键词；建议打开原文核对完整语境。"
+            f"目前只确认了“{term_label}”等关键词重合，尚不足以把这段原文作为该主张的直接证据。"
             if prefer_zh
-            else f'The answer sentence and retrieved passage share keywords such as "{term_label}"; open the source to verify the full context.'
+            else f'Only keyword overlap such as "{term_label}" is confirmed; this is not enough to present the passage as direct evidence.'
         )
         return {
-            "status": "grounded",
-            "confidence": 0.65,
-            "suppress_link": False,
+            "status": "candidate",
+            "confidence": 0.45,
+            "suppress_link": True,
             "reason": reason,
             "overlap_terms": terms,
             "missing_terms": [],

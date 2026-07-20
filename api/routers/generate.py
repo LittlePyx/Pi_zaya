@@ -14,7 +14,10 @@ from api.internal_access import internal_api_allowed, require_internal_api
 from api.routers.chat import _normalize_chat_image_attachment, _resolve_allowed_paper_guide_source_path
 from api.sse import sse_generator, sse_response
 from kb.answer_presentation import clean_assistant_answer_presentation_text
-from kb.generation_state_runtime import _strip_internal_generation_markers
+from kb.generation_state_runtime import (
+    _strip_empty_citation_bracket_fragments,
+    _strip_internal_generation_markers,
+)
 from kb.path_safety import resolve_verified_chat_image_upload_path
 from kb.task_runtime import (
     generation_start_failed_message,
@@ -53,11 +56,20 @@ def _generation_user_meta(prompt_context: object, query_scope: str, agent_mode: 
 def _strip_internal_structured_markers(text: str) -> str:
     """Final safety net: never leak internal grounding markers in /api/generate output.
 
-    Strips [[SUPPORT:...]] tokens which are internal grounding metadata that should
-    never be user-visible.  Preserves [[CITE:...]] tokens because they are intentionally
-    generated citation markers that the renderer converts to user-visible links.
+    Streaming/optimistic UI does not yet have citation metadata, so structured
+    citation protocol tokens must stay hidden until the hydrated message can
+    render them as real links.
     """
-    return _strip_internal_generation_markers(text)
+    cleaned = _strip_internal_generation_markers(text)
+    cleaned = re.sub(
+        r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\[\[?\s*(?:CITE)?\s*:?[A-Za-z0-9_:-]*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = _strip_empty_citation_bracket_fragments(cleaned)
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
 
 _TITLE_LEADING_NOISE_RE = re.compile(

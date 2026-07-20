@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import api.routers.references as references_router
 from fastapi import Response
@@ -42,6 +43,78 @@ def test_attach_assistant_answers_to_refs_keeps_alignment_text_internal():
     assert len(attached[10]["answer_sig"]) == 40
     assert "answer_text" not in references_router.public_refs_payload_projection(attached)[10]
     assert "answer_sig" not in references_router.public_refs_payload_projection(attached)[10]
+
+
+def test_attach_assistant_answers_recovers_canonical_cited_hits(tmp_path: Path):
+    realtime = tmp_path / "realtime.en.md"
+    realtime.write_text(
+        "<!-- kb_page: 3 -->\n## Results\nThe system reconstructs real-time single-pixel video "
+        "at a frame rate of 30 Hz using 333 illumination patterns.\n",
+        encoding="utf-8",
+    )
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-canonical-answer"
+            return [
+                {"id": 20, "role": "user", "content": "question"},
+                {
+                    "id": 21,
+                    "role": "assistant",
+                    "content": "该方法以 333 个图案实现 30 Hz 实时成像。[1]",
+                    "meta": {"canonical_hit_paths": [str(realtime)]},
+                },
+            ]
+
+    attached = references_router._attach_assistant_answers_to_refs(
+        store=Store(),
+        conv_id="conv-canonical-answer",
+        refs={20: {"prompt": "question", "hits": [{"text": "unrelated seed", "meta": {"source_path": "seed.md"}}]}},
+    )
+
+    recovered = next(
+        hit for hit in attached[20]["hits"] if hit.get("meta", {}).get("ref_answer_citation_num") == 1
+    )
+    assert len(attached[20]["hits"]) == 1
+    assert recovered["meta"]["source_path"] == str(realtime)
+    assert "30 Hz" in recovered["text"]
+
+
+def test_attach_assistant_answers_orders_cited_hits_by_answer_occurrence(monkeypatch):
+    first = {
+        "text": "First cited evidence.",
+        "meta": {"source_path": "first.md", "ref_answer_citation_num": 1},
+    }
+    second = {
+        "text": "Second cited evidence.",
+        "meta": {"source_path": "second.md", "ref_answer_citation_num": 2},
+    }
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-citation-order"
+            return [
+                {"id": 30, "role": "user", "content": "question"},
+                {
+                    "id": 31,
+                    "role": "assistant",
+                    "content": "先讨论第二篇。[2] 再讨论第一篇。[1]",
+                    "meta": {"canonical_hit_paths": ["first.md", "second.md"]},
+                },
+            ]
+
+    monkeypatch.setattr(
+        "api.chat_render._augment_hits_with_canonical_answer_citations",
+        lambda *_args, **_kwargs: [first, second],
+    )
+
+    attached = references_router._attach_assistant_answers_to_refs(
+        store=Store(),
+        conv_id="conv-citation-order",
+        refs={30: {"prompt": "question", "hits": []}},
+    )
+
+    assert [hit["meta"]["ref_answer_citation_num"] for hit in attached[30]["hits"]] == [2, 1]
 
 
 def test_get_conversation_refs_reuses_cached_payload_when_signature_is_unchanged(monkeypatch):
@@ -714,7 +787,8 @@ def test_get_conversation_refs_full_payload_prefers_authoritative_doc_list_over_
     assert dict(calls.get("kwargs") or {}).get("allow_exact_locate") is False
     assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is False
     assert dict(calls.get("kwargs") or {}).get("allow_citation_prefetch") is False
-    assert dict(calls.get("kwargs") or {}).get("apply_copy_polish") is True
+    assert dict(calls.get("kwargs") or {}).get("apply_copy_polish") is False
+    assert dict(calls.get("kwargs") or {}).get("seed_only") is True
     assert store.persisted == []
     warm = dict(calls.get("warm") or {})
     assert list((warm.get("authoritative_doc_list_by_user") or {}).get(21) or []) == messages[1]["meta"]["paper_guide_contracts"]["doc_list"]
@@ -764,7 +838,8 @@ def test_build_pending_conversation_refs_payload_uses_empty_authoritative_doc_li
     assert dict(calls.get("kwargs") or {}).get("guide_mode") is True
     assert dict(calls.get("kwargs") or {}).get("allow_exact_locate") is False
     assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is False
-    assert dict(calls.get("kwargs") or {}).get("apply_copy_polish") is True
+    assert dict(calls.get("kwargs") or {}).get("apply_copy_polish") is False
+    assert dict(calls.get("kwargs") or {}).get("seed_only") is True
     assert dict(calls.get("kwargs") or {}).get("guide_source_name") == "CVPR-2024-SCINeRF.pdf"
     pack = dict(out.get(51) or {})
     assert list(pack.get("hits") or []) == []
@@ -1742,9 +1817,9 @@ def test_get_conversation_refs_returns_fast_exact_card_then_kicks_llm_warm(monke
     assert out[13]["enrichment_pending"] is True
     assert out[13]["hits"][0]["ui_meta"]["summary_line"] == "ADMM 是本文采用的已有优化方法。"
     assert out[13]["hits"][0]["ui_meta"]["polish_status"] == "heuristic"
-    assert initial_kwargs.get("render_variant") == "bounded_full"
+    assert initial_kwargs.get("render_variant") == "fast"
     assert initial_kwargs.get("allow_expensive_llm_for_ready") is False
-    assert initial_kwargs.get("allow_exact_locate") is True
+    assert initial_kwargs.get("allow_exact_locate") is False
     assert len(warm_calls) == 1
     assert warm_calls[0]["refs"] == refs
 
@@ -1810,7 +1885,7 @@ def test_background_llm_polish_env_override_can_disable_card_polish(monkeypatch)
     assert references_router._refs_background_llm_polish_enabled() is False
 
 
-def test_stored_full_payload_without_llm_copy_is_ignored_when_polish_is_enabled(monkeypatch):
+def test_stored_full_payload_without_llm_copy_is_reused_when_polish_is_enabled(monkeypatch):
     monkeypatch.delenv("KB_REFS_BACKGROUND_LLM_POLISH", raising=False)
     monkeypatch.setattr(references_router, "_refs_card_polish_llm_enabled", lambda: True)
     monkeypatch.setattr(references_router, "_refs_pack_render_signature", lambda **kwargs: "sig-stored")
@@ -1846,7 +1921,7 @@ def test_stored_full_payload_without_llm_copy_is_ignored_when_polish_is_enabled(
         guide_source_name="",
     )
 
-    assert out is None
+    assert out == pack["rendered_payload"]
 
 
 def test_stored_full_payload_with_llm_copy_is_reused_when_polish_is_enabled(monkeypatch):

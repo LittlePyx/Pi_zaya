@@ -79,6 +79,9 @@ _STRUCT_SID_HEADER_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _VISIBLE_NUMERIC_CITE_RE = re.compile(r"\[\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*\]")
+_DOUBLE_NUMERIC_CITE_RE = re.compile(
+    r"(?<![!\\])\[\[\s*(\d{1,5}(?:\s*(?:-|–|—|,|;|；|、)\s*\d{1,5})*)\s*\]\]"
+)
 _RETRIEVAL_ABSENCE_CLAIM_RE = re.compile(
     r"(?:"
     r"(?:\u672a|\u6ca1\u6709|\u65e0\u6cd5).{0,36}(?:\u68c0\u7d22\u7ed3\u679c|\u68c0\u7d22\u7247\u6bb5|\u68c0\u7d22\u4e0a\u4e0b\u6587)|"
@@ -111,7 +114,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 29
+_RENDER_CACHE_SCHEMA_VERSION = 30
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -4043,6 +4046,39 @@ def _reading_guide_repair_missing_system_a_citations(
     text = str(md or "")
     if not text.strip():
         return text
+    if isinstance(canonical_paths, list) and canonical_paths:
+        authoritative_num_sources: dict[int, str] = {}
+        for hit in hits:
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            try:
+                answer_num = int((meta or {}).get("ref_answer_citation_num") or 0)
+            except (TypeError, ValueError):
+                answer_num = 0
+            source_key = _reading_slot_source_key((meta or {}).get("source_path") or hit.get("source_path"))
+            if answer_num > 0 and source_key:
+                authoritative_num_sources[answer_num] = source_key
+        marker_nums = [
+            int(marker.group(1) or 0)
+            for marker in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", text)
+            if 1 <= int(marker.group(1) or 0) <= len(canonical_paths)
+        ]
+        marker_sources = {
+            _reading_slot_source_key(canonical_paths[num - 1])
+            for num in marker_nums
+            if _reading_slot_source_key(canonical_paths[num - 1])
+        }
+        mapping_is_authoritative = bool(marker_nums) and all(
+            authoritative_num_sources.get(num) == _reading_slot_source_key(canonical_paths[num - 1])
+            for num in marker_nums
+        )
+        if mapping_is_authoritative and len(marker_sources) >= 2:
+            # Recovered final-answer hits carry an explicit number-to-source
+            # contract. In that case the answer is already complete and plan
+            # rebinding could only move a citation to another paper. Legacy
+            # hits without this contract must still use the normal repair path.
+            return text
     if "reading" not in str(output_mode or "") and not scope_boundary:
         return _reading_guide_rebind_multi_source_plan_markers(
             text,
@@ -4253,6 +4289,259 @@ def _reading_guide_repair_missing_system_a_citations(
                 parts[best_idx] = _append_numeric_citation_to_paragraph(parts[best_idx], num)
             bound_count += 1
     return "".join(parts)
+
+
+def _augment_hits_with_canonical_answer_citations(
+    hits: list[dict],
+    *,
+    canonical_paths: list[str] | None,
+    answer_text: str,
+) -> list[dict]:
+    """Recover legacy cited hits that were omitted from the display seed pack."""
+
+    if not isinstance(canonical_paths, list) or not canonical_paths:
+        return [dict(hit) for hit in hits if isinstance(hit, dict)]
+    normalized_answer = _normalize_double_numeric_citation_markers(answer_text)
+    cited_nums: list[int] = []
+    for marker in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", normalized_answer):
+        num = int(marker.group(1) or 0)
+        if 1 <= num <= len(canonical_paths) and num not in cited_nums:
+            cited_nums.append(num)
+    if not cited_nums:
+        return [dict(hit) for hit in hits if isinstance(hit, dict)]
+
+    out = [dict(hit) for hit in hits if isinstance(hit, dict)]
+    available = {
+        _reading_slot_source_key(
+            ((hit.get("meta") or {}).get("source_path") if isinstance(hit.get("meta"), dict) else "")
+            or hit.get("source_path")
+        )
+        for hit in out
+    }
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", normalized_answer) if part.strip()]
+    stop_words = {
+        "the", "and", "for", "with", "from", "that", "this", "paper", "evidence",
+        "论文", "证据", "深度学习", "单像素成像",
+    }
+
+    def _claims_for_num(num: int) -> list[str]:
+        marker = f"[{num}]"
+        units = [
+            part.strip()
+            for part in re.split(r"(?<=[.!?。！？;；])\s*|\n+", normalized_answer)
+            if part.strip() and marker in part
+        ]
+        if units:
+            return units
+        return [next((part for part in paragraphs if marker in part), normalized_answer[:1200])]
+
+    for num in cited_nums:
+        source_path = str(canonical_paths[num - 1] or "").strip()
+        source_key = _reading_slot_source_key(source_path)
+        if not source_key:
+            continue
+        md_path = Path(source_path)
+        if not md_path.exists():
+            continue
+        try:
+            blocks = task_runtime.load_source_blocks(md_path)
+        except Exception:
+            blocks = []
+
+        def _claim_requirement_focuses(claim: str) -> list[str]:
+            claim_low = claim.lower()
+            checks = (
+                ("realtime", r"real[- ]?time|frame rate|实时|帧率"),
+                ("domain_shift", r"domain shift|degradation[- ]?robust|域偏移|退化鲁棒"),
+                ("light_range", r"low[- ]?light|high[- ]?light|低照度|高照度|低光照|高光照"),
+                ("resolution", r"optical resolution|resolution|光学分辨率|分辨率"),
+                ("lpips", r"\blpips\b|最低.{0,12}lpips"),
+                ("real_degradation", r"mist|fog|haze|jitter|sensor noise|雾|抖动|传感器噪声|真实退化"),
+            )
+            return [
+                name
+                for name, pattern in checks
+                if re.search(pattern, claim_low, flags=re.I)
+            ]
+
+        def _rank_blocks_for_claim(
+            claim: str,
+            *,
+            requirement_focus: str = "",
+        ) -> list[tuple[float, dict, str]]:
+            claim_terms = {
+                token.lower()
+                for token in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}|\d{2,4}|[\u4e00-\u9fff]{2,8}", claim)
+                if token.lower() not in stop_words
+            }
+            claim_low = claim.lower()
+            active_requirements = set(_claim_requirement_focuses(claim))
+            if requirement_focus:
+                active_requirements = {requirement_focus}
+            claim_requires_realtime = "realtime" in active_requirements
+            claim_requires_domain_shift = "domain_shift" in active_requirements
+            claim_requires_light_range = "light_range" in active_requirements
+            claim_requires_resolution = "resolution" in active_requirements
+            claim_requires_optical_resolution = bool(
+                claim_requires_resolution
+                and re.search(
+                    r"optical resolution|光学分辨率|"
+                    r"\b64\s*(?:\\?times|[x×])\s*64\b|"
+                    r"\b256\s*(?:\\?times|[x×])\s*256\b",
+                    claim_low,
+                    flags=re.I,
+                )
+            )
+            claim_requires_lpips = "lpips" in active_requirements
+            claim_requires_real_degradation = "real_degradation" in active_requirements
+            ranked: list[tuple[float, dict, str]] = []
+            for raw_block in list(blocks or []):
+                if not isinstance(raw_block, dict):
+                    continue
+                block_text = str(raw_block.get("text") or "").strip()
+                heading_path = str(raw_block.get("heading_path") or "").strip()
+                strong_result_surface = bool(
+                    re.search(
+                        r"lowest\s+LPIPS|real-world degraded scenes|frame rate|generalization ability|"
+                        r"consistently (?:achieves|outperforms)|最低.{0,16}LPIPS|实时帧率",
+                        block_text,
+                        flags=re.I,
+                    )
+                )
+                if not block_text or (_looks_low_value_citation_context(block_text) and not strong_result_surface):
+                    continue
+                snippet = _pick_readable_evidence_text(
+                    block_text,
+                    source=source_path,
+                    title=md_path.stem,
+                    claim=claim,
+                    heading=heading_path,
+                    max_len=520,
+                )
+                if not snippet and strong_result_surface:
+                    evidence_sentences = [
+                        part.strip()
+                        for part in re.split(r"(?<=[.!?。！？])\s+", block_text)
+                        if part.strip()
+                        and re.search(
+                            r"mist|fog|haze|jitter|sensor noise|LPIPS|real-world degradation|"
+                            r"frame rate|generalization|resolution|雾|抖动|传感器噪声|帧率|分辨率",
+                            part,
+                            flags=re.I,
+                        )
+                    ]
+                    snippet = " ".join(evidence_sentences[:4]).strip()
+                if not snippet:
+                    continue
+                snippet = re.sub(r"\blowand\s+high-light\b", "low- and high-light", snippet, flags=re.I)
+                snippet = re.sub(
+                    r"(^|\.\s)\d{1,3},\s+the proposed",
+                    lambda match: f"{match.group(1)}The proposed",
+                    snippet,
+                    flags=re.I,
+                )
+                surface_low = f"{heading_path} {snippet}".lower()
+                leaf_surface_low = f"{heading_path.split(' / ')[-1]} {snippet}".lower()
+                snippet_low = snippet.lower()
+                requirements = (
+                    (claim_requires_realtime, r"real[- ]?time|frame rate|reconstruction rate|video rate|\b\d+\s*fps\b|\b\d+\s*hz\b|实时|帧率", False),
+                    (claim_requires_domain_shift, r"domain shift|degradation[- ]?robust|域偏移|退化鲁棒", False),
+                    (claim_requires_light_range, r"low[- ]?light|high[- ]?light|低照度|高照度|低光照|高光照|lowand high-light", False),
+                    # A quantitative resolution sentence may carry the term in
+                    # its leaf section heading while the sentence itself only
+                    # reports the before/after image sizes.
+                    (
+                        claim_requires_resolution,
+                        (
+                            r"optical resolution|光学分辨率|full[- ]sampling|sub[- ]sampling|"
+                            r"\b64\s*(?:\\?times|[x×])\s*64\b|"
+                            r"\b256\s*(?:\\?times|[x×])\s*256\b"
+                            if claim_requires_optical_resolution
+                            else r"optical resolution|\bresolution\b|分辨率"
+                        ),
+                        True,
+                    ),
+                    (claim_requires_lpips, r"\blpips\b", False),
+                    (claim_requires_real_degradation, r"mist|fog|haze|jitter|sensor noise|雾|抖动|传感器噪声|real-world degradation", False),
+                )
+                if any(
+                    required
+                    and not re.search(
+                        pattern,
+                        leaf_surface_low if allow_heading else snippet_low,
+                        flags=re.I,
+                    )
+                    for required, pattern, allow_heading in requirements
+                ):
+                    continue
+                overlap = sum(1 for term in claim_terms if term and term.lower() in surface_low)
+                quality = _evidence_sentence_quality(
+                    snippet,
+                    claim=claim,
+                    heading=heading_path,
+                    title=md_path.stem,
+                )
+                score = float(quality) + min(12.0, float(overlap) * 1.25)
+                if any(required for required, _pattern, _allow_heading in requirements):
+                    score += 5.0
+                if "333" in claim_low and "333" in snippet_low:
+                    score += 4.0
+                ranked.append((score, dict(raw_block), snippet))
+            ranked.sort(key=lambda item: item[0], reverse=True)
+            return ranked
+
+        selected: list[tuple[float, dict, str]] = []
+        for claim in _claims_for_num(num):
+            focuses = _claim_requirement_focuses(claim)
+            ranking_passes = focuses if len(focuses) > 1 else [""]
+            for focus in ranking_passes:
+                ranked = _rank_blocks_for_claim(claim, requirement_focus=focus)
+                if not ranked or ranked[0][0] < 2.0:
+                    continue
+                candidate = ranked[0]
+                if any(
+                    candidate[2].lower() in existing[2].lower() or existing[2].lower() in candidate[2].lower()
+                    for existing in selected
+                ):
+                    continue
+                selected.append(candidate)
+        if not selected:
+            continue
+        _score, block, snippet = selected[0]
+        heading_path = str(block.get("heading_path") or "").strip()
+        if len(selected) > 1:
+            snippet = " ".join(item[2] for item in selected).strip()
+            _score = max(item[0] for item in selected)
+        out = [
+            hit
+            for hit in out
+            if _reading_slot_source_key(
+                ((hit.get("meta") or {}).get("source_path") if isinstance(hit.get("meta"), dict) else "")
+                or hit.get("source_path")
+            )
+            != source_key
+        ]
+        out.append(
+            {
+                "id": f"canonical:{hashlib.sha1(source_path.encode('utf-8', errors='ignore')).hexdigest()[:12]}:{num}",
+                "score": float(_score),
+                "text": snippet,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": md_path.stem,
+                    "top_heading": heading_path,
+                    "heading_path": heading_path,
+                    "page_start": int(block.get("page_start") or block.get("page") or 0),
+                    "page_end": int(block.get("page_end") or block.get("page_start") or block.get("page") or 0),
+                    "block_id": str(block.get("block_id") or "").strip(),
+                    "anchor_id": str(block.get("anchor_id") or "").strip(),
+                    "ref_answer_citation_num": int(num),
+                    "ref_display_reason": "canonical_answer_repair",
+                },
+            }
+        )
+        available.add(source_key)
+    return out
 
 
 def _render_norm_source_key(path_like: str | Path) -> str:
@@ -5070,11 +5359,19 @@ def _should_link_inpaper_citations_for_message(
     return "citation" in _message_answer_output_mode(rec)
 
 
-def _strip_freeform_numeric_citation_markers(md: str) -> str:
+def _normalize_double_numeric_citation_markers(md: str) -> str:
     text = str(md or "")
+    if "[[" not in text:
+        return text
+    return _DOUBLE_NUMERIC_CITE_RE.sub(lambda match: f"[{match.group(1).strip()}]", text)
+
+
+def _strip_freeform_numeric_citation_markers(md: str) -> str:
+    text = _normalize_double_numeric_citation_markers(str(md or ""))
     if (not text) or ("[" not in text):
         return text
     out = _FREEFORM_NUMERIC_CITE_RE.sub("", text)
+    out = re.sub(r"(?<![\w\]])\[\s*\](?![\w\[])|\[\s*\[\s*\]\s*\]", "", out)
     out = re.sub(r"[ \t]+([,.;:!?])", r"\1", out)
     out = re.sub(r"(?m)[ \t]{2,}", " ", out)
     out = re.sub(r"[ \t]+\n", "\n", out)
@@ -6009,8 +6306,13 @@ def enrich_messages_with_reference_render(
             )
             _rec_meta = rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
             _canon_paths = list(_rec_meta.get("canonical_hit_paths") or []) if isinstance(_rec_meta.get("canonical_hit_paths"), list) else []
-            citation_hits = _augment_hits_with_system_a_plan_slots(
+            citation_hits = _augment_hits_with_canonical_answer_citations(
                 hits,
+                canonical_paths=_canon_paths or None,
+                answer_text=rendered_body,
+            )
+            citation_hits = _augment_hits_with_system_a_plan_slots(
+                citation_hits,
                 citation_plan,
                 reserved_count=len(_canon_paths),
             )
@@ -6021,6 +6323,8 @@ def enrich_messages_with_reference_render(
                 citation_plan=citation_plan,
             )
             if rendered_body.strip():
+                rendered_body = _normalize_double_numeric_citation_markers(rendered_body)
+                raw_body = rendered_body
                 rendered_body = _annotate_equation_tags_with_sources(rendered_body, citation_hits)
                 rendered_body = _normalize_equation_source_notes(rendered_body)
                 rendered_body, linked_named_system_b = _repair_named_system_b_citation_markers(

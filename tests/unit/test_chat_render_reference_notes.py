@@ -5,9 +5,12 @@ import pytest
 
 from kb.chat_store import ChatStore
 from api.chat_render import (
+    _augment_hits_with_canonical_answer_citations,
     _enrich_provenance_segments_for_display,
     _normalize_chat_markdown_for_display,
+    _normalize_double_numeric_citation_markers,
     _normalize_equation_source_notes,
+    _strip_freeform_numeric_citation_markers,
     enrich_messages_with_reference_render,
 )
 from tests._paper_guide_fixtures import build_scinerf_like_fixture
@@ -15,6 +18,116 @@ from tests._paper_guide_fixtures import build_scinerf_like_fixture
 
 MOJIBAKE_REFERENCE_LOCATOR = "\u9359\u509d\u20ac\u51a8\u757e\u6d63"
 MOJIBAKE_REFERENCE_SOURCE_PREFIX = "\u93c9\u30e8\u569c" + MOJIBAKE_REFERENCE_LOCATOR + "?#1\u951b\u6b5a"
+
+
+def test_double_numeric_citations_never_render_as_empty_brackets() -> None:
+    assert _normalize_double_numeric_citation_markers("A [[4]], B [[5；2]].") == "A [4], B [5；2]."
+    stripped = _strip_freeform_numeric_citation_markers("A [[4]], B [[]], C [].")
+    assert "[]" not in stripped
+    assert "[[]]" not in stripped
+
+
+def test_legacy_canonical_citations_recover_the_actual_answer_sources(tmp_path: Path) -> None:
+    paths = []
+    for idx in range(1, 6):
+        path = tmp_path / f"paper-{idx}.en.md"
+        if idx == 2:
+            body = (
+                "# Robust SPI\n\n## Results\n\nIn the domain shift test, the physical degradation model "
+                "enables degradation-robust representations and the best reconstruction results.\n"
+            )
+        elif idx == 4:
+                body = (
+                    "# Real-time SPI\n\n## Results\n\nThe method uses 333 patterns and yields a reconstruction frame rate of "
+                "30 Hz for 128 x 128 single-pixel video.\n"
+            )
+        elif idx == 5:
+            body = (
+                "# Transformer SPI\n\n## Real data\n\nThe network generalizes in both low-light and high-light "
+                "conditions and improves image resolution.\n"
+            )
+        else:
+            body = f"# Paper {idx}\n\nUnrelated background text for paper {idx}.\n"
+        path.write_text(body, encoding="utf-8")
+        paths.append(str(path))
+
+    legacy_hits = [
+        {"text": "seed", "meta": {"source_path": paths[idx]}}
+        for idx in range(3)
+    ]
+    repaired = _augment_hits_with_canonical_answer_citations(
+        legacy_hits,
+        canonical_paths=paths,
+        answer_text=(
+            "Real-time reconstruction with 333 patterns [[4]].\n\n"
+            "Low-light and high-light resolution gains [[5]].\n\n"
+            "Domain shift degradation-robust generalization [[2]]."
+        ),
+    )
+
+    cited = {
+        int((hit.get("meta") or {}).get("ref_answer_citation_num") or 0): hit
+        for hit in repaired
+        if int((hit.get("meta") or {}).get("ref_answer_citation_num") or 0) > 0
+    }
+    assert set(cited) == {2, 4, 5}
+    assert "30 Hz" in cited[4]["text"]
+    assert "low-light" in cited[5]["text"]
+    assert "degradation-robust" in cited[2]["text"]
+
+
+def test_canonical_citation_rescues_existing_same_source_hit_to_claim_specific_block(tmp_path: Path) -> None:
+    source = tmp_path / "robust.en.md"
+    source.write_text(
+        "# Robust SPI\n\n## Abstract\n\nA general framework for robust imaging.\n\n"
+        "## Results\n\nAll real-world samples involving mist, jitter, and sensor noise achieve "
+        "the lowest LPIPS score with the proposed method.\n",
+        encoding="utf-8",
+    )
+    existing = {
+        "text": "A general framework for robust imaging.",
+        "meta": {
+            "source_path": str(source),
+            "heading_path": "Abstract",
+            "ref_answer_citation_num": 1,
+        },
+    }
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [existing],
+        canonical_paths=[str(source)],
+        answer_text="真实退化样本包含雾、抖动和传感器噪声，并取得最低 LPIPS [1]。",
+    )
+
+    assert len(repaired) == 1
+    assert repaired[0]["meta"]["ref_answer_citation_num"] == 1
+    assert "Results" in repaired[0]["meta"]["heading_path"]
+    assert "lowest LPIPS" in repaired[0]["text"]
+
+
+def test_canonical_citation_combines_distinct_blocks_for_one_multi_signal_claim(tmp_path: Path) -> None:
+    source = tmp_path / "hatnet.en.md"
+    source.write_text(
+        "# HATNet\n\n## Results / Optical resolution\n\n"
+        "Full sampling reconstructs a 64 x 64 image, while HATNet reconstructs a 256 x 256 image at the same data throughput.\n\n"
+        "## Results / Illumination robustness\n\n"
+        "HATNet shows strong generalization ability in both low-light and high-light conditions.\n",
+        encoding="utf-8",
+    )
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [],
+        canonical_paths=[str(source)],
+        answer_text=(
+            "The method improves optical resolution from 64 x 64 to 256 x 256 and also "
+            "generalizes in low-light and high-light conditions [1]."
+        ),
+    )
+
+    assert len(repaired) == 1
+    assert repaired[0]["meta"]["ref_answer_citation_num"] == 1
+    assert "64 x 64" in repaired[0]["text"]
+    assert "low-light" in repaired[0]["text"]
 
 
 def test_equation_source_note_does_not_reference_removed_refs_ui():

@@ -37,6 +37,8 @@ def test_origin_question_builds_system_b_first_plan():
     assert plan["system_b_enabled"] is True
     assert plan["slots"][0]["preferred_system"] == "system_b"
     assert plan["slots"][0]["candidate_cite_examples"] == ["[[CITE:s1234abcd:4]]"]
+    assert plan["slots"][0]["grounding_contract"]["context_marker_verified"] is True
+    assert plan["route_policy"]["system_a"] == "retrieved_paper_text_only"
     assert citation_plan_prefers_system_b(plan, context="ADMM comes from prior work.", ref_num=4)
 
     block = build_citation_plan_prompt_block(plan)
@@ -96,7 +98,8 @@ def test_three_source_lineage_budgets_each_system_a_source() -> None:
     )
 
     assert plan["intent"] == "origin_lookup"
-    assert plan["budget"] == {"system_a": 3, "system_b": 1}
+    assert plan["budget"] == {"system_a": 3, "system_b": 0}
+    assert plan["system_b_enabled"] is False
     assert {
         slot["source_path"]
         for slot in plan["slots"]
@@ -170,6 +173,7 @@ def test_explicit_evolution_history_and_from_to_contexts_keep_lineage_route() ->
                     "label": "Snapshot compressive imaging",
                     "source_path": "sci.en.md",
                     "heading_path": "Introduction",
+                    "evidence_quote": "Snapshot compressive imaging builds on prior spectral systems [50].",
                 }
             ],
         )
@@ -681,13 +685,86 @@ def test_exact_reference_lookup_keeps_system_b_while_rejecting_extra_recommendat
         prompt_family="citation_lookup",
         answer_hits=[],
         reference_opportunities=[
-            {"sid": "s9999abcd", "ref_num": 9, "label": "terahertz imaging", "source_path": "oe2017.en.md"}
+            {
+                "sid": "s9999abcd",
+                "ref_num": 9,
+                "label": "terahertz imaging",
+                "source_path": "oe2017.en.md",
+                "heading_path": "Introduction",
+                "evidence_quote": "The terahertz implementation follows the compressed-sensing system [9].",
+            }
         ],
     )
 
     assert plan["intent"] == "origin_lookup"
     assert plan["system_b_enabled"] is True
     assert plan["slots"][0]["candidate_refs"] == [9]
+
+
+def test_origin_intent_without_same_context_marker_disables_system_b() -> None:
+    plan = build_citation_plan(
+        prompt="Where did ADMM come from?",
+        answer_hits=[
+            {
+                "text": "The current paper uses ADMM in its reconstruction loop.",
+                "meta": {"source_path": "paper.en.md", "heading_path": "Method"},
+            }
+        ],
+        reference_opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 4,
+                "label": "ADMM",
+                "source_path": "paper.en.md",
+                "heading_path": "Method",
+                "evidence_quote": "The current paper uses ADMM in its reconstruction loop.",
+            }
+        ],
+    )
+
+    assert plan["intent"] == "origin_lookup"
+    assert plan["budget"] == {"system_a": 1, "system_b": 0}
+    assert plan["system_a_enabled"] is True
+    assert plan["system_b_enabled"] is False
+    assert all(slot["preferred_system"] == "system_a" for slot in plan["slots"])
+
+
+def test_reference_list_marker_does_not_masquerade_as_system_b_context() -> None:
+    plan = build_citation_plan(
+        prompt="Who originally introduced this method?",
+        answer_hits=[
+            {
+                "text": "The current paper applies the method.",
+                "meta": {"source_path": "paper.en.md", "heading_path": "Method"},
+            }
+        ],
+        reference_opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 4,
+                "label": "Upstream method",
+                "source_path": "paper.en.md",
+                "heading_path": "References",
+                "evidence_quote": "[4] Author, Upstream method, 2019.",
+                "context_marker_verified": True,
+            }
+        ],
+    )
+
+    assert plan["budget"]["system_b"] == 0
+    assert plan["system_b_enabled"] is False
+
+
+def test_empty_retrieval_shell_does_not_enable_system_a() -> None:
+    plan = build_citation_plan(
+        prompt="Explain the method.",
+        answer_hits=[
+            {"text": "", "meta": {"source_path": "paper.en.md", "heading_path": "Method"}}
+        ],
+    )
+
+    assert plan["system_a_enabled"] is False
+    assert plan["slots"] == []
 
 
 def test_multi_paper_source_marker_request_keeps_system_a_slots_for_every_requested_paper():

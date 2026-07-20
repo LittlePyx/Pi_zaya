@@ -157,12 +157,13 @@ def load_settings() -> Settings:
         ).strip().rstrip("/")
         if "api.deepseek.com" in text_base_url and not text_base_url.endswith("/v1"):
             text_base_url = text_base_url + "/v1"
-        raw_model = (
-            _env("DEEPSEEK_MODEL") or _env("OPENAI_MODEL") or "deepseek-chat"
-        ).strip()
-        # Auto-upgrade old deprecated model IDs to the current series.
-        if raw_model in ("deepseek-reasoner",):
-            raw_model = "deepseek-chat"
+        # Provider-specific model settings must not inherit OPENAI_MODEL:
+        # sending (for example) ``gpt-4o`` to DeepSeek produces a misleading
+        # connection failure even though the DeepSeek key is valid.
+        raw_model = (_env("DEEPSEEK_MODEL") or "deepseek-v4-flash").strip()
+        # Use the explicit V4 fast path rather than DeepSeek's retiring aliases.
+        if raw_model in ("deepseek-chat", "deepseek-reasoner"):
+            raw_model = "deepseek-v4-flash"
         text_model = raw_model
     elif _env("QWEN_API_KEY"):
         text_base_url = (
@@ -185,6 +186,9 @@ def load_settings() -> Settings:
             stored_text_base_url or _env("OPENAI_BASE_URL") or "https://api.openai.com/v1"
         ).strip().rstrip("/")
         text_model = (stored_text_model or _env("OPENAI_MODEL") or "gpt-4o").strip()
+
+    if "api.deepseek.com" in text_base_url and text_model in {"deepseek-chat", "deepseek-reasoner"}:
+        text_model = "deepseek-v4-flash"
 
     # --- vision model -------------------------------------------------
     # Qwen VL is the primary vision model.  DeepSeek does not support

@@ -32,7 +32,6 @@ from api.reference_ui import (
     open_reference_source,
     public_refs_payload_projection,
 )
-from api.reference_card_quality import refs_pack_has_full_llm_copy
 from api.reference_metadata_quality import (
     backfill_reference_metadata,
     citation_metadata_export_acceptance,
@@ -105,7 +104,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 13
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 25
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000
@@ -413,7 +412,7 @@ def _attach_assistant_answers_to_refs(*, store, conv_id: str, refs: dict | None)
     except Exception:
         return refs_out
     wanted = set(refs_out)
-    answers: dict[int, str] = {}
+    answers: dict[int, tuple[str, list[str]]] = {}
     active_user_msg_id = 0
     for message in list(messages or []):
         if not isinstance(message, dict):
@@ -431,12 +430,54 @@ def _attach_assistant_answers_to_refs(*, store, conv_id: str, refs: dict | None)
         answer_text = str(message.get("content") or "").strip()
         if not answer_text:
             continue
-        answers[active_user_msg_id] = answer_text
+        msg_meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
+        canonical_paths = [
+            str(path or "").strip()
+            for path in list((msg_meta or {}).get("canonical_hit_paths") or [])
+            if str(path or "").strip()
+        ]
+        answers[active_user_msg_id] = (answer_text, canonical_paths)
         active_user_msg_id = 0
-    for user_msg_id, answer_text in answers.items():
+    for user_msg_id, (answer_text, canonical_paths) in answers.items():
         pack = dict(refs_out.get(user_msg_id) or {})
         pack["answer_text"] = answer_text
         pack["answer_sig"] = hashlib.sha1(answer_text.encode("utf-8")).hexdigest()
+        if canonical_paths:
+            # Historical packs could contain only the retrieval seed even when
+            # the final answer cited additional whole-library sources. Recover
+            # those authoritative cited rows before the references endpoint
+            # computes its signature or renders cards, so the panel cannot
+            # silently substitute unrelated seed documents.
+            from api.chat_render import _augment_hits_with_canonical_answer_citations
+
+            aligned_hits = _augment_hits_with_canonical_answer_citations(
+                list(pack.get("hits") or []),
+                canonical_paths=canonical_paths,
+                answer_text=answer_text,
+            )
+            cited_hits = [
+                hit
+                for hit in aligned_hits
+                if isinstance(hit, dict)
+                and int(((hit.get("meta") or {}).get("ref_answer_citation_num") or 0)) > 0
+            ]
+            if cited_hits:
+                normalized_answer = re.sub(r"\[\[\s*(\d{1,5})\s*\]\]", r"[\1]", answer_text)
+
+                def _citation_order(hit: dict) -> tuple[int, int]:
+                    try:
+                        number = int(((hit.get("meta") or {}).get("ref_answer_citation_num") or 0))
+                    except (TypeError, ValueError):
+                        number = 0
+                    marker = re.search(rf"(?<![!\\])\[{number}\](?!\()", normalized_answer) if number > 0 else None
+                    return (int(marker.start()) if marker else len(normalized_answer) + number, number)
+
+                cited_hits.sort(key=_citation_order)
+            # Once authoritative answer-citation rows exist, the panel must
+            # represent those rows only. Leaving uncited retrieval seeds in the
+            # candidate pool lets generic relevance scoring displace a paper
+            # the user can actually click from the answer.
+            pack["hits"] = cited_hits or aligned_hits
         refs_out[user_msg_id] = pack
     return refs_out
 
@@ -760,12 +801,6 @@ def _get_stored_rendered_pack_payload(
         return None
     if _stored_rendered_pack_payload_has_dirty_card_copy(payload):
         return None
-    if (
-        _refs_background_llm_polish_enabled()
-        and (not prompt_explicitly_requests_multi_paper_list(str((pack or {}).get("prompt") or "").strip()))
-        and (not _payload_refs_card_copy_has_llm_result(payload))
-    ):
-        return None
     return dict(payload)
 
 
@@ -892,10 +927,6 @@ def _payload_source_paths(payload_pack: dict | None) -> list[str]:
         if source_path:
             out.append(source_path)
     return out
-
-
-def _payload_refs_card_copy_has_llm_result(payload_pack: dict | None) -> bool:
-    return refs_pack_has_full_llm_copy(payload_pack)
 
 
 def _payload_is_authoritative_doc_list_pack(payload_pack: dict | None, authoritative_doc_list: list[dict] | None) -> bool:
@@ -1043,7 +1074,9 @@ def _render_authoritative_doc_list_pack(
     allow_expensive_llm: bool | None = None,
     allow_citation_prefetch: bool = False,
 ) -> dict:
-    # Keep pending/full on the same authoritative paper set and only defer strict locate until full render.
+    # Keep pending/full on the same authoritative paper set.  The pending pass
+    # shapes only the already-computed contract; all source scans and copy
+    # enrichment belong to the background full render.
     allow_llm = bool(not pending) if allow_expensive_llm is None else bool(allow_expensive_llm)
     return build_doc_list_refs_payload(
         user_msg_id=int(user_msg_id),
@@ -1051,7 +1084,7 @@ def _render_authoritative_doc_list_pack(
         doc_list=doc_list,
         allow_expensive_llm=allow_llm,
         allow_exact_locate=not pending,
-        apply_copy_polish=True,
+        apply_copy_polish=not pending,
         guide_mode=bool(guide_mode),
         guide_source_path=str(guide_source_path or "").strip(),
         guide_source_name=str(guide_source_name or "").strip(),
@@ -1060,6 +1093,7 @@ def _render_authoritative_doc_list_pack(
         lib_store=_lib_store(),
         allow_citation_prefetch=bool(allow_citation_prefetch),
         db_dir=get_settings().db_dir,
+        seed_only=bool(pending),
     )
 
 
@@ -1196,7 +1230,7 @@ def _annotate_refs_payload_refresh_state(payload: dict, *, mode: str) -> dict[in
     for user_msg_id, pack in (payload or {}).items():
         if not isinstance(pack, dict):
             continue
-        pack2 = _attach_pack_display_contract(pack)
+        pack2 = dict(pack)
         pack2["payload_mode"] = mode_norm
         if needs_enrichment:
             pack2["enrichment_pending"] = True
@@ -1652,47 +1686,12 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
 
     def _finish(payload: dict | None, mode: str) -> dict:
         payload_out = payload if isinstance(payload, dict) else {}
-        if payload_out:
-            hydrated_payload = dict(payload_out)
-            pdf_root = _pdf_dir()
-            lib_store = _lib_store()
-            db_dir = get_settings().db_dir
-            for raw_user_msg_id, raw_pack in payload_out.items():
-                if not isinstance(raw_pack, dict):
-                    continue
-                pipeline_debug = (
-                    raw_pack.get("pipeline_debug")
-                    if isinstance(raw_pack.get("pipeline_debug"), dict)
-                    else {}
-                )
-                try:
-                    if bool(pipeline_debug.get("doc_list_authoritative")):
-                        hydrated_payload[raw_user_msg_id] = hydrate_doc_list_refs_payload_citation_meta(
-                            raw_pack,
-                            doc_list=[],
-                            pdf_root=pdf_root,
-                            lib_store=lib_store,
-                            db_dir=db_dir,
-                        )
-                    else:
-                        hydrated_payload[raw_user_msg_id] = hydrate_refs_payload_citation_meta(
-                            raw_pack,
-                            pdf_root=pdf_root,
-                            lib_store=lib_store,
-                            db_dir=db_dir,
-                        )
-                except Exception:
-                    continue
-            payload_out = hydrated_payload
-        try:
-            _sync_message_render_packets_with_refs_payload(
-                store=store,
-                conv_id=conv_id,
-                payload=payload_out,
-                mode=mode,
-            )
-        except Exception:
-            pass
+        # Card construction/background warming already embeds cached local
+        # bibliography metadata. Re-scanning every source and rebuilding every
+        # message render packet on this read path caused 10–45 second stalls,
+        # even for a cache hit. The message endpoint can consume the stored
+        # rendered pack directly; remote/local metadata refresh remains an
+        # independent background concern.
         _set_refs_timing_headers(
             response,
             timings=timings,
@@ -1969,43 +1968,12 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                     default_status="failed",
                 )
         _record("failed_fast_render", phase_started_at)
-    normal_ready_refs: dict[int, dict] = {}
-    exact_ready_refs: dict[int, dict] = {}
-    for user_msg_id, pack in ready_missing_refs.items():
-        target = (
-            exact_ready_refs
-            if _refs_payload_has_fast_exact_hit({int(user_msg_id): pack})
-            else normal_ready_refs
-        )
-        target[int(user_msg_id)] = pack
-    if exact_ready_refs:
-        phase_started_at = time.perf_counter()
-        exact_payload = _annotate_refs_payload_refresh_state(
-            enrich_refs_payload(
-                exact_ready_refs,
-                pdf_root=_pdf_dir(),
-                md_root=_md_dir(),
-                lib_store=_lib_store(),
-                guide_mode=guide_mode,
-                guide_source_path=guide_source_path,
-                guide_source_name=guide_source_name,
-                render_variant="bounded_full",
-                allow_expensive_llm_for_ready=False,
-                allow_exact_locate=True,
-            ),
-            mode="fast",
-        )
-        if isinstance(exact_payload, dict):
-            for user_msg_id, pack in exact_ready_refs.items():
-                payload_pack = exact_payload.get(int(user_msg_id))
-                if isinstance(payload_pack, dict):
-                    payload[int(user_msg_id)] = _attach_pack_render_state(
-                        payload_pack,
-                        source_pack=pack,
-                        default_status="fast",
-                        override_status=True,
-                    )
-        _record("exact_fast_render", phase_started_at)
+    # Even exact System-B hits use the local fast card path for the first
+    # response.  Their stricter locator and polished copy are still computed by
+    # the background warm, without holding the user's request open.
+    normal_ready_refs: dict[int, dict] = {
+        int(user_msg_id): pack for user_msg_id, pack in ready_missing_refs.items()
+    }
     if normal_ready_refs:
         phase_started_at = time.perf_counter()
         fast_payload = _build_fast_ready_conversation_refs_payload(
@@ -2027,7 +1995,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         _record("fast_render", phase_started_at)
 
     cache_mode = "full"
-    if authoritative_fast_payloads or exact_ready_refs or normal_ready_refs:
+    if authoritative_fast_payloads or normal_ready_refs:
         cache_mode = "fast"
     elif failed_ready_refs:
         cache_mode = "fast"
@@ -2043,7 +2011,6 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         )
     ready_refs_to_warm = {
         **authoritative_fast_refs,
-        **exact_ready_refs,
         **normal_ready_refs,
     }
     if ready_refs_to_warm and (not pending_refs) and (not failed_ready_refs):

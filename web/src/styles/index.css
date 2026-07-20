@@ -4067,6 +4067,10 @@ body.kb-reader-resizing .kb-reader-content {
   margin-left: 28px;
 }
 
+.kb-ref-evidence-grid.is-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .kb-ref-card {
   border: 0;
   border-radius: 0;

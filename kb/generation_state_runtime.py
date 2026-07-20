@@ -9,6 +9,7 @@ from pathlib import Path
 from kb import runtime_state as RUNTIME
 from kb.answer_presentation import clean_assistant_answer_presentation_text
 from kb.chat_store import ChatStore
+from kb.config import CITATION_OFFSET
 from kb.paper_guide_provenance import _build_paper_guide_answer_provenance
 
 
@@ -149,12 +150,74 @@ def _gen_has_active_task_id(task_id: str) -> bool:
     return False
 
 
+def _strip_empty_citation_bracket_fragments(text: str) -> str:
+    """Remove shells left by hidden citation tokens without harming Markdown UI."""
+
+    s = str(text or "")
+    if not s or "[" not in s:
+        return s
+    # Preserve task-list checkboxes and empty-label Markdown links/images.
+    s = re.sub(
+        r"(?<!!)(?<!- )(?<!\* )(?<!\+ )\[\s*\](?!\s*\()",
+        "",
+        s,
+    )
+    s = re.sub(r"\[\s*\[\s*\]\s*\]", "", s)
+    s = re.sub(r"[ \t]+([,.;:!?，。；：！？])", r"\1", s)
+    return s
+
+
 def _strip_internal_generation_markers(text: str) -> str:
     """Remove internal grounding markers before text reaches user-visible storage."""
     s = str(text or "")
     if not s:
         return s
     s = re.sub(r"\[\[\s*SUPPORT\s*:[^\]]+\]\]", "", s, flags=re.IGNORECASE)
+    # DOC-k labels and offset citation IDs belong to the model-facing prompt.
+    # Convert them before every SSE poll so streaming never exposes internal
+    # retrieval bookkeeping that only the finalization pass used to clean up.
+    s = re.sub(r"[（(]\s*DOC-\d+(?:-S\d+)?\s*[）)]", "", s, flags=re.IGNORECASE)
+    s = re.sub(
+        r"\b(source)\s+DOC-\d+(?:-S\d+)?\b|(?<=来源)\s*DOC-\d+(?:-S\d+)?\b",
+        lambda match: str(match.group(1) or ""),
+        s,
+        flags=re.IGNORECASE,
+    )
+    doc_label = "来源" if re.search(r"[\u3400-\u9fff]", s) else "source"
+    s = re.sub(r"\bDOC-\d+(?:-S\d+)?\b", doc_label, s, flags=re.IGNORECASE)
+
+    def _public_cite(match: re.Match) -> str:
+        raw = str(match.group(1) or "")
+        parts = re.split(r"\s*([,，;；、\-–—])\s*", raw)
+        converted: list[str] = []
+        saw_number = False
+        for part in parts:
+            if re.fullmatch(r"\d{5,}", part or ""):
+                number = int(part)
+                if number < CITATION_OFFSET:
+                    return match.group(0)
+                converted.append(str(number - CITATION_OFFSET))
+                saw_number = True
+            else:
+                converted.append(part)
+        return "[" + "".join(converted) + "]" if saw_number else match.group(0)
+
+    s = re.sub(r"\[\s*((?:\d{5,})(?:\s*[,，;；、\-–—]\s*\d{5,})*)\s*\]", _public_cite, s)
+    # Some providers wrap the requested numeric citation in an extra pair of
+    # brackets (``[[10004]]``). After offset conversion that becomes ``[[4]]``
+    # and breaks Markdown citation linking; collapse only purely numeric forms.
+    s = re.sub(
+        r"\[\[\s*(\d{1,4}(?:\s*[,，;；、\-–—]\s*\d{1,4})*)\s*\]\]",
+        lambda match: f"[{match.group(1)}]",
+        s,
+    )
+    # A stream snapshot can end halfway through an internal token. Hold that
+    # ambiguous tail back until a later snapshot proves it is ordinary text or
+    # completes the marker/citation. This prevents brief flashes such as
+    # ``DOC-`` and ``[100`` in the browser.
+    s = re.sub(r"(?:\bDOC(?:-\d*(?:-S\d*)?)?|\[\[\s*(?:SUPPORT|CITE)?[^\]]*)\s*$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\[\s*\d+(?:\s*[,，;；、\-–—]\s*\d*)?\s*$", "", s)
+    s = _strip_empty_citation_bracket_fragments(s)
     s = re.sub(r"[ \t]{2,}", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s).strip()
     return s

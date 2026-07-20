@@ -177,6 +177,7 @@ def _apply_primary_prompt_aligned_summary_candidate(
     ref_summary_focus_score: Callable[..., float],
     matched_focus_terms_for_ref_card: Callable[..., list[str]],
     ref_summary_surfaces_match: Callable[..., bool],
+    rank_prompt_aligned_ref_summary_candidate: Callable[..., tuple] | None = None,
 ) -> dict[str, Any]:
     summary_line_out = str(summary_line or "").strip()
     summary_source_out = str(summary_source or "").strip()
@@ -197,6 +198,19 @@ def _apply_primary_prompt_aligned_summary_candidate(
         prompt=prompt,
         source_path=source_path,
     )
+    if (
+        str((prompt_aligned_candidate or {}).get("source_kind") or "").strip().lower()
+        == "retrieval_hit"
+    ):
+        inferred_hit_heading = infer_heading_path_for_summary_from_source_blocks(
+            prompt=prompt,
+            source_path=source_path,
+            summary_line=prompt_aligned_summary,
+            anchor_target_kind=anchor_target_kind,
+            anchor_target_number=anchor_target_number,
+        )
+        if inferred_hit_heading:
+            candidate_heading_path = inferred_hit_heading
     if candidate_heading_path and anchor_target_kind and anchor_target_number > 0:
         candidate_anchor_num = refs_heading_anchor_number(anchor_target_kind, candidate_heading_path)
         if candidate_anchor_num > 0 and candidate_anchor_num != anchor_target_number:
@@ -207,7 +221,7 @@ def _apply_primary_prompt_aligned_summary_candidate(
             and (not refs_heading_paths_related(candidate_heading_path, heading_path))
         ):
             candidate_heading_path = ""
-    if (not candidate_heading_path) and allow_summary_block_rescue:
+    if not candidate_heading_path:
         candidate_heading_path = infer_heading_path_for_summary_from_source_blocks(
             prompt=prompt,
             source_path=source_path,
@@ -243,6 +257,25 @@ def _apply_primary_prompt_aligned_summary_candidate(
         anchor_target_kind=anchor_target_kind,
         anchor_target_number=anchor_target_number,
     )
+    rank_candidate = rank_prompt_aligned_ref_summary_candidate or (
+        lambda *args, **kwargs: (0.0,)
+    )
+    current_copy_rank = rank_candidate(
+        {"summary": summary_line_out, "heading_path": heading_path},
+        prompt=prompt,
+        source_path=source_path,
+        title=title,
+        anchor_target_kind=anchor_target_kind,
+        anchor_target_number=anchor_target_number,
+    )[0] if summary_line_out else -1000.0
+    candidate_copy_rank = rank_candidate(
+        dict(prompt_aligned_candidate or {}),
+        prompt=prompt,
+        source_path=source_path,
+        title=title,
+        anchor_target_kind=anchor_target_kind,
+        anchor_target_number=anchor_target_number,
+    )[0]
     fallback_focus_hits = len(matched_focus_terms_for_ref_card(prompt, surface_text=summary_line_out))
     prompt_aligned_focus_hits = len(matched_focus_terms_for_ref_card(prompt, surface_text=prompt_aligned_summary))
     prefer_prompt_aligned_heading = bool(
@@ -261,6 +294,7 @@ def _apply_primary_prompt_aligned_summary_candidate(
         (not summary_line_out)
         or current_unacceptable
         or (chosen_score >= (current_score + 0.75))
+        or (candidate_copy_rank >= (current_copy_rank + 0.5))
         or prefer_prompt_aligned_heading
     ):
         summary_line_out = prompt_aligned_summary
@@ -471,6 +505,7 @@ def _resolve_primary_ref_evidence_summary_selection(
         ref_summary_focus_score=ref_summary_focus_score,
         matched_focus_terms_for_ref_card=matched_focus_terms_for_ref_card,
         ref_summary_surfaces_match=ref_summary_surfaces_match,
+        rank_prompt_aligned_ref_summary_candidate=rank_prompt_aligned_ref_summary_candidate,
     )
 
     return {

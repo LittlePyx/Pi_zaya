@@ -246,6 +246,12 @@ def looks_broken_leading_prefix(value: str) -> bool:
         return False
     if looks_author_metadata_prefix(text):
         return True
+    # A complete evidence sentence can legitimately start with a capitalized
+    # content word (for example, "All tested samples were ...").  Do not
+    # mistake it for a detached title/author prefix merely because its first
+    # token is not in the small fragment allow-list.
+    if _TERMINAL_PUNCT_RE.search(text) and _CONTENT_VERB_RE.search(text):
+        return False
     first_token = re.match(r"^[A-Za-z]{2,}\b", text)
     if first_token and not _FRAGMENT_LEAD_OK_RE.match(text):
         return True
@@ -297,6 +303,11 @@ def looks_bibliography_entry_context(value: str) -> bool:
 def looks_low_value_citation_context(value: str) -> bool:
     text = clean_display_text(value, max_len=1400)
     if not text:
+        return True
+    metadata_surface = re.sub(r"\s+", " ", text).strip()
+    if re.search(r"(?i)\bA\s*R\s*T\s*I\s*C\s*L\s*E\s+I\s*N\s*F\s*O\b", metadata_surface):
+        return True
+    if re.match(r"(?i)^\s*(?:keywords?|index\s+terms?)\s*:", metadata_surface):
         return True
     if looks_author_list_context(text) or looks_bibliography_entry_context(text):
         return True

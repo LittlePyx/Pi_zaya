@@ -94,12 +94,6 @@ function localizedGenerationStreamIncompleteMessage(locale: string) {
     : en.chat_generation_stream_incomplete
 }
 
-function localizedGenerationRefreshFailedMessage(locale: string) {
-  return locale.toLowerCase().startsWith('zh')
-    ? zh.chat_generation_refresh_failed
-    : en.chat_generation_refresh_failed
-}
-
 function generationStreamFailureDisplayMessage(error: unknown, locale: string) {
   const raw = error instanceof Error ? error.message.trim() : String(error || '').trim()
   if (!raw) return localizedGenerationStreamFailedMessage(locale)
@@ -116,10 +110,6 @@ function generationStreamFailureDisplayMessage(error: unknown, locale: string) {
     return localizedGenerationStreamFailedMessage(locale)
   }
   return raw
-}
-
-function generationRefreshFailureDisplayMessage(locale: string) {
-  return localizedGenerationRefreshFailedMessage(locale)
 }
 
 function isCanonicalGenerationStartFailureText(text: string) {
@@ -198,6 +188,53 @@ function upsertGenerationFailureMessage(
       meta: {
         ...(generation?.traceId ? { trace_id: generation.traceId } : {}),
         generation_status: 'failed',
+      },
+    },
+  ]
+}
+
+function upsertGenerationCompletedMessage(
+  messages: Message[],
+  generation: GenerationState | null | undefined,
+  finalContent: string,
+): Message[] {
+  const content = String(finalContent || generation?.partial || '').trim()
+  if (!content) return messages
+  const assistantMsgId = Number(generation?.assistantMsgId || 0)
+  const fallbackId = Number.isFinite(assistantMsgId) && assistantMsgId > 0
+    ? assistantMsgId
+    : Math.floor(Date.now())
+  const createdAt = Date.now() / 1000
+  const patchMessage = (message: Message): Message => ({
+    ...message,
+    role: 'assistant',
+    content,
+    created_at: Number.isFinite(Number(message.created_at)) ? message.created_at : createdAt,
+    meta: {
+      ...(message.meta || {}),
+      ...(generation?.traceId ? { trace_id: generation.traceId } : {}),
+      generation_status: 'done',
+    },
+  })
+  if (assistantMsgId > 0) {
+    let found = false
+    const next = messages.map((message) => {
+      if (Number(message.id || 0) !== assistantMsgId) return message
+      found = true
+      return patchMessage(message)
+    })
+    if (found) return next
+  }
+  return [
+    ...messages,
+    {
+      id: fallbackId,
+      role: 'assistant',
+      content,
+      created_at: createdAt,
+      meta: {
+        ...(generation?.traceId ? { trace_id: generation.traceId } : {}),
+        generation_status: 'done',
       },
     },
   ]
@@ -2323,16 +2360,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           if (data.done) {
             streamDone = true
             if (!requestGenerationIsCurrent()) return
-            let page: MessagePage
-            try {
-              const result = await getMessagesPageWithFallback(convId!, {
-                limit: MESSAGE_PAGE_SIZE,
-                renderPacketOnly: requestPaperGuideMode ? true : undefined,
-              })
-              page = result.page
-            } catch {
-              throw new Error(generationRefreshFailureDisplayMessage(uiLocale))
-            }
+            const finalContent = String(data.answer || data.partial || nextGeneration.partial || '').trim()
             let visibleAtCompletion = false
             set((state) => {
               const visibleForRequest = state.activeConvId === convId && (
@@ -2341,6 +2369,71 @@ export const useChatStore = create<ChatState>((set, get) => ({
               )
               visibleAtCompletion = visibleForRequest
               const previousCache = state.conversationCacheById[convId!]
+              const baseMessages = visibleForRequest
+                ? state.messages
+                : (Array.isArray(previousCache?.messages) ? previousCache.messages : [])
+              const completedGeneration = visibleForRequest
+                ? state.generation
+                : previousCache?.generation
+              const completedMessages = upsertGenerationCompletedMessage(
+                baseMessages,
+                completedGeneration,
+                finalContent,
+              )
+              const nextCache = upsertConversationViewCache(state.conversationCacheById, convId!, {
+                messages: completedMessages,
+                refs: visibleForRequest
+                  ? state.refs
+                  : (previousCache?.refs && typeof previousCache.refs === 'object' ? previousCache.refs : {}),
+                generation: null,
+                sseController: null,
+                cachedAt: Date.now(),
+              })
+              if (!visibleForRequest) {
+                return { conversationCacheById: nextCache }
+              }
+              return {
+                messages: completedMessages,
+                generation: null,
+                conversationLoading: false,
+                messagesLoadingMore: false,
+                sseController: state.sseController === ctrl ? null : state.sseController,
+                conversationCacheById: nextCache,
+              }
+            })
+            if (visibleAtCompletion) {
+              scheduleLoadRefsForConversation(convId!, set, () => get().activeConvId, 120, undefined, 'generation_done')
+            }
+
+            // The completed answer is already visible. Hydrating server-side
+            // metadata and post-processing must never keep the streaming UI
+            // open or turn a successful generation into a visible failure.
+            let page: MessagePage | null = null
+            try {
+              const result = await getMessagesPageWithFallback(convId!, {
+                // Only the just-created user/assistant pair is needed here.
+                // Rendering a full page delays citation hydration in long
+                // conversations even though the streamed answer is complete.
+                limit: 2,
+                renderPacketOnly: requestPaperGuideMode ? true : undefined,
+              })
+              page = result.page
+            } catch {
+              page = null
+            }
+            if (page) set((state) => {
+              const visibleForRequest = state.activeConvId === convId
+              const previousCache = state.conversationCacheById[convId!]
+              const currentRequestGeneration = visibleForRequest
+                ? state.generation
+                : previousCache?.generation
+              const stillOwnsGenerationState = !currentRequestGeneration
+                || currentRequestGeneration.sessionId === res.session_id
+              // A newer request may have started in the same conversation
+              // while this lightweight hydration was in flight. Its page can
+              // only describe the completed request, so do not merge it into
+              // or clear any state owned by the newer generation.
+              if (!stillOwnsGenerationState) return {}
               const baseMessages = visibleForRequest
                 ? state.messages
                 : (Array.isArray(previousCache?.messages) ? previousCache.messages : [])
@@ -2368,20 +2461,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
               }
               return {
                 messages: merged.messages,
-                generation: null,
                 conversationLoading: false,
                 messagesLoadingMore: false,
                 messagesHasMoreBefore: merged.hasMoreBefore,
                 oldestLoadedMessageId: merged.oldestLoadedMessageId,
+                generation: null,
+                sseController: null,
                 conversationCacheById: nextCache,
               }
             })
-            if (visibleAtCompletion) {
-              scheduleLoadRefsForConversation(convId!, set, () => get().activeConvId, 120, undefined, 'generation_done')
-            }
             const postprocessState = get()
             if (!visibleAtCompletion || postprocessState.activeConvId !== convId) {
-              await get().loadSidebarData()
+              void get().loadSidebarData()
               return
             }
             const paperGuideMode = Boolean(
@@ -2402,7 +2493,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 { paperGuideMode, reason: 'generation_done' },
               )
             }
-            await get().loadSidebarData()
+            void get().loadSidebarData()
             return
           }
         }

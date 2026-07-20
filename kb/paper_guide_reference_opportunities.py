@@ -853,6 +853,7 @@ def detect_text_reference_opportunities(
                         "label": label,
                         "heading_path": _compact_text(heading, max_len=160),
                         "evidence_quote": context_text,
+                        "context_marker_verified": True,
                         "why_line": "The retrieved source paper explicitly cites this upstream work in the cited context.",
                         "ref_title": _compact_text(title, max_len=160),
                     },
@@ -1166,6 +1167,7 @@ def detect_paper_guide_reference_opportunities(
                         "label": _label_for_opportunity(prompt=prompt, text=text, ref_num=int(ref_num)),
                         "heading_path": heading,
                         "evidence_quote": text,
+                        "context_marker_verified": True,
                         "why_line": (
                             "The current paper cites this upstream work in the evidence used for the answer."
                         ),

@@ -162,6 +162,9 @@ def _query_term_profile(prompt_text: str, used_query: str) -> dict[str, bool]:
         "wants_single_photon": ("单光子" in zh) or ("single photon" in en) or ("spad" in en) or ("sns" in en) or ("nanowire" in en),
         "wants_compressive": ("压缩" in zh) or ("compressive" in en),
         "wants_spectral": ("光谱" in zh) or ("spectral" in en),
+        "wants_deep_learning": ("深度学习" in zh)
+        or ("deep learning" in en)
+        or ("neural network" in en),
     }
     return p
 
@@ -171,10 +174,23 @@ def _doc_term_bonus(profile: dict[str, bool], doc_name: str, snippets: list[str]
     """
     hay = _norm_text_for_match(doc_name or "") + "\n" + _norm_text_for_match("\n".join(snippets or []))
     has_single_shot = any(k in hay for k in ["single-shot", "single shot", "single exposure", "snapshot"])
-    has_single_pixel = any(k in hay for k in ["single-pixel", "single pixel"])
+    has_single_pixel = any(k in hay for k in ["single-pixel", "single pixel"]) or bool(
+        re.search(r"\bspi\b", hay)
+    )
     has_single_photon = any(k in hay for k in ["single-photon", "single photon", "spad", "sns", "snspd", "nanowire"])
     has_spectral = "spectral" in hay
     has_compressive = "compressive" in hay
+    has_deep_learning = any(
+        k in hay
+        for k in [
+            "deep learning",
+            "neural network",
+            "neural-network",
+            "transformer",
+            "convolutional network",
+            "learned reconstruction",
+        ]
+    )
 
     bonus = 0.0
     if profile.get("wants_single_shot"):
@@ -185,6 +201,8 @@ def _doc_term_bonus(profile: dict[str, bool], doc_name: str, snippets: list[str]
     if profile.get("wants_single_pixel"):
         if has_single_pixel:
             bonus += 2.2
+        else:
+            bonus -= 2.2
         if has_single_shot and (not has_single_pixel):
             bonus -= 1.6
         if has_single_photon and (not has_single_pixel):
@@ -198,6 +216,11 @@ def _doc_term_bonus(profile: dict[str, bool], doc_name: str, snippets: list[str]
         bonus += 0.9 if has_spectral else -0.6
     if profile.get("wants_compressive"):
         bonus += 0.6 if has_compressive else -0.3
+    if profile.get("wants_deep_learning"):
+        # Topic qualifiers must remain decisive after widening the library
+        # candidate pool. A generic SPI paper should not displace a paper that
+        # actually studies deep-learning reconstruction.
+        bonus += 2.0 if has_deep_learning else -2.0
     return bonus
 
 def _is_probably_bad_heading(h: str) -> bool:

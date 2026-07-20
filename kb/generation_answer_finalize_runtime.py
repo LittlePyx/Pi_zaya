@@ -33,6 +33,7 @@ from kb.paper_guide_reference_opportunities import (
     merge_reference_opportunity_candidate_refs,
     strip_reference_opportunity_note,
 )
+from kb.generation_state_runtime import _strip_empty_citation_bracket_fragments
 from kb.reference_query_family import (
     extract_requested_paper_count,
     extract_multi_paper_topic as _shared_extract_multi_paper_topic,
@@ -80,8 +81,13 @@ _STRUCT_CITE_GARBAGE_RE = re.compile(r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]", re.IGNORE
 _SID_INLINE_RE = re.compile(r"\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\]", re.IGNORECASE)
 _SID_RE = re.compile(r"^[A-Za-z0-9_-]{4,24}$")
 _INLINE_REF_NUM_RE = re.compile(r"\[(\d{1,4})\]")
+# Keep citation specifications interoperable across providers, including the
+# Chinese/semicolon separators that some models emit.
 _FREEFORM_NUMERIC_CITE_RE = re.compile(
-    r"(?<![!\\])\[(\d{1,5}(?:\s*(?:-|–|—|,)\s*\d{1,5})*)\](?!\()"
+    r"(?<![!\\])\[(\d{1,5}(?:\s*(?:-|–|—|,|;|；|、)\s*\d{1,5})*)\](?!\()"
+)
+_DOUBLE_NUMERIC_CITE_RE = re.compile(
+    r"(?<![!\\])\[\[\s*(\d{1,5}(?:\s*(?:-|–|—|,|;|；|、)\s*\d{1,5})*)\s*\]\]"
 )
 _DOC_HEADING_LINE_RE = re.compile(
     r"(?im)^\s*(?:>\s*)?(?:\*{1,2}\s*)?DOC-\d{1,3}(?:-S\d{1,3})?(?:\s*\*{1,2})?\s*[:：]\s*$"
@@ -275,7 +281,11 @@ def _promote_numeric_inpaper_refs(
     # processed by subsequent pipeline steps).
     def _repl(m: re.Match) -> str:
         spec = str(m.group(1) or "").strip()
-        nums = [int(x) for x in re.split(r"\s*(?:-|\u2013|\u2014|,)\s*", spec) if x.strip()]
+        nums = [
+            int(x)
+            for x in re.split(r"\s*(?:-|\u2013|\u2014|,|;|；|、)\s*", spec)
+            if x.strip()
+        ]
         if not nums:
             return m.group(0)
 
@@ -346,7 +356,11 @@ def _strip_citation_offset(
 
     def _repl(m: re.Match) -> str:
         spec = str(m.group(1) or "").strip()
-        nums = [int(x) for x in re.split(r"\s*(?:-|\u2013|\u2014|,)\s*", spec) if x.strip()]
+        nums = [
+            int(x)
+            for x in re.split(r"\s*(?:-|\u2013|\u2014|,|;|；|、)\s*", spec)
+            if x.strip()
+        ]
         if not nums:
             return m.group(0)
 
@@ -358,6 +372,15 @@ def _strip_citation_offset(
         return "[" + ",".join(str(n) for n in new_nums) + "]"
 
     return _FREEFORM_NUMERIC_CITE_RE.sub(_repl, answer)
+
+
+def _normalize_double_numeric_citations(answer: str) -> str:
+    """Collapse model-emitted ``[[n]]`` into the public ``[n]`` form."""
+
+    text = str(answer or "")
+    if "[[" not in text:
+        return text
+    return _DOUBLE_NUMERIC_CITE_RE.sub(lambda match: f"[{match.group(1).strip()}]", text)
 
 
 def _sanitize_canceled_generation_answer(
@@ -379,6 +402,7 @@ def _sanitize_canceled_generation_answer(
     ).strip()
     answer = _sanitize_empty_markdown_label_fragments(answer)
     answer = _strip_citation_offset(answer)
+    answer = _normalize_double_numeric_citations(answer)
     answer = _strip_latex_footnote_markers(answer)
     if answer:
         answer = _sanitize_paper_guide_answer_for_user(
@@ -477,6 +501,7 @@ def _sanitize_empty_markdown_label_fragments(answer: str) -> str:
     text = re.sub(r"(?m)^\s*\*{4,}\s*[:：]\s*", "", text)
     text = re.sub(r"(?m)(^|\n)(\s*[-*+]\s*)?\*{4,}\s*[:：]\s*", r"\1", text)
     text = re.sub(r"(?<!\*)\*{4,}\s*[:：]\s*", "", text)
+    text = _strip_empty_citation_bracket_fragments(text)
     text = re.sub(r"[ \t]+([,.;:!?，。；：！？])", r"\1", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -733,6 +758,7 @@ def _strip_final_answer_citation_markers(
         out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
     if not preserve_numeric_markers:
         out = _FREEFORM_NUMERIC_CITE_RE.sub("", out)
+    out = _strip_empty_citation_bracket_fragments(out)
     out = re.sub(r"[ \t]+([,.;:!?])", r"\1", out)
     out = re.sub(r"(?m)[ \t]{2,}", " ", out)
     out = re.sub(r"[ \t]+\n", "\n", out)
@@ -3019,6 +3045,67 @@ def _maybe_clarify_negative_boundary_answer(answer: str, *, prompt: str) -> str:
     return "\u4e0d\u662f\u5f53\u524d\u4e3b\u7ebf\u7684\u6838\u5fc3\u6587\u732e\uff1b" + text
 
 
+def _normalize_retrieval_window_claims(
+    answer: str,
+    *,
+    prompt: str,
+    verified_inventory_count: bool = False,
+) -> str:
+    """Keep a bounded retrieval window from masquerading as the whole library."""
+
+    text = str(answer or "").strip()
+    if not text:
+        return text
+    if verified_inventory_count:
+        return text
+    del prompt
+    out = re.sub(
+        r"根据(?:您|你)?提供的库中文献\s*[（(]\s*共\s*\d+\s*篇\s*[）)]",
+        "根据本轮检索到的候选文献",
+        text,
+    )
+    out = re.sub(
+        r"(?:您|你)?的?库中文献\s*[（(]\s*共\s*\d+\s*篇\s*[）)]",
+        "本轮检索到的候选文献",
+        out,
+    )
+    out = re.sub(
+        r"(?:您|你)?的?(?:文献库|库)(?:里|中)?\s*(?:一共|共)?\s*(?:只有|仅有)?\s*(\d+)\s*篇(?:文献)?",
+        lambda match: f"本轮检索到 {match.group(1)} 篇候选文献",
+        out,
+    )
+    out = re.sub(
+        r"(?:库中|文献库中)(?:的)?文献(?:资源)?不足以支撑",
+        "本轮检索证据不足以支撑",
+        out,
+    )
+    out = re.sub(
+        r"there\s+(?:are|were)\s+(?:exactly\s+|only\s+)?(\d+)\s+papers?\s+in\s+(?:your|the)\s+library",
+        lambda match: f"the current retrieval found {match.group(1)} candidate papers",
+        out,
+        flags=re.I,
+    )
+    out = re.sub(
+        r"(?:the\s+)?(?:\d+\s+)?papers?\s+in\s+(?:your|the)\s+library",
+        "the papers in the current retrieval window",
+        out,
+        flags=re.I,
+    )
+    out = re.sub(
+        r"(?:your|the)\s+(?:whole\s+)?library\s+contains?",
+        "the current retrieval window contains",
+        out,
+        flags=re.I,
+    )
+    out = re.sub(
+        r"(?:your|the)\s+(?:whole\s+)?library\s+(?:does\s+not|doesn't|lacks?)",
+        "the current retrieval window does not",
+        out,
+        flags=re.I,
+    )
+    return out
+
+
 def _finalize_fast_exact_generation_answer(
     partial: str,
     *,
@@ -3426,7 +3513,11 @@ def _finalize_generation_answer(
     # Step 1: Promote bare [n] where n < CITATION_OFFSET to structured
     # [[CITE:<sid>:n]] — these are in-paper bibliography references (System B).
     # Hit citations use [OFFSET+1] numbers and are handled in step 2.
-    if not paper_guide_mode and not answer_audit_requested:
+    if (
+        not paper_guide_mode
+        and not answer_audit_requested
+        and not system_b_explicitly_disabled
+    ):
         answer = _promote_numeric_inpaper_refs(
             answer,
             answer_hits=answer_hits,
@@ -3438,6 +3529,7 @@ def _finalize_generation_answer(
     # 1-based hit citations; System B refs are already [[CITE:...]].
     if not paper_guide_mode:
         answer = _strip_citation_offset(answer)
+        answer = _normalize_double_numeric_citations(answer)
     # Step 3: Strip LaTeX footnote markers ($^n$, $_{xx}$) that leak from paper text.
     answer = _strip_latex_footnote_markers(answer)
     if not answer_audit_requested:
@@ -3492,6 +3584,7 @@ def _finalize_generation_answer(
                 paper_guide_candidate_refs_effective = {}
     elif (
         not answer_audit_requested
+        and not system_b_explicitly_disabled
         and not library_paper_selection_prompt
         and not paper_guide_reference_opportunities
     ):
@@ -3591,6 +3684,7 @@ def _finalize_generation_answer(
         retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
         allow_paper_guide_structured_refs=bool(paper_guide_validated_structured_refs),
     )
+    answer = _normalize_retrieval_window_claims(answer, prompt=prompt_for_user or prompt)
     answer = _maybe_clarify_negative_boundary_answer(answer, prompt=prompt_for_user or prompt)
     if single_paper_pick_prompt:
         answer = _strip_single_paper_selection_extras(answer)

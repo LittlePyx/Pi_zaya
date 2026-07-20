@@ -10,6 +10,7 @@ from kb.task_runtime import (
     _selected_research_context_source_paths,
     _trim_multi_paper_answer_to_planned_sources,
 )
+from kb.generation_answer_finalize_runtime import _normalize_double_numeric_citations
 
 
 def _hit(source_path: str, text: str) -> dict:
@@ -119,6 +120,66 @@ def test_refs_display_docs_preserve_all_non_contiguous_sources_selected_by_answe
         "db/paper-5.en.md",
     ]
     assert [item["meta"]["ref_answer_citation_num"] for item in merged] == [2, 6, 3, 5]
+
+
+def test_refs_display_docs_follow_final_canonical_citations_after_double_bracket_normalization():
+    answer_hits = [_hit(f"db/paper-{idx}.en.md", f"paper {idx}") for idx in range(1, 7)]
+    answer = _normalize_double_numeric_citations("Realtime [[4]], resolution [[5]], robustness [[2]].")
+
+    merged = _merge_refs_display_docs_with_answer_hits(
+        refs_seed_docs=answer_hits[:3],
+        answer_hits=answer_hits,
+        limit=4,
+        answer=answer,
+    )
+
+    assert answer == "Realtime [4], resolution [5], robustness [2]."
+    assert [item["meta"]["source_path"] for item in merged] == [
+        "db/paper-4.en.md",
+        "db/paper-5.en.md",
+        "db/paper-2.en.md",
+    ]
+    assert [item["meta"]["ref_answer_citation_num"] for item in merged] == [4, 5, 2]
+
+
+def test_refs_display_docs_keep_exact_cited_passage_and_only_backfill_seed_metadata():
+    seed = {
+        "text": "Generic abstract only.",
+        "meta": {
+            "source_path": "db/realtime.en.md",
+            "heading_path": "Abstract",
+            "page_start": 1,
+            "doi": "10.1000/realtime",
+            "citation_count": 42,
+        },
+        "ui_meta": {"summary_line": "Generic abstract only."},
+    }
+    cited = {
+        "text": "Choosing 333 patterns yields a reconstruction frame rate of 30 Hz.",
+        "meta": {
+            "source_path": "db/realtime.en.md",
+            "heading_path": "Results / Reconstruction speed",
+            "page_start": 3,
+            "block_id": "blk_speed",
+            "anchor_id": "p_speed",
+        },
+    }
+
+    merged = _merge_refs_display_docs_with_answer_hits(
+        refs_seed_docs=[seed],
+        answer_hits=[cited],
+        limit=1,
+        answer="The method reaches real-time speed [1].",
+    )
+
+    assert merged[0]["text"] == cited["text"]
+    assert merged[0]["meta"]["heading_path"] == "Results / Reconstruction speed"
+    assert merged[0]["meta"]["page_start"] == 3
+    assert merged[0]["meta"]["block_id"] == "blk_speed"
+    assert merged[0]["meta"]["anchor_id"] == "p_speed"
+    assert merged[0]["meta"]["doi"] == "10.1000/realtime"
+    assert merged[0]["meta"]["citation_count"] == 42
+    assert "ui_meta" not in merged[0]
 
 
 def test_multi_source_synthesis_refs_follow_planned_system_a_sources() -> None:

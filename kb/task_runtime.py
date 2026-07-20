@@ -50,6 +50,7 @@ from kb.answer_quality import (
     _gen_answer_quality_summary,
     _gen_record_answer_quality,
 )
+from kb.citation_plan import _system_b_opportunity_is_grounded
 from kb.agent.runner import build_agent_trace_for_completed_answer, build_generation_agent_notes
 from kb.agent.tools import generate_grounded_answer as agent_generate_grounded_answer
 from kb.generation_agent_finalize_runtime import (
@@ -1048,6 +1049,38 @@ def _looks_like_incomplete_stream_partial(
     return False
 
 
+def _should_retry_generation_non_stream(
+    stream_exc: Exception,
+    *,
+    streamed: bool,
+    partial: str,
+    paper_guide_mode: bool = False,
+    prompt_family: str = "",
+    has_hits: bool = False,
+) -> bool:
+    """Retry an interrupted stream only when doing so will not extend a long tail.
+
+    Once visible text has been emitted, a total-deadline timeout is intentionally
+    terminal: the best partial answer is finalized instead of starting another
+    full provider request behind the user's back.
+    """
+
+    # A streaming timeout has already exhausted the user-visible provider
+    # budget. Starting a fresh non-stream request here recreates the long tail,
+    # including when no token was emitted at all.
+    if isinstance(stream_exc, TimeoutError):
+        return False
+    return bool(
+        (not streamed)
+        or _looks_like_incomplete_stream_partial(
+            partial,
+            paper_guide_mode=paper_guide_mode,
+            prompt_family=prompt_family,
+            has_hits=has_hits,
+        )
+    )
+
+
 def _rendered_primary_precision_score(primary_evidence: dict | None) -> tuple[int, int, int, int, int, int]:
     if not isinstance(primary_evidence, dict) or not primary_evidence:
         return (0, 0, 0, 0, 0, 0)
@@ -1736,9 +1769,29 @@ def _merge_refs_display_docs_with_answer_hits(
                 (seed_by_source[key] for key in source_keys if key in seed_by_source),
                 None,
             )
-            hit = copy.deepcopy(rich_seed if isinstance(rich_seed, dict) else raw)
-            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-            meta2 = dict(meta or {})
+            hit = copy.deepcopy(raw)
+            if isinstance(rich_seed, dict):
+                # The cited answer hit is authoritative for evidence location
+                # and text. A richer seed from the same paper may only fill
+                # missing bibliographic fields; otherwise an Abstract seed can
+                # silently replace the exact Results passage the answer cited.
+                for key, value in rich_seed.items():
+                    if key in {"text", "meta", "ui_meta", "reader_open", "primary_evidence"}:
+                        continue
+                    if key not in hit or hit.get(key) in (None, "", [], {}):
+                        hit[key] = copy.deepcopy(value)
+            raw_meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+            seed_meta = rich_seed.get("meta") if isinstance(rich_seed, dict) and isinstance(rich_seed.get("meta"), dict) else {}
+            meta2 = copy.deepcopy(seed_meta or {})
+            meta2.update(copy.deepcopy(raw_meta or {}))
+            seed_source_path = str((seed_meta or {}).get("source_path") or "").strip()
+            raw_source_path = str((raw_meta or {}).get("source_path") or "").strip()
+            if seed_source_path.lower().endswith(".pdf") and raw_source_path.lower().endswith((".md", ".markdown")):
+                # Selected-context records expose the library PDF as document
+                # identity while retaining the Markdown path used to select
+                # the exact evidence block.
+                meta2["source_path"] = seed_source_path
+                meta2.setdefault("md_path", raw_source_path)
             if str(meta2.get("ref_pack_state") or "").strip().lower() == "pending":
                 meta2["ref_pack_state"] = "ready"
             if display_reason and not str(meta2.get("ref_display_reason") or "").strip():
@@ -3132,7 +3185,9 @@ def _query_scope_prompt_block(*, scope: str, selected_count: int, current_source
         "QUERY SCOPE: Full library.\n"
         "- Search and synthesize across the whole indexed literature library.\n"
         "- When multiple papers are relevant, organize the answer by paper and explain why each paper matches.\n"
-        "- Pair important claims with exact retrieved evidence or location markers; say clearly when the library lacks direct support."
+        "- Pair important claims with exact retrieved evidence or location markers.\n"
+        "- The retrieved snippets are only a bounded candidate window, not the full library inventory. Never infer the library's total paper count from them.\n"
+        "- If that window lacks support, say the current retrieval found no direct evidence; do not claim the entire library lacks the topic."
     )
 
 
@@ -3275,27 +3330,33 @@ def _build_exact_preflight_citation_contract(
     support = rows[0]
     source_path = str(support.get("source_path") or bound_source_path or "").strip()
     ref_nums = list(candidate_refs.get(source_path) or [])
-    ref_num = int(ref_nums[0]) if ref_nums else 0
-    allow_system_b = bool(_paper_guide_prompt_requests_citation_lookup(prompt))
+    requests_system_b = bool(_paper_guide_prompt_requests_citation_lookup(prompt))
     sid = _cite_source_id(source_path) if source_path else ""
     heading = str(support.get("heading_path") or "").strip()
     evidence = str(
         support.get("locate_anchor") or support.get("segment_text") or ""
     ).strip()
-    opportunities = (
-        [
-            {
+    grounded_opportunity: dict = {}
+    if requests_system_b and sid:
+        for candidate_ref_num in ref_nums:
+            opportunity = {
                 "source_path": source_path,
                 "sid": sid,
-                "ref_num": ref_num,
-                "label": f"reference {ref_num}",
+                "ref_num": int(candidate_ref_num),
+                "label": f"reference {int(candidate_ref_num)}",
                 "heading_path": heading,
                 "evidence_quote": evidence,
+                "context_marker_verified": support.get("context_marker_verified") is True,
             }
-        ]
-        if allow_system_b and sid and ref_num > 0
-        else []
-    )
+            if _system_b_opportunity_is_grounded(
+                opportunity,
+                ref_num=int(candidate_ref_num),
+            ):
+                grounded_opportunity = opportunity
+                break
+    opportunities = [grounded_opportunity] if grounded_opportunity else []
+    ref_num = int(grounded_opportunity.get("ref_num") or 0)
+    allow_system_b = bool(grounded_opportunity)
     slots = [
         {
             "claim_type": "prior_work",
@@ -3328,7 +3389,7 @@ def _build_exact_preflight_citation_contract(
     citation_plan = {
         "version": 1,
         "source": "exact_support_preflight",
-        "intent": "origin_lookup" if allow_system_b else "evidence_lookup",
+        "intent": "origin_lookup" if requests_system_b else "evidence_lookup",
         "budget": {"system_a": 1, "system_b": 1 if allow_system_b and ref_num > 0 else 0},
         "system_a_enabled": True,
         "system_b_enabled": bool(allow_system_b and ref_num > 0),
@@ -4703,6 +4764,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 retriever,
                 top_k=top_k,
                 settings=settings_obj,
+                whole_library=bool(effective_query_scope == "library"),
                 allow_expand=_retrieval_query_expansion_allowed(
                     current_paper_scoped=bool(paper_guide_source_scoped),
                     cross_paper_requested=bool(paper_guide_cross_paper_refs),
@@ -6109,14 +6171,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 if _gen_should_cancel(session_id, task_id):
                     raise RuntimeError("canceled")
                 logger.warning("LLM stream failed before answer completion: %s", str(stream_exc)[:240])
-                should_retry_non_stream = bool(
-                    (not streamed)
-                    or _looks_like_incomplete_stream_partial(
-                        partial,
-                        paper_guide_mode=bool(paper_guide_source_scoped),
-                        prompt_family=paper_guide_prompt_family,
-                        has_hits=bool(answer_hits),
-                    )
+                should_retry_non_stream = _should_retry_generation_non_stream(
+                    stream_exc,
+                    streamed=streamed,
+                    partial=partial,
+                    paper_guide_mode=bool(paper_guide_source_scoped),
+                    prompt_family=paper_guide_prompt_family,
+                    has_hits=bool(answer_hits),
                 )
                 retry_error: Exception | None = None
                 if should_retry_non_stream:
@@ -6452,12 +6513,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 pass
         refs_precompute_enabled = _generation_refs_precompute_enabled()
         if (
-            (
-                refs_precompute_enabled
-                or bool(selected_context_refs_source_paths)
-                or bool(planned_synthesis_source_paths)
-            )
-            and (not prompt_multi_paper_list)
+            (not prompt_multi_paper_list)
             and umid > 0
             and (answer_hits or selected_context_refs_guarded)
             and (not paper_guide_exact_preflight)

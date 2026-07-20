@@ -121,6 +121,16 @@ function refDisplayNameKey(value: string): string {
     .toLowerCase()
 }
 
+function refDisplayDoiKey(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^doi:\s*/i, '')
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
+    .replace(/[?#].*$/, '')
+    .replace(/[\s.,;]+$/, '')
+}
+
 function uiTextMostlySame(left: string, right: string): boolean {
   const a = cleanCitationDisplayText(left).replace(/\s+/g, ' ').toLowerCase()
   const b = cleanCitationDisplayText(right).replace(/\s+/g, ' ').toLowerCase()
@@ -146,6 +156,7 @@ export function enrichCiteDetailsWithVisibleRefContext(
   if (details.length <= 0 || hits.length <= 0) return details
   const bySourcePath = new Map<string, { displayNum: number; summaryLine: string }>()
   const bySourceName = new Map<string, { displayNum: number; summaryLine: string }>()
+  const byDoi = new Map<string, { displayNum: number; summaryLine: string }>()
   for (const [index, hit] of hits.entries()) {
     const ui = hit?.ui_meta || {}
     const meta = hit?.meta || {}
@@ -153,17 +164,21 @@ export function enrichCiteDetailsWithVisibleRefContext(
     const summaryLine = cleanCitationDisplayText(String(ui.summary_line || ''))
     const sourcePath = String(ui.source_path || meta.source_path || '').trim()
     const sourceName = String(ui.display_name || basenameFromSourcePath(sourcePath) || '').trim()
+    const citationMeta = ui.citation_meta || {}
     const row = { displayNum, summaryLine }
     const pathKey = refDisplaySourceKey(sourcePath)
     if (pathKey && !bySourcePath.has(pathKey)) bySourcePath.set(pathKey, row)
     const nameKey = refDisplayNameKey(sourceName)
     if (nameKey && !bySourceName.has(nameKey)) bySourceName.set(nameKey, row)
+    const doiKey = refDisplayDoiKey(String(citationMeta.doi || citationMeta.doi_url || ''))
+    if (doiKey && !byDoi.has(doiKey)) byDoi.set(doiKey, row)
   }
-  if (bySourcePath.size <= 0 && bySourceName.size <= 0) return details
+  if (bySourcePath.size <= 0 && bySourceName.size <= 0 && byDoi.size <= 0) return details
 
   return details.map((detail) => {
     if (detail.isInpaper) return detail
-    const row = bySourcePath.get(refDisplaySourceKey(detail.sourcePath))
+    const row = byDoi.get(refDisplayDoiKey(detail.doi || detail.doiUrl))
+      || bySourcePath.get(refDisplaySourceKey(detail.sourcePath))
       || bySourceName.get(refDisplayNameKey(detail.sourceName))
     if (!row) return detail
     const next: CiteDetail = {

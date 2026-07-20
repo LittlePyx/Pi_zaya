@@ -46,6 +46,7 @@ from kb.task_runtime import (
     _filter_history_for_multimodal_turn,
     _has_anchor_grounded_answer_hits,
     _looks_like_incomplete_stream_partial,
+    _should_retry_generation_non_stream,
     _inject_paper_guide_fallback_citations,
     _merge_paper_guide_deepread_context,
     _needs_conversational_source_hint,
@@ -124,6 +125,47 @@ def test_exact_preflight_hit_keeps_locate_and_reference_identity():
         "system_a",
     ]
     assert ordinary_contract["reference_opportunities"] == []
+
+
+def test_exact_preflight_system_b_requires_same_context_reference_marker():
+    support = {
+        "source_path": "paper.md",
+        "heading_path": "2. Related Work",
+        "locate_anchor": "Most existing methods employ ADMM for this optimization.",
+        "resolved_ref_num": 4,
+        "candidate_refs": [4],
+    }
+
+    contract = _build_exact_preflight_citation_contract(
+        [support],
+        bound_source_path="paper.md",
+        bound_source_name="SCINeRF",
+        prompt="Which upstream reference is cited for ADMM?",
+    )
+
+    assert contract["citation_plan"]["budget"] == {"system_a": 1, "system_b": 0}
+    assert contract["citation_plan"]["system_b_enabled"] is False
+    assert contract["reference_opportunities"] == []
+
+
+def test_exact_preflight_system_b_rejects_bibliography_heading():
+    support = {
+        "source_path": "paper.md",
+        "heading_path": "References",
+        "locate_anchor": "[4] S. Boyd et al., Distributed Optimization and ADMM.",
+        "resolved_ref_num": 4,
+        "candidate_refs": [4],
+    }
+
+    contract = _build_exact_preflight_citation_contract(
+        [support],
+        bound_source_path="paper.md",
+        bound_source_name="SCINeRF",
+        prompt="Which upstream reference is cited for ADMM?",
+    )
+
+    assert contract["citation_plan"]["budget"] == {"system_a": 1, "system_b": 0}
+    assert contract["reference_opportunities"] == []
 
 
 def test_reference_ui_does_not_replace_authoritative_exact_hit_with_section_rescue(monkeypatch):
@@ -523,6 +565,33 @@ def test_incomplete_stream_partial_allows_complete_citation_lookup_answer():
         paper_guide_mode=True,
         prompt_family="citation_lookup",
         has_hits=True,
+    )
+
+
+def test_total_stream_timeout_with_visible_partial_skips_second_full_request():
+    assert not _should_retry_generation_non_stream(
+        TimeoutError("total visible-output deadline"),
+        streamed=True,
+        partial="已经给出一条完整可见结论 [1]。",
+        paper_guide_mode=True,
+        prompt_family="overview",
+        has_hits=True,
+    )
+
+
+def test_total_stream_timeout_before_first_token_skips_second_full_request():
+    assert not _should_retry_generation_non_stream(
+        TimeoutError("total visible-output deadline"),
+        streamed=False,
+        partial="",
+    )
+
+
+def test_pre_output_stream_failure_can_still_use_bounded_retry():
+    assert _should_retry_generation_non_stream(
+        ConnectionError("provider unavailable"),
+        streamed=False,
+        partial="",
     )
 
 

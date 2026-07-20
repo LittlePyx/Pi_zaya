@@ -78,6 +78,74 @@ def test_canceled_generation_answer_without_partial_is_stable() -> None:
     assert finalize_runtime._sanitize_canceled_generation_answer("") == "(Generation canceled)"
 
 
+def test_numeric_citation_normalization_collapses_provider_double_brackets_and_separators() -> None:
+    assert finalize_runtime._normalize_double_numeric_citations(
+        "Evidence [[4]], [[5；2]], and [[3、1]]."
+    ) == "Evidence [4], [5；2], and [3、1]."
+
+
+def test_offset_citations_inside_double_brackets_become_public_markers() -> None:
+    converted = finalize_runtime._strip_citation_offset("Evidence [[10004;10005]].")
+    assert finalize_runtime._normalize_double_numeric_citations(converted) == "Evidence [4,5]."
+
+
+def test_stripped_structured_citation_does_not_leave_empty_bracket_shell() -> None:
+    out = finalize_runtime._strip_final_answer_citation_markers(
+        "Claim [ [[CITE:source:12]] ].",
+        preserve_numeric_markers=True,
+        preserve_structured_markers=False,
+    )
+
+    assert out == "Claim."
+    assert finalize_runtime._sanitize_empty_markdown_label_fragments("- [ ] task") == "- [ ] task"
+
+
+def test_retrieval_window_does_not_masquerade_as_whole_library() -> None:
+    out = finalize_runtime._normalize_retrieval_window_claims(
+        "根据您提供的库中文献（共2篇），没有任何一篇文献涉及该主题。"
+        "结论：库中文献资源不足以支撑这个问题。",
+        prompt="请结合库中文献回答。",
+    )
+
+    assert "共2篇" not in out
+    assert "本轮检索到的候选文献" in out
+    assert "本轮检索证据不足" in out
+    assert "库中文献资源不足" not in out
+
+
+def test_explicit_library_inventory_count_requires_verified_contract() -> None:
+    answer = "库中文献（共42篇）。"
+    assert finalize_runtime._normalize_retrieval_window_claims(
+        answer,
+        prompt="我的文献库里有多少篇文献？",
+        verified_inventory_count=True,
+    ) == answer
+
+
+def test_topic_inventory_question_cannot_treat_candidate_count_as_library_count() -> None:
+    out = finalize_runtime._normalize_retrieval_window_claims(
+        "我的库里一共只有 2 篇文献讨论单像素成像。",
+        prompt="我库里有几篇讨论单像素成像？",
+    )
+
+    assert "库里一共只有" not in out
+    assert "本轮检索到 2 篇候选文献" in out
+
+
+def test_english_library_candidate_counts_are_scoped_to_retrieval() -> None:
+    exact = finalize_runtime._normalize_retrieval_window_claims(
+        "There are exactly 2 papers in your library about SPI.",
+        prompt="How many papers in my library discuss SPI?",
+    )
+    words = finalize_runtime._normalize_retrieval_window_claims(
+        "Your library contains two papers about SPI.",
+        prompt="How many papers in my library discuss SPI?",
+    )
+
+    assert "current retrieval found 2 candidate papers" in exact
+    assert "current retrieval window contains two papers" in words
+
+
 def test_negative_boundary_answer_clarifies_not_core_paper() -> None:
     answer = finalize_runtime._maybe_clarify_negative_boundary_answer(
         "**\u7ed3\u8bba\uff1a\u5173\u7cfb\u4e0d\u5927\uff0c\u4e0d\u5efa\u8bae\u4e00\u8d77\u8bfb\u3002** "
@@ -215,14 +283,9 @@ def test_finalize_strips_model_system_b_marker_when_plan_disables_system_b(monke
     monkeypatch.setattr(
         finalize_runtime,
         "detect_text_reference_opportunities",
-        lambda **_kwargs: [
-            {
-                "sid": "s1234abcd",
-                "ref_num": 7,
-                "source_path": "paper.md",
-                "label": "upstream work",
-            }
-        ],
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("System B detection must not run when its budget is disabled")
+        ),
     )
 
     out = finalize_runtime._finalize_generation_answer(

@@ -217,6 +217,11 @@ def _should_force_keep_ref_hit(hit: dict) -> bool:
     meta = (hit or {}).get("meta", {}) or {}
     if not isinstance(meta, dict):
         return False
+    try:
+        if int(meta.get("ref_answer_citation_num") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
     if str(meta.get("ref_display_reason") or "").strip().lower() == "answer_hit_top":
         return True
     if bool(meta.get("paper_guide_fast_exact")):

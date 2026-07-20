@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable
 import re
 
+from api.reference_card_copy import looks_generic_ref_why_line, looks_templated_ref_why_line
 from api.reference_value_utils import _non_negative_float, _positive_int
 
 
@@ -41,6 +42,31 @@ def _dedupe_doc_list_card_copy(*, raw_item: dict, ui_meta: dict | None) -> dict:
     out.pop("why_generation", None)
     out.pop("why_basis", None)
     return out
+
+
+def _sanitize_doc_list_hit_copy(hits: list[dict] | None) -> list[dict]:
+    """Remove generic relevance prose at the last public payload boundary."""
+
+    source_hits = hits if isinstance(hits, list) else []
+    out: list[dict] | None = None
+    for idx, raw_hit in enumerate(source_hits):
+        if not isinstance(raw_hit, dict):
+            continue
+        raw_ui_meta = raw_hit.get("ui_meta") if isinstance(raw_hit.get("ui_meta"), dict) else {}
+        ui_meta = dict(raw_ui_meta)
+        why_line = str(ui_meta.get("why_line") or "").strip()
+        if why_line and (
+            looks_generic_ref_why_line(why_line)
+            or looks_templated_ref_why_line(why_line)
+        ):
+            if out is None:
+                out = list(source_hits)
+            for key in ("why_line", "why_generation", "why_basis"):
+                ui_meta.pop(key, None)
+            hit = dict(raw_hit)
+            hit["ui_meta"] = ui_meta
+            out[idx] = hit
+    return out if out is not None else source_hits
 
 
 def _collect_doc_list_ref_text_candidates(
@@ -1326,6 +1352,7 @@ def _finalize_doc_list_payload_pack(
 ) -> dict:
     pack_out = dict(pack_src or {}) if isinstance(pack_src, dict) else {}
     pack_out["user_msg_id"] = int(user_msg_id) if str(user_msg_id).isdigit() else user_msg_id
+    hits = _sanitize_doc_list_hit_copy(hits)
     pack_out["hits"] = hits
     pipeline_debug = dict(pack_out.get("pipeline_debug") or {}) if isinstance(pack_out.get("pipeline_debug"), dict) else {}
     pipeline_debug["doc_list_authoritative"] = True
@@ -1371,6 +1398,7 @@ def _finalize_legacy_doc_list_payload_pack(
 ) -> dict:
     pack_out = dict(pack_src or {}) if isinstance(pack_src, dict) else {}
     pack_out["user_msg_id"] = int(user_msg_id) if str(user_msg_id).isdigit() else user_msg_id
+    hits = _sanitize_doc_list_hit_copy(hits)
     pack_out["hits"] = hits
     pipeline_debug = dict(pack_out.get("pipeline_debug") or {}) if isinstance(pack_out.get("pipeline_debug"), dict) else {}
     pipeline_debug["doc_list_authoritative"] = True
@@ -1509,6 +1537,7 @@ def _build_doc_list_refs_payload(
     prefer_zh_ref_card_locale: Callable[..., bool],
     build_legacy_doc_list_payload_hits: Callable[..., list[dict]],
     finalize_legacy_doc_list_payload_pack: Callable[..., dict],
+    seed_only: bool = False,
 ) -> dict:
     pack_src = dict(pack or {}) if isinstance(pack, dict) else {}
     prompt = str(pack_src.get("prompt") or "").strip()
@@ -1524,6 +1553,36 @@ def _build_doc_list_refs_payload(
         guide_source_name=guide_source_name_norm,
         filter_bound_source=prompt_cross_paper_refs,
     )
+    if doc_rows_all and seed_only:
+        # The first references request only needs a stable, clickable rendering
+        # of the authoritative document list.  Reusing the legacy shaper here
+        # avoids source scans, exact-location work and copy polishing; the
+        # background full render upgrades the same cards afterwards.
+        hits = build_legacy_doc_list_payload_hits(
+            doc_list=doc_rows,
+            prompt=prompt,
+            prefer_zh=bool(prefer_zh_ref_card_locale(prompt)),
+        )
+        pack_out = finalize_legacy_doc_list_payload_pack(
+            user_msg_id=user_msg_id,
+            pack_src=pack_src,
+            hits=hits,
+            guide_active=guide_active,
+            guide_source_path_norm=guide_source_path_norm,
+            guide_source_name_norm=guide_source_name_norm,
+            prompt_cross_paper_refs=prompt_cross_paper_refs,
+        )
+        pipeline_debug = (
+            dict(pack_out.get("pipeline_debug") or {})
+            if isinstance(pack_out.get("pipeline_debug"), dict)
+            else {}
+        )
+        pipeline_debug["fast_seed_contract"] = True
+        pipeline_debug["filtered_self_hit_count"] = int(filtered_self_doc_count)
+        pack_out["pipeline_debug"] = pipeline_debug
+        if guide_active and isinstance(pack_out.get("guide_filter"), dict):
+            pack_out["guide_filter"]["filtered_hit_count"] = int(filtered_self_doc_count)
+        return pack_out
     if doc_rows_all:
         hits = build_doc_list_payload_hits(
             doc_rows=doc_rows,

@@ -37,6 +37,50 @@ def test_strip_internal_generation_markers_preserves_cites():
     assert out == "draft still cites [[CITE:ref-1:12]]"
 
 
+def test_strip_internal_generation_markers_hides_doc_labels_and_publicizes_offset_cites():
+    out = _strip_internal_generation_markers(
+        "根据综述文档（DOC-1），第一项结论 [10001]，对照来源 DOC-2-S3 [10002-10003]。"
+    )
+
+    assert "DOC-" not in out
+    assert "10001" not in out
+    assert out == "根据综述文档，第一项结论 [1]，对照来源 [2-3]。"
+
+
+def test_stream_snapshots_hide_incomplete_internal_marker_tails():
+    for snapshot in ("claim DOC", "claim DOC-", "claim DOC-1", "claim [10", "claim [10001"):
+        out = _strip_internal_generation_markers(snapshot)
+        assert "DOC" not in out
+        assert "10001" not in out
+        assert not out.endswith("[10")
+
+
+def test_internal_doc_label_replacement_matches_answer_language():
+    assert _strip_internal_generation_markers("DOC-1 supports this claim.") == "source supports this claim."
+    assert _strip_internal_generation_markers("DOC-1 支撑该结论。") == "来源 支撑该结论。"
+
+
+def test_closed_public_citation_is_not_mistaken_for_incomplete_offset():
+    assert _strip_internal_generation_markers("See equation [100].") == "See equation [100]."
+
+
+def test_double_wrapped_offset_citation_becomes_public_numeric_citation():
+    assert _strip_internal_generation_markers("Evidence [[10004]].") == "Evidence [4]."
+    assert _strip_internal_generation_markers("Evidence [[10002-10003]].") == "Evidence [2-3]."
+
+
+def test_stream_offset_citations_accept_semicolon_and_cjk_separators():
+    assert _strip_internal_generation_markers("Evidence [10001;10002].") == "Evidence [1;2]."
+    assert _strip_internal_generation_markers("Evidence [[10003；10004]].") == "Evidence [3；4]."
+    assert _strip_internal_generation_markers("Evidence [10005、10006].") == "Evidence [5、6]."
+
+
+def test_hidden_stream_markers_do_not_leave_empty_brackets_or_harm_markdown():
+    assert _strip_internal_generation_markers("Claim [ [[SUPPORT:DOC-1]] ].") == "Claim."
+    text = "- [ ] keep task\n\n[](https://example.com)\n\n![](image.png)"
+    assert _strip_internal_generation_markers(text) == text
+
+
 def test_gen_has_running_for_conversation_ignores_cancel_requested_task():
     from kb import runtime_state as RUNTIME
 
