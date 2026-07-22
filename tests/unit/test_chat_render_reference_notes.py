@@ -2051,6 +2051,38 @@ def test_enrich_messages_reuses_persisted_render_cache(monkeypatch, tmp_path: Pa
     assert isinstance(render_cache.get("render_packet"), dict)
 
 
+def test_historical_render_cache_reuse_requires_same_original_answer():
+    from api import chat_render
+
+    answer = "The method reports a concrete reconstruction result."
+    cache = chat_render._build_render_cache_payload(
+        cache_key="old-reference-card-key",
+        notice="",
+        rendered_body=answer,
+        rendered_content=answer,
+        copy_markdown=answer,
+        copy_text=answer,
+        cite_details=[],
+        refs_user_msg_id=1,
+        render_packet={"answer_markdown": answer, "rendered_content": answer},
+    )
+
+    reused = chat_render._extract_compatible_historical_render_cache(
+        {"render_cache": cache},
+        raw_content=answer,
+        hits=[],
+    )
+    rejected = chat_render._extract_compatible_historical_render_cache(
+        {"render_cache": cache},
+        raw_content="The answer has changed.",
+        hits=[],
+    )
+
+    assert reused is not None
+    assert reused["rendered_content"] == answer
+    assert rejected is None
+
+
 def test_render_cache_persists_render_packet_when_contracts_present(monkeypatch, tmp_path: Path):
     from api import chat_render
 

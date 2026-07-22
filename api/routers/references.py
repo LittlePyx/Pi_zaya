@@ -90,6 +90,8 @@ router = APIRouter(prefix="/api/references", tags=["references"])
 _REFS_CONVERSATION_CACHE: dict[str, dict] = {}
 _REFS_CONVERSATION_WARMING: set[str] = set()
 _REFS_CONVERSATION_WARMING_LOCK = threading.Lock()
+_CANONICAL_ANSWER_HITS_CACHE: dict[str, list[dict]] = {}
+_CANONICAL_ANSWER_HITS_CACHE_LOCK = threading.Lock()
 _CITATION_CARD_POLISH_CACHE: dict[str, dict] = {}
 _CITATION_CARD_POLISH_WARMING: set[str] = set()
 _CITATION_CARD_POLISH_LOCK = threading.Lock()
@@ -104,7 +106,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 25
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 32
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000
@@ -397,6 +399,72 @@ def _refs_cache_input_pack_signature(pack: dict | None) -> str:
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 
 
+def _augment_pack_with_canonical_answer_paths(pack: dict | None) -> dict:
+    out = dict(pack or {})
+    if bool(out.get("_canonical_answer_paths_aligned")):
+        return out
+    canonical_paths = [
+        str(path or "").strip()
+        for path in list(out.get("_canonical_answer_paths") or [])
+        if str(path or "").strip()
+    ]
+    answer_text = str(out.get("answer_text") or "").strip()
+    if not canonical_paths or not answer_text:
+        return out
+    from api.chat_render import _augment_hits_with_canonical_answer_citations
+
+    raw_hits = list(out.get("hits") or [])
+    cache_blob = json.dumps(
+        {
+            "answer": answer_text,
+            "canonical_paths": canonical_paths,
+            "hits": raw_hits,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    cache_key = hashlib.sha1(cache_blob.encode("utf-8")).hexdigest()
+    with _CANONICAL_ANSWER_HITS_CACHE_LOCK:
+        cached_hits = _CANONICAL_ANSWER_HITS_CACHE.get(cache_key)
+    if isinstance(cached_hits, list):
+        aligned_hits = [dict(hit) for hit in cached_hits if isinstance(hit, dict)]
+    else:
+        aligned_hits = _augment_hits_with_canonical_answer_citations(
+            raw_hits,
+            canonical_paths=canonical_paths,
+            answer_text=answer_text,
+        )
+        with _CANONICAL_ANSWER_HITS_CACHE_LOCK:
+            if len(_CANONICAL_ANSWER_HITS_CACHE) >= 64:
+                _CANONICAL_ANSWER_HITS_CACHE.pop(next(iter(_CANONICAL_ANSWER_HITS_CACHE)), None)
+            _CANONICAL_ANSWER_HITS_CACHE[cache_key] = [
+                dict(hit) for hit in aligned_hits if isinstance(hit, dict)
+            ]
+    cited_hits = [
+        hit
+        for hit in aligned_hits
+        if isinstance(hit, dict)
+        and int(((hit.get("meta") or {}).get("ref_answer_citation_num") or 0)) > 0
+    ]
+    if cited_hits:
+        normalized_answer = re.sub(r"\[\[\s*(\d{1,5})\s*\]\]", r"[\1]", answer_text)
+
+        def _citation_order(hit: dict) -> tuple[int, int]:
+            try:
+                number = int(((hit.get("meta") or {}).get("ref_answer_citation_num") or 0))
+            except (TypeError, ValueError):
+                number = 0
+            marker = re.search(rf"(?<![!\\])\[{number}\](?!\()", normalized_answer) if number > 0 else None
+            return (int(marker.start()) if marker else len(normalized_answer) + number, number)
+
+        cited_hits.sort(key=_citation_order)
+    out["hits"] = cited_hits or aligned_hits
+    out["_canonical_answer_paths_aligned"] = True
+    return out
+
+
 def _attach_assistant_answers_to_refs(*, store, conv_id: str, refs: dict | None) -> dict:
     """Keep final answers internal so evidence cards can align to supported claims."""
 
@@ -438,46 +506,19 @@ def _attach_assistant_answers_to_refs(*, store, conv_id: str, refs: dict | None)
         ]
         answers[active_user_msg_id] = (answer_text, canonical_paths)
         active_user_msg_id = 0
+    latest_user_msg_id = max(refs_out, default=0)
     for user_msg_id, (answer_text, canonical_paths) in answers.items():
         pack = dict(refs_out.get(user_msg_id) or {})
         pack["answer_text"] = answer_text
         pack["answer_sig"] = hashlib.sha1(answer_text.encode("utf-8")).hexdigest()
         if canonical_paths:
-            # Historical packs could contain only the retrieval seed even when
-            # the final answer cited additional whole-library sources. Recover
-            # those authoritative cited rows before the references endpoint
-            # computes its signature or renders cards, so the panel cannot
-            # silently substitute unrelated seed documents.
-            from api.chat_render import _augment_hits_with_canonical_answer_citations
-
-            aligned_hits = _augment_hits_with_canonical_answer_citations(
-                list(pack.get("hits") or []),
-                canonical_paths=canonical_paths,
-                answer_text=answer_text,
-            )
-            cited_hits = [
-                hit
-                for hit in aligned_hits
-                if isinstance(hit, dict)
-                and int(((hit.get("meta") or {}).get("ref_answer_citation_num") or 0)) > 0
-            ]
-            if cited_hits:
-                normalized_answer = re.sub(r"\[\[\s*(\d{1,5})\s*\]\]", r"[\1]", answer_text)
-
-                def _citation_order(hit: dict) -> tuple[int, int]:
-                    try:
-                        number = int(((hit.get("meta") or {}).get("ref_answer_citation_num") or 0))
-                    except (TypeError, ValueError):
-                        number = 0
-                    marker = re.search(rf"(?<![!\\])\[{number}\](?!\()", normalized_answer) if number > 0 else None
-                    return (int(marker.start()) if marker else len(normalized_answer) + number, number)
-
-                cited_hits.sort(key=_citation_order)
-            # Once authoritative answer-citation rows exist, the panel must
-            # represent those rows only. Leaving uncited retrieval seeds in the
-            # candidate pool lets generic relevance scoring displace a paper
-            # the user can actually click from the answer.
-            pack["hits"] = cited_hits or aligned_hits
+            pack["_canonical_answer_paths"] = canonical_paths
+            # The current answer must be exact on first paint.  Historical
+            # turns keep their shallow rendered cards and are realigned one at
+            # a time by the background warm, avoiding repeated whole-library
+            # source scans on every conversation read.
+            if user_msg_id == latest_user_msg_id:
+                pack = _augment_pack_with_canonical_answer_paths(pack)
         refs_out[user_msg_id] = pack
     return refs_out
 
@@ -1334,6 +1375,12 @@ def _persist_rendered_refs_payloads(
             payload_pack = payload.get(str(user_msg_id))
         if not isinstance(payload_pack, dict) or (not payload_pack):
             continue
+        # ``payload_pack`` is built from the row returned by
+        # ``list_message_refs``.  That row already carries the previous stored
+        # payload under ``rendered_payload``.  Persisting it again recursively
+        # nests every historical render, bloats SQLite, and can leak stale card
+        # copy back into later reads.
+        payload_to_store = _without_nested_render_payload(payload_pack)
         sig = _refs_pack_render_signature(
             user_msg_id=user_msg_id,
             pack=pack,
@@ -1344,7 +1391,7 @@ def _persist_rendered_refs_payloads(
         try:
             store.set_message_refs_rendered_payload(
                 user_msg_id=int(user_msg_id),
-                rendered_payload=payload_pack,
+                rendered_payload=payload_to_store,
                 rendered_payload_sig=sig,
                 render_status="full",
                 render_error="",
@@ -1354,6 +1401,13 @@ def _persist_rendered_refs_payloads(
             )
         except Exception:
             continue
+
+
+def _without_nested_render_payload(payload_pack: dict | None) -> dict:
+    out = dict(payload_pack or {})
+    out.pop("rendered_payload", None)
+    out.pop("rendered_payload_sig", None)
+    return out
 
 
 def _refs_background_llm_polish_enabled() -> bool:
@@ -1412,6 +1466,7 @@ def _warm_conversation_refs_payload_async(
                     continue
                 if not isinstance(pack, dict):
                     continue
+                pack = _augment_pack_with_canonical_answer_paths(pack)
                 if user_msg_id in authoritative_map:
                     rendered = _render_authoritative_doc_list_pack(
                         user_msg_id=user_msg_id,
@@ -1431,28 +1486,52 @@ def _warm_conversation_refs_payload_async(
                     )
                     if isinstance(rendered, dict) and rendered:
                         payload[user_msg_id] = rendered
+                        _persist_rendered_refs_payloads(
+                            refs={user_msg_id: pack},
+                            payload={user_msg_id: rendered},
+                            guide_mode=guide_mode,
+                            guide_source_path=guide_source_path,
+                            guide_source_name=guide_source_name,
+                        )
                     continue
                 regular_refs[user_msg_id] = pack
             if regular_refs:
-                regular_payload = enrich_refs_payload(
-                    regular_refs,
-                    pdf_root=_pdf_dir(),
-                    md_root=_md_dir(),
-                    lib_store=_lib_store(),
-                    guide_mode=guide_mode,
-                    guide_source_path=guide_source_path,
-                    guide_source_name=guide_source_name,
-                    render_variant="bounded_full",
-                    allow_expensive_llm_for_ready=_refs_background_llm_polish_enabled(),
-                    allow_exact_locate=True,
-                )
-                if isinstance(regular_payload, dict):
-                    payload.update(
-                        {
-                            int(key): value
-                            for key, value in regular_payload.items()
-                            if (str(key).isdigit() or isinstance(key, int)) and isinstance(value, dict)
-                        }
+                # Finish the newest answer first and persist each completed
+                # pack immediately.  A long historical conversation must not
+                # keep the card under the latest answer in fast mode until all
+                # older turns have finished exact-location work.
+                for user_msg_id in sorted(regular_refs, reverse=True):
+                    pack = regular_refs[user_msg_id]
+                    has_answer_citation_locator = any(
+                        int((((hit.get("meta") or {}) if isinstance(hit, dict) else {}).get("ref_answer_citation_num") or 0)) > 0
+                        for hit in list(pack.get("hits") or [])
+                    )
+                    regular_payload = enrich_refs_payload(
+                        {user_msg_id: pack},
+                        pdf_root=_pdf_dir(),
+                        md_root=_md_dir(),
+                        lib_store=_lib_store(),
+                        guide_mode=guide_mode,
+                        guide_source_path=guide_source_path,
+                        guide_source_name=guide_source_name,
+                        render_variant="bounded_full",
+                        allow_expensive_llm_for_ready=_refs_background_llm_polish_enabled(),
+                        # Answer-citation rows already carry the exact source
+                        # excerpt and their reader payload resolves that excerpt
+                        # back to a source block.  Other retrieval cards retain
+                        # the broader exact candidate scan.
+                        allow_exact_locate=not has_answer_citation_locator,
+                    )
+                    rendered = regular_payload.get(user_msg_id) if isinstance(regular_payload, dict) else None
+                    if not isinstance(rendered, dict):
+                        continue
+                    payload[user_msg_id] = rendered
+                    _persist_rendered_refs_payloads(
+                        refs={user_msg_id: pack},
+                        payload={user_msg_id: rendered},
+                        guide_mode=guide_mode,
+                        guide_source_path=guide_source_path,
+                        guide_source_name=guide_source_name,
                     )
             if not isinstance(payload, dict):
                 return
@@ -1469,13 +1548,6 @@ def _warm_conversation_refs_payload_async(
                         for key, value in current_payload.items()
                         if (str(key).isdigit() or isinstance(key, int)) and isinstance(value, dict)
                     }
-            _persist_rendered_refs_payloads(
-                refs=refs,
-                payload=payload,
-                guide_mode=guide_mode,
-                guide_source_path=guide_source_path,
-                guide_source_name=guide_source_name,
-            )
             cached_payload.update(payload)
             _store_cached_conversation_refs_payload(
                 conv_id=conv_key,
@@ -1782,10 +1854,18 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
     pending_refs: dict[int, dict] = {}
     failed_ready_refs: dict[int, dict] = {}
     ready_missing_refs: dict[int, dict] = {}
+    historical_stale_payloads: dict[int, dict] = {}
+    historical_stale_refs: dict[int, dict] = {}
     authoritative_sync_payloads: dict[int, dict] = {}
     authoritative_sync_refs: dict[int, dict] = {}
     authoritative_fast_payloads: dict[int, dict] = {}
     authoritative_fast_refs: dict[int, dict] = {}
+    numeric_user_msg_ids = [
+        int(key)
+        for key in refs_norm
+        if str(key).isdigit() or isinstance(key, int)
+    ]
+    latest_user_msg_id = max(numeric_user_msg_ids, default=0)
     phase_started_at = time.perf_counter()
     for user_msg_id, pack in refs_norm.items():
         if not isinstance(pack, dict):
@@ -1870,7 +1950,17 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         elif str((pack or {}).get("render_status") or "").strip().lower() == "failed":
             failed_ready_refs[int(user_msg_id)] = pack
         else:
-            ready_missing_refs[int(user_msg_id)] = pack
+            stale_payload = pack.get("rendered_payload")
+            if (
+                int(user_msg_id) != latest_user_msg_id
+                and isinstance(stale_payload, dict)
+                and bool(stale_payload)
+                and not _stored_rendered_pack_payload_has_dirty_card_copy(stale_payload)
+            ):
+                historical_stale_payloads[int(user_msg_id)] = _without_nested_render_payload(stale_payload)
+                historical_stale_refs[int(user_msg_id)] = pack
+            else:
+                ready_missing_refs[int(user_msg_id)] = pack
     _record("render_state_scan", phase_started_at)
 
     if authoritative_sync_payloads:
@@ -1889,6 +1979,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         and (not pending_refs)
         and (not failed_ready_refs)
         and (not ready_missing_refs)
+        and (not historical_stale_payloads)
         and (not authoritative_fast_payloads)
         and stored_full_payload
     ):
@@ -1918,6 +2009,20 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         return _finish(annotated_cached, f"cache_{cached_mode or ('pending' if has_pending else 'fast')}")
 
     payload: dict[int, dict] = dict(stored_full_payload)
+    if historical_stale_payloads:
+        annotated_historical = _annotate_refs_payload_refresh_state(
+            historical_stale_payloads,
+            mode="fast",
+        )
+        for user_msg_id, pack in historical_stale_refs.items():
+            payload_pack = annotated_historical.get(int(user_msg_id))
+            if isinstance(payload_pack, dict):
+                payload[int(user_msg_id)] = _attach_pack_render_state(
+                    payload_pack,
+                    source_pack=pack,
+                    default_status="fast",
+                    override_status=True,
+                )
     if authoritative_fast_payloads:
         annotated_authoritative = _annotate_refs_payload_refresh_state(
             authoritative_fast_payloads,
@@ -1995,7 +2100,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         _record("fast_render", phase_started_at)
 
     cache_mode = "full"
-    if authoritative_fast_payloads or normal_ready_refs:
+    if authoritative_fast_payloads or normal_ready_refs or historical_stale_payloads:
         cache_mode = "fast"
     elif failed_ready_refs:
         cache_mode = "fast"
@@ -2010,6 +2115,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             refs=refs_norm,
         )
     ready_refs_to_warm = {
+        **historical_stale_refs,
         **authoritative_fast_refs,
         **normal_ready_refs,
     }

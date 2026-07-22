@@ -155,18 +155,35 @@ def test_ref_card_polish_contract_unwraps_source_excerpt_summary():
     assert ui["card_view"]["summary"].startswith("However, the limited image quality")
 
 
-def test_answer_citation_copy_cleanup_keeps_summary_primary_and_reader_atomic():
+def test_mostly_english_wrapper_is_not_mislabeled_as_chinese_guide():
+    ui = attach_ref_card_polish_contract(
+        {
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": (
+                "原文片段写到：Choosing 333 unique patterns yields a reconstruction "
+                "frame rate of 30 Hz for multiple image resolutions."
+            ),
+        }
+    )
+
+    assert ui["summary_display_role"] == "source_evidence"
+    assert ui["summary_label"] == "原文证据"
+
+
+def test_answer_citation_copy_cleanup_preserves_localized_guide_and_source_evidence_split():
     raw_summary = (
         "Clearly, the reconstructed results improve as illumination increases. "
         "HATNet generalizes in both low-light and high-light conditions."
     )
+    localized_guide = "该实验表明，HATNet 在不同照度条件下均保持了良好的泛化能力。"
     ui = attach_ref_card_polish_contract(
         {
             "display_name": "HATNet.pdf",
             "source_path": "hatnet.en.md",
             "summary_source": "answer_citation",
             "primary_evidence_source": "answer_citation",
-            "summary_line": raw_summary,
+            "summary_line": localized_guide,
             "summary_generation": "section_grounded",
             "primary_evidence": {
                 "snippet": raw_summary,
@@ -183,9 +200,12 @@ def test_answer_citation_copy_cleanup_keeps_summary_primary_and_reader_atomic():
         }
     )
 
-    assert ui["summary_line"] == ui["primary_evidence"]["snippet"]
-    assert ui["summary_line"] == ui["reader_open"]["snippet"]
-    assert ui["summary_line"] == ui["reader_open"]["primaryEvidence"]["snippet"]
+    assert ui["summary_line"] == localized_guide
+    assert ui["primary_evidence"]["snippet"] == raw_summary
+    assert ui["reader_open"]["snippet"] == raw_summary
+    assert ui["reader_open"]["primaryEvidence"]["snippet"] == raw_summary
+    assert ui["summary_display_role"] == "guide"
+    assert ui["summary_label"] == "导读"
 
 
 def test_ref_card_hit_quality_accepts_grounded_openable_card():

@@ -35,16 +35,20 @@ def _ref_card_user_locale(prompt: str = "", *fallback_texts: str) -> str:
     if pref in {"zh", "en"}:
         return pref
 
+    # "auto" is a user-interface preference: cards should stay in the
+    # language selected for the product even when a prompt or a paper happens
+    # to use another language.  Prompt inference is only a fallback for older
+    # installations that have no saved UI locale.
+    ui_pref = _refs_card_ui_locale_pref()
+    if ui_pref in {"zh", "en"}:
+        return ui_pref
+
     prompt_text = str(prompt or "").strip()
     if prompt_text:
         if _prefer_zh_locale(prompt_text):
             return "zh"
         if _prompt_strongly_prefers_english(prompt_text):
             return "en"
-
-    ui_pref = _refs_card_ui_locale_pref()
-    if ui_pref in {"zh", "en"}:
-        return ui_pref
 
     fallback_parts = [str(text or "").strip() for text in fallback_texts if str(text or "").strip()]
     if fallback_parts:

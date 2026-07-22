@@ -29,6 +29,17 @@ def test_ref_card_user_locale_infers_prompt_language(monkeypatch):
     assert _prefer_zh_ref_card_locale("请解释", "fallback") is True
 
 
+def test_ref_card_auto_locale_prefers_saved_ui_language_over_prompt(monkeypatch):
+    monkeypatch.setenv("KB_REFS_CARD_LOCALE", "auto")
+    monkeypatch.setattr(
+        reference_card_locale,
+        "load_prefs",
+        lambda: {"refs_card_locale": "auto", "ui_locale": "zh"},
+    )
+
+    assert _ref_card_user_locale("Summarize this English paper") == "zh"
+
+
 def test_prompt_strongly_prefers_english_requires_latin_text_only():
     assert _prompt_strongly_prefers_english("Compare these papers") is True
     assert _prompt_strongly_prefers_english("比较 these papers") is False

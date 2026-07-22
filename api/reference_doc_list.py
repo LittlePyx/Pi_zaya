@@ -23,6 +23,17 @@ def _doc_list_copy_is_duplicate(left: object, right: object) -> bool:
     return len(shorter) >= 24 and shorter in longer and (len(shorter) / max(1, len(longer))) >= 0.72
 
 
+def _doc_list_copy_matches_locale(value: object, locale: str) -> bool:
+    text = str(value or "").strip()
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_count = len(re.findall(r"[A-Za-z]", text))
+    if locale == "zh":
+        return cjk_count >= 4 and (cjk_count >= 12 or cjk_count * 2 >= latin_count)
+    if locale == "en":
+        return latin_count >= 4 and (cjk_count == 0 or latin_count >= max(8, cjk_count * 2))
+    return False
+
+
 def _dedupe_doc_list_card_copy(*, raw_item: dict, ui_meta: dict | None) -> dict:
     out = dict(ui_meta or {}) if isinstance(ui_meta, dict) else {}
     summary_line = str(out.get("summary_line") or "").strip()
@@ -31,6 +42,21 @@ def _dedupe_doc_list_card_copy(*, raw_item: dict, ui_meta: dict | None) -> dict:
         return out
 
     authoritative_summary = str(raw_item.get("summary_line") or "").strip()
+    render_locale = str(out.get("render_locale") or "").strip().lower()
+    if (
+        render_locale in {"zh", "en"}
+        and _doc_list_copy_matches_locale(summary_line, render_locale)
+        and authoritative_summary
+        and not _doc_list_copy_matches_locale(authoritative_summary, render_locale)
+    ):
+        # The localized Guide and Relevance can occasionally collapse to the
+        # same sentence after a deterministic timeout fallback.  Keep the
+        # correctly localized Guide and omit the duplicate relevance line;
+        # never restore source-language evidence into the Guide slot.
+        out.pop("why_line", None)
+        out.pop("why_generation", None)
+        out.pop("why_basis", None)
+        return out
     if authoritative_summary and not _doc_list_copy_is_duplicate(authoritative_summary, why_line):
         out["summary_line"] = authoritative_summary
         out["summary_generation"] = str(raw_item.get("summary_generation") or "").strip() or "section_grounded"
@@ -838,6 +864,7 @@ def _finalize_doc_list_hit_ui_meta(
     effective_primary_evidence: dict,
     summary_source: str,
     allow_expensive_llm: bool,
+    ref_card_user_locale: Callable[..., str],
     align_ref_card_copy_to_user_locale: Callable[..., tuple[str, str]],
     build_ref_summary_surface_meta: Callable[..., dict],
     build_ref_summary_basis_meta: Callable[..., dict],
@@ -846,6 +873,13 @@ def _finalize_doc_list_hit_ui_meta(
     build_doc_list_reader_open_payload: Callable[..., dict],
 ) -> dict:
     ui_out = dict(ui_meta or {}) if isinstance(ui_meta, dict) else {}
+    ui_out["render_locale"] = ref_card_user_locale(
+        prompt,
+        str(ui_out.get("display_name") or source_name),
+        str(ui_out.get("heading_path") or heading_path),
+        str(ui_out.get("summary_line") or ""),
+        str(ui_out.get("why_line") or ""),
+    )
     aligned_summary_line, aligned_why_line = align_ref_card_copy_to_user_locale(
         prompt=prompt,
         display_name=str(ui_out.get("display_name") or source_name),
@@ -1247,13 +1281,20 @@ def _polish_doc_list_payload_hits(
             continue
         jobs.append((idx, hit, ui_meta))
 
+    batch_attempted = bool(allow_expensive_llm and len(jobs) > 1)
+    # A multi-card request already receives one bounded batch-model attempt.
+    # If that attempt times out or returns only a subset, finish the remaining
+    # cards with grounded deterministic copy instead of multiplying the tail
+    # with two more model calls per card.
+    allow_leftover_llm = bool(allow_expensive_llm and not batch_attempted)
+
     def _polish_one(idx: int, hit: dict, ui_meta: dict) -> tuple[int, dict]:
         polished_ui = normalize_ref_copy_ui_meta(
             maybe_polish_single_ref_hit_card(
                 prompt=prompt,
                 hit=hit,
                 ui_meta=ui_meta,
-                allow_expensive_llm=bool(allow_expensive_llm),
+                allow_expensive_llm=allow_leftover_llm,
             )
         )
         polished_ui = apply_doc_list_topic_match_hints(
@@ -1268,7 +1309,7 @@ def _polish_doc_list_payload_hits(
             prompt=prompt,
             jobs=jobs,
         )
-        if bool(allow_expensive_llm)
+        if batch_attempted
         else {}
     )
     batch_polished = {
@@ -1498,6 +1539,7 @@ def _build_legacy_doc_list_payload_hits(
             "citation_meta": {},
             "source_path": source_path,
             "reader_open": {key: value for key, value in reader_open.items() if value not in (None, "", [], {})},
+            "render_locale": "zh" if prefer_zh else "en",
         }
         if primary_evidence:
             ui_meta["primary_evidence"] = dict(primary_evidence)

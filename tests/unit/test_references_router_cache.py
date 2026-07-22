@@ -21,6 +21,112 @@ class _FakeStore:
         return self._refs
 
 
+def test_persist_rendered_refs_payload_drops_previous_nested_render(monkeypatch):
+    class Store:
+        def __init__(self):
+            self.saved = None
+
+        def set_message_refs_rendered_payload(self, **kwargs):
+            self.saved = dict(kwargs)
+
+    store = Store()
+    refs = {1: {"prompt": "question", "prompt_sig": "prompt-sig", "hits": []}}
+    payload = {
+        1: {
+            "hits": [],
+            "rendered_payload": {"hits": [{"text": "stale"}]},
+            "rendered_payload_sig": "stale-sig",
+        }
+    }
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: store)
+
+    references_router._persist_rendered_refs_payloads(
+        refs=refs,
+        payload=payload,
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+    )
+
+    saved_payload = dict((store.saved or {}).get("rendered_payload") or {})
+    assert "rendered_payload" not in saved_payload
+    assert "rendered_payload_sig" not in saved_payload
+    assert saved_payload["hits"] == []
+
+
+def test_first_read_rebuilds_only_latest_pack_and_reuses_shallow_historical_snapshot(monkeypatch):
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    refs = {
+        1: {
+            "prompt": "older question",
+            "prompt_sig": "old-prompt",
+            "hits": [{"text": "old raw", "meta": {"source_path": "old.md", "ref_pack_state": "ready"}}],
+            "rendered_payload": {
+                "hits": [
+                    {
+                        "text": "older ready card",
+                        "ui_meta": {
+                            "display_name": "Old paper.pdf",
+                            "summary_line": "Older evidence-grounded guide.",
+                            "why_line": "It supports the older question with a specific result.",
+                        },
+                    }
+                ],
+                "rendered_payload": {"hits": [{"text": "recursively nested stale card"}]},
+            },
+            "rendered_payload_sig": "old-schema-sig",
+        },
+        2: {
+            "prompt": "latest question",
+            "prompt_sig": "latest-prompt",
+            "hits": [{"text": "latest raw", "meta": {"source_path": "latest.md", "ref_pack_state": "ready"}}],
+        },
+    }
+    store = _FakeStore({"mode": "chat"}, refs)
+    enriched_keys: list[list[int]] = []
+    warmed_keys: list[list[int]] = []
+
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(references_router, "_pdf_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_md_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_lib_store", lambda: None)
+    monkeypatch.setattr(
+        references_router,
+        "_warm_conversation_refs_payload_async",
+        lambda **kwargs: warmed_keys.append(sorted(int(key) for key in dict(kwargs.get("refs") or {}))),
+    )
+
+    def fake_enrich(payload, **kwargs):
+        del kwargs
+        keys = sorted(int(key) for key in dict(payload or {}))
+        enriched_keys.append(keys)
+        return {
+            2: {
+                "hits": [
+                    {
+                        "text": "latest fast card",
+                        "ui_meta": {
+                            "display_name": "Latest paper.pdf",
+                            "summary_line": "Latest evidence-grounded guide.",
+                            "why_line": "It supports the latest question with a specific result.",
+                        },
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(references_router, "enrich_refs_payload", fake_enrich)
+
+    out = references_router.get_conversation_refs("conv-latest-first")
+
+    assert enriched_keys == [[2]]
+    assert warmed_keys == [[1, 2]]
+    assert out[1]["hits"][0]["text"] == "older ready card"
+    assert out[2]["hits"][0]["text"] == "latest fast card"
+    assert "rendered_payload" not in out[1]
+
+
 def test_attach_assistant_answers_to_refs_keeps_alignment_text_internal():
     class Store:
         def get_messages(self, conv_id: str):
@@ -115,6 +221,66 @@ def test_attach_assistant_answers_orders_cited_hits_by_answer_occurrence(monkeyp
     )
 
     assert [hit["meta"]["ref_answer_citation_num"] for hit in attached[30]["hits"]] == [2, 1]
+
+
+def test_attach_assistant_answers_aligns_only_latest_turn_on_read(monkeypatch):
+    references_router._CANONICAL_ANSWER_HITS_CACHE.clear()
+    calls: list[str] = []
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-latest-align"
+            return [
+                {"id": 1, "role": "user", "content": "older"},
+                {
+                    "id": 2,
+                    "role": "assistant",
+                    "content": "older answer [1]",
+                    "meta": {"canonical_hit_paths": ["older-cited.md"]},
+                },
+                {"id": 3, "role": "user", "content": "latest"},
+                {
+                    "id": 4,
+                    "role": "assistant",
+                    "content": "latest answer [1]",
+                    "meta": {"canonical_hit_paths": ["latest-cited.md"]},
+                },
+            ]
+
+    def fake_augment(hits, *, canonical_paths, answer_text):
+        del hits
+        calls.append(answer_text)
+        return [
+            {
+                "text": canonical_paths[0],
+                "meta": {"source_path": canonical_paths[0], "ref_answer_citation_num": 1},
+            }
+        ]
+
+    monkeypatch.setattr("api.chat_render._augment_hits_with_canonical_answer_citations", fake_augment)
+    attached = references_router._attach_assistant_answers_to_refs(
+        store=Store(),
+        conv_id="conv-latest-align",
+        refs={
+            1: {"prompt": "older", "hits": [{"text": "older seed", "meta": {"source_path": "old.md"}}]},
+            3: {"prompt": "latest", "hits": [{"text": "latest seed", "meta": {"source_path": "new.md"}}]},
+        },
+    )
+    attached_again = references_router._attach_assistant_answers_to_refs(
+        store=Store(),
+        conv_id="conv-latest-align",
+        refs={
+            1: {"prompt": "older", "hits": [{"text": "older seed", "meta": {"source_path": "old.md"}}]},
+            3: {"prompt": "latest", "hits": [{"text": "latest seed", "meta": {"source_path": "new.md"}}]},
+        },
+    )
+
+    assert calls == ["latest answer [1]"]
+    assert attached[1]["hits"][0]["text"] == "older seed"
+    assert attached[1]["_canonical_answer_paths"] == ["older-cited.md"]
+    assert attached[3]["hits"][0]["text"] == "latest-cited.md"
+    assert attached[3]["_canonical_answer_paths_aligned"] is True
+    assert attached_again[3]["hits"][0]["text"] == "latest-cited.md"
 
 
 def test_get_conversation_refs_reuses_cached_payload_when_signature_is_unchanged(monkeypatch):

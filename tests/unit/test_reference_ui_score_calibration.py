@@ -17,6 +17,7 @@ def _disable_remote_summary_translation(monkeypatch):
         cache_clear()
     monkeypatch.setenv("KB_REFS_CARD_LOCALE", "auto")
     monkeypatch.setenv("KB_CITE_SUMMARY_TRANSLATE_ZH", "0")
+    monkeypatch.setattr(reference_card_locale, "_refs_card_ui_locale_pref", lambda: "")
     yield
     cache_clear = getattr(reference_ui._translate_summary_to_zh, "cache_clear", None)
     if callable(cache_clear):
@@ -687,8 +688,8 @@ def test_build_hit_ui_meta_falls_back_to_snippet_summary_when_ref_pack_missing(m
     )
 
     assert "SCINeRF" in str(ui_meta.get("summary_line") or "")
-    assert "SCINeRF" in str(ui_meta.get("why_line") or "")
-    assert "三维场景" in str(ui_meta.get("why_line") or "")
+    assert not str(ui_meta.get("why_line") or "")
+    assert ui_meta.get("summary_label") == "导读"
     reader_open = ui_meta.get("reader_open") or {}
     assert str(reader_open.get("sourcePath") or "") == r"db\SCINeRF\SCINeRF.en.md"
     assert str(reader_open.get("headingPath") or "") == "3. Method / 3.1. Background on NeRF"
@@ -696,10 +697,30 @@ def test_build_hit_ui_meta_falls_back_to_snippet_summary_when_ref_pack_missing(m
     assert str(reader_open.get("highlightSnippet") or "") == str(reader_open.get("snippet") or "")
 
 
-def test_answer_cited_card_keeps_summary_primary_and_reader_on_same_direct_evidence():
+def test_summary_surface_labels_untranslated_fast_copy_as_source_evidence(monkeypatch):
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
+
+    surface = reference_ui._build_ref_summary_surface_meta(
+        prompt="请比较实时速度",
+        summary_kind="guide",
+        summary_line="Choosing 333 patterns yields a reconstruction frame rate of 30 Hz.",
+    )
+
+    assert surface["summary_kind"] == "guide"
+    assert surface["summary_label"] == "原文证据"
+    assert surface["summary_title"] == "支撑回答的原文片段"
+
+
+def test_answer_cited_card_localizes_guide_without_changing_direct_evidence(monkeypatch):
     evidence = (
         "All tested samples were collected under realistic conditions involving mist, jitter, and sensor noise. "
         "The proposed method consistently achieves the lowest LPIPS scores across all samples under real-world degradations."
+    )
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
+    monkeypatch.setattr(
+        reference_ui,
+        "_translate_summary_to_zh",
+        lambda text: "该论文在雾、抖动和传感器噪声等真实退化条件下取得了最低的 LPIPS。",
     )
     ui_meta = build_hit_ui_meta(
         {
@@ -713,19 +734,23 @@ def test_answer_cited_card_keeps_summary_primary_and_reader_on_same_direct_evide
         prompt="请说明真实退化鲁棒性的直接证据",
         pdf_root=None,
         lib_store=None,
+        allow_expensive_llm=True,
     )
 
     summary = str(ui_meta.get("summary_line") or "")
     primary = ui_meta.get("primary_evidence") or {}
     reader = ui_meta.get("reader_open") or {}
-    assert "mist, jitter, and sensor noise" in summary
-    assert "lowest LPIPS" in summary
-    assert summary == str(primary.get("snippet") or "")
-    assert summary == str(reader.get("snippet") or "")
-    assert "LPIPS" in str(ui_meta.get("why_line") or "")
+    assert "真实退化条件" in summary
+    assert "mist, jitter, and sensor noise" in str(primary.get("snippet") or "")
+    assert "lowest LPIPS" in str(primary.get("snippet") or "")
+    assert str(primary.get("snippet") or "") == str(reader.get("snippet") or "")
+    assert summary != str(primary.get("snippet") or "")
+    assert ui_meta.get("summary_label") == "导读"
+    assert not str(ui_meta.get("why_line") or "")
 
 
-def test_answer_cited_multi_block_summary_drops_stale_strict_locator(tmp_path: Path):
+def test_answer_cited_multi_block_summary_drops_stale_strict_locator(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "en")
     source = tmp_path / "hatnet.en.md"
     evidence = (
         "Full sampling forms a 64 x 64 image while HATNet reconstructs a 256 x 256 image. "
@@ -4885,6 +4910,112 @@ def test_maybe_polish_refs_card_copy_parallel_preserves_hit_order(monkeypatch):
     assert why_lines == [f"polished::{title}" for title in titles]
 
 
+def test_full_polish_recovers_localized_guide_without_overwriting_source_evidence(monkeypatch):
+    source_text = "Choosing 333 patterns yields a reconstruction frame rate of 30 Hz."
+    hits = [
+        {
+            "ui_meta": {
+                "display_name": "Real-time SPI.pdf",
+                "heading_path": "Results",
+                "summary_line": source_text,
+                "summary_kind": "guide",
+                "summary_label": "原文证据",
+                "why_line": "原文给出了明确的实时指标：以 333 个照明图案达到 30 Hz 重建帧率，可直接支撑实时成像结论。",
+                "primary_evidence": {
+                    "snippet": source_text,
+                    "highlight_snippet": source_text,
+                },
+                "reader_open": {
+                    "snippet": source_text,
+                    "highlightSnippet": source_text,
+                },
+            }
+        }
+    ]
+
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
+    monkeypatch.setenv("KB_REFS_CARD_POLISH_TOP_N", "4")
+    monkeypatch.setenv("KB_REFS_CARD_POLISH_MAX_WORKERS", "1")
+    monkeypatch.setattr(
+        reference_ui,
+        "_maybe_polish_single_ref_hit_card",
+        lambda **kwargs: dict(kwargs.get("ui_meta") or {}),
+    )
+
+    out = reference_ui._maybe_polish_refs_card_copy(
+        prompt="请比较实时速度",
+        hits=hits,
+        guide_mode=False,
+    )
+
+    ui = dict(out[0].get("ui_meta") or {})
+    assert ui["summary_label"] == "导读"
+    assert "333" in ui["summary_line"]
+    assert "30 Hz" in ui["summary_line"]
+    assert not ui["summary_line"].startswith("Choosing")
+    assert ui["primary_evidence"]["snippet"] == source_text
+    assert ui["reader_open"]["highlightSnippet"] == source_text
+
+
+def test_full_polish_splits_duplicate_chinese_guide_and_relevance(monkeypatch):
+    duplicate = (
+        "通过对比各样本的 LPIPS 指标，可验证该补偿方法在真实多重退化场景下"
+        "重建质量优于其他方案，直接支撑鲁棒性优势结论。"
+    )
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
+
+    ui = reference_ui._finalize_polished_ref_card_locale(
+        prompt="比较真实退化鲁棒性",
+        ui_meta={
+            "display_name": "Robust SPI.pdf",
+            "heading_path": "Results",
+            "summary_kind": "guide",
+            "summary_line": duplicate,
+            "why_line": duplicate,
+        },
+    )
+
+    assert ui["summary_label"] == "导读"
+    assert ui["summary_line"] == "该论文比较了各样本的 LPIPS 指标，并表明该补偿方法在真实多重退化场景下重建质量优于其他方案。"
+    assert ui["why_line"] == duplicate
+    assert ui["summary_line"] != ui["why_line"]
+
+
+def test_full_polish_replaces_relevance_template_guide_from_authoritative_evidence(monkeypatch):
+    source_text = (
+        "All tested samples include real-world degradations such as mist, jitter, and sensor noise. "
+        "The proposed method consistently achieves the lowest LPIPS scores across all samples."
+    )
+    factual_guide = "该论文在雾、抖动和传感器噪声等真实退化样本上均取得最低的 LPIPS。"
+    template_guide = "此证据通过实验比较 LPIPS 指标，直接支撑了真实退化下的鲁棒性结论。"
+    why_line = f"{template_guide.rstrip('。')}，可用于验证复杂环境中的重建质量优势。"
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: factual_guide)
+
+    ui = reference_ui._finalize_polished_ref_card_locale(
+        prompt="比较真实退化鲁棒性",
+        ui_meta={
+            "display_name": "Robust SPI.pdf",
+            "heading_path": "Results",
+            "summary_kind": "guide",
+            "summary_line": template_guide,
+            "why_line": why_line,
+            "primary_evidence": {
+                "snippet": source_text,
+                "highlight_snippet": source_text,
+            },
+            "reader_open": {"highlightSnippet": source_text},
+        },
+        allow_llm_translate=True,
+    )
+
+    assert ui["summary_label"] == "导读"
+    assert ui["summary_line"] == factual_guide
+    assert ui["why_line"] == why_line
+    assert ui["primary_evidence"]["snippet"] == source_text
+    assert ui["reader_open"]["highlightSnippet"] == source_text
+
+
 def test_build_doc_list_refs_payload_batches_authoritative_card_polish(monkeypatch):
     pack = {
         "prompt": "How does the library evidence around Snapshot Compressive Imaging (SCI) line up?",
@@ -6085,13 +6216,35 @@ def test_build_ref_summary_surface_meta_auto_prefers_prompt_language(monkeypatch
         summary_kind="guide",
         summary_line="该研究提出了一种空间可变的数字超采样方法。",
     )
-    assert out["summary_label"] == "Guide"
+    assert out["summary_label"] == "Source Evidence"
+
+
+def test_align_ref_card_copy_derives_chinese_guide_when_translation_times_out(monkeypatch):
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    summary_line, why_line = reference_ui._align_ref_card_copy_to_user_locale(
+        prompt="请比较实时速度",
+        display_name="Real-time SPI.pdf",
+        heading_path="Results",
+        summary_line="Choosing 333 patterns yields a reconstruction frame rate of 30 Hz.",
+        why_line="原文给出了明确的实时指标：以 333 个照明图案达到 30 Hz 重建帧率，可直接支撑实时成像结论。",
+        summary_kind="guide",
+        allow_llm_translate=True,
+    )
+
+    assert summary_line == "该论文报告了明确的实时指标：以 333 个照明图案达到 30 Hz 重建帧率。"
+    assert why_line.endswith("可直接支撑实时成像结论。")
 
 
 def test_align_ref_card_copy_to_user_locale_prefers_chinese_prompt(monkeypatch):
     monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "auto")
     monkeypatch.setattr(reference_card_locale, "_refs_card_ui_locale_pref", lambda: "")
-    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: f"中文概括：{text}")
+    monkeypatch.setattr(
+        reference_ui,
+        "_translate_summary_to_zh",
+        lambda text: "该文定义了 dynamic supersampling，并说明它通过在不同帧之间移动有效像素边界实现。",
+    )
 
     summary_line, why_line = reference_ui._align_ref_card_copy_to_user_locale(
         prompt="哪篇文章最直接定义了 dynamic supersampling？",
@@ -6103,7 +6256,7 @@ def test_align_ref_card_copy_to_user_locale_prefers_chinese_prompt(monkeypatch):
         allow_llm_translate=True,
     )
 
-    assert "中文概括" in str(summary_line or "")
+    assert "不同帧之间移动有效像素边界" in str(summary_line or "")
     assert reference_ui._has_cjk_text(str(summary_line or ""))
     assert reference_ui._has_cjk_text(str(why_line or ""))
 

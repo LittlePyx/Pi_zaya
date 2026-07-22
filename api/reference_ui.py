@@ -1299,6 +1299,12 @@ def _looks_why_like_ref_summary(text: str) -> bool:
         flags=re.I,
     ):
         return True
+    if re.search(
+        r"\b(?:this|the|cited) evidence\b.{0,180}\b(?:support(?:s|ed)?|verify|validat(?:e|es|ed)|answer(?:s|ed)?|relevant)\b",
+        lower,
+        flags=re.I,
+    ):
+        return True
     if re.match(
         r"^[A-Za-z0-9 .:/&+\-]{6,120}[”\"](?:\u8ba8\u8bba\u4e86|\u6bd4\u8f83\u4e86|\u5b9a\u4e49\u6216\u89e3\u91ca\u4e86)",
         s,
@@ -1306,7 +1312,9 @@ def _looks_why_like_ref_summary(text: str) -> bool:
         return True
     return bool(
         re.search(
-            r"(\u9002\u5408\u4f5c\u4e3a\u5b9a\u4f4d\u5165\u53e3|\u76f4\u63a5\u8986\u76d6\u4e86|\u76f4\u63a5\u5b9a\u4e49\u6216\u89e3\u91ca\u4e86|\u548c\u5f53\u524d.{0,24}\u95ee\u9898|\u6b63\u5bf9\u9f50)",
+            r"(\u9002\u5408\u4f5c\u4e3a\u5b9a\u4f4d\u5165\u53e3|\u76f4\u63a5\u8986\u76d6\u4e86|\u76f4\u63a5\u5b9a\u4e49\u6216\u89e3\u91ca\u4e86|\u548c\u5f53\u524d.{0,24}\u95ee\u9898|\u6b63\u5bf9\u9f50|"
+            r"(?:\u6b64|\u8be5|\u8fd9\u6761)(?:\u9879)?\u8bc1\u636e.{0,120}(?:\u652f\u6491|\u9a8c\u8bc1|\u56de\u7b54|\u76f8\u5173)|"
+            r"(?:\u76f4\u63a5\u652f\u6491|\u53ef\u7528\u4e8e\u9a8c\u8bc1|\u53ef\u76f4\u63a5\u9a8c\u8bc1).{0,100}(?:\u7ed3\u8bba|\u4f18\u52bf|\u95ee\u9898))",
             s,
         )
     )
@@ -2012,6 +2020,65 @@ def _ref_copy_clear_locale(text: str) -> str:
     return ""
 
 
+def _ref_copy_matches_target_locale(text: str, target_locale: str) -> bool:
+    """Accept mixed technical copy only when the requested language dominates."""
+
+    value = str(text or "").strip()
+    if not value:
+        return False
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", value))
+    latin_count = len(re.findall(r"[A-Za-z]", value))
+    if target_locale == "zh":
+        return cjk_count >= 4 and (cjk_count >= 12 or cjk_count * 2 >= latin_count)
+    if target_locale == "en":
+        return latin_count >= 4 and (cjk_count == 0 or latin_count >= max(8, cjk_count * 2))
+    return False
+
+
+def _derive_localized_guide_from_why_line(*, target_locale: str, why_line: str) -> str:
+    """Recover a factual Guide from already-grounded localized relevance copy."""
+
+    if target_locale != "zh" or not _ref_copy_matches_target_locale(why_line, target_locale):
+        return ""
+    guide = _normalize_ref_copy_text(str(why_line or "").strip())
+    if not guide:
+        return ""
+    for marker in (
+        "，可直接支撑",
+        "，能够直接支撑",
+        "，因此可支撑",
+        "，可直接验证",
+        "，可用于验证",
+        "，直接支撑",
+        "；可直接支撑",
+        "；能够直接支撑",
+        "；直接支撑",
+    ):
+        if marker in guide:
+            guide = guide.split(marker, 1)[0].strip(" ，；。")
+            break
+    comparison_match = re.match(r"^通过对比(.+?)，可验证(.+)$", guide)
+    if comparison_match:
+        compared = comparison_match.group(1).strip(" ，；。")
+        finding = comparison_match.group(2).strip(" ，；。")
+        guide = f"该论文比较了{compared}，并表明{finding}"
+    replacements = (
+        ("原文给出了", "该论文报告了"),
+        ("原文明确给出", "该论文明确报告"),
+        ("原文在", "该论文在"),
+        ("该证据在", "该论文在"),
+        ("论文的", "该论文的"),
+    )
+    for prefix, replacement in replacements:
+        if guide.startswith(prefix):
+            guide = replacement + guide[len(prefix):]
+            break
+    guide = guide.rstrip(" ，；。") + "。"
+    if len(re.findall(r"[\u4e00-\u9fff]", guide)) < 12:
+        return ""
+    return guide
+
+
 def _align_ref_card_copy_to_user_locale(
     *,
     prompt: str,
@@ -2026,10 +2093,18 @@ def _align_ref_card_copy_to_user_locale(
     summary_out = _normalize_ref_copy_text(str(summary_line or "").strip())
     why_out = _normalize_ref_copy_text(str(why_line or "").strip())
 
-    if summary_out and _ref_copy_clear_locale(summary_out) not in {"", target_locale}:
+    if summary_out and not _ref_copy_matches_target_locale(summary_out, target_locale):
         localized_summary = ""
         if target_locale == "zh" and allow_llm_translate:
             localized_summary = _translate_summary_to_zh(summary_out)
+        localized_summary = _normalize_ref_copy_text(str(localized_summary or "").strip())
+        if localized_summary and not _ref_copy_matches_target_locale(localized_summary, target_locale):
+            localized_summary = ""
+        if not localized_summary and allow_llm_translate:
+            localized_summary = _derive_localized_guide_from_why_line(
+                target_locale=target_locale,
+                why_line=why_out,
+            )
         allow_template_localization = bool(
             target_locale != "zh"
             or allow_llm_translate
@@ -2054,10 +2129,10 @@ def _align_ref_card_copy_to_user_locale(
             and (not _looks_location_only_ref_summary(summary_out))
         ):
             localized_summary = ""
-        if localized_summary and _ref_copy_clear_locale(localized_summary) in {"", target_locale}:
+        if localized_summary and _ref_copy_matches_target_locale(localized_summary, target_locale):
             summary_out = localized_summary
 
-    if why_out and _ref_copy_clear_locale(why_out) not in {"", target_locale}:
+    if why_out and not _ref_copy_matches_target_locale(why_out, target_locale):
         localized_why = _build_prompt_aligned_ref_why_line_v3(
             prompt=prompt,
             display_name=display_name,
@@ -2066,8 +2141,14 @@ def _align_ref_card_copy_to_user_locale(
             why_line=why_out,
         )
         localized_why = _normalize_ref_copy_text(str(localized_why or "").strip())
-        if localized_why and _ref_copy_clear_locale(localized_why) in {"", target_locale}:
+        if localized_why and _ref_copy_matches_target_locale(localized_why, target_locale):
             why_out = localized_why
+
+    # Relevance is explanatory UI copy, never source evidence.  If a safe
+    # target-language rewrite is unavailable, omit it until the background
+    # polish completes instead of showing a contradictory language pair.
+    if why_out and not _ref_copy_matches_target_locale(why_out, target_locale):
+        why_out = ""
 
     return summary_out, why_out
 
@@ -2206,7 +2287,8 @@ def _infer_ref_summary_kind(
 
 
 def _build_ref_summary_surface_meta(*, prompt: str, summary_kind: str, summary_line: str = "") -> dict[str, str]:
-    prefer_zh = _ref_card_user_locale(prompt, summary_line) == "zh"
+    target_locale = _ref_card_user_locale(prompt, summary_line)
+    prefer_zh = target_locale == "zh"
     kind = str(summary_kind or "").strip().lower()
     if kind == "abstract":
         return {
@@ -2219,6 +2301,17 @@ def _build_ref_summary_surface_meta(*, prompt: str, summary_kind: str, summary_l
             "summary_kind": "metadata",
             "summary_label": "信息卡" if prefer_zh else "Meta",
             "summary_title": "可用文献信息" if prefer_zh else "Available Bibliographic Info",
+        }
+    if summary_line and not _ref_copy_matches_target_locale(summary_line, target_locale):
+        # A fast card may already have a trustworthy source excerpt while its
+        # localized guide is still being prepared.  Label that text honestly
+        # as source evidence instead of presenting it as a guide in the wrong
+        # language.  The background full render replaces it with localized
+        # guide copy without changing the evidence used for navigation.
+        return {
+            "summary_kind": "guide",
+            "summary_label": "原文证据" if prefer_zh else "Source Evidence",
+            "summary_title": "支撑回答的原文片段" if prefer_zh else "Original Passage Supporting the Answer",
         }
     return {
         "summary_kind": "guide",
@@ -4122,6 +4215,134 @@ def _refs_card_polish_max_workers(job_count: int) -> int:
     return max(1, min(int(job_count or 0), configured))
 
 
+def _finalize_polished_ref_card_locale(
+    *,
+    prompt: str,
+    ui_meta: dict | None,
+    allow_llm_translate: bool = False,
+) -> dict:
+    """Make the full-render Guide locale explicit without touching evidence."""
+
+    ui = _normalize_ref_copy_ui_meta(ui_meta)
+    if not ui:
+        return {}
+    summary_kind = str(ui.get("summary_kind") or "").strip().lower() or "guide"
+    summary_line = str(ui.get("summary_line") or "").strip()
+    why_line = str(ui.get("why_line") or "").strip()
+    display_name = str(ui.get("display_name") or "").strip()
+    heading_path = str(ui.get("heading_path") or ui.get("section_label") or "").strip()
+    target_locale = _ref_card_user_locale(
+        prompt,
+        display_name,
+        heading_path,
+        summary_line,
+        why_line,
+    )
+
+    localized_summary = summary_line
+    guide_needs_recovery = bool(
+        summary_kind not in {"abstract", "metadata"}
+        and summary_line
+        and (
+            not _ref_copy_matches_target_locale(summary_line, target_locale)
+            or _looks_why_like_ref_summary(summary_line)
+        )
+    )
+    if guide_needs_recovery:
+        # The batch/single polish call may time out after producing only a
+        # localized relevance sentence.  That sentence is already grounded in
+        # the same source snippets, so recover its factual clause as the Guide
+        # instead of reverting the card to a source-language excerpt.
+        recovered = ""
+        primary_evidence = _ref_card_primary_evidence(ui)
+        source_excerpt = ""
+        for key in ("highlight_snippet", "highlightSnippet", "snippet", "quote", "text"):
+            source_excerpt = _summary_excerpt(
+                str(primary_evidence.get(key) or ""),
+                max_sentences=2,
+                max_len=360,
+            )
+            if source_excerpt:
+                break
+        if source_excerpt and _ref_copy_matches_target_locale(source_excerpt, target_locale):
+            if not _looks_why_like_ref_summary(source_excerpt):
+                recovered = source_excerpt
+        elif source_excerpt and target_locale == "zh" and allow_llm_translate:
+            translated = _normalize_ref_copy_text(_translate_summary_to_zh(source_excerpt))
+            if (
+                _ref_copy_matches_target_locale(translated, target_locale)
+                and not _looks_why_like_ref_summary(translated)
+            ):
+                recovered = translated
+        if not recovered:
+            recovered = _derive_localized_guide_from_why_line(
+                target_locale=target_locale,
+                why_line=why_line,
+            )
+            if _looks_why_like_ref_summary(recovered):
+                recovered = ""
+        if (
+            (not recovered)
+            and not _looks_why_like_ref_summary(summary_line)
+            and target_locale == "zh"
+            and allow_llm_translate
+        ):
+            translated = _normalize_ref_copy_text(_translate_summary_to_zh(summary_line))
+            if (
+                _ref_copy_matches_target_locale(translated, target_locale)
+                and not _looks_why_like_ref_summary(translated)
+            ):
+                recovered = translated
+        if recovered:
+            localized_summary = recovered
+            ui["summary_generation"] = "deterministic_grounded"
+        elif source_excerpt:
+            # Preserve an authoritative source excerpt instead of showing a
+            # relevance template as if it were a factual Guide.  Surface meta
+            # will label the source-language fallback explicitly.
+            localized_summary = source_excerpt
+            summary_kind = "source_evidence"
+            ui["summary_kind"] = summary_kind
+            ui["summary_generation"] = "source_grounded"
+
+    if why_line and not _ref_copy_matches_target_locale(why_line, target_locale):
+        # Relevance is explanatory UI copy.  A wrong-language fallback is more
+        # confusing than omitting it until a later successful polish.
+        why_line = ""
+
+    if localized_summary and why_line and _ref_copy_similarity_ratio(localized_summary, why_line) >= 0.94:
+        recovered = _derive_localized_guide_from_why_line(
+            target_locale=target_locale,
+            why_line=why_line,
+        )
+        if recovered and _ref_copy_similarity_ratio(recovered, why_line) < 0.94:
+            localized_summary = recovered
+            ui["summary_generation"] = "deterministic_grounded"
+        else:
+            why_line = ""
+
+    ui["summary_line"] = localized_summary
+    ui["why_line"] = why_line
+    ui["render_locale"] = target_locale
+    ui.update(
+        _build_ref_summary_surface_meta(
+            prompt=prompt,
+            summary_kind=summary_kind,
+            summary_line=localized_summary,
+        )
+    )
+    summary_generation = str(ui.get("summary_generation") or "").strip() or "section_grounded"
+    ui.update(
+        _build_ref_summary_basis_meta(
+            prompt=prompt,
+            summary_kind=summary_kind,
+            summary_generation=summary_generation,
+            summary_line=localized_summary,
+        )
+    )
+    return ui
+
+
 def _maybe_polish_refs_card_copy(*, prompt: str, hits: list[dict], guide_mode: bool) -> list[dict]:
     rows = [dict(hit) for hit in (hits or []) if isinstance(hit, dict)]
     if not rows:
@@ -4143,22 +4364,39 @@ def _maybe_polish_refs_card_copy(*, prompt: str, hits: list[dict], guide_mode: b
         return polished
 
     def _polish_one(idx: int, hit: dict, ui_meta: dict) -> tuple[int, dict]:
-        return idx, _maybe_polish_single_ref_hit_card(
+        return idx, _finalize_polished_ref_card_locale(
             prompt=prompt,
-            hit=hit,
-            ui_meta=ui_meta,
-            allow_expensive_llm=True,
+            ui_meta=_maybe_polish_single_ref_hit_card(
+                prompt=prompt,
+                hit=hit,
+                ui_meta=ui_meta,
+                allow_expensive_llm=True,
+            ),
+            allow_llm_translate=True,
         )
 
     max_workers = _refs_card_polish_max_workers(len(jobs))
     if max_workers <= 1:
         for idx, hit, ui_meta in jobs:
             hit2 = dict(hit)
-            hit2["ui_meta"] = _maybe_polish_single_ref_hit_card(
+            hit2["ui_meta"] = _finalize_polished_ref_card_locale(
                 prompt=prompt,
-                hit=hit,
-                ui_meta=ui_meta,
-                allow_expensive_llm=True,
+                ui_meta=_maybe_polish_single_ref_hit_card(
+                    prompt=prompt,
+                    hit=hit,
+                    ui_meta=ui_meta,
+                    allow_expensive_llm=True,
+                ),
+                allow_llm_translate=True,
+            )
+            polished[idx] = hit2
+        for idx, hit in enumerate(polished):
+            if not isinstance(hit, dict):
+                continue
+            hit2 = dict(hit)
+            hit2["ui_meta"] = _finalize_polished_ref_card_locale(
+                prompt=prompt,
+                ui_meta=hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {},
             )
             polished[idx] = hit2
         return polished
@@ -4176,13 +4414,26 @@ def _maybe_polish_refs_card_copy(*, prompt: str, hits: list[dict], guide_mode: b
     except Exception:
         for idx, hit, ui_meta in jobs:
             hit2 = dict(hit)
-            hit2["ui_meta"] = _maybe_polish_single_ref_hit_card(
+            hit2["ui_meta"] = _finalize_polished_ref_card_locale(
                 prompt=prompt,
-                hit=hit,
-                ui_meta=ui_meta,
-                allow_expensive_llm=True,
+                ui_meta=_maybe_polish_single_ref_hit_card(
+                    prompt=prompt,
+                    hit=hit,
+                    ui_meta=ui_meta,
+                    allow_expensive_llm=True,
+                ),
+                allow_llm_translate=True,
             )
             polished[idx] = hit2
+    for idx, hit in enumerate(polished):
+        if not isinstance(hit, dict):
+            continue
+        hit2 = dict(hit)
+        hit2["ui_meta"] = _finalize_polished_ref_card_locale(
+            prompt=prompt,
+            ui_meta=hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {},
+        )
+        polished[idx] = hit2
     return polished
 
 
@@ -5874,6 +6125,7 @@ def _finalize_doc_list_hit_ui_meta(
         effective_primary_evidence=effective_primary_evidence,
         summary_source=summary_source,
         allow_expensive_llm=allow_expensive_llm,
+        ref_card_user_locale=_ref_card_user_locale,
         align_ref_card_copy_to_user_locale=_align_ref_card_copy_to_user_locale,
         build_ref_summary_surface_meta=_build_ref_summary_surface_meta,
         build_ref_summary_basis_meta=_build_ref_summary_basis_meta,
@@ -7507,17 +7759,6 @@ def build_hit_ui_meta(
     why_generation = str(copy_flow.get("why_generation") or "").strip()
     summary_kind = str(copy_flow.get("summary_kind") or "").strip()
     render_locale = str(copy_flow.get("render_locale") or "").strip()
-    if authoritative_cited_summary:
-        summary_line = authoritative_cited_summary
-        grounded_why = _build_grounded_ref_why_line(
-            prefer_zh=_prefer_zh_ref_card_locale(prompt, summary_line),
-            focus_terms=_render_focus_terms_for_ref_card(prompt, max_n=2),
-            heading_path=heading_path,
-            summary_line=summary_line,
-            action=_shared_prompt_reference_focus_action(prompt),
-        )
-        why_line = grounded_why
-        why_generation = "deterministic_grounded" if grounded_why else ""
     if structured_table_card:
         summary_line = str(structured_table_card.get("summary_line") or summary_line).strip()
         why_line = str(structured_table_card.get("why_line") or why_line).strip()
@@ -7531,6 +7772,7 @@ def build_hit_ui_meta(
             card_context={**structured_table_card, "heading_path": heading_path},
         )
     else:
+        evidence_summary_line = authoritative_cited_summary or summary_line
         reader_open = _build_refs_reader_open_payload(
             meta=meta,
             prompt=prompt,
@@ -7538,7 +7780,7 @@ def build_hit_ui_meta(
             display_name=display_name,
             heading_path=heading_path,
             heading=heading,
-            summary_line=summary_line,
+            summary_line=evidence_summary_line,
             why_line=why_line,
             anchor_target_kind=anchor_target_kind,
             anchor_target_number=anchor_target_number,
@@ -7570,22 +7812,23 @@ def build_hit_ui_meta(
         score=score,
         prompt=prompt,
     )
-    if answer_citation_num > 0 and summary_source == "answer_citation" and summary_line:
+    if answer_citation_num > 0 and summary_source == "answer_citation" and authoritative_cited_summary:
+        evidence_summary_line = authoritative_cited_summary
         primary_evidence = dict(primary_evidence or {})
         primary_evidence.update(
             {
                 "source_path": source_path,
                 "source_name": display_name,
                 "heading_path": heading_path or heading,
-                "snippet": summary_line,
-                "highlight_snippet": summary_line,
+                "snippet": evidence_summary_line,
+                "highlight_snippet": evidence_summary_line,
                 "selection_reason": "answer_citation",
             }
         )
         exact_summary_block = _authoritative_summary_source_block(
             source_path=source_path,
             heading_path=heading_path or heading,
-            summary_line=summary_line,
+            summary_line=evidence_summary_line,
         )
         if exact_summary_block:
             exact_block_id = str(exact_summary_block.get("block_id") or "").strip()
@@ -7617,8 +7860,8 @@ def build_hit_ui_meta(
             primary_evidence["strict_locate"] = False
         if isinstance(reader_open, dict):
             reader_open = dict(reader_open)
-            reader_open["snippet"] = summary_line
-            reader_open["highlightSnippet"] = summary_line
+            reader_open["snippet"] = evidence_summary_line
+            reader_open["highlightSnippet"] = evidence_summary_line
             if exact_summary_block:
                 reader_open.update(
                     {
@@ -7641,8 +7884,8 @@ def build_hit_ui_meta(
                 locate_target.update(
                     {
                         "headingPath": exact_heading_path,
-                        "snippet": summary_line,
-                        "highlightSnippet": summary_line,
+                        "snippet": evidence_summary_line,
+                        "highlightSnippet": evidence_summary_line,
                         "blockId": exact_block_id,
                         "anchorId": exact_anchor_id,
                         "anchorKind": exact_anchor_kind,

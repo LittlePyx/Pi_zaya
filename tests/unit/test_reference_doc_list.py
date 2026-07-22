@@ -4,6 +4,26 @@ from api import reference_doc_list as doc_list
 from api import reference_ui
 
 
+def test_dedupe_keeps_localized_guide_instead_of_restoring_source_evidence() -> None:
+    guide = "该论文报告了明确的实时指标：以 333 个照明图案达到 30 Hz 重建帧率。"
+    out = doc_list._dedupe_doc_list_card_copy(
+        raw_item={
+            "summary_line": "Choosing 333 patterns yields a reconstruction frame rate of 30 Hz.",
+            "summary_generation": "section_grounded",
+        },
+        ui_meta={
+            "render_locale": "zh",
+            "summary_line": guide,
+            "why_line": guide,
+            "summary_generation": "deterministic_grounded",
+            "why_generation": "deterministic_grounded",
+        },
+    )
+
+    assert out["summary_line"] == guide
+    assert "why_line" not in out
+
+
 def test_collect_doc_list_ref_text_candidates_cleans_and_dedupes() -> None:
     clean_calls: list[dict] = []
 
@@ -447,6 +467,7 @@ def test_finalize_doc_list_hit_ui_meta_sets_reader_open_score_and_sources() -> N
         effective_primary_evidence={"heading_path": "2. Method", "snippet": "effective"},
         summary_source="doc_list_seed",
         allow_expensive_llm=True,
+        ref_card_user_locale=lambda *args: "en",
         align_ref_card_copy_to_user_locale=lambda **kwargs: ("aligned summary", "aligned why"),
         build_ref_summary_surface_meta=lambda **kwargs: {
             "summary_kind": "guide",
@@ -485,6 +506,7 @@ def test_finalize_doc_list_hit_ui_meta_sets_reader_open_score_and_sources() -> N
     assert out["primary_evidence_heading_path"] == "2. Method"
     assert out["topic_match_kind"] == "explicit_sci_mention"
     assert out["summary_source"] == "doc_list_seed"
+    assert out["render_locale"] == "en"
 
 
 def test_build_doc_list_hit_ui_meta_delegates_weak_primary_to_chain_a() -> None:
@@ -965,7 +987,7 @@ def test_hydrate_doc_list_refs_payload_adds_local_metadata_and_sanitizes_copy(mo
     assert ui_meta["why_line"] == repeated
 
 
-def test_polish_doc_list_payload_hits_uses_batch_then_single_leftovers() -> None:
+def test_polish_doc_list_payload_hits_uses_batch_then_deterministic_leftovers() -> None:
     calls: list[dict] = []
     doc_rows = [
         {"source_path": "/kb/paper-a.md", "source_name": "A.pdf"},
@@ -1028,7 +1050,7 @@ def test_polish_doc_list_payload_hits_uses_batch_then_single_leftovers() -> None
     assert [call["fn"] for call in calls] == ["batch", "hints", "single", "normalize", "hints"]
     assert calls[0]["jobs"][0][0] == 0
     assert calls[0]["jobs"][1][0] == 1
-    assert calls[2]["allow_expensive_llm"] is True
+    assert calls[2]["allow_expensive_llm"] is False
     assert calls[2]["ui_meta"]["display_name"] == "B.pdf"
 
 
@@ -1739,6 +1761,7 @@ def test_reference_ui_finalize_doc_list_hit_ui_meta_uses_doc_list_module(monkeyp
             "effective_primary_evidence": effective,
             "summary_source": "doc_list_seed",
             "allow_expensive_llm": True,
+            "ref_card_user_locale": reference_ui._ref_card_user_locale,
             "align_ref_card_copy_to_user_locale": reference_ui._align_ref_card_copy_to_user_locale,
             "build_ref_summary_surface_meta": reference_ui._build_ref_summary_surface_meta,
             "build_ref_summary_basis_meta": reference_ui._build_ref_summary_basis_meta,

@@ -130,6 +130,48 @@ def _clean_ref_card_text(value: Any, *, max_len: int = 520) -> str:
     return text
 
 
+def _align_summary_surface_to_render_locale(ui_meta: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Keep Guide copy localized while identifying untranslated source text."""
+
+    ui = _as_dict(ui_meta)
+    kind = _norm(ui.get("summary_kind")) or "guide"
+    if kind in {"abstract", "metadata"}:
+        return ui
+    locale = _ref_card_locale(ui)
+    summary = _text(ui.get("summary_line"))
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", summary))
+    latin_count = len(re.findall(r"[A-Za-z]", summary))
+    locale_matches = bool(
+        (locale == "zh" and cjk_count >= 4 and (cjk_count >= 12 or cjk_count * 2 >= latin_count))
+        or (
+            locale == "en"
+            and latin_count >= 4
+            and (cjk_count == 0 or latin_count >= max(8, cjk_count * 2))
+        )
+    )
+    locale_mismatch = bool(
+        summary
+        and not locale_matches
+    )
+    if locale_mismatch:
+        ui["summary_display_role"] = "source_evidence"
+        ui["summary_label"] = "Source Evidence" if locale == "en" else "原文证据"
+        ui["summary_title"] = (
+            "Original Passage Supporting the Answer"
+            if locale == "en"
+            else "支撑回答的原文片段"
+        )
+    else:
+        ui["summary_display_role"] = "guide"
+        ui["summary_label"] = "Guide" if locale == "en" else "导读"
+        ui["summary_title"] = (
+            "What This Evidence Shows"
+            if locale == "en"
+            else "这条证据说明什么"
+        )
+    return ui
+
+
 def _clean_ref_card_copy_field(value: Any, ui: Mapping[str, Any], *, max_len: int = 620) -> str:
     text = _text(value)
     if not text:
@@ -1190,30 +1232,7 @@ def attach_ref_card_polish_contract(
         cleaned = _clean_ref_card_copy_field(ui.get(key), ui)
         if cleaned:
             ui[key] = cleaned
-    if (
-        str(ui.get("primary_evidence_source") or ui.get("summary_source") or "").strip().lower()
-        == "answer_citation"
-        and str(ui.get("summary_line") or "").strip()
-    ):
-        # Copy cleanup is the last public-payload transformation. Keep an
-        # answer-cited card atomic after that cleanup so the card, popover and
-        # reader all expose the same evidence excerpt.
-        summary = str(ui.get("summary_line") or "").strip()
-        primary = _as_dict(ui.get("primary_evidence"))
-        if primary:
-            primary["snippet"] = summary
-            primary["highlight_snippet"] = summary
-            ui["primary_evidence"] = primary
-        reader = _as_dict(ui.get("reader_open"))
-        if reader:
-            reader["snippet"] = summary
-            reader["highlightSnippet"] = summary
-            reader_primary = _as_dict(reader.get("primaryEvidence"))
-            if reader_primary:
-                reader_primary["snippet"] = summary
-                reader_primary["highlight_snippet"] = summary
-                reader["primaryEvidence"] = reader_primary
-            ui["reader_open"] = reader
+    ui = _align_summary_surface_to_render_locale(ui)
     ui.update(
         ref_card_polish_status(
             ui,

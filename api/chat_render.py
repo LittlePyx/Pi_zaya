@@ -5447,6 +5447,20 @@ def _build_message_render_cache_key(
     return _stable_json_hash(base)
 
 
+def _raw_reference_render_cache_input_signature(raw_pack: dict | None) -> str:
+    pack = dict(raw_pack or {})
+    return _stable_json_hash(
+        {
+            "prompt_sig": str(pack.get("prompt_sig") or "").strip(),
+            "answer_sig": str(pack.get("answer_sig") or "").strip(),
+            "used_query": str(pack.get("used_query") or "").strip(),
+            "used_translation": bool(pack.get("used_translation")),
+            "hits": list(pack.get("hits") or []),
+            "scores": list(pack.get("scores") or []),
+        }
+    )
+
+
 def _iter_numeric_citation_numbers(text: str) -> list[int]:
     return _contract_iter_numeric_citation_numbers(text)
 
@@ -5513,6 +5527,65 @@ def _extract_render_cache(
     if render_payload_is_degraded_for_citations(payload, raw_content=raw_content, hits=hits):
         return None
     return normalized
+
+
+def _extract_compatible_historical_render_cache(
+    meta: dict | None,
+    *,
+    raw_content: str,
+    hits: list[dict] | None = None,
+) -> dict | None:
+    """Reuse a prior historical render when only card-enrichment data changed."""
+
+    if not isinstance(meta, dict):
+        return None
+    raw_cache = meta.get("render_cache")
+    if not isinstance(raw_cache, dict):
+        return None
+    stored_key = str(raw_cache.get("cache_key") or "").strip()
+    if not stored_key:
+        return None
+    payload = normalize_render_cache_payload(
+        raw_cache,
+        schema=_RENDER_CACHE_SCHEMA_VERSION,
+        expected_key=stored_key,
+    )
+    if payload is None:
+        return None
+    normalized = payload.as_dict()
+    render_packet = normalized.get("render_packet") if isinstance(normalized.get("render_packet"), dict) else {}
+    cached_answer = str((render_packet or {}).get("answer_markdown") or "").strip()
+    if not cached_answer or cached_answer != str(raw_content or "").strip():
+        return None
+    if not (
+        str(normalized.get("rendered_content") or "").strip()
+        or str(normalized.get("rendered_body") or "").strip()
+    ):
+        return None
+    if render_payload_is_degraded_for_citations(payload, raw_content=raw_content, hits=hits):
+        return None
+    return normalized
+
+
+def _extract_pre_aligned_render_cache(
+    meta: dict | None,
+    *,
+    input_ref_sig: str,
+    raw_content: str,
+    hits: list[dict] | None = None,
+) -> dict | None:
+    if not isinstance(meta, dict):
+        return None
+    raw_cache = meta.get("render_cache")
+    if not isinstance(raw_cache, dict):
+        return None
+    if str(raw_cache.get("input_ref_sig") or "").strip() != str(input_ref_sig or "").strip():
+        return None
+    return _extract_compatible_historical_render_cache(
+        meta,
+        raw_content=raw_content,
+        hits=hits,
+    )
 
 
 def _build_render_cache_payload(
@@ -6243,6 +6316,14 @@ def enrich_messages_with_reference_render(
 ) -> list[dict]:
     out: list[dict] = []
     last_user_msg_id = 0
+    latest_assistant_idx = max(
+        (
+            idx
+            for idx, item in enumerate(messages or [])
+            if str((item or {}).get("role") or "").strip().lower() == "assistant"
+        ),
+        default=-1,
+    )
     for idx, msg in enumerate(messages or []):
         rec = dict(msg or {})
         role = str(rec.get("role") or "")
@@ -6260,9 +6341,25 @@ def enrich_messages_with_reference_render(
             continue
 
         raw_ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
-        ref_pack = _answer_aligned_reference_render_pack(
-            raw_ref_pack if isinstance(raw_ref_pack, dict) else None,
-            render_source,
+        raw_ref_pack_dict = raw_ref_pack if isinstance(raw_ref_pack, dict) else None
+        input_ref_sig = _raw_reference_render_cache_input_signature(raw_ref_pack_dict)
+        raw_hits = list((raw_ref_pack_dict or {}).get("hits") or [])
+        pre_aligned_cache = _extract_pre_aligned_render_cache(
+            rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
+            input_ref_sig=input_ref_sig,
+            raw_content=render_source,
+            hits=raw_hits,
+        )
+        if pre_aligned_cache is None and idx != latest_assistant_idx:
+            pre_aligned_cache = _extract_compatible_historical_render_cache(
+                rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
+                raw_content=render_source,
+                hits=raw_hits,
+            )
+        ref_pack = (
+            _effective_reference_render_pack(raw_ref_pack_dict)
+            if pre_aligned_cache is not None
+            else _answer_aligned_reference_render_pack(raw_ref_pack_dict, render_source)
         )
         render_locale = _effective_citation_render_locale(ref_pack if isinstance(ref_pack, dict) else None)
         hits = list((ref_pack or {}).get("hits") or []) if isinstance(ref_pack, dict) else []
@@ -6277,12 +6374,15 @@ def enrich_messages_with_reference_render(
             provenance=provenance_raw if isinstance(provenance_raw, dict) else None,
             render_locale=render_locale,
         )
-        cached = _extract_render_cache(
-            rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
-            expected_key=render_cache_key,
-            raw_content=render_source,
-            hits=hits,
-        )
+        strict_cached = None
+        if pre_aligned_cache is None:
+            strict_cached = _extract_render_cache(
+                rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
+                expected_key=render_cache_key,
+                raw_content=render_source,
+                hits=hits,
+            )
+        cached = pre_aligned_cache or strict_cached
         if cached:
             _restore_render_packet_contract_from_cache(rec, cached)
             rec["cite_details"] = list(cached.get("cite_details") or [])
@@ -6450,14 +6550,25 @@ def enrich_messages_with_reference_render(
         )
         _project_render_packet_compat_fields(rec)
         _maybe_strip_legacy_render_fields(rec, enabled=bool(render_packet_only))
+        if chat_store is not None and msg_id > 0 and cached and (pre_aligned_cache is not None or strict_cached is not None):
+            stored_cache = (
+                dict((rec.get("meta") or {}).get("render_cache") or {})
+                if isinstance(rec.get("meta"), dict)
+                and isinstance((rec.get("meta") or {}).get("render_cache"), dict)
+                else {}
+            )
+            if stored_cache and str(stored_cache.get("input_ref_sig") or "").strip() != input_ref_sig:
+                try:
+                    stored_cache["input_ref_sig"] = input_ref_sig
+                    chat_store.set_message_render_cache(msg_id, stored_cache)
+                except Exception:
+                    pass
         if chat_store is not None and msg_id > 0 and not cached:
             try:
                 meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
                 contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
                 render_packet = dict(contracts.get("render_packet") or {}) if isinstance(contracts.get("render_packet"), dict) else {}
-                chat_store.set_message_render_cache(
-                    msg_id,
-                    _build_render_cache_payload(
+                cache_payload = _build_render_cache_payload(
                         cache_key=render_cache_key,
                         notice=str(rec.get("notice") or ""),
                         rendered_body=str(rec.get("rendered_body") or ""),
@@ -6471,7 +6582,11 @@ def enrich_messages_with_reference_render(
                         ],
                         refs_user_msg_id=int(rec.get("refs_user_msg_id") or last_user_msg_id or 0),
                         render_packet=render_packet,
-                    ),
+                    )
+                cache_payload["input_ref_sig"] = input_ref_sig
+                chat_store.set_message_render_cache(
+                    msg_id,
+                    cache_payload,
                 )
             except Exception:
                 pass
