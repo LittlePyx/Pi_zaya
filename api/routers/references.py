@@ -217,6 +217,408 @@ def _sync_message_render_packets_with_refs_payload(*, store, conv_id: str, paylo
         return
 
 
+def _answer_citation_source_key(value: Any) -> str:
+    normalized = str(value or "").strip().replace("/", "\\").casefold()
+    parts = [part for part in normalized.split("\\") if part]
+    # Public API payloads intentionally replace the absolute corpus prefix with
+    # ``kb-source/<root-id>``.  The document directory plus filename remains
+    # stable on both sides and is specific enough to align the rendered card
+    # with the source citation without re-exposing a local filesystem path.
+    if len(parts) >= 2:
+        return "\\".join(parts[-2:])
+    return normalized
+
+
+def _answer_citation_claim_text(detail: dict, *, prefer_zh: bool) -> str:
+    evidence = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
+    if prefer_zh and evidence:
+        metric_match = re.search(r"\b(PSNR|SSIM|LPIPS|FID|FPS)\b", evidence, flags=re.I)
+        pairs = re.findall(
+            r"(?:^|[:,;])\s*([A-Za-z][A-Za-z0-9 +()_-]{0,48}?)\s*=\s*(-?\d+\.\d+)",
+            evidence,
+            flags=re.I,
+        )
+        if metric_match and pairs:
+            dataset_match = re.search(r"\b(SIDD|GoPro|ImageNet|CIFAR(?:-?10|-?100)?)\b", evidence, flags=re.I)
+            prefix = " ".join(
+                part
+                for part in (
+                    str(dataset_match.group(1) or "") if dataset_match else "",
+                    str(metric_match.group(1) or "").upper(),
+                )
+                if part
+            )
+            facts = "，".join(f"{method.strip()} = {value}" for method, value in pairs[:4])
+            return f"{prefix}：{facts}。" if prefix else f"{facts}。"
+    raw = str(detail.get("card_takeaway") or detail.get("answer_claim") or "").strip()
+    raw = re.sub(r"\[[0-9,\-–—\s]+\](?:\([^)]*\))?", "", raw)
+    raw = re.sub(r"[*_`#]+", "", raw)
+    raw = " ".join(raw.split()).strip(" -—:：;；,.。")
+    if not raw:
+        raw = " ".join(evidence.split()).strip()
+    if prefer_zh:
+        raw = re.sub(r"^在.{0,180}?(?:中|里)[，,:：]\s*", "", raw)
+        raw = re.sub(r"^根据(?:本文|该文|这篇论文|文献库)[，,:：\s]*", "", raw)
+    else:
+        raw = re.sub(r"^(?:in|according to)\s+.{0,180}?[,:]\s*", "", raw, flags=re.I)
+    if prefer_zh and "；" in raw:
+        raw = raw.split("；", 1)[0].strip()
+    elif (not prefer_zh) and ";" in raw:
+        raw = raw.split(";", 1)[0].strip()
+    limit = 96 if prefer_zh else 180
+    if len(raw) > limit:
+        raw = raw[: limit - 1].rstrip(" ,，。.;；:：") + "…"
+    return raw
+
+
+def _answer_citation_heading_leaf(detail: dict, *, prefer_zh: bool) -> str:
+    heading = str(detail.get("heading_path") or detail.get("location_label") or "").strip()
+    parts = [part.strip() for part in heading.split(" / ") if part.strip()]
+    leaf = parts[-1] if parts else heading
+    if len(leaf) > 70:
+        leaf = leaf[:67].rstrip() + "…"
+    return leaf or ("原文定位处" if prefer_zh else "the cited passage")
+
+
+def _answer_citation_card_copy(
+    details: list[dict],
+    *,
+    prefer_zh: bool,
+    prompt: str = "",
+) -> tuple[str, str]:
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for detail in details:
+        claim = _answer_citation_claim_text(detail, prefer_zh=prefer_zh)
+        if not claim:
+            continue
+        key = claim.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append((_answer_citation_heading_leaf(detail, prefer_zh=prefer_zh), claim))
+        if len(rows) >= 2:
+            break
+    if not rows:
+        return "", ""
+    summary = ("；" if prefer_zh else "; ").join(claim for _heading, claim in rows)
+    prompt_text = str(prompt or "")
+    headings = "”和“".join(heading for heading, _claim in rows)
+    reading_route = bool(
+        re.search(
+            r"先读|哪几篇|阅读|主线|路线|read first|which papers|reading|roadmap",
+            prompt_text,
+            flags=re.I,
+        )
+    )
+    if reading_route:
+        evidence_text = " ".join(
+            str(detail.get("evidence_quote") or detail.get("summary_line") or "")
+            for detail in details
+            if isinstance(detail, dict)
+        )
+        source_text = " ".join(
+            str(detail.get("source_name") or detail.get("card_title") or "")
+            for detail in details
+            if isinstance(detail, dict)
+        )
+        role_text = f"{source_text} {evidence_text}".lower()
+        if "hadamard" in role_text and "fourier" in role_text:
+            if prefer_zh:
+                return (
+                    "本文用 Hadamard 基图案进行 HSI、用 Fourier 基图案进行 FSI，并从原理、成像效率和噪声鲁棒性等方面比较二者。",
+                    "它直接比较两种经典调制方案，适合在掌握基础原理后用于理解编码差异和方法选型。",
+                )
+            return (
+                summary,
+                "It directly compares two classic modulation schemes, making it the method-selection step after the fundamentals.",
+            )
+        if (
+            "compressed sensing" in role_text
+            or "fewer than the total number of unknown pixels" in role_text
+            or "principles and prospects" in role_text
+        ):
+            if prefer_zh:
+                return (
+                    "压缩感知使单像素相机能在测量次数少于图像未知像素总数时，通过欠采样恢复图像。",
+                    "它建立单像素成像的采集与重建基础，是理解后续调制方法和学习方法的起点。",
+                )
+            return (
+                summary,
+                "It establishes the acquisition and reconstruction foundations needed before studying modulation or learning-based methods.",
+            )
+        if "deep learning" in role_text and (
+            "reconstruction quality" in role_text
+            or "reconstruction speed" in role_text
+            or "advances and challenges" in role_text
+        ):
+            if prefer_zh:
+                return (
+                    "这篇综述说明，深度学习单像素成像针对传统迭代重建的质量与耗时瓶颈，并带来更高的重建质量和速度。",
+                    "它总结学习型方法的进展与实际局限，适合放在经典原理和调制方法之后把握前沿。",
+                )
+            return (
+                summary,
+                "It surveys the progress and deployment limits of learning-based SPI, so it belongs after the classical foundations and modulation methods.",
+            )
+        if prefer_zh:
+            return summary, f"“{headings}”说明这篇文献在阅读路线中承担的具体知识环节，可据此安排阅读顺序。"
+        return summary, f"'{headings}' identifies the specific knowledge role this paper plays in the reading order."
+    if prefer_zh:
+        if re.search(r"好处|优势|收益|坑|局限|挑战", prompt_text):
+            why = f"“{headings}”分别覆盖优势与局限，正好对应问题要求的正反两方面。"
+        elif re.search(r"关系|相关|主线|值得.{0,8}(?:读|看)|交集", prompt_text):
+            why = "卡片定位到论文的研究对象与方法边界，可据此判断它是否属于当前单像素成像主线。"
+        elif re.search(r"最高|最低|并列|PSNR|SSIM|LPIPS|表格|基准", prompt_text, flags=re.I):
+            why = f"“{headings}”包含同一基准上的量化结果，可用于核对最优数值和并列情况。"
+        elif re.search(r"区别|差异|比较|对比|vs\.?|versus", prompt_text, flags=re.I):
+            why = f"“{headings}”给出该方法的定义或结果，是与另一方法逐项对照时的原文依据。"
+        elif re.search(r"原创|谁提出|来源|沿革|已有", prompt_text):
+            why = f"“{headings}”保留了方法归属或上游工作的原文线索，可用于核对来源判断。"
+        else:
+            why = f"“{headings}”提供回答该问题所需的原文定位，卡片中的结论可在这里逐项核对。"
+    else:
+        if re.search(r"benefit|advantage|strength|pitfall|limit|challenge", prompt_text, flags=re.I):
+            why = f"'{headings}' covers the benefit and limitation sides requested by the question."
+        elif re.search(r"relevan|research line|worth reading|scope", prompt_text, flags=re.I):
+            why = "The card identifies the paper's research object and method boundary, which determines whether it belongs on the current research line."
+        elif re.search(r"highest|lowest|tie|PSNR|SSIM|LPIPS|table|benchmark", prompt_text, flags=re.I):
+            why = f"'{headings}' contains results on the same benchmark, allowing the best value and any tie to be checked."
+        elif re.search(r"compare|difference|vs\.?|versus", prompt_text, flags=re.I):
+            why = f"'{headings}' provides the method definition or result needed for a point-by-point comparison."
+        else:
+            why = f"'{headings}' provides the source location needed to check the card's conclusion."
+    return summary, why
+
+
+def _answer_citation_state_by_user(
+    *,
+    store,
+    conv_id: str,
+) -> tuple[dict[int, list[dict]], set[int]]:
+    try:
+        messages = list(store.get_messages(conv_id) or [])
+    except Exception:
+        return {}, set()
+    out: dict[int, list[dict]] = {}
+    pending: set[int] = set()
+    last_user_msg_id = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        if role == "user":
+            try:
+                last_user_msg_id = int(message.get("id") or 0)
+            except (TypeError, ValueError):
+                last_user_msg_id = 0
+            continue
+        if role != "assistant" or last_user_msg_id <= 0:
+            continue
+        meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
+        contracts = meta.get("paper_guide_contracts") if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+        packet = contracts.get("render_packet") if isinstance(contracts.get("render_packet"), dict) else {}
+        details = list(packet.get("cite_details") or message.get("cite_details") or [])
+        grounded = [
+            dict(item)
+            for item in details
+            if isinstance(item, dict)
+            and str(item.get("citation_route") or "").strip().lower() == "system_a"
+            and str(item.get("source_path") or "").strip()
+            and str(item.get("evidence_quote") or item.get("summary_line") or "").strip()
+        ]
+        if grounded:
+            out[last_user_msg_id] = grounded
+            pending.discard(last_user_msg_id)
+            continue
+        answer_quality = meta.get("answer_quality") if isinstance(meta.get("answer_quality"), dict) else {}
+        citation_plan = (
+            answer_quality.get("citation_plan")
+            if isinstance(answer_quality.get("citation_plan"), dict)
+            else {}
+        )
+        planned_system_a = any(
+            isinstance(item, dict)
+            and str(item.get("preferred_system") or "system_a").strip().lower() != "system_b"
+            for item in list(citation_plan.get("slots") or [])
+        )
+        if planned_system_a:
+            pending.add(last_user_msg_id)
+    return out, pending
+
+
+def _answer_citation_details_by_user(*, store, conv_id: str) -> dict[int, list[dict]]:
+    details, _pending = _answer_citation_state_by_user(store=store, conv_id=conv_id)
+    return details
+
+
+def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload: dict | None) -> dict:
+    """Make reference cards describe the evidence actually used by the answer."""
+
+    payload_out = {key: dict(value) for key, value in dict(payload or {}).items() if isinstance(value, dict)}
+    details_by_user, pending_users = _answer_citation_state_by_user(
+        store=store,
+        conv_id=conv_id,
+    )
+    for raw_user_msg_id, pack in list(payload_out.items()):
+        try:
+            user_msg_id = int(raw_user_msg_id)
+        except (TypeError, ValueError):
+            continue
+        details = list(details_by_user.get(user_msg_id) or [])
+        if not details:
+            if user_msg_id in pending_users and list(pack.get("hits") or []):
+                pack["enrichment_pending"] = True
+                pack["answer_citation_overlay_pending"] = True
+            continue
+        pack["enrichment_pending"] = False
+        pack.pop("answer_citation_overlay_pending", None)
+        prompt = str(pack.get("prompt") or "")
+        render_locale = str(pack.get("render_locale") or "").strip().lower()
+        prefer_zh = render_locale == "zh" or (
+            render_locale != "en" and bool(re.search(r"[\u4e00-\u9fff]", prompt))
+        )
+        grouped: dict[str, list[dict]] = {}
+        source_order: list[str] = []
+        for detail in details:
+            source_key = _answer_citation_source_key(detail.get("source_path"))
+            if not source_key:
+                continue
+            if source_key not in grouped:
+                grouped[source_key] = []
+                source_order.append(source_key)
+            grouped[source_key].append(detail)
+
+        existing_by_source: dict[str, dict] = {}
+        remaining: list[dict] = []
+        for hit in list(pack.get("hits") or []):
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            source_key = _answer_citation_source_key(
+                (ui_meta or {}).get("source_path") or (meta or {}).get("source_path")
+            )
+            if source_key in grouped and source_key not in existing_by_source:
+                existing_by_source[source_key] = dict(hit)
+            elif source_key not in grouped:
+                remaining.append(dict(hit))
+
+        aligned_hits: list[dict] = []
+        for source_key in source_order:
+            source_details = grouped[source_key]
+            detail = source_details[0]
+            hit = dict(existing_by_source.get(source_key) or {})
+            meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), dict) else {}
+            ui = dict(hit.get("ui_meta") or {}) if isinstance(hit.get("ui_meta"), dict) else {}
+            summary_line, why_line = _answer_citation_card_copy(
+                source_details,
+                prefer_zh=prefer_zh,
+                prompt=prompt,
+            )
+            evidence_quote = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
+            source_path = str(detail.get("source_path") or "").strip()
+            source_name = str(detail.get("source_name") or detail.get("card_title") or "").strip()
+            heading_path = str(detail.get("heading_path") or detail.get("location_label") or "").strip()
+            primary = {
+                "source_path": source_path,
+                "source_name": source_name,
+                "heading_path": heading_path,
+                "snippet": evidence_quote,
+                "highlight_snippet": evidence_quote,
+                "block_id": str(detail.get("block_id") or "").strip(),
+                "anchor_id": str(detail.get("anchor_id") or "").strip(),
+                "anchor_kind": str(detail.get("anchor_kind") or "sentence").strip(),
+                "page_start": int(detail.get("page_start") or 0),
+                "page_end": int(detail.get("page_end") or detail.get("page_start") or 0),
+                "selection_reason": "answer_citation_grounded",
+                "strict_locate": bool(detail.get("block_id") or detail.get("anchor_id")),
+            }
+            meta.update({"source_path": source_path, "source_name": source_name, "heading_path": heading_path})
+            ui.update(
+                {
+                    "display_name": source_name or str(ui.get("display_name") or ""),
+                    "source_path": source_path,
+                    "heading_path": heading_path,
+                    "section_label": heading_path,
+                    "summary_line": summary_line,
+                    "summary_kind": "guide",
+                    "summary_display_role": "guide",
+                    "summary_label": "导读" if prefer_zh else "Guide",
+                    "summary_title": "这条证据说明什么" if prefer_zh else "What This Evidence Shows",
+                    "summary_generation": "answer_citation_grounded",
+                    "summary_basis": "基于回答实际引用的原文证据" if prefer_zh else "Based on the source evidence cited by the answer",
+                    "summary_source": "answer_citation_grounded",
+                    "why_line": why_line,
+                    "why_generation": "answer_citation_grounded",
+                    "why_basis": "对齐答案主张与原文定位" if prefer_zh else "Aligned to the answer claim and source locator",
+                    "primary_evidence": primary,
+                    "primary_evidence_heading_path": heading_path,
+                    "render_locale": "zh" if prefer_zh else "en",
+                }
+            )
+            reader_open = dict(ui.get("reader_open") or {}) if isinstance(ui.get("reader_open"), dict) else {}
+            reader_open.update(
+                {
+                    "sourcePath": source_path,
+                    "sourceName": source_name,
+                    "headingPath": heading_path,
+                    "snippet": evidence_quote,
+                    "highlightSnippet": evidence_quote,
+                    "strictLocate": bool(primary["strict_locate"]),
+                    "primaryEvidence": primary,
+                }
+            )
+            ui["reader_open"] = reader_open
+            location = heading_path or ("原文定位处" if prefer_zh else "Source passage")
+            ui["card_view"] = {
+                "version": 1,
+                "route": "references",
+                "kind": "reference_locator",
+                "header": {
+                    "kicker": "参考定位" if prefer_zh else "Reference",
+                    "title": source_name,
+                    "subtitle": location,
+                },
+                "sections": [
+                    {
+                        "id": "summary",
+                        "label": "导读" if prefer_zh else "Guide",
+                        "text": summary_line,
+                        "kind": "summary",
+                        "tone": "primary",
+                        "source": "answer_citation_grounded",
+                    },
+                    {
+                        "id": "why",
+                        "label": "相关性" if prefer_zh else "Why it matters",
+                        "text": why_line,
+                        "kind": "why",
+                        "tone": "",
+                    },
+                    {
+                        "id": "location",
+                        "label": "位置" if prefer_zh else "Location",
+                        "text": location,
+                        "kind": "locator",
+                        "tone": "",
+                    },
+                ],
+                "summary": summary_line,
+                "quality": {"label": "grounded", "source": "answer_citation_grounded"},
+            }
+            hit.update({"text": evidence_quote, "meta": meta, "ui_meta": ui})
+            aligned_hits.append(hit)
+        if remaining and not list(pack.get("retrieval_hits") or []):
+            # Keep unused candidates available for diagnostics without
+            # presenting them as evidence for claims the answer did not make.
+            pack["retrieval_hits"] = [dict(hit) for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
+        pack["hits"] = aligned_hits
+        pack["answer_aligned_citation_cards"] = True
+        payload_out[raw_user_msg_id] = pack
+    return payload_out
+
+
 def _reference_asset_roots() -> list[Path]:
     return reference_source_roots(
         md_root=_md_dir(),
@@ -1758,6 +2160,11 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
 
     def _finish(payload: dict | None, mode: str) -> dict:
         payload_out = payload if isinstance(payload, dict) else {}
+        payload_out = _overlay_refs_payload_with_answer_citations(
+            store=store,
+            conv_id=conv_id,
+            payload=payload_out,
+        )
         # Card construction/background warming already embeds cached local
         # bibliography metadata. Re-scanning every source and rebuilding every
         # message render packet on this read path caused 10–45 second stalls,

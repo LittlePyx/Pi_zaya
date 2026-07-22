@@ -1,14 +1,83 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
 import pytest
 
 from kb.retrieval_engine import (
     _expand_query_via_llm,
     _group_hits_by_doc_for_refs,
     _merge_expanded_results,
+    _reading_roadmap_source_role_bonus,
     _search_hits_with_fallback,
+    _translate_query_for_search,
 )
+
+
+def test_reading_roadmap_source_role_bonus_prefers_reviews_and_comparisons():
+    prompt = "我刚开始看单像素成像，想建立主线，应该先读哪几篇？"
+
+    assert _reading_roadmap_source_role_bonus(
+        prompt,
+        "NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+    ) > _reading_roadmap_source_role_bonus(
+        prompt,
+        "Robust application method.en.md",
+    )
+    assert _reading_roadmap_source_role_bonus(
+        prompt,
+        "Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+    ) > 0
+    assert _reading_roadmap_source_role_bonus(
+        "请解释这个公式",
+        "Principles and prospects for single-pixel imaging.en.md",
+    ) == 0
+
+
+def test_reading_roadmap_grouping_keeps_complementary_foundation_and_comparison_docs(
+    tmp_path,
+    monkeypatch,
+):
+    import kb.retrieval_engine as retrieval_engine
+
+    monkeypatch.setattr(retrieval_engine, "_is_temp_source_path", lambda _path: False)
+    sources = [
+        tmp_path / "NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+        tmp_path / "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.en.md",
+        tmp_path / "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+        tmp_path / "Application of single-pixel imaging for one narrow task.en.md",
+    ]
+    for source in sources:
+        source.write_text(
+            "# Introduction\n\nGrounded single-pixel imaging evidence.\n",
+            encoding="utf-8",
+        )
+
+    hits = [
+        {
+            "score": score,
+            "text": "Grounded single-pixel imaging evidence.",
+            "meta": {"source_path": str(source), "heading_path": "Introduction"},
+        }
+        for source, score in zip(sources, [1.0, 1.1, 1.2, 12.0])
+    ]
+
+    docs = _group_hits_by_doc_for_refs(
+        hits,
+        "我刚开始看深度学习单像素成像，想建立主线，应该先读哪几篇？",
+        3,
+        deep_read=False,
+        llm_rerank=False,
+    )
+
+    names = [
+        Path(str((doc.get("meta") or {}).get("source_path") or "")).name
+        for doc in docs
+    ]
+    assert names == [sources[1].name, sources[0].name, sources[2].name]
+
+
 from kb.retrieval_heuristics import _doc_term_bonus, _query_term_profile
 
 
@@ -214,6 +283,32 @@ class _FakeSettings:
     timeout_s = 60.0
     max_retries = 0
     query_expansion_enabled = False
+
+
+def test_translate_query_uses_mixed_metric_anchors_without_llm(monkeypatch):
+    class Settings:
+        api_key = "configured"
+
+    import kb.retrieval_engine as retrieval_engine
+
+    monkeypatch.setattr(
+        retrieval_engine,
+        "DeepSeekChat",
+        lambda _settings: (_ for _ in ()).throw(AssertionError("translation LLM should not run")),
+    )
+
+    translated = _translate_query_for_search(
+        Settings(),
+        "ECCV-2022 Simple Baselines 论文的 SIDD 基准测试里，PSNR 最高的模型是谁？如果并列请全部列出。",
+    )
+
+    assert translated is not None
+    assert "SIDD" in translated
+    assert "PSNR" in translated
+    assert "benchmark" in translated
+    assert "highest" in translated
+    assert "model" in translated
+    assert "tie" in translated
 
 
 def test_search_hits_fallback_basic():

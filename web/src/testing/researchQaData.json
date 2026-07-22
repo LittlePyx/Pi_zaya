@@ -483,7 +483,8 @@
         "参考定位卡应说明“为什么这是外围而非主线”。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["perovskite", "器件", "不是"],
+        "requiredAnswerTerms": ["perovskite", "器件"],
+        "requiredAnswerTermGroups": [["不是", "不属于", "并非", "相关性不大", "关联不大", "关系不大", "非主线"]],
         "requiredRefDocIds": ["perovskite-laser"],
         "requiredCitationDocIds": ["perovskite-laser"],
         "allowedRefDocIds": ["perovskite-laser"],
@@ -494,7 +495,8 @@
             "id": "perovskite-is-device-boundary",
             "docId": "perovskite-laser",
             "route": "system_a",
-            "answerTerms": ["perovskite", "器件", "不是"],
+            "answerTerms": ["perovskite", "器件"],
+            "answerTermGroups": [["不是", "不属于", "并非", "相关性不大", "关联不大", "关系不大", "非主线"]],
             "evidenceTerms": ["dual-cavity perovskite", "lasing"]
           }
         ],

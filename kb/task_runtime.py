@@ -389,6 +389,7 @@ from kb.source_blocks import (
     normalize_match_text,
     split_answer_segments,
 )
+from kb.structured_table_answer import build_structured_table_extreme_answer
 from kb.markdown_rendering import _normalize_math_markdown
 from kb.localized_strings import S
 
@@ -6105,21 +6106,26 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     paper_guide_exact_preflight.get("answer") or ""
                 ).strip()
             else:
-                ds = DeepSeekChat(settings_obj)
-                direct_answer_override = _build_paper_guide_direct_answer_override(
-                    paper_guide_mode=bool(paper_guide_source_scoped or conversational_exact_source_hint),
-                    prompt_family=paper_guide_prompt_family,
-                    prompt_for_user=prompt_for_user,
-                    paper_guide_focus_source_path=(
-                        paper_guide_focus_source_path or conversational_exact_source_hint
-                    ),
-                    paper_guide_direct_source_path=paper_guide_direct_source_path,
-                    paper_guide_bound_source_path=paper_guide_bound_source_path,
-                    answer_hits=answer_hits,
-                    special_focus_block=paper_guide_special_focus_block,
-                    db_dir=db_dir,
-                    llm=ds,
+                direct_answer_override = build_structured_table_extreme_answer(
+                    prompt_for_user or prompt,
+                    answer_hits,
                 )
+                if not direct_answer_override:
+                    ds = DeepSeekChat(settings_obj)
+                    direct_answer_override = _build_paper_guide_direct_answer_override(
+                        paper_guide_mode=bool(paper_guide_source_scoped or conversational_exact_source_hint),
+                        prompt_family=paper_guide_prompt_family,
+                        prompt_for_user=prompt_for_user,
+                        paper_guide_focus_source_path=(
+                            paper_guide_focus_source_path or conversational_exact_source_hint
+                        ),
+                        paper_guide_direct_source_path=paper_guide_direct_source_path,
+                        paper_guide_bound_source_path=paper_guide_bound_source_path,
+                        answer_hits=answer_hits,
+                        special_focus_block=paper_guide_special_focus_block,
+                        db_dir=db_dir,
+                        llm=ds,
+                    )
         if paper_guide_mode:
             paper_guide_debug.update(
                 {

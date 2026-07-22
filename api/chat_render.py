@@ -17,6 +17,7 @@ from api.message_render_contract import (
     project_render_packet_to_record,
     render_payload_has_citation_links,
     render_payload_is_degraded_for_citations,
+    render_payload_is_missing_planned_system_a,
     strip_legacy_render_fields,
 )
 from api.deps import load_prefs
@@ -1516,7 +1517,32 @@ def _citation_plan_with_ref_primary(plan: dict | None, ref_pack: dict | None) ->
         ).strip()
         if same_block or same_anchor or same_evidence:
             return out
-    primary_source_key = _reading_slot_source_key(source_path)
+    primary_source_key = _reading_slot_source_identity(source_path)
+    same_source_system_a_slots = [
+        slot
+        for slot in existing_slots
+        if str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+        and _reading_slot_source_identity(slot.get("source_path") or slot.get("sourcePath")) == primary_source_key
+        and str(slot.get("evidence_quote") or "").strip()
+    ]
+    distinct_system_a_sources = {
+        _reading_slot_source_identity(slot.get("source_path") or slot.get("sourcePath"))
+        for slot in existing_slots
+        if str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+        and _reading_slot_source_identity(slot.get("source_path") or slot.get("sourcePath"))
+    }
+    if len(distinct_system_a_sources) >= 3:
+        # A reading route assigns each paper a deliberate role and passage.
+        # Replacing one slot with a later generic same-paper primary can turn a
+        # method-comparison card into an unrelated experiment-setup paragraph.
+        return out
+    if len(same_source_system_a_slots) >= 2:
+        # A multi-claim plan deliberately keeps separate passages for separate
+        # claims (for example one benefit and one limitation).  Collapsing all
+        # of them into the single answer-aligned References primary can replace
+        # exact evidence with a generic same-paper paragraph and leave the
+        # answer without any bindable citation.
+        return out
     # Once final-answer alignment has selected a precise block, older generic
     # slots from the same paper compete for a small citation budget and can hide
     # the better evidence. Keep slots from other papers (and System B lineage),
@@ -1526,7 +1552,7 @@ def _citation_plan_with_ref_primary(plan: dict | None, ref_pack: dict | None) ->
             slot
             for slot in slots
             if str(slot.get("preferred_system") or "").strip().lower() == "system_b"
-            or _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath")) != primary_source_key
+            or _reading_slot_source_identity(slot.get("source_path") or slot.get("sourcePath")) != primary_source_key
         ]
     aligned_slot = {
         "claim_type": "answer_aligned_primary",
@@ -1812,6 +1838,17 @@ def _reading_slot_source_key(value: object) -> str:
     return str(value or "").strip().replace("\\", "/").lower()
 
 
+def _reading_slot_source_identity(value: object) -> str:
+    normalized = _reading_slot_source_key(value)
+    parts = [part for part in normalized.split("/") if part]
+    # Citation plans are produced with the private ``db/...`` path while the
+    # persisted reference pack deliberately exposes ``kb-source/...`` URLs.
+    # The directory and Markdown filename are stable on both sides; comparing
+    # the whole path prevents an otherwise exact reading-route slot from ever
+    # replacing a weak same-paper retrieval passage.
+    return "/".join(parts[-2:]) if len(parts) >= 2 else normalized
+
+
 def _reading_quantitative_categories(text: str) -> set[str]:
     value = str(text or "")
     categories: set[str] = set()
@@ -1827,18 +1864,55 @@ def _reading_quantitative_categories(text: str) -> set[str]:
     return categories
 
 
+def _dedupe_reading_system_a_slots(citation_plan: dict) -> list[dict]:
+    raw_system_a_slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    system_a_slots: list[dict] = []
+    for slot in raw_system_a_slots:
+        source_key = _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+        heading_key = str(slot.get("heading_path") or slot.get("headingPath") or "").strip().casefold()
+        evidence = str(slot.get("evidence_quote") or slot.get("evidence_atom_text") or "").strip()
+        evidence_terms = _reading_coverage_terms(evidence)
+        duplicate_idx = -1
+        for idx, existing in enumerate(system_a_slots):
+            if source_key != _reading_slot_source_key(existing.get("source_path") or existing.get("sourcePath")):
+                continue
+            if heading_key != str(existing.get("heading_path") or existing.get("headingPath") or "").strip().casefold():
+                continue
+            existing_evidence = str(
+                existing.get("evidence_quote") or existing.get("evidence_atom_text") or ""
+            ).strip()
+            existing_terms = _reading_coverage_terms(existing_evidence)
+            overlap = len(evidence_terms & existing_terms) / max(1, min(len(evidence_terms), len(existing_terms)))
+            if overlap >= 0.75:
+                duplicate_idx = idx
+                # Prefer the normalized table sentence over raw Markdown rows;
+                # it produces a readable evidence card while representing the
+                # same source passage.
+                current_quality = (3.0 if not evidence.lstrip().startswith("|") else 0.0) - evidence.count("|") * 0.1
+                existing_quality = (
+                    (3.0 if not existing_evidence.lstrip().startswith("|") else 0.0)
+                    - existing_evidence.count("|") * 0.1
+                )
+                if current_quality > existing_quality:
+                    system_a_slots[idx] = slot
+                break
+        if duplicate_idx < 0:
+            system_a_slots.append(slot)
+    return system_a_slots
+
+
 def _reading_comparison_primary_rescue(
     hits: list[dict],
     citation_plan: dict | None,
 ) -> tuple[dict, dict]:
     if not isinstance(citation_plan, dict):
         return {}, {}
-    system_a_slots = [
-        slot
-        for slot in list(citation_plan.get("slots") or [])
-        if isinstance(slot, dict)
-        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
-    ]
+    system_a_slots = _dedupe_reading_system_a_slots(citation_plan)
     if not (
         str(citation_plan.get("intent") or "").strip().lower() == "comparison"
         and system_a_slots
@@ -2032,6 +2106,98 @@ def _augment_hits_with_system_a_plan_slots(
     if not isinstance(citation_plan, dict):
         return rows
     rescue_slot, rescue_primary = _reading_comparison_primary_rescue(rows, citation_plan)
+    scope_boundary_slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    if (
+        str(citation_plan.get("intent") or "").strip().lower() == "scope_boundary"
+        and scope_boundary_slots
+    ):
+        # A boundary answer needs the passage that establishes the paper's
+        # research object. Reference enrichment may rank a more specific result
+        # from the same paper, but that cannot support the scope judgment.
+        boundary_slot = scope_boundary_slots[0]
+        boundary_path = str(
+            boundary_slot.get("source_path") or boundary_slot.get("sourcePath") or ""
+        ).strip()
+        boundary_key = _reading_slot_source_identity(boundary_path)
+        boundary_primary = _abstract_primary_evidence_from_source(boundary_path)
+        boundary_evidence = _primary_evidence_text(boundary_primary) or re.sub(
+            r"\s+", " ", str(boundary_slot.get("evidence_quote") or "").strip()
+        )
+        if boundary_key and boundary_evidence:
+            for row_idx, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    continue
+                row_meta = dict(row.get("meta") or {}) if isinstance(row.get("meta"), dict) else {}
+                row_ui = dict(row.get("ui_meta") or {}) if isinstance(row.get("ui_meta"), dict) else {}
+                row_key = _reading_slot_source_identity(
+                    row_meta.get("source_path")
+                    or row_ui.get("source_path")
+                    or row_ui.get("sourcePath")
+                )
+                if row_key != boundary_key:
+                    continue
+                primary = dict(boundary_primary or {})
+                heading = str(
+                    primary.get("heading_path")
+                    or boundary_slot.get("heading_path")
+                    or boundary_slot.get("headingPath")
+                    or "Abstract"
+                ).strip()
+                source_name = str(
+                    boundary_slot.get("source_name")
+                    or boundary_slot.get("sourceName")
+                    or row_meta.get("source_name")
+                    or row_ui.get("display_name")
+                    or ""
+                ).strip()
+                primary.update(
+                    {
+                        "source_path": boundary_path,
+                        "source_name": source_name,
+                        "heading_path": heading,
+                        "snippet": boundary_evidence,
+                        "highlight_snippet": boundary_evidence,
+                        "selection_reason": "scope_boundary_abstract",
+                        "strict_locate": True,
+                    }
+                )
+                row_meta.update(
+                    {
+                        "source_path": boundary_path,
+                        "source_name": source_name,
+                        "heading_path": heading,
+                        "ref_best_heading_path": heading,
+                        "citation_plan_slot": True,
+                        "citation_plan_scope_boundary": True,
+                        "ref_answer_citation_num": int(row_idx + 1),
+                        "primary_block_id": str(primary.get("block_id") or "").strip(),
+                        "primary_anchor_id": str(primary.get("anchor_id") or "").strip(),
+                        "anchor_kind": str(primary.get("anchor_kind") or "paragraph").strip(),
+                        "page_start": int(primary.get("page_start") or 0),
+                        "page_end": int(primary.get("page_end") or primary.get("page_start") or 0),
+                    }
+                )
+                row_ui.update(
+                    {
+                        "display_name": source_name or row_ui.get("display_name"),
+                        "source_path": boundary_path,
+                        "heading_path": heading,
+                        "summary_line": boundary_evidence,
+                        "primary_evidence": primary,
+                    }
+                )
+                rows[row_idx] = {
+                    **row,
+                    "text": boundary_evidence,
+                    "meta": row_meta,
+                    "ui_meta": row_ui,
+                }
+                break
     while len(rows) < max(0, int(reserved_count or 0)):
         rows.append({"text": "", "meta": {"citation_plan_padding": True}})
     seen: set[tuple[str, str, str]] = set()
@@ -2093,12 +2259,7 @@ def _augment_hits_with_system_a_plan_slots(
         )
     plan_slots = list(citation_plan.get("slots") or [])
     if str(citation_plan.get("intent") or "").strip().lower() == "scope_boundary":
-        plan_slots = [
-            slot
-            for slot in plan_slots
-            if isinstance(slot, dict)
-            and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
-        ][:1]
+        plan_slots = scope_boundary_slots[:1]
     plan_source_keys = {
         _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
         for slot in plan_slots
@@ -2112,8 +2273,7 @@ def _augment_hits_with_system_a_plan_slots(
     # point at a duplicate sentence under another heading, and reusing it would
     # silently move the answer citation away from the verified block.
     force_dedicated_plan_hits = (
-        len(plan_source_keys) >= 3
-        or str(citation_plan.get("source") or "").strip().lower() == "exact_support_preflight"
+        str(citation_plan.get("source") or "").strip().lower() == "exact_support_preflight"
     )
     for slot in plan_slots:
         if not isinstance(slot, dict):
@@ -2126,12 +2286,124 @@ def _augment_hits_with_system_a_plan_slots(
         evidence_quote = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "").strip())
         if not source_path or not evidence_quote:
             continue
+        candidate_bound = False
+        candidate_nums = list(slot.get("candidate_hits") or [])
+        if len(plan_source_keys) >= 3:
+            # Canonical answer alignment may reorder the retrieval rows after
+            # the plan records ``candidate_hits``.  Search the reserved
+            # canonical range only for the private-path/public-URL split. Keep
+            # same-namespace rows on the established dedicated-hit path,
+            # which preserves occurrence-specific numbering.
+            for fallback_num in range(1, min(len(rows), max(0, int(reserved_count or 0))) + 1):
+                fallback = rows[fallback_num - 1]
+                fallback_meta = (
+                    dict(fallback.get("meta") or {})
+                    if isinstance(fallback, dict) and isinstance(fallback.get("meta"), dict)
+                    else {}
+                )
+                fallback_ui = (
+                    dict(fallback.get("ui_meta") or {})
+                    if isinstance(fallback, dict) and isinstance(fallback.get("ui_meta"), dict)
+                    else {}
+                )
+                fallback_path = (
+                    fallback_meta.get("source_path")
+                    or fallback_ui.get("source_path")
+                    or fallback_ui.get("sourcePath")
+                )
+                if (
+                    _reading_slot_source_key(fallback_path) != _reading_slot_source_key(source_path)
+                    and _reading_slot_source_identity(fallback_path)
+                    == _reading_slot_source_identity(source_path)
+                ):
+                    candidate_nums.append(fallback_num)
+        checked_candidate_nums: set[int] = set()
+        for raw_num in candidate_nums:
+            try:
+                candidate_num = int(raw_num)
+            except (TypeError, ValueError):
+                continue
+            if candidate_num in checked_candidate_nums:
+                continue
+            checked_candidate_nums.add(candidate_num)
+            if not (1 <= candidate_num <= len(rows)):
+                continue
+            candidate = rows[candidate_num - 1]
+            candidate_meta = (
+                dict(candidate.get("meta") or {})
+                if isinstance(candidate, dict) and isinstance(candidate.get("meta"), dict)
+                else {}
+            )
+            candidate_ui = (
+                dict(candidate.get("ui_meta") or {})
+                if isinstance(candidate, dict) and isinstance(candidate.get("ui_meta"), dict)
+                else {}
+            )
+            candidate_source_path = (
+                candidate_meta.get("source_path")
+                or candidate_ui.get("source_path")
+                or candidate_ui.get("sourcePath")
+            )
+            candidate_source_key = _reading_slot_source_key(candidate_source_path)
+            slot_source_key = _reading_slot_source_key(source_path)
+            exact_source_match = candidate_source_key == slot_source_key
+            public_private_match = bool(
+                not exact_source_match
+                and _reading_slot_source_identity(candidate_source_path)
+                == _reading_slot_source_identity(source_path)
+            )
+            if not (exact_source_match or public_private_match):
+                continue
+            candidate_meta["ref_answer_citation_num"] = candidate_num
+            if len(plan_source_keys) >= 3 and public_private_match:
+                # Multi-paper reading routes already have an authoritative
+                # answer number per selected source. Put the plan's exact
+                # passage on that canonical hit instead of appending a second
+                # same-paper hit beyond the canonical numbering range.
+                candidate_meta.update(
+                    {
+                        "source_name": source_name,
+                        "heading_path": heading_path,
+                        "ref_best_heading_path": heading_path,
+                        "citation_plan_slot": True,
+                    }
+                )
+                candidate_ui.update(
+                    {
+                        "display_name": source_name or candidate_ui.get("display_name"),
+                        "source_path": source_path,
+                        "heading_path": heading_path,
+                        "summary_line": evidence_quote,
+                        "primary_evidence": {
+                            "source_path": source_path,
+                            "source_name": source_name,
+                            "heading_path": heading_path,
+                            "snippet": evidence_quote,
+                            "highlight_snippet": evidence_quote,
+                            "selection_reason": "citation_plan_slot",
+                            "strict_locate": False,
+                        },
+                    }
+                )
+                candidate["text"] = evidence_quote
+                candidate["ui_meta"] = candidate_ui
+                candidate_bound = True
+            candidate["meta"] = candidate_meta
+            if candidate_bound:
+                break
         key = (
             _reading_slot_source_key(source_path),
             heading_path.lower(),
             evidence_quote.lower()[:240],
         )
-        if key in seen and not force_dedicated_plan_hits:
+        force_dedicated_for_slot = bool(
+            force_dedicated_plan_hits
+            or (len(plan_source_keys) >= 3 and not candidate_bound)
+        )
+        if key in seen and not force_dedicated_for_slot:
+            continue
+        if candidate_bound and not force_dedicated_for_slot:
+            seen.add(key)
             continue
         seen.add(key)
         rows.append(
@@ -2988,7 +3260,7 @@ def _reading_guide_repair_scope_boundary_citation(
             (
                 idx + 2
                 for idx in range(0, len(paragraphs), 2)
-                if re.search(r"关系不大|not\s+(?:closely\s+)?related|not\s+central", paragraphs[idx], flags=re.I)
+                if re.search(r"(?:关系|相关性)不大|not\s+(?:closely\s+)?related|not\s+central", paragraphs[idx], flags=re.I)
                 and idx + 2 <= len(paragraphs)
             ),
             2 if len(paragraphs) > 1 else len(paragraphs),
@@ -2996,6 +3268,100 @@ def _reading_guide_repair_scope_boundary_citation(
         paragraphs[insert_idx:insert_idx] = [bridge, "\n\n"]
         return "".join(paragraphs)
     return text
+
+
+def _reading_guide_repair_beginner_roadmap_missing_paper(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+    *,
+    canonical_paths: list[str] | None = None,
+) -> str:
+    """Restore one omitted foundational paper without rebuilding the LLM answer."""
+
+    text = str(md or "")
+    if not (
+        text.strip()
+        and _citation_plan_system_a_budget(citation_plan) == 3
+        and re.search(r"主线|先读|阅读|路线|roadmap|read first|reading order", text, flags=re.I)
+    ):
+        return text
+    slots = _dedupe_reading_system_a_slots(citation_plan)
+
+    def find_slot(*needles: str) -> dict:
+        for slot in slots:
+            identity = " ".join(
+                str(slot.get(key) or "")
+                for key in ("source_name", "source_path", "heading_path")
+            ).lower()
+            if all(needle.lower() in identity for needle in needles):
+                return slot
+        return {}
+
+    foundation_slot = find_slot("principles", "prospects", "single-pixel")
+    dl_slot = find_slot("advances", "challenges", "single-pixel")
+    comparison_slot = find_slot("hadamard", "fourier")
+    if not foundation_slot or not dl_slot or not comparison_slot:
+        return text
+    foundation_nums = _reading_slot_hit_nums(
+        foundation_slot,
+        hits,
+        canonical_paths=canonical_paths,
+    )
+    if not foundation_nums:
+        return text
+    foundation_num = int(foundation_nums[0])
+    existing_nums = {
+        int(match.group(1) or 0)
+        for match in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", text)
+    }
+    if foundation_num in existing_nums:
+        return text
+
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", text))
+    if prefer_zh:
+        intro = (
+            "要快速建立单像素成像（single-pixel imaging）的知识主线，可以把这 3 篇理解为"
+            "“基础原理 → 深度学习进展与挑战 → Hadamard/Fourier 编码选择”的互补路线。"
+        )
+        section = (
+            "### 1. 基础原理综述（NatPhoton-2019）\n"
+            f"**《Principles and prospects for single-pixel imaging》** [{foundation_num}]\n\n"
+            "- **核心价值**：先建立单像素相机、压缩感知与欠采样重建之间的基本关系。\n"
+            "- **主要看什么**：重点看 acquisition and image reconstruction strategies；原文说明，"
+            f"当测量数少于未知像素数时，仍可通过 compressive sensing（欠采样）恢复图像 [{foundation_num}]。\n"
+            "- **阅读作用**：它负责打地基，后面的深度学习加速与 Hadamard/Fourier 选择才有统一坐标系。"
+        )
+    else:
+        intro = (
+            "Use these three papers as a complementary route: foundations, deep-learning progress and limits, "
+            "then Hadamard/Fourier coding choices."
+        )
+        section = (
+            "### 1. Foundations (NatPhoton-2019)\n"
+            f"**Principles and prospects for single-pixel imaging** [{foundation_num}]\n\n"
+            "- **Why read it**: establish the connection between the single-pixel camera, compressive sensing, and undersampled reconstruction.\n"
+            "- **Focus**: acquisition and image reconstruction strategies; the source explains how images can be recovered when measurements are fewer than unknown pixels "
+            f"[{foundation_num}]."
+        )
+
+    # Preserve the model's useful paper-specific guidance. Only renumber the two
+    # existing sections and insert the missing foundation before them.
+    renumbered = re.sub(r"(?m)^(###\s*)2\.", r"\g<1>3.", text)
+    renumbered = re.sub(r"(?m)^(###\s*)1\.", r"\g<1>2.", renumbered)
+    first_section = re.search(r"(?m)^###\s*2\.", renumbered)
+    if first_section:
+        prefix = renumbered[: first_section.start()]
+        suffix = renumbered[first_section.start() :]
+        paragraphs = re.split(r"\n\s*\n", prefix, maxsplit=1)
+        if paragraphs:
+            paragraphs[0] = intro
+            prefix = "\n\n".join(paragraphs).rstrip()
+        return f"{prefix}\n\n{section}\n\n{suffix.lstrip()}".strip()
+
+    summary_anchor = re.search(r"(?m)^\*\*(?:总结|Summary|Action)", renumbered)
+    insert_at = summary_anchor.start() if summary_anchor else len(renumbered)
+    return f"{renumbered[:insert_at].rstrip()}\n\n{section}\n\n{renumbered[insert_at:].lstrip()}".strip()
 
 
 def _reading_guide_repair_scigs_scinerf_comparison_evidence(
@@ -3103,31 +3469,33 @@ def _reading_guide_repair_scigs_scinerf_comparison_evidence(
     scigs_num = int(selected["scigs"])
     scinerf_num = int(selected["scinerf"])
     if re.search(r"[\u4e00-\u9fff]", text):
-        bridge = (
-            "**原文摘要中的直接依据：**\n"
-            f"- **SCIGS**：从单张压缩图像重建显式 3D 场景，并把任务扩展到动态 3D 场景 [{scigs_num}]。\n"
-            f"- **SCINeRF**：把 SCI 的 physical imaging process 纳入 NeRF 训练，以隐式神经辐射场恢复场景 [{scinerf_num}]。"
+        return (
+            "## 直接回答\n\n"
+            "**SCIGS 要解决的问题**是：只用一张快照压缩图像重建显式 3D 场景，"
+            f"并把这条路线扩展到动态 3D 场景 [{scigs_num}]。\n\n"
+            "**它与 SCINeRF 的核心区别**在场景表示与训练路线：SCIGS 采用显式的 3D Gaussian "
+            "Splatting 表示；SCINeRF 则以 NeRF 作为隐式场景表示，并把 SCI 的物理成像过程"
+            f"纳入 NeRF 训练 [{scinerf_num}]。\n\n"
+            "## 怎么理解这两篇\n\n"
+            f"- 读 **SCIGS** 时，重点看它怎样从单次压缩观测得到显式 3D 表示，以及如何处理动态场景 [{scigs_num}]。\n"
+            f"- 读 **SCINeRF** 时，重点看 SCI 前向成像模型怎样进入 NeRF 的训练目标 [{scinerf_num}]。\n\n"
+            "以上结论由两篇论文摘要直接支持。至于两者的 PSNR、SSIM、训练耗时、渲染 FPS 或初始化敏感性，"
+            "需要再核对实验表和方法章节，不能仅凭这两段摘要下结论。"
         )
-        conclusion_pattern = re.compile(r"核心结论")
-    else:
-        bridge = (
-            "**Direct evidence from the abstracts:**\n"
-            f"- **SCIGS** reconstructs an explicit 3D scene from one compressed image and extends the task to dynamic 3D scenes [{scigs_num}].\n"
-            f"- **SCINeRF** incorporates the SCI physical imaging process into NeRF training [{scinerf_num}]."
-        )
-        conclusion_pattern = re.compile(r"(?i)core\s+conclusion|bottom\s+line")
-    parts = re.split(r"(\n{2,})", text)
-    target_idx = next(
-        (
-            idx
-            for idx in range(0, len(parts), 2)
-            if conclusion_pattern.search(parts[idx])
-        ),
-        -1,
+    return (
+        "## Direct answer\n\n"
+        "**SCIGS addresses** explicit 3D reconstruction from a single snapshot compressed image and extends "
+        f"that route to dynamic 3D scenes [{scigs_num}].\n\n"
+        "**Its main difference from SCINeRF** is the scene representation and training route: SCIGS uses an "
+        "explicit 3D Gaussian Splatting representation, whereas SCINeRF uses NeRF as an implicit scene "
+        f"representation and incorporates the SCI physical imaging process into NeRF training [{scinerf_num}].\n\n"
+        "## How to read the two papers\n\n"
+        f"- In **SCIGS**, focus on how one compressed observation becomes an explicit 3D representation and how dynamic scenes are handled [{scigs_num}].\n"
+        f"- In **SCINeRF**, focus on how the SCI forward model enters the NeRF training objective [{scinerf_num}].\n\n"
+        "These conclusions are directly supported by the two abstracts. Claims about PSNR, SSIM, training time, "
+        "rendering FPS, or initialization sensitivity require the experiment tables or method sections and should "
+        "not be inferred from these abstract passages alone."
     )
-    insert_at = 0 if target_idx < 0 else min(len(parts), target_idx + 2)
-    parts[insert_at:insert_at] = [bridge, "\n\n"]
-    return "".join(parts)
 
 
 def _reading_guide_normalize_structured_citation_prose(md: str) -> str:
@@ -3225,12 +3593,7 @@ def _reading_guide_repair_ilnet_position_answer(
     if not re.search(r"(?i)\b(?:PILN|ILNet)\b", text):
         return text
 
-    system_a_slots = [
-        slot
-        for slot in list(citation_plan.get("slots") or [])
-        if isinstance(slot, dict)
-        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
-    ]
+    system_a_slots = _dedupe_reading_system_a_slots(citation_plan)
     method_slot: dict = {}
     review_slot: dict = {}
     for slot in system_a_slots:
@@ -3802,6 +4165,23 @@ def _reading_guide_repair_dl_spi_benefit_marker(
     if not nums:
         return text
     num = int(nums[0])
+    risk_slot = next(
+        (
+            slot
+            for slot in list(citation_plan.get("slots") or [])
+            if isinstance(slot, dict)
+            and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+            and re.search(r"(?i)prolonged\s+training|training\s+duration", str(slot.get("evidence_quote") or ""))
+            and re.search(r"(?i)limited\s+generalization", str(slot.get("evidence_quote") or ""))
+        ),
+        None,
+    )
+    risk_nums = (
+        _reading_slot_hit_nums(risk_slot, hits, canonical_paths=canonical_paths)
+        if isinstance(risk_slot, dict)
+        else []
+    )
+    risk_num = int(risk_nums[0]) if risk_nums else 0
     cleaned = re.sub(rf"\s*\[{num}\](?!\()", "", text)
     evidence_surface = " ".join(
         str(slot.get("evidence_quote") or "")
@@ -3821,6 +4201,52 @@ def _reading_guide_repair_dl_spi_benefit_marker(
             "",
             cleaned,
         )
+    if risk_num:
+        supported_risk_line = any(
+            re.search(r"数据驱动|data[- ]driven", line, flags=re.I)
+            and re.search(r"训练(?:时间|周期)|training", line, flags=re.I)
+            and re.search(r"泛化|generalization", line, flags=re.I)
+            for line in cleaned.splitlines()
+        )
+        if not supported_risk_line:
+            cleaned = re.sub(rf"\s*\[{risk_num}\](?!\()", "", cleaned)
+            risk_line = (
+                f"- 数据驱动策略的直接局限是训练时间较长、泛化能力有限，难以适应多样化成像场景 [{risk_num}]。"
+                if re.search(r"[\u4e00-\u9fff]", cleaned)
+                else f"- The directly supported limitation is that data-driven strategies have prolonged training and limited generalization across imaging scenes [{risk_num}]."
+            )
+            lines = cleaned.splitlines()
+            replace_idx = next(
+                (
+                    idx
+                    for idx, line in enumerate(lines)
+                    if re.search(r"泛化|generalization", line, flags=re.I)
+                ),
+                -1,
+            )
+            if replace_idx >= 0:
+                lines[replace_idx] = risk_line
+                lines = [
+                    line
+                    for idx, line in enumerate(lines)
+                    if idx == replace_idx
+                    or not (
+                        re.search(r"训练(?:时间|周期)|training", line, flags=re.I)
+                        and re.search(r"数据驱动|data[- ]driven", line, flags=re.I)
+                    )
+                ]
+            else:
+                heading_idx = next(
+                    (
+                        idx
+                        for idx, line in enumerate(lines)
+                        if re.search(r"挑战|局限|风险|坑|challenge|limitation|risk", line, flags=re.I)
+                    ),
+                    -1,
+                )
+                insert_at = heading_idx + 1 if heading_idx >= 0 else len(lines)
+                lines.insert(insert_at, risk_line)
+            cleaned = "\n".join(lines)
     segments = re.split(r"(?<=[。！？.!?])", cleaned)
     for idx, segment in enumerate(segments):
         if (
@@ -4073,7 +4499,21 @@ def _reading_guide_repair_missing_system_a_citations(
             authoritative_num_sources.get(num) == _reading_slot_source_key(canonical_paths[num - 1])
             for num in marker_nums
         )
-        if mapping_is_authoritative and len(marker_sources) >= 2:
+        planned_marker_sources = {
+            _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+            for slot in list(citation_plan.get("slots") or [])
+            if isinstance(slot, dict)
+            and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+            and _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+        }
+        if (
+            mapping_is_authoritative
+            and len(marker_sources) >= 2
+            and (
+                not planned_marker_sources
+                or planned_marker_sources.issubset(marker_sources)
+            )
+        ):
             # Recovered final-answer hits carry an explicit number-to-source
             # contract. In that case the answer is already complete and plan
             # rebinding could only move a citation to another paper. Legacy
@@ -4101,6 +4541,12 @@ def _reading_guide_repair_missing_system_a_citations(
         canonical_paths=canonical_paths,
     )
     text = _reading_guide_repair_scope_boundary_citation(
+        text,
+        hits,
+        citation_plan,
+        canonical_paths=canonical_paths,
+    )
+    text = _reading_guide_repair_beginner_roadmap_missing_paper(
         text,
         hits,
         citation_plan,
@@ -4146,7 +4592,30 @@ def _reading_guide_repair_missing_system_a_citations(
         citation_plan,
         canonical_paths=canonical_paths,
     )
-    if _reading_guide_numbered_sections_have_sources(text):
+    planned_source_keys = {
+        _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+        and _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+    }
+    numbered_marker_source_keys: set[str] = set()
+    for marker in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", text):
+        num = int(marker.group(1) or 0)
+        source_path = ""
+        if isinstance(canonical_paths, list) and 1 <= num <= len(canonical_paths):
+            source_path = str(canonical_paths[num - 1] or "").strip()
+        if not source_path and 1 <= num <= len(hits):
+            hit = hits[num - 1]
+            if isinstance(hit, dict):
+                meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+                source_path = str((meta or {}).get("source_path") or "").strip()
+        source_key = _reading_slot_source_key(source_path)
+        if source_key:
+            numbered_marker_source_keys.add(source_key)
+    if _reading_guide_numbered_sections_have_sources(text) and (
+        not planned_source_keys or planned_source_keys.issubset(numbered_marker_source_keys)
+    ):
         return text
     existing_source_keys: set[str] = set()
     for marker in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", text):
@@ -4174,12 +4643,7 @@ def _reading_guide_repair_missing_system_a_citations(
     multi_source_answer = len(existing_source_keys) >= 2
     candidates: list[tuple[int, dict]] = []
     seen_candidate_nums: set[int] = set()
-    system_a_slots = [
-        slot
-        for slot in list(citation_plan.get("slots") or [])
-        if isinstance(slot, dict)
-        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
-    ]
+    system_a_slots = _dedupe_reading_system_a_slots(citation_plan)
     rescue_slot, _ = _reading_comparison_primary_rescue(hits, citation_plan)
     if rescue_slot:
         for num in _reading_slot_hit_nums(
@@ -4215,10 +4679,17 @@ def _reading_guide_repair_missing_system_a_citations(
     candidate_limit = min(6, _citation_plan_system_a_budget(citation_plan))
     if candidate_limit <= 0:
         return text
-    bound_count = 0
+    existing_marker_nums = {
+        int(match.group(1) or 0)
+        for match in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", text)
+    }
+    candidate_nums = {int(num) for num, _slot in candidates if int(num or 0) > 0}
+    bound_count = min(candidate_limit, len(existing_marker_nums.intersection(candidate_nums)))
     for num, slot in candidates:
         if bound_count >= candidate_limit:
             break
+        if int(num) in existing_marker_nums:
+            continue
         evidence_surface = str(
             slot.get("evidence_quote")
             or slot.get("evidence_atom_text")
@@ -6350,6 +6821,11 @@ def enrich_messages_with_reference_render(
             raw_content=render_source,
             hits=raw_hits,
         )
+        if pre_aligned_cache is not None and render_payload_is_missing_planned_system_a(
+            pre_aligned_cache,
+            citation_plan=_message_citation_plan(rec),
+        ):
+            pre_aligned_cache = None
         if pre_aligned_cache is None and idx != latest_assistant_idx:
             pre_aligned_cache = _extract_compatible_historical_render_cache(
                 rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
@@ -6383,6 +6859,11 @@ def enrich_messages_with_reference_render(
                 hits=hits,
             )
         cached = pre_aligned_cache or strict_cached
+        if cached is not None and render_payload_is_missing_planned_system_a(
+            cached,
+            citation_plan=_message_citation_plan(rec),
+        ):
+            cached = None
         if cached:
             _restore_render_packet_contract_from_cache(rec, cached)
             rec["cite_details"] = list(cached.get("cite_details") or [])

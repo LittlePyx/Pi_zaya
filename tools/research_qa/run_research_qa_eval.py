@@ -131,7 +131,31 @@ def _case_requires_full_refs_wait(expected: dict[str, Any] | None) -> bool:
         or contract.get("requireRefsReady")
         or contract.get("requirePolishStatus")
         or contract.get("requireCitationShelfQuality")
+        or contract.get("requireCitationCardQuality")
     )
+
+
+def _refs_payload_is_converged_for_case(
+    refs_payload: Any,
+    *,
+    user_msg_id: int | str | None,
+    expected: dict[str, Any] | None,
+    forbidden_phrases: list[str] | None = None,
+) -> bool:
+    if not _refs_payload_is_full(refs_payload, user_msg_id=user_msg_id):
+        return False
+    if not _case_requires_full_refs_wait(expected):
+        return True
+    # A persisted reference pack can become ``full`` just before the answer's
+    # final citation packet is committed. During that short interval the API
+    # still returns the older generic card copy. Treat card quality as part of
+    # convergence so real-user checks do not stop on that transient snapshot.
+    card_quality = _ref_card_quality_summary(
+        refs_payload,
+        list(forbidden_phrases or []),
+        user_msg_id=user_msg_id,
+    )
+    return bool(card_quality.get("count")) and not _ref_card_quality_failures(card_quality)
 
 
 def _generation_should_wait_for_full_refs(
@@ -1813,12 +1837,28 @@ def run_case(
         else {}
     )
     refs_payload = _get_json(base_url, f"/api/references/conversation/{parse.quote(conv_id)}", timeout_s)
+    # The product refreshes the converged message packet as soon as generation
+    # completes, then requests the reference shelf again. Reproduce that order:
+    # the first refs read makes full evidence available, the message read binds
+    # answer citations, and the second refs read aligns card copy to those cites.
+    _get_json(
+        base_url,
+        f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1",
+        timeout_s,
+    )
+    refs_payload = _get_json(base_url, f"/api/references/conversation/{parse.quote(conv_id)}", timeout_s)
     cards_complete_ms: float | None = None
-    if _refs_payload_is_full(refs_payload, user_msg_id=gen.get("user_msg_id")):
+    expected = case.get("expected") if isinstance(case.get("expected"), dict) else {}
+    if _refs_payload_is_converged_for_case(
+        refs_payload,
+        user_msg_id=gen.get("user_msg_id"),
+        expected=expected,
+        forbidden_phrases=fixture.forbidden_phrases,
+    ):
         cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
     elif _generation_should_wait_for_full_refs(
         final_payload,
-        case.get("expected") if isinstance(case.get("expected"), dict) else {},
+        expected,
     ):
         card_wait_deadline = time.perf_counter() + min(45.0, max(1.0, float(timeout_s)))
         while time.perf_counter() < card_wait_deadline:
@@ -1828,7 +1868,12 @@ def run_case(
                 f"/api/references/conversation/{parse.quote(conv_id)}",
                 timeout_s,
             )
-            if _refs_payload_is_full(refs_payload, user_msg_id=gen.get("user_msg_id")):
+            if _refs_payload_is_converged_for_case(
+                refs_payload,
+                user_msg_id=gen.get("user_msg_id"),
+                expected=expected,
+                forbidden_phrases=fixture.forbidden_phrases,
+            ):
                 cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
                 break
     # References may refine primary evidence and backfill message render packets;

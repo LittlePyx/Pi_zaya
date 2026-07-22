@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -19,6 +20,207 @@ class _FakeStore:
     def list_message_refs(self, conv_id: str):
         del conv_id
         return self._refs
+
+    def get_messages(self, conv_id: str):
+        del conv_id
+        return []
+
+
+def test_reference_cards_follow_grounded_answer_citations() -> None:
+    source_path = r"F:\db\DL-SPI\DL-SPI.en.md"
+    public_source_path = "kb-source/0/DL-SPI/DL-SPI.en.md"
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {"id": 10, "role": "user", "content": "深度学习给单像素成像带来的好处和坑是什么？"},
+                {
+                    "id": 11,
+                    "role": "assistant",
+                    "content": "answer",
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "citation_route": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "DL-SPI.pdf",
+                                        "heading_path": "Abstract",
+                                        "evidence_quote": "Deep learning provides exceptional reconstruction quality and fast reconstruction speed.",
+                                        "card_takeaway": "深度学习提升重建质量和速度。",
+                                    },
+                                    {
+                                        "citation_route": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "DL-SPI.pdf",
+                                        "heading_path": "Challenges",
+                                        "evidence_quote": "Training is prolonged and generalization is limited.",
+                                        "answer_claim": "训练时间长，且泛化能力有限。",
+                                    },
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    payload = {
+        10: {
+            "prompt": "深度学习给单像素成像带来的好处和坑是什么？",
+            "render_locale": "zh",
+            "hits": [
+                {
+                    "text": "An unrelated neural-network definition.",
+                    "meta": {"source_path": public_source_path},
+                    "ui_meta": {"source_path": public_source_path, "display_name": "DL-SPI.pdf"},
+                },
+                {
+                    "text": "A duplicate hit.",
+                    "meta": {"source_path": public_source_path},
+                    "ui_meta": {"source_path": public_source_path, "display_name": "DL-SPI.pdf"},
+                },
+                {
+                    "text": "An unused retrieval candidate.",
+                    "meta": {"source_path": "kb-source/0/Other/Other.en.md"},
+                    "ui_meta": {
+                        "source_path": "kb-source/0/Other/Other.en.md",
+                        "display_name": "Other.pdf",
+                    },
+                },
+            ],
+        }
+    }
+
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload=payload,
+    )
+
+    hits = out[10]["hits"]
+    assert len(hits) == 1
+    assert len(out[10]["retrieval_hits"]) == 3
+    assert all("Other.pdf" not in str(hit) for hit in hits)
+    ui = hits[0]["ui_meta"]
+    assert "重建质量和速度" in ui["summary_line"]
+    assert "训练时间长" in ui["summary_line"]
+    assert "Abstract" in ui["why_line"]
+    assert "Challenges" in ui["why_line"]
+    assert ui["summary_display_role"] == "guide"
+    assert ui["summary_label"] == "导读"
+    assert ui["summary_title"] == "这条证据说明什么"
+    assert [section["id"] for section in ui["card_view"]["sections"]] == ["summary", "why", "location"]
+
+
+def test_reading_route_cards_use_user_language_and_distinct_source_roles() -> None:
+    prompt = "我刚开始看单像素成像，想先建立主线，应该先读哪几篇？"
+    cards = [
+        references_router._answer_citation_card_copy(
+            [
+                {
+                    "source_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+                    "heading_path": "Acquisition and image reconstruction strategies",
+                    "evidence_quote": (
+                        "Compressed sensing recovers images when the number of measurements "
+                        "is fewer than the total number of unknown pixels."
+                    ),
+                }
+            ],
+            prefer_zh=True,
+            prompt=prompt,
+        ),
+        references_router._answer_citation_card_copy(
+            [
+                {
+                    "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+                    "heading_path": "Introduction",
+                    "evidence_quote": (
+                        "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns; "
+                        "the paper compares imaging efficiency and noise robustness."
+                    ),
+                }
+            ],
+            prefer_zh=True,
+            prompt=prompt,
+        ),
+        references_router._answer_citation_card_copy(
+            [
+                {
+                    "source_name": "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf",
+                    "heading_path": "Abstract",
+                    "evidence_quote": (
+                        "Deep learning brings exceptional reconstruction quality and fast "
+                        "reconstruction speed to single-pixel imaging."
+                    ),
+                }
+            ],
+            prefer_zh=True,
+            prompt=prompt,
+        ),
+    ]
+
+    assert all(re.search(r"[\u4e00-\u9fff]", summary) for summary, _why in cards)
+    assert "采集与重建基础" in cards[0][1]
+    assert "两种经典调制方案" in cards[1][1]
+    assert "学习型方法" in cards[2][1]
+    assert len({why for _summary, why in cards}) == 3
+
+
+def test_reference_cards_stay_pending_until_planned_answer_citations_are_ready() -> None:
+    source_path = r"F:\db\Paper\Paper.en.md"
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {"id": 20, "role": "user", "content": "What does the paper show?"},
+                {
+                    "id": 21,
+                    "role": "assistant",
+                    "content": "Answer still converging.",
+                    "meta": {
+                        "answer_quality": {
+                            "citation_plan": {
+                                "slots": [
+                                    {
+                                        "preferred_system": "system_a",
+                                        "source_path": source_path,
+                                    }
+                                ]
+                            }
+                        },
+                        "paper_guide_contracts": {"render_packet": {"cite_details": []}},
+                    },
+                },
+            ]
+
+    payload = {
+        20: {
+            "render_status": "full",
+            "payload_mode": "full",
+            "hits": [
+                {
+                    "meta": {"source_path": "kb-source/0/Paper/Paper.en.md"},
+                    "ui_meta": {
+                        "display_name": "Paper.pdf",
+                        "summary_line": "Generic card copy that should not end polling.",
+                        "why_line": "",
+                    },
+                }
+            ],
+        }
+    }
+
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload=payload,
+    )
+
+    assert out[20]["enrichment_pending"] is True
+    assert out[20]["answer_citation_overlay_pending"] is True
 
 
 def test_persist_rendered_refs_payload_drops_previous_nested_render(monkeypatch):

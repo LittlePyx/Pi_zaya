@@ -4375,12 +4375,12 @@ def test_reading_guide_repairs_uncited_source_definition_from_abstract(tmp_path:
         canonical_paths=[str(scigs_path), str(scinerf_path)],
     )
 
-    assert repaired.startswith("**Direct evidence from the abstracts:**")
-    assert "SCIGS** reconstructs an explicit 3D scene" in repaired
+    assert repaired.startswith("## Direct answer")
+    assert "SCIGS addresses** explicit 3D reconstruction" in repaired
     assert "dynamic 3D scenes [3]" in repaired
-    assert "SCINeRF** incorporates the SCI physical imaging process into NeRF training [4]" in repaired
-    assert "SCIGS can recover a dynamic 3D scene [1]" in repaired
-    assert "SCINeRF uses an implicit NeRF representation." in repaired
+    assert "SCI physical imaging process into NeRF training [4]" in repaired
+    assert "SCIGS can recover a dynamic 3D scene [1]" not in repaired
+    assert "not be inferred from these abstract passages alone" in repaired
     assert len(hits) == 4
     assert all(hit["meta"]["citation_plan_claim_abstract"] is True for hit in hits[2:])
     assert all("Abstract" in hit["meta"]["heading_path"] for hit in hits[2:])
@@ -4999,6 +4999,130 @@ def test_system_a_plan_slots_create_distinct_same_paper_evidence_hits():
     )
     assert _reading_slot_hit_nums(benefit_slot, reserved, canonical_paths=[source_path] * 3) == [4]
     assert _reading_slot_hit_nums(risk_slot, reserved, canonical_paths=[source_path] * 3) == [5]
+
+
+def test_system_a_plan_slot_marks_existing_candidate_with_authoritative_number():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "simple-baselines.en.md"
+    hits = [
+        {
+            "text": "SIDD PSNR: Baseline ours = 40.30; NAFNet ours = 40.30",
+            "meta": {"source_path": source_path},
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "candidate_hits": [1],
+                "evidence_quote": "SIDD PSNR: Baseline ours = 40.30; NAFNet ours = 40.30",
+            }
+        ]
+    }
+
+    augmented = _augment_hits_with_system_a_plan_slots(hits, plan, reserved_count=1)
+
+    assert augmented[0]["meta"]["ref_answer_citation_num"] == 1
+
+
+def test_system_a_canonical_number_matches_public_projected_source_path(monkeypatch):
+    from api.chat_render import _annotate_inpaper_citations_with_hover_meta
+
+    monkeypatch.setattr("ui.refs_renderer._is_temp_source_path", lambda _path: False)
+    absolute_path = (
+        r"F:\library\ECCV-2022-Simple Baselines for Image Restoration"
+        r"\ECCV-2022-Simple Baselines for Image Restoration.en.md"
+    )
+    public_path = (
+        "kb-source/0/ECCV-2022-Simple Baselines for Image Restoration/"
+        "ECCV-2022-Simple Baselines for Image Restoration.en.md"
+    )
+    hits = [
+        {
+                "text": (
+                    "Table 6. SIDD PSNR: Restormer = 40.02; "
+                    "Baseline ours = 40.30; NAFNet ours = 40."
+                ),
+                "meta": {
+                "source_path": public_path,
+                "source_name": "Simple Baselines for Image Restoration",
+                "heading_path": "5 Experiments / 5.2 Applications",
+                    "primary_block_id": "blk-table-6",
+                    "primary_anchor_id": "tb-6",
+                    "ref_snippets": [
+                        "Table 6. SIDD PSNR: Restormer = 40.02; "
+                        "Baseline ours = 40.30; NAFNet ours = 40.30"
+                    ],
+                },
+        }
+    ]
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Restormer PSNR is 40.02 dB [1].",
+        hits,
+        canonical_paths=[absolute_path],
+        citation_plan={"budget": {"system_a": 1, "system_b": 0}},
+        render_locale="zh",
+    )
+
+    assert "[1](#" in rendered
+    assert len(details) == 1
+    assert details[0]["citation_route"] == "system_a"
+    assert details[0]["binding_status"] == "grounded"
+    assert details[0]["source_path"] == public_path
+    assert "Baseline ours = 40.30" in details[0]["card_evidence"]
+
+
+def test_reading_guide_deduplicates_equivalent_raw_and_normalized_table_slots():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    source_path = "db/Simple-Baselines/Simple-Baselines.en.md"
+    heading = "5 Experiments / 5.2 Applications"
+    normalized = (
+        "Table 6. SIDD PSNR: Restormer [39] = 40.02; "
+        "Baseline ours = 40.30; NAFNet ours = 40.30"
+    )
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": heading,
+                "evidence_quote": (
+                    "| Method | Restormer [39] | Baseline ours | NAFNet ours | "
+                    "| --- | --- | --- | --- | | PSNR | 40.02 | 40.30 | 40.30 |"
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": heading,
+                "evidence_quote": normalized,
+            },
+        ],
+    }
+    hits = _augment_hits_with_system_a_plan_slots(
+        [{"text": normalized, "meta": {"source_path": source_path, "heading_path": heading}}],
+        plan,
+        reserved_count=1,
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        "Baseline (ours) 和 NAFNet (ours) 的 SIDD PSNR 均为 40.30，Restormer 为 40.02。",
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=[source_path],
+    )
+
+    assert repaired.count("[") == 1
+    assert "[1]" in repaired
 
 
 def test_reading_guide_does_not_add_duplicate_plan_slot_citations_to_multi_source_answer():
@@ -5635,7 +5759,8 @@ def test_reading_guide_repair_combines_adjacent_risks_supported_by_one_evidence_
         citation_plan=plan,
     )
 
-    assert "训练时间长：数据驱动策略的训练周期较长；泛化能力有限：难以有效适应多样化的成像场景 [7]。" in repaired
+    assert "数据驱动策略的直接局限是训练时间较长、泛化能力有限" in repaired
+    assert "- 训练时间长" not in repaired
     assert "\n- 泛化能力有限" not in repaired
     risk_detail = next(item for item in details if int(item.get("num") or 0) == 7)
     assert "训练" in str(risk_detail.get("answer_claim") or "")
@@ -5705,7 +5830,7 @@ def test_reading_guide_repair_combines_separated_data_training_and_generalizatio
         citation_plan=plan,
     )
 
-    assert "数据驱动策略的训练时间较长" in repaired
+    assert "数据驱动策略的直接局限是训练时间较长" in repaired
     assert "泛化能力有限" in repaired
     risk_detail = next(
         item
@@ -6532,7 +6657,7 @@ def test_reading_guide_repair_bridges_perovskite_device_scope_to_chinese_claim()
     )
 
     assert "dual-cavity perovskite" in repaired
-    assert "lasing 研究，而不是单像素成像方法 [2]" in repaired
+    assert "lasing 研究，而不是单像素成像方法 [1]" in repaired
     _rendered, details = _annotate_inpaper_citations_with_hover_meta(
         repaired,
         hits,
@@ -6576,6 +6701,75 @@ def test_reading_guide_repair_bridges_perovskite_device_scope_to_chinese_claim()
     }
     assert "dual-cavity perovskite" in concise_repaired
     assert _should_link_inpaper_citations_for_message(rec=rec, content=answer, hits=hits)
+
+
+def test_beginner_roadmap_restores_omitted_foundational_paper_without_rebuilding_answer():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    paths = ["dl-review.en.md", "spi-prospects.en.md", "hsi-fsi.en.md"]
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[0],
+                "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+                "heading_path": "Abstract",
+                "evidence_quote": "Deep learning improves reconstruction quality and speed.",
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[1],
+                "source_name": "Principles and prospects for single-pixel imaging",
+                "heading_path": "Acquisition and image reconstruction strategies",
+                "evidence_quote": "Images can be recovered when measurements are fewer than unknown pixels.",
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[2],
+                "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                "heading_path": "Introduction",
+                "evidence_quote": "HSI and FSI are compared in efficiency and noise robustness.",
+                "candidate_hits": [3],
+            },
+        ],
+    }
+    hits = _augment_hits_with_system_a_plan_slots(
+        [
+            {"text": "DL evidence", "meta": {"source_path": paths[0]}},
+            {"text": "Foundation evidence", "meta": {"source_path": paths[1]}},
+            {"text": "Comparison evidence", "meta": {"source_path": paths[2]}},
+        ],
+        plan,
+        reserved_count=3,
+    )
+    answer = (
+        "要快速建立单像素成像的知识主线，建议重点阅读 3 篇。\n\n"
+        "### 1. 深度学习综述\nLPR 提供进展与局限 [1]。\n\n"
+        "### 2. 编码对比\nHadamard 与 Fourier 的区别 [3]。\n\n"
+        "**总结行动建议**：按顺序阅读。"
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=paths,
+    )
+
+    assert "Principles and prospects for single-pixel imaging" in repaired
+    assert "compressive sensing" in repaired
+    assert "[4]" in repaired
+    assert "[6]" in repaired
+    assert "### 2. 深度学习综述" in repaired
+    assert "### 3. 编码对比" in repaired
 
 
 def test_reading_guide_repair_ignores_unrelated_same_paper_method_slot():
@@ -6948,6 +7142,161 @@ def test_answer_aligned_ref_primary_becomes_page_aware_citation_plan_hit():
     assert hits[0]["ui_meta"]["primary_evidence"]["page_start"] == 2
 
 
+def test_answer_aligned_ref_primary_preserves_multi_claim_same_paper_slots():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/DL-SPI/DL-SPI.en.md"
+    benefit = "Deep learning provides exceptional reconstruction quality and fast reconstruction speed."
+    risk = "Data-driven methods have prolonged training duration and limited generalization."
+    original = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {"preferred_system": "system_a", "source_path": source_path, "evidence_quote": benefit},
+            {"preferred_system": "system_a", "source_path": source_path, "evidence_quote": risk},
+        ],
+    }
+
+    resolved = _citation_plan_with_ref_primary(
+        original,
+        {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "Neural Network Basics",
+                "snippet": "Artificial neural networks contain input, hidden, and output layers.",
+            }
+        },
+    )
+
+    assert resolved["slots"] == original["slots"]
+
+
+def test_answer_aligned_ref_primary_preserves_multi_paper_reading_role_slots():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    slots = [
+        {
+            "preferred_system": "system_a",
+            "source_path": f"db/paper-{idx}/paper-{idx}.en.md",
+            "heading_path": heading,
+            "evidence_quote": evidence,
+        }
+        for idx, heading, evidence in (
+            (1, "Abstract", "Deep learning improves reconstruction quality and speed."),
+            (2, "Acquisition strategies", "Compressed sensing recovers from fewer measurements."),
+            (3, "Introduction", "HSI and FSI are compared in efficiency and noise robustness."),
+        )
+    ]
+    original = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": slots,
+    }
+
+    resolved = _citation_plan_with_ref_primary(
+        original,
+        {
+            "primary_evidence": {
+                "source_path": "db/paper-3/paper-3.en.md",
+                "heading_path": "3.2 Experiments",
+                "snippet": "The target uses 4 x 4 pixel binning.",
+                "block_id": "blk-experiment",
+                "anchor_id": "p-experiment",
+                "strict_locate": True,
+            }
+        },
+    )
+
+    assert resolved["slots"] == slots
+
+
+def test_multi_paper_plan_rebinds_reordered_public_hits_by_source():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    private_paths = [
+        f"F:/repo/db/paper-{idx}/paper-{idx}.en.md"
+        for idx in range(1, 4)
+    ]
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": private_paths[idx - 1],
+                "source_name": f"paper-{idx}",
+                "heading_path": f"Planned section {idx}",
+                "evidence_quote": f"Planned evidence for paper {idx}.",
+                "candidate_hits": [idx],
+            }
+            for idx in range(1, 4)
+        ],
+    }
+    # Canonical answer alignment reordered the hits after candidate_hits were
+    # recorded, and persisted only public source URLs.
+    hits = [
+        {
+            "text": f"Weak passage from paper {idx}.",
+            "meta": {
+                "source_path": f"kb-source/0/paper-{idx}/paper-{idx}.en.md",
+                "heading_path": "Unrelated experiment",
+            },
+            "ui_meta": {},
+        }
+        for idx in (2, 3, 1)
+    ]
+
+    rebound = _augment_hits_with_system_a_plan_slots(hits, plan, reserved_count=3)
+
+    assert len(rebound) == 3
+    for idx, hit in zip((2, 3, 1), rebound):
+        assert hit["meta"]["citation_plan_slot"] is True
+        assert hit["meta"]["heading_path"] == f"Planned section {idx}"
+        assert hit["text"] == f"Planned evidence for paper {idx}."
+        assert hit["ui_meta"]["primary_evidence"]["selection_reason"] == "citation_plan_slot"
+
+
+def test_existing_special_system_a_marker_counts_toward_plan_budget():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    source_path = "db/DL-SPI/DL-SPI.en.md"
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Challenges",
+                "evidence_quote": "Data-driven methods have prolonged training duration and limited generalization.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": "Deep learning provides exceptional reconstruction quality and fast reconstruction speed.",
+            },
+        ],
+    }
+    hits = _augment_hits_with_system_a_plan_slots([], plan)
+    answer = (
+        "好处：深度学习带来更高的重建质量和更快的重建速度。\n\n"
+        "坑：训练时间长，而且泛化能力有限。"
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+    )
+
+    assert repaired.count("[1]") == 1
+    assert repaired.count("[2]") == 1
+    assert "数据驱动策略的直接局限是训练时间较长、泛化能力有限" in repaired
+
+
 def test_exact_support_citation_plan_keeps_resolved_related_work_locator():
     from api.chat_render import _citation_plan_with_ref_primary
 
@@ -7098,7 +7447,7 @@ def test_scigs_comparison_abstract_repair_keeps_appended_citation_numbers(monkey
     }
 
     repaired = _reading_guide_repair_scigs_scinerf_comparison_evidence(
-        "SCIGS 与 SCINeRF 的核心区别。",
+        "SCIGS 与 SCINeRF 的核心区别。\n\nSSIM 0.9137，且推理速度更快。",
         hits,
         plan,
     )
@@ -7113,6 +7462,9 @@ def test_scigs_comparison_abstract_repair_keeps_appended_citation_numbers(monkey
     assert hits[3]["meta"]["ref_answer_citation_num"] == 4
     assert "[3](#" in rendered
     assert "[4](#" in rendered
+    assert "SSIM 0.9137" not in repaired
+    assert "推理速度更快" not in repaired
+    assert "不能仅凭这两段摘要下结论" in repaired
     assert [detail["heading_path"] for detail in details] == ["Abstract", "Abstract"]
 
 

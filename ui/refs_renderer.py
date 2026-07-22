@@ -4404,6 +4404,40 @@ def _assess_system_a_hit_binding(
             "missing_terms": [],
         }
 
+    claim_metrics = {
+        item.lower()
+        for item in re.findall(r"\b(?:psnr|ssim|lpips|fid|fps|macs?|flops?)\b", claim, flags=re.I)
+    }
+    evidence_metrics = {
+        item.lower()
+        for item in re.findall(r"\b(?:psnr|ssim|lpips|fid|fps|macs?|flops?)\b", quote_surface, flags=re.I)
+    }
+    claim_values = set(re.findall(r"(?<![\w.])\d+\.\d+(?![\w.])", claim))
+    evidence_values = set(re.findall(r"(?<![\w.])\d+\.\d+(?![\w.])", quote_surface))
+    shared_metrics = claim_metrics & evidence_metrics
+    shared_values = claim_values & evidence_values
+    # Concise answers to benchmark/table questions often put the marker after a
+    # final comparison sentence.  Their local citation context can therefore be
+    # much shorter than the table evidence.  An exact metric/value pair plus a
+    # named-method overlap is a stronger binding signal than generic text
+    # similarity and should not be discarded as a weak two-keyword match.
+    if shared_metrics and shared_values and keyword_overlap:
+        metric_label = "/".join(sorted(shared_metrics))
+        value_label = "/".join(sorted(shared_values))
+        reason = (
+            f"原文表格与答案包含相同的 {metric_label} 数值（{value_label}），并匹配到同一方法名称。"
+            if prefer_zh
+            else f"The source table and answer share the same {metric_label} value ({value_label}) and method name."
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.9,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": sorted(keyword_overlap | shared_metrics),
+            "missing_terms": [],
+        }
+
     if len(keyword_overlap) >= 2 and (
         claim_similarity >= 0.5
         or claim_keyword_coverage >= 0.75
@@ -4455,6 +4489,59 @@ def _assess_system_a_hit_binding(
         "overlap_terms": sorted(keyword_overlap),
         "missing_terms": sorted(strong_claim_terms - evidence_domains),
     }
+
+
+def _compact_metric_table_evidence(value: str, *, answer_claim: str = "") -> str:
+    """Turn a normalized benchmark row into a short, faithful card quote."""
+
+    text = _clean_evidence_display_text(value, max_len=1600)
+    metric_match = re.search(r"\b(PSNR|SSIM|LPIPS|FID|FPS)\b", text, flags=re.I)
+    if not metric_match:
+        return ""
+    pair_re = re.compile(
+        r"(?:^|[;:])\s*([A-Za-z][A-Za-z0-9 +()_-]{0,48}?)"
+        r"(?:\s*\[\d{1,4}\])?\s*=\s*(-?\d+\.\d+)",
+        flags=re.I,
+    )
+    pairs: list[tuple[str, str]] = []
+    for match in pair_re.finditer(text):
+        method = re.sub(r"\s+", " ", str(match.group(1) or "")).strip(" -:;")
+        value_text = str(match.group(2) or "").strip()
+        if method and value_text:
+            pairs.append((method, value_text))
+    if len(pairs) < 2:
+        return ""
+
+    claim_low = str(answer_claim or "").casefold()
+    selected: list[tuple[str, str]] = [
+        pair
+        for pair in pairs
+        if pair[0].casefold() in claim_low or pair[1] in claim_low
+    ]
+    metric = str(metric_match.group(1) or "").upper()
+    try:
+        target_value = (
+            min(float(value) for _method, value in pairs)
+            if metric in {"LPIPS", "FID"}
+            else max(float(value) for _method, value in pairs)
+        )
+        selected.extend(pair for pair in pairs if abs(float(pair[1]) - target_value) < 1e-9)
+    except (TypeError, ValueError):
+        pass
+    deduped: list[tuple[str, str]] = []
+    for pair in selected:
+        if pair not in deduped:
+            deduped.append(pair)
+    if not deduped:
+        deduped = pairs[:3]
+    deduped = deduped[:4]
+
+    dataset_match = re.search(r"\b(SIDD|GoPro|ImageNet|CIFAR(?:-?10|-?100)?)\b", text, flags=re.I)
+    dataset = f" {dataset_match.group(1)}" if dataset_match else ""
+    facts = ", ".join(f"{method} = {value}" for method, value in deduped)
+    table_match = re.search(r"\bTable\s+(\d+[A-Za-z]?)\b", text, flags=re.I)
+    subject = f"Table {table_match.group(1)}" if table_match else "The table"
+    return f"{subject} shows{dataset} {metric} results: {facts}."
 
 
 def _system_b_upstream_role(context_line: str, ref_rec: dict, *, locale: str = "") -> str:
@@ -4840,7 +4927,15 @@ def _annotate_inpaper_citations_with_hover_meta(
             return best if best_score >= 6.0 else None
 
         def _source_path_key(value: object) -> str:
-            return str(value or "").strip().replace("\\", "/").lower()
+            normalized = str(value or "").strip().replace("\\", "/").casefold()
+            parts = [part for part in normalized.split("/") if part]
+            # Public API payloads replace the absolute corpus prefix with
+            # ``kb-source/<root-id>``.  Keep the document directory and file
+            # name as the stable identity so canonical answer numbering still
+            # resolves after that privacy projection.
+            if len(parts) >= 2:
+                return "/".join(parts[-2:])
+            return normalized
 
         def _hit_context_for_numeric_ref(n: int, source_path: str) -> dict:
             wanted = _source_path_key(source_path)
@@ -5082,8 +5177,8 @@ def _annotate_inpaper_citations_with_hover_meta(
                 or ui_meta_h.get("primaryEvidenceHeadingPath")
                 or ui_meta_h.get("heading_path")
                 or ui_meta_h.get("headingPath")
-                or meta_h.get("heading_path")
                 or meta_h.get("ref_best_heading_path")
+                or meta_h.get("heading_path")
                 or ""
             ).strip()
             evidence_pick = _system_a_pick_best_evidence_candidate(
@@ -5129,6 +5224,27 @@ def _annotate_inpaper_citations_with_hover_meta(
                 or snippet
                 or ""
             ).strip()
+            metric_table_sources = [evidence_quote, str(hit.get("text") or ""), snippet]
+            for key in ("ref_show_snippets", "ref_snippets"):
+                values = meta_h.get(key)
+                if isinstance(values, list):
+                    metric_table_sources.extend(str(item or "") for item in values[:3])
+            compact_table_candidates = [
+                compact
+                for candidate in metric_table_sources
+                for compact in [_compact_metric_table_evidence(candidate, answer_claim=answer_claim)]
+                if compact
+            ]
+            compact_table_evidence = max(
+                compact_table_candidates,
+                key=lambda item: (item.count("="), len(item)),
+                default="",
+            )
+            if compact_table_evidence:
+                evidence_quote = compact_table_evidence
+                ref_best_heading = str(meta_h.get("ref_best_heading_path") or "").strip()
+                if ref_best_heading:
+                    heading = ref_best_heading
             readable_evidence_quote = _pick_readable_evidence_text(
                 evidence_quote,
                 source=src_name,

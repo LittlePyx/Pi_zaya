@@ -212,6 +212,194 @@ def render_payload_is_degraded_for_citations(
     return not render_payload_has_citation_links(payload)
 
 
+def render_payload_is_missing_planned_system_a(
+    payload: MessageRenderPayload | dict | None,
+    *,
+    citation_plan: dict | None,
+) -> bool:
+    """Reject a cached render that dropped an authorized System-A plan.
+
+    The raw model answer may legitimately contain no numeric marker because the
+    renderer binds typed System-A slots after generation.  The older degraded
+    check only considered markers already present in raw text, so a prematurely
+    cached marker-free packet could bypass that binding forever.
+    """
+
+    plan = _dict_or_empty(citation_plan)
+    budget = _dict_or_empty(plan.get("budget"))
+    try:
+        system_a_budget = int(budget.get("system_a") or 0)
+    except (TypeError, ValueError):
+        system_a_budget = 0
+    system_a_slots = [
+        item
+        for item in list(plan.get("slots") or [])
+        if isinstance(item, dict)
+        and str(item.get("preferred_system") or "").strip().lower() != "system_b"
+        and str(item.get("source_path") or item.get("sourcePath") or "").strip()
+        and str(item.get("evidence_quote") or "").strip()
+    ]
+    has_system_a_slot = bool(system_a_slots)
+    if system_a_budget <= 0 or not has_system_a_slot:
+        return False
+    normalized = payload
+    if isinstance(payload, dict):
+        normalized = MessageRenderPayload.from_cache(payload)
+    if not isinstance(normalized, MessageRenderPayload):
+        return True
+    details = list(normalized.cite_details or [])
+    details.extend(_dict_list(_dict_or_empty(normalized.render_packet).get("cite_details")))
+    system_a_details = [
+        item
+        for item in details
+        if isinstance(item, dict)
+        and str(item.get("citation_route") or "").strip().lower() == "system_a"
+    ]
+    if not system_a_details:
+        return True
+
+    def _source_key(value: object) -> str:
+        normalized_path = str(value or "").strip().replace("\\", "/").casefold()
+        parts = [part for part in normalized_path.split("/") if part]
+        return "/".join(parts[-2:]) if len(parts) >= 2 else normalized_path
+
+    def _slot_identity(slot: dict) -> tuple[str, str]:
+        return (
+            _source_key(slot.get("source_path") or slot.get("sourcePath")),
+            str(slot.get("heading_path") or slot.get("headingPath") or "").strip().casefold(),
+        )
+
+    def _has_structured_benchmark_pairs(slot: dict) -> bool:
+        evidence = str(slot.get("evidence_quote") or "")
+        return len(
+            re.findall(
+                r"(?:^|[:,;])\s*[A-Za-z][A-Za-z0-9 +()_-]{0,48}?"
+                r"(?:\s*\[\d{1,4}\])?\s*=\s*-?\d+\.\d+",
+                evidence,
+                flags=re.I,
+            )
+        ) >= 2
+
+    structured_identities = {
+        _slot_identity(slot)
+        for slot in system_a_slots
+        if _has_structured_benchmark_pairs(slot)
+    }
+    if structured_identities:
+        system_a_slots = [
+            slot
+            for slot in system_a_slots
+            if _slot_identity(slot) not in structured_identities
+            or _has_structured_benchmark_pairs(slot)
+        ]
+
+    def _terms(value: object) -> set[str]:
+        return {
+            token.casefold()
+            for token in re.findall(r"[A-Za-z][A-Za-z0-9+.-]{2,}|[\u4e00-\u9fff]{2,8}", str(value or ""))
+            if token.casefold() not in {"the", "and", "for", "with", "from", "table", "paper"}
+        }
+
+    def _matches_planned_evidence(detail: dict, slot: dict) -> bool:
+        if _source_key(detail.get("source_path")) != _source_key(
+            slot.get("source_path") or slot.get("sourcePath")
+        ):
+            return False
+        detail_heading = str(
+            detail.get("heading_path") or detail.get("card_locator") or detail.get("location_label") or ""
+        ).strip().casefold()
+        plan_heading = str(slot.get("heading_path") or slot.get("headingPath") or "").strip().casefold()
+        detail_evidence = str(
+            detail.get("evidence_quote")
+            or detail.get("card_evidence")
+            or detail.get("summary_line")
+            or detail.get("raw")
+            or ""
+        ).strip()
+        if not detail_heading and not detail_evidence:
+            # Preserve compatibility with old, source-only cache records. They
+            # cannot be audited for passage quality but are not known-bad.
+            return True
+        heading_match = bool(
+            plan_heading
+            and detail_heading
+            and (plan_heading in detail_heading or detail_heading in plan_heading)
+        )
+        if plan_heading and detail_heading and not heading_match:
+            return False
+        plan_evidence = str(slot.get("evidence_quote") or "")
+        detail_terms = _terms(detail_evidence)
+        plan_terms = _terms(plan_evidence)
+        metric_match = re.search(r"\b(PSNR|SSIM|LPIPS|FID|FPS)\b", plan_evidence, flags=re.I)
+        benchmark_pairs = [
+            (str(method or "").strip(), float(value))
+            for method, value in re.findall(
+                r"(?:^|[:,;])\s*([A-Za-z][A-Za-z0-9 +()_-]{0,48}?)"
+                r"(?:\s*\[\d{1,4}\])?\s*=\s*(-?\d+\.\d+)",
+                plan_evidence,
+                flags=re.I,
+            )
+        ]
+        if metric_match and len(benchmark_pairs) >= 2:
+            metric_name = str(metric_match.group(1) or "").upper()
+            extreme = (
+                min(value for _method, value in benchmark_pairs)
+                if metric_name in {"LPIPS", "FID"}
+                else max(value for _method, value in benchmark_pairs)
+            )
+            tied_methods = [
+                method
+                for method, value in benchmark_pairs
+                if abs(value - extreme) < 1e-9
+            ]
+            for method in tied_methods:
+                method_terms = _terms(method).difference({"ours", "method", "model"})
+                if method_terms and not method_terms.intersection(detail_terms):
+                    return False
+        plan_numbers = set(re.findall(r"(?<![\w.])-?\d+\.\d+(?![\w.])", plan_evidence))
+        detail_numbers = set(re.findall(r"(?<![\w.])-?\d+\.\d+(?![\w.])", detail_evidence))
+        numeric_match = bool(plan_numbers and detail_numbers and plan_numbers.intersection(detail_numbers))
+        term_overlap = plan_terms.intersection(detail_terms)
+        evidence_match = bool(numeric_match and term_overlap) if plan_numbers else len(term_overlap) >= 2
+        answer_claim = str(detail.get("answer_claim") or detail.get("card_claim") or "")
+        shared_claim_terms = _terms(answer_claim).intersection(plan_terms)
+        shared_claim_terms.difference_update(
+            {
+                "simple", "baselines", "image", "imaging", "restoration", "paper",
+                "results", "result", "table", "experiments", "applications",
+            }
+        )
+        if shared_claim_terms:
+            claim_coverage = len(shared_claim_terms.intersection(detail_terms)) / len(shared_claim_terms)
+            if claim_coverage < 0.85:
+                return False
+        return heading_match or evidence_match
+
+    slots_by_source: dict[str, list[dict]] = {}
+    for slot in system_a_slots:
+        source_key = _source_key(slot.get("source_path") or slot.get("sourcePath"))
+        if source_key:
+            slots_by_source.setdefault(source_key, []).append(slot)
+    if len(slots_by_source) >= 2:
+        # A multi-paper route is complete only when every selected paper keeps
+        # an answer-relevant passage.  The former any-match check let one good
+        # card preserve an otherwise stale cache containing weak passages for
+        # the remaining papers.
+        return any(
+            not any(
+                _matches_planned_evidence(detail, slot)
+                for detail in system_a_details
+                for slot in source_slots
+            )
+            for source_slots in slots_by_source.values()
+        )
+    return not any(
+        _matches_planned_evidence(detail, slot)
+        for detail in system_a_details
+        for slot in system_a_slots
+    )
+
+
 def normalize_render_cache_payload(
     cache: dict | None,
     *,

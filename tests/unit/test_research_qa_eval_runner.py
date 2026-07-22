@@ -11,6 +11,7 @@ from tools.research_qa.run_research_qa_eval import (
     _generation_should_wait_for_full_refs,
     _latency_budget_checks,
     _missing_term_groups,
+    _refs_payload_is_converged_for_case,
     _refs_payload_is_full,
     evaluate_replay_rows,
     load_fixture,
@@ -46,10 +47,54 @@ def test_refs_payload_full_state_rejects_fast_or_pending_cards():
     assert not _refs_payload_is_full({"9": {"payload_mode": "pending", "pending": True}}, user_msg_id=9)
 
 
+def test_refs_payload_convergence_waits_for_answer_aligned_card_copy() -> None:
+    generic = {
+        "9": {
+            "payload_mode": "full",
+            "render_status": "full",
+            "hits": [
+                {
+                    "ui_meta": {
+                        "display_name": "Paper.pdf",
+                        "summary_line": "A grounded summary long enough for the card.",
+                        "why_line": "",
+                    }
+                }
+            ],
+        }
+    }
+    aligned = {
+        "9": {
+            **generic["9"],
+            "hits": [
+                {
+                    "ui_meta": {
+                        "display_name": "Paper.pdf",
+                        "summary_line": "A grounded summary long enough for the card.",
+                        "why_line": "This passage establishes the exact role used by the answer.",
+                    }
+                }
+            ],
+        }
+    }
+
+    assert not _refs_payload_is_converged_for_case(
+        generic,
+        user_msg_id=9,
+        expected={"requireRefsReady": True},
+    )
+    assert _refs_payload_is_converged_for_case(
+        aligned,
+        user_msg_id=9,
+        expected={"requireRefsReady": True},
+    )
+
+
 def test_quality_contract_waits_for_full_reference_cards() -> None:
     assert _case_requires_full_refs_wait({"requireRefsReady": True})
     assert _case_requires_full_refs_wait({"requirePolishStatus": True})
     assert _case_requires_full_refs_wait({"requireCitationShelfQuality": True})
+    assert _case_requires_full_refs_wait({"requireCitationCardQuality": True})
     assert _case_requires_full_refs_wait({"maxCardsCompleteMs": 30000})
     assert not _case_requires_full_refs_wait({"minRefHits": 3})
 

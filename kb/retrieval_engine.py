@@ -1586,7 +1586,21 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
         ("\u8d85\u8868\u9762", "metasurface"),
         ("\u590d\u7528", "multiplexing"),
         ("\u9891\u5206", "frequency-division"),
+        ("基准测试", "benchmark"),
+        ("基准", "benchmark"),
+        ("最高", "highest"),
+        ("最大", "maximum"),
+        ("最低", "lowest"),
+        ("最小", "minimum"),
+        ("模型", "model"),
+        ("并列", "tie"),
     ]
+    ascii_terms = [
+        token
+        for token in re.findall(r"\b[A-Za-z][A-Za-z0-9+._-]{1,}\b", q)
+        if token.lower() not in {"the", "a", "an", "of", "for", "and", "or", "paper", "pdf", "md", "en"}
+    ]
+    terms.extend(ascii_terms[:8])
     for zh, en_term in mapping:
         if zh in q:
             terms.append(en_term)
@@ -2104,6 +2118,35 @@ def _search_hits_with_fallback(
 
     return hits1, scores1, q1, used_trans, query_variants
 
+
+_READING_ROADMAP_QUERY_RE = re.compile(
+    r"(?:刚开始|入门|主线|路线|先读|阅读顺序|哪几篇|"
+    r"\b(?:beginner|getting started|roadmap|reading order|read first|which papers?)\b)",
+    flags=re.I,
+)
+_FOUNDATIONAL_SOURCE_RE = re.compile(
+    r"(?:review|survey|overview|tutorial|principles?|prospects?|foundations?|"
+    r"advances?[- _]and[- _]challenges?)",
+    flags=re.I,
+)
+_COMPARATIVE_SOURCE_RE = re.compile(
+    r"(?:\bversus\b|\bvs\.?\b|comparison|comparative|benchmark)",
+    flags=re.I,
+)
+
+
+def _reading_roadmap_source_role_bonus(prompt_text: str, source_path: str) -> float:
+    """Favor complementary literature roles for a beginner reading route."""
+
+    if not _READING_ROADMAP_QUERY_RE.search(str(prompt_text or "")):
+        return 0.0
+    source_surface = Path(str(source_path or "")).stem.replace("_", " ").replace("-", " ")
+    if _FOUNDATIONAL_SOURCE_RE.search(source_surface):
+        return 18.0
+    if _COMPARATIVE_SOURCE_RE.search(source_surface):
+        return 14.0
+    return 0.0
+
 def _group_hits_by_doc_for_refs(
     hits_raw: list[dict],
     prompt_text: str,
@@ -2131,8 +2174,12 @@ def _group_hits_by_doc_for_refs(
     doc_focus_scores: dict[str, float] = {}
     doc_direct_scores: dict[str, float] = {}
     doc_direct_terms: dict[str, tuple[str, ...]] = {}
+    doc_roadmap_role_scores: dict[str, float] = {}
     anchor_hint = _extract_explicit_anchor_hint(prompt_text or deep_query or "")
     profile = _query_term_profile(prompt_text, deep_query or "")
+    reading_roadmap_query = bool(
+        _READING_ROADMAP_QUERY_RE.search(str(prompt_text or deep_query or ""))
+    )
     _bm25_scores: list[float] = []
     for src, hs in by_doc.items():
         try:
@@ -2170,6 +2217,11 @@ def _group_hits_by_doc_for_refs(
             Path(src).name,
             [str((h.get("text") or "")).strip() for h in hs[:6] if str((h.get("text") or "")).strip()],
         )
+        roadmap_role_bonus = _reading_roadmap_source_role_bonus(
+            prompt_text or deep_query or "",
+            src,
+        )
+        doc_roadmap_role_scores[src] = float(roadmap_role_bonus)
         # Candidate preselection must honor topic qualifiers too. Otherwise a
         # wider full-library pool can fill the bounded document scorer with
         # generic high-BM25 papers before relevant qualified papers are scored.
@@ -2179,7 +2231,8 @@ def _group_hits_by_doc_for_refs(
                 + (1.6 * doc_hint_score)
                 + (1.05 * doc_focus_score)
                 + (1.8 * direct_score)
-                + (4.0 * pre_term_bonus),
+                + (4.0 * pre_term_bonus)
+                + roadmap_role_bonus,
                 src,
             )
         )
@@ -2219,6 +2272,7 @@ def _group_hits_by_doc_for_refs(
         doc_focus_score = float(doc_focus_scores.get(src, 0.0) or 0.0)
         direct_score = float(doc_direct_scores.get(src, 0.0) or 0.0)
         direct_terms = tuple(doc_direct_terms.get(src) or ())
+        roadmap_role_bonus = float(doc_roadmap_role_scores.get(src, 0.0) or 0.0)
         force_anchor_focus = bool(anchor_hint) and (doc_hint_score >= 6.0)
         anchor_focus_query = (
             _build_doc_anchor_focus_query(prompt_text or deep_query or "", src, anchor_hint)
@@ -2578,6 +2632,7 @@ def _group_hits_by_doc_for_refs(
             + (1.15 * doc_focus_score)
             + (1.35 * direct_score)
             + (0.35 * anchor_capped)
+            + roadmap_role_bonus
         )
 
         meta_out = {"source_path": src}
@@ -2612,6 +2667,8 @@ def _group_hits_by_doc_for_refs(
         if direct_score > 0.0:
             meta_out["direct_prompt_match_score"] = float(direct_score)
             meta_out["direct_prompt_match_terms"] = list(direct_terms)
+        if roadmap_role_bonus > 0.0:
+            meta_out["reading_roadmap_role_score"] = float(roadmap_role_bonus)
         if primary_table_text:
             for key in (
                 "structured_kind",
@@ -2678,6 +2735,7 @@ def _group_hits_by_doc_for_refs(
             "term_bonus": term_bonus,
             "focus_bonus": doc_focus_score,
             "direct_prompt": direct_score,
+            "reading_roadmap_role": roadmap_role_bonus,
             "llm": 0.0,
             "why": "",
             "score": combined,
@@ -2714,7 +2772,11 @@ def _group_hits_by_doc_for_refs(
     # one half of the topic (for example, generic deep learning or conventional
     # SPI). Preserve the broad pool when no qualified document exists so a
     # sparse library can still return a clearly bounded fallback.
-    if profile.get("wants_deep_learning") and profile.get("wants_single_pixel"):
+    if (
+        profile.get("wants_deep_learning")
+        and profile.get("wants_single_pixel")
+        and not reading_roadmap_query
+    ):
         qualified_docs = [
             doc
             for doc in docs

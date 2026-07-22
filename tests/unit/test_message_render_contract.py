@@ -8,8 +8,147 @@ from api.message_render_contract import (
     normalize_render_cache_payload,
     project_render_packet_to_record,
     render_payload_is_degraded_for_citations,
+    render_payload_is_missing_planned_system_a,
     strip_legacy_render_fields,
 )
+
+
+def test_render_payload_rejects_missing_planned_system_a() -> None:
+    plan = {
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "paper.en.md",
+                "evidence_quote": "The paper reports faster reconstruction.",
+            }
+        ],
+    }
+
+    assert render_payload_is_missing_planned_system_a(
+        {"rendered_body": "Faster reconstruction.", "cite_details": []},
+        citation_plan=plan,
+    )
+    assert not render_payload_is_missing_planned_system_a(
+        {
+            "cite_details": [
+                {"citation_route": "system_a", "source_path": "paper.en.md"}
+            ]
+        },
+        citation_plan=plan,
+    )
+
+
+def test_render_payload_rejects_system_a_bound_to_wrong_passage() -> None:
+    plan = {
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": r"F:\db\Simple Baselines\Simple Baselines.en.md",
+                "heading_path": "5 Experiments / 5.2 Applications",
+                "evidence_quote": (
+                    "Table 6. SIDD PSNR: Restormer = 40.02; "
+                    "Baseline ours = 40.30; NAFNet ours = 40.30"
+                ),
+            }
+        ],
+    }
+    wrong = {
+        "cite_details": [
+            {
+                "citation_route": "system_a",
+                "source_path": "kb-source/0/Simple Baselines/Simple Baselines.en.md",
+                "heading_path": "5 Experiments / 5.1 Ablations",
+                "evidence_quote": "In PSNR, LN brings 0.46 dB and 3.39 dB on SIDD and GoPro.",
+                "answer_claim": "Baseline and NAFNet tie on SIDD at PSNR 40.30.",
+            }
+        ]
+    }
+    incomplete = {
+        "cite_details": [
+            {
+                "citation_route": "system_a",
+                "source_path": "kb-source/0/Simple Baselines/Simple Baselines.en.md",
+                "heading_path": "5 Experiments / 5.2 Applications",
+                "evidence_quote": "The table shows SIDD PSNR results: Baseline ours = 40.30.",
+                "answer_claim": "Baseline and NAFNet tie on SIDD at PSNR 40.30.",
+            }
+        ]
+    }
+    correct = {
+        "cite_details": [
+            {
+                "citation_route": "system_a",
+                "source_path": "kb-source/0/Simple Baselines/Simple Baselines.en.md",
+                "heading_path": "5 Experiments / 5.2 Applications",
+                "evidence_quote": (
+                    "The table shows SIDD PSNR results: "
+                    "Baseline ours = 40.30, NAFNet ours = 40.30."
+                ),
+                "answer_claim": "Baseline and NAFNet tie on SIDD at PSNR 40.30.",
+            }
+        ]
+    }
+
+    assert render_payload_is_missing_planned_system_a(wrong, citation_plan=plan)
+    assert render_payload_is_missing_planned_system_a(incomplete, citation_plan=plan)
+    assert not render_payload_is_missing_planned_system_a(correct, citation_plan=plan)
+
+
+def test_render_payload_rejects_multi_paper_cache_with_one_weak_card() -> None:
+    plan = {
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": f"F:/repo/db/paper-{idx}/paper-{idx}.en.md",
+                "heading_path": heading,
+                "evidence_quote": evidence,
+            }
+            for idx, heading, evidence in (
+                (1, "Abstract", "Deep learning improves reconstruction quality and speed."),
+                (2, "Acquisition", "Compressed sensing recovers images from fewer measurements."),
+                (3, "Introduction", "HSI uses Hadamard patterns while FSI uses Fourier patterns."),
+            )
+        ],
+    }
+    stale = {
+        "cite_details": [
+            {
+                "citation_route": "system_a",
+                "source_path": "kb-source/0/paper-1/paper-1.en.md",
+                "heading_path": "Abstract",
+                "evidence_quote": "Deep learning improves reconstruction quality and speed.",
+            },
+            {
+                "citation_route": "system_a",
+                "source_path": "kb-source/0/paper-2/paper-2.en.md",
+                "heading_path": "Acquisition",
+                "evidence_quote": "Compressed sensing recovers images from fewer measurements.",
+            },
+            {
+                "citation_route": "system_a",
+                "source_path": "kb-source/0/paper-3/paper-3.en.md",
+                "heading_path": "Experiments",
+                "evidence_quote": "The target uses 4 x 4 pixel binning.",
+            },
+        ]
+    }
+    repaired = {
+        "cite_details": [
+            *stale["cite_details"][:2],
+            {
+                "citation_route": "system_a",
+                "source_path": "kb-source/0/paper-3/paper-3.en.md",
+                "heading_path": "Introduction",
+                "evidence_quote": "HSI uses Hadamard patterns while FSI uses Fourier patterns.",
+            },
+        ]
+    }
+
+    assert render_payload_is_missing_planned_system_a(stale, citation_plan=plan)
+    assert not render_payload_is_missing_planned_system_a(repaired, citation_plan=plan)
 
 
 def test_normalize_cache_falls_back_to_render_packet_fields():
