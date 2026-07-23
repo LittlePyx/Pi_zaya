@@ -257,7 +257,7 @@ def test_research_qa_fixture_enforces_system_b_trace_policy():
     assert scinerf_expected.get("maxSystemBCount") == 1
 
     lineage_expected = _case_by_id(fixture, "cassi-to-3d-sci-lineage").get("expected") or {}
-    assert lineage_expected.get("requiredSystemBDocIds") == ["scinerf"]
+    assert lineage_expected.get("requiredSystemBDocIds") == ["scigs"]
     assert "Theory, Algorithms, and Applications" in lineage_expected.get("requiredSystemBTerms", [])
 
     roadmap_expected = _case_by_id(fixture, "spi-roadmap-beginner").get("expected") or {}
@@ -301,7 +301,9 @@ def test_research_qa_fixture_cases_have_acceptance_contracts():
         assert expected, f"{case_id} must include machine-checkable expectations"
         assert case_doc_ids, f"{case_id} must bind at least one library document"
         assert not (set(case_doc_ids) - doc_ids), f"{case_id} references unknown docs"
-        assert expected.get("requiredAnswerTerms"), f"{case_id} must define answer terms"
+        assert (
+            expected.get("requiredAnswerTerms") or expected.get("requiredAnswerTermGroups")
+        ), f"{case_id} must define answer terms or answer term groups"
         assert expected.get("requiredRefDocIds"), f"{case_id} must define required refs docs"
         assert expected.get("requiredCitationDocIds"), f"{case_id} must define required citation docs"
 
@@ -1314,7 +1316,10 @@ def test_validate_case_checks_primary_evidence_terms():
                             "source_path": source_path,
                             "display_name": "Quantum correlation light-field microscope",
                             "summary_line": "Digital refocusing is described with ray tracing and wave propagation.",
-                            "why_line": "This card points to the procedure that explains the answer.",
+                            "why_line": (
+                                "Ray tracing maps photon paths before wave propagation "
+                                "performs digital refocusing."
+                            ),
                         }
                     }
                 ],
