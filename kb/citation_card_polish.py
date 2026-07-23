@@ -57,6 +57,7 @@ _ALIAS_TO_SNAKE = {
     "cardQualityScore": "card_quality_score",
     "cardQualityFlags": "card_quality_flags",
     "cardWarning": "card_warning",
+    "renderLocale": "render_locale",
 }
 _TEXT_PATCH_KEYS = ("card_takeaway", "card_claim", "card_context_summary", "card_support_explanation")
 _VIEW_PATCH_VERSION = 1
@@ -110,6 +111,49 @@ def normalize_citation_card_detail(detail: Mapping[str, Any] | None) -> dict[str
     if "is_inpaper" not in rec:
         rec["is_inpaper"] = bool(rec.get("isInpaper"))
     return rec
+
+
+def _citation_card_render_locale(detail: Mapping[str, Any] | None) -> str:
+    rec = dict(detail or {}) if isinstance(detail, Mapping) else {}
+    for raw in (
+        rec.get("render_locale"),
+        rec.get("renderLocale"),
+        rec.get("target_locale"),
+        rec.get("targetLocale"),
+        rec.get("locale"),
+    ):
+        value = str(raw or "").strip().lower().replace("_", "-")
+        if value.startswith("zh"):
+            return "zh"
+        if value.startswith("en"):
+            return "en"
+    language_surface = " ".join(
+        str(rec.get(key) or "")
+        for key in (
+            "answer_claim",
+            "answerClaim",
+            "card_claim",
+            "cardClaim",
+            "card_takeaway",
+            "cardTakeaway",
+            "user_question_relation",
+            "userQuestionRelation",
+        )
+    )
+    return "zh" if re.search(r"[\u4e00-\u9fff]", language_surface) else "en"
+
+
+def _polish_language_mismatch(value: str, *, render_locale: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_words = re.findall(r"\b[A-Za-z][A-Za-z'-]{1,}\b", text)
+    if render_locale == "en":
+        return cjk_count >= 3
+    if render_locale == "zh":
+        return cjk_count == 0 and len(latin_words) >= 5
+    return False
 
 
 def citation_card_polish_enabled() -> bool:
@@ -270,9 +314,11 @@ def _candidate_payload(base: Mapping[str, Any]) -> str:
 
 def citation_card_polish_cache_key(detail: Mapping[str, Any] | None) -> str:
     rec = normalize_citation_card_detail(detail)
-    base = compose_citation_card(rec)
+    render_locale = _citation_card_render_locale(rec)
+    base = compose_citation_card(rec, locale=render_locale)
     selected = {
-        "version": 4,
+        "version": 5,
+        "render_locale": render_locale,
         "is_inpaper": bool(base.get("is_inpaper")),
         "num": str(base.get("num") or ""),
         "source_name": _text(base.get("source_name"), max_len=220),
@@ -304,6 +350,7 @@ def _llm_polish_citation_card_json(
     answer_claim: str,
     evidence: str,
     candidate_payload: str,
+    render_locale: str,
 ) -> str:
     if not citation_card_polish_enabled() or not candidate_payload:
         return ""
@@ -332,6 +379,7 @@ def _llm_polish_citation_card_json(
             "SystemA answer evidence card: this source text is direct evidence for a sentence in the answer. "
             "Explain the concrete point supported by the quote."
         )
+    target_language = "Simplified Chinese" if render_locale == "zh" else "English"
     try:
         out = DeepSeekChat(fast_settings).chat(
             messages=[
@@ -340,7 +388,7 @@ def _llm_polish_citation_card_json(
                     "content": (
                         "You polish a small citation popover card for a research reading assistant. "
                         "Return JSON only: {\"card_takeaway\":\"...\",\"card_claim\":\"...\",\"card_context_summary\":\"...\",\"card_support_explanation\":\"...\"}. "
-                        "Write concise Chinese. card_takeaway is the primary polished line: name the specific mechanism, claim, limitation, or upstream role. "
+                        f"Write concise {target_language}. card_takeaway is the primary polished line: name the specific mechanism, claim, limitation, or upstream role. "
                         "It must not be a title, location, bibliography entry, copied evidence, or generic relevance sentence. "
                         "card_claim is optional and should only be filled if it is a short answer-side statement that is not duplicated by the evidence. "
                         "card_context_summary is only for SystemB: summarize why the current paper cites this upstream work in the provided context. "
@@ -424,6 +472,7 @@ def _reject_polish_reason(
     key: str,
     text: str,
     route: str,
+    render_locale: str,
     baseline: Mapping[str, str],
     accepted: Mapping[str, Any],
 ) -> str:
@@ -478,6 +527,8 @@ def _reject_polish_reason(
         for accepted_key in ("card_takeaway", "card_claim", "card_context_summary"):
             if _sameish(text, str(accepted.get(accepted_key) or "")):
                 return f"duplicates_{accepted_key}"
+    if _polish_language_mismatch(text, render_locale=render_locale):
+        return "wrong_language"
     return ""
 
 
@@ -530,7 +581,8 @@ def polish_citation_card_detail(
     llm_fn: Callable[..., str] | None = None,
 ) -> dict[str, Any]:
     rec = normalize_citation_card_detail(detail)
-    base = compose_citation_card(rec)
+    render_locale = _citation_card_render_locale(rec)
+    base = compose_citation_card(rec, locale=render_locale)
     payload = _candidate_payload(base)
     if not payload:
         return {
@@ -555,6 +607,7 @@ def polish_citation_card_detail(
         answer_claim=_text(base.get("card_claim") or base.get("answer_claim"), max_len=420),
         evidence=_text(base.get("card_evidence") or base.get("evidence_quote") or base.get("citation_context"), max_len=620),
         candidate_payload=payload,
+        render_locale=render_locale,
     )
     parsed = _parse_json_object(raw)
     route = "system_b" if bool(base.get("is_inpaper")) else "system_a"
@@ -572,7 +625,14 @@ def polish_citation_card_detail(
             parsed.get(key),
             max_len=220 if key == "card_context_summary" else (420 if key != "card_takeaway" else 160),
         )
-        reason = _reject_polish_reason(key=key, text=text, route=route, baseline=baseline, accepted=patch)
+        reason = _reject_polish_reason(
+            key=key,
+            text=text,
+            route=route,
+            render_locale=render_locale,
+            baseline=baseline,
+            accepted=patch,
+        )
         if reason:
             rejected.append(f"{key}:{reason}")
             continue

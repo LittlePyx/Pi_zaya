@@ -298,10 +298,31 @@ function normalizePlainMathParentheticals(text: string): string {
   }).join('\n')
 }
 
+function normalizeAdjacentStrongMarkdown(text: string): string {
+  const lines = String(text || '').split('\n')
+  let inFence = false
+  return lines.map((line) => {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      return line
+    }
+    if (inFence) return line
+    return line
+      .split(/(`[^`\n]*`)/g)
+      .map((segment, index) => {
+        if (index % 2 === 1) return segment
+        // CommonMark does not close `**` when a CJK/Latin letter immediately
+        // follows it. The entity adds an invisible punctuation boundary.
+        return segment.replace(/(\*\*[^*\n]+?\*\*)(?=[\p{L}\p{N}])/gu, '$1&#8203;')
+      })
+      .join('')
+  }).join('\n')
+}
+
 function normalize(text: string) {
-  return normalizePlainMathParentheticals(normalizeMicroUnitLatex(normalizeReferenceSectionSpacing(repairCollapsedGfmTables(text))
+  return normalizeAdjacentStrongMarkdown(normalizePlainMathParentheticals(normalizeMicroUnitLatex(normalizeReferenceSectionSpacing(repairCollapsedGfmTables(text))
     .replace(/\\\(/g, '$').replace(/\\\)/g, '$')
-    .replace(/\\\[/g, '$$').replace(/\\\]/g, '$$')))
+    .replace(/\\\[/g, '$$').replace(/\\\]/g, '$$'))))
 }
 
 function resolvePlainCitationDetail(

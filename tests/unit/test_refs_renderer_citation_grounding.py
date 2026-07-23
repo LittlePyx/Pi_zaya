@@ -19,6 +19,84 @@ def test_system_a_binds_cassi_dual_disperser_aliases() -> None:
     assert "cassi" in binding["overlap_terms"]
 
 
+def test_system_a_binds_chinese_sph_claim_to_english_mechanism() -> None:
+    evidence = (
+        "Instead of actively performing phase shifting, a beat frequency is introduced "
+        "between the signal and reference beams, realizing phase stepping naturally in "
+        "time through heterodyne holography."
+    )
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="外差拍频让相移在时间上自然展开，从而提高采集吞吐量。",
+        hit={"text": evidence},
+        meta={},
+        heading="Introduction",
+        evidence_quote=evidence,
+        source_name="Imaging biological tissue with high-throughput SPH",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "beat-frequency phase stepping" in binding["overlap_terms"]
+
+
+def test_system_a_binds_bilingual_distilled_sensing_claim() -> None:
+    evidence = (
+        "The procedure is based on the principle of distilled sensing and uses sparse "
+        "sensing matrices to identify irrelevant signal components."
+    )
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="这一思想源于蒸馏感知（distilled sensing）原理。",
+        hit={"text": evidence},
+        meta={},
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="Sequentially Designed Compressed Sensing",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "distilled sensing" in binding["overlap_terms"]
+
+
+def test_system_a_binds_chinese_s2ism_tradeoff_to_english_abstract() -> None:
+    evidence = (
+        "Current image scanning microscopy approaches do not provide optical sectioning "
+        "and fail with thick samples, introducing a trade-off between optical sectioning "
+        "and signal-to-noise ratio while spatial resolution remains constrained."
+    )
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="s²ISM 同时改善空间分辨率、信噪比和光学切片能力。",
+        hit={"text": evidence},
+        meta={},
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="Structured detection for s2ISM",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "s2ism tradeoff" in binding["overlap_terms"]
+
+
+def test_system_a_binds_chinese_spad_mechanism_to_english_principle() -> None:
+    evidence = (
+        "A single photon avalanche diode (SPAD) operates in Geiger mode above its reverse "
+        "bias breakdown voltage and requires a quenching circuit after avalanche current."
+    )
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="SPAD 在盖革模式下高于击穿电压工作，并由淬灭电路终止雪崩。",
+        hit={"text": evidence},
+        meta={},
+        heading="Principle of single photon detection avalanche diode",
+        evidence_quote=evidence,
+        source_name="Single-photon detector review",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "spad geiger quenching" in binding["overlap_terms"]
+
+
 def test_system_a_binds_piln_to_ilnet_and_sampling_rate_aliases() -> None:
     binding = refs_renderer._assess_system_a_hit_binding(
         answer_claim="PILN targets single-pixel imaging at a low sampling rate.",

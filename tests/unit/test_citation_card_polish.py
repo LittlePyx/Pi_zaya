@@ -219,3 +219,35 @@ def test_citation_card_polish_cache_key_normalizes_frontend_aliases() -> None:
     }
 
     assert citation_card_polish_cache_key(snake) == citation_card_polish_cache_key(camel)
+
+
+def test_citation_card_polish_cache_key_separates_render_languages() -> None:
+    detail = {
+        "source_name": "Fixture.pdf",
+        "heading_path": "Abstract",
+        "answer_claim": "SCINeRF uses the SCI physical model during NeRF training.",
+        "evidence_quote": "The physical imaging process is part of NeRF training.",
+    }
+
+    assert citation_card_polish_cache_key(
+        {**detail, "render_locale": "zh"}
+    ) != citation_card_polish_cache_key({**detail, "render_locale": "en"})
+
+
+def test_polish_citation_card_rejects_output_in_the_wrong_language() -> None:
+    detail = {
+        "render_locale": "en",
+        "source_name": "Fixture.pdf",
+        "heading_path": "Abstract",
+        "answer_claim": "SCINeRF uses the SCI physical model during NeRF training.",
+        "evidence_quote": "The physical imaging process is part of NeRF training.",
+    }
+
+    def fake_llm(**kwargs: object) -> str:
+        assert kwargs["render_locale"] == "en"
+        return '{"card_takeaway":"原文把物理成像过程纳入神经辐射场训练。"}'
+
+    out = polish_citation_card_detail(detail, llm_fn=fake_llm)
+
+    assert out["citation_card_polish_status"] == "empty"
+    assert out["citation_card_polish_source"] == "llm_empty"

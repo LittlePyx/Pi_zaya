@@ -3577,6 +3577,46 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
         ),
     ),
     (
+        "beat-frequency phase stepping",
+        re.compile(
+            r"(?is)(?:"
+            r"beat\s+frequency.{0,100}phase\s+stepping|"
+            r"phase\s+stepping.{0,100}beat\s+frequency|"
+            r"heterodyne\s+holography.{0,100}(?:phase\s+stepping|beat\s+frequency)|"
+            r"(?:拍频|外差全息).{0,60}(?:相移|相位步进)|"
+            r"(?:相移|相位步进).{0,60}(?:拍频|外差全息)"
+            r")"
+        ),
+    ),
+    (
+        "distilled sensing",
+        re.compile(r"(?i)\bdistilled\s+sensing\b|蒸馏感知"),
+    ),
+    (
+        "s2ism tradeoff",
+        re.compile(
+            r"(?is)(?=.*(?:spatial\s+resolution|空间分辨率|超分辨))"
+            r"(?=.*(?:signal-to-noise|\bSNR\b|信噪比))"
+            r"(?=.*(?:optical\s+sectioning|光学切片|光学层切))"
+        ),
+    ),
+    (
+        "spad geiger quenching",
+        re.compile(
+            r"(?is)(?=.*(?:\bSPAD\b|single\s+photon\s+avalanche\s+diode))"
+            r"(?=.*(?:Geiger|盖革))"
+            r"(?=.*(?:breakdown\s+voltage|击穿电压))"
+            r"(?=.*(?:quenching\s+circuit|淬灭电路))"
+        ),
+    ),
+    (
+        "scinerf physical formation",
+        re.compile(
+            r"(?is)(?=.*(?:SCINeRF|NeRF))"
+            r"(?=.*(?:physical\s+imag(?:e|ing)\s+(?:formation\s+)?process|物理成像过程))"
+        ),
+    ),
+    (
         "piln",
         re.compile(r"(?i)\bPILN\b|\bILNet\b|part[-\s]?based\s+image[-\s]?loop\s+network"),
     ),
@@ -3618,6 +3658,11 @@ _SYSTEM_A_STRONG_BINDING_TERMS = {
     "neural radiance fields",
     "3d gaussian splatting",
     "cassi",
+    "beat-frequency phase stepping",
+    "distilled sensing",
+    "s2ism tradeoff",
+    "spad geiger quenching",
+    "scinerf physical formation",
     "piln",
     "admm",
 }
@@ -3689,13 +3734,17 @@ def _system_a_prefers_zh(*texts: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", " ".join(str(text or "") for text in texts)))
 
 
-def _system_a_domain_terms(text: str) -> set[str]:
+@lru_cache(maxsize=4096)
+def _system_a_domain_terms(text: str) -> frozenset[str]:
     raw = str(text or "")
     if not raw:
-        return set()
-    return {name for name, pattern in _SYSTEM_A_DOMAIN_PATTERNS if pattern.search(raw)}
+        return frozenset()
+    return frozenset(
+        name for name, pattern in _SYSTEM_A_DOMAIN_PATTERNS if pattern.search(raw)
+    )
 
 
+@lru_cache(maxsize=4096)
 def _system_a_keyword_terms(text: str, *, limit: int = 18) -> set[str]:
     raw = str(text or "")
     out: set[str] = set()
@@ -4096,7 +4145,35 @@ def _system_a_pick_best_evidence_candidate(
     best = scored[0]
     primary = next((item for item in scored if str(item.get("source") or "") == "primary_evidence"), None)
     raw_hit = next((item for item in scored if str(item.get("source") or "") == "hit_text"), None)
-    if (
+    strict_plan_primary = bool(
+        isinstance(primary, dict)
+        and bool(meta.get("citation_plan_slot"))
+        and bool(
+            primary_evidence.get("strict_locate")
+            or primary_evidence.get("strictLocate")
+        )
+        and str(
+            primary_evidence.get("selection_reason")
+            or primary_evidence.get("selectionReason")
+            or ""
+        ).strip().lower()
+        == "citation_plan_slot"
+        and str(primary.get("readable_text") or "").strip()
+        and not _system_a_is_low_value_evidence_text(str(primary.get("text") or ""))
+    )
+    if strict_plan_primary:
+        # The citation plan has already resolved and verified this exact source
+        # block. Stale reader alternatives may score higher on generic prose
+        # quality, but substituting them breaks the claim-to-evidence contract.
+        best = dict(primary)
+        strict_text = _clean_evidence_display_text(
+            _system_a_candidate_text(primary_evidence),
+            max_len=520,
+        )
+        if strict_text:
+            best["text"] = strict_text
+            best["readable_text"] = strict_text
+    elif (
         isinstance(primary, dict)
         and isinstance(raw_hit, dict)
         and _system_a_raw_hit_is_clearly_more_specific(raw_hit, primary=primary, scored=scored)

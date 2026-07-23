@@ -26,7 +26,7 @@ class _FakeStore:
         return []
 
 
-def test_reference_cards_follow_grounded_answer_citations() -> None:
+def test_reference_cards_follow_grounded_answer_citations(monkeypatch) -> None:
     source_path = r"F:\db\DL-SPI\DL-SPI.en.md"
     public_source_path = "kb-source/0/DL-SPI/DL-SPI.en.md"
 
@@ -93,6 +93,7 @@ def test_reference_cards_follow_grounded_answer_citations() -> None:
         }
     }
 
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "zh")
     out = references_router._overlay_refs_payload_with_answer_citations(
         store=Store(),
         conv_id="conv",
@@ -106,11 +107,15 @@ def test_reference_cards_follow_grounded_answer_citations() -> None:
     ui = hits[0]["ui_meta"]
     assert "重建质量和速度" in ui["summary_line"]
     assert "训练时间长" in ui["summary_line"]
-    assert "Abstract" in ui["why_line"]
-    assert "Challenges" in ui["why_line"]
+    assert "重建质量与速度" in ui["why_line"]
+    assert "训练耗时" in ui["why_line"]
+    assert "泛化能力" in ui["why_line"]
     assert ui["summary_display_role"] == "guide"
     assert ui["summary_label"] == "导读"
     assert ui["summary_title"] == "这条证据说明什么"
+    assert ui["polish_status"] in {"heuristic", "full"}
+    assert ui["summary_polish_status"] in {"heuristic", "full"}
+    assert ui["why_polish_status"] in {"heuristic", "full"}
     assert [section["id"] for section in ui["card_view"]["sections"]] == ["summary", "why", "location"]
 
 
@@ -166,6 +171,140 @@ def test_reading_route_cards_use_user_language_and_distinct_source_roles() -> No
     assert "两种经典调制方案" in cards[1][1]
     assert "学习型方法" in cards[2][1]
     assert len({why for _summary, why in cards}) == 3
+
+
+def test_answer_citation_overlay_uses_source_identity_for_scinerf_relevance(monkeypatch) -> None:
+    source_path = r"F:\db\SCINeRF\SCINeRF.en.md"
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {
+                    "id": 30,
+                    "role": "user",
+                    "content": "SCI 是怎么走到 3D 场景重建的？",
+                },
+                {
+                    "id": 31,
+                    "role": "assistant",
+                    "content": "answer",
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "citation_route": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "CVPR-2024-SCINeRF.pdf",
+                                        "heading_path": "SCINeRF / Abstract",
+                                        "answer_claim": "SCINeRF 将 SCI 物理成像过程纳入 NeRF 联合优化。",
+                                        "evidence_quote": (
+                                            "we formulate the physical imaging process of SCI as part "
+                                            "of the training of NeRF"
+                                        ),
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    payload = {
+        30: {
+            "prompt": "SCI 是怎么走到 3D 场景重建的？",
+            "render_locale": "zh",
+            "hits": [
+                {
+                    "meta": {"source_path": "kb-source/0/SCINeRF/SCINeRF.en.md"},
+                    "ui_meta": {
+                        "source_path": "kb-source/0/SCINeRF/SCINeRF.en.md",
+                        "display_name": "CVPR-2024-SCINeRF.pdf",
+                    },
+                }
+            ],
+        }
+    }
+
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "zh")
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload=payload,
+    )
+
+    why = out[30]["hits"][0]["ui_meta"]["why_line"]
+    assert all(term in why for term in ("SCI", "NeRF", "物理成像", "三维"))
+    assert "逐项核对" not in why
+
+
+def test_answer_citation_overlay_uses_saved_locale_when_pack_has_no_locale(monkeypatch) -> None:
+    source_path = r"F:\db\SCINeRF\SCINeRF.en.md"
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {
+                    "id": 40,
+                    "role": "user",
+                    "content": "SCI 是怎么走到 3D 场景重建的？",
+                },
+                {
+                    "id": 41,
+                    "role": "assistant",
+                    "content": "answer",
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "citation_route": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "CVPR-2024-SCINeRF.pdf",
+                                        "heading_path": "SCINeRF / Abstract",
+                                        "answer_claim": "SCINeRF adds the SCI physical imaging process to NeRF training.",
+                                        "evidence_quote": (
+                                            "we formulate the physical imaging process of SCI as part "
+                                            "of the training of NeRF"
+                                        ),
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "en")
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload={
+            40: {
+                "prompt": "SCI 是怎么走到 3D 场景重建的？",
+                "hits": [
+                    {
+                        "meta": {"source_path": "kb-source/0/SCINeRF/SCINeRF.en.md"},
+                        "ui_meta": {
+                            "source_path": "kb-source/0/SCINeRF/SCINeRF.en.md",
+                            "display_name": "CVPR-2024-SCINeRF.pdf",
+                        },
+                    }
+                ],
+            }
+        },
+    )
+
+    ui = out[40]["hits"][0]["ui_meta"]
+    assert ui["render_locale"] == "en"
+    assert ui["summary_label"] == "Guide"
+    assert ui["card_view"]["sections"][1]["label"] == "Relevance"
+    assert "SCINeRF incorporates the physical SCI imaging process" in ui["summary_line"]
+    assert "lineage evidence" in ui["why_line"]
+    assert "neural scene representation" in ui["why_line"]
+    assert not re.search(r"[\u4e00-\u9fff]", ui["why_line"])
 
 
 def test_reference_cards_stay_pending_until_planned_answer_citations_are_ready() -> None:
@@ -1018,6 +1157,42 @@ def test_build_pending_conversation_refs_payload_stabilizes_multi_paper_identity
     assert pack["pending"] is True
 
 
+def test_build_pending_conversation_refs_payload_localizes_provisional_evidence(monkeypatch):
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "zh")
+    monkeypatch.setattr(
+        references_router,
+        "_filter_pending_refs_hits_by_prompt_focus",
+        lambda prompt, hits: list(hits),
+    )
+
+    out = references_router._build_pending_conversation_refs_payload(
+        {
+            19: {
+                "prompt": "How does SCINeRF connect snapshot compressive imaging to NeRF?",
+                "hits": [
+                    {
+                        "text": "We model the physical imaging process of SCI into NeRF training.",
+                        "meta": {
+                            "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+                            "ref_pack_state": "pending",
+                            "ref_best_heading_path": "Abstract",
+                        },
+                    }
+                ],
+            }
+        },
+        doc_list_by_user={},
+    )
+
+    ui = out[19]["hits"][0]["ui_meta"]
+    assert ui["render_locale"] == "zh"
+    assert ui["summary_kind"] == "evidence"
+    assert ui["summary_display_role"] == "source_evidence"
+    assert ui["summary_label"] == "原文证据"
+    assert "核验" in ui["why_line"]
+    assert "This pending match" not in ui["why_line"]
+
+
 def test_get_conversation_refs_full_payload_prefers_authoritative_doc_list_over_non_authoritative_rendered_payload(monkeypatch):
     references_router._REFS_CONVERSATION_CACHE.clear()
     references_router._REFS_CONVERSATION_WARMING.clear()
@@ -1636,6 +1811,69 @@ def test_stored_rendered_payload_is_stale_when_answer_source_disappears():
         "hits": [
             {"ui_meta": {"source_path": r"db\Other\Other.en.md", "summary_line": "old card"}},
         ]
+    }
+
+    assert references_router._stored_rendered_pack_payload_lost_current_hits(
+        payload=payload,
+        pack=pack,
+    )
+
+
+def test_multi_source_rendered_payload_is_stale_when_one_lineage_source_disappears():
+    pack = {
+        "prompt": "SCI 这条线是怎么从光谱成像走到 3D 场景重建的？",
+        "hits": [
+            {"meta": {"source_path": r"db\CASSI\CASSI.en.md"}},
+            {"meta": {"source_path": r"db\SCINeRF\SCINeRF.en.md"}},
+            {"meta": {"source_path": r"db\SCIGS\SCIGS.en.md"}},
+        ],
+    }
+    payload = {
+        "hits": [
+            {"ui_meta": {"source_path": r"db\SCINeRF\SCINeRF.en.md"}},
+            {"ui_meta": {"source_path": r"db\SCIGS\SCIGS.en.md"}},
+            {"ui_meta": {"source_path": r"db\Unrelated\Unrelated.en.md"}},
+        ],
+    }
+
+    assert references_router._stored_rendered_pack_payload_lost_current_hits(
+        payload=payload,
+        pack=pack,
+    )
+
+
+def test_rendered_payload_same_source_with_mixed_slashes_is_not_stale():
+    pack = {
+        "hits": [
+            {"meta": {"source_path": "F:/repo/db/Paper/Paper.en.md"}},
+        ]
+    }
+    payload = {
+        "hits": [
+            {"ui_meta": {"source_path": r"F:\repo\db\Paper\Paper.en.md"}},
+        ]
+    }
+
+    assert not references_router._stored_rendered_pack_payload_lost_current_hits(
+        payload=payload,
+        pack=pack,
+    )
+
+
+def test_six_paper_payload_is_stale_when_fifth_source_disappears():
+    sources = [rf"db\Paper-{idx}\Paper-{idx}.en.md" for idx in range(1, 7)]
+    pack = {
+        "prompt": "请列出并比较这六篇文献",
+        "hits": [
+            {"meta": {"source_path": source_path}}
+            for source_path in sources
+        ],
+    }
+    payload = {
+        "hits": [
+            {"ui_meta": {"source_path": source_path}}
+            for source_path in [*sources[:4], sources[5]]
+        ],
     }
 
     assert references_router._stored_rendered_pack_payload_lost_current_hits(

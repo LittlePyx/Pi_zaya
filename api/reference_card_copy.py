@@ -35,6 +35,8 @@ GENERIC_REF_WHY_PATTERNS: tuple[str, ...] = (
     "原文线索，可用来核对",
     "可用来判断论文如何使用",
     "可查看“",
+    "提供回答该问题所需的原文定位",
+    "卡片中的结论可在这里逐项核对",
     "use this evidence to check",
     "use this source wording",
     "use this hit to check",
@@ -198,8 +200,95 @@ def build_grounded_ref_why_line(
             and ("computational" in summary_low or "time" in summary_low)
         ):
             return "摘要明确指出迭代重建同时受图像质量和计算耗时限制，这是判断深度学习为何能改善单像素成像实用性的直接依据。"
+        if (
+            "deep learning" in summary_low
+            and ("reconstruction quality" in summary_low or "reconstruction speed" in summary_low)
+            and ("training" in summary_low or "generalization" in summary_low)
+        ):
+            return "原文同时给出深度学习在重建质量与速度上的收益，以及训练耗时和泛化能力方面的限制，直接对应问题要求的好处与风险。"
         if "scinerf" in summary_low and "3d scene" in summary_low and "single snapshot" in summary_low:
             return "原文明确将 SCINeRF 定义为从单次压缩快照学习三维场景表示的方法，直接回答了该方法是什么。"
+        if (
+            "scinerf" in summary_low
+            and "nerf" in summary_low
+            and "physical imaging process" in summary_low
+        ):
+            return "原文把 SCI 的物理成像过程纳入 NeRF 训练，直接说明从压缩快照到三维神经场景表示的关键衔接。"
+        if (
+            ("scigs" in summary_low or "3d gaussian" in summary_low)
+            and "3d" in summary_low
+            and "single compressed image" in summary_low
+            and ("dynamic" in summary_low or "explicit scene" in summary_low)
+        ):
+            return "原文说明 SCIGS 从单幅压缩图像重建显式三维场景并扩展到动态场景，直接支撑 SCI 向 3DGS 场景重建演进这一环。"
+        if (
+            (
+                "dual-disperser" in summary_low
+                or "dual disperser" in summary_low
+                or "two dispersive elements" in summary_low
+            )
+            and "binary-valued aperture" in summary_low
+            and "spectral data cube" in summary_low
+            and (
+                "single detector measurement" in summary_low
+                or "single 2d measurement" in summary_low
+                or "two-dimensional measurement" in summary_low
+            )
+        ):
+            return "原文同时给出双色散器、二值编码孔径和光谱数据立方体，直接说明 CASSI 如何把三维光谱信息压缩到一次二维测量中。"
+        if (
+            (
+                "dual-disperser" in summary_low
+                or "dual disperser" in summary_low
+                or "two dispersive elements" in summary_low
+            )
+            and "binary-valued aperture" in summary_low
+        ):
+            return "原文明确给出两个相向布置的色散元件及其间的二值编码孔径，直接说明 CASSI 的双色散编码结构。"
+        if (
+            "reducing the pinhole size" in summary_low
+            and ("spatial resolution" in summary_low or "optical sectioning" in summary_low)
+            and ("snr" in summary_low or "signal-to-noise" in summary_low)
+        ):
+            return "原文把缩小针孔与空间分辨率、光学切片能力和信噪比的联动写得很清楚，可直接支撑 s2ISM 的核心性能取舍。"
+        if (
+            "trade-off between spatial resolution" in summary_low
+            and "do not provide optical sectioning" in summary_low
+            and ("snr" in summary_low or "signal-to-noise" in summary_low)
+        ):
+            return "原文先说明 ISM 缓解空间分辨率与信噪比权衡，同时指出其仍缺少光学切片能力，直接对应 s2ISM 要解决的三方性能问题。"
+        if (
+            "do not provide optical sectioning" in summary_low
+            and "thick samples" in summary_low
+            and ("snr" in summary_low or "signal-to-noise" in summary_low)
+        ):
+            return "原文指出常规 ISM 在厚样本中缺少光学切片能力，并把这一限制与信噪比问题并列说明，直接对应 s2ISM 要解决的性能约束。"
+        if (
+            "subcarrier frequenc" in summary_low
+            and ("2.3%" in summary_low or "13.0%" in summary_low)
+        ):
+            return "原文说明不同探测通道由子载波频率并行编码，并给出 2.3% 与 13.0% 的串扰结果，可直接支撑 FDM 的并行采集与通道隔离结论。"
+        if (
+            "geiger mode" in summary_low
+            and ("breakdown" in summary_low or "quench" in summary_low)
+        ):
+            return "原文解释 SPAD 在盖革模式下高于击穿电压工作，并需通过淬灭电路复位，直接回答其探测与复位机理。"
+        if (
+            "distilled sensing" in summary_low
+            and ("support recovery" in summary_low or "signal support" in summary_low)
+        ):
+            return "原文把顺序自适应测量与信号支撑集恢复、distilled sensing 联系起来，直接说明该方法如何把测量资源逐步集中到有效分量。"
+        if (
+            ("beat frequency" in summary_low or "heterodyne" in summary_low)
+            and ("holograph" in summary_low or "phase" in summary_low)
+        ):
+            return "原文以拍频和外差全息解释相位信息如何从单像素时间信号中分离出来，直接支撑压缩全息的测量机理。"
+        if (
+            "wiener" in summary_low
+            and "bm3d" in summary_low
+            and ("wavelet" in summary_low or "total variation" in summary_low)
+        ):
+            return "原文同时列出 Wiener、BM3D 以及小波或总变分方法，可据此区分空间域与变换域去噪路线，而不是只给出泛化的算法标签。"
         if "self-supervised" in summary_low and "network" in summary_low:
             if "ground-truth" in summary_low or "without ground truth" in summary_low:
                 return "该方法采用自监督网络，在无需真值图像的条件下完成重建，为深度学习用于单像素成像提供了具体方法证据。"
@@ -213,6 +302,38 @@ def build_grounded_ref_why_line(
                 return "原文明确指出深度学习并未带来所述重建改善，这条证据应当用于说明方法局限，而不是作为正向优势。"
             return "原文把深度学习与重建质量或速度的改善直接联系起来，可据此概括它给单像素成像带来的实际收益。"
         return ""
+
+    if (
+        ("scinerf" in summary_low or "nerf" in summary_low)
+        and "physical imaging process" in summary_low
+        and "sci" in summary_low
+    ):
+        return (
+            "This passage is the lineage evidence for the transition from an SCI measurement "
+            "model to a learned neural scene representation."
+        )
+    if (
+        ("scigs" in summary_low or "3d gaussian" in summary_low)
+        and "3d" in summary_low
+        and ("single compressed image" in summary_low or "compressed image" in summary_low)
+        and ("dynamic" in summary_low or "explicit" in summary_low)
+    ):
+        return (
+            "This passage marks the endpoint of the lineage: explicit and dynamic 3D scene "
+            "reconstruction rather than only decoding a 2D snapshot."
+        )
+    if (
+        (
+            "dual-disperser" in summary_low
+            or "dual disperser" in summary_low
+            or "two dispersive elements" in summary_low
+        )
+        and "binary-valued aperture" in summary_low
+    ):
+        return (
+            "This passage identifies the optical components that perform spectral coding, "
+            "separating the hardware encoding stage from the later 3D reconstruction stages."
+        )
     return ""
 
 

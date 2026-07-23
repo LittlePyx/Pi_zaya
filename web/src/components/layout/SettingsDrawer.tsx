@@ -738,6 +738,7 @@ export function SettingsDrawer({
           <SettingsRow title={S.ui_lang} description={S.settings_language_desc}>
             <Select
               className="kb-settings-select"
+              data-testid="settings-ui-language-select"
               value={s.uiLocale}
               onChange={(v) => { savePreference({ uiLocale: v as 'zh' | 'en' }) }}
               options={[
@@ -895,6 +896,7 @@ export function SettingsDrawer({
           <SettingsRow title={S.settings_citation_language} description={S.settings_citation_language_desc}>
             <Segmented
               className="kb-settings-segmented"
+              data-testid="settings-citation-language-segmented"
               value={s.refsCardLocale}
               onChange={(v) => { savePreference({ refsCardLocale: v as 'auto' | 'zh' | 'en' }) }}
               options={[

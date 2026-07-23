@@ -528,3 +528,164 @@ def test_search_hits_fallback_with_expansion(monkeypatch):
     # Should have merged results from both queries
     assert len(hits) >= 1
     assert "expanded variant" in variants
+
+
+def test_deterministic_expansion_skips_redundant_llm_expansion(monkeypatch):
+    class FakeSettings:
+        api_key = "test-key"
+        timeout_s = 60.0
+        max_retries = 0
+        query_expansion_enabled = True
+
+    retriever = _FakeRetriever(
+        {
+            "CASSI 怎么进行双色散编码？": [
+                {
+                    "text": "base result",
+                    "score": 5.0,
+                    "meta": {"source_path": "base.md", "chunk_id": "base"},
+                }
+            ],
+            "CASSI exact architecture": [
+                {
+                    "text": "exact result",
+                    "score": 9.0,
+                    "meta": {"source_path": "exact.md", "chunk_id": "exact"},
+                }
+            ],
+        }
+    )
+
+    import kb.retrieval_engine as re
+
+    monkeypatch.setattr(re, "_translate_query_for_search", lambda _settings, _prompt: None)
+    monkeypatch.setattr(
+        re,
+        "_deterministic_query_variants",
+        lambda _prompt: ["CASSI exact architecture"],
+    )
+    monkeypatch.setattr(
+        re,
+        "_expand_query_via_llm",
+        lambda *_args, **_kwargs: pytest.fail("deterministic coverage should skip LLM expansion"),
+    )
+
+    hits, _scores, _used_query, _used_trans, variants = _search_hits_with_fallback(
+        "CASSI 怎么进行双色散编码？",
+        retriever,
+        top_k=10,
+        settings=FakeSettings(),
+        allow_expand=True,
+    )
+
+    assert hits
+    assert "CASSI exact architecture" in variants
+
+
+def test_doc_grouping_deep_reads_named_source_with_deterministic_mechanism_terms(
+    tmp_path,
+    monkeypatch,
+):
+    import kb.retrieval_engine as re
+
+    monkeypatch.setattr(re, "_is_temp_source_path", lambda _source_path: False)
+    source = tmp_path / (
+        "OE-2007-Single-shot compressive spectral imaging with "
+        "a dual-disperser architecture.en.md"
+    )
+    exact = (
+        "The primary features are two dispersive elements, arranged in opposition "
+        "and surrounding a binary-valued aperture code."
+    )
+    source.write_text(
+        f"# Paper\n\n## Abstract\n\n{exact}\n\n## Conclusions\n\n"
+        "The dual-disperser design creates arbitrary spectral projections.",
+        encoding="utf-8",
+    )
+    expansion = (
+        "CASSI single-shot compressive spectral imaging dual-disperser "
+        "two dispersive elements binary-valued aperture"
+    )
+    hits = [
+        {
+            "id": "weak-conclusion",
+            "text": "The dual-disperser design creates arbitrary spectral projections.",
+            "score": 12.0,
+            "_expansion_variants": [expansion],
+            "meta": {"source_path": str(source), "heading_path": "Conclusions"},
+        }
+    ]
+
+    docs = _group_hits_by_doc_for_refs(
+        hits,
+        prompt_text="CASSI 的双色散结构怎么摆，为什么中间放二值孔径？",
+        top_k_docs=1,
+        deep_read=False,
+        llm_rerank=False,
+    )
+
+    assert docs
+    show = " ".join((docs[0].get("meta") or {}).get("ref_show_snippets") or [])
+    assert "two dispersive elements" in show
+    assert "binary-valued aperture" in show
+
+
+def test_expansion_deep_read_keeps_user_section_intent_for_named_source(
+    tmp_path,
+    monkeypatch,
+):
+    import kb.retrieval_engine as re
+
+    monkeypatch.setattr(re, "_is_temp_source_path", lambda _source_path: False)
+    source = tmp_path / (
+        "OE-2007-Single-shot compressive spectral imaging with "
+        "a dual-disperser architecture.en.md"
+    )
+    source.write_text(
+        "# Paper\n\n## Reconstruction limitations\n\n"
+        "The reconstruction is sensitive to calibration error and model mismatch.",
+        encoding="utf-8",
+    )
+    expansion = (
+        "CASSI single-shot compressive spectral imaging dual-disperser "
+        "two dispersive elements binary-valued aperture"
+    )
+    seen_queries: list[str] = []
+
+    def fake_deep_read(md_path, query, **_kwargs):
+        seen_queries.append(str(query))
+        return [
+            {
+                "score": 9.0,
+                "text": "The reconstruction is sensitive to calibration error and model mismatch.",
+                "meta": {
+                    "source_path": str(md_path),
+                    "heading_path": "Reconstruction limitations",
+                },
+            }
+        ]
+
+    monkeypatch.setattr(re, "_deep_read_md_for_context", fake_deep_read)
+    hits = [
+        {
+            "id": "architecture-seed",
+            "text": "The system uses a dual-disperser architecture.",
+            "score": 12.0,
+            "_expansion_variants": [expansion],
+            "meta": {"source_path": str(source), "heading_path": "Abstract"},
+        }
+    ]
+
+    docs = _group_hits_by_doc_for_refs(
+        hits,
+        prompt_text="What are CASSI's reconstruction limitations and calibration risks?",
+        top_k_docs=1,
+        deep_read=False,
+        llm_rerank=False,
+    )
+
+    assert docs
+    assert seen_queries
+    assert "reconstruction limitations" in seen_queries[0].lower()
+    assert "calibration" in seen_queries[0].lower()
+    assert "two dispersive elements" in seen_queries[0].lower()

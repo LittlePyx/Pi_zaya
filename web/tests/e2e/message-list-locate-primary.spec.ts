@@ -2252,3 +2252,17 @@ test('normal multi-doc answer suppresses ambiguous inline locate buttons without
   await expect(page.locator('body')).toContainText('DOC-2')
   await expect(page.locator('.kb-md-locate-inline-btn')).toHaveCount(0)
 })
+
+test('CJK-adjacent strong markdown renders as emphasis without leaking delimiters', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.goto('/__message_list_test__?scenario=cjk-adjacent-strong')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('cjk-adjacent-strong')
+  const assistant = page.locator('.kb-msg-bubble-assistant').last()
+  await expect(assistant.locator('.kb-markdown strong')).toHaveText([
+    '快照压缩成像（CASSI）',
+    '三维场景表示',
+  ])
+  await expect(assistant).not.toContainText('**')
+  await expect(assistant).toContainText('快照压缩成像（CASSI）的物理原理')
+})

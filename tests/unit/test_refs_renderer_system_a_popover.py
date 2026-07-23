@@ -646,6 +646,54 @@ def test_system_a_prefers_claim_specific_raw_hit_over_stale_primary() -> None:
     assert "detection efficiency" in picked["readable_text"]
 
 
+def test_system_a_strict_plan_primary_beats_stale_reader_alternative() -> None:
+    exact = (
+        "A beat frequency realizes phase stepping naturally in time through "
+        "heterodyne holography."
+    )
+    stale = "Single-pixel holography uses a single-pixel detector."
+    hit = {
+        "text": exact,
+        "meta": {
+            "source_path": "db/SPH/SPH.en.md",
+            "heading_path": "Introduction",
+            "citation_plan_slot": True,
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "heading_path": "Introduction",
+                "snippet": exact,
+                "selection_reason": "citation_plan_slot",
+                "strict_locate": True,
+                "block_id": "blk-intro",
+                "anchor_id": "p-intro",
+            },
+            "reader_open": {
+                "evidenceAlternatives": [
+                    {
+                        "headingPath": "Results / Figure 2",
+                        "snippet": stale,
+                        "blockId": "blk-stale",
+                    }
+                ]
+            },
+        },
+    }
+
+    picked = _system_a_pick_best_evidence_candidate(
+        hit=hit,
+        meta=hit["meta"],
+        ui_meta=hit["ui_meta"],
+        primary_evidence=hit["ui_meta"]["primary_evidence"],
+        answer_claim="外差拍频让相移在时间上自然展开。",
+        source_name="High-throughput single-pixel holography",
+        default_heading="Introduction",
+    )
+
+    assert picked["source"] == "primary_evidence"
+    assert picked["readable_text"] == exact
+
+
 def test_system_a_raw_hit_uses_its_own_locator_instead_of_stale_primary() -> None:
     source_path = "db/demo/spd-review.en.md"
     rendered, details = _annotate_inpaper_citations_with_hover_meta(

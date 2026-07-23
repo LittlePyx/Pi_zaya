@@ -218,7 +218,10 @@ def test_ref_card_hit_quality_accepts_grounded_openable_card():
                 "source_path": "demo.en.md",
                 "heading_path": "4. Strategy and Advantages / Data-driven strategy",
                 "summary_line": "This card explains how the model maps compressed measurements back to images.",
-                "why_line": "It directly supports the user's question about reconstruction quality under low sampling.",
+                "why_line": (
+                    "The Data-driven strategy section links compressed measurements "
+                    "to reconstruction quality under low sampling."
+                ),
                 "polish_status": "full",
                 "can_open": True,
                 "reader_open": {
@@ -279,6 +282,23 @@ def test_ref_card_hit_quality_rejects_template_duplicate_and_broken_copy():
     assert "ref_card_unknown_polish_status" in names
     assert "ref_card_raw_markdown_visible" in names
     assert "ref_card_broken_evidence" in names
+
+
+def test_ref_card_hit_quality_rejects_localized_generic_why_copy():
+    quality = ref_card_hit_quality(
+        {
+            "meta": {"source_path": "SCINeRF.en.md"},
+            "ui_meta": {
+                "display_name": "SCINeRF.pdf",
+                "summary_line": "The abstract introduces a physical SCI imaging process for NeRF reconstruction.",
+                "why_line": "“Abstract”提供回答该问题所需的原文定位，卡片中的结论可在这里逐项核对。",
+            },
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is False
+    assert "ref_card_generic_why_visible" in names
 
 
 def test_summarize_ref_card_hit_quality_indexes_failures():

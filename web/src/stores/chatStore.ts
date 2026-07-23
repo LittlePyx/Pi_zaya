@@ -1054,6 +1054,7 @@ interface ChatState {
   renameProject: (id: string, name: string) => Promise<void>
   deleteProject: (id: string) => Promise<void>
   selectConversation: (id: string) => Promise<void>
+  refreshActiveConversationLocale: () => Promise<void>
   createConversation: () => Promise<string>
   createPaperGuideConversation: (opts: {
     sourcePath: string
@@ -1610,6 +1611,45 @@ export const useChatStore = create<ChatState>((set, get) => ({
         note: 'fetch_failed',
       })
     }
+  },
+
+  refreshActiveConversationLocale: async () => {
+    const initial = get()
+    const convId = String(initial.activeConvId || '').trim()
+    if (!convId) return
+    const paperGuideMode = initial.activeConversation?.mode === 'paper_guide'
+      || Boolean(initial.guideBindings?.[convId]?.sourcePath)
+    const pageResult = await getMessagesPageWithFallback(convId, {
+      limit: MESSAGE_PAGE_SIZE,
+      renderPacketOnly: paperGuideMode ? true : undefined,
+    })
+    if (get().activeConvId !== convId) return
+    const page = pageResult.page
+    set((state) => ({
+      messages: Array.isArray(page?.messages) ? page.messages : [],
+      messagesHasMoreBefore: Boolean(page?.has_more_before),
+      oldestLoadedMessageId: Number.isFinite(Number(page?.oldest_loaded_id))
+        ? Number(page?.oldest_loaded_id)
+        : null,
+      conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+        messages: Array.isArray(page?.messages) ? page.messages : [],
+        refs: {},
+        messagesHasMoreBefore: Boolean(page?.has_more_before),
+        oldestLoadedMessageId: Number.isFinite(Number(page?.oldest_loaded_id))
+          ? Number(page?.oldest_loaded_id)
+          : null,
+        cachedAt: Date.now(),
+      }),
+      refs: {},
+    }))
+    stopRefsPolling()
+    await loadRefsForConversation(
+      convId,
+      set,
+      () => get().activeConvId,
+      undefined,
+      'locale_change',
+    )
   },
 
   createConversation: async () => {

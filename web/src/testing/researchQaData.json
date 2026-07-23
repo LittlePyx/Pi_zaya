@@ -451,7 +451,12 @@
         "厚样本解释应关联离焦背景/散射/SNR，而不是泛泛说“更难”。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["SNR", "resolution", "optical sectioning"],
+        "requiredAnswerTerms": [],
+        "requiredAnswerTermGroups": [
+          ["SNR", "信噪比"],
+          ["resolution", "分辨率"],
+          ["optical sectioning", "光学切片", "光学层切"]
+        ],
         "requiredRefDocIds": ["s2ism"],
         "requiredCitationDocIds": ["s2ism"],
         "requireSystemB": false
@@ -581,19 +586,21 @@
             "id": "scinerf-neural-3d-stage",
             "docId": "scinerf",
             "route": "system_a",
+            "answerScope": "response",
             "answerTerms": ["NeRF", "3D"],
-            "evidenceTerms": ["physical image formation process", "NeRF"]
+            "evidenceTerms": ["physical imaging process", "NeRF"]
           },
           {
             "id": "scigs-gaussian-3d-stage",
             "docId": "scigs",
             "route": "system_a",
+            "answerScope": "response",
             "answerTerms": ["3D"],
             "evidenceTerms": ["dynamic", "3D scene"]
           }
         ],
         "requiredSystemBTerms": ["Snapshot Compressive Imaging", "Theory, Algorithms, and Applications"],
-        "requiredSystemBDocIds": ["scinerf"],
+        "requiredSystemBDocIds": ["scigs"],
         "requireSystemBTraceComplete": true,
         "forbidSystemBAnswerContextOnly": true,
         "maxSystemBNeedsReviewCount": 0,
@@ -621,7 +628,12 @@
         "参考卡片需要让用户看得出每条证据为什么属于那篇方法。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["structured detection", "resolution", "SNR", "refocus"],
+        "requiredAnswerTerms": ["structured detection"],
+        "requiredAnswerTermGroups": [
+          ["resolution", "分辨率"],
+          ["SNR", "信噪比"],
+          ["refocus", "重聚焦", "重新聚焦"]
+        ],
         "requiredRefDocIds": ["s2ism", "iism", "qclfm"],
         "requiredCitationDocIds": ["s2ism", "iism", "qclfm"],
         "minRefHits": 3,
@@ -843,7 +855,12 @@
         "证据必须来自论文对高吞吐 SPH 机制的原文，而不是泛泛介绍单像素成像。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["beat frequency", "phase stepping", "heterodyne holography"],
+        "requiredAnswerTerms": [],
+        "requiredAnswerTermGroups": [
+          ["beat frequency", "拍频"],
+          ["phase stepping", "相位步进", "相移"],
+          ["heterodyne holography", "外差全息"]
+        ],
         "requiredRefDocIds": ["sph-biological"],
         "requiredCitationDocIds": ["sph-biological"],
         "allowedRefDocIds": ["sph-biological"],
@@ -854,7 +871,8 @@
           "docId": "sph-biological",
           "route": "system_a",
           "sourcePage": 2,
-          "answerTerms": ["beat frequency", "phase stepping"],
+          "answerTerms": [],
+          "answerTermGroups": [["beat frequency", "拍频"], ["phase stepping", "相位步进", "相移"]],
           "evidenceTerms": ["beat frequency", "phase stepping naturally in time", "heterodyne holography"]
         }],
         "requiredLocateContracts": [{
@@ -881,7 +899,12 @@
         "至少给出危险气体泄漏或自动驾驶三维感知中的一个原文应用例子。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["wavelengths", "high frame rates", "three dimensions"],
+        "requiredAnswerTerms": [],
+        "requiredAnswerTermGroups": [
+          ["wavelengths", "波长", "波段"],
+          ["high frame rates", "高帧率"],
+          ["three dimensions", "三维", "3D"]
+        ],
         "requiredRefDocIds": ["spi-prospects"],
         "requiredCitationDocIds": ["spi-prospects"],
         "allowedRefDocIds": ["spi-prospects"],
@@ -892,7 +915,12 @@
           "docId": "spi-prospects",
           "route": "system_a",
           "sourcePage": 1,
-          "answerTerms": ["wavelengths", "high frame rates", "three dimensions"],
+          "answerTerms": [],
+          "answerTermGroups": [
+            ["wavelengths", "波长", "波段"],
+            ["high frame rates", "高帧率"],
+            ["three dimensions", "三维", "3D"]
+          ],
           "evidenceTerms": ["wavelengths outside the reach of FPA technology", "high frame rates", "three dimensions"]
         }],
         "requiredLocateContracts": [{
@@ -919,7 +947,12 @@
         "厚样本问题应落到离焦光和探测器尺寸限制，不能只说散射更强。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["spatial resolution", "signal-to-noise ratio", "optical sectioning"],
+        "requiredAnswerTerms": [],
+        "requiredAnswerTermGroups": [
+          ["spatial resolution", "空间分辨率"],
+          ["signal-to-noise ratio", "信噪比", "SNR"],
+          ["optical sectioning", "光学切片", "光学层切"]
+        ],
         "requiredRefDocIds": ["s2ism"],
         "requiredCitationDocIds": ["s2ism"],
         "allowedRefDocIds": ["s2ism"],
@@ -929,8 +962,14 @@
           "id": "s2ism-abstract-tradeoff",
           "docId": "s2ism",
           "route": "system_a",
+          "answerScope": "response",
           "sourcePage": 1,
-          "answerTerms": ["spatial resolution", "signal-to-noise ratio", "optical sectioning"],
+          "answerTerms": [],
+          "answerTermGroups": [
+            ["spatial resolution", "空间分辨率"],
+            ["signal-to-noise ratio", "信噪比", "SNR"],
+            ["optical sectioning", "光学切片", "光学层切"]
+          ],
           "evidenceTerms": ["trade-off between spatial resolution and signal-to-noise ratio", "do not provide optical sectioning", "fail with thick samples"]
         }],
         "requiredLocateContracts": [{
@@ -998,7 +1037,11 @@
         "证据必须落到系统结构原文，不能用后来的 SCI 论文替代本论文。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["two dispersive elements", "binary-valued aperture"],
+        "requiredAnswerTerms": ["CASSI"],
+        "requiredAnswerTermGroups": [
+          ["two dispersive elements", "两个色散元件", "两级色散元件", "双色散"],
+          ["binary-valued aperture", "二值孔径", "二值编码孔径", "二进制孔径"]
+        ],
         "requiredRefDocIds": ["cassi"],
         "requiredCitationDocIds": ["cassi"],
         "allowedRefDocIds": ["cassi"],
@@ -1008,8 +1051,13 @@
           "id": "cassi-abstract-architecture",
           "docId": "cassi",
           "route": "system_a",
+          "answerScope": "response",
           "sourcePage": 1,
-          "answerTerms": ["two dispersive elements", "binary-valued aperture"],
+          "answerTerms": ["CASSI"],
+          "answerTermGroups": [
+            ["two dispersive elements", "两个色散元件", "两级色散元件", "双色散"],
+            ["binary-valued aperture", "二值孔径", "二值编码孔径", "二进制孔径"]
+          ],
           "evidenceTerms": ["two dispersive elements", "arranged in opposition", "binary-valued aperture code"]
         }],
         "requiredLocateContracts": [{
@@ -1036,7 +1084,12 @@
         "必须明确速度与信噪比权衡，并指出不改变探测器积分时间。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["parallelize", "signal-to-noise ratio", "acquisition speed"],
+        "requiredAnswerTerms": [],
+        "requiredAnswerTermGroups": [
+          ["parallelize", "并行化", "并行"],
+          ["signal-to-noise ratio", "信噪比", "SNR"],
+          ["acquisition speed", "采集速度", "采集时间"]
+        ],
         "requiredRefDocIds": ["fdm-metamaterials"],
         "requiredCitationDocIds": ["fdm-metamaterials"],
         "allowedRefDocIds": ["fdm-metamaterials"],
@@ -1046,8 +1099,14 @@
           "id": "fdm-abstract-tradeoff",
           "docId": "fdm-metamaterials",
           "route": "system_a",
+          "answerScope": "response",
           "sourcePage": 1,
-          "answerTerms": ["parallelize", "signal-to-noise ratio", "acquisition speed"],
+          "answerTerms": [],
+          "answerTermGroups": [
+            ["parallelize", "并行化", "并行"],
+            ["signal-to-noise ratio", "信噪比", "SNR"],
+            ["acquisition speed", "采集速度", "采集时间"]
+          ],
           "evidenceTerms": ["parallelize the single-pixel imaging process", "trade-off between signal-to-noise ratio and acquisition speed", "without altering detector integration time"]
         }],
         "requiredLocateContracts": [{
@@ -1074,7 +1133,11 @@
         "证据应定位到经典去噪方法章节，而不是只引用摘要。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["spatial domain", "transform domain"],
+        "requiredAnswerTerms": [],
+        "requiredAnswerTermGroups": [
+          ["spatial domain", "空间域"],
+          ["transform domain", "变换域"]
+        ],
         "requiredRefDocIds": ["denoising-review"],
         "requiredCitationDocIds": ["denoising-review"],
         "allowedRefDocIds": ["denoising-review"],
@@ -1084,8 +1147,10 @@
           "id": "denoising-two-families",
           "docId": "denoising-review",
           "route": "system_a",
+          "answerScope": "response",
           "sourcePage": 2,
-          "answerTerms": ["spatial domain", "transform domain"],
+          "answerTerms": [],
+          "answerTermGroups": [["spatial domain", "空间域"], ["transform domain", "变换域"]],
           "evidenceTerms": ["spatial domain methods", "transform domain methods"]
         }],
         "requiredLocateContracts": [{
@@ -1153,7 +1218,12 @@
         "必须准确复述从单张压缩图重建显式动态三维场景的论文声明。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["variant of 3DGS", "single compressed image", "dynamic 3D scenes"],
+        "requiredAnswerTerms": ["3DGS"],
+        "requiredAnswerTermGroups": [
+          ["variant of 3DGS", "3DGS 变体", "改进 3DGS", "适配 3DGS"],
+          ["single compressed image", "单张压缩图", "单张快照压缩图像", "一次压缩观测"],
+          ["dynamic 3D scenes", "动态 3D 场景", "动态三维场景"]
+        ],
         "requiredRefDocIds": ["scigs"],
         "requiredCitationDocIds": ["scigs"],
         "allowedRefDocIds": ["scigs"],
@@ -1163,8 +1233,14 @@
           "id": "scigs-explicit-dynamic-claim",
           "docId": "scigs",
           "route": "system_a",
+          "answerScope": "response",
           "sourcePage": 1,
-          "answerTerms": ["variant of 3DGS", "single compressed image", "dynamic 3D scenes"],
+          "answerTerms": ["3DGS"],
+          "answerTermGroups": [
+            ["variant of 3DGS", "3DGS 变体", "改进 3DGS", "适配 3DGS"],
+            ["single compressed image", "单张压缩图", "单张快照压缩图像", "一次压缩观测"],
+            ["dynamic 3D scenes", "动态 3D 场景", "动态三维场景"]
+          ],
           "evidenceTerms": ["variant of 3DGS", "single compressed image", "dynamic 3D scenes"]
         }],
         "requiredLocateContracts": [{
@@ -1191,7 +1267,12 @@
         "还要解释快速区域与慢变化区域在不同帧上积累细节的机制。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["foveal region", "entire field of view", "several consecutive frames"],
+        "requiredAnswerTerms": [],
+        "requiredAnswerTermGroups": [
+          ["foveal region", "中央凹", "焦点区域", "高分辨率区"],
+          ["entire field of view", "整个视场", "全视场"],
+          ["several consecutive frames", "连续帧", "多帧", "连续多帧"]
+        ],
         "requiredRefDocIds": ["foveated-spi"],
         "requiredCitationDocIds": ["foveated-spi"],
         "allowedRefDocIds": ["foveated-spi"],
@@ -1201,8 +1282,14 @@
           "id": "foveated-whole-field-update",
           "docId": "foveated-spi",
           "route": "system_a",
+          "answerScope": "response",
           "sourcePage": 1,
-          "answerTerms": ["foveal region", "entire field of view", "several consecutive frames"],
+          "answerTerms": [],
+          "answerTermGroups": [
+            ["foveal region", "中央凹", "焦点区域", "高分辨率区"],
+            ["entire field of view", "整个视场", "全视场"],
+            ["several consecutive frames", "连续帧", "多帧", "连续多帧"]
+          ],
           "evidenceTerms": ["high-resolution foveal region tracks motion", "entire field of view", "several consecutive frames"]
         }],
         "requiredLocateContracts": [{
@@ -1229,7 +1316,12 @@
         "目标应准确说成稀疏信号支撑集恢复，不要泛化成任意图像重建都更好。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["sequential adaptive", "signal support recovery", "distilled sensing"],
+        "requiredAnswerTerms": [],
+        "requiredAnswerTermGroups": [
+          ["sequential adaptive", "顺序自适应", "序贯自适应"],
+          ["signal support recovery", "信号支撑集恢复", "稀疏支撑恢复"],
+          ["distilled sensing", "蒸馏感知"]
+        ],
         "requiredRefDocIds": ["seq-cs"],
         "requiredCitationDocIds": ["seq-cs"],
         "allowedRefDocIds": ["seq-cs"],
@@ -1239,8 +1331,14 @@
           "id": "sequential-cs-abstract-purpose",
           "docId": "seq-cs",
           "route": "system_a",
+          "answerScope": "response",
           "sourcePage": 1,
-          "answerTerms": ["sequential adaptive", "signal support recovery", "distilled sensing"],
+          "answerTerms": [],
+          "answerTermGroups": [
+            ["sequential adaptive", "顺序自适应", "序贯自适应"],
+            ["signal support recovery", "信号支撑集恢复", "稀疏支撑恢复"],
+            ["distilled sensing", "蒸馏感知"]
+          ],
           "evidenceTerms": ["sequential adaptive compressed sensing", "signal support recovery", "distilled sensing"]
         }],
         "requiredLocateContracts": [{
@@ -1267,7 +1365,11 @@
         "不能把它描述成单纯提高分辨率而忽略对活细胞长时间观察的意义。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["120 nm", "tenfold lower", "photodamage"],
+        "requiredAnswerTerms": ["120 nm"],
+        "requiredAnswerTermGroups": [
+          ["tenfold lower", "降低约10倍", "低十倍", "十分之一"],
+          ["photodamage", "光损伤", "光毒性"]
+        ],
         "requiredRefDocIds": ["iism"],
         "requiredCitationDocIds": ["iism"],
         "allowedRefDocIds": ["iism"],
@@ -1277,8 +1379,13 @@
           "id": "iism-resolution-power-benefit",
           "docId": "iism",
           "route": "system_a",
+          "answerScope": "response",
           "sourcePage": 1,
-          "answerTerms": ["120 nm", "tenfold lower", "photodamage"],
+          "answerTerms": ["120 nm"],
+          "answerTermGroups": [
+            ["tenfold lower", "降低约10倍", "低十倍", "十分之一"],
+            ["photodamage", "光损伤", "光毒性"]
+          ],
           "evidenceTerms": ["120 nm lateral resolution", "tenfold lower incident illumination power", "reducing photodamage"]
         }],
         "requiredLocateContracts": [{
@@ -1305,7 +1412,12 @@
         "还要说明过量感应电流会损伤器件，因此必须淬灭雪崩。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["Geiger mode", "breakdown voltage", "quenching circuit"],
+        "requiredAnswerTerms": ["SPAD"],
+        "requiredAnswerTermGroups": [
+          ["Geiger mode", "Geiger 模式", "盖革模式"],
+          ["breakdown voltage", "击穿电压"],
+          ["quenching circuit", "淬灭电路"]
+        ],
         "requiredRefDocIds": ["spd-review"],
         "requiredCitationDocIds": ["spd-review"],
         "allowedRefDocIds": ["spd-review"],
@@ -1315,8 +1427,14 @@
           "id": "spad-geiger-quenching",
           "docId": "spd-review",
           "route": "system_a",
+          "answerScope": "response",
           "sourcePage": 2,
-          "answerTerms": ["Geiger mode", "breakdown voltage", "quenching circuit"],
+          "answerTerms": ["SPAD"],
+          "answerTermGroups": [
+            ["Geiger mode", "Geiger 模式", "盖革模式"],
+            ["breakdown voltage", "击穿电压"],
+            ["quenching circuit", "淬灭电路"]
+          ],
           "evidenceTerms": ["operates in Geiger mode", "reverse bias breakdown voltage", "quenching circuit"]
         }],
         "requiredLocateContracts": [{
@@ -1343,7 +1461,12 @@
         "证据必须来自方法章节，不能只靠标题猜测网络结构。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["self-supervised", "image-loop", "part-based"],
+        "requiredAnswerTerms": ["ILNet"],
+        "requiredAnswerTermGroups": [
+          ["self-supervised", "自监督"],
+          ["image-loop", "图像循环", "图像闭环"],
+          ["part-based", "分块", "基于部件", "特征分块"]
+        ],
         "requiredRefDocIds": ["piln"],
         "requiredCitationDocIds": ["piln"],
         "allowedRefDocIds": ["piln"],
@@ -1353,8 +1476,14 @@
           "id": "piln-method-definition",
           "docId": "piln",
           "route": "system_a",
+          "answerScope": "response",
           "sourcePage": 2,
-          "answerTerms": ["self-supervised", "image-loop", "part-based"],
+          "answerTerms": ["ILNet"],
+          "answerTermGroups": [
+            ["self-supervised", "自监督"],
+            ["image-loop", "图像循环", "图像闭环"],
+            ["part-based", "分块", "基于部件", "特征分块"]
+          ],
           "evidenceTerms": ["self-supervised image-loop neural network", "part-based model", "finer-grained learning"]
         }],
         "requiredLocateContracts": [{

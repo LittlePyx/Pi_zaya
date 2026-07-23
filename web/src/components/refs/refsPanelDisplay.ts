@@ -12,6 +12,7 @@ export interface RefsPanelRefUiMeta {
   score_pending?: boolean
   summary_line?: string
   summary_kind?: string
+  summary_display_role?: string
   summary_label?: string
   summary_title?: string
   summary_generation?: string
@@ -31,6 +32,7 @@ export interface RefsPanelRefUiMeta {
   can_open?: boolean
   citation_meta?: Record<string, unknown>
   source_path?: string
+  source_kind?: string
   reader_open?: Partial<ReaderOpenPayload>
   card_view?: unknown
   cardView?: unknown

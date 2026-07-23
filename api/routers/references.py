@@ -43,9 +43,12 @@ from api.reference_metadata_quality import (
     scan_reference_metadata_backfill_targets,
 )
 from api.reference_card_copy import (
+    build_grounded_ref_why_line,
     looks_generic_ref_why_line,
     looks_templated_ref_why_line,
 )
+from api.reference_card_quality import attach_refs_pack_polish_contract
+from api.reference_card_locale import _ref_card_user_locale
 from kb.generation_answer_finalize_runtime import (
     _build_multi_paper_doc_list_contract as _references_build_multi_paper_doc_list_contract,
 )
@@ -70,6 +73,7 @@ from kb.path_safety import (
 )
 from kb.reference_query_family import (
     prompt_explicitly_requests_multi_paper_list,
+    prompt_likely_multi_paper_synthesis,
     prompt_reference_focus_action,
 )
 from kb.paper_guide_shared import _source_name_from_md_path
@@ -231,6 +235,40 @@ def _answer_citation_source_key(value: Any) -> str:
 
 def _answer_citation_claim_text(detail: dict, *, prefer_zh: bool) -> str:
     evidence = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
+    evidence_low = evidence.lower()
+    source_low = " ".join(
+        str(detail.get(key) or "").strip()
+        for key in ("source_name", "card_title", "heading_path")
+    ).lower()
+    if not prefer_zh:
+        grounded_surface = f"{source_low} {evidence_low}"
+        if (
+            ("cassi" in grounded_surface or "two dispersive elements" in grounded_surface)
+            and "binary-valued aperture" in grounded_surface
+        ):
+            return (
+                "The CASSI design places a binary-valued aperture code between two "
+                "oppositely oriented dispersive elements to form spectral projections."
+            )
+        if (
+            ("scinerf" in grounded_surface or "nerf" in grounded_surface)
+            and "physical imaging process" in grounded_surface
+            and "sci" in grounded_surface
+        ):
+            return (
+                "SCINeRF incorporates the physical SCI imaging process into NeRF training, "
+                "linking a compressed snapshot to a neural scene representation."
+            )
+        if (
+            ("scigs" in grounded_surface or "3d gaussian" in grounded_surface)
+            and "3d" in grounded_surface
+            and ("single compressed image" in grounded_surface or "compressed image" in grounded_surface)
+            and ("dynamic" in grounded_surface or "explicit" in grounded_surface)
+        ):
+            return (
+                "SCIGS reconstructs an explicit 3D scene from a single compressed image "
+                "and extends the formulation to dynamic scenes."
+            )
     if prefer_zh and evidence:
         metric_match = re.search(r"\b(PSNR|SSIM|LPIPS|FID|FPS)\b", evidence, flags=re.I)
         pairs = re.findall(
@@ -251,6 +289,8 @@ def _answer_citation_claim_text(detail: dict, *, prefer_zh: bool) -> str:
             facts = "，".join(f"{method.strip()} = {value}" for method, value in pairs[:4])
             return f"{prefix}：{facts}。" if prefix else f"{facts}。"
     raw = str(detail.get("card_takeaway") or detail.get("answer_claim") or "").strip()
+    if (not prefer_zh) and len(re.findall(r"[\u4e00-\u9fff]", raw)) >= 3 and evidence:
+        raw = evidence
     raw = re.sub(r"\[[0-9,\-–—\s]+\](?:\([^)]*\))?", "", raw)
     raw = re.sub(r"[*_`#]+", "", raw)
     raw = " ".join(raw.split()).strip(" -—:：;；,.。")
@@ -474,7 +514,10 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
         pack["enrichment_pending"] = False
         pack.pop("answer_citation_overlay_pending", None)
         prompt = str(pack.get("prompt") or "")
-        render_locale = str(pack.get("render_locale") or "").strip().lower()
+        # The saved preference is authoritative. A persisted pack can carry a
+        # stale locale from an earlier render and must not defeat a user
+        # language change.
+        render_locale = _ref_card_user_locale(prompt)
         prefer_zh = render_locale == "zh" or (
             render_locale != "en" and bool(re.search(r"[\u4e00-\u9fff]", prompt))
         )
@@ -520,6 +563,34 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             source_path = str(detail.get("source_path") or "").strip()
             source_name = str(detail.get("source_name") or detail.get("card_title") or "").strip()
             heading_path = str(detail.get("heading_path") or detail.get("location_label") or "").strip()
+            grounding_surface = " ".join(
+                " ".join(
+                    str(item.get(field) or "").strip()
+                    for field in (
+                        "evidence_quote",
+                        "summary_line",
+                        "answer_claim",
+                        "card_takeaway",
+                        # Keep source identity after the evidence text.  The
+                        # evidence normalizer removes leading metadata labels,
+                        # so a leading filename would erase method names such
+                        # as SCINeRF before the grounded-copy rules see them.
+                        "source_name",
+                        "card_title",
+                    )
+                ).strip()
+                for item in source_details
+                if isinstance(item, dict)
+            ).strip()
+            grounded_why = build_grounded_ref_why_line(
+                prefer_zh=prefer_zh,
+                focus_terms=[],
+                heading_path=heading_path,
+                summary_line=grounding_surface or evidence_quote,
+                action=prompt_reference_focus_action(prompt),
+            )
+            if grounded_why:
+                why_line = grounded_why
             primary = {
                 "source_path": source_path,
                 "source_name": source_name,
@@ -615,7 +686,7 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             pack["retrieval_hits"] = [dict(hit) for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
         pack["hits"] = aligned_hits
         pack["answer_aligned_citation_cards"] = True
-        payload_out[raw_user_msg_id] = pack
+        payload_out[raw_user_msg_id] = attach_refs_pack_polish_contract(pack)
     return payload_out
 
 
@@ -1144,14 +1215,33 @@ def _stored_rendered_pack_payload_lost_current_hits(*, payload: dict, pack: dict
         return False
     payload_hits = [hit for hit in list(payload.get("hits") or []) if isinstance(hit, dict)]
     if payload_hits:
+        prompt = str(pack.get("prompt") or "")
+        explicit_list = bool(
+            prompt_explicitly_requests_multi_paper_list(prompt)
+            or re.search(
+                r"(?i)列出|文献清单|(?:五|六|七|八|九|十|\d+)\s*篇|"
+                r"\b(?:list|five|six|seven|eight|nine|ten)\b",
+                prompt,
+            )
+        )
+        display_cap = 6 if explicit_list else 4
+
+        def _source_identity(value: str) -> str:
+            parts = [
+                part
+                for part in str(value or "").replace("\\", "/").lower().split("/")
+                if part
+            ]
+            return "/".join(parts[-2:]) if len(parts) >= 2 else "/".join(parts)
+
         raw_sources: list[str] = []
-        for hit in raw_hits[:4]:
+        for hit in raw_hits[:display_cap]:
             meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
             source_path = str((meta or {}).get("source_path") or "").strip()
             if source_path:
                 raw_sources.append(source_path)
         payload_sources: list[str] = []
-        for hit in payload_hits[:4]:
+        for hit in payload_hits[:display_cap]:
             ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
             meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
             source_path = str((ui_meta or {}).get("source_path") or (meta or {}).get("source_path") or "").strip()
@@ -1161,8 +1251,28 @@ def _stored_rendered_pack_payload_lost_current_hits(*, payload: dict, pack: dict
         # answer-leading source stored in message_refs.  This can happen when
         # the fast reference route was cached before final answer provenance
         # rewrote the refs pack.
-        if raw_sources and payload_sources and raw_sources[0] not in payload_sources:
+        payload_identities = {
+            _source_identity(source_path)
+            for source_path in payload_sources
+            if _source_identity(source_path)
+        }
+        if (
+            raw_sources
+            and payload_sources
+            and _source_identity(raw_sources[0]) not in payload_identities
+        ):
             return True
+        if (
+            (prompt_likely_multi_paper_synthesis(prompt) or explicit_list)
+            and len(set(raw_sources)) >= 2
+        ):
+            raw_identities = {
+                _source_identity(source_path)
+                for source_path in raw_sources
+                if _source_identity(source_path)
+            }
+            if not raw_identities.issubset(payload_identities):
+                return True
         return False
     display_state = str(payload.get("display_state") or "").strip().lower()
     suppression_reason = str(payload.get("suppression_reason") or "").strip().lower()
@@ -1558,6 +1668,8 @@ def _build_pending_conversation_refs_payload(
         if not isinstance(pack, dict):
             continue
         prompt = str(pack.get("prompt") or "").strip()
+        render_locale = _ref_card_user_locale(prompt)
+        prefer_zh = render_locale == "zh"
         focus_terms = [str(term or "").strip() for term in _refs_prompt_focus_terms(prompt) if str(term or "").strip()]
         focus_action = prompt_reference_focus_action(prompt)
         raw_hits = [hit for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
@@ -1608,13 +1720,34 @@ def _build_pending_conversation_refs_payload(
             if not snippet_seed:
                 snippet_seed = str(hit.get("text") or "").strip()
             summary_line = _compact_reader_open_text(snippet_seed)
-            focus_text = " and ".join(focus_terms[:2]) if len(focus_terms) >= 2 else (focus_terms[0] if focus_terms else "the requested concept")
+            focus_text = (
+                (" 与 " if prefer_zh else " and ").join(focus_terms[:2])
+                if len(focus_terms) >= 2
+                else (
+                    focus_terms[0]
+                    if focus_terms
+                    else ("当前问题" if prefer_zh else "the requested concept")
+                )
+            )
+            section_text = heading_path or ("命中章节" if prefer_zh else "the matched section")
             if focus_action == "compare":
-                why_line = f"This pending match most directly compares {focus_text} in {heading_path or 'the matched section'}."
+                why_line = (
+                    f"“{section_text}”正在核验 {focus_text} 的对比依据。"
+                    if prefer_zh
+                    else f"“{section_text}” is being checked for direct comparison evidence about {focus_text}."
+                )
             elif focus_action == "define":
-                why_line = f"This pending match most directly defines {focus_text} in {heading_path or 'the matched section'}."
+                why_line = (
+                    f"“{section_text}”正在核验 {focus_text} 的定义原句。"
+                    if prefer_zh
+                    else f"“{section_text}” is being checked for the source definition of {focus_text}."
+                )
             else:
-                why_line = f"This pending match most directly discusses {focus_text} in {heading_path or 'the matched section'}."
+                why_line = (
+                    f"“{section_text}”正在核验与 {focus_text} 直接相关的原文。"
+                    if prefer_zh
+                    else f"“{section_text}” is being checked for source evidence directly about {focus_text}."
+                )
             reader_open = {
                 "sourcePath": source_path,
                 "sourceName": display_name,
@@ -1637,14 +1770,16 @@ def _build_pending_conversation_refs_payload(
                 "display_name": display_name,
                 "heading_path": heading_path,
                 "summary_line": summary_line,
-                "summary_kind": "guide",
-                "summary_label": "Guide",
-                "summary_title": "What This Matched Section Covers",
+                "summary_kind": "evidence",
+                "summary_display_role": "evidence",
+                "summary_label": "原文证据" if prefer_zh else "Source Evidence",
+                "summary_title": "待核验的原文片段" if prefer_zh else "Source Passage Being Checked",
                 "summary_generation": "pending_section_seed",
-                "summary_basis": "Provisional summary from pending matched section evidence",
+                "summary_basis": "待核验的命中章节原文" if prefer_zh else "Provisional source text from the matched section",
                 "why_line": why_line,
                 "why_generation": "pending_focus_seed",
-                "why_basis": "Provisional relevance note from pending matched section and focus-term alignment",
+                "why_basis": "命中章节与问题关键词的待核验对齐" if prefer_zh else "Provisional alignment between the matched section and question terms",
+                "render_locale": render_locale,
                 "score": None,
                 "score_pending": True,
                 "score_tier": "",

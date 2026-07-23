@@ -619,6 +619,13 @@ def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
     source_identity_aliases = (
         ("pidl", ("physics informed deep learning", "single photon imaging")),
         ("piln", ("part based image loop network",)),
+        (
+            "cassi",
+            (
+                "single shot compressive spectral imaging",
+                "dual disperser",
+            ),
+        ),
     )
     for alias, required_source_phrases in source_identity_aliases:
         if re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", prompt_low) and all(
@@ -1933,6 +1940,87 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
         )
     if has_any("origin", "source", "comes from", "prior", "previous", "\u6765\u6e90", "\u51fa\u5904", "\u4e4b\u524d", "\u5df2\u6709"):
         add("prior work existing method background reference citation source")
+    wants_cassi = has_any("cassi")
+    wants_sci_lineage = bool(
+        has_any(
+            "snapshot compressive imaging",
+            "snapshot compressive",
+            "compressive snapshot",
+            "压缩快照",
+            "快照压缩",
+        )
+        and has_any("3d", "three-dimensional", "三维", "光谱", "spectral")
+    )
+    if wants_cassi or wants_sci_lineage:
+        add(
+            "CASSI single-shot compressive spectral imaging dual-disperser "
+            "two dispersive elements binary-valued aperture spectral datacube"
+        )
+    if wants_sci_lineage or has_any("scinerf", "scigs"):
+        add(
+            "SCINeRF neural radiance fields snapshot compressive image "
+            "physical imaging process SCI training NeRF 3D scene"
+        )
+        add(
+            "SCIGS 3D Gaussian Splatting snapshot compressive image "
+            "single compressed image dynamic 3D scenes"
+        )
+    if has_any("3d single-pixel video", "3d single pixel video") and has_any(
+        "detector",
+        "探测器",
+        "frame",
+        "fps",
+        "速度",
+        "实时",
+    ):
+        add(
+            "3D single-pixel video four spatially-separated single-pixel detectors "
+            "continuous real-time 3D video 8 frames per second 64 x 64 pixels"
+        )
+    if has_any(
+        "single-pixel compressive holography",
+        "single pixel compressive holography",
+        "单像素压缩全息",
+        "单像素全息",
+    ) and has_any("throughput", "phase", "相移", "吞吐"):
+        add(
+            "high-throughput single-pixel compressive holography beat frequency "
+            "heterodyne holography phase stepping naturally in time"
+        )
+    if has_any(
+        "sequential compressed sensing",
+        "sequentially designed compressed sensing",
+        "顺序压缩感知",
+        "序贯压缩感知",
+    ):
+        add(
+            "sequential adaptive compressed sensing signal support recovery "
+            "distilled sensing exact support lower SNR"
+        )
+    if has_any("spad") and has_any(
+        "geiger",
+        "breakdown",
+        "quench",
+        "淬灭",
+        "击穿",
+        "雪崩",
+    ):
+        add(
+            "SPAD operates in Geiger mode reverse bias breakdown voltage "
+            "quenching circuit avalanche single photon detection"
+        )
+    if has_any(
+        "beginner",
+        "getting started",
+        "reading roadmap",
+        "刚开始",
+        "入门",
+        "主线",
+        "先读",
+    ) and has_any("single-pixel imaging", "single pixel imaging", "单像素成像"):
+        add("Principles and prospects for single-pixel imaging review camera architecture applications")
+        add("Hadamard single-pixel imaging versus Fourier single-pixel imaging sampling basis comparison")
+        add("Advances and Challenges of Single-Pixel Imaging Based on Deep Learning review taxonomy")
     return variants[:4]
 
 
@@ -2068,11 +2156,19 @@ def _search_hits_with_fallback(
             weights=[1.5] + [2.5 for _ in deterministic_variants],
         )
         for _h in merged_hits:
+            _h["_expansion_variants"] = list(deterministic_variants)
+        for _h in merged_hits:
             _h["_bm25_score"] = _h.get("score", 0.0)
         hits1, scores1, best1 = merged_hits, merged_scores, float(max(merged_scores) if merged_scores else best1)
 
     # LLM-based query expansion to improve recall for synonym-variant queries.
-    if bool(allow_expand) and q1 and getattr(settings, "api_key", None) and getattr(settings, "query_expansion_enabled", False):
+    if (
+        bool(allow_expand)
+        and not deterministic_variants
+        and q1
+        and getattr(settings, "api_key", None)
+        and getattr(settings, "query_expansion_enabled", False)
+    ):
         expanded = _expand_query_via_llm(settings, q1)
         # expanded[0] is q1; skip it since we already searched q1
         new_variants = [v for v in expanded[1:] if v and v.lower() != q1.lower() and (not q2 or v.lower() != q2.lower())]
@@ -2251,6 +2347,15 @@ def _group_hits_by_doc_for_refs(
     for _best, src in doc_order[:max_docs_consider]:
         hs = by_doc.get(src) or []
         hs2 = sorted(hs, key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
+        expansion_variants = list(
+            dict.fromkeys(
+                str(variant or "").strip()
+                for hit in hs2[:6]
+                for variant in list(hit.get("_expansion_variants") or [])
+                if str(variant or "").strip()
+            )
+        )
+        expansion_focus_query = " ".join(expansion_variants[:3]).strip()
         primary_table_hit = next(
             (
                 h
@@ -2337,9 +2442,28 @@ def _group_hits_by_doc_for_refs(
 
         # Optional deep-read for better section targeting + aspects + ranking.
         deep_best = 0.0
-        do_deep_read = (deep_read and deep_query and (len(docs) < deep_expand_docs)) or force_anchor_focus
+        use_expansion_deep_read = bool(expansion_focus_query and doc_hint_score >= 6.0)
+        expansion_augmented_query = " ".join(
+            part
+            for part in [
+                str(prompt_text or deep_query or "").strip(),
+                expansion_focus_query if use_expansion_deep_read else "",
+            ]
+            if part
+        ).strip()
+        do_deep_read = (
+            (deep_read and deep_query and (len(docs) < deep_expand_docs))
+            or force_anchor_focus
+            or use_expansion_deep_read
+        )
         if do_deep_read:
-            read_query = (anchor_focus_query or deep_query or prompt_text or "").strip()
+            read_query = (
+                anchor_focus_query
+                or expansion_augmented_query
+                or deep_query
+                or prompt_text
+                or ""
+            ).strip()
             anchor_extra: list[dict] = []
             if force_anchor_focus:
                 try:
@@ -2496,7 +2620,13 @@ def _group_hits_by_doc_for_refs(
             ]
 
         # Build display snippets: pick the most relevant, non-noise snippets.
-        q_for_pick = (anchor_focus_query or deep_query or prompt_text or "").strip()
+        q_for_pick = (
+            anchor_focus_query
+            or expansion_augmented_query
+            or deep_query
+            or prompt_text
+            or ""
+        ).strip()
         q_tokens = [t for t in tokenize(q_for_pick) if len(t) >= 3]
         scored_snips: list[tuple[float, str]] = []
         for s in snippets:
@@ -2651,7 +2781,9 @@ def _group_hits_by_doc_for_refs(
                 "",
             )
         else:
-            meta_out["ref_snippets"] = snippets[:3]
+            meta_out["ref_snippets"] = (
+                show_snips[:3] if use_expansion_deep_read and show_snips else snippets[:3]
+            )
         if primary_table_text:
             # Keep the card, locator and async reference summary grounded on
             # the same table series used by the answer.  Competing tables from

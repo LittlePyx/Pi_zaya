@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from api.reference_card_copy import looks_generic_ref_why_line, looks_templated_ref_why_line
 from kb.citation_audit import summarize_system_b_citation_audit
 from kb.evidence_text import finish_evidence_text, source_title_candidate, strip_evidence_metadata_prefix
 
@@ -1061,6 +1062,10 @@ def ref_card_hit_quality(
             fail("ref_card_raw_markdown_visible", field=field, detail=text[:120])
         if _has_template_phrase(text):
             fail("ref_card_template_phrase_visible", field=field, detail=text[:120])
+        if field in {"why_line", "card_view_why"} and (
+            looks_generic_ref_why_line(text) or looks_templated_ref_why_line(text)
+        ):
+            fail("ref_card_generic_why_visible", field=field, detail=text[:120])
         if field in {"summary_line", "why_line", "card_view_summary", "card_view_why"}:
             if _looks_redundant_narrative_metadata(text, {**meta, **ui}):
                 fail("ref_card_narrative_metadata_repeated", field=field, detail=text[:120])

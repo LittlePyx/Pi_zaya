@@ -1004,6 +1004,18 @@ const plainMathWidthMessages: Message[] = [
   },
 ]
 
+const cjkAdjacentStrongMessages: Message[] = [
+  {
+    id: 9221,
+    role: 'assistant',
+    content: '三个工作的共同起点是**快照压缩成像（CASSI）**的物理原理，并进一步发展到**三维场景表示**和动态重建。',
+    rendered_body: '三个工作的共同起点是**快照压缩成像（CASSI）**的物理原理，并进一步发展到**三维场景表示**和动态重建。',
+    copy_text: '三个工作的共同起点是快照压缩成像（CASSI）的物理原理，并进一步发展到三维场景表示和动态重建。',
+    copy_markdown: '三个工作的共同起点是**快照压缩成像（CASSI）**的物理原理，并进一步发展到**三维场景表示**和动态重建。',
+    created_at: Date.now(),
+  },
+]
+
 const libraryFigureAssetUrlMessages: Message[] = [
   {
     id: 9251,
@@ -1752,6 +1764,7 @@ type RegressionScenario =
   | 'plain-citation-refs-fallback'
   | 'plain-citation-refs-partial'
   | 'plain-math-width'
+  | 'cjk-adjacent-strong'
   | 'library-figure-asset-url'
   | 'guide-filter-empty-external'
   | 'negative-evidence-locate'
@@ -1788,6 +1801,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'plain-citation-refs-fallback') return 'plain-citation-refs-fallback'
     if (scenarioParam === 'plain-citation-refs-partial') return 'plain-citation-refs-partial'
     if (scenarioParam === 'plain-math-width') return 'plain-math-width'
+    if (scenarioParam === 'cjk-adjacent-strong') return 'cjk-adjacent-strong'
     if (scenarioParam === 'library-figure-asset-url') return 'library-figure-asset-url'
     if (scenarioParam === 'guide-filter-empty-external') return 'guide-filter-empty-external'
     if (scenarioParam === 'negative-evidence-locate') return 'negative-evidence-locate'
@@ -1820,6 +1834,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'plain-citation-refs-fallback') return plainCitationRefsFallbackMessages
     if (scenario === 'plain-citation-refs-partial') return plainCitationRefsPartialFallbackMessages
     if (scenario === 'plain-math-width') return plainMathWidthMessages
+    if (scenario === 'cjk-adjacent-strong') return cjkAdjacentStrongMessages
     if (scenario === 'library-figure-asset-url') return libraryFigureAssetUrlMessages
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyMessages
     if (scenario === 'negative-evidence-locate') return negativeEvidenceLocateMessages

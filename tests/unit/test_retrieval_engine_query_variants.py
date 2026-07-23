@@ -72,6 +72,121 @@ def test_pidl_piln_aliases_keep_both_named_sources_through_focus_matching() -> N
     assert _source_prompt_match_score(question, "library/SCINeRF.en.md") == 0.0
 
 
+def test_cassi_alias_matches_dual_disperser_title_without_literal_acronym() -> None:
+    question = "CASSI 的双色散结构具体怎么摆，为什么中间要放二值孔径？"
+    cassi_source = (
+        "library/OE-2007-Single-shot compressive spectral imaging with "
+        "a dual-disperser architecture.en.md"
+    )
+
+    assert _source_prompt_match_score(question, cassi_source) >= 7.5
+    assert _source_prompt_match_score(
+        question,
+        "library/SCIGS-3D-Gaussians-Splatting-from-a-Snapshot-Compressive-Image.en.md",
+    ) == 0.0
+
+
+def test_deterministic_query_variants_expand_snapshot_compressive_3d_lineage() -> None:
+    variants = _deterministic_query_variants(
+        "SCI 或压缩快照成像这条线，是怎么从光谱成像走到 3D 场景重建的？"
+    )
+    joined = "\n".join(variants).lower()
+
+    assert "dual-disperser" in joined
+    assert "binary-valued aperture" in joined
+    assert "scinerf" in joined
+    assert "physical imaging process" in joined
+    assert "scigs" in joined
+    assert "dynamic 3d scenes" in joined
+
+
+def test_snapshot_compressive_3d_lineage_retrieves_all_named_stages_without_an_llm() -> None:
+    cassi_source = (
+        "library/OE-2007-Single-shot compressive spectral imaging with "
+        "a dual-disperser architecture.en.md"
+    )
+    scinerf_source = (
+        "library/CVPR-2024-SCINeRF-Neural-Radiance-Fields-from-a-"
+        "Snapshot-Compressive-Image.en.md"
+    )
+    scigs_source = (
+        "library/ICIP-2025-SCIGS-3D-Gaussians-Splatting-from-a-"
+        "Snapshot-Compressive-Image.en.md"
+    )
+    retriever = BM25Retriever(
+        [
+            {
+                "id": "cassi",
+                "text": (
+                    "A single-shot compressive spectral imager uses two dispersive "
+                    "elements with a binary-valued aperture between them."
+                ),
+                "meta": {"source_path": cassi_source},
+            },
+            {
+                "id": "scinerf",
+                "text": (
+                    "SCINeRF formulates the physical imaging process of snapshot "
+                    "compressive imaging as part of NeRF training for a 3D scene."
+                ),
+                "meta": {"source_path": scinerf_source},
+            },
+            {
+                "id": "scigs",
+                "text": (
+                    "SCIGS adapts 3D Gaussian Splatting to recover dynamic 3D scenes "
+                    "from a single compressed image."
+                ),
+                "meta": {"source_path": scigs_source},
+            },
+            {
+                "id": "unrelated",
+                "text": "Deep learning for classical Japanese literature recognition.",
+                "meta": {"source_path": "library/Classical-Japanese-Literature.en.md"},
+            },
+        ]
+    )
+
+    hits, _scores, _used_query, _used_translation, _variants = _search_hits_with_fallback(
+        "SCI 或压缩快照成像这条线，是怎么从光谱成像走到 3D 场景重建的？",
+        retriever,
+        3,
+        SimpleNamespace(api_key=None, query_expansion_enabled=False),
+        allow_translate=False,
+    )
+
+    assert {hit["meta"]["source_path"] for hit in hits[:3]} == {
+        cassi_source,
+        scinerf_source,
+        scigs_source,
+    }
+
+
+def test_deterministic_query_variants_expand_exact_mechanism_terms() -> None:
+    cases = {
+        "这篇 3D single-pixel video 用了几个探测器，速度是多少？": (
+            "four spatially-separated single-pixel detectors",
+            "8 frames per second",
+        ),
+        "单像素压缩全息怎么提高吞吐量，为什么不再主动相移？": (
+            "beat frequency",
+            "phase stepping naturally in time",
+        ),
+        "Sequential compressed sensing 多利用了什么信息？": (
+            "signal support recovery",
+            "distilled sensing",
+        ),
+        "SPAD 雪崩之后为什么需要淬灭电路？": (
+            "geiger mode",
+            "quenching circuit",
+        ),
+    }
+
+    for question, required in cases.items():
+        joined = " ".join(_deterministic_query_variants(question)).lower()
+        assert all(term in joined for term in required)
+
+
 def test_pidl_piln_comparison_retrieves_both_named_sources_without_an_llm() -> None:
     pidl_source = (
         "library/NatCommun-2023-Physics-informed deep learning for computational "

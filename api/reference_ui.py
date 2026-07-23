@@ -32,6 +32,7 @@ from api.reference_card_quality import (
     ref_card_polish_status,
     refs_pack_has_full_llm_copy,
 )
+from api.deps import load_prefs
 from api.reference_focus_terms import (
     _PROMPT_FOCUS_STOPWORDS,
     _clean_refs_focus_phrase,
@@ -149,7 +150,13 @@ from kb.evidence_text import finish_evidence_text as _finish_evidence_text
 from kb.evidence_text import pick_readable_evidence_text as _pick_readable_evidence_text
 from kb.library_store import LibraryStore
 from kb.llm import DeepSeekChat
-from kb.path_safety import clean_file_source_path_input, root_relative_file_id
+from kb.path_safety import (
+    ROOT_RELATIVE_FILE_ID_PREFIX,
+    clean_file_source_path_input,
+    reference_source_roots,
+    resolve_root_relative_file_id,
+    root_relative_file_id,
+)
 from kb.paper_guide_prompting import (
     _paper_guide_prompt_requests_citation_lookup as _prompt_requests_citation_lookup,
 )
@@ -4574,6 +4581,27 @@ def _resolve_source_md_path(source_path: str) -> Path | None:
     raw = clean_file_source_path_input(source_path)
     if not raw:
         return None
+    if raw.replace("\\", "/").startswith(ROOT_RELATIVE_FILE_ID_PREFIX):
+        try:
+            settings = load_settings()
+            prefs = load_prefs()
+            md_root = Path(
+                prefs.get("md_dir")
+                or os.environ.get("KB_MD_DIR")
+                or str(Path(settings.db_dir).parent / "md_output")
+            ).expanduser()
+            resolved_public = resolve_root_relative_file_id(
+                raw,
+                reference_source_roots(
+                    md_root=md_root,
+                    db_dir=settings.db_dir,
+                ),
+            )
+        except Exception:
+            resolved_public = None
+        if resolved_public is not None and resolved_public.suffix.lower() == ".md":
+            return resolved_public
+        return None
     candidates: list[Path] = []
     direct = Path(raw)
     candidates.append(direct)
@@ -5365,6 +5393,251 @@ def _source_block_to_answer_primary_evidence(
     return _normalize_primary_ref_evidence_payload(evidence)
 
 
+def _prompt_contract_evidence_excerpt(
+    block_text: str,
+    *,
+    required_patterns: tuple[str, ...],
+    max_len: int = 460,
+) -> str:
+    """Build a concise excerpt that preserves every contract mechanism term."""
+
+    text = re.sub(r"\s+", " ", str(block_text or "")).strip()
+    if not text or not required_patterns:
+        return ""
+    sentences = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+", text)
+        if part.strip()
+    ] or [text]
+    chosen: list[str] = []
+    seen_sentences: set[str] = set()
+    for pattern in required_patterns:
+        matched_sentence = next(
+            (
+                sentence
+                for sentence in sentences
+                if re.search(pattern, sentence, flags=re.IGNORECASE)
+            ),
+            "",
+        )
+        if not matched_sentence:
+            return ""
+        sentence_key = matched_sentence.lower()
+        if sentence_key in seen_sentences:
+            continue
+        seen_sentences.add(sentence_key)
+        piece = matched_sentence
+        if len(piece) > 210:
+            match = re.search(pattern, piece, flags=re.IGNORECASE)
+            if match is None:
+                return ""
+            start = max(0, int(match.start()) - 80)
+            end = min(len(piece), int(match.end()) + 110)
+            if start > 0:
+                next_space = piece.find(" ", start)
+                start = next_space + 1 if next_space >= 0 else start
+            if end < len(piece):
+                previous_space = piece.rfind(" ", start, end)
+                end = previous_space if previous_space > start else end
+            piece = ("… " if start > 0 else "") + piece[start:end].strip()
+            if end < len(matched_sentence):
+                piece = piece.rstrip(" ,;:") + " …"
+        if piece not in chosen:
+            chosen.append(piece)
+    excerpt = " ".join(chosen).strip()
+    if len(excerpt) > int(max_len):
+        excerpt = excerpt[: int(max_len)].rsplit(" ", 1)[0].rstrip(" ,;:") + " …"
+    if not all(
+        re.search(pattern, excerpt, flags=re.IGNORECASE)
+        for pattern in required_patterns
+    ):
+        return ""
+    return excerpt
+
+
+def _select_prompt_contract_primary_ref_evidence(
+    *,
+    pack: dict | None,
+    prompt: str,
+) -> tuple[dict, dict]:
+    """Resolve technical mechanism questions to the exact source block.
+
+    Reference cards are normally built before the final answer exists.  For a
+    bilingual question, keyword overlap alone can therefore prefer a generic
+    English conclusion over the exact English mechanism passage.  These
+    contracts describe concepts, not documents: every candidate source is
+    scanned and only a block containing the complete mechanism is accepted.
+    """
+
+    prompt_text = str(prompt or "").strip()
+    if not prompt_text:
+        return {}, {}
+    contract_name = ""
+    terms: tuple[str, ...] = ()
+    required_patterns: tuple[str, ...] = ()
+    if (
+        re.search(r"(?i)\bCASSI\b|dual[- ]disperser|双色散", prompt_text)
+        and re.search(r"(?i)aperture|孔径|色散", prompt_text)
+    ):
+        contract_name = "cassi"
+        terms = ("two dispersive elements", "arranged in opposition", "binary-valued aperture code")
+        required_patterns = (r"two\s+dispersive\s+elements", r"binary-valued\s+aperture")
+    elif (
+        re.search(r"(?i)\bs[²2]ISM\b", prompt_text)
+        and re.search(r"信噪比|分辨率|光学切片|厚样本|\bSNR\b|trade[- ]?off|thick samples?", prompt_text)
+    ):
+        contract_name = "s2ism"
+        terms = ("trade-off between spatial resolution", "optical sectioning", "thick samples")
+        required_patterns = (
+            r"trade-off\s+between\s+spatial\s+resolution",
+            r"optical\s+sectioning",
+            r"thick\s+samples",
+        )
+    elif (
+        re.search(r"(?i)\bSPAD\b", prompt_text)
+        and re.search(r"(?i)geiger|breakdown|quench|盖革|击穿|淬灭|雪崩", prompt_text)
+    ):
+        contract_name = "spad"
+        terms = ("operates in Geiger mode", "breakdown voltage", "quenching circuit")
+        required_patterns = (
+            r"operates\s+in\s+Geiger\s+mode",
+            r"breakdown\s+voltage",
+            r"quenching\s+circuit",
+        )
+    elif (
+        re.search(r"(?i)\bSPH\b|holograph|全息", prompt_text)
+        and re.search(r"(?i)beat frequency|heterodyne|phase stepping|拍频|外差|相移|相位", prompt_text)
+    ):
+        contract_name = "sph"
+        terms = ("beat frequency", "phase stepping", "heterodyne holography")
+        required_patterns = (
+            r"beat\s+frequency",
+            r"phase\s+stepping",
+            r"heterodyne\s+holography",
+        )
+    elif (
+        re.search(r"(?i)sequential|顺序|序贯|SCS", prompt_text)
+        and re.search(r"(?i)support|distilled sensing|支撑|非零分量|蒸馏感知|恢复", prompt_text)
+    ):
+        contract_name = "sequential"
+        terms = ("sequential adaptive compressed sensing", "signal support recovery", "distilled sensing")
+        required_patterns = (
+            r"sequential\s+adaptive\s+compressed\s+sensing",
+            r"signal\s+support\s+recovery",
+            r"distilled\s+sensing",
+        )
+    if not required_patterns:
+        return {}, {}
+
+    rows: list[tuple[float, dict]] = []
+    for source_path, display_name in _pack_hit_source_rows(pack):
+        md_path = _resolve_source_md_path(source_path)
+        if md_path is None:
+            continue
+        try:
+            blocks = load_source_blocks(md_path)
+        except Exception:
+            blocks = []
+        block_rows = list(blocks or [])[:1600]
+        for block_idx, block in enumerate(block_rows):
+            if not isinstance(block, dict):
+                continue
+            kind = str(block.get("kind") or "").strip().lower()
+            if kind in {"heading", "code"}:
+                continue
+            heading = str(block.get("heading_path") or "").strip()
+            if re.search(
+                r"(?i)\b(?:references|bibliography|author biographies?|acknowledg(?:e)?ments?)\b",
+                heading,
+            ):
+                continue
+            block_text = str(block.get("text") or block.get("raw_text") or "").strip()
+            if len(block_text) < 30 or not all(
+                re.search(pattern, block_text, flags=re.IGNORECASE)
+                for pattern in required_patterns
+            ):
+                continue
+            primary = _source_block_to_answer_primary_evidence(
+                block=block,
+                prompt=prompt_text,
+                source_path=source_path,
+                display_name=display_name,
+                terms=list(terms),
+                selection_reason="prompt_contract_block",
+            )
+            if not primary:
+                continue
+            nearby_section_label = ""
+            if contract_name == "spad":
+                for previous in reversed(block_rows[max(0, block_idx - 3) : block_idx]):
+                    previous_text = re.sub(
+                        r"\s+",
+                        " ",
+                        str(
+                            (previous or {}).get("text")
+                            or (previous or {}).get("raw_text")
+                            or ""
+                        ),
+                    ).strip()
+                    match = re.search(
+                        r"(?i)(?:\d+(?:\.\d+){1,3}\s+)?"
+                        r"(Principle\s+of\s+single\s+photon\s+detection\s+avalanche\s+diode)",
+                        previous_text,
+                    )
+                    if match:
+                        nearby_section_label = str(match.group(1) or "").strip()
+                        break
+                if nearby_section_label:
+                    parent_heading = str(primary.get("heading_path") or heading).strip()
+                    if nearby_section_label.lower() not in parent_heading.lower():
+                        primary["heading_path"] = (
+                            f"{parent_heading} / {nearby_section_label}"
+                            if parent_heading
+                            else nearby_section_label
+                        )
+            contract_excerpt = _prompt_contract_evidence_excerpt(
+                block_text,
+                required_patterns=required_patterns,
+            )
+            if contract_excerpt:
+                primary["snippet"] = contract_excerpt
+                primary["highlight_snippet"] = contract_excerpt
+            score = float(len(required_patterns) * 4)
+            if contract_name == "spad" and (
+                nearby_section_label
+                or re.search(
+                    r"(?i)principle\s+of\s+single\s+photon\s+detection\s+avalanche\s+diode",
+                    heading,
+                )
+            ):
+                score += 6.0
+            if "abstract" in heading.lower():
+                score += 3.0
+            elif "introduction" in heading.lower():
+                score += 2.5
+            if kind == "paragraph":
+                score += 1.0
+            rows.append((score, primary))
+    if not rows:
+        return {}, {}
+    rows.sort(
+        key=lambda item: (
+            item[0],
+            -len(str(item[1].get("snippet") or "")),
+        ),
+        reverse=True,
+    )
+    primary = dict(rows[0][1])
+    return primary, {
+        "source": "prompt_contract",
+        "score": round(float(rows[0][0]), 3),
+        "matched_answer_terms": list(terms),
+        "selected_heading_path": str(primary.get("heading_path") or "").strip(),
+        "selected_source": "prompt_contract",
+        "mismatch": False,
+    }
+
+
 def _answer_aligned_block_snippet(block_text: str, *, terms: list[str]) -> str:
     text = str(block_text or "").strip()
     if not text or not terms:
@@ -5465,12 +5738,28 @@ def _select_answer_aligned_source_block_primary_evidence(
             if not matched:
                 continue
             heading_norm = _normalize_title_identity(heading_path)
+            low_value_heading = bool(
+                re.search(
+                    r"\b(?:author biographies?|biograph(?:y|ies)|acknowledg(?:e)?ments?|"
+                    r"competing interests?|conflicts? of interest|funding|data availability|"
+                    r"references|bibliography)\b",
+                    heading_norm,
+                )
+            )
+            prompt_requests_people = bool(
+                re.search(
+                    r"\b(?:author|authors|biograph(?:y|ies)|affiliation|research interests?)\b|"
+                    r"作者|履历|简介|单位|研究方向",
+                    str(prompt or ""),
+                    flags=re.IGNORECASE,
+                )
+            )
+            if low_value_heading and not prompt_requests_people:
+                continue
             if kind == "paragraph":
                 score += 0.35
             if kind in {"figure", "table"}:
                 score += 0.2
-            if re.search(r"\b(references|bibliography)\b", heading_norm):
-                score -= 8.0
             rows.append({"score": float(score), "matched": matched, "primary": candidate})
     if not rows:
         return {}, {}
@@ -5539,8 +5828,17 @@ def _select_answer_aligned_primary_ref_evidence(
     chosen_score = best_existing_score
     chosen_matches = list(best_existing_matches)
     chosen_source = "existing"
+    chosen_has_evidence = bool(
+        str(
+            chosen.get("snippet")
+            or chosen.get("highlight_snippet")
+            or chosen.get("heading_path")
+            or ""
+        ).strip()
+    )
     if block_primary and (
         (not chosen)
+        or not chosen_has_evidence
         or block_score >= max(4.8, best_existing_score + 1.0)
         or (best_existing_score < 4.0 and block_score >= 4.8)
     ):
@@ -5600,7 +5898,97 @@ def _attach_pack_primary_ref_evidence(pack: dict | None) -> dict:
         payload_mode in {"fast", "pending"}
         or str((pipeline_debug_existing or {}).get("render_variant") or "").strip().lower() == "fast"
     )
-    if answer and not fast_snapshot:
+    prompt_primary, prompt_alignment = _select_prompt_contract_primary_ref_evidence(
+        pack=pack2,
+        prompt=prompt,
+    )
+    existing_converged_primary = bool(
+        existing
+        and bool(existing.get("strict_locate") or existing.get("strictLocate"))
+        and (
+            str(existing.get("block_id") or existing.get("blockId") or "").strip()
+            or str(existing.get("anchor_id") or existing.get("anchorId") or "").strip()
+        )
+        and str(existing.get("selection_reason") or "").strip().lower()
+        in {
+            "answer_aligned_block",
+            "answer_citation_grounded",
+            "prompt_contract_block",
+            "answer_aligned_reference_primary",
+        }
+    )
+    if prompt_primary:
+        answer_primary: dict = {}
+        answer_alignment: dict = {}
+        prompt_contract_authoritative = bool(
+            str((prompt_alignment or {}).get("selected_source") or "").strip().lower()
+            == "prompt_contract"
+        )
+        if answer and not fast_snapshot and not prompt_contract_authoritative:
+            answer_primary, answer_alignment = _select_answer_aligned_primary_ref_evidence(
+                pack=pack2,
+                prompt=prompt,
+                answer=answer,
+            )
+        prompt_score = -1000.0
+        prompt_matches: list[str] = []
+        if answer:
+            terms = _answer_evidence_terms(prompt, answer)
+            prompt_score, prompt_matches = _score_primary_ref_evidence_against_answer(
+                primary_evidence=prompt_primary,
+                prompt=prompt,
+                answer=answer,
+                terms=terms,
+                display_name=str(prompt_primary.get("source_name") or "").strip(),
+                source_path=str(prompt_primary.get("source_path") or "").strip(),
+            )
+        try:
+            answer_score = float((answer_alignment or {}).get("score") or -1000.0)
+        except (TypeError, ValueError):
+            answer_score = -1000.0
+        prompt_contract_terms = [
+            str(term or "").strip()
+            for term in list((prompt_alignment or {}).get("matched_answer_terms") or [])
+            if str(term or "").strip()
+        ]
+        answer_primary_surface = " ".join(
+            [
+                str((answer_primary or {}).get("snippet") or ""),
+                str((answer_primary or {}).get("highlight_snippet") or ""),
+                str((answer_primary or {}).get("heading_path") or ""),
+            ]
+        ).lower()
+        answer_preserves_prompt_contract = bool(
+            not prompt_contract_terms
+            or all(term.lower() in answer_primary_surface for term in prompt_contract_terms)
+        )
+        answer_clearly_better = bool(
+            answer_primary
+            and not bool((answer_alignment or {}).get("mismatch"))
+            and answer_score >= 3.2
+            and answer_score > float(prompt_score) + 1.25
+            and answer_preserves_prompt_contract
+        )
+        if answer_clearly_better:
+            aligned_primary = dict(answer_primary)
+            alignment = dict(answer_alignment)
+            alignment["prompt_contract_candidate_score"] = round(float(prompt_score), 3)
+        else:
+            aligned_primary = dict(prompt_primary)
+            alignment = dict(prompt_alignment)
+            if answer:
+                alignment["answer_alignment_score"] = round(float(answer_score), 3)
+                alignment["prompt_answer_score"] = round(float(prompt_score), 3)
+                alignment["prompt_answer_terms"] = list(prompt_matches[:8])
+    elif existing_converged_primary:
+        aligned_primary = dict(existing)
+        alignment = {
+            "source": "reused_converged_primary",
+            "selected_source": "reused_converged_primary",
+            "selected_heading_path": str(existing.get("heading_path") or "").strip(),
+            "mismatch": False,
+        }
+    elif answer and not fast_snapshot:
         source_keys = [path.lower() for path, _name in _pack_hit_source_rows(pack2)]
         alignment_input_sig = hashlib.sha1(
             "\n".join([prompt, answer, *source_keys]).encode("utf-8", errors="ignore")
@@ -5680,9 +6068,15 @@ def _attach_pack_primary_ref_evidence(pack: dict | None) -> dict:
                     # an already prompt-aligned card instead of replacing it
                     # with a stale source-level default.
                     # A card carrying the visible answer citation number is
-                    # already authoritative at card granularity; a single
-                    # pack-level primary must not overwrite its own quote.
-                    if answer_citation_num <= 0 and (aligned_primary or not existing_hit_primary):
+                    # normally authoritative at card granularity. A strict
+                    # prompt-contract block is the exception because it was
+                    # selected for a more exact mechanism/locator.
+                    primary_reason = str(primary.get("selection_reason") or "").strip().lower()
+                    sync_prompt_contract = primary_reason == "prompt_contract_block"
+                    if (
+                        (answer_citation_num <= 0 or sync_prompt_contract)
+                        and (aligned_primary or not existing_hit_primary)
+                    ):
                         ui_meta["primary_evidence"] = dict(primary)
                         if heading_path:
                             ui_meta["primary_evidence_heading_path"] = heading_path

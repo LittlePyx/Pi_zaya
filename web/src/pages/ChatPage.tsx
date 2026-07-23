@@ -56,6 +56,7 @@ export default function ChatPage() {
   const uploading = useChatStore((s) => s.uploading)
   const removePendingImage = useChatStore((s) => s.removePendingImage)
   const cancelGen = useChatStore((s) => s.cancelGeneration)
+  const refreshActiveConversationLocale = useChatStore((s) => s.refreshActiveConversationLocale)
   const settings = useSettingsStore()
   const liveRunning = Boolean(generation)
   const { agentMode, setAgentMode: handleAgentModeChange } = useAgentMode(activeConvId)
@@ -113,6 +114,9 @@ export default function ChatPage() {
   const debugSnapshot = useChatPerfSnapshot(debugPanelEnabled)
   const [shelfDockTarget, setShelfDockTarget] = useState<HTMLDivElement | null>(null)
   const eventTokenRef = useRef(1)
+  const localeRefreshKeyRef = useRef(
+    `${settings.uiLocale}:${settings.refsCardLocale}:${settings.localePreferencesRevision}`,
+  )
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
   const activeGuideBinding = useMemo(() => {
     const convId = String(activeConvId || '').trim()
@@ -257,6 +261,21 @@ export default function ChatPage() {
     resetTimeline,
     setRightDockPanel,
     shelfProjectScope,
+  ])
+
+  useEffect(() => {
+    const nextKey = `${settings.uiLocale}:${settings.refsCardLocale}:${settings.localePreferencesRevision}`
+    if (!settings.loaded || localeRefreshKeyRef.current === nextKey) return
+    localeRefreshKeyRef.current = nextKey
+    if (!activeConvId) return
+    void refreshActiveConversationLocale()
+  }, [
+    activeConvId,
+    refreshActiveConversationLocale,
+    settings.loaded,
+    settings.localePreferencesRevision,
+    settings.refsCardLocale,
+    settings.uiLocale,
   ])
 
   useEffect(() => {

@@ -27,6 +27,24 @@ def test_double_numeric_citations_never_render_as_empty_brackets() -> None:
     assert "[[]]" not in stripped
 
 
+def test_final_display_cleanup_removes_empty_citation_wrappers_but_keeps_task_boxes() -> None:
+    value = (
+        "Claim [ [[CITE:nonexistent:1]] ].\n"
+        "Nested [ [ [[CITE:nonexistent:2]] ] ].\n"
+        "- [ ] keep this task\n"
+        "1. [ ] keep this numbered task"
+    )
+
+    out = _normalize_chat_markdown_for_display(value)
+
+    assert "Claim." in out
+    assert "Nested." in out
+    assert "[]" not in out
+    assert "[[]]" not in out
+    assert "- [ ] keep this task" in out
+    assert "1. [ ] keep this numbered task" in out
+
+
 def test_legacy_canonical_citations_recover_the_actual_answer_sources(tmp_path: Path) -> None:
     paths = []
     for idx in range(1, 6):
@@ -103,6 +121,46 @@ def test_canonical_citation_rescues_existing_same_source_hit_to_claim_specific_b
     assert repaired[0]["meta"]["ref_answer_citation_num"] == 1
     assert "Results" in repaired[0]["meta"]["heading_path"]
     assert "lowest LPIPS" in repaired[0]["text"]
+
+
+def test_canonical_citation_reuses_converged_strict_primary_without_rescan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "paper.en.md"
+    source.write_text("# Paper\n\nExact evidence.\n", encoding="utf-8")
+    hit = {
+        "text": "Exact evidence.",
+        "meta": {
+            "source_path": str(source),
+            "ref_answer_citation_num": 1,
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": str(source),
+                "heading_path": "Results",
+                "snippet": "Exact evidence.",
+                "strict_locate": True,
+                "selection_reason": "answer_citation_grounded",
+            }
+        },
+    }
+
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: pytest.fail("converged primary should not rescan source blocks"),
+    )
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [hit],
+        canonical_paths=[str(source)],
+        answer_text="The result is exact [1].",
+    )
+
+    assert repaired == [hit]
 
 
 def test_canonical_citation_combines_distinct_blocks_for_one_multi_signal_claim(tmp_path: Path) -> None:
@@ -3943,6 +4001,102 @@ def test_abstract_primary_evidence_refreshes_after_markdown_repair(tmp_path: Pat
     assert first["snippet"] != second["snippet"]
 
 
+def test_claim_aligned_primary_selects_exact_mechanism_block_outside_abstract(tmp_path: Path):
+    from api.chat_render import _claim_aligned_abstract_primary_evidence
+
+    source_path = tmp_path / "spad-review.en.md"
+    source_path.write_text(
+        "# Paper\n\n"
+        "## Abstract\n\nA broad review of emerging photodetectors.\n\n"
+        "<!-- kb_page: 2 -->\n"
+        "## Principle of single photon detection avalanche diode\n\n"
+        "A SPAD operates in Geiger mode with a bias higher than its reverse bias "
+        "breakdown voltage. Excessive induced current can damage the device, so it "
+        "must be supported by a quenching circuit.\n\n"
+        "## Low-dimensional devices\n\nPhotogating improves material performance.\n",
+        encoding="utf-8",
+    )
+    pack = {
+        "hits": [
+            {
+                "meta": {
+                    "source_path": str(source_path),
+                    "source_name": "SPAD review.pdf",
+                }
+            }
+        ]
+    }
+    detail = {
+        "source_path": str(source_path),
+        "source_name": "SPAD review.pdf",
+        "answer_claim": (
+            "SPAD 工作在 Geiger 模式并偏置在击穿电压以上，雪崩后需要淬灭电路。"
+        ),
+    }
+
+    primary = _claim_aligned_abstract_primary_evidence(pack, detail)
+
+    assert "Principle of single photon detection avalanche diode" in primary["heading_path"]
+    assert primary["page_start"] == 2
+    assert "quenching circuit" in primary["snippet"]
+    assert "Photogating" not in primary["snippet"]
+
+
+def test_system_a_plan_populates_reserved_canonical_padding_for_missing_third_source():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    paths = ["cassi.en.md", "scinerf.en.md", "scigs.en.md"]
+    plan = {
+        "budget": {"system_a": 3, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "source_path": paths[2],
+                "candidate_refs": [42],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[0],
+                "source_name": "CASSI",
+                "heading_path": "Abstract",
+                "evidence_quote": "Two dispersive elements surround a binary aperture.",
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[1],
+                "source_name": "SCINeRF",
+                "heading_path": "Abstract",
+                "evidence_quote": "The SCI physical process is part of NeRF training.",
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[2],
+                "source_name": "SCIGS",
+                "heading_path": "Abstract",
+                "evidence_quote": "SCIGS reconstructs dynamic 3D scenes.",
+                "candidate_hits": [3],
+            },
+        ],
+    }
+
+    hits = _augment_hits_with_system_a_plan_slots(
+        [
+            {"text": "CASSI hit", "meta": {"source_path": paths[0]}},
+            {"text": "SCINeRF hit", "meta": {"source_path": paths[1]}},
+        ],
+        plan,
+        reserved_count=3,
+    )
+
+    assert hits[2]["meta"]["source_path"] == paths[2]
+    assert hits[2]["meta"]["ref_answer_citation_num"] == 3
+    assert hits[2]["meta"]["citation_plan_slot"] is True
+    assert not hits[2]["meta"].get("citation_plan_padding")
+    assert "dynamic 3D scenes" in hits[2]["text"]
+
+
 def test_system_a_primary_backfill_does_not_relabel_repeated_citation_claim(tmp_path: Path):
     from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
 
@@ -4438,6 +4592,216 @@ def test_reading_guide_lineage_rebinds_cassi_and_scinerf_to_direct_evidence():
     assert "SCIGS uses a dynamic 3D scene [3]" in repaired
     assert hits[3]["meta"]["citation_plan_lineage_cassi"] is True
     assert hits[4]["meta"]["citation_plan_lineage_scinerf"] is True
+
+
+def test_reading_guide_lineage_completes_truncated_scigs_stage_from_plan():
+    from api.chat_render import _reading_guide_repair_lineage_scinerf_evidence
+
+    hits = [
+        {"text": "Generic CASSI.", "meta": {"source_path": "cassi.en.md"}},
+        {"text": "Generic SCINeRF.", "meta": {"source_path": "scinerf.en.md"}},
+        {"text": "Generic SCIGS.", "meta": {"source_path": "scigs.en.md"}},
+    ]
+    plan = {
+        "intent": "origin_lookup",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "cassi.en.md",
+                "source_name": "CASSI dual-disperser spectral imaging",
+                "candidate_hits": [1],
+                "evidence_quote": (
+                    "The system uses two dispersive elements arranged in opposition "
+                    "around a binary-valued aperture code."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "scinerf.en.md",
+                "source_name": "SCINeRF",
+                "candidate_hits": [2],
+                "evidence_quote": (
+                    "SCINeRF learns a 3D scene representation with NeRF from a single "
+                    "snapshot compressed image."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "scigs.en.md",
+                "source_name": "SCIGS 3D Gaussians Splatting",
+                "candidate_hits": [3],
+                "evidence_quote": (
+                    "The proposed SCIGS is the first to reconstruct a 3D explicit scene "
+                    "from a single compressed image, extending its application to dynamic 3D scenes."
+                ),
+            },
+        ],
+    }
+    answer = (
+        "### 1. Dual-disperser spectral imaging\nCASSI starts the lineage [1].\n\n"
+        "### 2. SCINeRF\nSCINeRF moves the task to a 3D scene [2].\n\n"
+        "### 3. SCI + 3D Gaussian Splatting → SC"
+    )
+
+    repaired = _reading_guide_repair_lineage_scinerf_evidence(answer, hits, plan)
+
+    assert "SCIGS / 3DGS" in repaired
+    assert "explicit 3D scene from one compressed image" in repaired
+    assert "dynamic 3D scenes [6]" in repaired
+    assert not repaired.rstrip().endswith("→ SC")
+    assert "[1]" not in repaired
+    assert "[2]" not in repaired
+    assert "[3]" not in repaired
+    assert hits[5]["meta"]["citation_plan_lineage_scigs"] is True
+
+
+def test_reading_guide_lineage_recovers_when_provider_stops_inside_scinerf_formula(
+    tmp_path,
+):
+    from api.chat_render import _reading_guide_repair_lineage_scinerf_evidence
+
+    cassi_path = tmp_path / "cassi.en.md"
+    scinerf_path = tmp_path / "scinerf.en.md"
+    scigs_path = tmp_path / "scigs.en.md"
+    cassi_path.write_text(
+        "# CASSI\n\n## Abstract\n\n"
+        "The system design uses two dispersive elements arranged in opposition "
+        "and surrounding a binary-valued aperture code.\n",
+        encoding="utf-8",
+    )
+    scinerf_path.write_text(
+        "# SCINeRF\n\n## Abstract\n\n"
+        "SCINeRF recovers the underlying 3D scene representation from a single "
+        "snapshot compressed image. We formulate the physical imaging process "
+        "of SCI as part of the training of NeRF.\n",
+        encoding="utf-8",
+    )
+    scigs_path.write_text(
+        "# SCIGS\n\n## Abstract\n\n"
+        "The proposed SCIGS is the first to reconstruct a 3D explicit scene "
+        "from a single compressed image, extending its application to dynamic 3D scenes.\n",
+        encoding="utf-8",
+    )
+    hits = [
+        {"text": "CASSI candidate", "meta": {"source_path": str(cassi_path)}},
+        {"text": "SCINeRF candidate", "meta": {"source_path": str(scinerf_path)}},
+        {"text": "SCIGS candidate", "meta": {"source_path": str(scigs_path)}},
+    ]
+    plan = {
+        "intent": "origin_lookup",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": str(cassi_path),
+                "source_name": "CASSI dual-disperser spectral imaging",
+                "candidate_hits": [1],
+                "evidence_quote": (
+                    "The design uses two dispersive elements arranged in opposition "
+                    "around a binary-valued aperture code."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": str(scinerf_path),
+                "source_name": "SCINeRF",
+                "candidate_hits": [2],
+                "evidence_quote": "A broad method-section hit without the method name.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": str(scigs_path),
+                "source_name": "SCIGS 3D Gaussian Splatting",
+                "candidate_hits": [3],
+                "evidence_quote": "A broad method-section hit without the abstract conclusion.",
+            },
+        ],
+    }
+    answer = (
+        "### 1. Spectral imaging\nCASSI starts the lineage [1].\n\n"
+        "### 2. SCI + NeRF → SCINeRF\n"
+        "- Input: one compressed image and masks.\n"
+        "- Key innovation: $Y = \\sum_t \\Phi_t \\odot R_t(\\pi_\\theta)$ "
+        "（其中 $R_t$ 是 NeRF 在第 $t$ 时刻\n\n"
+        "如果想顺着论文的引用链继续追，可以打开上游综述。"
+    )
+
+    repaired = _reading_guide_repair_lineage_scinerf_evidence(answer, hits, plan)
+
+    assert all(term in repaired for term in ("SCINeRF", "物理成像", "NeRF"))
+    assert "SCIGS / 3DGS" in repaired
+    assert "动态 3D 场景" in repaired
+    assert "（其中 $R_t$ 是 NeRF 在第 $t$ 时刻" not in repaired
+    assert "如果想顺着论文的引用链继续追" in repaired
+
+
+def test_authoritative_lineage_mapping_still_runs_exact_evidence_repair():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    sources = ["cassi.en.md", "scinerf.en.md", "scigs.en.md"]
+    hits = [
+        {
+            "text": f"Generic evidence {num}.",
+            "meta": {
+                "source_path": source,
+                "ref_answer_citation_num": num,
+            },
+        }
+        for num, source in enumerate(sources, start=1)
+    ]
+    plan = {
+        "intent": "origin_lookup",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": sources[0],
+                "source_name": "CASSI dual-disperser spectral imaging",
+                "candidate_hits": [1],
+                "evidence_quote": (
+                    "The design has two dispersive elements in opposition around "
+                    "a binary-valued aperture code."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": sources[1],
+                "source_name": "SCINeRF",
+                "candidate_hits": [2],
+                "evidence_quote": (
+                    "SCINeRF learns a 3D scene representation using NeRF from a single "
+                    "snapshot compressed image."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": sources[2],
+                "source_name": "SCIGS 3D Gaussian Splatting",
+                "candidate_hits": [3],
+                "evidence_quote": (
+                    "SCIGS reconstructs a 3D explicit scene from a single compressed image "
+                    "and extends the application to dynamic 3D scenes."
+                ),
+            },
+        ],
+    }
+    answer = (
+        "### 1. Dual-disperser spectral imaging\nCASSI starts the lineage [1].\n\n"
+        "### 2. SCINeRF\nSCINeRF moves it to a 3D scene [2].\n\n"
+        "### 3. 3D Gaussian Splatting → SC"
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=sources,
+    )
+
+    assert "two dispersive elements" in repaired
+    assert "SCINeRF** learns a 3D scene representation" in repaired
+    assert "SCIGS / 3DGS" in repaired
+    assert "dynamic 3D scenes [6]" in repaired
+    assert len(hits) == 6
 
 
 def test_reading_guide_keeps_only_planned_system_b_marker_within_budget():
@@ -5392,6 +5756,452 @@ def test_reading_guide_repair_resolves_stale_candidate_hit_by_source_path():
     assert "Overview: SCI moves from spectral data cubes toward 3D scene reconstruction. [3]" not in repaired
 
 
+def test_reading_guide_repair_adds_cassi_marker_to_chinese_mechanism_answer():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    answer = (
+        "CASSI 的双色散结构使用两个色散元件反向排列，中间放置二值孔径编码。\n\n"
+        "二值编码提供空间调制，色散把调制扩展到光谱维度，从而完成单次压缩测量。"
+    )
+    evidence = (
+        "The primary features of the system design are two dispersive elements, "
+        "arranged in opposition and surrounding a binary-valued aperture code."
+    )
+    hits = [{"text": evidence, "meta": {"source_path": "cassi.en.md"}}]
+    plan = {
+        "budget": {"system_a": 1},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "cassi.en.md",
+                "source_name": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=["cassi.en.md"],
+    )
+
+    assert repaired.count("[1]") == 1
+    assert "二值孔径编码 [1]。" in repaired
+
+
+def test_cassi_normalization_splits_exact_architecture_from_broader_projection_claim():
+    import re
+
+    from api.chat_render import (
+        _reading_guide_normalize_cassi_architecture_terms,
+        _reading_guide_repair_mechanism_marker_target,
+    )
+
+    evidence = (
+        "The primary features of the system design are two dispersive elements, "
+        "arranged in opposition and surrounding a binary-valued aperture code."
+    )
+    answer = (
+        "其基本思路是：通过一个物理编码掩模（例如双色散器系统 [1]），"
+        "将三维数据立方体压缩投影到二维探测器上。"
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "cassi.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = _reading_guide_normalize_cassi_architecture_terms(answer, plan)
+    repaired = _reading_guide_repair_mechanism_marker_target(
+        normalized,
+        [{"text": evidence, "meta": {"source_path": "cassi.en.md"}}],
+        plan,
+        canonical_paths=["cassi.en.md"],
+    )
+
+    cited_sentence = next(
+        sentence
+        for sentence in re.split(r"(?<=[。！？])", repaired)
+        if "[1]" in sentence
+    )
+    assert "CASSI（编码孔径快照光谱成像）" in cited_sentence
+    assert "两个相向布置的色散元件" in cited_sentence
+    assert "二值编码孔径" in cited_sentence
+    assert "三维数据立方体" not in cited_sentence
+    assert repaired.count("[1]") == 1
+
+
+def test_cassi_normalization_uses_exact_retrieval_hit_when_plan_quote_is_noisy():
+    import re
+
+    from api.chat_render import _reading_guide_normalize_cassi_architecture_terms
+
+    answer = (
+        "其基本思路是：通过一个物理编码掩模（例如双色散器系统 [1]），"
+        "将三维数据立方体压缩投影到二维探测器上。"
+    )
+    plan = {
+        "slots": [
+            {
+                "source_path": "cassi.en.md",
+                "evidence_quote": "Table data. 2: 15 = 2; 15 = 2",
+            }
+        ]
+    }
+    hits = [
+        {
+            "text": (
+                "The primary features of the system design are two dispersive elements, "
+                "arranged in opposition and surrounding a binary-valued aperture code."
+            ),
+            "meta": {"source_path": "cassi.en.md", "heading_path": "Abstract"},
+        }
+    ]
+
+    normalized = _reading_guide_normalize_cassi_architecture_terms(answer, plan, hits)
+
+    cited_sentence = next(
+        sentence
+        for sentence in re.split(r"(?<=[。！？])", normalized)
+        if "[1]" in sentence
+    )
+    assert "两个相向布置的色散元件" in cited_sentence
+    assert "二值编码孔径" in cited_sentence
+    assert "三维数据立方体" not in cited_sentence
+
+
+def test_cassi_normalization_moves_variable_broad_claim_marker_to_exact_bridge():
+    import re
+
+    from api.chat_render import _reading_guide_normalize_cassi_architecture_terms
+
+    answer = (
+        "最早的快照压缩成像正是为光谱成像设计的，如 2007 年的双色散架构，"
+        "通过编码掩模将高光谱立方体压缩到单次二维测量中 [1]。"
+    )
+    evidence = (
+        "The primary features of the system design are two dispersive elements, "
+        "arranged in opposition and surrounding a binary-valued aperture code."
+    )
+
+    normalized = _reading_guide_normalize_cassi_architecture_terms(
+        answer,
+        {"slots": [{"evidence_quote": evidence}]},
+    )
+
+    cited_sentence = next(
+        sentence
+        for sentence in re.split(r"(?<=[。！？])", normalized)
+        if "[1]" in sentence
+    )
+    assert "CASSI（编码孔径快照光谱成像）" in cited_sentence
+    assert "两个相向布置的色散元件" in cited_sentence
+    assert "二值编码孔径" in cited_sentence
+    assert "高光谱立方体压缩到" not in cited_sentence
+    assert normalized.count("[1]") == 1
+
+
+def test_cassi_normalization_moves_marker_across_display_equation_to_exact_bridge():
+    from api.chat_render import _reading_guide_normalize_cassi_architecture_terms
+
+    evidence = (
+        "The primary features of the system design are two dispersive elements, "
+        "arranged in opposition and surrounding a binary-valued aperture code."
+    )
+    answer = (
+        "The 2007 dual-disperser system uses an encoded aperture and dispersive optics "
+        "to compress a spectral data cube into one 2D measurement.\n"
+        "$$\nB = Phi vec(I)\n$$\n"
+        "The reconstruction then uses a compressive-sensing prior [1]."
+    )
+    plan = {
+        "slots": [
+            {
+                "candidate_hits": [1],
+                "source_path": "cassi.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = _reading_guide_normalize_cassi_architecture_terms(answer, plan)
+
+    cited_line = next(line for line in normalized.splitlines() if "[1]" in line)
+    assert "two dispersive elements" in cited_line
+    assert "binary-valued aperture" in cited_line
+    assert "compressive-sensing prior [1]" not in normalized
+    assert normalized.count("[1]") == 1
+
+
+def test_backfill_cassi_citation_uses_architecture_block_when_claim_omits_acronym(tmp_path):
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    md_path = tmp_path / "cassi.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "## Abstract",
+                (
+                    "The primary features of the system design are two dispersive elements, "
+                    "arranged in opposition and surrounding a binary-valued aperture code."
+                ),
+                "<!-- kb_page: 8 -->",
+                "## Conclusions",
+                "The dual-disperser design creates spectral projections on the source datacube.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    details = [
+        {
+            "citation_route": "system_a",
+            "source_path": str(md_path),
+            "source_name": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+            "heading_path": "Conclusions",
+            "answer_claim": "这种反向配置让编码孔径的调制通过色散叠加到光谱维度。",
+            "evidence_quote": "The dual-disperser design creates spectral projections on the source datacube.",
+        }
+    ]
+    pack = {
+        "hits": [
+            {
+                "text": details[0]["evidence_quote"],
+                "meta": {"source_path": str(md_path)},
+                "ui_meta": {
+                    "source_path": str(md_path),
+                    "display_name": details[0]["source_name"],
+                },
+            }
+        ]
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, pack, render_locale="zh")
+
+    assert out[0]["heading_path"] == "Abstract"
+    assert out[0]["page_start"] == 1
+    assert "two dispersive elements" in out[0]["evidence_quote"]
+    assert "binary-valued aperture code" in out[0]["evidence_quote"]
+
+
+def test_mechanism_marker_targets_sph_beat_frequency_sentence():
+    from api.chat_render import (
+        _reading_guide_repair_mechanism_marker_target,
+    )
+
+    evidence = (
+        "Instead of actively performing phase shifting, a beat frequency is introduced between "
+        "the signal beam and the reference beam, thereby realizing phase stepping naturally in "
+        "time by exploiting the framework of heterodyne holography."
+    )
+    answer = (
+        "这篇论文通过关键设计提升单像素全息（SPH）的吞吐量，并放弃主动相移。\n"
+        "本文利用两个 AOM 引入差频的拍频，使相移在时间上自然完成，并采用外差全息。"
+    )
+    hits = [{"text": evidence, "meta": {"source_path": "sph.en.md"}}]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "sph.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    repaired = _reading_guide_repair_mechanism_marker_target(
+        answer,
+        hits,
+        plan,
+        canonical_paths=["sph.en.md"],
+    )
+
+    assert "吞吐量，并放弃主动相移。[1]" not in repaired
+    assert "采用外差全息 [1]。" in repaired
+
+
+def test_sequential_support_terms_and_marker_are_normalized_from_exact_source():
+    from api.chat_render import (
+        _reading_guide_normalize_sequential_support_terms,
+        _reading_guide_repair_mechanism_marker_target,
+    )
+
+    evidence = (
+        "A sequential adaptive compressed sensing procedure for signal support recovery is "
+        "proposed and analyzed. The procedure is based on the principle of distilled sensing."
+    )
+    answer = (
+        "顺序压缩感知（SCS）利用自适应反馈分配测量资源，这一思想源于蒸馏感知。\n\n"
+        "SCS主要保证的是信号支撑（support）的精确恢复。"
+    )
+    hits = [{"text": evidence, "meta": {"source_path": "sequential.en.md"}}]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "sequential.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = _reading_guide_normalize_sequential_support_terms(answer, plan)
+    repaired = _reading_guide_repair_mechanism_marker_target(
+        normalized,
+        hits,
+        plan,
+        canonical_paths=["sequential.en.md"],
+    )
+
+    assert "顺序自适应压缩感知" in repaired
+    assert "信号支撑集恢复（signal support recovery）" in repaired
+    assert "源于蒸馏感知 [1]。" in repaired
+
+
+def test_s2ism_tradeoff_marker_targets_three_way_claim():
+    from api.chat_render import _reading_guide_repair_mechanism_marker_target
+
+    evidence = (
+        "There is a trade-off between spatial resolution and signal-to-noise ratio. "
+        "Current approaches do not provide optical sectioning and fail with thick samples."
+    )
+    answer = (
+        "s²ISM 同时改善空间分辨率、信噪比和光学切片能力，打破三方权衡。\n\n"
+        "它通过结构化检测完成重建。"
+    )
+    hits = [{"text": evidence, "meta": {"source_path": "s2ism.en.md"}}]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "s2ism.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    repaired = _reading_guide_repair_mechanism_marker_target(
+        answer,
+        hits,
+        plan,
+        canonical_paths=["s2ism.en.md"],
+    )
+
+    assert "打破三方权衡 [1]。" in repaired
+
+
+def test_spad_marker_targets_complete_geiger_breakdown_quenching_claim():
+    from api.chat_render import _reading_guide_repair_mechanism_marker_target
+
+    evidence = (
+        "A SPAD operates in Geiger mode above its reverse bias breakdown voltage and "
+        "must be supported by a quenching circuit."
+    )
+    answer = (
+        "SPAD 在盖革模式下高于击穿电压工作，雪崩后由淬灭电路复位。\n\n"
+        "这是单光子探测器的核心工作流程。"
+    )
+    hits = [{"text": evidence, "meta": {"source_path": "spad.en.md"}}]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "spad.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    repaired = _reading_guide_repair_mechanism_marker_target(
+        answer,
+        hits,
+        plan,
+        canonical_paths=["spad.en.md"],
+    )
+
+    assert "淬灭电路复位 [1]。" in repaired
+
+
+def test_spad_marker_adds_complete_source_backed_bridge_when_answer_splits_mechanism():
+    from api.chat_render import _reading_guide_repair_mechanism_marker_target
+
+    evidence = (
+        "A SPAD operates in Geiger mode above its reverse bias breakdown voltage and "
+        "must be supported by a quenching circuit."
+    )
+    answer = (
+        "SPAD operates in Geiger mode to detect individual photons.\n\n"
+        "Its bias is higher than breakdown voltage.\n\n"
+        "A quenching circuit interrupts the avalanche before reset."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "spad.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    repaired = _reading_guide_repair_mechanism_marker_target(
+        answer,
+        [{"text": evidence, "meta": {"source_path": "spad.en.md"}}],
+        plan,
+        canonical_paths=["spad.en.md"],
+    )
+
+    cited_line = next(line for line in repaired.splitlines() if "[1]" in line)
+    assert "Geiger mode" in cited_line
+    assert "breakdown voltage" in cited_line
+    assert "quenching circuit" in cited_line
+    assert repaired.count("[1]") == 1
+
+
+def test_sequential_english_label_gets_source_supported_precise_terms():
+    from api.chat_render import _reading_guide_normalize_sequential_support_terms
+
+    evidence = (
+        "A sequential adaptive compressed sensing procedure for signal support recovery is "
+        "proposed and analyzed. The procedure is based on the principle of distilled sensing."
+    )
+    answer = (
+        "Sequential compressed sensing uses feedback from earlier measurements.\n\n"
+        "It reliably achieves support set exact recovery at a lower SNR."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "sequential.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = _reading_guide_normalize_sequential_support_terms(answer, plan)
+
+    assert "Sequential adaptive compressed sensing" in normalized
+    assert "based on distilled sensing" in normalized
+    assert "signal support recovery" in normalized
+    assert not any("\u4e00" <= char <= "\u9fff" for char in normalized)
+
+
 def test_reading_guide_repair_prefers_canonical_number_for_source_path():
     from api.chat_render import _reading_guide_repair_missing_system_a_citations
 
@@ -6339,6 +7149,53 @@ def test_s2ism_tradeoff_whole_paragraph_rewrite_requires_focused_comparison_plan
     assert repaired == answer
 
 
+def test_s2ism_tradeoff_repair_accepts_direct_answer_grounding_plan(tmp_path: Path):
+    from api.chat_render import _reading_guide_repair_s2ism_tradeoff_answer
+
+    source_path = tmp_path / "s2ism.en.md"
+    evidence = (
+        "Fast detector arrays overcome the trade-off between spatial resolution and "
+        "signal-to-noise ratio. However, current image scanning microscopy approaches "
+        "do not provide optical sectioning and fail with thick samples unless the detector "
+        "size is limited, introducing a trade-off between optical sectioning and "
+        "signal-to-noise ratio."
+    )
+    source_path.write_text(
+        f"<!-- kb_page: 1 -->\n## Abstract\n\n{evidence}\n",
+        encoding="utf-8",
+    )
+    answer = (
+        "s²ISM 打破了空间分辨率、信噪比和光学切片能力的三方权衡。\n\n"
+        "普通 ISM 在厚样本里会失败。"
+    )
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": str(source_path),
+                "source_name": "Structured detection for s2ISM",
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+            }
+        ],
+    }
+
+    repaired = _reading_guide_repair_s2ism_tradeoff_answer(
+        answer,
+        [{"text": evidence, "meta": {"source_path": str(source_path)}}],
+        plan,
+        canonical_paths=[str(source_path)],
+    )
+
+    assert "空间分辨率与 SNR" in repaired
+    assert "光学切片（optical sectioning）与 SNR" in repaired
+    assert "厚样本" in repaired
+    assert "[1]" in repaired
+
+
 def test_s2ism_repair_continues_binding_other_planned_sources():
     from api.chat_render import _reading_guide_repair_missing_system_a_citations
 
@@ -6512,11 +7369,15 @@ def test_multi_source_plan_normalizes_duplicate_canonical_markers_before_budgeti
         canonical_paths=canonical_paths,
     )
 
-    assert "[5]" not in repaired
-    assert "[6]" not in repaired
-    assert repaired.count("[7]") == 2
-    assert repaired.count("[8]") == 2
-    assert repaired.count("[9]") == 1
+    assert repaired.count("[5]") == 2
+    assert repaired.count("[6]") == 2
+    # The third canonical source is already reserved for the foundation
+    # review, so the repair should use that stable answer number instead of
+    # inventing an out-of-range synthetic marker.
+    assert repaired.count("[3]") == 1
+    assert "[7]" not in repaired
+    assert "[8]" not in repaired
+    assert "[9]" not in repaired
 
 
 def test_microscopy_method_map_repair_preserves_unrelated_numeric_citations(
@@ -6766,8 +7627,10 @@ def test_beginner_roadmap_restores_omitted_foundational_paper_without_rebuilding
 
     assert "Principles and prospects for single-pixel imaging" in repaired
     assert "compressive sensing" in repaired
-    assert "[4]" in repaired
-    assert "[6]" in repaired
+    assert "[2]" in repaired
+    assert "[4]" not in repaired
+    assert "[3]" in repaired
+    assert "[6]" not in repaired
     assert "### 2. 深度学习综述" in repaired
     assert "### 3. 编码对比" in repaired
 
@@ -6875,6 +7738,146 @@ def test_system_a_render_backfills_public_bibliography_without_primary_evidence(
     assert "metadata_quality" not in detail
     assert detail["heading_path"] == "3. Results"
     assert detail["card_view"]["header"]["subtitle"] == "3. Results"
+
+
+def test_system_a_prompt_contract_refines_existing_locator(monkeypatch):
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    monkeypatch.setattr(
+        "api.chat_render.load_local_source_citation_meta",
+        lambda *_args, **_kwargs: {},
+    )
+    source_path = "db/SPAD/SPAD.en.md"
+    evidence = (
+        "SPAD operates in Geiger mode above reverse breakdown voltage and "
+        "must be supported by a quenching circuit."
+    )
+    details = [
+        {
+            "num": 1,
+            "source_path": source_path,
+            "source_name": "SPAD.pdf",
+            "heading_path": "1 Introduction",
+            "evidence_quote": evidence,
+            "summary_line": evidence,
+            "raw": evidence,
+            "block_id": "blk-principle",
+            "answer_claim": "SPAD needs Geiger-mode bias and a quenching circuit.",
+            "citation_route": "system_a",
+            "is_inpaper": False,
+        }
+    ]
+    ref_pack = {
+        "primary_evidence": {
+            "source_path": source_path,
+            "source_name": "SPAD.pdf",
+            "heading_path": (
+                "1 Introduction / Principle of single photon detection avalanche diode"
+            ),
+            "snippet": (
+                "SPAD operates in Geiger mode … above reverse breakdown voltage … "
+                "supported by a quenching circuit."
+            ),
+            "block_id": "blk-principle",
+            "anchor_id": "p-principle",
+            "page_start": 2,
+            "page_end": 2,
+            "selection_reason": "prompt_contract_block",
+            "strict_locate": True,
+        },
+        "hits": [
+            {
+                "text": evidence,
+                "meta": {"source_path": source_path},
+                "ui_meta": {"source_path": source_path},
+            }
+        ],
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, ref_pack)
+
+    assert len(out) == 1
+    assert "Principle of single photon detection avalanche diode" in out[0]["heading_path"]
+    assert out[0]["block_id"] == "blk-principle"
+    assert out[0]["page_start"] == 2
+
+
+def test_render_packet_final_primary_refines_citation_locator(monkeypatch):
+    from api.chat_render import _merge_render_packet_contract_meta
+
+    monkeypatch.setattr(
+        "api.chat_render.load_local_source_citation_meta",
+        lambda *_args, **_kwargs: {},
+    )
+    source_path = "db/SPAD/SPAD.en.md"
+    full_evidence = (
+        "SPAD operates in Geiger mode above reverse breakdown voltage and "
+        "must be supported by a quenching circuit."
+    )
+    final_primary = {
+        "source_path": source_path,
+        "source_name": "SPAD.pdf",
+        "heading_path": (
+            "1 Introduction / Principle of single photon detection avalanche diode"
+        ),
+        "snippet": (
+            "SPAD operates in Geiger mode … above reverse breakdown voltage … "
+            "supported by a quenching circuit."
+        ),
+        "block_id": "blk-principle",
+        "anchor_id": "p-principle",
+        "page_start": 2,
+        "page_end": 2,
+        "selection_reason": "prompt_contract_block",
+        "strict_locate": True,
+    }
+    rec = {
+        "content": "SPAD needs Geiger-mode bias and quenching.",
+        "cite_details": [
+            {
+                "num": 1,
+                "source_path": source_path,
+                "source_name": "SPAD.pdf",
+                "heading_path": "1 Introduction",
+                "evidence_quote": full_evidence,
+                "summary_line": full_evidence,
+                "raw": full_evidence,
+                "block_id": "blk-principle",
+                "anchor_id": "p-principle",
+                "answer_claim": "SPAD needs Geiger-mode bias and quenching.",
+                "citation_route": "system_a",
+                "is_inpaper": False,
+            }
+        ],
+        "meta": {
+            "paper_guide_contracts": {
+                "primary_evidence": final_primary,
+                "render_packet": {},
+            }
+        },
+    }
+    ref_pack = {
+        "hits": [
+            {
+                "text": full_evidence,
+                "meta": {"source_path": source_path},
+                "ui_meta": {"source_path": source_path},
+            }
+        ]
+    }
+
+    _merge_render_packet_contract_meta(
+        rec=rec,
+        msg_id=1,
+        enriched_provenance={},
+        ref_pack=ref_pack,
+        render_locale="zh",
+    )
+
+    details = rec["meta"]["paper_guide_contracts"]["render_packet"]["cite_details"]
+    assert len(details) == 1
+    assert "Principle of single photon detection avalanche diode" in details[0]["heading_path"]
+    assert details[0]["block_id"] == "blk-principle"
 
 
 def test_reading_guide_does_not_bind_piln_evidence_to_pidl_retrieval_notice():
@@ -7168,6 +8171,255 @@ def test_answer_aligned_ref_primary_preserves_multi_claim_same_paper_slots():
     )
 
     assert resolved["slots"] == original["slots"]
+
+
+def test_prompt_contract_primary_replaces_generic_same_paper_slots():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/SPH/SPH.en.md"
+    original = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": "SPH uses a single-pixel detector.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Conclusion",
+                "evidence_quote": "We developed high-throughput SPH.",
+            },
+        ],
+    }
+    exact = (
+        "A beat frequency realizes phase stepping naturally in time by exploiting "
+        "the framework of heterodyne holography."
+    )
+
+    resolved = _citation_plan_with_ref_primary(
+        original,
+        {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "Introduction",
+                "snippet": exact,
+                "block_id": "blk-intro",
+                "anchor_id": "p-intro",
+                "selection_reason": "prompt_contract_block",
+                "strict_locate": True,
+            }
+        },
+    )
+
+    assert len(resolved["slots"]) == 1
+    assert resolved["slots"][0]["heading_path"] == "Introduction"
+    assert resolved["slots"][0]["evidence_quote"] == exact
+    assert resolved["slots"][0]["evidence_selection_reason"] == "prompt_contract_block"
+
+
+def test_prompt_contract_primary_recovers_public_source_path_from_matching_hit():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    public_path = "kb-source/0/SPAD/SPAD.en.md"
+    exact = (
+        "SPAD operates in Geiger mode above its reverse bias breakdown voltage "
+        "and must be supported by a quenching circuit."
+    )
+    resolved = _citation_plan_with_ref_primary(
+        {
+            "budget": {"system_a": 2, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "F:/repo/db/SPAD/SPAD.en.md",
+                    "heading_path": "Figure 2",
+                    "evidence_quote": "SPAD operates in Geiger mode.",
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "F:/repo/db/SPAD/SPAD.en.md",
+                    "heading_path": "Materials",
+                    "evidence_quote": "SPADs use several semiconductor materials.",
+                },
+            ],
+        },
+        {
+            "primary_evidence": {
+                # Public API payloads intentionally omit the private path.
+                "source_name": "SPAD.pdf",
+                "heading_path": "Principle of SPAD",
+                "snippet": exact,
+                "block_id": "blk-principle",
+                "anchor_id": "p-principle",
+                "selection_reason": "prompt_contract_block",
+                "strict_locate": True,
+            },
+            "hits": [
+                {
+                    "text": exact,
+                    "meta": {
+                        "source_path": public_path,
+                        "primary_block_id": "blk-principle",
+                    },
+                    "ui_meta": {},
+                }
+            ],
+        },
+    )
+
+    assert len(resolved["slots"]) == 1
+    assert resolved["slots"][0]["source_path"] == public_path
+    assert resolved["slots"][0]["heading_path"] == "Principle of SPAD"
+    assert resolved["slots"][0]["evidence_quote"] == exact
+    assert resolved["slots"][0]["evidence_selection_reason"] == "prompt_contract_block"
+
+
+def test_prompt_contract_primary_preserves_other_same_source_claim_slots():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/SPAD/SPAD.en.md"
+    noise_evidence = (
+        "The SPAD noise model includes dark count, afterpulsing, and crosstalk."
+    )
+    resolved = _citation_plan_with_ref_primary(
+        {
+            "budget": {"system_a": 2, "system_b": 0},
+            "slots": [
+                {
+                    "claim_type": "mechanism",
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "heading_path": "Principle",
+                    "evidence_quote": "SPAD operates in Geiger mode.",
+                },
+                {
+                    "claim_type": "noise_limitations",
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "heading_path": "Noise model",
+                    "evidence_quote": noise_evidence,
+                },
+            ],
+        },
+        {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "Principle",
+                "snippet": (
+                    "SPAD operates in Geiger mode above breakdown voltage and "
+                    "requires a quenching circuit."
+                ),
+                "block_id": "blk-principle",
+                "anchor_id": "p-principle",
+                "selection_reason": "prompt_contract_block",
+                "strict_locate": True,
+            }
+        },
+    )
+
+    assert len(resolved["slots"]) == 2
+    assert resolved["slots"][0]["evidence_selection_reason"] == "prompt_contract_block"
+    assert resolved["slots"][1]["evidence_quote"] == noise_evidence
+    assert resolved["slots"][1]["claim_type"] == "noise_limitations"
+
+
+def test_prompt_contract_primary_reuses_matching_reserved_public_hit():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _citation_plan_with_ref_primary,
+    )
+
+    private_path = "F:/repo/db/SPH/SPH.en.md"
+    exact = (
+        "A beat frequency realizes phase stepping naturally in time by exploiting "
+        "the framework of heterodyne holography."
+    )
+    plan = _citation_plan_with_ref_primary(
+        {
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": private_path,
+                    "heading_path": "Abstract",
+                    "evidence_quote": "SPH uses a single-pixel detector.",
+                }
+            ],
+        },
+        {
+            "primary_evidence": {
+                "source_path": private_path,
+                "source_name": "SPH",
+                "heading_path": "Introduction",
+                "snippet": exact,
+                "block_id": "blk-intro",
+                "anchor_id": "p-intro",
+                "page_start": 2,
+                "page_end": 2,
+                "selection_reason": "prompt_contract_block",
+                "strict_locate": True,
+            }
+        },
+    )
+    hits = [
+        {
+            "text": "A generic SPH passage.",
+            "meta": {
+                "source_path": "kb-source/0/SPH/SPH.en.md",
+                "heading_path": "Abstract",
+            },
+            "ui_meta": {},
+        }
+    ]
+
+    rebound = _augment_hits_with_system_a_plan_slots(hits, plan, reserved_count=1)
+
+    assert len(rebound) == 1
+    assert rebound[0]["text"] == exact
+    assert rebound[0]["meta"]["ref_answer_citation_num"] == 1
+    assert rebound[0]["meta"]["primary_block_id"] == "blk-intro"
+    assert rebound[0]["ui_meta"]["primary_evidence"]["strict_locate"] is True
+
+
+def test_prompt_contract_primary_reuses_matching_reserved_exact_source_hit():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _citation_plan_with_ref_primary,
+    )
+
+    source_path = "kb-source/0/SPH/SPH.en.md"
+    exact = "A beat frequency realizes phase stepping naturally in time."
+    plan = _citation_plan_with_ref_primary(
+        {"budget": {"system_a": 1, "system_b": 0}, "slots": []},
+        {
+            "primary_evidence": {
+                "source_path": source_path,
+                "source_name": "SPH",
+                "heading_path": "Introduction",
+                "snippet": exact,
+                "block_id": "blk-intro",
+                "anchor_id": "p-intro",
+                "selection_reason": "prompt_contract_block",
+                "strict_locate": True,
+            }
+        },
+    )
+    hits = [
+        {
+            "text": "A broader passage from the same source.",
+            "meta": {"source_path": source_path, "heading_path": "Introduction"},
+            "ui_meta": {},
+        }
+    ]
+
+    rebound = _augment_hits_with_system_a_plan_slots(hits, plan, reserved_count=3)
+
+    assert len(rebound) == 3
+    assert rebound[0]["text"] == exact
+    assert rebound[0]["meta"]["ref_answer_citation_num"] == 1
 
 
 def test_answer_aligned_ref_primary_preserves_multi_paper_reading_role_slots():
@@ -7572,3 +8824,302 @@ def test_system_a_binding_bridges_chinese_spad_noise_claim_to_english_evidence()
     assert binding["status"] == "grounded"
     assert binding["suppress_link"] is False
     assert "crosstalk noise" in binding["overlap_terms"]
+
+
+def test_lineage_plan_replaces_each_system_a_slot_with_exact_source_evidence(tmp_path: Path) -> None:
+    from api.chat_render import _citation_plan_with_exact_lineage_evidence
+
+    cassi_path = tmp_path / "dual-disperser-cassi.en.md"
+    scinerf_path = tmp_path / "SCINeRF.en.md"
+    scigs_path = tmp_path / "SCIGS.en.md"
+    cassi_path.write_text(
+        "\n".join(
+            [
+                "# CASSI",
+                "<!-- kb_page: 1 -->",
+                "## Abstract",
+                (
+                    "The coded snapshot spectral imager uses two dispersive elements "
+                    "and a binary-valued aperture to encode a hyperspectral cube."
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    scinerf_path.write_text(
+        "\n".join(
+            [
+                "# SCINeRF",
+                "<!-- kb_page: 2 -->",
+                "## Abstract",
+                (
+                    "SCINeRF incorporates the physical imaging process of snapshot "
+                    "compressive imaging into NeRF reconstruction."
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    scigs_path.write_text(
+        "\n".join(
+            [
+                "# SCIGS",
+                "<!-- kb_page: 3 -->",
+                "## Abstract",
+                "SCIGS reconstructs a dynamic 3D scene from snapshot measurements.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    original_slots = [
+        {
+            "preferred_system": "system_a",
+            "source_path": str(path),
+            "heading_path": "Weak section",
+            "evidence_quote": "Weak lineage evidence.",
+        }
+        for path in (cassi_path, scinerf_path, scigs_path)
+    ]
+
+    repaired = _citation_plan_with_exact_lineage_evidence(
+        {
+            "intent": "origin_lookup",
+            "budget": {"system_a": 3, "system_b": 0},
+            "slots": original_slots,
+        }
+    )
+
+    repaired_slots = repaired["slots"]
+    assert len(repaired_slots) == 3
+    assert "two dispersive elements" in repaired_slots[0]["evidence_quote"]
+    assert "binary-valued aperture" in repaired_slots[0]["evidence_quote"]
+    assert "physical imaging process" in repaired_slots[1]["evidence_quote"]
+    assert "NeRF" in repaired_slots[1]["evidence_quote"]
+    assert "dynamic 3D scene" in repaired_slots[2]["evidence_quote"]
+    assert {slot["page_start"] for slot in repaired_slots} == {1, 2, 3}
+    assert all(slot["strict_locate"] is True for slot in repaired_slots)
+    assert all(
+        slot["evidence_selection_reason"] == "lineage_exact_source_block"
+        for slot in repaired_slots
+    )
+    assert all(slot["evidence_quote"] == "Weak lineage evidence." for slot in original_slots)
+
+
+def test_lineage_canonical_paths_bind_all_three_reserved_system_a_hits(tmp_path: Path) -> None:
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_paths = [
+        str(tmp_path / "CASSI" / "CASSI.en.md"),
+        str(tmp_path / "SCINeRF" / "SCINeRF.en.md"),
+        str(tmp_path / "SCIGS" / "SCIGS.en.md"),
+    ]
+    evidence = [
+        "CASSI uses two dispersive elements and a binary-valued aperture.",
+        "SCINeRF embeds the physical imaging process into NeRF.",
+        "SCIGS reconstructs a dynamic 3D scene.",
+    ]
+    plan = {
+        "intent": "origin_lookup",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": Path(source_path).name,
+                "heading_path": "Abstract",
+                "evidence_quote": quote,
+                "block_id": f"block-{idx}",
+                "anchor_id": f"anchor-{idx}",
+                "strict_locate": True,
+            }
+            for idx, (source_path, quote) in enumerate(
+                zip(source_paths, evidence),
+                start=1,
+            )
+        ],
+    }
+    hits = [
+        {
+            "text": f"Stale retrieval passage {idx}.",
+            "meta": {
+                "source_path": f"kb-source/0/stale-{idx}/stale-{idx}.en.md",
+                "citation_plan_padding": True,
+            },
+            "ui_meta": {},
+        }
+        for idx in range(1, 4)
+    ]
+
+    rebound = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=3,
+        canonical_paths=source_paths,
+    )
+
+    assert len(rebound) == 3
+    for idx, hit in enumerate(rebound, start=1):
+        assert hit["text"] == evidence[idx - 1]
+        assert hit["meta"]["source_path"] == source_paths[idx - 1]
+        assert hit["meta"]["ref_answer_citation_num"] == idx
+        assert hit["meta"]["citation_plan_slot"] is True
+        assert "citation_plan_padding" not in hit["meta"]
+        assert hit["ui_meta"]["primary_evidence"]["block_id"] == f"block-{idx}"
+
+
+def test_lineage_system_b_retargets_same_reference_to_downstream_paper(tmp_path: Path) -> None:
+    from api.chat_render import _retarget_lineage_system_b_to_downstream_source
+    from api.reference_rendering import _source_cite_id
+
+    upstream_path = tmp_path / "SCINeRF.en.md"
+    cassi_path = tmp_path / "CASSI.en.md"
+    downstream_path = tmp_path / "SCIGS.en.md"
+    reference = (
+        "X. Yuan, D. J. Brady, and A. K. Katsaggelos. Snapshot compressive imaging: "
+        "Theory, algorithms, and applications. IEEE Signal Processing Magazine, 2021."
+    )
+    upstream_path.write_text(
+        f"# SCINeRF\n\n## References\n[50] {reference}\n",
+        encoding="utf-8",
+    )
+    cassi_path.write_text(
+        "# CASSI\n\n## Abstract\nCASSI uses a coded aperture.\n",
+        encoding="utf-8",
+    )
+    downstream_path.write_text(
+        "\n".join(
+            [
+                "# SCIGS",
+                "## Introduction",
+                (
+                    "Snapshot compressive imaging theory, algorithms, and applications [42] "
+                    "provide the foundation for our dynamic scene method."
+                ),
+                "## References",
+                f"[42] {reference}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    old_sid = _source_cite_id(str(upstream_path))
+    new_sid = _source_cite_id(str(downstream_path))
+    answer = f"The lineage starts from SCI [[CITE:{old_sid}:50]]."
+    plan = {
+        "intent": "origin_lookup",
+        "budget": {"system_a": 3, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": str(upstream_path),
+                "heading_path": "Abstract",
+                "evidence_quote": "SCINeRF evidence.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": str(cassi_path),
+                "heading_path": "Abstract",
+                "evidence_quote": "CASSI evidence.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": str(downstream_path),
+                "heading_path": "Introduction",
+                "evidence_quote": "SCIGS evidence.",
+            },
+            {
+                "preferred_system": "system_b",
+                "source_path": str(upstream_path),
+                "source_name": "SCINeRF.pdf",
+                "topic": "Snapshot compressive imaging: Theory, algorithms, and applications",
+                "sid": old_sid,
+                "candidate_refs": [50],
+                "candidate_cite_examples": [f"[[CITE:{old_sid}:50]]"],
+            },
+        ],
+    }
+
+    repaired_answer, repaired_plan = _retarget_lineage_system_b_to_downstream_source(
+        answer,
+        plan,
+    )
+
+    system_b = repaired_plan["slots"][-1]
+    assert f"[[CITE:{old_sid}:50]]" not in repaired_answer
+    assert f"[[CITE:{new_sid}:42]]" in repaired_answer
+    assert system_b["source_path"] == str(downstream_path)
+    assert system_b["candidate_refs"] == [42]
+    assert system_b["candidate_cite_examples"] == [f"[[CITE:{new_sid}:42]]"]
+    assert system_b["selection_reason"] == "downstream_duplicate_reference"
+    assert system_b["grounding_contract"] == {
+        "same_context_reference": True,
+        "context_marker_verified": True,
+        "relation_context_verified": True,
+        "relation_entities": ["video_sci"],
+    }
+    assert "Snapshot compressive imaging theory" in system_b["evidence_quote"]
+
+
+def test_lineage_system_b_drops_unsupported_spectral_origin_relation(tmp_path: Path) -> None:
+    from api.chat_render import _retarget_lineage_system_b_to_downstream_source
+    from api.reference_rendering import _source_cite_id
+
+    upstream_path = tmp_path / "SCINeRF.en.md"
+    cassi_path = tmp_path / "CASSI.en.md"
+    downstream_path = tmp_path / "SCIGS.en.md"
+    reference = (
+        "X. Yuan et al. Snapshot compressive imaging: Theory, algorithms, "
+        "and applications. IEEE Signal Processing Magazine, 2021."
+    )
+    upstream_path.write_text(
+        f"# SCINeRF\n\n## References\n[50] {reference}\n",
+        encoding="utf-8",
+    )
+    cassi_path.write_text("# CASSI\n\nCoded aperture evidence.\n", encoding="utf-8")
+    downstream_path.write_text(
+        "\n".join(
+            [
+                "# SCIGS",
+                "## Introduction",
+                "Compressed Sensing and video SCI [42] technology has been developed.",
+                "## References",
+                f"[42] {reference}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    old_sid = _source_cite_id(str(upstream_path))
+    token = f"[[CITE:{old_sid}:50]]"
+    answer = f"This method directly originates from the spectral data-cube paradigm {token}."
+    plan = {
+        "intent": "origin_lookup",
+        "budget": {"system_a": 3, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": str(path),
+                "evidence_quote": "Direct paper evidence.",
+            }
+            for path in (upstream_path, cassi_path, downstream_path)
+        ]
+        + [
+            {
+                "preferred_system": "system_b",
+                "source_path": str(upstream_path),
+                "topic": "Snapshot compressive imaging: Theory, algorithms, and applications",
+                "sid": old_sid,
+                "candidate_refs": [50],
+            }
+        ],
+    }
+
+    repaired_answer, repaired_plan = _retarget_lineage_system_b_to_downstream_source(
+        answer,
+        plan,
+    )
+
+    assert token not in repaired_answer
+    assert all(
+        slot.get("preferred_system") != "system_b"
+        for slot in repaired_plan["slots"]
+    )
+    assert repaired_plan["budget"]["system_b"] == 0

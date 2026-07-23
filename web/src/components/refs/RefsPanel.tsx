@@ -412,12 +412,43 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                   const cardView = normalizeRefCardView(ui.card_view || ui.cardView)
                   const summarySection = refCardSection(cardView, 'summary')
                   const whySection = refCardSection(cardView, 'why')
-                  const summary = String(summarySection?.text || ui.summary_line || '').trim()
-                  const summaryLabel = String(summarySection?.label || ui.summary_label || '').trim() || S.refs_summary_label
-                  const summaryTitle = String(summarySection?.title || ui.summary_title || '').trim() || S.refs_summary_title
-                  const why = String(whySection?.text || ui.why_line || '').trim()
-                  const whyLabel = String(whySection?.label || '').trim() || S.refs_why_chip
-                  const whyTitle = String(whySection?.title || '').trim() || S.refs_why_title
+                  const summary = String(
+                    summarySection?.text || cardView?.summary || (!cardView ? ui.summary_line : '') || '',
+                  ).trim()
+                  const summaryKind = String(ui.summary_kind || '').trim().toLowerCase()
+                  const summaryRole = String(ui.summary_display_role || '').trim().toLowerCase()
+                  const sourceKind = String(ui.source_kind || '').trim().toLowerCase()
+                  const isResearchBasket = sourceKind === 'research_basket'
+                    || title.toLowerCase().startsWith('research basket:')
+                  const isSourceEvidence = summaryRole === 'source_evidence'
+                    || summaryRole === 'evidence'
+                    || summaryKind === 'evidence'
+                    || summaryKind === 'source_evidence'
+                  const isGuide = summaryRole === 'guide'
+                    || summaryKind === 'guide'
+                    || summaryKind === 'section_grounded'
+                  const isMetadata = summaryKind === 'metadata'
+                  const summaryLabel = isResearchBasket
+                    ? S.refs_basket_label
+                    : isSourceEvidence
+                      ? S.refs_evidence_label
+                      : isGuide
+                        ? S.refs_guide_label
+                        : isMetadata
+                          ? S.refs_metadata_label
+                          : S.refs_summary_label
+                  const summaryTitle = isResearchBasket
+                    ? S.refs_basket_title
+                    : isSourceEvidence
+                      ? S.refs_evidence_title
+                      : isGuide
+                        ? S.refs_guide_title
+                        : isMetadata
+                          ? S.refs_metadata_title
+                          : S.refs_summary_title
+                  const why = String(whySection?.text || (!cardView ? ui.why_line : '') || '').trim()
+                  const whyLabel = S.refs_why_chip
+                  const whyTitle = S.refs_why_title
                   const polishStatus = normalizePolishStatus(ui.polish_status)
                   const polishLabel = polishStatusLabel(polishStatus, S)
                   const semanticBadges = (Array.isArray(ui.semantic_badges) ? ui.semantic_badges : [])

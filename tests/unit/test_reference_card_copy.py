@@ -17,6 +17,9 @@ def test_generic_why_line_detector_catches_prompt_echo_template() -> None:
     assert looks_generic_ref_why_line(
         "该文在“Abstract”处直接讨论了“single-pixel、imaging”，与问题的关注点直接对应。请只依据原文回答。"
     )
+    assert looks_generic_ref_why_line(
+        "“Abstract”提供回答该问题所需的原文定位，卡片中的结论可在这里逐项核对。"
+    )
 
 
 def test_templated_why_line_detector_does_not_reject_specific_evidence() -> None:
@@ -26,6 +29,22 @@ def test_templated_why_line_detector_does_not_reject_specific_evidence() -> None
     assert not looks_generic_ref_why_line(
         "Related Work 中明确提及 Snapshot Compressive Imaging（SCI），直接回应用户查询。"
     )
+
+
+def test_english_grounded_copy_uses_evidence_instead_of_a_template_shell() -> None:
+    why = build_grounded_ref_why_line(
+        prefer_zh=False,
+        focus_terms=[],
+        heading_path="SCINeRF / Abstract",
+        summary_line=(
+            "SCINeRF formulates the physical imaging process of SCI as part "
+            "of the training of NeRF."
+        ),
+    )
+
+    assert "lineage evidence" in why
+    assert "neural scene representation" in why
+    assert not looks_generic_ref_why_line(why)
 
 
 def test_build_grounded_ref_why_line_personalizes_chinese_copy() -> None:
@@ -181,3 +200,118 @@ def test_generic_relevance_template_is_removed_when_no_specific_relation_exists(
     assert summary.startswith("The paper describes")
     assert why == ""
     assert changed is True
+
+
+def test_grounded_ref_why_line_explains_cassi_measurement_chain() -> None:
+    _summary, why, changed = finalize_ref_card_copy(
+        summary_line=(
+            "A dual-disperser architecture with a binary-valued aperture compresses "
+            "the spectral data cube into a single detector measurement."
+        ),
+        why_line="与当前问题的关注点直接对应。",
+        prefer_zh=True,
+        focus_terms=["CASSI"],
+        heading_path="System architecture",
+    )
+
+    assert changed is True
+    assert all(term in why for term in ("CASSI", "双色散器", "二值编码孔径", "光谱"))
+
+
+def test_grounded_ref_why_line_explains_scinerf_bridge() -> None:
+    _summary, why, changed = finalize_ref_card_copy(
+        summary_line=(
+            "SCINeRF formulates the physical imaging process of SCI as part of "
+            "the training of NeRF."
+        ),
+        why_line="Use this evidence to check the answer.",
+        prefer_zh=True,
+        focus_terms=["SCINeRF"],
+        heading_path="Introduction",
+    )
+
+    assert changed is True
+    assert all(term in why for term in ("SCI", "NeRF", "物理成像", "三维"))
+
+
+def test_grounded_ref_why_line_explains_scigs_dynamic_3d_stage() -> None:
+    _summary, why, changed = finalize_ref_card_copy(
+        summary_line=(
+            "SCIGS reconstructs a 3D explicit scene from a single compressed image "
+            "and extends the application to dynamic 3D scenes."
+        ),
+        why_line="Use this evidence to check the answer.",
+        prefer_zh=True,
+        focus_terms=["SCIGS"],
+        heading_path="Abstract",
+    )
+
+    assert changed is True
+    assert all(term in why for term in ("SCIGS", "单幅压缩图像", "三维", "动态"))
+
+
+def test_grounded_ref_why_line_explains_s2ism_tradeoff() -> None:
+    _summary, why, changed = finalize_ref_card_copy(
+        summary_line=(
+            "Reducing the pinhole size improves spatial resolution and optical sectioning "
+            "but decreases the signal-to-noise ratio (SNR)."
+        ),
+        why_line="与当前问题的关注点直接对应。",
+        prefer_zh=True,
+        focus_terms=["s2ISM"],
+        heading_path="Discussion",
+    )
+
+    assert changed is True
+    assert all(term in why for term in ("空间分辨率", "光学切片", "信噪比", "s2ISM"))
+
+
+def test_grounded_ref_why_line_explains_s2ism_thick_sample_limitation() -> None:
+    _summary, why, changed = finalize_ref_card_copy(
+        summary_line=(
+            "Current image scanning microscopy approaches do not provide optical "
+            "sectioning and fail with thick samples unless the detector size is limited, "
+            "introducing a trade-off with signal-to-noise ratio."
+        ),
+        why_line="与当前问题相关。",
+        prefer_zh=True,
+        focus_terms=["s2ISM"],
+        heading_path="Abstract",
+    )
+
+    assert changed is True
+    assert all(term in why for term in ("厚样本", "光学切片", "信噪比", "s2ISM"))
+    assert len(why) >= 45
+
+
+def test_grounded_ref_why_line_handles_truncated_s2ism_abstract() -> None:
+    _summary, why, changed = finalize_ref_card_copy(
+        summary_line=(
+            "Fast detector arrays enable image scanning microscopy, which overcomes the "
+            "trade-off between spatial resolution and signal-to-noise ratio. However, "
+            "current approaches do not provide optical sectioning."
+        ),
+        why_line="",
+        prefer_zh=True,
+        focus_terms=["s2ISM", "三方权衡"],
+        heading_path="Abstract",
+    )
+
+    assert changed is True
+    assert all(term in why for term in ("空间分辨率", "光学切片", "信噪比", "s2ISM"))
+
+
+def test_grounded_ref_why_line_explains_fdm_parallel_channels() -> None:
+    _summary, why, changed = finalize_ref_card_copy(
+        summary_line=(
+            "Different detector channels are encoded at subcarrier frequencies; "
+            "the measured crosstalk is 2.3% and 13.0%."
+        ),
+        why_line="与当前问题的关注点直接对应。",
+        prefer_zh=True,
+        focus_terms=["FDM"],
+        heading_path="Results",
+    )
+
+    assert changed is True
+    assert all(term in why for term in ("子载波", "并行", "2.3%", "13.0%"))

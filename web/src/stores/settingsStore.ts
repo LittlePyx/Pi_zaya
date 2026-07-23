@@ -157,6 +157,7 @@ interface SettingsState {
   pdfDir: string
   mdDir: string
   uiLocale: 'zh' | 'en'
+  localePreferencesRevision: number
   theme: 'light' | 'dark'
   sidebarCollapsed: boolean
   model: string
@@ -202,6 +203,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   pdfDir: '',
   mdDir: '',
   uiLocale: 'zh',
+  localePreferencesRevision: 0,
   theme: readInitialTheme(),
   sidebarCollapsed: false,
   model: '',
@@ -407,7 +409,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const rollbackKeys = Object.keys(localPatch) as Array<keyof SettingsState>
     set(localPatch)
     try {
-      return await settingsApi.update(patchToSend)
+      const response = await settingsApi.update(patchToSend)
+      if (patch.uiLocale !== undefined || patch.refsCardLocale !== undefined) {
+        set((current) => ({
+          localePreferencesRevision: current.localePreferencesRevision + 1,
+        }))
+      }
+      return response
     } catch (err) {
       const rollbackTheme = localPatch.theme !== undefined && get().theme === localPatch.theme
       set((current) => {
