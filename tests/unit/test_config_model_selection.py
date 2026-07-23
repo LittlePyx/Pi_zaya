@@ -8,6 +8,7 @@ def _clear_provider_env(monkeypatch) -> None:
         "DEEPSEEK_API_KEY",
         "DEEPSEEK_BASE_URL",
         "DEEPSEEK_MODEL",
+        "KB_DEEPSEEK_THINKING_MODE",
         "QWEN_API_KEY",
         "QWEN_TEXT_MODEL",
         "QWEN_MODEL",
@@ -29,6 +30,7 @@ def test_deepseek_default_model_does_not_inherit_openai_model(monkeypatch) -> No
 
     assert settings.text_model == "deepseek-v4-flash"
     assert settings.text_base_url == "https://api.deepseek.com/v1"
+    assert settings.deepseek_thinking_mode == "disabled"
 
 
 def test_deepseek_explicit_v4_pro_is_preserved(monkeypatch) -> None:
@@ -40,6 +42,7 @@ def test_deepseek_explicit_v4_pro_is_preserved(monkeypatch) -> None:
     settings = config.load_settings()
 
     assert settings.text_model == "deepseek-v4-pro"
+    assert settings.deepseek_thinking_mode == "enabled"
 
 
 def test_stored_official_deepseek_alias_migrates_to_explicit_v4(monkeypatch) -> None:
@@ -57,3 +60,29 @@ def test_stored_official_deepseek_alias_migrates_to_explicit_v4(monkeypatch) -> 
     settings = config.load_settings()
 
     assert settings.text_model == "deepseek-v4-flash"
+    assert settings.deepseek_thinking_mode == "disabled"
+
+
+def test_deepseek_reasoner_alias_preserves_thinking_intent(monkeypatch) -> None:
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setattr(config, "_load_runtime_prefs", lambda: {})
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-reasoner")
+
+    settings = config.load_settings()
+
+    assert settings.text_model == "deepseek-v4-flash"
+    assert settings.deepseek_thinking_mode == "enabled"
+
+
+def test_deepseek_thinking_mode_can_be_explicitly_overridden(monkeypatch) -> None:
+    _clear_provider_env(monkeypatch)
+    monkeypatch.setattr(config, "_load_runtime_prefs", lambda: {})
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("KB_DEEPSEEK_THINKING_MODE", "enabled")
+
+    settings = config.load_settings()
+
+    assert settings.text_model == "deepseek-v4-flash"
+    assert settings.deepseek_thinking_mode == "enabled"

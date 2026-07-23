@@ -259,3 +259,66 @@ def test_chat_supports_bounded_single_attempt_retry() -> None:
     assert answer == "bounded answer"
     assert len(completions.calls) == 1
     assert completions.calls[0]["timeout"] == 18.0
+
+
+def test_chat_disables_hidden_thinking_for_official_deepseek_flash() -> None:
+    class _OfficialFlashSettings(_FakeSettings):
+        text_base_url = "https://api.deepseek.com/v1"
+        text_model = "deepseek-v4-flash"
+        deepseek_thinking_mode = "disabled"
+
+    class _ResponseCompletions:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def create(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            message = type("Message", (), {"content": "fast answer"})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    completions = _ResponseCompletions()
+    ds = DeepSeekChat.__new__(DeepSeekChat)
+    ds._settings = _OfficialFlashSettings()
+    ds._text_client = _FakeClient(completions)  # type: ignore[arg-type]
+    ds._vision_client = ds._text_client
+
+    assert ds.chat(messages=[{"role": "user", "content": "hello"}]) == "fast answer"
+    assert completions.calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_chat_stream_disables_hidden_thinking_for_official_deepseek_flash() -> None:
+    class _OfficialFlashSettings(_FakeSettings):
+        text_base_url = "https://api.deepseek.com/v1"
+        text_model = "deepseek-v4-flash"
+        deepseek_thinking_mode = "disabled"
+
+    completions = _FakeCompletions(pieces=["fast", " answer"])
+    ds = DeepSeekChat.__new__(DeepSeekChat)
+    ds._settings = _OfficialFlashSettings()
+    ds._text_client = _FakeClient(completions)
+    ds._vision_client = ds._text_client
+
+    assert list(ds.chat_stream(messages=[{"role": "user", "content": "hello"}])) == ["fast", " answer"]
+    assert completions.calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_chat_stream_does_not_send_deepseek_thinking_to_qwen_fallback() -> None:
+    class _OfficialFlashSettings(_FakeSettings):
+        text_base_url = "https://api.deepseek.com/v1"
+        text_model = "deepseek-v4-flash"
+        vision_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        deepseek_thinking_mode = "disabled"
+
+    settings = _OfficialFlashSettings()
+    settings.auto_route = True
+    primary = _FakeCompletions(error=ConnectionError("primary unavailable"))
+    secondary = _FakeCompletions(pieces=["qwen", " fallback"])
+    ds = DeepSeekChat.__new__(DeepSeekChat)
+    ds._settings = settings
+    ds._text_client = _FakeClient(primary)
+    ds._vision_client = _FakeClient(secondary)
+
+    assert list(ds.chat_stream(messages=[{"role": "user", "content": "hello"}])) == ["qwen", " fallback"]
+    assert primary.calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert "extra_body" not in secondary.calls[0]

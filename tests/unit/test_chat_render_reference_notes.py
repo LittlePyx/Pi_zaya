@@ -4648,11 +4648,84 @@ def test_reading_guide_lineage_completes_truncated_scigs_stage_from_plan():
     assert "SCIGS / 3DGS" in repaired
     assert "explicit 3D scene from one compressed image" in repaired
     assert "dynamic 3D scenes [6]" in repaired
+    assert len(hits) == 6
     assert not repaired.rstrip().endswith("→ SC")
     assert "[1]" not in repaired
     assert "[2]" not in repaired
     assert "[3]" not in repaired
     assert hits[5]["meta"]["citation_plan_lineage_scigs"] is True
+
+
+def test_reading_guide_lineage_reuses_canonical_system_a_numbers():
+    from api.chat_render import _reading_guide_repair_lineage_scinerf_evidence
+
+    source_paths = ["cassi.en.md", "scinerf.en.md", "scigs.en.md"]
+    hits = [
+        {
+            "text": "old",
+            "meta": {
+                "source_path": path,
+                "ref_answer_citation_num": idx,
+            },
+        }
+        for idx, path in enumerate(source_paths, start=1)
+    ]
+    plan = {
+        "intent": "origin_lookup",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_paths[0],
+                "source_name": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+                "heading_path": "Abstract",
+                "evidence_quote": (
+                    "The system uses two dispersive elements surrounding a "
+                    "binary-valued aperture code."
+                ),
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_paths[1],
+                "source_name": "SCINeRF",
+                "heading_path": "Abstract",
+                "evidence_quote": (
+                    "SCINeRF incorporates the physical imaging process into "
+                    "NeRF training for a 3D scene."
+                ),
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_paths[2],
+                "source_name": "SCIGS",
+                "heading_path": "Abstract",
+                "evidence_quote": (
+                    "SCIGS reconstructs an explicit 3D scene from a single "
+                    "compressed image and extends to dynamic 3D scenes."
+                ),
+                "candidate_hits": [3],
+            },
+        ],
+    }
+    answer = (
+        "## 第三阶段：3D 场景\n"
+        "双色散光谱成像走向 SCINeRF [2]，再走向 SCIGS [3]。"
+    )
+
+    repaired = _reading_guide_repair_lineage_scinerf_evidence(answer, hits, plan)
+
+    assert len(hits) == 3
+    assert "[1]" in repaired
+    assert "[2]" in repaired
+    assert "[3]" in repaired
+    assert all(
+        int(hit["meta"]["ref_answer_citation_num"]) == idx
+        for idx, hit in enumerate(hits, start=1)
+    )
+    assert hits[0]["meta"]["citation_plan_lineage_cassi"] is True
+    assert hits[1]["meta"]["citation_plan_lineage_scinerf"] is True
+    assert hits[2]["meta"]["citation_plan_lineage_scigs"] is True
 
 
 def test_reading_guide_lineage_recovers_when_provider_stops_inside_scinerf_formula(
@@ -4800,8 +4873,8 @@ def test_authoritative_lineage_mapping_still_runs_exact_evidence_repair():
     assert "two dispersive elements" in repaired
     assert "SCINeRF** learns a 3D scene representation" in repaired
     assert "SCIGS / 3DGS" in repaired
-    assert "dynamic 3D scenes [6]" in repaired
-    assert len(hits) == 6
+    assert "dynamic 3D scenes [3]" in repaired
+    assert len(hits) == 3
 
 
 def test_reading_guide_keeps_only_planned_system_b_marker_within_budget():

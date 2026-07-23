@@ -92,6 +92,10 @@ class Settings:
     vision_uses_text_fallback: bool = field(default=False)
     # Whether LLM-based query expansion is enabled for BM25 retrieval.
     query_expansion_enabled: bool = field(default=False)
+    # DeepSeek V4 defaults to hidden thinking, which can delay the first
+    # user-visible token by tens of seconds.  Keep the resolved provider mode
+    # explicit so the LLM adapter can request the intended behavior.
+    deepseek_thinking_mode: str = field(default="")
     # Runtime environment and API access protection.
     app_env: str = field(default="development")
     production: bool = field(default=False)
@@ -143,6 +147,7 @@ def load_settings() -> Settings:
     stored_vision_base_url = _clean_base_url(prefs.get("vision_base_url"))
     stored_vision_model = _clean_pref_str(prefs.get("vision_model"))
     stored_auto_backup_enabled = _clean_pref_bool(prefs.get("auto_backup_enabled"))
+    requested_text_model = ""
 
     # --- text model ---------------------------------------------------
     # Prefer DeepSeek (cheapest / fastest for text).  Fall back to Qwen,
@@ -161,6 +166,7 @@ def load_settings() -> Settings:
         # sending (for example) ``gpt-4o`` to DeepSeek produces a misleading
         # connection failure even though the DeepSeek key is valid.
         raw_model = (_env("DEEPSEEK_MODEL") or "deepseek-v4-flash").strip()
+        requested_text_model = raw_model
         # Use the explicit V4 fast path rather than DeepSeek's retiring aliases.
         if raw_model in ("deepseek-chat", "deepseek-reasoner"):
             raw_model = "deepseek-v4-flash"
@@ -181,14 +187,31 @@ def load_settings() -> Settings:
             stored_text_base_url or _env("OPENAI_BASE_URL") or "https://api.openai.com/v1"
         ).strip().rstrip("/")
         text_model = (stored_text_model or _env("OPENAI_MODEL") or "gpt-4o").strip()
+        requested_text_model = text_model
     else:
         text_base_url = (
             stored_text_base_url or _env("OPENAI_BASE_URL") or "https://api.openai.com/v1"
         ).strip().rstrip("/")
         text_model = (stored_text_model or _env("OPENAI_MODEL") or "gpt-4o").strip()
+        requested_text_model = text_model
 
     if "api.deepseek.com" in text_base_url and text_model in {"deepseek-chat", "deepseek-reasoner"}:
         text_model = "deepseek-v4-flash"
+    deepseek_thinking_mode = ""
+    if "api.deepseek.com" in text_base_url:
+        configured_thinking = str(_env("KB_DEEPSEEK_THINKING_MODE", "") or "").strip().lower()
+        if configured_thinking in {"enabled", "disabled"}:
+            deepseek_thinking_mode = configured_thinking
+        else:
+            requested_model_low = str(requested_text_model or text_model or "").strip().lower()
+            # Preserve the intent of the retiring compatibility aliases.
+            # Flash is the low-latency product default; Pro and the old
+            # reasoner alias retain thinking unless explicitly overridden.
+            deepseek_thinking_mode = (
+                "enabled"
+                if requested_model_low in {"deepseek-v4-pro", "deepseek-reasoner"}
+                else "disabled"
+            )
 
     # --- vision model -------------------------------------------------
     # Qwen VL is the primary vision model.  DeepSeek does not support
@@ -348,6 +371,7 @@ def load_settings() -> Settings:
         auto_route=auto_route,
         vision_uses_text_fallback=vision_uses_text_fallback,
         query_expansion_enabled=query_expansion_enabled,
+        deepseek_thinking_mode=deepseek_thinking_mode,
         app_env=app_env,
         production=production,
         access_token=access_token,

@@ -193,6 +193,50 @@ def test_detect_text_reference_opportunities_for_normal_question(monkeypatch) ->
     assert opportunities[0]["ref_num"] == 4
 
 
+def test_detect_text_reference_opportunities_does_not_reresolve_structured_rows(monkeypatch) -> None:
+    from kb import paper_guide_reference_opportunities as mod
+
+    monkeypatch.setattr(mod, "load_reference_index", lambda _db_dir: {"docs": {}})
+    monkeypatch.setattr(
+        mod,
+        "load_paper_guide_reference_index",
+        lambda _source_path: [
+            {
+                "ref_num": 50,
+                "title": "Snapshot Compressive Imaging: Theory, Algorithms, and Applications",
+                "text": "Snapshot Compressive Imaging: Theory, Algorithms, and Applications.",
+                "doi": "10.1109/msp.2020.3023869",
+                "first_citation_context": "Video snapshot compressive imaging (SCI) [50] records dynamic scenes.",
+                "first_citation_location": "Introduction",
+            }
+        ],
+    )
+
+    def fail_resolve(*_args, **_kwargs):
+        raise AssertionError("structured rows must not rescan the global reference index")
+
+    monkeypatch.setattr(mod, "resolve_reference_entry", fail_resolve)
+
+    opportunities = detect_text_reference_opportunities(
+        prompt="SCI 这条路线是怎么从视频走到 3D 场景重建的？",
+        answer="",
+        answer_hits=[
+            {
+                "text": "SCI captures high-dimensional dynamic scenes.",
+                "meta": {
+                    "source_path": "db/demo/scinerf.en.md",
+                    "source_sha1": "abc",
+                    "heading_path": "Introduction",
+                },
+            }
+        ],
+        db_dir="db",
+    )
+
+    assert opportunities
+    assert opportunities[0]["ref_num"] == 50
+
+
 def test_reference_title_starting_with_focus_outranks_incidental_title_match() -> None:
     from kb import paper_guide_reference_opportunities as mod
 

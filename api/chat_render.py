@@ -5493,6 +5493,43 @@ def _reading_guide_repair_lineage_scinerf_evidence(
     )
 
     def append_direct_hit(hit: dict) -> int:
+        hit_meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        hit_source_key = _reading_slot_source_key(
+            (hit_meta or {}).get("source_path") or hit.get("source_path")
+        )
+        if hit_source_key:
+            for idx, existing in enumerate(hits):
+                if not isinstance(existing, dict):
+                    continue
+                existing_meta = (
+                    existing.get("meta")
+                    if isinstance(existing.get("meta"), dict)
+                    else {}
+                )
+                existing_source_key = _reading_slot_source_key(
+                    (existing_meta or {}).get("source_path")
+                    or existing.get("source_path")
+                )
+                try:
+                    answer_num = int(
+                        (existing_meta or {}).get("ref_answer_citation_num") or 0
+                    )
+                except (TypeError, ValueError):
+                    answer_num = 0
+                if existing_source_key != hit_source_key or answer_num <= 0:
+                    continue
+                merged = dict(existing)
+                merged.update(hit)
+                merged_meta = dict(existing_meta or {})
+                merged_meta.update(hit_meta or {})
+                # Preserve the canonical number-to-source contract created
+                # from the final answer. Appending a second copy used to move
+                # exact lineage evidence to [7]/[8]/[9], after which the
+                # renderer quite correctly rejected those markers.
+                merged_meta["ref_answer_citation_num"] = answer_num
+                merged["meta"] = merged_meta
+                hits[idx] = merged
+                return answer_num
         while len(hits) + 1 in reserved_ref_nums:
             hits.append(
                 {
@@ -5501,6 +5538,9 @@ def _reading_guide_repair_lineage_scinerf_evidence(
                     "meta": {"citation_number_padding": True},
                 }
             )
+        hit_meta = dict(hit_meta or {})
+        hit_meta.setdefault("ref_answer_citation_num", len(hits) + 1)
+        hit["meta"] = hit_meta
         hits.append(hit)
         return len(hits)
 

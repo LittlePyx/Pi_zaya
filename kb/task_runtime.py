@@ -4710,6 +4710,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         )
         refs_async_will_run = False
         refs_async_seed_docs: list[dict] = []
+        refs_async_start = None
+        refs_async_started = False
         prompt_multi_paper_list = False
         seed_refs_should_stay_pending = False
         basket_filter_trace: dict[str, object] = {}
@@ -5603,25 +5605,45 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="empty")
                 _finalize_task_after_refs_async()
 
-            try:
-                threading.Thread(target=_bg_enrich_refs, daemon=True).start()
-            except Exception:
+            def _start_bg_enrich_refs() -> None:
                 try:
-                    chat_store.set_message_refs_render_state(
-                        user_msg_id=umid,
-                        render_status="failed",
-                        render_error="refs_async_thread_start_failed",
-                        render_error_detail="Failed to start async refs thread.",
-                        render_attempts=1,
-                    )
+                    threading.Thread(target=_bg_enrich_refs, daemon=True).start()
                 except Exception:
-                    pass
-                _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="error")
-                _finalize_task_after_refs_async()
+                    try:
+                        chat_store.set_message_refs_render_state(
+                            user_msg_id=umid,
+                            render_status="failed",
+                            render_error="refs_async_thread_start_failed",
+                            render_error_detail="Failed to start async refs thread.",
+                            render_attempts=1,
+                        )
+                    except Exception:
+                        pass
+                    _gen_update_task(
+                        session_id,
+                        task_id,
+                        refs_async_pending=False,
+                        refs_async_state="error",
+                    )
+                    _finalize_task_after_refs_async()
+
+            # Reference-card model calls share provider capacity with the
+            # answer. Start them only after the user can already see answer
+            # text, so a literature list cannot delay first-token latency.
+            refs_async_start = _start_bg_enrich_refs
+
+        def _start_deferred_refs_async() -> None:
+            nonlocal refs_async_started
+            if refs_async_started or not callable(refs_async_start):
+                return
+            refs_async_started = True
+            refs_async_start()
+            _trace_event("refs_async_started", elapsed_s=0.0, after="first_visible_answer")
 
         _gen_update_task(session_id, task_id, stage="context", used_query=str(used_query or ""), used_translation=bool(used_translation), refs_done=True)
 
         # Keep prompt compact for fast first-token latency.
+        t_answer_selection0 = time.perf_counter()
         answer_hit_limit = max(
             1,
             min(
@@ -5761,6 +5783,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "output_mode": str(answer_output_mode or ""),
             },
         )
+        _trace_event(
+            "answer_hit_selection",
+            elapsed_s=time.perf_counter() - t_answer_selection0,
+            answer_hit_count=int(len(answer_hits or [])),
+        )
         if bool(task.get("agent_mode")):
             try:
                 agent_bridge = build_generation_agent_notes(
@@ -5814,6 +5841,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             except Exception as exc:
                 agent_scope_context["agent_bridge_error"] = str(exc)[:180]
                 _trace_section("agent", {"mode": "research_agent", "bridge_error": str(exc)[:180]})
+        t_prompt_context0 = time.perf_counter()
         paper_guide_context_records = _build_paper_guide_context_records(
             answer_hits,
             paper_guide_mode=bool(paper_guide_source_scoped),
@@ -5911,6 +5939,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 paper_guide_bound_source_path=paper_guide_bound_source_path,
                 db_dir=db_dir,
             )
+        _trace_event(
+            "citation_plan_preflight",
+            elapsed_s=time.perf_counter() - t_prompt_context0,
+        )
         paper_guide_evidence_cards_block = str(paper_guide_prompt_context.get("paper_guide_evidence_cards_block") or "")
         paper_guide_support_slots_block = str(paper_guide_prompt_context.get("paper_guide_support_slots_block") or "")
         paper_guide_special_focus_block = str(paper_guide_prompt_context.get("paper_guide_special_focus_block") or "")
@@ -5971,6 +6003,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 task_id,
                 paper_guide_debug=dict(paper_guide_debug),
             )
+        t_prompt_build0 = time.perf_counter()
         prompt_bundle = _build_generation_prompt_bundle(
             prompt=prompt,
             ctx=ctx,
@@ -5993,6 +6026,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             citation_plan_block=citation_plan_block,
             image_attachment_count=len(image_attachments or []),
         )
+        _trace_event(
+            "prompt_build",
+            elapsed_s=time.perf_counter() - t_prompt_build0,
+            context_chars=int(len(ctx or "")),
+        )
         system = str(prompt_bundle.get("system") or "")
         user = str(prompt_bundle.get("user") or "")
         prompt_for_user = str(prompt_bundle.get("prompt_for_user") or prompt or "[Image attachment only request]")
@@ -6014,7 +6052,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "do not invent bibliographic facts beyond the fields shown, and keep citations/evidence grounded in available sources.\n"
                 f"{selected_research_context_block}"
             ).strip()
+        t_history0 = time.perf_counter()
         history = chat_store.get_messages(conv_id)
+        _trace_event(
+            "history_load",
+            elapsed_s=time.perf_counter() - t_history0,
+            message_count=int(len(history or [])),
+        )
         try:
             cur_user_msg_id = int(task.get("user_msg_id") or 0)
         except Exception:
@@ -6152,16 +6196,30 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             partial = str(agent_direct_answer_override or direct_answer_override or "").strip()
             _gen_update_task(session_id, task_id, stage="answer", partial=partial, char_count=len(partial))
             _gen_store_partial(task, partial)
+            _trace_event(
+                "first_provider_visible",
+                elapsed_s=time.perf_counter() - t_answer0,
+                direct_override=True,
+            )
+            _start_deferred_refs_async()
         else:
             try:
                 if ds is None:
                     ds = DeepSeekChat(settings_obj)
+                _trace_event("llm_request_started", elapsed_s=0.0)
                 for piece in ds.chat_stream(messages=messages, temperature=temperature, max_tokens=max_tokens):
                     if _gen_should_cancel(session_id, task_id):
                         raise RuntimeError("canceled")
+                    if not streamed:
+                        _trace_event(
+                            "first_provider_visible",
+                            elapsed_s=time.perf_counter() - t_answer0,
+                            direct_override=False,
+                        )
                     partial += piece
                     streamed = True
                     _gen_update_task(session_id, task_id, stage="answer", partial=partial, char_count=len(partial))
+                    _start_deferred_refs_async()
                     now = time.monotonic()
                     # Reduce sqlite write frequency while still keeping crash-recovery checkpoints.
                     if (
@@ -6230,6 +6288,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         raise stream_exc
             else:
                 pass
+
+        if str(partial or "").strip():
+            _start_deferred_refs_async()
 
         _trace_event(
             "llm_answer",

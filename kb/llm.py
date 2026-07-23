@@ -45,6 +45,41 @@ def _has_multimodal_content(messages: list[dict]) -> bool:
     return False
 
 
+def _deepseek_completion_extra_body(
+    settings: object,
+    *,
+    route_kind: str,
+    model: str,
+) -> dict[str, Any]:
+    """Select DeepSeek V4 thinking mode without affecting other providers."""
+
+    if str(route_kind or "").strip().lower() != "text":
+        return {}
+    base_url = str(getattr(settings, "text_base_url", "") or "").strip().lower()
+    model_low = str(model or "").strip().lower()
+    if "api.deepseek.com" not in base_url:
+        return {}
+    if model_low not in {
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-chat",
+        "deepseek-reasoner",
+    }:
+        return {}
+
+    configured = str(getattr(settings, "deepseek_thinking_mode", "") or "").strip().lower()
+    env_override = str(os.environ.get("KB_DEEPSEEK_THINKING_MODE", "") or "").strip().lower()
+    if env_override in {"enabled", "disabled"}:
+        configured = env_override
+    if configured not in {"enabled", "disabled"}:
+        configured = (
+            "enabled"
+            if model_low in {"deepseek-v4-pro", "deepseek-reasoner"}
+            else "disabled"
+        )
+    return {"thinking": {"type": configured}}
+
+
 def _plain_annotation(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -154,15 +189,30 @@ class DeepSeekChat:
         retry_count = int(max_retries) if max_retries is not None else int(self._settings.max_retries)
         retry_count = max(0, retry_count)
         last_err: Optional[Exception] = None
+        route_kind = (
+            "vision"
+            if bool(getattr(self._settings, "auto_route", False)) and _has_multimodal_content(messages)
+            else "text"
+        )
+        extra_body = _deepseek_completion_extra_body(
+            self._settings,
+            route_kind=route_kind,
+            model=model,
+        )
         for attempt in range(retry_count + 1):
             try:
+                request_kwargs = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "timeout": request_timeout_s,
+                }
+                if extra_body:
+                    request_kwargs["extra_body"] = extra_body
                 resp = self._create_with_guard_timeout(
                     client=client,
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout=request_timeout_s,
+                    **request_kwargs,
                 )
                 return (resp.choices[0].message.content or "").strip()
             except Exception as e:  # noqa: BLE001
@@ -332,13 +382,23 @@ class DeepSeekChat:
                     route_client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
                     owns_client = True
                 resources["client"] = route_client
-                resp = route_client.chat.completions.create(
+                request_kwargs = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "timeout": request_timeout_s,
+                    "stream": True,
+                }
+                extra_body = _deepseek_completion_extra_body(
+                    self._settings,
+                    route_kind=route_kind,
                     model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout=request_timeout_s,
-                    stream=True,
+                )
+                if extra_body:
+                    request_kwargs["extra_body"] = extra_body
+                resp = route_client.chat.completions.create(
+                    **request_kwargs,
                 )
                 resources["response"] = resp
                 for event in resp:

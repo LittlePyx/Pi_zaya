@@ -752,17 +752,25 @@ def detect_text_reference_opportunities(
             if not context_text or n not in _inline_ref_nums_from_text(context_text):
                 return
             ref = dict(seed_ref or {})
-            try:
-                resolved = resolve_reference_entry(
-                    dict(index_data or {}),
-                    source_path,
-                    n,
-                    source_sha1=source_sha1,
-                )
-            except Exception:
-                resolved = None
-            if isinstance(resolved, Mapping) and isinstance(resolved.get("ref"), Mapping):
-                ref.update({k: v for k, v in dict(resolved.get("ref") or {}).items() if v})
+            # Per-paper ``reference_index.json`` rows already contain the
+            # bibliography fields needed by the opportunity scorer. Resolving
+            # every one of those rows again through the global index can fall
+            # back to a full document scan when paths moved across machines;
+            # on a six-paper origin query that added several seconds before
+            # the answer request even started. Keep the global lookup only for
+            # inline-hit candidates that do not carry structured metadata.
+            if not any(str(ref.get(key) or "").strip() for key in ("title", "raw", "doi")):
+                try:
+                    resolved = resolve_reference_entry(
+                        dict(index_data or {}),
+                        source_path,
+                        n,
+                        source_sha1=source_sha1,
+                    )
+                except Exception:
+                    resolved = None
+                if isinstance(resolved, Mapping) and isinstance(resolved.get("ref"), Mapping):
+                    ref.update({k: v for k, v in dict(resolved.get("ref") or {}).items() if v})
             title, surface = _reference_surface_for_match(ref)
             label = _label_for_opportunity(prompt=prompt_text, text=context_text, ref_num=n)
             active_labels = list(prompt_labels if (explicit_upstream_intent and prompt_labels) else labels)
