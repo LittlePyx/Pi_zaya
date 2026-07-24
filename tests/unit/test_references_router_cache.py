@@ -191,6 +191,60 @@ def test_reference_cards_follow_grounded_answer_citations(monkeypatch) -> None:
     assert ui["summary_polish_status"] in {"heuristic", "full"}
     assert ui["why_polish_status"] in {"heuristic", "full"}
     assert [section["id"] for section in ui["card_view"]["sections"]] == ["summary", "why", "location"]
+    assert out[10]["render_status"] == "full"
+    assert out[10]["payload_mode"] == "full"
+    assert out[10]["display_state"] == "ready"
+    assert out[10]["answer_aligned_citation_cards"] is True
+    assert "enrichment_pending" not in out[10]
+
+
+def test_completed_answer_citation_overlays_do_not_need_background_warm() -> None:
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {"id": 10, "role": "user", "content": "How did the method evolve?"},
+                {
+                    "id": 11,
+                    "role": "assistant",
+                    "content": "The first paper established the coded acquisition model [1].",
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "citation_route": "system_a",
+                                        "source_path": r"F:\db\CASSI\CASSI.en.md",
+                                        "source_name": "CASSI.pdf",
+                                        "heading_path": "Method",
+                                        "answer_claim": "The first paper established the coded acquisition model.",
+                                        "evidence_quote": "The camera uses coded aperture snapshot spectral imaging.",
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    refs = {
+        10: {
+            "prompt": "How did the method evolve?",
+            "hits": [{"meta": {"source_path": "kb-source/0/CASSI/CASSI.en.md"}}],
+        },
+        20: {
+            "prompt": "What remains uncertain?",
+            "hits": [{"meta": {"source_path": "kb-source/0/Other/Other.en.md"}}],
+        },
+    }
+
+    remaining = references_router._refs_without_completed_answer_citation_overlays(
+        store=Store(),
+        conv_id="conv",
+        refs=refs,
+    )
+
+    assert list(remaining) == [20]
 
 
 def test_reading_route_cards_use_user_language_and_distinct_source_roles() -> None:

@@ -686,8 +686,72 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             pack["retrieval_hits"] = [dict(hit) for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
         pack["hits"] = aligned_hits
         pack["answer_aligned_citation_cards"] = True
+        if _answer_citation_overlay_pack_is_complete(pack):
+            pack["payload_mode"] = "full"
+            pack["display_state"] = "ready"
+            pack["render_status"] = "full"
+            pack["render_error"] = ""
+            pack["render_error_detail"] = ""
+            pack["render_built_at"] = float(pack.get("render_built_at") or time.time())
+            pack["render_attempts"] = max(1, int(pack.get("render_attempts") or 0))
+            pack.pop("enrichment_pending", None)
+            pack.pop("answer_citation_overlay_pending", None)
         payload_out[raw_user_msg_id] = attach_refs_pack_polish_contract(pack)
     return payload_out
+
+
+def _answer_citation_overlay_pack_is_complete(pack: dict | None) -> bool:
+    if not isinstance(pack, dict) or not bool(pack.get("answer_aligned_citation_cards")):
+        return False
+    hits = [hit for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
+    if not hits:
+        return False
+    for hit in hits:
+        ui = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        primary = ui.get("primary_evidence") if isinstance(ui.get("primary_evidence"), dict) else {}
+        source_path = str(
+            (ui or {}).get("source_path")
+            or (primary or {}).get("source_path")
+            or ""
+        ).strip()
+        if (
+            not source_path
+            or not str((ui or {}).get("summary_line") or "").strip()
+            or not str((ui or {}).get("why_line") or "").strip()
+            or not str(
+                (primary or {}).get("snippet")
+                or (primary or {}).get("highlight_snippet")
+                or ""
+            ).strip()
+        ):
+            return False
+    return True
+
+
+def _refs_without_completed_answer_citation_overlays(
+    *,
+    store,
+    conv_id: str,
+    refs: dict[int, dict] | None,
+) -> dict[int, dict]:
+    refs_out = {
+        int(key): dict(value)
+        for key, value in dict(refs or {}).items()
+        if (str(key).isdigit() or isinstance(key, int)) and isinstance(value, dict)
+    }
+    if not refs_out:
+        return {}
+    ready_user_ids = set(
+        _answer_citation_details_by_user(
+            store=store,
+            conv_id=conv_id,
+        )
+    )
+    return {
+        user_msg_id: pack
+        for user_msg_id, pack in refs_out.items()
+        if user_msg_id not in ready_user_ids
+    }
 
 
 def _reference_asset_roots() -> list[Path]:
@@ -2010,6 +2074,7 @@ def _persist_rendered_refs_payloads(
                 render_error="",
                 render_error_detail="",
                 render_built_at=time.time(),
+                render_attempts=max(1, int(pack.get("render_attempts") or 0)),
                 render_evidence_sig=str(sig or "").strip(),
             )
         except Exception:
@@ -2365,6 +2430,10 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
     route_started_at = time.perf_counter()
     route_deadline_at = route_started_at + _refs_ready_budget_s()
     timings: list[tuple[str, float]] = []
+    refs_for_finish: dict[int, dict] = {}
+    finish_guide_mode = False
+    finish_guide_source_path = ""
+    finish_guide_source_name = ""
 
     def _record(name: str, started_at: float) -> None:
         timings.append((name, _refs_perf_ms(started_at)))
@@ -2376,6 +2445,30 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             conv_id=conv_id,
             payload=payload_out,
         )
+        completed_payloads = {
+            int(user_msg_id): pack
+            for user_msg_id, pack in payload_out.items()
+            if (str(user_msg_id).isdigit() or isinstance(user_msg_id, int))
+            and isinstance(pack, dict)
+            and _answer_citation_overlay_pack_is_complete(pack)
+            and int(user_msg_id) in refs_for_finish
+            and str(
+                (refs_for_finish.get(int(user_msg_id)) or {}).get("render_status")
+                or ""
+            ).strip().lower()
+            != "full"
+        }
+        if completed_payloads:
+            _persist_rendered_refs_payloads(
+                refs={
+                    user_msg_id: refs_for_finish[user_msg_id]
+                    for user_msg_id in completed_payloads
+                },
+                payload=completed_payloads,
+                guide_mode=finish_guide_mode,
+                guide_source_path=finish_guide_source_path,
+                guide_source_name=finish_guide_source_name,
+            )
         # Card construction/background warming already embeds cached local
         # bibliography metadata. Re-scanning every source and rebuilding every
         # message render packet on this read path caused 10–45 second stalls,
@@ -2409,6 +2502,9 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
     guide_mode = str(conversation.get("mode") or "").strip().lower() == "paper_guide"
     guide_source_path = str(conversation.get("bound_source_path") or "").strip()
     guide_source_name = str(conversation.get("bound_source_name") or "").strip()
+    finish_guide_mode = bool(guide_mode)
+    finish_guide_source_path = guide_source_path
+    finish_guide_source_name = guide_source_name
     refs_state_signature = ""
     if hasattr(store, "list_message_refs_state"):
         phase_started_at = time.perf_counter()
@@ -2459,6 +2555,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         conv_id=conv_id,
         refs=refs if isinstance(refs, dict) else {},
     )
+    refs_for_finish = refs_norm
     all_user_msg_ids: set[int] = set()
     for key in refs_norm.keys():
         try:
@@ -2648,14 +2745,20 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
 
     if isinstance(cached_payload, dict) and (not stored_full_payload) and (not has_authoritative_doc_list):
         if (not has_pending) and (not failed_ready_refs) and cached_mode != "full":
-            _warm_conversation_refs_payload_async(
+            refs_to_warm = _refs_without_completed_answer_citation_overlays(
+                store=store,
                 conv_id=conv_id,
-                signature=signature,
                 refs=refs_norm,
-                guide_mode=guide_mode,
-                guide_source_path=guide_source_path,
-                guide_source_name=guide_source_name,
             )
+            if refs_to_warm:
+                _warm_conversation_refs_payload_async(
+                    conv_id=conv_id,
+                    signature=signature,
+                    refs=refs_to_warm,
+                    guide_mode=guide_mode,
+                    guide_source_path=guide_source_path,
+                    guide_source_name=guide_source_name,
+                )
         annotated_cached = _annotate_refs_payload_refresh_state(
             cached_payload,
             mode=cached_mode or ("pending" if has_pending else "fast"),
@@ -2780,15 +2883,32 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             for user_msg_id in authoritative_fast_refs
             if user_msg_id in authoritative_doc_lists
         }
-        _warm_conversation_refs_payload_async(
+        regular_refs_to_warm = _refs_without_completed_answer_citation_overlays(
+            store=store,
             conv_id=conv_id,
-            signature=signature,
-            refs=ready_refs_to_warm,
-            guide_mode=guide_mode,
-            guide_source_path=guide_source_path,
-            guide_source_name=guide_source_name,
-            authoritative_doc_list_by_user=authoritative_to_warm,
+            refs={
+                user_msg_id: pack
+                for user_msg_id, pack in ready_refs_to_warm.items()
+                if user_msg_id not in authoritative_to_warm
+            },
         )
+        refs_to_warm = {
+            **regular_refs_to_warm,
+            **{
+                user_msg_id: ready_refs_to_warm[user_msg_id]
+                for user_msg_id in authoritative_to_warm
+            },
+        }
+        if refs_to_warm:
+            _warm_conversation_refs_payload_async(
+                conv_id=conv_id,
+                signature=signature,
+                refs=refs_to_warm,
+                guide_mode=guide_mode,
+                guide_source_path=guide_source_path,
+                guide_source_name=guide_source_name,
+                authoritative_doc_list_by_user=authoritative_to_warm,
+            )
     return _finish(payload, cache_mode)
 
 

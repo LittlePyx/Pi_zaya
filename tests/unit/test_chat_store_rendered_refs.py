@@ -81,6 +81,92 @@ def test_message_refs_rendered_payload_roundtrip(tmp_path: Path):
     assert pack2["render_attempts"] == 2
 
 
+def test_message_refs_late_partial_upsert_cannot_downgrade_full_render(tmp_path: Path):
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("refs")
+    user_msg_id = store.append_message(
+        conv_id,
+        "user",
+        "How did snapshot spectral imaging lead to 3D reconstruction?",
+    )
+    store.upsert_message_refs(
+        user_msg_id=user_msg_id,
+        conv_id=conv_id,
+        prompt="How did snapshot spectral imaging lead to 3D reconstruction?",
+        prompt_sig="sig-lineage",
+        hits=[{"text": "grounded", "meta": {"source_path": "scinerf.md"}}],
+        scores=[9.0],
+        used_query="snapshot spectral imaging 3D reconstruction",
+        used_translation=False,
+        rendered_payload={"hits": [{"ui_meta": {"summary_line": "complete"}}]},
+        rendered_payload_sig="render-complete",
+        render_status="full",
+        render_built_at=123.0,
+        render_attempts=1,
+    )
+
+    updated = store.upsert_message_refs(
+        user_msg_id=user_msg_id,
+        conv_id=conv_id,
+        prompt="How did snapshot spectral imaging lead to 3D reconstruction?",
+        prompt_sig="sig-lineage",
+        hits=[{"text": "late partial", "meta": {"source_path": "other.md"}}],
+        scores=[7.0],
+        used_query="snapshot spectral imaging 3D reconstruction",
+        used_translation=False,
+        render_status="pending",
+        render_attempts=1,
+        skip_if_rendered_full=True,
+    )
+
+    assert updated is False
+    pack = store.list_message_refs(conv_id)[user_msg_id]
+    assert pack["hits"][0]["text"] == "grounded"
+    assert pack["render_status"] == "full"
+    assert pack["rendered_payload"] == {
+        "hits": [{"ui_meta": {"summary_line": "complete"}}]
+    }
+    assert pack["rendered_payload_sig"] == "render-complete"
+    assert pack["render_built_at"] == 123.0
+
+
+def test_message_refs_partial_upsert_still_updates_pending_render(tmp_path: Path):
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("refs")
+    user_msg_id = store.append_message(conv_id, "user", "Compare three papers")
+    store.upsert_message_refs(
+        user_msg_id=user_msg_id,
+        conv_id=conv_id,
+        prompt="Compare three papers",
+        prompt_sig="sig-compare",
+        hits=[{"text": "seed", "meta": {"source_path": "seed.md"}}],
+        scores=[6.0],
+        used_query="compare papers",
+        used_translation=False,
+        render_status="pending",
+    )
+
+    updated = store.upsert_message_refs(
+        user_msg_id=user_msg_id,
+        conv_id=conv_id,
+        prompt="Compare three papers",
+        prompt_sig="sig-compare",
+        hits=[{"text": "partial", "meta": {"source_path": "partial.md"}}],
+        scores=[8.0],
+        used_query="compare papers",
+        used_translation=False,
+        render_status="pending",
+        render_attempts=1,
+        skip_if_rendered_full=True,
+    )
+
+    assert updated is True
+    pack = store.list_message_refs(conv_id)[user_msg_id]
+    assert pack["hits"][0]["text"] == "partial"
+    assert pack["render_status"] == "pending"
+    assert pack["render_attempts"] == 1
+
+
 def test_message_refs_render_state_roundtrip(tmp_path: Path):
     store = ChatStore(tmp_path / "chat.sqlite3")
     conv_id = store.create_conversation("refs")

@@ -2135,6 +2135,7 @@ class ChatStore:
         render_evidence_sig: str | None = None,
         render_locale: str | None = None,
         query_variants: list[str] | None = None,
+        skip_if_rendered_full: bool = False,
     ) -> bool:
         mid = int(user_msg_id or 0)
         if mid <= 0:
@@ -2206,7 +2207,7 @@ class ChatStore:
             )
             if row:
                 created_at = float(row["created_at"] or now)
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE message_refs
                     SET conv_id = ?, prompt = ?, prompt_sig = ?, hits_json = ?, scores_json = ?,
@@ -2215,6 +2216,7 @@ class ChatStore:
                         render_built_at = ?, render_attempts = ?, render_evidence_sig = ?, render_locale = ?,
                         used_query = ?, used_translation = ?, query_variants_json = ?, updated_at = ?
                     WHERE user_msg_id = ?
+                      AND (? = 0 OR LOWER(TRIM(render_status)) <> 'full')
                     """,
                     (
                         conv_id,
@@ -2236,8 +2238,11 @@ class ChatStore:
                         query_variants_json,
                         now,
                         mid,
+                        1 if bool(skip_if_rendered_full) else 0,
                     ),
                 )
+                if bool(skip_if_rendered_full) and int(cursor.rowcount or 0) <= 0:
+                    return False
             else:
                 created_at = now
                 conn.execute(

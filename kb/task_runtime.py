@@ -5372,6 +5372,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                             render_error="",
                             render_error_detail="",
                             render_attempts=1,
+                            # Answer finalization can publish a complete,
+                            # citation-grounded card packet while this model
+                            # call is still running. A late partial result must
+                            # not erase that packet or regress it to pending.
+                            skip_if_rendered_full=True,
                         )
                     except Exception:
                         pass
