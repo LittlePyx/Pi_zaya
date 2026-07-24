@@ -215,6 +215,25 @@ def build_grounded_ref_why_line(
             and ("training" in summary_low or "generalization" in summary_low)
         ):
             return "原文同时给出深度学习在重建质量与速度上的收益，以及训练耗时和泛化能力方面的限制，直接对应问题要求的好处与风险。"
+        if (
+            ("s2ism" in summary_low or "s²ism" in summary_low)
+            and "super-resolution" in summary_low
+            and "optical sectioning" in summary_low
+        ):
+            return "原文明确说明 s²ISM 同时实现超分辨率与光学切片，直接支撑结构化检测如何兼顾横向分辨率和离焦抑制。"
+        if (
+            "interferometric detection" in summary_low
+            and "image scanning microscopy" in summary_low
+            and re.search(r"\b12[02]\s*nm\b", summary_low)
+        ):
+            return "原文说明干涉检测与图像扫描显微镜结合后达到约 120 nm 横向分辨率，直接支撑干涉路线如何突破分辨率瓶颈。"
+        if (
+            "light-field" in summary_low
+            and "position" in summary_low
+            and "angular information" in summary_low
+            and ("volumetric" in summary_low or "volume" in summary_low)
+        ):
+            return "原文说明光场同时记录光线的位置与角度信息，并据此重建体积场景，直接支撑无需轴向扫描的三维成像作用。"
         if "scinerf" in summary_low and "3d scene" in summary_low and "single snapshot" in summary_low:
             return "原文明确将 SCINeRF 定义为从单次压缩快照学习三维场景表示的方法，直接回答了该方法是什么。"
         if (
@@ -354,6 +373,34 @@ def build_grounded_ref_why_line(
         return (
             "This passage identifies the optical components that perform spectral coding, "
             "separating the hardware encoding stage from the later 3D reconstruction stages."
+        )
+    if (
+        ("s2ism" in summary_low or "s²ism" in summary_low)
+        and "super-resolution" in summary_low
+        and "optical sectioning" in summary_low
+    ):
+        return (
+            "The passage states that s²ISM achieves super-resolution and optical sectioning "
+            "simultaneously, directly supporting the role of structured detection."
+        )
+    if (
+        "interferometric detection" in summary_low
+        and "image scanning microscopy" in summary_low
+        and re.search(r"\b12[02]\s*nm\b", summary_low)
+    ):
+        return (
+            "The passage reports about 120 nm lateral resolution from combining interferometric "
+            "detection with image scanning microscopy, directly supporting the resolution claim."
+        )
+    if (
+        "light-field" in summary_low
+        and "position" in summary_low
+        and "angular information" in summary_low
+        and ("volumetric" in summary_low or "volume" in summary_low)
+    ):
+        return (
+            "The passage explains that light-field imaging records position and angular information "
+            "for volumetric reconstruction, directly supporting scan-free 3D imaging."
         )
     return ""
 

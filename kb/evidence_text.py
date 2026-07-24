@@ -14,7 +14,7 @@ _EVIDENCE_TRAIL_STRIP_RE = re.compile(r"[\s,;:\uff0c\uff1b\uff1a]+$")
 _TERMINAL_PUNCT_RE = re.compile(r"[\u3002\uff01\uff1f.!?]$")
 _LAST_TERMINAL_PUNCT_RE = re.compile(r"[\u3002\uff01\uff1f.!?]")
 _FRAGMENT_LEAD_OK_RE = re.compile(
-    r"^(?:a|an|the|this|these|those|most|many|some|several|existing|previous|prior|traditional|we|our|in|on|for|by|with|when|where|while|because|however|therefore|thus|as|if|to)\b",
+    r"^(?:a|an|the|this|these|those|most|many|some|several|existing|previous|prior|traditional|we|our|in|on|for|by|with|when|where|while|because|since|however|therefore|thus|as|if|to)\b",
     re.IGNORECASE,
 )
 _CONTENT_SENTENCE_START_RE = re.compile(

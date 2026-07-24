@@ -554,6 +554,125 @@ def test_reference_cards_stay_pending_until_planned_answer_citations_are_ready()
     assert out[20]["answer_citation_overlay_pending"] is True
 
 
+def test_reference_cards_use_evidence_bearing_system_a_plan_while_render_packet_converges() -> None:
+    source_path = r"F:\db\Paper\Paper.en.md"
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {"id": 22, "role": "user", "content": "What does the paper show?"},
+                {
+                    "id": 23,
+                    "role": "assistant",
+                    "content": "The method improves reconstruction quality [1].",
+                    "meta": {
+                        "answer_quality": {
+                            "citation_plan": {
+                                "slots": [
+                                    {
+                                        "preferred_system": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "Paper.pdf",
+                                        "heading_path": "Results",
+                                        "evidence_quote": (
+                                            "The proposed method improves reconstruction quality "
+                                            "without increasing acquisition time."
+                                        ),
+                                        "candidate_hits": [1],
+                                        "block_id": "blk-results",
+                                    }
+                                ]
+                            }
+                        },
+                        "paper_guide_contracts": {"render_packet": {"cite_details": []}},
+                    },
+                },
+            ]
+
+    payload = {
+        22: {
+            "prompt": "What does the paper show?",
+            "render_status": "pending",
+            "payload_mode": "pending",
+            "hits": [
+                {
+                    "meta": {"source_path": source_path},
+                    "ui_meta": {
+                        "source_path": source_path,
+                        "display_name": "Paper.pdf",
+                    },
+                }
+            ],
+        }
+    }
+
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload=payload,
+    )
+
+    pack = out[22]
+    assert pack["display_state"] == "ready"
+    assert pack["payload_mode"] == "full"
+    assert pack["answer_aligned_citation_cards"] is True
+    assert "enrichment_pending" not in pack
+    assert len(pack["hits"]) == 1
+    hit = pack["hits"][0]
+    assert hit["ui_meta"]["summary_line"]
+    assert hit["ui_meta"]["why_line"]
+    assert hit["ui_meta"]["primary_evidence"]["block_id"] == "blk-results"
+
+
+def test_evidence_bearing_plan_does_not_schedule_redundant_refs_warm() -> None:
+    source_path = r"F:\db\Paper\Paper.en.md"
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {"id": 24, "role": "user", "content": "What does the paper show?"},
+                {
+                    "id": 25,
+                    "role": "assistant",
+                    "content": "The method improves quality [1].",
+                    "meta": {
+                        "answer_quality": {
+                            "citation_plan": {
+                                "slots": [
+                                    {
+                                        "preferred_system": "system_a",
+                                        "source_path": source_path,
+                                        "evidence_quote": (
+                                            "The proposed method improves reconstruction quality "
+                                            "without increasing acquisition time."
+                                        ),
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    refs = {
+        24: {
+            "prompt": "What does the paper show?",
+            "hits": [{"meta": {"source_path": source_path}}],
+        }
+    }
+
+    assert (
+        references_router._refs_without_completed_answer_citation_overlays(
+            store=Store(),
+            conv_id="conv",
+            refs=refs,
+        )
+        == {}
+    )
+
+
 def test_persist_rendered_refs_payload_drops_previous_nested_render(monkeypatch):
     class Store:
         def __init__(self):
@@ -2309,7 +2428,7 @@ def test_warm_conversation_refs_payload_async_uses_bounded_full_variant(monkeypa
     kwargs = dict(calls.get("kwargs") or {})
     assert kwargs.get("render_variant") == "bounded_full"
     assert kwargs.get("allow_expensive_llm_for_ready") is False
-    assert kwargs.get("allow_exact_locate") is True
+    assert kwargs.get("allow_exact_locate") is False
     assert calls.get("persisted_payload") == {13: {"hits": [{"ui_meta": {"summary_line": "bounded-full"}}]}}
     assert calls.get("cache_mode") == "full"
 
@@ -2353,6 +2472,61 @@ def test_warm_conversation_refs_payload_async_allows_background_llm_when_enabled
 
     kwargs = dict(calls.get("kwargs") or {})
     assert kwargs.get("allow_expensive_llm_for_ready") is True
+
+
+def test_warm_conversation_refs_payload_async_skips_llm_for_answer_citation_cards(monkeypatch):
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    calls: dict[str, object] = {}
+    monkeypatch.setenv("KB_REFS_BACKGROUND_LLM_POLISH", "1")
+
+    class _ImmediateThread:
+        def __init__(self, *, target=None, daemon=None, name=None):
+            del daemon, name
+            self._target = target
+
+        def start(self):
+            if self._target is not None:
+                self._target()
+
+    monkeypatch.setattr(references_router.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(references_router, "_pdf_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_md_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_lib_store", lambda: None)
+
+    def fake_enrich_refs_payload(*args, **kwargs):
+        calls["kwargs"] = dict(kwargs)
+        return {13: {"hits": [{"ui_meta": {"summary_line": "grounded"}}]}}
+
+    monkeypatch.setattr(references_router, "enrich_refs_payload", fake_enrich_refs_payload)
+    monkeypatch.setattr(references_router, "_persist_rendered_refs_payloads", lambda **_kwargs: None)
+    monkeypatch.setattr(references_router, "_store_cached_conversation_refs_payload", lambda **_kwargs: None)
+
+    references_router._warm_conversation_refs_payload_async(
+        conv_id="conv-warm-answer-citations",
+        signature="sig-warm-answer-citations",
+        refs={
+            13: {
+                "prompt": "Compare the three methods.",
+                "hits": [
+                    {
+                        "text": "Direct evidence.",
+                        "meta": {
+                            "source_path": "paper.en.md",
+                            "ref_answer_citation_num": 1,
+                        },
+                    }
+                ],
+            }
+        },
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+    )
+
+    kwargs = dict(calls.get("kwargs") or {})
+    assert kwargs.get("allow_expensive_llm_for_ready") is False
+    assert kwargs.get("allow_exact_locate") is False
 
 
 def test_warm_conversation_refs_payload_async_polishes_authoritative_doc_list_and_merges_cache(monkeypatch):
@@ -2477,11 +2651,11 @@ def test_stored_authoritative_payload_can_replace_raw_retrieval_source_set():
     ) == payload
 
 
-def test_background_llm_polish_follows_card_polish_flag_when_unset(monkeypatch):
+def test_background_llm_polish_is_opt_in_when_unset(monkeypatch):
     monkeypatch.delenv("KB_REFS_BACKGROUND_LLM_POLISH", raising=False)
     monkeypatch.setattr(references_router, "_refs_card_polish_llm_enabled", lambda: True)
 
-    assert references_router._refs_background_llm_polish_enabled() is True
+    assert references_router._refs_background_llm_polish_enabled() is False
 
 
 def test_fast_exact_refs_are_detected_for_two_stage_rendering():
@@ -2673,7 +2847,7 @@ def test_warm_conversation_refs_payload_async_allows_llm_for_fast_exact_hits(mon
     kwargs = dict(calls.get("kwargs") or {})
     assert kwargs.get("render_variant") == "bounded_full"
     assert kwargs.get("allow_expensive_llm_for_ready") is True
-    assert kwargs.get("allow_exact_locate") is True
+    assert kwargs.get("allow_exact_locate") is False
 
 
 def test_background_llm_polish_env_override_can_disable_card_polish(monkeypatch):

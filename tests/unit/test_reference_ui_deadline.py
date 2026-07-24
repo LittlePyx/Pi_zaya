@@ -12,8 +12,8 @@ def test_refs_card_polish_budget_env_is_bounded(monkeypatch):
     monkeypatch.setenv("KB_REFS_CARD_POLISH_MAX_RETRIES", "99")
     monkeypatch.setenv("KB_REFS_CARD_POLISH_TOP_N", "99")
 
-    assert reference_ui._refs_card_polish_timeout_s() == 45.0
-    assert reference_ui._refs_card_polish_max_retries() == 2
+    assert reference_ui._refs_card_polish_timeout_s() == 12.0
+    assert reference_ui._refs_card_polish_max_retries() == 1
     assert reference_ui._refs_card_polish_top_n() == 8
 
     monkeypatch.setenv("KB_REFS_CARD_POLISH_TIMEOUT_S", "bad")

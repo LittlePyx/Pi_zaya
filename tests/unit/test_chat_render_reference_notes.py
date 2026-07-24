@@ -163,6 +163,47 @@ def test_canonical_citation_reuses_converged_strict_primary_without_rescan(
     assert repaired == [hit]
 
 
+def test_canonical_citation_reuses_numbered_plan_slot_without_rescan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "paper.en.md"
+    source.write_text("# Paper\n\nExact planned evidence.\n", encoding="utf-8")
+    hit = {
+        "text": "Exact planned evidence.",
+        "meta": {
+            "source_path": str(source),
+            "ref_answer_citation_num": 1,
+            "citation_plan_slot": True,
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": str(source),
+                "heading_path": "Results",
+                "snippet": "Exact planned evidence.",
+                "strict_locate": False,
+                "selection_reason": "citation_plan_slot",
+            }
+        },
+    }
+
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: pytest.fail("numbered plan evidence should not rescan source blocks"),
+    )
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [hit],
+        canonical_paths=[str(source)],
+        answer_text="The result follows from the planned passage [1].",
+    )
+
+    assert repaired == [hit]
+
+
 def test_canonical_citation_combines_distinct_blocks_for_one_multi_signal_claim(tmp_path: Path) -> None:
     source = tmp_path / "hatnet.en.md"
     source.write_text(
@@ -3862,6 +3903,61 @@ def test_system_a_primary_backfill_selects_direct_s2ism_capability_evidence(
     assert out[0]["anchor_id"] != "p_weak"
 
 
+def test_system_a_primary_backfill_preserves_better_citation_plan_evidence() -> None:
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source_path = "db/qclfm/qclfm.en.md"
+    direct_evidence = (
+        "Light-field imaging captures both the position and angular information "
+        "of light rays for volumetric reconstruction."
+    )
+    weaker_alternative = (
+        "At a resolving power of 100 micrometers, QCLFM achieved a near infinite "
+        "depth of field."
+    )
+    details = [
+        {
+            "num": 3,
+            "source_path": source_path,
+            "source_name": "QCLFM.pdf",
+            "citation_route": "system_a",
+            "citation_plan_slot": True,
+            "answer_claim": (
+                "Light-field records position and angular information for volumetric reconstruction."
+            ),
+            "heading_path": "Introduction",
+            "evidence_quote": direct_evidence,
+            "block_id": "blk_direct",
+            "anchor_id": "p_direct",
+        }
+    ]
+    pack = {
+        "hits": [
+            {
+                "text": weaker_alternative,
+                "meta": {"source_path": source_path, "source_name": "QCLFM.pdf"},
+                "ui_meta": {
+                    "primary_evidence": {
+                        "source_path": source_path,
+                        "heading_path": "Results",
+                        "snippet": weaker_alternative,
+                        "block_id": "blk_weaker",
+                        "anchor_id": "p_weaker",
+                        "strict_locate": True,
+                        "selection_reason": "answer_aligned_block",
+                    }
+                },
+            }
+        ]
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, pack, render_locale="en")
+
+    assert out[0]["evidence_quote"] == direct_evidence
+    assert out[0]["block_id"] == "blk_direct"
+    assert out[0]["anchor_id"] == "p_direct"
+
+
 def test_system_a_primary_backfill_sets_scigs_dynamic_relation_after_replacement(
     tmp_path: Path,
 ):
@@ -7527,7 +7623,13 @@ def test_microscopy_method_map_repair_preserves_unrelated_numeric_citations(
     assert "interferometric detection [2]" not in repaired
     assert "angular information [3]" not in repaired
     assert "independently supported property [4]" in repaired
-    assert all(f"[{num}]" in repaired for num in (5, 6, 7))
+    assert all(f"[{num}]" in repaired for num in (1, 2, 3))
+    assert len(hits) == 4
+    assert [hit["meta"]["citation_plan_microscopy_direct"] for hit in hits[:3]] == [
+        "s2ism",
+        "iism",
+        "light_field",
+    ]
 
 
 def test_perovskite_scope_bridge_does_not_rewrite_answer_without_boundary_claim():

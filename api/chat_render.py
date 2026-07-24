@@ -1425,6 +1425,10 @@ def _backfill_system_a_cite_details_from_ref_pack(
             and source_key
             and source_key not in trusted_primary_bound_sources
             and not _primary_evidence_matches_detail(detail, primary)
+            and (
+                not bool(detail.get("citation_plan_slot"))
+                or _answer_aligned_primary_improves_claim_coverage(detail, primary)
+            )
         )
         if not (
             _system_a_detail_needs_ref_primary_backfill(detail)
@@ -5327,6 +5331,7 @@ def _reading_guide_repair_microscopy_method_map_evidence(
             if 1 <= candidate_num <= 99999:
                 replaced_marker_nums.add(candidate_num)
         source_key = _reading_slot_source_key(source_path)
+        matching_hit_nums: list[int] = []
         for hit_num, hit in enumerate(hits, start=1):
             hit_meta = (
                 hit.get("meta")
@@ -5336,6 +5341,7 @@ def _reading_guide_repair_microscopy_method_map_evidence(
             hit_path = str((hit_meta or {}).get("source_path") or "").strip()
             if source_key and _reading_slot_source_key(hit_path) == source_key:
                 replaced_marker_nums.add(hit_num)
+                matching_hit_nums.append(hit_num)
         primary = _claim_aligned_abstract_primary_evidence(
             {"hits": [{"meta": {"source_path": source_path, "source_name": source_name}}]},
             {
@@ -5344,42 +5350,123 @@ def _reading_guide_repair_microscopy_method_map_evidence(
                 "answer_claim": probe_claim,
             },
         )
-        evidence = _primary_evidence_text(primary) or str(slot.get("evidence_quote") or "").strip()
-        if not evidence or not all(pattern.search(evidence) for pattern in required_patterns):
+        evidence_candidates: list[tuple[str, dict]] = []
+        primary_text = _primary_evidence_text(primary)
+        if primary_text:
+            evidence_candidates.append((primary_text, dict(primary)))
+        for hit_num in matching_hit_nums:
+            hit = hits[hit_num - 1]
+            hit_ui = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            hit_primary = (
+                hit_ui.get("primary_evidence")
+                if isinstance(hit_ui.get("primary_evidence"), dict)
+                else {}
+            )
+            hit_primary_text = _primary_evidence_text(hit_primary)
+            if hit_primary_text:
+                evidence_candidates.append((hit_primary_text, dict(hit_primary)))
+        slot_evidence = str(slot.get("evidence_quote") or "").strip()
+        if slot_evidence:
+            evidence_candidates.append((slot_evidence, {}))
+        evidence = ""
+        evidence_primary: dict = {}
+        for candidate_text, candidate_primary in evidence_candidates:
+            if all(pattern.search(candidate_text) for pattern in required_patterns):
+                evidence = candidate_text
+                evidence_primary = candidate_primary
+                break
+        if not evidence:
             return text
+        primary = evidence_primary or dict(primary)
         heading = str(
             primary.get("heading_path")
             or primary.get("headingPath")
             or slot.get("heading_path")
             or "Abstract"
         ).strip()
-        hits.append(
+        target_num = matching_hit_nums[0] if matching_hit_nums else 0
+        if target_num:
+            target_hit = hits[target_num - 1]
+            target_meta = (
+                dict(target_hit.get("meta") or {})
+                if isinstance(target_hit.get("meta"), dict)
+                else {}
+            )
+            target_ui = (
+                dict(target_hit.get("ui_meta") or {})
+                if isinstance(target_hit.get("ui_meta"), dict)
+                else {}
+            )
+        else:
+            target_hit = {"score": 10.0}
+            target_meta = {}
+            target_ui = {}
+        primary_payload = dict(primary)
+        primary_payload.update(
+            {
+                "source_path": source_path,
+                "source_name": source_name,
+                "heading_path": heading,
+                "snippet": evidence,
+                "highlight_snippet": evidence,
+                "selection_reason": "citation_plan_slot",
+                "strict_locate": bool(
+                    primary.get("strict_locate")
+                    or primary.get("strictLocate")
+                    or primary.get("block_id")
+                    or primary.get("blockId")
+                    or primary.get("anchor_id")
+                    or primary.get("anchorId")
+                ),
+            }
+        )
+        target_meta.update(
+            {
+                "source_path": source_path,
+                "source_name": source_name,
+                "heading_path": heading,
+                "ref_best_heading_path": heading,
+                "evidence_quote": evidence,
+                "citation_plan_slot": True,
+                "citation_plan_microscopy_direct": kind,
+                "primary_block_id": str(
+                    primary.get("block_id") or primary.get("blockId") or ""
+                ).strip(),
+                "primary_anchor_id": str(
+                    primary.get("anchor_id") or primary.get("anchorId") or ""
+                ).strip(),
+                "anchor_kind": str(
+                    primary.get("anchor_kind")
+                    or primary.get("anchorKind")
+                    or "paragraph"
+                ).strip(),
+                "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+            }
+        )
+        target_ui.update(
+            {
+                "display_name": source_name,
+                "source_path": source_path,
+                "heading_path": heading,
+                "summary_line": evidence,
+                "primary_evidence": primary_payload,
+            }
+        )
+        target_hit.update(
             {
                 "text": evidence,
                 "score": 10.0,
-                "meta": {
-                    "source_path": source_path,
-                    "source_name": source_name,
-                    "heading_path": heading,
-                    "ref_best_heading_path": heading,
-                    "evidence_quote": evidence,
-                    "citation_plan_slot": True,
-                    "citation_plan_microscopy_direct": kind,
-                    "primary_block_id": str(primary.get("block_id") or "").strip(),
-                    "primary_anchor_id": str(primary.get("anchor_id") or "").strip(),
-                    "anchor_kind": str(primary.get("anchor_kind") or "paragraph").strip(),
-                    "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
-                },
-                "ui_meta": {
-                    "display_name": source_name,
-                    "source_path": source_path,
-                    "heading_path": heading,
-                    "summary_line": evidence,
-                    "primary_evidence": dict(primary),
-                },
+                "meta": target_meta,
+                "ui_meta": target_ui,
             }
         )
-        selected[kind] = len(hits)
+        if target_num:
+            hits[target_num - 1] = target_hit
+        else:
+            hits.append(target_hit)
+            target_num = len(hits)
+        target_meta["ref_answer_citation_num"] = target_num
+        selected[kind] = target_num
 
     if replaced_marker_nums:
         target_markers = "|".join(str(num) for num in sorted(replaced_marker_nums))
@@ -6171,6 +6258,11 @@ def _reading_guide_repair_missing_system_a_citations(
                     citation_plan,
                     canonical_paths=canonical_paths,
                 )
+                text = _reading_guide_repair_microscopy_method_map_evidence(
+                    text,
+                    hits,
+                    citation_plan,
+                )
             return text
     reading_repair = bool("reading" in str(output_mode or "") or scope_boundary)
     if not reading_repair:
@@ -6498,25 +6590,57 @@ def _augment_hits_with_canonical_answer_citations(
                 == source_identity
                 and _hit_answer_num(hit) == int(num)
                 and isinstance((hit.get("ui_meta") or {}).get("primary_evidence"), dict)
-                and bool(((hit.get("ui_meta") or {}).get("primary_evidence") or {}).get("strict_locate"))
-                and str(
-                    ((hit.get("ui_meta") or {}).get("primary_evidence") or {}).get("selection_reason")
-                    or ""
-                ).strip().lower()
-                in {
-                    "answer_citation_grounded",
-                    "prompt_contract_block",
-                    "answer_aligned_block",
-                    "answer_aligned_reference_primary",
-                }
+                and (
+                    (
+                        bool(
+                            ((hit.get("ui_meta") or {}).get("primary_evidence") or {}).get(
+                                "strict_locate"
+                            )
+                        )
+                        and str(
+                            (
+                                (hit.get("ui_meta") or {}).get("primary_evidence") or {}
+                            ).get("selection_reason")
+                            or ""
+                        ).strip().lower()
+                        in {
+                            "answer_citation_grounded",
+                            "prompt_contract_block",
+                            "answer_aligned_block",
+                            "answer_aligned_reference_primary",
+                        }
+                    )
+                    or (
+                        bool(
+                            (
+                                hit.get("meta")
+                                if isinstance(hit.get("meta"), dict)
+                                else {}
+                            ).get("citation_plan_slot")
+                        )
+                        and str(
+                            (
+                                (hit.get("ui_meta") or {}).get("primary_evidence") or {}
+                            ).get("selection_reason")
+                            or ""
+                        ).strip().lower()
+                        == "citation_plan_slot"
+                        and bool(
+                            _primary_evidence_text(
+                                (hit.get("ui_meta") or {}).get("primary_evidence") or {}
+                            )
+                        )
+                    )
+                )
             ),
             None,
         )
         if authoritative_existing is not None:
-            # The converged References payload already carries an occurrence-
-            # specific, strictly locatable answer citation. Re-scanning every
-            # source block here costs seconds per message and cannot improve
-            # this evidence contract.
+            # The converged References payload or the citation plan already
+            # carries the answer-number/source binding and a concrete evidence
+            # passage. Re-scanning every source block here costs seconds per
+            # message; claim-specific repairs below can still upgrade the plan
+            # passage when a stricter occurrence is required.
             continue
         md_path = Path(source_path)
         if not md_path.exists():
@@ -8669,16 +8793,16 @@ def enrich_messages_with_reference_render(
             raw_body = rendered_body
             _rec_meta = rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
             _canon_paths = list(_rec_meta.get("canonical_hit_paths") or []) if isinstance(_rec_meta.get("canonical_hit_paths"), list) else []
-            citation_hits = _augment_hits_with_canonical_answer_citations(
-                hits,
-                canonical_paths=_canon_paths or None,
-                answer_text=rendered_body,
-            )
             citation_hits = _augment_hits_with_system_a_plan_slots(
-                citation_hits,
+                hits,
                 citation_plan,
                 reserved_count=len(_canon_paths),
                 canonical_paths=_canon_paths or None,
+            )
+            citation_hits = _augment_hits_with_canonical_answer_citations(
+                citation_hits,
+                canonical_paths=_canon_paths or None,
+                answer_text=rendered_body,
             )
             allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
                 rec=rec,

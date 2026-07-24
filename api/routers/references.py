@@ -342,6 +342,41 @@ def _answer_citation_card_copy(
     if not rows:
         return "", ""
     summary = ("；" if prefer_zh else "; ").join(claim for _heading, claim in rows)
+    support_line = next(
+        (
+            str(
+                detail.get("support_relation")
+                or detail.get("binding_reason")
+                or detail.get("card_support_explanation")
+                or ""
+            ).strip()
+            for detail in details
+            if isinstance(detail, dict)
+            and str(
+                detail.get("support_relation")
+                or detail.get("binding_reason")
+                or detail.get("card_support_explanation")
+                or ""
+            ).strip()
+            and not looks_generic_ref_why_line(
+                str(
+                    detail.get("support_relation")
+                    or detail.get("binding_reason")
+                    or detail.get("card_support_explanation")
+                    or ""
+                )
+            )
+            and not looks_templated_ref_why_line(
+                str(
+                    detail.get("support_relation")
+                    or detail.get("binding_reason")
+                    or detail.get("card_support_explanation")
+                    or ""
+                )
+            )
+        ),
+        "",
+    )
     prompt_text = str(prompt or "")
     headings = "”和“".join(heading for heading, _claim in rows)
     reading_route = bool(
@@ -428,7 +463,7 @@ def _answer_citation_card_copy(
             else:
                 why = f"“{headings}”保留了方法归属或上游工作的原文线索，可用于核对来源判断。"
         else:
-            why = f"“{headings}”提供回答该问题所需的原文定位，卡片中的结论可在这里逐项核对。"
+            why = support_line or f"“{headings}”提供回答该问题所需的原文定位，卡片中的结论可在这里逐项核对。"
     else:
         if re.search(r"benefit|advantage|strength|pitfall|limit|challenge", prompt_text, flags=re.I):
             why = f"'{headings}' covers the benefit and limitation sides requested by the question."
@@ -441,8 +476,112 @@ def _answer_citation_card_copy(
         elif re.search(r"origin|invent|original|novel|prior work|existing method", prompt_text, flags=re.I):
             why = f"'{headings}' identifies whether the method is prior work or a contribution introduced by this paper."
         else:
-            why = f"'{headings}' provides the source location needed to check the card's conclusion."
+            why = support_line or f"'{headings}' provides the source location needed to check the card's conclusion."
     return summary, why
+
+
+def _grounded_system_a_details_from_citation_plan(citation_plan: dict | None) -> list[dict]:
+    """Project evidence-bearing System-A plan slots into temporary card details.
+
+    Generation has already selected these source passages before the answer is
+    streamed. Reusing them lets the references endpoint construct grounded
+    cards while the richer message render packet is still being persisted.
+    Source-only slots deliberately remain pending.
+    """
+
+    def _as_nonnegative_int(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    out: list[dict] = []
+    for slot in list((citation_plan or {}).get("slots") or []):
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("preferred_system") or "system_a").strip().lower() == "system_b":
+            continue
+        source_path = str(
+            slot.get("source_path") or slot.get("sourcePath") or ""
+        ).strip()
+        evidence_quote = re.sub(
+            r"\s+",
+            " ",
+            str(
+                slot.get("evidence_quote")
+                or slot.get("evidenceQuote")
+                or slot.get("summary_line")
+                or ""
+            ).strip(),
+        )
+        if (
+            not source_path
+            or len(evidence_quote) < 24
+            or re.match(r"(?i)^\s*(?:title|paper title)\s*:", evidence_quote)
+        ):
+            continue
+        candidate_nums: list[int] = []
+        for raw_num in list(
+            slot.get("candidate_hits") or slot.get("candidateHits") or []
+        ):
+            try:
+                candidate_num = int(raw_num)
+            except (TypeError, ValueError):
+                continue
+            if candidate_num > 0 and candidate_num not in candidate_nums:
+                candidate_nums.append(candidate_num)
+        source_name = str(
+            slot.get("source_name")
+            or slot.get("sourceName")
+            or _source_name_from_md_path(source_path)
+            or ""
+        ).strip()
+        heading_path = str(
+            slot.get("heading_path") or slot.get("headingPath") or ""
+        ).strip()
+        answer_claim = str(
+            slot.get("answer_claim")
+            or slot.get("answerClaim")
+            or slot.get("claim_text")
+            or slot.get("claimText")
+            or slot.get("topic")
+            or ""
+        ).strip()
+        out.append(
+            {
+                "num": candidate_nums[0] if candidate_nums else 0,
+                "citation_route": "system_a",
+                "routing_reason": "citation_plan_slot",
+                "source_path": source_path,
+                "source_name": source_name,
+                "heading_path": heading_path,
+                "location_label": heading_path,
+                "answer_claim": answer_claim,
+                "evidence_quote": evidence_quote,
+                "summary_line": evidence_quote,
+                "block_id": str(
+                    slot.get("block_id") or slot.get("blockId") or ""
+                ).strip(),
+                "anchor_id": str(
+                    slot.get("anchor_id") or slot.get("anchorId") or ""
+                ).strip(),
+                "anchor_kind": str(
+                    slot.get("anchor_kind") or slot.get("anchorKind") or "sentence"
+                ).strip(),
+                "page_start": _as_nonnegative_int(
+                    slot.get("page_start") or slot.get("pageStart") or 0
+                ),
+                "page_end": _as_nonnegative_int(
+                    slot.get("page_end")
+                    or slot.get("pageEnd")
+                    or slot.get("page_start")
+                    or slot.get("pageStart")
+                    or 0
+                ),
+                "citation_plan_slot": True,
+            }
+        )
+    return out
 
 
 def _answer_citation_state_by_user(
@@ -491,6 +630,13 @@ def _answer_citation_state_by_user(
             if isinstance(answer_quality.get("citation_plan"), dict)
             else {}
         )
+        if not citation_plan and isinstance(contracts.get("citation_plan"), dict):
+            citation_plan = contracts.get("citation_plan")
+        planned_grounded = _grounded_system_a_details_from_citation_plan(citation_plan)
+        if planned_grounded:
+            out[last_user_msg_id] = planned_grounded
+            pending.discard(last_user_msg_id)
+            continue
         planned_system_a = any(
             isinstance(item, dict)
             and str(item.get("preferred_system") or "system_a").strip().lower() != "system_b"
@@ -2106,7 +2252,11 @@ def _refs_background_llm_polish_enabled() -> bool:
     raw = str(os.environ.get("KB_REFS_BACKGROUND_LLM_POLISH", "") or "").strip().lower()
     if raw:
         return raw in {"1", "true", "on", "yes"}
-    return bool(_refs_card_polish_llm_enabled())
+    # Source-grounded deterministic cards are the default.  A second model
+    # pass races the answer renderer and used to add a 12-45 second tail even
+    # when the final cards were ultimately composed from exact citations.
+    # Keep the optional polish available as an explicit deployment opt-in.
+    return False
 
 
 def _refs_payload_has_fast_exact_hit(refs: dict | None) -> bool:
@@ -2207,12 +2357,21 @@ def _warm_conversation_refs_payload_async(
                         guide_source_path=guide_source_path,
                         guide_source_name=guide_source_name,
                         render_variant="bounded_full",
-                        allow_expensive_llm_for_ready=_refs_background_llm_polish_enabled(),
-                        # Answer-citation rows already carry the exact source
-                        # excerpt and their reader payload resolves that excerpt
-                        # back to a source block.  Other retrieval cards retain
-                        # the broader exact candidate scan.
-                        allow_exact_locate=not has_answer_citation_locator,
+                        # Once generation has assigned answer citation numbers,
+                        # the cards can be composed directly from the exact
+                        # cited passages.  Waiting for a second LLM to restate
+                        # those passages only adds a long tail and can make the
+                        # card wording less faithful.
+                        allow_expensive_llm_for_ready=bool(
+                            _refs_background_llm_polish_enabled()
+                            and not has_answer_citation_locator
+                        ),
+                        # The retrieval row already carries a source passage,
+                        # and completed answers replace it with a stricter
+                        # citation-plan block.  A second whole-source candidate
+                        # scan was the remaining long tail and could even move
+                        # the card away from the passage used in the answer.
+                        allow_exact_locate=False,
                     )
                     rendered = regular_payload.get(user_msg_id) if isinstance(regular_payload, dict) else None
                     if not isinstance(rendered, dict):
@@ -2445,6 +2604,8 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
     route_deadline_at = route_started_at + _refs_ready_budget_s()
     timings: list[tuple[str, float]] = []
     refs_for_finish: dict[int, dict] = {}
+    refs_state_signature = ""
+    signature = ""
     finish_guide_mode = False
     finish_guide_source_path = ""
     finish_guide_source_name = ""
@@ -2483,6 +2644,15 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                 guide_source_path=finish_guide_source_path,
                 guide_source_name=finish_guide_source_name,
             )
+            if signature:
+                _store_cached_conversation_refs_payload(
+                    conv_id=conv_id,
+                    signature=signature,
+                    payload=payload_out,
+                    mode="full",
+                    refs=refs_for_finish,
+                    state_signature=refs_state_signature,
+                )
         # Card construction/background warming already embeds cached local
         # bibliography metadata. Re-scanning every source and rebuilding every
         # message render packet on this read path caused 10–45 second stalls,
@@ -2519,7 +2689,6 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
     finish_guide_mode = bool(guide_mode)
     finish_guide_source_path = guide_source_path
     finish_guide_source_name = guide_source_name
-    refs_state_signature = ""
     if hasattr(store, "list_message_refs_state"):
         phase_started_at = time.perf_counter()
         try:
@@ -2570,6 +2739,12 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         refs=refs if isinstance(refs, dict) else {},
     )
     refs_for_finish = refs_norm
+    answer_citation_ready_user_ids = set(
+        _answer_citation_details_by_user(
+            store=store,
+            conv_id=conv_id,
+        )
+    )
     all_user_msg_ids: set[int] = set()
     for key in refs_norm.keys():
         try:
@@ -2649,6 +2824,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             )
             if rebuilt_doc_list:
                 authoritative_doc_list = rebuilt_doc_list
+        pack_phase_started_at = time.perf_counter()
         pack_full = _get_stored_rendered_pack_payload(
             user_msg_id=user_msg_id,
             pack=pack,
@@ -2657,6 +2833,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             guide_source_name=guide_source_name,
             allow_authoritative_source_override=bool(authoritative_doc_list_present),
         )
+        _record("stored_pack_lookup", pack_phase_started_at)
         if authoritative_doc_list_present and _refs_pack_has_pending(pack, include_stale=False):
             pending_refs[int(user_msg_id)] = pack
             continue
@@ -2675,6 +2852,18 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                     default_status="full",
                 )
                 continue
+            if int(user_msg_id) in answer_citation_ready_user_ids:
+                # The answer plan already supplies source-bound evidence for
+                # every visible card. Seed the overlay directly from the
+                # retrieval rows instead of building an intermediate
+                # authoritative card pack that will be replaced in _finish.
+                authoritative_seed = _without_nested_render_payload(pack)
+                authoritative_seed["payload_mode"] = "fast"
+                authoritative_seed["enrichment_pending"] = True
+                authoritative_fast_payloads[int(user_msg_id)] = authoritative_seed
+                authoritative_fast_refs[int(user_msg_id)] = pack
+                continue
+            pack_phase_started_at = time.perf_counter()
             authoritative_payload = _render_authoritative_doc_list_pack(
                 user_msg_id=int(user_msg_id),
                 pack=pack,
@@ -2688,6 +2877,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                 pending=bool(authoritative_doc_list),
                 allow_expensive_llm=False,
             )
+            _record("authoritative_fast_pack", pack_phase_started_at)
             if isinstance(authoritative_payload, dict) and authoritative_payload:
                 if not authoritative_doc_list:
                     authoritative_sync_payloads[int(user_msg_id)] = authoritative_payload
@@ -2892,26 +3082,15 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         **normal_ready_refs,
     }
     if ready_refs_to_warm and (not pending_refs) and (not failed_ready_refs):
-        authoritative_to_warm = {
-            user_msg_id: authoritative_doc_lists[user_msg_id]
-            for user_msg_id in authoritative_fast_refs
-            if user_msg_id in authoritative_doc_lists
-        }
-        regular_refs_to_warm = _refs_without_completed_answer_citation_overlays(
+        refs_to_warm = _refs_without_completed_answer_citation_overlays(
             store=store,
             conv_id=conv_id,
-            refs={
-                user_msg_id: pack
-                for user_msg_id, pack in ready_refs_to_warm.items()
-                if user_msg_id not in authoritative_to_warm
-            },
+            refs=ready_refs_to_warm,
         )
-        refs_to_warm = {
-            **regular_refs_to_warm,
-            **{
-                user_msg_id: ready_refs_to_warm[user_msg_id]
-                for user_msg_id in authoritative_to_warm
-            },
+        authoritative_to_warm = {
+            user_msg_id: authoritative_doc_lists[user_msg_id]
+            for user_msg_id in refs_to_warm
+            if user_msg_id in authoritative_doc_lists
         }
         if refs_to_warm:
             _warm_conversation_refs_payload_async(

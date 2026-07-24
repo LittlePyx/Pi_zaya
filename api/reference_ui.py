@@ -3149,7 +3149,10 @@ def _refs_card_polish_timeout_s(default_s: float = 7.0) -> float:
         raw = float(str(os.environ.get("KB_REFS_CARD_POLISH_TIMEOUT_S", str(default_s)) or str(default_s)))
     except Exception:
         raw = float(default_s)
-    return max(2.0, min(45.0, raw))
+    # Card prose is optional polish over a deterministic, source-grounded
+    # fallback.  Keep it out of the answer's long tail: a slow model response
+    # should never hold the reference panel for tens of seconds.
+    return max(2.0, min(12.0, raw))
 
 
 def _refs_card_polish_max_retries() -> int:
@@ -3157,7 +3160,7 @@ def _refs_card_polish_max_retries() -> int:
         raw = int(str(os.environ.get("KB_REFS_CARD_POLISH_MAX_RETRIES", "0") or "0"))
     except Exception:
         raw = 0
-    return max(0, min(2, raw))
+    return max(0, min(1, raw))
 
 
 def _refs_card_polish_second_pass_enabled() -> bool:
@@ -5795,6 +5798,7 @@ def _select_answer_aligned_primary_ref_evidence(
     pack: dict | None,
     prompt: str,
     answer: str,
+    allow_source_block_scan: bool = True,
 ) -> tuple[dict, dict]:
     terms = _answer_evidence_terms(prompt, answer)
     candidates = _iter_pack_primary_ref_evidence_candidates(pack)
@@ -5817,12 +5821,15 @@ def _select_answer_aligned_primary_ref_evidence(
             best_existing_score = float(score)
             best_existing_matches = list(matched)
 
-    block_primary, block_alignment = _select_answer_aligned_source_block_primary_evidence(
-        pack=pack,
-        prompt=prompt,
-        answer=answer,
-        terms=terms,
-    )
+    block_primary: dict = {}
+    block_alignment: dict = {}
+    if allow_source_block_scan:
+        block_primary, block_alignment = _select_answer_aligned_source_block_primary_evidence(
+            pack=pack,
+            prompt=prompt,
+            answer=answer,
+            terms=terms,
+        )
     block_score = float((block_alignment or {}).get("score") or -1000.0) if block_primary else -1000.0
     chosen = dict(best_existing)
     chosen_score = best_existing_score
@@ -5898,6 +5905,9 @@ def _attach_pack_primary_ref_evidence(pack: dict | None) -> dict:
         payload_mode in {"fast", "pending"}
         or str((pipeline_debug_existing or {}).get("render_variant") or "").strip().lower() == "fast"
     )
+    allow_answer_alignment_source_scan = bool(
+        (pipeline_debug_existing or {}).get("allow_answer_alignment_source_scan", True)
+    )
     prompt_primary, prompt_alignment = _select_prompt_contract_primary_ref_evidence(
         pack=pack2,
         prompt=prompt,
@@ -5929,6 +5939,7 @@ def _attach_pack_primary_ref_evidence(pack: dict | None) -> dict:
                 pack=pack2,
                 prompt=prompt,
                 answer=answer,
+                allow_source_block_scan=allow_answer_alignment_source_scan,
             )
         prompt_score = -1000.0
         prompt_matches: list[str] = []
@@ -6006,6 +6017,7 @@ def _attach_pack_primary_ref_evidence(pack: dict | None) -> dict:
                 pack=pack2,
                 prompt=prompt,
                 answer=answer,
+                allow_source_block_scan=allow_answer_alignment_source_scan,
             )
             if alignment:
                 alignment["input_sig"] = alignment_input_sig
@@ -10203,7 +10215,17 @@ def _resolve_refs_payload_render_variant(
     if variant == "fast":
         return variant, False, False, False
     if variant in {"bounded_full", "precomputed_full"}:
-        return "bounded_full", False, bool(allow_expensive_llm_for_ready), True
+        # Bounded/precomputed rendering defaults to exact locating through the
+        # public ``allow_exact_locate=True`` argument, but callers that already
+        # hold an answer-citation passage must be able to turn the second
+        # whole-source scan off.  Previously this branch silently forced the
+        # scan back on and added several seconds per card batch.
+        return (
+            "bounded_full",
+            False,
+            bool(allow_expensive_llm_for_ready),
+            bool(allow_exact_locate),
+        )
     return (
         "interactive_full",
         bool(allow_citation_prefetch_for_pending),
@@ -10476,6 +10498,7 @@ def enrich_refs_payload(
             "enrich_elapsed_llm_filter_s": round(max(0.0, t_final - t_enrich_start), 3),
             "enrich_elapsed_llm_polish_s": round(max(0.0, t_done - t_polish_start), 3),
             "render_variant": str(_render_variant or ""),
+            "allow_answer_alignment_source_scan": bool(allow_exact_locate),
             "llm_polish_allowed": bool(llm_polish_allowed),
             "llm_polish_enabled": bool(_refs_card_polish_llm_enabled()),
             "llm_polish_top_n": int(_refs_card_polish_top_n()),

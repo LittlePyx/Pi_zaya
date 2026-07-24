@@ -4283,6 +4283,62 @@ def test_enrich_refs_payload_bounded_full_skips_heavy_refine_but_keeps_exact_loc
     assert str(ui_meta.get("heading_path") or "") == "2. Comparison of theory / 2.2 Basis patterns generation"
 
 
+def test_enrich_refs_payload_bounded_full_honors_explicit_exact_locate_opt_out(monkeypatch):
+    refs = {
+        102: {
+            "prompt": "Compare three microscopy methods.",
+            "answer": "The planned passage supports the microscopy comparison [1].",
+            "hits": [
+                {
+                    "text": "A planned answer-citation passage.",
+                    "meta": {
+                        "source_path": "paper.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_answer_citation_num": 1,
+                    },
+                }
+            ],
+        }
+    }
+    calls: dict[str, object] = {}
+
+    def fake_build_hit_ui_meta(*args, **kwargs):
+        del args
+        calls["allow_exact_locate"] = kwargs.get("allow_exact_locate")
+        return {
+            "summary_line": "A planned answer-citation passage.",
+            "heading_path": "Results",
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(
+        reference_ui,
+        "_select_answer_aligned_source_block_primary_evidence",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("explicit exact-locate opt-out should skip answer-alignment source scan")
+        ),
+    )
+
+    out = enrich_refs_payload(
+        refs,
+        pdf_root=None,
+        md_root=None,
+        lib_store=None,
+        render_variant="bounded_full",
+        allow_expensive_llm_for_ready=False,
+        allow_exact_locate=False,
+    )
+
+    assert len(list((out.get(102) or {}).get("hits") or [])) == 1
+    assert calls["allow_exact_locate"] is False
+    assert (
+        (out.get(102) or {}).get("pipeline_debug", {}).get(
+            "allow_answer_alignment_source_scan"
+        )
+        is False
+    )
+
+
 def test_filter_refs_hits_by_prompt_focus_compare_prefers_explicit_versus_title_match():
     prompt = "Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?"
     hits = [

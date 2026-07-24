@@ -73,6 +73,20 @@ def test_pick_readable_evidence_text_keeps_cited_sentence_with_commas() -> None:
     assert "hyperspectral SPI" in picked
 
 
+def test_pick_readable_evidence_text_keeps_complete_since_clause() -> None:
+    evidence = (
+        "Since super-resolution and optical sectioning are achieved simultaneously, "
+        "we named our technique s2ISM."
+    )
+
+    picked = pick_readable_evidence_text(
+        evidence,
+        claim="s2ISM provides simultaneous super-resolution and optical sectioning.",
+    )
+
+    assert picked == evidence
+
+
 def test_pick_readable_evidence_text_trims_short_tail_phrase_before_ellipsis() -> None:
     raw = (
         "This paper proposes a novel method for recovering dynamic 3D scene representations "

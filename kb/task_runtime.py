@@ -849,7 +849,11 @@ def _build_precomputed_refs_render_payload(
                 guide_source_name=str(guide_source_name or "").strip(),
                 render_variant="bounded_full",
                 allow_expensive_llm_for_ready=bool(allow_expensive_llm),
-                allow_exact_locate=True,
+                # This synchronous pass sits between the streamed answer and
+                # the ready citation cards.  Keep it to retrieval-local
+                # evidence; the answer renderer subsequently installs the
+                # citation-plan block with an exact reader locator.
+                allow_exact_locate=False,
             )
             payload = payload_by_user.get(mid) if isinstance(payload_by_user, dict) else None
         else:
@@ -3783,6 +3787,21 @@ def _should_allow_refs_async_enrich(
     return bool(refs_async_in_paper_guide or paper_guide_cross_paper_refs)
 
 
+def _should_run_refs_async_enrich_for_request(
+    *,
+    allow_refs_async: bool,
+    prompt_multi_paper_list: bool,
+) -> bool:
+    if not allow_refs_async:
+        return False
+    # Explicit multi-paper/reading-list answers already build an authoritative
+    # doc-list contract from the full-library retrieval and answer citation
+    # plan. A second provider-backed refs rerank races that contract, consumes
+    # CPU/provider capacity after the first token, and delays card rendering
+    # without changing the paper set.
+    return not prompt_multi_paper_list
+
+
 def _select_refs_async_rebuild_hits_raw(
     *,
     hits_raw: list[dict],
@@ -5211,7 +5230,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 )
 
             refs_async_will_run = bool(
-                allow_refs_async
+                _should_run_refs_async_enrich_for_request(
+                    allow_refs_async=allow_refs_async,
+                    prompt_multi_paper_list=prompt_multi_paper_list,
+                )
                 and llm_rerank
                 and prompt
                 and refs_seed_docs_for_display

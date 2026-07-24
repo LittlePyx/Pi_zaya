@@ -181,6 +181,37 @@ def test_grounded_ref_why_line_explains_physical_degradation_generalization() ->
     assert "物理退化模型" in why
     assert "鲁棒性" in why
     assert "可用来核对" not in why
+
+
+def test_grounded_ref_why_line_explains_microscopy_method_roles() -> None:
+    cases = [
+        (
+            "Since super-resolution and optical sectioning are achieved simultaneously, "
+            "we named our technique s²ISM.",
+            ("s²ISM", "超分辨率", "光学切片"),
+        ),
+        (
+            "This technique combines interferometric detection with image scanning microscopy "
+            "to achieve about 120 nm lateral resolution.",
+            ("干涉检测", "120 nm", "分辨率"),
+        ),
+        (
+            "Light-field imaging captures both position and angular information for volumetric reconstruction.",
+            ("位置", "角度", "体积"),
+        ),
+    ]
+
+    for summary, required in cases:
+        why = build_grounded_ref_why_line(
+            prefer_zh=True,
+            focus_terms=[],
+            heading_path="Abstract",
+            summary_line=summary,
+        )
+        assert all(term in why for term in required)
+        assert not looks_generic_ref_why_line(why)
+
+
 def test_finalize_ref_card_copy_replaces_location_shell_with_metric_specific_why() -> None:
     _summary, why, changed = finalize_ref_card_copy(
         summary_line="Choosing 333 patterns yields a reconstruction frame rate of 30 Hz.",

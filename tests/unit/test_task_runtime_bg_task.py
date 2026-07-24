@@ -58,6 +58,7 @@ from kb.task_runtime import (
     _select_multi_paper_seed_docs_for_display,
     _select_refs_async_rebuild_hits_raw,
     _should_allow_refs_async_enrich,
+    _should_run_refs_async_enrich_for_request,
     _paper_guide_targeted_source_block_hits,
     _pick_recent_source_hint,
     _post_convert_source_retry_needed,
@@ -715,6 +716,21 @@ def test_should_allow_refs_async_enrich_keeps_cross_paper_paper_guide_queries_en
     )
 
 
+def test_explicit_multi_paper_list_uses_authoritative_contract_without_second_refs_rerank():
+    assert not _should_run_refs_async_enrich_for_request(
+        allow_refs_async=True,
+        prompt_multi_paper_list=True,
+    )
+    assert _should_run_refs_async_enrich_for_request(
+        allow_refs_async=True,
+        prompt_multi_paper_list=False,
+    )
+    assert not _should_run_refs_async_enrich_for_request(
+        allow_refs_async=False,
+        prompt_multi_paper_list=False,
+    )
+
+
 def test_select_refs_async_rebuild_hits_raw_prefers_unscoped_hits_for_cross_paper_refs():
     scoped = [{"id": "scoped"}]
     unscoped = [{"id": "external"}, {"id": "bound"}]
@@ -1063,7 +1079,7 @@ def test_build_precomputed_refs_render_payload_uses_bounded_full_variant(monkeyp
     kwargs = dict(calls.get("kwargs") or {})
     assert kwargs.get("render_variant") == "bounded_full"
     assert kwargs.get("allow_expensive_llm_for_ready") is False
-    assert kwargs.get("allow_exact_locate") is True
+    assert kwargs.get("allow_exact_locate") is False
 
 
 def test_build_precomputed_refs_render_payload_keeps_synthetic_basket_card_non_openable(monkeypatch):
