@@ -119,6 +119,59 @@ def test_system_a_uses_richest_metadata_from_duplicate_source_hits() -> None:
     assert details[0]["journal_quartile"] == "Q2"
 
 
+def test_authoritative_detector_table_slot_keeps_the_planned_record() -> None:
+    source_path = "db/detector-review/detector-review.en.md"
+    record = (
+        "Table 1. Detector performance. Detector type: InGaAs/InAlAs-SPAD. "
+        "Working parameter (wavelength = 1310 nm); Performance = 61.2% DE at "
+        "200 K; Year = 2022; Ref. = [82]"
+    )
+    unrelated = (
+        "A perovskite detector reaches 88% efficiency for 18 keV X-ray detection."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "InGaAs/InAlAs-SPAD 在 1310 nm、200 K 下达到 61.2% 探测效率 [1]。",
+        [
+            {
+                "text": record,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "2.3 Superconducting",
+                    "citation_plan_slot": True,
+                    "citation_plan_evidence_authoritative": True,
+                },
+                "ui_meta": {
+                    "primary_evidence": {
+                        "heading_path": "2.3 Superconducting",
+                        "snippet": record,
+                        "highlight_snippet": record,
+                        "selection_reason": "citation_plan_slot",
+                    },
+                    "reader_open": {
+                        "evidenceAlternatives": [
+                            {
+                                "headingPath": "2.4 Perovskite",
+                                "snippet": unrelated,
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        anchor_ns="detector-table",
+        canonical_paths=[source_path],
+    )
+
+    assert "#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["citation_plan_slot"] is True
+    assert details[0]["evidence_quote"].startswith(
+        "Detector type: InGaAs/InAlAs-SPAD"
+    )
+    assert "61.2% DE at 200 K" in details[0]["evidence_quote"]
+    assert "perovskite" not in details[0]["evidence_quote"].lower()
+
+
 def test_system_a_canonical_path_matches_windows_and_posix_separators() -> None:
     canonical_path = "F:/library/scigs/scigs.en.md"
     raw_hit_path = r"F:\library\scigs\scigs.en.md"

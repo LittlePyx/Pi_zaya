@@ -418,7 +418,7 @@ def _hit_source_path(hit: dict) -> str:
     return str(meta.get("source_path") or "").strip()
 
 
-def _multi_source_answer_hit_is_low_value(hit: dict) -> bool:
+def _multi_source_answer_hit_is_low_value(hit: dict, *, prompt: str = "") -> bool:
     if not isinstance(hit, dict):
         return True
     if _looks_like_title_only_hit(hit) or _looks_like_heading_only_hit(hit):
@@ -434,6 +434,17 @@ def _multi_source_answer_hit_is_low_value(hit: dict) -> bool:
         flags=re.IGNORECASE,
     ):
         return True
+    if re.search(r"\bauthor biographies?\b|\bbiographical notes?\b", heading, flags=re.IGNORECASE):
+        asks_about_authors = bool(
+            re.search(
+                r"\bauthors?\b|\bbiograph|\beducation\b|\bdegree\b|\baffiliation\b|"
+                r"作者|传记|简历|教育经历|学历|学位|任职|职位|研究方向",
+                str(prompt or ""),
+                flags=re.IGNORECASE,
+            )
+        )
+        if not asks_about_authors:
+            return True
     text_prefix = normalize_match_text(str(hit.get("text") or "")[:900])
     if re.search(r"\backnowledgements?\b|\backnowledgments?\b", text_prefix, flags=re.IGNORECASE):
         return True
@@ -485,7 +496,7 @@ def _rescue_multi_source_answer_hits(
         ranked: list[tuple[float, int, dict]] = []
         seen: set[tuple[str, str]] = set()
         for idx, candidate in enumerate(candidates):
-            if not isinstance(candidate, dict) or _multi_source_answer_hit_is_low_value(candidate):
+            if not isinstance(candidate, dict) or _multi_source_answer_hit_is_low_value(candidate, prompt=prompt):
                 continue
             meta = candidate.get("meta", {}) or {}
             fingerprint = (

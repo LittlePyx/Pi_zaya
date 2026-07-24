@@ -19,6 +19,43 @@ def test_system_a_binds_cassi_dual_disperser_aliases() -> None:
     assert "cassi" in binding["overlap_terms"]
 
 
+def test_system_a_numeric_metric_binding_explains_relevance_without_repeating_table():
+    evidence = "Table 2 shows SSIM results: VST+bicubic = 0.50, U-net = 0.60, Ours = 0.76."
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim=(
+            "该方法的 SSIM 达到 0.76，优于 VST+bicubic 的 0.50 和 U-net 的 0.60。"
+        ),
+        hit={"text": evidence},
+        meta={},
+        heading="Results / Noise model evaluation",
+        evidence_quote=evidence,
+        source_name="High-resolution single-photon imaging with physics-informed deep learning",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "直接量化" in binding["reason"]
+    assert "0.76" not in binding["reason"]
+
+
+def test_system_a_detector_table_binding_explains_hardware_boundary():
+    evidence = (
+        "Detector type: InGaAs/InAlAs-SPAD. Working parameter: wavelength = "
+        "1310 nm; Performance = 61.2% DE at 200 K."
+    )
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="该 InGaAs/InAlAs-SPAD 在 1310 nm、200 K 下达到 61.2% 探测效率。",
+        hit={"text": evidence},
+        meta={},
+        heading="2.3 Superconducting",
+        evidence_quote=evidence,
+        source_name="Emerging single-photon detection technique",
+    )
+
+    assert binding["status"] == "grounded"
+    assert "硬件性能边界" in binding["reason"]
+
+
 def test_system_a_binds_chinese_sph_claim_to_english_mechanism() -> None:
     evidence = (
         "Instead of actively performing phase shifting, a beat frequency is introduced "

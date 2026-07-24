@@ -373,10 +373,27 @@ def _prepare_paper_guide_prompt_context(
 
     if paper_guide_mode and paper_guide_bound_source_ready:
         prompt_text = prompt or retrieval_prompt or used_query
+        # Ground evidence with the same cross-language aliases that found the
+        # document.  A Chinese question over an English paper otherwise makes
+        # the locator scorer fall back to the first sentence of a section,
+        # even when deterministic retrieval already found a much more precise
+        # passage later in that section.
+        support_grounding_prompt = "\n".join(
+            dict.fromkeys(
+                str(item or "").strip()
+                for item in [
+                    prompt_text,
+                    retrieval_prompt,
+                    used_query,
+                    *list(query_variants or []),
+                ]
+                if str(item or "").strip()
+            )
+        )
         support_slot_limit = max(4, min(6, len(paper_guide_evidence_cards or [])))
         paper_guide_support_slots = _build_paper_guide_support_slots(
             paper_guide_evidence_cards,
-            prompt=prompt_text,
+            prompt=support_grounding_prompt or prompt_text,
             prompt_family=prompt_family,
             db_dir=db_dir,
             target_scope=paper_guide_target_scope,

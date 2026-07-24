@@ -6,6 +6,7 @@ from kb.retrieval_engine import (
     _deterministic_query_variants,
     _search_hits_with_fallback,
     _source_prompt_match_score,
+    _translate_query_for_search,
 )
 from kb.retriever import BM25Retriever
 
@@ -28,6 +29,65 @@ def test_deterministic_query_variants_expand_thick_sample_tradeoff_terms() -> No
     assert "snr" in joined
     assert "optical sectioning" in joined
     assert "out-of-focus background" in joined
+
+
+def test_query_translation_does_not_treat_representative_as_table_intent() -> None:
+    translated = _translate_query_for_search(
+        SimpleNamespace(api_key=None),
+        "什么场景真的值得用单像素相机？这篇综述给了哪些代表性应用？",
+    )
+
+    assert translated
+    assert "single-pixel" in translated
+    assert "representative applications" in translated
+    assert "table" not in translated.split()
+
+
+def test_query_translation_keeps_explicit_table_intent() -> None:
+    translated = _translate_query_for_search(
+        SimpleNamespace(api_key=None),
+        "表格中哪种方法的 PSNR 最高？",
+    )
+
+    assert translated
+    assert "table" in translated.split()
+
+
+def test_deterministic_query_variants_split_multi_method_microscopy_question() -> None:
+    variants = _deterministic_query_variants(
+        "显微成像这些 structured detection、interferometric、light-field 方法分别在解决什么麻烦？"
+    )
+    joined = "\n".join(variants).lower()
+
+    assert "structured detection" in joined
+    assert "interferometric image scanning microscopy" in joined
+    assert "quantum correlation light-field microscope" in joined
+
+
+def test_deterministic_query_variants_pair_detector_review_with_pidl() -> None:
+    variants = _deterministic_query_variants(
+        "单光子成像里，探测器综述和 physics-informed deep learning 这篇应该怎么搭配读？"
+    )
+    joined = "\n".join(variants).lower()
+
+    assert "photodetector review" in joined
+    assert "physics-informed deep learning" in joined
+    assert "real spad noise" in joined
+
+
+def test_deterministic_query_variants_expand_single_pixel_application_review() -> None:
+    variants = _deterministic_query_variants(
+        "什么场景真的值得用单像素相机，而不是普通面阵相机？这篇综述给了哪些代表性应用？"
+    )
+
+    assert any(
+        "principles and prospects for single-pixel imaging applications" in variant.lower()
+        for variant in variants
+    )
+    joined = " ".join(variants).lower()
+    assert "wavelengths outside fpa technology" in joined
+    assert "high frame rates" in joined
+    assert "three dimensions" in joined
 
 
 def test_deterministic_query_variants_expand_piln_taxonomy_terms() -> None:

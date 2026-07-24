@@ -265,6 +265,57 @@ def test_build_paper_guide_support_slots_assigns_unique_markers_and_block_render
     assert "cite_example=[[CITE:s1:35]]" in block
 
 
+def test_build_support_slots_uses_cross_language_retrieval_terms_for_locator(tmp_path: Path):
+    source_pdf = tmp_path / "SpiProspects.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    md_dir = tmp_path / "SpiProspects"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "SpiProspects.en.md"
+    abstract = (
+        "Modern digital cameras employ silicon focal plane array (FPA) image sensors "
+        "featuring millions of pixels. As the approach suits a wide variety of detector "
+        "technologies, images can be collected at wavelengths outside the reach of FPA "
+        "technology or at high frame rates or in three dimensions. Promising applications "
+        "include the visualization of hazardous gas leaks and 3D situation awareness for "
+        "autonomous vehicles."
+    )
+    md_main.write_text(f"## Abstract\n\n{abstract}\n", encoding="utf-8")
+
+    slots = _build_paper_guide_support_slots(
+        [
+            {
+                "doc_idx": 1,
+                "sid": "s1",
+                "source_path": str(source_pdf),
+                "heading": "Abstract",
+                "snippet": abstract,
+                "candidate_refs": [],
+                "deepread_texts": [],
+            }
+        ],
+        prompt=(
+            "什么场景值得用单像素相机？\n"
+            "wavelengths outside FPA technology high frame rates three dimensions "
+            "hazardous gas leaks autonomous vehicles"
+        ),
+        prompt_family="overview",
+        db_dir=tmp_path,
+    )
+
+    assert len(slots) == 1
+    evidence = " ".join(
+        [
+            str(slots[0].get("snippet") or ""),
+            str(slots[0].get("locate_anchor") or ""),
+        ]
+    ).lower()
+    assert "wavelengths outside the reach of fpa technology" in evidence
+    assert "high frame rates" in evidence
+    assert "three dimensions" in evidence
+    assert "hazardous gas leaks" in evidence
+    assert "autonomous vehicles" in evidence
+
+
 def test_build_paper_guide_support_slots_expands_targeted_panel_atoms(tmp_path: Path):
     source_pdf = tmp_path / "DemoPaper.pdf"
     source_pdf.write_bytes(b"%PDF-1.4\n")

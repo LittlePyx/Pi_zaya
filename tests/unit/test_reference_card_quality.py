@@ -45,6 +45,50 @@ def test_ref_card_polish_contract_marks_pending_before_llm_copy():
     assert ui["why_polish_status"] == "pending"
 
 
+def test_ref_card_polish_contract_replaces_title_echo_with_specific_guide():
+    title = "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning"
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": f"{title}.pdf",
+            "citation_meta": {"title": title},
+            "summary_kind": "guide",
+            "summary_line": (
+                "单像素成像综述（Advances and Challenges of Single-Pixel Imaging "
+                "Based on Deep Learning）讨论了光子级成像的深度学习重建方法"
+            ),
+            "why_line": (
+                "摘要明确指出迭代重建同时受图像质量和计算耗时限制，"
+                "这是判断深度学习为何能改善单像素成像实用性的直接依据。"
+            ),
+            "summary_generation": "answer_citation_grounded",
+            "why_generation": "deterministic_grounded",
+        },
+        hit_meta={"title": title},
+    )
+
+    assert ui["summary_line"] == "该综述指出迭代重建同时受图像质量和计算耗时限制。"
+    assert title not in ui["summary_line"]
+    assert ui["card_view"]["summary"] == ui["summary_line"]
+
+
+def test_ref_card_polish_contract_replaces_metadata_led_summary():
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "DL SPI review.pdf",
+            "summary_kind": "guide",
+            "summary_line": "（LPR, 2025）的摘要指出，深度学习在单像素成像中具有重要作用。",
+            "why_line": (
+                "摘要明确指出迭代重建同时受图像质量和计算耗时限制，"
+                "这是判断深度学习为何能改善单像素成像实用性的直接依据。"
+            ),
+            "summary_generation": "answer_citation_grounded",
+            "why_generation": "deterministic_grounded",
+        }
+    )
+
+    assert ui["summary_line"] == "该综述指出迭代重建同时受图像质量和计算耗时限制。"
+
+
 def test_refs_pack_polish_contract_counts_mixed_cards():
     pack = attach_refs_pack_polish_contract(
         {

@@ -414,6 +414,38 @@ def _looks_redundant_narrative_metadata(text: str, data: Mapping[str, Any]) -> b
     return False
 
 
+def _summary_from_specific_why_line(why_line: str) -> str:
+    why = re.sub(r"\s+", " ", _text(why_line)).strip()
+    if len(why) < 18:
+        return ""
+    if re.search(r"[\u4e00-\u9fff]", why):
+        summary = re.sub(r"^摘要明确指出", "该综述指出", why)
+        summary = re.sub(r"^原文明确指出", "该文指出", summary)
+        summary = re.sub(r"^原文(?:在[^，。]{0,50})?给出的具体陈述是[：:]?\s*", "", summary)
+        summary = re.split(
+            r"[，；](?:这是|这为|因此|由此|可(?:以)?|直接)(?:判断|说明|支撑|对应|用于)?",
+            summary,
+            maxsplit=1,
+        )[0].strip(" “”。；，")
+        if summary and not summary.endswith(("。", "！", "？")):
+            summary += "。"
+    else:
+        summary = re.sub(
+            r"^(?:the\s+)?(?:abstract|source|paper|passage)\s+(?:explicitly\s+)?"
+            r"(?:states?|shows?|reports?|explains?)\s+(?:that\s+)?",
+            "",
+            why,
+            flags=re.I,
+        )
+        summary = re.split(r",\s+(?:which|thereby|so\s+that)\b|;\s+(?:this|therefore)\b", summary, maxsplit=1)[0]
+        summary = summary.strip(" \"'.;,")
+        if summary:
+            summary = summary[:1].upper() + summary[1:]
+            if not summary.endswith((".", "!", "?")):
+                summary += "."
+    return summary if len(summary) >= 12 else ""
+
+
 def _quality_issue(name: str, *, field: str = "", detail: Any = "", severity: str = "error") -> dict[str, Any]:
     out: dict[str, Any] = {"name": name, "severity": severity}
     if field:
@@ -1238,6 +1270,30 @@ def attach_ref_card_polish_contract(
         if cleaned:
             ui[key] = cleaned
     ui = _align_summary_surface_to_render_locale(ui)
+    identity_meta = {
+        **_as_dict(ui.get("citation_meta")),
+        **_as_dict(hit_meta),
+        **ui,
+    }
+    summary_line = _text(ui.get("summary_line"))
+    why_line = _text(ui.get("why_line"))
+    metadata_led_summary = bool(
+        re.match(
+            r"^\s*[（(][^）)]{1,80}(?:19|20)\d{2}[^）)]*[）)]",
+            summary_line,
+        )
+    )
+    if summary_line and why_line and (
+        _looks_redundant_narrative_metadata(summary_line, identity_meta)
+        or metadata_led_summary
+    ):
+        derived_summary = _summary_from_specific_why_line(why_line)
+        if derived_summary and not _looks_redundant_narrative_metadata(
+            derived_summary,
+            identity_meta,
+        ):
+            ui["summary_line"] = derived_summary
+            ui["summary_generation"] = "deterministic_grounded"
     ui.update(
         ref_card_polish_status(
             ui,

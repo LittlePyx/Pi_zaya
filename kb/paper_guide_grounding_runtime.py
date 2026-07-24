@@ -20,6 +20,7 @@ from kb.paper_guide_focus import (
 from kb.paper_guide_prompting import _paper_guide_prompt_family
 from kb.paper_guide_provenance import (
     _best_evidence_quote,
+    _best_evidence_quote_match,
     _block_support_metrics,
     _extract_figure_number,
     _is_explicit_non_source_segment,
@@ -1782,6 +1783,62 @@ def _paper_guide_refocus_support_excerpt(text: str, *, max_chars: int = 900) -> 
     return excerpt
 
 
+def _paper_guide_prompt_aligned_block_excerpt(
+    prompt: str,
+    block_text: str,
+    *,
+    max_chars: int = 900,
+) -> str:
+    """Select the prompt-aligned sentence plus one relevant neighbor."""
+
+    raw = re.sub(r"\s+", " ", str(block_text or "")).strip()
+    probe = str(prompt or "").strip()
+    if not raw or not probe:
+        return ""
+    best, best_score = _best_evidence_quote_match(
+        probe,
+        {"text": raw, "raw_text": raw},
+    )
+    if not best or float(best_score or 0.0) < 0.35:
+        return ""
+    sentences = [
+        str(sentence or "").strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", raw)
+        if str(sentence or "").strip()
+    ]
+    best_norm = normalize_match_text(best)
+    best_idx = next(
+        (
+            idx
+            for idx, sentence in enumerate(sentences)
+            if normalize_match_text(sentence) == best_norm
+            or best_norm in normalize_match_text(sentence)
+        ),
+        -1,
+    )
+    selected = [best]
+    if best_idx >= 0:
+        neighbors: list[tuple[float, int, str]] = []
+        for idx in (best_idx - 1, best_idx + 1):
+            if not (0 <= idx < len(sentences)):
+                continue
+            sentence = sentences[idx]
+            _quote, score = _best_evidence_quote_match(
+                probe,
+                {"text": sentence, "raw_text": sentence},
+            )
+            if float(score or 0.0) >= 0.35:
+                neighbors.append((float(score or 0.0), idx, sentence))
+        if neighbors:
+            _score, neighbor_idx, neighbor = max(
+                neighbors,
+                key=lambda item: (item[0], -abs(item[1] - best_idx)),
+            )
+            selected = [neighbor, best] if neighbor_idx < best_idx else [best, neighbor]
+    excerpt = " ".join(dict.fromkeys(selected)).strip()
+    return _trim_paper_guide_prompt_snippet(excerpt, max_chars=max_chars)
+
+
 def _build_paper_guide_support_slots(
     cards: list[dict],
     *,
@@ -1839,6 +1896,25 @@ def _build_paper_guide_support_slots(
                 snippet = _trim_paper_guide_prompt_snippet(cand, max_chars=420)
                 if snippet:
                     break
+        if snippet and family != "figure_walkthrough" and str(prompt or "").strip():
+            focused_quote = ""
+            focused_score = 0.0
+            for cand in [primary, *deepread_texts]:
+                candidate = str(cand or "").strip()
+                if not candidate:
+                    continue
+                quote, score = _best_evidence_quote_match(
+                    str(prompt or ""),
+                    {"text": candidate, "raw_text": candidate},
+                )
+                if quote and float(score or 0.0) > focused_score:
+                    focused_quote = quote
+                    focused_score = float(score or 0.0)
+            if focused_quote and focused_score >= 0.2:
+                snippet = _trim_paper_guide_prompt_snippet(
+                    focused_quote,
+                    max_chars=520,
+                )
         if not snippet or not source_path:
             continue
 
@@ -1940,6 +2016,15 @@ def _build_paper_guide_support_slots(
             variant_snippet = str(variant.get("snippet") or "").strip() or snippet
             locate_anchor = str(variant.get("locate_anchor") or "").strip()
             panel_letters = [str(ch or "").strip().lower() for ch in list(variant.get("panel_letters") or []) if str(ch or "").strip()]
+            if family != "figure_walkthrough":
+                aligned_excerpt = _paper_guide_prompt_aligned_block_excerpt(
+                    str(prompt or ""),
+                    str(variant.get("block_text") or ""),
+                )
+                if aligned_excerpt:
+                    variant_snippet = aligned_excerpt
+                    locate_anchor = aligned_excerpt
+                    variant["evidence_atom_text"] = aligned_excerpt
             if family == "method" and re.search(
                 r"\b(?:refocus|refocusing|out[ -]of[ -]focus)\b|重聚焦|重新对焦|离焦.{0,8}对焦",
                 str(prompt or ""),

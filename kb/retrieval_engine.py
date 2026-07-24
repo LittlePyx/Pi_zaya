@@ -1579,7 +1579,12 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
         ("\u76ee\u5f55", "table of contents"),
         ("\u5927\u7eb2", "outline"),
         ("\u56fe", "figure"),
-        ("\u8868", "table"),
+        # Do not match the single character ``表`` here: substring matching
+        # would turn words such as ``代表性`` into an unrelated ``table``
+        # query. Cover actual table intent with explicit phrases instead.
+        ("\u8868\u683c", "table"),
+        ("\u8868\u4e2d", "table"),
+        ("\u8868\u5185", "table"),
         ("\u516c\u5f0f", "equation"),
         ("\u5b9a\u4e49", "definition"),
         ("\u5c0f\u6ce2", "wavelet"),
@@ -1601,6 +1606,10 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
         ("最小", "minimum"),
         ("模型", "model"),
         ("并列", "tie"),
+        ("代表性应用", "representative applications"),
+        ("哪些应用", "applications"),
+        ("什么场景", "use cases"),
+        ("综述", "review"),
     ]
     ascii_terms = [
         token
@@ -1917,6 +1926,31 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
             "physics-informed deep learning computational single-photon imaging "
             "physical prior data generator neural network loss inference"
         )
+    if (
+        has_any("single-photon", "single photon", "\u5355\u5149\u5b50")
+        and has_any(
+            "physics-informed deep learning",
+            "physics informed deep learning",
+            "pidl",
+        )
+        and has_any(
+            "detector",
+            "photodetector",
+            "review",
+            "survey",
+            "\u63a2\u6d4b\u5668",
+            "\u7efc\u8ff0",
+            "\u600e\u4e48\u642d\u914d\u8bfb",
+        )
+    ):
+        add(
+            "Emerging single-photon detection technique high-performance "
+            "photodetector review SPAD"
+        )
+        add(
+            "High-resolution single-photon imaging physics-informed deep learning "
+            "real SPAD noise"
+        )
     if has_any("piln", "part-based image-loop", "image-loop network"):
         add(
             "part-based image-loop network single-pixel imaging ILNet physical model "
@@ -1964,6 +1998,26 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
         add(
             "SCIGS 3D Gaussian Splatting snapshot compressive image "
             "single compressed image dynamic 3D scenes"
+        )
+    microscopy_method_count = sum(
+        (
+            has_any("structured detection", "s2ism", "\u7ed3\u6784\u5316\u63a2\u6d4b"),
+            has_any("interferometric", "iism", "\u5e72\u6d89"),
+            has_any("light-field", "light field", "qclfm", "\u5149\u573a"),
+        )
+    )
+    if microscopy_method_count >= 2:
+        add(
+            "Structured detection for simultaneous super-resolution and optical "
+            "sectioning s2ISM laser scanning microscopy"
+        )
+        add(
+            "Interferometric image scanning microscopy label-free live cells "
+            "enhanced lateral resolution"
+        )
+        add(
+            "Quantum correlation light-field microscope position angular information "
+            "volumetric reconstruction extreme depth of field"
         )
     if has_any("3d single-pixel video", "3d single pixel video") and has_any(
         "detector",
@@ -2021,6 +2075,26 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
         add("Principles and prospects for single-pixel imaging review camera architecture applications")
         add("Hadamard single-pixel imaging versus Fourier single-pixel imaging sampling basis comparison")
         add("Advances and Challenges of Single-Pixel Imaging Based on Deep Learning review taxonomy")
+    if (
+        has_any("single-pixel", "single pixel", "\u5355\u50cf\u7d20")
+        and has_any(
+            "applications",
+            "use case",
+            "use cases",
+            "representative",
+            "review",
+            "survey",
+            "\u4ec0\u4e48\u573a\u666f",
+            "\u503c\u5f97\u7528",
+            "\u4ee3\u8868\u6027\u5e94\u7528",
+            "\u7efc\u8ff0",
+        )
+    ):
+        add(
+            "Principles and prospects for single-pixel imaging applications "
+            "wavelengths outside FPA technology high frame rates three dimensions "
+            "hazardous gas leaks autonomous vehicles camera architecture review"
+        )
     return variants[:4]
 
 

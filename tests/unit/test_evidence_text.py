@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 from kb.evidence_text import (
+    finish_evidence_text,
     looks_low_value_citation_context,
     pick_readable_evidence_text,
     strip_evidence_metadata_prefix,
 )
+
+
+def test_finish_evidence_text_does_not_treat_decimal_point_as_sentence_end() -> None:
+    evidence = (
+        "Detector type: InGaAs/InAlAs-SPAD. Performance = 61.2% DE at "
+        "200 K; Year = 2022; Ref. = [82]"
+    )
+
+    assert finish_evidence_text(evidence) == f"{evidence}..."
 
 
 def test_article_info_keywords_are_not_accepted_as_citation_evidence() -> None:

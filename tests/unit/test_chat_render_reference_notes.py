@@ -4346,6 +4346,52 @@ def test_reading_guide_repair_adds_missing_system_a_source_to_matching_paragraph
     assert "噪声模型 [1]" in repaired
 
 
+def test_reading_guide_repairs_cross_language_application_evidence() -> None:
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    source_path = "spi-prospects.en.md"
+    evidence = (
+        "Single-pixel imaging can operate at wavelengths outside the reach of FPA "
+        "technology, at high frame rates, and in three dimensions. Applications "
+        "include hazardous gas leaks and autonomous vehicles."
+    )
+    answer = (
+        "当普通面阵相机受波段限制、需要高帧率或三维测量时，单像素相机更值得考虑。\n\n"
+        "代表性应用包括危险气体泄漏监测和自动驾驶。"
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {"source_path": source_path, "heading_path": "Abstract"},
+        }
+    ]
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "Principles and prospects for single-pixel imaging",
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+            }
+        ],
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=[source_path],
+    )
+
+    assert "[1]" in repaired
+    assert repaired.count("[1]") == 1
+
+
 def test_reading_guide_budget_counts_only_bound_comparison_citations():
     source_path = "hsi-fsi.en.md"
     comparison_heading = (
@@ -5558,6 +5604,52 @@ def test_system_a_plan_slot_marks_existing_candidate_with_authoritative_number()
     augmented = _augment_hits_with_system_a_plan_slots(hits, plan, reserved_count=1)
 
     assert augmented[0]["meta"]["ref_answer_citation_num"] == 1
+
+
+def test_prompt_aligned_source_slot_rebinds_single_paper_canonical_hit():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "spi-prospects.en.md"
+    weak_evidence = (
+        "It is worth noting that binary sampling can reduce measurement noise."
+    )
+    exact_evidence = (
+        "Images can be collected at wavelengths outside the reach of FPA technology "
+        "or at high frame rates or in three dimensions. Promising applications "
+        "include hazardous gas leaks and autonomous vehicles."
+    )
+    hits = [
+        {
+            "text": weak_evidence,
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "Acquisition strategies",
+            },
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": exact_evidence,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            }
+        ]
+    }
+
+    augmented = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=1,
+        canonical_paths=[source_path],
+    )
+
+    assert augmented[0]["text"] == exact_evidence
+    assert augmented[0]["meta"]["citation_plan_slot"] is True
+    assert augmented[0]["meta"]["ref_answer_citation_num"] == 1
+    assert augmented[0]["ui_meta"]["primary_evidence"]["snippet"] == exact_evidence
 
 
 def test_system_a_canonical_number_matches_public_projected_source_path(monkeypatch):

@@ -2426,6 +2426,29 @@ def _citation_plan_system_a_budget(plan: dict | None) -> int:
 
 _READING_COVERAGE_BRIDGES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
     (
+        re.compile(
+            r"\b(?:wavelengths?\s+outside|high\s+frame\s+rates?|three[-\s]?dimensional|"
+            r"hazardous\s+gas\s+leaks?|autonomous\s+vehicles?|fluorescence|"
+            r"hyperspectral|remote\s+sensing|quantum\s+state\s+tomography)\b",
+            re.IGNORECASE,
+        ),
+        (
+            "波长",
+            "波段",
+            "高帧率",
+            "三维",
+            "3d",
+            "危险气体泄漏",
+            "自动驾驶",
+            "荧光",
+            "高光谱",
+            "超光谱",
+            "遥感",
+            "量子态层析",
+            "量子态断层",
+        ),
+    ),
+    (
         re.compile(r"\b(?:single[-\s]?photon|spad|photodetectors?|detectors?|detection)\b", re.IGNORECASE),
         ("单光子", "探测器", "硬件", "spad", "暗计数", "死时间", "后脉冲", "串扰"),
     ),
@@ -3240,9 +3263,31 @@ def _augment_hits_with_system_a_plan_slots(
                 or str(slot.get("anchor_id") or slot.get("anchorId") or "").strip()
             )
         )
+        prompt_aligned_source_slot = bool(
+            str(
+                slot.get("evidence_selection_reason")
+                or slot.get("evidenceSelectionReason")
+                or ""
+            ).strip().lower()
+            == "prompt_aligned_source_sentence"
+        )
+        structured_table_plan_slot = bool(
+            re.search(
+                r"(?is)\btable\s+\d+[a-z]?\b.*(?:detector\s+type\s*:|"
+                r"\bmetric\s*:|(?:^|[;:])\s*[A-Za-z][A-Za-z0-9 +()_-]{0,48}\s*=\s*-?\d)",
+                evidence_quote,
+            )
+        )
+        authoritative_plan_evidence = bool(
+            prompt_aligned_source_slot or structured_table_plan_slot
+        )
         candidate_bound = False
         candidate_nums = list(slot.get("candidate_hits") or [])
-        if len(plan_source_keys) >= 3 or trusted_prompt_contract_slot:
+        if (
+            len(plan_source_keys) >= 3
+            or trusted_prompt_contract_slot
+            or prompt_aligned_source_slot
+        ):
             # Canonical answer alignment may reorder the retrieval rows after
             # the plan records ``candidate_hits``.  Search the reserved
             # canonical range only for the private-path/public-URL split. Keep
@@ -3288,7 +3333,8 @@ def _augment_hits_with_system_a_plan_slots(
                     == _reading_slot_source_identity(source_path)
                 )
                 if canonical_fallback_match or public_private_fallback or (
-                    trusted_prompt_contract_slot and exact_fallback_source
+                    (trusted_prompt_contract_slot or prompt_aligned_source_slot)
+                    and exact_fallback_source
                 ):
                     candidate_nums.append(fallback_num)
         checked_candidate_nums: set[int] = set()
@@ -3349,6 +3395,7 @@ def _augment_hits_with_system_a_plan_slots(
             candidate_meta["ref_answer_citation_num"] = candidate_num
             should_rebind_candidate = bool(
                 trusted_prompt_contract_slot
+                or prompt_aligned_source_slot
                 or (
                     len(plan_source_keys) >= 3
                     and (
@@ -3374,6 +3421,7 @@ def _augment_hits_with_system_a_plan_slots(
                         "heading_path": heading_path,
                         "ref_best_heading_path": heading_path,
                         "citation_plan_slot": True,
+                        "citation_plan_evidence_authoritative": authoritative_plan_evidence,
                         "primary_block_id": str(
                             slot.get("block_id") or slot.get("blockId") or ""
                         ).strip(),
@@ -3460,6 +3508,7 @@ def _augment_hits_with_system_a_plan_slots(
                     "heading_path": heading_path,
                     "ref_best_heading_path": heading_path,
                     "citation_plan_slot": True,
+                    "citation_plan_evidence_authoritative": authoritative_plan_evidence,
                     "primary_block_id": str(slot.get("block_id") or slot.get("blockId") or "").strip(),
                     "primary_anchor_id": str(slot.get("anchor_id") or slot.get("anchorId") or "").strip(),
                     "anchor_kind": str(slot.get("anchor_kind") or slot.get("anchorKind") or "").strip(),

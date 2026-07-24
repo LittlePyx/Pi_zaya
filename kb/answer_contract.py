@@ -771,6 +771,7 @@ def _build_paper_guide_grounding_rules(
         "- Do not introduce hardware models, acquisition parameters, baseline numbers, or modality-specific claims that are not explicitly present in retrieved context.",
         "- For broad or generic questions, synthesize across retrieved sections, but mark any missing quantity as not stated instead of filling it with background knowledge.",
         "- Keep entity names exact: do not swap sample type, cell line, nanoparticle type, hardware model, or dataset identity with a plausible nearby alternative.",
+        "- Keep defining technical acronyms exact and include them at least once when they appear in the question or retrieved evidence (for example, SPAD); do not replace every occurrence with a looser generic phrase.",
         "- When the paper separately supports a claim with test objects and live-cell demonstrations, keep those evidence scopes separate instead of merging them into one stronger claim.",
         "- If a 'Paper-guide method focus' or 'Paper-guide figure focus' block is provided, resolve that focal sub-question from the focus block before using broader context.",
         "- If a 'Paper-guide support slots' block is provided, end each paper-grounded claim with that slot's exact support_example marker instead of guessing a paper reference number directly.",

@@ -84,7 +84,13 @@ def test_build_paper_guide_context_records_builds_primary_evidence_card_even_whe
 
 
 def test_prepare_paper_guide_prompt_context_builds_blocks_and_candidate_refs(monkeypatch):
-    monkeypatch.setattr(context_runtime, "_build_paper_guide_support_slots", lambda *args, **kwargs: [{"support_example": "[[SUPPORT:DOC-1]]"}])
+    captured = {}
+
+    def _support_slots(*_args, **kwargs):
+        captured["prompt"] = kwargs.get("prompt", "")
+        return [{"support_example": "[[SUPPORT:DOC-1]]"}]
+
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_support_slots", _support_slots)
     monkeypatch.setattr(context_runtime, "_build_paper_guide_evidence_cards_block", lambda *args, **kwargs: "EVIDENCE BLOCK")
     monkeypatch.setattr(context_runtime, "_build_paper_guide_support_slots_block", lambda *args, **kwargs: "SUPPORT BLOCK")
     monkeypatch.setattr(context_runtime, "_build_paper_guide_special_focus_block", lambda *args, **kwargs: "FOCUS BLOCK")
@@ -123,6 +129,7 @@ def test_prepare_paper_guide_prompt_context_builds_blocks_and_candidate_refs(mon
         prompt_family="method",
         paper_guide_bound_source_path=r"db\demo\paper.en.md",
         db_dir="db",
+        query_variants=["APR phase correlation image registration"],
     )
 
     assert out["paper_guide_evidence_cards_block"] == "EVIDENCE BLOCK"
@@ -133,6 +140,8 @@ def test_prepare_paper_guide_prompt_context_builds_blocks_and_candidate_refs(mon
     assert out["paper_guide_support_slots"] == [{"support_example": "[[SUPPORT:DOC-1]]"}]
     assert out["paper_guide_target_scope"]["prompt_family"] == "method"
     assert out["paper_guide_focus_source_path"] == r"db\demo\paper.en.md"
+    assert "How is APR grounded?" in captured["prompt"]
+    assert "APR phase correlation image registration" in captured["prompt"]
     seed = out["paper_guide_contracts_seed"]
     assert seed["version"] == 1
     assert seed["intent"]["family"] == "method"

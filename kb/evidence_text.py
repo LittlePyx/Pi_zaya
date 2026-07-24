@@ -11,8 +11,8 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[\u3002\uff01\uff1f\uff1b;!?\.])\s+")
 _LEAD_STRIP_RE = re.compile(r"^[\s,.;:\u3002\uff0c\uff1b\uff1a]+")
 _TRAIL_STRIP_RE = re.compile(r"[\s,.;:\u3002\uff0c\uff1b\uff1a]+$")
 _EVIDENCE_TRAIL_STRIP_RE = re.compile(r"[\s,;:\uff0c\uff1b\uff1a]+$")
-_TERMINAL_PUNCT_RE = re.compile(r"[\u3002\uff01\uff1f.!?]$")
-_LAST_TERMINAL_PUNCT_RE = re.compile(r"[\u3002\uff01\uff1f.!?]")
+_TERMINAL_PUNCT_RE = re.compile(r"(?:[\u3002\uff01\uff1f!?]|(?<!\d)\.(?!\d))$")
+_LAST_TERMINAL_PUNCT_RE = re.compile(r"[\u3002\uff01\uff1f!?]|(?<!\d)\.(?!\d)")
 _FRAGMENT_LEAD_OK_RE = re.compile(
     r"^(?:a|an|the|this|these|those|most|many|some|several|existing|previous|prior|traditional|we|our|in|on|for|by|with|when|where|while|because|since|however|therefore|thus|as|if|to)\b",
     re.IGNORECASE,
@@ -160,6 +160,15 @@ def _trim_incomplete_sentence_tail(value: str) -> str:
         if stem and stem != text[: -len(ellipsis)].rstrip():
             return stem + ellipsis
         return text
+    if (
+        re.search(
+            r"(?i)\b(?:detector\s+type|working\s+parameter|performance)\s*"
+            r"(?:\([^)]*\))?\s*[:=]",
+            text,
+        )
+        and re.search(r"\d+(?:\.\d+)?(?:%|\s*(?:K|nm|Hz)\b)", text)
+    ):
+        return text if _TERMINAL_PUNCT_RE.search(text) else text.rstrip(" ,;:") + "..."
     if _TERMINAL_PUNCT_RE.search(text):
         return text
 
@@ -169,7 +178,15 @@ def _trim_incomplete_sentence_tail(value: str) -> str:
         head = text[: last.end()].strip()
         tail = text[last.end() :].strip()
         tail_tokens = loose_tokens(tail)
-        if head and tail and len(tail_tokens) <= 18:
+        structured_numeric_tail = bool(
+            re.search(
+                r"(?i)\b(?:working\s+parameter|performance|detector\s+type|"
+                r"metric|year|ref)\s*(?:\([^)]*\))?\s*[:=]",
+                tail,
+            )
+            and re.search(r"\d", tail)
+        )
+        if head and tail and len(tail_tokens) <= 18 and not structured_numeric_tail:
             return head
 
     tokens = loose_tokens(text)

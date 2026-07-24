@@ -107,6 +107,126 @@ def test_three_source_lineage_budgets_each_system_a_source() -> None:
     } == {"cassi.en.md", "scinerf.en.md", "scigs.en.md"}
 
 
+def test_support_slots_rank_prompt_aligned_passage_before_title_noise() -> None:
+    source_path = "spi-prospects.en.md"
+    plan = build_citation_plan(
+        prompt="什么场景值得用单像素相机？",
+        prompt_family="overview",
+        support_slots=[
+            {
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "locate_anchor": (
+                    "Modern digital cameras employ silicon focal plane array image sensors "
+                    "featuring millions of pixels."
+                ),
+            },
+            {
+                "source_path": source_path,
+                "heading_path": "Title",
+                "locate_anchor": "Principles and prospects for single-pixel imaging",
+            },
+            {
+                "source_path": source_path,
+                "heading_path": "Authors",
+                "locate_anchor": "Gibson and Miles Padgett",
+            },
+            {
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "locate_anchor": (
+                    "Images can be collected at wavelengths outside the reach of FPA "
+                    "technology or at high frame rates or in three dimensions."
+                ),
+            },
+        ],
+        retrieval_queries=[
+            (
+                "single-pixel imaging applications wavelengths outside FPA technology "
+                "high frame rates three dimensions"
+            )
+        ],
+    )
+
+    system_a = [
+        slot
+        for slot in plan["slots"]
+        if slot["preferred_system"] == "system_a"
+    ]
+    assert "wavelengths outside the reach of FPA" in system_a[0]["evidence_quote"]
+    assert "high frame rates" in system_a[0]["evidence_quote"]
+
+
+def test_support_slot_source_alignment_replaces_stale_evidence_atom(
+    tmp_path,
+) -> None:
+    source_path = tmp_path / "spi-prospects.en.md"
+    source_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "",
+                "# Principles and prospects for single-pixel imaging",
+                "",
+                "## Abstract",
+                "",
+                (
+                    "Modern digital cameras employ silicon focal plane array (FPA) "
+                    "image sensors featuring millions of pixels."
+                ),
+                "",
+                (
+                    "Although the focus of this Review has been on single-pixel "
+                    "cameras for imaging, the sparsity principle applies to other "
+                    "multidimensional sensing problems and spectral applications."
+                ),
+                "",
+                (
+                    "As the approach suits a wide variety of detector technologies, "
+                    "images can be collected at wavelengths outside the reach of FPA "
+                    "technology or at high frame rates or in three dimensions. "
+                    "Promising applications include the visualization of hazardous gas "
+                    "leaks and 3D situation awareness for autonomous vehicles."
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    plan = build_citation_plan(
+        prompt="什么场景值得用单像素相机？",
+        prompt_family="overview",
+        support_slots=[
+            {
+                "source_path": str(source_path),
+                "heading_path": "Abstract",
+                "evidence_atom_text": (
+                    "Modern digital cameras employ silicon focal plane array (FPA) "
+                    "image sensors featuring millions of pixels."
+                ),
+                "evidence_quote": "A stale fallback quote.",
+            }
+        ],
+        retrieval_queries=[
+            (
+                "applications wavelengths outside FPA technology high frame rates "
+                "three dimensions hazardous gas leaks autonomous vehicles"
+            )
+        ],
+    )
+
+    system_a = [
+        slot
+        for slot in plan["slots"]
+        if slot["preferred_system"] == "system_a"
+    ]
+    assert system_a[0]["heading_path"].endswith("Abstract")
+    assert system_a[0]["page_start"] == 1
+    assert system_a[0]["page_end"] == 1
+    assert "wavelengths outside the reach of FPA technology" in system_a[0]["evidence_quote"]
+    assert "hazardous gas leaks" in system_a[0]["evidence_quote"]
+
+
 def test_evolutionary_method_wording_does_not_trigger_lineage_route() -> None:
     plan = build_citation_plan(
         prompt="Explain the evolutionary optimization method and implementation.",

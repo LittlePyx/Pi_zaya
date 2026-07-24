@@ -110,6 +110,13 @@ def _positive_ints(values: Any, *, limit: int = 6) -> list[int]:
     return out
 
 
+def _nonnegative_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return max(0, int(default))
+
+
 def _source_sentences(source_path: str) -> list[str]:
     path = Path(str(source_path or "")).expanduser()
     if not path.is_file():
@@ -123,6 +130,188 @@ def _source_sentences(source_path: str) -> list[str]:
         for sentence in re.split(r"(?<=[.!?])\s+", raw)
         if str(sentence or "").strip()
     ]
+
+
+def _source_sentence_records(source_path: str) -> list[tuple[str, str, int]]:
+    path = Path(str(source_path or "")).expanduser()
+    if not path.is_file():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return []
+    headings: list[tuple[int, str]] = []
+    records: list[tuple[str, str, int]] = []
+    paragraph: list[str] = []
+    current_page = 0
+
+    def flush() -> None:
+        if not paragraph:
+            return
+        raw = re.sub(r"\s+", " ", " ".join(paragraph)).strip()
+        paragraph.clear()
+        heading_path = " / ".join(text for _level, text in headings)
+        for sentence in re.split(r"(?<=[.!?])\s+", raw):
+            clean = re.sub(r"\s+", " ", sentence).strip()
+            if len(clean) >= 24:
+                records.append((heading_path, clean, current_page))
+
+    for line in lines:
+        page_match = re.match(r"^\s*<!--\s*kb_page:\s*(\d+)\s*-->\s*$", line)
+        if page_match:
+            flush()
+            current_page = int(page_match.group(1))
+            continue
+        heading_match = re.match(r"^\s*(#{1,6})\s+(.+?)\s*$", line)
+        if heading_match:
+            flush()
+            level = len(heading_match.group(1))
+            text = re.sub(r"\s+", " ", heading_match.group(2)).strip()
+            headings[:] = [
+                (old_level, old_text)
+                for old_level, old_text in headings
+                if old_level < level
+            ]
+            headings.append((level, text))
+            continue
+        stripped = line.strip()
+        if not stripped:
+            flush()
+            continue
+        if stripped.startswith(("<!--", "![", "|")):
+            continue
+        paragraph.append(stripped)
+    flush()
+    return records
+
+
+def _prompt_aligned_source_slot(
+    raw: Mapping[str, Any],
+    *,
+    ranking_texts: Sequence[str] | None,
+) -> dict[str, Any]:
+    out = dict(raw)
+    # File names, translated broad queries and review-oriented prompts repeat
+    # generic title words heavily.  They are useful for document ranking but
+    # would otherwise beat the actual claim-bearing sentence during in-document
+    # evidence alignment.
+    generic_source_tokens = {
+        "and",
+        "application",
+        "applications",
+        "approach",
+        "architecture",
+        "architectures",
+        "camera",
+        "cameras",
+        "challenges",
+        "for",
+        "foundations",
+        "imaging",
+        "method",
+        "methods",
+        "overview",
+        "pixel",
+        "principles",
+        "prospects",
+        "representative",
+        "review",
+        "single",
+        "survey",
+        "the",
+        "use",
+        "used",
+        "uses",
+        "using",
+    }
+    query_tokens = _ranking_tokens(
+        " ".join(str(item or "") for item in list(ranking_texts or []))
+    ) - generic_source_tokens
+    source_path = str(out.get("source_path") or "").strip()
+    if len(query_tokens) < 3 or not source_path:
+        return out
+    records = _source_sentence_records(source_path)
+    if not records:
+        return out
+
+    scored: list[tuple[int, int, str, str, set[str], int]] = []
+    for index, (heading_path, sentence, page_num) in enumerate(records):
+        heading_low = str(heading_path or "").lower()
+        if re.search(r"(?:^|\s/\s)(?:references?|bibliography|works cited)\s*$", heading_low):
+            continue
+        sentence_tokens = _ranking_tokens(sentence) - generic_source_tokens
+        overlap = query_tokens.intersection(sentence_tokens)
+        score = len(overlap)
+        if len(sentence) < 48:
+            score -= 1
+        if re.search(r"(?:\$\^\{|@|\bcorresponding author\b)", sentence, re.IGNORECASE):
+            score -= 2
+        scored.append((score, index, heading_path, sentence, overlap, page_num))
+    if not scored:
+        return out
+    scored.sort(key=lambda item: (item[0], len(item[4]), len(item[3])), reverse=True)
+    (
+        best_score,
+        best_index,
+        best_heading,
+        best_sentence,
+        best_overlap,
+        best_page,
+    ) = scored[0]
+    current_evidence = _first_text(
+        out,
+        "evidence_atom_text",
+        "evidence_quote",
+        "locate_anchor",
+        "snippet",
+        max_len=900,
+    )
+    current_score = len(query_tokens.intersection(_ranking_tokens(current_evidence)))
+    if best_score < 4 or best_score < current_score + 2:
+        return out
+
+    selected = [best_sentence]
+    neighbor_candidates = [
+        item
+        for item in scored
+        if abs(int(item[1]) - int(best_index)) == 1
+        and item[2] == best_heading
+        and item[0] >= 2
+        and bool(item[4] - best_overlap)
+    ]
+    if neighbor_candidates:
+        (
+            _score,
+            neighbor_index,
+            _heading,
+            neighbor_sentence,
+            _overlap,
+            _page,
+        ) = max(
+            neighbor_candidates,
+            key=lambda item: (item[0], len(item[4] - best_overlap)),
+        )
+        selected = (
+            [neighbor_sentence, best_sentence]
+            if neighbor_index < best_index
+            else [best_sentence, neighbor_sentence]
+        )
+    evidence = _compact_text(" ".join(selected), max_len=900)
+    # Support records produced by the paper-guide runtime commonly carry both
+    # ``evidence_atom_text`` and ``evidence_quote``.  Slot normalization prefers
+    # the former, so keep every evidence alias in sync after source alignment.
+    out["evidence_atom_text"] = evidence
+    out["evidence_quote"] = evidence
+    out["locate_anchor"] = evidence
+    out["snippet"] = evidence
+    if best_heading:
+        out["heading_path"] = best_heading
+        out["heading"] = best_heading
+    if best_page > 0:
+        out["page_start"] = best_page
+        out["page_end"] = best_page
+    out["selection_reason"] = "prompt_aligned_source_sentence"
+    return out
 
 
 def _first_source_sentence(sentences: Sequence[str], *needles: str) -> str:
@@ -347,6 +536,8 @@ def _system_a_slots(
             return
         seen.add(identity)
         candidate_hits = [int(hit_num)] if int(hit_num or 0) > 0 else []
+        page_start = _nonnegative_int(raw.get("page_start"))
+        page_end = _nonnegative_int(raw.get("page_end"), default=page_start)
         slots.append(
             {
                 "claim_type": _first_text(raw, "claim_type", max_len=80) or "paper_evidence",
@@ -358,12 +549,75 @@ def _system_a_slots(
                 "source_name": _source_name(source_path),
                 "heading_path": heading,
                 "evidence_quote": snippet,
+                "evidence_selection_reason": _first_text(
+                    raw,
+                    "evidence_selection_reason",
+                    "selection_reason",
+                    max_len=80,
+                ),
+                "block_id": _first_text(raw, "block_id", max_len=120),
+                "anchor_id": _first_text(raw, "anchor_id", max_len=120),
+                "anchor_kind": _first_text(raw, "anchor_kind", max_len=40),
+                "page_start": page_start,
+                "page_end": page_end,
+                "strict_locate": bool(raw.get("strict_locate")),
                 "candidate_refs": _positive_ints(raw.get("candidate_refs"), limit=4),
                 "instruction": "Use this for factual claims supported by the retrieved paper text itself.",
             }
         )
 
-    for raw in list(support_slots or []):
+    ranked_support_slots = [
+        _prompt_aligned_source_slot(
+            dict(raw),
+            ranking_texts=ranking_texts,
+        )
+        for raw in list(support_slots or [])
+        if isinstance(raw, Mapping)
+    ]
+    if len(ranked_support_slots) > 1 and ranking_texts:
+        indexed_support = [
+            (
+                idx,
+                {
+                    "text": _first_text(
+                        raw,
+                        "evidence_atom_text",
+                        "evidence_quote",
+                        "locate_anchor",
+                        "snippet",
+                        max_len=760,
+                    ),
+                    "meta": {
+                        "source_path": raw.get("source_path"),
+                        "source_name": raw.get("source_name"),
+                        "heading_path": raw.get("heading_path") or raw.get("heading"),
+                        "evidence_quote": _first_text(
+                            raw,
+                            "evidence_atom_text",
+                            "evidence_quote",
+                            "locate_anchor",
+                            "snippet",
+                            max_len=760,
+                        ),
+                    },
+                },
+            )
+            for idx, raw in enumerate(ranked_support_slots, start=1)
+        ]
+        ranked_indices = [
+            int(idx)
+            for idx, _hit in _rank_system_a_answer_hits(
+                indexed_support,
+                ranking_texts=ranking_texts,
+            )
+        ]
+        ranked_support_slots = [
+            ranked_support_slots[idx - 1]
+            for idx in ranked_indices
+            if 1 <= idx <= len(ranked_support_slots)
+        ]
+
+    for raw in ranked_support_slots:
         if isinstance(raw, Mapping):
             add_slot(dict(raw))
         if len(slots) >= max(1, int(max_items)):

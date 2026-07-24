@@ -336,6 +336,56 @@ def test_multi_source_answer_rescue_replaces_low_value_representative_from_same_
     assert all("dl-spi" not in str((item.get("meta") or {}).get("source_path") or "") for item in out)
 
 
+def test_multi_source_answer_rescue_replaces_unrequested_author_biography():
+    source = r"db\dl-spi-review.md"
+    out = _rescue_multi_source_answer_hits(
+        grouped_docs=[
+            {
+                "score": 40.0,
+                "text": "Kai Song received his degree and studies single-photon imaging.",
+                "meta": {"source_path": source, "heading_path": "Author Biographies"},
+            }
+        ],
+        raw_hits=[
+            {
+                "score": 22.0,
+                "text": (
+                    "Iterative reconstruction has limited image quality and lengthy computational times, "
+                    "while deep-learning single-pixel imaging improves reconstruction speed."
+                ),
+                "meta": {"source_path": source, "heading_path": "Abstract", "block_id": "abstract-1"},
+            }
+        ],
+        prompt="physics-informed deep learning 在单光子成像里到底帮了什么？",
+    )
+
+    assert len(out) == 1
+    assert out[0]["meta"]["block_id"] == "abstract-1"
+
+
+def test_multi_source_answer_rescue_keeps_requested_author_biography():
+    source = r"db\dl-spi-review.md"
+    biography = {
+        "score": 40.0,
+        "text": "Kai Song received his degree and studies single-photon imaging.",
+        "meta": {"source_path": source, "heading_path": "Author Biographies"},
+    }
+    out = _rescue_multi_source_answer_hits(
+        grouped_docs=[biography],
+        raw_hits=[
+            {
+                "score": 50.0,
+                "text": "This review discusses reconstruction algorithms.",
+                "meta": {"source_path": source, "heading_path": "Abstract"},
+            }
+        ],
+        prompt="请概括作者 Kai Song 的学历、当前职位和研究方向。",
+    )
+
+    assert len(out) == 1
+    assert out[0]["text"] == biography["text"]
+
+
 def test_multi_source_rescue_preserves_grouped_structured_table_evidence():
     source = r"db\Simple Baselines for Image Restoration.md"
     benchmark = (

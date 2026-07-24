@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib import parse, request
 
@@ -21,6 +22,9 @@ from api.reference_card_quality import (
     summarize_ref_card_hit_quality,
 )
 from kb.citation_audit import summarize_system_b_citation_audit
+from kb.retrieval_engine import _group_hits_by_doc_for_refs, _search_hits_with_fallback
+from kb.retriever import BM25Retriever
+from kb.store import load_all_chunks
 
 
 DEFAULT_FIXTURE = Path("web/src/testing/researchQaData.json")
@@ -303,6 +307,148 @@ def source_path_for_doc(
         root = fixture.db_root.rstrip("/\\")
         return f"{root}/{directory}/{file_stem}.en.md"
     return str(Path(db_root) / directory / f"{file_stem}.en.md")
+
+
+def _resolved_path_key(value: Path | str) -> str:
+    try:
+        return str(Path(value).resolve()).replace("\\", "/").casefold()
+    except Exception:
+        return str(value or "").replace("\\", "/").casefold()
+
+
+def evaluate_retrieval_coverage(
+    fixture: ResearchQaFixture,
+    *,
+    cases: list[dict[str, Any]] | None = None,
+    db_root: Path | str | None = None,
+    top_k: int = 6,
+    max_required_rank: int | None = None,
+) -> dict[str, Any]:
+    """Run a deterministic, no-LLM full-library recall check.
+
+    The live answer path may additionally use an LLM reranker, but this gate
+    intentionally verifies that required papers already survive lexical
+    retrieval and document grouping. That makes failures reproducible and
+    keeps routine coverage checks fast and free of external API variance.
+    """
+
+    root = Path(db_root or fixture.db_root or DEFAULT_DB_ROOT)
+    selected_cases = list(cases if cases is not None else fixture.cases)
+    rank_limit = max(1, int(max_required_rank or top_k))
+    chunks = load_all_chunks(root)
+    retriever = BM25Retriever(chunks)
+    settings = SimpleNamespace(api_key=None, query_expansion_enabled=False)
+    source_to_doc_id = {
+        _resolved_path_key(source_path_for_doc(fixture, doc_id, db_root=root)): doc_id
+        for doc_id in fixture.docs_by_id
+    }
+
+    rows: list[dict[str, Any]] = []
+    for case in selected_cases:
+        case_id = str(case.get("id") or "").strip() or "<missing-id>"
+        question = str(case.get("question") or "").strip()
+        expected = case.get("expected") if isinstance(case.get("expected"), dict) else {}
+        required_ids = [
+            str(item or "").strip()
+            for item in _as_list(expected.get("requiredRefDocIds"))
+            if str(item or "").strip()
+        ]
+        hits, _scores, used_query, used_translation, query_variants = _search_hits_with_fallback(
+            question,
+            retriever,
+            int(top_k),
+            settings,
+            allow_translate=True,
+            allow_expand=False,
+            whole_library=True,
+        )
+        grouped = _group_hits_by_doc_for_refs(
+            hits,
+            question,
+            int(top_k),
+            deep_read=False,
+            llm_rerank=False,
+            settings=settings,
+        )
+        ranked_sources = [
+            str(((doc.get("meta") or {}).get("source_path") or "")).strip()
+            for doc in grouped
+            if isinstance(doc, dict)
+        ]
+        ranked_doc_ids = [
+            source_to_doc_id.get(_resolved_path_key(source), "")
+            for source in ranked_sources
+        ]
+        ranks = {
+            doc_id: (
+                ranked_doc_ids.index(doc_id) + 1
+                if doc_id in ranked_doc_ids
+                else None
+            )
+            for doc_id in required_ids
+        }
+        missing_ids = [
+            doc_id
+            for doc_id, rank in ranks.items()
+            if rank is None or int(rank) > rank_limit
+        ]
+        rows.append(
+            {
+                "id": case_id,
+                "question": question,
+                "ok": not missing_ids,
+                "required_doc_ids": required_ids,
+                "required_ranks": ranks,
+                "missing_doc_ids": missing_ids,
+                "ranked_doc_ids": ranked_doc_ids,
+                "ranked_sources": ranked_sources,
+                "used_query": used_query,
+                "used_translation": bool(used_translation),
+                "query_variants": query_variants,
+            }
+        )
+
+    evaluated_rows = [row for row in rows if row.get("required_doc_ids")]
+    passed = sum(1 for row in evaluated_rows if bool(row.get("ok")))
+    return {
+        "ok": passed == len(evaluated_rows),
+        "total": len(evaluated_rows),
+        "passed": passed,
+        "failed": len(evaluated_rows) - passed,
+        "top_k": int(top_k),
+        "max_required_rank": rank_limit,
+        "db_root": str(root.resolve()),
+        "chunk_count": len(chunks),
+        "cases": rows,
+    }
+
+
+def _build_retrieval_coverage_report(summary: dict[str, Any]) -> str:
+    lines = [
+        "# Research QA retrieval coverage",
+        "",
+        f"- Result: {'PASS' if summary.get('ok') else 'FAIL'}",
+        f"- Cases: {summary.get('passed', 0)}/{summary.get('total', 0)} passed",
+        f"- Candidate depth: top {summary.get('top_k', 0)}",
+        f"- Required rank limit: {summary.get('max_required_rank', 0)}",
+        f"- Indexed chunks: {summary.get('chunk_count', 0)}",
+        "",
+        "| Case | Result | Required ranks | Missing |",
+        "|---|---:|---|---|",
+    ]
+    for row in list(summary.get("cases") or []):
+        if not row.get("required_doc_ids"):
+            continue
+        ranks = ", ".join(
+            f"{doc_id}: {rank if rank is not None else 'missing'}"
+            for doc_id, rank in dict(row.get("required_ranks") or {}).items()
+        )
+        missing = ", ".join(str(item) for item in list(row.get("missing_doc_ids") or []))
+        lines.append(
+            f"| {row.get('id')} | {'pass' if row.get('ok') else 'fail'} | "
+            f"{ranks or '-'} | {missing or '-'} |"
+        )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 _PAGE_MARKER_RE = re.compile(r"<!--\s*kb_page:\s*(\d+)\s*-->", flags=re.IGNORECASE)
@@ -2009,9 +2155,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Check source-grounded contracts against page-marked Markdown without calling the API.",
     )
     parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="Run deterministic full-library required-document coverage without calling an LLM.",
+    )
+    parser.add_argument(
         "--db-root",
         default=str(DEFAULT_DB_ROOT),
-        help="Markdown corpus root used by --validate-sources (default: db).",
+        help="Indexed corpus root used by --validate-sources and --retrieval-only (default: db).",
+    )
+    parser.add_argument(
+        "--max-required-rank",
+        type=int,
+        default=0,
+        help="Maximum accepted required-document rank for --retrieval-only (default: --top-k).",
     )
     parser.add_argument("--fail-on-quality", action="store_true", help="Exit 1 when any quality check fails.")
     args = parser.parse_args(argv)
@@ -2051,6 +2208,44 @@ def main(argv: list[str] | None = None) -> int:
             f"db_root={Path(args.db_root).resolve()}"
         )
         return 0
+
+    if args.retrieval_only:
+        retrieval_summary = evaluate_retrieval_coverage(
+            fixture,
+            cases=selected_cases,
+            db_root=args.db_root,
+            top_k=max(1, int(args.top_k)),
+            max_required_rank=(
+                int(args.max_required_rank)
+                if int(args.max_required_rank or 0) > 0
+                else int(args.top_k)
+            ),
+        )
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = Path(args.out_dir) / stamp
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(output_dir / "retrieval_coverage.json", retrieval_summary)
+        (output_dir / "retrieval_coverage.md").write_text(
+            _build_retrieval_coverage_report(retrieval_summary),
+            encoding="utf-8",
+        )
+        for row in list(retrieval_summary.get("cases") or []):
+            if not row.get("required_doc_ids"):
+                continue
+            ranks = ", ".join(
+                f"{doc_id}={rank if rank is not None else 'missing'}"
+                for doc_id, rank in dict(row.get("required_ranks") or {}).items()
+            )
+            print(f"[retrieval] {row.get('id')} -> {'pass' if row.get('ok') else 'fail'} ({ranks})")
+        print(
+            f"[OK] retrieval coverage: {retrieval_summary.get('passed')}/"
+            f"{retrieval_summary.get('total')} passed; report={output_dir}"
+        )
+        return (
+            0
+            if bool(retrieval_summary.get("ok")) or not bool(args.fail_on_quality)
+            else 1
+        )
 
     if args.replay:
         summary = evaluate_replay_rows(

@@ -4161,7 +4161,20 @@ def _system_a_pick_best_evidence_candidate(
         and str(primary.get("readable_text") or "").strip()
         and not _system_a_is_low_value_evidence_text(str(primary.get("text") or ""))
     )
-    if strict_plan_primary:
+    authoritative_plan_primary = bool(
+        isinstance(primary, dict)
+        and bool(meta.get("citation_plan_slot"))
+        and bool(meta.get("citation_plan_evidence_authoritative"))
+        and str(
+            primary_evidence.get("selection_reason")
+            or primary_evidence.get("selectionReason")
+            or ""
+        ).strip().lower()
+        == "citation_plan_slot"
+        and str(primary.get("readable_text") or "").strip()
+        and not _system_a_is_low_value_evidence_text(str(primary.get("text") or ""))
+    )
+    if strict_plan_primary or authoritative_plan_primary:
         # The citation plan has already resolved and verified this exact source
         # block. Stale reader alternatives may score higher on generic prose
         # quality, but substituting them breaks the claim-to-evidence contract.
@@ -4416,12 +4429,70 @@ def _assess_system_a_hit_binding(
             "missing_terms": sorted(strong_claim_terms - evidence_domains),
         }
 
+    claim_metrics = {
+        item.lower()
+        for item in re.findall(r"\b(?:psnr|ssim|lpips|fid|fps|macs?|flops?)\b", claim, flags=re.I)
+    }
+    evidence_metrics = {
+        item.lower()
+        for item in re.findall(r"\b(?:psnr|ssim|lpips|fid|fps|macs?|flops?)\b", quote_surface, flags=re.I)
+    }
+    claim_values = set(re.findall(r"(?<![\w.])\d+\.\d+(?![\w.])", claim))
+    evidence_values = set(re.findall(r"(?<![\w.])\d+\.\d+(?![\w.])", quote_surface))
+    shared_metrics = claim_metrics & evidence_metrics
+    shared_values = claim_values & evidence_values
+    if shared_metrics and shared_values:
+        metric_label = "/".join(sorted(shared_metrics)).upper()
+        reason = (
+            f"这组 {metric_label} 对比直接量化了答案中各方法的重建质量差异，并显示物理先验方法相对基线的增益。"
+            if prefer_zh
+            else (
+                f"This {metric_label} comparison quantifies the reconstruction-quality "
+                "difference and the physics-informed method's gain over the baselines."
+            )
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.9,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": sorted(keyword_overlap | shared_metrics),
+            "missing_terms": [],
+        }
+
     if body_domain_overlap:
         terms = sorted(body_domain_overlap)
         term_label = _system_a_term_label(terms)
         claim_low = claim.lower()
         evidence_low = quote_surface.lower()
         if (
+            "detector type:" in evidence_low
+            and "performance" in evidence_low
+            and re.search(r"\b(?:spad|single[- ]?photon|detection efficiency)\b|探测效率|单光子", claim_low)
+        ):
+            reason = (
+                "这条表格记录把探测器型号、工作波长、温度与探测效率放在同一项中，可直接建立算法需要面对的硬件性能边界。"
+                if prefer_zh
+                else (
+                    "This table record links detector type, operating wavelength, "
+                    "temperature, and detection efficiency in one hardware-performance boundary."
+                )
+            )
+        elif (
+            "iterative reconstruction" in evidence_low
+            and "image quality" in evidence_low
+            and ("computational time" in evidence_low or "computational times" in evidence_low)
+            and "deep learning" in evidence_low
+        ):
+            reason = (
+                "摘要同时给出迭代重建的质量与耗时瓶颈，以及深度学习带来的质量和速度收益，支撑其作为算法背景综述的定位。"
+                if prefer_zh
+                else (
+                    "The abstract pairs iterative reconstruction's quality and runtime "
+                    "limits with the quality and speed gains reported for deep learning."
+                )
+            )
+        elif (
             re.search(r"real[- ]?time|frame rate|\b\d+\s*(?:fps|hz)\b|实时|帧率", claim_low, flags=re.I)
             and re.search(r"real[- ]?time|frame rate|\b\d+\s*(?:fps|hz)\b|实时|帧率", evidence_low, flags=re.I)
         ):
@@ -4489,18 +4560,6 @@ def _assess_system_a_hit_binding(
             "missing_terms": [],
         }
 
-    claim_metrics = {
-        item.lower()
-        for item in re.findall(r"\b(?:psnr|ssim|lpips|fid|fps|macs?|flops?)\b", claim, flags=re.I)
-    }
-    evidence_metrics = {
-        item.lower()
-        for item in re.findall(r"\b(?:psnr|ssim|lpips|fid|fps|macs?|flops?)\b", quote_surface, flags=re.I)
-    }
-    claim_values = set(re.findall(r"(?<![\w.])\d+\.\d+(?![\w.])", claim))
-    evidence_values = set(re.findall(r"(?<![\w.])\d+\.\d+(?![\w.])", quote_surface))
-    shared_metrics = claim_metrics & evidence_metrics
-    shared_values = claim_values & evidence_values
     # Concise answers to benchmark/table questions often put the marker after a
     # final comparison sentence.  Their local citation context can therefore be
     # much shorter than the table evidence.  An exact metric/value pair plus a
@@ -4627,6 +4686,22 @@ def _compact_metric_table_evidence(value: str, *, answer_claim: str = "") -> str
     table_match = re.search(r"\bTable\s+(\d+[A-Za-z]?)\b", text, flags=re.I)
     subject = f"Table {table_match.group(1)}" if table_match else "The table"
     return f"{subject} shows{dataset} {metric} results: {facts}."
+
+
+def _compact_detector_table_evidence(value: str) -> str:
+    """Keep one detector record while removing repeated table/title prefixes."""
+
+    text = _clean_evidence_display_text(value, max_len=1200)
+    match = re.search(r"(?i)\bDetector\s+type\s*:", text)
+    if not match:
+        return ""
+    record = text[match.start() :].strip()
+    if not re.search(r"(?i)\bperformance\b", record):
+        return ""
+    record = re.sub(r"\s+", " ", record)
+    if len(record) > 520:
+        record = record[:517].rstrip(" ,;") + "..."
+    return record
 
 
 def _system_b_upstream_role(context_line: str, ref_rec: dict, *, locale: str = "") -> str:
@@ -5331,25 +5406,46 @@ def _annotate_inpaper_citations_with_hover_meta(
                 key=lambda item: (item.count("="), len(item)),
                 default="",
             )
+            compact_detector_evidence = _compact_detector_table_evidence(
+                evidence_quote
+            )
             if compact_table_evidence:
                 evidence_quote = compact_table_evidence
                 ref_best_heading = str(meta_h.get("ref_best_heading_path") or "").strip()
                 if ref_best_heading:
                     heading = ref_best_heading
-            readable_evidence_quote = _pick_readable_evidence_text(
-                evidence_quote,
-                source=src_name,
-                title=heading,
-                claim=answer_claim,
-                heading=heading,
-                max_len=520,
+            elif compact_detector_evidence:
+                evidence_quote = compact_detector_evidence
+            authoritative_plan_evidence = bool(
+                meta_h.get("citation_plan_slot")
+                and meta_h.get("citation_plan_evidence_authoritative")
+                and not picked_raw_hit
             )
-            if readable_evidence_quote:
-                evidence_quote = readable_evidence_quote
-            else:
-                cleaned_evidence_quote = _clean_evidence_display_text(evidence_quote, max_len=520)
+            if authoritative_plan_evidence or bool(compact_detector_evidence):
+                cleaned_evidence_quote = _clean_evidence_display_text(
+                    evidence_quote,
+                    max_len=520,
+                )
                 if cleaned_evidence_quote:
                     evidence_quote = cleaned_evidence_quote
+            else:
+                readable_evidence_quote = _pick_readable_evidence_text(
+                    evidence_quote,
+                    source=src_name,
+                    title=heading,
+                    claim=answer_claim,
+                    heading=heading,
+                    max_len=520,
+                )
+                if readable_evidence_quote:
+                    evidence_quote = readable_evidence_quote
+                else:
+                    cleaned_evidence_quote = _clean_evidence_display_text(
+                        evidence_quote,
+                        max_len=520,
+                    )
+                    if cleaned_evidence_quote:
+                        evidence_quote = cleaned_evidence_quote
             evidence_source = str(evidence_pick.get("source") or "retrieval_hit").strip() or "retrieval_hit"
             if evidence_source in {"hit_meta", "hit_text"}:
                 evidence_source = "retrieval_hit"

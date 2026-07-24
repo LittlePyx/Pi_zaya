@@ -13,6 +13,7 @@ from tools.research_qa.run_research_qa_eval import (
     _missing_term_groups,
     _refs_payload_is_converged_for_case,
     _refs_payload_is_full,
+    evaluate_retrieval_coverage,
     evaluate_replay_rows,
     load_fixture,
     load_replay,
@@ -21,6 +22,55 @@ from tools.research_qa.run_research_qa_eval import (
     validate_fixture_contracts,
     validate_fixture_sources,
 )
+
+
+def test_retrieval_coverage_reports_required_document_ranks(monkeypatch, tmp_path):
+    docs = [
+        {"id": "alpha", "dir": "alpha", "file": "alpha"},
+        {"id": "beta", "dir": "beta", "file": "beta"},
+    ]
+    fixture = ResearchQaFixture(
+        db_root=str(tmp_path),
+        docs=docs,
+        cases=[
+            {
+                "id": "compare-alpha-beta",
+                "question": "Compare the alpha mechanism with the beta mechanism.",
+                "expected": {"requiredRefDocIds": ["alpha", "beta"]},
+            }
+        ],
+        forbidden_phrases=[],
+    )
+    alpha_path = tmp_path / "alpha" / "alpha.en.md"
+    beta_path = tmp_path / "beta" / "beta.en.md"
+    alpha_path.parent.mkdir(parents=True)
+    beta_path.parent.mkdir(parents=True)
+    alpha_path.write_text("# Alpha\n\nAlpha mechanism evidence.", encoding="utf-8")
+    beta_path.write_text("# Beta\n\nBeta mechanism evidence.", encoding="utf-8")
+    monkeypatch.setattr(
+        eval_mod,
+        "load_all_chunks",
+        lambda _root: [{"id": "placeholder", "text": "placeholder", "meta": {}}],
+    )
+    monkeypatch.setattr(
+        eval_mod,
+        "_search_hits_with_fallback",
+        lambda *_args, **_kwargs: ([{"id": "hit"}], [1.0], _args[0], False, [_args[0]]),
+    )
+    monkeypatch.setattr(
+        eval_mod,
+        "_group_hits_by_doc_for_refs",
+        lambda *_args, **_kwargs: [
+            {"meta": {"source_path": str(alpha_path)}},
+            {"meta": {"source_path": str(beta_path)}},
+        ],
+    )
+
+    summary = evaluate_retrieval_coverage(fixture, db_root=tmp_path, top_k=2)
+
+    assert summary["ok"] is True, summary
+    assert summary["passed"] == 1
+    assert summary["cases"][0]["required_ranks"] == {"alpha": 1, "beta": 2}
 
 
 def test_research_qa_latency_budgets_track_answer_and_async_cards_separately():
