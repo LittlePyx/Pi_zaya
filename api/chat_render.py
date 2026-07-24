@@ -2122,15 +2122,31 @@ def _citation_plan_with_exact_lineage_evidence(plan: dict | None) -> dict:
                 r"\bNeRF\b",
             )
         elif "scigs" in source_surface:
+            # The broad "dynamic 3D scene" abstract supports SCIGS's goal but
+            # not the answer's 3DGS/mechanism claim. Prefer the source-local
+            # passage that names 3DGS, the transformation network and the
+            # single compressed input; otherwise the renderer correctly drops
+            # the citation as a claim/evidence mismatch.
             patterns = (
-                r"dynamic",
-                r"3D\s+scene",
+                r"\b3DGS\b",
+                r"transformation\s+network",
+                r"single\s+compressed\s+image",
             )
         primary = (
             _source_primary_evidence_matching(source_path, patterns)
             if source_path and patterns
             else {}
         )
+        if not primary and "scigs" in source_surface:
+            # Older conversions can omit the 3DGS acronym while preserving the
+            # method's explicit dynamic-scene statement.
+            primary = _source_primary_evidence_matching(
+                source_path,
+                (
+                    r"dynamic",
+                    r"3D\s+scene",
+                ),
+            )
         if not primary:
             repaired.append(slot)
             continue

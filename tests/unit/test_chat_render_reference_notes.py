@@ -8978,6 +8978,73 @@ def test_lineage_plan_replaces_each_system_a_slot_with_exact_source_evidence(tmp
     assert all(slot["evidence_quote"] == "Weak lineage evidence." for slot in original_slots)
 
 
+def test_lineage_plan_prefers_scigs_3dgs_mechanism_over_broad_dynamic_abstract(
+    tmp_path: Path,
+) -> None:
+    from api.chat_render import _citation_plan_with_exact_lineage_evidence
+    from ui.refs_renderer import _assess_system_a_hit_binding
+
+    cassi_path = tmp_path / "dual-disperser-cassi.en.md"
+    scinerf_path = tmp_path / "SCINeRF.en.md"
+    scigs_path = tmp_path / "SCIGS.en.md"
+    cassi_path.write_text(
+        "## Abstract\nTwo dispersive elements surround a binary-valued aperture.",
+        encoding="utf-8",
+    )
+    scinerf_path.write_text(
+        "## Abstract\nSCINeRF puts the physical imaging process into NeRF training.",
+        encoding="utf-8",
+    )
+    scigs_path.write_text(
+        "\n".join(
+            [
+                "## Abstract",
+                "SCIGS reconstructs a dynamic 3D scene from snapshot measurements.",
+                "## 3. Method",
+                (
+                    "SCIGS is a variant of 3DGS with a transformation network. "
+                    "The method reconstructs an explicit scene from a single compressed image."
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    slots = [
+        {
+            "preferred_system": "system_a",
+            "source_path": str(path),
+            "source_name": path.stem,
+            "heading_path": "Weak section",
+            "evidence_quote": "Weak lineage evidence.",
+        }
+        for path in (cassi_path, scinerf_path, scigs_path)
+    ]
+
+    repaired = _citation_plan_with_exact_lineage_evidence(
+        {
+            "intent": "origin_lookup",
+            "budget": {"system_a": 3, "system_b": 0},
+            "slots": slots,
+        }
+    )
+    scigs_slot = repaired["slots"][2]
+    evidence = scigs_slot["evidence_quote"]
+    binding = _assess_system_a_hit_binding(
+        answer_claim="SCIGS 将方法迁移到 3D 高斯泼溅（3DGS），用显式高斯替代 NeRF。",
+        hit={"text": evidence},
+        meta={},
+        heading=scigs_slot["heading_path"],
+        evidence_quote=evidence,
+        source_name="SCIGS",
+    )
+
+    assert "3DGS" in evidence
+    assert "transformation network" in evidence
+    assert "single compressed image" in evidence
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
 def test_lineage_canonical_paths_bind_all_three_reserved_system_a_hits(tmp_path: Path) -> None:
     from api.chat_render import _augment_hits_with_system_a_plan_slots
 

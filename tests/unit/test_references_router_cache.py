@@ -367,6 +367,70 @@ def test_answer_citation_overlay_uses_source_identity_for_scinerf_relevance(monk
     assert "逐项核对" not in why
 
 
+def test_answer_citation_overlay_explains_admm_is_prior_work(monkeypatch) -> None:
+    source_path = r"F:\db\SCINeRF\SCINeRF.en.md"
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {
+                    "id": 35,
+                    "role": "user",
+                    "content": "ADMM 是作者自己发明的吗？我应该把它当成这篇论文的新东西吗？",
+                },
+                {
+                    "id": 36,
+                    "role": "assistant",
+                    "content": "不是，ADMM 在这里属于已有方法。",
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "citation_route": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "CVPR-2024-SCINeRF.pdf",
+                                        "heading_path": "SCINeRF / 2. Related Work",
+                                        "answer_claim": "ADMM 是已有方法，不是本文原创。",
+                                        "evidence_quote": (
+                                            "Most existing methods employ ADMM for iterative optimization."
+                                        ),
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "zh")
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload={
+            35: {
+                "prompt": "ADMM 是作者自己发明的吗？我应该把它当成这篇论文的新东西吗？",
+                "hits": [
+                    {
+                        "meta": {"source_path": "kb-source/0/SCINeRF/SCINeRF.en.md"},
+                        "ui_meta": {
+                            "source_path": "kb-source/0/SCINeRF/SCINeRF.en.md",
+                            "display_name": "CVPR-2024-SCINeRF.pdf",
+                        },
+                    }
+                ],
+            }
+        },
+    )
+
+    ui = out[35]["hits"][0]["ui_meta"]
+    assert all(term in ui["why_line"] for term in ("ADMM", "已有方法", "不是本文新提出"))
+    assert "逐项核对" not in ui["why_line"]
+    assert ui["card_view"]["sections"][1]["text"] == ui["why_line"]
+    assert out[35]["render_status"] == "full"
+
+
 def test_answer_citation_overlay_uses_saved_locale_when_pack_has_no_locale(monkeypatch) -> None:
     source_path = r"F:\db\SCINeRF\SCINeRF.en.md"
 

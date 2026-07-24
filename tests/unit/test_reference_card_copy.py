@@ -59,6 +59,27 @@ def test_build_grounded_ref_why_line_personalizes_chinese_copy() -> None:
     assert "这条命中" not in out
 
 
+def test_grounded_ref_why_line_explains_admm_prior_work_origin() -> None:
+    zh = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="SCINeRF / 2. Related Work",
+        summary_line="Most existing methods employ ADMM for iterative optimization.",
+    )
+    en = build_grounded_ref_why_line(
+        prefer_zh=False,
+        focus_terms=[],
+        heading_path="SCINeRF / 2. Related Work",
+        summary_line="Most existing methods employ ADMM for iterative optimization.",
+    )
+
+    assert all(term in zh for term in ("ADMM", "已有方法", "不是本文新提出"))
+    assert "existing methods" in en
+    assert "new contributions" in en
+    assert not looks_generic_ref_why_line(zh)
+    assert not looks_generic_ref_why_line(en)
+
+
 def test_finalize_ref_card_copy_replaces_template_why_line() -> None:
     summary, why, changed = finalize_ref_card_copy(
         summary_line="Most existing methods employ ADMM for iterative optimization.",
@@ -72,7 +93,8 @@ def test_finalize_ref_card_copy_replaces_template_why_line() -> None:
     assert summary.startswith("Most existing methods")
     assert changed is True
     assert "This hit is directly relevant" not in why
-    assert why == ""
+    assert "existing methods" in why
+    assert "new contributions" in why
 
 
 def test_grounded_ref_why_line_uses_summary_when_terms_are_missing() -> None:

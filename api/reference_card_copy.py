@@ -163,6 +163,15 @@ def build_grounded_ref_why_line(
         )
     )
     if prefer_zh:
+        if (
+            re.search(r"\bADMM\b", summary_full, flags=re.I)
+            and re.search(
+                r"\b(?:existing|prior|previous|earlier)\s+(?:methods?|work|approaches?)\b",
+                summary_full,
+                flags=re.I,
+            )
+        ):
+            return "原文把 ADMM 明确归入已有方法，而不是本文新提出的贡献，可据此核对其方法来源与原创性。"
         if ("frame rate" in summary_low or "reconstruction rate" in summary_low) and "30 hz" in summary_low and "333" in summary_low:
             return "原文给出了明确的实时指标：以 333 个照明图案达到 30 Hz 重建帧率，可直接支撑实时成像结论。"
         if ("frame rate" in summary_low or "reconstruction rate" in summary_low) and "30 hz" in summary_low:
@@ -303,6 +312,18 @@ def build_grounded_ref_why_line(
             return "原文把深度学习与重建质量或速度的改善直接联系起来，可据此概括它给单像素成像带来的实际收益。"
         return ""
 
+    if (
+        re.search(r"\bADMM\b", summary_full, flags=re.I)
+        and re.search(
+            r"\b(?:existing|prior|previous|earlier)\s+(?:methods?|work|approaches?)\b",
+            summary_full,
+            flags=re.I,
+        )
+    ):
+        return (
+            "The passage explicitly places ADMM among existing methods rather than the "
+            "paper's new contributions, which resolves the method-origin question."
+        )
     if (
         ("scinerf" in summary_low or "nerf" in summary_low)
         and "physical imaging process" in summary_low

@@ -413,8 +413,20 @@ def _answer_citation_card_copy(
             why = f"“{headings}”包含同一基准上的量化结果，可用于核对最优数值和并列情况。"
         elif re.search(r"区别|差异|比较|对比|vs\.?|versus", prompt_text, flags=re.I):
             why = f"“{headings}”给出该方法的定义或结果，是与另一方法逐项对照时的原文依据。"
-        elif re.search(r"原创|谁提出|来源|沿革|已有", prompt_text):
-            why = f"“{headings}”保留了方法归属或上游工作的原文线索，可用于核对来源判断。"
+        elif re.search(r"原创|发明|谁提出|来源|沿革|已有|新东西", prompt_text):
+            evidence_text = " ".join(
+                str(detail.get("evidence_quote") or detail.get("summary_line") or "")
+                for detail in details
+                if isinstance(detail, dict)
+            )
+            if re.search(
+                r"\b(?:existing|prior|previous|earlier)\s+(?:methods?|work|approaches?)\b",
+                evidence_text,
+                flags=re.I,
+            ):
+                why = f"“{headings}”明确把该方法归入已有工作，而非本文新贡献，可据此核对其来源与原创性。"
+            else:
+                why = f"“{headings}”保留了方法归属或上游工作的原文线索，可用于核对来源判断。"
         else:
             why = f"“{headings}”提供回答该问题所需的原文定位，卡片中的结论可在这里逐项核对。"
     else:
@@ -426,6 +438,8 @@ def _answer_citation_card_copy(
             why = f"'{headings}' contains results on the same benchmark, allowing the best value and any tie to be checked."
         elif re.search(r"compare|difference|vs\.?|versus", prompt_text, flags=re.I):
             why = f"'{headings}' provides the method definition or result needed for a point-by-point comparison."
+        elif re.search(r"origin|invent|original|novel|prior work|existing method", prompt_text, flags=re.I):
+            why = f"'{headings}' identifies whether the method is prior work or a contribution introduced by this paper."
         else:
             why = f"'{headings}' provides the source location needed to check the card's conclusion."
     return summary, why
