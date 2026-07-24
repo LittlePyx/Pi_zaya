@@ -518,7 +518,7 @@ def test_system_a_reuses_one_card_for_duplicate_evidence_hits() -> None:
     )
 
     anchors = re.findall(r"\[(?:1|2)\]\(#([^) \"\n]+)", rendered)
-    assert len(anchors) == 1
+    assert len(anchors) == 2
     assert len(set(anchors)) == 1
     assert len(details) == 1
     assert details[0]["linked_nums"] == [1, 2]
@@ -554,11 +554,13 @@ def test_system_a_reuses_repeated_same_number_for_same_evidence() -> None:
     )
 
     anchors = re.findall(r"\[1\]\(#([^) \"\n]+)", rendered)
-    assert len(anchors) == 1
+    assert len(anchors) == 2
     assert len(set(anchors)) == 1
     assert len(details) == 1
     assert "occurrence_specific_claim" not in details[0]["card_quality_flags"]
     assert "Foveated single-pixel imaging uses dynamic supersampling" in details[0]["answer_claim"]
+    assert len(details[0]["answer_claims"]) == 2
+    assert any("cited again" in claim for claim in details[0]["answer_claims"])
     assert "##" not in details[0]["card_evidence"]
 
 

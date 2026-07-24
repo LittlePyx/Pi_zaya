@@ -117,6 +117,7 @@ def test_build_generation_prompt_bundle_adds_citation_lock_for_non_citeless_fami
         paper_guide_evidence_cards_block="EVIDENCE BLOCK",
         paper_guide_citation_grounding_block="GROUNDING BLOCK",
         paper_guide_reference_opportunities_block="Paper-guide upstream reference opportunities:\n- label=ADMM | cite_example=[[CITE:s12345678:4]]",
+        citation_plan_block="Citation plan (follow before adding citations):\n- intent=method",
         image_attachment_count=2,
     )
 
@@ -129,6 +130,10 @@ def test_build_generation_prompt_bundle_adds_citation_lock_for_non_citeless_fami
     assert "Upstream-reference protocol:" in out["system"]
     assert "Answer the user's substantive question first" in out["system"]
     assert "Never begin the final answer with locator-only shells" in out["system"]
+    assert "limit on distinct evidence cards" in out["system"]
+    assert "a citation in an earlier paragraph does not support a later uncited restatement" in out["system"]
+    assert "Do not collect the citations in an evidence preamble" in out["system"]
+    assert "Remove unsupported specifics before finalizing" in out["system"]
     assert "Anchor-grounded answer rule:" in out["system"]
     assert "FOCUS BLOCK" in out["user"]
     assert "SUPPORT BLOCK" in out["user"]

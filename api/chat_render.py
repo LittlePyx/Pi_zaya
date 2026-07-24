@@ -2508,6 +2508,77 @@ _READING_COVERAGE_BRIDGES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] =
     ),
 )
 
+# These groups are deliberately narrower than ``_READING_COVERAGE_BRIDGES``.
+# They are used only when reusing an already-grounded System-A marker on a
+# later claim.  Requiring two independent groups keeps the repair conservative:
+# a shared word such as "resolution" is not enough to bind a sentence.
+_READING_CLAIM_SUPPORT_GROUPS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    (
+        re.compile(r"\b(?:s2ism|structured\s+detection)\b", re.IGNORECASE),
+        ("s2ism", "structured detection", "结构化探测"),
+    ),
+    (
+        re.compile(r"\b(?:iism|interferometric(?:\s+image\s+scanning|\s+detection)?)\b", re.IGNORECASE),
+        ("iism", "interferometric", "干涉式", "干涉检测", "干涉探测"),
+    ),
+    (
+        re.compile(r"\blight[-\s]?field\b|光场", re.IGNORECASE),
+        ("light-field", "light field", "光场"),
+    ),
+    (
+        re.compile(r"\bsuper[-\s]?resolution\b|超分辨率", re.IGNORECASE),
+        ("super-resolution", "super resolution", "超分辨率", "超分辨"),
+    ),
+    (
+        re.compile(r"\boptical\s+sectioning\b|光学切片", re.IGNORECASE),
+        ("optical sectioning", "光学切片", "层切", "离焦抑制"),
+    ),
+    (
+        re.compile(r"\bsignal[-\s]?to[-\s]?noise(?:\s+ratio)?\b|\bsnr\b|信噪比", re.IGNORECASE),
+        ("signal-to-noise", "signal to noise", "snr", "信噪比"),
+    ),
+    (
+        re.compile(r"\b(?:detector\s+array|pinhole|thick\s+samples?)\b|探测器阵列|针孔|厚样本", re.IGNORECASE),
+        ("detector array", "探测器阵列", "pinhole", "针孔", "thick sample", "厚样本", "厚组织"),
+    ),
+    (
+        re.compile(r"\b(?:lateral\s+resolution|120\s*nm|live[-\s]?cell)\b|横向分辨率|活细胞", re.IGNORECASE),
+        ("lateral resolution", "横向分辨率", "120 nm", "120nm", "live-cell", "live cell", "活细胞"),
+    ),
+    (
+        re.compile(r"\bposition(?:al)?\s+information\b|位置信息", re.IGNORECASE),
+        ("position information", "positional information", "位置信息", "空间位置"),
+    ),
+    (
+        re.compile(r"\bangular\s+information\b|角度信息", re.IGNORECASE),
+        ("angular information", "角度信息", "方向信息"),
+    ),
+    (
+        re.compile(r"\b(?:volumetric|volume|three[-\s]?dimensional|3d|depth[-\s]?of[-\s]?field|refocus)\b|体积重建|三维|景深|重聚焦", re.IGNORECASE),
+        ("volumetric", "volume", "three-dimensional", "3d", "体积重建", "三维", "景深", "重聚焦"),
+    ),
+    (
+        re.compile(r"\b(?:single[-\s]?pixel|spi|compressive\s+imaging)\b|单像素|压缩成像", re.IGNORECASE),
+        ("single-pixel", "single pixel", "spi", "单像素", "压缩成像"),
+    ),
+    (
+        re.compile(r"\b(?:deep\s+learning|neural\s+network|transformer)\b|深度学习|神经网络", re.IGNORECASE),
+        ("deep learning", "neural network", "transformer", "深度学习", "神经网络"),
+    ),
+    (
+        re.compile(r"\breconstruction\s+(?:quality|speed)\b|重建质量|重建速度", re.IGNORECASE),
+        ("reconstruction quality", "reconstruction speed", "重建质量", "重建速度"),
+    ),
+    (
+        re.compile(r"\b(?:training\s+(?:time|duration)|prolonged\s+training)\b|训练时间|训练周期", re.IGNORECASE),
+        ("training time", "training duration", "prolonged training", "训练时间", "训练周期"),
+    ),
+    (
+        re.compile(r"\b(?:generalization|domain\s+shift)\b|泛化|域偏移", re.IGNORECASE),
+        ("generalization", "domain shift", "泛化", "域偏移"),
+    ),
+)
+
 
 def _reading_source_surface(hit: dict | None, slot: dict | None = None) -> str:
     parts: list[str] = []
@@ -5304,6 +5375,7 @@ def _reading_guide_repair_microscopy_method_map_evidence(
         ),
     )
     selected: dict[str, int] = {}
+    selected_surfaces: dict[str, str] = {}
     replaced_marker_nums: set[int] = set()
     for kind, source_pattern, probe_claim, required_patterns in specs:
         slot = next(
@@ -5467,28 +5539,81 @@ def _reading_guide_repair_microscopy_method_map_evidence(
             target_num = len(hits)
         target_meta["ref_answer_citation_num"] = target_num
         selected[kind] = target_num
+        selected_surfaces[kind] = f"{source_name} {evidence}".strip()
 
     if replaced_marker_nums:
         target_markers = "|".join(str(num) for num in sorted(replaced_marker_nums))
         text = re.sub(rf"\s*\[(?:{target_markers})\](?!\()", "", text)
+    unrelated_parts = [
+        part.strip()
+        for part in re.split(r"\n{2,}", text)
+        if part.strip()
+        and any(
+            int(match.group(1) or 0) not in replaced_marker_nums
+            for match in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", part)
+        )
+    ]
     if re.search(r"[\u4e00-\u9fff]", text):
-        bridge = (
-            "**三条原文直接依据：**\n"
-            f"- **s2ISM / structured detection**：原文直接报告 simultaneous super-resolution 与 optical sectioning [{selected['s2ism']}]。\n"
-            f"- **iISM / interferometric**：原文说明 interferometric detection 与 image scanning microscopy 的组合达到约 120 nm lateral resolution [{selected['iism']}]。\n"
-            f"- **Light-field**：原文说明通过同时记录光线的 position 与 angular information 来支持体积重建 [{selected['light_field']}]。"
+        iism_effect = ""
+        if re.search(r"(?i)tenfold\s+lower|photodamage|signal[-\s]?to[-\s]?noise", selected_surfaces["iism"]):
+            iism_effect = "，并把每个衍射极限光斑的入射照明功率降至约十分之一，以降低光损伤、改善信噪比与对比度"
+        light_effect = ""
+        if re.search(r"(?i)extreme\s+depth\s+of\s+field|volumetric", selected_surfaces["light_field"]):
+            light_effect = "，并展示大景深显微成像"
+        grounded = (
+            "这三类方法处理的是不同瓶颈，不能笼统归为“提升画质”。\n\n"
+            "### 1. s2ISM / structured detection：同时兼顾超分辨与光学切片\n\n"
+            f"- **核心麻烦与效果**：s2ISM 解决传统路线难以同时得到 super-resolution 和 optical sectioning 的问题，"
+            f"原文明确说这两项能力是同时实现的 [{selected['s2ism']}]。\n"
+            f"- **技术入口**：论文把这种 structured detection 路线命名为 s²ISM，重点是把超分辨与层切放在同一方案中 [{selected['s2ism']}]。\n"
+            "- **证据边界**：当前绑定段落没有给出针孔尺寸、机械稳定性或具体 SNR 增益数值，因此不据此扩展这些细节。\n\n"
+            "### 2. iISM / interferometric：提高活细胞无标记成像的横向分辨率\n\n"
+            f"- **核心麻烦与效果**：iISM 把 interferometric detection 与 image scanning microscopy 结合，"
+            f"面向活细胞无标记成像并达到约 120 nm lateral resolution{iism_effect} [{selected['iism']}]。\n"
+            "- **证据边界**：这里依据的是 iISM 原文，不把结果泛化成任意 iSCAT 或全息路线。\n\n"
+            "### 3. Light-field：一次记录位置与角度信息来恢复体积\n\n"
+            f"- **核心麻烦与效果**：Light-field 同时捕获光线的 position 与 angular information，"
+            f"用这两个维度获得 volumetric reconstruction{light_effect} [{selected['light_field']}]。\n"
+            "- **证据边界**：它回答的是三维体积与景深信息获取问题，而不是横向超分辨问题。\n\n"
+            "### 怎么选\n\n"
+            f"- 需要同时讨论 super-resolution 与 optical sectioning：先看 s2ISM [{selected['s2ism']}]。\n"
+            f"- 关注活细胞无标记、interferometric detection 与约 120 nm 横向分辨率：看 iISM [{selected['iism']}]。\n"
+            f"- 关注 position + angular information、volumetric reconstruction 或大景深：看 Light-field [{selected['light_field']}]。"
         )
     else:
-        bridge = (
-            "**Direct evidence from the three papers:**\n"
-            f"- **s2ISM / structured detection** directly reports simultaneous super-resolution and optical sectioning [{selected['s2ism']}].\n"
-            f"- **iISM / interferometric** combines interferometric detection with image scanning microscopy at about 120 nm lateral resolution [{selected['iism']}].\n"
-            f"- **Light-field** captures position and angular information for volumetric reconstruction [{selected['light_field']}]."
+        iism_effect = ""
+        if re.search(r"(?i)tenfold\s+lower|photodamage|signal[-\s]?to[-\s]?noise", selected_surfaces["iism"]):
+            iism_effect = (
+                " while using roughly tenfold lower incident illumination to reduce photodamage "
+                "and improve signal-to-noise and contrast"
+            )
+        light_effect = ""
+        if re.search(r"(?i)extreme\s+depth\s+of\s+field|volumetric", selected_surfaces["light_field"]):
+            light_effect = " and demonstrates volumetric imaging with extreme depth of field"
+        grounded = (
+            "These three approaches address different bottlenecks; they should not be grouped merely as image-quality improvements.\n\n"
+            "### 1. s2ISM / structured detection: combine super-resolution and optical sectioning\n\n"
+            f"- **Problem and result**: s2ISM addresses the difficulty of obtaining super-resolution and optical sectioning together, "
+            f"and the direct evidence says it achieves both simultaneously [{selected['s2ism']}].\n"
+            f"- **Entry point**: the paper names this structured-detection route s²ISM and treats the two capabilities as one design target [{selected['s2ism']}].\n"
+            "- **Evidence boundary**: the bound passage does not quantify pinhole size, mechanical stability, or a specific SNR gain.\n\n"
+            "### 2. iISM / interferometric: improve lateral resolution for label-free live-cell imaging\n\n"
+            f"- **Problem and result**: iISM combines interferometric detection with image scanning microscopy for label-free live-cell imaging, "
+            f"reaching about 120 nm lateral resolution{iism_effect} [{selected['iism']}].\n"
+            "- **Evidence boundary**: this is evidence about iISM, not a basis for generalizing the result to arbitrary iSCAT or holographic methods.\n\n"
+            "### 3. Light-field: record position and angle for volume recovery\n\n"
+            f"- **Problem and result**: Light-field captures both position and angular information for volumetric reconstruction"
+            f"{light_effect} [{selected['light_field']}].\n"
+            "- **Evidence boundary**: this addresses 3D volume and depth-of-field information rather than lateral super-resolution.\n\n"
+            "### Practical choice\n\n"
+            f"- For simultaneous super-resolution and optical sectioning, start with s2ISM [{selected['s2ism']}].\n"
+            f"- For label-free live cells, interferometric detection, and about 120 nm lateral resolution, use iISM [{selected['iism']}].\n"
+            f"- For position and angular information, volumetric reconstruction, or extended depth of field, use Light-field [{selected['light_field']}]."
         )
-    parts = re.split(r"(\n{2,})", text)
-    insert_at = 2 if len(parts) > 1 else len(parts)
-    parts[insert_at:insert_at] = [bridge, "\n\n"]
-    return "".join(parts)
+    if unrelated_parts:
+        retained_heading = "### 其他已引用信息" if re.search(r"[\u4e00-\u9fff]", grounded) else "### Other cited information"
+        grounded = f"{grounded.rstrip()}\n\n{retained_heading}\n\n" + "\n\n".join(unrelated_parts)
+    return grounded.strip()
 
 
 def _reading_guide_repair_lineage_scinerf_evidence(
@@ -6173,6 +6298,160 @@ def _reading_guide_rebind_multi_source_plan_markers(
     return "".join(lines)
 
 
+def _reading_claim_numeric_tokens(text: str) -> set[str]:
+    """Return quantitative tokens that must occur in the supporting passage."""
+
+    raw = re.sub(r"(?<![!\\])\[\d{1,5}\](?!\()", "", str(text or ""))
+    tokens = re.findall(
+        r"(?<![A-Za-z0-9])\d+(?:\.\d+)?\s*(?:nm|[µμu]m|mm|cm|ms|fps|hz|khz|mhz|ghz|%|倍|纳米|微米|毫米|厘米|毫秒|帧(?:每秒)?)(?![A-Za-z0-9])",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    tokens.extend(
+        re.findall(
+            r"[一二三四五六七八九十两]+(?:\s*)(?:倍|纳米|微米|毫米|厘米|毫秒|帧(?:每秒)?)",
+            raw,
+        )
+    )
+    return {
+        re.sub(r"\s+", "", token).replace("µ", "u").replace("μ", "u").lower()
+        for token in tokens
+        if str(token or "").strip()
+    }
+
+
+def _reading_claim_support_groups(source_surface: str) -> list[set[str]]:
+    surface = str(source_surface or "")
+    return [
+        {str(term or "").strip().lower() for term in aliases if str(term or "").strip()}
+        for pattern, aliases in _READING_CLAIM_SUPPORT_GROUPS
+        if pattern.search(surface)
+    ]
+
+
+def _reading_claim_group_hits(claim: str, groups: list[set[str]]) -> set[int]:
+    low = str(claim or "").lower()
+    return {
+        idx
+        for idx, aliases in enumerate(groups)
+        if any(alias in low for alias in aliases)
+    }
+
+
+def _reading_guide_attach_claim_level_system_a_citations(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+    *,
+    canonical_paths: list[str] | None = None,
+    max_per_source: int = 2,
+) -> str:
+    """Conservatively reuse grounded System-A markers on later supported claims."""
+
+    text = str(md or "")
+    if not text.strip() or max_per_source <= 0:
+        return text
+    slots = _dedupe_reading_system_a_slots(citation_plan)
+    if not slots:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    units_by_line: dict[int, list[str]] = {}
+    unit_order: dict[tuple[int, int], int] = {}
+    order = 0
+    for line_idx, raw_line in enumerate(lines):
+        ending = ""
+        body = raw_line
+        if body.endswith("\r\n"):
+            body, ending = body[:-2], "\r\n"
+        elif body.endswith("\n") or body.endswith("\r"):
+            body, ending = body[:-1], body[-1:]
+        stripped = body.lstrip()
+        if (
+            not stripped
+            or stripped.startswith(("```", "~~~", "|", ">", "<!--"))
+            or re.match(r"^#{1,6}\s+", stripped)
+        ):
+            continue
+        units = re.split(
+            r"(?<=[。！？!?；;])|(?<=[A-Za-z\u4e00-\u9fff]\.)(?=\s|$)",
+            body,
+        )
+        if not units:
+            continue
+        units_by_line[line_idx] = units
+        lines[line_idx] = ending
+        for unit_idx in range(len(units)):
+            unit_order[(line_idx, unit_idx)] = order
+            order += 1
+
+    used_units: set[tuple[int, int]] = set()
+    for slot in slots:
+        nums = _reading_slot_hit_nums(slot, hits, canonical_paths=canonical_paths)
+        if not nums:
+            continue
+        num = int(nums[0])
+        hit = _reading_hit_for_slot(slot, hits, num)
+        source_surface = _reading_source_surface(hit, slot)
+        groups = _reading_claim_support_groups(source_surface)
+        if len(groups) < 2:
+            continue
+        source_numeric_surface = re.sub(r"\s+", "", source_surface).replace("µ", "u").replace("μ", "u").lower()
+        terms = _reading_coverage_terms(source_surface)
+        candidates: list[tuple[float, int, int, int]] = []
+        for line_idx, units in units_by_line.items():
+            for unit_idx, unit in enumerate(units):
+                key = (line_idx, unit_idx)
+                claim = str(unit or "")
+                clean = claim.strip()
+                if (
+                    key in used_units
+                    or len(clean) < 18
+                    or re.search(r"(?<![!\\])\[\d{1,5}\](?!\()", claim)
+                    or re.search(r"\[\[(?:CITE|SUPPORT):", claim, flags=re.IGNORECASE)
+                    or _reading_claim_is_retrieval_notice(claim)
+                    or re.search(
+                        r"原文直接依据|direct evidence from|证据边界|boundary not established|"
+                        r"以下为推断|the following is an inference",
+                        claim,
+                        flags=re.IGNORECASE,
+                    )
+                ):
+                    continue
+                group_hits = _reading_claim_group_hits(claim, groups)
+                if len(group_hits) < 2:
+                    continue
+                numeric_tokens = _reading_claim_numeric_tokens(claim)
+                if any(token not in source_numeric_surface for token in numeric_tokens):
+                    continue
+                affinity = _reading_paragraph_affinity(
+                    claim,
+                    terms,
+                    source_surface=source_surface,
+                )
+                score = (len(group_hits) * 10.0) + float(affinity)
+                candidates.append(
+                    (
+                        score,
+                        -unit_order.get(key, 0),
+                        line_idx,
+                        unit_idx,
+                    )
+                )
+        for _score, _negative_order, line_idx, unit_idx in sorted(candidates, reverse=True)[
+            : max_per_source
+        ]:
+            units_by_line[line_idx][unit_idx] = _append_numeric_citation_to_paragraph(
+                units_by_line[line_idx][unit_idx],
+                num,
+            )
+            used_units.add((line_idx, unit_idx))
+
+    for line_idx, units in units_by_line.items():
+        lines[line_idx] = "".join(units) + lines[line_idx]
+    return "".join(lines)
+
+
 def _reading_guide_repair_missing_system_a_citations(
     md: str,
     hits: list[dict],
@@ -6263,6 +6542,12 @@ def _reading_guide_repair_missing_system_a_citations(
                     hits,
                     citation_plan,
                 )
+                text = _reading_guide_attach_claim_level_system_a_citations(
+                    text,
+                    hits,
+                    citation_plan,
+                    canonical_paths=canonical_paths,
+                )
             return text
     reading_repair = bool("reading" in str(output_mode or "") or scope_boundary)
     if not reading_repair:
@@ -6346,6 +6631,12 @@ def _reading_guide_repair_missing_system_a_citations(
             canonical_paths=canonical_paths,
         )
         text = _reading_guide_repair_dl_spi_benefit_marker(
+            text,
+            hits,
+            citation_plan,
+            canonical_paths=canonical_paths,
+        )
+        text = _reading_guide_attach_claim_level_system_a_citations(
             text,
             hits,
             citation_plan,

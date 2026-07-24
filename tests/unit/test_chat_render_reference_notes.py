@@ -7619,9 +7619,17 @@ def test_microscopy_method_map_repair_preserves_unrelated_numeric_citations(
         {"slots": slots},
     )
 
-    assert "structured detection [1]" not in repaired
-    assert "interferometric detection [2]" not in repaired
-    assert "angular information [3]" not in repaired
+    assert "s2ISM uses structured detection [1]." not in repaired
+    assert "iISM uses interferometric detection [2]." not in repaired
+    assert "Light-field microscopy records angular information [3]." not in repaired
+    assert (
+        "s2ISM addresses the difficulty of obtaining super-resolution and optical "
+        "sectioning together" in repaired
+    )
+    assert "achieves both simultaneously [1]" in repaired
+    assert "about 120 nm lateral resolution [2]" in repaired
+    assert "captures both position and angular information for volumetric reconstruction" in repaired
+    assert "extreme depth of field [3]" in repaired
     assert "independently supported property [4]" in repaired
     assert all(f"[{num}]" in repaired for num in (1, 2, 3))
     assert len(hits) == 4
@@ -7630,6 +7638,75 @@ def test_microscopy_method_map_repair_preserves_unrelated_numeric_citations(
         "iism",
         "light_field",
     ]
+
+
+def test_claim_level_citation_reuse_binds_supported_body_and_skips_unsupported_details():
+    from api import chat_render
+
+    sources = [
+        (
+            "s2ism.en.md",
+            "Structured detection for high-SNR s2ISM in thick samples",
+            "s2ISM structured detection simultaneously provides super-resolution and optical "
+            "sectioning while improving signal-to-noise ratio in thick samples.",
+        ),
+        (
+            "iism.en.md",
+            "Interferometric image scanning microscopy",
+            "iISM combines interferometric detection with image scanning microscopy and achieves "
+            "120 nm lateral resolution in live cells.",
+        ),
+        (
+            "light-field.en.md",
+            "Light-field microscopy",
+            "Light-field microscopy records position and angular information for volumetric "
+            "three-dimensional reconstruction.",
+        ),
+    ]
+    hits = [
+        {
+            "text": evidence,
+            "meta": {"source_path": source_path, "source_name": source_name},
+        }
+        for source_path, source_name, evidence in sources
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": source_name,
+                "evidence_quote": evidence,
+                "candidate_hits": [index],
+            }
+            for index, (source_path, source_name, evidence) in enumerate(sources, start=1)
+        ]
+    }
+    answer = (
+        "**三条原文直接依据：**\n"
+        "- s2ISM 同时实现 super-resolution 与 optical sectioning [1]。\n"
+        "- iISM 结合 interferometric detection 并达到 120 nm lateral resolution [2]。\n"
+        "- Light-field 同时记录 position 与 angular information [3]。\n\n"
+        "s2ISM 的 structured detection 同时改善超分辨率和光学切片能力。\n"
+        "s2ISM 的 structured detection 还显著提高机械稳定性。\n"
+        "iISM 的 interferometric detection 达到 120 nm lateral resolution。\n"
+        "iISM 的 interferometric detection 将 lateral resolution 提高两倍。\n"
+        "Light-field microscopy 记录 position 和 angular information 以支持 3D reconstruction。\n"
+        "光场方法结合位置信息与角度信息支持三维重建。"
+    )
+
+    repaired = chat_render._reading_guide_attach_claim_level_system_a_citations(
+        answer,
+        hits,
+        plan,
+    )
+
+    assert "s2ISM 的 structured detection 同时改善超分辨率和光学切片能力 [1]。" in repaired
+    assert "iISM 的 interferometric detection 达到 120 nm lateral resolution [2]。" in repaired
+    assert "Light-field microscopy 记录 position 和 angular information 以支持 3D reconstruction [3]。" in repaired
+    assert "光场方法结合位置信息与角度信息支持三维重建 [3]。" in repaired
+    assert "显著提高机械稳定性 [1]" not in repaired
+    assert "lateral resolution 提高两倍 [2]" not in repaired
 
 
 def test_perovskite_scope_bridge_does_not_rewrite_answer_without_boundary_claim():

@@ -4277,6 +4277,14 @@ def _system_a_maybe_replace_claim(existing: dict, answer_claim: str) -> None:
     claim = re.sub(r"\s+", " ", normalize_inline_markdown(str(answer_claim or ""))).strip()
     if not claim:
         return
+    claims = [
+        str(item or "").strip()
+        for item in list(existing.get("answer_claims") or [])
+        if str(item or "").strip()
+    ]
+    if claim not in claims:
+        claims.append(claim)
+    existing["answer_claims"] = claims[:8]
     current = str(existing.get("answer_claim") or "").strip()
     if not current or _system_a_claim_quality(claim) > _system_a_claim_quality(current) + 0.45:
         existing["answer_claim"] = claim[:420]
@@ -4914,7 +4922,10 @@ def _annotate_inpaper_citations_with_hover_meta(
             anchor = str(detail.get("anchor") or "").strip()
             if bool(detail.get("is_inpaper")):
                 if key in used_system_b_keys:
-                    return False
+                    return True
+                if anchor and anchor in visible_detail_anchors:
+                    used_system_b_keys.add(key)
+                    return True
                 if used_system_b_count >= system_b_budget:
                     return False
                 used_system_b_keys.add(key)
@@ -4923,9 +4934,12 @@ def _annotate_inpaper_citations_with_hover_meta(
                     visible_detail_anchors.add(anchor)
                 return True
             if key in used_system_a_keys:
-                return False
+                return True
             if key in visible_system_a_evidence_keys:
-                return False
+                used_system_a_keys.add(key)
+                if anchor:
+                    visible_detail_anchors.add(anchor)
+                return True
             if used_system_a_count >= system_a_budget:
                 return False
             used_system_a_keys.add(key)
@@ -5410,6 +5424,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                     "summary_line": basket_quote[:360],
                     "summary_source": "research_basket",
                     "answer_claim": answer_claim[:420],
+                    "answer_claims": [answer_claim[:420]] if answer_claim else [],
                     "evidence_quote": basket_quote[:520],
                     "evidence_source": "research_basket",
                     "location_label": "Research basket",
@@ -5522,6 +5537,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                 "summary_line": evidence_quote[:360] or snippet[:360],
                 "summary_source": evidence_source,
                 "answer_claim": answer_claim[:420],
+                "answer_claims": [answer_claim[:420]] if answer_claim else [],
                 "evidence_quote": evidence_quote[:520],
                 "evidence_source": evidence_source,
                 "location_label": " · ".join([part for part in location_bits if str(part or "").strip()])[:260],

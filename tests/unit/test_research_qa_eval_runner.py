@@ -41,6 +41,48 @@ def test_research_qa_latency_budgets_track_answer_and_async_cards_separately():
     assert checks[-1]["name"] == "latency_cards_complete_ms"
 
 
+def test_inline_citation_contract_requires_repeated_claim_level_grounding():
+    contracts = [
+        {
+            "id": "s2ism-inline",
+            "termGroups": [
+                ["s2ISM", "structured detection"],
+                ["super-resolution", "optical sectioning"],
+            ],
+            "minCitedUnits": 2,
+        }
+    ]
+    answer = (
+        "s2ISM structured detection provides super-resolution [1](#kb-cite-1).\n"
+        "The detailed body says s2ISM improves optical sectioning without a marker."
+    )
+
+    failures = eval_mod._inline_citation_contract_failures(answer, contracts)
+
+    assert failures[0]["id"] == "s2ism-inline"
+    assert failures[0]["matching_unit_count"] == 2
+    assert failures[0]["cited_unit_count"] == 1
+
+
+def test_inline_citation_contract_accepts_reused_marker_in_detailed_body():
+    contracts = [
+        {
+            "id": "s2ism-inline",
+            "termGroups": [
+                ["s2ISM", "structured detection"],
+                ["super-resolution", "optical sectioning"],
+            ],
+            "minCitedUnits": 2,
+        }
+    ]
+    answer = (
+        "s2ISM structured detection provides super-resolution [1](#kb-cite-1).\n"
+        "The detailed body says s2ISM improves optical sectioning [1](#kb-cite-1)."
+    )
+
+    assert eval_mod._inline_citation_contract_failures(answer, contracts) == []
+
+
 def test_refs_payload_full_state_rejects_fast_or_pending_cards():
     assert _refs_payload_is_full({"9": {"payload_mode": "full", "render_status": "full"}}, user_msg_id=9)
     assert not _refs_payload_is_full({"9": {"payload_mode": "fast", "render_status": "fast"}}, user_msg_id=9)

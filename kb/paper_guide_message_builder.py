@@ -229,8 +229,12 @@ def _build_generation_prompt_bundle(
             "\nCitation-plan protocol:\n"
             "- Follow the Citation plan block before choosing citation markers.\n"
             "- Treat SystemA citations as evidence links to retrieved paper text, and SystemB citations as links to a paper's bibliography entries.\n"
-            "- Respect the per-paragraph citation budget unless the user explicitly asks for a dense reference list.\n"
+            "- Treat the citation budget as a limit on distinct evidence cards, not on how often a valid marker may be reused.\n"
+            "- Every substantive paper-specific section, bullet, or table row must carry its supporting marker inline; a citation in an earlier paragraph does not support a later uncited restatement.\n"
+            "- Do not collect the citations in an evidence preamble while leaving the detailed answer body uncited.\n"
+            "- Respect the distinct-card and per-paragraph budgets unless the user explicitly asks for a dense reference list.\n"
             "- If the plan provides a cite_example or support_example, copy that marker exactly instead of inventing a new number.\n"
+            "- Remove unsupported specifics before finalizing, especially numbers, performance claims, mechanisms, comparisons, and limitations; if an inference is useful, label it explicitly as an inference.\n"
         )
 
     cite_reminder = ""

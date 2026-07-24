@@ -929,6 +929,7 @@ def _claim_evidence_contract_failures(
             else:
                 claim_payload = {
                     "answer_claim": detail.get("answer_claim"),
+                    "answer_claims": detail.get("answer_claims"),
                     "support_relation": detail.get("support_relation"),
                     "user_question_relation": detail.get("user_question_relation"),
                 }
@@ -953,6 +954,76 @@ def _claim_evidence_contract_failures(
                     "answer_scope": answer_scope,
                     "evidence_terms": evidence_terms,
                     "source_page": source_page,
+                }
+            )
+    return failures
+
+
+def _answer_claim_units(answer: str) -> list[str]:
+    units: list[str] = []
+    for line in str(answer or "").splitlines():
+        stripped = line.strip()
+        if (
+            not stripped
+            or stripped.startswith(("```", "~~~", "|", "<!--"))
+            or re.match(r"^#{1,6}\s+", stripped)
+        ):
+            continue
+        units.extend(
+            unit.strip()
+            for unit in re.split(
+                r"(?<=[。！？!?；;])|(?<=[A-Za-z\u4e00-\u9fff]\.)(?=\s|$)",
+                stripped,
+            )
+            if unit.strip()
+        )
+    return units
+
+
+def _unit_has_citation(unit: str) -> bool:
+    return bool(
+        re.search(
+            r"(?<![!\\])\[\d{1,5}\](?:\([^)\n]+\))?|\[\[(?:CITE|SUPPORT):[^\]]+\]\]",
+            str(unit or ""),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _inline_citation_contract_failures(
+    answer: str,
+    contracts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    units = _answer_claim_units(answer)
+    failures: list[dict[str, Any]] = []
+    for index, contract in enumerate(contracts, start=1):
+        contract_id = str(contract.get("id") or f"inline-citation-{index}").strip()
+        term_groups = [
+            _contract_terms(group)
+            for group in _as_list(contract.get("termGroups"))
+            if _contract_terms(group)
+        ]
+        required_terms = _contract_terms(contract.get("requiredTerms"))
+        min_cited_units = max(1, _expected_int(contract, "minCitedUnits", 1))
+        matching_units = [
+            unit
+            for unit in units
+            if (
+                (not required_terms or all(_contains_term(unit, term) for term in required_terms))
+                and not _missing_term_groups(unit, term_groups)
+            )
+        ]
+        cited_units = [unit for unit in matching_units if _unit_has_citation(unit)]
+        if len(cited_units) < min_cited_units:
+            failures.append(
+                {
+                    "id": contract_id,
+                    "min_cited_units": min_cited_units,
+                    "matching_unit_count": len(matching_units),
+                    "cited_unit_count": len(cited_units),
+                    "term_groups": term_groups,
+                    "required_terms": required_terms,
+                    "matching_units": matching_units[:4],
                 }
             )
     return failures
@@ -1416,6 +1487,20 @@ def validate_case(
             answer=answer,
         )
         add_check("claims_have_matching_evidence", not claim_contract_failures, claim_contract_failures)
+
+    inline_citation_contracts = [
+        item for item in _as_list(expected.get("inlineCitationContracts")) if isinstance(item, dict)
+    ]
+    if inline_citation_contracts:
+        inline_citation_failures = _inline_citation_contract_failures(
+            answer,
+            inline_citation_contracts,
+        )
+        add_check(
+            "answer_claims_have_inline_citations",
+            not inline_citation_failures,
+            inline_citation_failures,
+        )
 
     locate_contracts = [
         item for item in _as_list(expected.get("requiredLocateContracts")) if isinstance(item, dict)

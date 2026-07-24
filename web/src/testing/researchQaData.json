@@ -665,6 +665,32 @@
             "evidenceTerms": ["position", "angular information"]
           }
         ],
+        "inlineCitationContracts": [
+          {
+            "id": "s2ism-claim-level-citations",
+            "termGroups": [
+              ["s2ISM", "structured detection", "结构化探测"],
+              ["super-resolution", "超分辨", "SNR", "信噪比", "optical sectioning", "光学切片", "光学层切"]
+            ],
+            "minCitedUnits": 2
+          },
+          {
+            "id": "iism-claim-level-citations",
+            "termGroups": [
+              ["iISM", "interferometric", "干涉式"],
+              ["120 nm", "lateral resolution", "横向分辨率"]
+            ],
+            "minCitedUnits": 2
+          },
+          {
+            "id": "qclfm-claim-level-citations",
+            "termGroups": [
+              ["light-field", "light field", "光场"],
+              ["position", "位置", "angular", "角度", "refocus", "重聚焦", "重新聚焦"]
+            ],
+            "minCitedUnits": 2
+          }
+        ],
         "requireRefsReady": true,
         "requirePolishStatus": true,
         "requireCitationShelfQuality": true,

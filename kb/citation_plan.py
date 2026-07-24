@@ -804,13 +804,25 @@ def build_citation_plan(
     )
     s2ism_focus = _s2ism_tradeoff_focus_slot(prompt, answer_hits)
     if s2ism_focus:
+        prompt_low = str(prompt or "").lower()
+        explicitly_compares_iism = bool(
+            re.search(r"\biism\b|interferometric", prompt_low)
+            and re.search(r"比较|对比|区别|差异|\bvs\.?\b|\bversus\b", str(prompt or ""), flags=re.IGNORECASE)
+        )
         focus_path = str(s2ism_focus.get("source_path") or "").strip().lower()
-        sys_a = [s2ism_focus] + [
-            slot
-            for slot in sys_a
-            if str(slot.get("source_path") or "").strip().lower() != focus_path
-        ]
-        sys_a = sys_a[:system_a_limit]
+        if explicitly_compares_iism:
+            sys_a = [s2ism_focus] + [
+                slot
+                for slot in sys_a
+                if str(slot.get("source_path") or "").strip().lower() != focus_path
+            ]
+            sys_a = sys_a[:system_a_limit]
+        else:
+            # A focused "this s2ISM paper" question must not spend its second
+            # evidence slot on a semantically nearby iISM or SPI paper.
+            sys_a = [s2ism_focus]
+            budget["system_a"] = 1
+            per_paragraph_budget["system_a"] = 1
     unique_system_a_sources = {
         str(slot.get("source_path") or "").strip().replace("\\", "/").lower()
         or str(slot.get("source_name") or "").strip().lower()
@@ -878,6 +890,9 @@ def build_citation_plan_prompt_block(plan: Mapping[str, Any] | None) -> str:
         f"- per paragraph budget: SystemA={int(per_paragraph_budget.get('system_a') or 0)}, SystemB={int(per_paragraph_budget.get('system_b') or 0)}",
         "- SystemA = retrieved paper text evidence; SystemB = a retrieved paper's bibliography/reference item.",
         "- Put a citation immediately after the sentence it supports; do not cite decorative or summary-only sentences.",
+        "- The SystemA/SystemB budget limits distinct evidence cards, not marker reuse. Reuse the same marker after every later substantive sentence supported by that same passage.",
+        "- Do not put all citations in a standalone evidence preamble and then leave the detailed body uncited.",
+        "- Before finalizing, scan every paper-specific mechanism, result, number, comparison, and limitation. If no planned evidence slot directly supports it, omit it or label it clearly as an inference.",
         "- Use SystemB only for origin, prior-work, method-source, or 'where did this idea come from' claims.",
         "- Use SystemA for claims about what the retrieved paper itself says, shows, defines, or reports.",
     ]

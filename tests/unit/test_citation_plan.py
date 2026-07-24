@@ -370,6 +370,45 @@ def test_s2ism_tradeoff_plan_prioritizes_direct_abstract_evidence():
     assert first["candidate_hits"] == [2]
     assert "thick samples" in first["evidence_quote"]
     assert "optical sectioning versus SNR" in first["support_example"]
+    assert plan["budget"]["system_a"] == 1
+    assert plan["per_paragraph_budget"]["system_a"] == 1
+    assert [slot["source_path"] for slot in plan["slots"] if slot["preferred_system"] == "system_a"] == [
+        s2ism_path
+    ]
+
+
+def test_s2ism_tradeoff_plan_keeps_iism_when_user_explicitly_compares_methods():
+    s2ism_path = "NatPhoton-Structured detection in laser scanning microscopy.en.md"
+    iism_path = "LSA-Interferometric image scanning microscopy.en.md"
+    plan = build_citation_plan(
+        prompt="s2ISM 和 iISM 的 trade-off 有什么区别？请直接对比。",
+        prompt_family="compare",
+        answer_hits=[
+            {
+                "text": (
+                    "Current image scanning microscopy approaches fail with thick samples unless "
+                    "detector size is limited, creating an optical-sectioning versus SNR trade-off."
+                ),
+                "meta": {"source_path": s2ism_path, "heading_path": "Abstract"},
+            },
+            {
+                "text": (
+                    "Interferometric image scanning microscopy combines interferometric detection "
+                    "with image scanning microscopy for 120 nm lateral resolution in live cells."
+                ),
+                "meta": {"source_path": iism_path, "heading_path": "Abstract"},
+            },
+        ],
+    )
+
+    system_a_paths = [
+        slot["source_path"]
+        for slot in plan["slots"]
+        if slot["preferred_system"] == "system_a"
+    ]
+    assert system_a_paths[0] == s2ism_path
+    assert iism_path in system_a_paths
+    assert plan["budget"]["system_a"] >= 2
 
 
 def test_s2ism_tradeoff_plan_recovers_exact_abstract_before_refs_enrichment(
@@ -442,6 +481,10 @@ def test_multi_source_route_budgets_one_system_a_citation_per_planned_source():
     prompt_block = build_citation_plan_prompt_block(method_map)
     assert "per paragraph budget: SystemA=2" in prompt_block
     assert "whole answer coverage target: SystemA=3" in prompt_block
+    assert "limits distinct evidence cards, not marker reuse" in prompt_block
+    assert "Reuse the same marker after every later substantive sentence" in prompt_block
+    assert "leave the detailed body uncited" in prompt_block
+    assert "If no planned evidence slot directly supports it, omit it" in prompt_block
 
 
 def test_hsi_fsi_plan_recovers_direct_comparison_evidence_from_source(tmp_path: Path):
