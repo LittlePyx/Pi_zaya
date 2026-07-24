@@ -318,4 +318,15 @@ test('refs cards render during generation and perf logs prove polling continued'
   expect(pollSuccesses.some((event) => event.keepPolling === true)).toBe(true)
   expect(refsLogs.some((event) => event.summary?.pendingPackCount === 1)).toBe(true)
   expect(refsLogs.some((event) => event.summary?.fastPackCount === 1)).toBe(true)
+
+  await expect.poll(
+    async () => {
+      const logs = await page.evaluate(() => window.__kbRefsPerf?.getLogs() || [])
+      return logs.some((event) => event.phase === 'poll_stop' && event.reason === 'settled')
+    },
+    { timeout: 5_000 },
+  ).toBe(true)
+  const settledRefsCalls = backend.getRefsCalls()
+  await page.waitForTimeout(1_200)
+  expect(backend.getRefsCalls()).toBe(settledRefsCalls)
 })

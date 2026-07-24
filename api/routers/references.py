@@ -709,6 +709,80 @@ def _refs_conversation_cache_ttl_s() -> float:
     return max(0.0, min(30.0, raw))
 
 
+def _refs_validated_cache_ttl_s() -> float:
+    try:
+        raw = float(
+            str(os.environ.get("KB_REFS_VALIDATED_CACHE_TTL_S", "45") or "45")
+        )
+    except Exception:
+        raw = 45.0
+    return max(1.0, min(300.0, raw))
+
+
+def _refs_conversation_state_signature(
+    *,
+    conversation: dict | None,
+    refs_state: dict | None,
+) -> str:
+    """Hash cheap SQLite state so polls can reuse refs without JSON loading."""
+
+    try:
+        prefs = load_prefs()
+    except Exception:
+        prefs = {}
+    conv = conversation if isinstance(conversation, dict) else {}
+    state = refs_state if isinstance(refs_state, dict) else {}
+    payload = {
+        "render_schema": _REFS_RENDER_PAYLOAD_SCHEMA_VERSION,
+        "conversation": {
+            "mode": str(conv.get("mode") or "").strip().lower(),
+            "bound_source_path": str(conv.get("bound_source_path") or "").strip(),
+            "bound_source_name": str(conv.get("bound_source_name") or "").strip(),
+            "bound_source_ready": bool(conv.get("bound_source_ready")),
+            "updated_at": float(conv.get("updated_at") or 0.0),
+        },
+        "refs_background_llm_polish": bool(_refs_background_llm_polish_enabled()),
+        "refs_card_locale": str((prefs or {}).get("refs_card_locale") or "")
+        .strip()
+        .lower(),
+        "ui_locale": str((prefs or {}).get("ui_locale") or "").strip().lower(),
+        "refs_state": state,
+    }
+    blob = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
+def _get_state_validated_conversation_refs_record(
+    *,
+    conv_id: str,
+    state_signature: str,
+) -> dict | None:
+    if not str(state_signature or "").strip():
+        return None
+    rec = _REFS_CONVERSATION_CACHE.get(str(conv_id or "").strip())
+    if not isinstance(rec, dict):
+        return None
+    if str(rec.get("state_signature") or "") != str(state_signature or ""):
+        return None
+    try:
+        cached_at = float(rec.get("cached_at") or 0.0)
+    except Exception:
+        cached_at = 0.0
+    if (
+        cached_at <= 0
+        or (time.time() - cached_at) > _refs_validated_cache_ttl_s()
+    ):
+        return None
+    payload = rec.get("payload")
+    return rec if isinstance(payload, dict) else None
+
+
 def _refs_conversation_cache_signature(
     *,
     refs: dict,
@@ -1016,9 +1090,11 @@ def _store_cached_conversation_refs_payload(
     payload: dict,
     mode: str = "full",
     refs: dict | None = None,
+    state_signature: str = "",
 ) -> None:
     _REFS_CONVERSATION_CACHE[str(conv_id or "").strip()] = {
         "signature": str(signature or ""),
+        "state_signature": str(state_signature or ""),
         "cached_at": time.time(),
         "mode": str(mode or "full").strip().lower() or "full",
         "payload": dict(payload or {}),
@@ -2333,6 +2409,41 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
     guide_mode = str(conversation.get("mode") or "").strip().lower() == "paper_guide"
     guide_source_path = str(conversation.get("bound_source_path") or "").strip()
     guide_source_name = str(conversation.get("bound_source_name") or "").strip()
+    refs_state_signature = ""
+    if hasattr(store, "list_message_refs_state"):
+        phase_started_at = time.perf_counter()
+        try:
+            refs_state = store.list_message_refs_state(
+                conv_id,
+                timeout_s=read_timeout_s,
+            )
+        except TypeError:
+            refs_state = store.list_message_refs_state(conv_id)
+        except sqlite3.OperationalError:
+            refs_state = None
+        if isinstance(refs_state, dict):
+            refs_state_signature = _refs_conversation_state_signature(
+                conversation=conversation,
+                refs_state=refs_state,
+            )
+            cached_state_rec = _get_state_validated_conversation_refs_record(
+                conv_id=conv_id,
+                state_signature=refs_state_signature,
+            )
+            _record("state_cache_lookup", phase_started_at)
+            if isinstance(cached_state_rec, dict):
+                cached_state_payload = cached_state_rec.get("payload")
+                cached_state_mode = (
+                    str(cached_state_rec.get("mode") or "full").strip().lower()
+                    or "full"
+                )
+                if isinstance(cached_state_payload, dict):
+                    return _finish(
+                        cached_state_payload,
+                        f"cache_validated_{cached_state_mode}",
+                    )
+        else:
+            _record("state_cache_lookup", phase_started_at)
     phase_started_at = time.perf_counter()
     try:
         refs = store.list_message_refs(conv_id, timeout_s=read_timeout_s)
@@ -2531,6 +2642,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             payload=stored_full_payload,
             mode="full",
             refs=refs_norm,
+            state_signature=refs_state_signature,
         )
         return _finish(stored_full_payload, "stored_full")
 
@@ -2655,6 +2767,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             payload=payload,
             mode=cache_mode,
             refs=refs_norm,
+            state_signature=refs_state_signature,
         )
     ready_refs_to_warm = {
         **historical_stale_refs,

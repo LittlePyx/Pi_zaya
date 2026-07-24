@@ -26,6 +26,80 @@ class _FakeStore:
         return []
 
 
+def test_state_validated_cache_skips_rendered_payload_json_loader(monkeypatch) -> None:
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    conversation = {
+        "mode": "normal",
+        "updated_at": 123.0,
+    }
+    refs_state = {
+        "rows": [
+            {
+                "user_msg_id": 7,
+                "prompt_sig": "prompt-7",
+                "rendered_payload_sig": "render-7",
+                "render_status": "pending",
+                "updated_at": 124.0,
+                "rendered_payload_json_chars": 67_000_000,
+            }
+        ],
+        "messages": {
+            "message_count": 0,
+            "max_message_id": 0,
+            "content_chars": 0,
+            "meta_chars": 0,
+        },
+    }
+    state_signature = references_router._refs_conversation_state_signature(
+        conversation=conversation,
+        refs_state=refs_state,
+    )
+    cached_payload = {
+        7: {
+            "render_status": "pending",
+            "payload_mode": "pending",
+            "hits": [],
+        }
+    }
+    references_router._store_cached_conversation_refs_payload(
+        conv_id="conv-validated",
+        signature="full-signature-not-needed",
+        state_signature=state_signature,
+        payload=cached_payload,
+        mode="pending",
+    )
+
+    class Store:
+        def get_conversation(self, conv_id: str, *, timeout_s=None):
+            del conv_id, timeout_s
+            return dict(conversation)
+
+        def list_message_refs_state(self, conv_id: str, *, timeout_s=None):
+            del conv_id, timeout_s
+            return dict(refs_state)
+
+        def list_message_refs(self, conv_id: str, *, timeout_s=None):
+            raise AssertionError(
+                f"validated cache must not deserialize rendered payloads for {conv_id}"
+            )
+
+        def get_messages(self, conv_id: str):
+            del conv_id
+            return []
+
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: Store())
+    monkeypatch.setattr(references_router, "_reference_asset_roots", lambda: [])
+
+    response = Response()
+    out = references_router.get_conversation_refs(
+        "conv-validated",
+        response=response,
+    )
+
+    assert out == cached_payload
+    assert response.headers["x-kb-refs-mode"] == "cache_validated_pending"
+
+
 def test_reference_cards_follow_grounded_answer_citations(monkeypatch) -> None:
     source_path = r"F:\db\DL-SPI\DL-SPI.en.md"
     public_source_path = "kb-source/0/DL-SPI/DL-SPI.en.md"

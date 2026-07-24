@@ -487,29 +487,56 @@ function stopMessagePostprocessPolling() {
   }
 }
 
+function latestRefsPack(refs: Record<string, unknown>) {
+  const entries = Object.entries(refs || {})
+    .map(([key, value]) => ({ key, id: Number(key), value }))
+    .filter((entry) => Number.isFinite(entry.id))
+    .sort((a, b) => b.id - a.id)
+  return entries[0]?.value as {
+    hits?: Array<{ ui_meta?: Record<string, unknown>; meta?: Record<string, unknown> }>
+    enrichment_pending?: boolean
+    payload_mode?: string
+    render_status?: string
+    display_state?: string
+    polish_status?: string
+  } | undefined
+}
+
 function needsRefsEnrichment(refs: Record<string, unknown>) {
-  for (const value of Object.values(refs || {})) {
-    const rec = value as {
-      hits?: Array<{ ui_meta?: Record<string, unknown>; meta?: Record<string, unknown> }>
-      enrichment_pending?: boolean
-      payload_mode?: string
-    }
-    if (rec?.enrichment_pending) {
-      return true
-    }
-    const payloadMode = String(rec?.payload_mode || '').trim().toLowerCase()
-    if (payloadMode === 'fast' || payloadMode === 'pending') {
-      return true
-    }
-    const hits = Array.isArray(rec?.hits) ? rec.hits : []
-    for (const hit of hits) {
-      const meta = hit?.meta || {}
-      if (String(meta.ref_pack_state || '').trim().toLowerCase() === 'pending') {
-        return true
-      }
-    }
+  // Historical pending packs must not keep a settled conversation polling for
+  // five minutes. Only the latest user turn can still change what the user is
+  // currently waiting to see.
+  const rec = latestRefsPack(refs)
+  if (!rec) return false
+  if (rec.enrichment_pending === true) return true
+  if (rec.enrichment_pending === false) return false
+  const renderStatus = String(rec.render_status || '').trim().toLowerCase()
+  const displayState = String(rec.display_state || '').trim().toLowerCase()
+  const polishStatus = String(rec.polish_status || '').trim().toLowerCase()
+  if (
+    renderStatus === 'full'
+    || renderStatus === 'failed'
+    || displayState === 'empty'
+    || displayState === 'hidden_by_guide'
+    || displayState === 'suppressed'
+    || polishStatus === 'full'
+  ) {
+    return false
   }
-  return false
+  if (rec.enrichment_pending) return true
+  const payloadMode = String(rec.payload_mode || '').trim().toLowerCase()
+  if (payloadMode === 'fast' || payloadMode === 'pending') return true
+  const hits = Array.isArray(rec.hits) ? rec.hits : []
+  return hits.some((hit) => (
+    String(hit?.meta?.ref_pack_state || '').trim().toLowerCase() === 'pending'
+  ))
+}
+
+function refsPayloadRevision(refs: Record<string, unknown>) {
+  // Compare the full public response. A narrow projection can miss a later
+  // DOI, bibliometrics, SystemB trace, or locate-target upgrade even when the
+  // visible summary sentence stays unchanged.
+  return JSON.stringify(refs || {})
 }
 
 async function loadRefsForConversation(
@@ -547,13 +574,17 @@ async function loadRefsForConversation(
       })
       return
     }
-    set((state) => ({
-      refs,
-      conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+    const nextRevision = refsPayloadRevision(refs)
+    set((state) => {
+      if (refsPayloadRevision(state.refs) === nextRevision) return state
+      return {
         refs,
-        cachedAt: Date.now(),
-      }),
-    }))
+        conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+          refs,
+          cachedAt: Date.now(),
+        }),
+      }
+    })
     const needsEnrichment = needsRefsEnrichment(refs)
     const keepPolling = Boolean(shouldKeepPolling?.())
     pushRefsPerf({
@@ -667,12 +698,15 @@ async function startRefsPolling(
   stopRefsPolling()
   const token = ++refsPollToken
   let tries = 0
-  const maxTries = 180
+  const pollingStartedAt = nowMs()
+  let generationSettledAt = 0
+  const maxTotalPollingMs = 120_000
+  const maxSettledPollingMs = 30_000
   const nextDelay = () => {
-    if (tries <= 6) return 350
-    if (tries <= 18) return 700
-    if (tries <= 60) return 1200
-    return 1800
+    if (tries <= 3) return 500
+    if (tries <= 8) return 1000
+    if (tries <= 16) return 2000
+    return 4000
   }
 
   pushRefsPerf({
@@ -723,15 +757,30 @@ async function startRefsPolling(
         })
         return
       }
-      set((state) => ({
-        refs,
-        conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+      const nextRevision = refsPayloadRevision(refs)
+      set((state) => {
+        if (refsPayloadRevision(state.refs) === nextRevision) return state
+        return {
           refs,
-          cachedAt: Date.now(),
-        }),
-      }))
+          conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+            refs,
+            cachedAt: Date.now(),
+          }),
+        }
+      })
       const keepPolling = Boolean(shouldKeepPolling?.())
       const needsEnrichment = needsRefsEnrichment(refs)
+      const now = nowMs()
+      if (keepPolling) {
+        generationSettledAt = 0
+      } else if (!generationSettledAt) {
+        generationSettledAt = now
+      }
+      const totalPollingExpired = now - pollingStartedAt >= maxTotalPollingMs
+      const settledPollingExpired = Boolean(
+        generationSettledAt
+        && now - generationSettledAt >= maxSettledPollingMs
+      )
       pushRefsPerf({
         ts: Date.now(),
         convId,
@@ -745,7 +794,11 @@ async function startRefsPolling(
         ...refsBackendPerf(meta),
         summary: summarizeRefsPayload(refs),
       })
-      if ((!needsEnrichment && !keepPolling) || tries >= maxTries) {
+      if (
+        (!needsEnrichment && !keepPolling)
+        || totalPollingExpired
+        || settledPollingExpired
+      ) {
         refsPollTimer = null
         pushRefsPerf({
           ts: Date.now(),
@@ -754,7 +807,11 @@ async function startRefsPolling(
           token,
           durationMs: 0,
           attempt: tries,
-          reason: tries >= maxTries ? 'max_tries' : 'settled',
+          reason: totalPollingExpired
+            ? 'max_total_wall_time'
+            : settledPollingExpired
+              ? 'max_settled_wall_time'
+              : 'settled',
           needsEnrichment,
           keepPolling,
         })
@@ -773,7 +830,7 @@ async function startRefsPolling(
         reason,
         error: err instanceof Error ? err.message : String(err || 'unknown'),
       })
-      if (tries >= maxTries) {
+      if (nowMs() - pollingStartedAt >= maxTotalPollingMs) {
         refsPollTimer = null
         pushRefsPerf({
           ts: Date.now(),
@@ -782,7 +839,7 @@ async function startRefsPolling(
           token,
           durationMs: 0,
           attempt: tries,
-          reason: 'max_tries_after_error',
+          reason: 'max_total_wall_time_after_error',
         })
         return
       }

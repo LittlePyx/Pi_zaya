@@ -58,6 +58,7 @@ _STATE_MAX_LIST_ITEMS = 500
 _STATE_MAX_VALUE_DEPTH = 6
 _STATE_MAX_STRING_LIMIT = 4000
 _STATE_MAX_KEY_LIMIT = 120
+_MESSAGE_REFS_NESTED_PAYLOAD_REPAIR_KEY = "message_refs_strip_nested_rendered_payload_v1"
 
 
 _DEFAULT_CONVERSATION_TITLE_RE = re.compile(
@@ -677,6 +678,54 @@ class ChatStore:
             except sqlite3.OperationalError:
                 pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_message_refs_conv_id ON message_refs(conv_id);")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_store_repairs (
+                  repair_key TEXT PRIMARY KEY,
+                  repaired_at REAL NOT NULL
+                );
+                """
+            )
+            repair_done = conn.execute(
+                "SELECT 1 FROM chat_store_repairs WHERE repair_key = ? LIMIT 1",
+                (_MESSAGE_REFS_NESTED_PAYLOAD_REPAIR_KEY,),
+            ).fetchone()
+            if repair_done is None:
+                try:
+                    # Older render writes could recursively embed the previous
+                    # payload under ``rendered_payload``.  One observed row was
+                    # 67 MB although its useful top-level packet was ~56 KB.
+                    # JSON1 removes that redundant subtree inside SQLite, so
+                    # startup does not deserialize hundreds of megabytes in
+                    # Python.  The repair is idempotent and recorded once.
+                    conn.execute(
+                        """
+                        UPDATE message_refs
+                        SET rendered_payload_json = json_remove(
+                            rendered_payload_json,
+                            '$.rendered_payload'
+                        )
+                        WHERE rendered_payload_json <> ''
+                          AND json_valid(rendered_payload_json)
+                          AND json_type(
+                              rendered_payload_json,
+                              '$.rendered_payload'
+                          ) IS NOT NULL
+                        """
+                    )
+                except sqlite3.OperationalError:
+                    # Very old SQLite builds may not include JSON1.  Keep the
+                    # data untouched and retry after the runtime is upgraded.
+                    pass
+                else:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO chat_store_repairs
+                            (repair_key, repaired_at)
+                        VALUES (?, ?)
+                        """,
+                        (_MESSAGE_REFS_NESTED_PAYLOAD_REPAIR_KEY, time.time()),
+                    )
             # Projects (ChatGPT-style): optional grouping for conversations
             conn.execute(
                 """
@@ -2391,6 +2440,78 @@ class ChatStore:
                 ),
             )
         return True
+
+    def list_message_refs_state(
+        self,
+        conv_id: str,
+        *,
+        timeout_s: float | None = None,
+    ) -> dict[str, object]:
+        """Return a small cache-validation snapshot without loading refs JSON."""
+
+        with self._connect(timeout_s=timeout_s) as conn:
+            rows = conn.execute(
+                """
+                SELECT user_msg_id, prompt_sig, rendered_payload_sig,
+                       render_status, render_error, render_built_at,
+                       render_attempts, render_evidence_sig, render_locale,
+                       used_query, used_translation, created_at, updated_at,
+                       LENGTH(hits_json) AS hits_json_chars,
+                       LENGTH(scores_json) AS scores_json_chars,
+                       LENGTH(rendered_payload_json) AS rendered_payload_json_chars,
+                       LENGTH(query_variants_json) AS query_variants_json_chars
+                FROM message_refs
+                WHERE conv_id = ?
+                ORDER BY user_msg_id ASC
+                """,
+                (conv_id,),
+            ).fetchall()
+            message_row = conn.execute(
+                """
+                SELECT COUNT(*) AS message_count,
+                       COALESCE(MAX(id), 0) AS max_message_id,
+                       COALESCE(SUM(LENGTH(content)), 0) AS content_chars,
+                       COALESCE(SUM(LENGTH(meta_json)), 0) AS meta_chars
+                FROM messages
+                WHERE conv_id = ?
+                """,
+                (conv_id,),
+            ).fetchone()
+
+        state_rows: list[dict[str, object]] = []
+        for row in rows:
+            state_rows.append(
+                {
+                    "user_msg_id": int(row["user_msg_id"] or 0),
+                    "prompt_sig": str(row["prompt_sig"] or ""),
+                    "rendered_payload_sig": str(row["rendered_payload_sig"] or ""),
+                    "render_status": str(row["render_status"] or ""),
+                    "render_error": str(row["render_error"] or ""),
+                    "render_built_at": float(row["render_built_at"] or 0.0),
+                    "render_attempts": int(row["render_attempts"] or 0),
+                    "render_evidence_sig": str(row["render_evidence_sig"] or ""),
+                    "render_locale": str(row["render_locale"] or ""),
+                    "used_query": str(row["used_query"] or ""),
+                    "used_translation": bool(int(row["used_translation"] or 0)),
+                    "created_at": float(row["created_at"] or 0.0),
+                    "updated_at": float(row["updated_at"] or 0.0),
+                    "hits_json_chars": int(row["hits_json_chars"] or 0),
+                    "scores_json_chars": int(row["scores_json_chars"] or 0),
+                    "rendered_payload_json_chars": int(
+                        row["rendered_payload_json_chars"] or 0
+                    ),
+                    "query_variants_json_chars": int(
+                        row["query_variants_json_chars"] or 0
+                    ),
+                }
+            )
+        message_state = {
+            "message_count": int((message_row["message_count"] if message_row else 0) or 0),
+            "max_message_id": int((message_row["max_message_id"] if message_row else 0) or 0),
+            "content_chars": int((message_row["content_chars"] if message_row else 0) or 0),
+            "meta_chars": int((message_row["meta_chars"] if message_row else 0) or 0),
+        }
+        return {"rows": state_rows, "messages": message_state}
 
     def list_message_refs(self, conv_id: str, *, timeout_s: float | None = None) -> dict[int, dict]:
         with self._connect(timeout_s=timeout_s) as conn:

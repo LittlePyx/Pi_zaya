@@ -5377,29 +5377,18 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         pass
 
                 seed_docs = list(refs_async_seed_docs)[:refs_async_top_k_docs]
-                try:
-                    rebuild_hits_raw = _select_refs_async_rebuild_hits_raw(
-                        hits_raw=hits_raw,
-                        refs_unscoped_hits_raw=refs_unscoped_hits_raw,
-                        paper_guide_cross_paper_refs=paper_guide_cross_paper_refs,
-                    )
-                    if rebuild_hits_raw:
-                        t_rebuild0 = time.perf_counter()
-                        rebuilt_docs = _group_hits_by_doc_for_refs(
-                            rebuild_hits_raw,
-                            prompt_text=retrieval_prompt,
-                            top_k_docs=refs_async_top_k_docs,
-                            deep_query=(used_query or retrieval_prompt or prompt or ""),
-                            deep_read=True,
-                            llm_rerank=False,
-                            settings=settings_obj,
-                        )
-                        if rebuilt_docs:
-                            if not prompt_multi_paper_list:
-                                seed_docs = rebuilt_docs
-                        _perf_log("gen.refs_rebuild", elapsed=time.perf_counter() - t_rebuild0, docs=len(seed_docs))
-                except Exception:
-                    seed_docs = list(refs_async_seed_docs)
+                # ``refs_async_seed_docs`` already comes from the grouped,
+                # filtered display set.  The old worker deep-read all raw hits
+                # again here and then deliberately discarded ``rebuilt_docs``
+                # for every multi-paper request (the only request family that
+                # populates this async seed).  That no-op cost about 35 seconds
+                # on a real three-paper lineage query.
+                _perf_log(
+                    "gen.refs_rebuild",
+                    elapsed=0.0,
+                    docs=len(seed_docs),
+                    mode="reuse_grouped_seed",
+                )
 
                 try:
                     t_pack0 = time.perf_counter()

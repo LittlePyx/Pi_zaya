@@ -1,6 +1,7 @@
+import json
 from pathlib import Path
 
-from kb.chat_store import ChatStore
+from kb.chat_store import ChatStore, _MESSAGE_REFS_NESTED_PAYLOAD_REPAIR_KEY
 
 
 def _insert_orphan_message_ref(store: ChatStore, *, conv_id: str, user_msg_id: int) -> None:
@@ -110,6 +111,85 @@ def test_message_refs_render_state_roundtrip(tmp_path: Path):
     assert pack["render_status"] == "pending"
     assert pack["render_attempts"] == 1
     assert pack["render_locale"] == "zh"
+
+
+def test_message_refs_state_snapshot_does_not_load_rendered_payload(tmp_path: Path):
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("refs")
+    user_msg_id = store.append_message(conv_id, "user", "Which paper is relevant?")
+    store.upsert_message_refs(
+        user_msg_id=user_msg_id,
+        conv_id=conv_id,
+        prompt="Which paper is relevant?",
+        prompt_sig="sig-state",
+        hits=[{"text": "hit", "meta": {"source_path": "paper.md"}}],
+        scores=[8.0],
+        used_query="relevant paper",
+        used_translation=False,
+        rendered_payload={
+            "hits": [{"ui_meta": {"summary_line": "grounded"}}],
+            "large_unused_field": "x" * 20_000,
+        },
+        rendered_payload_sig="render-state",
+        render_status="full",
+    )
+
+    state = store.list_message_refs_state(conv_id)
+
+    assert set(state) == {"rows", "messages"}
+    row = list(state["rows"])[0]
+    assert row["user_msg_id"] == user_msg_id
+    assert row["rendered_payload_sig"] == "render-state"
+    assert row["rendered_payload_json_chars"] > 20_000
+    assert "rendered_payload" not in row
+    assert state["messages"]["message_count"] == 1
+
+
+def test_chat_store_repairs_legacy_nested_rendered_payload_once(tmp_path: Path):
+    db_path = tmp_path / "chat.sqlite3"
+    store = ChatStore(db_path)
+    conv_id = store.create_conversation("refs")
+    user_msg_id = store.append_message(conv_id, "user", "Which paper is relevant?")
+    store.upsert_message_refs(
+        user_msg_id=user_msg_id,
+        conv_id=conv_id,
+        prompt="Which paper is relevant?",
+        prompt_sig="sig-nested",
+        hits=[{"text": "hit", "meta": {"source_path": "paper.md"}}],
+        scores=[8.0],
+        used_query="relevant paper",
+        used_translation=False,
+        rendered_payload={
+            "hits": [{"ui_meta": {"summary_line": "current"}}],
+            "rendered_payload": {
+                "hits": [{"ui_meta": {"summary_line": "stale"}}],
+                "large_unused_field": "x" * 50_000,
+            },
+        },
+        rendered_payload_sig="render-nested",
+        render_status="full",
+    )
+    with store._connect() as conn:
+        conn.execute(
+            "DELETE FROM chat_store_repairs WHERE repair_key = ?",
+            (_MESSAGE_REFS_NESTED_PAYLOAD_REPAIR_KEY,),
+        )
+
+    repaired_store = ChatStore(db_path)
+    with repaired_store._connect() as conn:
+        raw = conn.execute(
+            "SELECT rendered_payload_json FROM message_refs WHERE user_msg_id = ?",
+            (user_msg_id,),
+        ).fetchone()["rendered_payload_json"]
+        repair_row = conn.execute(
+            "SELECT 1 FROM chat_store_repairs WHERE repair_key = ?",
+            (_MESSAGE_REFS_NESTED_PAYLOAD_REPAIR_KEY,),
+        ).fetchone()
+
+    payload = json.loads(raw)
+    assert payload["hits"][0]["ui_meta"]["summary_line"] == "current"
+    assert "rendered_payload" not in payload
+    assert repair_row is not None
 
 
 def test_message_refs_reject_late_write_after_user_message_deleted(tmp_path: Path):
