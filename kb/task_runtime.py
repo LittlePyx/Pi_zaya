@@ -80,6 +80,7 @@ from kb.generation_answer_finalize_runtime import (
     _exclude_bound_source_from_multi_paper_doc_list_contract as _finalize_runtime_exclude_bound_source_from_multi_paper_doc_list_contract,
     _filter_multi_paper_doc_list_contract as _finalize_runtime_filter_multi_paper_doc_list_contract,
     _finalize_generation_answer as _finalize_runtime_finalize_generation_answer,
+    _pick_shared_primary_evidence as _finalize_runtime_pick_shared_primary_evidence,
     _sanitize_canceled_generation_answer as _finalize_runtime_sanitize_canceled_generation_answer,
 )
 from kb.paper_guide_contracts import (
@@ -778,6 +779,7 @@ def _build_precomputed_refs_render_payload(
     guide_source_name: str,
     library_db_path: Path | str | None,
     allow_expensive_llm: bool = False,
+    primary_evidence: dict | None = None,
 ) -> tuple[dict | None, str]:
     mid = int(user_msg_id or 0)
     if mid <= 0:
@@ -815,6 +817,8 @@ def _build_precomputed_refs_render_payload(
         "used_query": str(used_query or "").strip(),
         "used_translation": bool(used_translation),
     }
+    if isinstance(primary_evidence, dict) and primary_evidence:
+        pack["primary_evidence"] = dict(primary_evidence)
     try:
         from api.reference_ui import enrich_refs_payload
         from api.routers.library import _md_dir, _pdf_dir
@@ -6419,6 +6423,23 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         answer = str(finalize_state.get("answer") or "")
         paper_guide_support_resolution = list(finalize_state.get("paper_guide_support_resolution") or [])
         paper_guide_contracts = dict(finalize_state.get("paper_guide_contracts") or {})
+        finalized_primary_evidence = _finalize_runtime_pick_shared_primary_evidence(
+            paper_guide_contracts_seed=paper_guide_contracts,
+            evidence_cards=list(paper_guide_evidence_cards or []),
+            support_resolution=list(paper_guide_support_resolution or []),
+            prompt_text=prompt_for_user or prompt,
+            answer_text=answer,
+        )
+        if finalized_primary_evidence:
+            paper_guide_contracts["primary_evidence"] = dict(finalized_primary_evidence)
+            render_packet = (
+                dict(paper_guide_contracts.get("render_packet") or {})
+                if isinstance(paper_guide_contracts.get("render_packet"), dict)
+                else {}
+            )
+            if render_packet:
+                render_packet["primary_evidence"] = dict(finalized_primary_evidence)
+                paper_guide_contracts["render_packet"] = render_packet
         finalized_citation_plan = (
             dict(paper_guide_contracts.get("citation_plan") or {})
             if isinstance(paper_guide_contracts.get("citation_plan"), dict)
@@ -6705,6 +6726,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         guide_source_path=str(paper_guide_bound_source_path or "") if paper_guide_source_scoped else "",
                         guide_source_name=str(paper_guide_bound_source_name or "") if paper_guide_source_scoped else "",
                         library_db_path=getattr(settings_obj, "library_db_path", None),
+                        primary_evidence=shared_primary_evidence,
                     )
                     _trace_event(
                         "refs_precompute",

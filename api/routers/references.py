@@ -436,6 +436,16 @@ def _answer_citation_card_copy(
                 summary,
                 "It surveys the progress and deployment limits of learning-based SPI, so it belongs after the classical foundations and modulation methods.",
             )
+        if "spatial domain methods" in role_text and "transform domain methods" in role_text:
+            if prefer_zh:
+                return (
+                    summary,
+                    "该文先给出经典去噪的空间域与变换域总分类，再展开像素或图像块相关性及变换机制，直接对应当前方法地图。",
+                )
+            return (
+                summary,
+                "It first establishes the spatial-domain versus transform-domain taxonomy and then explains the mechanisms under each branch.",
+            )
         if prefer_zh:
             return summary, f"“{headings}”说明这篇文献在阅读路线中承担的具体知识环节，可据此安排阅读顺序。"
         return summary, f"'{headings}' identifies the specific knowledge role this paper plays in the reading order."

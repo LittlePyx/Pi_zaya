@@ -5,6 +5,414 @@ import pytest
 import kb.generation_answer_finalize_runtime as finalize_runtime
 
 
+def test_merge_citation_plan_support_slots_preserves_prompt_aligned_source_sentence():
+    merged = finalize_runtime._merge_citation_plan_support_slots(
+        [
+            {
+                "doc_idx": 1,
+                "support_id": "DOC-1",
+                "support_example": "[[SUPPORT:DOC-1]]",
+                "source_path": "paper.en.md",
+                "locate_anchor": "A weak background sentence.",
+            }
+        ],
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [],
+                    "source_path": "paper.en.md",
+                    "heading_path": "Paper / Abstract",
+                    "evidence_quote": (
+                        "The method operates at tenfold lower incident illumination power, "
+                        "significantly reducing photodamage."
+                    ),
+                    "block_id": "blk_abstract",
+                    "anchor_id": "p_abstract",
+                    "page_start": 1,
+                }
+            ]
+        },
+        locked_citation_source={"sid": "s1234abcd", "source_path": "paper.en.md"},
+    )
+
+    assert len(merged) == 2
+    assert merged[0]["support_id"] == "DOC-900"
+    assert merged[0]["support_example"] == "[[SUPPORT:DOC-900]]"
+    assert merged[0]["heading_path"] == "Paper / Abstract"
+    assert "tenfold lower" in merged[0]["locate_anchor"]
+    assert merged[0]["sid"] == "s1234abcd"
+    assert merged[0]["cite_policy"] == "locate_only"
+    assert merged[0]["evidence_selection_reason"] == "citation_plan_support_bridge"
+
+
+def test_shared_primary_evidence_prefers_query_aligned_plan_bridge() -> None:
+    exact = (
+        "This technique operates at tenfold lower incident illumination power per diffraction "
+        "limited spot, significantly reducing photodamage."
+    )
+    primary = finalize_runtime._pick_shared_primary_evidence(
+        paper_guide_contracts_seed={
+            "primary_evidence": {
+                "source_path": "paper.en.md",
+                "heading_path": "Results / Resolution",
+                "snippet": "The closed pinhole iPSF has a FWHM of 122 nm.",
+                "selection_reason": "answer_hit_top",
+            }
+        },
+        evidence_cards=[],
+        support_resolution=[
+            {
+                "source_path": "paper.en.md",
+                "heading_path": "Paper / Abstract",
+                "locate_anchor": exact,
+                "block_id": "blk_abstract",
+                "anchor_id": "p_abstract",
+                "evidence_selection_reason": "citation_plan_support_bridge",
+            }
+        ],
+        prompt_text="iISM 在活细胞中是否减少光损伤？",
+        answer_text="入射照明功率降低约十倍，从而减少光损伤。",
+    )
+
+    assert primary["block_id"] == "blk_abstract"
+    assert primary["heading_path"] == "Paper / Abstract"
+    assert "tenfold lower" in primary["snippet"]
+
+
+def test_shared_primary_evidence_focuses_long_abstract_on_supporting_sentences() -> None:
+    abstract = (
+        "Single-pixel cameras measure correlations between a scene and a set of patterns. "
+        "These systems often have low frame rates because they require many measurements. "
+        "Several compressive sensing techniques mitigate this limitation by undersampling. "
+        "Here, we instead exploit the spatiotemporal redundancy of dynamic scenes. "
+        "In our system, a high-resolution foveal region tracks motion within the scene, yet "
+        "unlike a simple zoom, every frame delivers new spatial information from across the "
+        "entire field of view. This strategy records quickly changing features while "
+        "accumulating detail of slower regions over several consecutive frames. "
+        "The architecture spatially varies resolution and exposure time."
+    )
+
+    primary = finalize_runtime._pick_shared_primary_evidence(
+        paper_guide_contracts_seed={},
+        evidence_cards=[],
+        support_resolution=[
+            {
+                "source_path": "foveated.en.md",
+                "heading_path": "Paper / Abstract",
+                "locate_anchor": abstract,
+                "block_id": "blk_abstract",
+                "anchor_id": "p_abstract",
+                "evidence_selection_reason": "citation_plan_support_bridge",
+            }
+        ],
+        prompt_text="动态超采样为什么不是普通 zoom？",
+        answer_text="中央凹区域跟踪运动，同时每帧覆盖整个视场，并在连续帧中积累细节。",
+    )
+
+    assert primary["snippet"].startswith("In our system")
+    assert "entire field of view" in primary["snippet"]
+    assert "several consecutive frames" in primary["snippet"]
+    assert "measure correlations" not in primary["snippet"]
+
+
+def test_normalize_supported_sequential_terms_keeps_answer_language():
+    answer = (
+        "Sequential compressed sensing（SCS）利用自适应反馈。\n\n"
+        "这种策略保证信号支撑集（support）的恢复。"
+    )
+    evidence = (
+        "A sequential adaptive compressed sensing procedure for signal support recovery is proposed. "
+        "The procedure is based on distilled sensing."
+    )
+
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="Sequential compressed sensing 多利用了什么信息？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+    )
+
+    assert "Sequential adaptive compressed sensing（顺序自适应压缩感知）" in out
+    assert "信号支撑集恢复（signal support recovery）" in out
+
+
+def test_normalize_supported_iism_live_cell_benefit_adds_missing_power_fact():
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "iISM 在活细胞中实现约 120 nm 横向分辨率。",
+        prompt="iISM 对活细胞成像有什么好处？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "evidence_quote": (
+                        "The technique achieves about 120 nm lateral resolution while operating at "
+                        "tenfold lower incident illumination power per diffraction limited spot, "
+                        "significantly reducing photodamage."
+                    ),
+                }
+            ]
+        },
+    )
+
+    assert "降低约 10 倍" in out
+    assert "减少光损伤" in out
+
+
+def test_normalize_supported_iism_fact_with_spaced_tenfold_value_is_idempotent():
+    answer = "论文的 Abstract 报告约 120 nm 分辨率，照明功率降低约 10 倍，从而减少光损伤。 [1]"
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "iism.en.md",
+                "evidence_quote": (
+                    "The method achieves 120 nm lateral resolution at tenfold lower incident "
+                    "illumination power, significantly reducing photodamage."
+                ),
+            }
+        ]
+    }
+
+    once = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="iISM 在活细胞中有什么好处？",
+        citation_plan=plan,
+        answer_hits=[{"meta": {"source_path": "iism.en.md"}}],
+    )
+    twice = finalize_runtime._normalize_citation_plan_supported_terms(
+        once,
+        prompt="iISM 在活细胞中有什么好处？",
+        citation_plan=plan,
+        answer_hits=[{"meta": {"source_path": "iism.en.md"}}],
+    )
+
+    assert twice == once
+    assert once.count("Abstract 报告") == 1
+    assert once.endswith("[1]")
+
+
+def test_normalize_supported_scigs_variant_uses_exact_answer_hit():
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "SCIGS 的核心新意是从单张压缩图重建动态 3D 场景 [3]。",
+        prompt="SCIGS 的核心新意是什么？",
+        citation_plan={"slots": []},
+        answer_hits=[{"text": "The proposed SCIGS is a variant of 3DGS."}],
+    )
+
+    assert "SCIGS 是面向 SCI 的 3DGS 变体" in out
+    assert "3DGS 变体 [3]" in out
+    assert out.count("[3]") == 2
+
+
+def test_normalize_supported_scigs_adds_single_image_term_and_drops_unasked_named_comparison():
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        (
+            "SCIGS 是面向 SCI 的 3DGS 变体 [1]。\n\n"
+            "具体来说，SCIGS 声称：\n- 输入：仅需一张动态场景的压缩图像。\n"
+            "- 现有 NeRF 方法（如 SCINeRF）难以处理动态场景。"
+        ),
+        prompt="SCIGS 的核心新意是什么？",
+        citation_plan={
+            "budget": {"system_a": 2, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scigs.en.md",
+                    "evidence_quote": (
+                        "SCIGS is a variant of 3DGS and reconstructs dynamic 3D scenes "
+                        "from a single compressed image."
+                    ),
+                }
+            ],
+        },
+        answer_hits=[{"meta": {"source_path": "scigs.en.md"}}],
+    )
+
+    assert "单张压缩图像（single compressed image）" in out
+    assert "SCINeRF" not in out
+
+
+def test_normalize_supported_terms_matches_virtual_and_absolute_source_paths():
+    plan_path = r"F:\repo\db\paper\paper.en.md"
+    hit_path = "kb-source/0/paper/paper.en.md"
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "动态超采样和普通 zoom 不同：它让每帧都采集整个视场，并融合连续多帧。",
+        prompt="动态超采样和普通 zoom 的关键区别是什么？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": plan_path,
+                    "evidence_quote": (
+                        "A high-resolution foveal region tracks motion. Unlike a simple zoom, "
+                        "every frame delivers new spatial information from across the entire field of view."
+                    ),
+                }
+            ]
+        },
+        answer_hits=[{"meta": {"source_path": hit_path}}],
+    )
+
+    assert "foveal region" in out
+    assert out.endswith("[1]")
+
+
+def test_foveated_exact_whole_field_clause_gets_occurrence_specific_citation():
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        (
+            "普通 zoom 只放大局部；动态超采样的每一帧都从整个视场采集新的空间信息，"
+            "并通过连续多帧累积慢变化区域的细节 [3]。"
+        ),
+        prompt="动态超采样和普通 zoom 有什么区别？",
+        citation_plan={
+            "budget": {"system_a": 2, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "foveated.en.md",
+                    "evidence_quote": (
+                        "A high-resolution foveal region tracks motion. Unlike a simple zoom, every frame "
+                        "delivers new spatial information from across the entire field of view while detail "
+                        "accumulates over several consecutive frames."
+                    ),
+                }
+            ],
+        },
+        answer_hits=[
+            {"meta": {"source_path": "other.en.md"}},
+            {"meta": {"source_path": "other-2.en.md"}},
+            {"meta": {"source_path": "kb-source/0/foveated/foveated.en.md"}},
+        ],
+    )
+
+    assert "foveal region" in out
+    assert "连续多帧中为慢变区域累积细节。 [3]" in out
+    assert out.count("[3]") == 1
+
+
+def test_normalize_supported_iism_fact_gets_existing_system_a_citation():
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        (
+            "iISM 实现约 120 nm 分辨率 [1]。\n\n"
+            "在约 120 nm 分辨率下，入射照明功率降低约 10 倍，从而减少光损伤。"
+        ),
+        prompt="iISM 在活细胞里同时改善了什么？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "paper.en.md",
+                    "evidence_quote": (
+                        "The method achieves 120 nm lateral resolution at tenfold lower incident "
+                        "illumination power, significantly reducing photodamage."
+                    ),
+                }
+            ]
+        },
+        answer_hits=[{"meta": {"source_path": "paper.en.md"}}],
+    )
+
+    assert "减少光损伤。 [1]" in out
+
+
+def test_normalize_supported_qclfm_adds_cited_two_step_claim() -> None:
+    evidence = (
+        "The operation for digital refocusing can be achieved using two steps. "
+        "First, the trajectory of the photons is reconstructed through a ray tracing operation. "
+        "The second step reverses diffraction by applying wave propagation of distance -z."
+    )
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "QCLFM 通过两步数字重聚焦将离焦样品重新对焦。\n\n第一步使用光线追迹。\n\n第二步反演衍射。 [1]",
+        prompt="QCLFM 如何做数字重聚焦？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "qclfm.en.md",
+                    "heading_path": "A. Concept",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"meta": {"source_path": "qclfm.en.md"}}],
+    )
+
+    compound = next(paragraph for paragraph in out.split("\n\n") if "ray tracing" in paragraph)
+    assert "wave propagation" in compound
+    assert "重聚焦" in compound
+    assert compound.endswith("[1]")
+
+
+def test_normalize_supported_dl_benefit_and_risk_cites_both_claims() -> None:
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        (
+            "好处：深度学习带来卓越的重建质量和快速重建速度。\n\n"
+            "局限：数据驱动策略训练时间长、泛化能力有限。 [1]"
+        ),
+        prompt="深度学习给单像素成像带来的好处和坑分别是什么？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "dl-spi.en.md",
+                    "heading_path": "Abstract",
+                    "evidence_quote": (
+                        "Deep learning offers exceptional reconstruction quality and fast reconstruction speed."
+                    ),
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "dl-spi.en.md",
+                    "heading_path": "4. Strategy and Advantages",
+                    "evidence_quote": (
+                        "Data-driven strategies require prolonged training and have limited generalization."
+                    ),
+                },
+            ]
+        },
+        answer_hits=[{"meta": {"source_path": "dl-spi.en.md"}}],
+    )
+
+    paragraphs = out.split("\n\n")
+    assert paragraphs[0].endswith("[1]")
+    assert paragraphs[1].endswith("[1]")
+
+
+def test_normalize_supported_piln_adds_cited_abstract_definition() -> None:
+    evidence = (
+        "We proposed a self-supervised image-loop neural network (ILNet) with a part-based model. "
+        "The part-based model divides image features into different parts to facilitate "
+        "finer-grained learning and improve image details."
+    )
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "ILNet 会把半成品图像送入下一轮迭代。 [1]",
+        prompt="ILNet 为什么叫 image-loop，part-based 解决什么？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "piln.en.md",
+                    "heading_path": "Abstract",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"meta": {"source_path": "piln.en.md"}}],
+    )
+
+    compound = next(paragraph for paragraph in out.split("\n\n") if "self-supervised" in paragraph)
+    assert "part-based model" in compound
+    assert "finer-grained learning" in compound
+    assert compound.endswith("[1]")
+
+
 def test_origin_question_requests_upstream_citation_lookup() -> None:
     assert finalize_runtime._prompt_explicitly_requests_citation_lookup(
         "ADMM 是作者自己发明的吗？我应该把它当成这篇论文的新东西吗？"

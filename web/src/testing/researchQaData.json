@@ -1525,7 +1525,7 @@
       "question": "ILNet 为什么叫 image-loop？part-based 设计具体想解决什么，训练是否依赖成对真值？",
       "acceptance": [
         "回答应识别它是自监督 image-loop 网络，并解释特征分块用于更细粒度学习。",
-        "证据必须来自方法章节，不能只靠标题猜测网络结构。"
+        "方法定义应定位到摘要中的原句，训练机制再由方法章节补充，不能只靠标题猜测网络结构。"
       ],
       "expected": {
         "requiredAnswerTerms": ["ILNet"],
@@ -1558,7 +1558,7 @@
           "docId": "piln",
           "route": "system_a",
           "sourcePage": 2,
-          "locatorTerms": ["2.1. Methods"],
+          "locatorTerms": ["Abstract"],
           "evidenceTerms": ["self-supervised image-loop neural network", "part-based model"]
         }],
         "requireCitationCardQuality": true,

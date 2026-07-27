@@ -96,6 +96,71 @@ def test_render_payload_rejects_system_a_bound_to_wrong_passage() -> None:
     assert not render_payload_is_missing_planned_system_a(correct, citation_plan=plan)
 
 
+def test_render_payload_rejects_wrong_same_paper_passage_for_compound_claim() -> None:
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": r"F:\db\PILN\PILN.en.md",
+                "heading_path": "Abstract",
+                "evidence_quote": (
+                    "We proposed a self-supervised image-loop neural network with a "
+                    "part-based model. It divides image features to facilitate "
+                    "finer-grained learning."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": r"F:\db\PILN\PILN.en.md",
+                "heading_path": "2.1. Methods",
+                "evidence_quote": (
+                    "ILNet uses a semi-finished reconstructed image loop to replace "
+                    "the input of the network."
+                ),
+            },
+        ],
+    }
+    stale = {
+        "cite_details": [
+            {
+                "citation_route": "system_a",
+                "source_path": "kb-source/0/PILN/PILN.en.md",
+                "heading_path": "2.1. Methods",
+                "evidence_quote": (
+                    "ILNet uses a semi-finished reconstructed image loop to replace "
+                    "the input of the network."
+                ),
+                "answer_claim": (
+                    "ILNet is a self-supervised image-loop neural network whose "
+                    "part-based model supports finer-grained learning."
+                ),
+            }
+        ]
+    }
+    repaired = {
+        "cite_details": [
+            {
+                "citation_route": "system_a",
+                "source_path": "kb-source/0/PILN/PILN.en.md",
+                "heading_path": "Abstract",
+                "evidence_quote": (
+                    "We proposed a self-supervised image-loop neural network with a "
+                    "part-based model. It divides image features to facilitate "
+                    "finer-grained learning."
+                ),
+                "answer_claim": (
+                    "ILNet is a self-supervised image-loop neural network whose "
+                    "part-based model supports finer-grained learning."
+                ),
+            }
+        ]
+    }
+
+    assert render_payload_is_missing_planned_system_a(stale, citation_plan=plan)
+    assert not render_payload_is_missing_planned_system_a(repaired, citation_plan=plan)
+
+
 def test_render_payload_rejects_multi_paper_cache_with_one_weak_card() -> None:
     plan = {
         "budget": {"system_a": 3, "system_b": 0},

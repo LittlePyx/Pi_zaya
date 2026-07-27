@@ -836,6 +836,44 @@ def test_citation_details_deduplicates_message_and_render_packet_cards():
     assert details == [detail]
 
 
+def test_citation_details_preserves_distinct_occurrence_cards_from_same_paper():
+    benefit = {
+        "num": 1,
+        "anchor": "kb-cite-benefit-1",
+        "citation_route": "system_a",
+        "source_path": "dl-spi.md",
+        "title": "DL SPI review",
+        "doi": "10.1000/dl-spi",
+        "heading_path": "Abstract",
+        "evidence_quote": "Exceptional reconstruction quality and fast reconstruction speed.",
+        "occurrence_specific": True,
+    }
+    risk = {
+        **benefit,
+        "anchor": "kb-cite-risk-1",
+        "heading_path": "4. Strategy and Advantages",
+        "evidence_quote": "Prolonged training duration and limited generalization.",
+    }
+    result = {
+        "assistant_message": {
+            "content": "Benefit [1]. Risk [1].",
+            "cite_details": [benefit, risk],
+            "meta": {
+                "paper_guide_contracts": {
+                    "render_packet": {"cite_details": [dict(benefit), dict(risk)]},
+                }
+            },
+        }
+    }
+
+    details = eval_mod._citation_details(result)
+
+    assert [detail["anchor"] for detail in details] == [
+        "kb-cite-benefit-1",
+        "kb-cite-risk-1",
+    ]
+
+
 def test_validate_case_rejects_unready_unpolished_refs_without_forcing_ordinary_system_b():
     fixture = load_fixture()
     case = _case_by_id(fixture, "spi-roadmap-beginner")

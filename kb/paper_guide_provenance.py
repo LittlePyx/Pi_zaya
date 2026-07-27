@@ -1349,13 +1349,14 @@ def _annotate_segments_with_support_resolution(
             seg_idx = -1
         if bool(rec.get("_segment_index_provided")) and seg_idx >= 0:
             by_segment_index.setdefault(seg_idx, []).append((idx, rec))
-        # Only allow surface-based matching when the record does not carry an explicit segment_index.
-        # This prevents a record meant for a specific segment from being applied to a different segment
-        # due to normalization collisions.
-        if not bool(rec.get("_segment_index_provided")):
-            rec_norm = _normalize_support_resolution_surface(str(rec.get("segment_text") or ""))
-            if rec_norm:
-                by_surface.setdefault(rec_norm, []).append((idx, rec))
+        # Keep exact-surface fallback even when a segment index was supplied.
+        # The grounding splitter numbers prose segments while provenance keeps
+        # Markdown line-oriented indices, so the two valid indices can differ.
+        # An exact normalized surface is safer than attaching the record to a
+        # different paragraph merely because its ordinal happens to match.
+        rec_norm = _normalize_support_resolution_surface(str(rec.get("segment_text") or ""))
+        if rec_norm:
+            by_surface.setdefault(rec_norm, []).append((idx, rec))
     used: set[int] = set()
     out: list[dict] = []
     for ordinal_idx, seg in enumerate(segments or []):
@@ -1372,6 +1373,30 @@ def _annotate_segments_with_support_resolution(
             if idx not in used
         ]
         if direct_rows:
+            surface_direct_rows = [
+                (idx, item)
+                for idx, item in direct_rows
+                if _normalize_support_resolution_surface(str(item.get("segment_text") or ""))
+                == seg_norm
+            ]
+            index_only_rows = [
+                (idx, item)
+                for idx, item in direct_rows
+                if not _normalize_support_resolution_surface(
+                    str(item.get("segment_text") or "")
+                )
+            ]
+            if surface_direct_rows:
+                direct_rows = surface_direct_rows
+            elif index_only_rows:
+                # Some exact figure-panel records intentionally carry only an
+                # ordinal and locator. They remain valid index bindings; the
+                # mismatch guard applies only when the producer also supplied a
+                # contradictory segment surface.
+                direct_rows = index_only_rows
+            elif seg_norm:
+                direct_rows = []
+        if direct_rows:
             direct_rows.sort(
                 key=lambda pair: (
                     1 if str(pair[1].get("block_id") or "").strip() else 0,
@@ -1381,7 +1406,7 @@ def _annotate_segments_with_support_resolution(
                 reverse=True,
             )
             chosen_idx, rec = direct_rows[0]
-        elif seg_norm:
+        if rec is None and seg_norm:
             exact_rows = [
                 (idx, item)
                 for idx, item in list(by_surface.get(seg_norm, []) or [])
@@ -1511,7 +1536,8 @@ def _annotate_segments_with_support_resolution(
                 if block_fig_num <= 0:
                     block_fig_num = int(_extract_figure_number(f"{block_heading}\n{block_text[:1200]}") or 0)
                 block_is_figure_like = bool(
-                    block_fig_num > 0
+                    int(support_target_fig or 0) > 0
+                    or block_fig_num > 0
                     or str(block.get("kind") or "").strip().lower() == "figure"
                     or re.search(r"\b(?:figure|fig(?:ure)?\.?|panel|caption)\b", f"{block_heading}\n{block_text[:800]}", flags=re.IGNORECASE)
                 )

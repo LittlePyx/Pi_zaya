@@ -829,7 +829,7 @@ def _citation_details(result: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(final_payload, dict):
         details.extend(_as_list(final_payload.get("cite_details")))
     structured: list[dict[str, Any]] = []
-    seen: set[tuple[str, int, str, str, str]] = set()
+    seen: set[tuple[str, int, str, str, str, str]] = set()
     detailed_system_b_nums: set[int] = set()
     for raw in details:
         if not isinstance(raw, dict):
@@ -843,7 +843,17 @@ def _citation_details(result: dict[str, Any]) -> list[dict[str, Any]]:
         source_path = str(item.get("source_path") or item.get("sourcePath") or "").strip().lower()
         title = str(item.get("title") or item.get("card_title") or "").strip().lower()
         doi = str(item.get("doi") or "").strip().lower()
-        key = (route, num, source_path, title, doi)
+        # Repeated payload surfaces can carry the same rendered card, so still
+        # dedupe by its stable anchor.  Distinct occurrence-specific System-A
+        # cards from one paper intentionally share route/number/DOI and must
+        # not collapse into one broad card during evaluation.
+        occurrence_key = str(
+            item.get("anchor")
+            or item.get("citation_budget_key")
+            or item.get("evidence_fingerprint")
+            or ""
+        ).strip().lower()
+        key = (route, num, source_path, title, doi, occurrence_key)
         if key in seen:
             continue
         seen.add(key)

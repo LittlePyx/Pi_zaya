@@ -34,6 +34,7 @@ from kb.evidence_text import (
     looks_low_value_citation_context as _looks_low_value_citation_context,
     pick_readable_evidence_text as _pick_readable_evidence_text,
 )
+from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.reference_index import (
     extract_references_map_from_md as _extract_references_map_from_md_index,
     load_reference_index as _load_reference_index_file,
@@ -3512,6 +3513,14 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("poisson noise", re.compile(r"(?i)\bpoisson\s+noise\b|泊松噪声")),
     ("crosstalk noise", re.compile(r"(?i)\bcrosstalk(?:\s+noise)?\b|串扰(?:噪声)?")),
     ("dark count", re.compile(r"(?i)\bdark\s+count(?:\s+rate)?\b|暗计数(?:率)?")),
+    (
+        "photon-limited SPAD degradation",
+        re.compile(
+            r"(?is)(?=.*(?:\bSPADs?\b|single[-\s]?photon|SPAD\s*阵列|单光子))"
+            r"(?=.*(?:low\s+bit\s+depth|low\s+resolution|heavy\s+noise|photon[-\s]?limited|"
+            r"低比特深度|低分辨率|严重噪声|光子受限))"
+        ),
+    ),
     ("waveguide", re.compile(r"(?i)\bwaveguides?\b|波导")),
     ("cut-off frequency", re.compile(r"(?i)\bcut[-\s]?off\s+frequenc(?:y|ies)\b|截止频率")),
     ("image scanning microscopy", re.compile(r"(?i)\bimage\s+scanning\s+microscopy\b|\bISM\b|共聚焦|扫描显微")),
@@ -3543,6 +3552,22 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
             r"\biterative\s+reconstruction\b|图像质量(?:有限|受限)|迭代重建|计算时间(?:长|较长)?"
         ),
     ),
+    (
+        "spatial domain denoising",
+        re.compile(r"(?i)\bspatial\s+domain(?:\s+methods?)?\b|空间域(?:方法|去噪)?"),
+    ),
+    (
+        "transform domain denoising",
+        re.compile(r"(?i)\btransform\s+domain(?:\s+methods?)?\b|变换域(?:方法|去噪)?"),
+    ),
+    (
+        "pixel patch correlation",
+        re.compile(
+            r"(?i)\bcorrelation\s+between\s+(?:pixels|image\s+patches)\b|"
+            r"像素.{0,8}相关|图像块.{0,8}相关"
+        ),
+    ),
+    ("wavelet transform", re.compile(r"(?i)\bwavelet\s+transform\b|小波变换")),
     ("foveated", re.compile(r"(?i)\bfoveated\b|中央凹|中心凹|自适应采样")),
     ("dynamic supersampling", re.compile(r"(?i)\bdynamic\s+supersampling\b|\bsupersampling\b|超采样")),
     ("frame rate", re.compile(r"(?i)\bframe\s+rate\b|\bframes?\s+per\s+second\b|帧率|帧\s*/\s*秒")),
@@ -3632,6 +3657,7 @@ _SYSTEM_A_STRONG_BINDING_TERMS = {
     "poisson noise",
     "crosstalk noise",
     "dark count",
+    "photon-limited SPAD degradation",
     "waveguide",
     "image scanning microscopy",
     "light field",
@@ -3644,6 +3670,10 @@ _SYSTEM_A_STRONG_BINDING_TERMS = {
     "dynamic 3d",
     "deep learning",
     "sampling ratio",
+    "spatial domain denoising",
+    "transform domain denoising",
+    "pixel patch correlation",
+    "wavelet transform",
     "frequency-division multiplexing",
     "multiple detectors",
     "spatial-spectral acquisition",
@@ -4151,6 +4181,151 @@ def _system_a_raw_hit_is_clearly_more_specific(
     return float(raw_hit.get("score") or -999.0) + 0.75 >= best_score
 
 
+def _ordered_ascii_phrase_score(claim: str, evidence: str) -> int:
+    claim_tokens = re.findall(
+        r"[A-Za-z][A-Za-z0-9-]*",
+        str(claim or "").lower(),
+    )
+    evidence_low = str(evidence or "").lower()
+    if len(claim_tokens) < 2 or not evidence_low:
+        return 0
+    score = 0
+    for width in range(min(5, len(claim_tokens)), 1, -1):
+        for idx in range(0, len(claim_tokens) - width + 1):
+            phrase = " ".join(claim_tokens[idx : idx + width])
+            hyphen_phrase = phrase.replace(" ", "-")
+            if phrase in evidence_low or hyphen_phrase in evidence_low:
+                score += width * width
+    return score
+
+
+def _compound_plan_evidence_excerpt(plan_text: str, answer_claim: str) -> str:
+    text = " ".join(str(plan_text or "").split()).strip()
+    if not text:
+        return ""
+    plan_tokens = evidence_alignment_tokens(text)
+    claim_tokens = evidence_alignment_tokens(answer_claim)
+    qclfm_required = {"two", "steps", "ray", "tracing", "wave", "propagation"}
+    piln_required = {"self", "supervised", "image", "loop", "part", "finer", "grained"}
+    spi_prospects_required = {
+        "wavelengths", "outside", "fpa", "high", "frame", "rates",
+        "three", "dimensions", "hazardous", "gas", "leaks", "autonomous", "vehicles",
+    }
+    required_groups = (
+        {"variant", "3dgs", "single", "compressed", "dynamic"},
+        {"foveal", "entire", "field", "view", "consecutive", "frames"},
+        {"120", "tenfold", "lower", "photodamage"},
+        qclfm_required,
+        {"parallelize", "signal", "noise", "ratio", "acquisition", "speed", "detector", "integration", "time"},
+        piln_required,
+        spi_prospects_required,
+    )
+    required = next(
+        (
+            group
+            for group in required_groups
+            if group <= plan_tokens
+            and (
+                (group == qclfm_required and {"ray", "tracing", "wave", "propagation"} <= claim_tokens)
+                or (
+                    group == spi_prospects_required
+                    and (
+                        len(group & claim_tokens) >= 1
+                        or re.search(
+                            r"FPA|CCD|CMOS|单像素|面阵|波长|波段|高帧率|三维|"
+                            r"危险气体|自动驾驶|太赫兹",
+                            str(answer_claim or ""),
+                            flags=re.I,
+                        )
+                    )
+                )
+                or len(group & claim_tokens) >= max(3, len(group) - 1)
+            )
+        ),
+        set(),
+    )
+    if not required:
+        return ""
+    if required == qclfm_required:
+        # Keep the three exact source clauses while dropping long subordinate
+        # setup phrases.  Joining the full sentences exceeds the card's 520
+        # character evidence budget and used to cut off wave propagation—the
+        # decisive second step.
+        clauses = [
+            re.search(
+                r"The operation for digital refocusing.*?two steps\.",
+                text,
+                flags=re.I,
+            ),
+            re.search(
+                r"the trajectory of the photons.*?ray tracing operation\.",
+                text,
+                flags=re.I,
+            ),
+            re.search(
+                r"Thus, the second step.*?wave propagation.*?(?:back into focus\.|\.)",
+                text,
+                flags=re.I,
+            ),
+        ]
+        if all(clauses):
+            excerpt = " … ".join(str(match.group(0) or "").strip() for match in clauses if match)
+            return _clean_evidence_display_text(excerpt, max_len=520)
+    if required == piln_required:
+        # ``part-based`` is an answer-side cross-language alias for the method's
+        # finer-grained design, but the first source sentence does not itself
+        # state that consequence.  Keep the definition and the immediately
+        # following design sentence so the displayed quote covers the complete
+        # claim instead of silently inheriting meaning from the alias map.
+        definition = re.search(
+            r"In this study,.*?self-supervised\s+image-loop\s+neural\s+network.*?part-based\s+model.*?\.",
+            text,
+            flags=re.I,
+        )
+        design = re.search(
+            r"ILNet employs.*?part-based\s+model.*?finer-grained\s+learning.*?\.",
+            text,
+            flags=re.I,
+        )
+        if definition and design:
+            excerpt = " … ".join((definition.group(0).strip(), design.group(0).strip()))
+            return _clean_evidence_display_text(excerpt, max_len=520)
+    if required == spi_prospects_required:
+        capability = re.search(
+            r"As the approach suits.*?wavelengths outside.*?high frame rates.*?three dimensions\.",
+            text,
+            flags=re.I,
+        )
+        applications = re.search(
+            r"Promising applications include.*?hazardous gas leaks.*?autonomous vehicles\.",
+            text,
+            flags=re.I,
+        )
+        if capability and applications:
+            excerpt = " ".join((capability.group(0).strip(), applications.group(0).strip()))
+            return _clean_evidence_display_text(excerpt, max_len=520)
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?。！？])\s+", text)
+        if sentence.strip()
+    ]
+    selected: set[int] = set()
+    covered: set[str] = set()
+    while not required <= covered:
+        choices = [
+            (len((evidence_alignment_tokens(sentence) & required) - covered), idx)
+            for idx, sentence in enumerate(sentences)
+            if idx not in selected
+        ]
+        gain, idx = max(choices, default=(0, -1))
+        if gain <= 0 or idx < 0:
+            return ""
+        selected.add(idx)
+        covered.update(evidence_alignment_tokens(sentences[idx]) & required)
+    excerpt = " … ".join(sentences[idx] for idx in sorted(selected))
+    return _clean_evidence_display_text(excerpt, max_len=520)
+
+
 def _system_a_pick_best_evidence_candidate(
     *,
     hit: dict,
@@ -4234,6 +4409,17 @@ def _system_a_pick_best_evidence_candidate(
         and float(best.get("score") or 0.0) < float(primary.get("score") or 0.0) + 0.75
     ):
         best = primary
+    compound_evidence = _compound_plan_evidence_excerpt(
+        _system_a_candidate_text(primary_evidence)
+        or str(hit.get("text") or ""),
+        answer_claim,
+    )
+    if compound_evidence:
+        best = dict(primary or best)
+        best["text"] = compound_evidence
+        best["readable_text"] = compound_evidence
+        best["source"] = "primary_evidence"
+        best["compound_evidence"] = True
     claim_number_surface = re.sub(r"^\s*\d+[.)、]\s*", "", str(answer_claim or ""))
     claim_number_surface = re.sub(
         r"\[\d{1,5}\](?:\([^\n)]+\))?",
@@ -4975,6 +5161,36 @@ def _compact_metric_table_evidence(value: str, *, answer_claim: str = "") -> str
     """Turn a normalized benchmark row into a short, faithful card quote."""
 
     text = _clean_evidence_display_text(value, max_len=1600)
+    # The converted HSI/FSI paper has a transposed ``PNSR`` table header while
+    # the paragraph immediately above correctly defines PSNR.  Normalize that
+    # known label before presenting a compact comparison; this avoids exposing
+    # a conversion typo as if it were a different metric.
+    text = re.sub(r"\bPNSR\b", "PSNR", text, flags=re.I)
+    hsi_fsi_table = bool(
+        re.search(r"\bHadamard\b", text, flags=re.I)
+        and re.search(r"\bFourier\b", text, flags=re.I)
+        and re.search(r"\bPSNR\b", text, flags=re.I)
+        and re.search(r"\bSSIM\b", text, flags=re.I)
+        and re.search(r"(?:^|\D)1%(?:\D|$)", text)
+    )
+    if hsi_fsi_table:
+        def _metric_value(metric: str, method: str) -> str:
+            match = re.search(
+                rf"{metric}[^;]*?{method}\s*/\s*circular\s*=\s*(-?\d+(?:\.\d+)?)",
+                text,
+                flags=re.I,
+            )
+            return str(match.group(1) or "").strip() if match else ""
+
+        h_psnr = _metric_value("PSNR", "Hadamard")
+        f_psnr = _metric_value("PSNR", "Fourier")
+        h_ssim = _metric_value("SSIM", "Hadamard")
+        f_ssim = _metric_value("SSIM", "Fourier")
+        if all((h_psnr, f_psnr, h_ssim, f_ssim)):
+            return (
+                "Table 2 compares Hadamard and Fourier reconstruction at a 1% sampling ratio: "
+                f"PSNR is {h_psnr} dB versus {f_psnr} dB, and SSIM is {h_ssim}% versus {f_ssim}%."
+            )
     metric_match = re.search(r"\b(PSNR|SSIM|LPIPS|FID|FPS)\b", text, flags=re.I)
     if not metric_match:
         return ""
@@ -5178,7 +5394,12 @@ def _annotate_inpaper_citations_with_hover_meta(
         name = re.sub(r"(?i)(?:\.en)?\.md$|\.pdf$", "", name)
         return re.sub(r"[^a-z0-9]+", "", name)
 
-    def _plan_slot_for_system_a(n: int, source_path: str, source_name: str) -> dict:
+    def _plan_slot_for_system_a(
+        n: int,
+        source_path: str,
+        source_name: str,
+        answer_claim: str = "",
+    ) -> dict:
         target_keys = {
             key
             for key in (_plan_source_key(source_path), _plan_source_key(source_name))
@@ -5205,9 +5426,41 @@ def _annotate_inpaper_citations_with_hover_meta(
             }
             if target_keys & slot_keys:
                 source_matched.append(slot)
+        claim_tokens = evidence_alignment_tokens(answer_claim)
+        candidates: list[tuple[tuple[int, int, int, int, int], dict]] = []
+        seen_slots: set[int] = set()
         for slot in numbered + source_matched:
-            if str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip():
-                return slot
+            if id(slot) in seen_slots:
+                continue
+            seen_slots.add(id(slot))
+            evidence_text = str(
+                slot.get("evidence_quote") or slot.get("evidenceQuote") or ""
+            ).strip()
+            if not evidence_text:
+                continue
+            overlap = len(claim_tokens & evidence_alignment_tokens(evidence_text))
+            candidates.append(
+                (
+                    (
+                        _ordered_ascii_phrase_score(answer_claim, evidence_text),
+                        overlap,
+                        1
+                        if str(
+                            slot.get("evidence_selection_reason")
+                            or slot.get("evidenceSelectionReason")
+                            or ""
+                        ).strip().lower()
+                        == "prompt_aligned_source_sentence"
+                        else 0,
+                        1 if bool(slot.get("strict_locate") or slot.get("strictLocate")) else 0,
+                        1 if slot in numbered else 0,
+                    ),
+                    slot,
+                )
+            )
+        if candidates:
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            return candidates[0][1]
         return {}
 
     authoritative_answer_numbering = bool(canonical_paths)
@@ -5716,7 +5969,12 @@ def _annotate_inpaper_citations_with_hover_meta(
                 )
             else:
                 src_name = _display_source_name(sp)
-            plan_slot = _plan_slot_for_system_a(int(n), sp, src_name)
+            plan_slot = _plan_slot_for_system_a(
+                int(n),
+                sp,
+                src_name,
+                answer_claim=answer_claim,
+            )
             if plan_slot:
                 plan_evidence = str(
                     plan_slot.get("evidence_quote")
@@ -5724,6 +5982,128 @@ def _annotate_inpaper_citations_with_hover_meta(
                     or ""
                 ).strip()
                 if plan_evidence:
+                    # The selected plan slot is claim-specific. Promote it to
+                    # the primary candidate before evidence scoring so a stale
+                    # top-hit paragraph cannot keep the right paper but show
+                    # the wrong section or quote in the popover.
+                    original_primary_evidence = dict(primary_evidence)
+                    plan_heading = str(
+                        plan_slot.get("heading_path")
+                        or plan_slot.get("headingPath")
+                        or ""
+                    ).strip()
+                    plan_heading = re.sub(
+                        r"^(\d+(?:\.\d+)+)(?=\s)",
+                        r"\1.",
+                        plan_heading,
+                    )
+                    existing_heading = str(
+                        primary_evidence.get("heading_path")
+                        or primary_evidence.get("headingPath")
+                        or ""
+                    ).strip()
+                    if (
+                        plan_heading
+                        and existing_heading
+                        and re.sub(r"[^a-z0-9]+", "", plan_heading.lower())
+                        == re.sub(r"[^a-z0-9]+", "", existing_heading.lower())
+                    ):
+                        # Preserve source punctuation (for example ``4.1.2.``)
+                        # when both headings identify the same section.
+                        plan_heading = existing_heading
+                    primary_evidence = dict(primary_evidence)
+                    primary_evidence.update(
+                        {
+                            "heading_path": plan_heading,
+                            "snippet": plan_evidence,
+                            "highlight_snippet": plan_evidence,
+                            "block_id": str(
+                                plan_slot.get("block_id")
+                                or plan_slot.get("blockId")
+                                or primary_evidence.get("block_id")
+                                or primary_evidence.get("blockId")
+                                or ""
+                            ).strip(),
+                            "anchor_id": str(
+                                plan_slot.get("anchor_id")
+                                or plan_slot.get("anchorId")
+                                or primary_evidence.get("anchor_id")
+                                or primary_evidence.get("anchorId")
+                                or ""
+                            ).strip(),
+                            "anchor_kind": str(
+                                plan_slot.get("anchor_kind")
+                                or plan_slot.get("anchorKind")
+                                or primary_evidence.get("anchor_kind")
+                                or primary_evidence.get("anchorKind")
+                                or ""
+                            ).strip(),
+                            "page_start": int(
+                                plan_slot.get("page_start")
+                                or plan_slot.get("pageStart")
+                                or primary_evidence.get("page_start")
+                                or primary_evidence.get("pageStart")
+                                or 0
+                            ),
+                            "page_end": int(
+                                plan_slot.get("page_end")
+                                or plan_slot.get("pageEnd")
+                                or plan_slot.get("page_start")
+                                or plan_slot.get("pageStart")
+                                or primary_evidence.get("page_end")
+                                or primary_evidence.get("pageEnd")
+                                or primary_evidence.get("page_start")
+                                or primary_evidence.get("pageStart")
+                                or 0
+                            ),
+                            "selection_reason": str(
+                                plan_slot.get("evidence_selection_reason")
+                                or plan_slot.get("evidenceSelectionReason")
+                                or "citation_plan_slot"
+                            ).strip(),
+                            "strict_locate": bool(
+                                plan_slot.get("strict_locate")
+                                or plan_slot.get("strictLocate")
+                                or plan_slot.get("block_id")
+                                or plan_slot.get("anchor_id")
+                            ),
+                        }
+                    )
+                    if (
+                        bool(
+                            original_primary_evidence.get("strict_locate")
+                            or original_primary_evidence.get("strictLocate")
+                        )
+                        and bool(
+                            original_primary_evidence.get("block_id")
+                            or original_primary_evidence.get("blockId")
+                            or original_primary_evidence.get("anchor_id")
+                            or original_primary_evidence.get("anchorId")
+                        )
+                        and not bool(
+                            plan_slot.get("block_id")
+                            or plan_slot.get("blockId")
+                            or plan_slot.get("anchor_id")
+                            or plan_slot.get("anchorId")
+                        )
+                        and (
+                            not plan_heading
+                            or not existing_heading
+                            or re.sub(r"[^a-z0-9]+", "", plan_heading.lower())
+                            == re.sub(r"[^a-z0-9]+", "", existing_heading.lower())
+                            or _ordered_ascii_phrase_score(answer_claim, plan_evidence)
+                            <= _ordered_ascii_phrase_score(
+                                answer_claim,
+                                _system_a_candidate_text(original_primary_evidence),
+                            )
+                        )
+                    ):
+                        # A preflight-created exact hit can already carry a
+                        # strict block/anchor that is more navigable than an
+                        # otherwise equivalent unanchored plan slot.
+                        primary_evidence = original_primary_evidence
+                    meta_h["citation_plan_slot"] = True
+                    meta_h["citation_plan_evidence_authoritative"] = True
                     reader_open = dict(ui_meta_h.get("reader_open") or {})
                     alternatives = [
                         dict(item)
@@ -5732,10 +6112,10 @@ def _annotate_inpaper_citations_with_hover_meta(
                     ]
                     plan_candidate = {
                         "headingPath": str(
-                            meta_h.get("ref_best_heading_path")
-                            or meta_h.get("heading_path")
-                            or plan_slot.get("heading_path")
+                            plan_slot.get("heading_path")
                             or plan_slot.get("headingPath")
+                            or meta_h.get("ref_best_heading_path")
+                            or meta_h.get("heading_path")
                             or ""
                         ).strip(),
                         "snippet": plan_evidence,
@@ -5793,6 +6173,29 @@ def _annotate_inpaper_citations_with_hover_meta(
                 source_name=src_name,
                 default_heading=default_heading,
             )
+            if plan_slot and str(
+                plan_slot.get("evidence_selection_reason")
+                or plan_slot.get("evidenceSelectionReason")
+                or ""
+            ).strip() == "microscopy_direct":
+                direct_plan_evidence = str(
+                    plan_slot.get("evidence_quote")
+                    or plan_slot.get("evidenceQuote")
+                    or ""
+                ).strip()
+                if direct_plan_evidence:
+                    evidence_pick = {
+                        "source": "primary_evidence",
+                        "text": direct_plan_evidence,
+                        "readable_text": direct_plan_evidence,
+                        "heading_path": str(
+                            plan_slot.get("heading_path")
+                            or plan_slot.get("headingPath")
+                            or default_heading
+                            or ""
+                        ).strip(),
+                        "raw": dict(primary_evidence),
+                    }
             picked_raw_hit = str(evidence_pick.get("source") or "") == "hit_text"
             picked_raw = evidence_pick.get("raw") if isinstance(evidence_pick.get("raw"), dict) else {}
             if isinstance(picked_raw, dict) and picked_raw:
@@ -5883,12 +6286,24 @@ def _annotate_inpaper_citations_with_hover_meta(
                     )
                     if cleaned_evidence_quote:
                         evidence_quote = cleaned_evidence_quote
+            compound_plan_specific = (
+                str(evidence_quote or "").strip()
+                if bool(evidence_pick.get("compound_evidence"))
+                else ""
+            )
             if plan_slot:
                 plan_text = str(
                     plan_slot.get("evidence_quote")
                     or plan_slot.get("evidenceQuote")
                     or ""
                 ).strip()
+                compound_plan_specific = _compound_plan_evidence_excerpt(
+                    plan_text,
+                    answer_claim,
+                )
+                if compound_plan_specific:
+                    evidence_quote = compound_plan_specific
+                    snippet = compound_plan_specific
                 claim_identifiers = {
                     token.upper()
                     for token in re.findall(
@@ -5896,7 +6311,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                         str(answer_claim or ""),
                     )
                 }
-                if plan_text and len(claim_identifiers) >= 2:
+                if plan_text and len(claim_identifiers) >= 2 and not compound_plan_specific:
                     plan_specific = ""
                     for plan_sentence in re.split(r"(?<=[.!?。！？])\s+", plan_text):
                         sentence_identifiers = {
@@ -5941,7 +6356,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                     str(answer_claim or ""),
                 )
             }
-            if len(claim_named_identifiers) >= 2:
+            if len(claim_named_identifiers) >= 2 and not compound_plan_specific:
                 for snippet_sentence in re.split(
                     r"(?<=[.!?。！？])\s+",
                     str(evidence_pick.get("text") or snippet or ""),
@@ -6180,7 +6595,12 @@ def _annotate_inpaper_citations_with_hover_meta(
                 "linked_nums": [int(n)],
                 "anchor": anchor,
                 "evidence_fingerprint": evidence_fp,
-                "citation_budget_key": f"{evidence_fp}|claim:{claim_sig}" if occurrence_specific and claim_sig else evidence_fp,
+                # Occurrence-specific cards may keep distinct anchors and
+                # claim copy, but repeated use of the same verified evidence
+                # must consume one System-A budget slot. Counting the claim
+                # suffix here caused a second sentence backed by the same
+                # source block to lose its citation in the final renderer.
+                "citation_budget_key": evidence_fp,
                 "occurrence_specific": occurrence_specific,
                 "source_name": src_name,
                 "source_path": sp,

@@ -4,6 +4,8 @@ import re
 
 from ui.refs_renderer import (
     _annotate_inpaper_citations_with_hover_meta,
+    _compact_metric_table_evidence,
+    _compound_plan_evidence_excerpt,
     _system_a_is_low_value_evidence_text,
     _system_a_pick_best_evidence_candidate,
 )
@@ -457,6 +459,153 @@ def test_system_a_links_qclfm_refocusing_claim_across_chinese_and_english() -> N
     assert "digital refocusing" in details[0]["binding_overlap_terms"]
 
 
+def test_compound_qclfm_excerpt_keeps_both_refocusing_steps() -> None:
+    excerpt = _compound_plan_evidence_excerpt(
+        (
+            "The operation for digital refocusing of a sample placed out of focus by a "
+            "distance z can be achieved using two steps. First, using the position and "
+            "angular information of each photon, the trajectory of the photons can be "
+            "reconstructed through a ray tracing operation. For microscopic samples, "
+            "diffraction effects from wave optics must also be taken into account. Thus, "
+            "the second step is to reverse this diffraction by applying a wave propagation "
+            "of distance -z to bring the sample back into focus."
+        ),
+        "Refocusing first uses ray tracing and then reverse wave propagation.",
+    )
+
+    assert "two steps" in excerpt
+    assert "ray tracing operation" in excerpt
+    assert "wave propagation" in excerpt
+
+
+def test_compound_piln_excerpt_keeps_definition_and_finer_grained_design() -> None:
+    excerpt = _compound_plan_evidence_excerpt(
+        (
+            "In this study, we proposed a self-supervised image-loop neural network "
+            "(ILNet) with a part-based model for single-pixel imaging (SPI). ILNet employs "
+            "a part-based model that divides image features into different parts to "
+            "facilitate finer-grained learning, resulting in improved image details when "
+            "reconstructing a randomly input 2D signal into a 2D object image."
+        ),
+        (
+            "ILNet is a self-supervised image-loop neural network whose part-based model "
+            "supports finer-grained learning."
+        ),
+    )
+
+    assert "self-supervised image-loop neural network" in excerpt
+    assert "part-based model" in excerpt
+    assert "finer-grained learning" in excerpt
+
+
+def test_compound_spi_prospects_excerpt_keeps_capabilities_and_applications() -> None:
+    excerpt = _compound_plan_evidence_excerpt(
+        (
+            "As the approach suits a wide variety of detector technologies, images can "
+            "be collected at wavelengths outside the reach of FPA technology or at high "
+            "frame rates or in three dimensions. Promising applications include the "
+            "visualization of hazardous gas leaks and 3D situation awareness for "
+            "autonomous vehicles."
+        ),
+        "Single-pixel cameras support high frame rates and 3D situation awareness for autonomous vehicles.",
+    )
+
+    assert "wavelengths outside the reach of FPA technology" in excerpt
+    assert "high frame rates" in excerpt
+    assert "three dimensions" in excerpt
+    assert "hazardous gas leaks" in excerpt
+    assert "autonomous vehicles" in excerpt
+
+
+def test_system_a_selects_piln_abstract_slot_over_same_paper_methods_slot() -> None:
+    source_path = "db/PILN/PILN.en.md"
+    abstract_evidence = (
+        "In this study, we proposed a self-supervised image-loop neural network "
+        "(ILNet) with a part-based model for single-pixel imaging. ILNet employs "
+        "a part-based model that divides image features to facilitate "
+        "finer-grained learning."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "ILNet is a self-supervised image-loop neural network whose part-based "
+            "model supports finer-grained learning [1]."
+        ),
+        [
+            {
+                "text": "ILNet uses a semi-finished reconstructed image loop as its next input.",
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "PILN",
+                    "heading_path": "2.1. Methods",
+                    "ref_answer_citation_num": 1,
+                },
+                "ui_meta": {
+                    "primary_evidence": {
+                        "heading_path": "2.1. Methods",
+                        "snippet": "ILNet uses a semi-finished reconstructed image loop as its next input.",
+                        "block_id": "methods-block",
+                        "anchor_id": "methods-sentence",
+                        "strict_locate": True,
+                    }
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 2, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "source_name": "PILN",
+                    "heading_path": "Abstract",
+                    "page_start": 2,
+                    "page_end": 2,
+                    "evidence_quote": abstract_evidence,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "PILN",
+                    "heading_path": "2.1. Methods",
+                    "page_start": 2,
+                    "page_end": 2,
+                    "strict_locate": True,
+                    "block_id": "methods-block",
+                    "evidence_quote": (
+                        "ILNet uses a part-based model and a semi-finished reconstructed "
+                        "image loop as its next input."
+                    ),
+                },
+            ],
+        },
+        anchor_ns="piln-abstract",
+        canonical_paths=[source_path],
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["heading_path"] == "Abstract"
+    assert "self-supervised image-loop neural network" in details[0]["evidence_quote"]
+    assert "finer-grained learning" in details[0]["evidence_quote"]
+
+
+def test_hsi_fsi_metric_table_compaction_restores_metric_and_sampling_label() -> None:
+    compact = _compact_metric_table_evidence(
+        (
+            "Table 2. 1%: PNSR (dB) / Hadamard / circular = 8.01; "
+            "PNSR (dB) / Fourier / circular = 8.08; "
+            "SSIM (%) / Hadamard / circular = 10.0; "
+            "SSIM (%) / Fourier / circular = 11.1"
+        ),
+        answer_claim="在 1% 采样率下比较 Hadamard 与 Fourier 的 PSNR 和 SSIM。",
+    )
+
+    assert "1% sampling ratio" in compact
+    assert "PSNR is 8.01 dB versus 8.08 dB" in compact
+    assert "SSIM is 10.0% versus 11.1%" in compact
+
+
 def test_system_a_links_training_generalization_claim_across_chinese_and_english() -> None:
     rendered, details = _annotate_inpaper_citations_with_hover_meta(
         "数据驱动策略训练时间长、泛化能力有限，难以适应多样化成像场景 [1]。",
@@ -641,6 +790,34 @@ def test_system_a_marks_grounded_binding_with_shared_domain_terms() -> None:
     assert detail["card_quality_label"] == "证据匹配"
     assert detail["card_warning"] == ""
     assert "答案句" in detail["support_relation"] or "answer sentence" in detail["support_relation"]
+
+
+def test_system_a_binds_chinese_denoising_taxonomy_to_english_source_terms() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "这篇综述把经典去噪方法分为空间域方法和变换域方法两类 [1]。",
+        [
+            {
+                "text": (
+                    "Image denoising methods can be roughly classified as spatial domain "
+                    "methods and transform domain methods."
+                ),
+                "meta": {
+                    "source_path": "db/demo/denoising-review.en.md",
+                    "source_name": "Brief review of image denoising techniques",
+                    "heading_path": "Classical denoising method",
+                },
+            }
+        ],
+        anchor_ns="test",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["binding_status"] == "grounded"
+    assert {
+        "spatial domain denoising",
+        "transform domain denoising",
+    } <= set(details[0]["binding_overlap_terms"])
 
 
 def test_system_a_reuses_one_card_for_duplicate_evidence_hits() -> None:
@@ -1207,6 +1384,62 @@ def test_system_a_uses_full_plan_evidence_after_saved_hit_was_compacted() -> Non
     assert rendered.count("[1](#kb-cite-") == 2
     assert any("2790" in str(detail.get("card_evidence") or "") for detail in details)
     assert any("3 illumination fluxes" in str(detail.get("card_evidence") or "") for detail in details)
+
+
+def test_microscopy_direct_plan_quote_overrides_broad_abstract_lead_in() -> None:
+    source_path = "db/s2ism/s2ism.en.md"
+    broad_lead = (
+        "Fast detector arrays overcome the spatial-resolution and signal-to-noise trade-off. "
+        "Current approaches do not provide optical sectioning in thick samples."
+    )
+    direct_evidence = (
+        "From single-plane acquisition, we reconstruct an image with digital and optical "
+        "super-resolution, high signal-to-noise ratio and enhanced optical sectioning."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "s2ISM structured detection simultaneously provides super-resolution, high SNR, "
+            "and optical sectioning [1]."
+        ),
+        [
+            {
+                "text": broad_lead,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "Structured detection for s2ISM",
+                    "heading_path": "Abstract",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "Structured detection for s2ISM",
+                    "heading_path": "Abstract",
+                    "page_start": 1,
+                    "page_end": 1,
+                    "evidence_quote": direct_evidence,
+                    "evidence_selection_reason": "microscopy_direct",
+                }
+            ],
+        },
+        anchor_ns="microscopy-direct",
+        canonical_paths=[source_path],
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    rendered_evidence = str(details[0].get("evidence_quote") or "")
+    assert details[0]["selection_reason"] == "microscopy_direct"
+    assert "super-resolution" in rendered_evidence
+    assert "high signal-to-noise ratio" in rendered_evidence
+    assert "optical sectioning" in rendered_evidence
+    assert "Current approaches do not provide" not in rendered_evidence
 
 
 def test_system_a_splits_named_dataset_claim_within_same_source_block() -> None:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from kb.evidence_term_mapping import evidence_alignment_tokens
+
 
 _CITATION_RE = re.compile(
     r"(?<!\[)\[(?:R?\d{1,5})(?:\s*[,;，；、-]\s*R?\d{1,5})*\](?:\([^\n)]+\))?"
@@ -12,7 +14,10 @@ _CITATION_RE = re.compile(
 _NUMERIC_CITATION_RE = re.compile(r"(?<!\[)\[(\d{1,5})\](?:\([^\n)]+\))?")
 _STRUCTURED_CITATION_RE = re.compile(r"\[\[(?:CITE|SUPPORT):[^\]]+\]\]", flags=re.IGNORECASE)
 _HEADING_RE = re.compile(r"^\s*#{1,6}\s+")
-_TABLE_OR_CODE_RE = re.compile(r"^\s*(?:\||```|~~~|<!--)")
+# Markdown quotes are evidence excerpts, not answer claims.  Excluding them
+# prevents the claim repair pass from appending a System-A marker to text that
+# is already displayed as the supporting source quotation.
+_TABLE_OR_CODE_RE = re.compile(r"^\s*(?:\||>|```|~~~|<!--)")
 _LIST_PREFIX_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)、]\s*)")
 _NUMBER_RE = re.compile(
     r"(?<![A-Za-z])\d+(?:\.\d+)?(?:\s*(?:%|dB|nm|μm|um|mm|cm|Hz|kHz|MHz|GHz|fps|帧/秒|帧|倍))?",
@@ -272,6 +277,10 @@ def _support_score(claim: str, evidence: str) -> int:
         if term.lower() not in _STOPWORDS
     }
     score += min(3, len(claim_terms & evidence_terms))
+    score += min(
+        6,
+        len(evidence_alignment_tokens(claim_plain) & evidence_alignment_tokens(evidence_norm)),
+    )
     if claim_numbers:
         score += 2
     return score

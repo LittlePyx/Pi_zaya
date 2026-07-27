@@ -134,7 +134,7 @@ def _ground_paper_guide_answer_support(
     support_slots: list[dict],
     prompt_family: str = "",
     db_dir: Path | None = None,
-    max_injections: int = 3,
+    max_injections: int = 8,
 ) -> tuple[str, list[dict]]:
     text = _inject_paper_guide_support_markers(
         answer,

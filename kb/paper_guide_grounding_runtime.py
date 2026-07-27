@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.inpaper_citation_grounding import (
     extract_citation_context_hints,
     parse_ref_num_set,
@@ -393,7 +394,20 @@ def _paper_guide_support_focus_tokens(*parts: str, limit: int = 18) -> set[str]:
         for pattern, tokens in _PAPER_GUIDE_SUPPORT_CJK_TOKEN_HINTS:
             if re.search(pattern, part_text, flags=re.IGNORECASE):
                 mapped_tokens.extend(tokens)
-        for tok in [*mapped_tokens, *_paper_guide_cue_tokens(part_text)]:
+        cross_language_tokens = (
+            sorted(evidence_alignment_tokens(part_text))
+            if re.search(r"[\u4e00-\u9fff]", part_text)
+            else []
+        )
+        # Preserve source-order English cues and the established paper-guide
+        # aliases before adding cross-language aliases.  Sorting all English
+        # source words here can displace the exact mechanism cues at the token
+        # budget boundary and regress otherwise-correct evidence ranking.
+        for tok in [
+            *mapped_tokens,
+            *_paper_guide_cue_tokens(part_text),
+            *cross_language_tokens,
+        ]:
             if tok in seen:
                 continue
             is_strong = tok in _PAPER_GUIDE_SUPPORT_TECH_STRONG_TOKENS or tok in _PAPER_GUIDE_CITE_STRONG_TOKENS
@@ -2388,7 +2402,12 @@ def _inject_paper_guide_support_markers(
             txt = str(extra or "").strip()
             if txt:
                 cue_parts.append(txt)
-        tokens = set(_paper_guide_cue_tokens(" ".join(cue_parts)))
+        cue_text = " ".join(cue_parts)
+        tokens = set(_paper_guide_cue_tokens(cue_text))
+        # Preserve the ordered cue budget, then add the complete deterministic
+        # term set. Discriminating terms such as ``tenfold`` or ``detector
+        # integration time`` often occur late in an English abstract sentence.
+        tokens.update(evidence_alignment_tokens(cue_text))
         if not tokens:
             continue
         rules.append(
@@ -2397,6 +2416,8 @@ def _inject_paper_guide_support_markers(
                 "tokens": tokens,
                 "claim_type": str(slot.get("claim_type") or "").strip().lower(),
                 "cite_policy": str(slot.get("cite_policy") or "").strip().lower(),
+                "plan_bridge": str(slot.get("evidence_selection_reason") or "").strip()
+                == "citation_plan_support_bridge",
                 "figure_like": _paper_guide_support_slot_looks_figure_like(slot),
                 "panel_letters": {
                     str(ch or "").strip().lower()
@@ -2439,7 +2460,6 @@ def _inject_paper_guide_support_markers(
         return True
 
     lines = text.splitlines()
-    used_markers: set[str] = set()
     injected = 0
     skip_line_re = re.compile(
         r"(?i)(retrieved library snippets support this conclusion|check the cited section/figure|compare this result against one baseline paper)"
@@ -2481,7 +2501,7 @@ def _inject_paper_guide_support_markers(
         best_shared: set[str] = set()
         for rule in rules:
             marker = str(rule.get("marker") or "").strip()
-            if (not marker) or (marker in used_markers):
+            if not marker:
                 continue
             claim_type = str(rule.get("claim_type") or "").strip().lower()
             if not _family_compatible(claim_type, stripped):
@@ -2497,6 +2517,11 @@ def _inject_paper_guide_support_markers(
                 score += 0.45
             if cite_policy == "prefer_ref":
                 score += 0.1
+            if bool(rule.get("plan_bridge")):
+                # The citation plan already selected this exact source sentence
+                # against the user query. It must outrank a nearby legacy slot
+                # that happens to share one generic token such as "time".
+                score += 4.0
             if bool(rule.get("figure_like")) and (not line_mentions_figure):
                 if claim_type == "figure_panel":
                     score -= 2.2
@@ -2551,7 +2576,6 @@ def _inject_paper_guide_support_markers(
         if not marker:
             continue
         lines[idx] = raw.rstrip() + " " + marker
-        used_markers.add(marker)
         injected += 1
     return "\n".join(lines).strip()
 
@@ -2690,15 +2714,42 @@ def _resolve_paper_guide_support_markers(
                     )
                 )
                 return ""
-            rebound = _resolve_paper_guide_support_slot_block(
-                source_path=str(slot.get("source_path") or "").strip(),
-                snippet=surface,
-                heading=str(slot.get("heading_path") or slot.get("heading") or "").strip(),
-                prompt_family=prompt_family,
-                claim_type=str(slot.get("claim_type") or "").strip(),
-                db_dir=db_dir,
-                target_scope=dict(slot.get("target_scope") or {}),
-            )
+            if str(slot.get("evidence_selection_reason") or "").strip() == "citation_plan_support_bridge":
+                # This slot already carries the exact source block selected by
+                # the citation plan. Re-scoring it against a translated answer
+                # sentence can drift to a nearby reference or figure block.
+                rebound = {
+                    "block_id": str(slot.get("block_id") or "").strip(),
+                    "anchor_id": str(slot.get("anchor_id") or "").strip(),
+                    "heading_path": str(slot.get("heading_path") or slot.get("heading") or "").strip(),
+                    "locate_anchor": str(
+                        slot.get("locate_anchor")
+                        or slot.get("evidence_atom_text")
+                        or slot.get("snippet")
+                        or ""
+                    ).strip(),
+                    "evidence_atom_id": str(slot.get("evidence_atom_id") or "").strip(),
+                    "evidence_atom_kind": str(slot.get("evidence_atom_kind") or "sentence").strip(),
+                    "evidence_atom_text": str(
+                        slot.get("evidence_atom_text")
+                        or slot.get("locate_anchor")
+                        or slot.get("snippet")
+                        or ""
+                    ).strip(),
+                    "candidate_refs": list(slot.get("candidate_refs") or []),
+                    "ref_spans": list(slot.get("ref_spans") or []),
+                    "target_scope": dict(slot.get("target_scope") or {}),
+                }
+            else:
+                rebound = _resolve_paper_guide_support_slot_block(
+                    source_path=str(slot.get("source_path") or "").strip(),
+                    snippet=surface,
+                    heading=str(slot.get("heading_path") or slot.get("heading") or "").strip(),
+                    prompt_family=prompt_family,
+                    claim_type=str(slot.get("claim_type") or "").strip(),
+                    db_dir=db_dir,
+                    target_scope=dict(slot.get("target_scope") or {}),
+                )
             slot_ref_spans = _merge_paper_guide_ref_spans(
                 list(rebound.get("ref_spans") or []),
                 list(slot.get("ref_spans") or []),
@@ -2724,8 +2775,7 @@ def _resolve_paper_guide_support_markers(
             heading_path = str(rebound.get("heading_path") or slot.get("heading_path") or slot.get("heading") or "").strip()
             locate_anchor = str(rebound.get("locate_anchor") or slot.get("locate_anchor") or "").strip()
             ref_num, mode = _resolve_paper_guide_support_ref_num(slot_for_ref, context_text=line)
-            resolutions.append(
-                _build_paper_guide_support_resolution(
+            resolution = _build_paper_guide_support_resolution(
                     doc_idx=int(doc_idx),
                     support_id=support_id or str(slot.get("support_id") or "").strip(),
                     sid=str(slot.get("sid") or "").strip(),
@@ -2750,7 +2800,10 @@ def _resolve_paper_guide_support_markers(
                     segment_text=surface,
                     line_index=int(idx),
                 )
-            )
+            evidence_selection_reason = str(slot.get("evidence_selection_reason") or "").strip()
+            if evidence_selection_reason:
+                resolution["evidence_selection_reason"] = evidence_selection_reason
+            resolutions.append(resolution)
             if int(ref_num or 0) > 0:
                 sid = str(slot.get("sid") or "").strip()
                 if sid:

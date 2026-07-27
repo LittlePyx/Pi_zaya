@@ -301,6 +301,30 @@ def test_reading_route_cards_use_user_language_and_distinct_source_roles() -> No
     assert len({why for _summary, why in cards}) == 3
 
 
+def test_denoising_method_map_card_uses_distinct_grounded_relevance_copy() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "Brief review of image denoising techniques.pdf",
+                "heading_path": "Classical denoising method",
+                "answer_claim": "经典去噪方法分为空间域方法与变换域方法。",
+                "evidence_quote": (
+                    "Image denoising methods are classified as spatial domain methods and "
+                    "transform domain methods. Spatial methods use correlations between "
+                    "pixels or image patches."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt="请给我一张经典去噪方法阅读路线图。",
+    )
+
+    assert summary
+    assert "空间域" in why
+    assert "变换域" in why
+    assert why != summary
+
+
 def test_answer_citation_overlay_uses_source_identity_for_scinerf_relevance(monkeypatch) -> None:
     source_path = r"F:\db\SCINeRF\SCINeRF.en.md"
 

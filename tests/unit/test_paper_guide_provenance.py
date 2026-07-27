@@ -3,6 +3,48 @@ from pathlib import Path
 import kb.paper_guide_provenance as provenance
 
 
+def test_support_resolution_uses_exact_surface_when_segment_ordinals_differ() -> None:
+    exact_claim = "每个衍射受限光斑的入射照明功率降低约十倍，从而减少光损伤。"
+    segments = [
+        {"raw_markdown": "iISM 同时改善分辨率与灵敏度。", "text": "iISM 同时改善分辨率与灵敏度。"},
+        {"raw_markdown": exact_claim, "text": exact_claim},
+    ]
+    block = {
+        "block_id": "blk_abstract",
+        "anchor_id": "p_abstract",
+        "heading_path": "Paper / Abstract",
+        "text": "tenfold lower incident illumination power, significantly reducing photodamage",
+        "kind": "paragraph",
+    }
+
+    out = provenance._annotate_segments_with_support_resolution(
+        segments,
+        support_resolution=[
+            {
+                # Grounding prose ordinals and provenance Markdown ordinals can
+                # legitimately differ; the exact surface must win.
+                "segment_index": 0,
+                "segment_text": exact_claim,
+                "doc_idx": 900,
+                "support_id": "DOC-900",
+                "source_path": "paper.en.md",
+                "block_id": "blk_abstract",
+                "anchor_id": "p_abstract",
+                "heading_path": "Paper / Abstract",
+                "locate_anchor": block["text"],
+                "claim_type": "own_result",
+                "cite_policy": "locate_only",
+            }
+        ],
+        block_lookup={"blk_abstract": block},
+    )
+
+    assert not out[0].get("support_doc_k")
+    assert out[1]["support_doc_k"] == 900
+    assert out[1]["primary_block_id"] == "blk_abstract"
+    assert out[1]["support_locate_anchor"] == block["text"]
+
+
 def test_anchor_row_to_provenance_block_preserves_figure_identity():
     block = provenance._anchor_row_to_provenance_block(
         {

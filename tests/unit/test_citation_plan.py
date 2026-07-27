@@ -3,10 +3,74 @@ from __future__ import annotations
 from pathlib import Path
 
 from kb.citation_plan import (
+    _prompt_aligned_source_slot,
+    _rank_system_a_answer_hits,
     build_citation_plan,
     build_citation_plan_prompt_block,
     citation_plan_prefers_system_b,
 )
+
+
+def test_prompt_aligned_abstract_keeps_complete_multi_sentence_claim(tmp_path: Path) -> None:
+    prefix = "Background context. " * 35
+    target = (
+        "A high-resolution foveal region tracks motion, yet unlike a simple zoom, every frame "
+        "delivers new spatial information from across the entire field of view. This strategy "
+        "records fast-changing features while accumulating slowly evolving detail over several consecutive frames."
+    )
+    source = tmp_path / "foveated.en.md"
+    source.write_text(f"# Paper\n\n## Abstract\n\n{prefix}{target}\n", encoding="utf-8")
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "evidence_atom_text": "Generic supersampling background.",
+        },
+        ranking_texts=["动态超采样和普通 zoom 有什么区别？运动区域如何处理？"],
+    )
+
+    assert "unlike a simple zoom" in slot["evidence_quote"]
+    assert "entire field of view" in slot["evidence_quote"]
+    assert "several consecutive frames" in slot["evidence_quote"]
+    assert "Background context" not in slot["evidence_quote"]
+
+
+def test_chinese_fdm_query_ranks_exact_english_abstract_before_figure_caption() -> None:
+    indexed_hits = [
+        (
+            1,
+            {
+                "text": "Figure 4. State characterization of the illumination patterns.",
+                "meta": {
+                    "source_path": "fdm.en.md",
+                    "heading_path": "Experimental results / Figure 4",
+                },
+            },
+        ),
+        (
+            2,
+            {
+                "text": (
+                    "Frequency-division multiplexed single-pixel imaging parallelizes acquisition "
+                    "and offers a trade-off between signal-to-noise ratio and acquisition speed "
+                    "without altering detector integration time."
+                ),
+                "meta": {
+                    "source_path": "fdm.en.md",
+                    "heading_path": "Abstract",
+                },
+            },
+        ),
+    ]
+
+    ranked = _rank_system_a_answer_hits(
+        indexed_hits,
+        ranking_texts=[
+            "频分复用为什么能并行采集，又如何在不改变探测器积分时间时权衡信噪比和采集速度？"
+        ],
+    )
+
+    assert ranked[0][0] == 2
 
 
 def test_origin_question_builds_system_b_first_plan():
@@ -711,6 +775,127 @@ def test_single_paper_benefit_risk_question_preserves_risk_evidence(tmp_path: Pa
     assert any(slot["evidence_quote"] == benefit for slot in plan["slots"])
     assert any(slot["evidence_quote"] == risk for slot in plan["slots"])
     assert any(slot["heading_path"] == "4. Strategy and Advantages" for slot in plan["slots"])
+
+
+def test_piln_method_question_promotes_exact_abstract_definition(tmp_path: Path):
+    source_path = tmp_path / "Optics & Laser Technology-2024-Part-based image-loop network for single-pixel imaging.en.md"
+    source_path.write_text(
+        "<!-- kb_page: 2 -->\n\n## Abstract\n\n"
+        "We proposed a self-supervised image-loop neural network (ILNet) with a part-based model. "
+        "The part-based model divides image features into different parts to facilitate finer-grained learning.\n\n"
+        "## 2. Method and experiment setup\n\n### 2.1. Methods\n\n"
+        "The generated image is used as input for subsequent iterations.\n",
+        encoding="utf-8",
+    )
+
+    plan = build_citation_plan(
+        prompt="ILNet 为什么叫 image-loop？part-based 设计具体解决什么？",
+        prompt_family="method",
+        answer_hits=[
+            {
+                "text": "The generated image is used as input for subsequent iterations.",
+                "meta": {
+                    "source_path": str(source_path),
+                    "heading_path": "2. Method and experiment setup / 2.1. Methods",
+                },
+            }
+        ],
+    )
+
+    slot = plan["slots"][0]
+    assert slot["heading_path"].endswith("Abstract")
+    assert "self-supervised image-loop neural network" in slot["evidence_quote"]
+    assert "finer-grained learning" in slot["evidence_quote"]
+    assert slot["page_start"] == 2
+
+
+def test_classical_denoising_question_promotes_two_family_taxonomy(tmp_path: Path):
+    source_path = tmp_path / "Visual Computing-2019-Brief review of image denoising techniques.en.md"
+    source_path.write_text(
+        "<!-- kb_page: 2 -->\n\n"
+        "Generally, image denoising methods can be roughly classified as: spatial "
+        "domain methods, transform domain methods.\n\n"
+        "## Classical denoising method\n\n"
+        "Spatial domain methods aim to remove noise by calculating the gray value "
+        "of each pixel based on the correlation between pixels/image patches in the "
+        "original image.\n\n"
+        "## Non-data adaptive transform\n\n"
+        "Wavelet transform decomposes data into a scale-space representation.\n",
+        encoding="utf-8",
+    )
+
+    plan = build_citation_plan(
+        prompt="Map classical denoising into spatial domain and transform domain methods.",
+        prompt_family="method",
+        answer_hits=[
+            {
+                "text": "Wavelet transform decomposes data into a scale-space representation.",
+                "meta": {
+                    "source_path": str(source_path),
+                    "heading_path": "Non-data adaptive transform",
+                },
+            }
+        ],
+    )
+
+    slot = plan["slots"][0]
+    assert slot["heading_path"].endswith("Classical denoising method")
+    assert "spatial domain methods" in slot["evidence_quote"]
+    assert "transform domain methods" in slot["evidence_quote"]
+    assert "correlation between pixels/image patches" in slot["evidence_quote"]
+    assert slot["candidate_hits"] == [1]
+    assert slot["page_start"] == 2
+
+
+def test_piln_classification_reserves_method_and_review_after_generic_hits(tmp_path: Path):
+    review = tmp_path / "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.en.md"
+    review.write_text(
+        "<!-- kb_page: 8 -->\n\n#### 4.1.2. Model-Driven Strategy\n\n"
+        "Model-driven strategy is an unsupervised learning mode. This strategy integrates "
+        "the physical process of SPI with neural networks and leverages the discrepancy "
+        "between real and estimated measurements to guide network optimization.\n",
+        encoding="utf-8",
+    )
+    piln = tmp_path / "Optics & Laser Technology-2024-Part-based image-loop network for single-pixel imaging.en.md"
+    piln.write_text(
+        "<!-- kb_page: 2 -->\n\n## Abstract\n\n"
+        "We proposed a self-supervised image-loop neural network (ILNet) with a part-based model. "
+        "ILNet employs a part-based model that divides image features to facilitate "
+        "finer-grained learning.\n",
+        encoding="utf-8",
+    )
+    generic_hits = [
+        {
+            "text": f"Generic evidence {index}.",
+            "meta": {"source_path": str(tmp_path / f"generic-{index}.en.md"), "heading_path": "Abstract"},
+        }
+        for index in range(1, 4)
+    ]
+
+    plan = build_citation_plan(
+        prompt="PILN should be placed in which DL-SPI strategy, and when is it suitable?",
+        prompt_family="method",
+        answer_hits=[
+            *generic_hits,
+            {
+                "text": "The review categorizes deep-learning SPI strategies.",
+                "meta": {"source_path": str(review), "heading_path": "Abstract"},
+            },
+            {
+                "text": "The generated image is fed into the next ILNet iteration.",
+                "meta": {"source_path": str(piln), "heading_path": "2.1. Methods"},
+            },
+        ],
+    )
+
+    assert plan["budget"]["system_a"] >= 2
+    assert plan["slots"][0]["source_path"] == str(piln)
+    assert plan["slots"][0]["candidate_hits"] == [5]
+    assert "self-supervised image-loop neural network" in plan["slots"][0]["evidence_quote"]
+    assert plan["slots"][1]["source_path"] == str(review)
+    assert plan["slots"][1]["candidate_hits"] == [4]
+    assert "model-driven strategy" in plan["slots"][1]["evidence_quote"].lower()
+    assert "physical process of SPI" in plan["slots"][1]["evidence_quote"]
 
 
 def test_beginner_roadmap_plan_uses_clean_source_evidence_for_each_paper(tmp_path: Path):

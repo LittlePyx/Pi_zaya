@@ -1,6 +1,39 @@
 from kb.claim_evidence_runtime import audit_and_repair_claim_evidence, claim_evidence_audit
 
 
+def test_chinese_fdm_claim_is_repaired_from_unique_english_evidence() -> None:
+    answer = "频分复用可并行采集，并在不改变探测器积分时间时权衡信噪比与采集速度。"
+    hits = [
+        {
+            "text": (
+                "Frequency-division multiplexed single-pixel imaging parallelizes acquisition "
+                "and offers a trade-off between signal-to-noise ratio and acquisition speed "
+                "without altering detector integration time."
+            )
+        },
+        {"text": "A figure visualizes illumination pattern state characterization."},
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(answer, hits)
+
+    assert "[1]" in repaired
+    assert meta["repaired_citations"] == 1
+    assert meta["uncited_high_risk_claims"] == 0
+
+
+def test_source_blockquote_is_not_rewritten_as_an_answer_claim() -> None:
+    answer = "> Frequency-division multiplexing parallelizes acquisition."
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [{"text": "Frequency-division multiplexing parallelizes acquisition."}],
+    )
+
+    assert repaired == answer
+    assert meta["total_claims"] == 0
+    assert meta["repaired_citations"] == 0
+
+
 def test_unique_matching_hit_repairs_missing_claim_citation():
     answer = "该方法把 SPAD 串扰和暗计数纳入物理噪声模型。"
     hits = [

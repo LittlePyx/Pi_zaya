@@ -380,6 +380,27 @@ def render_payload_is_missing_planned_system_a(
         source_key = _source_key(slot.get("source_path") or slot.get("sourcePath"))
         if source_key:
             slots_by_source.setdefault(source_key, []).append(slot)
+    # A single paper can legitimately contribute several passages.  Do not let
+    # a weak cached occurrence survive merely because a different claim from
+    # the same paper happens to match another plan slot.  When a citation claim
+    # strongly identifies one passage, that occurrence must match its best
+    # claim-aligned slot before the whole packet can be reused.
+    for detail in system_a_details:
+        source_slots = slots_by_source.get(_source_key(detail.get("source_path"))) or []
+        claim_terms = _terms(detail.get("answer_claim") or detail.get("card_claim") or "")
+        if not source_slots or not claim_terms:
+            continue
+        ranked_slots = sorted(
+            (
+                (len(claim_terms.intersection(_terms(slot.get("evidence_quote") or ""))), slot)
+                for slot in source_slots
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        best_overlap, best_slot = ranked_slots[0]
+        if best_overlap >= 3 and not _matches_planned_evidence(detail, best_slot):
+            return True
     if len(slots_by_source) >= 2:
         # A multi-paper route is complete only when every selected paper keeps
         # an answer-relevant passage.  The former any-match check let one good

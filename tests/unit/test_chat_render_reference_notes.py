@@ -2299,6 +2299,84 @@ def test_enrich_messages_rebuilds_degraded_numeric_citation_cache(tmp_path: Path
     assert len(persisted_cache.get("cite_details") or []) == 2
 
 
+def test_render_cache_key_changes_when_citation_plan_evidence_changes():
+    from api import chat_render
+
+    common = {
+        "conv_id": "conv-plan-cache",
+        "msg_id": 10,
+        "role": "assistant",
+        "content": "s2ISM provides super-resolution and optical sectioning [1].",
+        "refs_user_msg_id": 9,
+        "ref_pack": {"hits": []},
+        "provenance": None,
+    }
+    broad_key = chat_render._build_message_render_cache_key(
+        **common,
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "evidence_quote": "Current methods do not provide optical sectioning.",
+                }
+            ]
+        },
+    )
+    direct_key = chat_render._build_message_render_cache_key(
+        **common,
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "evidence_quote": (
+                        "We reconstruct an image with super-resolution and enhanced optical sectioning."
+                    ),
+                    "evidence_selection_reason": "microscopy_direct",
+                }
+            ]
+        },
+    )
+
+    assert broad_key != direct_key
+
+
+def test_render_cache_rejects_stale_microscopy_evidence_after_plan_refinement():
+    from api import chat_render
+
+    source_path = "db/s2ism/s2ism.en.md"
+    cache = {
+        "cite_details": [
+            {
+                "citation_route": "system_a",
+                "source_path": source_path,
+                "evidence_quote": (
+                    "Current image scanning microscopy approaches do not provide optical sectioning "
+                    "in thick samples."
+                ),
+            }
+        ]
+    }
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "evidence_quote": (
+                    "We reconstruct an image with digital and optical super-resolution, high "
+                    "signal-to-noise ratio and enhanced optical sectioning."
+                ),
+                "evidence_selection_reason": "microscopy_direct",
+            }
+        ]
+    }
+
+    assert chat_render._render_cache_missing_authoritative_plan_evidence(cache, plan) is True
+    plan["slots"][0].pop("evidence_selection_reason")
+    assert chat_render._render_cache_missing_authoritative_plan_evidence(cache, plan) is True
+    cache["cite_details"][0]["evidence_quote"] = plan["slots"][0]["evidence_quote"]
+    assert chat_render._render_cache_missing_authoritative_plan_evidence(cache, plan) is False
+
+
 def test_enrich_messages_rebuilds_degraded_structured_citation_cache(monkeypatch, tmp_path: Path):
     from api import chat_render
     from ui import refs_renderer
@@ -5218,7 +5296,7 @@ def test_reading_guide_repairs_s2ism_tradeoff_answer_and_binds_exact_abstract(
     assert "空间分辨率与 SNR" in repaired
     assert "光学切片（optical sectioning）与 SNR" in repaired
     assert "限制探测器尺寸" in repaired
-    assert "迭代次数与噪声放大”的单一权衡" in repaired
+    assert "迭代次数" not in repaired
     assert repaired_twice == repaired
     assert hits[-1]["meta"]["citation_plan_s2ism_tradeoff"] is True
     public_source_path = "F:/library/NatPhoton-s2ism.en.md"
@@ -5303,7 +5381,7 @@ def test_s2ism_tradeoff_repair_checks_correct_terms_only_in_target_paragraph(tmp
     assert "two coupled trade-offs" in repaired
     assert "spatial resolution versus SNR" in repaired
     assert "optical sectioning versus SNR" in repaired
-    assert "mentioned elsewhere in this answer" in repaired
+    assert "iteration count versus noise amplification" not in repaired
     assert hits[-1]["meta"]["citation_plan_s2ism_tradeoff"] is True
 
 
@@ -5377,8 +5455,10 @@ def test_s2ism_tradeoff_uses_canonical_source_number_when_refs_are_reordered():
         canonical_paths=canonical_paths,
     )
 
-    assert "detector size improves sectioning only by sacrificing SNR [7]" in repaired
-    assert "[2]" not in repaired
+    assert "limiting detector size restores sectioning only by sacrificing SNR" in repaired
+    assert "[2]" in repaired
+    assert repaired.count("[2]") >= 2
+    assert "[7]" not in repaired
     assert "[8]" not in repaired
     assert "[9]" not in repaired
     _rendered, details = _annotate_inpaper_citations_with_hover_meta(
@@ -5650,6 +5730,151 @@ def test_prompt_aligned_source_slot_rebinds_single_paper_canonical_hit():
     assert augmented[0]["meta"]["citation_plan_slot"] is True
     assert augmented[0]["meta"]["ref_answer_citation_num"] == 1
     assert augmented[0]["ui_meta"]["primary_evidence"]["snippet"] == exact_evidence
+
+
+def test_same_source_prompt_aligned_slots_do_not_overwrite_primary_visible_evidence():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "denoising-review.en.md"
+    taxonomy = (
+        "Image denoising methods are classified as spatial domain methods and "
+        "transform domain methods."
+    )
+    wavelet = "The wavelet transform decomposes input data into a scale-space representation."
+    hits = [
+        {
+            "text": "A weak same-paper retrieval passage.",
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+            "ui_meta": {},
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Classical denoising method",
+                "evidence_quote": taxonomy,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Non-data adaptive transform",
+                "evidence_quote": wavelet,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+        ]
+    }
+
+    augmented = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=1,
+        canonical_paths=[source_path],
+    )
+
+    assert augmented[0]["text"] == taxonomy
+    assert augmented[0]["meta"]["ref_answer_citation_num"] == 1
+    assert any(hit.get("text") == wavelet for hit in augmented[1:])
+
+
+def test_prompt_aligned_source_slot_rebinds_compacted_hit_without_reserved_padding():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "foveated.en.md"
+    exact_evidence = (
+        "A high-resolution foveal region tracks motion, yet unlike a simple zoom, "
+        "every frame delivers information from the entire field of view over "
+        "several consecutive frames."
+    )
+    hits = [
+        {
+            "text": "A nearby section defines digital supersampling.",
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "Results",
+                "ref_answer_citation_num": 3,
+            },
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": exact_evidence,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            }
+        ]
+    }
+
+    augmented = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=0,
+        canonical_paths=[source_path],
+    )
+
+    assert len(augmented) == 1
+    assert augmented[0]["text"] == exact_evidence
+    assert augmented[0]["meta"]["heading_path"] == "Abstract"
+    assert augmented[0]["meta"]["ref_answer_citation_num"] == 3
+
+
+def test_compound_plan_evidence_excerpt_keeps_scigs_relationship_and_output_claims():
+    from ui.refs_renderer import _compound_plan_evidence_excerpt
+
+    plan_text = (
+        "We propose SCIGS, a variant of 3DGS, with a primitive transformation network. "
+        "The network uses camera pose stamps and Gaussian coordinates. "
+        "SCIGS reconstructs a dynamic 3D scene from a single compressed image."
+    )
+    answer_claim = (
+        "SCIGS 是 3DGS 变体，可从单张压缩图像（single compressed image）"
+        "重建动态 3D 场景。"
+    )
+
+    excerpt = _compound_plan_evidence_excerpt(plan_text, answer_claim)
+
+    assert "variant of 3DGS" in excerpt
+    assert "single compressed image" in excerpt
+    assert "dynamic 3D scene" in excerpt
+    assert "camera pose stamps" not in excerpt
+
+
+def test_system_a_evidence_picker_keeps_compound_primary_evidence():
+    from ui.refs_renderer import _system_a_pick_best_evidence_candidate
+
+    evidence = (
+        "We propose SCIGS, a variant of 3DGS, with a primitive transformation network. "
+        "The network uses camera pose stamps and Gaussian coordinates. "
+        "SCIGS reconstructs dynamic 3D scenes from a single compressed image."
+    )
+    primary = {
+        "snippet": evidence,
+        "heading_path": "Abstract",
+        "selection_reason": "prompt_aligned_source_sentence",
+        "strict_locate": True,
+    }
+
+    picked = _system_a_pick_best_evidence_candidate(
+        hit={"text": evidence},
+        meta={},
+        ui_meta={},
+        primary_evidence=primary,
+        answer_claim=(
+            "SCIGS 是 3DGS 变体，可从单张压缩图像（single compressed image）"
+            "重建动态 3D 场景。"
+        ),
+        source_name="SCIGS.pdf",
+        default_heading="Abstract",
+    )
+
+    assert picked["compound_evidence"] is True
+    assert "variant of 3DGS" in picked["readable_text"]
+    assert "single compressed image" in picked["readable_text"]
 
 
 def test_system_a_canonical_number_matches_public_projected_source_path(monkeypatch):
@@ -6971,11 +7196,14 @@ def test_reading_guide_repair_combines_numbered_risks_supported_by_one_evidence_
         citation_plan=plan,
     )
 
-    assert "1. Prolonged training: data-driven strategies take a long time to train; Limited generalization: they struggle with diverse imaging scenes [7]." in repaired
+    assert (
+        "The directly supported limitation is that data-driven strategies have prolonged "
+        "training and limited generalization across imaging scenes [7]."
+    ) in repaired
     assert "\n2. Limited generalization" not in repaired
     risk_detail = next(item for item in details if int(item.get("num") or 0) == 7)
-    assert "Prolonged training" in str(risk_detail.get("answer_claim") or "")
-    assert "Limited generalization" in str(risk_detail.get("answer_claim") or "")
+    assert "prolonged training" in str(risk_detail.get("answer_claim") or "").lower()
+    assert "limited generalization" in str(risk_detail.get("answer_claim") or "").lower()
     assert "prolonged training" in str(risk_detail.get("evidence_quote") or "")
     assert "limited generalization" in str(risk_detail.get("evidence_quote") or "")
 
@@ -7246,9 +7474,10 @@ def test_reading_guide_cassi_lineage_keeps_three_system_a_cards_and_cleans_syste
         canonical_paths=source_paths,
     )
 
-    assert "CASSI starts with a dual-disperser architecture [4]" in repaired
-    assert "SCINeRF uses NeRF with the SCI physical image formation process [5]" in repaired
-    assert "SCIGS reconstructs a dynamic 3D scene [6]" in repaired
+    assert "CASSI starts with a dual-disperser architecture [1]" in repaired
+    assert "SCINeRF uses NeRF with the SCI physical image formation process [2]" in repaired
+    assert "SCIGS reconstructs a dynamic 3D scene [3]" in repaired
+    assert all(f"[{num}]" not in repaired for num in (4, 5, 6))
     assert "[ [[CITE:sid:50]] ]" not in repaired
     assert "upstream step [[CITE:sid:50]]" in repaired
     assert "原始论文" not in repaired
@@ -7330,40 +7559,20 @@ def test_reading_guide_names_ilnet_and_binds_method_plus_strategy_evidence():
 
     assert "论文原文将该方法称为 **ILNet**" in repaired
     assert "part-based model" in repaired
-    assert "问题中称 PILN" in repaired
-    assert "[4]" in repaired
-    assert "[5]" not in repaired
+    assert "PILN/ILNet" in repaired
+    assert "[1]" in repaired
+    assert "[2]" in repaired
     assert "model-driven strategy" in repaired
-    assert "用于定位的两类策略" in repaired
     assert "两条主线之一" not in repaired
     assert "实时成像" not in repaired
     assert "高帧率" not in repaired
-    assert "[2]" not in repaired
-    assert hits[3]["meta"]["heading_path"].endswith("Methods / ILNet architecture")
-    assert "self-supervised image-loop neural network (ILNet)" in hits[3]["text"]
-    assert "physical process of SPI" in hits[4]["text"]
-    pinned_review_hits = [
-        (idx, hit)
-        for idx, hit in enumerate(hits, start=1)
-        if isinstance(hit, dict)
-        and isinstance(hit.get("meta"), dict)
-        and hit["meta"].get("citation_plan_ilnet_review") is True
-    ]
-    assert len(pinned_review_hits) == 1
-    pinned_review_num, pinned_review_hit = pinned_review_hits[0]
-    assert f"[{pinned_review_num}]" in repaired
-    assert "model-driven strategy" in pinned_review_hit["text"].lower()
-    assert "physical process of SPI" in pinned_review_hit["text"]
-
     _rendered, details = _annotate_inpaper_citations_with_hover_meta(
         repaired,
         hits,
         canonical_paths=[method_path, review_path, other_path],
         citation_plan=plan,
     )
-    review_detail = next(
-        item for item in details if int(item.get("num") or 0) == pinned_review_num
-    )
+    review_detail = next(item for item in details if int(item.get("num") or 0) == 2)
     assert review_detail.get("citation_plan_slot") is True
     generic_abstract = (
         "Single-pixel imaging technology can capture images at wavelengths outside conventional "
@@ -7651,7 +7860,9 @@ def test_microscopy_method_map_repair_preserves_unrelated_numeric_citations(
         (
             "s2ism.en.md",
             "Structured detection for s2ISM",
-            "Structured detection provides simultaneous super-resolution and optical sectioning.",
+            "Existing image-scanning methods retain a resolution-versus-sectioning trade-off. "
+            "Structured detection provides simultaneous super-resolution, high signal-to-noise "
+            "ratio, and optical sectioning.",
         ),
         (
             "iism.en.md",
@@ -7718,18 +7929,87 @@ def test_microscopy_method_map_repair_preserves_unrelated_numeric_citations(
         "s2ISM addresses the difficulty of obtaining super-resolution and optical "
         "sectioning together" in repaired
     )
-    assert "achieves both simultaneously [1]" in repaired
+    assert "achieves both simultaneously while maintaining high SNR [1]" in repaired
     assert "about 120 nm lateral resolution [2]" in repaired
     assert "captures both position and angular information for volumetric reconstruction" in repaired
     assert "extreme depth of field [3]" in repaired
     assert "independently supported property [4]" in repaired
     assert all(f"[{num}]" in repaired for num in (1, 2, 3))
     assert len(hits) == 4
+    assert str(hits[0]["meta"]["evidence_quote"]).startswith("Structured detection provides")
+    assert str(slots[0]["evidence_quote"]).startswith("Structured detection provides")
     assert [hit["meta"]["citation_plan_microscopy_direct"] for hit in hits[:3]] == [
         "s2ism",
         "iism",
         "light_field",
     ]
+    repaired_again = chat_render._reading_guide_repair_claim_aligned_abstract_citations(
+        repaired,
+        hits,
+        {"slots": slots},
+        canonical_paths=[str(tmp_path / filename) for filename, _, _ in sources],
+    )
+    assert repaired_again == repaired
+    assert len(hits) == 4
+
+
+def test_single_photon_reading_pair_keeps_facts_on_two_sources_and_uncites_reading_steps():
+    from api import chat_render
+
+    detector_evidence = (
+        "Performance information of different single-photon detectors. Detector type: Si-SPAD; "
+        "spectral range 400–1000 nm; 50%–92% QE; operating temperature 200–300 K."
+    )
+    model_evidence = (
+        "Physics-informed deep learning uses a real-world physical noise model of SPAD for low bit "
+        "depth. It includes dark count rate and is calibrated with 2790 images."
+    )
+    hits = [
+        {
+            "text": detector_evidence,
+            "meta": {"source_path": "detector-review.en.md"},
+        },
+        {
+            "text": model_evidence,
+            "meta": {"source_path": "spad-pidl.en.md"},
+        },
+        {
+            "text": "A single-pixel imaging review, not a SPAD-array source.",
+            "meta": {"source_path": "spi-review.en.md"},
+        },
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "detector-review.en.md",
+                "source_name": "Emerging single-photon detector review",
+                "evidence_quote": detector_evidence,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "spad-pidl.en.md",
+                "source_name": "Physics-informed deep learning for SPAD imaging",
+                "evidence_quote": model_evidence,
+                "candidate_hits": [2],
+            },
+        ]
+    }
+
+    repaired = chat_render._reading_guide_repair_single_photon_reading_pair(
+        "请结合 single-photon detector 综述和 physics-informed 物理噪声模型给出阅读路线。",
+        hits,
+        plan,
+    )
+
+    assert repaired.count("[1]") == 1
+    assert repaired.count("[2]") == 3
+    assert "[3]" not in repaired
+    assert "这些参数决定后续算法面对的观测质量" not in repaired
+    assert "### 1. 先读探测器综述" in repaired
+    assert "### 2. 再读 physics-informed deep learning" in repaired
+    assert "### 3." not in repaired
 
 
 def test_claim_level_citation_reuse_binds_supported_body_and_skips_unsupported_details():
@@ -7919,6 +8199,55 @@ def test_dl_spi_benefit_repair_does_not_cross_single_photon_pixel_modalities():
 
     assert repaired == answer
     assert "[2]" not in repaired
+
+
+def test_dl_spi_benefit_risk_repair_keeps_only_two_direct_markers():
+    from api import chat_render
+
+    answer = (
+        "深度学习给 SPI 带来好处和挑战 [1]。\n\n"
+        "- 卓越的重建质量与快速重建速度：深度学习提高重建质量和重建速度。\n"
+        "- 数据驱动策略训练时间长、泛化能力有限，难以适应多样场景 [1]。\n"
+        "- 深度学习的固有限制包括依赖大规模数据、容易过拟合和泛化有限 [1]。"
+    )
+    hits = [
+        {
+            "text": "Deep learning SPI evidence.",
+            "meta": {"source_path": "dl-spi.en.md", "ref_answer_citation_num": 1},
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "dl-spi.en.md",
+                "candidate_hits": [1],
+                "evidence_quote": (
+                    "Deep learning offers exceptional reconstruction quality and fast reconstruction speed."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "dl-spi.en.md",
+                "candidate_hits": [1],
+                "evidence_quote": (
+                    "Data-driven strategies have prolonged training duration and limited generalization."
+                ),
+            },
+        ]
+    }
+
+    repaired = chat_render._reading_guide_repair_dl_spi_benefit_marker(
+        answer,
+        hits,
+        plan,
+        canonical_paths=["dl-spi.en.md"],
+    )
+
+    assert repaired.count("[1]") == 2
+    assert "重建质量和重建速度 [1]。" in repaired
+    assert "训练时间长、泛化能力有限" in repaired
+    assert "固有限制" not in repaired
 
 
 def test_missing_system_a_repair_does_not_force_single_pixel_source_onto_spad_reading_tip():
@@ -9294,6 +9623,53 @@ def test_exact_support_citation_backfill_does_not_replace_locked_passage():
     assert out[0]["routing_reason"] == "exact_support_preflight"
 
 
+def test_microscopy_direct_citation_backfill_keeps_claim_matching_passage():
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source_path = "db/s2ism/s2ism.en.md"
+    exact_evidence = (
+        "We reconstruct an image with digital and optical super-resolution, high signal-to-noise "
+        "ratio and enhanced optical sectioning."
+    )
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "routing_reason": "retrieval_hit",
+            "source_path": source_path,
+            "source_name": "Structured detection for s2ISM.pdf",
+            "heading_path": "Abstract",
+            "answer_claim": (
+                "s2ISM structured detection simultaneously provides super-resolution and optical "
+                "sectioning."
+            ),
+            "evidence_quote": exact_evidence,
+            "raw": exact_evidence,
+            "page_start": 1,
+            "page_end": 1,
+            "selection_reason": "microscopy_direct",
+            "strict_locate": True,
+        }
+    ]
+    ref_pack = {
+        "hits": [
+            {
+                "text": (
+                    "Fast detector arrays improve signal-to-noise ratio. Current approaches do not "
+                    "provide optical sectioning in thick samples."
+                ),
+                "meta": {"source_path": source_path, "heading_path": "Abstract", "page_start": 1},
+            }
+        ]
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, ref_pack)
+
+    assert out[0]["evidence_quote"] == exact_evidence
+    assert "super-resolution" in str(out[0].get("card_evidence") or exact_evidence)
+    assert "Current approaches do not provide" not in str(out[0].get("evidence_quote") or "")
+
+
 def test_canonical_answer_repair_preserves_authoritative_exact_support_hit():
     from api.chat_render import _augment_hits_with_canonical_answer_citations
 
@@ -9821,6 +10197,15 @@ def test_lineage_system_b_retargets_same_reference_to_downstream_paper(tmp_path:
         "relation_entities": ["video_sci"],
     }
     assert "Snapshot compressive imaging theory" in system_b["evidence_quote"]
+
+    seeded_answer, seeded_plan = _retarget_lineage_system_b_to_downstream_source(
+        "Video SCI connects compressed measurements to the later 3D scene route.",
+        plan,
+    )
+
+    assert f"[[CITE:{new_sid}:42]]" in seeded_answer
+    assert "Snapshot Compressive Imaging: Theory, Algorithms, and Applications" in seeded_answer
+    assert seeded_plan["slots"][-1]["source_path"] == str(downstream_path)
 
 
 def test_lineage_system_b_drops_unsupported_spectral_origin_relation(tmp_path: Path) -> None:

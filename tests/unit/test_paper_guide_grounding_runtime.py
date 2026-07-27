@@ -384,6 +384,93 @@ def test_inject_paper_guide_support_markers_prefers_method_line():
     assert out.endswith("[[SUPPORT:DOC-1]]")
 
 
+def test_inject_support_marker_aligns_chinese_claim_with_english_fdm_evidence():
+    out = _inject_paper_guide_support_markers(
+        "频分复用把不同空间编码调制到不同载频，因此可以并行采集；它在不改变探测器积分时间时权衡信噪比与采集速度。",
+        support_slots=[
+            {
+                "support_example": "[[SUPPORT:DOC-1]]",
+                "claim_type": "method_detail",
+                "cite_policy": "locate_only",
+                "cue": "frequency-division multiplexing parallelizes acquisition",
+                "heading_path": "Abstract",
+                "heading": "Abstract",
+                "snippet": (
+                    "Frequency-division multiplexed single-pixel imaging parallelizes acquisition "
+                    "and offers a trade-off between signal-to-noise ratio and acquisition speed "
+                    "without altering detector integration time."
+                ),
+                "locate_anchor": (
+                    "Frequency-division multiplexed single-pixel imaging parallelizes acquisition "
+                    "without altering detector integration time."
+                ),
+                "deepread_texts": [],
+            }
+        ],
+        prompt_family="method",
+    )
+
+    assert out.endswith("[[SUPPORT:DOC-1]]")
+
+
+def test_inject_support_marker_can_reuse_same_evidence_for_two_supported_claims():
+    out = _inject_paper_guide_support_markers(
+        (
+            "频分复用把不同空间编码调制到不同载频，从而实现并行采集。\n"
+            "它在不改变探测器积分时间时权衡信噪比与采集速度。"
+        ),
+        support_slots=[
+            {
+                "support_example": "[[SUPPORT:DOC-1]]",
+                "claim_type": "method_detail",
+                "cite_policy": "locate_only",
+                "cue": "frequency-division multiplexing parallelizes acquisition",
+                "heading_path": "Abstract",
+                "heading": "Abstract",
+                "snippet": (
+                    "Frequency-division multiplexed single-pixel imaging parallelizes acquisition "
+                    "and offers a trade-off between signal-to-noise ratio and acquisition speed "
+                    "without altering detector integration time."
+                ),
+                "locate_anchor": (
+                    "Frequency-division multiplexed single-pixel imaging parallelizes acquisition "
+                    "without altering detector integration time."
+                ),
+                "deepread_texts": [],
+            }
+        ],
+        prompt_family="method",
+    )
+
+    assert out.count("[[SUPPORT:DOC-1]]") == 2
+
+
+def test_inject_support_marker_uses_late_iism_abstract_terms():
+    out = _inject_paper_guide_support_markers(
+        "iISM 在约 120 nm 横向分辨率下把入射照明功率降低约十倍，并显著减少光损伤。",
+        support_slots=[
+            {
+                "support_example": "[[SUPPORT:DOC-900]]",
+                "claim_type": "own_result",
+                "cite_policy": "locate_only",
+                "cue": (
+                    "Here, we introduce interferometric image scanning microscopy. "
+                    "This next-generation technique combines interferometric detection with image scanning microscopy "
+                    "to achieve about 120 nm lateral resolution while operating at tenfold lower incident illumination "
+                    "power per diffraction limited spot, significantly reducing photodamage."
+                ),
+                "heading_path": "Paper / Abstract",
+                "snippet": "",
+                "locate_anchor": "",
+                "deepread_texts": [],
+            }
+        ],
+        prompt_family="strength_limits",
+    )
+
+    assert out.endswith("[[SUPPORT:DOC-900]]")
+
+
 def test_resolve_paper_guide_support_ref_num_prefers_local_ref_span():
     ref_num, mode = _resolve_paper_guide_support_ref_num(
         {
@@ -429,6 +516,41 @@ def test_resolve_paper_guide_support_markers_rewrites_to_structured_cite():
     assert "[[CITE:s1:34]]" in answer
     assert len(resolutions) == 1
     assert resolutions[0]["resolved_ref_num"] == 34
+
+
+def test_resolve_citation_plan_bridge_keeps_preselected_exact_locator():
+    exact = (
+        "The technique achieves about 120 nm lateral resolution while operating at "
+        "tenfold lower incident illumination power, significantly reducing photodamage."
+    )
+    answer, resolutions = _resolve_paper_guide_support_markers(
+        "iISM 降低约十倍照明功率并减少光损伤。 [[SUPPORT:DOC-900]]",
+        support_slots=[
+            {
+                "doc_idx": 900,
+                "support_id": "DOC-900",
+                "support_example": "[[SUPPORT:DOC-900]]",
+                "source_path": "paper.en.md",
+                "heading_path": "Paper / Abstract",
+                "locate_anchor": exact,
+                "evidence_atom_text": exact,
+                "evidence_atom_kind": "sentence",
+                "block_id": "blk_abstract",
+                "anchor_id": "p_abstract",
+                "claim_type": "own_result",
+                "cite_policy": "locate_only",
+                "evidence_selection_reason": "citation_plan_support_bridge",
+            }
+        ],
+        prompt_family="compare",
+        db_dir=None,
+    )
+
+    assert "[[SUPPORT:" not in answer
+    assert len(resolutions) == 1
+    assert resolutions[0]["heading_path"] == "Paper / Abstract"
+    assert resolutions[0]["locate_anchor"] == exact
+    assert resolutions[0]["block_id"] == "blk_abstract"
 
 
 def test_resolve_paper_guide_support_markers_drops_broad_summary_markers():

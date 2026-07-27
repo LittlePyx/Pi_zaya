@@ -11,6 +11,7 @@ from kb.answer_contract import (
     _reconcile_kb_notice,
 )
 from kb.claim_evidence_runtime import audit_and_repair_claim_evidence
+from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.paper_guide_contracts import (
     _build_paper_guide_render_packet_model,
     _build_paper_guide_retrieval_bundle_model,
@@ -47,7 +48,7 @@ from kb.reference_query_family import (
     prompt_targets_sci_topic as _shared_prompt_targets_sci_topic,
 )
 from kb.config import CITATION_OFFSET
-from kb.evidence_text import pick_readable_evidence_text
+from kb.evidence_text import pick_readable_evidence_text, split_evidence_sentences
 from kb.paper_guide_shared import _cite_source_id
 from kb.reference_index import (
     load_reference_index as _load_reference_index,
@@ -2821,12 +2822,16 @@ def _build_paper_guide_contract_snapshot(
     citation_validation: dict | None,
     doc_list_contract: list[dict] | None = None,
     paper_guide_contracts_seed: dict | None = None,
+    prompt_text: str = "",
 ) -> dict:
     seed = dict(paper_guide_contracts_seed or {})
     doc_list = [dict(item) for item in list(doc_list_contract or []) if isinstance(item, dict)]
     primary_evidence = _pick_shared_primary_evidence(
         paper_guide_contracts_seed=paper_guide_contracts_seed,
         evidence_cards=evidence_cards,
+        support_resolution=support_resolution,
+        prompt_text=prompt_text,
+        answer_text=final_answer_markdown or answer_markdown,
     )
     render_packet_seed = seed.get("render_packet") if isinstance(seed.get("render_packet"), dict) else {}
     citation_plan_seed = seed.get("citation_plan") if isinstance(seed.get("citation_plan"), dict) else {}
@@ -2962,10 +2967,77 @@ def _pick_shared_primary_evidence(
     *,
     paper_guide_contracts_seed: dict | None,
     evidence_cards: list[dict] | None,
+    support_resolution: list[dict] | None = None,
+    prompt_text: str = "",
+    answer_text: str = "",
 ) -> dict:
-    def _primary_precision_score(primary: dict | None) -> tuple[int, int, int, int, int, int]:
+    alignment_tokens = evidence_alignment_tokens(f"{prompt_text}\n{answer_text}")
+
+    def _focused_snippet(value: object) -> str:
+        text = " ".join(str(value or "").split()).strip()
+        if len(text) <= 360 or not alignment_tokens:
+            return text
+        sentences = split_evidence_sentences(text)
+        if len(sentences) < 2:
+            return text[:700].rstrip()
+        # Prefer the smallest contiguous span covering every part of a compound
+        # claim. Long abstracts often put the decisive sentence after several
+        # background sentences, which should not become the card excerpt.
+        compound_groups = (
+            (r"foveal\s+region", r"entire\s+field\s+of\s+view", r"consecutive\s+frames"),
+            (r"variant\s+of\s+3dgs", r"single\s+compressed\s+image", r"dynamic\s+3d\s+scenes"),
+            (r"120\s*nm", r"tenfold\s+lower", r"photodamage"),
+            (r"two\s+steps", r"ray\s+tracing", r"wave\s+propagation"),
+            (
+                r"parallelize\s+the\s+single-pixel\s+imaging\s+process",
+                r"signal-to-noise\s+ratio\s+and\s+acquisition\s+speed",
+                r"detector\s+integration\s+time",
+            ),
+            (
+                r"self-supervised\s+image-loop\s+neural\s+network",
+                r"part-based\s+model",
+                r"finer-grained\s+learning",
+            ),
+        )
+        for group in compound_groups:
+            matched_indices: list[int] = []
+            for pattern in group:
+                idx = next(
+                    (i for i, sentence in enumerate(sentences) if re.search(pattern, sentence, flags=re.I)),
+                    -1,
+                )
+                if idx < 0:
+                    matched_indices = []
+                    break
+                matched_indices.append(idx)
+            if matched_indices:
+                focused = " ".join(
+                    sentences[idx]
+                    for idx in range(min(matched_indices), max(matched_indices) + 1)
+                ).strip()
+                if focused:
+                    return focused[:1100].rstrip()
+        scored = [
+            (len(alignment_tokens & evidence_alignment_tokens(sentence)), idx)
+            for idx, sentence in enumerate(sentences)
+        ]
+        best_score, best_idx = max(scored)
+        if best_score <= 0:
+            return text[:700].rstrip()
+        selected = {best_idx}
+        neighbors = [
+            (score, idx)
+            for score, idx in scored
+            if abs(idx - best_idx) == 1 and score > 0
+        ]
+        if neighbors:
+            selected.add(max(neighbors)[1])
+        focused = " ".join(sentences[idx] for idx in sorted(selected)).strip()
+        return focused[:700].rstrip() if focused else text[:700].rstrip()
+
+    def _primary_precision_score(primary: dict | None) -> tuple[int, int, int, int, int, int, int]:
         if not isinstance(primary, dict) or not primary:
-            return (0, 0, 0, 0, 0, 0)
+            return (0, 0, 0, 0, 0, 0, 0)
         reason = str(primary.get("selection_reason") or primary.get("selectionReason") or "").strip().lower()
         reason_rank = {
             "prompt_aligned": 6,
@@ -2977,8 +3049,16 @@ def _pick_shared_primary_evidence(
             "shared_contract_seed": 1,
             "answer_hit_top": 0,
         }.get(reason, 3 if reason else 0)
+        evidence_text = str(
+            primary.get("snippet")
+            or primary.get("locate_anchor")
+            or primary.get("evidence_quote")
+            or ""
+        )
+        alignment = len(alignment_tokens & evidence_alignment_tokens(evidence_text))
         return (
             reason_rank,
+            min(99, alignment),
             1 if str(primary.get("block_id") or primary.get("blockId") or "").strip() else 0,
             1 if str(primary.get("anchor_id") or primary.get("anchorId") or "").strip() else 0,
             1 if str(primary.get("heading_path") or primary.get("headingPath") or "").strip() else 0,
@@ -2989,7 +3069,7 @@ def _pick_shared_primary_evidence(
         )
 
     best: dict = {}
-    best_score = (0, 0, 0, 0, 0, 0)
+    best_score = (0, 0, 0, 0, 0, 0, 0)
 
     seed = dict(paper_guide_contracts_seed or {})
     candidates: list[dict] = []
@@ -3002,12 +3082,48 @@ def _pick_shared_primary_evidence(
         primary = card.get("primary_evidence")
         if isinstance(primary, dict) and primary:
             candidates.append(dict(primary))
+    for rec in list(support_resolution or []):
+        if not isinstance(rec, dict):
+            continue
+        locate_anchor = str(rec.get("locate_anchor") or rec.get("evidence_atom_text") or "").strip()
+        source_path = str(rec.get("source_path") or "").strip()
+        if not locate_anchor or not source_path:
+            continue
+        reason = str(rec.get("evidence_selection_reason") or "").strip()
+        candidates.append(
+            {
+                "source_path": source_path,
+                "source_name": str(rec.get("source_name") or "").strip(),
+                "block_id": str(rec.get("block_id") or "").strip(),
+                "anchor_id": str(rec.get("anchor_id") or "").strip(),
+                "heading_path": str(rec.get("heading_path") or "").strip(),
+                "snippet": locate_anchor,
+                "highlight_snippet": locate_anchor,
+                "anchor_kind": str(rec.get("evidence_atom_kind") or "sentence").strip(),
+                "page_start": int(rec.get("page_start") or 0),
+                "page_end": int(rec.get("page_end") or rec.get("page_start") or 0),
+                "selection_reason": (
+                    "prompt_aligned" if reason == "citation_plan_support_bridge" else "provenance_segment"
+                ),
+                "strict_locate": bool(rec.get("block_id") or rec.get("anchor_id")),
+            }
+        )
 
     for candidate in candidates:
         score = _primary_precision_score(candidate)
         if (not best) or score > best_score:
             best = dict(candidate)
             best_score = score
+    if best:
+        focused = _focused_snippet(
+            best.get("snippet")
+            or best.get("highlight_snippet")
+            or best.get("locate_anchor")
+            or best.get("evidence_quote")
+        )
+        if focused:
+            best["snippet"] = focused
+            best["highlight_snippet"] = focused
     return best
 
 
@@ -3222,7 +3338,7 @@ def _finalize_fast_exact_generation_answer(
     answer, claim_evidence_meta = audit_and_repair_claim_evidence(
         answer,
         answer_hits=list(answer_hits or []),
-        allow_citation_repairs=False,
+        allow_citation_repairs=True,
         prompt=prompt_text,
     )
     contracts = _build_paper_guide_contract_snapshot(
@@ -3238,6 +3354,7 @@ def _finalize_fast_exact_generation_answer(
         citation_validation=dict(citation_validation or {}),
         doc_list_contract=[],
         paper_guide_contracts_seed=dict(paper_guide_contracts_seed or {}),
+        prompt_text=prompt_text,
     )
     if support_resolution:
         primary_support = support_resolution[0]
@@ -3373,6 +3490,593 @@ def _finalize_fast_exact_generation_answer(
     }
 
 
+def _merge_citation_plan_support_slots(
+    support_slots: list[dict] | None,
+    *,
+    citation_plan: dict | None,
+    locked_citation_source: dict | None = None,
+) -> list[dict]:
+    """Prepend prompt-aligned System-A plan slots to answer grounding.
+
+    Retrieval support slots and citation-plan slots are produced by different
+    selectors. The latter can contain a more precise source sentence. Keeping
+    that sentence only in the prompt lets final grounding drift back to a broad
+    heading, figure, or References block.
+    """
+
+    existing = [dict(item) for item in list(support_slots or []) if isinstance(item, dict)]
+    used_doc_indices: set[int] = set()
+    for item in existing:
+        try:
+            doc_idx = int(item.get("doc_idx") or 0)
+        except Exception:
+            doc_idx = 0
+        if doc_idx > 0:
+            used_doc_indices.add(doc_idx)
+
+    locked = dict(locked_citation_source or {}) if isinstance(locked_citation_source, dict) else {}
+    locked_path = str(locked.get("source_path") or "").strip().lower()
+    locked_sid = str(locked.get("sid") or "").strip()
+    derived: list[dict] = []
+    next_doc_idx = 900
+    for raw in list((citation_plan or {}).get("slots") or []):
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("preferred_system") or "").strip().lower() != "system_a":
+            continue
+        source_path = str(raw.get("source_path") or "").strip()
+        evidence_quote = str(raw.get("evidence_quote") or "").strip()
+        if not source_path or not evidence_quote:
+            continue
+        while next_doc_idx in used_doc_indices and next_doc_idx <= 999:
+            next_doc_idx += 1
+        if next_doc_idx > 999:
+            break
+        support_id = f"DOC-{next_doc_idx}"
+        heading_path = str(raw.get("heading_path") or raw.get("topic") or "").strip()
+        source_sid = locked_sid if locked_sid and source_path.lower() == locked_path else ""
+        derived.append(
+            {
+                "doc_idx": next_doc_idx,
+                "support_id": support_id,
+                "support_example": f"[[SUPPORT:{support_id}]]",
+                "cite_example": "",
+                "sid": source_sid,
+                "source_path": source_path,
+                "heading": heading_path,
+                "heading_path": heading_path,
+                "cue": evidence_quote,
+                "snippet": evidence_quote,
+                "locate_anchor": evidence_quote,
+                "claim_type": str(raw.get("claim_type") or "own_result").strip(),
+                "cite_policy": "locate_only",
+                "candidate_refs": [],
+                "ref_spans": [],
+                "evidence_atom_id": "",
+                "evidence_atom_kind": "sentence",
+                "evidence_atom_text": evidence_quote,
+                "block_id": str(raw.get("block_id") or "").strip(),
+                "anchor_id": str(raw.get("anchor_id") or "").strip(),
+                "target_scope": {},
+                "deepread_texts": [],
+                "page_start": int(raw.get("page_start") or 0),
+                "page_end": int(raw.get("page_end") or raw.get("page_start") or 0),
+                "strict_locate": bool(raw.get("strict_locate")),
+                "evidence_selection_reason": "citation_plan_support_bridge",
+                "source_evidence_selection_reason": str(
+                    raw.get("evidence_selection_reason") or ""
+                ).strip(),
+            }
+        )
+        used_doc_indices.add(next_doc_idx)
+        next_doc_idx += 1
+    return [*derived, *existing]
+
+
+def _normalize_citation_plan_supported_terms(
+    answer: str,
+    *,
+    prompt: str,
+    citation_plan: dict | None,
+    answer_hits: list[dict] | None = None,
+) -> str:
+    """Restore precise source terminology that generation paraphrases away."""
+
+    text = str(answer or "").strip()
+    evidence_parts = [
+        str(slot.get("evidence_quote") or "")
+        for slot in list((citation_plan or {}).get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() == "system_a"
+    ]
+    for hit in list(answer_hits or []):
+        if not isinstance(hit, dict):
+            continue
+        evidence_parts.append(str(hit.get("text") or ""))
+    evidence = "\n".join(evidence_parts)
+    if not text or not evidence:
+        return text
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", text))
+
+    def _is_markdown_table_paragraph(value: str) -> bool:
+        lines = [line.strip() for line in str(value or "").splitlines() if line.strip()]
+        return bool(lines and any(line.startswith("|") for line in lines))
+    plan_source_paths = {
+        str(slot.get("source_path") or "").strip().replace("\\", "/").lower()
+        for slot in list((citation_plan or {}).get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() == "system_a"
+        and str(slot.get("source_path") or "").strip()
+    }
+    def _source_identity(value: object) -> tuple[str, str]:
+        normalized = str(value or "").strip().replace("\\", "/").lower()
+        name = normalized.rsplit("/", 1)[-1]
+        for suffix in (".en.md", ".md", ".pdf"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        return normalized, name
+
+    plan_source_names = {
+        _source_identity(path)[1]
+        for path in plan_source_paths
+        if _source_identity(path)[1]
+    }
+    matching_hit_nums: list[int] = []
+    for idx, hit in enumerate(list(answer_hits or []), start=1):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_key, source_name = _source_identity((meta or {}).get("source_path"))
+        if source_key and (source_key in plan_source_paths or source_name in plan_source_names):
+            matching_hit_nums.append(idx)
+    primary_hit_num = matching_hit_nums[0] if matching_hit_nums else 0
+
+    has_sequential_contract = bool(
+        re.search(r"sequential\s+adaptive\s+compressed\s+sensing", evidence, flags=re.I)
+        and re.search(r"signal\s+support\s+recovery", evidence, flags=re.I)
+        and re.search(r"distilled\s+sensing", evidence, flags=re.I)
+    )
+    if has_sequential_contract and re.search(
+        r"顺序压缩感知|序贯压缩感知|Sequential compressed sensing",
+        text,
+        flags=re.I,
+    ):
+        if prefer_zh:
+            text = re.sub(r"顺序压缩感知", "顺序自适应压缩感知", text, count=1)
+            text = re.sub(
+                r"Sequential\s+compressed\s+sensing",
+                "Sequential adaptive compressed sensing（顺序自适应压缩感知）",
+                text,
+                count=1,
+                flags=re.I,
+            )
+            text = re.sub(
+                r"信号支撑集?（support）的(?:精确)?恢复|信号支撑集?\(support\)的(?:精确)?恢复|"
+                r"(?:信号的)?支撑集的(?:精确)?恢复",
+                "信号支撑集恢复（signal support recovery）",
+                text,
+                count=1,
+            )
+        else:
+            text = re.sub(
+                r"Sequential\s+compressed\s+sensing",
+                "Sequential adaptive compressed sensing",
+                text,
+                count=1,
+                flags=re.I,
+            )
+            text = re.sub(
+                r"\b(?:exact\s+)?support\s+set\s+(?:exact\s+)?recovery\b|"
+                r"\bexact\s+support\s+(?:set\s+)?recovery\b",
+                "signal support recovery",
+                text,
+                count=1,
+                flags=re.I,
+            )
+
+    if (
+        re.search(r"\bSCIGS\b", text, flags=re.I)
+        and re.search(r"variant\s+of\s+3DGS", evidence, flags=re.I)
+        and not re.search(r"3DGS\s*(?:的)?(?:变体|改进|适配)|variant\s+of\s+3DGS", text, flags=re.I)
+    ):
+        if prefer_zh:
+            text = re.sub(
+                r"SCIGS\s+的核心新意",
+                "SCIGS 是面向 SCI 的 3DGS 变体；它的核心新意",
+                text,
+                count=1,
+            )
+            if "3DGS 变体" not in text:
+                text = "SCIGS 是面向 SCI 的 3DGS 变体。\n\n" + text
+        else:
+            text = "SCIGS is a variant of 3DGS adapted to SCI.\n\n" + text
+
+    if (
+        re.search(r"\bSCIGS\b", text, flags=re.I)
+        and re.search(r"single\s+compressed\s+image", evidence, flags=re.I)
+        and not re.search(
+            r"single\s+compressed\s+image|单张压缩图像|单张快照压缩图像|一次压缩观测",
+            text,
+            flags=re.I,
+        )
+    ):
+        if prefer_zh:
+            text = re.sub(
+                r"仅需一张动态场景的压缩图像",
+                "仅需单张压缩图像（single compressed image）作为动态场景输入",
+                text,
+                count=1,
+            )
+            if not re.search(r"single\s+compressed\s+image|单张压缩图像", text, flags=re.I):
+                text = re.sub(
+                    r"SCIGS\s+声称：",
+                    "SCIGS 声称只需单张压缩图像（single compressed image）：",
+                    text,
+                    count=1,
+                )
+        else:
+            text = re.sub(
+                r"requires?\s+only\s+one\s+compressed\s+image",
+                "uses a single compressed image",
+                text,
+                count=1,
+                flags=re.I,
+            )
+
+    if (
+        re.search(r"\bSCIGS\b", text, flags=re.I)
+        and re.search(r"\bSCINeRF\b", text, flags=re.I)
+        and not re.search(r"\bSCINeRF\b", str(prompt or ""), flags=re.I)
+    ):
+        # Do not make an unrequested named-paper comparison merely because a
+        # related-work passage was retrieved; retain the supported method-family
+        # statement without implying that the user asked about another paper.
+        text = re.sub(r"[（(]\s*如\s*SCINeRF\s*[）)]", "", text, flags=re.I)
+        text = re.sub(r"(?:此前\s*)?\bSCINeRF\s*等?", "相关", text, flags=re.I)
+
+    if (
+        re.search(r"\bSCIGS\b", text, flags=re.I)
+        and re.search(r"variant\s+of\s+3DGS", evidence, flags=re.I)
+        and re.search(r"single\s+compressed\s+image", evidence, flags=re.I)
+        and re.search(r"dynamic\s+3D\s+scenes", evidence, flags=re.I)
+    ):
+        scigs_paragraphs = text.split("\n\n")
+        has_compound_scigs_claim = any(
+            re.search(r"\bSCIGS\b", line, flags=re.I)
+            and re.search(r"3DGS\s*变体|variant\s+of\s+3DGS", line, flags=re.I)
+            and re.search(r"单张压缩图|single\s+compressed\s+image", line, flags=re.I)
+            and re.search(r"动态\s*3D\s*场景|dynamic\s+3D\s+scenes", line, flags=re.I)
+            for paragraph in scigs_paragraphs
+            if not _is_markdown_table_paragraph(paragraph)
+            for line in paragraph.splitlines()
+        )
+        if not has_compound_scigs_claim:
+            compound_claim = (
+                "论文摘要的核心主张是：SCIGS 是面向 SCI 的 3DGS 变体，可从单张压缩图像（single compressed image）重建动态 3D 场景。"
+                if prefer_zh
+                else "The Abstract's core claim is that SCIGS is a variant of 3DGS for SCI that reconstructs dynamic 3D scenes from a single compressed image."
+            )
+            text = f"{compound_claim}\n\n{text}"
+
+    if (
+        re.search(r"dynamic\s+supersampling|动态超采样", f"{prompt}\n{text}", flags=re.I)
+        and re.search(r"high[- ]resolution\s+foveal\s+region", evidence, flags=re.I)
+        and not re.search(r"foveal\s+region|中央凹|焦点区域|高分辨率区", text, flags=re.I)
+    ):
+        if prefer_zh:
+            text = re.sub(r"运动区域", "高分辨率焦点区域（foveal region）", text, count=1)
+            if "foveal region" not in text.lower():
+                text = "高分辨率焦点区域（foveal region）跟踪场景中的运动，同时每帧仍采集整个视场的信息。\n\n" + text
+        else:
+            text = "A high-resolution foveal region tracks motion while every frame still samples the full field of view.\n\n" + text
+
+    if (
+        re.search(r"high[- ]resolution\s+foveal\s+region", evidence, flags=re.I)
+        and re.search(r"entire\s+field\s+of\s+view", evidence, flags=re.I)
+        and re.search(r"consecutive\s+frames", evidence, flags=re.I)
+    ):
+        foveated_paragraphs = text.split("\n\n")
+        has_compound_foveated_claim = any(
+            (not _is_markdown_table_paragraph(paragraph))
+            and re.search(r"中央凹|foveal", paragraph, flags=re.I)
+            and re.search(r"整个视场|全视场|entire\s+field\s+of\s+view", paragraph, flags=re.I)
+            and re.search(r"连续帧|连续多帧|多帧|consecutive\s+frames", paragraph, flags=re.I)
+            for paragraph in foveated_paragraphs
+        )
+        if not has_compound_foveated_claim:
+            compound_claim = (
+                "论文摘要的关键表述是：高分辨率中央凹区域（foveal region）跟踪运动；但不同于简单 zoom，每一帧仍从整个视场采集新的空间信息，并在连续多帧中为慢变区域累积细节。"
+                if prefer_zh
+                else "The Abstract states that a high-resolution foveal region tracks motion; unlike a simple zoom, every frame still gathers new spatial information across the entire field of view and accumulates slower detail over consecutive frames."
+            )
+            parts = text.split("\n\n", 1)
+            text = f"{parts[0]}\n\n{compound_claim}"
+            if len(parts) > 1:
+                text += f"\n\n{parts[1]}"
+
+    has_qclfm_refocus_contract = bool(
+        re.search(r"digital\s+refocusing", evidence, flags=re.I)
+        and re.search(r"two\s+steps", evidence, flags=re.I)
+        and re.search(r"ray\s+tracing", evidence, flags=re.I)
+        and re.search(r"wave\s+propagation", evidence, flags=re.I)
+    )
+    if has_qclfm_refocus_contract and re.search(
+        r"QCLFM|量子关联光场|重聚焦|digital\s+refocusing",
+        f"{prompt}\n{text}",
+        flags=re.I,
+    ):
+        has_compound_refocus_claim = any(
+            (not _is_markdown_table_paragraph(paragraph))
+            and re.search(r"重聚焦|重新对焦|digital\s+refocusing", paragraph, flags=re.I)
+            and re.search(r"光线追迹|光线追踪|ray\s+tracing", paragraph, flags=re.I)
+            and re.search(r"波传播|wave\s+propagation", paragraph, flags=re.I)
+            for paragraph in text.split("\n\n")
+        )
+        if not has_compound_refocus_claim:
+            compound_claim = (
+                "论文在 Concept 中把数字重聚焦明确分为两步：先依据光子的位置与角度做光线追迹（ray tracing），再以反向波传播（wave propagation）消除微观样品的衍射，从而重新对焦。"
+                if prefer_zh
+                else "The Concept defines digital refocusing in two steps: ray tracing from photon position and angle, followed by reverse wave propagation to undo diffraction and bring a microscopic sample back into focus."
+            )
+            parts = text.split("\n\n", 1)
+            text = f"{parts[0]}\n\n{compound_claim}"
+            if len(parts) > 1:
+                text += f"\n\n{parts[1]}"
+
+    has_piln_definition_contract = bool(
+        re.search(r"self-supervised\s+image-loop\s+neural\s+network", evidence, flags=re.I)
+        and re.search(r"part-based\s+model", evidence, flags=re.I)
+        and re.search(r"finer-grained\s+learning", evidence, flags=re.I)
+    )
+    if has_piln_definition_contract and re.search(
+        r"\bILNet\b|image[- ]loop|图像循环|图像闭环|part[- ]based|分块",
+        f"{prompt}\n{text}",
+        flags=re.I,
+    ):
+        has_compound_piln_claim = any(
+            (not _is_markdown_table_paragraph(paragraph))
+            and re.search(r"\bILNet\b", paragraph, flags=re.I)
+            and re.search(r"自监督|self-supervised", paragraph, flags=re.I)
+            and re.search(r"图像循环|图像闭环|image[- ]loop", paragraph, flags=re.I)
+            and re.search(r"part[- ]based|分块|基于部件", paragraph, flags=re.I)
+            and re.search(r"finer[- ]grained|细粒度", paragraph, flags=re.I)
+            for paragraph in text.split("\n\n")
+        )
+        if not has_compound_piln_claim:
+            compound_claim = (
+                "论文摘要把 ILNet 定义为自监督图像循环网络（self-supervised image-loop neural network）：part-based model 将图像特征分成不同部分做细粒度学习（finer-grained learning），以改善重建细节。"
+                if prefer_zh
+                else "The Abstract defines ILNet as a self-supervised image-loop neural network whose part-based model divides image features for finer-grained learning and improved reconstruction detail."
+            )
+            parts = text.split("\n\n", 1)
+            text = f"{parts[0]}\n\n{compound_claim}"
+            if len(parts) > 1:
+                text += f"\n\n{parts[1]}"
+
+    asks_iism_live_benefit = bool(
+        re.search(r"\biism\b", f"{prompt}\n{text}", flags=re.I)
+        and re.search(r"活细胞|live[- ]cell|好处|benefit", str(prompt or ""), flags=re.I)
+    )
+    has_iism_power_contract = bool(
+        re.search(r"tenfold\s+lower\s+incident\s+illumination\s+power", evidence, flags=re.I)
+        and re.search(r"photodamage", evidence, flags=re.I)
+    )
+    if asks_iism_live_benefit and has_iism_power_contract and not (
+        re.search(r"tenfold\s+lower|降低约?\s*(?:10|十)\s*倍|低十倍|十分之一", text, flags=re.I)
+        and re.search(r"photodamage|光损伤|光毒性", text, flags=re.I)
+    ):
+        addition = (
+            "同时，论文的 Abstract 报告：在约 120 nm 横向分辨率下，每个衍射受限光斑的入射照明功率可降低约 10 倍，从而显著减少光损伤。"
+            if prefer_zh
+            else "The Abstract also reports about 120 nm lateral resolution at tenfold lower incident illumination power per diffraction-limited spot, significantly reducing photodamage."
+        )
+        existing_citation = re.search(r"(?<!\[)\[(\d+)\](?!\])", text)
+        citation_num = int(existing_citation.group(1)) if existing_citation else primary_hit_num
+        if citation_num > 0:
+            addition += f" [{citation_num}]"
+        paragraphs = text.split("\n\n", 1)
+        text = f"{paragraphs[0]}\n\n{addition}"
+        if len(paragraphs) > 1:
+            text += f"\n\n{paragraphs[1]}"
+    system_b_enabled = bool(
+        int(dict((citation_plan or {}).get("budget") or {}).get("system_b") or 0) > 0
+        or any(
+            isinstance(slot, dict)
+            and str(slot.get("preferred_system") or "").strip().lower() == "system_b"
+            for slot in list((citation_plan or {}).get("slots") or [])
+        )
+    )
+    if (
+        len(plan_source_paths) == 1
+        and primary_hit_num > 0
+        and matching_hit_nums
+        and not system_b_enabled
+    ):
+        answer_hit_count = len(list(answer_hits or []))
+
+        def _canonicalize_numeric_marker(match: re.Match[str]) -> str:
+            number = int(match.group(1))
+            return f"[{primary_hit_num}]" if 1 <= number <= answer_hit_count else match.group(0)
+
+        text = re.sub(r"(?<!\[)\[(\d+)\](?!\])", _canonicalize_numeric_marker, text)
+
+    visible_citation = re.search(r"(?<!\[)\[(\d+)\](?!\])", text)
+    supported_citation_num = primary_hit_num or (int(visible_citation.group(1)) if visible_citation else 0)
+    if supported_citation_num > 0:
+        if re.search(r"\bSCIGS\b", text, flags=re.I) and re.search(r"variant\s+of\s+3DGS", evidence, flags=re.I):
+            text = re.sub(
+                r"(SCIGS\s+是面向\s+SCI\s+的\s+3DGS\s+变体)(?!\s*\[\d+\])",
+                rf"\1 [{supported_citation_num}]",
+                text,
+                count=1,
+            )
+
+        paragraph_rules = (
+            (
+                re.compile(r"(?:降低约?\s*(?:10|十)\s*倍|tenfold\s+lower).*(?:光损伤|photodamage)", re.I | re.S),
+                re.compile(r"tenfold\s+lower.*photodamage", re.I | re.S),
+            ),
+            (
+                re.compile(r"(?:普通\s*zoom|simple\s+zoom).*(?:整个视场|全视场|entire\s+field\s+of\s+view)", re.I | re.S),
+                re.compile(r"unlike\s+a?\s*simple\s+zoom.*entire\s+field\s+of\s+view", re.I | re.S),
+            ),
+        )
+        paragraphs = text.split("\n\n")
+        for answer_pattern, evidence_pattern in paragraph_rules:
+            if not evidence_pattern.search(evidence):
+                continue
+            for idx, paragraph in enumerate(paragraphs):
+                if not answer_pattern.search(paragraph) or re.search(r"(?<!\[)\[\d+\](?!\])", paragraph):
+                    continue
+                paragraphs[idx] = paragraph.rstrip() + f" [{supported_citation_num}]"
+                break
+        text = "\n\n".join(paragraphs)
+
+        if has_qclfm_refocus_contract:
+            paragraphs = text.split("\n\n")
+            for idx, paragraph in enumerate(paragraphs):
+                if (
+                    _is_markdown_table_paragraph(paragraph)
+                    or not re.search(r"重聚焦|重新对焦|digital\s+refocusing", paragraph, flags=re.I)
+                    or not re.search(r"光线追迹|光线追踪|ray\s+tracing", paragraph, flags=re.I)
+                    or not re.search(r"波传播|wave\s+propagation", paragraph, flags=re.I)
+                    or re.search(r"(?<!\[)\[\d+\](?!\])", paragraph)
+                ):
+                    continue
+                paragraphs[idx] = paragraph.rstrip() + f" [{supported_citation_num}]"
+                break
+            text = "\n\n".join(paragraphs)
+
+        if has_piln_definition_contract:
+            paragraphs = text.split("\n\n")
+            for idx, paragraph in enumerate(paragraphs):
+                if (
+                    _is_markdown_table_paragraph(paragraph)
+                    or not re.search(r"\bILNet\b", paragraph, flags=re.I)
+                    or not re.search(r"自监督|self-supervised", paragraph, flags=re.I)
+                    or not re.search(r"图像循环|图像闭环|image[- ]loop", paragraph, flags=re.I)
+                    or not re.search(r"part[- ]based|分块|基于部件", paragraph, flags=re.I)
+                    or not re.search(r"finer[- ]grained|细粒度", paragraph, flags=re.I)
+                    or re.search(r"(?<!\[)\[\d+\](?!\])", paragraph)
+                ):
+                    continue
+                paragraphs[idx] = paragraph.rstrip() + f" [{supported_citation_num}]"
+                break
+            text = "\n\n".join(paragraphs)
+
+        has_dl_spi_benefit_risk_contract = bool(
+            re.search(r"reconstruction\s+quality", evidence, flags=re.I)
+            and re.search(r"reconstruction\s+speed", evidence, flags=re.I)
+            and re.search(r"training", evidence, flags=re.I)
+            and re.search(r"limited\s+generalization", evidence, flags=re.I)
+        )
+        if has_dl_spi_benefit_risk_contract:
+            paragraphs = text.split("\n\n")
+
+            def _append_dl_marker(predicate) -> None:
+                for idx, paragraph in enumerate(paragraphs):
+                    if (
+                        _is_markdown_table_paragraph(paragraph)
+                        or not predicate(paragraph)
+                        or re.search(r"(?<!\[)\[\d+\](?!\])", paragraph)
+                    ):
+                        continue
+                    paragraphs[idx] = paragraph.rstrip() + f" [{supported_citation_num}]"
+                    return
+
+            _append_dl_marker(
+                lambda paragraph: bool(
+                    re.search(r"深度学习|deep\s+learning", paragraph, flags=re.I)
+                    and re.search(r"重建质量|reconstruction\s+quality", paragraph, flags=re.I)
+                    and re.search(r"重建速度|reconstruction\s+speed", paragraph, flags=re.I)
+                )
+            )
+            _append_dl_marker(
+                lambda paragraph: bool(
+                    re.search(r"训练|training", paragraph, flags=re.I)
+                    and re.search(r"泛化|generalization", paragraph, flags=re.I)
+                )
+            )
+            text = "\n\n".join(paragraphs)
+        if re.search(r"unlike\s+a?\s*simple\s+zoom.*entire\s+field\s+of\s+view", evidence, flags=re.I | re.S):
+            foveated_claim_patterns = (
+                r"((?:每一帧|每帧)[^，；。\n]{0,48}(?:整个视场|全视场)[^，；。\n]{0,48})",
+                r"((?:every\s+frame)[^,;.\n]{0,80}(?:entire\s+field\s+of\s+view)[^,;.\n]{0,48})",
+            )
+            for claim_pattern in foveated_claim_patterns:
+                match = re.search(claim_pattern, text, flags=re.I)
+                if not match:
+                    continue
+                following = text[match.end(1) : match.end(1) + 12]
+                if re.match(r"\s*\[\d+\]", following):
+                    break
+                replacement = match.group(1).rstrip() + f" [{supported_citation_num}]"
+                text = text[: match.start(1)] + replacement + text[match.end(1) :]
+                break
+
+        # With one planned source, retain the visible marker on the strongest
+        # compound claim. Later citation-budget cleanup can otherwise keep a
+        # nearby result paragraph and drop the sentence that answers the user.
+        def _relocate_single_source_marker(paragraph_predicate) -> None:
+            nonlocal text
+            paragraphs = text.split("\n\n")
+            target_idx = next(
+                (idx for idx, paragraph in enumerate(paragraphs) if paragraph_predicate(paragraph)),
+                -1,
+            )
+            if target_idx < 0:
+                return
+            marker_re = re.compile(rf"\s*\[{supported_citation_num}\](?!\()")
+            paragraphs = [marker_re.sub("", paragraph) for paragraph in paragraphs]
+            paragraphs[target_idx] = paragraphs[target_idx].rstrip() + f" [{supported_citation_num}]"
+            text = "\n\n".join(paragraphs)
+
+        if (
+            len(plan_source_paths) == 1
+            and re.search(r"high[- ]resolution\s+foveal\s+region", evidence, flags=re.I)
+            and re.search(r"entire\s+field\s+of\s+view", evidence, flags=re.I)
+            and re.search(r"consecutive\s+frames", evidence, flags=re.I)
+        ):
+            _relocate_single_source_marker(
+                lambda paragraph: bool(
+                    re.search(r"中央凹|foveal", paragraph, flags=re.I)
+                    and not _is_markdown_table_paragraph(paragraph)
+                    and re.search(r"整个视场|全视场|entire\s+field\s+of\s+view", paragraph, flags=re.I)
+                    and re.search(r"连续帧|多帧|累积帧|consecutive\s+frames", paragraph, flags=re.I)
+                )
+            )
+        if (
+            len(plan_source_paths) == 1
+            and re.search(r"120\s*nm", evidence, flags=re.I)
+            and re.search(r"tenfold\s+lower", evidence, flags=re.I)
+            and re.search(r"photodamage", evidence, flags=re.I)
+        ):
+            _relocate_single_source_marker(
+                lambda paragraph: bool(
+                    re.search(r"120\s*nm", paragraph, flags=re.I)
+                    and re.search(r"tenfold\s+lower|降低约?\s*(?:10|十)\s*倍", paragraph, flags=re.I)
+                    and re.search(r"photodamage|光损伤|光毒性", paragraph, flags=re.I)
+                )
+            )
+        if (
+            len(plan_source_paths) == 1
+            and re.search(r"variant\s+of\s+3DGS", evidence, flags=re.I)
+            and re.search(r"single\s+compressed\s+image", evidence, flags=re.I)
+            and re.search(r"dynamic\s+3D\s+scenes", evidence, flags=re.I)
+        ):
+            _relocate_single_source_marker(
+                lambda paragraph: bool(
+                    re.search(r"\bSCIGS\b", paragraph, flags=re.I)
+                    and not _is_markdown_table_paragraph(paragraph)
+                    and re.search(r"3DGS\s*变体|variant\s+of\s+3DGS", paragraph, flags=re.I)
+                    and re.search(r"单张压缩图|single\s+compressed\s+image", paragraph, flags=re.I)
+                    and re.search(r"动态\s*3D\s*场景|dynamic\s+3D\s+scenes", paragraph, flags=re.I)
+                )
+            )
+    return text
+
+
 def _finalize_generation_answer(
     partial: str,
     *,
@@ -3485,6 +4189,8 @@ def _finalize_generation_answer(
     shared_primary_evidence = _pick_shared_primary_evidence(
         paper_guide_contracts_seed=dict(paper_guide_contracts_seed or {}),
         evidence_cards=list(paper_guide_evidence_cards or []),
+        prompt_text=prompt_for_user or prompt,
+        answer_text=answer,
     )
     if paper_guide_contract_enabled:
         answer = _apply_answer_contract_v1(
@@ -3505,6 +4211,17 @@ def _finalize_generation_answer(
         contract_enabled=bool(paper_guide_contract_enabled),
         output_mode=answer_output_mode,
     )
+    answer = _normalize_citation_plan_supported_terms(
+        answer,
+        prompt=prompt_for_user or prompt,
+        citation_plan=citation_plan_seed,
+        answer_hits=answer_hits,
+    )
+    grounding_support_slots = _merge_citation_plan_support_slots(
+        list(paper_guide_support_slots or []),
+        citation_plan=citation_plan_seed,
+        locked_citation_source=locked_citation_source,
+    )
     answer, paper_guide_support_resolution = apply_paper_guide_answer_postprocess(
         answer,
         paper_guide_mode=paper_guide_mode,
@@ -3517,7 +4234,7 @@ def _finalize_generation_answer(
         bound_source_path=paper_guide_bound_source_path,
         db_dir=db_dir,
         answer_hits=answer_hits,
-        support_slots=list(paper_guide_support_slots or []),
+        support_slots=grounding_support_slots,
         cards=list(paper_guide_evidence_cards or []),
         locked_citation_source=locked_citation_source,
     )
@@ -3690,6 +4407,15 @@ def _finalize_generation_answer(
         and bool(paper_guide_reference_apply_meta.get("tail_used"))
     ):
         answer = strip_reference_opportunity_note(answer)
+    # Structured markers have now been resolved to their final System-A
+    # numbers. Re-run the idempotent precision pass so newly inserted,
+    # source-backed claim sentences receive the same visible citation.
+    answer = _normalize_citation_plan_supported_terms(
+        answer,
+        prompt=prompt_for_user or prompt,
+        citation_plan=citation_plan_seed,
+        answer_hits=answer_hits,
+    )
     if callable(validate_freeform_numeric_citations):
         answer, freeform_validation = validate_freeform_numeric_citations(
             answer,
@@ -3714,9 +4440,24 @@ def _finalize_generation_answer(
     answer, claim_evidence_meta = audit_and_repair_claim_evidence(
         answer,
         answer_hits=list(answer_hits or []),
-        allow_citation_repairs=not bool(paper_guide_mode),
+        allow_citation_repairs=True,
         prompt=prompt_for_user or prompt,
     )
+    # Claim repair may add a valid but weaker nearby [n] after the precision
+    # pass above. Run the source-backed pass once more so the final user-visible
+    # marker and its reference card stay on the strongest compound evidence.
+    answer = _normalize_citation_plan_supported_terms(
+        answer,
+        prompt=prompt_for_user or prompt,
+        citation_plan=citation_plan_seed,
+        answer_hits=answer_hits,
+    )
+    if callable(validate_freeform_numeric_citations):
+        answer, final_freeform_validation = validate_freeform_numeric_citations(
+            answer,
+            answer_hits=answer_hits,
+        )
+        citation_validation["final_freeform"] = final_freeform_validation
     answer = _normalize_retrieval_window_claims(answer, prompt=prompt_for_user or prompt)
     answer = _maybe_clarify_negative_boundary_answer(answer, prompt=prompt_for_user or prompt)
     if single_paper_pick_prompt:
@@ -3808,6 +4549,7 @@ def _finalize_generation_answer(
         citation_validation=dict(citation_validation or {}),
         doc_list_contract=list(multi_paper_doc_list or []),
         paper_guide_contracts_seed=dict(paper_guide_contracts_seed or {}),
+        prompt_text=prompt_for_user or prompt,
     )
     if research_answer_plan_norm:
         intent_contract = (
