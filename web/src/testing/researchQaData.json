@@ -464,6 +464,7 @@
     },
     {
       "id": "single-photon-pidl",
+      "sourceGrounded": true,
       "docIds": ["pidl-single-photon", "spd-review"],
       "question": "physics-informed deep learning 在单光子成像里到底帮了什么？",
       "acceptance": [
@@ -471,9 +472,35 @@
         "参考卡应能区分算法主文献和探测器背景综述。"
       ],
       "expected": {
-        "requiredAnswerTerms": ["physics-informed", "SPAD", "noise"],
+        "requiredAnswerTerms": ["physics-informed", "SPAD"],
+        "requiredAnswerTermGroups": [["noise", "噪声"]],
         "requiredRefDocIds": ["pidl-single-photon"],
         "requiredCitationDocIds": ["pidl-single-photon"],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "forbiddenAnswerTerms": [
+          "单像素成像（一种单光子成像的变体）",
+          "single-pixel imaging is a variant of single-photon imaging"
+        ],
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "pidl-physical-noise-role",
+          "docId": "pidl-single-photon",
+          "route": "system_a",
+          "answerScope": "response",
+            "sourcePage": 3,
+          "answerTerms": ["SPAD"],
+          "answerTermGroups": [["noise", "噪声"], ["physics-informed", "物理"]],
+          "evidenceTerms": ["physical noise model", "SPAD"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "pidl-physical-noise-locate",
+          "docId": "pidl-single-photon",
+          "route": "system_a",
+            "sourcePage": 3,
+          "locatorTerms": ["Introduction"],
+          "evidenceTerms": ["physical noise model", "SPAD"]
+        }],
         "requireSystemB": false
       }
     },
@@ -568,6 +595,8 @@
         "requiredAnswerTerms": ["CASSI", "snapshot compressive imaging", "NeRF", "3DGS"],
         "requiredRefDocIds": ["cassi", "scinerf", "scigs"],
         "requiredCitationDocIds": ["cassi", "scinerf", "scigs"],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
         "minRefHits": 3,
         "minRefDocCount": 3,
         "minCitationCount": 3,
@@ -636,6 +665,8 @@
         ],
         "requiredRefDocIds": ["s2ism", "iism", "qclfm"],
         "requiredCitationDocIds": ["s2ism", "iism", "qclfm"],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
         "minRefHits": 3,
         "minRefDocCount": 3,
         "minCitationCount": 3,
@@ -715,6 +746,8 @@
         "requiredAnswerTerms": ["SPAD", "detector", "physics-informed", "noise"],
         "requiredRefDocIds": ["spd-review", "pidl-single-photon"],
         "requiredCitationDocIds": ["spd-review", "pidl-single-photon"],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
         "minRefHits": 2,
         "minRefDocCount": 2,
         "minCitationCount": 2,
@@ -744,6 +777,8 @@
         "requiredAnswerTerms": ["PILN", "ILNet", "deep learning", "single-pixel imaging", "generalization"],
         "requiredRefDocIds": ["piln", "dl-spi-review"],
         "requiredCitationDocIds": ["piln", "dl-spi-review"],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
         "minRefHits": 2,
         "minRefDocCount": 2,
         "minCitationCount": 2,
@@ -933,6 +968,8 @@
         ],
         "requiredRefDocIds": ["spi-prospects"],
         "requiredCitationDocIds": ["spi-prospects"],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
         "allowedRefDocIds": ["spi-prospects"],
         "maxUnexpectedRefDocCount": 0,
         "requiredRouteCounts": {"system_a": 1, "system_b": 0},
@@ -981,6 +1018,8 @@
         ],
         "requiredRefDocIds": ["s2ism"],
         "requiredCitationDocIds": ["s2ism"],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
         "allowedRefDocIds": ["s2ism"],
         "maxUnexpectedRefDocCount": 0,
         "requiredRouteCounts": {"system_a": 1, "system_b": 0},
@@ -1026,6 +1065,8 @@
         "requiredAnswerTermGroups": [["Poisson", "泊松"], ["crosstalk", "串扰"], ["dark count rate", "暗计数率", "暗计数"]],
         "requiredRefDocIds": ["pidl-single-photon"],
         "requiredCitationDocIds": ["pidl-single-photon"],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
         "allowedRefDocIds": ["pidl-single-photon"],
         "maxUnexpectedRefDocCount": 0,
         "requiredRouteCounts": {"system_a": 1, "system_b": 0},

@@ -85,6 +85,11 @@ def test_exact_preflight_hit_keeps_locate_and_reference_identity():
         "block_id": "blk_admm",
         "anchor_id": "p_admm",
         "locate_anchor": "Most existing methods employ ADMM [4].",
+        "page_start": 3,
+        "page_end": 3,
+        "anchor_kind": "paragraph",
+        "evidence_selection_reason": "exact_method_source",
+        "strict_locate": True,
         "resolved_ref_num": 4,
         "candidate_refs": [4, 21],
     }
@@ -100,6 +105,10 @@ def test_exact_preflight_hit_keeps_locate_and_reference_identity():
     assert hit["meta"]["paper_guide_fast_exact"] is True
     assert hit["meta"]["ref_locs"][0]["block_id"] == "blk_admm"
     assert hit["meta"]["ref_locs"][0]["snippet"] == support["locate_anchor"]
+    assert hit["meta"]["ref_locs"][0]["page_start"] == 3
+    assert hit["meta"]["ref_locs"][0]["strict_locate"] is True
+    assert hit["meta"]["primary_evidence"]["selection_reason"] == "exact_method_source"
+    assert hit["meta"]["structured_evidence_locked"] is True
     assert _candidate_refs_from_support_resolution([support]) == {"paper.md": [4, 21]}
 
     contract = _build_exact_preflight_citation_contract(
@@ -114,6 +123,12 @@ def test_exact_preflight_hit_keeps_locate_and_reference_identity():
         "system_b",
     ]
     assert contract["reference_opportunities"][0]["ref_num"] == 4
+    system_a_slot = contract["citation_plan"]["slots"][0]
+    assert system_a_slot["page_start"] == 3
+    assert system_a_slot["page_end"] == 3
+    assert system_a_slot["block_id"] == "blk_admm"
+    assert system_a_slot["strict_locate"] is True
+    assert system_a_slot["evidence_selection_reason"] == "exact_method_source"
 
     ordinary_contract = _build_exact_preflight_citation_contract(
         [support],
@@ -126,6 +141,36 @@ def test_exact_preflight_hit_keeps_locate_and_reference_identity():
         "system_a",
     ]
     assert ordinary_contract["reference_opportunities"] == []
+
+
+def test_exact_preflight_prefers_focused_evidence_quote_over_broad_locator() -> None:
+    support = {
+        "source_path": "paper.md",
+        "heading_path": "Introduction / Figure 1a",
+        "locate_anchor": "A broad paragraph with unrelated surrounding material.",
+        "evidence_quote": "The exact SPAD evidence contains crosstalk and dark count rate.",
+        "page_start": 2,
+        "page_end": 2,
+        "strict_locate": True,
+    }
+
+    hit = _build_exact_preflight_hit(
+        {"source_path": "paper.md", "support_resolution": [support]},
+        source_name="PIDL",
+    )
+    contract = _build_exact_preflight_citation_contract(
+        [support],
+        bound_source_path="paper.md",
+        bound_source_name="PIDL",
+        prompt="Explain the SPAD noise model.",
+    )
+
+    assert hit["text"] == support["evidence_quote"]
+    assert hit["meta"]["primary_evidence"]["snippet"] == support["evidence_quote"]
+    assert (
+        contract["citation_plan"]["slots"][0]["evidence_quote"]
+        == support["evidence_quote"]
+    )
 
 
 def test_exact_preflight_system_b_requires_same_context_reference_marker():

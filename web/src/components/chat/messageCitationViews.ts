@@ -190,8 +190,10 @@ export function enrichCiteDetailsWithVisibleRefContext(
     const answerClaim = cleanCitationDisplayText(detail.cardClaim || detail.answerClaim)
     const evidenceText = cleanCitationDisplayText(detail.cardEvidence || detail.evidenceQuote || detail.summaryLine)
     const summary = row.summaryLine
+    const hasOccurrenceSpecificClaim = (detail.cardQualityFlags || []).includes('occurrence_specific_claim')
     const shouldReplaceTakeaway = Boolean(
       summary
+      && !hasOccurrenceSpecificClaim
       && (
         !currentTakeaway
         || uiTextMostlySame(currentTakeaway, answerClaim)

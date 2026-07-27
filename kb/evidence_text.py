@@ -549,9 +549,54 @@ def pick_readable_evidence_text(
         sentences.pop(0)
     if not sentences:
         return ""
+    claim_identifiers = {
+        token.upper()
+        for token in re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])", str(claim or ""))
+    }
+    identifier_matches = [
+        (
+            len(
+                claim_identifiers
+                & {
+                    token.upper()
+                    for token in re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])", sentence)
+                }
+            ),
+            idx,
+        )
+        for idx, sentence in enumerate(sentences[:10])
+    ]
+    identifier_matches.sort(key=lambda item: (-item[0], item[1]))
+    identifier_count, identifier_idx = (
+        identifier_matches[0] if identifier_matches else (0, 0)
+    )
+    if len(claim_identifiers) >= 2 and identifier_count >= 2:
+        # Named datasets and methods (for example PASCAL VOC2007) are more
+        # discriminative than a generic first sentence from the same block.
+        # Page-marked Markdown can split such a sentence at a page boundary;
+        # retain the exact fragment with an ellipsis instead of falling back to
+        # unrelated but smoother prose.
+        identifier_sentence = sentences[identifier_idx]
+        if usable_evidence_sentence(identifier_sentence):
+            window = join_evidence_window(
+                sentences,
+                center_idx=identifier_idx,
+                claim=claim,
+                heading=heading,
+                title=title,
+                max_len=max_len,
+            )
+            if window:
+                return finish_evidence_text(window, max_len=max_len)
+        return finish_evidence_text(identifier_sentence, max_len=max_len)
     usable = [idx for idx, sentence in enumerate(sentences[:10]) if usable_evidence_sentence(sentence)]
     if usable:
         first_idx = usable[0]
+        claim_numbers = {
+            token
+            for token in re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", str(claim or ""))
+            if not (len(token) == 4 and 1900 <= int(float(token)) <= 2100)
+        }
         scored = [
             (
                 evidence_sentence_quality(sentences[idx], claim=claim, heading=heading, title=title),
@@ -562,7 +607,30 @@ def pick_readable_evidence_text(
         scored.sort(key=lambda item: (-item[0], item[1]))
         best_score, best_idx = scored[0]
         first_score = evidence_sentence_quality(sentences[first_idx], claim=claim, heading=heading, title=title)
-        center_idx = best_idx if best_idx > first_idx and best_score >= first_score + 1.0 else first_idx
+        numeric_matches = [
+            (
+                len(
+                    claim_numbers
+                    & set(re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", sentences[idx]))
+                ),
+                idx,
+            )
+            for idx in usable
+        ]
+        numeric_matches.sort(key=lambda item: (-item[0], item[1]))
+        numeric_count, numeric_idx = numeric_matches[0] if numeric_matches else (0, first_idx)
+        structured_detector_record = bool(
+            re.search(r"(?i)detector\s+type\s*:", text)
+            and re.search(r"(?i)(?:working\s+parameter|performance)\s*(?:\([^)]*\))?\s*[:=]", text)
+        )
+        if len(claim_numbers) >= 2 and numeric_count >= 2 and not structured_detector_record:
+            # Quantitative claims need the sentence carrying their values, not
+            # merely the first qualitative sentence in the same source block.
+            # The evidence window will also retain a useful preceding setup
+            # sentence when it fits.
+            center_idx = numeric_idx
+        else:
+            center_idx = best_idx if best_idx > first_idx and best_score >= first_score + 1.0 else first_idx
         window = join_evidence_window(
             sentences,
             center_idx=center_idx,

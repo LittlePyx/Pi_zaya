@@ -121,6 +121,15 @@ def test_paper_guide_prompt_family_prefers_method_for_training_summary_questions
     )
 
 
+def test_paper_guide_prompt_family_treats_noise_model_contents_as_method_not_compare():
+    assert (
+        _paper_guide_prompt_family(
+            "为什么只用泊松噪声训练 SPAD 超分辨模型不够？这篇文章把哪些真实噪声放进了物理模型？"
+        )
+        == "method"
+    )
+
+
 def test_paper_guide_prompt_family_detects_chinese_refocus_and_scope_questions():
     assert _paper_guide_prompt_family("这个显微镜怎么把离焦样品重新对焦？") == "method"
     assert not _paper_guide_prompt_requests_exact_method_support("这个显微镜怎么把离焦样品重新对焦？")

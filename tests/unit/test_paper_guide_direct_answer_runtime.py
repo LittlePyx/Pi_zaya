@@ -1,5 +1,44 @@
 import kb.paper_guide_direct_answer_runtime as direct_answer_runtime
 from kb.paper_guide_direct_answer_runtime import _build_paper_guide_direct_answer_override
+
+
+def test_spad_noise_model_preflight_returns_grounded_localized_answer(tmp_path):
+    source = tmp_path / "pidl.en.md"
+    source.write_text(
+        "<!-- kb_page: 2 -->\n"
+        "The underlying limitation originates from the employed single-source Poisson noise model, "
+        "which deviates from complex real SPAD noise containing a variety of different-model sources "
+        "such as crosstalk, dark count rate, and so on. However, the technique also falls into the "
+        "single-source based Poisson statistics that lead to degraded imaging quality without considering "
+        "such multiple noise sources (as validated in the following experiments shown in Fig. 2b).\n\n"
+        "**Figure 1.** Illustration. **a** The multi-source physical noise model of SPAD arrays, which "
+        "consists of shot noise from photon incidence, fixed-pattern noise from SPAD array's photon "
+        "absorption, dark count rate, afterpulsing and crosstalk noise from blind electron avalanche, "
+        "and deadtime noise from the quenching circuit.\n",
+        encoding="utf-8",
+    )
+
+    out = direct_answer_runtime._build_paper_guide_exact_answer_preflight(
+        paper_guide_mode=True,
+        prompt_family="method",
+        prompt_for_user="为什么只用泊松噪声训练 SPAD 超分辨模型不够？模型纳入了哪些噪声？",
+        source_path=str(source),
+        db_dir=tmp_path,
+    )
+
+    assert "只用泊松噪声不够" in out["answer"]
+    assert "串扰噪声" in out["answer"]
+    assert "死时间噪声" in out["answer"]
+    assert out["answer"].count("[1]") >= 6
+    assert out["support_resolution"][0]["page_start"] == 2
+    assert "multi-source physical noise model" in out["support_resolution"][0]["locate_anchor"]
+    evidence = out["support_resolution"][0]["evidence_quote"]
+    assert "single-source Poisson noise model" in evidence
+    assert "multi-source physical noise model" in evidence
+    assert "Mora-Mart" not in evidence
+    assert "Figure 1." not in evidence
+    assert "泊松噪声不够" in out["support_resolution"][0]["why_line"]
+    assert "暗计数率" in out["support_resolution"][0]["guide_line"]
 from kb.paper_guide.skills import PaperGuideSkillResult
 
 

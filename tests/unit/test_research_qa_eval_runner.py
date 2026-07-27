@@ -246,7 +246,7 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
         "ECCV-2022-Simple Baselines for Image Restoration/"
         "ECCV-2022-Simple Baselines for Image Restoration.en.md"
     )
-    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 15
+    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 16
 
 
 def test_source_grounded_contracts_match_page_marked_markdown(tmp_path):
@@ -326,6 +326,60 @@ def test_claim_contract_can_validate_split_claims_against_full_response():
     ]
 
     assert _claim_evidence_contract_failures(fixture, details, [contract], answer=answer) == []
+
+
+def test_claim_level_citation_gate_rejects_extra_uncited_mechanism_claim():
+    fixture = load_fixture()
+    case = {
+        "id": "claim-level-citation-gate",
+        "question": "What does the method do?",
+        "expected": {
+            "requireClaimLevelCitations": True,
+            "maxUncitedHighRiskClaims": 0,
+        },
+    }
+    result = {
+        "answer": (
+            "The paper models SPAD crosstalk and dark count rate [1].\n\n"
+            "It also improves acquisition speed through a new sampling policy."
+        ),
+        "status": "done",
+        "done": True,
+        "refs_payload": {},
+        "render_cache": {},
+    }
+
+    quality = validate_case(case, fixture, result)
+    failed_names = {item["name"] for item in quality["failures"]}
+
+    assert "answer_high_risk_claims_are_cited" in failed_names
+
+
+def test_claim_level_citation_gate_accepts_cited_mechanism_claims():
+    fixture = load_fixture()
+    case = {
+        "id": "claim-level-citation-gate-pass",
+        "question": "What does the method do?",
+        "expected": {
+            "requireClaimLevelCitations": True,
+            "maxUncitedHighRiskClaims": 0,
+        },
+    }
+    result = {
+        "answer": (
+            "The paper models SPAD crosstalk and dark count rate [1].\n\n"
+            "It improves reconstruction quality through the physical noise model [1]."
+        ),
+        "status": "done",
+        "done": True,
+        "refs_payload": {},
+        "render_cache": {},
+    }
+
+    quality = validate_case(case, fixture, result)
+    failed_names = {item["name"] for item in quality["failures"]}
+
+    assert "answer_high_risk_claims_are_cited" not in failed_names
 
 
 def test_research_qa_fixture_enforces_system_b_trace_policy():
@@ -543,6 +597,25 @@ def test_research_qa_fixture_real_regression_cases_require_card_quality_gates():
         assert int(expected.get("minRefHits") or 0) >= 2
         assert int(expected.get("minCitationCount") or 0) >= 2
         assert int(expected.get("minCitationDocCount") or 0) >= 1
+
+
+def test_research_qa_fixture_has_claim_level_grounding_gate_on_core_cases():
+    fixture = load_fixture()
+    strict_case_ids = {
+        "single-photon-pidl",
+        "cassi-to-3d-sci-lineage",
+        "microscopy-methods-map",
+        "single-photon-reading-pair",
+        "piln-dl-spi-position",
+        "spi-prospects-when-use-single-pixel",
+        "s2ism-three-way-tradeoff",
+        "pidl-real-spad-noise",
+    }
+
+    for case_id in strict_case_ids:
+        expected = _case_by_id(fixture, case_id).get("expected") or {}
+        assert expected.get("requireClaimLevelCitations") is True
+        assert expected.get("maxUncitedHighRiskClaims") == 0
 
 
 def test_validate_case_accepts_grounded_system_b_answer():
@@ -1223,12 +1296,20 @@ def test_validate_case_accepts_common_zh_en_synonyms():
         "user_msg_id": 103,
         "assistant_message": {
             "role": "assistant",
-            "content": "physics-informed deep learning 用 SPAD 物理模型处理多种噪声，并改善单光子成像质量。",
+            "content": "physics-informed deep learning 用 SPAD 物理模型处理多种噪声，并改善单光子成像质量 [1]。",
             "cite_details": [
                 {
+                    "num": 1,
                     "source_path": source_path,
                     "source_name": "High-resolution single-photon imaging with physics-informed deep learning",
+                    "citation_route": "system_a",
                     "is_inpaper": False,
+                    "heading_path": "Introduction",
+                    "location_label": "Introduction / p. 3",
+                    "page_start": 3,
+                    "page_end": 3,
+                    "answer_claim": "physics-informed deep learning 用 SPAD 物理模型处理多种噪声。",
+                    "evidence_quote": "The multi-source physical noise model of SPAD arrays describes real noise.",
                 }
             ],
         },

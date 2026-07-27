@@ -509,7 +509,13 @@ def _system_a_slots(
             "locate_anchor",
             "snippet",
             "text",
-            max_len=520,
+            # Keep enough of a source paragraph for later claim-level citation
+            # validation.  SPAD calibration passages, for example, introduce
+            # the physical model first and only then list dataset sizes and
+            # acquisition settings.  Truncating at 520 characters made those
+            # numeric claims look unsupported during final rendering even
+            # though the retrieved paragraph contained them verbatim.
+            max_len=1000,
         )
         identity = " ".join([source_path, heading, snippet]).lower()
         if (
@@ -639,12 +645,52 @@ def _system_a_slots(
             continue
         hit = dict(hit0)
         meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), Mapping) else {}
+        primary = (
+            dict(meta.get("primary_evidence") or {})
+            if isinstance(meta.get("primary_evidence"), Mapping)
+            else {}
+        )
         raw = {
             "source_path": meta.get("source_path"),
-            "heading_path": meta.get("heading_path") or meta.get("ref_best_heading_path"),
-            "evidence_quote": meta.get("evidence_quote") or hit.get("text"),
+            "heading_path": (
+                primary.get("heading_path")
+                or meta.get("heading_path")
+                or meta.get("ref_best_heading_path")
+            ),
+            "evidence_quote": (
+                primary.get("snippet")
+                or primary.get("highlight_snippet")
+                or meta.get("evidence_quote")
+                or hit.get("text")
+            ),
             "text": hit.get("text"),
             "claim_type": meta.get("claim_type"),
+            "evidence_selection_reason": (
+                primary.get("selection_reason")
+                or meta.get("evidence_selection_reason")
+                or meta.get("selection_reason")
+            ),
+            "block_id": primary.get("block_id") or meta.get("block_id"),
+            "anchor_id": primary.get("anchor_id") or meta.get("anchor_id"),
+            "anchor_kind": primary.get("anchor_kind") or meta.get("anchor_kind"),
+            "page_start": (
+                primary.get("page_start")
+                or primary.get("pageStart")
+                or meta.get("page_start")
+                or meta.get("page")
+            ),
+            "page_end": (
+                primary.get("page_end")
+                or primary.get("pageEnd")
+                or meta.get("page_end")
+                or meta.get("page_start")
+                or meta.get("page")
+            ),
+            "strict_locate": bool(
+                primary.get("strict_locate")
+                or primary.get("strictLocate")
+                or meta.get("strict_locate")
+            ),
         }
         add_slot(raw, hit_num=idx)
         if len(slots) >= max(1, int(max_items)):

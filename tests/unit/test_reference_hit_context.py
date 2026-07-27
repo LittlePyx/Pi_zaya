@@ -230,3 +230,62 @@ def test_reference_ui_locked_table_card_keeps_metric_summary_and_exact_anchor() 
     assert ui["reader_open"]["blockId"] == "table-6"
     assert ui["reader_open"]["anchorId"] == "tb_00006"
     assert ui["reader_open"]["anchorKind"] == "table"
+
+
+def test_reference_ui_exact_support_keeps_localized_guide_and_relevance(tmp_path) -> None:
+    from api import reference_ui
+
+    source = tmp_path / "pidl.en.md"
+    evidence = (
+        "The underlying limitation originates from the employed single-source Poisson noise model, "
+        "which deviates from real SPAD noise containing crosstalk and dark count rate. "
+        "The multi-source physical noise model includes shot noise, dark count rate, and crosstalk noise."
+    )
+    source.write_text(f"# Introduction\n\n{evidence}\n", encoding="utf-8")
+    guide = "论文先解释单源泊松模型为什么偏离真实 SPAD 噪声，再列出多源物理噪声模型的组成。"
+    why = "这段原文直接回答泊松噪声为什么不够，以及模型纳入了哪些真实噪声。"
+    hit = {
+        "score": 1_000_000.0,
+        "text": evidence,
+        "meta": {
+            "source_path": str(source),
+            "source_name": "PIDL",
+            "heading_path": "Introduction / Figure 1a",
+            "top_heading": "Introduction / Figure 1a",
+            "page_start": 2,
+            "page_end": 2,
+            "paper_guide_fast_exact": True,
+            "structured_evidence_locked": True,
+            "guide_line": guide,
+            "why_line": why,
+            "primary_evidence": {
+                "source_path": str(source),
+                "source_name": "PIDL",
+                "heading_path": "Introduction / Figure 1a",
+                "snippet": evidence,
+                "highlight_snippet": evidence,
+                "page_start": 2,
+                "page_end": 2,
+                "selection_reason": "spad_noise_model_exact_source",
+                "strict_locate": True,
+            },
+        },
+    }
+
+    ui = reference_ui.build_hit_ui_meta(
+        hit,
+        prompt="为什么只用泊松噪声训练 SPAD 模型不够？模型纳入了哪些真实噪声？",
+        pdf_root=None,
+        lib_store=None,
+        allow_expensive_llm=False,
+        allow_exact_locate=True,
+    )
+
+    assert ui["summary_line"] == guide
+    assert ui["why_line"] == why
+    assert ui["heading_path"] == "Introduction / Figure 1a"
+    assert ui["page_start"] == 2
+    assert ui["primary_evidence"]["snippet"] == evidence
+    assert ui["primary_evidence"]["strict_locate"] is True
+    assert ui["reader_open"]["snippet"] == evidence
+    assert ui["reader_open"]["pageStart"] == 2

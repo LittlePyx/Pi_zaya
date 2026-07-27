@@ -75,6 +75,17 @@ def test_deterministic_query_variants_pair_detector_review_with_pidl() -> None:
     assert "real spad noise" in joined
 
 
+def test_deterministic_query_variants_focus_single_photon_pidl_on_physical_noise_model() -> None:
+    variants = _deterministic_query_variants(
+        "physics-informed deep learning 在单光子成像里到底帮了什么？"
+    )
+    joined = "\n".join(variants).lower()
+
+    assert "high-resolution single-photon imaging" in joined
+    assert "physical multi-source noise model" in joined
+    assert "spad arrays" in joined
+
+
 def test_deterministic_query_variants_expand_single_pixel_application_review() -> None:
     variants = _deterministic_query_variants(
         "什么场景真的值得用单像素相机，而不是普通面阵相机？这篇综述给了哪些代表性应用？"

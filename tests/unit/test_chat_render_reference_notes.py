@@ -7801,6 +7801,220 @@ def test_claim_level_citation_reuse_binds_supported_body_and_skips_unsupported_d
     assert "lateral resolution 提高两倍 [2]" not in repaired
 
 
+def test_claim_level_citation_reuse_does_not_cross_single_photon_pixel_modalities():
+    from api import chat_render
+
+    hits = [
+        {
+            "text": "A physical SPAD noise model supports single-photon image reconstruction.",
+            "meta": {"source_path": "pidl.en.md"},
+        },
+        {
+            "text": "Deep learning single-pixel imaging improves reconstruction quality and speed.",
+            "meta": {"source_path": "dl-spi.en.md"},
+        },
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "pidl.en.md",
+                "evidence_quote": hits[0]["text"],
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "dl-spi.en.md",
+                "evidence_quote": hits[1]["text"],
+                "candidate_hits": [2],
+            },
+        ]
+    }
+    answer = "SPAD 单光子成像利用物理噪声模型改善重建质量 [1]。"
+
+    repaired = chat_render._reading_guide_attach_claim_level_system_a_citations(
+        answer,
+        hits,
+        plan,
+    )
+
+    assert repaired.count("[1]") == 1
+    assert "[2]" not in repaired
+
+
+def test_claim_level_citation_reuse_requires_physical_noise_model_evidence():
+    from api import chat_render
+
+    hits = [
+        {
+            "text": (
+                "A detector review discusses SPAD hardware, dark count, photon detection, "
+                "noise reduction, and imaging resolution."
+            ),
+            "meta": {"source_path": "detector-review.en.md"},
+        },
+        {
+            "text": (
+                "We established a real-world physical noise model of SPAD arrays with "
+                "dark count rate, afterpulsing, and crosstalk noise."
+            ),
+            "meta": {"source_path": "pidl.en.md"},
+        },
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": hit["meta"]["source_path"],
+                "evidence_quote": hit["text"],
+                "candidate_hits": [index],
+            }
+            for index, hit in enumerate(hits, start=1)
+        ]
+    }
+    answer = "SPAD 阵列的多源物理噪声模型包含暗计数、后脉冲和串扰 [2]。"
+
+    repaired = chat_render._reading_guide_attach_claim_level_system_a_citations(
+        answer,
+        hits,
+        plan,
+    )
+
+    assert repaired.count("[2]") == 1
+    assert "[1]" not in repaired
+
+
+def test_dl_spi_benefit_repair_does_not_cross_single_photon_pixel_modalities():
+    from api import chat_render
+
+    answer = (
+        "physics-informed deep learning 提高了 SPAD 单光子成像的重建质量和重建速度 [1]。"
+    )
+    hits = [
+        {"text": "SPAD single-photon evidence.", "meta": {"source_path": "pidl.en.md"}},
+        {
+            "text": "Single-pixel imaging review evidence.",
+            "meta": {"source_path": "dl-spi.en.md"},
+        },
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "dl-spi.en.md",
+                "candidate_hits": [2],
+                "evidence_quote": (
+                    "Deep learning single-pixel imaging has exceptional reconstruction "
+                    "quality and fast reconstruction speed."
+                ),
+            }
+        ]
+    }
+
+    repaired = chat_render._reading_guide_repair_dl_spi_benefit_marker(
+        answer,
+        hits,
+        plan,
+    )
+
+    assert repaired == answer
+    assert "[2]" not in repaired
+
+
+def test_missing_system_a_repair_does_not_force_single_pixel_source_onto_spad_reading_tip():
+    from api import chat_render
+
+    answer = (
+        "physics-informed deep learning 在 SPAD 单光子成像中建立物理噪声模型 [1]。\n\n"
+        "**阅读建议**：阅读 *High-resolution single-photon imaging with physics-informed "
+        "deep learning* 的 Introduction 和参数校准部分。"
+    )
+    hits = [
+        {
+            "text": "A physical noise model supports SPAD single-photon reconstruction.",
+            "meta": {"source_path": "pidl.en.md", "ref_answer_citation_num": 1},
+        },
+        {
+            "text": "Deep learning single-pixel imaging improves reconstruction quality and speed.",
+            "meta": {"source_path": "dl-spi.en.md", "ref_answer_citation_num": 2},
+        },
+    ]
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "pidl.en.md",
+                "candidate_hits": [1],
+                "evidence_quote": hits[0]["text"],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "dl-spi.en.md",
+                "candidate_hits": [2],
+                "evidence_quote": hits[1]["text"],
+            },
+        ],
+    }
+
+    repaired = chat_render._reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=["pidl.en.md", "dl-spi.en.md"],
+    )
+
+    assert repaired.count("[1]") == 1
+    assert "[2]" not in repaired
+
+
+def test_missing_system_a_repair_does_not_force_detector_review_onto_cited_spad_tip():
+    from api import chat_render
+
+    answer = (
+        "SPAD 的物理噪声模型支撑单光子重建 [2]。\n\n"
+        "**阅读建议**：这篇 High-resolution single-photon imaging with physics-informed "
+        "deep learning 论文是处理 SPAD 低信噪比数据的必读材料 [2]。"
+    )
+    hits = [
+        {
+            "text": (
+                "A detector review discusses SPAD sensitivity, photon detection, low dark count, "
+                "and detector performance."
+            ),
+            "meta": {"source_path": "detector-review.en.md", "ref_answer_citation_num": 1},
+        },
+        {
+            "text": "A real-world physical noise model supports SPAD single-photon reconstruction.",
+            "meta": {"source_path": "pidl.en.md", "ref_answer_citation_num": 2},
+        },
+    ]
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": hit["meta"]["source_path"],
+                "candidate_hits": [index],
+                "evidence_quote": hit["text"],
+            }
+            for index, hit in enumerate(hits, start=1)
+        ],
+    }
+
+    repaired = chat_render._reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=["detector-review.en.md", "pidl.en.md"],
+    )
+
+    assert "[1]" not in repaired
+    assert repaired.count("[2]") == 2
+
+
 def test_perovskite_scope_bridge_does_not_rewrite_answer_without_boundary_claim():
     from api.chat_render import _reading_guide_repair_scope_boundary_citation
 
@@ -8983,6 +9197,145 @@ def test_exact_support_plan_gets_dedicated_hit_when_enriched_hit_reuses_text():
     assert hits[1]["meta"]["citation_plan_slot"] is True
     assert hits[1]["ui_meta"]["primary_evidence"]["heading_path"] == "SCINeRF / 2. Related Work"
     assert _reading_slot_hit_nums(plan_slot, hits, [source_path]) == [2]
+
+
+def test_exact_support_plan_rebinds_its_reserved_answer_citation():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "db/PIDL/PIDL.en.md"
+    exact_evidence = "The multi-source physical noise model includes crosstalk and dark count rate."
+    plan_slot = {
+        "preferred_system": "system_a",
+        "candidate_hits": [1],
+        "source_path": source_path,
+        "source_name": "PIDL",
+        "heading_path": "Introduction / Figure 1a",
+        "evidence_quote": exact_evidence,
+        "page_start": 2,
+        "page_end": 2,
+        "evidence_selection_reason": "spad_noise_model_exact_source",
+        "strict_locate": True,
+    }
+    abstract_hit = {
+        "text": "The abstract says that SPAD has multiple noise sources.",
+        "meta": {
+            "source_path": source_path,
+            "source_name": "PIDL",
+            "heading_path": "Abstract",
+            "page_start": 1,
+            "page_end": 1,
+        },
+        "ui_meta": {},
+    }
+
+    hits = _augment_hits_with_system_a_plan_slots(
+        [abstract_hit],
+        {
+            "source": "exact_support_preflight",
+            "intent": "evidence_lookup",
+            "slots": [plan_slot],
+        },
+        reserved_count=1,
+    )
+
+    assert len(hits) == 1
+    assert hits[0]["text"] == exact_evidence
+    assert hits[0]["meta"]["heading_path"] == "Introduction / Figure 1a"
+    assert hits[0]["meta"]["page_start"] == 2
+    assert hits[0]["meta"]["citation_plan_evidence_authoritative"] is True
+    assert hits[0]["meta"]["citation_plan_source"] == "exact_support_preflight"
+    assert (
+        hits[0]["meta"]["citation_plan_evidence_selection_reason"]
+        == "spad_noise_model_exact_source"
+    )
+    assert hits[0]["ui_meta"]["primary_evidence"]["selection_reason"] == "spad_noise_model_exact_source"
+    assert hits[0]["ui_meta"]["primary_evidence"]["strict_locate"] is True
+
+
+def test_exact_support_citation_backfill_does_not_replace_locked_passage():
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source_path = "db/PIDL/PIDL.en.md"
+    exact_evidence = "The multi-source physical noise model includes crosstalk and dark count rate."
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "routing_reason": "exact_support_preflight",
+            "evidence_source": "exact_support_preflight",
+            "source_path": source_path,
+            "source_name": "PIDL.pdf",
+            "heading_path": "Introduction / Figure 1a",
+            "evidence_quote": exact_evidence,
+            "raw": exact_evidence,
+            "page_start": 2,
+            "page_end": 2,
+            "selection_reason": "exact_support_preflight",
+            "strict_locate": True,
+        }
+    ]
+    ref_pack = {
+        "primary_evidence": {
+            "source_path": source_path,
+            "heading_path": "Abstract",
+            "snippet": "A broad abstract sentence about SPAD.",
+            "page_start": 1,
+            "page_end": 1,
+            "selection_reason": "answer_aligned_block",
+            "strict_locate": True,
+        }
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, ref_pack)
+
+    assert out[0]["heading_path"] == "Introduction / Figure 1a"
+    assert out[0]["page_start"] == 2
+    assert out[0]["evidence_quote"] == exact_evidence
+    assert out[0]["routing_reason"] == "exact_support_preflight"
+
+
+def test_canonical_answer_repair_preserves_authoritative_exact_support_hit():
+    from api.chat_render import _augment_hits_with_canonical_answer_citations
+
+    source_path = "db/PIDL/PIDL.en.md"
+    evidence = "The multi-source physical noise model includes crosstalk and dark count rate."
+    exact_hit = {
+        "text": evidence,
+        "meta": {
+            "source_path": source_path,
+            "source_name": "PIDL",
+            "heading_path": "Introduction / Figure 1a",
+            "page_start": 2,
+            "page_end": 2,
+            "ref_answer_citation_num": 1,
+            "citation_plan_slot": True,
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_source": "exact_support_preflight",
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "Introduction / Figure 1a",
+                "snippet": evidence,
+                "page_start": 2,
+                "page_end": 2,
+                "selection_reason": "spad_noise_model_exact_source",
+                "strict_locate": True,
+            }
+        },
+    }
+
+    out = _augment_hits_with_canonical_answer_citations(
+        [exact_hit],
+        canonical_paths=[source_path],
+        answer_text="SPAD needs a multi-source physical noise model [1].",
+    )
+
+    assert len(out) == 1
+    assert out[0]["text"] == evidence
+    assert out[0]["meta"]["heading_path"] == "Introduction / Figure 1a"
+    assert out[0]["meta"]["page_start"] == 2
+    assert out[0]["meta"]["citation_plan_source"] == "exact_support_preflight"
 
 
 def test_scigs_comparison_abstract_repair_keeps_appended_citation_numbers(monkeypatch):

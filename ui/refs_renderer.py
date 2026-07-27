@@ -4068,6 +4068,43 @@ def _system_a_score_evidence_candidate(
     claim_keywords = _system_a_keyword_terms(answer_claim, limit=48)
     candidate_keywords = _system_a_keyword_terms(" ".join([raw_text, scoring_text]), limit=64)
     claim_keyword_overlap = claim_keywords & candidate_keywords
+    claim_number_surface = re.sub(r"^\s*\d+[.)、]\s*", "", str(answer_claim or ""))
+    claim_number_surface = re.sub(
+        r"\[\d{1,5}\](?:\([^\n)]+\))?",
+        " ",
+        claim_number_surface,
+    )
+    claim_numbers = {
+        token
+        for token in re.findall(
+            r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
+            claim_number_surface,
+        )
+        if not (len(token) == 4 and 1900 <= int(float(token)) <= 2100)
+    }
+    candidate_numbers = set(
+        re.findall(
+            r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
+            raw_text,
+        )
+    )
+    if claim_numbers:
+        matched_numbers = claim_numbers & candidate_numbers
+        score += min(8.0, 2.0 * len(matched_numbers))
+        if not matched_numbers:
+            score -= 6.0
+        elif matched_numbers != claim_numbers:
+            score -= 1.5
+    claim_identifiers = {
+        token.upper()
+        for token in re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])", str(answer_claim or ""))
+    }
+    candidate_identifiers = {
+        token.upper()
+        for token in re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])", raw_text)
+    }
+    if len(claim_identifiers) >= 2:
+        score += min(5.0, 1.5 * len(claim_identifiers & candidate_identifiers))
     if strong_claim_terms:
         score += 1.6 if matched_strong else -3.0
     if heading:
@@ -4165,12 +4202,10 @@ def _system_a_pick_best_evidence_candidate(
         isinstance(primary, dict)
         and bool(meta.get("citation_plan_slot"))
         and bool(meta.get("citation_plan_evidence_authoritative"))
-        and str(
-            primary_evidence.get("selection_reason")
-            or primary_evidence.get("selectionReason")
-            or ""
-        ).strip().lower()
-        == "citation_plan_slot"
+        and bool(
+            primary_evidence.get("strict_locate")
+            or primary_evidence.get("strictLocate")
+        )
         and str(primary.get("readable_text") or "").strip()
         and not _system_a_is_low_value_evidence_text(str(primary.get("text") or ""))
     )
@@ -4199,6 +4234,88 @@ def _system_a_pick_best_evidence_candidate(
         and float(best.get("score") or 0.0) < float(primary.get("score") or 0.0) + 0.75
     ):
         best = primary
+    claim_number_surface = re.sub(r"^\s*\d+[.)、]\s*", "", str(answer_claim or ""))
+    claim_number_surface = re.sub(
+        r"\[\d{1,5}\](?:\([^\n)]+\))?",
+        " ",
+        claim_number_surface,
+    )
+    claim_number_tokens = {
+        token
+        for token in re.findall(
+            r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
+            claim_number_surface,
+        )
+        if not (len(token) == 4 and 1900 <= int(float(token)) <= 2100)
+    }
+    claim_identifier_tokens = {
+        token.upper()
+        for token in re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])", str(answer_claim or ""))
+    }
+    specificity_ranked: list[tuple[int, int, float, dict]] = []
+    for candidate in scored:
+        candidate_text = str(candidate.get("text") or "")
+        candidate_numbers = set(
+            re.findall(
+                r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
+                candidate_text,
+            )
+        )
+        candidate_identifiers = {
+            token.upper()
+            for token in re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])", candidate_text)
+        }
+        number_match = len(claim_number_tokens & candidate_numbers)
+        identifier_match = len(claim_identifier_tokens & candidate_identifiers)
+        if (
+            claim_number_tokens
+            and claim_number_tokens.issubset(candidate_numbers)
+        ) or (
+            len(claim_identifier_tokens) >= 2 and identifier_match >= 2
+        ):
+            specificity_ranked.append(
+                (number_match, identifier_match, float(candidate.get("score") or 0.0), candidate)
+            )
+    if specificity_ranked:
+        _number_match, _identifier_match, _score, specific = max(
+            specificity_ranked,
+            key=lambda item: (item[0], item[1], item[2]),
+        )
+        specific = dict(specific)
+        specific_readable = _pick_readable_evidence_text(
+            str(specific.get("text") or ""),
+            source=source_name,
+            title=str(specific.get("heading_path") or default_heading or ""),
+            claim=answer_claim,
+            heading=str(specific.get("heading_path") or default_heading or ""),
+            max_len=520,
+        )
+        if _identifier_match >= 2:
+            for sentence in re.split(
+                r"(?<=[.!?。！？])\s+",
+                str(specific.get("text") or ""),
+            ):
+                sentence_identifiers = {
+                    token.upper()
+                    for token in re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])", sentence)
+                }
+                if len(claim_identifier_tokens & sentence_identifiers) < 2:
+                    continue
+                direct_identifier_evidence = _clean_evidence_display_text(
+                    sentence,
+                    max_len=520,
+                )
+                if direct_identifier_evidence and not re.search(
+                    r"[.!?。！？…]$",
+                    direct_identifier_evidence,
+                ):
+                    direct_identifier_evidence = direct_identifier_evidence.rstrip(" ,;:") + "..."
+                if direct_identifier_evidence:
+                    specific_readable = direct_identifier_evidence
+                    break
+        if specific_readable:
+            specific["readable_text"] = specific_readable
+        best = specific
     return best
 
 
@@ -4299,11 +4416,26 @@ def _system_a_maybe_replace_claim(existing: dict, answer_claim: str) -> None:
         claims.append(claim)
     existing["answer_claims"] = claims[:8]
     current = str(existing.get("answer_claim") or "").strip()
+    reading_advice_re = re.compile(
+        r"^\s*(?:\*{0,2})?(?:阅读(?:/使用)?建议|阅读建议|reading\s+(?:suggestion|recommendation|tip))\s*[:：]",
+        re.IGNORECASE,
+    )
+    if reading_advice_re.search(claim) and current and not reading_advice_re.search(current):
+        # A later navigation hint may reuse the same source passage, but the
+        # evidence card should continue to describe the substantive claim it
+        # supports rather than being relabelled as a reading recommendation.
+        return
     if not current or _system_a_claim_quality(claim) > _system_a_claim_quality(current) + 0.45:
         existing["answer_claim"] = claim[:420]
 
 
-def _system_a_should_split_occurrence(existing: dict, n: int, answer_claim: str) -> bool:
+def _system_a_should_split_occurrence(
+    existing: dict,
+    n: int,
+    answer_claim: str,
+    *,
+    evidence_quote: str = "",
+) -> bool:
     claim = re.sub(r"\s+", " ", normalize_inline_markdown(str(answer_claim or ""))).strip()
     if len(claim) < 18:
         return False
@@ -4324,9 +4456,64 @@ def _system_a_should_split_occurrence(existing: dict, n: int, answer_claim: str)
     old_claim = str(existing.get("answer_claim") or "").strip()
     if not old_claim:
         return False
-    # Same evidence location should stay one card even if the answer mentions
-    # it twice with slightly different local wording.  Multiple near-identical
-    # System A cards made hover/click feel noisy instead of helpful.
+    if _system_a_claim_substantially_same(old_claim, claim):
+        return False
+    old_numbers = set(
+        re.findall(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])", old_claim)
+    )
+    new_numbers = set(
+        re.findall(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])", claim)
+    )
+    if old_numbers != new_numbers and (old_numbers or new_numbers):
+        # A numeric dataset/result claim must be bound to the sentence that
+        # contains those values, even when an earlier qualitative claim reused
+        # the same answer citation number from the same source chunk.
+        return True
+    claim_identifiers = {
+        token.upper()
+        for token in re.findall(
+            r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
+            claim,
+        )
+    }
+    if len(claim_identifiers) >= 2:
+        old_identifiers = {
+            token.upper()
+            for token in re.findall(
+                r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
+                str(existing.get("evidence_quote") or ""),
+            )
+        }
+        new_identifiers = {
+            token.upper()
+            for token in re.findall(
+                r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
+                str(evidence_quote or ""),
+            )
+        }
+        if len(claim_identifiers & old_identifiers) < 2 and (
+            not str(evidence_quote or "").strip()
+            or len(claim_identifiers & new_identifiers) >= 2
+        ):
+            # One source block can contain several independently useful facts.
+            # Keep a named dataset/method citation attached to the sentence that
+            # actually mentions it instead of reusing an earlier generic card.
+            return True
+    old_evidence = _system_a_fp_text(
+        str(existing.get("evidence_quote") or ""),
+        max_len=520,
+    )
+    new_evidence = _system_a_fp_text(str(evidence_quote or ""), max_len=520)
+    if old_evidence and new_evidence and old_evidence == new_evidence:
+        # Several neighboring claims may legitimately cite the same source
+        # sentence. Reuse that card; only claim-specific evidence selections
+        # (numeric values, named datasets, different passages) need a new one.
+        return False
+    old_domains = _system_a_domain_terms(old_claim)
+    new_domains = _system_a_domain_terms(claim)
+    if old_domains and new_domains:
+        overlap = len(old_domains & new_domains) / max(1, min(len(old_domains), len(new_domains)))
+        return overlap < 0.5
     return False
 
 
@@ -4349,6 +4536,65 @@ def _assess_system_a_hit_binding(
         ]
     )
     evidence_surface = " ".join([evidence_body_surface, str(source_name or "")])
+    claim_low = claim.lower()
+    evidence_body_low = evidence_body_surface.lower()
+    source_tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(source_name or "").lower())
+        if len(token) >= 3
+        and token not in {"pdf", "paper", "journal", "2023", "2024", "2025"}
+    }
+    named_candidates = [
+        next((part for part in match if part), "")
+        for match in re.findall(
+            r"\(([^()]{24,}?)\)|（([^（）]{24,}?)）|\*([^*\n]{24,})\*|《([^》\n]{24,})》",
+            claim,
+        )
+    ]
+    for named_candidate in named_candidates:
+        title_tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]+", named_candidate.lower())
+            if len(token) >= 3
+            and token not in {"the", "and", "with", "from", "paper", "journal", "2023", "2024", "2025"}
+        }
+        if len(title_tokens) < 5 or len(source_tokens) < 3:
+            continue
+        if len(title_tokens & source_tokens) / max(1, len(title_tokens)) < 0.45:
+            reason = (
+                "答案句明确点名了另一篇论文，不能把当前命中作为该句证据。"
+                if _system_a_prefers_zh(claim)
+                else "The answer sentence explicitly names a different paper, so this hit cannot support it."
+            )
+            return {
+                "status": "mismatch",
+                "confidence": 0.0,
+                "suppress_link": True,
+                "reason": reason,
+                "overlap_terms": [],
+                "missing_terms": ["source identity"],
+            }
+    physical_noise_model_re = re.compile(
+        r"physical\s+(?:multi[- ]source\s+)?noise\s+model|"
+        r"multi[- ]source\s+(?:physical\s+)?noise\s+model|"
+        r"物理噪声模型|多源(?:物理)?噪声模型|多源噪声"
+    )
+    if physical_noise_model_re.search(claim_low) and not physical_noise_model_re.search(
+        evidence_body_low
+    ):
+        reason = (
+            "答案句要求的是物理噪声模型证据，但该命中只涉及邻近的探测器或成像主题。"
+            if _system_a_prefers_zh(claim)
+            else "The claim requires evidence for a physical noise model, but this hit only covers an adjacent detector or imaging topic."
+        )
+        return {
+            "status": "mismatch",
+            "confidence": 0.0,
+            "suppress_link": True,
+            "reason": reason,
+            "overlap_terms": [],
+            "missing_terms": ["physical noise model"],
+        }
     claim_domains = _system_a_domain_terms(claim)
     evidence_domains = _system_a_domain_terms(evidence_surface)
     evidence_body_domains = _system_a_domain_terms(evidence_body_surface)
@@ -4387,6 +4633,96 @@ def _assess_system_a_hit_binding(
     missing_strong_terms = strong_claim_terms - evidence_body_domains
     matched_strong_terms = strong_claim_terms & evidence_body_domains
     source_identity_overlap = _system_a_has_source_identity_overlap(claim, evidence_body_surface, source_name)
+    numeric_claim_surface = re.sub(r"^\s*\d+[.)、]\s*", "", claim)
+    numeric_claim_surface = re.sub(r"\[\d{1,5}\](?:\([^\n)]+\))?", " ", numeric_claim_surface)
+    claim_numeric_values = {
+        token
+        for token in re.findall(
+            r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
+            numeric_claim_surface,
+        )
+        if not (len(token) == 4 and 1900 <= int(float(token)) <= 2100)
+    }
+    evidence_numeric_values = set(
+        re.findall(
+            r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
+            quote_surface,
+        )
+    )
+    claim_metrics = {
+        item.lower()
+        for item in re.findall(r"\b(?:psnr|ssim|lpips|fid|fps|macs?|flops?)\b", claim, flags=re.I)
+    }
+    evidence_metrics = {
+        item.lower()
+        for item in re.findall(r"\b(?:psnr|ssim|lpips|fid|fps|macs?|flops?)\b", quote_surface, flags=re.I)
+    }
+    shared_metrics = claim_metrics & evidence_metrics
+    shared_decimal_values = {
+        item for item in claim_numeric_values & evidence_numeric_values if "." in item
+    }
+    if shared_metrics and shared_decimal_values:
+        metric_label = "/".join(sorted(shared_metrics)).upper()
+        reason = (
+            f"这组 {metric_label} 对比直接量化了答案中各方法的重建质量差异，并显示物理先验方法相对基线的增益。"
+            if prefer_zh
+            else (
+                f"This {metric_label} comparison quantifies the reconstruction-quality "
+                "difference and the physics-informed method's gain over the baselines."
+            )
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.9,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": sorted(keyword_overlap | shared_metrics),
+            "missing_terms": [],
+        }
+    if (
+        "detector type:" in quote_surface.lower()
+        and "performance" in quote_surface.lower()
+        and re.search(
+            r"\b(?:spad|single[- ]?photon|detection efficiency)\b|探测效率|单光子",
+            claim.lower(),
+        )
+        and len(claim_numeric_values) >= 2
+        and claim_numeric_values.issubset(evidence_numeric_values)
+    ):
+        reason = (
+            "这条表格记录把探测器型号、工作波长、温度与探测效率放在同一项中，可直接建立算法需要面对的硬件性能边界。"
+            if prefer_zh
+            else (
+                "This table record links detector type, operating wavelength, "
+                "temperature, and detection efficiency in one hardware-performance boundary."
+            )
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.9,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": sorted(keyword_overlap),
+            "missing_terms": [],
+        }
+    if (
+        len(claim_numeric_values) >= 2
+        and claim_numeric_values.issubset(evidence_numeric_values)
+    ):
+        values_label = "/".join(sorted(claim_numeric_values, key=lambda value: (len(value), value)))
+        reason = (
+            f"原文同一证据片段直接包含答案中的定量值（{values_label}），可核对该数据集或实验陈述。"
+            if prefer_zh
+            else f"The same source passage directly contains the claim's quantitative values ({values_label})."
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.95,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": sorted(keyword_overlap),
+            "missing_terms": [],
+        }
     # A single answer sentence can carry multiple citations.  If this hit already
     # shares a concrete body/heading domain term with the sentence, keep
     # evaluating it instead of suppressing it for a strong term that belongs to a
@@ -4830,6 +5166,50 @@ def _annotate_inpaper_citations_with_hover_meta(
     visible_detail_anchors: set[str] = set()
     visible_system_a_evidence_keys: set[str] = set()
     plan = dict(citation_plan or {}) if isinstance(citation_plan, dict) else {}
+    plan_system_a_slots = [
+        dict(slot)
+        for slot in list(plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+
+    def _plan_source_key(value: object) -> str:
+        name = str(value or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+        name = re.sub(r"(?i)(?:\.en)?\.md$|\.pdf$", "", name)
+        return re.sub(r"[^a-z0-9]+", "", name)
+
+    def _plan_slot_for_system_a(n: int, source_path: str, source_name: str) -> dict:
+        target_keys = {
+            key
+            for key in (_plan_source_key(source_path), _plan_source_key(source_name))
+            if key
+        }
+        numbered: list[dict] = []
+        source_matched: list[dict] = []
+        for slot in plan_system_a_slots:
+            candidate_hits: set[int] = set()
+            for raw in list(slot.get("candidate_hits") or []):
+                try:
+                    candidate_hits.add(int(raw))
+                except Exception:
+                    continue
+            if int(n) in candidate_hits:
+                numbered.append(slot)
+            slot_keys = {
+                key
+                for key in (
+                    _plan_source_key(slot.get("source_path") or slot.get("sourcePath")),
+                    _plan_source_key(slot.get("source_name") or slot.get("sourceName")),
+                )
+                if key
+            }
+            if target_keys & slot_keys:
+                source_matched.append(slot)
+        for slot in numbered + source_matched:
+            if str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip():
+                return slot
+        return {}
+
     authoritative_answer_numbering = bool(canonical_paths)
     if not authoritative_answer_numbering:
         for hit in hits or []:
@@ -5317,8 +5697,8 @@ def _annotate_inpaper_citations_with_hover_meta(
             if isinstance(cached, dict) and not _system_a_should_split_occurrence(cached, int(n), answer_claim):
                 _system_a_maybe_replace_claim(cached, answer_claim)
                 return cached
-            meta_h = (hit or {}).get("meta", {}) or {}
-            ui_meta_h = (hit or {}).get("ui_meta", {}) or {}
+            meta_h = dict((hit or {}).get("meta", {}) or {})
+            ui_meta_h = dict((hit or {}).get("ui_meta", {}) or {})
             is_research_basket_synthetic = bool(
                 meta_h.get("research_basket_evidence")
                 and (
@@ -5336,6 +5716,63 @@ def _annotate_inpaper_citations_with_hover_meta(
                 )
             else:
                 src_name = _display_source_name(sp)
+            plan_slot = _plan_slot_for_system_a(int(n), sp, src_name)
+            if plan_slot:
+                plan_evidence = str(
+                    plan_slot.get("evidence_quote")
+                    or plan_slot.get("evidenceQuote")
+                    or ""
+                ).strip()
+                if plan_evidence:
+                    reader_open = dict(ui_meta_h.get("reader_open") or {})
+                    alternatives = [
+                        dict(item)
+                        for item in list(reader_open.get("evidenceAlternatives") or [])
+                        if isinstance(item, dict)
+                    ]
+                    plan_candidate = {
+                        "headingPath": str(
+                            meta_h.get("ref_best_heading_path")
+                            or meta_h.get("heading_path")
+                            or plan_slot.get("heading_path")
+                            or plan_slot.get("headingPath")
+                            or ""
+                        ).strip(),
+                        "snippet": plan_evidence,
+                        "highlightSnippet": plan_evidence,
+                        "blockId": str(
+                            plan_slot.get("block_id") or plan_slot.get("blockId") or ""
+                        ).strip(),
+                        "anchorId": str(
+                            plan_slot.get("anchor_id") or plan_slot.get("anchorId") or ""
+                        ).strip(),
+                        "anchorKind": str(
+                            plan_slot.get("anchor_kind") or plan_slot.get("anchorKind") or ""
+                        ).strip(),
+                        "pageStart": int(
+                            plan_slot.get("page_start") or plan_slot.get("pageStart") or 0
+                        ),
+                        "pageEnd": int(
+                            plan_slot.get("page_end")
+                            or plan_slot.get("pageEnd")
+                            or plan_slot.get("page_start")
+                            or plan_slot.get("pageStart")
+                            or 0
+                        ),
+                        "selectionReason": str(
+                            plan_slot.get("evidence_selection_reason")
+                            or plan_slot.get("evidenceSelectionReason")
+                            or "citation_plan_slot"
+                        ).strip(),
+                    }
+                    if not any(
+                        str(item.get("snippet") or item.get("highlightSnippet") or "").strip()
+                        == plan_evidence
+                        for item in alternatives
+                    ):
+                        alternatives.insert(0, plan_candidate)
+                    reader_open["evidenceAlternatives"] = alternatives
+                    ui_meta_h["reader_open"] = reader_open
             default_heading = str(
                 primary_evidence.get("heading_path")
                 or primary_evidence.get("headingPath")
@@ -5446,10 +5883,121 @@ def _annotate_inpaper_citations_with_hover_meta(
                     )
                     if cleaned_evidence_quote:
                         evidence_quote = cleaned_evidence_quote
+            if plan_slot:
+                plan_text = str(
+                    plan_slot.get("evidence_quote")
+                    or plan_slot.get("evidenceQuote")
+                    or ""
+                ).strip()
+                claim_identifiers = {
+                    token.upper()
+                    for token in re.findall(
+                        r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
+                        str(answer_claim or ""),
+                    )
+                }
+                if plan_text and len(claim_identifiers) >= 2:
+                    plan_specific = ""
+                    for plan_sentence in re.split(r"(?<=[.!?。！？])\s+", plan_text):
+                        sentence_identifiers = {
+                            token.upper()
+                            for token in re.findall(
+                                r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
+                                plan_sentence,
+                            )
+                        }
+                        if len(claim_identifiers & sentence_identifiers) < 2:
+                            continue
+                        plan_specific = _clean_evidence_display_text(
+                            plan_sentence,
+                            max_len=520,
+                        )
+                        if plan_specific and not re.search(r"[.!?。！？…]$", plan_specific):
+                            plan_specific = plan_specific.rstrip(" ,;:") + "..."
+                        break
+                    if not plan_specific:
+                        plan_specific = _pick_readable_evidence_text(
+                            plan_text,
+                            source=src_name,
+                            title=heading,
+                            claim=answer_claim,
+                            heading=heading,
+                            max_len=520,
+                        )
+                    plan_specific_identifiers = {
+                        token.upper()
+                        for token in re.findall(
+                            r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
+                            plan_specific,
+                        )
+                    }
+                    if len(claim_identifiers & plan_specific_identifiers) >= 2:
+                        evidence_quote = plan_specific
+                        snippet = plan_specific
+            claim_named_identifiers = {
+                token.upper()
+                for token in re.findall(
+                    r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
+                    str(answer_claim or ""),
+                )
+            }
+            if len(claim_named_identifiers) >= 2:
+                for snippet_sentence in re.split(
+                    r"(?<=[.!?。！？])\s+",
+                    str(evidence_pick.get("text") or snippet or ""),
+                ):
+                    snippet_identifiers = {
+                        token.upper()
+                        for token in re.findall(
+                            r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
+                            snippet_sentence,
+                        )
+                    }
+                    if len(claim_named_identifiers & snippet_identifiers) < 2:
+                        continue
+                    named_evidence = _clean_evidence_display_text(
+                        snippet_sentence,
+                        max_len=520,
+                    )
+                    if named_evidence and not re.search(r"[.!?。！？…]$", named_evidence):
+                        named_evidence = named_evidence.rstrip(" ,;:") + "..."
+                    if named_evidence:
+                        evidence_quote = named_evidence
+                    break
             evidence_source = str(evidence_pick.get("source") or "retrieval_hit").strip() or "retrieval_hit"
             if evidence_source in {"hit_meta", "hit_text"}:
                 evidence_source = "retrieval_hit"
+            exact_support_plan = bool(
+                authoritative_plan_evidence
+                and str(meta_h.get("citation_plan_source") or "").strip().lower()
+                == "exact_support_preflight"
+            )
+            if exact_support_plan:
+                evidence_source = "exact_support_preflight"
             p0, p1 = _safe_page_range(meta_h)
+            if isinstance(picked_raw, dict) and picked_raw:
+                raw_page_start = _system_a_candidate_value(
+                    picked_raw,
+                    "page_start",
+                    "pageStart",
+                    "page",
+                    "page_number",
+                )
+                raw_page_end = _system_a_candidate_value(
+                    picked_raw,
+                    "page_end",
+                    "pageEnd",
+                )
+                try:
+                    picked_p0 = int(raw_page_start or 0)
+                except Exception:
+                    picked_p0 = 0
+                try:
+                    picked_p1 = int(raw_page_end or picked_p0 or 0)
+                except Exception:
+                    picked_p1 = picked_p0
+                if picked_p0 > 0:
+                    p0, p1 = picked_p0, picked_p1 or picked_p0
             ref_rank = meta_h.get("ref_rank") if isinstance(meta_h.get("ref_rank"), dict) else {}
             if picked_raw_hit:
                 block_id = str(evidence_pick.get("block_id") or "").strip()
@@ -5603,7 +6151,12 @@ def _annotate_inpaper_citations_with_hover_meta(
             existing = system_a_detail_by_fingerprint.get(evidence_fp)
             split_occurrence = bool(
                 isinstance(existing, dict)
-                and _system_a_should_split_occurrence(existing, int(n), answer_claim)
+                and _system_a_should_split_occurrence(
+                    existing,
+                    int(n),
+                    answer_claim,
+                    evidence_quote=evidence_quote,
+                )
             )
             if isinstance(existing, dict) and not split_occurrence:
                 _system_a_add_linked_num(existing, int(n))
@@ -5612,22 +6165,34 @@ def _annotate_inpaper_citations_with_hover_meta(
                 return existing
             if isinstance(existing, dict) and split_occurrence:
                 existing["occurrence_specific"] = True
-            occurrence_extra = claim_sig if split_occurrence else ""
+            same_number_source_exists = any(
+                isinstance(item, dict)
+                and str(item.get("citation_route") or "") == "system_a"
+                and int(item.get("num") or 0) == int(n)
+                and str(item.get("source_path") or "").strip().lower() == sp.lower()
+                for item in detail_by_key.values()
+            )
+            occurrence_specific = bool(split_occurrence or same_number_source_exists)
+            occurrence_extra = claim_sig if occurrence_specific else ""
             anchor = _build_inpaper_anchor(anchor_ns, int(n), source_name=src_name, extra=occurrence_extra)
             rec = {
                 "num": int(n),
                 "linked_nums": [int(n)],
                 "anchor": anchor,
                 "evidence_fingerprint": evidence_fp,
-                "citation_budget_key": f"{evidence_fp}|claim:{claim_sig}" if split_occurrence and claim_sig else evidence_fp,
-                "occurrence_specific": bool(split_occurrence),
+                "citation_budget_key": f"{evidence_fp}|claim:{claim_sig}" if occurrence_specific and claim_sig else evidence_fp,
+                "occurrence_specific": occurrence_specific,
                 "source_name": src_name,
                 "source_path": sp,
                 "raw": snippet[:520],
                 "title": heading or src_name,
                 "is_inpaper": False,  # System A (hit citation)
                 "citation_route": "system_a",
-                "routing_reason": "retrieval_hit",
+                "routing_reason": (
+                    "exact_support_preflight"
+                    if exact_support_plan
+                    else "retrieval_hit"
+                ),
                 "routing_confidence": float(binding.get("confidence") or 0.0),
                 "heading_path": heading,
                 "summary_line": evidence_quote[:360] or snippet[:360],
@@ -5651,6 +6216,16 @@ def _annotate_inpaper_citations_with_hover_meta(
                 "binding_overlap_terms": list(binding.get("overlap_terms") or []),
                 "evidence_pick_score": float(evidence_pick.get("score") or 0.0) if evidence_pick else 0.0,
                 "citation_plan_slot": bool(meta_h.get("citation_plan_slot")),
+                "selection_reason": str(
+                    meta_h.get("citation_plan_evidence_selection_reason")
+                    or primary_evidence.get("selection_reason")
+                    or primary_evidence.get("selectionReason")
+                    or ""
+                ).strip(),
+                "strict_locate": bool(
+                    primary_evidence.get("strict_locate")
+                    or primary_evidence.get("strictLocate")
+                ),
             }
             citation_meta_candidates: list[dict] = []
             source_key = sp.replace("\\", "/").strip().lower()

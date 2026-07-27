@@ -78,6 +78,7 @@ const messages = [
         anchor_id: 'p-lpr-41',
         anchor_kind: 'paragraph',
         page_start: 7,
+        card_quality_flags: ['occurrence_specific_claim'],
       },
       {
         num: 2,
@@ -600,7 +601,8 @@ test('research QA acceptance: polished refs and both citation systems stay click
   await expect(page.getByTestId('citation-popover-system-a-compact-meta')).toContainText('Data-driven strategy')
   await expect(page.getByTestId('citation-popover-system-a-location')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('low-dimensional measurements')
-  await expect(page.getByTestId('citation-popover-system-a-claim')).toHaveCount(0)
+  await expect(page.getByTestId('citation-popover-system-a-claim')).toBeVisible()
+  await expect(page.getByTestId('citation-popover-system-a-takeaway')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-a-support')).toHaveCount(0)
 
   await page.locator('.kb-cite-pop-close').click()

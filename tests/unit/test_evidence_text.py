@@ -110,6 +110,49 @@ def test_pick_readable_evidence_text_trims_short_tail_phrase_before_ellipsis() -
     assert "in this..." not in picked
 
 
+def test_pick_readable_evidence_text_prefers_sentence_with_claim_numbers() -> None:
+    raw = (
+        "We established a real-world physical noise model of SPAD arrays. "
+        "The model includes shot noise, fixed-pattern noise, dark count rate, afterpulsing, "
+        "crosstalk, and deadtime noise. "
+        "To calibrate this model, we collected a real-shot SPAD dataset containing 2790 images. "
+        "The dataset covers 90 scenes, 10 bit depths, and 3 illumination fluxes."
+    )
+
+    picked = pick_readable_evidence_text(
+        raw,
+        claim="该数据集包含2790张图像，覆盖90个场景、10种位深度和3种照明通量。",
+        heading="Introduction",
+    )
+
+    assert "2790 images" in picked
+    assert "90 scenes" in picked
+    assert "10 bit depths" in picked
+    assert "3 illumination fluxes" in picked
+
+
+def test_pick_readable_evidence_text_prefers_named_dataset_fragment_at_page_break() -> None:
+    raw = (
+        "We established a real-world physical noise model of SPAD arrays. "
+        "The model contains crosstalk and dark count noise. "
+        "With the calibrated physical noise model, we employed public high-resolution "
+        "images collected from the PASCAL VOC2007 dataset and"
+    )
+
+    picked = pick_readable_evidence_text(
+        raw,
+        claim=(
+            "The SPAD network uses public high-resolution images from PASCAL VOC2007 "
+            "as its training prior."
+        ),
+        heading="Introduction",
+    )
+
+    assert picked.startswith("With the calibrated physical noise model")
+    assert "PASCAL VOC2007" in picked
+    assert picked.endswith("...")
+
+
 def test_metadata_prefix_strip_preserves_complete_capitalized_evidence_sentence() -> None:
     evidence = (
         "All tested samples were collected under realistic conditions involving mist, jitter, and sensor noise. "

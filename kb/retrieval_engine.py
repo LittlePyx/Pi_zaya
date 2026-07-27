@@ -1926,6 +1926,15 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
             "physics-informed deep learning computational single-photon imaging "
             "physical prior data generator neural network loss inference"
         )
+    if has_any("single-photon", "single photon", "\u5355\u5149\u5b50") and has_any(
+        "physics-informed deep learning",
+        "physics informed deep learning",
+        "pidl",
+    ):
+        add(
+            "High-resolution single-photon imaging physics-informed deep learning "
+            "physical multi-source noise model SPAD arrays crosstalk dark count rate"
+        )
     if (
         has_any("single-photon", "single photon", "\u5355\u5149\u5b50")
         and has_any(

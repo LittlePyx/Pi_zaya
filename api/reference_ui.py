@@ -7963,6 +7963,24 @@ def build_hit_ui_meta(
         prompt=prompt,
         hit_text=str((hit or {}).get("text") or ""),
     )
+    exact_support_locked = bool(
+        meta.get("paper_guide_fast_exact")
+        and meta.get("structured_evidence_locked")
+        and isinstance(meta.get("primary_evidence"), dict)
+    )
+    exact_support_primary = (
+        dict(meta.get("primary_evidence") or {})
+        if exact_support_locked
+        else {}
+    )
+    exact_support_evidence = str(
+        exact_support_primary.get("snippet")
+        or exact_support_primary.get("highlight_snippet")
+        or retrieval_hit_text
+        or ""
+    ).strip()
+    exact_support_guide = str(meta.get("guide_line") or "").strip()
+    exact_support_why = str(meta.get("why_line") or "").strip()
 
     primary_evidence = _select_primary_ref_evidence(
         meta=meta,
@@ -8012,6 +8030,20 @@ def build_hit_ui_meta(
     except (TypeError, ValueError):
         answer_citation_num = 0
     authoritative_cited_summary = ""
+    if exact_support_locked and exact_support_evidence:
+        heading_path = str(
+            exact_support_primary.get("heading_path")
+            or meta.get("heading_path")
+            or heading_path
+            or ""
+        ).strip()
+        heading = str(heading_path.split(" / ")[-1] or heading).strip()
+        section_label = heading_path
+        subsection_label = ""
+        summary_line = exact_support_guide or summary_line
+        summary_source = "exact_support_preflight"
+        authoritative_cited_summary = exact_support_evidence
+        used_prompt_aligned_summary = True
     if structured_table_card:
         locked_heading_context = _resolve_ref_ui_heading_context(
             prompt=prompt,
@@ -8147,6 +8179,9 @@ def build_hit_ui_meta(
     )
     why_line = str(why_copy.get("why_line") or "").strip()
     why_generation = str(why_copy.get("why_generation") or "").strip()
+    if exact_support_locked and exact_support_why:
+        why_line = exact_support_why
+        why_generation = "deterministic_grounded"
     copy_flow = _resolve_ref_card_summary_kind_and_copy(
         prompt=prompt,
         display_name=display_name,
@@ -8218,6 +8253,50 @@ def build_hit_ui_meta(
         score=score,
         prompt=prompt,
     )
+    if exact_support_locked and exact_support_evidence:
+        primary_evidence = dict(exact_support_primary)
+        primary_evidence.update(
+            {
+                "source_path": source_path,
+                "source_name": display_name,
+                "heading_path": heading_path or heading,
+                "snippet": exact_support_evidence,
+                "highlight_snippet": exact_support_evidence,
+                "selection_reason": str(
+                    exact_support_primary.get("selection_reason")
+                    or "exact_support_preflight"
+                ).strip(),
+                "strict_locate": True,
+            }
+        )
+        if isinstance(reader_open, dict):
+            reader_open = dict(reader_open)
+            reader_open.update(
+                {
+                    "sourcePath": source_path,
+                    "sourceName": display_name,
+                    "headingPath": heading_path or heading,
+                    "snippet": exact_support_evidence,
+                    "highlightSnippet": exact_support_evidence,
+                    "strictLocate": True,
+                    "primaryEvidence": dict(primary_evidence),
+                }
+            )
+            exact_page_start = _positive_int(
+                exact_support_primary.get("page_start")
+                or exact_support_primary.get("pageStart")
+                or p0
+            )
+            exact_page_end = _positive_int(
+                exact_support_primary.get("page_end")
+                or exact_support_primary.get("pageEnd")
+                or exact_page_start
+                or p1
+            )
+            if exact_page_start > 0:
+                reader_open["pageStart"] = exact_page_start
+            if exact_page_end > 0:
+                reader_open["pageEnd"] = exact_page_end
     if answer_citation_num > 0 and summary_source == "answer_citation" and authoritative_cited_summary:
         evidence_summary_line = authoritative_cited_summary
         primary_evidence = dict(primary_evidence or {})

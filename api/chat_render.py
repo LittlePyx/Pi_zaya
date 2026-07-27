@@ -1320,6 +1320,26 @@ def _backfill_system_a_cite_details_from_ref_pack(
                 detail,
             ),
         )
+        exact_support_locked = bool(
+            str(detail.get("routing_reason") or "").strip().lower()
+            == "exact_support_preflight"
+            or str(detail.get("evidence_source") or "").strip().lower()
+            == "exact_support_preflight"
+            or str(detail.get("selection_reason") or "").strip().lower()
+            == "exact_support_preflight"
+        )
+        if (
+            exact_support_locked
+            and str(detail.get("evidence_quote") or detail.get("raw") or "").strip()
+            and str(detail.get("heading_path") or "").strip()
+            and int(detail.get("page_start") or detail.get("pageStart") or 0) > 0
+        ):
+            # Exact-support preflight has already resolved the source
+            # occurrence.  Reference-pack enrichment may still add DOI/title
+            # metadata, but must not replace the verified passage with a
+            # broader abstract or a different occurrence from the same paper.
+            out.append(compose_citation_card(detail, locale=render_locale))
+            continue
         existing_evidence = str(
             detail.get("evidence_quote")
             or detail.get("summary_line")
@@ -3271,6 +3291,10 @@ def _augment_hits_with_system_a_plan_slots(
             ).strip().lower()
             == "prompt_aligned_source_sentence"
         )
+        exact_support_plan_slot = bool(
+            force_dedicated_plan_hits
+            and bool(slot.get("strict_locate") or slot.get("strictLocate"))
+        )
         structured_table_plan_slot = bool(
             re.search(
                 r"(?is)\btable\s+\d+[a-z]?\b.*(?:detector\s+type\s*:|"
@@ -3279,10 +3303,15 @@ def _augment_hits_with_system_a_plan_slots(
             )
         )
         authoritative_plan_evidence = bool(
-            prompt_aligned_source_slot or structured_table_plan_slot
+            exact_support_plan_slot
+            or prompt_aligned_source_slot
+            or structured_table_plan_slot
         )
         candidate_bound = False
         candidate_nums = list(slot.get("candidate_hits") or [])
+        exact_support_candidate_slot = bool(
+            exact_support_plan_slot and candidate_nums
+        )
         if (
             len(plan_source_keys) >= 3
             or trusted_prompt_contract_slot
@@ -3396,6 +3425,7 @@ def _augment_hits_with_system_a_plan_slots(
             should_rebind_candidate = bool(
                 trusted_prompt_contract_slot
                 or prompt_aligned_source_slot
+                or exact_support_candidate_slot
                 or (
                     len(plan_source_keys) >= 3
                     and (
@@ -3422,6 +3452,12 @@ def _augment_hits_with_system_a_plan_slots(
                         "ref_best_heading_path": heading_path,
                         "citation_plan_slot": True,
                         "citation_plan_evidence_authoritative": authoritative_plan_evidence,
+                        "citation_plan_source": str(citation_plan.get("source") or "").strip(),
+                        "citation_plan_evidence_selection_reason": str(
+                            slot.get("evidence_selection_reason")
+                            or slot.get("evidenceSelectionReason")
+                            or ""
+                        ).strip(),
                         "primary_block_id": str(
                             slot.get("block_id") or slot.get("blockId") or ""
                         ).strip(),
@@ -3453,7 +3489,11 @@ def _augment_hits_with_system_a_plan_slots(
                             "heading_path": heading_path,
                             "snippet": evidence_quote,
                             "highlight_snippet": evidence_quote,
-                            "selection_reason": "citation_plan_slot",
+                            "selection_reason": str(
+                                slot.get("evidence_selection_reason")
+                                or slot.get("evidenceSelectionReason")
+                                or "citation_plan_slot"
+                            ).strip(),
                             "block_id": str(
                                 slot.get("block_id") or slot.get("blockId") or ""
                             ).strip(),
@@ -3489,7 +3529,7 @@ def _augment_hits_with_system_a_plan_slots(
             evidence_quote.lower()[:240],
         )
         force_dedicated_for_slot = bool(
-            force_dedicated_plan_hits
+            (force_dedicated_plan_hits and not candidate_bound)
             or (len(plan_source_keys) >= 3 and not candidate_bound)
         )
         if key in seen and not force_dedicated_for_slot:
@@ -3509,6 +3549,12 @@ def _augment_hits_with_system_a_plan_slots(
                     "ref_best_heading_path": heading_path,
                     "citation_plan_slot": True,
                     "citation_plan_evidence_authoritative": authoritative_plan_evidence,
+                    "citation_plan_source": str(citation_plan.get("source") or "").strip(),
+                    "citation_plan_evidence_selection_reason": str(
+                        slot.get("evidence_selection_reason")
+                        or slot.get("evidenceSelectionReason")
+                        or ""
+                    ).strip(),
                     "primary_block_id": str(slot.get("block_id") or slot.get("blockId") or "").strip(),
                     "primary_anchor_id": str(slot.get("anchor_id") or slot.get("anchorId") or "").strip(),
                     "anchor_kind": str(slot.get("anchor_kind") or slot.get("anchorKind") or "").strip(),
@@ -3527,7 +3573,11 @@ def _augment_hits_with_system_a_plan_slots(
                         "heading_path": heading_path,
                         "snippet": evidence_quote,
                         "highlight_snippet": evidence_quote,
-                        "selection_reason": "citation_plan_slot",
+                        "selection_reason": str(
+                            slot.get("evidence_selection_reason")
+                            or slot.get("evidenceSelectionReason")
+                            or "citation_plan_slot"
+                        ).strip(),
                         "block_id": str(slot.get("block_id") or slot.get("blockId") or "").strip(),
                         "anchor_id": str(slot.get("anchor_id") or slot.get("anchorId") or "").strip(),
                         "anchor_kind": str(slot.get("anchor_kind") or slot.get("anchorKind") or "").strip(),
@@ -6145,6 +6195,10 @@ def _reading_guide_repair_dl_spi_benefit_marker(
             re.search(r"(?i)deep\s+learning|深度学习", segment)
             and re.search(r"(?i)reconstruction\s+quality|重建质量|质量", segment)
             and re.search(r"(?i)reconstruction\s+speed|重建速度|速度", segment)
+            and not _reading_claim_has_modality_conflict(
+                segment,
+                str(benefit_slot.get("evidence_quote") or ""),
+            )
         ):
             segments[idx] = _append_numeric_citation_to_paragraph(segment, num)
             return "".join(segments)
@@ -6387,6 +6441,82 @@ def _reading_claim_group_hits(claim: str, groups: list[set[str]]) -> set[int]:
     }
 
 
+def _reading_claim_has_modality_conflict(claim: str, source_surface: str) -> bool:
+    claim_low = str(claim or "").lower()
+    source_low = str(source_surface or "").lower()
+    claim_single_photon = bool(re.search(r"\bsingle[- ]?photon\b|\bspad\b|单光子", claim_low))
+    claim_single_pixel = bool(re.search(r"\bsingle[- ]?pixel\b|单像素", claim_low))
+    source_single_photon = bool(re.search(r"\bsingle[- ]?photon\b|\bspad\b|单光子", source_low))
+    source_single_pixel = bool(re.search(r"\bsingle[- ]?pixel\b|单像素", source_low))
+    return bool(
+        (claim_single_photon and source_single_pixel and not source_single_photon)
+        or (claim_single_pixel and source_single_photon and not source_single_pixel)
+    )
+
+
+def _reading_claim_has_evidence_scope_conflict(claim: str, source_surface: str) -> bool:
+    """Reject nearby-topic evidence that misses the claim's defining scope.
+
+    Broad detector reviews can mention SPAD, noise and dark counts without
+    supporting a claim about constructing or calibrating a *physical noise
+    model*.  Keyword overlap alone is therefore insufficient for that family
+    of claims.
+    """
+
+    claim_low = str(claim or "").lower()
+    source_low = str(source_surface or "").lower()
+    claim_requires_physical_noise_model = bool(
+        re.search(
+            r"physical\s+(?:multi[- ]source\s+)?noise\s+model|"
+            r"multi[- ]source\s+(?:physical\s+)?noise\s+model|"
+            r"物理噪声模型|多源(?:物理)?噪声模型|多源噪声",
+            claim_low,
+        )
+    )
+    if claim_requires_physical_noise_model and not re.search(
+        r"physical\s+(?:multi[- ]source\s+)?noise\s+model|"
+        r"multi[- ]source\s+(?:physical\s+)?noise\s+model|"
+        r"物理噪声模型|多源(?:物理)?噪声模型|多源噪声",
+        source_low,
+    ):
+        return True
+    return False
+
+
+def _reading_claim_names_different_paper(claim: str, source_name: str) -> bool:
+    """Detect an explicitly named paper title that is not the candidate source."""
+
+    source_tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(source_name or "").lower())
+        if len(token) >= 3
+        and token not in {"pdf", "paper", "journal", "2023", "2024", "2025"}
+    }
+    if len(source_tokens) < 3:
+        return False
+    candidates = [
+        next((part for part in match if part), "")
+        for match in re.findall(
+            r"\((?:\*)?([^()]{24,}?)(?:\*)?\)|（(?:\*)?([^（）]{24,}?)(?:\*)?）|"
+            r"\*([^*\n]{24,})\*|《([^》\n]{24,})》",
+            str(claim or ""),
+        )
+    ]
+    for candidate in candidates:
+        title_tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]+", candidate.lower())
+            if len(token) >= 3
+            and token not in {"the", "and", "with", "from", "paper", "journal", "2023", "2024", "2025"}
+        }
+        if len(title_tokens) < 5:
+            continue
+        overlap = len(title_tokens & source_tokens) / max(1, len(title_tokens))
+        if overlap < 0.45:
+            return True
+    return False
+
+
 def _reading_guide_attach_claim_level_system_a_citations(
     md: str,
     hits: list[dict],
@@ -6466,6 +6596,10 @@ def _reading_guide_attach_claim_level_system_a_citations(
                         flags=re.IGNORECASE,
                     )
                 ):
+                    continue
+                if _reading_claim_has_modality_conflict(claim, source_surface):
+                    continue
+                if _reading_claim_has_evidence_scope_conflict(claim, source_surface):
                     continue
                 group_hits = _reading_claim_group_hits(claim, groups)
                 if len(group_hits) < 2:
@@ -6829,7 +6963,23 @@ def _reading_guide_repair_missing_system_a_citations(
                     _reading_paragraph_affinity(line, terms, source_surface=surface),
                 )
                 for line_idx, line in enumerate(paragraph_lines)
-                if line.strip() and not _reading_claim_is_retrieval_notice(line)
+                if line.strip()
+                and not _reading_claim_is_retrieval_notice(line)
+                and not (
+                    re.search(r"(?<![!\\])\[\d{1,5}\](?!\()", line)
+                    and re.search(
+                        r"阅读(?:/使用)?建议|必读|建议(?:重点)?阅读|"
+                        r"reading\s+(?:tip|advice|recommendation)|recommended\s+reading|must[- ]read",
+                        line,
+                        flags=re.I,
+                    )
+                )
+                and not _reading_claim_has_modality_conflict(line, surface)
+                and not _reading_claim_has_evidence_scope_conflict(line, surface)
+                and not _reading_claim_names_different_paper(
+                    line,
+                    str(slot.get("source_name") or slot.get("sourceName") or ""),
+                )
             ]
             if not line_scores:
                 continue
@@ -6965,6 +7115,35 @@ def _augment_hits_with_canonical_answer_citations(
                             or ""
                         ).strip().lower()
                         == "citation_plan_slot"
+                        and bool(
+                            _primary_evidence_text(
+                                (hit.get("ui_meta") or {}).get("primary_evidence") or {}
+                            )
+                        )
+                    )
+                    or (
+                        bool(
+                            (
+                                hit.get("meta")
+                                if isinstance(hit.get("meta"), dict)
+                                else {}
+                            ).get("citation_plan_slot")
+                        )
+                        and bool(
+                            (
+                                hit.get("meta")
+                                if isinstance(hit.get("meta"), dict)
+                                else {}
+                            ).get("citation_plan_evidence_authoritative")
+                        )
+                        and bool(
+                            ((hit.get("ui_meta") or {}).get("primary_evidence") or {}).get(
+                                "strict_locate"
+                            )
+                            or ((hit.get("ui_meta") or {}).get("primary_evidence") or {}).get(
+                                "strictLocate"
+                            )
+                        )
                         and bool(
                             _primary_evidence_text(
                                 (hit.get("ui_meta") or {}).get("primary_evidence") or {}

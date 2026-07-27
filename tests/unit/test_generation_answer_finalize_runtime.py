@@ -382,6 +382,10 @@ def test_finalize_fast_exact_reuses_support_without_full_text_rescan(monkeypatch
         "block_id": "blk_admm",
         "anchor_id": "p_admm",
         "locate_anchor": "Most existing methods employ ADMM [4].",
+        "page_start": 3,
+        "page_end": 3,
+        "evidence_selection_reason": "exact_support_preflight",
+        "strict_locate": True,
         "ref_nums": [4],
         "resolved_ref_num": 4,
     }
@@ -394,6 +398,28 @@ def test_finalize_fast_exact_reuses_support_without_full_text_rescan(monkeypatch
         finalize_runtime,
         "_build_answer_quality_probe",
         lambda answer, **_kwargs: {"minimum_ok": True, "answer": answer},
+    )
+    original_snapshot = finalize_runtime._build_paper_guide_contract_snapshot
+
+    def _snapshot_with_stale_system_a(**kwargs):
+        snapshot = original_snapshot(**kwargs)
+        packet = dict(snapshot.get("render_packet") or {})
+        packet["cite_details"] = [
+            {
+                "num": 1,
+                "citation_route": "system_a",
+                "source_path": "stale.md",
+                "evidence_quote": "Stale broad retrieval evidence.",
+            },
+            *list(packet.get("cite_details") or []),
+        ]
+        snapshot["render_packet"] = packet
+        return snapshot
+
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_build_paper_guide_contract_snapshot",
+        _snapshot_with_stale_system_a,
     )
 
     out = finalize_runtime._finalize_generation_answer(
@@ -431,8 +457,13 @@ def test_finalize_fast_exact_reuses_support_without_full_text_rescan(monkeypatch
     assert out["paper_guide_support_resolution"][0]["block_id"] == "blk_admm"
     system_a = out["paper_guide_contracts"]["render_packet"]["cite_details"][0]
     assert system_a["citation_route"] == "system_a"
+    assert system_a["source_path"] == "paper.md"
     assert system_a["block_id"] == "blk_admm"
     assert system_a["anchor_id"] == "p_admm"
+    assert system_a["page_start"] == 3
+    assert system_a["page_end"] == 3
+    assert system_a["selection_reason"] == "exact_support_preflight"
+    assert system_a["strict_locate"] is True
 
 
 def test_finalize_fast_exact_honors_disabled_system_b_budget(monkeypatch):

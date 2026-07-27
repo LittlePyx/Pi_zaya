@@ -67,6 +67,12 @@ _PAPER_GUIDE_METHOD_PROMPT_RE = re.compile(
     r"\bwhy\b.*\bapr\b|原理|方法|机制|算法|为什么.*APR|怎么做到的|重聚焦|重新对焦|离焦.{0,8}对焦)",
     flags=re.IGNORECASE,
 )
+_PAPER_GUIDE_MODEL_CONTENT_PROMPT_RE = re.compile(
+    r"(?:为什么.{0,24}(?:泊松|poisson).{0,12}不够|"
+    r"(?:哪些|什么|which|what).{0,24}(?:噪声|noise|退化|degradation).{0,24}(?:模型|model|纳入|include)|"
+    r"(?:模型|model).{0,24}(?:包含|纳入|include).{0,24}(?:哪些|什么|which|what).{0,12}(?:噪声|noise|退化|degradation))",
+    flags=re.IGNORECASE,
+)
 _PAPER_GUIDE_EQUATION_PROMPT_RE = re.compile(
     r"(\bwhat\s+does\s+(?:equation|eq\.?|formula)\b|\b(?:equation|eq\.?|formula)\s*\(?\d+\)?\b|"
     r"\bvariable(?:s)?\b.*\b(?:define|definition|mean|means|denote|denotes|represent|represents)\b|"
@@ -473,6 +479,8 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
             q,
         )
     )
+    if _PAPER_GUIDE_MODEL_CONTENT_PROMPT_RE.search(q):
+        return "method"
     if _PAPER_GUIDE_STRENGTH_PROMPT_RE.search(q) or _PAPER_GUIDE_STRENGTH_PROMPT_RE_CLEAN.search(q):
         return "strength_limits"
     if tradeoff_without_explicit_comparison and (

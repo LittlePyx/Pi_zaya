@@ -10,6 +10,7 @@ from kb.answer_contract import (
     _enhance_kb_miss_fallback,
     _reconcile_kb_notice,
 )
+from kb.claim_evidence_runtime import audit_and_repair_claim_evidence
 from kb.paper_guide_contracts import (
     _build_paper_guide_render_packet_model,
     _build_paper_guide_retrieval_bundle_model,
@@ -3218,6 +3219,12 @@ def _finalize_fast_exact_generation_answer(
         paper_guide_support_slots=list(paper_guide_support_slots or []),
         paper_guide_support_resolution=support_resolution,
     )
+    answer, claim_evidence_meta = audit_and_repair_claim_evidence(
+        answer,
+        answer_hits=list(answer_hits or []),
+        allow_citation_repairs=False,
+        prompt=prompt_text,
+    )
     contracts = _build_paper_guide_contract_snapshot(
         paper_guide_mode=True,
         intent_model=resolved_intent,
@@ -3235,9 +3242,9 @@ def _finalize_fast_exact_generation_answer(
     if support_resolution:
         primary_support = support_resolution[0]
         evidence_quote = str(
-            primary_support.get("locate_anchor")
+            primary_support.get("evidence_quote")
+            or primary_support.get("locate_anchor")
             or primary_support.get("segment_text")
-            or primary_support.get("evidence_quote")
             or ""
         ).strip()
         heading_path = str(primary_support.get("heading_path") or "").strip()
@@ -3269,6 +3276,24 @@ def _finalize_fast_exact_generation_answer(
             "block_id": str(primary_support.get("block_id") or "").strip(),
             "anchor_id": str(primary_support.get("anchor_id") or "").strip(),
             "anchor_kind": str(primary_support.get("anchor_kind") or "paragraph").strip(),
+            "page_start": int(
+                primary_support.get("page_start")
+                or primary_support.get("page")
+                or primary_support.get("page_number")
+                or 0
+            ),
+            "page_end": int(
+                primary_support.get("page_end")
+                or primary_support.get("page_start")
+                or primary_support.get("page")
+                or primary_support.get("page_number")
+                or 0
+            ),
+            "selection_reason": str(
+                primary_support.get("evidence_selection_reason")
+                or "exact_support_preflight"
+            ).strip(),
+            "strict_locate": bool(primary_support.get("strict_locate", True)),
             "binding_status": "grounded",
             "binding_confidence": 1.0,
             "binding_reason": "Exact paper support was resolved for the answer claim.",
@@ -3283,11 +3308,12 @@ def _finalize_fast_exact_generation_answer(
             for item in list(packet.get("cite_details") or [])
             if isinstance(item, dict)
         ]
-        if not any(
-            str(item.get("citation_route") or "").strip().lower() == "system_a"
+        packet_details = [
+            item
             for item in packet_details
-        ):
-            packet_details.insert(0, system_a_detail)
+            if str(item.get("citation_route") or "").strip().lower() != "system_a"
+        ]
+        packet_details.insert(0, system_a_detail)
         packet["cite_details"] = packet_details
         contracts["render_packet"] = packet
     research_plan = str(research_answer_plan or "").strip()
@@ -3334,6 +3360,7 @@ def _finalize_fast_exact_generation_answer(
         }
     if dict(citation_validation or {}).get("raw_count"):
         answer_quality["citation_validation"] = dict(citation_validation or {})
+    answer_quality["claim_evidence"] = dict(claim_evidence_meta or {})
     answer_quality["retrieval_confidence"] = dict(
         paper_guide_retrieval_confidence_hint or {}
     )
@@ -3684,6 +3711,12 @@ def _finalize_generation_answer(
         retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
         allow_paper_guide_structured_refs=bool(paper_guide_validated_structured_refs),
     )
+    answer, claim_evidence_meta = audit_and_repair_claim_evidence(
+        answer,
+        answer_hits=list(answer_hits or []),
+        allow_citation_repairs=not bool(paper_guide_mode),
+        prompt=prompt_for_user or prompt,
+    )
     answer = _normalize_retrieval_window_claims(answer, prompt=prompt_for_user or prompt)
     answer = _maybe_clarify_negative_boundary_answer(answer, prompt=prompt_for_user or prompt)
     if single_paper_pick_prompt:
@@ -3819,6 +3852,7 @@ def _finalize_generation_answer(
         answer_quality["citation_plan"] = dict(citation_plan)
     if bool(template_repair_meta.get("changed")):
         answer_quality["template_repair"] = dict(template_repair_meta)
+    answer_quality["claim_evidence"] = dict(claim_evidence_meta or {})
     if bool(retrieval_confidence.get("low_confidence")):
         refs_for_notice = _collect_low_confidence_candidate_refs(
             support_resolution=list(paper_guide_support_resolution or []),

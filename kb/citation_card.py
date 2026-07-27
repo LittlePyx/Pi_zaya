@@ -1032,6 +1032,28 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
     )
     claim = pack.answer_claim
     evidence = pack.evidence_quote
+    exact_support_locked = bool(
+        (
+            str(rec.get("routing_reason") or "").strip().lower()
+            == "exact_support_preflight"
+            or str(rec.get("evidence_source") or "").strip().lower()
+            == "exact_support_preflight"
+        )
+        and bool(rec.get("strict_locate") or rec.get("strictLocate"))
+        and int(rec.get("page_start") or rec.get("pageStart") or 0) > 0
+    )
+    exact_evidence = (
+        clean_display_text(evidence_raw_for_pack, max_len=900)
+        if exact_support_locked
+        else ""
+    )
+    if exact_evidence:
+        # This text was selected from a verified page occurrence before
+        # general retrieval.  The generic readability filter intentionally
+        # rejects some long/list-like excerpts; that is inappropriate for an
+        # authoritative exact-support passage because it leaves the card with
+        # no evidence and invites a broader abstract to replace it.
+        evidence = exact_evidence
     takeaway = _system_a_takeaway(claim=claim, evidence=evidence, heading=heading, locale=locale)
     if not takeaway:
         takeaway = pack.evidence_focus
@@ -1045,7 +1067,14 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
     ranked_score = min(0.76, max(0.42, _safe_float(rec.get("score"), 0.0) / 10.0))
     score = max(binding_confidence, ranked_score) if binding_confidence else ranked_score
     score += pack.score_delta
-    flags: list[str] = list(pack.flags)
+    flags: list[str] = [
+        flag
+        for flag in pack.flags
+        if not (
+            exact_evidence
+            and flag in {"evidence_quote_filtered", "missing_evidence_quote"}
+        )
+    ]
     if _text_has_visible_markup_artifact(str(evidence_raw_for_pack or "")):
         flags.append("card_evidence_markup_cleaned")
     if not claim:

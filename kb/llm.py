@@ -465,6 +465,16 @@ class DeepSeekChat:
                     raise TimeoutError(
                         f"LLM stream timed out waiting for {phase} after {visible_timeout_s:.1f}s"
                     ) from exc
+                received_at = time.monotonic()
+                if received_at >= absolute_deadline:
+                    raise TimeoutError(
+                        f"LLM stream exceeded the {total_timeout_s:.1f}s total visible-output deadline"
+                    )
+                if received_at - last_visible_at >= visible_timeout_s:
+                    phase = "idle visible output" if emitted else "first visible token"
+                    raise TimeoutError(
+                        f"LLM stream timed out waiting for {phase} after {visible_timeout_s:.1f}s"
+                    )
                 if kind == "piece":
                     piece = str(payload)
                     raw_probe += piece

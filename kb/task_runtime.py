@@ -3190,7 +3190,9 @@ def _query_scope_prompt_block(*, scope: str, selected_count: int, current_source
         "QUERY SCOPE: Full library.\n"
         "- Search and synthesize across the whole indexed literature library.\n"
         "- When multiple papers are relevant, organize the answer by paper and explain why each paper matches.\n"
-        "- Pair important claims with exact retrieved evidence or location markers.\n"
+        "- Pair every paper-specific mechanism, result, number, comparison, and limitation with exact retrieved evidence on that same sentence.\n"
+        "- Keep evidence boundaries between papers and neighboring modalities; background from one source cannot prove a claim about another source or modality.\n"
+        "- If direct support is absent, omit the specific claim or label it explicitly as an inference; do not attach the nearest unrelated citation.\n"
         "- The retrieved snippets are only a bounded candidate window, not the full library inventory. Never infer the library's total paper count from them.\n"
         "- If that window lacks support, say the current retrieval found no direct evidence; do not claim the entire library lacks the topic."
     )
@@ -3238,9 +3240,9 @@ def _build_exact_preflight_hit(preflight: dict, *, source_name: str = "") -> dic
         support.get("source_path") or (preflight or {}).get("source_path") or ""
     ).strip()
     text = str(
-        support.get("locate_anchor")
+        support.get("evidence_quote")
+        or support.get("locate_anchor")
         or support.get("segment_text")
-        or support.get("evidence_quote")
         or support.get("text")
         or ""
     ).strip()
@@ -3263,10 +3265,17 @@ def _build_exact_preflight_hit(preflight: dict, *, source_name: str = "") -> dic
         "source_sha1",
         "block_id",
         "anchor_id",
+        "anchor_kind",
         "page",
         "page_number",
+        "page_start",
+        "page_end",
         "segment_index",
         "claim_type",
+        "guide_line",
+        "why_line",
+        "evidence_selection_reason",
+        "strict_locate",
         "resolved_ref_num",
         "candidate_refs",
         "ref_nums",
@@ -3275,16 +3284,32 @@ def _build_exact_preflight_hit(preflight: dict, *, source_name: str = "") -> dic
         value = support.get(key)
         if value not in (None, "", [], {}):
             meta[key] = value
-    meta["ref_locs"] = [
-        {
-            "source_path": source_path,
-            "heading_path": heading_path,
-            "snippet": text,
-            "block_id": str(support.get("block_id") or "").strip(),
-            "anchor_id": str(support.get("anchor_id") or "").strip(),
-            "selection_reason": "exact_support_preflight",
-        }
-    ]
+    page_start = int(
+        support.get("page_start")
+        or support.get("page")
+        or support.get("page_number")
+        or 0
+    )
+    page_end = int(support.get("page_end") or page_start or 0)
+    primary_evidence = {
+        "source_path": source_path,
+        "source_name": meta["source_name"],
+        "heading_path": heading_path,
+        "snippet": text,
+        "highlight_snippet": text,
+        "block_id": str(support.get("block_id") or "").strip(),
+        "anchor_id": str(support.get("anchor_id") or "").strip(),
+        "anchor_kind": str(support.get("anchor_kind") or "").strip(),
+        "page_start": page_start,
+        "page_end": page_end,
+        "selection_reason": str(
+            support.get("evidence_selection_reason") or "exact_support_preflight"
+        ).strip(),
+        "strict_locate": bool(support.get("strict_locate", True)),
+    }
+    meta["structured_evidence_locked"] = True
+    meta["primary_evidence"] = dict(primary_evidence)
+    meta["ref_locs"] = [dict(primary_evidence)]
     meta["ref_show_snippets"] = [text]
     return {"text": text, "score": 1_000_000.0, "meta": meta}
 
@@ -3339,7 +3364,10 @@ def _build_exact_preflight_citation_contract(
     sid = _cite_source_id(source_path) if source_path else ""
     heading = str(support.get("heading_path") or "").strip()
     evidence = str(
-        support.get("locate_anchor") or support.get("segment_text") or ""
+        support.get("evidence_quote")
+        or support.get("locate_anchor")
+        or support.get("segment_text")
+        or ""
     ).strip()
     grounded_opportunity: dict = {}
     if requests_system_b and sid:
@@ -3373,6 +3401,27 @@ def _build_exact_preflight_citation_contract(
             "source_name": bound_source_name,
             "heading_path": heading,
             "evidence_quote": evidence,
+            "block_id": str(support.get("block_id") or "").strip(),
+            "anchor_id": str(support.get("anchor_id") or "").strip(),
+            "anchor_kind": str(support.get("anchor_kind") or "").strip(),
+            "page_start": int(
+                support.get("page_start")
+                or support.get("page")
+                or support.get("page_number")
+                or 0
+            ),
+            "page_end": int(
+                support.get("page_end")
+                or support.get("page_start")
+                or support.get("page")
+                or support.get("page_number")
+                or 0
+            ),
+            "evidence_selection_reason": str(
+                support.get("evidence_selection_reason")
+                or "exact_support_preflight"
+            ).strip(),
+            "strict_locate": bool(support.get("strict_locate", True)),
             "candidate_refs": ref_nums,
         }
     ]

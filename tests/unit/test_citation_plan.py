@@ -1095,3 +1095,69 @@ def test_previous_answer_audit_uses_every_authoritative_source_without_system_b(
     assert plan["system_b_enabled"] is False
     system_a_slots = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
     assert [slot["candidate_hits"] for slot in system_a_slots] == [[1], [2], [3], [4]]
+
+
+def test_answer_hit_slot_preserves_primary_evidence_locator() -> None:
+    evidence = "The multi-source physical noise model of SPAD arrays includes crosstalk."
+    plan = build_citation_plan(
+        prompt="How does physics-informed deep learning help SPAD imaging?",
+        answer_hits=[
+            {
+                "text": "A broader retrieved chunk.",
+                "meta": {
+                    "source_path": "pidl.en.md",
+                    "heading_path": "Introduction",
+                    "page_start": 1,
+                    "primary_evidence": {
+                        "heading_path": "Introduction / Figure 1a",
+                        "snippet": evidence,
+                        "block_id": "fig-1a",
+                        "anchor_id": "caption-a",
+                        "anchor_kind": "paragraph",
+                        "page_start": 2,
+                        "page_end": 2,
+                        "selection_reason": "answer_aligned_block",
+                        "strict_locate": True,
+                    },
+                },
+            }
+        ],
+    )
+
+    slot = next(item for item in plan["slots"] if item["preferred_system"] == "system_a")
+    assert slot["evidence_quote"] == evidence
+    assert slot["heading_path"] == "Introduction / Figure 1a"
+    assert slot["block_id"] == "fig-1a"
+    assert slot["anchor_id"] == "caption-a"
+    assert slot["page_start"] == 2
+    assert slot["page_end"] == 2
+    assert slot["strict_locate"] is True
+
+
+def test_answer_hit_slot_keeps_late_numeric_calibration_evidence() -> None:
+    prefix = (
+        "We first established a real-world physical noise model of SPAD arrays. "
+        "The model contains shot noise, fixed-pattern noise, dark count rate, "
+        "afterpulsing, crosstalk noise, and deadtime noise. "
+    )
+    evidence = prefix + ("Parameter discussion. " * 20) + (
+        "We collected 2790 images from 90 scenes at 10 bit depths and 3 illumination fluxes."
+    )
+    assert evidence.index("2790") > 520
+
+    plan = build_citation_plan(
+        prompt="How was the SPAD physical noise model calibrated?",
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": "pidl.en.md",
+                    "heading_path": "Introduction",
+                },
+            }
+        ],
+    )
+
+    slot = next(item for item in plan["slots"] if item["preferred_system"] == "system_a")
+    assert "2790 images" in slot["evidence_quote"]
+    assert "90 scenes" in slot["evidence_quote"]

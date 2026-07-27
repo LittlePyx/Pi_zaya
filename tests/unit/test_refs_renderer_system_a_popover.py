@@ -172,6 +172,112 @@ def test_authoritative_detector_table_slot_keeps_the_planned_record() -> None:
     assert "perovskite" not in details[0]["evidence_quote"].lower()
 
 
+def test_authoritative_exact_support_slot_keeps_verified_page_and_passage() -> None:
+    source_path = "db/pidl/pidl.en.md"
+    exact_evidence = (
+        "The multi-source physical noise model of SPAD arrays includes shot noise, "
+        "dark count rate, afterpulsing and crosstalk noise."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Poisson noise alone is insufficient because SPAD has crosstalk and dark count rate [1].",
+        [
+            {
+                "text": exact_evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Introduction / Figure 1a",
+                    "page_start": 2,
+                    "page_end": 2,
+                    "citation_plan_slot": True,
+                    "citation_plan_evidence_authoritative": True,
+                    "citation_plan_source": "exact_support_preflight",
+                    "citation_plan_evidence_selection_reason": "spad_noise_model_exact_source",
+                },
+                "ui_meta": {
+                    "primary_evidence": {
+                        "heading_path": "Introduction / Figure 1a",
+                        "snippet": exact_evidence,
+                        "highlight_snippet": exact_evidence,
+                        "page_start": 2,
+                        "page_end": 2,
+                        "selection_reason": "spad_noise_model_exact_source",
+                        "strict_locate": True,
+                    },
+                    "reader_open": {
+                        "evidenceAlternatives": [
+                            {
+                                "headingPath": "Abstract",
+                                "snippet": "A broad abstract sentence about SPAD imaging.",
+                                "pageStart": 1,
+                                "pageEnd": 1,
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        anchor_ns="exact-spad",
+        canonical_paths=[source_path],
+    )
+
+    assert "#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["heading_path"] == "Introduction / Figure 1a"
+    assert details[0]["page_start"] == 2
+    assert details[0]["evidence_quote"] == exact_evidence
+    assert details[0]["routing_reason"] == "exact_support_preflight"
+    assert details[0]["evidence_source"] == "exact_support_preflight"
+    assert details[0]["selection_reason"] == "spad_noise_model_exact_source"
+    assert details[0]["strict_locate"] is True
+
+
+def test_authoritative_exact_support_card_keeps_long_multi_claim_passage() -> None:
+    source_path = "db/pidl/pidl.en.md"
+    exact_evidence = (
+        "The underlying limitation originates from the employed single-source Poisson noise model, "
+        "which deviates from complex real SPAD noise containing crosstalk and dark count rate. "
+        "The multi-source physical noise model of SPAD arrays consists of shot noise, fixed-pattern "
+        "noise, dark count rate, afterpulsing and crosstalk noise, and deadtime noise."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Poisson noise alone is insufficient; the model includes realistic SPAD noise [1].",
+        [
+            {
+                "text": exact_evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Introduction / Figure 1a",
+                    "page_start": 2,
+                    "page_end": 2,
+                    "citation_plan_slot": True,
+                    "citation_plan_evidence_authoritative": True,
+                    "citation_plan_source": "exact_support_preflight",
+                    "citation_plan_evidence_selection_reason": "spad_noise_model_exact_source",
+                },
+                "ui_meta": {
+                    "primary_evidence": {
+                        "heading_path": "Introduction / Figure 1a",
+                        "snippet": exact_evidence,
+                        "page_start": 2,
+                        "page_end": 2,
+                        "selection_reason": "spad_noise_model_exact_source",
+                        "strict_locate": True,
+                    }
+                },
+            }
+        ],
+        anchor_ns="exact-spad-long",
+        canonical_paths=[source_path],
+    )
+
+    assert "#kb-cite-" in rendered
+    assert len(details) == 1
+    assert "single-source Poisson noise model" in details[0]["card_evidence"]
+    assert "afterpulsing and crosstalk noise" in details[0]["card_evidence"]
+    assert "evidence_quote_filtered" not in details[0]["card_quality_flags"]
+    assert "missing_evidence_quote" not in details[0]["card_quality_flags"]
+
+
 def test_system_a_canonical_path_matches_windows_and_posix_separators() -> None:
     canonical_path = "F:/library/scigs/scigs.en.md"
     raw_hit_path = r"F:\library\scigs\scigs.en.md"
@@ -989,6 +1095,201 @@ def test_system_a_keeps_distinct_cards_for_distinct_evidence_locations() -> None
     assert len(set(anchors)) == 2
     assert len(details) == 2
     assert [d["linked_nums"] for d in details] == [[1], [2]]
+
+
+def test_system_a_splits_reused_number_for_distinct_numeric_claims() -> None:
+    source_path = "db/pidl/pidl.en.md"
+    evidence = (
+        "The multi-source physical noise model of SPAD arrays includes crosstalk and dark count rate. "
+        "We collected 2790 real SPAD images covering 90 scenes, 10 bit depths, and 3 illumination fluxes."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "The SPAD model includes crosstalk and dark count rate [1].\n\n"
+            "The calibration dataset contains 2790 SPAD images from 90 scenes [1]."
+        ),
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Introduction",
+                    "page_start": 3,
+                    "page_end": 3,
+                },
+            }
+        ],
+        citation_plan={"budget": {"system_a": 2, "system_b": 0}},
+        anchor_ns="reused-numeric",
+        canonical_paths=[source_path],
+    )
+
+    assert rendered.count("[1](#kb-cite-") == 2
+    assert len(details) == 2
+    assert any("2790" in str(detail.get("card_evidence") or "") for detail in details)
+    assert all(detail["page_start"] == 3 for detail in details)
+
+
+def test_system_a_suppresses_adjacent_topic_without_physical_noise_model_evidence() -> None:
+    source_path = "db/dl-spi-review/dl-spi-review.en.md"
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "这篇单光子论文建议先为 SPAD 传感器建立并校准多源物理噪声模型 [1]。"
+        ),
+        [
+            {
+                "text": (
+                    "Photon-level single-pixel imaging uses a single photon detector and deep "
+                    "learning reconstruction for extreme or long-distance scenes."
+                ),
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Imaging at Photon-Level",
+                    "page_start": 10,
+                },
+            }
+        ],
+        citation_plan={"budget": {"system_a": 1, "system_b": 0}},
+        anchor_ns="physical-model-scope",
+        canonical_paths=[source_path],
+    )
+
+    assert "[1]" not in rendered
+    assert details == []
+
+
+def test_system_a_uses_full_plan_evidence_after_saved_hit_was_compacted() -> None:
+    source_path = "db/pidl/pidl.en.md"
+    compact_hit = (
+        "The multi-source physical noise model of SPAD arrays includes crosstalk and dark count rate."
+    )
+    full_plan_evidence = (
+        compact_hit
+        + " We collected 2790 real SPAD images covering 90 scenes, 10 bit depths, "
+        "and 3 illumination fluxes."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "The SPAD model includes crosstalk and dark count rate [1].\n\n"
+            "The calibration dataset contains 2790 images from 90 scenes, 10 bit depths, "
+            "and 3 illumination fluxes [1]."
+        ),
+        [
+            {
+                "text": compact_hit,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "PIDL",
+                    "heading_path": "Introduction",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 2, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "PIDL",
+                    "heading_path": "Introduction",
+                    "page_start": 3,
+                    "page_end": 3,
+                    "evidence_quote": full_plan_evidence,
+                }
+            ],
+        },
+        anchor_ns="compacted-plan",
+        canonical_paths=[source_path],
+    )
+
+    assert rendered.count("[1](#kb-cite-") == 2
+    assert any("2790" in str(detail.get("card_evidence") or "") for detail in details)
+    assert any("3 illumination fluxes" in str(detail.get("card_evidence") or "") for detail in details)
+
+
+def test_system_a_splits_named_dataset_claim_within_same_source_block() -> None:
+    source_path = "db/pidl/pidl.en.md"
+    full_plan_evidence = (
+        "We established and calibrated a physical noise model of SPAD arrays. "
+        "We then used public high-resolution images collected from PASCAL VOC2007 "
+        "to train the reconstruction network."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "The method calibrates a physical noise model of SPAD arrays [1].\n\n"
+            "Training also uses the PASCAL VOC2007 public image dataset [1]."
+        ),
+        [
+            {
+                "text": "We established and calibrated a physical noise model of SPAD arrays.",
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "PIDL",
+                    "heading_path": "Introduction",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 2, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "PIDL",
+                    "heading_path": "Introduction",
+                    "page_start": 3,
+                    "page_end": 3,
+                    "evidence_quote": full_plan_evidence,
+                }
+            ],
+        },
+        anchor_ns="named-dataset",
+        canonical_paths=[source_path],
+    )
+
+    anchors = re.findall(r"\[1\]\(#([^) \"\n]+)", rendered)
+    assert len(anchors) == 2
+    assert len(set(anchors)) == 2
+    assert len(details) == 2
+    named_detail = next(
+        detail for detail in details if "PASCAL VOC2007" in str(detail.get("answer_claim") or "")
+    )
+    assert "PASCAL VOC2007" in str(named_detail.get("card_evidence") or "")
+    assert named_detail["page_start"] == 3
+
+
+def test_system_a_reading_tip_does_not_replace_substantive_card_claim() -> None:
+    source_path = "db/pidl/pidl.en.md"
+    evidence = "Deep learning with a calibrated SPAD noise model improves reconstruction quality."
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "The calibrated SPAD noise model improves reconstruction quality [1].\n\n"
+            "阅读建议：阅读这篇论文的噪声模型部分 [1]。"
+        ),
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Introduction",
+                    "evidence_quote": evidence,
+                    "page_start": 3,
+                },
+            }
+        ],
+        citation_plan={"budget": {"system_a": 2, "system_b": 0}},
+        anchor_ns="reading-tip",
+        canonical_paths=[source_path],
+    )
+
+    assert rendered.count("[1](#kb-cite-") >= 1
+    assert len(details) == 1
+    assert "improves reconstruction quality" in str(details[0].get("answer_claim") or "")
+    assert not str(details[0].get("answer_claim") or "").startswith("阅读建议")
 
 
 def test_system_a_context_keeps_sentence_before_inline_math_split() -> None:

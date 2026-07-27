@@ -22,6 +22,7 @@ from api.reference_card_quality import (
     summarize_ref_card_hit_quality,
 )
 from kb.citation_audit import summarize_system_b_citation_audit
+from kb.claim_evidence_runtime import claim_evidence_audit
 from kb.retrieval_engine import _group_hits_by_doc_for_refs, _search_hits_with_fallback
 from kb.retriever import BM25Retriever
 from kb.store import load_all_chunks
@@ -1510,6 +1511,20 @@ def validate_case(
             "answer_avoids_forbidden_claims",
             not present_forbidden_answer_terms,
             present_forbidden_answer_terms,
+        )
+
+    if bool(expected.get("requireClaimLevelCitations")):
+        claim_audit = claim_evidence_audit(answer)
+        max_uncited_high_risk = _expected_int(expected, "maxUncitedHighRiskClaims")
+        uncited_high_risk = int(claim_audit.get("uncited_high_risk_claims") or 0)
+        add_check(
+            "answer_high_risk_claims_are_cited",
+            uncited_high_risk <= max_uncited_high_risk,
+            {
+                "actual": uncited_high_risk,
+                "max": max_uncited_high_risk,
+                "claims": list(claim_audit.get("unresolved_claims") or []),
+            },
         )
 
     required_ref_doc_ids = [str(item) for item in _as_list(expected.get("requiredRefDocIds")) if str(item or "").strip()]
