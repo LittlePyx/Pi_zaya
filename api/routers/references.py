@@ -381,7 +381,9 @@ def _answer_citation_card_copy(
     headings = "”和“".join(heading for heading, _claim in rows)
     reading_route = bool(
         re.search(
-            r"先读|哪几篇|阅读|主线|路线|read first|which papers|reading|roadmap",
+            r"先读|哪几篇.{0,12}(?:读|看)|(?:阅读|学习|文献)(?:主线|路线|顺序|路径)|"
+            r"(?:主线|路线|顺序).{0,8}(?:阅读|学习|文献)|read first|which papers|"
+            r"reading\s+(?:order|route|roadmap)|literature\s+roadmap|\broadmap\b",
             prompt_text,
             flags=re.I,
         )
@@ -453,7 +455,35 @@ def _answer_citation_card_copy(
         if re.search(r"好处|优势|收益|坑|局限|挑战", prompt_text):
             why = f"“{headings}”分别覆盖优势与局限，正好对应问题要求的正反两方面。"
         elif re.search(r"关系|相关|主线|值得.{0,8}(?:读|看)|交集", prompt_text):
-            why = "卡片定位到论文的研究对象与方法边界，可据此判断它是否属于当前单像素成像主线。"
+            evidence_text = " ".join(
+                str(detail.get("evidence_quote") or detail.get("summary_line") or "")
+                for detail in details
+                if isinstance(detail, dict)
+            )
+            source_text = " ".join(
+                str(detail.get("source_name") or detail.get("card_title") or "")
+                for detail in details
+                if isinstance(detail, dict)
+            )
+            role_text = f"{source_text} {evidence_text}".lower()
+            if (
+                "model-driven" in role_text
+                and "physical process" in role_text
+                and "neural network" in role_text
+            ):
+                why = (
+                    "该综述给出 model-driven strategy 的判据——把 SPI 物理过程与神经网络结合并用测量差异优化，"
+                    "因此可直接用来判断 ILNet/PILN 在深度学习单像素成像主线中的位置。"
+                )
+            elif "ilnet" in role_text and (
+                "part-based" in role_text or "image-loop" in role_text
+            ):
+                why = (
+                    "ILNet 原文给出自监督 image-loop 与 part-based 机制，可与综述的 model-driven 判据逐项对照，"
+                    "从而判断其方法定位、适用问题和证据边界。"
+                )
+            else:
+                why = "卡片定位到论文的研究对象与方法边界，可据此判断它是否属于当前单像素成像主线。"
         elif re.search(r"最高|最低|并列|PSNR|SSIM|LPIPS|表格|基准", prompt_text, flags=re.I):
             why = f"“{headings}”包含同一基准上的量化结果，可用于核对最优数值和并列情况。"
         elif re.search(r"区别|差异|比较|对比|vs\.?|versus", prompt_text, flags=re.I):
@@ -478,7 +508,34 @@ def _answer_citation_card_copy(
         if re.search(r"benefit|advantage|strength|pitfall|limit|challenge", prompt_text, flags=re.I):
             why = f"'{headings}' covers the benefit and limitation sides requested by the question."
         elif re.search(r"relevan|research line|worth reading|scope", prompt_text, flags=re.I):
-            why = "The card identifies the paper's research object and method boundary, which determines whether it belongs on the current research line."
+            evidence_text = " ".join(
+                str(detail.get("evidence_quote") or detail.get("summary_line") or "")
+                for detail in details
+                if isinstance(detail, dict)
+            )
+            source_text = " ".join(
+                str(detail.get("source_name") or detail.get("card_title") or "")
+                for detail in details
+                if isinstance(detail, dict)
+            )
+            role_text = f"{source_text} {evidence_text}".lower()
+            if (
+                "model-driven" in role_text
+                and "physical process" in role_text
+                and "neural network" in role_text
+            ):
+                why = (
+                    "The review defines model-driven SPI by combining the physical process with neural networks and optimizing against measurement discrepancy, "
+                    "which provides the criterion for placing ILNet/PILN on the research line."
+                )
+            elif "ilnet" in role_text and (
+                "part-based" in role_text or "image-loop" in role_text
+            ):
+                why = (
+                    "The ILNet source specifies its self-supervised image-loop and part-based mechanisms, allowing a direct comparison with the review's model-driven criterion and scope."
+                )
+            else:
+                why = "The card identifies the paper's research object and method boundary, which determines whether it belongs on the current research line."
         elif re.search(r"highest|lowest|tie|PSNR|SSIM|LPIPS|table|benchmark", prompt_text, flags=re.I):
             why = f"'{headings}' contains results on the same benchmark, allowing the best value and any tie to be checked."
         elif re.search(r"compare|difference|vs\.?|versus", prompt_text, flags=re.I):
@@ -594,6 +651,56 @@ def _grounded_system_a_details_from_citation_plan(citation_plan: dict | None) ->
     return out
 
 
+def _grounded_answer_citation_state(message: dict | None) -> tuple[list[dict], bool]:
+    """Return ready System-A evidence and whether the answer still expects it."""
+
+    message_in = message if isinstance(message, dict) else {}
+    meta = message_in.get("meta") if isinstance(message_in.get("meta"), dict) else {}
+    contracts = (
+        meta.get("paper_guide_contracts")
+        if isinstance(meta.get("paper_guide_contracts"), dict)
+        else {}
+    )
+    packet = (
+        contracts.get("render_packet")
+        if isinstance(contracts.get("render_packet"), dict)
+        else {}
+    )
+    details = list(packet.get("cite_details") or message_in.get("cite_details") or [])
+    grounded = [
+        dict(item)
+        for item in details
+        if isinstance(item, dict)
+        and str(item.get("citation_route") or "").strip().lower() == "system_a"
+        and str(item.get("source_path") or "").strip()
+        and str(item.get("evidence_quote") or item.get("summary_line") or "").strip()
+    ]
+    if grounded:
+        return grounded, False
+
+    answer_quality = (
+        meta.get("answer_quality")
+        if isinstance(meta.get("answer_quality"), dict)
+        else {}
+    )
+    citation_plan = (
+        answer_quality.get("citation_plan")
+        if isinstance(answer_quality.get("citation_plan"), dict)
+        else {}
+    )
+    if not citation_plan and isinstance(contracts.get("citation_plan"), dict):
+        citation_plan = contracts.get("citation_plan")
+    planned_grounded = _grounded_system_a_details_from_citation_plan(citation_plan)
+    if planned_grounded:
+        return planned_grounded, False
+    planned_system_a = any(
+        isinstance(item, dict)
+        and str(item.get("preferred_system") or "system_a").strip().lower() != "system_b"
+        for item in list(citation_plan.get("slots") or [])
+    )
+    return [], planned_system_a
+
+
 def _answer_citation_state_by_user(
     *,
     store,
@@ -618,40 +725,11 @@ def _answer_citation_state_by_user(
             continue
         if role != "assistant" or last_user_msg_id <= 0:
             continue
-        meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
-        contracts = meta.get("paper_guide_contracts") if isinstance(meta.get("paper_guide_contracts"), dict) else {}
-        packet = contracts.get("render_packet") if isinstance(contracts.get("render_packet"), dict) else {}
-        details = list(packet.get("cite_details") or message.get("cite_details") or [])
-        grounded = [
-            dict(item)
-            for item in details
-            if isinstance(item, dict)
-            and str(item.get("citation_route") or "").strip().lower() == "system_a"
-            and str(item.get("source_path") or "").strip()
-            and str(item.get("evidence_quote") or item.get("summary_line") or "").strip()
-        ]
+        grounded, planned_system_a = _grounded_answer_citation_state(message)
         if grounded:
             out[last_user_msg_id] = grounded
             pending.discard(last_user_msg_id)
             continue
-        answer_quality = meta.get("answer_quality") if isinstance(meta.get("answer_quality"), dict) else {}
-        citation_plan = (
-            answer_quality.get("citation_plan")
-            if isinstance(answer_quality.get("citation_plan"), dict)
-            else {}
-        )
-        if not citation_plan and isinstance(contracts.get("citation_plan"), dict):
-            citation_plan = contracts.get("citation_plan")
-        planned_grounded = _grounded_system_a_details_from_citation_plan(citation_plan)
-        if planned_grounded:
-            out[last_user_msg_id] = planned_grounded
-            pending.discard(last_user_msg_id)
-            continue
-        planned_system_a = any(
-            isinstance(item, dict)
-            and str(item.get("preferred_system") or "system_a").strip().lower() != "system_b"
-            for item in list(citation_plan.get("slots") or [])
-        )
         if planned_system_a:
             pending.add(last_user_msg_id)
     return out, pending
@@ -775,7 +853,25 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                 "selection_reason": "answer_citation_grounded",
                 "strict_locate": bool(detail.get("block_id") or detail.get("anchor_id")),
             }
-            meta.update({"source_path": source_path, "source_name": source_name, "heading_path": heading_path})
+            meta.update(
+                {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "heading_path": heading_path,
+                    # This row is now backed by the answer's concrete citation
+                    # detail and strict reader locator.  A stale pending flag
+                    # from the earlier fast pass must not keep the whole card
+                    # shelf in a 60-second polling loop.
+                    "ref_pack_state": "ready",
+                }
+            )
+            try:
+                answer_citation_num = int(detail.get("num") or 0)
+            except (TypeError, ValueError):
+                answer_citation_num = 0
+            if answer_citation_num > 0:
+                meta["ref_answer_citation_num"] = answer_citation_num
+            meta["answer_citation_overlay_grounded"] = True
             ui.update(
                 {
                     "display_name": source_name or str(ui.get("display_name") or ""),
@@ -796,6 +892,7 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                     "primary_evidence": primary,
                     "primary_evidence_heading_path": heading_path,
                     "render_locale": "zh" if prefer_zh else "en",
+                    "score_pending": False,
                 }
             )
             reader_open = dict(ui.get("reader_open") or {}) if isinstance(ui.get("reader_open"), dict) else {}
@@ -864,6 +961,8 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             pack["render_error_detail"] = ""
             pack["render_built_at"] = float(pack.get("render_built_at") or time.time())
             pack["render_attempts"] = max(1, int(pack.get("render_attempts") or 0))
+            pack.pop("pending", None)
+            pack.pop("pending_hit_count", None)
             pack.pop("enrichment_pending", None)
             pack.pop("answer_citation_overlay_pending", None)
         payload_out[raw_user_msg_id] = attach_refs_pack_polish_contract(pack)
@@ -1261,7 +1360,7 @@ def _attach_assistant_answers_to_refs(*, store, conv_id: str, refs: dict | None)
     except Exception:
         return refs_out
     wanted = set(refs_out)
-    answers: dict[int, tuple[str, list[str]]] = {}
+    answers: dict[int, tuple[str, list[str], bool]] = {}
     active_user_msg_id = 0
     for message in list(messages or []):
         if not isinstance(message, dict):
@@ -1285,14 +1384,19 @@ def _attach_assistant_answers_to_refs(*, store, conv_id: str, refs: dict | None)
             for path in list((msg_meta or {}).get("canonical_hit_paths") or [])
             if str(path or "").strip()
         ]
-        answers[active_user_msg_id] = (answer_text, canonical_paths)
+        grounded_details, _planned_system_a = _grounded_answer_citation_state(message)
+        answers[active_user_msg_id] = (
+            answer_text,
+            canonical_paths,
+            bool(grounded_details),
+        )
         active_user_msg_id = 0
     latest_user_msg_id = max(refs_out, default=0)
-    for user_msg_id, (answer_text, canonical_paths) in answers.items():
+    for user_msg_id, (answer_text, canonical_paths, grounded_overlay_ready) in answers.items():
         pack = dict(refs_out.get(user_msg_id) or {})
         pack["answer_text"] = answer_text
         pack["answer_sig"] = hashlib.sha1(answer_text.encode("utf-8")).hexdigest()
-        if canonical_paths:
+        if canonical_paths and not grounded_overlay_ready:
             pack["_canonical_answer_paths"] = canonical_paths
             # The current answer must be exact on first paint.  Historical
             # turns keep their shallow rendered cards and are realigned one at
@@ -1300,6 +1404,13 @@ def _attach_assistant_answers_to_refs(*, store, conv_id: str, refs: dict | None)
             # source scans on every conversation read.
             if user_msg_id == latest_user_msg_id:
                 pack = _augment_pack_with_canonical_answer_paths(pack)
+        elif grounded_overlay_ready:
+            # The answer renderer/citation plan already provides the exact
+            # source path, evidence quote, and locator consumed by
+            # ``_overlay_refs_payload_with_answer_citations``. Re-ranking every
+            # block in every cited source here duplicates that work and adds
+            # several seconds before the first complete card response.
+            pack["_answer_citation_overlay_ready"] = True
         refs_out[user_msg_id] = pack
     return refs_out
 

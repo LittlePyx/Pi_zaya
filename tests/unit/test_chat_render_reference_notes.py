@@ -163,6 +163,48 @@ def test_canonical_citation_reuses_converged_strict_primary_without_rescan(
     assert repaired == [hit]
 
 
+def test_canonical_citation_reuses_exact_lineage_primary_without_rescan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "lineage.en.md"
+    source.write_text("# Paper\n\nExact lineage evidence.\n", encoding="utf-8")
+    hit = {
+        "text": "Exact lineage evidence.",
+        "meta": {
+            "source_path": str(source),
+            "ref_answer_citation_num": 1,
+            "citation_plan_slot": True,
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": str(source),
+                "heading_path": "Method",
+                "snippet": "Exact lineage evidence.",
+                "block_id": "blk-lineage",
+                "strict_locate": True,
+                "selection_reason": "lineage_exact_source_block",
+            }
+        },
+    }
+
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: pytest.fail("exact lineage evidence should not rescan source blocks"),
+    )
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [hit],
+        canonical_paths=[str(source)],
+        answer_text="The method follows this lineage [1].",
+    )
+
+    assert repaired == [hit]
+
+
 def test_canonical_citation_reuses_numbered_plan_slot_without_rescan(
     tmp_path: Path,
     monkeypatch,
@@ -202,6 +244,93 @@ def test_canonical_citation_reuses_numbered_plan_slot_without_rescan(
     )
 
     assert repaired == [hit]
+
+
+def test_canonical_citation_seeds_persisted_answer_evidence_before_legacy_scan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "compacted-answer-source.en.md"
+    source.write_text("# Paper\n\nA much larger source that should not be rescanned.\n", encoding="utf-8")
+    evidence = {
+        "text": "The compact answer context reports a 30 Hz reconstruction rate.",
+        "meta": {
+            "source_path": str(source),
+            "source_name": "Compacted Answer Source.pdf",
+            "heading_path": "Results / Runtime",
+            "block_id": "blk-runtime",
+            "anchor_id": "p-runtime",
+            "page_start": 7,
+        },
+    }
+
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: [],
+    )
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [],
+        canonical_paths=[str(source)],
+        canonical_evidence=[evidence],
+        answer_text="The method reaches 30 Hz [1].",
+    )
+
+    assert len(repaired) == 1
+    assert repaired[0]["meta"]["ref_answer_citation_num"] == 1
+    assert repaired[0]["meta"]["canonical_answer_evidence"] is True
+    assert repaired[0]["ui_meta"]["primary_evidence"]["strict_locate"] is True
+    assert repaired[0]["ui_meta"]["primary_evidence"]["block_id"] == "blk-runtime"
+
+
+def test_canonical_citation_marks_matching_plan_hit_before_legacy_scan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "planned-answer-source.en.md"
+    source.write_text("# Paper\n\nThe source should not be rescanned.\n", encoding="utf-8")
+    existing = {
+        "text": "The prompt-aligned passage explains the model-driven strategy.",
+        "meta": {
+            "source_path": str(source),
+            "ref_answer_citation_num": 1,
+            "citation_plan_slot": True,
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": str(source),
+                "snippet": "The prompt-aligned passage explains the model-driven strategy.",
+                "selection_reason": "prompt_aligned_source_sentence",
+                "strict_locate": False,
+            }
+        },
+    }
+    canonical = {
+        "text": "The answer context also explains the model-driven strategy in detail.",
+        "meta": {"source_path": str(source)},
+    }
+
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: [],
+    )
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [existing],
+        canonical_paths=[str(source)],
+        canonical_evidence=[canonical],
+        answer_text="This is a model-driven strategy [1].",
+    )
+
+    assert len(repaired) == 1
+    assert repaired[0]["meta"]["canonical_answer_evidence"] is True
+    assert repaired[0]["text"] == existing["text"]
 
 
 def test_canonical_citation_combines_distinct_blocks_for_one_multi_signal_claim(tmp_path: Path) -> None:
@@ -3660,6 +3789,40 @@ def test_effective_reference_pack_prefers_authoritative_doc_list_hits():
     assert "enriched_hits" not in effective
 
 
+def test_effective_reference_pack_preserves_generation_hits_when_cards_are_answer_aligned():
+    from api.chat_render import _effective_reference_render_pack
+
+    pack = {
+        "hits": [{"text": "raw generation hit", "meta": {"source_path": "paper.md"}}],
+        "rendered_payload": {
+            "answer_aligned_citation_cards": True,
+            "hits": [
+                {
+                    "text": "the exact evidence quoted by the answer",
+                    "meta": {
+                        "source_path": "paper.md",
+                        "ref_answer_citation_num": 1,
+                        "answer_citation_overlay_grounded": True,
+                    },
+                    "ui_meta": {
+                        "primary_evidence": {
+                            "snippet": "the exact evidence quoted by the answer",
+                            "strict_locate": True,
+                            "selection_reason": "answer_citation_grounded",
+                        }
+                    },
+                }
+            ],
+        },
+    }
+
+    effective = _effective_reference_render_pack(pack)
+
+    assert effective["hits"][0]["text"] == "raw generation hit"
+    assert effective["enriched_hits"][0]["text"] == "the exact evidence quoted by the answer"
+    assert "retrieval_hits" not in effective
+
+
 def test_effective_reference_pack_keeps_newer_top_level_authoritative_hits():
     from api.chat_render import _effective_reference_render_pack
 
@@ -4214,6 +4377,53 @@ def test_claim_aligned_primary_selects_exact_mechanism_block_outside_abstract(tm
     assert primary["page_start"] == 2
     assert "quenching circuit" in primary["snippet"]
     assert "Photogating" not in primary["snippet"]
+
+
+def test_system_a_plan_keeps_existing_answer_grounded_locator():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    grounded = {
+        "text": "Exact answer evidence with a verified reader locator.",
+        "meta": {
+            "source_path": "paper.en.md",
+            "ref_answer_citation_num": 1,
+            "answer_citation_overlay_grounded": True,
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": "paper.en.md",
+                "heading_path": "Results / Exact result",
+                "snippet": "Exact answer evidence with a verified reader locator.",
+                "block_id": "blk-exact",
+                "anchor_id": "p-exact",
+                "selection_reason": "answer_citation_grounded",
+                "strict_locate": True,
+            }
+        },
+    }
+    broad_plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "paper.en.md",
+                "source_name": "Paper",
+                "heading_path": "Introduction",
+                "evidence_quote": "A broader plan seed that has no exact locator.",
+                "candidate_hits": [1],
+            }
+        ]
+    }
+
+    hits = _augment_hits_with_system_a_plan_slots(
+        [grounded],
+        broad_plan,
+        reserved_count=1,
+        canonical_paths=["paper.en.md"],
+    )
+
+    assert len(hits) == 1
+    assert hits[0]["text"] == grounded["text"]
+    assert hits[0]["ui_meta"]["primary_evidence"]["block_id"] == "blk-exact"
 
 
 def test_system_a_plan_populates_reserved_canonical_padding_for_missing_third_source():
@@ -5923,6 +6133,79 @@ def test_system_a_canonical_number_matches_public_projected_source_path(monkeypa
     assert details[0]["binding_status"] == "grounded"
     assert details[0]["source_path"] == public_path
     assert "Baseline ours = 40.30" in details[0]["card_evidence"]
+
+
+def test_table_backfill_preserves_same_anchor_table_label():
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source_path = "kb-source/0/Simple-Baselines/Simple-Baselines.en.md"
+    compact = "SIDD PSNR: Baseline ours = 40.30; NAFNet ours = 40.30."
+    located = "Table 6. Image Denoising Results on SIDD. " + compact
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source_path,
+            "source_name": "Simple Baselines.pdf",
+            "heading_path": "5 Experiments / 5.2 Applications",
+            "answer_claim": "Baseline ours and NAFNet ours tie at 40.30 PSNR on SIDD.",
+            "evidence_quote": compact,
+            "block_id": "blk-table-6",
+            "anchor_id": "tb-6",
+            "anchor_kind": "table",
+            "page_start": 13,
+            "binding_status": "grounded",
+            "binding_confidence": 0.9,
+            "score": 60.0,
+        }
+    ]
+    primary = {
+        "source_path": source_path,
+        "heading_path": "5 Experiments / 5.2 Applications",
+        "snippet": compact,
+        "block_id": "blk-table-6",
+        "anchor_id": "tb-6",
+        "anchor_kind": "table",
+        "page_start": 13,
+        "selection_reason": "answer_citation_grounded",
+        "strict_locate": True,
+    }
+    ref_pack = {
+        "primary_evidence": primary,
+        "hits": [
+            {
+                "text": compact,
+                "meta": {"source_path": source_path},
+                "ui_meta": {
+                    "source_path": source_path,
+                    "primary_evidence": primary,
+                    "reader_open": {
+                        "locateTarget": {
+                            "sourcePath": source_path,
+                            "headingPath": "5 Experiments / 5.2 Applications",
+                            "snippet": located,
+                            "blockId": "blk-table-6",
+                            "anchorId": "tb-6",
+                            "anchorKind": "table",
+                            "pageStart": 13,
+                            "strictLocate": True,
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(
+        details,
+        ref_pack,
+        render_locale="en",
+    )
+
+    assert len(out) == 1
+    assert "Table 6" in out[0]["card_evidence"]
+    assert "Baseline ours = 40.30" in out[0]["card_evidence"]
+    assert out[0]["page_start"] == 13
 
 
 def test_reading_guide_deduplicates_equivalent_raw_and_normalized_table_slots():
@@ -9107,6 +9390,130 @@ def test_prompt_contract_primary_replaces_generic_same_paper_slots():
     assert resolved["slots"][0]["evidence_selection_reason"] == "prompt_contract_block"
 
 
+def test_prompt_contract_primary_replaces_truncated_same_block_slot():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/SPAD/SPAD.en.md"
+    truncated = "SPAD operates in Geiger mode above its reverse bias breakdown voltage."
+    complete = truncated + " The avalanche diode must be supported by a quenching circuit."
+    resolved = _citation_plan_with_ref_primary(
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "heading_path": "Principle of SPAD",
+                    "block_id": "blk-principle",
+                    "evidence_quote": truncated,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                }
+            ]
+        },
+        {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "Principle of SPAD",
+                "snippet": complete,
+                "block_id": "blk-principle",
+                "anchor_id": "p-principle",
+                "selection_reason": "prompt_contract_block",
+                "strict_locate": True,
+            }
+        },
+    )
+
+    assert resolved["slots"][0]["evidence_quote"] == complete
+    assert resolved["slots"][0]["evidence_selection_reason"] == "prompt_contract_block"
+
+
+def test_prompt_contract_primary_drops_generic_slots_with_incidental_noise_terms():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/SPAD/SPAD.en.md"
+    complete = (
+        "SPAD operates in Geiger mode above its reverse bias breakdown voltage "
+        "and must be supported by a quenching circuit."
+    )
+    resolved = _citation_plan_with_ref_primary(
+        {
+            "slots": [
+                {
+                    "claim_type": "own_result",
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "heading_path": "Introduction",
+                    "block_id": "blk-principle",
+                    "evidence_quote": (
+                        "SPAD operates in Geiger mode above breakdown voltage; "
+                        "excess current can cause a long dead time."
+                    ),
+                },
+                {
+                    "claim_type": "paper_evidence",
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "heading_path": "Low-dimensional SPAD",
+                    "block_id": "blk-materials",
+                    "evidence_quote": (
+                        "Low-dimensional photodetectors can also produce a large dark count."
+                    ),
+                },
+            ]
+        },
+        {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "Principle",
+                "snippet": complete,
+                "block_id": "blk-principle",
+                "anchor_id": "p-principle",
+                "selection_reason": "prompt_contract_block",
+                "strict_locate": True,
+            }
+        },
+    )
+
+    assert len(resolved["slots"]) == 1
+    assert resolved["slots"][0]["evidence_quote"] == complete
+    assert resolved["slots"][0]["evidence_selection_reason"] == "prompt_contract_block"
+
+
+def test_prompt_aligned_slot_survives_unrelated_same_paper_section_rescue():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/PILN/PILN.en.md"
+    exact = (
+        "ILNet is a self-supervised image-loop neural network with a part-based model "
+        "that enables finer-grained learning."
+    )
+    original = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": exact,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            }
+        ]
+    }
+    resolved = _citation_plan_with_ref_primary(
+        original,
+        {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "1. Introduction",
+                "snippet": "Large-scale datasets are necessary for data-driven reconstruction.",
+                "block_id": "blk-introduction",
+                "selection_reason": "section_intent_rescue",
+                "strict_locate": True,
+            }
+        },
+    )
+
+    assert resolved["slots"] == original["slots"]
+
+
 def test_prompt_contract_primary_recovers_public_source_path_from_matching_hit():
     from api.chat_render import _citation_plan_with_ref_primary
 
@@ -9579,6 +9986,179 @@ def test_exact_support_plan_rebinds_its_reserved_answer_citation():
     )
     assert hits[0]["ui_meta"]["primary_evidence"]["selection_reason"] == "spad_noise_model_exact_source"
     assert hits[0]["ui_meta"]["primary_evidence"]["strict_locate"] is True
+
+
+def test_verified_abstract_quote_repairs_stale_nonabstract_locator(monkeypatch):
+    from api import chat_render
+
+    source_path = "db/Foveated/Foveated.en.md"
+    evidence = (
+        "Foveated single-pixel imaging improves the spatial resolution of the foveal region "
+        "without sacrificing the field of view, unlike simple digital zoom."
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_abstract_primary_evidence_from_source",
+        lambda _source_path: {
+            "source_path": source_path,
+            "heading_path": "Abstract",
+            "snippet": evidence,
+            "block_id": "blk-abstract",
+            "anchor_id": "p-abstract",
+            "anchor_kind": "paragraph",
+            "page_start": 1,
+            "page_end": 1,
+        },
+    )
+
+    repaired = chat_render._citation_plan_with_verified_heading_locators(
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "heading_path": "Abstract",
+                    "evidence_quote": evidence,
+                    "block_id": "blk-spatial-variant",
+                    "anchor_id": "p-spatial-variant",
+                    "page_start": 3,
+                    "page_end": 3,
+                }
+            ]
+        }
+    )
+
+    slot = repaired["slots"][0]
+    assert slot["heading_path"] == "Abstract"
+    assert slot["block_id"] == "blk-abstract"
+    assert slot["anchor_id"] == "p-abstract"
+    assert slot["page_start"] == 1
+    assert slot["strict_locate"] is True
+
+
+def test_scope_boundary_abstract_row_is_not_overwritten_by_later_plan_slot(monkeypatch):
+    from api import chat_render
+
+    source_path = "db/perovskite/perovskite.en.md"
+    abstract_evidence = (
+        "We demonstrate electrically driven lasing from a dual-cavity perovskite device."
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_abstract_primary_evidence_from_source",
+        lambda _source_path: {
+            "source_path": source_path,
+            "heading_path": "Abstract",
+            "snippet": abstract_evidence,
+            "block_id": "blk-abstract",
+            "anchor_id": "p-abstract",
+            "anchor_kind": "paragraph",
+            "page_start": 1,
+            "page_end": 1,
+        },
+    )
+    plan = {
+        "intent": "scope_boundary",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "Perovskite laser",
+                "heading_path": "Results / Device performance",
+                "evidence_quote": "The device reaches an external quantum efficiency of 82.7%.",
+                "block_id": "blk-result",
+                "page_start": 4,
+                "strict_locate": True,
+                "candidate_hits": [1],
+            }
+        ],
+    }
+
+    hits = chat_render._augment_hits_with_system_a_plan_slots(
+        [
+            {
+                "text": "A generic paper overview.",
+                "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+                "ui_meta": {},
+            }
+        ],
+        plan,
+        reserved_count=1,
+        canonical_paths=[source_path] * 6,
+    )
+
+    assert len(hits) == 1
+    assert hits[0]["text"] == abstract_evidence
+    assert hits[0]["meta"]["citation_plan_scope_boundary"] is True
+    assert hits[0]["meta"]["primary_block_id"] == "blk-abstract"
+    assert hits[0]["meta"]["ref_answer_citation_num"] == 1
+
+
+def test_scope_boundary_repair_prefers_direct_abstract_over_reference_list_slot():
+    from api.chat_render import _reading_guide_repair_scope_boundary_citation
+
+    source_path = "db/perovskite/perovskite.en.md"
+    distractor = (
+        "Deschler et al. reported optically pumped lasing in solution-processed "
+        "perovskite semiconductors and other dual-cavity studies."
+    )
+    direct = (
+        "In this work, we demonstrate electrically driven lasing from a dual-cavity "
+        "perovskite device with vertically stacked sub-units."
+    )
+    plan = {
+        "intent": "scope_boundary",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Conclusion",
+                "evidence_quote": distractor,
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": direct,
+                "candidate_hits": [1],
+            },
+        ],
+    }
+    hits = [
+        {
+            "text": direct,
+            "meta": {
+                "source_path": source_path,
+                "ref_answer_citation_num": 1,
+                "citation_plan_scope_boundary": True,
+            },
+        },
+        *({"text": "", "meta": {}} for _idx in range(5)),
+        {
+            "text": direct,
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "citation_plan_slot": True,
+                "ref_answer_citation_num": 7,
+            },
+        },
+    ]
+    answer = (
+        "相关性不大：它研究的是钙钛矿激光器件，而不是单像素成像主线。\n\n"
+        "其双腔结构实现了电驱动激射 [1]。"
+    )
+
+    repaired = _reading_guide_repair_scope_boundary_citation(
+        answer,
+        hits,
+        plan,
+        canonical_paths=[source_path] * 6,
+    )
+
+    assert "原文摘要表明" in repaired
+    assert "不是单像素成像方法 [1]" in repaired
+    assert "[7]" not in repaired
 
 
 def test_exact_support_citation_backfill_does_not_replace_locked_passage():

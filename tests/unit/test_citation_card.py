@@ -31,6 +31,59 @@ def test_system_a_card_composer_builds_quality_fields() -> None:
     assert detail["card_warning"] == ""
 
 
+def test_system_a_card_preserves_strict_prompt_contract_evidence() -> None:
+    evidence = (
+        "Single photon avalanche diode (SPAD) operates in Geiger mode. "
+        "… Its bias voltage is higher than the reverse bias breakdown voltage. "
+        "… The avalanche diode must be supported by a quenching circuit."
+    )
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "SPAD.pdf",
+            "heading_path": "Principle of SPAD",
+            "answer_claim": "SPAD 的雪崩发生后需要淬灭电路。",
+            "evidence_quote": evidence,
+            "location_label": "Principle of SPAD · p. 2",
+            "selection_reason": "prompt_contract_block",
+            "strict_locate": True,
+            "page_start": 2,
+            "binding_status": "grounded",
+            "binding_confidence": 0.9,
+        }
+    )
+
+    assert detail["card_evidence"] == evidence
+    assert "Geiger mode" in detail["card_evidence"]
+    assert "breakdown voltage" in detail["card_evidence"]
+    assert "quenching circuit" in detail["card_evidence"]
+
+
+def test_system_a_card_preserves_verified_structured_metric_evidence() -> None:
+    evidence = (
+        "Table 6. SIDD PSNR: Baseline ours = 40.30; NAFNet ours = 40.30; "
+        "Restormer ours = 40.02."
+    )
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Simple Baselines.pdf",
+            "heading_path": "5.2 Applications",
+            "answer_claim": "Baseline and NAFNet tie for the best SIDD PSNR at 40.30 dB.",
+            "evidence_quote": evidence,
+            "location_label": "5.2 Applications · p. 13",
+            "strict_locate": True,
+            "page_start": 13,
+            "binding_status": "grounded",
+            "binding_confidence": 0.9,
+        }
+    )
+
+    assert detail["card_evidence"] == evidence
+    assert "Table 6" in detail["card_evidence"]
+    assert detail["card_evidence"].count("=") == 3
+
+
 def test_system_a_card_composer_strips_markdown_source_markup() -> None:
     detail = compose_citation_card(
         {

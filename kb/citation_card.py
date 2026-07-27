@@ -405,10 +405,15 @@ def _build_card_view(out: Mapping[str, Any], *, route: str, locale: str = "") ->
 
 def _finalize_card_output(card: dict[str, Any], *, route: str, locale: str = "") -> dict[str, Any]:
     out = dict(card)
+    preserve_evidence_boundary = bool(
+        out.pop("_preserve_card_evidence_boundary", False)
+    )
     flags = _clean_quality_flags(out.get("card_quality_flags"))
     for key, limit in _CARD_TEXT_LIMITS.items():
         before = str(out.get(key) or "")
-        if key == "card_evidence":
+        if key == "card_evidence" and preserve_evidence_boundary:
+            out[key] = clean_display_text(out.get(key), max_len=limit)
+        elif key == "card_evidence":
             out[key] = finish_evidence_text(out.get(key), max_len=limit)
         else:
             out[key] = _clean_text(out.get(key), max_len=limit)
@@ -1038,21 +1043,42 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
             == "exact_support_preflight"
             or str(rec.get("evidence_source") or "").strip().lower()
             == "exact_support_preflight"
+            or str(
+                rec.get("selection_reason")
+                or rec.get("selectionReason")
+                or ""
+            ).strip().lower()
+            == "prompt_contract_block"
         )
         and bool(rec.get("strict_locate") or rec.get("strictLocate"))
         and int(rec.get("page_start") or rec.get("pageStart") or 0) > 0
     )
+    structured_metric_evidence_locked = bool(
+        bool(rec.get("strict_locate") or rec.get("strictLocate"))
+        and int(rec.get("page_start") or rec.get("pageStart") or 0) > 0
+        and re.search(
+            r"(?i)\b(?:PSNR|SSIM|LPIPS|FID|FPS)\b",
+            str(evidence_raw_for_pack or ""),
+        )
+        and len(
+            re.findall(
+                r"(?i)(?:^|[;,:])\s*[A-Za-z][A-Za-z0-9 +()_-]{0,48}\s*=\s*-?\d+(?:\.\d+)?",
+                str(evidence_raw_for_pack or ""),
+            )
+        )
+        >= 2
+    )
     exact_evidence = (
         clean_display_text(evidence_raw_for_pack, max_len=900)
-        if exact_support_locked
+        if exact_support_locked or structured_metric_evidence_locked
         else ""
     )
     if exact_evidence:
         # This text was selected from a verified page occurrence before
         # general retrieval.  The generic readability filter intentionally
         # rejects some long/list-like excerpts; that is inappropriate for an
-        # authoritative exact-support passage because it leaves the card with
-        # no evidence and invites a broader abstract to replace it.
+        # authoritative exact-support or prompt-contract passage because it
+        # can drop the final clause that made the passage satisfy the prompt.
         evidence = exact_evidence
     takeaway = _system_a_takeaway(claim=claim, evidence=evidence, heading=heading, locale=locale)
     if not takeaway:
@@ -1132,6 +1158,7 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
         "card_quality_flags": flags,
         "card_warning": warning,
         "card_flow": [],
+        "_preserve_card_evidence_boundary": structured_metric_evidence_locked,
     }, route="system_a", locale=locale)
 
 

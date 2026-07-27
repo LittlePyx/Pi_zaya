@@ -4781,6 +4781,85 @@ def _assess_system_a_hit_binding(
             "overlap_terms": [],
             "missing_terms": ["physical noise model"],
         }
+    verified_prompt_contract = bool(
+        (meta or {}).get("citation_plan_evidence_authoritative")
+        and str(
+            (meta or {}).get("citation_plan_evidence_selection_reason") or ""
+        ).strip().lower()
+        == "prompt_contract_block"
+        and (
+            str((meta or {}).get("primary_block_id") or "").strip()
+            or str((meta or {}).get("primary_anchor_id") or "").strip()
+        )
+        and int((meta or {}).get("page_start") or 0) > 0
+    )
+    canonical_answer_evidence = bool((meta or {}).get("canonical_answer_evidence"))
+    if canonical_answer_evidence or verified_prompt_contract:
+        claim_keywords_fast = _system_a_keyword_terms(claim, limit=48)
+        evidence_keywords_fast = _system_a_keyword_terms(evidence_surface, limit=64)
+        keyword_overlap_fast = claim_keywords_fast & evidence_keywords_fast
+        claim_identifiers_fast = {
+            token.upper()
+            for token in re.findall(
+                r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
+                claim,
+            )
+        }
+        evidence_identifiers_fast = {
+            token.upper()
+            for token in re.findall(
+                r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
+                evidence_surface,
+            )
+        }
+        claim_numbers_fast = set(
+            re.findall(
+                r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
+                re.sub(r"\[\d{1,5}\](?:\([^\n)]+\))?", " ", claim),
+            )
+        )
+        evidence_numbers_fast = set(
+            re.findall(
+                r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
+                evidence_body_surface,
+            )
+        )
+        shared_identifiers_fast = claim_identifiers_fast & evidence_identifiers_fast
+        shared_numbers_fast = claim_numbers_fast & evidence_numbers_fast
+        if (
+            len(keyword_overlap_fast) >= 2
+            or bool(shared_identifiers_fast)
+            or bool(shared_numbers_fast)
+            or _system_a_has_source_identity_overlap(claim, evidence_body_surface, source_name)
+        ):
+            prefer_zh_fast = _system_a_prefers_zh(claim)
+            overlap_label = "、".join(sorted(keyword_overlap_fast | shared_identifiers_fast)[:4])
+            if verified_prompt_contract and not canonical_answer_evidence:
+                reason = (
+                    f"该引用使用了已核对页码和原文块的证据，且与答案中的关键词{f'“{overlap_label}”' if overlap_label else ''}一致。"
+                    if prefer_zh_fast
+                    else (
+                        "This citation uses evidence with a verified page and source block"
+                        + (f" and matches the claim terms {overlap_label}." if overlap_label else ".")
+                    )
+                )
+            else:
+                reason = (
+                    f"该引用复用生成回答时实际提供的原文证据，且与答案中的关键词{f'“{overlap_label}”' if overlap_label else ''}一致。"
+                    if prefer_zh_fast
+                    else (
+                        "This citation reuses the source evidence actually supplied during answer generation"
+                        + (f" and matches the claim terms {overlap_label}." if overlap_label else ".")
+                    )
+                )
+            return {
+                "status": "grounded",
+                "confidence": 0.9,
+                "suppress_link": False,
+                "reason": reason,
+                "overlap_terms": sorted(keyword_overlap_fast | shared_identifiers_fast | shared_numbers_fast),
+                "missing_terms": [],
+            }
     claim_domains = _system_a_domain_terms(claim)
     evidence_domains = _system_a_domain_terms(evidence_surface)
     evidence_body_domains = _system_a_domain_terms(evidence_body_surface)
@@ -5427,7 +5506,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             if target_keys & slot_keys:
                 source_matched.append(slot)
         claim_tokens = evidence_alignment_tokens(answer_claim)
-        candidates: list[tuple[tuple[int, int, int, int, int], dict]] = []
+        candidates: list[tuple[tuple[int, int, int, int, int, int], dict]] = []
         seen_slots: set[int] = set()
         for slot in numbered + source_matched:
             if id(slot) in seen_slots:
@@ -5438,12 +5517,15 @@ def _annotate_inpaper_citations_with_hover_meta(
             ).strip()
             if not evidence_text:
                 continue
-            overlap = len(claim_tokens & evidence_alignment_tokens(evidence_text))
+            evidence_tokens = evidence_alignment_tokens(evidence_text)
+            overlap = len(claim_tokens & evidence_tokens)
+            overlap_density = int(1000 * overlap / max(1, len(evidence_tokens)))
             candidates.append(
                 (
                     (
                         _ordered_ascii_phrase_score(answer_claim, evidence_text),
                         overlap,
+                        overlap_density,
                         1
                         if str(
                             slot.get("evidence_selection_reason")

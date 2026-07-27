@@ -301,6 +301,46 @@ def test_reading_route_cards_use_user_language_and_distinct_source_roles() -> No
     assert len({why for _summary, why in cards}) == 3
 
 
+def test_research_line_relation_cards_do_not_use_reading_route_templates() -> None:
+    prompt = "PILN 这种网络方法和综述里说的深度学习单像素成像主线是什么关系？"
+    _review_summary, review_why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf",
+                "heading_path": "4.1.2. Model-Driven Strategy",
+                "answer_claim": "Model-driven strategy integrates the SPI physical process with neural networks.",
+                "evidence_quote": (
+                    "Model-driven strategy integrates the physical process of SPI with neural networks "
+                    "and uses measurement discrepancy to guide optimization."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt=prompt,
+    )
+    _method_summary, method_why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "Part-based image-loop network for single-pixel imaging.pdf",
+                "heading_path": "Abstract",
+                "answer_claim": "ILNet is a self-supervised image-loop network with a part-based model.",
+                "evidence_quote": (
+                    "ILNet is a self-supervised image-loop neural network with a part-based model "
+                    "for single-pixel imaging."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt=prompt,
+    )
+
+    assert "model-driven strategy 的判据" in review_why
+    assert "ILNet/PILN" in review_why
+    assert "逐项对照" in method_why
+    assert "把握前沿" not in review_why
+    assert "阅读路线" not in review_why + method_why
+
+
 def test_denoising_method_map_card_uses_distinct_grounded_relevance_copy() -> None:
     summary, why = references_router._answer_citation_card_copy(
         [
@@ -619,12 +659,18 @@ def test_reference_cards_use_evidence_bearing_system_a_plan_while_render_packet_
             "prompt": "What does the paper show?",
             "render_status": "pending",
             "payload_mode": "pending",
+            "pending": True,
+            "pending_hit_count": 1,
             "hits": [
                 {
-                    "meta": {"source_path": source_path},
+                    "meta": {
+                        "source_path": source_path,
+                        "ref_pack_state": "pending",
+                    },
                     "ui_meta": {
                         "source_path": source_path,
                         "display_name": "Paper.pdf",
+                        "score_pending": True,
                     },
                 }
             ],
@@ -641,12 +687,17 @@ def test_reference_cards_use_evidence_bearing_system_a_plan_while_render_packet_
     assert pack["display_state"] == "ready"
     assert pack["payload_mode"] == "full"
     assert pack["answer_aligned_citation_cards"] is True
+    assert "pending" not in pack
+    assert "pending_hit_count" not in pack
     assert "enrichment_pending" not in pack
     assert len(pack["hits"]) == 1
     hit = pack["hits"][0]
     assert hit["ui_meta"]["summary_line"]
     assert hit["ui_meta"]["why_line"]
     assert hit["ui_meta"]["primary_evidence"]["block_id"] == "blk-results"
+    assert hit["meta"]["ref_pack_state"] == "ready"
+    assert hit["ui_meta"]["score_pending"] is False
+    assert hit["ui_meta"]["polish_status"] == "heuristic"
 
 
 def test_evidence_bearing_plan_does_not_schedule_redundant_refs_warm() -> None:
@@ -897,6 +948,75 @@ def test_attach_assistant_answers_orders_cited_hits_by_answer_occurrence(monkeyp
     )
 
     assert [hit["meta"]["ref_answer_citation_num"] for hit in attached[30]["hits"]] == [2, 1]
+
+
+def test_attach_assistant_answers_reuses_grounded_plan_without_rescanning_sources(monkeypatch):
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-grounded-plan"
+            return [
+                {"id": 40, "role": "user", "content": "What supports this claim?"},
+                {
+                    "id": 41,
+                    "role": "assistant",
+                    "content": "The method recovers the dynamic scene [1].",
+                    "meta": {
+                        "canonical_hit_paths": ["dynamic-scene.en.md"],
+                        "answer_quality": {
+                            "citation_plan": {
+                                "slots": [
+                                    {
+                                        "preferred_system": "system_a",
+                                        "candidate_hits": [1],
+                                        "source_path": "dynamic-scene.en.md",
+                                        "source_name": "Dynamic Scene.pdf",
+                                        "heading_path": "Results / Dynamic reconstruction",
+                                        "evidence_quote": (
+                                            "The proposed method reconstructs the dynamic 3D scene "
+                                            "from a snapshot compressive image."
+                                        ),
+                                        "block_id": "blk-dynamic",
+                                        "anchor_id": "p-dynamic",
+                                        "page_start": 6,
+                                    }
+                                ]
+                            }
+                        },
+                    },
+                },
+            ]
+
+    def fail_rescan(*_args, **_kwargs):
+        raise AssertionError("grounded citation plans must not rescan source blocks")
+
+    monkeypatch.setattr(
+        "api.chat_render._augment_hits_with_canonical_answer_citations",
+        fail_rescan,
+    )
+    store = Store()
+    attached = references_router._attach_assistant_answers_to_refs(
+        store=store,
+        conv_id="conv-grounded-plan",
+        refs={
+            40: {
+                "prompt": "What supports this claim?",
+                "hits": [{"text": "retrieval seed", "meta": {"source_path": "seed.en.md"}}],
+            }
+        },
+    )
+
+    assert attached[40]["_answer_citation_overlay_ready"] is True
+    assert "_canonical_answer_paths" not in attached[40]
+    assert attached[40]["hits"][0]["text"] == "retrieval seed"
+
+    overlaid = references_router._overlay_refs_payload_with_answer_citations(
+        store=store,
+        conv_id="conv-grounded-plan",
+        payload=attached,
+    )
+    assert overlaid[40]["render_status"] == "full"
+    assert overlaid[40]["hits"][0]["meta"]["source_path"] == "dynamic-scene.en.md"
+    assert "dynamic 3D scene" in overlaid[40]["hits"][0]["text"]
 
 
 def test_attach_assistant_answers_aligns_only_latest_turn_on_read(monkeypatch):

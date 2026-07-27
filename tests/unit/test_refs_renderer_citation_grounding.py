@@ -4,6 +4,115 @@ from kb.citation_plan import build_citation_plan
 from ui import refs_renderer
 
 
+def test_canonical_answer_evidence_uses_fast_binding_without_domain_scan(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refs_renderer,
+        "_system_a_domain_terms",
+        lambda _text: (_ for _ in ()).throw(AssertionError("domain scan should be skipped")),
+    )
+
+    evidence = "ILNet is a self-supervised image-loop network for single-pixel imaging."
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="ILNet uses a self-supervised image-loop network for single-pixel imaging.",
+        hit={"text": evidence},
+        meta={"canonical_answer_evidence": True},
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="Part-based image-loop network for single-pixel imaging.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert binding["confidence"] >= 0.9
+    assert "ILNET" in {term.upper() for term in binding["overlap_terms"]}
+
+
+def test_verified_prompt_contract_uses_fast_binding_for_cross_language_spad(monkeypatch) -> None:
+    monkeypatch.setattr(
+        refs_renderer,
+        "_system_a_domain_terms",
+        lambda _text: (_ for _ in ()).throw(AssertionError("domain scan should be skipped")),
+    )
+    evidence = (
+        "A single photon avalanche diode (SPAD) operates in Geiger mode above the reverse "
+        "breakdown voltage and must be supported by a quenching circuit."
+    )
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim="SPAD 在 Geiger 模式下工作，雪崩后需要 quenching circuit 恢复探测。",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_contract_block",
+            "primary_block_id": "blk-principle",
+            "primary_anchor_id": "p-principle",
+            "page_start": 2,
+        },
+        heading="Principle of SPAD",
+        evidence_quote=evidence,
+        source_name="Physics-informed deep learning for SPAD imaging.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert binding["confidence"] >= 0.9
+    assert "已核对页码和原文块" in binding["reason"]
+
+
+def test_same_source_plan_prefers_dense_risk_evidence_over_broad_prompt_passage(monkeypatch):
+    source_path = "dl-spi.en.md"
+    risk = "Data-driven strategies have prolonged training duration and limited generalization ability."
+    broad = (
+        "Deep learning achieves exceptional reconstruction quality and fast reconstruction speed. "
+        "Many architectures improve robustness and reduce sampling requirements. "
+        + risk
+    )
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(
+        refs_renderer,
+        "_resolve_reference_entry_from_index",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "DL-SPI.pdf")
+    hits = [
+        {
+            "text": broad,
+            "meta": {"source_path": source_path, "heading_path": "Abstract"},
+            "ui_meta": {},
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "evidence_quote": broad,
+                "heading_path": "Abstract",
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "evidence_quote": risk,
+                "heading_path": "Challenges",
+                "strict_locate": True,
+                "candidate_hits": [1],
+            },
+        ]
+    }
+
+    rendered, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
+        "Its main risks are prolonged training duration and limited generalization ability [1].",
+        hits,
+        citation_plan=plan,
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["evidence_quote"] == risk
+    assert details[0]["heading_path"] == "Challenges"
+
+
 def test_system_a_binds_cassi_dual_disperser_aliases() -> None:
     binding = refs_renderer._assess_system_a_hit_binding(
         answer_claim="CASSI introduced a dual-disperser architecture with a coded aperture.",

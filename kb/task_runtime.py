@@ -6656,12 +6656,93 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         if cur_assistant_msg_id > 0 and answer_hits:
             try:
                 _canon_paths: list[str] = []
+                _canon_evidence: list[dict] = []
                 for _h in answer_hits:
-                    _sp_h = str((_h.get("meta") or {}).get("source_path") or "").strip()
+                    _meta_h = dict(_h.get("meta") or {}) if isinstance(_h.get("meta"), dict) else {}
+                    _ui_h = dict(_h.get("ui_meta") or {}) if isinstance(_h.get("ui_meta"), dict) else {}
+                    _sp_h = str(_meta_h.get("source_path") or _h.get("source_path") or "").strip()
                     if _sp_h:
                         _canon_paths.append(_sp_h)
+                        _primary_h = (
+                            dict(_ui_h.get("primary_evidence") or {})
+                            if isinstance(_ui_h.get("primary_evidence"), dict)
+                            else (
+                                dict(_meta_h.get("primary_evidence") or {})
+                                if isinstance(_meta_h.get("primary_evidence"), dict)
+                                else {}
+                            )
+                        )
+                        _evidence_text_h = re.sub(
+                            r"\s+",
+                            " ",
+                            str(
+                                _primary_h.get("snippet")
+                                or _primary_h.get("highlight_snippet")
+                                or _meta_h.get("evidence_quote")
+                                or _h.get("text")
+                                or ""
+                            ).strip(),
+                        )[:1800]
+                        _canon_meta = {
+                            key: value
+                            for key, value in {
+                                "source_path": _sp_h,
+                                "source_name": _meta_h.get("source_name"),
+                                "heading_path": (
+                                    _primary_h.get("heading_path")
+                                    or _meta_h.get("heading_path")
+                                    or _meta_h.get("ref_best_heading_path")
+                                ),
+                                "block_id": _primary_h.get("block_id") or _meta_h.get("block_id"),
+                                "anchor_id": _primary_h.get("anchor_id") or _meta_h.get("anchor_id"),
+                                "anchor_kind": _primary_h.get("anchor_kind") or _meta_h.get("anchor_kind"),
+                                "page_start": (
+                                    _primary_h.get("page_start")
+                                    or _primary_h.get("pageStart")
+                                    or _meta_h.get("page_start")
+                                ),
+                                "page_end": (
+                                    _primary_h.get("page_end")
+                                    or _primary_h.get("pageEnd")
+                                    or _meta_h.get("page_end")
+                                    or _meta_h.get("page_start")
+                                ),
+                            }.items()
+                            if value not in (None, "", [], {})
+                        }
+                        _canon_primary = {
+                            key: value
+                            for key, value in {
+                                "source_path": _sp_h,
+                                "source_name": _primary_h.get("source_name") or _meta_h.get("source_name"),
+                                "heading_path": _canon_meta.get("heading_path"),
+                                "snippet": _evidence_text_h,
+                                "highlight_snippet": _evidence_text_h,
+                                "block_id": _canon_meta.get("block_id"),
+                                "anchor_id": _canon_meta.get("anchor_id"),
+                                "anchor_kind": _canon_meta.get("anchor_kind"),
+                                "page_start": _canon_meta.get("page_start"),
+                                "page_end": _canon_meta.get("page_end"),
+                                "selection_reason": _primary_h.get("selection_reason"),
+                                "strict_locate": _primary_h.get("strict_locate"),
+                            }.items()
+                            if value not in (None, "", [], {})
+                        }
+                        _canon_evidence.append(
+                            {
+                                "text": _evidence_text_h,
+                                "meta": _canon_meta,
+                                "ui_meta": {"primary_evidence": _canon_primary} if _canon_primary else {},
+                            }
+                        )
                 if _canon_paths:
-                    chat_store.merge_message_meta(cur_assistant_msg_id, {"canonical_hit_paths": _canon_paths})
+                    chat_store.merge_message_meta(
+                        cur_assistant_msg_id,
+                        {
+                            "canonical_hit_paths": _canon_paths,
+                            "canonical_hit_evidence": _canon_evidence,
+                        },
+                    )
             except Exception:
                 pass
         refs_precompute_enabled = _generation_refs_precompute_enabled()
