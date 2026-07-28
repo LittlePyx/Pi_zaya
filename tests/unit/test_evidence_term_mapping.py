@@ -175,3 +175,21 @@ def test_spi_application_claims_align_with_abstract_terms() -> None:
         "autonomous",
         "vehicles",
     } <= (answer_tokens & evidence_tokens)
+
+
+def test_detector_review_guide_aligns_with_english_abstract() -> None:
+    answer_tokens = evidence_alignment_tokens(
+        "这篇综述介绍各类探测器的物理原理、制造难度和适用场景。"
+    )
+    evidence_tokens = evidence_alignment_tokens(
+        "This review summarizes detector principles, manufacturing complexity, "
+        "technical challenges, and barriers to wider adoption."
+    )
+
+    assert {
+        "detector",
+        "principles",
+        "manufacturing",
+        "complexity",
+        "adoption",
+    }.issubset(answer_tokens & evidence_tokens)

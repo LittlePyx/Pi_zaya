@@ -1,4 +1,77 @@
+import subprocess
+import sys
+
 from kb.claim_evidence_runtime import audit_and_repair_claim_evidence, claim_evidence_audit
+
+
+def test_claim_evidence_runtime_does_not_load_legacy_ui_renderer() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import kb.claim_evidence_runtime; "
+                "assert 'ui.refs_renderer' not in sys.modules"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_final_gate_keeps_supported_review_coverage_and_drops_unsupported_suffix() -> None:
+    review_quote = (
+        "This review summarizes the principles and technical challenges of several "
+        "single-photon detectors. Their complexity and high manufacturing cost pose "
+        "challenges to wider adoption."
+    )
+    method_quote = (
+        "We introduce deep learning into SPAD for improved single-photon imaging."
+    )
+    hits = [
+        {
+            "text": review_quote,
+            "meta": {
+                "source_name": "single-photon detector review.pdf",
+                "citation_plan_evidence_quotes": [review_quote],
+            },
+        },
+        {
+            "text": method_quote,
+            "meta": {
+                "source_name": "physics-informed deep learning.pdf",
+                "citation_plan_evidence_quotes": [method_quote],
+            },
+        },
+    ]
+    answer = (
+        "读这篇综述可以了解各类探测器的物理原理、制造难度和适用场景，"
+        "为理解暗计数和死时间提供背景。\n\n"
+        "该方法论文使用 deep learning 改进 SPAD 成像 [2]。"
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        prompt="这两篇文献应该如何搭配阅读？",
+        allowed_citation_numbers={1, 2},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "各类探测器的物理原理、制造难度和适用场景 [1]" in repaired
+    assert "暗计数和死时间提供背景" not in repaired
+    assert "SPAD 成像 [2]" in repaired
+    assert meta["minimum_ok"] is True
+    assert any(
+        item.get("reason") == "supported_paper_coverage_prefix"
+        for item in meta.get("repairs") or []
+    )
 
 
 def test_chinese_fdm_claim_is_repaired_from_unique_english_evidence() -> None:
@@ -652,6 +725,40 @@ def test_this_is_continuation_inherits_the_preceding_source_citation() -> None:
 
     assert "这是多帧时序层面的采样策略，与单帧使用什么基函数无关 [1]。" in repaired
     assert meta["uncited_high_risk_claims"] == 0
+
+
+def test_final_gate_keeps_supported_suffix_after_unsupported_contrast() -> None:
+    answer = (
+        "它不改变基函数本身，而是通过让高分辨率的中央凹区域跟踪场景中的运动，"
+        "同时让每一帧从整个视场中传递新的空间信息，从而快速记录快速变化特征的细节，"
+        "并跨多帧累积缓慢变化区域的细节 [1]。"
+    )
+    hits = [
+        {
+            "text": (
+                "A high-resolution foveal region tracks motion in the scene while every "
+                "frame delivers new spatial information from across the entire field of "
+                "view. It rapidly records the detail of quickly changing features while "
+                "accumulating detail of slowly evolving regions over consecutive frames."
+            )
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert "不改变基函数" not in repaired
+    assert "整个视场" in repaired
+    assert "跨多帧累积" in repaired
+    assert "[1]" in repaired
+    assert any(
+        item.get("reason") == "supported_contrast_suffix"
+        for item in meta.get("rebound_repairs", [])
+    )
 
 
 def test_trims_speculation_after_an_explicit_evidence_boundary() -> None:

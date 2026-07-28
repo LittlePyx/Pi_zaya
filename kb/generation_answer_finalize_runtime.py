@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from pathlib import Path
 
 from kb.answer_contract import (
@@ -4324,8 +4325,9 @@ def _finalize_generation_answer(
     build_paper_guide_supplement_lines=None,
     validate_freeform_numeric_citations=None,
 ) -> dict:
+    finalize_started = time.perf_counter()
     if paper_guide_fast_exact and paper_guide_precomputed_support_resolution:
-        return _finalize_fast_exact_generation_answer(
+        result = _finalize_fast_exact_generation_answer(
             partial,
             prompt=prompt,
             prompt_for_user=prompt_for_user,
@@ -4350,6 +4352,25 @@ def _finalize_generation_answer(
             research_answer_plan=research_answer_plan,
             validate_structured_citations=validate_structured_citations,
         )
+        answer_quality = dict(result.get("answer_quality") or {})
+        answer_quality["_finalize_timing_ms"] = {
+            "mode": "fast_exact",
+            "total": round((time.perf_counter() - finalize_started) * 1000.0, 3),
+        }
+        result["answer_quality"] = answer_quality
+        return result
+    finalize_stage_started = finalize_started
+    finalize_stage_timings: dict[str, float] = {}
+
+    def _mark_finalize_stage(name: str) -> None:
+        nonlocal finalize_stage_started
+        now = time.perf_counter()
+        finalize_stage_timings[str(name)] = round(
+            (now - finalize_stage_started) * 1000.0,
+            3,
+        )
+        finalize_stage_started = now
+
     resolved_paper_guide_intent = _resolve_paper_guide_intent(
         prompt_for_user or prompt,
         prompt_family=paper_guide_prompt_family,
@@ -4469,6 +4490,7 @@ def _finalize_generation_answer(
             cards=list(paper_guide_evidence_cards or []),
             fallback_source_path=str(paper_guide_bound_source_path or paper_guide_direct_source_path or paper_guide_focus_source_path or ""),
         )
+    _mark_finalize_stage("answer_contract")
     # Step 1: Promote bare [n] where n < CITATION_OFFSET to structured
     # [[CITE:<sid>:n]] — these are in-paper bibliography references (System B).
     # Hit citations use [OFFSET+1] numbers and are handled in step 2.
@@ -4652,22 +4674,16 @@ def _finalize_generation_answer(
         retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
         allow_paper_guide_structured_refs=bool(paper_guide_validated_structured_refs),
     )
+    _mark_finalize_stage("citation_routing")
     strict_comparison_numbers = _strict_comparison_system_a_numbers(citation_plan_seed)
     claim_evidence_hits = _claim_evidence_hits_with_citation_plan(
         list(answer_hits or []),
         citation_plan_seed,
     )
-    answer, claim_evidence_meta = audit_and_repair_claim_evidence(
-        answer,
-        answer_hits=claim_evidence_hits,
-        allow_citation_repairs=True,
-        prompt=prompt_for_user or prompt,
-        allowed_citation_numbers=strict_comparison_numbers,
-        drop_unsupported_unplanned_claims=strict_comparison_numbers is not None,
-    )
-    # Claim repair may add a valid but weaker nearby [n] after the precision
-    # pass above. Run the source-backed pass once more so the final user-visible
-    # marker and its reference card stay on the strongest compound evidence.
+    # Citation routing may rewrite structured markers. Run the source-backed
+    # precision pass on that user-visible form; claim/evidence repair itself is
+    # intentionally deferred to the single final gate after all answer-shaping
+    # mutations below.
     answer = _normalize_citation_plan_supported_terms(
         answer,
         prompt=prompt_for_user or prompt,
@@ -4681,6 +4697,7 @@ def _finalize_generation_answer(
         )
         citation_validation["final_freeform"] = final_freeform_validation
     answer = _collapse_adjacent_duplicate_numeric_citations(answer)
+    _mark_finalize_stage("citation_precision")
     answer = _normalize_retrieval_window_claims(answer, prompt=prompt_for_user or prompt)
     answer = _maybe_clarify_negative_boundary_answer(answer, prompt=prompt_for_user or prompt)
     if single_paper_pick_prompt:
@@ -4743,6 +4760,7 @@ def _finalize_generation_answer(
         prompt=prompt_for_user or prompt,
         answer_hits=answer_hits,
     )
+    _mark_finalize_stage("answer_shape")
     # This is the last mutation of the evidence-grounded answer. Earlier
     # citation repair runs before multi-paper reconstruction and other answer
     # contract fixes, which can introduce a fresh factual sentence after the
@@ -4776,6 +4794,7 @@ def _finalize_generation_answer(
         final_gate_has_grounded_system_a
     )
     claim_evidence_meta = final_claim_evidence_meta
+    _mark_finalize_stage("evidence_final_gate")
     grounded_answer = str(answer or "")
     answer = _maybe_prepend_paper_guide_low_confidence_notice(
         answer,
@@ -4820,6 +4839,7 @@ def _finalize_generation_answer(
         )
         intent_contract["research_answer_plan"] = research_answer_plan_norm
         paper_guide_contracts["intent"] = intent_contract
+    _mark_finalize_stage("supplement_and_contracts")
     answer_quality = _build_answer_quality_probe(
         answer,
         has_hits=bool(answer_hits),
@@ -4891,6 +4911,12 @@ def _finalize_generation_answer(
     if dict(citation_validation or {}).get("raw_count"):
         answer_quality["citation_validation"] = dict(citation_validation or {})
     answer_quality["retrieval_confidence"] = retrieval_confidence
+    _mark_finalize_stage("quality_metadata")
+    answer_quality["_finalize_timing_ms"] = {
+        "mode": "standard",
+        "stages": dict(finalize_stage_timings),
+        "total": round((time.perf_counter() - finalize_started) * 1000.0, 3),
+    }
     return {
         "answer": answer,
         "paper_guide_support_resolution": list(paper_guide_support_resolution or []),

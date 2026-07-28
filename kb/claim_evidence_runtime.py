@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from kb.evidence_binding import assess_system_a_hit_binding
 from kb.evidence_term_mapping import evidence_alignment_tokens
 
 
@@ -53,6 +54,13 @@ _ANAPHORIC_CONTINUATION_RE = re.compile(
     r"从而|它|该(?:方法|模型|设计)|基于(?:该|此)模型|"
     r"其(?:核心(?:思想)?|作用|机制)(?:是|在于)?|"
     r"this\b|that\b|it\b|therefore\b|thereby\b|as\s+a\s+result\b)",
+    flags=re.IGNORECASE,
+)
+_PAPER_COVERAGE_CLAIM_RE = re.compile(
+    r"(?:这篇|该(?:综述|论文|文献)|本文|综述).{0,80}"
+    r"(?:梳理|概述|讨论|涵盖|介绍|总结|了解|提供)|"
+    r"\b(?:this|the)\s+(?:review|paper|study)\b.{0,80}"
+    r"\b(?:reviews?|summari[sz]es?|covers?|discusses?|introduces?|provides?)\b",
     flags=re.IGNORECASE,
 )
 _BOUNDARY_RE = re.compile(
@@ -232,7 +240,11 @@ def _is_high_risk_claim(unit: str) -> bool:
         flags=re.IGNORECASE,
     ):
         return False
-    return bool(_meaningful_numbers(plain) or _RISK_RE.search(plain))
+    return bool(
+        _meaningful_numbers(plain)
+        or _RISK_RE.search(plain)
+        or _PAPER_COVERAGE_CLAIM_RE.search(plain)
+    )
 
 
 def _hit_payload(hit: dict[str, Any]) -> str:
@@ -281,6 +293,18 @@ def _support_score(claim: str, evidence: str) -> int:
     )
     if physical_noise_model_re.search(claim_low) and not physical_noise_model_re.search(
         evidence_norm
+    ):
+        return 0
+    review_identity_re = re.compile(r"\b(?:review|survey)\b|综述", re.I)
+    method_identity_re = re.compile(
+        r"\b(?:here\s*,?\s*)?we\s+(?:introduce|propose|develop|present|build)\b|"
+        r"\bour\s+(?:method|framework|model)\b",
+        re.I,
+    )
+    if (
+        review_identity_re.search(claim_low)
+        and not review_identity_re.search(evidence_norm)
+        and method_identity_re.search(evidence_norm)
     ):
         return 0
     explicit_relation_requirements = (
@@ -742,8 +766,6 @@ def _strip_user_visible_rejected_citations(
     clickable in the UI.
     """
 
-    from ui.refs_renderer import _assess_system_a_hit_binding
-
     rejected: list[dict[str, Any]] = []
     output_lines: list[str] = []
     in_fence = False
@@ -802,7 +824,7 @@ def _strip_user_visible_rejected_citations(
                     or hit.get("title")
                     or ""
                 ).strip()
-                binding = _assess_system_a_hit_binding(
+                binding = assess_system_a_hit_binding(
                     answer_claim=segment,
                     hit=hit,
                     meta=binding_meta,
@@ -981,6 +1003,45 @@ def _repair_uncited_unique_claims(
                 previous_citations = comparison_citations
                 changed = True
                 continue
+            coverage_suffix = re.search(
+                r"[，,；;]\s*(?:为(?:了)?|从而|以便|用于|"
+                r"(?:so\s+that|in\s+order\s+to|to\s+understand)\b)",
+                segment,
+                flags=re.IGNORECASE,
+            )
+            coverage_prefix = (
+                segment[: coverage_suffix.start()].rstrip("，,；;：: ")
+                if coverage_suffix
+                else ""
+            )
+            if (
+                len(_plain_claim(coverage_prefix)) >= 20
+                and _PAPER_COVERAGE_CLAIM_RE.search(_plain_claim(coverage_prefix))
+            ):
+                prefix_hit_index, prefix_score = _best_unique_hit(
+                    coverage_prefix,
+                    answer_hits,
+                    min_score=min_support_score,
+                )
+                if prefix_hit_index > 0:
+                    punctuation = "。" if _ZH_RE.search(coverage_prefix) else "."
+                    rebuilt_segments.append(
+                        _append_citation(
+                            f"{coverage_prefix}{punctuation}",
+                            prefix_hit_index,
+                        )
+                    )
+                    repairs.append(
+                        {
+                            "claim": _plain_claim(coverage_prefix)[:220],
+                            "citation": prefix_hit_index,
+                            "score": prefix_score,
+                            "reason": "supported_paper_coverage_prefix",
+                        }
+                    )
+                    previous_citations = [prefix_hit_index]
+                    changed = True
+                    continue
             hit_index, score = _best_unique_hit(
                 segment,
                 answer_hits,
@@ -1100,6 +1161,46 @@ def _repair_mismatched_unique_citations(
                 for number in citations
                 if 0 < number <= len(answer_hits)
             ]
+            # A model may attach one unsupported contrast clause to an otherwise
+            # faithful evidence paraphrase (for example, "it does not change the
+            # basis, but instead ...").  Do not discard the supported half merely
+            # because the unsupported setup made the whole sentence fail.  This
+            # is deliberately limited to an explicit contrast boundary and still
+            # requires the suffix to bind uniquely to eligible evidence.
+            contrast = re.search(
+                r"(?:，|,)\s*(?:而是|而应|但(?:是)?应|rather\s+than|but\s+instead|instead)\s*",
+                segment,
+                flags=re.IGNORECASE,
+            )
+            contrast_suffix = (
+                _CITATION_RE.sub("", segment[contrast.end() :]).strip()
+                if contrast
+                else ""
+            )
+            if (
+                (not cited_scores or max(cited_scores) < min_support_score)
+                and len(_plain_claim(contrast_suffix)) >= 20
+                and _is_high_risk_claim(contrast_suffix)
+            ):
+                suffix_hit_index, suffix_score = _best_unique_hit(
+                    contrast_suffix,
+                    answer_hits,
+                    min_score=min_support_score,
+                )
+                if suffix_hit_index > 0:
+                    rebuilt.append(_append_citation(contrast_suffix, suffix_hit_index))
+                    repairs.append(
+                        {
+                            "claim": _plain_claim(contrast_suffix)[:220],
+                            "from": citations,
+                            "citation": suffix_hit_index,
+                            "score": suffix_score,
+                            "reason": "supported_contrast_suffix",
+                        }
+                    )
+                    previous_citations = [suffix_hit_index]
+                    changed = True
+                    continue
             if (
                 len(previous_citations) == 1
                 and _ANAPHORIC_CONTINUATION_RE.search(_plain_claim(segment))

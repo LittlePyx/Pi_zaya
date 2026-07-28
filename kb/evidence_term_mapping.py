@@ -15,6 +15,13 @@ _ASCII_STOPWORDS = {
 # English academic source passages. Values intentionally mirror terms commonly
 # written verbatim in papers; they are never used to generate user-facing prose.
 _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (r"各类(?:单光子)?探测器|探测器类型", ("detector", "detectors")),
+    (r"物理原理|工作原理|技术原理", ("physical", "principles")),
+    (
+        r"制造难度|制造挑战|制造工艺(?:复杂|困难)",
+        ("complexity", "manufacturing", "challenges"),
+    ),
+    (r"适用场景|应用场景|推广应用", ("applications", "adoption")),
     (r"深度学习|神经网络", ("deep", "learning", "neural", "network")),
     (r"物理信息|物理先验|物理约束", ("physics", "informed", "physical")),
     (r"重建", ("reconstruction", "reconstruct", "reconstructed")),

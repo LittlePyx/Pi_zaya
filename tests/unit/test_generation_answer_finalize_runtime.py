@@ -963,6 +963,9 @@ def test_finalize_fast_exact_reuses_support_without_full_text_rescan(monkeypatch
     assert system_a["page_end"] == 3
     assert system_a["selection_reason"] == "exact_support_preflight"
     assert system_a["strict_locate"] is True
+    timing = out["answer_quality"]["_finalize_timing_ms"]
+    assert timing["mode"] == "fast_exact"
+    assert timing["total"] >= 0
 
 
 def test_finalize_fast_exact_honors_disabled_system_b_budget(monkeypatch):
@@ -3227,6 +3230,19 @@ def test_finalize_generation_answer_uses_authoritative_single_doc_list_for_multi
 
 
 def test_finalize_generation_answer_rechecks_claims_after_late_answer_mutation(monkeypatch):
+    original_audit = finalize_runtime.audit_and_repair_claim_evidence
+    audit_calls = 0
+
+    def _counted_audit(*args, **kwargs):
+        nonlocal audit_calls
+        audit_calls += 1
+        return original_audit(*args, **kwargs)
+
+    monkeypatch.setattr(
+        finalize_runtime,
+        "audit_and_repair_claim_evidence",
+        _counted_audit,
+    )
     monkeypatch.setattr(finalize_runtime, "_reconcile_kb_notice", lambda answer, **kwargs: answer)
     monkeypatch.setattr(finalize_runtime, "_enhance_kb_miss_fallback", lambda answer, **kwargs: answer)
     monkeypatch.setattr(
@@ -3292,6 +3308,19 @@ def test_finalize_generation_answer_rechecks_claims_after_late_answer_mutation(m
     assert "提高十倍" not in out["answer"]
     assert out["answer_quality"]["claim_evidence"]["final_gate_applied"] is True
     assert out["answer_quality"]["claim_evidence"]["minimum_ok"] is True
+    assert audit_calls == 1
+    timing = out["answer_quality"]["_finalize_timing_ms"]
+    assert timing["mode"] == "standard"
+    assert timing["total"] >= 0
+    assert set(timing["stages"]) == {
+        "answer_contract",
+        "citation_routing",
+        "citation_precision",
+        "answer_shape",
+        "evidence_final_gate",
+        "supplement_and_contracts",
+        "quality_metadata",
+    }
 
 
 def test_finalize_generation_answer_preserves_numeric_refs_for_citation_lookup(monkeypatch):
