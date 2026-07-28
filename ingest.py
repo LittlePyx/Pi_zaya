@@ -74,6 +74,30 @@ def _annotate_chunks_with_quality(chunks: list[dict], assessment: dict) -> list[
     status = str((assessment or {}).get("status") or "ready")
     action = str((assessment or {}).get("action") or "none")
     issue_codes = [str(item) for item in list((assessment or {}).get("issue_codes") or []) if str(item or "").strip()][:30]
+    quality_result = (assessment or {}).get("quality_result") if isinstance((assessment or {}).get("quality_result"), dict) else {}
+    source_quality = quality_result.get("source_quality") if isinstance(quality_result.get("source_quality"), dict) else {}
+    unreliable_pages = {
+        int(item)
+        for item in list((source_quality or {}).get("evidence_unreliable_pages") or [])
+        if str(item or "").isdigit() and int(item) > 0
+    }
+    page_reasons: dict[int, list[str]] = {}
+    for profile in list((source_quality or {}).get("page_evidence_profiles") or []):
+        if not isinstance(profile, dict):
+            continue
+        try:
+            page = int(profile.get("page") or 0)
+        except Exception:
+            continue
+        if page <= 0:
+            continue
+        reasons = [
+            str(item or "").strip()
+            for item in list(profile.get("reason_codes") or [])
+            if str(item or "").strip()
+        ]
+        if reasons:
+            page_reasons[page] = reasons[:12]
     out: list[dict] = []
     for chunk in list(chunks or []):
         row = dict(chunk)
@@ -82,6 +106,28 @@ def _annotate_chunks_with_quality(chunks: list[dict], assessment: dict) -> list[
         meta["conversion_quality_action"] = action
         if issue_codes:
             meta["conversion_quality_issue_codes"] = issue_codes
+        try:
+            page_start = int(meta.get("page_start") or 0)
+            page_end = int(meta.get("page_end") or page_start or 0)
+        except Exception:
+            page_start = 0
+            page_end = 0
+        touched_unreliable = sorted(
+            page
+            for page in unreliable_pages
+            if page_start > 0 and page_start <= page <= max(page_start, page_end)
+        )
+        meta["evidence_ready"] = not bool(touched_unreliable)
+        if touched_unreliable:
+            meta["conversion_quality_unreliable_pages"] = touched_unreliable
+            meta["conversion_quality_page_issue_codes"] = sorted(
+                {
+                    code
+                    for page in touched_unreliable
+                    for code in page_reasons.get(page, [])
+                    if code
+                }
+            )[:20]
         row["meta"] = meta
         out.append(row)
     return out

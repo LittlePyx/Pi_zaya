@@ -164,6 +164,18 @@ def _build_paper_guide_context_records(
         top = "" if _is_probably_bad_heading(focus_heading) else focus_heading
         sid = _cite_source_id(src)
         header = f"DOC-{i} [SID:{sid}] {src_name or 'unknown'}" + (f" | {top}" if top else "")
+        try:
+            page_start = int(meta.get("page_start") or 0)
+            page_end = int(meta.get("page_end") or page_start or 0)
+        except Exception:
+            page_start = 0
+            page_end = 0
+        if page_start > 0:
+            header += (
+                f" | page: {page_start}"
+                if page_end <= page_start
+                else f" | pages: {page_start}-{page_end}"
+            )
 
         candidate_refs: list[int] = []
         cue_texts: list[str] = []

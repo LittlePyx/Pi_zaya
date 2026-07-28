@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from kb.store import compute_doc_id, doc_chunks_path, load_all_chunks, load_docs_index, save_docs_index, write_doc_chunks
+from ingest import _annotate_chunks_with_quality
 
 
 def _good_markdown() -> str:
@@ -74,6 +75,37 @@ def test_ingest_quality_gate_blocks_bad_markdown_before_chunks(tmp_path: Path):
     assert all(chunk["meta"]["source_path"] != str(bad_md) for chunk in loaded)
     assert any(chunk["meta"]["source_path"] == str(good_md) for chunk in loaded)
     assert "quality_blocked: 1" in proc.stdout
+
+
+def test_chunk_quality_annotation_marks_only_unreliable_pages_as_non_evidence() -> None:
+    chunks = [
+        {"text": "Clean evidence", "meta": {"page_start": 1, "page_end": 1}},
+        {"text": "Damaged evidence", "meta": {"page_start": 2, "page_end": 2}},
+    ]
+    assessment = {
+        "status": "degraded",
+        "action": "reconvert",
+        "issue_codes": ["source_page_text_corruption"],
+        "quality_result": {
+            "source_quality": {
+                "evidence_unreliable_pages": [2],
+                "page_evidence_profiles": [
+                    {
+                        "page": 2,
+                        "status": "unreliable",
+                        "reason_codes": ["missing_wrapped_word_prefixes"],
+                    }
+                ],
+            }
+        },
+    }
+
+    annotated = _annotate_chunks_with_quality(chunks, assessment)
+
+    assert annotated[0]["meta"]["evidence_ready"] is True
+    assert annotated[1]["meta"]["evidence_ready"] is False
+    assert annotated[1]["meta"]["conversion_quality_unreliable_pages"] == [2]
+    assert annotated[1]["meta"]["conversion_quality_page_issue_codes"] == ["missing_wrapped_word_prefixes"]
 
 
 def test_incremental_ingest_rebuilds_unchanged_doc_when_chunk_artifact_is_missing(tmp_path: Path):

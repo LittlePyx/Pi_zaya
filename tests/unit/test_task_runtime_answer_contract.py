@@ -945,6 +945,39 @@ def test_sanitize_structured_tokens_removes_sid_markers():
     assert "answer body" in out
 
 
+def test_sanitize_structured_tokens_removes_parenthesized_and_bare_sid_markers():
+    from kb import task_runtime
+
+    raw = "Evidence is in (SID:s50f9c165) section 5.2; route SID:s50f9c165 internally."
+    out = task_runtime._sanitize_structured_cite_tokens(raw)
+
+    assert "SID:" not in out
+    assert "section 5.2" in out
+
+
+def test_requested_source_page_is_appended_from_hit_metadata():
+    from kb.generation_answer_finalize_runtime import _ensure_requested_source_page
+
+    out = _ensure_requested_source_page(
+        "MsGAN performs better as turbulence increases [1].\n\nThe snippet did not provide a page number.",
+        prompt="第 5.2 节的证据在 PDF 第几页？",
+        answer_hits=[
+            {
+                "text": "MsGAN consistently surpasses CCD.",
+                "meta": {
+                    "page_start": 10,
+                    "page_end": 10,
+                    "ref_best_heading_path": "5. Single-Pixel Imaging / 5.2. Imaging Through Scattering Media",
+                },
+            }
+        ],
+    )
+
+    assert "PDF 第 10 页" in out
+    assert "5.2. Imaging Through Scattering Media" in out
+    assert "did not provide a page number" not in out
+
+
 def test_sanitize_structured_tokens_drops_non_numeric_cite_markers():
     from kb import task_runtime
 

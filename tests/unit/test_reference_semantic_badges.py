@@ -26,6 +26,16 @@ def test_semantic_badges_prefer_anchor_target():
     ) == [{"text": "公式语义命中 公式7", "score": 11.5}]
 
 
+def test_semantic_badges_preserve_decimal_section_label():
+    assert _build_semantic_badges(
+        anchor_target_kind="section",
+        anchor_target_number=5,
+        anchor_target_label="5.2",
+        anchor_match_score=41.5,
+        explicit_doc_match_score=9.0,
+    ) == [{"text": "锚点语义命中 section 5.2", "score": 41.5}]
+
+
 def test_semantic_badges_fall_back_to_doc_direct_link():
     assert _build_semantic_badges(
         anchor_target_kind="",

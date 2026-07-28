@@ -247,6 +247,79 @@ def test_quality_repair_flags_uncovered_fragmented_table_columns(tmp_path: Path)
     assert report["repair_plan"]["action"] == "reconvert"
 
 
+def test_quality_gate_targets_page_with_missing_wrapped_word_prefixes(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "wrapped-columns.pdf"
+    doc = fitz.open()
+    front_page = doc.new_page()
+    front_page.insert_text(
+        (40, 40),
+        "Wrapped Columns\nAbstract\nThis paper studies robust scientific image reconstruction.",
+        fontsize=9,
+    )
+    page = doc.new_page()
+    filler = [f"scientificterm{index:03d}" for index in range(80)]
+    source_lines = [" ".join(filler[index : index + 8]) for index in range(0, len(filler), 8)]
+    source_lines.extend(
+        [
+            "Advanced reconstruction algo-",
+            "rithms improve imaging quality with pow-",
+            "erful processing and have exhib-",
+            "ited stable experimental performance.",
+        ]
+    )
+    page.insert_text((40, 40), "\n".join(source_lines), fontsize=8)
+    reference_page = doc.new_page()
+    reference_page.insert_text(
+        (40, 40),
+        "References\n[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+        fontsize=9,
+    )
+    doc.save(pdf_path)
+    doc.close()
+
+    md_path = tmp_path / "wrapped-columns.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Wrapped Columns",
+                "## Abstract",
+                "This paper studies robust scientific image reconstruction.",
+                "<!-- kb_page: 2 -->",
+                "## Results",
+                " ".join(filler),
+                "rithms improve imaging quality with erful processing and have ited stable experimental performance.",
+                "<!-- kb_page: 3 -->",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+
+    assert report["repair_plan"]["action"] == "reconvert"
+    assert report["repair_plan"]["scope"] == "pages"
+    assert report["repair_plan"]["retry_pages"] == [2]
+    assert "source_page_text_corruption" in report["repair_plan"]["issue_codes"]
+    assert report["source_quality"]["evidence_unreliable_pages"] == [2]
+    damage = report["source_quality"]["source_page_text_corruption_pages"][0]
+    assert damage["missing_wrapped_word_count"] == 3
+
+    assessment = prepare_markdown_for_index(md_path, source_pdf_path=pdf_path)
+
+    assert assessment["indexable"] is True
+    assert assessment["status"] == "ready"
+    assert assessment["auto_repair"]["changed"] is True
+    assert "recover_corrupted_source_pages" in assessment["auto_repair"]["applied"]
+    repaired = md_path.read_text(encoding="utf-8")
+    assert "algorithms improve imaging quality with powerful processing" in repaired
+    assert "source_page_text_corruption" not in assessment["issue_codes"]
+
+
 def test_quality_repair_moves_next_page_anchor_before_high_confidence_table(tmp_path: Path):
     import fitz
 

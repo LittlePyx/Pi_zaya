@@ -133,3 +133,9 @@ def test_pdf_cli_prefers_role_specific_vision_model_over_legacy_shared_model(tmp
 
     assert cfg.llm is not None
     assert cfg.llm.model == "dedicated-vision-model"
+
+
+def test_pdf_cli_reads_quality_gate_targeted_retry_pages(monkeypatch):
+    monkeypatch.setenv("KB_PDF_PAGE_CACHE_RETRY_PAGES", "10, 3;10 invalid")
+
+    assert pdf_to_md._targeted_retry_page_numbers() == {3, 10}

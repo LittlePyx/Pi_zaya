@@ -209,6 +209,14 @@ class PageConversionCache:
         self.hits: set[int] = set()
         self.stores: set[int] = set()
         self.rejected: set[int] = set()
+        self.targeted_retry_pages: set[int] = set()
+        raw_retry_pages = str(os.environ.get("KB_PDF_PAGE_CACHE_RETRY_PAGES", "") or "").strip()
+        for raw_page in re.split(r"[,;\s]+", raw_retry_pages):
+            if not raw_page.isdigit():
+                continue
+            page_number = int(raw_page)
+            if page_number > 0:
+                self.targeted_retry_pages.add(page_number - 1)
 
         self.source_fingerprint = ""
         self.page_output_fingerprint = ""
@@ -280,6 +288,7 @@ class PageConversionCache:
             "hits": sorted(page + 1 for page in self.hits),
             "stored": sorted(page + 1 for page in self.stores),
             "rejected": sorted(page + 1 for page in self.rejected),
+            "targeted_retry_pages": sorted(page + 1 for page in self.targeted_retry_pages),
             "updated_at": time.time(),
         }
         self._atomic_write(
@@ -294,6 +303,10 @@ class PageConversionCache:
 
     def load_page(self, page_index: int, *, assets_dir: Path) -> str | None:
         if not self.enabled or self.refresh:
+            return None
+        if int(page_index) in self.targeted_retry_pages:
+            with self._lock:
+                self.rejected.add(int(page_index))
             return None
         page_dir = self._page_dir(page_index)
         entry_path = page_dir / "entry.json"
@@ -310,7 +323,8 @@ class PageConversionCache:
             if str(entry.get("page_output_fingerprint") or "") != self.page_output_fingerprint:
                 raise ValueError("page output algorithm changed")
             entry_config_fingerprint = str(entry.get("config_fingerprint") or "")
-            if entry_config_fingerprint not in self.compatible_config_fingerprints:
+            cross_profile_targeted_retry = bool(self.targeted_retry_pages)
+            if entry_config_fingerprint not in self.compatible_config_fingerprints and not cross_profile_targeted_retry:
                 raise ValueError("conversion configuration changed")
             # Keep cached text out of *.md discovery so ingestion cannot index
             # page fragments as standalone documents.
@@ -337,7 +351,10 @@ class PageConversionCache:
                 name = str(row.get("name") or "").strip()
                 source = page_dir / "assets" / name
                 self._atomic_write(Path(assets_dir) / name, source.read_bytes())
-            if entry_config_fingerprint != self.config_fingerprint:
+            if (
+                entry_config_fingerprint != self.config_fingerprint
+                and entry_config_fingerprint in self.compatible_config_fingerprints
+            ):
                 entry["config_fingerprint"] = self.config_fingerprint
                 self._atomic_write(
                     entry_path,

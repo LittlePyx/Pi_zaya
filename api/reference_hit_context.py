@@ -152,11 +152,13 @@ def _build_ref_hit_context(
     )
     anchor_match_score = non_negative_float(meta.get("anchor_match_score"))
     explicit_doc_match_score = non_negative_float(meta.get("explicit_doc_match_score"))
+    anchor_target_label = str(meta.get("anchor_target_label") or "").strip()
     semantic_badges = build_semantic_badges(
         anchor_target_kind=anchor_target_kind,
         anchor_target_number=anchor_target_number,
         anchor_match_score=anchor_match_score,
         explicit_doc_match_score=explicit_doc_match_score,
+        anchor_target_label=anchor_target_label,
     )
     citation_context = _load_hit_citation_context(
         source_path=source_path,
@@ -182,6 +184,7 @@ def _build_ref_hit_context(
         "score_pending": bool(score_pending),
         "anchor_target_kind": anchor_target_kind,
         "anchor_target_number": anchor_target_number,
+        "anchor_target_label": anchor_target_label,
         "anchor_match_score": anchor_match_score,
         "explicit_doc_match_score": explicit_doc_match_score,
         "semantic_badges": semantic_badges,

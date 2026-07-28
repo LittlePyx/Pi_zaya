@@ -52,6 +52,16 @@ def _progress_log(msg: str) -> None:
         print(msg, flush=True)
 
 
+def _targeted_retry_page_numbers() -> set[int]:
+    """Pages that the post-conversion quality gate selected for a stronger pass."""
+    raw = str(os.environ.get("KB_PDF_PAGE_CACHE_RETRY_PAGES", "") or "").strip()
+    pages: set[int] = set()
+    for item in re.split(r"[,;\s]+", raw):
+        if item.isdigit() and int(item) > 0:
+            pages.add(int(item))
+    return pages
+
+
 def _ensure_openai_class():
     global OpenAI
     if OpenAI is not None:
@@ -6248,9 +6258,12 @@ INPUT JSON:
             self._repairs_dir.mkdir(parents=True, exist_ok=True)
 
         auto_page_llm, auto_page_llm_reason = self._should_auto_use_page_llm(blocks=blocks)
-        use_page_llm = bool(self.cfg.llm_render_page or auto_page_llm)
+        targeted_page_llm = bool(self.cfg.llm and pnum in _targeted_retry_page_numbers())
+        use_page_llm = bool(self.cfg.llm_render_page or auto_page_llm or targeted_page_llm)
         if auto_page_llm:
             _progress_log(f"Page {pnum}: auto page-LLM enabled ({auto_page_llm_reason})")
+        elif targeted_page_llm:
+            _progress_log(f"Page {pnum}: quality-gate targeted page-LLM enabled")
 
         tagged = ""
         if self.cfg.keep_debug or use_page_llm:

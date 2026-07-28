@@ -64,6 +64,10 @@ class BM25Retriever:
             return []
         scores = self._bm25.get_scores(q)
         adjusted_scores = [float(score) for score in scores]
+        for idx, chunk in enumerate(self._chunks):
+            meta = chunk.get("meta") or {}
+            if meta.get("evidence_ready") is False:
+                adjusted_scores[idx] = float("-inf")
         if _TABLE_QUERY_RE.search(str(query or "")):
             comparison_intent = bool(_TABLE_COMPARISON_RE.search(str(query or "")))
             method_intent = bool(_TABLE_METHOD_QUERY_RE.search(str(query or "")))
@@ -72,6 +76,8 @@ class BM25Retriever:
             query_tokens = {str(token or "").lower() for token in q if str(token or "").strip()}
             for idx, chunk in enumerate(self._chunks):
                 meta = chunk.get("meta") or {}
+                if meta.get("evidence_ready") is False:
+                    continue
                 kind = str(meta.get("structured_kind") or "").strip().lower()
                 if kind == "table_metric":
                     label_tokens = {
@@ -116,7 +122,12 @@ class BM25Retriever:
         # If nothing matches (common for cross-lingual queries), don't return arbitrary documents.
         if best <= 0.0:
             return []
-        idxs = sorted(range(len(adjusted_scores)), key=lambda i: adjusted_scores[i], reverse=True)[: max(1, top_k)]
+        eligible_idxs = [
+            idx
+            for idx, _score in enumerate(adjusted_scores)
+            if (self._chunks[idx].get("meta") or {}).get("evidence_ready") is not False
+        ]
+        idxs = sorted(eligible_idxs, key=lambda i: adjusted_scores[i], reverse=True)[: max(1, top_k)]
         hits: list[dict] = []
         for i in idxs:
             c = self._chunks[i]

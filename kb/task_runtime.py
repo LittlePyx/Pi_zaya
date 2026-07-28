@@ -7354,6 +7354,7 @@ _SOURCE_CONVERSION_RETRY_ISSUES = {
     "source_page_count_mismatch",
     "page_marker_gaps",
     "source_page_marker_alignment",
+    "source_page_text_corruption",
     "reference_index_truncated",
 }
 
@@ -7399,6 +7400,30 @@ def _post_convert_source_retry_speed_mode(assessment: dict, requested_speed_mode
     if requested in {"normal", "full_llm"}:
         return "normal"
     return "normal"
+
+
+def _post_convert_source_retry_pages(assessment: dict) -> list[int]:
+    plan = (assessment or {}).get("repair_plan") if isinstance((assessment or {}).get("repair_plan"), dict) else {}
+    pages = list((plan or {}).get("retry_pages") or [])
+    if not pages:
+        quality_result = (
+            (assessment or {}).get("quality_result")
+            if isinstance((assessment or {}).get("quality_result"), dict)
+            else {}
+        )
+        source_quality = (
+            quality_result.get("source_quality")
+            if isinstance(quality_result.get("source_quality"), dict)
+            else {}
+        )
+        pages = list((source_quality or {}).get("evidence_unreliable_pages") or [])
+    return sorted(
+        {
+            int(page)
+            for page in pages
+            if str(page or "").isdigit() and int(page) > 0
+        }
+    )[:500]
 
 
 def _bg_post_convert_quality_gate(
@@ -7560,8 +7585,12 @@ def _bg_worker_loop() -> None:
             def _should_cancel() -> bool:
                 return bg_should_cancel(_BG_STATE, _BG_LOCK)
 
-            def _clear_md_folder_for_retry() -> None:
-                _safe_rmtree_child(md_folder, out_root)
+            def _clear_md_folder_for_retry(*, preserve_page_cache: bool = False) -> None:
+                _safe_clear_conversion_output(
+                    md_folder,
+                    out_root,
+                    preserve_page_cache=bool(preserve_page_cache),
+                )
 
             effective_speed_mode = speed_mode
             source_retry_done = False
@@ -7630,6 +7659,7 @@ def _bg_worker_loop() -> None:
                 source_retry_done = True
                 retry_speed_mode = _post_convert_source_retry_speed_mode(post_convert_quality, speed_mode)
                 retry_issue_codes = _quality_assessment_issue_codes(post_convert_quality)
+                retry_pages = _post_convert_source_retry_pages(post_convert_quality)
                 retry_plan = post_convert_quality.get("repair_plan") if isinstance(post_convert_quality.get("repair_plan"), dict) else {}
                 retry_scope = str((retry_plan or {}).get("scope") or "")
                 retry_reason = str(post_convert_quality.get("reason") or "")
@@ -7646,18 +7676,30 @@ def _bg_worker_loop() -> None:
                         repair_run_id=repair_run_id,
                         source="post_convert_quality_gate",
                         reason=retry_reason,
-                        detail="Quality gate requested an automatic source-level reconversion.",
-                        extra={"requested_speed_mode": speed_mode, "retry_speed_mode": retry_speed_mode},
+                        detail=(
+                            f"Quality gate requested automatic reconversion of source page(s): {', '.join(str(page) for page in retry_pages)}."
+                            if retry_pages
+                            else "Quality gate requested an automatic source-level reconversion."
+                        ),
+                        extra={
+                            "requested_speed_mode": speed_mode,
+                            "retry_speed_mode": retry_speed_mode,
+                            "retry_pages": retry_pages,
+                        },
                     )
                 except Exception:
                     pass
                 _on_progress(
                     last_page_done,
                     last_page_total,
-                    f"quality gate: retrying conversion with {retry_speed_mode} profile",
+                    (
+                        f"quality gate: retrying page(s) {', '.join(str(page) for page in retry_pages)} with {retry_speed_mode} profile"
+                        if retry_pages
+                        else f"quality gate: retrying conversion with {retry_speed_mode} profile"
+                    ),
                 )
                 bg_update_conversion_stage(_BG_STATE, _BG_LOCK, "retrying", task_id=task_id)
-                _clear_md_folder_for_retry()
+                _clear_md_folder_for_retry(preserve_page_cache=bool(retry_pages))
                 retry_ok, retry_out_folder = run_pdf_to_md(
                     pdf_path=pdf,
                     out_root=out_root,
@@ -7669,6 +7711,7 @@ def _bg_worker_loop() -> None:
                     cancel_cb=_should_cancel,
                     speed_mode=retry_speed_mode,
                     max_active_conversions=_bg_target_worker_count(),
+                    retry_pages=retry_pages,
                 )
                 ok, out_folder, msg = _bg_conversion_result_message(
                     retry_ok,
@@ -7692,7 +7735,11 @@ def _bg_worker_loop() -> None:
                         source="post_convert_quality_gate",
                         reason=retry_reason,
                         detail=msg,
-                        extra={"requested_speed_mode": speed_mode, "retry_speed_mode": retry_speed_mode},
+                        extra={
+                            "requested_speed_mode": speed_mode,
+                            "retry_speed_mode": retry_speed_mode,
+                            "retry_pages": retry_pages,
+                        },
                     )
                 post_convert_quality = {}
                 if ok and md_exists and not _bg_cancel_requested(_should_cancel):

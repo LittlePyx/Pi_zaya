@@ -35,7 +35,7 @@ from .pdf_reference_text import (
 )
 from .reference_page_vl import reference_markdown_entry_count
 from .tables import markdown_table_issue_counts, normalize_markdown_tables_document
-from .text_utils import contains_only_detached_accent_mojibake, normalize_detached_accents
+from .text_utils import _normalize_text, contains_only_detached_accent_mojibake, normalize_detached_accents
 from kb.inpaper_citation_grounding import iter_inpaper_numeric_citations, parse_ref_num_set
 from kb.reference_index import extract_references_map_from_md
 
@@ -238,7 +238,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 8
+CONVERSION_QUALITY_RULES_VERSION = 9
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
@@ -246,6 +246,10 @@ SOURCE_PAGE_COVERAGE_THRESHOLD = 0.66
 SOURCE_PAGE_MIN_RARE_TOKENS = 60
 SOURCE_PAGE_EMPTY_MARKER_MIN_ALNUM_CHARS = 500
 SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD = 0.32
+SOURCE_PAGE_MIN_WRAPPED_WORDS = 3
+SOURCE_PAGE_MAX_WRAP_PREFIX_CHARS = 12
+SOURCE_PAGE_MAX_WRAP_SUFFIX_CHARS = 24
+SOURCE_PAGE_MISSING_WRAP_RATIO = 0.20
 PAGE_ALIGNMENT_ANCHOR_DRIFT_CHARS = 1200
 PAGE_ALIGNMENT_BEAM_SIZE = 300
 PAGE_ALIGNMENT_BEAM_PER_MATCH = 80
@@ -499,6 +503,18 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "reason": "A Markdown link appears inside display math and cannot be rendered as valid TeX.",
         "strategies": [],
     },
+    "source_page_text_corruption": {
+        "label": "Reconvert source pages with damaged column or line-wrap text",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "pages",
+        "speed_mode": "normal",
+        "reason": (
+            "One or more converted pages lost the leading half of source words at PDF line wraps, "
+            "so those pages are not reliable enough for retrieval or answer evidence."
+        ),
+        "strategies": ["recover_corrupted_source_pages", "postprocess_markdown"],
+    },
     "heading_level_jumps": {
         "label": "Rebalance heading levels using the established heading policy",
         "safe": True,
@@ -591,7 +607,7 @@ def plan_conversion_quality_repair(issue_codes: list[str] | None, metrics: dict[
             review_actions.append(row)
 
     if reconvert_actions:
-        scope_priority = {"document": 4, "assets": 3, "references": 2, "markdown": 1}
+        scope_priority = {"document": 5, "pages": 4, "assets": 3, "references": 2, "markdown": 1}
         primary = sorted(
             reconvert_actions,
             key=lambda item: scope_priority.get(str(item.get("scope") or ""), 0),
@@ -808,6 +824,13 @@ def write_conversion_quality_result(
                 if str(code or "").strip().lower() in remaining
             }
     repair_plan = plan_conversion_quality_repair(remaining, metrics=metrics)
+    retry_pages = [
+        int(page)
+        for page in list(source_quality.get("evidence_unreliable_pages") or [])
+        if str(page or "").isdigit() and int(page) > 0
+    ]
+    if retry_pages and str(repair_plan.get("action") or "").strip().lower() == "reconvert":
+        repair_plan["retry_pages"] = sorted(set(retry_pages))[:500]
     if exhausted_issue_codes:
         repair_plan = _escalate_persistent_source_autofix(
             repair_plan,
@@ -1189,6 +1212,8 @@ def _issue_codes_from_context(
         codes = [code for code in codes if code not in {"missing_abstract", "weak_structure"}]
     if int(quality.get("missing_source_page_count") or 0) > 0:
         codes.append("missing_source_pages")
+    if int(quality.get("source_page_text_corruption_count") or 0) > 0:
+        codes.append("source_page_text_corruption")
     if int(quality.get("source_page_anchor_issue_count") or 0) > 0:
         codes.append("source_page_marker_alignment")
     if (
@@ -1969,39 +1994,90 @@ def _page_marker_occurrences(text: str) -> list[dict[str, int]]:
     return out
 
 
+_SOURCE_WRAPPED_WORD_RE = re.compile(
+    rf"([A-Za-z]{{2,{SOURCE_PAGE_MAX_WRAP_PREFIX_CHARS}}})-\s*\n\s*"
+    rf"([a-z]{{2,{SOURCE_PAGE_MAX_WRAP_SUFFIX_CHARS}}})"
+)
+
+
+def _source_page_wrapped_word_damage(page_text: str, local_segment: str) -> dict[str, Any]:
+    """Find PDF line-wrap words whose leading half disappeared in Markdown.
+
+    Two-column PDFs commonly expose words as ``algo-\nrithms`` in their text
+    layer. A healthy conversion emits ``algorithms`` (or at least keeps the two
+    adjacent halves). A damaged column merge can instead leave only ``rithms``.
+    Comparing against the source page makes this signal precise without using a
+    language dictionary or penalizing legitimate technical vocabulary.
+    """
+    source = str(page_text or "")
+    local = str(local_segment or "").lower()
+    pairs: list[tuple[str, str]] = []
+    for match in _SOURCE_WRAPPED_WORD_RE.finditer(source):
+        prefix = str(match.group(1) or "").lower()
+        suffix = str(match.group(2) or "").lower()
+        if len(prefix + suffix) < 5:
+            continue
+        pairs.append((prefix, suffix))
+
+    missing: list[dict[str, str]] = []
+    for prefix, suffix in pairs:
+        joined = re.escape(prefix + suffix)
+        first = re.escape(prefix)
+        second = re.escape(suffix)
+        preserved = re.search(
+            rf"\b{joined}\b|\b{first}\s*-\s*{second}\b|\b{first}\s+{second}\b",
+            local,
+            flags=re.IGNORECASE,
+        )
+        if preserved:
+            continue
+        missing.append(
+            {
+                "source": f"{prefix}-{suffix}",
+                "expected": f"{prefix}{suffix}",
+            }
+        )
+
+    pair_count = len(pairs)
+    missing_count = len(missing)
+    missing_ratio = float(missing_count / max(1, pair_count))
+    corrupted = bool(
+        pair_count >= SOURCE_PAGE_MIN_WRAPPED_WORDS
+        and missing_count >= SOURCE_PAGE_MIN_WRAPPED_WORDS
+        and missing_ratio >= SOURCE_PAGE_MISSING_WRAP_RATIO
+    )
+    return {
+        "source_wrapped_word_count": int(pair_count),
+        "missing_wrapped_word_count": int(missing_count),
+        "missing_wrapped_word_ratio": round(missing_ratio, 4),
+        "missing_wrapped_word_examples": missing[:12],
+        "text_corruption": corrupted,
+    }
+
+
 def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str, Any]:
+    empty = {
+        "min_source_page_coverage": 0.0,
+        "missing_source_page_count": 0,
+        "missing_source_pages": [],
+        "source_page_coverage_threshold": SOURCE_PAGE_COVERAGE_THRESHOLD,
+        "source_page_text_corruption_count": 0,
+        "source_page_text_corruption_pages": [],
+        "evidence_unreliable_pages": [],
+        "page_evidence_profiles": [],
+    }
     if fitz is None or pdf_path is None:
-        return {
-            "min_source_page_coverage": 0.0,
-            "missing_source_page_count": 0,
-            "missing_source_pages": [],
-            "source_page_coverage_threshold": SOURCE_PAGE_COVERAGE_THRESHOLD,
-        }
+        return dict(empty)
     try:
         path = Path(pdf_path).expanduser()
         if not path.exists() or not path.is_file():
-            return {
-                "min_source_page_coverage": 0.0,
-                "missing_source_page_count": 0,
-                "missing_source_pages": [],
-                "source_page_coverage_threshold": SOURCE_PAGE_COVERAGE_THRESHOLD,
-            }
+            return dict(empty)
     except Exception:
-        return {
-            "min_source_page_coverage": 0.0,
-            "missing_source_page_count": 0,
-            "missing_source_pages": [],
-            "source_page_coverage_threshold": SOURCE_PAGE_COVERAGE_THRESHOLD,
-        }
+        return dict(empty)
 
     md_tokens = _rare_source_tokens(text)
     if len(md_tokens) < SOURCE_PAGE_MIN_RARE_TOKENS:
-        return {
-            "min_source_page_coverage": 0.0,
-            "missing_source_page_count": 0,
-            "missing_source_pages": [],
-            "source_page_coverage_threshold": SOURCE_PAGE_COVERAGE_THRESHOLD,
-        }
+        return dict(empty)
     marker_pages = {
         int(match.group(1))
         for match in PAGE_MARKER_RE.finditer(str(text or ""))
@@ -2037,17 +2113,14 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
         return str(text or "")[max(0, start) : max(0, end)]
 
     low_pages: list[dict[str, Any]] = []
+    corrupted_pages: list[dict[str, Any]] = []
+    page_profiles: list[dict[str, Any]] = []
     min_coverage = 1.0
     assessed = 0
     try:
         doc = fitz.open(str(path))
     except Exception:
-        return {
-            "min_source_page_coverage": 0.0,
-            "missing_source_page_count": 0,
-            "missing_source_pages": [],
-            "source_page_coverage_threshold": SOURCE_PAGE_COVERAGE_THRESHOLD,
-        }
+        return dict(empty)
     try:
         for page_index in range(len(doc)):
             page_no = page_index + 1
@@ -2058,13 +2131,16 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
             if marker_pages and page_no < min(marker_pages) and _pdf_page_looks_like_download_landing_page(page_text):
                 continue
             page_tokens = _rare_source_tokens(page_text)
+            local_segment = local_segment_for_page(page_no)
             if len(page_tokens) < SOURCE_PAGE_MIN_RARE_TOKENS:
-                local_segment = local_segment_for_page(page_no)
                 source_alnum_chars = len(re.findall(r"[A-Za-z0-9]", page_text))
-                if (
+                empty_marked_page = bool(
                     page_no in marker_segments
                     and not _rare_source_tokens(local_segment)
                     and source_alnum_chars >= SOURCE_PAGE_EMPTY_MARKER_MIN_ALNUM_CHARS
+                )
+                if (
+                    empty_marked_page
                 ):
                     assessed += 1
                     min_coverage = 0.0
@@ -2078,10 +2154,18 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
                             "reason": "empty_page_marker_segment",
                         }
                     )
+                page_profiles.append(
+                    {
+                        "page": int(page_no),
+                        "status": "unreliable" if empty_marked_page else "unassessed",
+                        "source_token_count": int(len(page_tokens)),
+                        "has_page_marker": bool(page_no in marker_pages),
+                        "reason_codes": ["empty_page_marker_segment"] if empty_marked_page else [],
+                    }
+                )
                 continue
             assessed += 1
             coverage = len(page_tokens.intersection(md_tokens)) / max(1, len(page_tokens))
-            local_segment = local_segment_for_page(page_no)
             local_coverage: float | None = None
             local_token_count: int | None = None
             if page_no in marker_segments:
@@ -2089,10 +2173,30 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
             if local_segment:
                 local_tokens = _rare_source_tokens(local_segment)
                 local_coverage = len(page_tokens.intersection(local_tokens)) / max(1, len(page_tokens))
+            wrap_damage = _source_page_wrapped_word_damage(page_text, local_segment)
+            if bool(wrap_damage.get("text_corruption")):
+                corrupted_pages.append(
+                    {
+                        "page": int(page_no),
+                        "source_wrapped_word_count": int(wrap_damage.get("source_wrapped_word_count") or 0),
+                        "missing_wrapped_word_count": int(wrap_damage.get("missing_wrapped_word_count") or 0),
+                        "missing_wrapped_word_ratio": float(wrap_damage.get("missing_wrapped_word_ratio") or 0.0),
+                        "examples": list(wrap_damage.get("missing_wrapped_word_examples") or [])[:12],
+                        "reason": "missing_wrapped_word_prefixes",
+                    }
+                )
             empty_marked_page_segment = bool(
                 page_no in marker_segments and int(local_token_count or 0) == 0
             )
+            local_low = bool(
+                local_coverage is not None
+                and local_coverage < SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD
+                and page_no not in set(inferred_offsets)
+            )
+            low_global = bool(page_no not in marker_pages and coverage < SOURCE_PAGE_COVERAGE_THRESHOLD)
+            reason_codes: list[str] = []
             if empty_marked_page_segment:
+                reason_codes.append("empty_page_marker_segment")
                 low_pages.append(
                     {
                         "page": int(page_no),
@@ -2104,25 +2208,34 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
                     }
                 )
                 min_coverage = min(min_coverage, 0.0)
-                continue
-            min_coverage = min(min_coverage, coverage)
-            local_low_without_inferred_anchor = (
-                local_coverage is not None
-                and local_coverage < SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD
-                and page_no not in set(inferred_offsets)
-            )
-            if page_no in marker_pages and not local_low_without_inferred_anchor:
-                continue
-            if coverage >= SOURCE_PAGE_COVERAGE_THRESHOLD and not local_low_without_inferred_anchor:
-                continue
-            low_pages.append(
+            else:
+                min_coverage = min(min_coverage, coverage)
+                if local_low or low_global:
+                    reason = "low_local_page_overlap" if local_low else "low_text_overlap"
+                    reason_codes.append(reason)
+                    low_pages.append(
+                        {
+                            "page": int(page_no),
+                            "coverage": round(float(coverage), 4),
+                            "local_coverage": round(float(local_coverage), 4) if local_coverage is not None else None,
+                            "source_token_count": int(len(page_tokens)),
+                            "has_page_marker": bool(page_no in marker_pages),
+                            "reason": reason,
+                        }
+                    )
+            if bool(wrap_damage.get("text_corruption")):
+                reason_codes.append("missing_wrapped_word_prefixes")
+            page_profiles.append(
                 {
                     "page": int(page_no),
+                    "status": "unreliable" if reason_codes else "ready",
                     "coverage": round(float(coverage), 4),
                     "local_coverage": round(float(local_coverage), 4) if local_coverage is not None else None,
                     "source_token_count": int(len(page_tokens)),
                     "has_page_marker": bool(page_no in marker_pages),
-                    "reason": "low_local_page_overlap" if local_low_without_inferred_anchor else "low_text_overlap",
+                    "missing_wrapped_word_count": int(wrap_damage.get("missing_wrapped_word_count") or 0),
+                    "missing_wrapped_word_ratio": float(wrap_damage.get("missing_wrapped_word_ratio") or 0.0),
+                    "reason_codes": reason_codes,
                 }
             )
     finally:
@@ -2130,11 +2243,22 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
             doc.close()
         except Exception:
             pass
+    unreliable_pages = sorted(
+        {
+            int(item.get("page") or 0)
+            for item in low_pages + corrupted_pages
+            if int(item.get("page") or 0) > 0
+        }
+    )
     return {
         "min_source_page_coverage": round(float(min_coverage if assessed > 0 else 0.0), 4),
         "missing_source_page_count": int(len(low_pages)),
         "missing_source_pages": low_pages[:20],
         "source_page_coverage_threshold": SOURCE_PAGE_COVERAGE_THRESHOLD,
+        "source_page_text_corruption_count": int(len(corrupted_pages)),
+        "source_page_text_corruption_pages": corrupted_pages[:50],
+        "evidence_unreliable_pages": unreliable_pages[:500],
+        "page_evidence_profiles": page_profiles[:500],
     }
 
 
@@ -3248,7 +3372,7 @@ def _clean_pdf_page_block_text(raw: str) -> str:
     text = re.sub(r"([A-Za-z]{2,})-\s*\n\s*([a-z][A-Za-z]*)", join_hyphen, text)
     text = re.sub(r"\s*\n\s*", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return _normalize_text(text)
 
 
 def _pdf_page_has_references_heading_text(text: str) -> bool:
@@ -3424,22 +3548,22 @@ def _pdf_page_fallback_markdown(pdf_path: Path, page_no: int) -> str:
             text = _clean_pdf_page_block_text(str(block[4] or ""))
             if not text:
                 continue
-            if y1 < H * 0.07:
+            width = max(0.0, x1 - x0)
+            if re.search(r"\bwww\.(?:advancedsciencenews|lpr-journal)\.com\b", text, re.IGNORECASE):
+                continue
+            if x0 > W * 0.90 or width < W * 0.035:
+                continue
+            if y0 > H * 0.86 and re.search(r"\b(?:copyright|wiley|photonics\s+rev|\d+\s+of\s+\d+)\b", text, re.IGNORECASE):
                 continue
             if re.fullmatch(r"(?:references|bibliography)", text, re.IGNORECASE):
                 continue
             if re.match(r"^\d{1,4}\.\s+[A-Z]", text) and y0 > H * 0.65:
                 continue
-            is_footnote = bool(y0 > H * 0.74 and x1 < W * 0.58 and len(text) >= 40)
-            width = max(0.0, x1 - x0)
             if width >= W * 0.62:
                 col = 0
             else:
                 col = 0 if x0 < W * 0.50 else 1
-            if is_footnote:
-                footnote_blocks.append((col, y0, text))
-            else:
-                main_blocks.append((col, y0, text))
+            main_blocks.append((col, y0, text))
         main = _merge_pdf_page_paragraphs([text for _, _, text in sorted(main_blocks, key=lambda item: (item[0], item[1]))])
         footnotes = [text for _, _, text in sorted(footnote_blocks, key=lambda item: (item[0], item[1]))]
     finally:
@@ -3530,6 +3654,63 @@ def _recover_missing_source_pages_from_pdf_text(md_text: str, md_path: Path, sou
         if pos > 0 and not fixed[:pos].endswith("\n\n"):
             insert = "\n" + insert
         fixed = fixed[:pos] + insert + fixed[pos:]
+    return fixed, fixed != text
+
+
+def _recover_corrupted_source_pages_from_pdf_text(
+    md_text: str,
+    md_path: Path,
+    source_pdf_path: Path | str | None = None,
+) -> tuple[str, bool]:
+    """Replace only source-proven corrupted page segments with PDF block text.
+
+    Existing page-local image links are retained so visual evidence remains
+    available, while prose comes from source text blocks sorted by column and
+    vertical position. The caller re-runs the source comparison before accepting
+    the repair.
+    """
+    text = str(md_text or "")
+    pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
+    if not pdf_path:
+        return text, False
+    coverage = _source_page_coverage_quality(text, pdf_path)
+    pages = [
+        int(item.get("page") or 0)
+        for item in list(coverage.get("source_page_text_corruption_pages") or [])
+        if int(item.get("page") or 0) > 0
+    ]
+    if not pages:
+        return text, False
+
+    fixed = text
+    for page_no in sorted(set(pages), reverse=True):
+        occurrence = next(
+            (
+                item
+                for item in _page_marker_occurrences(fixed)
+                if int(item.get("page") or 0) == int(page_no)
+            ),
+            None,
+        )
+        if occurrence is None:
+            continue
+        fallback = _pdf_page_fallback_markdown(pdf_path, page_no)
+        if not fallback:
+            continue
+        marker_start = int(occurrence.get("start") or 0)
+        segment_end = int(occurrence.get("segment_end") or len(fixed))
+        current_segment = fixed[marker_start:segment_end]
+        image_lines = [
+            str(line or "").strip()
+            for line in current_segment.splitlines()
+            if re.match(r"^\s*!\[[^\]]*]\([^)]+\)\s*$", str(line or ""))
+        ]
+        fallback_body = PAGE_MARKER_RE.sub("", fallback, count=1).strip()
+        replacement_parts = [f"<!-- kb_page: {page_no} -->"]
+        replacement_parts.extend(dict.fromkeys(line for line in image_lines if line))
+        replacement_parts.append(fallback_body)
+        replacement = "\n\n".join(part for part in replacement_parts if part).strip() + "\n\n"
+        fixed = fixed[:marker_start] + replacement + fixed[segment_end:]
     return fixed, fixed != text
 
 
@@ -4141,6 +4322,11 @@ def repair_markdown_text(
             text, changed = _recover_missing_source_pages_from_pdf_text(text, path, source_pdf_path)
             if changed:
                 applied.append("recover_missing_source_pages")
+
+        if source_repairs_enabled and "recover_corrupted_source_pages" in active_strategy_names:
+            text, changed = _recover_corrupted_source_pages_from_pdf_text(text, path, source_pdf_path)
+            if changed:
+                applied.append("recover_corrupted_source_pages")
 
         if source_repairs_enabled and "pdf_reference_backfill" in active_strategy_names:
             text, changed = _backfill_references_from_pdf_text(text, path, source_pdf_path)

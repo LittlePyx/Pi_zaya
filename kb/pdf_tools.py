@@ -1131,6 +1131,7 @@ def run_pdf_to_md(
     stall_timeout_s: float | None = None,
     speed_mode: str | None = None,
     max_active_conversions: int | None = None,
+    retry_pages: list[int] | None = None,
     _safe_retry_attempt: int = 0,
 ) -> tuple[bool, str]:
     """
@@ -1514,6 +1515,17 @@ def run_pdf_to_md(
         p_done = 0
         cp_out = []
         env = dict(os.environ)
+        clean_retry_pages = sorted(
+            {
+                int(page)
+                for page in list(retry_pages or [])
+                if str(page or "").isdigit() and int(page) > 0
+            }
+        )
+        if clean_retry_pages:
+            env["KB_PDF_PAGE_CACHE_RETRY_PAGES"] = ",".join(str(page) for page in clean_retry_pages)
+        else:
+            env.pop("KB_PDF_PAGE_CACHE_RETRY_PAGES", None)
         env["PYTHONUNBUFFERED"] = "1"
         if runtime_vision_api_key:
             env["KB_PDF_RUNTIME_VISION_API_KEY"] = runtime_vision_api_key
@@ -1806,6 +1818,7 @@ def run_pdf_to_md(
                     stall_timeout_s=stall_timeout_s,
                     speed_mode=speed_mode,
                     max_active_conversions=max_active_conversions,
+                    retry_pages=retry_pages,
                     _safe_retry_attempt=int(_safe_retry_attempt) + 1,
                 )
             finally:
@@ -1858,6 +1871,7 @@ def run_pdf_to_md(
                     stall_timeout_s=stall_timeout_s,
                     speed_mode=speed_mode,
                     max_active_conversions=max_active_conversions,
+                    retry_pages=retry_pages,
                     _safe_retry_attempt=int(_safe_retry_attempt) + 1,
                 )
             finally:

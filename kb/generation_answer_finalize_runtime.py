@@ -2933,6 +2933,94 @@ def _finalize_user_visible_citation_markers(
     return _sanitize_empty_markdown_label_fragments(text)
 
 
+_SOURCE_PAGE_REQUEST_RE = re.compile(
+    r"(?:PDF\s*)?(?:第几页|页码|所在页|哪一页|第\s*\d+\s*页)|"
+    r"\b(?:which\s+page|page\s+number|source[-\s]+pdf\s+page|pdf\s+page)\b",
+    flags=re.I,
+)
+
+
+def _ensure_requested_source_page(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict] | None,
+) -> str:
+    """Deterministically surface indexed PDF pages when the user asks for one."""
+
+    text = str(answer or "").strip()
+    prompt_text = str(prompt or "").strip()
+    if not text or not _SOURCE_PAGE_REQUEST_RE.search(prompt_text):
+        return text
+
+    requested_section_match = re.search(
+        r"(?:section\s*|第\s*)([0-9]+(?:\.[0-9]+){0,3})(?:\s*(?:节|章))?",
+        prompt_text,
+        flags=re.I,
+    )
+    requested_section = str(requested_section_match.group(1) or "").strip() if requested_section_match else ""
+    candidates: list[tuple[int, int, int, str]] = []
+    for idx, hit in enumerate(list(answer_hits or []), start=1):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        try:
+            page_start = int((meta or {}).get("page_start") or 0)
+            page_end = int((meta or {}).get("page_end") or page_start or 0)
+        except Exception:
+            continue
+        if page_start <= 0:
+            continue
+        heading = str(
+            (meta or {}).get("ref_best_heading_path")
+            or (meta or {}).get("heading_path")
+            or (meta or {}).get("top_heading")
+            or ""
+        ).strip()
+        section_priority = int(bool(requested_section and requested_section in heading))
+        candidates.append((section_priority, idx, page_start, heading))
+        if page_end > page_start:
+            candidates[-1] = (section_priority, idx, page_start, f"{heading}\n__PAGE_END__={page_end}")
+    if not candidates:
+        return text
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    _priority, _idx, page_start, heading_raw = candidates[0]
+    page_end_match = re.search(r"\n__PAGE_END__=(\d+)$", heading_raw)
+    page_end = int(page_end_match.group(1)) if page_end_match else page_start
+    heading = re.sub(r"\n__PAGE_END__=\d+$", "", heading_raw).strip()
+
+    exact_page_patterns = [
+        rf"(?:PDF\s*)?第\s*{page_start}\s*页",
+        rf"\b(?:page|p\.)\s*{page_start}\b",
+    ]
+    if any(re.search(pattern, text, flags=re.I) for pattern in exact_page_patterns):
+        return text
+
+    # Remove a model-generated false negative now contradicted by indexed page metadata.
+    text = re.sub(
+        r"(?im)^.*(?:未标注|没有标注|无法确定|未提供).{0,20}(?:具体)?页码.*$\n?",
+        "",
+        text,
+    ).strip()
+    text = re.sub(
+        r"(?im)^.*(?:(?:page number|pdf page).{0,24}(?:not provided|not available|cannot be determined)|"
+        r"(?:did not provide|does not provide|not available|cannot determine).{0,24}(?:page number|pdf page)).*$\n?",
+        "",
+        text,
+    ).strip()
+
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", prompt_text))
+    if prefer_zh:
+        page_label = f"PDF 第 {page_start} 页" if page_end <= page_start else f"PDF 第 {page_start}–{page_end} 页"
+        section_label = f"，{heading}" if heading else ""
+        location = f"原文位置：{page_label}{section_label}。"
+    else:
+        page_label = f"PDF page {page_start}" if page_end <= page_start else f"PDF pages {page_start}–{page_end}"
+        section_label = f", {heading}" if heading else ""
+        location = f"Source location: {page_label}{section_label}."
+    return f"{text}\n\n{location}".strip()
+
+
 def _build_paper_guide_contract_snapshot(
     *,
     paper_guide_mode: bool,
@@ -4648,6 +4736,11 @@ def _finalize_generation_answer(
         )
         if formatted_multi_paper_answer:
             answer = formatted_multi_paper_answer
+    answer = _ensure_requested_source_page(
+        answer,
+        prompt=prompt_for_user or prompt,
+        answer_hits=answer_hits,
+    )
     grounded_answer = str(answer or "")
     answer = _maybe_prepend_paper_guide_low_confidence_notice(
         answer,

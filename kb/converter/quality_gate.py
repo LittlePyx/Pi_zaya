@@ -54,7 +54,23 @@ def _compact_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "review_issue_codes": [
             str(item) for item in list((plan or {}).get("review_issue_codes") or []) if str(item or "").strip()
         ][:30],
+        "retry_pages": [
+            int(item)
+            for item in list((plan or {}).get("retry_pages") or [])
+            if str(item or "").isdigit() and int(item) > 0
+        ][:500],
     }
+
+
+def _unreliable_pages_from_report(report: dict[str, Any]) -> list[int]:
+    source_quality = report.get("source_quality") if isinstance(report.get("source_quality"), dict) else {}
+    return sorted(
+        {
+            int(item)
+            for item in list((source_quality or {}).get("evidence_unreliable_pages") or [])
+            if str(item or "").isdigit() and int(item) > 0
+        }
+    )[:500]
 
 
 def load_or_write_conversion_quality_result(
@@ -149,6 +165,7 @@ def assess_markdown_index_quality(
         "repair_plan": compact,
         "report_path": str(conversion_quality_result_path(path)),
         "quality_result": report,
+        "evidence_unreliable_pages": _unreliable_pages_from_report(report),
     }
 
 
@@ -169,7 +186,8 @@ def prepare_markdown_for_index(
         if str(item or "").strip()
     ]
     should_attempt_repair = action_before_repair == "autofix" or (
-        action_before_repair == "reconvert" and "missing_images" in issue_codes_before_repair
+        action_before_repair == "reconvert"
+        and bool({"missing_images", "source_page_text_corruption"}.intersection(issue_codes_before_repair))
     )
     if bool(auto_repair) and should_attempt_repair:
         try:

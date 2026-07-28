@@ -115,6 +115,28 @@ def test_page_cache_reuses_equivalent_speed_mode_aliases(tmp_path: Path) -> None
     assert second.load_page(0, assets_dir=assets_dir) == "Converted page text."
 
 
+def test_targeted_retry_reuses_other_pages_across_quality_profiles(tmp_path: Path, monkeypatch) -> None:
+    source = _source(tmp_path)
+    save_dir = tmp_path / "out"
+    assets_dir = save_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    fast = replace(_config(tmp_path), speed_mode="ultra_fast")
+    first = PageConversionCache(save_dir=save_dir, pdf_path=source, cfg=fast, total_pages=2)
+    assert first.store_page(0, "Healthy first page.", assets_dir=assets_dir) is True
+    assert first.store_page(1, "Damaged second page.", assets_dir=assets_dir) is True
+
+    monkeypatch.setenv("KB_PDF_PAGE_CACHE_RETRY_PAGES", "2")
+    quality_retry = PageConversionCache(
+        save_dir=save_dir,
+        pdf_path=source,
+        cfg=replace(_config(tmp_path), speed_mode="normal"),
+        total_pages=2,
+    )
+
+    assert quality_retry.load_page(0, assets_dir=assets_dir) == "Healthy first page."
+    assert quality_retry.load_page(1, assets_dir=assets_dir) is None
+
+
 def test_page_cache_invalidates_when_pdf_content_changes(tmp_path: Path) -> None:
     source = _source(tmp_path, b"pdf-version-one")
     cfg = _config(tmp_path)

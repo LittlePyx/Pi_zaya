@@ -400,6 +400,17 @@ _SMALL_CN_NUMS = {
     "十": 10,
 }
 _ANCHOR_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    (
+        "section",
+        re.compile(
+            r"\b(?:section|sec\.?|chapter)\s*([0-9]+(?:\.[0-9]+){0,3})\b",
+            flags=re.I,
+        ),
+    ),
+    (
+        "section",
+        re.compile(r"第\s*([0-9]+(?:\.[0-9]+){0,3})\s*(?:节|章)"),
+    ),
     ("figure", re.compile(r"\bfig(?:ure)?\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
     ("figure", re.compile(r"\bfig(?:ure)?\.?\s*S\s*([0-9ivxlcdm]+)\b", flags=re.I)),
     ("table", re.compile(r"\btable\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
@@ -421,6 +432,7 @@ _ANCHOR_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("corollary", re.compile(r"推论\s*[\(\[（]?\s*([零一二两三四五六七八九十百\d]+)\s*[\)\]）]?")),
 ]
 _ANCHOR_KIND_LABELS = {
+    "section": ("section", "sec", "chapter", "节", "章"),
     "figure": ("figure", "fig", "图", "张图"),
     "table": ("table", "表"),
     "equation": ("equation", "eq", "formula", "公式", "式"),
@@ -522,12 +534,30 @@ def _extract_explicit_anchor_hint(question: str) -> dict[str, object]:
     ranked_hints: list[tuple[int, int, dict]] = []
     for pattern_index, (kind, pat) in enumerate(_ANCHOR_PATTERNS):
         for m in pat.finditer(q):
-            num = _parse_anchor_number(m.group(1))
+            raw_number = str(m.group(1) or "").strip()
+            number_text = raw_number
+            if kind == "section" and re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,3}", raw_number):
+                number_parts = [str(int(part)) for part in raw_number.split(".")]
+                number_text = ".".join(number_parts)
+                num = int(number_parts[0])
+            else:
+                num = _parse_anchor_number(raw_number)
             if num is None or num <= 0:
                 continue
             phrases: list[str] = []
             labels = _ANCHOR_KIND_LABELS.get(kind) or ()
-            for lab in labels:
+            if kind == "section":
+                phrases.extend(
+                    [
+                        f"section {number_text}",
+                        f"sec. {number_text}",
+                        f"chapter {number_text}",
+                        number_text,
+                        f"第{number_text}节",
+                        f"第 {number_text} 节",
+                    ]
+                )
+            for lab in (() if kind == "section" else labels):
                 if lab in {"fig", "eq"}:
                     phrases.append(f"{lab}. {num}")
                     phrases.append(f"{lab} {num}")
@@ -547,7 +577,8 @@ def _extract_explicit_anchor_hint(question: str) -> dict[str, object]:
             hint = {
                 "kind": kind,
                 "number": int(num),
-                "label": f"{kind} {num}",
+                "number_text": number_text,
+                "label": f"{kind} {number_text}",
                 "phrases": list(dict.fromkeys([p for p in phrases if str(p or "").strip()])),
             }
             if kind == "figure":
@@ -556,11 +587,11 @@ def _extract_explicit_anchor_hint(question: str) -> dict[str, object]:
             ranked_hints.append((int(m.start()), pattern_index, hint))
     ranked_hints.sort(key=lambda item: (int(item[0]), int(item[1])))
     hints: list[dict] = []
-    seen: set[tuple[str, int, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
     for _start, _pattern_index, hint in ranked_hints:
         key = (
             str(hint.get("kind") or ""),
-            int(hint.get("number") or 0),
+            str(hint.get("number_text") or hint.get("number") or ""),
             str(hint.get("figure_scope") or ""),
         )
         if key in seen:
@@ -1021,6 +1052,7 @@ def _anchor_text_bonus(text: str, anchor_hint: dict[str, object]) -> float:
         num = int(anchor_hint.get("number") or 0)
     except Exception:
         num = 0
+    number_text = str(anchor_hint.get("number_text") or num or "").strip()
     if (not kind) or (num <= 0):
         return 0.0
     low = str(text or "").lower()
@@ -1028,6 +1060,11 @@ def _anchor_text_bonus(text: str, anchor_hint: dict[str, object]) -> float:
         return 0.0
     score = 0.0
     patterns_by_kind = {
+        "section": (
+            rf"(?:^|[\n/]|\b)(?:section|sec\.?|chapter)?\s*"
+            rf"{re.escape(number_text)}(?=\s|[.:：、\-]|$)|"
+            rf"第\s*{re.escape(number_text)}\s*(?:节|章)"
+        ),
         "figure": rf"(?:fig(?:ure)?\.?\s*{num}\b|图\s*{num}(?!\d)|图{num}(?!\d)|第\s*{num}\s*张图)",
         "table": rf"(?:table\.?\s*{num}\b|表\s*{num}(?!\d)|表{num}(?!\d)|第\s*{num}\s*表)",
         "equation": rf"(?:eq(?:uation)?\.?\s*{num}\b|formula\s*{num}\b|公式\s*{num}(?!\d)|公式{num}(?!\d)|式\s*{num}(?!\d)|式{num}(?!\d)|[\(（]\s*{num}\s*[\)）]|\\tag\{{\s*{num}\s*\}})",
@@ -1051,7 +1088,7 @@ def _anchor_text_bonus(text: str, anchor_hint: dict[str, object]) -> float:
     labels = _ANCHOR_KIND_LABELS.get(kind) or ()
     if any(lab in low for lab in labels):
         score += 3.0
-    if str(num) in low:
+    if number_text in low:
         score += 1.5
     if kind in {"figure", "table"}:
         label_pat = r"(?:fig(?:ure)?\.?|图)" if kind == "figure" else r"(?:table\.?|表)"
@@ -1088,9 +1125,15 @@ def _anchor_regexes(anchor_hint: dict[str, object]) -> list[re.Pattern[str]]:
         num = int(anchor_hint.get("number") or 0)
     except Exception:
         num = 0
+    number_text = str(anchor_hint.get("number_text") or num or "").strip()
     if (not kind) or (num <= 0):
         return []
     raw_patterns = {
+        "section": [
+            rf"(?:^|\n)\s*\#{{1,6}}\s*{re.escape(number_text)}(?=\s|[.:：、\-]|$)",
+            rf"\b(?:section|sec\.?|chapter)\s*{re.escape(number_text)}\b",
+            rf"第\s*{re.escape(number_text)}\s*(?:节|章)",
+        ],
         "figure": [
             rf"fig(?:ure)?\.?\s*{num}\b",
             rf"第\s*{num}\s*张?图",
@@ -2914,6 +2957,8 @@ def _group_hits_by_doc_for_refs(
         if force_anchor_focus and anchor_hint:
             meta_out["anchor_target_kind"] = str(anchor_hint.get("kind") or "")
             meta_out["anchor_target_number"] = int(anchor_hint.get("number") or 0)
+            if str(anchor_hint.get("number_text") or "").strip():
+                meta_out["anchor_target_label"] = str(anchor_hint.get("number_text") or "").strip()
             if str(anchor_hint.get("kind") or "").strip().lower() == "figure":
                 target_scope = normalize_figure_scope(anchor_hint.get("figure_scope"))
                 target_key = str(anchor_hint.get("figure_key") or figure_key_for_scope(target_scope, int(anchor_hint.get("number") or 0))).strip()

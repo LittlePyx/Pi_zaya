@@ -3,12 +3,69 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from kb.retrieval_engine import (
+    _anchor_text_bonus,
     _deterministic_query_variants,
+    _extract_explicit_anchor_hint,
+    _group_hits_by_doc_for_refs,
     _search_hits_with_fallback,
     _source_prompt_match_score,
     _translate_query_for_search,
 )
 from kb.retriever import BM25Retriever
+
+
+def test_explicit_decimal_section_hint_is_preserved() -> None:
+    hint = _extract_explicit_anchor_hint("请只依据第 5.2 节解释 MsGAN")
+
+    assert hint["kind"] == "section"
+    assert hint["number"] == 5
+    assert hint["number_text"] == "5.2"
+    assert _anchor_text_bonus("### 5.2. Imaging Through Scattering Media", hint) >= 25.0
+
+
+def test_explicit_section_focus_selects_the_requested_passage(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("KB_DB_DIR", str(tmp_path))
+    source = tmp_path / "LPR-2025-Advances and Challenges.en.md"
+    source.write_text(
+        "# Advances and Challenges\n\n"
+        "## Abstract\nGeneral deep-learning overview.\n\n"
+        "### 5.2. Imaging Through Scattering Media\n"
+        "MsGAN clears low-quality computational ghost images under turbulence.\n\n"
+        "### 5.3. Imaging at Photon-Level\nSingle-photon detector arrays.\n",
+        encoding="utf-8",
+    )
+    chunks = [
+        {
+            "id": "abstract",
+            "score": 40.0,
+            "text": "General deep-learning overview.",
+            "meta": {"source_path": str(source), "heading_path": "Advances and Challenges / Abstract", "page_start": 1},
+        },
+        {
+            "id": "section",
+            "score": 18.0,
+            "text": "MsGAN clears low-quality computational ghost images under turbulence.",
+            "meta": {
+                "source_path": str(source),
+                "heading_path": "Advances and Challenges / 5.2. Imaging Through Scattering Media",
+                "page_start": 10,
+            },
+        },
+    ]
+
+    docs = _group_hits_by_doc_for_refs(
+        chunks,
+        "In LPR-2025-Advances and Challenges section 5.2, how does MsGAN handle turbulence?",
+        2,
+        deep_query="MsGAN turbulence section 5.2",
+        deep_read=True,
+        llm_rerank=False,
+        settings=SimpleNamespace(api_key=None),
+    )
+
+    assert "MsGAN" in docs[0]["text"]
+    assert docs[0]["meta"]["page_start"] == 10
+    assert docs[0]["meta"]["anchor_target_label"] == "5.2"
 
 
 def test_deterministic_query_variants_expand_refocus_mechanism_terms() -> None:

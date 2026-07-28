@@ -46,9 +46,15 @@ def _build_semantic_badges(
     anchor_target_number: int,
     anchor_match_score: float,
     explicit_doc_match_score: float,
+    anchor_target_label: str = "",
 ) -> list[dict]:
     badges: list[dict] = []
-    anchor_label = _anchor_kind_label(anchor_target_kind, anchor_target_number)
+    explicit_label = str(anchor_target_label or "").strip()
+    anchor_label = (
+        f"{str(anchor_target_kind or '').strip().lower()} {explicit_label}"
+        if explicit_label and str(anchor_target_kind or "").strip()
+        else _anchor_kind_label(anchor_target_kind, anchor_target_number)
+    )
     if anchor_label:
         badges.append(
             {

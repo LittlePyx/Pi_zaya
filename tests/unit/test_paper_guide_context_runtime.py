@@ -7,6 +7,8 @@ def test_build_paper_guide_context_records_prefers_ref_show_snippets_and_builds_
         "meta": {
             "source_path": r"db\demo\paper.en.md",
             "heading_path": "Materials and Methods / Adaptive pixel-reassignment (APR)",
+            "page_start": 10,
+            "page_end": 11,
             "ref_show_snippets": [
                 "APR was performed using image registration based on phase correlation [35].",
                 "APR was performed using image registration based on phase correlation [35].",
@@ -21,6 +23,7 @@ def test_build_paper_guide_context_records_prefers_ref_show_snippets_and_builds_
 
     assert len(out["ctx_parts"]) == 1
     assert "candidate refs: 35" in out["ctx_parts"][0]
+    assert "pages: 10-11" in out["ctx_parts"][0]
     assert "phase correlation [35]" in out["ctx_parts"][0]
     assert len(out["paper_guide_evidence_cards"]) == 1
     assert out["paper_guide_evidence_cards"][0]["candidate_refs"] == [35]

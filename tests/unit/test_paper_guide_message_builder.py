@@ -62,6 +62,8 @@ def test_normal_prompt_bundle_adds_user_facing_quality_protocol_with_hits():
     assert "Every paper-specific claim based on retrieved snippets" in system
     assert "[10001]" in system
     assert "Do not use bare [1] [2] [3]" in system
+    assert "Never expose SID identifiers" in system
+    assert "source-PDF page numbers" in system
     assert "Required citation reminder:" in out["user"]
     assert "Retrieved context (with deep-read supplements):" in out["user"]
 

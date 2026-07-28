@@ -29,6 +29,11 @@ _SUPPORT_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 _SID_INLINE_RE = re.compile(r"\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\]", re.IGNORECASE)
+_SID_PAREN_RE = re.compile(
+    r"[（(]\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*[）)]",
+    re.IGNORECASE,
+)
+_SID_BARE_RE = re.compile(r"(?<![A-Za-z0-9_-])SID\s*:\s*[A-Za-z0-9_-]{4,24}(?![A-Za-z0-9_-])", re.IGNORECASE)
 _SID_HEADER_LINE_RE = re.compile(
     r"(?im)^\s*(?:\[\d{1,3}\]|DOC-\d{1,3})\s*\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\][^\n]*\n?",
     re.IGNORECASE,
@@ -67,6 +72,8 @@ def _sanitize_structured_cite_tokens(answer: str) -> str:
     s = _CITE_NON_NUMERIC_RE.sub("", s)
     s = _SID_HEADER_LINE_RE.sub("", s)
     s = _SID_INLINE_RE.sub("", s)
+    s = _SID_PAREN_RE.sub("", s)
+    s = _SID_BARE_RE.sub("", s)
     return s
 
 
