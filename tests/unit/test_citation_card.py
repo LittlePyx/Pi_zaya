@@ -873,6 +873,52 @@ def test_system_a_card_unwraps_chinese_source_excerpt_prefix() -> None:
     assert "\u539f\u6587\u7247\u6bb5\u5199\u5230" not in detail["card_evidence"]
 
 
+def test_system_a_card_keeps_complete_sentence_with_coordinating_lead() -> None:
+    evidence = (
+        "And the aforementioned semiconductive SPDs (Si-SPAD, InSb, HgCdTe, etc.), "
+        "the superconducting TES detector has higher detection efficiency, faster response "
+        "speed, lower dark count, and higher energy resolution."
+    )
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "SPD-review.pdf",
+            "heading_path": "3 Single photon detection parameter",
+            "answer_claim": (
+                "TES detectors have higher detection efficiency and lower dark count "
+                "than the previously discussed semiconductor SPDs."
+            ),
+            "evidence_quote": evidence,
+            "location_label": "3 Single photon detection parameter",
+            "binding_status": "grounded",
+            "binding_confidence": 0.9,
+        }
+    )
+
+    assert detail["evidence_quote"] == evidence
+    assert detail["card_evidence"] == evidence
+    assert "evidence_quote_filtered" not in detail["card_quality_flags"]
+    assert "missing_evidence_quote" not in detail["card_quality_flags"]
+
+
+def test_system_a_card_still_filters_detached_coordinating_fragment() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "SPD-review.pdf",
+            "heading_path": "Detector comparison",
+            "answer_claim": "The detector has lower dark count.",
+            "evidence_quote": "And lower dark count and higher energy resolution.",
+            "location_label": "Detector comparison",
+            "binding_status": "grounded",
+            "binding_confidence": 0.9,
+        }
+    )
+
+    assert detail["card_evidence"] == ""
+    assert "missing_evidence_quote" in detail["card_quality_flags"]
+
+
 def test_system_a_card_suppresses_reading_roadmap_bibliographic_claim() -> None:
     detail = compose_citation_card(
         {
@@ -962,6 +1008,34 @@ def test_citation_card_contract_uses_english_locale_for_system_a_review_copy() -
     assert detail["card_support_label"] == "Evidence reliability"
     assert detail["card_quality_label"] == "Candidate evidence"
     assert detail["card_warning"] == "This link is candidate evidence. Open the source to confirm the context."
+
+
+def test_compound_plan_evidence_keeps_all_verified_source_clauses() -> None:
+    evidence = (
+        "The mask values require phase-sensitive detection. … "
+        "Each SLM pixel is modulated on p frequencies simultaneously. … "
+        "The light is multiplexed into a single-pixel detector. … "
+        "The signal is demodulated by p LIAs."
+    )
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "FDM.pdf",
+            "heading_path": "B. Encoding",
+            "answer_claim": "FDM parallelizes the encoding channels.",
+            "evidence_quote": evidence,
+            "evidence_source": "retrieval_hit",
+            "compound_plan_evidence": True,
+            "binding_status": "grounded",
+            "binding_confidence": 1.0,
+        },
+        locale="en",
+    )
+
+    assert "phase-sensitive detection" in detail["evidence_quote"]
+    assert "p frequencies simultaneously" in detail["evidence_quote"]
+    assert "multiplexed into a single-pixel detector" in detail["evidence_quote"]
+    assert "demodulated by p LIAs" in detail["evidence_quote"]
 
 
 def test_citation_card_contract_uses_english_locale_for_system_b_trace_copy() -> None:

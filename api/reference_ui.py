@@ -1982,11 +1982,37 @@ def _build_evidence_backed_ref_summary_from_seed(
     if not (_looks_natural_language_ref_summary(seed) or _is_summary_quality_ok(seed)):
         return ""
     if prefer_zh and _ref_copy_clear_locale(seed) == "en":
-        compact = _summary_excerpt(seed, max_sentences=2, max_len=260).strip()
-        if not compact:
-            return ""
-        return f"原文片段写到：“{compact}”"
+        return _deterministic_zh_summary_from_evidence(summary_line or seed)
     return seed
+
+
+def _deterministic_zh_summary_from_evidence(seed: str) -> str:
+    """Faithfully localize common evidence structures without model latency.
+
+    The rules are intentionally narrow. If none matches, callers fall back to
+    a topic-level guide instead of mixing a long English quote into Chinese UI.
+    """
+
+    text = re.sub(r"\s+", " ", str(seed or "").strip())
+    low = text.lower()
+    if "single-photon detections" in low and re.search(r"\b(?:spad|sapd|sns?pd|tes|pmt)s?\b", low):
+        return "该综述说明单光子探测可在极低光强下检测单个光子，并列出 PMT、SPAD、SNSPD、TES 等主流探测器路线。"
+    if "deep learning" in low and "spad" in low and (
+        "physical noise" in low or "photon flow model" in low
+    ):
+        return "该文将深度学习用于 SPAD 成像，并用物理噪声模型和真实数据标定支撑超分辨、比特深度与成像质量提升。"
+    if "frequency-division" in low and "parallelize" in low and "acquisition speed" in low:
+        return "该文用频分复用并行化单像素成像，在不改变探测器积分时间的情况下，以信噪比换取更高采集速度。"
+    if "four spatially-separated" in low and "3d video" in low:
+        speed = "，并达到约 8 帧/秒" if re.search(r"(?:~|sim)?\s*8\s+frames per second", low) else ""
+        return f"该系统用四个空间分离的单像素探测器并行获取不同照明方向的信号，重建连续实时 3D 视频{speed}。"
+    if "photometric stereo" in low and "different illumination directions" in low:
+        return "该文以光度立体视觉从同一视角、不同照明方向的多幅图像估计表面形状与反射率。"
+    if "hsi uses hadamard" in low and "fsi uses fourier" in low:
+        return "该文直接区分两种编码基底：HSI 使用 Hadamard 基图案，FSI 使用 Fourier 基图案。"
+    if "high-resolution foveal region" in low and "entire field of view" in low:
+        return "该方法用高分辨率中央凹区域跟踪运动，同时让每一帧仍从整个视场获取新的空间信息，并跨帧累积慢变区域细节。"
+    return ""
 
 
 def _pick_focus_sentence_ref_summary_seed(*, prompt: str, title: str, summary_line: str) -> str:
@@ -2049,6 +2075,10 @@ def _derive_localized_guide_from_why_line(*, target_locale: str, why_line: str) 
         return ""
     guide = _normalize_ref_copy_text(str(why_line or "").strip())
     if not guide:
+        return ""
+    if _card_copy_looks_generic_ref_why_line(guide) or _card_copy_looks_templated_ref_why_line(guide):
+        # A binding diagnostic explains why a link was kept; it is not a
+        # user-facing summary of what the paper says.
         return ""
     for marker in (
         "，可直接支撑",

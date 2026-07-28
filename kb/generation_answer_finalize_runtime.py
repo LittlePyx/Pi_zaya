@@ -79,6 +79,82 @@ _NEGATIVE_BOUNDARY_ANSWER_RE = re.compile(
     r"(?:\u5173\u7cfb\u4e0d\u5927|\u4e0d\u5efa\u8bae|\u6ca1\u6709.{0,8}\u4ea4\u96c6|"
     r"\u53c2\u8003\u4ef7\u503c.{0,8}\u4f4e|\u4ef7\u503c.{0,8}\u4f4e|\u4e0d\u503c\u5f97)"
 )
+
+
+def _strict_comparison_system_a_numbers(citation_plan: dict | None) -> set[int] | None:
+    if not isinstance(citation_plan, dict):
+        return None
+    if str(citation_plan.get("intent") or "").strip().lower() != "comparison":
+        return None
+    budget = citation_plan.get("budget") if isinstance(citation_plan.get("budget"), dict) else {}
+    try:
+        limit = max(0, int((budget or {}).get("system_a") or 0))
+    except (TypeError, ValueError):
+        limit = 0
+    if limit <= 0:
+        return set()
+    numbers: set[int] = set()
+    used_slots = 0
+    for raw_slot in list(citation_plan.get("slots") or []):
+        if not isinstance(raw_slot, dict):
+            continue
+        if str(raw_slot.get("preferred_system") or "").strip().lower() != "system_a":
+            continue
+        if used_slots >= limit:
+            break
+        used_slots += 1
+        for raw_number in list(raw_slot.get("candidate_hits") or []):
+            try:
+                number = int(raw_number)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                numbers.add(number)
+    return numbers
+
+
+def _claim_evidence_hits_with_citation_plan(
+    answer_hits: list[dict] | None,
+    citation_plan: dict | None,
+) -> list[dict]:
+    """Overlay verified plan sentences onto their canonical answer hits.
+
+    The citation-plan selector can relocate a source to a much more precise
+    sentence than the retrieval hit used during generation. Claim auditing must
+    evaluate the same evidence that the renderer will show; otherwise a valid
+    numeric or compound claim can be deleted merely because the earlier hit was
+    broader.
+    """
+
+    merged = [dict(hit) if isinstance(hit, dict) else {} for hit in list(answer_hits or [])]
+    if not merged or not isinstance(citation_plan, dict):
+        return merged
+    quotes_by_index: dict[int, list[str]] = {}
+    for slot in list(citation_plan.get("slots") or []):
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("preferred_system") or "").strip().lower() != "system_a":
+            continue
+        quote = str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip()
+        if not quote:
+            continue
+        for raw_number in list(slot.get("candidate_hits") or []):
+            try:
+                index = int(raw_number) - 1
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < len(merged):
+                quotes_by_index.setdefault(index, []).append(quote)
+    for index, quotes in quotes_by_index.items():
+        hit = dict(merged[index])
+        original = str(hit.get("text") or "").strip()
+        evidence_parts = list(dict.fromkeys([*quotes, original]))
+        hit["text"] = "\n".join(part for part in evidence_parts if part)
+        meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), dict) else {}
+        meta["citation_plan_evidence_quotes"] = list(dict.fromkeys(quotes))
+        hit["meta"] = meta
+        merged[index] = hit
+    return merged
 _STRUCT_CITE_GARBAGE_RE = re.compile(r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]", re.IGNORECASE)
 _SID_INLINE_RE = re.compile(r"\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\]", re.IGNORECASE)
 _SID_RE = re.compile(r"^[A-Za-z0-9_-]{4,24}$")
@@ -385,6 +461,18 @@ def _normalize_double_numeric_citations(answer: str) -> str:
     return _DOUBLE_NUMERIC_CITE_RE.sub(lambda match: f"[{match.group(1).strip()}]", text)
 
 
+def _collapse_adjacent_duplicate_numeric_citations(answer: str) -> str:
+    """Collapse repeated public markers such as ``[1] [1] [1]``."""
+
+    text = str(answer or "")
+    pattern = re.compile(r"\[(\d{1,5})\](?:\s*\[\1\])+")
+    previous = ""
+    while text != previous:
+        previous = text
+        text = pattern.sub(lambda match: f"[{match.group(1)}]", text)
+    return text
+
+
 def _sanitize_canceled_generation_answer(
     partial: str,
     *,
@@ -504,6 +592,43 @@ def _sanitize_empty_markdown_label_fragments(answer: str) -> str:
     text = re.sub(r"(?m)(^|\n)(\s*[-*+]\s*)?\*{4,}\s*[:：]\s*", r"\1", text)
     text = re.sub(r"(?<!\*)\*{4,}\s*[:：]\s*", "", text)
     text = _strip_empty_citation_bracket_fragments(text)
+    # A provider can reach its output-token limit while emitting a Markdown
+    # table.  Showing the half-written final row produces broken columns in the
+    # React renderer.  Preserve the completed prose and remove only the
+    # unfinished tail (plus an otherwise orphaned heading immediately above
+    # that table).
+    lines = text.splitlines()
+    last_nonempty = next(
+        (index for index in range(len(lines) - 1, -1, -1) if lines[index].strip()),
+        -1,
+    )
+    if last_nonempty >= 0:
+        tail = lines[last_nonempty].strip()
+        if tail.startswith("|") and not tail.endswith("|"):
+            table_start = last_nonempty
+            while table_start > 0:
+                previous = lines[table_start - 1].strip()
+                if not previous or previous.startswith("|"):
+                    table_start -= 1
+                    continue
+                break
+            previous_nonempty = next(
+                (
+                    index
+                    for index in range(table_start - 1, -1, -1)
+                    if lines[index].strip()
+                ),
+                -1,
+            )
+            if previous_nonempty >= 0 and re.match(
+                r"^\s*#{1,6}\s+\S",
+                lines[previous_nonempty],
+            ):
+                table_start = previous_nonempty
+            text = "\n".join(lines[:table_start]).rstrip()
+    # Citation normalization may move a marker that originally occupied the
+    # blank in "如 [n] 所述".  Do not expose the resulting empty attribution.
+    text = re.sub(r"(?<!\S)如\s+所述\s*[：:]?\s*", "", text)
     text = re.sub(r"[ \t]+([,.;:!?，。；：！？])", r"\1", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -4437,11 +4562,18 @@ def _finalize_generation_answer(
         retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
         allow_paper_guide_structured_refs=bool(paper_guide_validated_structured_refs),
     )
+    strict_comparison_numbers = _strict_comparison_system_a_numbers(citation_plan_seed)
+    claim_evidence_hits = _claim_evidence_hits_with_citation_plan(
+        list(answer_hits or []),
+        citation_plan_seed,
+    )
     answer, claim_evidence_meta = audit_and_repair_claim_evidence(
         answer,
-        answer_hits=list(answer_hits or []),
+        answer_hits=claim_evidence_hits,
         allow_citation_repairs=True,
         prompt=prompt_for_user or prompt,
+        allowed_citation_numbers=strict_comparison_numbers,
+        drop_unsupported_unplanned_claims=strict_comparison_numbers is not None,
     )
     # Claim repair may add a valid but weaker nearby [n] after the precision
     # pass above. Run the source-backed pass once more so the final user-visible
@@ -4458,6 +4590,7 @@ def _finalize_generation_answer(
             answer_hits=answer_hits,
         )
         citation_validation["final_freeform"] = final_freeform_validation
+    answer = _collapse_adjacent_duplicate_numeric_citations(answer)
     answer = _normalize_retrieval_window_claims(answer, prompt=prompt_for_user or prompt)
     answer = _maybe_clarify_negative_boundary_answer(answer, prompt=prompt_for_user or prompt)
     if single_paper_pick_prompt:

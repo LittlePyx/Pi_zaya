@@ -53,7 +53,7 @@ _WRAPPED_SOURCE_EXCERPT_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _CONTENT_VERB_RE = re.compile(
-    r"\b(?:is|are|was|were|be|been|being|can|could|may|might|will|would|uses?|used|shows?|"
+    r"\b(?:is|are|was|were|be|been|being|has|have|had|can|could|may|might|will|would|uses?|used|shows?|"
     r"shown|presents?|presented|proposes?|proposed|demonstrates?|develops?|developed|introduces?|introduced|"
     r"improves?|improved|captures?|captured|reconstructs?|reconstructed|enables?|enabled|"
     r"achieves?|achieved|realizes?|realized|realizing|emerges?|emerged|"
@@ -403,9 +403,27 @@ def looks_fragmentary_sentence(value: str) -> bool:
     text = str(value or "").strip()
     if not text:
         return True
+    # A sentence extracted from the middle of a paragraph may legitimately
+    # retain its coordinating conjunction.  Treat it as a complete evidence
+    # sentence when it still has a finite/content verb, enough substance, and
+    # explicit terminal punctuation.  Truly detached continuations such as
+    # "and lower dark count" remain filtered by the checks below.
+    complete_coordinated_sentence = bool(
+        re.match(r"^(?:and|or)\b", text, re.IGNORECASE)
+        and _TERMINAL_PUNCT_RE.search(text)
+        and _CONTENT_VERB_RE.search(text)
+        and len(loose_tokens(text)) >= 8
+    )
     if re.match(r"^[a-z]{2,}\b", text) and not _FRAGMENT_LEAD_OK_RE.match(text):
         return True
-    if re.match(r"^(?:and|or|of|that|which|from|into|onto|within|without|using|used|measured|allowing)\b", text, re.IGNORECASE):
+    if (
+        not complete_coordinated_sentence
+        and re.match(
+            r"^(?:and|or|of|that|which|from|into|onto|within|without|using|used|measured|allowing)\b",
+            text,
+            re.IGNORECASE,
+        )
+    ):
         return True
     if len(text) > 80 and re.search(r"\b(?:and|or|of|to|with|by|from|into|onto)$", text, re.IGNORECASE):
         return True

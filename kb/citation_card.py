@@ -1068,9 +1068,14 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
         )
         >= 2
     )
+    compound_plan_evidence_locked = bool(
+        rec.get("compound_plan_evidence")
+        and str(rec.get("evidence_source") or "").strip().lower()
+        != "answer_context_only"
+    )
     exact_evidence = (
         clean_display_text(evidence_raw_for_pack, max_len=900)
-        if exact_support_locked or structured_metric_evidence_locked
+        if exact_support_locked or structured_metric_evidence_locked or compound_plan_evidence_locked
         else ""
     )
     if exact_evidence:
@@ -1158,7 +1163,9 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
         "card_quality_flags": flags,
         "card_warning": warning,
         "card_flow": [],
-        "_preserve_card_evidence_boundary": structured_metric_evidence_locked,
+        "_preserve_card_evidence_boundary": bool(
+            structured_metric_evidence_locked or compound_plan_evidence_locked
+        ),
     }, route="system_a", locale=locale)
 
 

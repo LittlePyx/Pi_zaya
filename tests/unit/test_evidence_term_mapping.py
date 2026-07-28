@@ -1,6 +1,27 @@
 from kb.evidence_term_mapping import evidence_alignment_tokens
 
 
+def test_chinese_3d_video_mechanism_aligns_with_english_source_terms() -> None:
+    answer_tokens = evidence_alignment_tokens(
+        "四个空间分离的单像素探测器用于光度立体，速度约为 8 帧/秒。"
+    )
+    evidence_tokens = evidence_alignment_tokens(
+        "Four spatially-separated single-pixel detectors perform photometric stereo "
+        "at approximately 8 frames per second."
+    )
+
+    assert {
+        "four",
+        "spatially",
+        "separated",
+        "detectors",
+        "photometric",
+        "stereo",
+        "frames",
+        "second",
+    } <= answer_tokens & evidence_tokens
+
+
 def test_fdm_chinese_question_aligns_with_english_mechanism_terms() -> None:
     question_tokens = evidence_alignment_tokens(
         "频分复用为什么能并行采集，又如何在不改变探测器积分时间时权衡信噪比和采集速度？"

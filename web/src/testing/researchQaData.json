@@ -164,6 +164,44 @@
     "直接定义或解释了",
     "命中章节讲什么 / 提供什么"
   ],
+  "splits": {
+    "baseline_real_v1": [
+      "scigs-dynamic-3d",
+      "scinerf-admm-origin",
+      "dl-spi-benefits-risks",
+      "perovskite-boundary",
+      "spi-roadmap-beginner",
+      "simple-baselines-sidd-best",
+      "three-d-video-real-time-mechanism",
+      "cassi-dual-disperser-design",
+      "denoising-classical-map",
+      "foveated-not-simple-zoom",
+      "spad-geiger-mechanism",
+      "piln-self-supervised-loop"
+    ],
+    "holdout_v1": [
+      "hadamard-fourier-choice",
+      "foveated-dynamic-supersampling",
+      "qclfm-refocus",
+      "s2ism-thick-samples",
+      "single-photon-pidl",
+      "cassi-to-3d-sci-lineage",
+      "microscopy-methods-map",
+      "single-photon-reading-pair",
+      "piln-dl-spi-position",
+      "sph-throughput-mechanism",
+      "spi-prospects-when-use-single-pixel",
+      "s2ism-three-way-tradeoff",
+      "pidl-real-spad-noise",
+      "fdm-speed-snr-tradeoff",
+      "scinerf-physics-in-training",
+      "scigs-explicit-dynamic-scene",
+      "sequential-cs-adaptive-advantage",
+      "iism-live-cell-benefit",
+      "fdm-vs-3d-video-parallelism",
+      "basis-choice-vs-foveated-adaptation"
+    ]
+  },
   "cases": [
     {
       "id": "scigs-dynamic-3d",
@@ -313,6 +351,7 @@
             "id": "conditional-hadamard-fourier-choice",
             "docId": "hsi-fsi",
             "route": "system_a",
+            "answerScope": "response",
             "answerTerms": ["Hadamard", "Fourier", "测量"],
             "evidenceTerms": ["sampling ratio", "PSNR", "SSIM"]
           }
@@ -1564,6 +1603,150 @@
         "requireCitationCardQuality": true,
         "minSystemAQualityCount": 1,
         "requireSystemB": false
+      }
+    },
+    {
+      "id": "fdm-vs-3d-video-parallelism",
+      "sourceGrounded": true,
+      "docIds": ["fdm-metamaterials", "3d-sp-video"],
+      "question": "频分复用单像素成像和 3D single-pixel video 都强调速度：它们分别把什么环节并行化，为什么后者需要多个探测器？请不要把两种加速机制混在一起。",
+      "acceptance": [
+        "回答要区分频分复用的编码频率并行与 3D 视频的多方向同步探测和光度立体，两者不能混写成同一种并行。",
+        "必须分别给出两篇正文证据，并说明 3D 视频使用四个空间分离探测器、达到约每秒 8 帧。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["3D"],
+        "requiredAnswerTermGroups": [
+          ["frequency-division", "频分复用"],
+          ["parallelize", "并行化", "并行"],
+          ["photometric stereo", "光度立体"],
+          ["four", "4 个", "四个", "四路"],
+          ["8 frames per second", "8 帧/秒", "每秒 8 帧", "8帧每秒", "8 fps"]
+        ],
+        "requiredRefDocIds": ["fdm-metamaterials", "3d-sp-video"],
+        "requiredCitationDocIds": ["fdm-metamaterials", "3d-sp-video"],
+        "allowedRefDocIds": ["fdm-metamaterials", "3d-sp-video"],
+        "allowedCitationDocIds": ["fdm-metamaterials", "3d-sp-video"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "fdm-parallel-encoding-layer",
+            "docId": "fdm-metamaterials",
+            "route": "system_a",
+            "answerScope": "response",
+            "sourcePage": 2,
+            "answerTerms": [],
+            "answerTermGroups": [["frequency-division", "频分复用"], ["parallelize", "并行化", "并行"]],
+            "evidenceTerms": ["p frequencies simultaneously", "phase-sensitive detection", "demodulated"]
+          },
+          {
+            "id": "three-d-video-parallel-detectors",
+            "docId": "3d-sp-video",
+            "route": "system_a",
+            "answerScope": "response",
+            "sourcePage": 2,
+            "answerTerms": ["3D"],
+            "answerTermGroups": [
+              ["photometric stereo", "光度立体"],
+              ["four", "4 个", "四个", "四路"],
+              ["8 frames per second", "8 帧/秒", "每秒 8 帧", "8帧每秒", "8 fps"]
+            ],
+            "evidenceTerms": ["photometric stereo", "four spatially-separated", "8 frames per second"]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "fdm-parallel-encoding-locate",
+            "docId": "fdm-metamaterials",
+            "route": "system_a",
+            "sourcePage": 2,
+            "locatorTerms": ["B. Encoding"],
+            "evidenceTerms": ["p frequencies simultaneously", "demodulated"]
+          },
+          {
+            "id": "three-d-video-detectors-abstract-locate",
+            "docId": "3d-sp-video",
+            "route": "system_a",
+            "sourcePage": 2,
+            "locatorTerms": ["Abstract"],
+            "evidenceTerms": ["four spatially-separated", "8 frames per second"]
+          }
+        ],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 2,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "basis-choice-vs-foveated-adaptation",
+      "sourceGrounded": true,
+      "docIds": ["hsi-fsi", "foveated-spi"],
+      "question": "Hadamard/Fourier 的选择和 foveated dynamic supersampling 是同一层面的采样策略吗？设计系统时，这两类选择分别在决定什么？",
+      "acceptance": [
+        "回答必须明确两者不是同一层面：前者决定确定性变换基和测量方式，后者决定视场内时空分辨率如何自适应分配。",
+        "两条主张必须分别绑定 HSI/FSI 对比论文和 foveated SPI 论文的正文证据。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["Hadamard", "Fourier", "foveated"],
+        "requiredAnswerTermGroups": [
+          ["不同层面", "不是同一层面", "different design layers", "different levels"],
+          ["basis patterns", "基图案", "基模式", "采样基"],
+          ["entire field of view", "整个视场", "全视场"]
+        ],
+        "requiredRefDocIds": ["hsi-fsi", "foveated-spi"],
+        "requiredCitationDocIds": ["hsi-fsi", "foveated-spi"],
+        "allowedRefDocIds": ["hsi-fsi", "foveated-spi"],
+        "allowedCitationDocIds": ["hsi-fsi", "foveated-spi"],
+        "maxUnexpectedRefDocCount": 0,
+        "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "hsi-fsi-basis-design-layer",
+            "docId": "hsi-fsi",
+            "route": "system_a",
+            "answerScope": "response",
+            "sourcePage": 3,
+            "answerTerms": ["Hadamard", "Fourier"],
+            "answerTermGroups": [["basis patterns", "基图案", "基模式", "采样基"]],
+            "evidenceTerms": ["HSI uses Hadamard basis patterns", "FSI uses Fourier basis patterns"]
+          },
+          {
+            "id": "foveated-spatiotemporal-design-layer",
+            "docId": "foveated-spi",
+            "route": "system_a",
+            "answerScope": "response",
+            "sourcePage": 1,
+            "answerTerms": ["foveated"],
+            "answerTermGroups": [["entire field of view", "整个视场", "全视场"]],
+            "evidenceTerms": ["high-resolution foveal region tracks motion", "entire field of view"]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "hsi-fsi-introduction-locate",
+            "docId": "hsi-fsi",
+            "route": "system_a",
+            "sourcePage": 3,
+            "locatorTerms": ["Introduction"],
+            "evidenceTerms": ["Hadamard basis patterns", "Fourier basis patterns"]
+          },
+          {
+            "id": "foveated-abstract-adaptation-locate",
+            "docId": "foveated-spi",
+            "route": "system_a",
+            "sourcePage": 1,
+            "locatorTerms": ["Abstract"],
+            "evidenceTerms": ["foveal region tracks motion", "entire field of view"]
+          }
+        ],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 2,
+        "maxSystemBCount": 0
       }
     }
   ]

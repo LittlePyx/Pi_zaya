@@ -10999,6 +10999,136 @@ def test_lineage_canonical_paths_bind_all_three_reserved_system_a_hits(tmp_path:
         assert hit["ui_meta"]["primary_evidence"]["block_id"] == f"block-{idx}"
 
 
+def test_prompt_aligned_rebind_discards_previous_source_card_fields(tmp_path: Path) -> None:
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = str(tmp_path / "FDM" / "FDM.en.md")
+    evidence = (
+        "Multiple frequency-division masks are projected simultaneously "
+        "without increasing integration time."
+    )
+    stale_3d = "Four detectors reconstruct the 3D object at eight frames per second."
+    hits = [
+        {
+            "text": "stale retrieval text",
+            "meta": {
+                "source_path": source_path,
+                "ref_answer_citation_num": 1,
+                "ref_snippets": [stale_3d],
+                "ref_show_snippets": [stale_3d],
+                "ref_locs": [{"snippet": stale_3d}],
+                "citation_meta": {
+                    "title": "Single-pixel 3D imaging",
+                    "doi": "10.1000/3d",
+                },
+            },
+            "ui_meta": {
+                "source_path": source_path,
+                "citation_meta": {
+                    "title": "Single-pixel 3D imaging",
+                    "doi": "10.1000/3d",
+                },
+                "reader_open": {
+                    "sourcePath": "3d.en.md",
+                    "evidenceAlternatives": [{"snippet": stale_3d}],
+                },
+            },
+        }
+    ]
+    plan = {
+        "source": "generation_citation_planner",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "FDM.pdf",
+                "heading_path": "Principle",
+                "evidence_quote": evidence,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "block_id": "blk-fdm",
+                "anchor_id": "p-fdm",
+                "anchor_kind": "sentence",
+                "page_start": 3,
+                "strict_locate": True,
+            }
+        ],
+    }
+
+    rebound = _augment_hits_with_system_a_plan_slots(hits, plan)
+    hit = rebound[0]
+
+    assert hit["text"] == evidence
+    assert "ref_snippets" not in hit["meta"]
+    assert "ref_show_snippets" not in hit["meta"]
+    assert "ref_locs" not in hit["meta"]
+    assert "citation_meta" not in hit["meta"]
+    assert "citation_meta" not in hit["ui_meta"]
+    assert hit["ui_meta"]["reader_open"]["sourcePath"] == source_path
+    assert hit["ui_meta"]["reader_open"]["evidenceAlternatives"] == [
+        {
+            "headingPath": "Principle",
+            "snippet": evidence,
+            "highlightSnippet": evidence,
+            "blockId": "blk-fdm",
+            "anchorId": "p-fdm",
+            "anchorKind": "sentence",
+            "pageStart": 3,
+            "pageEnd": 3,
+        }
+    ]
+    assert stale_3d not in str(hit)
+
+
+def test_prompt_aligned_rebind_keeps_same_source_answer_passage_as_alternative(
+    tmp_path: Path,
+) -> None:
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = str(tmp_path / "FDM" / "FDM.en.md")
+    mechanism = (
+        "The SLM pixels use BPSK at four carrier frequencies and the lock-in "
+        "amplifier demodulates the corresponding mask measurements in parallel."
+    )
+    abstract = (
+        "Frequency-division methods parallelize the single-pixel imaging process "
+        "without altering detector integration time."
+    )
+    hits = [
+        {
+            "text": mechanism,
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "Encoding",
+                "block_id": "blk-encoding",
+                "anchor_id": "p-encoding",
+                "page_start": 3,
+            },
+            "ui_meta": {"source_path": source_path},
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "FDM.pdf",
+                "heading_path": "Abstract",
+                "evidence_quote": abstract,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            }
+        ]
+    }
+
+    rebound = _augment_hits_with_system_a_plan_slots(hits, plan)
+    alternatives = rebound[0]["ui_meta"]["reader_open"]["evidenceAlternatives"]
+
+    assert any(item.get("snippet") == abstract for item in alternatives)
+    assert any(item.get("snippet") == mechanism for item in alternatives)
+    assert any(item.get("blockId") == "blk-encoding" for item in alternatives)
+
+
 def test_lineage_system_b_retargets_same_reference_to_downstream_paper(tmp_path: Path) -> None:
     from api.chat_render import _retarget_lineage_system_b_to_downstream_source
     from api.reference_rendering import _source_cite_id
@@ -11164,3 +11294,38 @@ def test_lineage_system_b_drops_unsupported_spectral_origin_relation(tmp_path: P
         for slot in repaired_plan["slots"]
     )
     assert repaired_plan["budget"]["system_b"] == 0
+
+
+def test_mechanism_marker_stays_on_exact_sph_sentence_within_paragraph() -> None:
+    from api.chat_render import _reading_guide_repair_mechanism_marker_target
+
+    evidence = (
+        "Instead of actively performing phase shifting, a beat frequency is introduced between "
+        "the signal beam and the reference beam, thereby realizing phase stepping naturally in "
+        "time by exploiting the framework of heterodyne holography."
+    )
+    answer = (
+        "该方法不再主动执行逐步相移。两个声光调制器在信号光与参考光之间引入拍频，"
+        "使相移随时间自然完成，并使用外差全息恢复复振幅。这使每秒采集的信息量大幅增加。"
+    )
+    hits = [{"text": evidence, "meta": {"source_path": "sph.en.md"}}]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "sph.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    repaired = _reading_guide_repair_mechanism_marker_target(
+        answer,
+        hits,
+        plan,
+        canonical_paths=["sph.en.md"],
+    )
+
+    assert "外差全息恢复复振幅 [1]。" in repaired
+    assert "信息量大幅增加 [1]" not in repaired

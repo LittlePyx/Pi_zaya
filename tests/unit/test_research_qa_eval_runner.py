@@ -17,6 +17,7 @@ from tools.research_qa.run_research_qa_eval import (
     evaluate_replay_rows,
     load_fixture,
     load_replay,
+    select_fixture_cases,
     source_path_for_doc,
     validate_case,
     validate_fixture_contracts,
@@ -228,7 +229,7 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
     fixture = load_fixture()
 
     assert len(fixture.docs) == 22
-    assert len(fixture.cases) == 30
+    assert len(fixture.cases) == 32
     case_ids = {str(item.get("id") or "") for item in fixture.cases}
     assert {
         "spi-roadmap-beginner",
@@ -246,7 +247,63 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
         "ECCV-2022-Simple Baselines for Image Restoration/"
         "ECCV-2022-Simple Baselines for Image Restoration.en.md"
     )
-    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 16
+    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 18
+    assert len(fixture.splits["baseline_real_v1"]) == 12
+    assert len(fixture.splits["holdout_v1"]) == 20
+    assert set(fixture.splits["baseline_real_v1"]).isdisjoint(fixture.splits["holdout_v1"])
+    assert set(fixture.splits["baseline_real_v1"]) | set(fixture.splits["holdout_v1"]) == case_ids
+
+
+def test_research_qa_fixture_split_selection_is_stable_and_intersectable():
+    fixture = load_fixture()
+
+    holdout = select_fixture_cases(fixture, split_names=["holdout_v1"])
+    one_case = select_fixture_cases(
+        fixture,
+        split_names=["holdout_v1"],
+        case_ids={"fdm-vs-3d-video-parallelism"},
+    )
+
+    assert [case["id"] for case in holdout] == fixture.splits["holdout_v1"]
+    assert [case["id"] for case in one_case] == ["fdm-vs-3d-video-parallelism"]
+
+
+def test_fixture_validation_rejects_split_overlap_and_unassigned_cases():
+    fixture = ResearchQaFixture(
+        db_root="db",
+        docs=[{"id": "paper"}],
+        cases=[
+            {
+                "id": "alpha",
+                "question": "What is alpha?",
+                "acceptance": ["one", "two"],
+                "docIds": ["paper"],
+                "expected": {
+                    "requiredAnswerTerms": ["alpha"],
+                    "requiredRefDocIds": ["paper"],
+                    "requiredCitationDocIds": ["paper"],
+                },
+            },
+            {
+                "id": "beta",
+                "question": "What is beta?",
+                "acceptance": ["one", "two"],
+                "docIds": ["paper"],
+                "expected": {
+                    "requiredAnswerTerms": ["beta"],
+                    "requiredRefDocIds": ["paper"],
+                    "requiredCitationDocIds": ["paper"],
+                },
+            },
+        ],
+        forbidden_phrases=[],
+        splits={"baseline": ["alpha"], "holdout": ["alpha"]},
+    )
+
+    errors = validate_fixture_contracts(fixture)
+
+    assert "case alpha appears in multiple splits: baseline, holdout" in errors
+    assert "fixture cases missing a split: beta" in errors
 
 
 def test_source_grounded_contracts_match_page_marked_markdown(tmp_path):
@@ -285,6 +342,39 @@ def test_source_grounded_contracts_match_page_marked_markdown(tmp_path):
     assert "page 2 missing evidence terms: alpha" in errors[0]
 
 
+def test_source_grounded_contract_ignores_inline_math_delimiters(tmp_path):
+    source_dir = tmp_path / "paper"
+    source_dir.mkdir()
+    (source_dir / "paper.en.md").write_text(
+        "<!-- kb_page: 2 -->\nEach pixel is modulated on $p$ frequencies simultaneously.\n",
+        encoding="utf-8",
+    )
+    fixture = ResearchQaFixture(
+        db_root=str(tmp_path),
+        docs=[{"id": "paper", "dir": "paper", "file": "paper"}],
+        cases=[
+            {
+                "id": "grounded-math",
+                "sourceGrounded": True,
+                "expected": {
+                    "claimEvidenceContracts": [
+                        {
+                            "id": "claim",
+                            "docId": "paper",
+                            "sourcePage": 2,
+                            "evidenceTerms": ["p frequencies simultaneously"],
+                        }
+                    ],
+                    "requiredLocateContracts": [],
+                },
+            }
+        ],
+        forbidden_phrases=[],
+    )
+
+    assert validate_fixture_sources(fixture, db_root=tmp_path) == []
+
+
 def test_source_page_contract_rejects_missing_or_wrong_citation_page():
     assert _detail_matches_source_page({"page_start": 2}, 2)
     assert _detail_matches_source_page({"page_start": 2, "page_end": 4}, 3)
@@ -299,10 +389,22 @@ def test_multilingual_term_groups_accept_one_reviewed_surface_per_claim():
     assert _missing_term_groups("模型只包含泊松噪声。", groups) == groups[1:]
 
 
+def test_design_layer_alias_accepts_natural_chinese_negation():
+    groups = [["不同层面", "不是同一层面", "different design layers"]]
+
+    assert _missing_term_groups("两种方法并非同一层面的采样策略。", groups) == []
+
+
 def test_term_groups_ignore_spacing_between_numbers_and_cjk_units():
     groups = [["four", "4 个", "四个"], ["8 frames per second", "8 帧/秒", "8 fps"]]
 
     assert _missing_term_groups("系统使用4个探测器，速度约为8帧/秒。", groups) == []
+
+
+def test_term_groups_accept_negated_same_layer_paraphrase():
+    groups = [["不同层面", "不是同一层面", "different design layers"]]
+
+    assert _missing_term_groups("两者不属于同一层面的采样策略。", groups) == []
 
 
 def test_claim_contract_can_validate_split_claims_against_full_response():

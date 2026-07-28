@@ -3310,6 +3310,49 @@ def _reading_comparison_primary_rescue(
     return {}, {}
 
 
+_PLAN_REBIND_SOURCE_BOUND_META_KEYS = {
+    "anchor_id",
+    "block_id",
+    "citation_meta",
+    "line_end",
+    "line_start",
+    "page_end",
+    "page_start",
+    "ref_best_heading_path",
+    "ref_headings",
+    "ref_locs",
+    "ref_overview_snippets",
+    "ref_section",
+    "ref_show_snippets",
+    "ref_snippets",
+    "ref_subsection",
+    "structured_evidence_locked",
+    "structured_kind",
+    "table_block_id",
+    "table_index",
+    "table_number",
+}
+
+
+def _clear_plan_rebind_source_bound_fields(meta: dict, ui: dict) -> tuple[dict, dict]:
+    """Remove retrieval fields that belong to the row's previous source."""
+
+    clean_meta = dict(meta)
+    clean_ui = dict(ui)
+    for key in _PLAN_REBIND_SOURCE_BOUND_META_KEYS:
+        clean_meta.pop(key, None)
+    for key in (
+        "citation_meta",
+        "primary_evidence",
+        "primary_evidence_heading_path",
+        "reader_open",
+        "section_label",
+        "subsection_label",
+    ):
+        clean_ui.pop(key, None)
+    return clean_meta, clean_ui
+
+
 def _augment_hits_with_system_a_plan_slots(
     hits: list[dict],
     citation_plan: dict | None,
@@ -3356,6 +3399,10 @@ def _augment_hits_with_system_a_plan_slots(
                 )
                 if row_key != boundary_key:
                     continue
+                row_meta, row_ui = _clear_plan_rebind_source_bound_fields(
+                    row_meta,
+                    row_ui,
+                )
                 primary = dict(boundary_primary or {})
                 heading = str(
                     primary.get("heading_path")
@@ -3835,6 +3882,67 @@ def _augment_hits_with_system_a_plan_slots(
                 # appending it beyond the canonical range makes the marker
                 # disappear during rendering. Put the exact passage on the
                 # matching reserved hit instead.
+                prior_text = re.sub(
+                    r"\s+",
+                    " ",
+                    str(candidate.get("text") or "").strip(),
+                )
+                prior_alternative: dict = {}
+                if (
+                    exact_source_match
+                    and len(prior_text) >= 48
+                    and prior_text.casefold() != evidence_quote.casefold()
+                    and not re.match(
+                        r"(?i)^\s*(?:title|paper title|to cite this article)\s*[:：]",
+                        prior_text,
+                    )
+                ):
+                    prior_alternative = {
+                        "headingPath": str(
+                            candidate_meta.get("heading_path")
+                            or candidate_ui.get("heading_path")
+                            or ""
+                        ).strip(),
+                        "snippet": prior_text,
+                        "highlightSnippet": prior_text,
+                        "blockId": str(
+                            candidate_meta.get("block_id")
+                            or candidate_meta.get("primary_block_id")
+                            or ""
+                        ).strip(),
+                        "anchorId": str(
+                            candidate_meta.get("anchor_id")
+                            or candidate_meta.get("primary_anchor_id")
+                            or ""
+                        ).strip(),
+                        "anchorKind": str(
+                            candidate_meta.get("anchor_kind") or ""
+                        ).strip(),
+                        "pageStart": int(candidate_meta.get("page_start") or 0),
+                        "pageEnd": int(
+                            candidate_meta.get("page_end")
+                            or candidate_meta.get("page_start")
+                            or 0
+                        ),
+                    }
+                existing_primary_text = _primary_evidence_text(candidate_primary)
+                if (
+                    authoritative_plan_evidence
+                    and existing_primary_text
+                    and re.sub(r"\s+", " ", existing_primary_text).strip().casefold()
+                    == evidence_quote.casefold()
+                ):
+                    # The second idempotent overlay runs after canonical answer
+                    # recovery. Keep the same-source alternatives assembled by
+                    # the first pass; rebuilding would discard the answer's
+                    # more specific table or mechanism passage.
+                    candidate_bound = True
+                    rebound_answer_keys.add(answer_source_key)
+                    break
+                candidate_meta, candidate_ui = _clear_plan_rebind_source_bound_fields(
+                    candidate_meta,
+                    candidate_ui,
+                )
                 candidate_meta.pop("citation_plan_padding", None)
                 candidate_meta.update(
                     {
@@ -3915,50 +4023,73 @@ def _augment_hits_with_system_a_plan_slots(
                     else {}
                 )
                 if plan_primary_payload:
-                    reader_open = (
-                        dict(candidate_ui.get("reader_open") or {})
-                        if isinstance(candidate_ui.get("reader_open"), dict)
-                        else {}
-                    )
                     # A prompt-aligned plan slot replaces the evidence shown
                     # for this hit. Keep the reader payload in lockstep; an old
                     # reader_open.primaryEvidence otherwise wins candidate
                     # scoring and makes the card show an unrelated sentence
                     # from the same paragraph.
-                    reader_open.update(
-                        {
-                            "sourcePath": source_path,
-                            "sourceName": source_name,
-                            "headingPath": heading_path,
-                            "snippet": evidence_quote,
-                            "highlightSnippet": evidence_quote,
-                            "primaryEvidence": dict(plan_primary_payload),
-                            "locateTarget": {
-                                "headingPath": heading_path,
-                                "snippet": evidence_quote,
-                                "highlightSnippet": evidence_quote,
-                                "blockId": str(plan_primary_payload.get("block_id") or ""),
-                                "anchorId": str(plan_primary_payload.get("anchor_id") or ""),
-                                "anchorKind": str(plan_primary_payload.get("anchor_kind") or ""),
-                            },
-                            "evidenceAlternatives": [
-                                {
-                                    "headingPath": heading_path,
-                                    "snippet": evidence_quote,
-                                    "highlightSnippet": evidence_quote,
-                                    "blockId": str(plan_primary_payload.get("block_id") or ""),
-                                    "anchorId": str(plan_primary_payload.get("anchor_id") or ""),
-                                    "anchorKind": str(plan_primary_payload.get("anchor_kind") or ""),
-                                    "pageStart": int(plan_primary_payload.get("page_start") or 0),
-                                    "pageEnd": int(
-                                        plan_primary_payload.get("page_end")
-                                        or plan_primary_payload.get("page_start")
-                                        or 0
-                                    ),
-                                }
-                            ],
-                        }
+                    block_id = str(plan_primary_payload.get("block_id") or "")
+                    anchor_id = str(plan_primary_payload.get("anchor_id") or "")
+                    anchor_kind = str(plan_primary_payload.get("anchor_kind") or "")
+                    page_start = int(plan_primary_payload.get("page_start") or 0)
+                    page_end = int(
+                        plan_primary_payload.get("page_end")
+                        or plan_primary_payload.get("page_start")
+                        or 0
                     )
+                    locate_target = {
+                        "headingPath": heading_path,
+                        "snippet": evidence_quote,
+                        "highlightSnippet": evidence_quote,
+                        "blockId": block_id,
+                        "anchorId": anchor_id,
+                        "anchorKind": anchor_kind,
+                    }
+                    alternative = {
+                        **locate_target,
+                        "pageStart": page_start,
+                        "pageEnd": page_end,
+                    }
+                    alternatives = [
+                        {
+                            key: value
+                            for key, value in alternative.items()
+                            if value not in (None, "", [], {}, 0)
+                        }
+                    ]
+                    if prior_alternative:
+                        cleaned_prior = {
+                            key: value
+                            for key, value in prior_alternative.items()
+                            if value not in (None, "", [], {}, 0)
+                        }
+                        if cleaned_prior:
+                            alternatives.append(cleaned_prior)
+                    reader_open = {
+                        "sourcePath": source_path,
+                        "sourceName": source_name,
+                        "headingPath": heading_path,
+                        "snippet": evidence_quote,
+                        "highlightSnippet": evidence_quote,
+                        "strictLocate": bool(plan_primary_payload.get("strict_locate")),
+                        "primaryEvidence": dict(plan_primary_payload),
+                        "locateTarget": {
+                            key: value
+                            for key, value in locate_target.items()
+                            if value not in (None, "", [], {})
+                        },
+                        "evidenceAlternatives": alternatives,
+                    }
+                    if block_id:
+                        reader_open["blockId"] = block_id
+                    if anchor_id:
+                        reader_open["anchorId"] = anchor_id
+                    if anchor_kind:
+                        reader_open["anchorKind"] = anchor_kind
+                    if page_start > 0:
+                        reader_open["pageStart"] = page_start
+                    if page_end > 0:
+                        reader_open["pageEnd"] = page_end
                     candidate_ui["reader_open"] = reader_open
                 candidate["text"] = evidence_quote
                 candidate["ui_meta"] = candidate_ui
@@ -4476,13 +4607,58 @@ def _reading_guide_repair_mechanism_marker_target(
                 continue
             lines[idx] = re.sub(r"[ \t]{2,}", " ", marker_re.sub("", line)).rstrip()
         clean_target_line = marker_re.sub("", lines[target_idx]).rstrip()
-        if mechanism in {"cassi", "spad"}:
+        if mechanism in {"sph", "sequential", "s2ism_tradeoff", "cassi", "spad"}:
             sentence_spans = list(
                 re.finditer(r"[^。！？.!?]+[。！？.!?]?", clean_target_line)
             )
             sentence_rows: list[tuple[float, int, int]] = []
             for sentence_match in sentence_spans:
                 sentence = str(sentence_match.group(0) or "")
+                if mechanism == "sph":
+                    beat = bool(re.search(r"(?i)beat\s+frequency|拍频|差频", sentence))
+                    phase = bool(re.search(r"(?i)phase\s+stepping|相位步进|相移", sentence))
+                    heterodyne = bool(re.search(r"(?i)heterodyne|外差", sentence))
+                    if beat and phase:
+                        sentence_rows.append(
+                            (
+                                6.0 + (1.0 if heterodyne else 0.0),
+                                int(sentence_match.start()),
+                                int(sentence_match.end()),
+                            )
+                        )
+                    continue
+                if mechanism == "sequential":
+                    sequential = bool(re.search(r"(?i)sequential|顺序|序贯|SCS", sentence))
+                    distilled = bool(re.search(r"(?i)distilled\s+sensing|蒸馏感知", sentence))
+                    support = bool(
+                        re.search(r"(?i)signal\s+support|support recovery|支撑集|信号支撑", sentence)
+                    )
+                    if sequential and (distilled or support):
+                        sentence_rows.append(
+                            (
+                                5.0 + (1.0 if distilled else 0.0) + (1.0 if support else 0.0),
+                                int(sentence_match.start()),
+                                int(sentence_match.end()),
+                            )
+                        )
+                    continue
+                if mechanism == "s2ism_tradeoff":
+                    resolution = bool(
+                        re.search(r"(?i)spatial\s+resolution|空间分辨率|超分辨", sentence)
+                    )
+                    snr = bool(re.search(r"(?i)signal-to-noise|\bSNR\b|信噪比", sentence))
+                    sectioning = bool(
+                        re.search(r"(?i)optical\s+sectioning|光学切片|光学层切", sentence)
+                    )
+                    if resolution and snr and sectioning:
+                        sentence_rows.append(
+                            (
+                                6.0,
+                                int(sentence_match.start()),
+                                int(sentence_match.end()),
+                            )
+                        )
+                    continue
                 if mechanism == "spad":
                     geiger = bool(re.search(r"(?i)Geiger|盖革", sentence))
                     breakdown = bool(re.search(r"(?i)breakdown\s+voltage|击穿电压", sentence))

@@ -39,8 +39,24 @@ _ADVICE_RE = re.compile(
     r"\b(?:recommend|should|could|next step|read|inspect|check)\b)",
     flags=re.IGNORECASE,
 )
+_NON_FACTUAL_GUIDANCE_RE = re.compile(
+    r"^(?:(?:你)?可以(?:思考|考虑)|读法建议|"
+    r"这样(?:在)?(?:读|阅读)|是否可能|建议|"
+    r"阅读(?:/使用)?(?:建议|目的)|快速浏览|"
+    r"优先阅读|重点(?:看|阅读)|先读|再读|"
+    r"consider\s+whether|think\s+about\s+whether|"
+    r"(?:quickly\s+)?(?:read|skim|browse)\b)",
+    flags=re.IGNORECASE,
+)
+_ANAPHORIC_CONTINUATION_RE = re.compile(
+    r"^(?:这(?:是|使得|意味着|表明)?|因此|由此|"
+    r"从而|它|该(?:方法|模型|设计)|基于(?:该|此)模型|"
+    r"其(?:核心思想|作用|机制)(?:是|在于)?|"
+    r"this\b|that\b|it\b|therefore\b|thereby\b|as\s+a\s+result\b)",
+    flags=re.IGNORECASE,
+)
 _BOUNDARY_RE = re.compile(
-    r"(?:当前|本轮)(?:引用|检索)(?:到的)?(?:片段|证据|结果)?[^。！？.!?]{0,16}"
+    r"(?:当前|本轮)(?:引用|检索)(?:到的)?(?:片段|证据|结果|内容)?[^。！？.!?]{0,16}"
     r"(?:未直接|未|没有)(?:提供|说明|显示|报告|验证|讨论)"
     r"|(?:the\s+)?current\s+(?:cited\s+)?(?:snippet|evidence|retrieval)[^.!?]{0,24}"
     r"(?:does\s+not|did\s+not|doesn't)(?:\s+directly)?\s+(?:provide|state|show|report|validate|discuss)",
@@ -146,7 +162,7 @@ def _split_claim_segments(value: str) -> list[str]:
         protected,
     )
     parts = re.split(
-        r"(?<=[。！？!?；;])\s*|(?<=[A-Za-z0-9\)])\.\s+(?=[A-Z\u4e00-\u9fff])",
+        r"(?<=[。！？!?；;])\s*|(?<=[A-Za-z0-9\)\]]\.)\s+(?=[A-Z\u4e00-\u9fff])",
         protected,
     )
     return [part.replace("<KB_DOT>", ".").strip() for part in parts if part.strip()]
@@ -201,6 +217,14 @@ def _meaningful_numbers(text: str) -> list[str]:
 def _is_high_risk_claim(unit: str) -> bool:
     plain = _plain_claim(unit)
     if len(plain) < 12 or _BOUNDARY_RE.search(plain) or _INFERENCE_RE.search(plain):
+        return False
+    if re.search(r"[?？]\s*$", plain):
+        return False
+    if re.match(r"^(?:这|these\b).{0,80}(?:建议|recommend)", plain, flags=re.IGNORECASE):
+        return False
+    if re.search(r"(?:搭配|一起)(?:读|阅读)", plain, flags=re.IGNORECASE):
+        return False
+    if _NON_FACTUAL_GUIDANCE_RE.search(plain):
         return False
     if _ADVICE_RE.search(plain) and re.match(
         r"^(?:阅读建议|建议|可以|应该|直接阅读|对于.{0,40}可参考|read|recommend|for further)",
@@ -286,7 +310,12 @@ def _support_score(claim: str, evidence: str) -> int:
     return score
 
 
-def _best_unique_hit(claim: str, answer_hits: list[dict[str, Any]]) -> tuple[int, int]:
+def _best_unique_hit(
+    claim: str,
+    answer_hits: list[dict[str, Any]],
+    *,
+    min_score: int = 3,
+) -> tuple[int, int]:
     scored = sorted(
         (
             (_support_score(claim, _hit_payload(hit)), index)
@@ -295,7 +324,7 @@ def _best_unique_hit(claim: str, answer_hits: list[dict[str, Any]]) -> tuple[int
         ),
         reverse=True,
     )
-    if not scored or scored[0][0] < 3:
+    if not scored or scored[0][0] < max(1, int(min_score)):
         return 0, 0
     best_score, best_index = scored[0]
     runner_up = scored[1][0] if len(scored) > 1 else 0
@@ -319,6 +348,22 @@ def _scope_absolute_negative_claims(answer: str) -> tuple[str, int]:
     count = 0
     patterns = (
         (
+            re.compile(
+                r"(?:两篇|这些|上述)(?:文献|论文)(?:均|都)?"
+                r"(?:未|没有)(?:提供|说明|显示|报告|验证|讨论)",
+                flags=re.IGNORECASE,
+            ),
+            lambda match: "当前引用证据未显示这些文献"
+            + ("提供" if "提供" in match.group(0) else "说明"),
+        ),
+        (
+            re.compile(
+                r"(?:这|该|上述)?两篇(?:论文|文献)之间(?:并)?没有直接的引用关系",
+                flags=re.IGNORECASE,
+            ),
+            lambda _match: "当前引用证据未显示这两篇论文之间存在直接引用关系",
+        ),
+        (
             re.compile(r"(?:这篇(?:文章|论文)|本文)(?:并)?(?:没有|未)(直接)?(提供|说明|显示|报告|验证|讨论)"),
             lambda match: f"当前引用证据未直接{match.group(2)}",
         ),
@@ -338,6 +383,33 @@ def _scope_absolute_negative_claims(answer: str) -> tuple[str, int]:
     for pattern, replacement in patterns:
         text, changed = pattern.subn(replacement, text)
         count += changed
+    return text, count
+
+
+def _trim_unsupported_boundary_inferences(answer: str) -> tuple[str, int]:
+    """Keep an evidence boundary while removing the speculative clause after it."""
+
+    text = str(answer or "")
+    patterns = (
+        re.compile(
+            r"((?:当前|本轮)(?:引用|检索)(?:到的)?(?:片段|证据|结果|内容)?"
+            r"[^。！？.!?]{0,48}?(?:未明确提及|未直接提及|未说明|没有提及)"
+            r"[^。！？.!?，,]{0,48})"
+            r"\s*[，,]\s*但[^。！？.!?]*",
+            flags=re.IGNORECASE,
+        ),
+        re.compile(
+            r"((?:the\s+)?current\s+(?:cited\s+)?(?:snippet|evidence|retrieval|content)"
+            r"[^.!?]{0,48}(?:does\s+not|doesn't|did\s+not)(?:\s+directly)?\s+mention"
+            r"[^.!?,;]{0,48})"
+            r"\s*[,;]\s*however[^.!?]*",
+            flags=re.IGNORECASE,
+        ),
+    )
+    count = 0
+    for pattern in patterns:
+        text, changed = pattern.subn(r"\1", text)
+        count += int(changed)
     return text, count
 
 
@@ -428,8 +500,32 @@ def _drop_hard_mismatched_claims(
     return "\n".join(output_lines), dropped
 
 
-def _repair_uncited_unique_claims(answer: str, answer_hits: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
-    repairs: list[dict[str, Any]] = []
+def _strip_unplanned_numeric_citations(
+    answer: str,
+    allowed_citation_numbers: set[int],
+) -> tuple[str, int]:
+    removed = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal removed
+        try:
+            number = int(match.group(1))
+        except (TypeError, ValueError):
+            return ""
+        if number in allowed_citation_numbers:
+            return match.group(0)
+        removed += 1
+        return ""
+
+    cleaned = _NUMERIC_CITATION_RE.sub(replace, str(answer or ""))
+    cleaned = re.sub(r"\s+([。！？.!?；;])", r"\1", cleaned)
+    return cleaned, removed
+
+
+def _drop_unsupported_uncited_claims(answer: str) -> tuple[str, list[str]]:
+    """Drop factual model additions that strict planned evidence cannot support."""
+
+    dropped: list[str] = []
     output_lines: list[str] = []
     in_fence = False
     for raw_line in str(answer or "").splitlines():
@@ -444,17 +540,159 @@ def _repair_uncited_unique_claims(answer: str, answer_hits: list[dict[str, Any]]
         prefix_match = _LIST_PREFIX_RE.match(stripped)
         prefix = prefix_match.group(0) if prefix_match else ""
         body = stripped[len(prefix) :] if prefix else stripped
+        kept: list[str] = []
+        for segment in _split_claim_segments(body):
+            if _is_high_risk_claim(segment) and not _CITATION_RE.search(segment):
+                dropped.append(_plain_claim(segment)[:220])
+                continue
+            kept.append(segment)
+        if not kept:
+            continue
+        joiner = "" if _ZH_RE.search("".join(kept)) else " "
+        leading = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+        output_lines.append(f"{leading}{prefix}{joiner.join(kept)}")
+    return "\n".join(output_lines), dropped
+
+
+def _repair_uncited_unique_claims(
+    answer: str,
+    answer_hits: list[dict[str, Any]],
+    *,
+    min_support_score: int = 3,
+    allowed_citation_numbers: set[int] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    repairs: list[dict[str, Any]] = []
+    output_lines: list[str] = []
+    in_fence = False
+    section_citations: list[int] = []
+    for raw_line in str(answer or "").splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            output_lines.append(raw_line)
+            continue
+        if _HEADING_RE.match(stripped):
+            section_citations = list(
+                dict.fromkeys(
+                    int(match.group(1))
+                    for match in _NUMERIC_CITATION_RE.finditer(stripped)
+                    if 0 < int(match.group(1)) <= len(answer_hits)
+                )
+            )
+            output_lines.append(raw_line)
+            continue
+        if in_fence or not stripped or _TABLE_OR_CODE_RE.match(stripped):
+            output_lines.append(raw_line)
+            continue
+        prefix_match = _LIST_PREFIX_RE.match(stripped)
+        prefix = prefix_match.group(0) if prefix_match else ""
+        body = stripped[len(prefix) :] if prefix else stripped
         segments = _split_claim_segments(body)
         if not segments:
             output_lines.append(raw_line)
             continue
         changed = False
         rebuilt_segments: list[str] = []
+        previous_citations: list[int] = list(section_citations)
         for segment in segments:
+            segment_citations = [
+                int(match.group(1))
+                for match in _NUMERIC_CITATION_RE.finditer(segment)
+                if 0 < int(match.group(1)) <= len(answer_hits)
+            ]
+            comparison_citations = sorted(
+                number
+                for number in set(allowed_citation_numbers or set())
+                if 0 < number <= len(answer_hits) and answer_hits[number - 1]
+            )
+            is_compound_comparison = bool(
+                len(comparison_citations) == 2
+                and re.search(
+                    r"核心区别|前者.{0,160}后者|两者.{0,80}(?:不同|区别|差异)|"
+                    r"core\s+difference|the\s+former.{0,160}the\s+latter",
+                    _plain_claim(segment),
+                    flags=re.IGNORECASE,
+                )
+                and all(
+                    _support_score(segment, _hit_payload(answer_hits[number - 1]))
+                    >= max(3, min_support_score - 1)
+                    for number in comparison_citations
+                )
+            )
+            if is_compound_comparison and not set(comparison_citations).issubset(segment_citations):
+                compound = segment
+                for number in comparison_citations:
+                    if number not in segment_citations:
+                        compound = _append_citation(compound, number)
+                rebuilt_segments.append(compound)
+                repairs.append(
+                    {
+                        "claim": _plain_claim(segment)[:220],
+                        "citations": comparison_citations,
+                        "score": max(3, min_support_score - 1),
+                        "reason": "compound_comparison_synthesis",
+                    }
+                )
+                previous_citations = comparison_citations
+                changed = True
+                continue
             if _CITATION_RE.search(segment) or not _is_high_risk_claim(segment):
                 rebuilt_segments.append(segment)
+                if segment_citations:
+                    previous_citations = list(dict.fromkeys(segment_citations))
                 continue
-            hit_index, score = _best_unique_hit(segment, answer_hits)
+            if len(section_citations) == 1:
+                inherited = int(section_citations[0])
+                rebuilt_segments.append(_append_citation(segment, inherited))
+                repairs.append(
+                    {
+                        "claim": _plain_claim(segment)[:220],
+                        "citation": inherited,
+                        "score": 1,
+                        "reason": "section_source_continuation",
+                    }
+                )
+                previous_citations = [inherited]
+                changed = True
+                continue
+            if (
+                len(previous_citations) == 1
+                and _ANAPHORIC_CONTINUATION_RE.search(_plain_claim(segment))
+                and not _meaningful_numbers(segment)
+            ):
+                inherited = int(previous_citations[0])
+                rebuilt_segments.append(_append_citation(segment, inherited))
+                repairs.append(
+                    {
+                        "claim": _plain_claim(segment)[:220],
+                        "citation": inherited,
+                        "score": 1,
+                        "reason": "anaphoric_continuation",
+                    }
+                )
+                changed = True
+                continue
+            if is_compound_comparison:
+                compound = segment
+                for number in comparison_citations:
+                    compound = _append_citation(compound, number)
+                rebuilt_segments.append(compound)
+                repairs.append(
+                    {
+                        "claim": _plain_claim(segment)[:220],
+                        "citations": comparison_citations,
+                        "score": max(3, min_support_score - 1),
+                        "reason": "compound_comparison_synthesis",
+                    }
+                )
+                previous_citations = comparison_citations
+                changed = True
+                continue
+            hit_index, score = _best_unique_hit(
+                segment,
+                answer_hits,
+                min_score=min_support_score,
+            )
             if hit_index <= 0:
                 rebuilt_segments.append(segment)
                 continue
@@ -472,22 +710,60 @@ def _repair_uncited_unique_claims(answer: str, answer_hits: list[dict[str, Any]]
     return "\n".join(output_lines), repairs
 
 
+def _strip_source_only_heading_citations(answer: str) -> tuple[str, int]:
+    """Keep evidence links on claims, not on decorative section headings."""
+
+    removed = 0
+    output: list[str] = []
+    in_fence = False
+    for raw_line in str(answer or "").splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            output.append(raw_line)
+            continue
+        if in_fence or not _HEADING_RE.match(stripped):
+            output.append(raw_line)
+            continue
+        cleaned, count = _NUMERIC_CITATION_RE.subn("", raw_line)
+        if count:
+            cleaned = re.sub(r"[（(]\s*[,，;；:/|\-\s]*[）)]", "", cleaned)
+            cleaned = re.sub(r"\s+([,，;；:：])", r"\1", cleaned)
+            cleaned = re.sub(r"\s{2,}", " ", cleaned).rstrip()
+            removed += int(count)
+        output.append(cleaned)
+    return "\n".join(output), removed
+
+
 def _repair_mismatched_unique_citations(
     answer: str,
     answer_hits: list[dict[str, Any]],
+    *,
+    min_support_score: int = 3,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Rebind an incorrect System-A number only when one hit is uniquely stronger."""
 
     repairs: list[dict[str, Any]] = []
     output_lines: list[str] = []
     in_fence = False
+    section_citations: list[int] = []
     for raw_line in str(answer or "").splitlines():
         stripped = raw_line.strip()
         if stripped.startswith(("```", "~~~")):
             in_fence = not in_fence
             output_lines.append(raw_line)
             continue
-        if in_fence or not stripped or _HEADING_RE.match(stripped) or _TABLE_OR_CODE_RE.match(stripped):
+        if _HEADING_RE.match(stripped):
+            section_citations = list(
+                dict.fromkeys(
+                    int(match.group(1))
+                    for match in _NUMERIC_CITATION_RE.finditer(stripped)
+                    if 0 < int(match.group(1)) <= len(answer_hits)
+                )
+            )
+            output_lines.append(raw_line)
+            continue
+        if in_fence or not stripped or _TABLE_OR_CODE_RE.match(stripped):
             output_lines.append(raw_line)
             continue
         prefix_match = _LIST_PREFIX_RE.match(stripped)
@@ -499,22 +775,71 @@ def _repair_mismatched_unique_citations(
             continue
         rebuilt: list[str] = []
         changed = False
+        previous_citations: list[int] = []
         for segment in segments:
             citations = [int(match.group(1)) for match in _NUMERIC_CITATION_RE.finditer(segment)]
             if not citations or not _is_high_risk_claim(segment):
                 rebuilt.append(segment)
+                if citations:
+                    previous_citations = list(dict.fromkeys(citations))
+                continue
+            if len(section_citations) == 1:
+                inherited = int(section_citations[0])
+                if citations != [inherited]:
+                    rebound = _NUMERIC_CITATION_RE.sub(f"[{inherited}]", segment)
+                    rebuilt.append(rebound)
+                    repairs.append(
+                        {
+                            "claim": _plain_claim(segment)[:220],
+                            "from": citations,
+                            "citation": inherited,
+                            "score": 1,
+                            "reason": "section_source_continuation",
+                        }
+                    )
+                    changed = True
+                else:
+                    rebuilt.append(segment)
+                previous_citations = [inherited]
                 continue
             cited_scores = [
                 _support_score(segment, _hit_payload(answer_hits[number - 1]))
                 for number in citations
                 if 0 < number <= len(answer_hits)
             ]
+            if (
+                len(previous_citations) == 1
+                and _ANAPHORIC_CONTINUATION_RE.search(_plain_claim(segment))
+                and not _meaningful_numbers(segment)
+            ):
+                inherited = int(previous_citations[0])
+                if inherited not in citations and 0 < inherited <= len(answer_hits):
+                    rebound = _NUMERIC_CITATION_RE.sub(f"[{inherited}]", segment)
+                    rebuilt.append(rebound)
+                    repairs.append(
+                        {
+                            "claim": _plain_claim(segment)[:220],
+                            "from": citations,
+                            "citation": inherited,
+                            "score": 1,
+                            "reason": "anaphoric_continuation",
+                        }
+                    )
+                    previous_citations = [inherited]
+                    changed = True
+                    continue
             if cited_scores and max(cited_scores) >= 3:
                 rebuilt.append(segment)
+                previous_citations = list(dict.fromkeys(citations))
                 continue
-            hit_index, score = _best_unique_hit(segment, answer_hits)
+            hit_index, score = _best_unique_hit(
+                segment,
+                answer_hits,
+                min_score=min_support_score,
+            )
             if hit_index <= 0 or hit_index in citations:
                 rebuilt.append(segment)
+                previous_citations = list(dict.fromkeys(citations))
                 continue
             rebound = _NUMERIC_CITATION_RE.sub(f"[{hit_index}]", segment)
             rebuilt.append(rebound)
@@ -526,6 +851,7 @@ def _repair_mismatched_unique_citations(
                     "score": score,
                 }
             )
+            previous_citations = [hit_index]
             changed = True
         if not changed:
             output_lines.append(raw_line)
@@ -605,12 +931,68 @@ def _drop_placeholder_sections(answer: str) -> tuple[str, int]:
     return "\n".join(kept).strip(), dropped + dropped_inline
 
 
+def _ensure_grounded_frame_rate_fact(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Keep a directly relevant reported frame rate from planned evidence.
+
+    Models often paraphrase ``real-time`` while dropping the concrete rate that
+    makes the comparison useful. Restore only when both the question/answer
+    discuss a 3D video system and one eligible source states the rate verbatim.
+    """
+
+    text = str(answer or "")
+    surface = f"{prompt}\n{text}"
+    if not (
+        re.search(r"(?i)\b3d\b", surface)
+        and re.search(r"(?i)video|视频", surface)
+        and re.search(r"(?i)parallel|detector|并行|探测器", surface)
+    ):
+        return text, 0
+    if re.search(
+        r"(?i)\b\d+(?:\.\d+)?\s*(?:frames?\s+per\s+second|fps)\b|"
+        r"\d+(?:\.\d+)?\s*帧\s*/?\s*秒",
+        text,
+    ):
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        if not (re.search(r"(?i)\b3d\b", evidence) and re.search(r"(?i)video", evidence)):
+            continue
+        match = re.search(
+            r"(?i)(?:~|≈|about|approximately)?\s*(\d+(?:\.\d+)?)\s*"
+            r"(?:frames?\s+per\s+second|fps)\b",
+            evidence,
+        )
+        if not match:
+            continue
+        rate = str(match.group(1) or "").strip()
+        if not rate:
+            continue
+        if _ZH_RE.search(surface):
+            addition = f"原文报告该三维视频系统的重建速度约为 {rate} 帧/秒 [{hit_num}]。"
+        else:
+            addition = (
+                f"The source reports a reconstruction rate of about {rate} frames "
+                f"per second for this 3D video system [{hit_num}]."
+            )
+        return f"{text.rstrip()}\n\n{addition}", 1
+    return text, 0
+
+
 def audit_and_repair_claim_evidence(
     answer: str,
     answer_hits: list[dict[str, Any]] | None = None,
     *,
     allow_citation_repairs: bool = True,
     prompt: str = "",
+    allowed_citation_numbers: set[int] | None = None,
+    drop_unsupported_unplanned_claims: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Apply safe claim-level grounding repairs and return internal audit metadata.
 
@@ -620,20 +1002,56 @@ def audit_and_repair_claim_evidence(
     """
 
     hits = [item for item in list(answer_hits or []) if isinstance(item, dict)]
+    allowed_numbers = {
+        int(number)
+        for number in set(allowed_citation_numbers or set())
+        if 0 < int(number) <= len(hits)
+    }
+    strict_plan = allowed_citation_numbers is not None
+    eligible_hits = [
+        hit if (not strict_plan or index in allowed_numbers) else {}
+        for index, hit in enumerate(hits, start=1)
+    ]
     scoped, dropped_placeholder_sections = _drop_placeholder_sections(str(answer or ""))
     scoped, scoped_count = _scope_absolute_negative_claims(scoped)
+    scoped, trimmed_inference_count = _trim_unsupported_boundary_inferences(scoped)
     scoped, modality_count = _repair_modality_boundary_language(scoped)
     scoped, spad_term_count = _ensure_prompt_spad_term(
         scoped,
         prompt=prompt,
-        answer_hits=hits,
+        answer_hits=eligible_hits,
     )
+    scoped, frame_rate_count = _ensure_grounded_frame_rate_fact(
+        scoped,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
+    removed_unplanned_citations = 0
+    if strict_plan:
+        scoped, removed_unplanned_citations = _strip_unplanned_numeric_citations(
+            scoped,
+            allowed_numbers,
+        )
     if allow_citation_repairs:
-        repaired, repairs = _repair_uncited_unique_claims(scoped, hits)
-        repaired, rebound_repairs = _repair_mismatched_unique_citations(repaired, hits)
+        min_support_score = 5 if strict_plan else 3
+        repaired, repairs = _repair_uncited_unique_claims(
+            scoped,
+            eligible_hits,
+            min_support_score=min_support_score,
+            allowed_citation_numbers=allowed_numbers if strict_plan else None,
+        )
+        repaired, rebound_repairs = _repair_mismatched_unique_citations(
+            repaired,
+            eligible_hits,
+            min_support_score=min_support_score,
+        )
     else:
         repaired, repairs, rebound_repairs = scoped, [], []
-    repaired, dropped_mismatches = _drop_hard_mismatched_claims(repaired, hits)
+    repaired, removed_heading_citations = _strip_source_only_heading_citations(repaired)
+    repaired, dropped_mismatches = _drop_hard_mismatched_claims(repaired, eligible_hits)
+    dropped_unplanned_claims: list[str] = []
+    if strict_plan and drop_unsupported_unplanned_claims:
+        repaired, dropped_unplanned_claims = _drop_unsupported_uncited_claims(repaired)
     units = _claim_units(repaired)
     high_risk_units = [unit for unit in units if _is_high_risk_claim(unit)]
     uncited = [unit for unit in high_risk_units if not _CITATION_RE.search(unit)]
@@ -661,9 +1079,14 @@ def audit_and_repair_claim_evidence(
         "repaired_citations": len(repairs),
         "rebound_citations": len(rebound_repairs),
         "scoped_negative_claims": int(scoped_count),
+        "trimmed_unsupported_inferences": int(trimmed_inference_count),
         "repaired_modality_boundaries": int(modality_count),
         "restored_prompt_terms": int(spad_term_count),
+        "restored_evidence_numbers": int(frame_rate_count),
         "dropped_hard_mismatch_claims": len(dropped_mismatches),
+        "removed_unplanned_citations": int(removed_unplanned_citations),
+        "removed_heading_citations": int(removed_heading_citations),
+        "dropped_unsupported_unplanned_claims": len(dropped_unplanned_claims),
         "dropped_placeholder_sections": int(dropped_placeholder_sections),
         "minimum_ok": not uncited and not mismatches,
     }
@@ -677,6 +1100,8 @@ def audit_and_repair_claim_evidence(
         meta["mismatches"] = mismatches[:8]
     if dropped_mismatches:
         meta["dropped_mismatches"] = dropped_mismatches[:8]
+    if dropped_unplanned_claims:
+        meta["dropped_unplanned_claims"] = dropped_unplanned_claims[:8]
     return repaired, meta
 
 

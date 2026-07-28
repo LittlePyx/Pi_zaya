@@ -20,6 +20,9 @@ def test_generic_why_line_detector_catches_prompt_echo_template() -> None:
     assert looks_generic_ref_why_line(
         "“Abstract”提供回答该问题所需的原文定位，卡片中的结论可在这里逐项核对。"
     )
+    assert looks_generic_ref_why_line(
+        "该引用复用生成回答时实际提供的原文证据，且与答案中的关键词一致。"
+    )
 
 
 def test_templated_why_line_detector_does_not_reject_specific_evidence() -> None:
@@ -95,6 +98,43 @@ def test_finalize_ref_card_copy_replaces_template_why_line() -> None:
     assert "This hit is directly relevant" not in why
     assert "existing methods" in why
     assert "new contributions" in why
+
+
+def test_finalize_ref_card_copy_separates_detector_guide_and_relevance() -> None:
+    summary = (
+        "Single-photon detections can detect individual photons at very low light levels. "
+        "Mainstream SPDs include PMTs, SPADs, SNSPDs, and TES."
+    )
+    summary_out, why, changed = finalize_ref_card_copy(
+        summary_line=summary,
+        why_line="该引用复用生成回答时实际提供的原文证据，且与答案中的关键词一致。",
+        prefer_zh=True,
+        focus_terms=["single-photon", "detector"],
+        heading_path="Abstract",
+        action="compare",
+    )
+
+    assert summary_out == summary
+    assert changed is True
+    assert why != summary_out
+    assert all(term in why for term in ("SPAD", "硬件", "基线"))
+
+
+def test_detector_metric_table_gets_specific_relevance_copy() -> None:
+    summary = (
+        "Si-SPAD working parameter (wavelength) = 400-1000 nm; "
+        "quantum efficiency = 50%-92%; operating temperature = 200-300 K."
+    )
+
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=["single-photon detector"],
+        heading_path="2.3 Superconducting",
+        summary_line=summary,
+    )
+
+    assert all(term in why for term in ("Si-SPAD", "工作波段", "量子效率", "温控", "硬件基线"))
+    assert not looks_generic_ref_why_line(why)
 
 
 def test_grounded_ref_why_line_uses_summary_when_terms_are_missing() -> None:
@@ -368,3 +408,60 @@ def test_grounded_ref_why_line_explains_fdm_parallel_channels() -> None:
 
     assert changed is True
     assert all(term in why for term in ("子载波", "并行", "2.3%", "13.0%"))
+
+
+def test_comparison_evidence_gets_specific_relevance_copy() -> None:
+    fdm = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Abstract",
+        summary_line=(
+            "We implement frequency-division methods to parallelize the single-pixel "
+            "imaging process and improve acquisition speed without altering detector "
+            "integration time."
+        ),
+    )
+    fdm_encoding = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="B. Encoding",
+        summary_line=(
+            "Each pixel is modulated on p frequencies simultaneously. The light is "
+            "multiplexed into a single-pixel detector and the signal is then demodulated "
+            "by p lock-in amplifiers."
+        ),
+    )
+    video = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Abstract",
+        summary_line=(
+            "Photometric stereo uses four spatially-separated single-pixel detectors "
+            "to reconstruct 3D video at 8 frames per second."
+        ),
+    )
+    foveated = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Abstract",
+        summary_line=(
+            "A high-resolution foveal region tracks motion while every frame delivers "
+            "new information from the entire field of view and slower regions accumulate "
+            "detail over consecutive frames."
+        ),
+    )
+    bases = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Introduction",
+        summary_line=(
+            "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns "
+            "and the paper compares imaging efficiency and noise robustness."
+        ),
+    )
+
+    assert "频分复用" in fdm and "积分时间" in fdm
+    assert "p 个频率通道" in fdm_encoding and "并行解调" in fdm_encoding
+    assert "四个" in video and "8 帧/秒" in video
+    assert "中央凹" in foveated and "跨帧" in foveated
+    assert "Hadamard" in bases and "Fourier" in bases

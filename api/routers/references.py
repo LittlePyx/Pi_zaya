@@ -49,9 +49,11 @@ from api.reference_card_copy import (
 )
 from api.reference_card_quality import attach_refs_pack_polish_contract
 from api.reference_card_locale import _ref_card_user_locale
+from api.reference_local_source_meta import public_citation_meta
 from kb.generation_answer_finalize_runtime import (
     _build_multi_paper_doc_list_contract as _references_build_multi_paper_doc_list_contract,
 )
+from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.citation_card_polish import (
     citation_card_polish_cache_key,
     citation_card_polish_enabled,
@@ -233,6 +235,73 @@ def _answer_citation_source_key(value: Any) -> str:
     return normalized
 
 
+_ANSWER_CITATION_SOURCE_BOUND_META_KEYS = {
+    "anchor_id",
+    "block_id",
+    "citation_meta",
+    "line_end",
+    "line_start",
+    "page_end",
+    "page_start",
+    "ref_best_heading_path",
+    "ref_headings",
+    "ref_locs",
+    "ref_overview_snippets",
+    "ref_section",
+    "ref_show_snippets",
+    "ref_snippets",
+    "ref_subsection",
+    "structured_evidence_locked",
+    "structured_kind",
+    "table_block_id",
+    "table_index",
+    "table_number",
+}
+
+
+def _answer_citation_public_meta(details: list[dict]) -> dict:
+    """Return bibliography carried by the newly grounded source details.
+
+    A reference row can be rebound after retrieval ranking.  Bibliography from
+    the previous row must never survive that operation, so only metadata
+    attached to the answer's concrete citation details is trusted here.
+    """
+
+    out: dict = {}
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        candidate = dict(detail)
+        bibliographic_title = str(detail.get("bibliographic_title") or "").strip()
+        evidence_heading = str(detail.get("heading_path") or "").strip()
+        detail_title = str(detail.get("title") or "").strip()
+        if bibliographic_title:
+            candidate["title"] = bibliographic_title
+        elif detail_title and detail_title == evidence_heading:
+            candidate.pop("title", None)
+        out.update(public_citation_meta(candidate))
+    return out
+
+
+def _clear_answer_citation_source_bound_fields(meta: dict, ui: dict) -> tuple[dict, dict]:
+    """Discard passage and bibliography fields owned by a previous source."""
+
+    clean_meta = dict(meta)
+    clean_ui = dict(ui)
+    for key in _ANSWER_CITATION_SOURCE_BOUND_META_KEYS:
+        clean_meta.pop(key, None)
+    for key in (
+        "citation_meta",
+        "primary_evidence",
+        "primary_evidence_heading_path",
+        "reader_open",
+        "section_label",
+        "subsection_label",
+    ):
+        clean_ui.pop(key, None)
+    return clean_meta, clean_ui
+
+
 def _answer_citation_claim_text(detail: dict, *, prefer_zh: bool) -> str:
     evidence = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
     evidence_low = evidence.lower()
@@ -288,7 +357,24 @@ def _answer_citation_claim_text(detail: dict, *, prefer_zh: bool) -> str:
             )
             facts = "，".join(f"{method.strip()} = {value}" for method, value in pairs[:4])
             return f"{prefix}：{facts}。" if prefix else f"{facts}。"
-    raw = str(detail.get("card_takeaway") or detail.get("answer_claim") or "").strip()
+    claim_candidates = [
+        str(value or "").strip()
+        for value in [
+            detail.get("card_takeaway"),
+            detail.get("answer_claim"),
+            *list(detail.get("answer_claims") or []),
+        ]
+        if str(value or "").strip()
+    ]
+    evidence_terms = evidence_alignment_tokens(evidence)
+    raw = max(
+        claim_candidates,
+        key=lambda value: (
+            len(evidence_terms & evidence_alignment_tokens(value)),
+            min(len(value), 240),
+        ),
+        default="",
+    )
     if (not prefer_zh) and len(re.findall(r"[\u4e00-\u9fff]", raw)) >= 3 and evidence:
         raw = evidence
     raw = re.sub(r"\[[0-9,\-–—\s]+\](?:\([^)]*\))?", "", raw)
@@ -802,6 +888,7 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             hit = dict(existing_by_source.get(source_key) or {})
             meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), dict) else {}
             ui = dict(hit.get("ui_meta") or {}) if isinstance(hit.get("ui_meta"), dict) else {}
+            meta, ui = _clear_answer_citation_source_bound_fields(meta, ui)
             summary_line, why_line = _answer_citation_card_copy(
                 source_details,
                 prefer_zh=prefer_zh,
@@ -813,11 +900,16 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             heading_path = str(detail.get("heading_path") or detail.get("location_label") or "").strip()
             grounding_surface = " ".join(
                 " ".join(
-                    str(item.get(field) or "").strip()
+                    (
+                        " ".join(str(value or "").strip() for value in list(item.get("answer_claims") or []))
+                        if field == "answer_claims"
+                        else str(item.get(field) or "").strip()
+                    )
                     for field in (
                         "evidence_quote",
                         "summary_line",
                         "answer_claim",
+                        "answer_claims",
                         "card_takeaway",
                         # Keep source identity after the evidence text.  The
                         # evidence normalizer removes leading metadata labels,
@@ -872,6 +964,9 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             if answer_citation_num > 0:
                 meta["ref_answer_citation_num"] = answer_citation_num
             meta["answer_citation_overlay_grounded"] = True
+            citation_meta = _answer_citation_public_meta(source_details)
+            if citation_meta:
+                meta["citation_meta"] = dict(citation_meta)
             ui.update(
                 {
                     "display_name": source_name or str(ui.get("display_name") or ""),
@@ -895,18 +990,17 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                     "score_pending": False,
                 }
             )
-            reader_open = dict(ui.get("reader_open") or {}) if isinstance(ui.get("reader_open"), dict) else {}
-            reader_open.update(
-                {
-                    "sourcePath": source_path,
-                    "sourceName": source_name,
-                    "headingPath": heading_path,
-                    "snippet": evidence_quote,
-                    "highlightSnippet": evidence_quote,
-                    "strictLocate": bool(primary["strict_locate"]),
-                    "primaryEvidence": primary,
-                }
-            )
+            if citation_meta:
+                ui["citation_meta"] = dict(citation_meta)
+            reader_open = {
+                "sourcePath": source_path,
+                "sourceName": source_name,
+                "headingPath": heading_path,
+                "snippet": evidence_quote,
+                "highlightSnippet": evidence_quote,
+                "strictLocate": bool(primary["strict_locate"]),
+                "primaryEvidence": primary,
+            }
             block_id = str(primary.get("block_id") or "").strip()
             anchor_id = str(primary.get("anchor_id") or "").strip()
             anchor_kind = str(primary.get("anchor_kind") or "").strip().lower()
@@ -917,22 +1011,15 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                     reader_open["anchorId"] = anchor_id
                 if anchor_kind:
                     reader_open["anchorKind"] = anchor_kind
-                locate_target = (
-                    dict(reader_open.get("locateTarget") or {})
-                    if isinstance(reader_open.get("locateTarget"), dict)
-                    else {}
-                )
-                locate_target.update(
-                    {
-                        "headingPath": heading_path,
-                        "snippet": evidence_quote,
-                        "highlightSnippet": evidence_quote,
-                        "evidenceQuote": evidence_quote,
-                        "blockId": block_id,
-                        "anchorId": anchor_id,
-                        "anchorKind": anchor_kind,
-                    }
-                )
+                locate_target = {
+                    "headingPath": heading_path,
+                    "snippet": evidence_quote,
+                    "highlightSnippet": evidence_quote,
+                    "evidenceQuote": evidence_quote,
+                    "blockId": block_id,
+                    "anchorId": anchor_id,
+                    "anchorKind": anchor_kind,
+                }
                 reader_open["locateTarget"] = {
                     key: value
                     for key, value in locate_target.items()

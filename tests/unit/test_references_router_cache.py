@@ -301,6 +301,61 @@ def test_reading_route_cards_use_user_language_and_distinct_source_roles() -> No
     assert len({why for _summary, why in cards}) == 3
 
 
+def test_3d_video_card_uses_detailed_answer_claims_for_specific_relevance() -> None:
+    details = [
+            {
+                "source_name": "Journal of Optics-2016-3D single-pixel video.pdf",
+                "heading_path": "Abstract",
+                "answer_claim": "这篇论文展示了实时 3D single-pixel video。",
+                "answer_claims": [
+                    "这篇论文展示了实时 3D single-pixel video。",
+                    "该系统使用四个空间分离的单像素探测器，为光度立体同步采集不同照明方向。",
+                ],
+                "evidence_quote": (
+                    "Photometric stereo uses simultaneous measurements from four "
+                    "spatially-separated single-pixel detectors."
+                ),
+            },
+            {
+                "source_name": "Journal of Optics-2016-3D single-pixel video.pdf",
+                "heading_path": "Abstract",
+                "answer_claim": "原文报告该系统实现约 8 帧/秒的连续实时三维视频。",
+                "evidence_quote": (
+                    "Four spatially-separated detectors enable continuous real-time "
+                    "3D video at approximately 8 frames per second."
+                ),
+            },
+        ]
+    summary, _generic_why = references_router._answer_citation_card_copy(
+        details,
+        prefer_zh=True,
+        prompt="为什么 3D single-pixel video 需要多个探测器？",
+    )
+    grounding_surface = " ".join(
+        " ".join(
+            [
+                str(detail.get("evidence_quote") or ""),
+                str(detail.get("answer_claim") or ""),
+                " ".join(str(value or "") for value in detail.get("answer_claims") or []),
+            ]
+        )
+        for detail in details
+    )
+    why = references_router.build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Abstract",
+        summary_line=grounding_surface,
+    )
+
+    assert "四个空间分离" in summary
+    assert "8 帧/秒" in summary
+    assert "光度立体" in why
+    assert "四个空间分离" in why
+    assert "8 帧/秒" in why
+    assert "逐项核对" not in why
+
+
 def test_research_line_relation_cards_do_not_use_reading_route_templates() -> None:
     prompt = "PILN 这种网络方法和综述里说的深度学习单像素成像主线是什么关系？"
     _review_summary, review_why = references_router._answer_citation_card_copy(
@@ -574,6 +629,93 @@ def test_answer_citation_overlay_uses_saved_locale_when_pack_has_no_locale(monke
     assert "lineage evidence" in ui["why_line"]
     assert "neural scene representation" in ui["why_line"]
     assert not re.search(r"[\u4e00-\u9fff]", ui["why_line"])
+
+
+def test_answer_citation_overlay_discards_previous_source_metadata(monkeypatch) -> None:
+    source_path = r"F:\db\FDM\FDM.en.md"
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {"id": 42, "role": "user", "content": "FDM 为什么更快？"},
+                {
+                    "id": 43,
+                    "role": "assistant",
+                    "content": "FDM 并行投射多个频率掩模 [1]。",
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "citation_route": "system_a",
+                                        "num": 1,
+                                        "source_path": source_path,
+                                        "source_name": "Frequency-division multiplexing SPI.pdf",
+                                        "bibliographic_title": "Frequency-division multiplexing single-pixel imaging",
+                                        "doi": "10.1000/fdm",
+                                        "heading_path": "Principle",
+                                        "answer_claim": "FDM 并行投射多个频率掩模。",
+                                        "evidence_quote": (
+                                            "Multiple frequency-division masks are projected "
+                                            "simultaneously without increasing integration time."
+                                        ),
+                                        "block_id": "blk-fdm",
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    stale_3d = "A four-detector system reconstructs a 3D object."
+    payload = {
+        42: {
+            "prompt": "FDM 为什么更快？",
+            "hits": [
+                {
+                    "text": "stale",
+                    "meta": {
+                        "source_path": "kb-source/0/FDM/FDM.en.md",
+                        "ref_snippets": [stale_3d],
+                        "ref_show_snippets": [stale_3d],
+                        "ref_locs": [{"snippet": stale_3d}],
+                        "citation_meta": {
+                            "title": "Single-pixel 3D imaging",
+                            "doi": "10.1000/3d",
+                        },
+                    },
+                    "ui_meta": {
+                        "source_path": "kb-source/0/FDM/FDM.en.md",
+                        "citation_meta": {
+                            "title": "Single-pixel 3D imaging",
+                            "doi": "10.1000/3d",
+                        },
+                        "reader_open": {
+                            "sourcePath": "3d.en.md",
+                            "evidenceAlternatives": [{"snippet": stale_3d}],
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "zh")
+    hit = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload=payload,
+    )[42]["hits"][0]
+
+    assert "ref_snippets" not in hit["meta"]
+    assert "ref_show_snippets" not in hit["meta"]
+    assert "ref_locs" not in hit["meta"]
+    assert hit["ui_meta"]["citation_meta"]["doi"] == "10.1000/fdm"
+    assert hit["ui_meta"]["reader_open"]["sourcePath"] == source_path
+    assert "evidenceAlternatives" not in hit["ui_meta"]["reader_open"]
+    assert stale_3d not in str(hit)
 
 
 def test_reference_cards_stay_pending_until_planned_answer_citations_are_ready() -> None:

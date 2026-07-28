@@ -5,6 +5,91 @@ import pytest
 import kb.generation_answer_finalize_runtime as finalize_runtime
 
 
+def test_sanitize_answer_drops_only_incomplete_markdown_table_tail() -> None:
+    answer = (
+        "两类选择分别决定编码基底与空间采样几何。\n\n"
+        "### 设计层级\n\n"
+        "| 决策 | 层级 |\n"
+        "| --- | --- |\n"
+        "| Hadamard / Fourier | 基底层 |\n"
+        "| Foveated supersampling | 空间几何（sp"
+    )
+
+    cleaned = finalize_runtime._sanitize_empty_markdown_label_fragments(answer)
+
+    assert cleaned == "两类选择分别决定编码基底与空间采样几何。"
+
+
+def test_sanitize_answer_removes_empty_citation_attribution_phrase() -> None:
+    answer = "如 所述：像素几何由每帧掩模图案定义。"
+
+    cleaned = finalize_runtime._sanitize_empty_markdown_label_fragments(answer)
+
+    assert cleaned == "像素几何由每帧掩模图案定义。"
+
+
+def test_strict_comparison_numbers_use_only_budgeted_system_a_slots() -> None:
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {"preferred_system": "system_a", "candidate_hits": [4]},
+            {"preferred_system": "system_a", "candidate_hits": [1]},
+            {"preferred_system": "system_a", "candidate_hits": [6]},
+        ],
+    }
+
+    assert finalize_runtime._strict_comparison_system_a_numbers(plan) == {1, 4}
+    assert finalize_runtime._strict_comparison_system_a_numbers(
+        {**plan, "intent": "answer_grounding"}
+    ) is None
+
+
+def test_claim_audit_uses_prompt_aligned_plan_evidence_for_numeric_claim() -> None:
+    hits = [
+        {"text": "Frequency division parallelizes acquisition."},
+        {},
+        {},
+        {
+            "text": (
+                "Photometric stereo estimates shape from images under different "
+                "illumination directions."
+            )
+        },
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [4],
+                "evidence_quote": (
+                    "Using four spatially-separated, single-pixel detectors, the system "
+                    "reconstructs continuous real-time 3D video at 8 frames per second."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "evidence_quote": "Frequency division parallelizes acquisition.",
+            },
+        ],
+    }
+
+    merged = finalize_runtime._claim_evidence_hits_with_citation_plan(hits, plan)
+    answer, audit = finalize_runtime.audit_and_repair_claim_evidence(
+        "3D single-pixel video uses four detectors and reaches 8 frames per second [4].",
+        answer_hits=merged,
+        allowed_citation_numbers={1, 4},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert "8 frames per second [4]" in answer
+    assert audit["dropped_hard_mismatch_claims"] == 0
+    assert audit["minimum_ok"] is True
+
+
 def test_merge_citation_plan_support_slots_preserves_prompt_aligned_source_sentence():
     merged = finalize_runtime._merge_citation_plan_support_slots(
         [
@@ -495,6 +580,12 @@ def test_numeric_citation_normalization_collapses_provider_double_brackets_and_s
 def test_offset_citations_inside_double_brackets_become_public_markers() -> None:
     converted = finalize_runtime._strip_citation_offset("Evidence [[10004;10005]].")
     assert finalize_runtime._normalize_double_numeric_citations(converted) == "Evidence [4,5]."
+
+
+def test_adjacent_duplicate_numeric_citations_are_collapsed() -> None:
+    assert finalize_runtime._collapse_adjacent_duplicate_numeric_citations(
+        "Evidence [1] [1][1], comparison [2] [2]."
+    ) == "Evidence [1], comparison [2]."
 
 
 def test_stripped_structured_citation_does_not_leave_empty_bracket_shell() -> None:

@@ -238,3 +238,285 @@ def test_adds_unique_physical_noise_support_to_followup_sentence() -> None:
 
     assert "[1]" in repaired
     assert meta["uncited_high_risk_claims"] == 0
+
+
+def test_reading_questions_and_navigation_are_not_factual_claims() -> None:
+    answer = (
+        "这两篇文献分别从硬件探测器和算法重建两个维度解决问题，建议按此顺序搭配阅读。\n\n"
+        "阅读目的：学习如何把物理噪声特性转化为可训练的数学模型。\n\n"
+        "你可以思考：该物理建模方法是否可能推广到其他类型的单光子探测器？\n\n"
+        "算法是否利用了综述中的波导集成？\n\n"
+        "快速浏览综述：重点看 2.3 节和 4.2 节，了解探测器性能指标。"
+    )
+
+    audit = claim_evidence_audit(answer)
+
+    assert audit["high_risk_claims"] == 0
+    assert audit["uncited_high_risk_claims"] == 0
+
+
+def test_anaphoric_continuation_inherits_previous_unique_citation() -> None:
+    answer = (
+        "该方法建立了真实硬件的多源物理噪声模型 [1]。"
+        "这使得网络能够学习并补偿实际硬件退化，而不只处理理想化噪声。"
+    )
+    hits = [
+        {
+            "text": (
+                "A real-world multi-source physical noise model of SPAD arrays is used "
+                "to train the network and compensate hardware degradation."
+            )
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(answer, hits)
+
+    assert "实际硬件退化，而不只处理理想化噪声 [1]" in repaired
+    assert meta["uncited_high_risk_claims"] == 0
+    assert any(item.get("reason") == "anaphoric_continuation" for item in meta["repairs"])
+
+
+def test_domain_specific_anaphoric_continuations_inherit_previous_citation() -> None:
+    hits = [
+        {
+            "text": (
+                "The calibrated model synthesizes a large dataset for super-resolution and bit-depth enhancement. "
+                "A foveated strategy records fast-changing regions and accumulates slower regions over frames."
+            )
+        }
+    ]
+
+    for answer, expected in (
+        (
+            "论文先标定了真实物理噪声模型 [1]。基于该模型，论文合成大规模数据集并实现超分辨率。",
+            "实现超分辨率 [1]",
+        ),
+        (
+            "系统对中央凹区域进行动态高分辨率采样 [1]。其核心思想是对快速变化区域用高采样率记录、对缓慢变化区域跨帧累积并提升分辨率。",
+            "提升分辨率 [1]",
+        ),
+    ):
+        repaired, meta = audit_and_repair_claim_evidence(answer, hits)
+
+        assert expected in repaired
+        assert meta["uncited_high_risk_claims"] == 0
+        assert any(item.get("reason") == "anaphoric_continuation" for item in meta["repairs"])
+
+
+def test_mismatch_repair_keeps_anaphoric_sentence_with_previous_paper() -> None:
+    answer = (
+        "探测器综述列出了 Si-SPAD、PMT、SNSPD 和 TES [1]。"
+        "它也说明制造复杂、成本高和低温条件限制了这些探测器的普及 [2]。"
+    )
+    hits = [
+        {
+            "text": (
+                "The review covers Si-SPAD, PMT, SNSPD and TES. Their complex and costly "
+                "manufacturing and special low-temperature conditions limit adoption."
+            )
+        },
+        {"text": "Deep learning reconstructs noisy SPAD images."},
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(answer, hits)
+
+    assert "低温条件限制了这些探测器的普及 [1]" in repaired
+    assert any(
+        item.get("reason") == "anaphoric_continuation"
+        for item in meta.get("rebound_repairs", [])
+    )
+
+
+def test_reading_section_heading_supplies_source_to_uncited_bullets_then_loses_own_marker() -> None:
+    answer = (
+        "### 1. 先读探测器综述（, [1]）\n\n"
+        "- **搭配价值**：这篇综述说明制造复杂、成本高和低温条件限制了探测器普及。\n\n"
+        "### 2. 再读物理噪声模型 [2]\n\n"
+        "- **核心方法**：论文建立 SPAD 物理噪声模型并用 2790 张真实数据标定。"
+    )
+    hits = [
+        {"text": "Complex manufacturing cost and low-temperature conditions limit detector adoption."},
+        {"text": "A real SPAD physical noise model is calibrated with 2790 real images."},
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(answer, hits)
+
+    assert "限制了探测器普及 [1]" in repaired
+    assert "2790 张真实数据标定 [2]" in repaired
+    assert "### 1. 先读探测器综述" in repaired
+    assert "### 1. 先读探测器综述（" not in repaired
+    assert "### 2. 再读物理噪声模型 [2]" not in repaired
+    assert meta["removed_heading_citations"] == 2
+
+
+def test_reading_advice_and_scoped_missing_details_are_not_factual_citation_gaps() -> None:
+    answer = (
+        "这样在读第二篇时，你就能分清哪些噪声是硬件带来的。\n\n"
+        "**读法建议**：重点关注 Fig. 1a 和 Fig. 1b。\n\n"
+        "两篇文献均未提供具体的训练超参数或推理速度数据。"
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(answer, [])
+
+    assert "当前引用证据未显示" in repaired
+    assert meta["uncited_high_risk_claims"] == 0
+
+
+def test_strict_comparison_synthesis_receives_both_planned_source_citations() -> None:
+    answer = (
+        "核心区别：前者在单个探测器上通过频率复用并行化空间调制，"
+        "后者通过多个探测器并行化多方向照明下的信号采集。"
+    )
+    hits = [
+        {
+            "text": (
+                "Each SLM pixel is modulated on p frequencies simultaneously and the "
+                "multiplexed signal enters a single-pixel detector."
+            )
+        },
+        {},
+        {},
+        {
+            "text": (
+                "Four spatially-separated single-pixel detectors sense reflected light "
+                "under different illumination directions for photometric stereo."
+            )
+        },
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 4},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert "[1] [4]" in repaired
+    assert meta["uncited_high_risk_claims"] == 0
+    assert any(
+        item.get("reason") == "compound_comparison_synthesis"
+        for item in meta.get("repairs", [])
+    )
+
+
+def test_strict_comparison_completes_a_partially_cited_two_source_claim() -> None:
+    answer = (
+        "核心区别：前者在单个探测器上通过频率复用并行化空间调制，"
+        "后者通过多个探测器并行化多方向照明下的信号采集 [1]。"
+    )
+    hits = [
+        {
+            "text": (
+                "Each SLM pixel is modulated on p frequencies simultaneously and the "
+                "multiplexed signal enters a single-pixel detector."
+            )
+        },
+        {},
+        {},
+        {
+            "text": (
+                "Four spatially-separated single-pixel detectors sense reflected light "
+                "under different illumination directions for photometric stereo."
+            )
+        },
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 4},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert "[1] [4]" in repaired
+    assert meta["uncited_high_risk_claims"] == 0
+    assert any(
+        item.get("reason") == "compound_comparison_synthesis"
+        for item in meta.get("repairs", [])
+    )
+
+
+def test_this_is_continuation_inherits_the_preceding_source_citation() -> None:
+    answer = (
+        "快速变化的区域用高分辨率快速记录，慢变区域通过多帧累积细节 [1]。"
+        "这是多帧时序层面的采样策略，与单帧使用什么基函数无关。"
+    )
+    hits = [
+        {
+            "text": (
+                "The strategy rapidly records quickly changing features while accumulating "
+                "details of slowly evolving regions over consecutive frames."
+            )
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(answer, hits)
+
+    assert "这是多帧时序层面的采样策略，与单帧使用什么基函数无关 [1]。" in repaired
+    assert meta["uncited_high_risk_claims"] == 0
+
+
+def test_trims_speculation_after_an_explicit_evidence_boundary() -> None:
+    answer = (
+        "当前检索到的内容未明确提及波导集成，"
+        "但波导集成提高的探测效率可以直接转化为更高的有效光子计数 [2]。"
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(answer, [])
+
+    assert repaired == "当前检索到的内容未明确提及波导集成。"
+    assert meta["trimmed_unsupported_inferences"] == 1
+    assert meta["uncited_high_risk_claims"] == 0
+
+
+def test_strict_plan_rebinds_supported_claim_and_drops_unplanned_claim() -> None:
+    answer = (
+        "The foveated method uses changing pixel boundaries across consecutive frames [3]. "
+        "SPH uses heterodyne holography [4]."
+    )
+    hits = [
+        {"text": "The foveated method uses changing pixel boundaries from one frame to the next."},
+        {"text": "HSI uses Hadamard basis patterns and FSI uses Fourier basis patterns."},
+        {"text": "A generic single-pixel imaging review."},
+        {"text": "SPH uses heterodyne holography."},
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 2},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert "pixel boundaries across consecutive frames [1]" in repaired
+    assert "heterodyne holography" not in repaired
+    assert meta["removed_unplanned_citations"] == 2
+    assert meta["dropped_unsupported_unplanned_claims"] == 1
+
+
+def test_restores_reported_3d_video_frame_rate_from_eligible_evidence() -> None:
+    answer = (
+        "四个空间分离的单像素探测器并行采集不同照明方向，"
+        "从而实现连续实时的 3D 视频重建 [4]。"
+    )
+    hits = [
+        {},
+        {},
+        {},
+        {
+            "text": (
+                "Four spatially-separated single-pixel detectors reconstruct "
+                "continuous real-time 3D video at approximately 8 frames per second."
+            )
+        },
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        prompt="这套 3D single-pixel video 为什么需要多个探测器并行采集？",
+        allowed_citation_numbers={4},
+    )
+
+    assert "约为 8 帧/秒 [4]" in repaired
+    assert meta["restored_evidence_numbers"] == 1

@@ -688,8 +688,9 @@ def test_build_hit_ui_meta_falls_back_to_snippet_summary_when_ref_pack_missing(m
     )
 
     assert "SCINeRF" in str(ui_meta.get("summary_line") or "")
-    assert not str(ui_meta.get("why_line") or "")
-    assert ui_meta.get("summary_label") == "导读"
+    why_line = str(ui_meta.get("why_line") or "")
+    assert all(term in why_line for term in ("SCINeRF", "单次压缩快照", "三维场景表示"))
+    assert ui_meta.get("summary_label") == "原文证据"
     reader_open = ui_meta.get("reader_open") or {}
     assert str(reader_open.get("sourcePath") or "") == r"db\SCINeRF\SCINeRF.en.md"
     assert str(reader_open.get("headingPath") or "") == "3. Method / 3.1. Background on NeRF"

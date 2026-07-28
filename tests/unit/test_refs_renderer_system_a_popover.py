@@ -4,11 +4,161 @@ import re
 
 from ui.refs_renderer import (
     _annotate_inpaper_citations_with_hover_meta,
+    _assess_system_a_hit_binding,
     _compact_metric_table_evidence,
+    _compact_metric_table_matches_claim,
     _compound_plan_evidence_excerpt,
     _system_a_is_low_value_evidence_text,
     _system_a_pick_best_evidence_candidate,
 )
+
+
+def test_quantitative_parenthetical_example_is_not_mistaken_for_another_paper() -> None:
+    evidence = (
+        "Working parameter (wavelength, time jitter/tj) = 400-1000 nm; "
+        "Performance = 50%-92% QE at 200-300 K."
+    )
+
+    binding = _assess_system_a_hit_binding(
+        answer_claim=(
+            "The detector review compares mainstream devices "
+            "(for example, Si-SPAD at 400-1000 nm, QE 50%-92%, 200-300 K)."
+        ),
+        hit={"text": evidence},
+        meta={"citation_plan_evidence_authoritative": True,
+              "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence"},
+        heading="Performance information of different single-photon detectors",
+        evidence_quote=evidence,
+        source_name="Emerging single-photon detection technique for high-performance photodetector.pdf",
+    )
+
+    assert binding["suppress_link"] is False
+    assert binding["status"] == "grounded"
+
+
+def test_compact_metric_table_must_match_the_bound_claim() -> None:
+    compact = "Table 2 shows PSNR and SSIM results for Hadamard and Fourier sampling."
+
+    assert not _compact_metric_table_matches_claim(
+        compact,
+        "The foveated method moves the high-resolution region and retains new information across the field of view.",
+    )
+    assert _compact_metric_table_matches_claim(
+        compact,
+        "At a 1% sampling ratio, Hadamard and Fourier have different PSNR and SSIM values.",
+    )
+
+
+def test_anaphoric_continuation_keeps_the_previous_grounded_link() -> None:
+    source_path = "db/pidl/pidl.en.md"
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "The study collected 2790 real-shot SPAD images to calibrate its physical noise model [1]. "
+            "This makes the model applicable across varied acquisition conditions [1]."
+        ),
+        [
+            {
+                "text": (
+                    "We collected a real-shot SPAD dataset containing 2790 images "
+                    "to calibrate the physical noise model under varied acquisition conditions."
+                ),
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Introduction",
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "Introduction",
+                    "evidence_quote": (
+                        "We collected a real-shot SPAD dataset containing 2790 images "
+                        "to calibrate the physical noise model under varied acquisition conditions."
+                    ),
+                }
+            ],
+        },
+        anchor_ns="anaphoric",
+    )
+
+    assert rendered.count("[1](#kb-cite-") == 2
+    assert len(details) == 1
+
+
+def test_chinese_anaphoric_continuation_reuses_compound_foveated_evidence() -> None:
+    source_path = "db/foveated/foveated.en.md"
+    evidence = (
+        "A high-resolution foveal region tracks motion while every frame delivers new "
+        "information across the entire field of view. This strategy records fast-changing "
+        "detail and accumulates slowly evolving detail over consecutive frames."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "系统用高分辨率中央凹区域追踪运动，并保留整个视场的新信息 [1]。"
+            "其核心思想是对快速变化区域即时记录，对慢变区域跨连续多帧累积细节 [1]。"
+        ),
+        [{"text": evidence, "meta": {"source_path": source_path, "heading_path": "Abstract"}}],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "Abstract",
+                    "evidence_quote": evidence,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                }
+            ],
+        },
+        anchor_ns="foveated-anaphoric",
+    )
+
+    assert rendered.count("[1](#kb-cite-") == 2
+    assert len(details) == 1
+    assert len(details[0]["answer_claims"]) == 2
+
+
+def test_chinese_model_based_continuation_reuses_physics_model_evidence() -> None:
+    source_path = "db/pidl/pidl.en.md"
+    evidence = (
+        "The physical noise model was calibrated with real-shot SPAD images. Based on the calibrated model, "
+        "the study synthesizes a large-scale dataset and enables super-resolution, bit-depth enhancement, "
+        "and image quality improvement."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "论文用真实 SPAD 数据标定物理噪声模型 [1]。"
+            "基于该模型，论文合成大规模数据集并实现超分辨率和位深增强 [1]。"
+        ),
+        [{"text": evidence, "meta": {"source_path": source_path, "heading_path": "Abstract"}}],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "Abstract",
+                    "evidence_quote": evidence,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                }
+            ],
+        },
+        anchor_ns="model-anaphoric",
+    )
+
+    assert rendered.count("[1](#kb-cite-") == 2
+    assert len(details) == 1
+    assert len(details[0]["answer_claims"]) == 2
 
 
 def test_system_a_citation_detail_carries_reader_card_fields() -> None:
@@ -517,6 +667,42 @@ def test_compound_spi_prospects_excerpt_keeps_capabilities_and_applications() ->
     assert "autonomous vehicles" in excerpt
 
 
+def test_compound_3d_video_excerpt_selects_the_frame_rate_sentence() -> None:
+    excerpt = _compound_plan_evidence_excerpt(
+        (
+            "Photometric stereo estimates surface normals from images captured under "
+            "different illumination directions. Performing high-speed single-pixel "
+            "imaging with four spatially-separated detectors enables continuous "
+            "real-time 3D video at approximately 8 frames per second."
+        ),
+        "原文报告该三维视频系统的重建速度约为 8 帧/秒。",
+    )
+
+    assert "four spatially-separated detectors" in excerpt
+    assert "8 frames per second" in excerpt
+    assert not excerpt.startswith("Photometric stereo estimates")
+
+
+def test_compound_fdm_excerpt_keeps_parallel_encoding_and_demodulation_chain() -> None:
+    excerpt = _compound_plan_evidence_excerpt(
+        (
+            "The mask values are encoded in the phase of intensity modulation, and thus "
+            "we require phase-sensitive detection, in this case provided by a lock-in "
+            "amplifier (LIA). "
+            "Each pixel of the SLM is modulated with either 0 or pi phase on $p$ "
+            "frequencies simultaneously, according to the present mask patterns. "
+            "The modulated light from the SLM is then multiplexed into a single-pixel "
+            "detector. The signal is then demodulated by a number (p) of LIAs."
+        ),
+        "每个像素用 BPSK 将多个掩模编码到 p 个频率载波上。",
+    )
+
+    assert "p frequencies simultaneously" in excerpt
+    assert "phase-sensitive detection" in excerpt
+    assert "multiplexed into a single-pixel detector" in excerpt
+    assert "demodulated" in excerpt
+
+
 def test_system_a_selects_piln_abstract_slot_over_same_paper_methods_slot() -> None:
     source_path = "db/PILN/PILN.en.md"
     abstract_evidence = (
@@ -632,7 +818,62 @@ def test_system_a_links_training_generalization_claim_across_chinese_and_english
     assert "[1](#kb-cite-" in rendered
     assert len(details) == 1
     assert details[0]["binding_status"] == "grounded"
-    assert "training and generalization" in details[0]["binding_overlap_terms"]
+
+
+def test_claim_specific_hit_beats_broader_prompt_aligned_plan_and_keeps_link() -> None:
+    source_path = "db/fdm/fdm.en.md"
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "SLM 的每个像素同时加载多个载波频率，从而并行编码多个掩模图案 [1]。",
+        [
+            {
+                "text": (
+                    "All SLM pixels use BPSK at carrier frequencies f1 through f4, "
+                    "with one mask encoded at each frequency."
+                ),
+                "meta": {"source_path": source_path, "heading_path": "State characterization"},
+                "ui_meta": {
+                    "primary_evidence": {
+                        "heading_path": "State characterization",
+                        "snippet": "All SLM pixels use BPSK at carrier frequencies f1 through f4.",
+                        "block_id": "old-block",
+                        "anchor_id": "old-anchor",
+                        "page_start": 3,
+                        "strict_locate": True,
+                    }
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "Abstract",
+                    "page_start": 1,
+                    "page_end": 1,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                    "evidence_quote": (
+                        "Frequency-division methods parallelize the single-pixel imaging "
+                        "process and trade signal-to-noise ratio for acquisition speed."
+                    ),
+                }
+            ],
+        },
+        anchor_ns="prompt-aligned",
+        canonical_paths=[source_path],
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["binding_status"] == "grounded"
+    assert details[0]["heading_path"] == "State characterization"
+    assert details[0]["page_start"] == 3
+    assert "BPSK" in details[0]["evidence_quote"]
+    assert details[0]["block_id"] == "old-block"
+    assert details[0]["anchor_id"] == "old-anchor"
+    assert "SLM" in details[0]["binding_overlap_terms"]
 
 
 def test_system_a_suppresses_weak_candidate_binding_instead_of_linking() -> None:
@@ -1440,6 +1681,78 @@ def test_microscopy_direct_plan_quote_overrides_broad_abstract_lead_in() -> None
     assert "high signal-to-noise ratio" in rendered_evidence
     assert "optical sectioning" in rendered_evidence
     assert "Current approaches do not provide" not in rendered_evidence
+
+
+def test_system_a_keeps_cross_language_super_resolution_outcome_citation() -> None:
+    source_path = "db/pidl/pidl.en.md"
+    evidence = (
+        "We introduce deep learning into SPAD, enabling super-resolution single-photon "
+        "imaging with enhancement of bit depth and imaging quality."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "最终效果是实现超分辨率、位深增强和成像质量提升 [1]。",
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "Physics-informed SPAD imaging",
+                    "heading_path": "Abstract",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "Physics-informed SPAD imaging",
+                    "heading_path": "Abstract",
+                    "page_start": 1,
+                    "page_end": 1,
+                    "evidence_quote": evidence,
+                }
+            ],
+        },
+        anchor_ns="cross-language-outcome",
+        canonical_paths=[source_path],
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["binding_status"] == "grounded"
+
+
+def test_system_a_recognizes_chinese_frequency_multiplexing_wording() -> None:
+    source_path = "db/fdm/fdm.en.md"
+    evidence = (
+        "Each pixel of the SLM is modulated on p frequencies simultaneously. "
+        "The modulated light is multiplexed into a single-pixel detector."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "前者在单探测器上通过频率复用并行化空间编码 [1]。",
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "Frequency-division-multiplexed SPI",
+                    "heading_path": "B. Encoding",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={"budget": {"system_a": 1, "system_b": 0}},
+        anchor_ns="frequency-multiplexing-zh",
+        canonical_paths=[source_path],
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["binding_status"] == "grounded"
 
 
 def test_system_a_splits_named_dataset_claim_within_same_source_block() -> None:

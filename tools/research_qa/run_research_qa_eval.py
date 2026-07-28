@@ -5,7 +5,7 @@ import json
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,6 +50,7 @@ class ResearchQaFixture:
     docs: list[dict[str, Any]]
     cases: list[dict[str, Any]]
     forbidden_phrases: list[str]
+    splits: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def docs_by_id(self) -> dict[str, dict[str, Any]]:
@@ -212,12 +213,51 @@ def load_fixture(path: Path | str = DEFAULT_FIXTURE) -> ResearchQaFixture:
     docs = data.get("docs") if isinstance(data, dict) else []
     cases = data.get("cases") if isinstance(data, dict) else []
     forbidden = data.get("forbiddenPhrases") if isinstance(data, dict) else []
+    raw_splits = data.get("splits") if isinstance(data, dict) else {}
     return ResearchQaFixture(
         db_root=str(data.get("dbRoot") or "") if isinstance(data, dict) else "",
         docs=[item for item in list(docs or []) if isinstance(item, dict)],
         cases=[item for item in list(cases or []) if isinstance(item, dict)],
         forbidden_phrases=[str(item) for item in list(forbidden or []) if str(item or "").strip()],
+        splits={
+            str(name): [
+                str(case_id)
+                for case_id in list(case_ids or [])
+                if str(case_id or "").strip()
+            ]
+            for name, case_ids in dict(raw_splits or {}).items()
+            if str(name or "").strip() and isinstance(case_ids, list)
+        },
     )
+
+
+def select_fixture_cases(
+    fixture: ResearchQaFixture,
+    *,
+    split_names: list[str] | None = None,
+    case_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    selected_ids: set[str] | None = None
+    wanted_splits = [str(name or "").strip() for name in list(split_names or []) if str(name or "").strip()]
+    if wanted_splits:
+        unknown_splits = sorted(set(wanted_splits) - set(fixture.splits))
+        if unknown_splits:
+            raise ValueError(f"unknown fixture splits: {', '.join(unknown_splits)}")
+        selected_ids = {
+            str(case_id)
+            for split_name in wanted_splits
+            for case_id in fixture.splits.get(split_name, [])
+        }
+    if case_ids:
+        requested = {str(case_id) for case_id in case_ids if str(case_id or "").strip()}
+        selected_ids = requested if selected_ids is None else selected_ids & requested
+    if selected_ids is None:
+        return list(fixture.cases)
+    return [
+        case
+        for case in fixture.cases
+        if str(case.get("id") or "").strip() in selected_ids
+    ]
 
 
 def load_replay(path: Path | str = DEFAULT_REPLAY) -> list[dict[str, Any]]:
@@ -241,6 +281,61 @@ def load_replay(path: Path | str = DEFAULT_REPLAY) -> list[dict[str, Any]]:
 def validate_fixture_contracts(fixture: ResearchQaFixture) -> list[str]:
     errors: list[str] = []
     known_docs = set(fixture.docs_by_id)
+    case_ids = [str(case.get("id") or "").strip() for case in fixture.cases]
+    known_case_ids = {case_id for case_id in case_ids if case_id}
+    duplicate_case_ids = sorted(
+        case_id for case_id in known_case_ids if case_ids.count(case_id) > 1
+    )
+    if duplicate_case_ids:
+        errors.append(f"fixture has duplicate case ids: {', '.join(duplicate_case_ids)}")
+    split_owners: dict[str, str] = {}
+    normalized_questions: dict[str, tuple[str, str]] = {}
+    for split_name, split_case_ids in fixture.splits.items():
+        duplicate_split_ids = sorted(
+            case_id for case_id in set(split_case_ids) if split_case_ids.count(case_id) > 1
+        )
+        if duplicate_split_ids:
+            errors.append(
+                f"split {split_name} has duplicate case ids: {', '.join(duplicate_split_ids)}"
+            )
+        unknown_split_ids = sorted(set(split_case_ids) - known_case_ids)
+        if unknown_split_ids:
+            errors.append(
+                f"split {split_name} references unknown cases: {', '.join(unknown_split_ids)}"
+            )
+        for case_id in split_case_ids:
+            owner = split_owners.get(case_id)
+            if owner and owner != split_name:
+                errors.append(
+                    f"case {case_id} appears in multiple splits: {owner}, {split_name}"
+                )
+            split_owners[case_id] = split_name
+            case = next(
+                (item for item in fixture.cases if str(item.get("id") or "").strip() == case_id),
+                None,
+            )
+            if not isinstance(case, dict):
+                continue
+            normalized_question = re.sub(
+                r"[^0-9a-z\u4e00-\u9fff]+",
+                "",
+                str(case.get("question") or "").lower(),
+            )
+            if not normalized_question:
+                continue
+            previous = normalized_questions.get(normalized_question)
+            if previous and previous[0] != split_name:
+                errors.append(
+                    "duplicate normalized question across splits: "
+                    f"{previous[1]} ({previous[0]}), {case_id} ({split_name})"
+                )
+            normalized_questions[normalized_question] = (split_name, case_id)
+    if fixture.splits:
+        unassigned_case_ids = sorted(known_case_ids - set(split_owners))
+        if unassigned_case_ids:
+            errors.append(
+                f"fixture cases missing a split: {', '.join(unassigned_case_ids)}"
+            )
     focus_cases: dict[str, list[str]] = {}
     for case in fixture.cases:
         case_id = str(case.get("id") or "").strip() or "<missing-id>"
@@ -555,11 +650,15 @@ def _payload_text(value: Any) -> str:
 def _contains_term(haystack: Any, term: str) -> bool:
     surface = _payload_text(haystack) if isinstance(haystack, (dict, list)) else haystack
     hay = _norm(surface)
-    hay_compact = re.sub(r"\s+", "", hay)
+    # Inline math commonly wraps a single technical symbol (for example
+    # ``$p$ frequencies``). Treat the delimiters as presentation markup so
+    # reviewed evidence phrases remain stable across Markdown conversion.
+    hay_search = hay.replace("$", "")
+    hay_compact = re.sub(r"\s+", "", hay_search)
     for needle in _term_aliases(term):
-        needle_norm = _norm(needle)
+        needle_norm = _norm(needle).replace("$", "")
         if needle_norm and (
-            needle_norm in hay
+            needle_norm in hay_search
             or re.sub(r"\s+", "", needle_norm) in hay_compact
         ):
             return True
@@ -568,6 +667,17 @@ def _contains_term(haystack: Any, term: str) -> bool:
 
 def _term_aliases(term: str) -> list[str]:
     raw = str(term or "").strip()
+    if raw == "不同层面":
+        return [
+            "不同层面",
+            "不是同一层面",
+            "并非同一层面",
+            "并不是同一层面",
+            "不属于同一层面",
+            "不在同一层面",
+            "different design layers",
+            "different levels",
+        ]
     aliases = {
         "已有": ["已有", "现成", "成熟", "经典", "既有", "existing", "prior", "previous", "not new", "background"],
         "不是": ["不是", "不大", "关系不大", "并非", "不属于", "not", "not a", "different"],
@@ -2166,6 +2276,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout-s", type=float, default=180.0, help="HTTP timeout seconds.")
     parser.add_argument("--limit", type=int, default=0, help="Optional case limit.")
     parser.add_argument("--case-id", action="append", default=[], help="Run one or more case ids.")
+    parser.add_argument(
+        "--split",
+        action="append",
+        default=[],
+        help="Run one or more named fixture splits (for example baseline_real_v1 or holdout_v1).",
+    )
     parser.add_argument("--top-k", type=int, default=6, help="Retrieval top_k sent to /api/generate.")
     parser.add_argument("--max-tokens", type=int, default=1800, help="Max tokens sent to /api/generate.")
     parser.add_argument(
@@ -2205,10 +2321,16 @@ def main(argv: list[str] | None = None) -> int:
         for error in fixture_errors:
             print(f"[ERROR] {error}", file=sys.stderr)
         return 2
-    selected_cases = list(fixture.cases)
     wanted_ids = {str(item) for item in list(args.case_id or []) if str(item or "").strip()}
-    if wanted_ids:
-        selected_cases = [item for item in selected_cases if str(item.get("id") or "") in wanted_ids]
+    try:
+        selected_cases = select_fixture_cases(
+            fixture,
+            split_names=list(args.split or []),
+            case_ids=wanted_ids or None,
+        )
+    except ValueError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 2
     if int(args.limit or 0) > 0:
         selected_cases = selected_cases[: int(args.limit)]
     if not selected_cases:
@@ -2293,6 +2415,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[OK] fixture: {fixture_path}")
         print(f"[OK] docs: {len(fixture.docs)}")
         print(f"[OK] cases: {len(selected_cases)}")
+        if args.split:
+            print(f"[OK] splits: {', '.join(str(item) for item in args.split)}")
         print(f"[OK] source-grounded cases: {sum(1 for case in selected_cases if bool(case.get('sourceGrounded')))}")
         focus_counts: dict[str, int] = {}
         for idx, case in enumerate(selected_cases, start=1):

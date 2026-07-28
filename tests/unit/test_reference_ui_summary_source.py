@@ -3,6 +3,30 @@ from __future__ import annotations
 import api.reference_ui as reference_ui
 
 
+def test_binding_diagnostic_is_not_reused_as_localized_guide() -> None:
+    why = "该引用复用生成回答时实际提供的原文证据，且与答案中的关键词一致。"
+
+    assert reference_ui._derive_localized_guide_from_why_line(
+        target_locale="zh",
+        why_line=why,
+    ) == ""
+
+
+def test_detector_evidence_has_faithful_chinese_guide_without_llm() -> None:
+    guide = reference_ui._build_evidence_backed_ref_summary_from_seed(
+        prompt="单光子成像里探测器综述应该怎么读？",
+        title="Emerging single-photon detection technique",
+        summary_line=(
+            "Single-photon detections can detect individual photons at extremely low light "
+            "levels. Mainstream SPDs include PMTs, SPADs, SNSPDs, and TES."
+        ),
+        prefer_zh=True,
+    )
+
+    assert all(term in guide for term in ("单光子", "SPAD", "TES"))
+    assert "原文片段写到" not in guide
+
+
 def test_normalize_primary_ref_evidence_payload_trims_mid_word_snippet() -> None:
     out = reference_ui._normalize_primary_ref_evidence_payload(
         {

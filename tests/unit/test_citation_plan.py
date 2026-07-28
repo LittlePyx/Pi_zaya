@@ -35,6 +35,34 @@ def test_prompt_aligned_abstract_keeps_complete_multi_sentence_claim(tmp_path: P
     assert "Background context" not in slot["evidence_quote"]
 
 
+def test_comparison_source_summary_replaces_front_matter_hit(tmp_path: Path) -> None:
+    source = tmp_path / "3d-video.en.md"
+    source.write_text(
+        "# 3D single-pixel video\n\n"
+        "To cite this article: Example et al. 2016.\n\n"
+        "## Abstract\n\n"
+        "Photometric stereo uses four spatially-separated single-pixel detectors. "
+        "The system reconstructs continuous 3D video at 8 frames per second.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "heading_path": "3D single-pixel video",
+            "evidence_atom_text": "To cite this article: Example et al. 2016.",
+        },
+        ranking_texts=[
+            "3D single-pixel video photometric stereo four detectors 8 frames per second"
+        ],
+        prefer_source_summary=True,
+    )
+
+    assert slot["heading_path"].endswith("Abstract")
+    assert "four spatially-separated" in slot["evidence_quote"]
+    assert "8 frames per second" in slot["evidence_quote"]
+
+
 def test_chinese_fdm_query_ranks_exact_english_abstract_before_figure_caption() -> None:
     indexed_hits = [
         (
@@ -468,6 +496,31 @@ def test_system_a_prompt_uses_offset_citation_example():
     assert "retrieved_hit=1" in block
     assert "cite_example=[10001]" in block
     assert " | hit=1" not in block
+
+
+def test_comparison_prompt_keeps_decisive_late_evidence_and_requests_compact_answer() -> None:
+    evidence = (
+        "Photometric stereo estimates surface shape from multiple illumination directions. "
+        "Performing high-speed structured illumination and sensing reflected light with four "
+        "spatially-separated single-pixel detectors reconstructs 3D video at 8 frames per second."
+    )
+    plan = build_citation_plan(
+        prompt="Compare the two acceleration mechanisms.",
+        prompt_family="compare",
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {"source_path": "3d-video.en.md", "heading_path": "Abstract"},
+            }
+        ],
+    )
+
+    block = build_citation_plan_prompt_block(plan)
+
+    assert "four spatially-separated single-pixel detectors" in block
+    assert "8 frames per second" in block
+    assert "one direct verdict" in block
+    assert "Do not add a comparison table" in block
 
 def test_comparison_plan_disables_system_b_budget():
     plan = build_citation_plan(
@@ -1346,3 +1399,265 @@ def test_answer_hit_slot_keeps_late_numeric_calibration_evidence() -> None:
     slot = next(item for item in plan["slots"] if item["preferred_system"] == "system_a")
     assert "2790 images" in slot["evidence_quote"]
     assert "90 scenes" in slot["evidence_quote"]
+
+
+def test_implicit_two_sided_comparison_keeps_both_exact_sources() -> None:
+    hits = [
+        {
+            "text": "A broad review summarizes deep-learning reconstruction for hyperspectral imaging.",
+            "meta": {"source_path": "generic-hsi-review.en.md", "heading_path": "Prospects"},
+        },
+        {
+            "text": (
+                "Frequency-division multiplexing parallelizes several spatial patterns in one "
+                "detector integration window, trading signal-to-noise ratio for acquisition speed."
+            ),
+            "meta": {"source_path": "frequency-division-multiplexed-spi.en.md", "heading_path": "Abstract"},
+        },
+        {
+            "text": "A general single-pixel imaging review lists many emerging applications.",
+            "meta": {"source_path": "generic-spi-review.en.md", "heading_path": "Outlook"},
+        },
+        {
+            "text": (
+                "The 3D video system uses photometric stereo with four detectors and reconstructs "
+                "three-dimensional video at eight frames per second."
+            ),
+            "meta": {"source_path": "real-time-3d-video-spi.en.md", "heading_path": "Results"},
+        },
+    ]
+
+    plan = build_citation_plan(
+        prompt=(
+            "频分复用单像素成像和 3D single-pixel video 都强调速度："
+            "它们分别把什么环节并行化，为什么后者需要多个探测器？"
+        ),
+        answer_hits=hits,
+        retrieval_queries=[
+            "frequency division multiplexed single-pixel imaging parallel acquisition",
+            "real-time three-dimensional video single-pixel imaging photometric stereo four detectors",
+        ],
+    )
+
+    system_a_slots = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert plan["intent"] == "comparison"
+    assert len(system_a_slots) == 2
+    selected = {slot["source_path"] for slot in system_a_slots}
+    assert selected == {
+        "frequency-division-multiplexed-spi.en.md",
+        "real-time-3d-video-spi.en.md",
+    }
+
+
+def test_comparison_answer_hits_align_each_source_summary_and_keep_hit_locator(
+    tmp_path: Path,
+) -> None:
+    fdm = tmp_path / "frequency-division-multiplexed-spi.en.md"
+    fdm.write_text(
+        "<!-- kb_page: 1 -->\n\n# Frequency-division multiplexed single-pixel imaging\n\n"
+        "Publisher front matter and citation instructions.\n\n"
+        "<!-- kb_page: 2 -->\n\n## Abstract\n\n"
+        "Frequency-division multiplexing parallelizes the single-pixel imaging process "
+        "by projecting multiple spatial patterns during one detector integration time. "
+        "This trades signal-to-noise ratio for acquisition speed.\n\n"
+        "## B. Encoding\n\n"
+        "The mask values are encoded in the phase of intensity modulation, requiring "
+        "phase-sensitive detection from a lock-in amplifier. Each SLM pixel is modulated "
+        "on p frequencies simultaneously according to the mask patterns. The modulated "
+        "light is multiplexed into a single-pixel detector. The signal is demodulated by "
+        "a number p of LIAs, one for each modulation frequency.\n",
+        encoding="utf-8",
+    )
+    video_3d = tmp_path / "real-time-3d-video-spi.en.md"
+    video_3d.write_text(
+        "<!-- kb_page: 1 -->\n\n# Real-time 3D video single-pixel imaging\n\n"
+        "To cite this article: Example et al. 2016.\n\n"
+        "<!-- kb_page: 3 -->\n\n## Abstract\n\n"
+        "Photometric stereo uses four spatially separated single-pixel detectors to "
+        "recover surface orientation in parallel. The system reconstructs continuous "
+        "three-dimensional video at eight frames per second.\n",
+        encoding="utf-8",
+    )
+
+    plan = build_citation_plan(
+        prompt=(
+            "频分复用单像素成像和 3D single-pixel video 分别把什么环节并行化，"
+            "为什么后者需要 four detectors？"
+        ),
+        answer_hits=[
+            {
+                "text": "Publisher front matter and citation instructions.",
+                "meta": {
+                    "source_path": str(fdm),
+                    "heading_path": "Frequency-division multiplexed single-pixel imaging",
+                    "page_start": 1,
+                },
+            },
+            {
+                "text": "To cite this article: Example et al. 2016.",
+                "meta": {
+                    "source_path": str(video_3d),
+                    "heading_path": "Real-time 3D video single-pixel imaging",
+                    "page_start": 1,
+                },
+            },
+        ],
+        retrieval_queries=[
+            "frequency division multiplexing parallel patterns detector integration time",
+            "3D video photometric stereo four single-pixel detectors eight frames per second",
+        ],
+    )
+
+    by_source = {
+        slot["source_path"]: slot
+        for slot in plan["slots"]
+        if slot["preferred_system"] == "system_a"
+    }
+    assert by_source[str(fdm)]["candidate_hits"] == [1]
+    assert by_source[str(fdm)]["heading_path"].endswith("B. Encoding")
+    assert by_source[str(fdm)]["page_start"] == 2
+    assert by_source[str(fdm)]["block_id"] == ""
+    assert by_source[str(fdm)]["strict_locate"] is False
+    assert "lock-in amplifier" in by_source[str(fdm)]["evidence_quote"]
+    assert "frequencies simultaneously" in by_source[str(fdm)]["evidence_quote"]
+    assert "demodulated" in by_source[str(fdm)]["evidence_quote"]
+    assert by_source[str(video_3d)]["candidate_hits"] == [2]
+    assert by_source[str(video_3d)]["heading_path"].endswith("Abstract")
+    assert by_source[str(video_3d)]["page_start"] == 3
+    assert "four spatially separated" in by_source[str(video_3d)]["evidence_quote"]
+    assert "eight frames per second" in by_source[str(video_3d)]["evidence_quote"]
+
+
+def test_basis_vs_foveated_answer_hit_uses_foveated_abstract(tmp_path: Path) -> None:
+    basis = tmp_path / "hadamard-versus-fourier.en.md"
+    basis.write_text(
+        "<!-- kb_page: 2 -->\n\n## Introduction\n\n"
+        "Hadamard single-pixel imaging uses binary Hadamard basis patterns, whereas "
+        "Fourier single-pixel imaging samples sinusoidal Fourier coefficients.\n",
+        encoding="utf-8",
+    )
+    foveated = tmp_path / "adaptive-foveated-spi.en.md"
+    foveated.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "Adaptive foveated single-pixel imaging applies dynamic supersampling to a "
+        "foveal region while every frame still delivers new information from the "
+        "entire field of view.\n\n"
+        "<!-- kb_page: 7 -->\n\n## Spatially variant digital supersampling\n\n"
+        "A generic interpolation kernel generates the displayed pixels.\n",
+        encoding="utf-8",
+    )
+
+    plan = build_citation_plan(
+        prompt=(
+            "Hadamard/Fourier basis choice 和 adaptive foveated dynamic supersampling "
+            "分别决定什么，二者是同一层面的采样策略吗？"
+        ),
+        answer_hits=[
+            {
+                "text": (
+                    "Hadamard single-pixel imaging uses binary Hadamard basis patterns, "
+                    "whereas Fourier single-pixel imaging samples sinusoidal coefficients."
+                ),
+                "meta": {
+                    "source_path": str(basis),
+                    "heading_path": "Introduction",
+                    "page_start": 2,
+                },
+            },
+            {
+                "text": "A generic interpolation kernel generates the displayed pixels.",
+                "meta": {
+                    "source_path": str(foveated),
+                    "heading_path": "Spatially variant digital supersampling",
+                    "page_start": 7,
+                },
+            },
+        ],
+        retrieval_queries=[
+            "Hadamard Fourier basis pattern choice",
+            "adaptive foveated dynamic supersampling entire field of view",
+        ],
+    )
+
+    by_source = {
+        slot["source_path"]: slot
+        for slot in plan["slots"]
+        if slot["preferred_system"] == "system_a"
+    }
+    assert by_source[str(basis)]["candidate_hits"] == [1]
+    assert by_source[str(basis)]["heading_path"].endswith("Introduction")
+    assert by_source[str(basis)]["page_start"] == 2
+    assert by_source[str(foveated)]["candidate_hits"] == [2]
+    assert by_source[str(foveated)]["heading_path"].endswith("Abstract")
+    assert by_source[str(foveated)]["page_start"] == 1
+    assert "entire field of view" in by_source[str(foveated)]["evidence_quote"]
+
+
+def test_same_layer_question_is_routed_as_two_sided_comparison() -> None:
+    plan = build_citation_plan(
+        prompt=(
+            "Hadamard/Fourier 的选择和 foveated dynamic supersampling 是同一层面的采样策略吗？"
+            "设计系统时，这两类选择分别在决定什么？"
+        ),
+        answer_hits=[
+            {
+                "text": "Every frame delivers new information from the entire field of view.",
+                "meta": {"source_path": "adaptive-foveated-spi.en.md", "heading_path": "Abstract"},
+            },
+            {
+                "text": "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns.",
+                "meta": {"source_path": "hadamard-versus-fourier.en.md", "heading_path": "Introduction"},
+            },
+            {
+                "text": "A broad review of single-pixel imaging applications.",
+                "meta": {"source_path": "generic-prospects.en.md", "heading_path": "Outlook"},
+            },
+        ],
+        retrieval_queries=[
+            "Hadamard Fourier basis pattern choice",
+            "adaptive foveated dynamic supersampling entire field of view",
+        ],
+    )
+
+    slots = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert plan["intent"] == "comparison"
+    assert len(slots) == 2
+    assert {slot["source_path"] for slot in slots} == {
+        "adaptive-foveated-spi.en.md",
+        "hadamard-versus-fourier.en.md",
+    }
+
+
+def test_pair_reading_question_does_not_add_a_generic_third_paper() -> None:
+    plan = build_citation_plan(
+        prompt="单光子成像里，探测器综述和 physics-informed deep learning 这篇应该怎么搭配读？",
+        answer_hits=[
+            {
+                "text": "A detector review explains single-photon detector physics.",
+                "meta": {"source_path": "detector-review.en.md", "heading_path": "Abstract"},
+            },
+            {
+                "text": "Physics-informed deep learning models real SPAD noise.",
+                "meta": {
+                    "source_path": "physics-informed-deep-learning-spad.en.md",
+                    "heading_path": "Abstract",
+                },
+            },
+            {
+                "text": "A generic deep-learning imaging survey.",
+                "meta": {"source_path": "generic-dl-review.en.md", "heading_path": "Abstract"},
+            },
+        ],
+        retrieval_queries=[
+            "single photon detector review",
+            "physics informed deep learning SPAD physical noise",
+        ],
+    )
+
+    slots = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert plan["intent"] == "comparison"
+    assert len(slots) == 2
+    assert {slot["source_path"] for slot in slots} == {
+        "detector-review.en.md",
+        "physics-informed-deep-learning-spad.en.md",
+    }

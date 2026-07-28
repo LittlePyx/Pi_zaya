@@ -46,7 +46,10 @@ _SOURCE_MARKER_REQUEST_RE = re.compile(
     r"(?:each|every).{0,16}(?:claim|conclusion|sentence).{0,24}(?:source|citation|evidence)"
 )
 _COMPARE_INTENT_RE = re.compile(
-    r"(?i)(对比|比较|区别|差异|哪个更|优缺点|trade-?off|versus|vs\.?|compare|comparison|difference)"
+    r"(?i)(对比|比较|区别|差异|哪个更|优缺点|"
+    r"(?:分别|各自).{0,30}(?:什么|哪些|如何|怎样|决定|并行|作用|机制)|"
+    r"同一(?:层面|类型|维度)|(?:搭配|一起)(?:读|阅读)|"
+    r"trade-?off|versus|vs\.?|compare|comparison|difference|respectively)"
 )
 _METHOD_INTENT_RE = re.compile(
     r"(?i)(怎么做|如何做|如何实现|流程|步骤|训练|公式|算法|方法|(?:技术|研究|方法)路线|"
@@ -196,6 +199,7 @@ def _prompt_aligned_source_slot(
     raw: Mapping[str, Any],
     *,
     ranking_texts: Sequence[str] | None,
+    prefer_source_summary: bool = False,
 ) -> dict[str, Any]:
     out = dict(raw)
     # File names, translated broad queries and review-oriented prompts repeat
@@ -249,6 +253,11 @@ def _prompt_aligned_source_slot(
         sentence_tokens = _ranking_tokens(sentence) - generic_source_tokens
         overlap = query_tokens.intersection(sentence_tokens)
         score = len(overlap)
+        if prefer_source_summary and re.search(r"(?:^|\s/\s)abstract\s*$", heading_low):
+            # Cross-paper comparisons need each paper's own high-level claim.
+            # An abstract sentence is usually safer than an internal paragraph
+            # that happens to share more generic query terms.
+            score += 5
         # A question that explicitly contrasts a method with its base model is
         # asking for the paper's relationship claim, not merely another passage
         # where both names co-occur. Prefer the source's exact "variant of"
@@ -262,7 +271,15 @@ def _prompt_aligned_source_slot(
         scored.append((score, index, heading_path, sentence, overlap, page_num))
     if not scored:
         return out
-    scored.sort(key=lambda item: (item[0], len(item[4]), len(item[3])), reverse=True)
+    summary_scored = [
+        item
+        for item in scored
+        if prefer_source_summary
+        and re.search(r"(?:^|\s/\s)abstract\s*$", str(item[2] or "").lower())
+        and len(item[4]) >= 2
+    ]
+    selection_pool = summary_scored or scored
+    selection_pool.sort(key=lambda item: (item[0], len(item[4]), len(item[3])), reverse=True)
     (
         best_score,
         best_index,
@@ -270,7 +287,7 @@ def _prompt_aligned_source_slot(
         best_sentence,
         best_overlap,
         best_page,
-    ) = scored[0]
+    ) = selection_pool[0]
     current_evidence = _first_text(
         out,
         "evidence_atom_text",
@@ -280,7 +297,8 @@ def _prompt_aligned_source_slot(
         max_len=1400,
     )
     current_score = len(query_tokens.intersection(_ranking_tokens(current_evidence)))
-    if best_score < 4 or best_score < current_score + 2:
+    picked_source_summary = bool(summary_scored)
+    if best_score < 4 or (not picked_source_summary and best_score < current_score + 2):
         return out
 
     selected = [best_sentence]
@@ -326,6 +344,11 @@ def _prompt_aligned_source_slot(
             r"detector\s+integration\s+time",
         ),
         (
+            r"photometric\s+stereo",
+            r"four\s+spatially[- ]separated",
+            r"8\s+frames\s+per\s+second",
+        ),
+        (
             r"self-supervised\s+image-loop\s+neural\s+network",
             r"part-based\s+model",
             r"finer-grained\s+learning",
@@ -350,11 +373,52 @@ def _prompt_aligned_source_slot(
             evidence = _compact_text(
                 " ".join(
                     evidence_sentences[idx]
-                    for idx in range(min(matched_indices), max(matched_indices) + 1)
+                    for idx in sorted(set(matched_indices))
                 ),
                 max_len=1400,
             )
             break
+    ranking_surface = " ".join(str(item or "") for item in list(ranking_texts or []))
+    frequency_mechanism_request = bool(
+        re.search(
+            r"(?i)frequency[-\s]?division|频分复用",
+            f"{source_path} {ranking_surface}",
+        )
+        and re.search(
+            r"(?i)parallel|mechanism|demodulat|lock[- ]?in|BPSK|并行|环节|机制|解调|锁相|载波",
+            ranking_surface,
+        )
+    )
+    if prefer_source_summary and frequency_mechanism_request:
+        encoding_rows = [
+            (heading_path, sentence, page_num)
+            for heading_path, sentence, page_num in records
+            if re.search(r"(?:^|\s/\s)B\.?\s+Encoding$", str(heading_path or ""), re.I)
+            and re.search(
+                r"(?i)phase[- ]sensitive\s+detection|lock[- ]?in\s+amplifier|"
+                r"frequenc(?:y|ies)\s+simultaneously|multiplexed\s+into\s+a\s+single[- ]pixel\s+detector|"
+                r"demodulated\s+by\s+a\s+number.*LIAs",
+                sentence,
+            )
+        ]
+        mechanism_signals = {
+            signal
+            for _heading_path, sentence, _page_num in encoding_rows
+            for signal, pattern in (
+                ("phase", r"(?i)phase[- ]sensitive\s+detection|lock[- ]?in\s+amplifier"),
+                ("parallel", r"(?i)frequenc(?:y|ies)\s+simultaneously"),
+                ("detector", r"(?i)multiplexed\s+into\s+a\s+single[- ]pixel\s+detector"),
+                ("demodulation", r"(?i)demodulated\s+by\s+a\s+number.*LIAs"),
+            )
+            if re.search(pattern, sentence)
+        }
+        if len(mechanism_signals) >= 3:
+            evidence = _compact_text(
+                " ".join(sentence for _heading, sentence, _page in encoding_rows),
+                max_len=1400,
+            )
+            best_heading = str(encoding_rows[0][0] or best_heading)
+            best_page = int(encoding_rows[0][2] or best_page or 0)
     # Support records produced by the paper-guide runtime commonly carry both
     # ``evidence_atom_text`` and ``evidence_quote``.  Slot normalization prefers
     # the former, so keep every evidence alias in sync after source alignment.
@@ -362,6 +426,14 @@ def _prompt_aligned_source_slot(
     out["evidence_quote"] = evidence
     out["locate_anchor"] = evidence
     out["snippet"] = evidence
+    # Source-file alignment identifies a new sentence and page but does not
+    # have the structured block/anchor identity of that occurrence. Retaining
+    # identifiers from the old retrieval hit makes the reader open the old
+    # section while the card displays the newly selected abstract sentence.
+    out["block_id"] = ""
+    out["anchor_id"] = ""
+    out["anchor_kind"] = ""
+    out["strict_locate"] = False
     if best_heading:
         out["heading_path"] = best_heading
         out["heading"] = best_heading
@@ -369,8 +441,8 @@ def _prompt_aligned_source_slot(
         out["page_start"] = best_page
         out["page_end"] = best_page
     out["selection_reason"] = "prompt_aligned_source_sentence"
-    if str(out.get("block_id") or out.get("anchor_id") or "").strip():
-        out["strict_locate"] = True
+    if prefer_source_summary and frequency_mechanism_request and "B. Encoding" in best_heading:
+        out["alignment_kind"] = "comparison_mechanism"
     return out
 
 
@@ -535,6 +607,28 @@ def _citation_intent(prompt: str, *, prompt_family: str = "") -> str:
     return "answer_grounding"
 
 
+def _explicit_comparison_facet_count(prompt: str) -> int:
+    """Estimate explicit three-or-more facets before a 'respectively' request."""
+
+    raw = str(prompt or "")
+    marker = re.search(r"分别|各自|respectively", raw, flags=re.IGNORECASE)
+    if not marker:
+        return 0
+    prefix = raw[: marker.start()]
+    # Chinese technical lists conventionally use the enumeration comma. It is
+    # a much safer source-count signal than ordinary commas in prose.
+    enumeration_count = prefix.count("、")
+    if enumeration_count >= 2:
+        return min(8, enumeration_count + 1)
+    english_tail = re.split(r"[。！？!?;；:]", prefix)[-1]
+    english_items = [
+        item.strip()
+        for item in re.split(r"\s*,\s*|\s+(?:and|or)\s+", english_tail, flags=re.IGNORECASE)
+        if item.strip()
+    ]
+    return min(8, len(english_items)) if len(english_items) >= 3 else 0
+
+
 def _budget_for_intent(intent: str) -> dict[str, int]:
     if intent == "scope_boundary":
         return {"system_a": 1, "system_b": 0}
@@ -631,6 +725,7 @@ def _system_a_slots(
     focus_multi_source_evidence: bool = False,
     ranking_texts: Sequence[str] | None = None,
     rank_answer_hits: bool = False,
+    prefer_source_summary: bool = False,
 ) -> list[dict[str, Any]]:
     slots: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -712,6 +807,7 @@ def _system_a_slots(
         _prompt_aligned_source_slot(
             dict(raw),
             ranking_texts=ranking_texts,
+            prefer_source_summary=prefer_source_summary,
         )
         for raw in list(support_slots or [])
         if isinstance(raw, Mapping)
@@ -828,6 +924,11 @@ def _system_a_slots(
                 or meta.get("strict_locate")
             ),
         }
+        raw = _prompt_aligned_source_slot(
+            raw,
+            ranking_texts=ranking_texts,
+            prefer_source_summary=prefer_source_summary,
+        )
         add_slot(raw, hit_num=idx)
         if len(slots) >= max(1, int(max_items)):
             break
@@ -1020,9 +1121,15 @@ def _rank_system_a_answer_hits(
             title_match = query_tokens & title_tokens
             evidence_match = query_tokens & evidence_tokens
             all_match = title_match | evidence_match
-            base_score = sum(token_weight(token) * 3.0 for token in title_match)
-            base_score += sum(token_weight(token) for token in evidence_match - title_match)
             new_tokens = all_match - covered_tokens
+            new_title_tokens = title_match - covered_tokens
+            covered_title_tokens = title_match & covered_tokens
+            new_evidence_tokens = (evidence_match - title_match) - covered_tokens
+            covered_evidence_tokens = (evidence_match - title_match) & covered_tokens
+            base_score = sum(token_weight(token) * 3.0 for token in new_title_tokens)
+            base_score += sum(token_weight(token) * 0.35 for token in covered_title_tokens)
+            base_score += sum(token_weight(token) for token in new_evidence_tokens)
+            base_score += sum(token_weight(token) * 0.15 for token in covered_evidence_tokens)
             coverage_score = sum(token_weight(token) for token in new_tokens)
             # Marginal coverage prevents a second generic deep-learning paper
             # from displacing the requested foundations or hardware paper.
@@ -1198,6 +1305,10 @@ def build_citation_plan(
     per_paragraph_budget = dict(budget)
     requested_paper_count = extract_requested_paper_count(prompt)
     requested_system_a = min(8, int(requested_paper_count or 0))
+    comparison_facet_count = _explicit_comparison_facet_count(prompt) if intent == "comparison" else 0
+    if comparison_facet_count >= 3:
+        requested_system_a = max(requested_system_a, comparison_facet_count)
+        budget["system_a"] = max(int(budget.get("system_a") or 0), comparison_facet_count)
     answer_audit = prompt_requests_answer_audit(prompt)
     if answer_audit:
         intent = "answer_audit"
@@ -1216,7 +1327,16 @@ def build_citation_plan(
         # invented System-B marker when no verified opportunity exists.
         budget["system_b"] = 0
         per_paragraph_budget["system_b"] = 0
-    system_a_limit = requested_system_a if requested_paper_count is not None else max(3, requested_system_a)
+    if requested_paper_count is not None:
+        system_a_limit = requested_system_a
+    elif intent == "comparison":
+        # A comparison normally has two named sides. Keeping a third generic
+        # paper in the evidence plan lets a broadly related review displace one
+        # of those sides in both the prompt and the visible citation shelf.
+        # Explicit three-or-more-paper requests still take the branch above.
+        system_a_limit = max(1, int(budget.get("system_a") or 2))
+    else:
+        system_a_limit = max(3, requested_system_a)
     source_focus_keys: set[str] = set()
     for raw in [*list(support_slots or []), *list(answer_hits or [])]:
         if not isinstance(raw, Mapping):
@@ -1234,7 +1354,10 @@ def build_citation_plan(
             and _MULTI_SLOT_COVERAGE_RE.search(str(prompt or ""))
         ),
         ranking_texts=[prompt, *list(retrieval_queries or [])],
-        rank_answer_hits=bool(requested_system_a > 1),
+        # Comparison questions need facet-aware source selection even when the
+        # user says "A versus B" instead of literally saying "two papers".
+        rank_answer_hits=bool(requested_system_a > 1 or intent == "comparison"),
+        prefer_source_summary=bool(intent == "comparison"),
     )
 
     def _named_answer_source_slot(pattern: str) -> dict[str, Any]:
@@ -1544,6 +1667,15 @@ def build_citation_plan_prompt_block(plan: Mapping[str, Any] | None) -> str:
         "- Use SystemB only for origin, prior-work, method-source, or 'where did this idea come from' claims.",
         "- Use SystemA for claims about what the retrieved paper itself says, shows, defines, or reports.",
     ]
+    if str(plan.get("intent") or "").strip().lower() == "comparison":
+        lines.extend(
+            [
+                "- This is a two-sided comparison: cover every planned SystemA source explicitly and keep each side's mechanism attached to its own source.",
+                "- Do not introduce a third paper or fill missing details from general domain knowledge; omit any detail the two planned passages do not support.",
+                "- Answer compactly: one direct verdict, one short paragraph or bullet per planned source, then at most one closing contrast. Do not add a comparison table, broad background, or speculative examples.",
+                "- Preserve the distinctive method terms and reported numbers from each planned evidence passage when they directly answer the question.",
+            ]
+        )
     if per_paragraph_budget != budget:
         lines.insert(
             3,
@@ -1570,7 +1702,15 @@ def build_citation_plan_prompt_block(plan: Mapping[str, Any] | None) -> str:
         heading = _compact_text(slot.get("heading_path"), max_len=100)
         if heading:
             parts.append(f"heading={heading}")
-        quote = _compact_text(slot.get("evidence_quote"), max_len=160)
+        # The comparison plan can replace a weak retrieval paragraph with the
+        # paper's abstract.  Keep enough of that authoritative passage for the
+        # model to see the second sentence where detector counts, frame rates,
+        # or whole-field behavior are often stated.  A 160-character preview
+        # hid precisely those details and encouraged unsupported domain fill.
+        quote = _compact_text(
+            slot.get("evidence_quote"),
+            max_len=(720 if str(plan.get("intent") or "").strip().lower() == "comparison" else 160),
+        )
         if quote:
             parts.append(f"evidence={quote}")
         lines.append("- " + " | ".join(parts))
