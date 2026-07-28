@@ -893,6 +893,27 @@ function getMessageRenderPacketForPostprocess(message: Message | null | undefine
   return packet && typeof packet === 'object' ? packet as Record<string, unknown> : null
 }
 
+function messageCitationRevisionForPostprocess(message: Message | null | undefined): string {
+  const packet = getMessageRenderPacketForPostprocess(message)
+  if (!packet) return ''
+  const details = Array.isArray(packet.cite_details) ? packet.cite_details : []
+  return JSON.stringify({
+    renderedContent: String(packet.rendered_content || message?.rendered_content || ''),
+    details: details.map((raw) => {
+      const detail = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+      return {
+        num: Number(detail.num || 0),
+        displayNum: Number(detail.display_num || 0),
+        answerHitNum: Number(detail.answer_hit_num || 0),
+        route: String(detail.citation_route || ''),
+        anchor: String(detail.anchor || ''),
+        sourcePath: String(detail.source_path || ''),
+        evidence: String(detail.evidence_quote || detail.summary_line || ''),
+      }
+    }),
+  })
+}
+
 function messageHasReadyLocatePostprocess(message: Message | null | undefined): boolean {
   if (!message || String(message.role || '').trim().toLowerCase() !== 'assistant') return false
   const provenance = getMessageProvenanceForPostprocess(message)
@@ -969,6 +990,8 @@ async function startMessagePostprocessPolling(
       return
     }
     tries += 1
+    const previousTarget = getState().messages.find((item) => Number(item.id || 0) === msgId) || null
+    const previousCitationRevision = messageCitationRevisionForPostprocess(previousTarget)
     try {
       const { page } = await getMessagesPageWithFallback(convId, {
         limit: MESSAGE_PAGE_SIZE,
@@ -996,6 +1019,17 @@ async function startMessagePostprocessPolling(
         }
       })
       const target = getState().messages.find((item) => Number(item.id || 0) === msgId) || null
+      const nextCitationRevision = messageCitationRevisionForPostprocess(target)
+      if (nextCitationRevision && nextCitationRevision !== previousCitationRevision) {
+        scheduleLoadRefsForConversation(
+          convId,
+          set,
+          () => getState().activeConvId,
+          40,
+          undefined,
+          'message_postprocess_citations_changed',
+        )
+      }
       if ((!messageNeedsPostprocessRefresh(target, opts) && tries >= minTries) || tries >= maxTries) {
         messagePostprocessPollTimer = null
         return
@@ -2567,6 +2601,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 conversationCacheById: nextCache,
               }
             })
+            if (page && visibleAtCompletion) {
+              scheduleLoadRefsForConversation(
+                convId!,
+                set,
+                () => get().activeConvId,
+                40,
+                undefined,
+                'post_generation_message_hydration',
+              )
+            }
             const postprocessState = get()
             if (!visibleAtCompletion || postprocessState.activeConvId !== convId) {
               void get().loadSidebarData()

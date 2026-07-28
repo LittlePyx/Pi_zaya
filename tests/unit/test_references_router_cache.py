@@ -100,6 +100,121 @@ def test_state_validated_cache_skips_rendered_payload_json_loader(monkeypatch) -
     assert response.headers["x-kb-refs-mode"] == "cache_validated_pending"
 
 
+def test_state_validated_cache_rejects_empty_payload_after_refs_row_appears() -> None:
+    assert references_router._state_cached_payload_covers_refs_rows(
+        {},
+        {"rows": [{"user_msg_id": 7}]},
+    ) is False
+    assert references_router._state_cached_payload_covers_refs_rows(
+        {7: {"hits": []}},
+        {"rows": [{"user_msg_id": 7}]},
+    ) is True
+
+
+def test_advantage_only_reference_copy_does_not_claim_the_prompt_asks_for_limits() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "answer_claim": "该方法把单像素视频重建提高到实时速度。",
+                "heading_path": "Results / Real-time reconstruction",
+                "evidence_quote": "The system reconstructs video at 30 frames per second.",
+            }
+        ],
+        prefer_zh=True,
+        prompt="总结深度学习单像素成像的三个主要优势",
+    )
+
+    assert "实时速度" in summary
+    assert "优势" in why
+    assert "局限" not in why
+    assert "正反两方面" not in why
+    polished = references_router.attach_refs_pack_polish_contract(
+        {
+            "hits": [
+                {
+                    "meta": {"source_path": r"F:\db\Speed\Speed.en.md"},
+                    "ui_meta": {
+                        "display_name": "Speed.pdf",
+                        "source_path": r"F:\db\Speed\Speed.en.md",
+                        "heading_path": "Results / Real-time reconstruction",
+                        "summary_line": summary,
+                        "why_line": why,
+                        "render_locale": "zh",
+                    },
+                }
+            ]
+        }
+    )
+    sections = polished["hits"][0]["ui_meta"]["card_view"]["sections"]
+    assert any(section["id"] == "why" for section in sections)
+
+
+def test_answer_citation_evidence_quote_prefers_claim_aligned_sentence_from_same_block() -> None:
+    quote = references_router._answer_citation_evidence_quote(
+        {
+            "answer_claim": "该方法在低光照和高光照条件下均展现出很强的泛化能力。",
+            "evidence_quote": "The sub-sampling method improves optical resolution.",
+            "raw": (
+                "The sub-sampling method improves optical resolution. "
+                "Our HATNet shows a great generalization ability in both low- and high-light conditions."
+            ),
+        }
+    )
+
+    assert "generalization ability" in quote
+    assert "low- and high-light" in quote
+
+
+def test_comparison_reference_copy_deduplicates_repeated_heading_names() -> None:
+    _summary, why = references_router._answer_citation_card_copy(
+        [
+            {"answer_claim": "Hadamard uses binary patterns.", "heading_path": "Paper / Abstract"},
+            {"answer_claim": "Fourier uses sinusoidal patterns.", "heading_path": "Paper / Abstract"},
+        ],
+        prefer_zh=True,
+        prompt="比较 Hadamard 与 Fourier 的差异",
+    )
+
+    assert "“Abstract”和“Abstract”" not in why
+
+
+def test_reference_copy_links_exact_claim_and_pdf_page_without_generic_template() -> None:
+    _summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "answer_claim": "MsGAN 随湍流增强时相对 CCD 的成像优势更加显著。",
+                "heading_path": "Review / Imaging through scattering media",
+                "evidence_quote": "As turbulence increases, the advantage of MsGAN becomes significant.",
+            }
+        ],
+        prefer_zh=True,
+        prompt="MsGAN 随湍流增强时表现如何？请给出直接结论和 PDF 页码。",
+    )
+
+    assert "MsGAN" in why
+    assert "PDF 页码" in why
+    assert "结论与出处" in why
+    assert "提供回答该问题所需" not in why
+    assert "逐项核对" not in why
+
+
+def test_reference_claim_focus_removes_source_lead_in_and_keeps_actual_conclusion() -> None:
+    focus = references_router._answer_citation_claim_focus(
+        "根据 LPR-2025 综述第 5.2 节的内容，MsGAN 的直接结论是：MsGAN 随湍流增强时优势更加显著。",
+        prefer_zh=True,
+    )
+
+    assert focus == "MsGAN 随湍流增强时优势更加显著"
+
+
+def test_reference_named_entities_ignore_venue_year_and_keep_method_names() -> None:
+    entities = references_router._answer_citation_named_entities(
+        "LPR-2025 综述说明 MsGAN 在 CCD 对比中更稳定，见 PDF。"
+    )
+
+    assert entities == {"msgan", "ccd"}
+
+
 def test_reference_cards_follow_grounded_answer_citations(monkeypatch) -> None:
     source_path = r"F:\db\DL-SPI\DL-SPI.en.md"
     public_source_path = "kb-source/0/DL-SPI/DL-SPI.en.md"
@@ -196,6 +311,80 @@ def test_reference_cards_follow_grounded_answer_citations(monkeypatch) -> None:
     assert out[10]["display_state"] == "ready"
     assert out[10]["answer_aligned_citation_cards"] is True
     assert "enrichment_pending" not in out[10]
+
+
+def test_answer_citation_overlay_exposes_contiguous_card_registry_after_raw_hit_gaps(monkeypatch) -> None:
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-display-registry"
+            return [
+                {"id": 10, "role": "user", "content": "比较速度和质量"},
+                {
+                    "id": 11,
+                    "role": "assistant",
+                    "content": "速度更高 [4]，质量更好 [5]。",
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "num": 1,
+                                        "display_num": 1,
+                                        "answer_hit_num": 4,
+                                        "answer_hit_linked_nums": [4],
+                                        "citation_route": "system_a",
+                                        "source_path": r"F:\db\Speed\Speed.en.md",
+                                        "source_name": "Speed.pdf",
+                                        "heading_path": "Results",
+                                        "answer_claim": "速度更高。",
+                                        "evidence_quote": "The system reconstructs video at 30 Hz.",
+                                    },
+                                    {
+                                        "num": 2,
+                                        "display_num": 2,
+                                        "answer_hit_num": 5,
+                                        "answer_hit_linked_nums": [5],
+                                        "citation_route": "system_a",
+                                        "source_path": r"F:\db\Quality\Quality.en.md",
+                                        "source_name": "Quality.pdf",
+                                        "heading_path": "Results",
+                                        "answer_claim": "质量更好。",
+                                        "evidence_quote": "The method achieves the best reconstruction quality.",
+                                    },
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "zh")
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv-display-registry",
+        payload={
+            10: {
+                "prompt": "比较速度和质量",
+                "hits": [
+                    {
+                        "meta": {"source_path": r"kb-source\0\Speed\Speed.en.md"},
+                        "ui_meta": {"source_path": r"kb-source\0\Speed\Speed.en.md"},
+                    },
+                    {
+                        "meta": {"source_path": r"kb-source\0\Quality\Quality.en.md"},
+                        "ui_meta": {"source_path": r"kb-source\0\Quality\Quality.en.md"},
+                    },
+                ],
+            }
+        },
+    )
+
+    pack = out[10]
+    assert [hit["meta"]["ref_answer_citation_num"] for hit in pack["hits"]] == [1, 2]
+    assert [hit["meta"]["ref_answer_citation_original_nums"] for hit in pack["hits"]] == [[4], [5]]
+    assert [hit["ui_meta"]["display_citation_num"] for hit in pack["hits"]] == [1, 2]
+    assert [row["display_num"] for row in pack["citation_registry"]] == [1, 2]
+    assert [row["original_nums"] for row in pack["citation_registry"]] == [[4], [5]]
 
 
 def test_completed_answer_citation_overlays_do_not_need_background_warm() -> None:

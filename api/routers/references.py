@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.deps import get_chat_store, get_settings, load_prefs
+from api.citation_display_registry import system_a_source_key
 from api.internal_access import require_management_api
 from api.reference_ui import (
     _attach_pack_display_contract,
@@ -112,7 +113,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 32
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 33
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000
@@ -291,11 +292,17 @@ def _clear_answer_citation_source_bound_fields(meta: dict, ui: dict) -> tuple[di
     for key in _ANSWER_CITATION_SOURCE_BOUND_META_KEYS:
         clean_meta.pop(key, None)
     for key in (
+        "anchor_match_score",
+        "anchor_target_kind",
+        "anchor_target_number",
         "citation_meta",
+        "page_end",
+        "page_start",
         "primary_evidence",
         "primary_evidence_heading_path",
         "reader_open",
         "section_label",
+        "semantic_badges",
         "subsection_label",
     ):
         clean_ui.pop(key, None)
@@ -406,6 +413,91 @@ def _answer_citation_heading_leaf(detail: dict, *, prefer_zh: bool) -> str:
     return leaf or ("原文定位处" if prefer_zh else "the cited passage")
 
 
+def _answer_citation_claim_focus(summary: str, *, prefer_zh: bool) -> str:
+    text = re.sub(r"^\s*\d+[.、)]\s*", "", str(summary or "").strip())
+    if prefer_zh:
+        text = re.sub(r"^根据.{0,160}?[，,:：]\s*", "", text)
+        lead_and_claim = re.split(r"[：]", text, maxsplit=1)
+        if (
+            len(lead_and_claim) == 2
+            and re.search(r"(?:结论|结果|表现|证据|回答)(?:是|为)?$", lead_and_claim[0].strip())
+            and len(lead_and_claim[1].strip()) >= 4
+        ):
+            text = lead_and_claim[1].strip()
+        head = re.split(r"[：。；]", text, maxsplit=1)[0].strip()
+        limit = 72
+    else:
+        head = re.split(r"[:.;]", text, maxsplit=1)[0].strip()
+        limit = 82
+    if 4 <= len(head) <= limit:
+        focus = head
+    elif len(text) > limit:
+        focus = text[: limit - 1].rstrip(" ,，。；;:") + "…"
+    else:
+        focus = text.rstrip(" ,，。；;:")
+    return focus or ("该回答要点" if prefer_zh else "this answer point")
+
+
+def _answer_citation_named_entities(value: str) -> set[str]:
+    stopwords = {
+        "api", "dl", "dnn", "figure", "lpr", "markdown", "paper", "pdf",
+        "result", "results", "section", "spi", "system", "table",
+    }
+    out: set[str] = set()
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", str(value or "")):
+        token_low = token.lower()
+        distinctive_shape = (
+            token.isupper()
+            or any(char.isdigit() for char in token)
+            or (any(char.isupper() for char in token[1:]) and any(char.islower() for char in token))
+        )
+        venue_year_token = bool(
+            re.fullmatch(r"(?:aaai|cvpr|eccv|iccv|ieee|lpr)-?(?:19|20)\d{2}", token_low)
+        )
+        if distinctive_shape and token_low not in stopwords and not venue_year_token:
+            out.add(token_low)
+    return out
+
+
+def _answer_citation_evidence_quote(detail: dict) -> str:
+    """Prefer the sentence in the cited block that best matches the answer claim."""
+
+    current = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
+    raw = re.sub(r"\s+", " ", str(detail.get("raw") or "")).strip()
+    claim = " ".join(
+        part
+        for part in (
+            str(detail.get("answer_claim") or "").strip(),
+            " ".join(str(value or "").strip() for value in list(detail.get("answer_claims") or [])),
+            str(detail.get("card_takeaway") or "").strip(),
+        )
+        if part
+    )
+    claim_terms = evidence_alignment_tokens(claim)
+    if not raw or not claim_terms:
+        return current
+    candidates = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+", raw)
+        if 24 <= len(part.strip()) <= 700
+    ]
+    if not candidates:
+        return current
+
+    def score(value: str) -> tuple[int, int, int]:
+        overlap = len(claim_terms & evidence_alignment_tokens(value))
+        number_overlap = len(
+            set(re.findall(r"(?<!\w)\d+(?:\.\d+)?%?", claim))
+            & set(re.findall(r"(?<!\w)\d+(?:\.\d+)?%?", value))
+        )
+        return overlap, number_overlap, -abs(len(value) - 180)
+
+    best = max(candidates, key=score)
+    if score(best)[:2] > score(current)[:2]:
+        return best
+    return current
+
+
 def _answer_citation_card_copy(
     details: list[dict],
     *,
@@ -428,6 +520,7 @@ def _answer_citation_card_copy(
     if not rows:
         return "", ""
     summary = ("；" if prefer_zh else "; ").join(claim for _heading, claim in rows)
+    claim_focus = _answer_citation_claim_focus(summary, prefer_zh=prefer_zh)
     support_line = next(
         (
             str(
@@ -464,7 +557,8 @@ def _answer_citation_card_copy(
         "",
     )
     prompt_text = str(prompt or "")
-    headings = "”和“".join(heading for heading, _claim in rows)
+    unique_headings = list(dict.fromkeys(heading for heading, _claim in rows if heading))
+    headings = "”和“".join(unique_headings)
     reading_route = bool(
         re.search(
             r"先读|哪几篇.{0,12}(?:读|看)|(?:阅读|学习|文献)(?:主线|路线|顺序|路径)|"
@@ -538,8 +632,14 @@ def _answer_citation_card_copy(
             return summary, f"“{headings}”说明这篇文献在阅读路线中承担的具体知识环节，可据此安排阅读顺序。"
         return summary, f"'{headings}' identifies the specific knowledge role this paper plays in the reading order."
     if prefer_zh:
-        if re.search(r"好处|优势|收益|坑|局限|挑战", prompt_text):
-            why = f"“{headings}”分别覆盖优势与局限，正好对应问题要求的正反两方面。"
+        asks_benefit = bool(re.search(r"好处|优势|收益", prompt_text))
+        asks_limit = bool(re.search(r"坑|局限|挑战", prompt_text))
+        if asks_benefit and asks_limit:
+            why = support_line or f"“{headings}”把原文结果与“{claim_focus}”直接对应起来，可据此分别核对收益与限制。"
+        elif asks_benefit:
+            why = support_line or f"“{headings}”把原文结果与“{claim_focus}”直接对应起来，可作为这一优势的依据。"
+        elif asks_limit:
+            why = support_line or f"“{headings}”把原文结果与“{claim_focus}”直接对应起来，可作为这一限制的依据。"
         elif re.search(r"关系|相关|主线|值得.{0,8}(?:读|看)|交集", prompt_text):
             evidence_text = " ".join(
                 str(detail.get("evidence_quote") or detail.get("summary_line") or "")
@@ -589,10 +689,25 @@ def _answer_citation_card_copy(
             else:
                 why = f"“{headings}”保留了方法归属或上游工作的原文线索，可用于核对来源判断。"
         else:
-            why = support_line or f"“{headings}”提供回答该问题所需的原文定位，卡片中的结论可在这里逐项核对。"
+            if re.search(r"页码|第\s*\d+\s*页|page", prompt_text, flags=re.I):
+                why = support_line or (
+                    f"“{headings}”中的原文直接支撑“{claim_focus}”，并保留 PDF 页码定位，"
+                    "正好覆盖问题要求的结论与出处。"
+                )
+            else:
+                why = support_line or (
+                    f"“{headings}”中的原文直接支撑“{claim_focus}”，"
+                    "可据此核对回答中的具体判断与上下文。"
+                )
     else:
-        if re.search(r"benefit|advantage|strength|pitfall|limit|challenge", prompt_text, flags=re.I):
-            why = f"'{headings}' covers the benefit and limitation sides requested by the question."
+        asks_benefit = bool(re.search(r"benefit|advantage|strength", prompt_text, flags=re.I))
+        asks_limit = bool(re.search(r"pitfall|limit|challenge", prompt_text, flags=re.I))
+        if asks_benefit and asks_limit:
+            why = support_line or f"'{headings}' ties the source result directly to '{claim_focus}', allowing both the benefit and limitation to be checked."
+        elif asks_benefit:
+            why = support_line or f"'{headings}' ties the source result directly to '{claim_focus}', providing evidence for this advantage."
+        elif asks_limit:
+            why = support_line or f"'{headings}' ties the source result directly to '{claim_focus}', providing evidence for this limitation."
         elif re.search(r"relevan|research line|worth reading|scope", prompt_text, flags=re.I):
             evidence_text = " ".join(
                 str(detail.get("evidence_quote") or detail.get("summary_line") or "")
@@ -629,7 +744,16 @@ def _answer_citation_card_copy(
         elif re.search(r"origin|invent|original|novel|prior work|existing method", prompt_text, flags=re.I):
             why = f"'{headings}' identifies whether the method is prior work or a contribution introduced by this paper."
         else:
-            why = support_line or f"'{headings}' provides the source location needed to check the card's conclusion."
+            if re.search(r"page|PDF", prompt_text, flags=re.I):
+                why = support_line or (
+                    f"The source text in '{headings}' directly supports '{claim_focus}' and retains the PDF page locator, "
+                    "covering both the requested conclusion and its source."
+                )
+            else:
+                why = support_line or (
+                    f"The source text in '{headings}' directly supports '{claim_focus}', "
+                    "so the answer's specific judgment can be checked in context."
+                )
     return summary, why
 
 
@@ -762,6 +886,12 @@ def _grounded_answer_citation_state(message: dict | None) -> tuple[list[dict], b
         and str(item.get("evidence_quote") or item.get("summary_line") or "").strip()
     ]
     if grounded:
+        grounded.sort(
+            key=lambda item: (
+                int(item.get("display_num") or item.get("num") or 0) or 10**9,
+                str(item.get("source_path") or ""),
+            )
+        )
         return grounded, False
 
     answer_quality = (
@@ -858,7 +988,7 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
         grouped: dict[str, list[dict]] = {}
         source_order: list[str] = []
         for detail in details:
-            source_key = _answer_citation_source_key(detail.get("source_path"))
+            source_key = system_a_source_key(detail) or _answer_citation_source_key(detail.get("source_path"))
             if not source_key:
                 continue
             if source_key not in grouped:
@@ -882,15 +1012,24 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                 remaining.append(dict(hit))
 
         aligned_hits: list[dict] = []
-        for source_key in source_order:
+        citation_registry: list[dict] = []
+        for display_num, source_key in enumerate(source_order, start=1):
             source_details = grouped[source_key]
-            detail = source_details[0]
+            display_details: list[dict] = []
+            for source_detail in source_details:
+                display_detail = dict(source_detail)
+                aligned_quote = _answer_citation_evidence_quote(display_detail)
+                if aligned_quote:
+                    display_detail["evidence_quote"] = aligned_quote
+                    display_detail["summary_line"] = aligned_quote
+                display_details.append(display_detail)
+            detail = display_details[0]
             hit = dict(existing_by_source.get(source_key) or {})
             meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), dict) else {}
             ui = dict(hit.get("ui_meta") or {}) if isinstance(hit.get("ui_meta"), dict) else {}
             meta, ui = _clear_answer_citation_source_bound_fields(meta, ui)
             summary_line, why_line = _answer_citation_card_copy(
-                source_details,
+                display_details,
                 prefer_zh=prefer_zh,
                 prompt=prompt,
             )
@@ -919,7 +1058,7 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                         "card_title",
                     )
                 ).strip()
-                for item in source_details
+                for item in display_details
                 if isinstance(item, dict)
             ).strip()
             grounded_why = build_grounded_ref_why_line(
@@ -929,7 +1068,12 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                 summary_line=grounding_surface or evidence_quote,
                 action=prompt_reference_focus_action(prompt),
             )
-            if grounded_why:
+            claim_named_entities = _answer_citation_named_entities(summary_line)
+            grounded_named_entities = _answer_citation_named_entities(grounded_why)
+            if grounded_why and (
+                not claim_named_entities
+                or bool(claim_named_entities & grounded_named_entities)
+            ):
                 why_line = grounded_why
             primary = {
                 "source_path": source_path,
@@ -957,12 +1101,31 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                     "ref_pack_state": "ready",
                 }
             )
-            try:
-                answer_citation_num = int(detail.get("num") or 0)
-            except (TypeError, ValueError):
-                answer_citation_num = 0
-            if answer_citation_num > 0:
-                meta["ref_answer_citation_num"] = answer_citation_num
+            original_nums: list[int] = []
+            for source_detail in source_details:
+                traced_values = (
+                    source_detail.get("answer_hit_num"),
+                    source_detail.get("original_num"),
+                    *list(source_detail.get("answer_hit_linked_nums") or []),
+                )
+                fallback_values = (
+                    *list(source_detail.get("linked_nums") or []),
+                    source_detail.get("num"),
+                )
+                has_traced_number = any(
+                    str(value or "").isdigit() and int(value) > 0
+                    for value in traced_values
+                )
+                for value in traced_values if has_traced_number else fallback_values:
+                    try:
+                        number = int(value or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if number > 0 and number not in original_nums:
+                        original_nums.append(number)
+            meta["ref_answer_citation_num"] = int(display_num)
+            if original_nums:
+                meta["ref_answer_citation_original_nums"] = original_nums
             meta["answer_citation_overlay_grounded"] = True
             citation_meta = _answer_citation_public_meta(source_details)
             if citation_meta:
@@ -986,7 +1149,10 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                     "why_basis": "对齐答案主张与原文定位" if prefer_zh else "Aligned to the answer claim and source locator",
                     "primary_evidence": primary,
                     "primary_evidence_heading_path": heading_path,
+                    "page_start": int(primary.get("page_start") or 0),
+                    "page_end": int(primary.get("page_end") or primary.get("page_start") or 0),
                     "render_locale": "zh" if prefer_zh else "en",
+                    "display_citation_num": int(display_num),
                     "score_pending": False,
                 }
             )
@@ -1074,11 +1240,21 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             }
             hit.update({"text": evidence_quote, "meta": meta, "ui_meta": ui})
             aligned_hits.append(hit)
+            citation_registry.append(
+                {
+                    "display_num": int(display_num),
+                    "source_key": source_key,
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "original_nums": original_nums,
+                }
+            )
         if remaining and not list(pack.get("retrieval_hits") or []):
             # Keep unused candidates available for diagnostics without
             # presenting them as evidence for claims the answer did not make.
             pack["retrieval_hits"] = [dict(hit) for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
         pack["hits"] = aligned_hits
+        pack["citation_registry"] = citation_registry
         pack["answer_aligned_citation_cards"] = True
         if _answer_citation_overlay_pack_is_complete(pack):
             pack["payload_mode"] = "full"
@@ -1241,6 +1417,31 @@ def _get_state_validated_conversation_refs_record(
         return None
     payload = rec.get("payload")
     return rec if isinstance(payload, dict) else None
+
+
+def _state_cached_payload_covers_refs_rows(payload: dict | None, refs_state: dict | None) -> bool:
+    """Reject an empty/partial state cache after message_refs rows appear."""
+
+    cached_ids: set[int] = set()
+    for raw_key, pack in dict(payload or {}).items():
+        if not isinstance(pack, dict):
+            continue
+        try:
+            cached_ids.add(int(raw_key))
+        except (TypeError, ValueError):
+            continue
+    state_ids: set[int] = set()
+    state = refs_state if isinstance(refs_state, dict) else {}
+    for row in list(state.get("rows") or []):
+        if not isinstance(row, dict):
+            continue
+        try:
+            user_msg_id = int(row.get("user_msg_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if user_msg_id > 0:
+            state_ids.add(user_msg_id)
+    return (not state_ids) or state_ids.issubset(cached_ids)
 
 
 def _refs_conversation_cache_signature(
@@ -2964,7 +3165,10 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                     str(cached_state_rec.get("mode") or "full").strip().lower()
                     or "full"
                 )
-                if isinstance(cached_state_payload, dict):
+                if isinstance(cached_state_payload, dict) and _state_cached_payload_covers_refs_rows(
+                    cached_state_payload,
+                    refs_state,
+                ):
                     return _finish(
                         cached_state_payload,
                         f"cache_validated_{cached_state_mode}",

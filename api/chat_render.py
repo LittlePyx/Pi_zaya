@@ -20,6 +20,7 @@ from api.message_render_contract import (
     render_payload_is_missing_planned_system_a,
     strip_legacy_render_fields,
 )
+from api.citation_display_registry import remap_system_a_citations_for_display
 from api.deps import load_prefs
 from api.reference_card_quality import attach_refs_pack_polish_contract
 from api.reference_local_source_meta import (
@@ -116,7 +117,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 40
+_RENDER_CACHE_SCHEMA_VERSION = 44
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -522,6 +523,8 @@ def _abstract_primary_evidence_from_source(source_path: str) -> dict:
 def _source_primary_evidence_matching(
     source_path: str,
     required_patterns: tuple[str, ...],
+    *,
+    preserve_full_block: bool = False,
 ) -> dict:
     raw_path = str(source_path or "").strip()
     if not raw_path or not required_patterns:
@@ -581,6 +584,8 @@ def _source_primary_evidence_matching(
             for pattern in required_patterns
         ):
             focused_text = re.sub(r"\s+", " ", text).strip()
+        elif preserve_full_block:
+            focused_text = re.sub(r"\s+", " ", text).strip()
         heading_low = heading.lower()
         score = float(len(required_patterns) * 4)
         if "abstract" in heading_low:
@@ -610,6 +615,69 @@ def _source_primary_evidence_matching(
         return {}
     rows.sort(key=lambda item: (item[0], -len(str(item[1].get("snippet") or ""))), reverse=True)
     return dict(rows[0][1])
+
+
+def _claim_distinctive_source_primary_evidence(detail: dict | None) -> dict:
+    """Recover a precise source block when a citation points at the wrong passage.
+
+    A generated answer can cite the right retrieved paper while a secondary
+    snippet selector binds the card to a different passage in that paper.  Two
+    distinctive method/entity tokens from the answer are conservative enough
+    to re-open the source and recover the matching block without broad semantic
+    guessing.  The full block is retained so the decisive result sentence is
+    not lost when the tokens occur in neighbouring sentences.
+    """
+
+    row = detail if isinstance(detail, dict) else {}
+    source_path = str(row.get("source_path") or row.get("sourcePath") or "").strip()
+    claim = " ".join(
+        part
+        for part in (
+            str(row.get("answer_claim") or "").strip(),
+            " ".join(str(value or "").strip() for value in list(row.get("answer_claims") or [])),
+        )
+        if part
+    )
+    if not source_path or not claim:
+        return {}
+    stopwords = {
+        "api", "dl", "dnn", "figure", "lpr", "markdown", "paper", "pdf",
+        "result", "results", "section", "spi", "system", "table",
+    }
+    tokens: list[str] = []
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", claim):
+        token_low = token.lower()
+        distinctive_shape = (
+            token.isupper()
+            or any(char.isdigit() for char in token)
+            or (any(char.isupper() for char in token[1:]) and any(char.islower() for char in token))
+        )
+        venue_year_token = bool(
+            re.fullmatch(r"(?:aaai|cvpr|eccv|iccv|ieee|lpr)-?(?:19|20)\d{2}", token_low)
+        )
+        if (
+            not distinctive_shape
+            or token_low in stopwords
+            or venue_year_token
+            or token_low in {item.lower() for item in tokens}
+        ):
+            continue
+        tokens.append(token)
+        if len(tokens) >= 3:
+            break
+    if len(tokens) < 2:
+        return {}
+    existing = str(
+        row.get("evidence_quote") or row.get("summary_line") or row.get("raw") or ""
+    ).lower()
+    if all(token.lower() in existing for token in tokens):
+        return {}
+    patterns = tuple(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])" for token in tokens)
+    return _source_primary_evidence_matching(
+        source_path,
+        patterns,
+        preserve_full_block=True,
+    )
 
 
 def _mentions_s2ism(value: str) -> bool:
@@ -1434,6 +1502,7 @@ def _backfill_system_a_cite_details_from_ref_pack(
             )
             if relation:
                 detail["support_relation"] = relation
+        source_claim_primary = _claim_distinctive_source_primary_evidence(detail)
         claim_aligned_primary = _claim_aligned_abstract_primary_evidence(ref_pack, detail)
         plan_evidence = str(
             detail.get("evidence_quote") or detail.get("summary_line") or detail.get("raw") or ""
@@ -1446,7 +1515,8 @@ def _backfill_system_a_cite_details_from_ref_pack(
             out.append(detail)
             continue
         primary = (
-            claim_aligned_primary
+            source_claim_primary
+            or claim_aligned_primary
             or (primary_by_source.get(source_key) if source_key else None)
         )
         snippet = _primary_evidence_text(primary if isinstance(primary, dict) else {})
@@ -10994,6 +11064,10 @@ def enrich_messages_with_reference_render(
                     render_locale=render_locale,
                     answer_text=render_source,
                 )
+            rendered_body, cite_details, _citation_registry = remap_system_a_citations_for_display(
+                rendered_body,
+                cite_details,
+            )
 
             rendered_full = ""
             if notice and rendered_body:

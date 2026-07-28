@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from kb.chat_store import ChatStore
+from api.citation_display_registry import remap_system_a_citations_for_display
 from api.chat_render import (
     _augment_hits_with_canonical_answer_citations,
     _enrich_provenance_segments_for_display,
@@ -25,6 +26,190 @@ def test_double_numeric_citations_never_render_as_empty_brackets() -> None:
     stripped = _strip_freeform_numeric_citation_markers("A [[4]], B [[]], C [].")
     assert "[]" not in stripped
     assert "[[]]" not in stripped
+
+
+def test_system_a_display_registry_remaps_answer_hit_numbers_but_keeps_system_b() -> None:
+    markdown = (
+        '速度证据 [4](#cite-speed "speed")；'
+        '质量证据 [5](#cite-quality "quality")；'
+        '文内参考 [66](#cite-system-b "reference").'
+    )
+    details = [
+        {
+            "num": 4,
+            "linked_nums": [4],
+            "anchor": "cite-speed",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Speed\Speed.en.md",
+            "source_name": "Speed.pdf",
+        },
+        {
+            "num": 5,
+            "linked_nums": [5],
+            "anchor": "cite-quality",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Quality\Quality.en.md",
+            "source_name": "Quality.pdf",
+        },
+        {
+            "num": 66,
+            "anchor": "cite-system-b",
+            "citation_route": "system_b",
+            "source_path": r"F:\db\Review\Review.en.md",
+        },
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert '[1](#cite-speed' in rendered
+    assert '[2](#cite-quality' in rendered
+    assert '[66](#cite-system-b' in rendered
+    assert [row["num"] for row in remapped] == [1, 2, 66]
+    assert remapped[0]["answer_hit_num"] == 4
+    assert remapped[1]["answer_hit_num"] == 5
+    assert [row["original_nums"] for row in registry] == [[4], [5]]
+
+
+def test_system_a_display_registry_maps_multiple_passages_from_one_paper_to_one_card() -> None:
+    markdown = '优势 [4](#cite-benefit "benefit")，局限 [5](#cite-limit "limit").'
+    details = [
+        {
+            "num": 4,
+            "anchor": "cite-benefit",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+        },
+        {
+            "num": 5,
+            "anchor": "cite-limit",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+        },
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert '[1](#cite-benefit' in rendered
+    assert '[1](#cite-limit' in rendered
+    assert [row["num"] for row in remapped] == [1, 1]
+    assert len(registry) == 1
+    assert registry[0]["original_nums"] == [4, 5]
+
+
+def test_system_a_display_registry_is_idempotent_for_historical_render_packets() -> None:
+    markdown = '速度证据 [1](#cite-speed "speed").'
+    details = [
+        {
+            "num": 1,
+            "display_num": 1,
+            "linked_nums": [1],
+            "answer_hit_num": 4,
+            "answer_hit_linked_nums": [4],
+            "original_num": 4,
+            "anchor": "cite-speed",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Speed\Speed.en.md",
+        }
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert rendered == markdown
+    assert remapped[0]["num"] == 1
+    assert remapped[0]["answer_hit_num"] == 4
+    assert remapped[0]["answer_hit_linked_nums"] == [4]
+    assert registry[0]["original_nums"] == [4]
+
+
+def test_system_a_display_registry_backfills_same_source_occurrence_alias() -> None:
+    markdown = (
+        '直接结论 [4](#cite-result "source: Review.pdf | ref 4")；'
+        'PDF 页码 [4](#cite-page "source: Review.pdf | ref 4").'
+    )
+    details = [
+        {
+            "num": 4,
+            "anchor": "cite-result",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+            "source_name": "Review.pdf",
+        }
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert '[1](#cite-result' in rendered
+    assert '[1](#cite-page' in rendered
+    assert [row["anchor"] for row in remapped] == ["cite-result", "cite-page"]
+    assert remapped[1]["citation_occurrence_alias"] is True
+    assert [row["num"] for row in remapped] == [1, 1]
+    assert len(registry) == 1
+
+
+def test_system_a_display_registry_does_not_alias_system_b_reader_anchor() -> None:
+    markdown = (
+        'Direct evidence [4](#cite-result "source: Review.pdf | ref 4"); '
+        'bibliography [4](#kb-cite-reader-external-4 "source: Review.pdf | ref 4").'
+    )
+    details = [
+        {
+            "num": 4,
+            "anchor": "cite-result",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+            "source_name": "Review.pdf",
+        }
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert '[1](#cite-result' in rendered
+    assert '[4](#kb-cite-reader-external-4' in rendered
+    assert [row["anchor"] for row in remapped] == ["cite-result"]
+    assert len(registry) == 1
+
+
+def test_system_a_backfill_rebinds_wrong_same_paper_passage_to_claim_block(tmp_path) -> None:
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source = tmp_path / "Review.en.md"
+    source.write_text(
+        "# Review\n\n"
+        "## 5.2. Imaging Through Scattering Media\n\n"
+        "<!-- kb_page: 10 -->\n\n"
+        "Zhang et al. proposed a Multi-scale GAN (MsGAN). "
+        "The experimental results acquired by CCD and MsGAN are shown in Figure 6a. "
+        "The image quality recovered by MsGAN consistently surpasses that of CCD, "
+        "and the advantage becomes notably prominent as turbulence increases.\n\n"
+        "## 5.3. Imaging at Photon-Level\n\n"
+        "<!-- kb_page: 11 -->\n\n"
+        "Figure 7a shows the results of an unsupervised anti-noise framework.\n",
+        encoding="utf-8",
+    )
+    details = [
+        {
+            "num": 1,
+            "anchor": "kb-cite-review-1",
+            "citation_route": "system_a",
+            "source_path": str(source),
+            "source_name": "Review.pdf",
+            "heading_path": "Review / 5.3. Imaging at Photon-Level",
+            "evidence_quote": "Figure 7a shows the results of an unsupervised anti-noise framework.",
+            "raw": "Figure 7a shows the results of an unsupervised anti-noise framework.",
+            "page_start": 11,
+            "answer_claim": "根据 LPR-2025 综述，MsGAN 恢复质量始终优于 CCD，且湍流越强优势越明显。",
+        }
+    ]
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, {}, render_locale="zh")
+
+    assert len(out) == 1
+    assert "MsGAN consistently surpasses" in out[0]["evidence_quote"]
+    assert "turbulence increases" in out[0]["evidence_quote"]
+    assert "Figure 7a shows" not in out[0]["evidence_quote"]
+    assert "5.2. Imaging Through Scattering Media" in out[0]["heading_path"]
+    assert out[0]["page_start"] == 10
+    assert out[0]["block_id"]
 
 
 def test_final_display_cleanup_removes_empty_citation_wrappers_but_keeps_task_boxes() -> None:
@@ -4857,7 +5042,8 @@ def test_reading_guide_budget_counts_only_bound_comparison_citations():
         for detail in details
         if "PSNR" in detail["evidence_quote"] and "SSIM" in detail["evidence_quote"]
     )
-    assert comparison_detail["num"] > 6
+    assert comparison_detail["num"] == 1
+    assert comparison_detail["answer_hit_num"] > 6
     assert comparison_detail["citation_plan_slot"] is True
     assert comparison_detail["block_id"] == "blk_comparison"
     assert comparison_detail["anchor_id"] == "p_comparison"
@@ -4947,7 +5133,8 @@ def test_comparison_rescue_adds_grounded_bridge_when_model_omits_all_citations()
     assert "定量对比依据" in rendered["rendered_content"]
     assert rendered["rendered_content"].index("定量对比依据") < rendered["rendered_content"].index("一句话建议")
     detail = next(item for item in rendered["cite_details"] if item["citation_route"] == "system_a")
-    assert detail["num"] > 6
+    assert detail["num"] == 1
+    assert detail["answer_hit_num"] > 6
     assert detail["heading_path"] == heading
     assert "sampling ratio" in detail["answer_claim"]
     assert "PSNR" in detail["evidence_quote"]
