@@ -5060,6 +5060,24 @@ def _assess_system_a_hit_binding(
     ).ratio() if claim and quote_surface else 0.0
     claim_words = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", claim.lower())
     evidence_words = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", quote_surface.lower())
+    claim_alignment_terms = evidence_alignment_tokens(claim)
+    evidence_alignment_terms = evidence_alignment_tokens(quote_surface)
+    alignment_overlap = claim_alignment_terms & evidence_alignment_terms
+    generic_alignment_terms = {
+        "approach",
+        "based",
+        "high",
+        "image",
+        "method",
+        "paper",
+        "performance",
+        "quality",
+        "results",
+        "study",
+        "system",
+        "using",
+    }
+    informative_alignment_overlap = alignment_overlap - generic_alignment_terms
     longest_word_run = max(
         (
             block.size
@@ -5185,6 +5203,36 @@ def _assess_system_a_hit_binding(
             "reason": reason,
             "overlap_terms": [],
             "missing_terms": sorted(missing_strong_terms),
+        }
+
+    # Chinese answer prose and English source passages often have no literal
+    # token overlap even when they describe the same mechanism.  Keep this
+    # cross-language path deliberately strict: several mapped, informative
+    # terms must agree, and any quantitative values in the claim must still be
+    # present in the source evidence.
+    if (
+        not body_domain_overlap
+        and len(alignment_overlap) >= 4
+        and len(informative_alignment_overlap) >= 4
+        and (
+            not claim_numeric_values
+            or claim_numeric_values.issubset(evidence_numeric_values)
+        )
+    ):
+        terms = sorted(informative_alignment_overlap)
+        term_label = _system_a_term_label(terms[:6])
+        reason = (
+            f"答案与英文原文在“{term_label}”等多个具体动作和对象上对应，可确认是同一技术主张。"
+            if prefer_zh
+            else "The answer and source align on several specific actions and objects, supporting the same technical claim."
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.84,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": terms,
+            "missing_terms": [],
         }
 
     context_only_overlap = body_domain_overlap & _SYSTEM_A_CONTEXT_ONLY_BINDING_TERMS

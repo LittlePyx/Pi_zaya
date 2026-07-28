@@ -87,6 +87,65 @@ def test_foveated_question_aligns_with_not_simple_zoom_claim() -> None:
     )
 
 
+def test_foveated_fast_and_slow_detail_claim_aligns_with_english_source() -> None:
+    answer_tokens = evidence_alignment_tokens(
+        "\u5feb\u901f\u53d8\u5316\u7684\u7279\u5f81\u88ab\u5feb\u901f\u8bb0\u5f55\uff0c"
+        "\u800c\u7f13\u6162\u6f14\u53d8\u7684\u533a\u57df\u901a\u8fc7\u591a\u5e27\u7d2f\u79ef\u7ec6\u8282\u3002"
+    )
+    evidence_tokens = evidence_alignment_tokens(
+        "This strategy rapidly records the detail of quickly changing features while "
+        "simultaneously accumulating detail of more slowly evolving regions over several "
+        "consecutive frames."
+    )
+
+    assert {
+        "rapidly",
+        "records",
+        "changing",
+        "features",
+        "accumulating",
+        "detail",
+        "slowly",
+        "evolving",
+        "consecutive",
+        "frames",
+    } <= (answer_tokens & evidence_tokens)
+
+
+def test_imaging_efficiency_and_noise_robustness_align_with_english_source() -> None:
+    answer_tokens = evidence_alignment_tokens(
+        "\u6210\u50cf\u6548\u7387\u548c\u566a\u58f0\u9c81\u68d2\u6027"
+    )
+    evidence_tokens = evidence_alignment_tokens(
+        "We compare the methods in terms of imaging efficiency and noise robustness."
+    )
+
+    assert {"imaging", "efficiency", "noise", "robustness"} <= (
+        answer_tokens & evidence_tokens
+    )
+
+
+def test_detector_manufacturing_challenges_align_with_english_source() -> None:
+    answer_tokens = evidence_alignment_tokens(
+        "\u786c\u4ef6\u5236\u9020\u590d\u6742\u3001\u6210\u672c\u9ad8\uff0c\u4e14\u9700\u8981\u4f4e\u6e29\u7b49\u7279\u6b8a\u5de5\u4f5c\u6761\u4ef6"
+    )
+    evidence_tokens = evidence_alignment_tokens(
+        "The complexity and high manufacturing cost, coupled with special conditions "
+        "such as a low-temperature environment, limit adoption."
+    )
+
+    assert {
+        "complexity",
+        "manufacturing",
+        "high",
+        "cost",
+        "low",
+        "temperature",
+        "special",
+        "conditions",
+    } <= (answer_tokens & evidence_tokens)
+
+
 def test_transposed_pnsr_table_header_aligns_with_psnr_claim() -> None:
     assert "psnr" in evidence_alignment_tokens(
         "Table 2: PNSR (dB), Hadamard = 8.01; Fourier = 8.08; SSIM = 11.1."

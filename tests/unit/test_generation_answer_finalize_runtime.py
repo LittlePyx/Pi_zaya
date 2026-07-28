@@ -3226,6 +3226,74 @@ def test_finalize_generation_answer_uses_authoritative_single_doc_list_for_multi
     assert "The following library paper directly relates to 'compressive holography':" in answer
 
 
+def test_finalize_generation_answer_rechecks_claims_after_late_answer_mutation(monkeypatch):
+    monkeypatch.setattr(finalize_runtime, "_reconcile_kb_notice", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(finalize_runtime, "_enhance_kb_miss_fallback", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_build_answer_quality_probe",
+        lambda answer, **kwargs: {"minimum_ok": True},
+    )
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_ensure_requested_source_page",
+        lambda answer, **kwargs: (
+            f"{answer}\n\n该系统还能把所有场景的重建速度提高十倍。"
+        ),
+    )
+
+    out = finalize_runtime._finalize_generation_answer(
+        "该方法让高分辨率中央凹区域跟踪运动 [1]。",
+        prompt="foveated dynamic supersampling 如何分配采样资源？",
+        prompt_for_user="foveated dynamic supersampling 如何分配采样资源？",
+        answer_hits=[
+            {
+                "text": "A high-resolution foveal region tracks motion within the scene.",
+                "meta": {"source_path": "foveated.en.md"},
+            }
+        ],
+        db_dir="db",
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="medium",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=True,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="method",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="foveated.en.md",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={
+            "citation_plan": {
+                "intent": "answer_grounding",
+                "budget": {"system_a": 1, "system_b": 0},
+                "slots": [
+                    {
+                        "preferred_system": "system_a",
+                        "candidate_hits": [1],
+                        "source_path": "foveated.en.md",
+                        "evidence_quote": (
+                            "A high-resolution foveal region tracks motion within the scene."
+                        ),
+                    }
+                ],
+            }
+        },
+        apply_paper_guide_answer_postprocess=lambda answer, **kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **kwargs: answer,
+        validate_structured_citations=lambda answer, **kwargs: (answer, {}),
+    )
+
+    assert "中央凹区域跟踪运动" in out["answer"]
+    assert "提高十倍" not in out["answer"]
+    assert out["answer_quality"]["claim_evidence"]["final_gate_applied"] is True
+    assert out["answer_quality"]["claim_evidence"]["minimum_ok"] is True
+
+
 def test_finalize_generation_answer_preserves_numeric_refs_for_citation_lookup(monkeypatch):
     monkeypatch.setattr(finalize_runtime, "_reconcile_kb_notice", lambda answer, **kwargs: answer)
     monkeypatch.setattr(finalize_runtime, "_apply_answer_contract_v1", lambda answer, **kwargs: answer)

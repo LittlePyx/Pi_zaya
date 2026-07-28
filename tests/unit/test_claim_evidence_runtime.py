@@ -127,6 +127,180 @@ def test_claim_audit_keeps_advice_out_of_high_risk_count():
     assert audit["uncited_high_risk_claims"] == 0
 
 
+def test_anaphoric_core_claim_inherits_previous_grounded_source() -> None:
+    answer = (
+        "Foveated dynamic supersampling 让高分辨率中央凹区域跟踪运动，"
+        "同时每一帧仍从整个视场获取新的空间信息 [1]。"
+        "其核心是快速记录快速变化的特征，同时通过多帧累积增强慢变区域细节。"
+    )
+    hits = [
+        {
+            "text": (
+                "A high-resolution foveal region tracks motion while every frame delivers "
+                "new spatial information across the entire field of view. This strategy "
+                "rapidly records quickly changing features while accumulating detail of "
+                "more slowly evolving regions over consecutive frames."
+            )
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(answer, hits)
+
+    assert "其核心是快速记录快速变化的特征，同时通过多帧累积增强慢变区域细节 [1]。" in repaired
+    assert meta["uncited_high_risk_claims"] == 0
+
+
+def test_final_gate_drops_unsupported_uncited_high_risk_claim_without_strict_plan() -> None:
+    answer = (
+        "该论文报告中央凹区域会跟踪运动 [1]。"
+        "该系统还能把所有场景的重建速度提高十倍。"
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [{"text": "A high-resolution foveal region tracks motion within the scene."}],
+        drop_unsupported_high_risk_claims=True,
+    )
+
+    assert "中央凹区域会跟踪运动 [1]" in repaired
+    assert "提高十倍" not in repaired
+    assert meta["dropped_unsupported_unplanned_claims"] == 1
+
+
+def test_final_gate_drops_high_risk_claim_with_wrong_numeric_source() -> None:
+    answer = (
+        "\u7cfb\u7edf\u8ddf\u8e2a\u4e2d\u592e\u51f9\u533a\u57df\u7684\u8fd0\u52a8 [1]\u3002"
+        "\u901a\u8fc7\u727a\u7272\u9759\u6b62\u533a\u57df\u5355\u5e27\u7684\u91c7\u6837\u6570\uff0c"
+        "\u6362\u53d6\u8fd0\u52a8\u533a\u57df\u7684\u9ad8\u65f6\u95f4\u5206\u8fa8\u7387 [1]\u3002"
+    )
+    hits = [
+        {
+            "text": (
+                "A high-resolution foveal region tracks motion while every frame "
+                "delivers new spatial information across the entire field of view."
+            )
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1},
+        drop_unsupported_high_risk_claims=True,
+    )
+
+    assert "\u4e2d\u592e\u51f9\u533a\u57df\u7684\u8fd0\u52a8 [1]" in repaired
+    assert "\u727a\u7272\u9759\u6b62\u533a\u57df" not in repaired
+    assert meta["stripped_weak_citations"] == 1
+    assert meta["dropped_unsupported_unplanned_claims"] == 1
+    assert meta["uncited_high_risk_claims"] == 0
+
+
+def test_final_gate_rejects_specific_relations_missing_from_source() -> None:
+    answer = (
+        "\u4e2d\u592e\u51f9\u533a\u57df\u8ddf\u8e2a\u8fd0\u52a8 [1]\u3002"
+        "\u8fd9\u4e00\u9009\u62e9\u51b3\u5b9a\u4e86\u5355\u6b21\u6d4b\u91cf\u7684\u4fe1\u566a\u6bd4\u548c\u7b97\u6cd5\u590d\u6742\u5ea6 [1]\u3002"
+        "\u7cfb\u7edf\u5229\u7528\u6709\u9650\u6d4b\u91cf\u9884\u7b97\u548c\u603b\u5e27\u6570\u8fdb\u884c\u52a8\u6001\u5206\u914d [1]\u3002"
+    )
+    hits = [
+        {
+            "text": (
+                "A high-resolution foveal region tracks motion while every frame "
+                "delivers new spatial information across the entire field of view."
+            )
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1},
+        drop_unsupported_high_risk_claims=True,
+    )
+
+    assert "\u4e2d\u592e\u51f9\u533a\u57df\u8ddf\u8e2a\u8fd0\u52a8 [1]" in repaired
+    assert "\u4fe1\u566a\u6bd4" not in repaired
+    assert "\u6709\u9650\u6d4b\u91cf\u9884\u7b97" not in repaired
+    assert meta["stripped_weak_citations"] == 2
+    assert meta["dropped_unsupported_unplanned_claims"] == 2
+
+
+def test_final_gate_removes_only_the_wrong_citation_from_multi_source_claim() -> None:
+    answer = (
+        "Hadamard \u5355\u50cf\u7d20\u6210\u50cf\u4f7f\u7528 Hadamard \u57fa\u56fe\u6848\uff0c"
+        "Fourier \u5355\u50cf\u7d20\u6210\u50cf\u4f7f\u7528 Fourier \u57fa\u56fe\u6848 [2] [1]\u3002"
+    )
+    hits = [
+        {"text": "A high-resolution foveal region tracks motion over consecutive frames."},
+        {"text": "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns."},
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 2},
+        drop_unsupported_high_risk_claims=True,
+    )
+
+    assert "[2]" in repaired
+    assert "[1]" not in repaired
+    assert meta["stripped_weak_citations"] == 1
+
+
+def test_final_gate_renumbers_list_after_dropping_first_item() -> None:
+    answer = (
+        "**\u8bbe\u8ba1\u51b3\u7b56**\uff1a\n"
+        "1. \u8fd9\u4e00\u9009\u62e9\u51b3\u5b9a\u4e86\u672a\u62a5\u544a\u7684\u4fe1\u566a\u6bd4 [1]\u3002\n"
+        "2. Foveated supersampling \u8d1f\u8d23\u8d44\u6e90\u5206\u914d [1]\u3002"
+    )
+    hits = [
+        {"text": "A high-resolution foveal region tracks motion over consecutive frames."}
+    ]
+
+    repaired, _meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1},
+        drop_unsupported_high_risk_claims=True,
+    )
+
+    assert "1. Foveated supersampling" in repaired
+    assert "2. Foveated supersampling" not in repaired
+
+
+def test_final_gate_drops_citation_the_renderer_would_hide() -> None:
+    answer = (
+        "\u8fd9\u4e2a\u9009\u62e9\u51b3\u5b9a\u4e86\u4e0d\u540c\u91c7\u6837\u7387\u4e0b\u7684\u91cd\u5efa\u8d28\u91cf\u548c\u566a\u58f0\u9c81\u68d2\u6027 [1]\u3002"
+    )
+    quote = (
+        "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns. "
+        "We compare imaging efficiency and noise robustness."
+    )
+    hits = [
+        {
+            "text": quote,
+            "meta": {
+                "source_name": "Hadamard versus Fourier single-pixel imaging.pdf",
+                "heading_path": "Introduction",
+                "page_start": 3,
+                "citation_plan_evidence_quotes": [quote],
+            },
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1},
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert repaired == ""
+    assert meta["renderer_rejected_citations"] == 1
+    assert meta["dropped_unsupported_unplanned_claims"] == 1
+
+
 def test_repairs_each_uncited_claim_in_a_multi_sentence_line() -> None:
     answer = (
         "该方法使用真实 SPAD 噪声模型指导训练。"
@@ -393,6 +567,30 @@ def test_strict_comparison_synthesis_receives_both_planned_source_citations() ->
 
     assert "[1] [4]" in repaired
     assert meta["uncited_high_risk_claims"] == 0
+
+
+def test_partly_cited_comparison_sentence_receives_both_planned_sources() -> None:
+    answer = (
+        "\u5b83\u4eec\u5206\u522b\u51b3\u5b9a\u4e86\u7528\u4ec0\u4e48\u6a21\u5f0f\u53bb\u6d4b\u91cf\uff08Hadamard/Fourier \u7a7a\u95f4\u7f16\u7801\u57fa\uff09\uff0c"
+        "\u4ee5\u53ca\u5982\u4f55\u7528 foveated supersampling \u52a8\u6001\u5206\u914d\u6d4b\u91cf\u8d44\u6e90 [1]\u3002"
+    )
+    hits = [
+        {"text": "A foveated region tracks motion and allocates sampling over consecutive frames."},
+        {"text": "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns."},
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 2},
+    )
+
+    assert "[1]" in repaired
+    assert "[2]" in repaired
+    assert any(
+        item.get("reason") == "compound_comparison_synthesis"
+        for item in meta.get("repairs", [])
+    )
     assert any(
         item.get("reason") == "compound_comparison_synthesis"
         for item in meta.get("repairs", [])
@@ -492,6 +690,39 @@ def test_strict_plan_rebinds_supported_claim_and_drops_unplanned_claim() -> None
     assert "heterodyne holography" not in repaired
     assert meta["removed_unplanned_citations"] == 2
     assert meta["dropped_unsupported_unplanned_claims"] == 1
+
+
+def test_strict_plan_rebinds_hadamard_claim_from_foveated_to_basis_source() -> None:
+    answer = (
+        "\u9009\u62e9 Hadamard/Fourier \u662f\u5728\u51b3\u5b9a\u6210\u50cf\u7684\u6570\u5b66\u57fa\u7840\uff0c"
+        "\u5373\u4f7f\u7528\u54ea\u4e00\u7ec4\u6b63\u4ea4\u57fa\u6765\u5206\u89e3\u548c\u91cd\u5efa\u56fe\u50cf [1]\u3002"
+    )
+    hits = [
+        {
+            "text": (
+                "A high-resolution foveal region tracks motion while the system "
+                "accumulates detail over consecutive frames."
+            ),
+            "meta": {"source_name": "Adaptive foveated single-pixel imaging.pdf"},
+        },
+        {
+            "text": (
+                "HSI uses Hadamard basis patterns for illumination while FSI uses "
+                "Fourier basis patterns."
+            ),
+            "meta": {"source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf"},
+        },
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 2},
+    )
+
+    assert "[2]" in repaired
+    assert "[1]" not in repaired
+    assert meta["rebound_citations"] == 1
 
 
 def test_restores_reported_3d_video_frame_rate_from_eligible_evidence() -> None:

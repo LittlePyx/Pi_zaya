@@ -147,8 +147,10 @@ def _claim_evidence_hits_with_citation_plan(
                 quotes_by_index.setdefault(index, []).append(quote)
     for index, quotes in quotes_by_index.items():
         hit = dict(merged[index])
-        original = str(hit.get("text") or "").strip()
-        evidence_parts = list(dict.fromkeys([*quotes, original]))
+        # The renderer exposes the citation-plan sentence, not the broader
+        # retrieval chunk.  Audit against that same user-visible evidence so a
+        # nearby paragraph cannot make an unsupported card look grounded.
+        evidence_parts = list(dict.fromkeys(quotes))
         hit["text"] = "\n".join(part for part in evidence_parts if part)
         meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), dict) else {}
         meta["citation_plan_evidence_quotes"] = list(dict.fromkeys(quotes))
@@ -4741,6 +4743,39 @@ def _finalize_generation_answer(
         prompt=prompt_for_user or prompt,
         answer_hits=answer_hits,
     )
+    # This is the last mutation of the evidence-grounded answer. Earlier
+    # citation repair runs before multi-paper reconstruction and other answer
+    # contract fixes, which can introduce a fresh factual sentence after the
+    # audit. Re-run the deterministic gate here: first bind a uniquely
+    # supported claim (including same-source anaphoric continuations), then
+    # remove only high-risk factual additions that still have no source.
+    # Generic-knowledge supplements are appended below and deliberately stay
+    # outside this source-grounded contract.
+    final_gate_has_grounded_system_a = any(
+        isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "system_a").strip().lower() == "system_a"
+        and bool(
+            str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip()
+        )
+        and bool(list(slot.get("candidate_hits") or []))
+        for slot in list(citation_plan_seed.get("slots") or [])
+    )
+    answer, final_claim_evidence_meta = audit_and_repair_claim_evidence(
+        answer,
+        answer_hits=claim_evidence_hits,
+        allow_citation_repairs=True,
+        prompt=prompt_for_user or prompt,
+        allowed_citation_numbers=strict_comparison_numbers,
+        drop_unsupported_unplanned_claims=strict_comparison_numbers is not None,
+        drop_unsupported_high_risk_claims=final_gate_has_grounded_system_a,
+        enforce_user_visible_binding=final_gate_has_grounded_system_a,
+    )
+    answer = _collapse_adjacent_duplicate_numeric_citations(answer)
+    final_claim_evidence_meta["final_gate_applied"] = True
+    final_claim_evidence_meta["unsupported_claim_drop_enabled"] = bool(
+        final_gate_has_grounded_system_a
+    )
+    claim_evidence_meta = final_claim_evidence_meta
     grounded_answer = str(answer or "")
     answer = _maybe_prepend_paper_guide_low_confidence_notice(
         answer,

@@ -27,7 +27,7 @@ _ACRONYM_RE = re.compile(r"\b[A-Z][A-Z0-9-]{1,12}\b")
 _EN_TERM_RE = re.compile(r"\b[a-z][a-z0-9-]{3,}\b", flags=re.IGNORECASE)
 _RISK_RE = re.compile(
     r"(?:表明|证明|达到|提升|提高|降低|优于|劣于|导致|使(?:得)?|通过|采用|使用|利用|构建|引入|"
-    r"包含|纳入|建模|训练|验证|报告|实现|解决|权衡|局限|限制|没有|未(?:提供|说明|显示|报告|验证|讨论)|"
+    r"包含|纳入|建模|训练|验证|报告|实现|解决|决定|影响|正交(?:的|组合)|权衡|局限|限制|没有|未(?:提供|说明|显示|报告|验证|讨论)|"
     r"\b(?:show(?:s|ed)?|demonstrat(?:e|es|ed)|achiev(?:e|es|ed)|improv(?:e|es|ed)|reduc(?:e|es|ed)|"
     r"outperform(?:s|ed)?|caus(?:e|es|ed)|use(?:s|d)?|employ(?:s|ed)?|introduc(?:e|es|ed)|"
     r"include(?:s|d)?|model(?:s|ed)?|train(?:s|ed)?|validat(?:e|es|ed)|report(?:s|ed)?|"
@@ -51,7 +51,7 @@ _NON_FACTUAL_GUIDANCE_RE = re.compile(
 _ANAPHORIC_CONTINUATION_RE = re.compile(
     r"^(?:这(?:是|使得|意味着|表明)?|因此|由此|"
     r"从而|它|该(?:方法|模型|设计)|基于(?:该|此)模型|"
-    r"其(?:核心思想|作用|机制)(?:是|在于)?|"
+    r"其(?:核心(?:思想)?|作用|机制)(?:是|在于)?|"
     r"this\b|that\b|it\b|therefore\b|thereby\b|as\s+a\s+result\b)",
     flags=re.IGNORECASE,
 )
@@ -283,6 +283,65 @@ def _support_score(claim: str, evidence: str) -> int:
         evidence_norm
     ):
         return 0
+    explicit_relation_requirements = (
+        (
+            re.compile(
+                r"牺牲.{0,32}换取|(?:帧率|时间分辨率).{0,24}(?:空间)?分辨率.{0,12}权衡|"
+                r"\btrade[- ]?off\b|\bat the expense of\b",
+                re.I,
+            ),
+            re.compile(r"牺牲|换取|权衡|\btrade[- ]?off\b|\bsacrific|\bat the expense of\b", re.I),
+        ),
+        (
+            re.compile(r"互补信息.{0,20}(?:合并|融合)|(?:合并|融合).{0,20}互补信息|\bmerge\w* complementary\b", re.I),
+            re.compile(r"互补|合并|融合|\bcomplementary\b|\bmerg|\bcombin|\bfus|\bintegrat", re.I),
+        ),
+        (
+            re.compile(r"超分辨率重建|\bsuper[- ]?resolution reconstruction\b", re.I),
+            re.compile(r"超分辨率.{0,16}重建|\bsuper[- ]?resolution\b.{0,40}\breconstruct", re.I),
+        ),
+        (
+            re.compile(r"信噪比|\bSNR\b|\bsignal[- ]to[- ]noise\b", re.I),
+            re.compile(r"信噪比|\bSNR\b|\bsignal[- ]to[- ]noise\b", re.I),
+        ),
+        (
+            re.compile(r"噪声(?:鲁棒性|特性)|\bnoise robustness\b|\bnoise characteristics?\b", re.I),
+            re.compile(r"噪声|\bnoise\b", re.I),
+        ),
+        (
+            re.compile(r"不同采样率|采样率下|\bacross (?:different )?sampling rates?\b", re.I),
+            re.compile(r"采样率|\bsampling (?:ratio|rate)s?\b", re.I),
+        ),
+        (
+            re.compile(r"空间频率.{0,8}结构信息|\bspatial frequency.{0,16}structure", re.I),
+            re.compile(r"空间频率|结构信息|\bspatial frequenc|\bspatial structure", re.I),
+        ),
+        (
+            re.compile(r"(?:算法|硬件).{0,16}复杂度|\b(?:algorithm|hardware).{0,20}complexity\b", re.I),
+            re.compile(r"复杂度|\bcomplexity\b", re.I),
+        ),
+        (
+            re.compile(r"频域.{0,12}稀疏|\bfrequency[- ]domain.{0,20}spars", re.I),
+            re.compile(r"频域.{0,12}稀疏|\bfrequency[- ]domain.{0,20}spars", re.I),
+        ),
+        (
+            re.compile(r"有限.{0,16}测量预算|总帧数|\bfixed.{0,16}measurement budget\b", re.I),
+            re.compile(r"有限.{0,16}测量预算|总帧数|\bfixed.{0,16}measurement budget\b|\btotal frame count\b", re.I),
+        ),
+        (
+            re.compile(r"不改变.{0,20}(?:编码|基函数)|\bwithout changing.{0,24}(?:encoding|basis)\b", re.I),
+            re.compile(r"不改变.{0,20}(?:编码|基函数)|\bwithout changing.{0,24}(?:encoding|basis)\b", re.I),
+        ),
+        (
+            re.compile(r"正交(?:的|组合)|\borthogonal(?:ly)?(?: combin| design| dimension)", re.I),
+            re.compile(r"正交(?:的|组合)|\borthogonal(?:ly)?(?: combin| design| dimension)", re.I),
+        ),
+    )
+    if any(
+        claim_pattern.search(claim_low) and not evidence_pattern.search(evidence_norm)
+        for claim_pattern, evidence_pattern in explicit_relation_requirements
+    ):
+        return 0
     claim_numbers = _meaningful_numbers(claim_plain)
     if claim_numbers and not all(number in re.sub(r"\s+", "", evidence_norm) for number in claim_numbers):
         return 0
@@ -300,7 +359,14 @@ def _support_score(claim: str, evidence: str) -> int:
         for term in _EN_TERM_RE.findall(evidence_norm)
         if term.lower() not in _STOPWORDS
     }
-    score += min(3, len(claim_terms & evidence_terms))
+    shared_terms = claim_terms & evidence_terms
+    score += min(3, len(shared_terms))
+    # Two independent literal content terms (for example Hadamard + Fourier)
+    # are materially stronger than one broad domain token such as
+    # ``single-pixel``.  The small bonus lets strict citation plans rebind a
+    # wrong source number without lowering the global support threshold.
+    if len(shared_terms) >= 2:
+        score += 1
     score += min(
         6,
         len(evidence_alignment_tokens(claim_plain) & evidence_alignment_tokens(evidence_norm)),
@@ -554,6 +620,232 @@ def _drop_unsupported_uncited_claims(answer: str) -> tuple[str, list[str]]:
     return "\n".join(output_lines), dropped
 
 
+def _renumber_ordered_lists(answer: str) -> str:
+    """Repair ordered-list numbering after unsupported items are removed."""
+
+    output: list[str] = []
+    next_number = 1
+    for raw_line in str(answer or "").splitlines():
+        match = re.match(r"^(\s*)(\d+)([.)、])\s+(.+)$", raw_line)
+        if match:
+            output.append(
+                f"{match.group(1)}{next_number}{match.group(3)} {match.group(4)}"
+            )
+            next_number += 1
+            continue
+        output.append(raw_line)
+        if raw_line.strip():
+            next_number = 1
+    return "\n".join(output)
+
+
+def _strip_weak_numeric_citations(
+    answer: str,
+    answer_hits: list[dict[str, Any]],
+    *,
+    min_support_score: int,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Remove numeric markers that do not bind a high-risk claim to evidence.
+
+    This runs only for the final strict evidence gate.  Removing the marker lets
+    the existing unsupported-claim dropper reject the model addition instead of
+    presenting a weak or wrong source as direct support.
+    """
+
+    stripped: list[dict[str, Any]] = []
+    output_lines: list[str] = []
+    in_fence = False
+    for raw_line in str(answer or "").splitlines():
+        surface = raw_line.strip()
+        if surface.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            output_lines.append(raw_line)
+            continue
+        if in_fence or not surface or _HEADING_RE.match(surface) or _TABLE_OR_CODE_RE.match(surface):
+            output_lines.append(raw_line)
+            continue
+        prefix_match = _LIST_PREFIX_RE.match(surface)
+        prefix = prefix_match.group(0) if prefix_match else ""
+        body = surface[len(prefix) :] if prefix else surface
+        rebuilt: list[str] = []
+        changed = False
+        for segment in _split_claim_segments(body):
+            citations = [
+                int(match.group(1))
+                for match in _NUMERIC_CITATION_RE.finditer(segment)
+                if 0 < int(match.group(1)) <= len(answer_hits)
+            ]
+            if (
+                not citations
+                or _STRUCTURED_CITATION_RE.search(segment)
+                or not _is_high_risk_claim(segment)
+            ):
+                rebuilt.append(segment)
+                continue
+            scored_citations = {
+                number: _support_score(
+                    segment,
+                    _hit_payload(answer_hits[number - 1]),
+                )
+                for number in citations
+                if answer_hits[number - 1]
+            }
+            supported_citations = {
+                number
+                for number, score in scored_citations.items()
+                if score >= max(1, int(min_support_score))
+            }
+            weak_citations = [
+                number for number in list(dict.fromkeys(citations))
+                if number not in supported_citations
+            ]
+            if not weak_citations:
+                rebuilt.append(segment)
+                continue
+            cleaned = _NUMERIC_CITATION_RE.sub(
+                lambda match: (
+                    match.group(0)
+                    if int(match.group(1)) in supported_citations
+                    else ""
+                ),
+                segment,
+            )
+            cleaned = re.sub(r"\s+([。！？.!?；;])", r"\1", cleaned)
+            rebuilt.append(cleaned)
+            stripped.append(
+                {
+                    "claim": _plain_claim(segment)[:220],
+                    "citations": weak_citations,
+                    "best_score": max(scored_citations.values()) if scored_citations else 0,
+                    "supported_citations": sorted(supported_citations),
+                }
+            )
+            changed = True
+        if not changed:
+            output_lines.append(raw_line)
+            continue
+        joiner = "" if _ZH_RE.search("".join(rebuilt)) else " "
+        leading = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+        output_lines.append(f"{leading}{prefix}{joiner.join(rebuilt)}")
+    return "\n".join(output_lines), stripped
+
+
+def _strip_user_visible_rejected_citations(
+    answer: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Apply the same binding decision used by the user-visible citation card.
+
+    The import is intentionally lazy: claim auditing remains lightweight for
+    ordinary calls, while the final answer gate uses the renderer's exact
+    decision as the single source of truth for whether a numeric marker will be
+    clickable in the UI.
+    """
+
+    from ui.refs_renderer import _assess_system_a_hit_binding
+
+    rejected: list[dict[str, Any]] = []
+    output_lines: list[str] = []
+    in_fence = False
+    for raw_line in str(answer or "").splitlines():
+        surface = raw_line.strip()
+        if surface.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            output_lines.append(raw_line)
+            continue
+        if in_fence or not surface or _HEADING_RE.match(surface) or _TABLE_OR_CODE_RE.match(surface):
+            output_lines.append(raw_line)
+            continue
+        prefix_match = _LIST_PREFIX_RE.match(surface)
+        prefix = prefix_match.group(0) if prefix_match else ""
+        body = surface[len(prefix) :] if prefix else surface
+        rebuilt: list[str] = []
+        changed = False
+        for segment in _split_claim_segments(body):
+            citations = [
+                int(match.group(1))
+                for match in _NUMERIC_CITATION_RE.finditer(segment)
+                if 0 < int(match.group(1)) <= len(answer_hits)
+            ]
+            if (
+                not citations
+                or _STRUCTURED_CITATION_RE.search(segment)
+            ):
+                rebuilt.append(segment)
+                continue
+            rejected_numbers: list[int] = []
+            binding_rows: list[dict[str, Any]] = []
+            for number in list(dict.fromkeys(citations)):
+                hit = answer_hits[number - 1]
+                if not hit:
+                    rejected_numbers.append(number)
+                    continue
+                meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), dict) else {}
+                quotes = [
+                    str(item or "").strip()
+                    for item in list(meta.get("citation_plan_evidence_quotes") or [])
+                    if str(item or "").strip()
+                ]
+                if not quotes:
+                    # Only make this strict decision for the authoritative
+                    # citation-plan evidence shown by the renderer.
+                    continue
+                binding_meta = dict(meta)
+                binding_meta["citation_plan_evidence_authoritative"] = True
+                binding_meta["citation_plan_evidence_selection_reason"] = (
+                    "prompt_aligned_source_sentence"
+                )
+                evidence_quote = quotes[0]
+                source_name = str(
+                    meta.get("source_name")
+                    or hit.get("source_name")
+                    or hit.get("title")
+                    or ""
+                ).strip()
+                binding = _assess_system_a_hit_binding(
+                    answer_claim=segment,
+                    hit=hit,
+                    meta=binding_meta,
+                    heading=str(meta.get("heading_path") or meta.get("top_heading") or ""),
+                    evidence_quote=evidence_quote,
+                    source_name=source_name,
+                )
+                if bool(binding.get("suppress_link")):
+                    rejected_numbers.append(number)
+                    binding_rows.append(
+                        {
+                            "citation": number,
+                            "status": str(binding.get("status") or "candidate"),
+                            "reason": str(binding.get("reason") or "")[:260],
+                        }
+                    )
+            if not rejected_numbers:
+                rebuilt.append(segment)
+                continue
+            rejected_set = set(rejected_numbers)
+            cleaned = _NUMERIC_CITATION_RE.sub(
+                lambda match: "" if int(match.group(1)) in rejected_set else match.group(0),
+                segment,
+            )
+            cleaned = re.sub(r"\s+([。！？.!?；;])", r"\1", cleaned)
+            rebuilt.append(cleaned)
+            rejected.append(
+                {
+                    "claim": _plain_claim(segment)[:220],
+                    "citations": sorted(rejected_set),
+                    "bindings": binding_rows,
+                }
+            )
+            changed = True
+        if not changed:
+            output_lines.append(raw_line)
+            continue
+        joiner = "" if _ZH_RE.search("".join(rebuilt)) else " "
+        leading = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+        output_lines.append(f"{leading}{prefix}{joiner.join(rebuilt)}")
+    return "\n".join(output_lines), rejected
+
+
 def _repair_uncited_unique_claims(
     answer: str,
     answer_hits: list[dict[str, Any]],
@@ -609,6 +901,7 @@ def _repair_uncited_unique_claims(
                 len(comparison_citations) == 2
                 and re.search(
                     r"核心区别|前者.{0,160}后者|两者.{0,80}(?:不同|区别|差异)|"
+                    r"(?:两者|它们).{0,120}分别(?:决定|作用)|"
                     r"core\s+difference|the\s+former.{0,160}the\s+latter",
                     _plain_claim(segment),
                     flags=re.IGNORECASE,
@@ -828,7 +1121,7 @@ def _repair_mismatched_unique_citations(
                     previous_citations = [inherited]
                     changed = True
                     continue
-            if cited_scores and max(cited_scores) >= 3:
+            if cited_scores and max(cited_scores) >= min_support_score:
                 rebuilt.append(segment)
                 previous_citations = list(dict.fromkeys(citations))
                 continue
@@ -993,6 +1286,8 @@ def audit_and_repair_claim_evidence(
     prompt: str = "",
     allowed_citation_numbers: set[int] | None = None,
     drop_unsupported_unplanned_claims: bool = False,
+    drop_unsupported_high_risk_claims: bool = False,
+    enforce_user_visible_binding: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Apply safe claim-level grounding repairs and return internal audit metadata.
 
@@ -1049,9 +1344,23 @@ def audit_and_repair_claim_evidence(
         repaired, repairs, rebound_repairs = scoped, [], []
     repaired, removed_heading_citations = _strip_source_only_heading_citations(repaired)
     repaired, dropped_mismatches = _drop_hard_mismatched_claims(repaired, eligible_hits)
+    renderer_rejected_citations: list[dict[str, Any]] = []
+    if enforce_user_visible_binding:
+        repaired, renderer_rejected_citations = _strip_user_visible_rejected_citations(
+            repaired,
+            eligible_hits,
+        )
+    stripped_weak_citations: list[dict[str, Any]] = []
+    if drop_unsupported_high_risk_claims:
+        repaired, stripped_weak_citations = _strip_weak_numeric_citations(
+            repaired,
+            eligible_hits,
+            min_support_score=5 if strict_plan else 2,
+        )
     dropped_unplanned_claims: list[str] = []
-    if strict_plan and drop_unsupported_unplanned_claims:
+    if (strict_plan and drop_unsupported_unplanned_claims) or drop_unsupported_high_risk_claims:
         repaired, dropped_unplanned_claims = _drop_unsupported_uncited_claims(repaired)
+    repaired = _renumber_ordered_lists(repaired)
     units = _claim_units(repaired)
     high_risk_units = [unit for unit in units if _is_high_risk_claim(unit)]
     uncited = [unit for unit in high_risk_units if not _CITATION_RE.search(unit)]
@@ -1084,6 +1393,8 @@ def audit_and_repair_claim_evidence(
         "restored_prompt_terms": int(spad_term_count),
         "restored_evidence_numbers": int(frame_rate_count),
         "dropped_hard_mismatch_claims": len(dropped_mismatches),
+        "stripped_weak_citations": len(stripped_weak_citations),
+        "renderer_rejected_citations": len(renderer_rejected_citations),
         "removed_unplanned_citations": int(removed_unplanned_citations),
         "removed_heading_citations": int(removed_heading_citations),
         "dropped_unsupported_unplanned_claims": len(dropped_unplanned_claims),
@@ -1100,6 +1411,10 @@ def audit_and_repair_claim_evidence(
         meta["mismatches"] = mismatches[:8]
     if dropped_mismatches:
         meta["dropped_mismatches"] = dropped_mismatches[:8]
+    if stripped_weak_citations:
+        meta["weak_citation_details"] = stripped_weak_citations[:8]
+    if renderer_rejected_citations:
+        meta["renderer_rejected_details"] = renderer_rejected_citations[:8]
     if dropped_unplanned_claims:
         meta["dropped_unplanned_claims"] = dropped_unplanned_claims[:8]
     return repaired, meta

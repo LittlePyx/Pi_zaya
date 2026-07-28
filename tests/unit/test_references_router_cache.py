@@ -178,6 +178,33 @@ def test_comparison_reference_copy_deduplicates_repeated_heading_names() -> None
     assert "“Abstract”和“Abstract”" not in why
 
 
+def test_design_layer_question_uses_comparison_relation_instead_of_repeating_summary() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "answer_claim": (
+                    "Hadamard 单像素成像使用 Hadamard 基图案，"
+                    "Fourier 单像素成像使用 Fourier 基图案。"
+                ),
+                "heading_path": "Paper / Introduction",
+                "evidence_quote": (
+                    "HSI uses Hadamard basis patterns for illumination while FSI uses "
+                    "Fourier basis patterns."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt=(
+            "Hadamard/Fourier 的选择和 foveated dynamic supersampling 是同一层面的"
+            "采样策略吗？设计系统时分别决定什么？"
+        ),
+    )
+
+    assert "Hadamard" in summary
+    assert why == "“Introduction”给出该方法的定义或结果，是与另一方法逐项对照时的原文依据。"
+    assert summary not in why
+
+
 def test_reference_copy_links_exact_claim_and_pdf_page_without_generic_template() -> None:
     _summary, why = references_router._answer_citation_card_copy(
         [

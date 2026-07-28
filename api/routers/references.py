@@ -672,7 +672,11 @@ def _answer_citation_card_copy(
                 why = "卡片定位到论文的研究对象与方法边界，可据此判断它是否属于当前单像素成像主线。"
         elif re.search(r"最高|最低|并列|PSNR|SSIM|LPIPS|表格|基准", prompt_text, flags=re.I):
             why = f"“{headings}”包含同一基准上的量化结果，可用于核对最优数值和并列情况。"
-        elif re.search(r"区别|差异|比较|对比|vs\.?|versus", prompt_text, flags=re.I):
+        elif re.search(
+            r"区别|差异|比较|对比|同一层面|不同层面|分别(?:决定|作用)|vs\.?|versus",
+            prompt_text,
+            flags=re.I,
+        ):
             why = f"“{headings}”给出该方法的定义或结果，是与另一方法逐项对照时的原文依据。"
         elif re.search(r"原创|发明|谁提出|来源|沿革|已有|新东西", prompt_text):
             evidence_text = " ".join(

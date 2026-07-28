@@ -126,6 +126,75 @@ def test_chinese_anaphoric_continuation_reuses_compound_foveated_evidence() -> N
     assert len(details[0]["answer_claims"]) == 2
 
 
+def test_chinese_foveated_mechanism_keeps_cross_language_source_link() -> None:
+    claim = (
+        "\u8bbe\u8ba1\u7cfb\u7edf\u65f6\uff0c\u8fd9\u4e00\u9009\u62e9\u51b3\u5b9a\u4e86\u5982\u4f55\u5229\u7528\u573a\u666f\u7684\u65f6\u7a7a\u5197\u4f59\uff1a"
+        "\u5feb\u901f\u53d8\u5316\u7684\u7279\u5f81\u88ab\u5feb\u901f\u8bb0\u5f55\uff0c\u800c\u7f13\u6162\u6f14\u53d8\u7684\u533a\u57df\u5219\u901a\u8fc7\u591a\u5e27\u7d2f\u79ef\u7ec6\u8282\u3002"
+    )
+    evidence = (
+        "This strategy rapidly records the detail of quickly changing features while "
+        "simultaneously accumulating detail of more slowly evolving regions over several "
+        "consecutive frames."
+    )
+
+    binding = _assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={},
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="foveated-single-pixel-imaging.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert {"rapidly", "changing", "accumulating", "slowly"} <= set(
+        binding["overlap_terms"]
+    )
+
+
+def test_chinese_efficiency_and_noise_claim_keeps_exact_english_source_link() -> None:
+    claim = "\u4e24\u79cd\u65b9\u6cd5\u5728\u6210\u50cf\u6548\u7387\u548c\u566a\u58f0\u9c81\u68d2\u6027\u65b9\u9762\u5b58\u5728\u5dee\u5f02\u3002"
+    evidence = (
+        "We compare HSI and FSI in terms of imaging efficiency and noise robustness."
+    )
+
+    binding = _assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={},
+        heading="Introduction",
+        evidence_quote=evidence,
+        source_name="Hadamard versus Fourier single-pixel imaging.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_chinese_detector_challenges_keep_exact_english_source_link() -> None:
+    claim = (
+        "\u63a2\u6d4b\u5668\u7684\u5171\u540c\u6311\u6218\u662f\u5236\u9020\u590d\u6742\u3001\u6210\u672c\u9ad8\uff0c"
+        "\u4e14\u9700\u8981\u4f4e\u6e29\u7b49\u7279\u6b8a\u5de5\u4f5c\u6761\u4ef6\u3002"
+    )
+    evidence = (
+        "The complexity and high manufacturing cost, coupled with the requirement of "
+        "special conditions like a low-temperature environment, pose significant challenges."
+    )
+
+    binding = _assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={},
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="single-photon detector review.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
 def test_chinese_model_based_continuation_reuses_physics_model_evidence() -> None:
     source_path = "db/pidl/pidl.en.md"
     evidence = (
