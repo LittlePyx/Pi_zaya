@@ -3568,7 +3568,13 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
         ),
     ),
     ("wavelet transform", re.compile(r"(?i)\bwavelet\s+transform\b|小波变换")),
-    ("foveated", re.compile(r"(?i)\bfoveated\b|中央凹|中心凹|自适应采样")),
+    (
+        "foveated",
+        re.compile(
+            r"(?i)\bfove(?:at(?:ed|ion)|al)\b|中央凹|中心凹|"
+            r"高分辨率(?:焦点|中央凹|中心凹)区域|自适应采样"
+        ),
+    ),
     ("dynamic supersampling", re.compile(r"(?i)\bdynamic\s+supersampling\b|\bsupersampling\b|超采样")),
     ("frame rate", re.compile(r"(?i)\bframe\s+rate\b|\bframes?\s+per\s+second\b|帧率|帧\s*/\s*秒")),
     (

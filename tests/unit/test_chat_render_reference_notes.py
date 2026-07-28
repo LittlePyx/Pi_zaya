@@ -2506,6 +2506,52 @@ def test_render_cache_rejects_stale_microscopy_evidence_after_plan_refinement():
     assert chat_render._render_cache_missing_authoritative_plan_evidence(cache, plan) is False
 
 
+def test_render_cache_rejects_scope_boundary_citation_bound_only_to_metric():
+    from api import chat_render
+
+    source_path = "db/perovskite/perovskite.en.md"
+    plan = {
+        "intent": "scope_boundary",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": (
+                    "We demonstrate electrically driven lasing from a dual-cavity "
+                    "perovskite device."
+                ),
+            }
+        ],
+    }
+    cache = {
+        "render_packet": {
+            "cite_details": [
+                {
+                    "citation_route": "system_a",
+                    "source_path": source_path,
+                    "answer_claim": "最低激射阈值为 92 A cm-2。",
+                    "evidence_quote": (
+                        "The device shows a minimum lasing threshold of 92 A cm-2."
+                    ),
+                }
+            ]
+        }
+    }
+
+    assert chat_render._render_cache_missing_authoritative_plan_evidence(cache, plan) is True
+    cache["render_packet"]["cite_details"][0].update(
+        {
+            "answer_claim": (
+                "这是一项 dual-cavity perovskite 激光器件研究，"
+                "而不是单像素成像方法。"
+            ),
+            "evidence_quote": plan["slots"][0]["evidence_quote"],
+        }
+    )
+    assert chat_render._render_cache_missing_authoritative_plan_evidence(cache, plan) is False
+
+
 def test_enrich_messages_rebuilds_degraded_structured_citation_cache(monkeypatch, tmp_path: Path):
     from api import chat_render
     from ui import refs_renderer
@@ -6033,6 +6079,95 @@ def test_prompt_aligned_source_slot_rebinds_compacted_hit_without_reserved_paddi
     assert augmented[0]["meta"]["ref_answer_citation_num"] == 3
 
 
+def test_broad_dl_review_slot_yields_to_two_claim_specific_candidate_rows():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "dl-spi-review.en.md"
+    broad = (
+        "Deep learning brings exceptional reconstruction quality and fast reconstruction speed. "
+        + ("This review surveys data-driven SPI methods and their applications. " * 12)
+        + "Data-driven strategies still require prolonged training and have limited generalization."
+    )
+    risk = (
+        "Data-driven strategies have prolonged training duration and limited generalization "
+        "when adapting to diverse imaging scenes."
+    )
+    benefit = (
+        "Deep-learning single-pixel imaging provides exceptional reconstruction quality "
+        "and fast reconstruction speed."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Challenges and Outlooks",
+                "evidence_quote": broad,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Strategy and Advantages",
+                "evidence_quote": risk,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": benefit,
+                "candidate_hits": [2],
+            },
+        ]
+    }
+    hits = [
+        {
+            "text": "Compacted first hit.",
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+        }
+    ]
+
+    augmented = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=2,
+        canonical_paths=[source_path, source_path],
+    )
+
+    assert augmented[0]["text"] == risk
+    assert augmented[0]["meta"]["heading_path"] == "Strategy and Advantages"
+    assert augmented[1]["text"] == benefit
+    assert augmented[1]["meta"]["heading_path"] == "Abstract"
+
+
+def test_foveated_chinese_claim_binds_to_english_abstract_evidence():
+    from ui.refs_renderer import _assess_system_a_hit_binding
+
+    claim = (
+        "高分辨率中央凹区域跟踪运动；每帧仍从整个视场获取新空间信息，"
+        "并通过连续多帧累积慢变区域的细节。"
+    )
+    evidence = (
+        "A high-resolution foveal region tracks motion within the scene, yet unlike "
+        "a simple zoom, every frame delivers new spatial information from across the "
+        "entire field of view. The system accumulates detail over several consecutive frames."
+    )
+
+    binding = _assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={},
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="Adaptive foveated single-pixel imaging with dynamic supersampling",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "foveated" in binding["overlap_terms"]
+
+
 def test_compound_plan_evidence_excerpt_keeps_scigs_relationship_and_output_claims():
     from ui.refs_renderer import _compound_plan_evidence_excerpt
 
@@ -8533,6 +8668,60 @@ def test_dl_spi_benefit_risk_repair_keeps_only_two_direct_markers():
     assert "固有限制" not in repaired
 
 
+def test_dl_spi_benefit_repair_preserves_multi_paper_roadmap_markers():
+    from api import chat_render
+
+    answer = (
+        "先读基础综述 [1]。\n\n"
+        "再读深度学习综述，了解重建质量、重建速度和训练泛化风险 [2]。\n\n"
+        "最后比较 Hadamard 与 Fourier 编码 [3]。"
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "spi-prospects.en.md",
+                "evidence_quote": "Single-pixel imaging foundation.",
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "dl-spi.en.md",
+                "evidence_quote": (
+                    "Deep learning provides exceptional reconstruction quality and "
+                    "fast reconstruction speed."
+                ),
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "hsi-fsi.en.md",
+                "evidence_quote": "Hadamard and Fourier basis comparison.",
+                "candidate_hits": [3],
+            },
+        ]
+    }
+    hits = [
+        {"text": "foundation", "meta": {"source_path": "spi-prospects.en.md"}},
+        {"text": "DL review", "meta": {"source_path": "dl-spi.en.md"}},
+        {"text": "comparison", "meta": {"source_path": "hsi-fsi.en.md"}},
+    ]
+
+    repaired = chat_render._reading_guide_repair_dl_spi_benefit_marker(
+        answer,
+        hits,
+        plan,
+        canonical_paths=[
+            "spi-prospects.en.md",
+            "dl-spi.en.md",
+            "hsi-fsi.en.md",
+        ],
+    )
+
+    assert repaired == answer
+    assert "[2]" in repaired
+
+
 def test_missing_system_a_repair_does_not_force_single_pixel_source_onto_spad_reading_tip():
     from api import chat_render
 
@@ -8803,6 +8992,66 @@ def test_beginner_roadmap_restores_omitted_foundational_paper_without_rebuilding
     assert "[6]" not in repaired
     assert "### 2. 深度学习综述" in repaired
     assert "### 3. 编码对比" in repaired
+
+
+def test_beginner_roadmap_completes_empty_dl_section_and_binds_comparison_claim():
+    from api.chat_render import _reading_guide_repair_beginner_roadmap_missing_paper
+
+    paths = ["spi-prospects.en.md", "dl-review.en.md", "hsi-fsi.en.md"]
+    plan = {
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[0],
+                "source_name": "Principles and prospects for single-pixel imaging",
+                "evidence_quote": "Images can be recovered from fewer measurements.",
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[1],
+                "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+                "evidence_quote": (
+                    "Iterative reconstruction has limited image quality and lengthy computational "
+                    "times; deep learning offers exceptional reconstruction quality and fast speed."
+                ),
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[2],
+                "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                "evidence_quote": "HSI uses Hadamard patterns while FSI uses Fourier patterns.",
+                "candidate_hits": [3],
+            },
+        ],
+    }
+    hits = [
+        {"text": "foundation", "meta": {"source_path": paths[0], "ref_answer_citation_num": 1}},
+        {"text": "DL review", "meta": {"source_path": paths[1], "ref_answer_citation_num": 2}},
+        {"text": "comparison", "meta": {"source_path": paths[2], "ref_answer_citation_num": 3}},
+    ]
+    answer = (
+        "建议按主线阅读三篇论文。\n\n"
+        "### 1. 建立原理框架：Principles and prospects for single-pixel imaging\n"
+        "先理解欠采样重建 [1]。\n\n"
+        "### 2. 掌握主流方法对比：Hadamard single-pixel imaging versus Fourier single-pixel imaging\n"
+        "- **主要看什么**：Hadamard 基（HSI）与 Fourier 基（FSI）的原理对比。\n\n"
+        "### 3. 了解前沿进展：Advances and Challenges of Single-Pixel Imaging Based on Deep Learning\n\n"
+        "### 阅读建议\n按顺序阅读。"
+    )
+
+    repaired = _reading_guide_repair_beginner_roadmap_missing_paper(
+        answer,
+        hits,
+        plan,
+        canonical_paths=paths,
+    )
+
+    assert "传统迭代重建的图像质量与计算耗时瓶颈" in repaired
+    assert "重建质量和重建速度收益 [2]" in repaired
+    assert "Hadamard 基（HSI）与 Fourier 基（FSI）的原理对比 [3]" in repaired
 
 
 def test_reading_guide_repair_ignores_unrelated_same_paper_method_slot():
@@ -10157,6 +10406,69 @@ def test_scope_boundary_repair_prefers_direct_abstract_over_reference_list_slot(
     )
 
     assert "原文摘要表明" in repaired
+    assert "不是单像素成像方法 [1]" in repaired
+    assert "[7]" not in repaired
+
+
+def test_scope_boundary_repair_uses_visible_same_source_candidate_when_flag_moved():
+    from api.chat_render import _reading_guide_repair_scope_boundary_citation
+
+    source_path = "db/perovskite/perovskite.en.md"
+    direct = (
+        "In this work, we demonstrate electrically driven lasing from a dual-cavity "
+        "perovskite device with vertically stacked sub-units."
+    )
+    plan = {
+        "intent": "scope_boundary",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": direct,
+                "candidate_hits": [1],
+            }
+        ],
+    }
+    hits = [
+        {
+            "text": "The device reaches a minimum threshold of 92 A cm-2.",
+            "meta": {
+                "source_path": source_path,
+                "ref_answer_citation_num": 1,
+            },
+        },
+        *({"text": "", "meta": {}} for _idx in range(4)),
+        {
+            "text": direct,
+            "meta": {
+                "source_path": source_path,
+                "citation_plan_scope_boundary": True,
+                "ref_answer_citation_num": 1,
+            },
+        },
+        {
+            "text": direct,
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "citation_plan_slot": True,
+                "ref_answer_citation_num": 7,
+            },
+        },
+    ]
+    answer = (
+        "相关性不大：它研究的是钙钛矿激光器件，而不是单像素成像主线。\n\n"
+        "其双腔结构实现了电驱动激射 [1]。"
+    )
+
+    repaired = _reading_guide_repair_scope_boundary_citation(
+        answer,
+        hits,
+        plan,
+        canonical_paths=[source_path] * 6,
+    )
+
     assert "不是单像素成像方法 [1]" in repaired
     assert "[7]" not in repaired
 

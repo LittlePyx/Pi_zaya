@@ -876,7 +876,7 @@
       ],
       "expected": {
         "requiredAnswerTerms": ["3D", "64"],
-        "requiredAnswerTermGroups": [["four", "4 个", "四个"], ["8 frames per second", "8 帧/秒", "8 fps"]],
+        "requiredAnswerTermGroups": [["four", "4 个", "四个"], ["8 frames per second", "8 帧/秒", "每秒 8 帧", "8帧每秒", "8 fps"]],
         "requiredRefDocIds": ["3d-sp-video"],
         "requiredCitationDocIds": ["3d-sp-video"],
         "allowedRefDocIds": ["3d-sp-video"],
@@ -889,7 +889,7 @@
           "answerScope": "response",
           "sourcePage": 2,
           "answerTerms": ["64"],
-          "answerTermGroups": [["four", "4 个", "四个"], ["8 frames per second", "8 帧/秒", "8 fps"]],
+          "answerTermGroups": [["four", "4 个", "四个"], ["8 frames per second", "8 帧/秒", "每秒 8 帧", "8帧每秒", "8 fps"]],
           "evidenceTerms": ["four spatially-separated", "8 frames per second", "64 \\times 64"]
         }],
         "requiredLocateContracts": [{

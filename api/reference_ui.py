@@ -8282,6 +8282,49 @@ def build_hit_ui_meta(
                     "primaryEvidence": dict(primary_evidence),
                 }
             )
+            exact_block_id = str(
+                exact_support_primary.get("block_id")
+                or exact_support_primary.get("blockId")
+                or ""
+            ).strip()
+            exact_anchor_id = str(
+                exact_support_primary.get("anchor_id")
+                or exact_support_primary.get("anchorId")
+                or ""
+            ).strip()
+            exact_anchor_kind = str(
+                exact_support_primary.get("anchor_kind")
+                or exact_support_primary.get("anchorKind")
+                or ""
+            ).strip().lower()
+            if exact_block_id:
+                reader_open["blockId"] = exact_block_id
+            if exact_anchor_id:
+                reader_open["anchorId"] = exact_anchor_id
+            if exact_anchor_kind:
+                reader_open["anchorKind"] = exact_anchor_kind
+            if exact_block_id or exact_anchor_id:
+                locate_target = (
+                    dict(reader_open.get("locateTarget") or {})
+                    if isinstance(reader_open.get("locateTarget"), dict)
+                    else {}
+                )
+                locate_target.update(
+                    {
+                        "headingPath": heading_path or heading,
+                        "snippet": exact_support_evidence,
+                        "highlightSnippet": exact_support_evidence,
+                        "evidenceQuote": exact_support_evidence,
+                        "blockId": exact_block_id,
+                        "anchorId": exact_anchor_id,
+                        "anchorKind": exact_anchor_kind,
+                    }
+                )
+                reader_open["locateTarget"] = {
+                    key: value
+                    for key, value in locate_target.items()
+                    if value not in (None, "", [], {})
+                }
             exact_page_start = _positive_int(
                 exact_support_primary.get("page_start")
                 or exact_support_primary.get("pageStart")

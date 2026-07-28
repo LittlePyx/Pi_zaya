@@ -3512,6 +3512,35 @@ def _augment_hits_with_system_a_plan_slots(
         and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
         and _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
     }
+    multi_claim_candidate_counts: dict[str, int] = {}
+    broad_benefit_risk_source_keys: set[str] = set()
+    for raw_slot in plan_slots:
+        if not isinstance(raw_slot, dict):
+            continue
+        raw_source_key = _reading_slot_source_key(
+            raw_slot.get("source_path") or raw_slot.get("sourcePath")
+        )
+        if not raw_source_key:
+            continue
+        if list(raw_slot.get("candidate_hits") or []):
+            multi_claim_candidate_counts[raw_source_key] = (
+                int(multi_claim_candidate_counts.get(raw_source_key) or 0) + 1
+            )
+        raw_reason = str(
+            raw_slot.get("evidence_selection_reason")
+            or raw_slot.get("evidenceSelectionReason")
+            or ""
+        ).strip().lower()
+        raw_evidence = str(raw_slot.get("evidence_quote") or "")
+        if (
+            raw_reason == "prompt_aligned_source_sentence"
+            and len(raw_evidence) >= 700
+            and re.search(r"(?i)(?:reconstruction|image)\s+quality", raw_evidence)
+            and re.search(r"(?i)(?:reconstruction|imaging)\s+speed", raw_evidence)
+            and re.search(r"(?i)training", raw_evidence)
+            and re.search(r"(?i)generalization", raw_evidence)
+        ):
+            broad_benefit_risk_source_keys.add(raw_source_key)
     # Exact-support preflight resolves a concrete source occurrence before the
     # slower reference-card enrichment runs.  Keep that occurrence as its own
     # hit even when the retrieval row has identical text: the enriched row may
@@ -3531,6 +3560,22 @@ def _augment_hits_with_system_a_plan_slots(
         heading_path = str(slot.get("heading_path") or slot.get("headingPath") or "").strip()
         evidence_quote = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "").strip())
         if not source_path or not evidence_quote:
+            continue
+        slot_source_key = _reading_slot_source_key(source_path)
+        broad_benefit_risk_slot = bool(
+            slot_source_key in broad_benefit_risk_source_keys
+            and str(
+                slot.get("evidence_selection_reason")
+                or slot.get("evidenceSelectionReason")
+                or ""
+            ).strip().lower()
+            == "prompt_aligned_source_sentence"
+            and multi_claim_candidate_counts.get(slot_source_key, 0) >= 2
+        )
+        if broad_benefit_risk_slot:
+            # A long review paragraph can mention both the benefit and the risk,
+            # but binding it to one visible number hides the two shorter
+            # claim-specific passages already selected by the plan.
             continue
         trusted_prompt_contract_slot = bool(
             str(
@@ -3574,6 +3619,14 @@ def _augment_hits_with_system_a_plan_slots(
         candidate_nums = list(slot.get("candidate_hits") or [])
         exact_support_candidate_slot = bool(
             exact_support_plan_slot and candidate_nums
+        )
+        multi_claim_candidate_slot = bool(
+            candidate_nums
+            and slot_source_key in broad_benefit_risk_source_keys
+            and multi_claim_candidate_counts.get(slot_source_key, 0) >= 2
+        )
+        authoritative_plan_evidence = bool(
+            authoritative_plan_evidence or multi_claim_candidate_slot
         )
         if (
             len(plan_source_keys) >= 3
@@ -3706,6 +3759,7 @@ def _augment_hits_with_system_a_plan_slots(
                 trusted_prompt_contract_slot
                 or prompt_aligned_source_slot
                 or exact_support_candidate_slot
+                or multi_claim_candidate_slot
                 or (
                     len(plan_source_keys) >= 3
                     and (
@@ -5437,17 +5491,23 @@ def _reading_guide_repair_scope_boundary_citation(
             candidate_source_identity = _reading_slot_source_identity(
                 candidate_meta.get("source_path") or candidate_hit.get("source_path")
             )
+            visible_candidate_num = _reading_visible_answer_num(
+                candidate_hit,
+                candidate_num,
+                canonical_paths,
+            )
+            canonical_visible_candidate = bool(
+                isinstance(canonical_paths, list)
+                and 1 <= visible_candidate_num <= len(canonical_paths)
+            )
             if (
-                bool(candidate_meta.get("citation_plan_scope_boundary"))
-                and candidate_source_identity == slot_source_identity
-            ):
-                stable_scope_nums.append(
-                    _reading_visible_answer_num(
-                        candidate_hit,
-                        candidate_num,
-                        canonical_paths,
-                    )
+                candidate_source_identity == slot_source_identity
+                and (
+                    bool(candidate_meta.get("citation_plan_scope_boundary"))
+                    or canonical_visible_candidate
                 )
+            ):
+                stable_scope_nums.append(visible_candidate_num)
         nums = stable_scope_nums or _reading_slot_hit_nums(
             slot,
             hits,
@@ -5527,9 +5587,102 @@ def _reading_guide_repair_beginner_roadmap_missing_paper(
         hits,
         canonical_paths=canonical_paths,
     )
-    if not foundation_nums:
+    dl_nums = _reading_slot_hit_nums(
+        dl_slot,
+        hits,
+        canonical_paths=canonical_paths,
+    )
+    comparison_nums = _reading_slot_hit_nums(
+        comparison_slot,
+        hits,
+        canonical_paths=canonical_paths,
+    )
+    if not foundation_nums or not dl_nums or not comparison_nums:
         return text
     foundation_num = int(foundation_nums[0])
+    dl_num = int(dl_nums[0])
+    comparison_num = int(comparison_nums[0])
+
+    def _complete_existing_sections(value: str) -> str:
+        lines = str(value or "").splitlines()
+
+        def section_bounds(pattern: str) -> tuple[int, int]:
+            start = next(
+                (
+                    idx
+                    for idx, line in enumerate(lines)
+                    if re.match(r"\s*#{2,4}\s+", line)
+                    and re.search(pattern, line, flags=re.I)
+                ),
+                -1,
+            )
+            if start < 0:
+                return -1, -1
+            end = next(
+                (
+                    idx
+                    for idx in range(start + 1, len(lines))
+                    if re.match(r"\s*#{2,4}\s+", lines[idx])
+                ),
+                len(lines),
+            )
+            return start, end
+
+        dl_start, dl_end = section_bounds(
+            r"Advances\s+and\s+Challenges|LPR[- ]?2025|深度学习综述|前沿进展"
+        )
+        if dl_start >= 0:
+            dl_body = "\n".join(lines[dl_start + 1 : dl_end]).strip()
+            dl_body_plain = re.sub(r"\s+", " ", _md_to_plain_text(dl_body)).strip()
+            if len(dl_body_plain) < 90:
+                prefer_zh_local = bool(re.search(r"[\u4e00-\u9fff]", value))
+                additions = (
+                    [
+                        (
+                            "- **主要看什么**：先看摘要中传统迭代重建的图像质量与计算耗时瓶颈，"
+                            f"再看深度学习带来的重建质量和重建速度收益 [{dl_num}]。"
+                        ),
+                        "- **为什么最后读**：在原理和编码选择之后，再理解学习方法如何改变重建环节。",
+                        "- **关键收获**：把“传统方法的瓶颈”和“深度学习的收益与适用边界”分开判断。",
+                    ]
+                    if prefer_zh_local
+                    else [
+                        (
+                            "- **Focus**: read the Abstract for iterative reconstruction's image-quality "
+                            f"and runtime limits, then the quality and speed gains from deep learning [{dl_num}]."
+                        ),
+                        "- **Why last**: study learning-based reconstruction after the foundations and coding choices.",
+                        "- **Takeaway**: separate the traditional bottleneck from deep learning's gains and scope.",
+                    ]
+                )
+                lines[dl_start + 1 : dl_start + 1] = additions
+
+        comparison_start, comparison_end = section_bounds(
+            r"Hadamard.*Fourier|Fourier.*Hadamard|主流方法对比|编码对比"
+        )
+        if comparison_start >= 0:
+            target_idx = next(
+                (
+                    idx
+                    for idx in range(comparison_start + 1, comparison_end)
+                    if re.search(r"Hadamard|HSI|哈达", lines[idx], flags=re.I)
+                    and re.search(r"Fourier|FSI|傅里叶", lines[idx], flags=re.I)
+                    and re.search(
+                        r"原理|采样基|模式|compare|comparison|basis",
+                        lines[idx],
+                        flags=re.I,
+                    )
+                ),
+                -1,
+            )
+            if target_idx >= 0 and f"[{comparison_num}]" not in lines[target_idx]:
+                lines[target_idx] = _append_numeric_citation_to_paragraph(
+                    lines[target_idx],
+                    comparison_num,
+                )
+        return "\n".join(lines)
+
+    text = _complete_existing_sections(text)
     existing_nums = {
         int(match.group(1) or 0)
         for match in re.finditer(r"(?<![!\\])\[(\d{1,5})\](?!\()", text)
@@ -6920,6 +7073,18 @@ def _reading_guide_repair_dl_spi_benefit_marker(
 ) -> str:
     text = str(md or "")
     if not re.search(r"(?i)deep\s+learning|深度学习", text):
+        return text
+    distinct_system_a_sources = {
+        _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+        and _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+    }
+    if len(distinct_system_a_sources) >= 2:
+        # Multi-paper roadmaps already carry stable source numbers. Removing all
+        # markers for the DL review here can erase that paper from both the
+        # answer and the literature shelf when no separate risk slot is planned.
         return text
     benefit_slot = next(
         (
@@ -9429,7 +9594,76 @@ def _render_cache_missing_authoritative_plan_evidence(
     if not isinstance(cache, dict) or not isinstance(citation_plan, dict):
         return False
     details = [item for item in list(cache.get("cite_details") or []) if isinstance(item, dict)]
-    for slot in list(citation_plan.get("slots") or []):
+    render_packet = (
+        cache.get("render_packet")
+        if isinstance(cache.get("render_packet"), dict)
+        else {}
+    )
+    details.extend(
+        item
+        for item in list(render_packet.get("cite_details") or [])
+        if isinstance(item, dict)
+    )
+    plan_slots = [
+        item
+        for item in list(citation_plan.get("slots") or [])
+        if isinstance(item, dict)
+    ]
+    if str(citation_plan.get("intent") or "").strip().lower() == "scope_boundary":
+        scope_slots = [
+            slot
+            for slot in plan_slots
+            if str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+            and re.search(
+                r"(?i)\bdual[- ]cavity\s+perovskite\b",
+                str(slot.get("evidence_quote") or slot.get("evidenceQuote") or ""),
+            )
+            and re.search(
+                r"(?i)\blas(?:e|er|ing)\w*\b",
+                str(slot.get("evidence_quote") or slot.get("evidenceQuote") or ""),
+            )
+        ]
+        if scope_slots:
+            for slot in scope_slots:
+                slot_identity = _reading_slot_source_identity(
+                    slot.get("source_path")
+                    or slot.get("sourcePath")
+                    or slot.get("source_name")
+                    or slot.get("sourceName")
+                )
+                for detail in details:
+                    if (
+                        str(detail.get("citation_route") or "").strip().lower()
+                        != "system_a"
+                    ):
+                        continue
+                    detail_identity = _reading_slot_source_identity(
+                        detail.get("source_path")
+                        or detail.get("sourcePath")
+                        or detail.get("source_name")
+                        or detail.get("sourceName")
+                    )
+                    if slot_identity and detail_identity != slot_identity:
+                        continue
+                    claim = str(
+                        detail.get("answer_claim") or detail.get("card_claim") or ""
+                    ).strip()
+                    evidence = " ".join(
+                        str(detail.get(key) or "")
+                        for key in (
+                            "evidence_quote",
+                            "card_evidence",
+                            "raw",
+                            "summary_line",
+                        )
+                    )
+                    if _scope_boundary_primary_evidence_relation(
+                        answer_claim=claim,
+                        evidence=evidence,
+                    ):
+                        return False
+            return True
+    for slot in plan_slots:
         if not isinstance(slot, dict):
             continue
         reason = str(

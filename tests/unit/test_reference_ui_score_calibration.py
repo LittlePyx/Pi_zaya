@@ -3123,6 +3123,55 @@ def test_build_hit_ui_meta_rebinds_summary_heading_to_exact_loc_path(monkeypatch
     assert (reader_open.get("primaryEvidence") or {}) == primary_evidence
 
 
+def test_build_hit_ui_meta_promotes_fast_exact_identity_into_reader_open(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    source_path = r"db\SCINeRF\SCINeRF.en.md"
+    evidence = "most of the existing methods employ alternating direction method of multipliers (ADMM) [4]"
+    hit = {
+        "text": evidence,
+        "meta": {
+            "source_path": source_path,
+            "ref_pack_state": "ready",
+            "top_heading": "2. Related Work",
+            "paper_guide_fast_exact": True,
+            "structured_evidence_locked": True,
+            "guide_line": evidence,
+            "why_line": "The source describes ADMM as an existing method rather than a new contribution.",
+            "primary_evidence": {
+                "source_path": source_path,
+                "source_name": "SCINeRF.pdf",
+                "heading_path": "SCINeRF / 2. Related Work",
+                "snippet": evidence,
+                "highlight_snippet": evidence,
+                "block_id": "blk-related-admm",
+                "anchor_id": "p-admm",
+                "anchor_kind": "sentence",
+                "selection_reason": "exact_support_preflight",
+                "strict_locate": True,
+            },
+        },
+    }
+
+    ui = build_hit_ui_meta(
+        hit,
+        prompt="ADMM 是作者自己发明的吗？",
+        pdf_root=None,
+        lib_store=None,
+        allow_expensive_llm=False,
+    )
+
+    reader_open = dict(ui.get("reader_open") or {})
+    locate_target = dict(reader_open.get("locateTarget") or {})
+    assert reader_open.get("strictLocate") is True
+    assert reader_open.get("blockId") == "blk-related-admm"
+    assert reader_open.get("anchorId") == "p-admm"
+    assert reader_open.get("anchorKind") == "sentence"
+    assert locate_target.get("blockId") == "blk-related-admm"
+    assert locate_target.get("anchorId") == "p-admm"
+    assert locate_target.get("evidenceQuote") == evidence
+
+
 def test_build_hit_ui_meta_prefers_authoritative_source_block_for_reader_open(monkeypatch):
     monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
 

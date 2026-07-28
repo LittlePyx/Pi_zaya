@@ -907,6 +907,46 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                     "primaryEvidence": primary,
                 }
             )
+            block_id = str(primary.get("block_id") or "").strip()
+            anchor_id = str(primary.get("anchor_id") or "").strip()
+            anchor_kind = str(primary.get("anchor_kind") or "").strip().lower()
+            if block_id or anchor_id:
+                if block_id:
+                    reader_open["blockId"] = block_id
+                if anchor_id:
+                    reader_open["anchorId"] = anchor_id
+                if anchor_kind:
+                    reader_open["anchorKind"] = anchor_kind
+                locate_target = (
+                    dict(reader_open.get("locateTarget") or {})
+                    if isinstance(reader_open.get("locateTarget"), dict)
+                    else {}
+                )
+                locate_target.update(
+                    {
+                        "headingPath": heading_path,
+                        "snippet": evidence_quote,
+                        "highlightSnippet": evidence_quote,
+                        "evidenceQuote": evidence_quote,
+                        "blockId": block_id,
+                        "anchorId": anchor_id,
+                        "anchorKind": anchor_kind,
+                    }
+                )
+                reader_open["locateTarget"] = {
+                    key: value
+                    for key, value in locate_target.items()
+                    if value not in (None, "", [], {})
+                }
+            else:
+                for key in ("blockId", "anchorId", "anchorKind", "anchorNumber", "locateTarget"):
+                    reader_open.pop(key, None)
+            page_start = int(primary.get("page_start") or 0)
+            page_end = int(primary.get("page_end") or page_start or 0)
+            if page_start > 0:
+                reader_open["pageStart"] = page_start
+            if page_end > 0:
+                reader_open["pageEnd"] = page_end
             ui["reader_open"] = reader_open
             location = heading_path or ("原文定位处" if prefer_zh else "Source passage")
             ui["card_view"] = {

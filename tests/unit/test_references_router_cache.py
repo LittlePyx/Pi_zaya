@@ -460,6 +460,10 @@ def test_answer_citation_overlay_explains_admm_is_prior_work(monkeypatch) -> Non
                                         "evidence_quote": (
                                             "Most existing methods employ ADMM for iterative optimization."
                                         ),
+                                        "block_id": "blk-related-admm",
+                                        "anchor_id": "p-admm",
+                                        "anchor_kind": "sentence",
+                                        "page_start": 2,
                                     }
                                 ]
                             }
@@ -492,6 +496,15 @@ def test_answer_citation_overlay_explains_admm_is_prior_work(monkeypatch) -> Non
     assert all(term in ui["why_line"] for term in ("ADMM", "已有方法", "不是本文新提出"))
     assert "逐项核对" not in ui["why_line"]
     assert ui["card_view"]["sections"][1]["text"] == ui["why_line"]
+    reader_open = dict(ui.get("reader_open") or {})
+    locate_target = dict(reader_open.get("locateTarget") or {})
+    assert reader_open.get("strictLocate") is True
+    assert reader_open.get("blockId") == "blk-related-admm"
+    assert reader_open.get("anchorId") == "p-admm"
+    assert reader_open.get("anchorKind") == "sentence"
+    assert reader_open.get("pageStart") == 2
+    assert locate_target.get("blockId") == "blk-related-admm"
+    assert locate_target.get("anchorId") == "p-admm"
     assert out[35]["render_status"] == "full"
 
 
