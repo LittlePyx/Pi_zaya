@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import copy
 import hashlib
 import inspect
 import json
@@ -19,6 +20,7 @@ from api.message_render_contract import (
     render_payload_is_degraded_for_citations,
     render_payload_is_missing_planned_system_a,
     strip_legacy_render_fields,
+    transform_markdown_outside_code,
 )
 from api.citation_display_registry import remap_system_a_citations_for_display
 from api.deps import load_prefs
@@ -50,13 +52,19 @@ from kb.paper_guide_structured_index_runtime import (
     load_paper_guide_figure_index,
 )
 from kb.citation_meta import extract_first_doi
-from kb.citation_card import compose_citation_card, refresh_citation_card_contract
+from kb.citation_card import (
+    CITATION_CARD_EVIDENCE_MAX_LEN,
+    compose_citation_card,
+    refresh_citation_card_contract,
+)
 from kb.inpaper_citation_enrichment import (
     enrich_inpaper_detail_context,
     extract_structured_cite_answer_context_line,
 )
 from kb.evidence_text import (
     clean_display_text as _clean_evidence_display_text,
+    compound_claim_evidence_excerpt,
+    evidence_alignment_tokens,
     evidence_sentence_quality as _evidence_sentence_quality,
     looks_low_value_citation_context as _looks_low_value_citation_context,
     pick_readable_evidence_text as _pick_readable_evidence_text,
@@ -75,12 +83,35 @@ _STRUCT_CITE_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d
 _STRUCT_CITE_SINGLE_RE = re.compile(r"(?<!\[)\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})(?:\s*:\s*(\d{1,4}))?\s*\](?!\])", re.IGNORECASE)
 _STRUCT_CITE_SID_ONLY_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*\]\]", re.IGNORECASE)
 _STRUCT_CITE_GARBAGE_RE = re.compile(r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]", re.IGNORECASE)
+_STRUCT_CITE_ATOM_PATTERN = (
+    r"(?:"
+    r"\[\[\s*CITE\s*:\s*[A-Za-z0-9_-]{4,24}(?:\s*:\s*\d{1,4})?\s*\]\]"
+    r"|\[\s*CITE\s*:\s*[A-Za-z0-9_-]{4,24}(?:\s*:\s*\d{1,4})?\s*\]"
+    r")"
+)
+_WRAPPED_STRUCT_CITE_RE = re.compile(
+    r"(?<!\[)(?:\[\s*){0,3}"
+    + _STRUCT_CITE_ATOM_PATTERN
+    + r"(?:\s*\]){0,3}(?!\])",
+    re.IGNORECASE,
+)
+_STRUCT_SUPPORT_RE = re.compile(r"\[\[\s*SUPPORT\s*:[^\]\n]+\]\]", re.IGNORECASE)
 _STRUCT_SID_INLINE_RE = re.compile(r"\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\]", re.IGNORECASE)
 _STRUCT_SID_HEADER_LINE_RE = re.compile(
     r"(?im)^\s*\[\d{1,3}\]\s*\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\][^\n]*\n?",
     re.IGNORECASE,
 )
 _VISIBLE_NUMERIC_CITE_RE = re.compile(r"\[\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*\]")
+_LINKED_NUMERIC_CITE_RE = re.compile(
+    r"(?<![!\\])\[\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*\]"
+    r"\(\#[^\s)]+(?:\s+\"[^\"\r\n]*\")?\)"
+)
+_CONFIRMED_CITATION_LINK_RE = re.compile(
+    r"(?<![!\\])\[(\d{1,4})\]"
+    r"\(\#((?:kb-)?cite-[^\s)]+)(?:\s+\"[^\"\r\n]*\")?\)",
+    re.IGNORECASE,
+)
+_SINGLE_NUMERIC_CITE_RE = re.compile(r"(?<!\[)\[(\d{1,4})\](?![\]\(])")
 _DOUBLE_NUMERIC_CITE_RE = re.compile(
     r"(?<![!\\])\[\[\s*(\d{1,5}(?:\s*(?:-|–|—|,|;|；|、)\s*\d{1,5})*)\s*\]\]"
 )
@@ -117,7 +148,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 44
+_RENDER_CACHE_SCHEMA_VERSION = 49
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -1196,7 +1227,19 @@ def _backfill_system_a_citation_meta(
     if existing_bibliographic_title:
         existing_input["title"] = existing_bibliographic_title
     elif existing_title and evidence_heading and existing_title == evidence_heading:
-        existing_input.pop("title", None)
+        root_heading = evidence_heading.split(" / ", 1)[0].strip()
+        if (
+            root_heading
+            and root_heading != evidence_heading
+            and re.search(r"(?:^|\s/\s)abstract\s*$", evidence_heading, flags=re.I)
+        ):
+            # Converter heading paths commonly use "Article title / Abstract".
+            # The root is a better source-paper identity than a filename that
+            # was shortened with an ellipsis, while the full path remains the
+            # evidence locator.
+            existing_input["title"] = root_heading
+        else:
+            existing_input.pop("title", None)
     existing_public = public_citation_meta(existing_input)
 
     # Oldest/local metadata only fills gaps. The metadata already attached to
@@ -1204,18 +1247,25 @@ def _backfill_system_a_citation_meta(
     citation_meta = dict(local_public)
     citation_meta.update(ref_pack_public)
     citation_meta.update(existing_public)
-    if not citation_meta:
-        return detail
-    bibliographic_title = str(citation_meta.get("title") or "").strip()
-    if bibliographic_title:
-        detail["bibliographic_title"] = bibliographic_title
-        # System A keeps the exact passage in heading_path/card_subtitle; title is
-        # the article title used by the literature basket and citation exports.
-        detail["title"] = bibliographic_title
-    for field, value in citation_meta.items():
-        if field == "title" or value in (None, "", [], {}):
-            continue
-        detail[field] = value
+    if citation_meta:
+        bibliographic_title = str(citation_meta.get("title") or "").strip()
+        if bibliographic_title:
+            detail["bibliographic_title"] = bibliographic_title
+            # System A keeps the exact passage in heading_path/card_subtitle; title is
+            # the article title used by the literature basket and citation exports.
+            detail["title"] = bibliographic_title
+        for field, value in citation_meta.items():
+            if field == "title" or value in (None, "", [], {}):
+                continue
+            detail[field] = value
+    try:
+        from api.reference_metadata_quality import citation_metadata_export_acceptance
+
+        acceptance = citation_metadata_export_acceptance(detail)
+    except Exception:
+        acceptance = {}
+    if isinstance(acceptance, dict) and acceptance:
+        detail["metadata_export_acceptance"] = acceptance
     return detail
 
 
@@ -1460,7 +1510,13 @@ def _backfill_system_a_cite_details_from_ref_pack(
             or str(detail.get("evidence_source") or "").strip().lower()
             == "exact_support_preflight"
             or str(detail.get("selection_reason") or "").strip().lower()
-            in {"exact_support_preflight", "microscopy_direct"}
+            in {
+                "exact_support_preflight",
+                "microscopy_direct",
+                "prompt_aligned_source_sentence",
+                "prompt_contract_block",
+                "spad_noise_model_exact_source",
+            }
         )
         if (
             exact_support_locked
@@ -1680,6 +1736,264 @@ def _backfill_system_a_cite_details_from_ref_pack(
     return out
 
 
+def _refine_system_a_cite_evidence_from_citation_plan(
+    cite_details: list[dict],
+    citation_plan: dict | None,
+    *,
+    render_locale: str = "",
+) -> list[dict]:
+    """Center inline System-A evidence on the answer-supported sentence window.
+
+    Citation cards are compacted for rendering, while the citation plan keeps
+    the full passage selected before generation.  Reusing that passage here
+    prevents an abstract's opening sentences from permanently becoming the
+    visible quote when the decisive evidence occurs later in the same block.
+    """
+
+    slots = [
+        dict(item)
+        for item in list((citation_plan or {}).get("slots") or [])
+        if isinstance(item, dict)
+        and str(item.get("preferred_system") or "system_a").strip().lower()
+        != "system_b"
+        and str(
+            item.get("evidence_quote")
+            or item.get("evidenceQuote")
+            or item.get("summary_line")
+            or ""
+        ).strip()
+    ]
+    if not slots:
+        return [dict(item) for item in list(cite_details or []) if isinstance(item, dict)]
+
+    slots_by_source: dict[str, list[dict]] = {}
+    for slot in slots:
+        source_key = _render_primary_source_identity(slot)
+        if source_key:
+            slots_by_source.setdefault(source_key, []).append(slot)
+
+    out: list[dict] = []
+    for raw in list(cite_details or []):
+        detail = dict(raw) if isinstance(raw, dict) else {}
+        if not detail:
+            continue
+        if (
+            bool(detail.get("is_inpaper"))
+            or str(detail.get("citation_route") or "").strip().lower() == "system_b"
+        ):
+            out.append(detail)
+            continue
+        source_key = _render_primary_source_identity(detail)
+        matches = list(slots_by_source.get(source_key) or [])
+        if len(matches) > 1:
+            heading_key = _render_primary_heading_identity(detail)
+            exact_heading = [
+                slot
+                for slot in matches
+                if _render_primary_heading_identity(slot) == heading_key
+            ]
+            if exact_heading:
+                matches = exact_heading
+        if not matches:
+            out.append(detail)
+            continue
+
+        claim = " ".join(
+            part
+            for part in (
+                str(detail.get("answer_claim") or "").strip(),
+                " ".join(
+                    str(value or "").strip()
+                    for value in list(detail.get("answer_claims") or [])
+                    if str(value or "").strip()
+                ),
+                str(detail.get("card_takeaway") or "").strip(),
+            )
+            if part
+        )
+        claim_terms = evidence_alignment_tokens(claim)
+        evidence_candidates: list[tuple[tuple[int, int, int], dict, str]] = []
+        for match_idx, candidate_slot in enumerate(matches):
+            plan_evidence = re.sub(
+                r"\s+",
+                " ",
+                str(
+                    candidate_slot.get("evidence_quote")
+                    or candidate_slot.get("evidenceQuote")
+                    or candidate_slot.get("summary_line")
+                    or ""
+                ),
+            ).strip()
+            # Whitespace-normalized plans can place the Markdown heading and
+            # first sentence on one line. Remove only a known section label so
+            # cleanup does not discard the evidence body.
+            plan_evidence = re.sub(
+                r"^\s*#{1,6}\s+(?:abstract|introduction|conclusion|discussion|results?)\s+",
+                "",
+                plan_evidence,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            compound = compound_claim_evidence_excerpt(
+                plan_evidence,
+                claim=claim,
+                max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
+            )
+            candidate_readable = compound or _pick_readable_evidence_text(
+                plan_evidence,
+                source=str(
+                    detail.get("source_name")
+                    or candidate_slot.get("source_name")
+                    or ""
+                ),
+                title=str(detail.get("title") or detail.get("card_title") or ""),
+                claim=claim,
+                heading=str(
+                    detail.get("heading_path")
+                    or candidate_slot.get("heading_path")
+                    or ""
+                ),
+                # Keep the selector's budget identical to the card contract.
+                max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
+            )
+            if not candidate_readable:
+                continue
+            evidence_candidates.append(
+                (
+                    (
+                        len(claim_terms & evidence_alignment_tokens(candidate_readable)),
+                        1 if not compound else 0,
+                        -match_idx,
+                    ),
+                    candidate_slot,
+                    candidate_readable,
+                )
+            )
+        if not evidence_candidates:
+            out.append(detail)
+            continue
+        _evidence_score, _slot, readable = max(
+            evidence_candidates,
+            key=lambda item: item[0],
+        )
+
+        # Card evidence and reader evidence serve different purposes.  The
+        # card may use a compact multi-sentence excerpt, while the reader needs
+        # the continuous source block plus its exact locator.  Select them
+        # independently so candidate ordering cannot trade one for the other.
+        locator_slot = max(
+            matches,
+            key=lambda item: (
+                len(
+                    claim_terms
+                    & evidence_alignment_tokens(
+                        str(
+                            item.get("evidence_quote")
+                            or item.get("evidenceQuote")
+                            or item.get("summary_line")
+                            or ""
+                        )
+                    )
+                ),
+                int(bool(str(item.get("block_id") or item.get("blockId") or "").strip()))
+                + int(bool(str(item.get("anchor_id") or item.get("anchorId") or "").strip())),
+                int(item.get("page_start") or item.get("pageStart") or 0) > 0,
+                len(
+                    str(
+                        item.get("evidence_quote")
+                        or item.get("evidenceQuote")
+                        or item.get("summary_line")
+                        or ""
+                    )
+                ),
+            ),
+        )
+        locator_block_id = str(
+            locator_slot.get("block_id") or locator_slot.get("blockId") or ""
+        ).strip()
+        locator_anchor_id = str(
+            locator_slot.get("anchor_id") or locator_slot.get("anchorId") or ""
+        ).strip()
+        if locator_block_id or locator_anchor_id:
+            reader_evidence = _clean_evidence_display_text(
+                locator_slot.get("evidence_quote")
+                or locator_slot.get("evidenceQuote")
+                or locator_slot.get("summary_line")
+                or "",
+                max_len=1800,
+            )
+            detail["block_id"] = locator_block_id
+            detail["anchor_id"] = locator_anchor_id
+            detail["anchor_kind"] = str(
+                locator_slot.get("anchor_kind")
+                or locator_slot.get("anchorKind")
+                or detail.get("anchor_kind")
+                or "paragraph"
+            ).strip()
+            detail["strict_locate"] = True
+            try:
+                locator_page_start = int(
+                    locator_slot.get("page_start")
+                    or locator_slot.get("pageStart")
+                    or 0
+                )
+                locator_page_end = int(
+                    locator_slot.get("page_end")
+                    or locator_slot.get("pageEnd")
+                    or locator_page_start
+                    or 0
+                )
+            except (TypeError, ValueError):
+                locator_page_start = 0
+                locator_page_end = 0
+            if locator_page_start > 0:
+                detail["page_start"] = locator_page_start
+                detail["page_end"] = locator_page_end or locator_page_start
+            if reader_evidence:
+                detail["reader_evidence_quote"] = reader_evidence
+                detail["reader_evidence_source"] = "citation_plan_located_block"
+        existing = str(
+            detail.get("evidence_quote")
+            or detail.get("summary_line")
+            or detail.get("raw")
+            or ""
+        ).strip()
+        existing_overlap = len(claim_terms & evidence_alignment_tokens(existing))
+        readable_overlap = len(claim_terms & evidence_alignment_tokens(readable))
+        if (
+            not readable
+            or not claim_terms
+            or readable_overlap < 3
+            or readable_overlap < existing_overlap + 2
+        ):
+            out.append(detail)
+            continue
+
+        detail["summary_line"] = readable
+        detail["evidence_quote"] = readable
+        detail["raw"] = readable
+        detail["card_evidence"] = readable
+        detail["evidence_source"] = "citation_plan_claim_window"
+        detail["summary_source"] = "citation_plan_claim_window"
+        for relation_builder in (
+            _quantitative_primary_evidence_relation,
+            _scigs_dynamic_primary_evidence_relation,
+            _dl_spi_benefit_primary_evidence_relation,
+            _scope_boundary_primary_evidence_relation,
+            _refocus_primary_evidence_relation,
+        ):
+            relation = relation_builder(answer_claim=claim, evidence=readable)
+            if relation:
+                detail["support_relation"] = relation
+        composed = compose_citation_card(detail, locale=render_locale)
+        composed["summary_line"] = readable
+        composed["evidence_quote"] = readable
+        composed["raw"] = readable
+        composed["card_evidence"] = readable
+        out.append(refresh_citation_card_contract(composed, locale=render_locale))
+    return out
+
+
 def _refine_system_a_cite_locators_from_final_primary(
     cite_details: list[dict],
     primary_evidence: dict | None,
@@ -1851,16 +2165,6 @@ def _answer_aligned_reference_render_pack(raw_pack: dict | None, answer_text: st
 
 
 def _effective_citation_render_locale(ref_pack: dict | None = None) -> str:
-    packs: list[dict] = []
-    if isinstance(ref_pack, dict):
-        packs.append(ref_pack)
-        rendered_payload = ref_pack.get("rendered_payload")
-        if isinstance(rendered_payload, dict):
-            packs.append(rendered_payload)
-    for pack in packs:
-        raw = str(pack.get("render_locale") or "").strip().lower()
-        if raw in {"zh", "en"}:
-            return raw
     try:
         prefs = load_prefs()
     except Exception:
@@ -1871,6 +2175,16 @@ def _effective_citation_render_locale(ref_pack: dict | None = None) -> str:
     raw_ui = str((prefs or {}).get("ui_locale") or "").strip().lower()
     if raw_ui in {"zh", "en"}:
         return raw_ui
+    packs: list[dict] = []
+    if isinstance(ref_pack, dict):
+        packs.append(ref_pack)
+        rendered_payload = ref_pack.get("rendered_payload")
+        if isinstance(rendered_payload, dict):
+            packs.append(rendered_payload)
+    for pack in packs:
+        raw = str(pack.get("render_locale") or "").strip().lower()
+        if raw in {"zh", "en"}:
+            return raw
     return "zh"
 
 
@@ -1951,15 +2265,24 @@ def _strip_structured_cite_tokens_for_display(md: str) -> str:
     s = str(md or "")
     if not s:
         return s
-    out = s
-    if "CITE" in s.upper():
-        out = _STRUCT_CITE_RE.sub("", out)
-        out = _STRUCT_CITE_SINGLE_RE.sub("", out)
-        out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
-        out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
-    out = _STRUCT_SID_HEADER_LINE_RE.sub("", out)
-    out = _STRUCT_SID_INLINE_RE.sub("", out)
-    return out
+
+    def _strip(prose: str) -> str:
+        out = prose
+        if "CITE" in prose.upper():
+            # Consume model-added wrappers together with an unresolved token.
+            # Removing only ``[[CITE:...]]`` first leaves user-visible ``[]``
+            # or ``[[]]``; deleting empty brackets globally would in turn
+            # corrupt legitimate literal arrays and Markdown task syntax.
+            out = _WRAPPED_STRUCT_CITE_RE.sub("", out)
+            out = _STRUCT_CITE_RE.sub("", out)
+            out = _STRUCT_CITE_SINGLE_RE.sub("", out)
+            out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
+            out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
+        out = _STRUCT_SID_HEADER_LINE_RE.sub("", out)
+        out = _STRUCT_SID_INLINE_RE.sub("", out)
+        return out
+
+    return transform_markdown_outside_code(s, _strip)
 
 
 _EMPTY_EXAMPLE_CONNECTOR_RE = re.compile(
@@ -1980,29 +2303,6 @@ def _cleanup_answer_surface_artifacts(md: str) -> str:
     out = str(md or "")
     if not out:
         return out
-    task_boxes: dict[str, str] = {}
-
-    def _protect_task_box(match: re.Match[str]) -> str:
-        token = f"\x00KB_TASK_BOX_{len(task_boxes)}\x00"
-        task_boxes[token] = str(match.group(0) or "")
-        return token
-
-    out = re.sub(
-        r"(?m)^\s*(?:[-*+]|\d+[.)])\s+\[\s*\]",
-        _protect_task_box,
-        out,
-    )
-    # Structured citations can be wrapped by model-generated brackets.  Once
-    # an unresolved token is removed those wrappers become ``[]``/``[[]]``.
-    # Remove them at the final display surface while preserving Markdown task
-    # checkboxes protected above.
-    for _ in range(3):
-        cleaned = re.sub(r"\[\s*(?:\[\s*\]\s*)?\]", "", out)
-        if cleaned == out:
-            break
-        out = cleaned
-    for token, original in task_boxes.items():
-        out = out.replace(token, original)
     out = _EMPTY_EXAMPLE_CONNECTOR_RE.sub(lambda m: str(m.group("open") or ""), out)
     out = _BARE_EMPTY_EXAMPLE_CONNECTOR_RE.sub("", out)
     for _ in range(3):
@@ -2827,6 +3127,54 @@ _READING_COVERAGE_BRIDGES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] =
 # a shared word such as "resolution" is not enough to bind a sentence.
 _READING_CLAIM_SUPPORT_GROUPS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
     (
+        re.compile(r"\b(?:ADMM|alternating\s+direction\s+method\s+of\s+multipliers)\b|交替方向乘子", re.IGNORECASE),
+        ("admm", "alternating direction method of multipliers", "交替方向乘子"),
+    ),
+    (
+        re.compile(r"\b(?:existing|prior|previous)\s+(?:methods?|work)\b|已有方法|现有方法|前人工作|既有方法", re.IGNORECASE),
+        (
+            "existing method",
+            "existing methods",
+            "prior work",
+            "previous work",
+            "已有方法",
+            "现有方法",
+            "前人工作",
+            "既有方法",
+            "不是本文原创",
+            "not original",
+        ),
+    ),
+    (
+        re.compile(
+            r"\bphysical\s+imag(?:e|ing)\s+(?:formation\s+)?process\s+of\s+SCI\b|"
+            r"SCI.{0,12}\u7269\u7406\u6210\u50cf\u8fc7\u7a0b|"
+            r"\u7269\u7406\u6210\u50cf\u8fc7\u7a0b.{0,12}SCI",
+            re.IGNORECASE,
+        ),
+        (
+            "physical imaging process of sci",
+            "sci physical imaging process",
+            "sci \u7269\u7406\u6210\u50cf\u8fc7\u7a0b",
+            "sci\u7269\u7406\u6210\u50cf\u8fc7\u7a0b",
+            "\u7269\u7406\u6210\u50cf\u8fc7\u7a0b",
+        ),
+    ),
+    (
+        re.compile(
+            r"\b(?:training\s+of\s+NeRF|NeRF\s+training)\b|"
+            r"NeRF.{0,8}\u8bad\u7ec3|\u8bad\u7ec3.{0,8}NeRF",
+            re.IGNORECASE,
+        ),
+        (
+            "training of nerf",
+            "nerf training",
+            "nerf \u8bad\u7ec3",
+            "nerf\u8bad\u7ec3",
+            "\u8bad\u7ec3\u7684\u4e00\u90e8\u5206",
+        ),
+    ),
+    (
         re.compile(r"\b(?:spad\s+arrays?|single[-\s]?photon)\b|SPAD\s*阵列|单光子", re.IGNORECASE),
         ("spad", "spad array", "spad arrays", "single-photon", "single photon", "SPAD阵列", "单光子"),
     ),
@@ -3429,6 +3777,7 @@ def _augment_hits_with_system_a_plan_slots(
     *,
     reserved_count: int = 0,
     canonical_paths: list[str] | None = None,
+    answer_text: str = "",
 ) -> list[dict]:
     rows = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
     if not isinstance(citation_plan, dict):
@@ -3622,6 +3971,77 @@ def _augment_hits_with_system_a_plan_slots(
                 selected_source_keys.append(scope_source_key)
             selected_scope_slots.append(scope_slot)
         plan_slots = selected_scope_slots
+    answer_surface = str(answer_text or "").strip()
+    if answer_surface and isinstance(canonical_paths, list) and canonical_paths:
+        canonical_source_counts: dict[str, int] = {}
+        for canonical_path in canonical_paths:
+            source_identity = _reading_slot_source_identity(canonical_path)
+            if source_identity:
+                canonical_source_counts[source_identity] = (
+                    int(canonical_source_counts.get(source_identity) or 0) + 1
+                )
+        answer_tokens = evidence_alignment_tokens(answer_surface)
+        answer_numbers = set(
+            re.findall(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])", answer_surface)
+        )
+
+        def _slot_answer_alignment(slot: dict) -> tuple[int, int, int, int, int]:
+            evidence = str(
+                slot.get("evidence_quote")
+                or slot.get("evidenceQuote")
+                or ""
+            ).strip()
+            evidence_tokens = evidence_alignment_tokens(evidence)
+            overlap = len(answer_tokens & evidence_tokens)
+            overlap_density = int(1000 * overlap / max(1, len(evidence_tokens)))
+            evidence_numbers = set(
+                re.findall(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])", evidence)
+            )
+            locator_specificity = int(
+                bool(
+                    slot.get("block_id")
+                    or slot.get("blockId")
+                    or slot.get("anchor_id")
+                    or slot.get("anchorId")
+                )
+            )
+            return (
+                len(answer_numbers & evidence_numbers),
+                overlap,
+                overlap_density,
+                locator_specificity,
+                int(bool(list(slot.get("candidate_hits") or []))),
+            )
+
+        # When only one canonical marker exists for a paper, several planned
+        # passages cannot each receive a visible number. Choose the passage that
+        # best matches the actual answer before the first slot claims that row.
+        # Keep multi-occurrence sources untouched because their candidate-hit
+        # numbers already encode occurrence-level routing.
+        source_slot_indices: dict[str, list[int]] = {}
+        for slot_idx, raw_slot in enumerate(plan_slots):
+            if not isinstance(raw_slot, dict):
+                continue
+            if str(raw_slot.get("preferred_system") or "").strip().lower() == "system_b":
+                continue
+            source_identity = _reading_slot_source_identity(
+                raw_slot.get("source_path")
+                or raw_slot.get("sourcePath")
+                or raw_slot.get("source_name")
+                or raw_slot.get("sourceName")
+            )
+            if source_identity and canonical_source_counts.get(source_identity) == 1:
+                source_slot_indices.setdefault(source_identity, []).append(slot_idx)
+        for slot_indices in source_slot_indices.values():
+            if len(slot_indices) < 2:
+                continue
+            ranked_slots = sorted(
+                (plan_slots[slot_idx] for slot_idx in slot_indices),
+                key=_slot_answer_alignment,
+                reverse=True,
+            )
+            for slot_idx, ranked_slot in zip(slot_indices, ranked_slots):
+                plan_slots[slot_idx] = ranked_slot
     plan_source_keys = {
         _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
         for slot in plan_slots
@@ -3877,6 +4297,7 @@ def _augment_hits_with_system_a_plan_slots(
                 or prompt_aligned_source_slot
                 or exact_support_candidate_slot
                 or multi_claim_candidate_slot
+                or (structured_table_plan_slot and bool(candidate_nums))
                 or (
                     len(plan_source_keys) >= 3
                     and (
@@ -7831,6 +8252,53 @@ def _reading_guide_attach_claim_level_system_a_citations(
     if not slots:
         return text
 
+    def shares_exact_system_b_context(slot: dict) -> bool:
+        """Allow one claim to expose both sides of a verified citation chain.
+
+        An origin answer can legitimately need two cards on the same sentence:
+        System A proves how the current paper describes the method, while
+        System B opens the upstream bibliography entry.  Keep this exception
+        narrow by requiring both planned slots to name the same source and the
+        same normalized evidence quote.
+        """
+
+        source_identity = _reading_slot_source_identity(
+            slot.get("source_path")
+            or slot.get("sourcePath")
+            or slot.get("source_name")
+            or slot.get("sourceName")
+        )
+        evidence = re.sub(
+            r"\s+",
+            " ",
+            str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip(),
+        ).casefold()
+        if not source_identity or not evidence:
+            return False
+        for raw_other in list(citation_plan.get("slots") or []):
+            if not isinstance(raw_other, dict):
+                continue
+            if str(raw_other.get("preferred_system") or "").strip().lower() != "system_b":
+                continue
+            other_identity = _reading_slot_source_identity(
+                raw_other.get("source_path")
+                or raw_other.get("sourcePath")
+                or raw_other.get("source_name")
+                or raw_other.get("sourceName")
+            )
+            other_evidence = re.sub(
+                r"\s+",
+                " ",
+                str(
+                    raw_other.get("evidence_quote")
+                    or raw_other.get("evidenceQuote")
+                    or ""
+                ).strip(),
+            ).casefold()
+            if other_identity == source_identity and other_evidence == evidence:
+                return True
+        return False
+
     lines = text.splitlines(keepends=True)
     units_by_line: dict[int, list[str]] = {}
     unit_order: dict[tuple[int, int], int] = {}
@@ -7843,9 +8311,23 @@ def _reading_guide_attach_claim_level_system_a_citations(
         elif body.endswith("\n") or body.endswith("\r"):
             body, ending = body[:-1], body[-1:]
         stripped = body.lstrip()
+        if stripped.startswith("|") and not re.match(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$", body):
+            # Comparison answers often put the only explicit claim for one
+            # planned paper in a Markdown table cell.  Treat cells as claim
+            # units so an exact source-local mechanism can receive its marker
+            # inside the cell; appending after the whole row would create an
+            # invalid orphan column that the renderer discards.
+            units = re.split(r"(\|)", body)
+            units_by_line[line_idx] = units
+            lines[line_idx] = ending
+            for unit_idx, unit in enumerate(units):
+                if unit != "|" and unit.strip():
+                    unit_order[(line_idx, unit_idx)] = order
+                    order += 1
+            continue
         if (
             not stripped
-            or stripped.startswith(("```", "~~~", "|", ">", "<!--"))
+            or stripped.startswith(("```", "~~~", ">", "<!--"))
             or re.match(r"^#{1,6}\s+", stripped)
         ):
             continue
@@ -7874,6 +8356,7 @@ def _reading_guide_attach_claim_level_system_a_citations(
             continue
         source_numeric_surface = re.sub(r"\s+", "", source_surface).replace("µ", "u").replace("μ", "u").lower()
         terms = _reading_coverage_terms(source_surface)
+        allow_shared_structured_cite = shares_exact_system_b_context(slot)
         candidates: list[tuple[float, int, int, int]] = []
         for line_idx, units in units_by_line.items():
             for unit_idx, unit in enumerate(units):
@@ -7884,7 +8367,14 @@ def _reading_guide_attach_claim_level_system_a_citations(
                     key in used_units
                     or len(clean) < 18
                     or re.search(r"(?<![!\\])\[\d{1,5}\](?!\()", claim)
-                    or re.search(r"\[\[(?:CITE|SUPPORT):", claim, flags=re.IGNORECASE)
+                    or (
+                        re.search(r"\[\[(?:CITE|SUPPORT):", claim, flags=re.IGNORECASE)
+                        and not (
+                            allow_shared_structured_cite
+                            and re.search(r"\[\[CITE:", claim, flags=re.IGNORECASE)
+                            and not re.search(r"\[\[SUPPORT:", claim, flags=re.IGNORECASE)
+                        )
+                    )
                     or _reading_claim_is_retrieval_notice(claim)
                     or re.search(
                         r"原文直接依据|direct evidence from|证据边界|boundary not established|"
@@ -9692,19 +10182,204 @@ def _normalize_double_numeric_citation_markers(md: str) -> str:
     text = str(md or "")
     if "[[" not in text:
         return text
-    return _DOUBLE_NUMERIC_CITE_RE.sub(lambda match: f"[{match.group(1).strip()}]", text)
+    return transform_markdown_outside_code(
+        text,
+        lambda prose: _DOUBLE_NUMERIC_CITE_RE.sub(
+            lambda match: f"[{match.group(1).strip()}]",
+            prose,
+        ),
+    )
 
 
-def _strip_freeform_numeric_citation_markers(md: str) -> str:
-    text = _normalize_double_numeric_citation_markers(str(md or ""))
-    if (not text) or ("[" not in text):
+def _strip_freeform_numeric_citation_markers(
+    md: str,
+    *,
+    confirmed_numbers: set[int] | None = None,
+) -> str:
+    """Remove only numeric markers that are known to be citations.
+
+    ``[1, 2]``, ``[1-3]``, ``[2024]`` and ``[]`` are valid answer content and
+    must survive.  Double-bracket markers and ``#kb-cite-*`` links are explicit
+    citation protocol; a plain ``[n]`` is removed only when its number was
+    confirmed by the current reference mapping.
+    """
+
+    raw = str(md or "")
+    allowed = {int(item) for item in set(confirmed_numbers or set()) if int(item) > 0}
+
+    def _strip(prose: str) -> str:
+        if "[" not in prose:
+            return prose
+        out = _DOUBLE_NUMERIC_CITE_RE.sub("", prose)
+        out = _CONFIRMED_CITATION_LINK_RE.sub("", out)
+        if allowed:
+            out = _SINGLE_NUMERIC_CITE_RE.sub(
+                lambda match: ""
+                if int(match.group(1) or 0) in allowed
+                else str(match.group(0) or ""),
+                out,
+            )
+        out = re.sub(r"[ \t]+([,.;:!?])", r"\1", out)
+        out = re.sub(r"(?m)[ \t]{2,}", " ", out)
+        out = re.sub(r"[ \t]+\n", "\n", out)
+        return out
+
+    return transform_markdown_outside_code(raw, _strip).strip()
+
+
+def _citation_free_answer_body(
+    md: str,
+    *,
+    confirmed_numbers: set[int] | None = None,
+) -> str:
+    """Canonicalize confirmed citation decoration without hiding body edits."""
+
+    allowed = {int(item) for item in set(confirmed_numbers or set()) if int(item) > 0}
+
+    def _drop_equation_source_note_lines(value: str) -> str:
+        out: list[str] = []
+        fence_char = ""
+        fence_len = 0
+        for line in str(value or "").splitlines(keepends=True):
+            fence = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", line)
+            if fence_char:
+                out.append(line)
+                if fence:
+                    marker = str(fence.group(1) or "")
+                    if marker.startswith(fence_char) and len(marker) >= fence_len:
+                        fence_char = ""
+                        fence_len = 0
+                continue
+            if fence:
+                marker = str(fence.group(1) or "")
+                fence_char = marker[:1]
+                fence_len = len(marker)
+                out.append(line)
+                continue
+            stripped = line.strip()
+            if stripped.startswith("*") and stripped.endswith("*") and _EQ_SOURCE_NOTE_RE.search(stripped):
+                continue
+            out.append(line)
+        return "".join(out)
+
+    def _canonicalize(prose: str) -> str:
+        text = prose
+        text = _CONFIRMED_CITATION_LINK_RE.sub("", text)
+        text = _WRAPPED_STRUCT_CITE_RE.sub("", text)
+        text = _STRUCT_CITE_RE.sub("", text)
+        text = _STRUCT_CITE_SINGLE_RE.sub("", text)
+        text = _STRUCT_CITE_SID_ONLY_RE.sub("", text)
+        text = _STRUCT_SUPPORT_RE.sub("", text)
+        text = _DOUBLE_NUMERIC_CITE_RE.sub("", text)
+        if allowed:
+            text = _SINGLE_NUMERIC_CITE_RE.sub(
+                lambda match: ""
+                if int(match.group(1) or 0) in allowed
+                else str(match.group(0) or ""),
+                text,
+            )
         return text
-    out = _FREEFORM_NUMERIC_CITE_RE.sub("", text)
-    out = re.sub(r"(?<![\w\]])\[\s*\](?![\w\[])|\[\s*\[\s*\]\s*\]", "", out)
-    out = re.sub(r"[ \t]+([,.;:!?])", r"\1", out)
-    out = re.sub(r"(?m)[ \t]{2,}", " ", out)
-    out = re.sub(r"[ \t]+\n", "\n", out)
-    return out.strip()
+
+    text = transform_markdown_outside_code(
+        _drop_equation_source_note_lines(str(md or "")),
+        _canonicalize,
+    )
+    text = _md_to_plain_text(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+([,.;:!?，。；：！？])", r"\1", text)
+    return text
+
+
+def _rendered_body_preserves_answer_body(
+    *,
+    answer_body: str,
+    rendered_body: str,
+    cite_details: list[dict] | None = None,
+) -> bool:
+    """Enforce that rendering changes citation decoration, never answer prose."""
+
+    confirmed_numbers: set[int] = set()
+    for detail in list(cite_details or []):
+        if not isinstance(detail, dict):
+            continue
+        for raw in [detail.get("num"), *list(detail.get("linked_nums") or [])]:
+            try:
+                number = int(raw or 0)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                confirmed_numbers.add(number)
+    if cite_details:
+        # Display remapping intentionally compacts sparse source numbers (for
+        # example raw ``[2]``/``[3]`` become visible ``[1]``/``[2]``).  The
+        # card details only carry the *new* numbers, so comparing with that set
+        # alone makes a decoration-only renumbering look like a prose edit.
+        # Treat single, non-year markers from the source answer as confirmed
+        # citations once this render actually produced citation cards.  Arrays,
+        # ranges, empty brackets and code are excluded by the shared scanner.
+        confirmed_numbers.update(_iter_numeric_citation_numbers(answer_body))
+    for match in _CONFIRMED_CITATION_LINK_RE.finditer(str(rendered_body or "")):
+        try:
+            confirmed_numbers.add(int(match.group(1) or 0))
+        except (TypeError, ValueError):
+            continue
+    for pattern in (_STRUCT_CITE_RE, _STRUCT_CITE_SINGLE_RE):
+        for match in pattern.finditer(str(answer_body or "")):
+            try:
+                number = int(match.group(2) or 0)
+            except (IndexError, TypeError, ValueError):
+                continue
+            if number > 0:
+                confirmed_numbers.add(number)
+    return _citation_free_answer_body(
+        rendered_body,
+        confirmed_numbers=confirmed_numbers,
+    ) == _citation_free_answer_body(
+        answer_body,
+        confirmed_numbers=confirmed_numbers,
+    )
+
+
+def _render_original_citation_markers_only(
+    answer_body: str,
+    hits: list[dict],
+    *,
+    anchor_ns: str,
+    canonical_paths: list[str] | None = None,
+    citation_plan: dict | None = None,
+    render_locale: str = "",
+) -> tuple[str, list[dict]]:
+    """Render markers already present in the answer without any prose repair."""
+
+    source = _normalize_double_numeric_citation_markers(str(answer_body or ""))
+    annotate_kwargs = {
+        "anchor_ns": anchor_ns,
+        "canonical_paths": canonical_paths,
+    }
+    if isinstance(citation_plan, dict) and citation_plan:
+        annotate_kwargs["citation_plan"] = citation_plan
+    rendered, details = _call_with_optional_render_locale(
+        _annotate_inpaper_citations_with_hover_meta,
+        source,
+        hits,
+        render_locale=render_locale,
+        **annotate_kwargs,
+    )
+    if _rendered_body_preserves_answer_body(
+        answer_body=answer_body,
+        rendered_body=rendered,
+        cite_details=[
+            dict(item) for item in list(details or []) if isinstance(item, dict)
+        ],
+    ):
+        return str(rendered or ""), [
+            dict(item) for item in list(details or []) if isinstance(item, dict)
+        ]
+
+    # The low-level annotator is expected to be decoration-only too. If it ever
+    # violates that contract, preserve the original prose and merely hide raw
+    # structured protocol tokens rather than attempting another semantic repair.
+    return _strip_structured_cite_tokens_for_display(source), []
 
 
 def _should_retry_structured_cite_fallback(*, raw_body: str, rendered_body: str, cite_details: list[dict]) -> bool:
@@ -9751,6 +10426,52 @@ def _stable_json_hash(payload: object) -> str:
     return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()
 
 
+def _answer_render_signature(answer_markdown: str) -> str:
+    return _stable_json_hash({"answer_markdown": str(answer_markdown or "")})
+
+
+def _render_signature_values(
+    *,
+    answer_sig: str,
+    input_ref_sig: str,
+    citation_plan_sig: str,
+    locale: str,
+) -> dict[str, object]:
+    return {
+        "schema": int(_RENDER_CACHE_SCHEMA_VERSION),
+        "answer_sig": str(answer_sig or "").strip(),
+        "input_ref_sig": str(input_ref_sig or "").strip(),
+        "citation_plan_sig": str(citation_plan_sig or "").strip(),
+        "locale": str(locale or "").strip().lower(),
+    }
+
+
+def _render_signatures_match(
+    payload: dict | None,
+    *,
+    answer_sig: str,
+    input_ref_sig: str,
+    citation_plan_sig: str,
+    locale: str,
+) -> bool:
+    raw = dict(payload or {}) if isinstance(payload, dict) else {}
+    expected = _render_signature_values(
+        answer_sig=answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale=locale,
+    )
+    return all(
+        (
+            int(raw.get(key) or 0) == int(value or 0)
+            if key == "schema"
+            else str(raw.get(key) or "").strip().lower()
+            == str(value or "").strip().lower()
+        )
+        for key, value in expected.items()
+    )
+
+
 def _build_message_render_cache_key(
     *,
     conv_id: str,
@@ -9780,10 +10501,25 @@ def _build_message_render_cache_key(
 
 def _raw_reference_render_cache_input_signature(raw_pack: dict | None) -> str:
     pack = dict(raw_pack or {})
+    rendered_payload = (
+        pack.get("rendered_payload")
+        if isinstance(pack.get("rendered_payload"), dict)
+        else {}
+    )
     return _stable_json_hash(
         {
             "prompt_sig": str(pack.get("prompt_sig") or "").strip(),
             "answer_sig": str(pack.get("answer_sig") or "").strip(),
+            "rendered_payload_sig": str(
+                pack.get("rendered_payload_sig")
+                or rendered_payload.get("rendered_payload_sig")
+                or ""
+            ).strip(),
+            "render_evidence_sig": str(
+                pack.get("render_evidence_sig")
+                or rendered_payload.get("render_evidence_sig")
+                or ""
+            ).strip(),
             "used_query": str(pack.get("used_query") or "").strip(),
             "used_translation": bool(pack.get("used_translation")),
             "hits": list(pack.get("hits") or []),
@@ -9981,6 +10717,10 @@ def _extract_render_cache(
     expected_key: str,
     raw_content: str = "",
     hits: list[dict] | None = None,
+    answer_sig: str = "",
+    input_ref_sig: str = "",
+    citation_plan_sig: str = "",
+    locale: str = "",
 ) -> dict | None:
     if not isinstance(meta, dict):
         return None
@@ -9992,6 +10732,29 @@ def _extract_render_cache(
     if payload is None:
         return None
     normalized = payload.as_dict()
+    raw_cache = meta.get("render_cache") if isinstance(meta.get("render_cache"), dict) else {}
+    render_packet = (
+        raw_cache.get("render_packet")
+        if isinstance(raw_cache.get("render_packet"), dict)
+        else {}
+    )
+    expected_answer_sig = str(answer_sig or "").strip() or _answer_render_signature(
+        raw_content
+    )
+    if not _render_signatures_match(
+        raw_cache,
+        answer_sig=expected_answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale=locale,
+    ) or not _render_signatures_match(
+        render_packet,
+        answer_sig=expected_answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale=locale,
+    ):
+        return None
     if str(raw_content or "").strip() and not (
         str(normalized.get("rendered_content") or "").strip()
         or str(normalized.get("rendered_body") or "").strip()
@@ -10005,16 +10768,23 @@ def _extract_render_cache(
 def _extract_compatible_historical_render_cache(
     meta: dict | None,
     *,
+    input_ref_sig: str,
+    citation_plan_sig: str,
     raw_content: str,
     hits: list[dict] | None = None,
+    answer_sig: str = "",
+    locale: str = "",
 ) -> dict | None:
-    """Reuse a prior historical render when only card-enrichment data changed."""
+    """Reuse a historical render only for the exact refs and citation plan."""
 
     if not isinstance(meta, dict):
         return None
     raw_cache = meta.get("render_cache")
     if not isinstance(raw_cache, dict):
         return None
+    expected_answer_sig = str(answer_sig or "").strip() or _answer_render_signature(
+        raw_content
+    )
     stored_key = str(raw_cache.get("cache_key") or "").strip()
     if not stored_key:
         return None
@@ -10027,6 +10797,20 @@ def _extract_compatible_historical_render_cache(
         return None
     normalized = payload.as_dict()
     render_packet = normalized.get("render_packet") if isinstance(normalized.get("render_packet"), dict) else {}
+    if not _render_signatures_match(
+        raw_cache,
+        answer_sig=expected_answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale=locale,
+    ) or not _render_signatures_match(
+        render_packet,
+        answer_sig=expected_answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale=locale,
+    ):
+        return None
     cached_answer = str((render_packet or {}).get("answer_markdown") or "").strip()
     if not cached_answer or cached_answer != str(raw_content or "").strip():
         return None
@@ -10036,6 +10820,8 @@ def _extract_compatible_historical_render_cache(
     ):
         return None
     if render_payload_is_degraded_for_citations(payload, raw_content=raw_content, hits=hits):
+        return None
+    if not list(hits or []) and list(normalized.get("cite_details") or []):
         return None
     return normalized
 
@@ -10047,22 +10833,22 @@ def _extract_pre_aligned_render_cache(
     citation_plan_sig: str,
     raw_content: str,
     hits: list[dict] | None = None,
+    answer_sig: str = "",
+    locale: str = "",
 ) -> dict | None:
     if not isinstance(meta, dict):
         return None
     raw_cache = meta.get("render_cache")
     if not isinstance(raw_cache, dict):
         return None
-    if str(raw_cache.get("input_ref_sig") or "").strip() != str(input_ref_sig or "").strip():
-        return None
-    if str(raw_cache.get("citation_plan_sig") or "").strip() != str(
-        citation_plan_sig or ""
-    ).strip():
-        return None
     return _extract_compatible_historical_render_cache(
         meta,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
         raw_content=raw_content,
         hits=hits,
+        answer_sig=answer_sig,
+        locale=locale,
     )
 
 
@@ -10077,6 +10863,10 @@ def _build_render_cache_payload(
     cite_details: list[dict],
     refs_user_msg_id: int,
     render_packet: dict | None = None,
+    answer_sig: str = "",
+    input_ref_sig: str = "",
+    citation_plan_sig: str = "",
+    locale: str = "",
 ) -> dict:
     return _contract_build_render_cache_payload(
         schema=_RENDER_CACHE_SCHEMA_VERSION,
@@ -10089,6 +10879,10 @@ def _build_render_cache_payload(
         cite_details=cite_details,
         refs_user_msg_id=refs_user_msg_id,
         render_packet=render_packet,
+        answer_sig=answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale=locale,
     )
 
 
@@ -10103,9 +10897,29 @@ def _sync_render_cache_packet(meta: dict, render_packet: dict) -> bool:
         else {}
     )
     next_packet = dict(render_packet or {}) if isinstance(render_packet, dict) else {}
-    if current_packet == next_packet:
-        return False
     next_cache["render_packet"] = next_packet
+    projection: dict = {}
+    project_render_packet_to_record(projection, next_packet)
+    for key in (
+        "notice",
+        "rendered_body",
+        "rendered_content",
+        "copy_markdown",
+        "copy_text",
+        "cite_details",
+    ):
+        next_cache[key] = projection.get(key, [] if key == "cite_details" else "")
+    for key in (
+        "schema",
+        "answer_sig",
+        "input_ref_sig",
+        "citation_plan_sig",
+        "locale",
+    ):
+        if key in next_packet:
+            next_cache[key] = next_packet.get(key)
+    if next_cache == cache and current_packet == next_packet:
+        return False
     meta["render_cache"] = next_cache
     return True
 
@@ -10118,11 +10932,23 @@ def _merge_render_packet_contract_meta(
     ref_pack: dict | None = None,
     chat_store=None,
     render_locale: str = "",
+    answer_sig: str = "",
+    input_ref_sig: str = "",
+    citation_plan_sig: str = "",
 ) -> None:
     meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
     contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
-    if not contracts:
-        return
+    answer_markdown = _message_render_source_markdown(rec, str(rec.get("content") or ""))
+    effective_answer_sig = str(answer_sig or "").strip() or _answer_render_signature(
+        answer_markdown
+    )
+    effective_input_ref_sig = str(input_ref_sig or "").strip() or _raw_reference_render_cache_input_signature(
+        ref_pack if isinstance(ref_pack, dict) else None
+    )
+    effective_citation_plan_sig = str(citation_plan_sig or "").strip() or _stable_json_hash(
+        _message_citation_plan(rec) or {}
+    )
+    effective_locale = str(render_locale or "").strip().lower()
     contracts_changed = False
     if isinstance(ref_pack, dict):
         refs_primary = dict(ref_pack.get("primary_evidence") or {}) if isinstance(ref_pack.get("primary_evidence"), dict) else {}
@@ -10179,30 +11005,53 @@ def _merge_render_packet_contract_meta(
         rec=rec,
         content=str(rec.get("content") or ""),
     )
-    preserve_existing_render = bool(allow_inpaper_citation_linking and existing_cite_details and (not current_cite_details))
+    current_ref_hits = [
+        dict(item)
+        for item in list((ref_pack or {}).get("hits") or [])
+        if isinstance(item, dict)
+    ] if isinstance(ref_pack, dict) else []
+    has_current_reference_input = any(
+        str(
+            (
+                hit.get("meta")
+                if isinstance(hit.get("meta"), dict)
+                else {}
+            ).get("source_path")
+            or ""
+        ).strip()
+        for hit in current_ref_hits
+    )
+    preserve_existing_render = bool(
+        allow_inpaper_citation_linking
+        and has_current_reference_input
+        and existing_cite_details
+        and (not current_cite_details)
+        and _render_signatures_match(
+            existing_packet,
+            answer_sig=effective_answer_sig,
+            input_ref_sig=effective_input_ref_sig,
+            citation_plan_sig=effective_citation_plan_sig,
+            locale=effective_locale,
+        )
+        and render_payload_has_citation_links(
+            existing_packet,
+            hits=current_ref_hits,
+        )
+        and _rendered_body_preserves_answer_body(
+            answer_body=answer_markdown,
+            rendered_body=str(existing_packet.get("rendered_body") or ""),
+            cite_details=existing_cite_details,
+        )
+    )
     rendered_body = (
         str(existing_packet.get("rendered_body") or "").strip()
         if preserve_existing_render
         else str(rec.get("rendered_body") or "").strip()
     )
-    rendered_content = (
-        str(existing_packet.get("rendered_content") or "").strip()
-        if preserve_existing_render
-        else str(rec.get("rendered_content") or "").strip()
-    )
-    copy_markdown = (
-        str(existing_packet.get("copy_markdown") or "").strip()
-        if preserve_existing_render
-        else str(rec.get("copy_markdown") or "").strip()
-    )
-    copy_text = (
-        str(existing_packet.get("copy_text") or "").strip()
-        if preserve_existing_render
-        else str(rec.get("copy_text") or "").strip()
-    )
+    if not rendered_body:
+        rendered_body = answer_markdown
     existing_notice = str(existing_packet.get("notice") or "").strip()
     current_notice = str(rec.get("notice") or "").strip()
-    answer_markdown = _message_render_source_markdown(rec, str(rec.get("content") or ""))
     provenance_segments = list((enriched_provenance or {}).get("segments") or [])
     provenance_primary_evidence = _merge_render_packet_primary_evidence(
         contract_primary=(
@@ -10253,13 +11102,46 @@ def _merge_render_packet_contract_meta(
     # When we preserve existing cite details/rendered output (because the current
     # render degraded), do not accidentally drop a newly-detected notice (e.g.
     # KB-miss) just because the existing packet had no notice.
-    notice = existing_notice if (preserve_existing_render and existing_notice) else current_notice
+    notice = current_notice or (existing_notice if preserve_existing_render else "")
     selected_cite_details = existing_cite_details if preserve_existing_render else current_cite_details
+    selected_cite_details = _refine_system_a_cite_evidence_from_citation_plan(
+        selected_cite_details,
+        _message_citation_plan(rec),
+        render_locale=render_locale,
+    )
     selected_cite_details = _refine_system_a_cite_locators_from_final_primary(
         selected_cite_details,
         provenance_primary_evidence,
         render_locale=render_locale,
     )
+    rendered_full = (
+        f"{notice}\n\n{rendered_body}"
+        if notice and rendered_body
+        else notice or rendered_body
+    )
+    selected_rendered_body = rendered_body
+    rendered_content, rebuilt_body, copy_markdown, copy_text = _build_render_texts(
+        rendered_full=rendered_full,
+        rendered_body=rendered_body,
+        notice=notice,
+        cite_details=selected_cite_details,
+    )
+    if _rendered_body_preserves_answer_body(
+        answer_body=selected_rendered_body,
+        rendered_body=rebuilt_body,
+        cite_details=selected_cite_details,
+    ):
+        rendered_body = rebuilt_body
+    else:
+        # A final Markdown cleanup is still presentation code.  It may not
+        # replace the selected answer body or make copy diverge from display.
+        rendered_body = selected_rendered_body
+        rendered_content = rendered_full
+        copy_markdown = _normalize_copy_citation_links(
+            rendered_content,
+            selected_cite_details,
+        )
+        copy_text = _md_to_plain_text(copy_markdown)
     unlinked_reference_candidates = _build_unlinked_reference_candidates(
         answer_markdown=answer_markdown,
         rendered_body=rendered_body,
@@ -10296,6 +11178,11 @@ def _merge_render_packet_contract_meta(
         provenance_segments=provenance_segments,
         primary_evidence=provenance_primary_evidence,
         unlinked_reference_candidates=unlinked_reference_candidates,
+        schema=int(_RENDER_CACHE_SCHEMA_VERSION),
+        answer_sig=effective_answer_sig,
+        input_ref_sig=effective_input_ref_sig,
+        citation_plan_sig=effective_citation_plan_sig,
+        locale=effective_locale,
     )
     render_packet = _paper_guide_model_dump(render_packet_model)
     cache_changed = _sync_render_cache_packet(meta, render_packet)
@@ -10354,6 +11241,120 @@ def _restore_render_packet_contract_from_cache(rec: dict, cached: dict | None) -
     contracts["render_packet"] = dict(render_packet)
     meta["paper_guide_contracts"] = contracts
     rec["meta"] = meta
+
+
+def _cached_render_packet_needs_contract_refresh(
+    cached: dict | None,
+    *,
+    enriched_provenance: dict | None,
+    ref_pack: dict | None,
+) -> bool:
+    """Return whether a signature-valid packet has newly arrived inputs.
+
+    A render cache is already exact for the answer, reference rows, citation
+    plan, locale, and schema.  Rebuilding its cards on every conversation poll
+    is therefore useful only when provenance or pack-level primary evidence
+    arrived after the packet was stored.  Keeping this decision explicit avoids
+    repeating the expensive evidence ranking path for an unchanged message.
+    """
+
+    packet = (
+        dict((cached or {}).get("render_packet") or {})
+        if isinstance((cached or {}).get("render_packet"), dict)
+        else {}
+    )
+    if not packet:
+        return True
+    if isinstance(enriched_provenance, dict) and bool(enriched_provenance):
+        segments = [
+            dict(item)
+            for item in list(enriched_provenance.get("segments") or [])
+            if isinstance(item, dict)
+        ]
+        has_current_locate_identity = any(
+            isinstance(item.get("locate_target"), dict)
+            or isinstance(item.get("reader_open"), dict)
+            for item in segments
+        )
+        provenance_projection = _paper_guide_model_dump(
+            _build_paper_guide_render_packet_model(
+                answer_markdown=str(packet.get("answer_markdown") or ""),
+                rendered_body=str(packet.get("rendered_body") or ""),
+                rendered_content=str(packet.get("rendered_content") or ""),
+                copy_text=str(packet.get("copy_text") or ""),
+                locate_target=(
+                    packet.get("locate_target")
+                    if (
+                        (not has_current_locate_identity)
+                        and isinstance(packet.get("locate_target"), dict)
+                    )
+                    else {}
+                ),
+                reader_open=(
+                    packet.get("reader_open")
+                    if (
+                        (not has_current_locate_identity)
+                        and isinstance(packet.get("reader_open"), dict)
+                    )
+                    else {}
+                ),
+                provenance_segments=segments,
+            )
+        )
+        for key in (
+            "locate_target",
+            "reader_open",
+            "segment_ids",
+            "visible_segment_ids",
+            "provenance_segment_count",
+            "visible_segment_count",
+        ):
+            if packet.get(key) != provenance_projection.get(key):
+                return True
+    refs_primary = (
+        dict((ref_pack or {}).get("primary_evidence") or {})
+        if isinstance((ref_pack or {}).get("primary_evidence"), dict)
+        else {}
+    )
+    if not refs_primary:
+        return False
+    packet_primary = (
+        dict(packet.get("primary_evidence") or {})
+        if isinstance(packet.get("primary_evidence"), dict)
+        else {}
+    )
+    if not packet_primary or not _primary_evidence_is_compatible(
+        packet_primary,
+        refs_primary,
+    ):
+        return True
+    if _primary_evidence_precision_score(refs_primary) > _primary_evidence_precision_score(
+        packet_primary
+    ):
+        return True
+
+    def _value(primary: dict, *keys: str) -> str:
+        for key in keys:
+            value = primary.get(key)
+            if value not in (None, ""):
+                return " ".join(str(value).strip().split()).casefold()
+        return ""
+
+    # A public/cached refs projection can be a strict subset of the render
+    # packet's primary evidence. Missing locator fields are not new evidence;
+    # only a conflicting non-empty field needs a refresh.
+    for aliases in (
+        ("block_id", "blockId"),
+        ("anchor_id", "anchorId"),
+        ("page_start", "pageStart"),
+        ("page_end", "pageEnd"),
+        ("snippet", "highlight_snippet", "highlightSnippet"),
+    ):
+        refs_value = _value(refs_primary, *aliases)
+        packet_value = _value(packet_primary, *aliases)
+        if refs_value and packet_value and refs_value != packet_value:
+            return True
+    return False
 
 
 def _reader_open_candidate_key(candidate: dict | None) -> str:
@@ -10449,7 +11450,7 @@ def _build_reader_open_alternative_candidates(
     ][:4]
 
 
-def _enrich_provenance_segments_for_display(
+def _enrich_provenance_segments_for_display_uncached(
     provenance: dict | None,
     hits: list[dict],
     *,
@@ -10652,6 +11653,84 @@ def _enrich_provenance_segments_for_display(
     return out
 
 
+@lru_cache(maxsize=96)
+def _enrich_provenance_segments_for_display_cached(
+    provenance_blob: str,
+    hits_blob: str,
+    anchor_ns: str,
+    source_version: str,
+    render_locale: str,
+    implementation_version: str,
+) -> dict | None:
+    del source_version, render_locale, implementation_version
+    provenance = json.loads(provenance_blob)
+    hits = json.loads(hits_blob)
+    return _enrich_provenance_segments_for_display_uncached(
+        provenance if isinstance(provenance, dict) else None,
+        hits if isinstance(hits, list) else [],
+        anchor_ns=anchor_ns,
+    )
+
+
+def _enrich_provenance_segments_for_display(
+    provenance: dict | None,
+    hits: list[dict],
+    *,
+    anchor_ns: str,
+) -> dict | None:
+    if not isinstance(provenance, dict):
+        return provenance
+    try:
+        provenance_blob = json.dumps(
+            provenance,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        hits_blob = json.dumps(
+            list(hits or []),
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        )
+        md_path_raw = str(provenance.get("md_path") or "").strip()
+        md_path = Path(md_path_raw) if md_path_raw else None
+        try:
+            stat = md_path.stat() if md_path is not None else None
+        except OSError:
+            stat = None
+        source_version = (
+            f"{int(stat.st_mtime_ns)}:{int(stat.st_size)}" if stat is not None else ""
+        )
+        implementation_version = ":".join(
+            str(id(func))
+            for func in (
+                _enrich_provenance_segments_for_display_uncached,
+                task_runtime.load_source_blocks,
+                load_paper_guide_anchor_index,
+                load_paper_guide_equation_index,
+                load_paper_guide_figure_index,
+            )
+        )
+        enriched = _enrich_provenance_segments_for_display_cached(
+            provenance_blob,
+            hits_blob,
+            str(anchor_ns or ""),
+            source_version,
+            _effective_citation_render_locale(None),
+            implementation_version,
+        )
+        return copy.deepcopy(enriched)
+    except Exception:
+        return _enrich_provenance_segments_for_display_uncached(
+            provenance,
+            hits,
+            anchor_ns=anchor_ns,
+        )
+
+
 def _source_name_from_path(source_path: str) -> str:
     name = Path(str(source_path or "")).name or str(source_path or "")
     low = name.lower()
@@ -10810,6 +11889,68 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
     return out, details
 
 
+def _message_refs_user_msg_id(rec: dict | None, *, fallback: int = 0) -> int:
+    """Recover the user turn that owns an assistant's reference packet.
+
+    A paginated slice may begin with an assistant message, so there is no user
+    row in the slice from which to rebuild ``last_user_msg_id``. The binding is
+    already persisted in the record/render packet and must be restored before
+    computing reference signatures or updating the cache.
+    """
+
+    try:
+        fallback_id = int(fallback or 0)
+    except (TypeError, ValueError):
+        fallback_id = 0
+    if fallback_id > 0:
+        return fallback_id
+
+    record = dict(rec or {}) if isinstance(rec, dict) else {}
+    meta = record.get("meta") if isinstance(record.get("meta"), dict) else {}
+    contracts = (
+        meta.get("paper_guide_contracts")
+        if isinstance(meta.get("paper_guide_contracts"), dict)
+        else {}
+    )
+    contract_packet = (
+        contracts.get("render_packet")
+        if isinstance(contracts.get("render_packet"), dict)
+        else {}
+    )
+    render_cache = (
+        meta.get("render_cache")
+        if isinstance(meta.get("render_cache"), dict)
+        else {}
+    )
+    cached_packet = (
+        render_cache.get("render_packet")
+        if isinstance(render_cache.get("render_packet"), dict)
+        else {}
+    )
+    top_packet = (
+        record.get("render_packet")
+        if isinstance(record.get("render_packet"), dict)
+        else {}
+    )
+    candidates = (
+        record.get("refs_user_msg_id"),
+        top_packet.get("refs_user_msg_id"),
+        contract_packet.get("refs_user_msg_id"),
+        render_cache.get("refs_user_msg_id"),
+        cached_packet.get("refs_user_msg_id"),
+        contracts.get("refs_user_msg_id"),
+        meta.get("refs_user_msg_id"),
+    )
+    for value in candidates:
+        try:
+            resolved = int(value or 0)
+        except (TypeError, ValueError):
+            continue
+        if resolved > 0:
+            return resolved
+    return 0
+
+
 def enrich_messages_with_reference_render(
     messages: list[dict],
     refs_by_user: dict[int, dict],
@@ -10844,11 +11985,23 @@ def enrich_messages_with_reference_render(
             out.append(rec)
             continue
 
-        raw_ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
+        message_refs_user_msg_id = _message_refs_user_msg_id(
+            rec,
+            fallback=last_user_msg_id,
+        )
+        raw_ref_pack = None
+        if isinstance(refs_by_user, dict) and message_refs_user_msg_id > 0:
+            raw_ref_pack = refs_by_user.get(message_refs_user_msg_id)
+            if raw_ref_pack is None:
+                raw_ref_pack = refs_by_user.get(str(message_refs_user_msg_id))
         raw_ref_pack_dict = raw_ref_pack if isinstance(raw_ref_pack, dict) else None
         input_ref_sig = _raw_reference_render_cache_input_signature(raw_ref_pack_dict)
         message_citation_plan = _message_citation_plan(rec)
         citation_plan_sig = _stable_json_hash(message_citation_plan or {})
+        answer_sig = _answer_render_signature(render_source)
+        expected_render_locale = _effective_citation_render_locale(
+            raw_ref_pack_dict if isinstance(raw_ref_pack_dict, dict) else None
+        )
         raw_hits = list((raw_ref_pack_dict or {}).get("hits") or [])
         pre_aligned_cache = _extract_pre_aligned_render_cache(
             rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
@@ -10856,6 +12009,8 @@ def enrich_messages_with_reference_render(
             citation_plan_sig=citation_plan_sig,
             raw_content=render_source,
             hits=raw_hits,
+            answer_sig=answer_sig,
+            locale=expected_render_locale,
         )
         if pre_aligned_cache is not None and (
             render_payload_is_missing_planned_system_a(
@@ -10871,8 +12026,12 @@ def enrich_messages_with_reference_render(
         if pre_aligned_cache is None and idx != latest_assistant_idx:
             pre_aligned_cache = _extract_compatible_historical_render_cache(
                 rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
+                input_ref_sig=input_ref_sig,
+                citation_plan_sig=citation_plan_sig,
                 raw_content=render_source,
                 hits=raw_hits,
+                answer_sig=answer_sig,
+                locale=expected_render_locale,
             )
         ref_pack = (
             _effective_reference_render_pack(raw_ref_pack_dict)
@@ -10887,7 +12046,7 @@ def enrich_messages_with_reference_render(
             msg_id=msg_id,
             role=role,
             content=render_source,
-            refs_user_msg_id=int(last_user_msg_id or 0),
+            refs_user_msg_id=int(message_refs_user_msg_id or 0),
             ref_pack=ref_pack if isinstance(ref_pack, dict) else None,
             provenance=provenance_raw if isinstance(provenance_raw, dict) else None,
             citation_plan=message_citation_plan,
@@ -10900,6 +12059,10 @@ def enrich_messages_with_reference_render(
                 expected_key=render_cache_key,
                 raw_content=render_source,
                 hits=hits,
+                answer_sig=answer_sig,
+                input_ref_sig=input_ref_sig,
+                citation_plan_sig=citation_plan_sig,
+                locale=render_locale,
             )
         cached = pre_aligned_cache or strict_cached
         if cached is not None and (
@@ -10921,12 +12084,15 @@ def enrich_messages_with_reference_render(
             rec["rendered_content"] = str(cached.get("rendered_content") or "")
             rec["notice"] = str(cached.get("notice") or "")
             rec["rendered_body"] = str(cached.get("rendered_body") or "")
-            rec["refs_user_msg_id"] = int(cached.get("refs_user_msg_id") or last_user_msg_id or 0)
+            rec["refs_user_msg_id"] = int(
+                cached.get("refs_user_msg_id") or message_refs_user_msg_id or 0
+            )
         else:
             notice, body = _split_kb_miss_notice(render_source)
             if notice and hits:
                 notice = ""
                 body = render_source
+            original_answer_body = str(body or "")
             cite_details: list[dict] = []
             rendered_body = str(body or "")
             raw_body = rendered_body
@@ -10952,6 +12118,7 @@ def enrich_messages_with_reference_render(
                 citation_plan,
                 reserved_count=len(_canon_paths),
                 canonical_paths=_canon_paths or None,
+                answer_text=rendered_body,
             )
             citation_hits = _augment_hits_with_canonical_answer_citations(
                 citation_hits,
@@ -10973,6 +12140,7 @@ def enrich_messages_with_reference_render(
                 citation_plan,
                 reserved_count=len(_canon_paths),
                 canonical_paths=_canon_paths or None,
+                answer_text=rendered_body,
             )
             allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
                 rec=rec,
@@ -11057,6 +12225,20 @@ def enrich_messages_with_reference_render(
                     rendered_body = _strip_structured_cite_tokens_for_display(rendered_body)
                     rendered_body = _strip_freeform_numeric_citation_markers(rendered_body)
 
+            if not _rendered_body_preserves_answer_body(
+                answer_body=original_answer_body,
+                rendered_body=rendered_body,
+                cite_details=cite_details,
+            ):
+                rendered_body, cite_details = _render_original_citation_markers_only(
+                    original_answer_body,
+                    citation_hits,
+                    anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
+                    canonical_paths=_canon_paths or None,
+                    citation_plan=message_citation_plan,
+                    render_locale=render_locale,
+                )
+
             if cite_details and isinstance(ref_pack, dict):
                 cite_details = _backfill_system_a_cite_details_from_ref_pack(
                     cite_details,
@@ -11085,13 +12267,66 @@ def enrich_messages_with_reference_render(
                 notice=notice,
                 cite_details=cite_details,
             )
+            if not _rendered_body_preserves_answer_body(
+                answer_body=original_answer_body,
+                rendered_body=rendered_body_norm,
+                cite_details=cite_details,
+            ):
+                rendered_body, cite_details = _render_original_citation_markers_only(
+                    original_answer_body,
+                    citation_hits,
+                    anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
+                    canonical_paths=_canon_paths or None,
+                    citation_plan=message_citation_plan,
+                    render_locale=render_locale,
+                )
+                if cite_details and isinstance(ref_pack, dict):
+                    cite_details = _backfill_system_a_cite_details_from_ref_pack(
+                        cite_details,
+                        ref_pack,
+                        render_locale=render_locale,
+                        answer_text=render_source,
+                    )
+                rendered_body, cite_details, _citation_registry = remap_system_a_citations_for_display(
+                    rendered_body,
+                    cite_details,
+                )
+                rendered_full = (
+                    f"{notice}\n\n{rendered_body}"
+                    if notice and rendered_body
+                    else notice or rendered_body
+                )
+                rendered_markdown, rendered_body_norm, copy_markdown, copy_text = _build_render_texts(
+                    rendered_full=rendered_full,
+                    rendered_body=str(rendered_body or ""),
+                    notice=notice,
+                    cite_details=cite_details,
+                )
+            if not _rendered_body_preserves_answer_body(
+                answer_body=original_answer_body,
+                rendered_body=rendered_body_norm,
+                cite_details=cite_details,
+            ):
+                # Last-resort contract preservation: do not let Markdown cleanup
+                # replace answer prose if even the marker-only path was altered.
+                cite_details = []
+                rendered_body_norm = _strip_structured_cite_tokens_for_display(
+                    _normalize_double_numeric_citation_markers(original_answer_body)
+                )
+                rendered_markdown = (
+                    f"{notice}\n\n{rendered_body_norm}"
+                    if notice and rendered_body_norm
+                    else notice or rendered_body_norm
+                )
+                copy_markdown = rendered_markdown
+                copy_text = _md_to_plain_text(copy_markdown)
             rec["cite_details"] = cite_details
             rec["copy_markdown"] = copy_markdown
             rec["copy_text"] = copy_text
             rec["rendered_content"] = rendered_markdown
             rec["notice"] = notice
             rec["rendered_body"] = rendered_body_norm
-            rec["refs_user_msg_id"] = int(last_user_msg_id or 0)
+            rec["refs_user_msg_id"] = int(message_refs_user_msg_id or 0)
         enriched_provenance = _enrich_provenance_segments_for_display(
             provenance_raw if isinstance(provenance_raw, dict) else None,
             hits,
@@ -11102,32 +12337,28 @@ def enrich_messages_with_reference_render(
             if isinstance(rec.get("meta"), dict):
                 rec["meta"] = dict(rec.get("meta") or {})
                 rec["meta"]["provenance"] = enriched_provenance
-        _merge_render_packet_contract_meta(
-            rec=rec,
-            msg_id=msg_id,
-            enriched_provenance=enriched_provenance if isinstance(enriched_provenance, dict) else None,
+        if (not cached) or _cached_render_packet_needs_contract_refresh(
+            cached,
+            enriched_provenance=(
+                enriched_provenance
+                if isinstance(enriched_provenance, dict)
+                else None
+            ),
             ref_pack=ref_pack if isinstance(ref_pack, dict) else None,
-            chat_store=chat_store,
-            render_locale=render_locale,
-        )
+        ):
+            _merge_render_packet_contract_meta(
+                rec=rec,
+                msg_id=msg_id,
+                enriched_provenance=enriched_provenance if isinstance(enriched_provenance, dict) else None,
+                ref_pack=ref_pack if isinstance(ref_pack, dict) else None,
+                chat_store=chat_store,
+                render_locale=render_locale,
+                answer_sig=answer_sig,
+                input_ref_sig=input_ref_sig,
+                citation_plan_sig=citation_plan_sig,
+            )
         _project_render_packet_compat_fields(rec)
         _maybe_strip_legacy_render_fields(rec, enabled=bool(render_packet_only))
-        if chat_store is not None and msg_id > 0 and cached and (pre_aligned_cache is not None or strict_cached is not None):
-            stored_cache = (
-                dict((rec.get("meta") or {}).get("render_cache") or {})
-                if isinstance(rec.get("meta"), dict)
-                and isinstance((rec.get("meta") or {}).get("render_cache"), dict)
-                else {}
-            )
-            if stored_cache and str(stored_cache.get("input_ref_sig") or "").strip() != input_ref_sig:
-                try:
-                    stored_cache["input_ref_sig"] = input_ref_sig
-                    stored_cache["citation_plan_sig"] = _stable_json_hash(
-                        _message_citation_plan(rec) or {}
-                    )
-                    chat_store.set_message_render_cache(msg_id, stored_cache)
-                except Exception:
-                    pass
         if chat_store is not None and msg_id > 0 and not cached:
             try:
                 meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
@@ -11145,13 +12376,19 @@ def enrich_messages_with_reference_render(
                             for item in list(rec.get("cite_details") or [])
                             if isinstance(item, dict)
                         ],
-                        refs_user_msg_id=int(rec.get("refs_user_msg_id") or last_user_msg_id or 0),
+                        refs_user_msg_id=int(
+                            rec.get("refs_user_msg_id")
+                            or message_refs_user_msg_id
+                            or 0
+                        ),
                         render_packet=render_packet,
+                        answer_sig=answer_sig,
+                        input_ref_sig=input_ref_sig,
+                        citation_plan_sig=_stable_json_hash(
+                            _message_citation_plan(rec) or {}
+                        ),
+                        locale=render_locale,
                     )
-                cache_payload["input_ref_sig"] = input_ref_sig
-                cache_payload["citation_plan_sig"] = _stable_json_hash(
-                    _message_citation_plan(rec) or {}
-                )
                 chat_store.set_message_render_cache(
                     msg_id,
                     cache_payload,

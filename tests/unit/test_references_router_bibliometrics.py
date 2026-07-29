@@ -6,6 +6,158 @@ from api.routers import references
 from kb.citation_card import compose_citation_card
 
 
+def test_source_bound_system_a_bibliometrics_uses_source_metadata_not_ref_number(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_path = str(tmp_path / "source-paper.en.md")
+    calls: list[str] = []
+
+    def source_meta(**kwargs):
+        calls.append(str(kwargs.get("source_path") or ""))
+        return {
+            "title": "The Actual Source Paper",
+            "authors": ["Source Author"],
+            "venue": "Source Journal",
+            "year": "2025",
+            "doi": "10.1000/source-paper",
+            "citation_count": 17,
+            "citation_source": "openalex",
+            "journal_if": 4.2,
+            "journal_if_source": "jcr",
+            "summary_line": "This is the abstract of the actual source paper.",
+            "summary_source": "abstract",
+            "summary_provider": "local_markdown",
+            "summary_generation": "extractive_local_markdown",
+            "summary_locale": "en",
+            "summary_quality": {
+                "ok": True,
+                "status": "grounded",
+                "locale": "en",
+            },
+        }
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("source-bound System A must bypass generic bibliography enrichment")
+
+    monkeypatch.setattr(references, "ensure_source_citation_meta", source_meta)
+    monkeypatch.setattr(references, "_resolve_public_reference_source_input", lambda value: value)
+    monkeypatch.setattr(references, "_pdf_dir", lambda: tmp_path)
+    monkeypatch.setattr(references, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(references, "_lib_store", lambda: object())
+    monkeypatch.setattr(references, "_prepare_bibliometrics_identity", forbidden)
+    monkeypatch.setattr(references, "hydrate_repaired_citation_metadata", forbidden)
+    monkeypatch.setattr(references, "enrich_citation_detail_meta", forbidden)
+    monkeypatch.setattr(references, "persist_repaired_citation_metadata", forbidden)
+
+    result = references.get_bibliometrics(
+        references.BibliometricsBody(
+            target_locale="en",
+            meta={
+                "citation_route": "system_a",
+                "is_inpaper": False,
+                "source_path": source_path,
+                "source_name": "source-paper.pdf",
+                "num": 1,
+                "linked_nums": [1],
+                "raw": "The local evidence cites an unrelated bibliography entry [1].",
+                "title": "Wrong Reference One",
+                "authors": ["Wrong Author"],
+                "venue": "Wrong Venue",
+                "year": "1999",
+                "doi": "10.1000/wrong-reference-one",
+                "citation_count": 999,
+                "journal_if": 99.9,
+            },
+        )
+    )
+
+    assert calls == [source_path]
+    assert result["title"] == "The Actual Source Paper"
+    assert result["authors"] == ["Source Author"]
+    assert result["venue"] == "Source Journal"
+    assert result["year"] == "2025"
+    assert result["doi"] == "10.1000/source-paper"
+    assert result["citation_count"] == 17
+    assert result["journal_if"] == 4.2
+    assert result["summary_line"] == "This is the abstract of the actual source paper."
+    assert result["bibliometrics_identity_source"] == "source_path"
+    assert result["source_metadata_status"] == "ready"
+    assert result["citation_route"] == "system_a"
+    assert result["is_inpaper"] is False
+    assert result["source_path"] == source_path
+    assert "num" not in result
+    assert "linked_nums" not in result
+    assert "raw" not in result
+
+
+def test_source_bound_system_a_bibliometrics_fails_without_bibliography_fallback(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_path = str(tmp_path / "missing-source.en.md")
+
+    def source_meta(**_kwargs):
+        raise RuntimeError("source metadata unavailable")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("unsafe generic bibliography fallback was called")
+
+    monkeypatch.setattr(references, "ensure_source_citation_meta", source_meta)
+    monkeypatch.setattr(references, "_resolve_public_reference_source_input", lambda value: value)
+    monkeypatch.setattr(references, "_pdf_dir", lambda: tmp_path)
+    monkeypatch.setattr(references, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(references, "_lib_store", lambda: object())
+    monkeypatch.setattr(references, "_local_source_summary_meta", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(references, "_prepare_bibliometrics_identity", forbidden)
+    monkeypatch.setattr(references, "hydrate_repaired_citation_metadata", forbidden)
+    monkeypatch.setattr(references, "enrich_citation_detail_meta", forbidden)
+    monkeypatch.setattr(references, "persist_repaired_citation_metadata", forbidden)
+
+    result = references.get_bibliometrics(
+        references.BibliometricsBody(
+            target_locale="zh",
+            meta={
+                "citation_route": "system_a",
+                "is_inpaper": False,
+                "source_path": source_path,
+                "source_name": "missing-source.pdf",
+                "num": 1,
+                "linked_nums": [1],
+                "raw": "Evidence text ending in citation [1].",
+                "title": "Wrong Upstream Reference",
+                "authors": ["Wrong Author"],
+                "venue": "Wrong Journal",
+                "year": "2020",
+                "doi": "10.1000/wrong-upstream",
+                "citation_count": 500,
+                "journal_if": 50.0,
+            },
+        )
+    )
+
+    assert result["source_metadata_status"] == "unavailable"
+    assert result["bibliometrics_identity_source"] == "source_path"
+    assert result["bibliometrics_checked"] is True
+    assert result["citation_route"] == "system_a"
+    assert result["is_inpaper"] is False
+    assert result["source_path"] == source_path
+    for key in (
+        "title",
+        "authors",
+        "venue",
+        "year",
+        "doi",
+        "doi_url",
+        "citation_count",
+        "journal_if",
+        "num",
+        "linked_nums",
+        "raw",
+    ):
+        assert key not in result
+
+
 def test_bibliometrics_rejects_local_source_summary_for_reader_reference() -> None:
     meta = {
         "is_inpaper": True,

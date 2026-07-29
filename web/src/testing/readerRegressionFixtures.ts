@@ -245,6 +245,40 @@ const readerRegressionRenderPolishMarkdown = [
   '',
 ].join('\n')
 
+const readerRegressionRenderPolishBlocks: ReaderDocBlock[] = [
+  {
+    doc_id: 'fixture-doc',
+    block_id: 'p-render-lead',
+    anchor_id: 'p-render-lead',
+    kind: 'paragraph',
+    heading_path: 'Render Polish Fixture',
+    text: 'Lead paragraph immediately before a physical page marker.',
+    line_start: 3,
+    line_end: 3,
+  },
+  {
+    doc_id: 'fixture-doc',
+    block_id: 'p-render-under-marker',
+    anchor_id: 'p-render-under-marker',
+    kind: 'paragraph',
+    heading_path: 'Render Polish Fixture / Figure Check',
+    text: 'Under each illumination, the integration time is $0.02\\,\\mus$, and the frame time is $20\\,\\mus$.',
+    line_start: 13,
+    line_end: 13,
+  },
+]
+
+const readerRegressionRenderPolishAnchors: ReaderDocAnchor[] = readerRegressionRenderPolishBlocks.map((block) => ({
+  anchor_id: block.anchor_id,
+  block_id: block.block_id,
+  kind: block.kind,
+  heading_path: block.heading_path,
+  text: block.text,
+  line_start: block.line_start,
+  line_end: block.line_end,
+  number: block.number,
+}))
+
 const readerRegressionCitationMarkdown = [
   '# Citation Fixture',
   '',
@@ -414,8 +448,8 @@ export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScena
       source_name: READER_REGRESSION_SOURCE_NAME,
       md_path: 'fixture-render-polish.md',
       markdown: readerRegressionRenderPolishMarkdown,
-      anchors: [] as ReaderDocAnchor[],
-      blocks: [] as ReaderDocBlock[],
+      anchors: readerRegressionRenderPolishAnchors,
+      blocks: readerRegressionRenderPolishBlocks,
       cite_details: readerRegressionRenderPolishCitationDetails,
       reference_cite_details: readerRegressionRenderPolishCitationDetails,
     }

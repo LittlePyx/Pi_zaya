@@ -55,12 +55,13 @@ from kb.generation_answer_finalize_runtime import (
     _build_multi_paper_doc_list_contract as _references_build_multi_paper_doc_list_contract,
 )
 from kb.evidence_term_mapping import evidence_alignment_tokens
+from kb.evidence_text import compound_claim_evidence_excerpt, pick_readable_evidence_text
 from kb.citation_card_polish import (
     citation_card_polish_cache_key,
     citation_card_polish_enabled,
     polish_citation_card_detail,
 )
-from kb.citation_card import compose_citation_card
+from kb.citation_card import CITATION_CARD_EVIDENCE_MAX_LEN, compose_citation_card
 from kb.file_ops import _resolve_md_output_paths
 from kb.library_store import LibraryStore
 from kb.path_safety import (
@@ -225,15 +226,16 @@ def _sync_message_render_packets_with_refs_payload(*, store, conv_id: str, paylo
 
 
 def _answer_citation_source_key(value: Any) -> str:
-    normalized = str(value or "").strip().replace("/", "\\").casefold()
-    parts = [part for part in normalized.split("\\") if part]
-    # Public API payloads intentionally replace the absolute corpus prefix with
-    # ``kb-source/<root-id>``.  The document directory plus filename remains
-    # stable on both sides and is specific enough to align the rendered card
-    # with the source citation without re-exposing a local filesystem path.
-    if len(parts) >= 2:
-        return "\\".join(parts[-2:])
-    return normalized
+    # Reuse the render registry's canonical path bridge. It resolves public
+    # ``kb-source/<root-id>`` paths to their local document when possible and
+    # hashes the complete identity, so same-named papers under different roots
+    # can never be merged merely because their final two path segments match.
+    return system_a_source_key(
+        {
+            "citation_route": "system_a",
+            "source_path": str(value or "").strip(),
+        }
+    )
 
 
 _ANSWER_CITATION_SOURCE_BOUND_META_KEYS = {
@@ -500,7 +502,6 @@ def _answer_citation_evidence_quote(detail: dict) -> str:
     """Prefer the sentence in the cited block that best matches the answer claim."""
 
     current = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
-    raw = re.sub(r"\s+", " ", str(detail.get("raw") or "")).strip()
     claim = " ".join(
         part
         for part in (
@@ -511,13 +512,55 @@ def _answer_citation_evidence_quote(detail: dict) -> str:
         if part
     )
     claim_terms = evidence_alignment_tokens(claim)
-    if not raw or not claim_terms:
+    if not claim_terms:
         return current
-    candidates = [
-        part.strip()
-        for part in re.split(r"(?<=[.!?])\s+", raw)
-        if 24 <= len(part.strip()) <= 700
-    ]
+
+    candidates: list[str] = []
+    seen_candidates: set[str] = set()
+    for raw_value in (
+        detail.get("citation_plan_evidence_quote"),
+        detail.get("raw"),
+        current,
+    ):
+        raw = re.sub(r"\s+", " ", str(raw_value or "")).strip()
+        if not raw:
+            continue
+        # Citation-plan slots are whitespace-normalized before persistence, so
+        # a Markdown heading and its first sentence can share one line.  Strip
+        # only a known section label instead of treating the whole line as a
+        # heading and discarding the evidence body.
+        readable_source = re.sub(
+            r"^\s*#{1,6}\s+(?:abstract|introduction|conclusion|discussion|results?)\s+",
+            "",
+            raw,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        compound = compound_claim_evidence_excerpt(
+            readable_source,
+            claim=claim,
+            max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
+        )
+        readable = compound or pick_readable_evidence_text(
+            readable_source,
+            source=str(detail.get("source_name") or ""),
+            title=str(detail.get("title") or detail.get("card_title") or ""),
+            claim=claim,
+            heading=str(detail.get("heading_path") or detail.get("location_label") or ""),
+            # Selection and display must share one budget.  Otherwise the
+            # overlay can lose the last step of a compound mechanism before
+            # the 520-character card contract ever sees it.
+            max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
+        )
+        for candidate in (
+            readable,
+            *re.split(r"(?<=[.!?])\s+", readable_source),
+        ):
+            value = str(candidate or "").strip()
+            key = value.casefold()
+            if 24 <= len(value) <= 700 and key not in seen_candidates:
+                seen_candidates.add(key)
+                candidates.append(value)
     if not candidates:
         return current
 
@@ -531,6 +574,12 @@ def _answer_citation_evidence_quote(detail: dict) -> str:
 
     best = max(candidates, key=score)
     if score(best)[:2] > score(current)[:2]:
+        return best
+    if (
+        score(best)[:2] == score(current)[:2]
+        and len(current) > CITATION_CARD_EVIDENCE_MAX_LEN
+        and len(best) <= CITATION_CARD_EVIDENCE_MAX_LEN
+    ):
         return best
     return current
 
@@ -920,40 +969,44 @@ def _grounded_system_a_details_from_citation_plan(citation_plan: dict | None) ->
             or slot.get("topic")
             or ""
         ).strip()
-        out.append(
-            {
-                "num": candidate_nums[0] if candidate_nums else 0,
-                "citation_route": "system_a",
-                "routing_reason": "citation_plan_slot",
-                "source_path": source_path,
-                "source_name": source_name,
-                "heading_path": heading_path,
-                "location_label": heading_path,
-                "answer_claim": answer_claim,
-                "evidence_quote": evidence_quote,
-                "summary_line": evidence_quote,
-                "block_id": str(
-                    slot.get("block_id") or slot.get("blockId") or ""
-                ).strip(),
-                "anchor_id": str(
-                    slot.get("anchor_id") or slot.get("anchorId") or ""
-                ).strip(),
-                "anchor_kind": str(
-                    slot.get("anchor_kind") or slot.get("anchorKind") or "sentence"
-                ).strip(),
-                "page_start": _as_nonnegative_int(
-                    slot.get("page_start") or slot.get("pageStart") or 0
-                ),
-                "page_end": _as_nonnegative_int(
-                    slot.get("page_end")
-                    or slot.get("pageEnd")
-                    or slot.get("page_start")
-                    or slot.get("pageStart")
-                    or 0
-                ),
-                "citation_plan_slot": True,
-            }
-        )
+        planned_detail = {
+            "num": candidate_nums[0] if candidate_nums else 0,
+            "citation_route": "system_a",
+            "routing_reason": "citation_plan_slot",
+            "source_path": source_path,
+            "source_name": source_name,
+            "heading_path": heading_path,
+            "location_label": heading_path,
+            "answer_claim": answer_claim,
+            "evidence_quote": evidence_quote,
+            "summary_line": evidence_quote,
+            "block_id": str(
+                slot.get("block_id") or slot.get("blockId") or ""
+            ).strip(),
+            "anchor_id": str(
+                slot.get("anchor_id") or slot.get("anchorId") or ""
+            ).strip(),
+            "anchor_kind": str(
+                slot.get("anchor_kind") or slot.get("anchorKind") or "sentence"
+            ).strip(),
+            "page_start": _as_nonnegative_int(
+                slot.get("page_start") or slot.get("pageStart") or 0
+            ),
+            "page_end": _as_nonnegative_int(
+                slot.get("page_end")
+                or slot.get("pageEnd")
+                or slot.get("page_start")
+                or slot.get("pageStart")
+                or 0
+            ),
+            "citation_plan_slot": True,
+        }
+        # In the fast state there may be no persisted render packet yet, so
+        # this plan detail is both the card source and the reader source.  Keep
+        # the continuous located passage before the card excerpt is compacted.
+        if planned_detail["block_id"] or planned_detail["anchor_id"]:
+            planned_detail["citation_plan_reader_evidence_quote"] = evidence_quote
+        out.append(planned_detail)
     return out
 
 
@@ -981,15 +1034,6 @@ def _grounded_answer_citation_state(message: dict | None) -> tuple[list[dict], b
         and str(item.get("source_path") or "").strip()
         and str(item.get("evidence_quote") or item.get("summary_line") or "").strip()
     ]
-    if grounded:
-        grounded.sort(
-            key=lambda item: (
-                int(item.get("display_num") or item.get("num") or 0) or 10**9,
-                str(item.get("source_path") or ""),
-            )
-        )
-        return grounded, False
-
     answer_quality = (
         meta.get("answer_quality")
         if isinstance(meta.get("answer_quality"), dict)
@@ -1003,6 +1047,197 @@ def _grounded_answer_citation_state(message: dict | None) -> tuple[list[dict], b
     if not citation_plan and isinstance(contracts.get("citation_plan"), dict):
         citation_plan = contracts.get("citation_plan")
     planned_grounded = _grounded_system_a_details_from_citation_plan(citation_plan)
+    if grounded:
+        if planned_grounded:
+            planned_by_source: dict[str, list[dict]] = {}
+            for planned in planned_grounded:
+                source_key = _answer_citation_source_key(planned.get("source_path"))
+                if source_key:
+                    planned_by_source.setdefault(source_key, []).append(planned)
+            enriched_grounded: list[dict] = []
+            for item in grounded:
+                detail = dict(item)
+                source_key = _answer_citation_source_key(detail.get("source_path"))
+                matches = list(planned_by_source.get(source_key) or [])
+                if len(matches) > 1:
+                    heading_key = str(
+                        detail.get("heading_path") or detail.get("location_label") or ""
+                    ).strip().casefold()
+                    heading_matches = [
+                        planned
+                        for planned in matches
+                        if str(
+                            planned.get("heading_path")
+                            or planned.get("location_label")
+                            or ""
+                        ).strip().casefold()
+                        == heading_key
+                    ]
+                    if heading_matches:
+                        matches = heading_matches
+                if matches:
+                    detail_claim = " ".join(
+                        part
+                        for part in (
+                            str(detail.get("answer_claim") or "").strip(),
+                            " ".join(
+                                str(value or "").strip()
+                                for value in list(detail.get("answer_claims") or [])
+                                if str(value or "").strip()
+                            ),
+                            str(detail.get("card_takeaway") or "").strip(),
+                        )
+                        if part
+                    )
+                    detail_claim_terms = evidence_alignment_tokens(detail_claim)
+                    planned_match = max(
+                        matches,
+                        key=lambda planned: (
+                            len(
+                                detail_claim_terms
+                                & evidence_alignment_tokens(
+                                    str(
+                                        planned.get("evidence_quote")
+                                        or planned.get("summary_line")
+                                        or ""
+                                    )
+                                )
+                            ),
+                            int(
+                                24
+                                <= len(
+                                    str(
+                                        planned.get("evidence_quote")
+                                        or planned.get("summary_line")
+                                        or ""
+                                    )
+                                )
+                                <= CITATION_CARD_EVIDENCE_MAX_LEN
+                            ),
+                            len(
+                                str(
+                                    planned.get("evidence_quote")
+                                    or planned.get("summary_line")
+                                    or ""
+                                )
+                            ),
+                            str(
+                                planned.get("evidence_quote")
+                                or planned.get("summary_line")
+                                or ""
+                            ).casefold(),
+                        ),
+                    )
+                    planned_quote = str(
+                        planned_match.get("evidence_quote")
+                        or planned_match.get("summary_line")
+                        or ""
+                    ).strip()
+                    if planned_quote:
+                        # The render card may intentionally compact ``raw`` and
+                        # ``evidence_quote``.  Retain the full, already-selected
+                        # citation-plan passage as a private alignment source;
+                        # the public excerpt is still chosen below against the
+                        # answer claim and keeps the render packet's locator.
+                        detail["citation_plan_evidence_quote"] = planned_quote
+                    locator_match = max(
+                        matches,
+                        key=lambda planned: (
+                            len(
+                                detail_claim_terms
+                                & evidence_alignment_tokens(
+                                    str(
+                                        planned.get("evidence_quote")
+                                        or planned.get("summary_line")
+                                        or ""
+                                    )
+                                )
+                            ),
+                            int(
+                                bool(
+                                    str(
+                                        planned.get("block_id")
+                                        or planned.get("blockId")
+                                        or ""
+                                    ).strip()
+                                )
+                            )
+                            + int(
+                                bool(
+                                    str(
+                                        planned.get("anchor_id")
+                                        or planned.get("anchorId")
+                                        or ""
+                                    ).strip()
+                                )
+                            ),
+                            int(planned.get("page_start") or planned.get("pageStart") or 0) > 0,
+                            len(
+                                str(
+                                    planned.get("evidence_quote")
+                                    or planned.get("summary_line")
+                                    or ""
+                                )
+                            ),
+                        ),
+                    )
+                    locator_block_id = str(
+                        locator_match.get("block_id")
+                        or locator_match.get("blockId")
+                        or ""
+                    ).strip()
+                    locator_anchor_id = str(
+                        locator_match.get("anchor_id")
+                        or locator_match.get("anchorId")
+                        or ""
+                    ).strip()
+                    if locator_block_id or locator_anchor_id:
+                        detail["block_id"] = locator_block_id
+                        detail["anchor_id"] = locator_anchor_id
+                        detail["anchor_kind"] = str(
+                            locator_match.get("anchor_kind")
+                            or locator_match.get("anchorKind")
+                            or detail.get("anchor_kind")
+                            or "paragraph"
+                        ).strip()
+                        try:
+                            locator_page_start = int(
+                                locator_match.get("page_start")
+                                or locator_match.get("pageStart")
+                                or 0
+                            )
+                            locator_page_end = int(
+                                locator_match.get("page_end")
+                                or locator_match.get("pageEnd")
+                                or locator_page_start
+                                or 0
+                            )
+                        except (TypeError, ValueError):
+                            locator_page_start = 0
+                            locator_page_end = 0
+                        if locator_page_start > 0:
+                            detail["page_start"] = locator_page_start
+                            detail["page_end"] = locator_page_end or locator_page_start
+                        reader_quote = re.sub(
+                            r"\s+",
+                            " ",
+                            str(
+                                locator_match.get("evidence_quote")
+                                or locator_match.get("summary_line")
+                                or ""
+                            ),
+                        ).strip()
+                        if reader_quote:
+                            detail["citation_plan_reader_evidence_quote"] = reader_quote[:1800]
+                enriched_grounded.append(detail)
+            grounded = enriched_grounded
+        grounded.sort(
+            key=lambda item: (
+                int(item.get("display_num") or item.get("num") or 0) or 10**9,
+                str(item.get("source_path") or ""),
+            )
+        )
+        return grounded, False
     if planned_grounded:
         return planned_grounded, False
     planned_system_a = any(
@@ -1120,6 +1355,47 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                     display_detail["summary_line"] = aligned_quote
                 display_details.append(display_detail)
             detail = display_details[0]
+            reader_claim = " ".join(
+                part
+                for item in display_details
+                for part in (
+                    str(item.get("answer_claim") or "").strip(),
+                    " ".join(
+                        str(value or "").strip()
+                        for value in list(item.get("answer_claims") or [])
+                        if str(value or "").strip()
+                    ),
+                    str(item.get("card_takeaway") or "").strip(),
+                )
+                if part
+            )
+            reader_claim_terms = evidence_alignment_tokens(reader_claim)
+
+            def _reader_quote(item: dict) -> str:
+                return str(
+                    item.get("citation_plan_reader_evidence_quote")
+                    or item.get("reader_evidence_quote")
+                    or item.get("evidence_quote")
+                    or item.get("summary_line")
+                    or ""
+                ).strip()
+
+            def _reader_score(item: dict) -> tuple[int, int, bool, int, str]:
+                reader_quote = _reader_quote(item)
+                return (
+                    len(reader_claim_terms & evidence_alignment_tokens(reader_quote)),
+                    int(bool(str(item.get("block_id") or "").strip()))
+                    + int(bool(str(item.get("anchor_id") or "").strip())),
+                    int(item.get("page_start") or 0) > 0,
+                    len(reader_quote),
+                    reader_quote.casefold(),
+                )
+
+            # A reference card needs a compact quote, while reader navigation
+            # needs the best claim-aligned continuous passage and locator.
+            # Select the latter independently so citation-plan slot order does
+            # not decide whether opening the source can reach the full block.
+            reader_detail = max(display_details, key=_reader_score)
             hit = dict(existing_by_source.get(source_key) or {})
             meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), dict) else {}
             ui = dict(hit.get("ui_meta") or {}) if isinstance(hit.get("ui_meta"), dict) else {}
@@ -1130,9 +1406,15 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                 prompt=prompt,
             )
             evidence_quote = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
+            reader_evidence_quote = _reader_quote(reader_detail) or evidence_quote
             source_path = str(detail.get("source_path") or "").strip()
             source_name = str(detail.get("source_name") or detail.get("card_title") or "").strip()
             heading_path = str(detail.get("heading_path") or detail.get("location_label") or "").strip()
+            reader_heading_path = str(
+                reader_detail.get("heading_path")
+                or reader_detail.get("location_label")
+                or heading_path
+            ).strip()
             grounding_surface = " ".join(
                 " ".join(
                     (
@@ -1174,16 +1456,24 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             primary = {
                 "source_path": source_path,
                 "source_name": source_name,
-                "heading_path": heading_path,
+                "heading_path": reader_heading_path,
                 "snippet": evidence_quote,
                 "highlight_snippet": evidence_quote,
-                "block_id": str(detail.get("block_id") or "").strip(),
-                "anchor_id": str(detail.get("anchor_id") or "").strip(),
-                "anchor_kind": str(detail.get("anchor_kind") or "sentence").strip(),
-                "page_start": int(detail.get("page_start") or 0),
-                "page_end": int(detail.get("page_end") or detail.get("page_start") or 0),
+                "block_id": str(reader_detail.get("block_id") or "").strip(),
+                "anchor_id": str(reader_detail.get("anchor_id") or "").strip(),
+                "anchor_kind": str(
+                    reader_detail.get("anchor_kind") or "sentence"
+                ).strip(),
+                "page_start": int(reader_detail.get("page_start") or 0),
+                "page_end": int(
+                    reader_detail.get("page_end")
+                    or reader_detail.get("page_start")
+                    or 0
+                ),
                 "selection_reason": "answer_citation_grounded",
-                "strict_locate": bool(detail.get("block_id") or detail.get("anchor_id")),
+                "strict_locate": bool(
+                    reader_detail.get("block_id") or reader_detail.get("anchor_id")
+                ),
             }
             meta.update(
                 {
@@ -1257,9 +1547,9 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             reader_open = {
                 "sourcePath": source_path,
                 "sourceName": source_name,
-                "headingPath": heading_path,
-                "snippet": evidence_quote,
-                "highlightSnippet": evidence_quote,
+                "headingPath": reader_heading_path,
+                "snippet": reader_evidence_quote,
+                "highlightSnippet": reader_evidence_quote,
                 "strictLocate": bool(primary["strict_locate"]),
                 "primaryEvidence": primary,
             }
@@ -1274,10 +1564,10 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                 if anchor_kind:
                     reader_open["anchorKind"] = anchor_kind
                 locate_target = {
-                    "headingPath": heading_path,
-                    "snippet": evidence_quote,
-                    "highlightSnippet": evidence_quote,
-                    "evidenceQuote": evidence_quote,
+                    "headingPath": reader_heading_path,
+                    "snippet": reader_evidence_quote,
+                    "highlightSnippet": reader_evidence_quote,
+                    "evidenceQuote": reader_evidence_quote,
                     "blockId": block_id,
                     "anchorId": anchor_id,
                     "anchorKind": anchor_kind,
@@ -1350,6 +1640,39 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             # presenting them as evidence for claims the answer did not make.
             pack["retrieval_hits"] = [dict(hit) for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
         pack["hits"] = aligned_hits
+        aligned_pack_primary: dict = {}
+        for aligned_hit in aligned_hits:
+            aligned_ui = (
+                aligned_hit.get("ui_meta")
+                if isinstance(aligned_hit.get("ui_meta"), dict)
+                else {}
+            )
+            candidate_primary = (
+                aligned_ui.get("primary_evidence")
+                if isinstance(aligned_ui.get("primary_evidence"), dict)
+                else {}
+            )
+            if str(
+                candidate_primary.get("snippet")
+                or candidate_primary.get("highlight_snippet")
+                or ""
+            ).strip():
+                aligned_pack_primary = dict(candidate_primary)
+                break
+        if aligned_pack_primary:
+            # The pre-overlay pack can still carry a shorter retrieval-level
+            # primary passage. Once answer citations are grounded, the first
+            # aligned card is authoritative at pack level as well; otherwise
+            # the later display-contract pass may revive the stale snippet and
+            # contradict both the visible card and its answer claim.
+            pack["primary_evidence"] = aligned_pack_primary
+            aligned_heading = str(
+                aligned_pack_primary.get("heading_path")
+                or aligned_pack_primary.get("headingPath")
+                or ""
+            ).strip()
+            if aligned_heading:
+                pack["primary_evidence_heading_path"] = aligned_heading
         pack["citation_registry"] = citation_registry
         pack["answer_aligned_citation_cards"] = True
         if _answer_citation_overlay_pack_is_complete(pack):
@@ -1685,6 +2008,11 @@ def _get_cached_conversation_refs_payload(*, conv_id: str, signature: str) -> di
 
 def _refs_cache_input_pack_signature(pack: dict | None) -> str:
     src = pack if isinstance(pack, dict) else {}
+    rendered_payload = (
+        src.get("rendered_payload")
+        if isinstance(src.get("rendered_payload"), dict)
+        else {}
+    )
     try:
         updated_at = float(src.get("updated_at") or 0.0)
     except Exception:
@@ -1693,6 +2021,16 @@ def _refs_cache_input_pack_signature(pack: dict | None) -> str:
         "prompt": str(src.get("prompt") or "").strip(),
         "prompt_sig": str(src.get("prompt_sig") or "").strip(),
         "answer_sig": str(src.get("answer_sig") or "").strip(),
+        "rendered_payload_sig": str(
+            src.get("rendered_payload_sig")
+            or rendered_payload.get("rendered_payload_sig")
+            or ""
+        ).strip(),
+        "render_evidence_sig": str(
+            src.get("render_evidence_sig")
+            or rendered_payload.get("render_evidence_sig")
+            or ""
+        ).strip(),
         "used_query": str(src.get("used_query") or "").strip(),
         "used_translation": bool(src.get("used_translation")),
         "updated_at": updated_at,
@@ -4779,12 +5117,124 @@ def _attach_bibliometrics_summary_locale(meta: dict | None) -> dict:
     return data
 
 
+_SOURCE_BOUND_SYSTEM_A_CONTEXT_FIELDS = (
+    "source_path",
+    "sourcePath",
+    "source_name",
+    "sourceName",
+    "heading_path",
+    "headingPath",
+    "location_label",
+    "locationLabel",
+    "block_id",
+    "blockId",
+    "anchor_id",
+    "anchorId",
+    "anchor_kind",
+    "anchorKind",
+    "page_start",
+    "pageStart",
+    "page_end",
+    "pageEnd",
+    "strict_locate",
+    "strictLocate",
+    "render_locale",
+    "renderLocale",
+)
+_SOURCE_BOUND_SYSTEM_A_AUTHORITY_FIELDS = (
+    "citation_source",
+    "journal_if_source",
+    "conference_rank_source",
+    "conference_ccf_source",
+    "venue_verified",
+    "venue_verified_by",
+    "summary_line",
+    "summary_source",
+    "summary_provider",
+    "summary_generation",
+    "summary_locale",
+    "summary_quality",
+)
+
+
+def _bibliometrics_is_source_bound_system_a(meta: dict | None) -> bool:
+    data = dict(meta or {})
+    route = str(data.get("citation_route") or data.get("citationRoute") or "").strip().lower()
+    source_path = str(data.get("source_path") or data.get("sourcePath") or "").strip()
+    is_inpaper = _truthy_bool(
+        data.get("is_inpaper") if "is_inpaper" in data else data.get("isInpaper")
+    )
+    return route == "system_a" and not is_inpaper and bool(source_path)
+
+
+def _source_bound_system_a_bibliometrics(
+    body: BibliometricsBody,
+    meta: dict | None,
+) -> dict:
+    """Resolve local System-A metadata from its source, never from citation markers."""
+
+    incoming = dict(meta or {})
+    source_path = str(
+        incoming.get("source_path") or incoming.get("sourcePath") or ""
+    ).strip()
+    safe_context = {
+        key: incoming[key]
+        for key in _SOURCE_BOUND_SYSTEM_A_CONTEXT_FIELDS
+        if incoming.get(key) not in (None, "", [], {})
+    }
+    safe_context["source_path"] = source_path
+    safe_context["citation_route"] = "system_a"
+    safe_context["is_inpaper"] = False
+
+    resolved_source_path = _resolve_public_reference_source_input(source_path)
+    authoritative: dict = {}
+    if resolved_source_path:
+        try:
+            loaded = ensure_source_citation_meta(
+                source_path=resolved_source_path,
+                pdf_root=_pdf_dir(),
+                md_root=_md_dir(),
+                lib_store=_lib_store(),
+            )
+        except Exception:
+            loaded = {}
+        if isinstance(loaded, dict):
+            authoritative = dict(loaded)
+
+    # Only source-resolved fields may define the paper identity. In particular,
+    # do not carry ``num``, ``linked_nums`` or ``raw`` into the generic
+    # bibliography pipeline: on a System-A card those belong to answer display
+    # and evidence text, not to the source paper's References section.
+    result = {**safe_context, **public_citation_meta(authoritative)}
+    for key in _SOURCE_BOUND_SYSTEM_A_AUTHORITY_FIELDS:
+        value = authoritative.get(key)
+        if value not in (None, "", [], {}):
+            result[key] = value
+    result["source_path"] = source_path
+    result["citation_route"] = "system_a"
+    result["is_inpaper"] = False
+    result["bibliometrics_identity_source"] = "source_path"
+    result["source_metadata_status"] = "ready" if authoritative else "unavailable"
+
+    target_locale = _bibliometrics_requested_locale(body, result)
+    if (
+        not _bibliometrics_summary_matches_locale(result, target_locale)
+        or not _bibliometrics_summary_has_locale_contract(result)
+    ):
+        local_summary = _local_source_summary_meta(result, target_locale=target_locale)
+        if local_summary:
+            result.update(local_summary)
+    return _attach_bibliometrics_summary_locale(
+        _bibliometrics_quality_contract(result)
+    )
+
+
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
-    meta = _prepare_bibliometrics_identity(
-        _strip_misbound_local_source_summary(body.meta or {}),
-        verify_library=True,
-    )
+    incoming = _strip_misbound_local_source_summary(body.meta or {})
+    if _bibliometrics_is_source_bound_system_a(incoming):
+        return _source_bound_system_a_bibliometrics(body, incoming)
+    meta = _prepare_bibliometrics_identity(incoming, verify_library=True)
     settings = get_settings()
     target_locale = _bibliometrics_requested_locale(body, meta)
     hydrated = _prepare_bibliometrics_identity(

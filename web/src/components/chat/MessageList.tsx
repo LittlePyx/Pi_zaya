@@ -1774,12 +1774,19 @@ export function MessageList({
       message.info(S.reader_missing_path)
       return
     }
+    const readerEvidence = String(
+      detail.readerEvidenceQuote
+      || detail.evidenceQuote
+      || detail.summaryLine
+      || detail.raw
+      || '',
+    ).trim()
     const payload = buildBasicReaderOpenPayload({
       sourcePath,
       sourceName: String(detail.sourceName || detail.title || '').trim(),
       headingPath: String(detail.headingPath || (!detail.isInpaper ? detail.title : '') || '').trim(),
-      snippet: String(detail.evidenceQuote || detail.summaryLine || detail.title || detail.raw || '').trim(),
-      highlightSnippet: String(detail.evidenceQuote || detail.summaryLine || detail.raw || '').trim(),
+      snippet: readerEvidence || String(detail.title || '').trim(),
+      highlightSnippet: readerEvidence,
       blockId: String(detail.blockId || '').trim(),
       anchorId: String(detail.anchorId || '').trim(),
       anchorKind: String(detail.anchorKind || '').trim(),
@@ -2164,7 +2171,12 @@ export function MessageList({
             const refEntryForCitations = refsUserMsgIdForCitations > 0
               ? refs[String(refsUserMsgIdForCitations)] as RefEntryLite | undefined
               : undefined
-            const fallbackCiteDetails = (!isUser && citeDetails.length <= 0 && Array.isArray(refEntryForCitations?.hits))
+            const fallbackCiteDetails = (
+              !isUser
+              && !renderPacket
+              && citeDetails.length <= 0
+              && Array.isArray(refEntryForCitations?.hits)
+            )
               ? buildFallbackCiteDetailsFromRefHits({
                 bodyContent: String(bodyContent || ''),
                 refHits: refEntryForCitations?.hits || [],
@@ -2175,10 +2187,15 @@ export function MessageList({
                 S,
               })
               : []
-            const effectiveCiteDetails = enrichCiteDetailsWithVisibleRefContext(
-              citeDetails.length > 0 ? citeDetails : fallbackCiteDetails,
-              refEntryForCitations,
-            )
+            // A render packet owns the visible citation numbering, anchors and
+            // card copy as one atomic contract. Refs ordering is only a legacy
+            // fallback and must never rewrite a packet-backed answer.
+            const effectiveCiteDetails = renderPacket
+              ? citeDetails
+              : enrichCiteDetailsWithVisibleRefContext(
+                  citeDetails.length > 0 ? citeDetails : fallbackCiteDetails,
+                  refEntryForCitations,
+                )
             const unlinkedReferenceViews = !isUser
               ? buildUnlinkedReferenceViews({
                 packet: renderPacket,
@@ -2347,6 +2364,7 @@ export function MessageList({
                       <MarkdownRenderer
                         content={bodyContent}
                         citeDetails={effectiveCiteDetails}
+                        linkifyPlainCitations={!renderPacket}
                         onCitationClick={openCitation}
                         onCitationHover={previewCitation}
                         onCitationLeave={scheduleCitationPreviewClose}

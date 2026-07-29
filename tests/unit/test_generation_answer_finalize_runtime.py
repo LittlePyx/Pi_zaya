@@ -28,6 +28,23 @@ def test_sanitize_answer_removes_empty_citation_attribution_phrase() -> None:
     assert cleaned == "像素几何由每帧掩模图案定义。"
 
 
+def test_sanitize_answer_removes_orphan_citation_only_line() -> None:
+    answer = "[1]\n\n在该配置下，测得的横向分辨率约为 120 nm [1]。"
+
+    cleaned = finalize_runtime._sanitize_empty_markdown_label_fragments(answer)
+
+    assert cleaned == "在该配置下，测得的横向分辨率约为 120 nm [1]。"
+
+
+def test_collapse_duplicate_numeric_citation_across_sentence_punctuation() -> None:
+    assert (
+        finalize_runtime._collapse_adjacent_duplicate_numeric_citations(
+            "该结论由同一证据支持 [1]。[1]"
+        )
+        == "该结论由同一证据支持 [1]。"
+    )
+
+
 def test_strict_comparison_numbers_use_only_budgeted_system_a_slots() -> None:
     plan = {
         "intent": "comparison",
@@ -43,6 +60,239 @@ def test_strict_comparison_numbers_use_only_budgeted_system_a_slots() -> None:
     assert finalize_runtime._strict_comparison_system_a_numbers(
         {**plan, "intent": "answer_grounding"}
     ) is None
+
+
+def test_strict_comparison_numbers_do_not_exact_allowlist_one_identified_paper() -> None:
+    same_paper_plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "paper.en.md",
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "paper.en.md",
+                "candidate_hits": [4],
+            },
+        ],
+    }
+
+    assert finalize_runtime._strict_comparison_system_a_numbers(same_paper_plan) is None
+
+
+def test_planned_source_binder_rebinds_reordered_sources_without_adding_prose() -> None:
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_name": "AlphaNet",
+                "source_path": "F:/kb/alpha/alpha-net.en.md",
+                "candidate_hits": [1],
+                "evidence_quote": (
+                    "AlphaNet parallelizes coded detector acquisition within one "
+                    "integration time."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_name": "BetaGS",
+                "source_path": "F:/kb/beta/beta-gs.en.md",
+                "candidate_hits": [2],
+                "evidence_quote": (
+                    "BetaGS reconstructs explicit dynamic 3D scenes from a single "
+                    "compressed image."
+                ),
+            },
+        ],
+    }
+    hits = [
+        {
+            "text": "A broad BetaGS passage.",
+            "meta": {"source_path": "kb/beta/beta-gs.en.md"},
+        },
+        {
+            "text": "A broad AlphaNet passage.",
+            "meta": {"source_path": "kb/alpha/alpha-net.en.md"},
+        },
+    ]
+    answer = (
+        "AlphaNet parallelizes coded detector acquisition within one integration time.\n\n"
+        "BetaGS reconstructs explicit dynamic 3D scenes from a single compressed image."
+    )
+
+    bound = finalize_runtime._bind_planned_source_citations(
+        answer,
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    assert "integration time [2]." in bound
+    assert "compressed image [1]." in bound
+    assert bound.replace(" [1]", "").replace(" [2]", "") == answer
+    assert (
+        finalize_runtime._bind_planned_source_citations(
+            bound,
+            citation_plan=plan,
+            answer_hits=hits,
+        )
+        == bound
+    )
+
+
+def test_planned_source_binder_places_markers_inside_aligned_table_cells() -> None:
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_name": "SCIGS",
+                "source_path": "scigs.en.md",
+                "candidate_hits": [1],
+                "evidence_quote": (
+                    "SCIGS is a variant of 3DGS and reconstructs explicit dynamic 3D "
+                    "scenes from a single compressed image."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_name": "BetaGS",
+                "source_path": "beta-gs.en.md",
+                "candidate_hits": [2],
+                "evidence_quote": (
+                    "BetaGS reconstructs explicit dynamic 3D scenes from a single "
+                    "compressed image."
+                ),
+            },
+        ],
+    }
+    hits = [
+        {"text": "SCIGS source.", "meta": {"source_path": "scigs.en.md"}},
+        {"text": "BetaGS source.", "meta": {"source_path": "beta-gs.en.md"}},
+    ]
+    answer = (
+        "| Method | Existing answer claim |\n"
+        "| --- | --- |\n"
+        "| SCIGS [1] | is a 3DGS variant that reconstructs explicit dynamic 3D scenes from a single compressed image |\n"
+        "| BetaGS | reconstructs explicit dynamic 3D scenes from a single compressed image |"
+    )
+
+    bound = finalize_runtime._bind_planned_source_citations(
+        answer,
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    assert "| Method | Existing answer claim |" in bound
+    assert "| --- | --- |" in bound
+    assert "| SCIGS [1] | is a 3DGS variant that reconstructs explicit dynamic 3D scenes from a single compressed image [1] |" in bound
+    assert "| BetaGS | reconstructs explicit dynamic 3D scenes from a single compressed image [2] |" in bound
+    assert "BetaGS [2]" not in bound
+
+
+def test_planned_source_binder_leaves_ambiguous_multi_source_claim_unchanged() -> None:
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "alpha.en.md",
+                "candidate_hits": [1],
+                "evidence_quote": (
+                    "AlphaNet improves reconstruction quality through adaptive sampling."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "beta.en.md",
+                "candidate_hits": [2],
+                "evidence_quote": (
+                    "BetaNet improves reconstruction quality through adaptive sampling."
+                ),
+            },
+        ],
+    }
+    hits = [
+        {"text": "Alpha source.", "meta": {"source_path": "alpha.en.md"}},
+        {"text": "Beta source.", "meta": {"source_path": "beta.en.md"}},
+    ]
+    answer = "The method improves reconstruction quality through adaptive sampling."
+
+    assert (
+        finalize_runtime._bind_planned_source_citations(
+            answer,
+            citation_plan=plan,
+            answer_hits=hits,
+        )
+        == answer
+    )
+
+
+def test_planned_source_binder_adds_correct_marker_before_strict_audit_removes_stale_one() -> None:
+    alpha_evidence = (
+        "AlphaNet parallelizes coded detector acquisition within one integration time."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_name": "AlphaNet",
+                "source_path": "alpha.en.md",
+                "candidate_hits": [1],
+                "evidence_quote": alpha_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "source_name": "BetaNet",
+                "source_path": "beta.en.md",
+                "candidate_hits": [3],
+                "evidence_quote": "BetaNet uses a separate reconstruction strategy.",
+            },
+        ],
+    }
+    hits = [
+        {
+            "text": "An unrelated detector calibration passage.",
+            "meta": {"source_path": "other.en.md"},
+        },
+        {"text": alpha_evidence, "meta": {"source_path": "alpha.en.md"}},
+        {
+            "text": "BetaNet uses a separate reconstruction strategy.",
+            "meta": {"source_path": "beta.en.md"},
+        },
+    ]
+    answer = (
+        "AlphaNet parallelizes coded detector acquisition within one integration time [1]."
+    )
+
+    bound = finalize_runtime._bind_planned_source_citations(
+        answer,
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+    repaired, audit = finalize_runtime.audit_and_repair_claim_evidence(
+        bound,
+        answer_hits=finalize_runtime._claim_evidence_hits_with_citation_plan(hits, plan),
+        allowed_citation_numbers=finalize_runtime._strict_comparison_system_a_numbers(
+            plan,
+            hits,
+        ),
+        drop_unsupported_unplanned_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "integration time [1][2]." in bound
+    assert "integration time [2]." in repaired
+    assert "[1]" not in repaired
+    assert audit["minimum_ok"] is True
 
 
 def test_claim_audit_uses_prompt_aligned_plan_evidence_for_numeric_claim() -> None:
@@ -87,6 +337,327 @@ def test_claim_audit_uses_prompt_aligned_plan_evidence_for_numeric_claim() -> No
 
     assert "8 frames per second [4]" in answer
     assert audit["dropped_hard_mismatch_claims"] == 0
+    assert audit["minimum_ok"] is True
+
+
+def test_cross_paper_plan_resolves_reordered_hits_by_source_before_evidence_audit() -> None:
+    private_paths = {
+        "alpha": "F:/kb/db/alpha/alpha.en.md",
+        "beta": "F:/kb/db/beta/beta.en.md",
+        "gamma": "F:/kb/db/gamma/gamma.en.md",
+    }
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": private_paths["alpha"],
+                "heading_path": "Abstract",
+                "evidence_quote": "Paper Alpha establishes the coded measurement model.",
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": private_paths["beta"],
+                "heading_path": "Methods",
+                "evidence_quote": "Paper Beta parallelizes hardware acquisition.",
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": private_paths["gamma"],
+                "heading_path": "Results",
+                "evidence_quote": "Paper Gamma adds physics-informed reconstruction.",
+                "candidate_hits": [3],
+            },
+        ],
+    }
+    # Public answer hits were reranked after the plan recorded private-path
+    # candidate numbers; an unplanned paper also entered the visible window.
+    hits = [
+        {
+            "text": "A broad Beta passage.",
+            "meta": {"source_path": "kb-source/0/beta/beta.en.md"},
+        },
+        {
+            "text": "Paper Delta discusses an unrelated detector.",
+            "meta": {"source_path": "kb-source/0/delta/delta.en.md"},
+        },
+        {
+            "text": "A broad Alpha passage.",
+            "meta": {"source_path": "kb-source/0/alpha/alpha.en.md"},
+        },
+        {
+            "text": "A broad Gamma passage.",
+            "meta": {"source_path": "kb-source/0/gamma/gamma.en.md"},
+        },
+    ]
+
+    allowed = finalize_runtime._strict_comparison_system_a_numbers(plan, hits)
+    merged = finalize_runtime._claim_evidence_hits_with_citation_plan(hits, plan)
+
+    assert allowed == {1, 3, 4}
+    assert merged[0]["text"] == "Paper Beta parallelizes hardware acquisition."
+    assert merged[1]["text"] == "Paper Delta discusses an unrelated detector."
+    assert merged[2]["text"] == "Paper Alpha establishes the coded measurement model."
+    assert merged[3]["text"] == "Paper Gamma adds physics-informed reconstruction."
+
+
+def test_cross_paper_claims_rebind_to_same_sources_as_reference_cards() -> None:
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "F:/kb/db/fdm/fdm.en.md",
+                "evidence_quote": (
+                    "Frequency-division multiplexing parallelizes multiple patterns "
+                    "within one detector integration time."
+                ),
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "F:/kb/db/video-3d/video-3d.en.md",
+                "evidence_quote": (
+                    "Photometric stereo uses four spatially separated detectors "
+                    "for parallel directional measurements."
+                ),
+                "candidate_hits": [2],
+            },
+        ],
+    }
+    hits = [
+        {
+            "text": "A broad 3D video passage.",
+            "meta": {"source_path": "kb-source/0/video-3d/video-3d.en.md"},
+        },
+        {
+            "text": "An unrelated review passage.",
+            "meta": {"source_path": "kb-source/0/review/review.en.md"},
+        },
+        {
+            "text": "A broad frequency-division passage.",
+            "meta": {"source_path": "kb-source/0/fdm/fdm.en.md"},
+        },
+    ]
+    merged = finalize_runtime._claim_evidence_hits_with_citation_plan(hits, plan)
+    allowed = finalize_runtime._strict_comparison_system_a_numbers(plan, hits)
+
+    repaired, audit = finalize_runtime.audit_and_repair_claim_evidence(
+        (
+            "Frequency-division multiplexing parallelizes multiple patterns within "
+            "one detector integration time [1]. "
+            "Photometric stereo uses four spatially separated detectors [2]."
+        ),
+        answer_hits=merged,
+        allowed_citation_numbers=allowed,
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert allowed == {1, 3}
+    assert "integration time [3]" in repaired
+    assert "four spatially separated detectors [1]" in repaired
+    assert "[2]" not in repaired
+    assert audit["minimum_ok"] is True
+
+
+def test_fdm_answer_replaces_secondary_result_with_planned_parallel_mechanism() -> None:
+    evidence = (
+        "Here, we implement frequency-division methods to parallelize the "
+        "single-pixel imaging process at 3.2 THz. Our technique enables a "
+        "trade-off between signal-to-noise ratio and acquisition speed—without "
+        "altering detector integration time."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "F:/kb/db/fdm/fdm.en.md",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+            }
+        ],
+    }
+    answer = (
+        "频分复用并行化了成像过程。实验表明，该技术实现了四倍的效率提升，"
+        "并且这种加速效果对任意图像尺寸都完全可扩展 [3]。\n\n"
+        "代价是信噪比（SNR）与采集速度之间的权衡 [1]。\n\n"
+        "不需要改变探测器积分时间 [1]。"
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="频分复用为什么更快，代价是什么？",
+        citation_plan=plan,
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {"source_path": "kb-source/0/fdm/fdm.en.md"},
+            }
+        ],
+    )
+
+    assert "并行化单像素成像过程" in normalized
+    assert "探测器积分时间" in normalized
+    assert "[1]" in normalized
+    assert "四倍的效率提升" not in normalized
+    assert "任意图像尺寸" not in normalized
+
+
+def test_four_hit_comparison_uses_plan_source_identity_for_claim_rebinding() -> None:
+    scinerf_path = "F:/kb/db/scinerf/scinerf.en.md"
+    scigs_path = "F:/kb/db/scigs/scigs.en.md"
+    scinerf_quote = (
+        "Specifically, we formulate the physical imaging process of SCI as part "
+        "of the training of NeRF."
+    )
+    scigs_quote = (
+        "SCIGS is a variant of 3DGS and reconstructs explicit dynamic 3D scenes "
+        "from a single compressed image."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": scinerf_path,
+                "source_name": "SCINeRF",
+                "heading_path": "SCINeRF / Abstract",
+                "evidence_quote": scinerf_quote,
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": scigs_path,
+                "source_name": "SCIGS",
+                "heading_path": "SCIGS / Abstract",
+                "evidence_quote": scigs_quote,
+                "candidate_hits": [4],
+            },
+        ],
+    }
+    hits = [
+        {"text": "SCIGS title.", "meta": {"source_path": scigs_path}},
+        {"text": "SCINeRF title.", "meta": {"source_path": scinerf_path}},
+        {
+            "text": "An unrelated SCINeRF mask-overlap passage.",
+            "meta": {
+                "source_path": scinerf_path,
+                "heading_path": "SCINeRF / Abstract",
+            },
+        },
+        {
+            "text": "SCIGS is a variant of 3DGS. A broad SCIGS comparison table.",
+            "meta": {"source_path": scigs_path},
+        },
+    ]
+
+    merged = finalize_runtime._claim_evidence_hits_with_citation_plan(hits, plan)
+    repaired, audit = finalize_runtime.audit_and_repair_claim_evidence(
+        (
+            "SCIGS reconstructs explicit dynamic 3D scenes from a single compressed "
+            "image [3]. SCINeRF formulates the physical imaging process of SCI as "
+            "part of the training of NeRF [3]. SCIGS is a variant of 3DGS [4]."
+        ),
+        answer_hits=merged,
+        allowed_citation_numbers={3, 4},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert merged[2]["meta"]["source_name"] == "SCINeRF"
+    assert merged[3]["meta"]["source_name"] == "SCIGS"
+    assert "single compressed image [4]" in repaired
+    assert "training of NeRF [3]" in repaired
+    assert audit["rebound_citations"] >= 1
+    assert audit["minimum_ok"] is True
+
+
+def test_same_paper_method_slot_binds_abstract_once_and_drops_unsupported_detail() -> None:
+    abstract = (
+        "Specifically, we formulate the physical imaging process of SCI as part "
+        "of the training of NeRF, allowing us to capture complex scene structures."
+    )
+    source_path = "F:/kb/db/scinerf/scinerf.en.md"
+    plan = {
+        "intent": "method_explain",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "claim_type": "method_detail",
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "SCINeRF / Abstract",
+                "evidence_quote": abstract,
+                "candidate_hits": [],
+            },
+            {
+                "claim_type": "paper_evidence",
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "SCINeRF / Abstract",
+                "evidence_quote": abstract,
+                "candidate_hits": [1],
+            },
+            {
+                "claim_type": "paper_evidence",
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "SCINeRF / Abstract",
+                "evidence_quote": f"## Abstract {abstract}",
+                "candidate_hits": [2],
+            },
+        ],
+    }
+    hits = [
+        {
+            "text": "Table 2 reports novel-view synthesis metrics.",
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "4. Experiments / Table 2",
+            },
+        },
+        {
+            "text": f"## Abstract {abstract}",
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "SCINeRF / Abstract",
+            },
+        },
+    ]
+
+    merged = finalize_runtime._claim_evidence_hits_with_citation_plan(hits, plan)
+
+    assert merged[0]["text"] == "Table 2 reports novel-view synthesis metrics."
+    assert "physical imaging process of SCI" in merged[1]["text"]
+    assert "citation_plan_evidence_quotes" not in merged[0].get("meta", {})
+    assert len(merged[1]["meta"]["citation_plan_evidence_quotes"]) == 2
+
+    repaired, audit = finalize_runtime.audit_and_repair_claim_evidence(
+        (
+            "SCINeRF \u5c06 SCI \u7684\u7269\u7406\u6210\u50cf\u8fc7\u7a0b\u4f5c\u4e3a NeRF "
+            "\u8bad\u7ec3\u7684\u4e00\u90e8\u5206\u3002"
+            "SCI \u68af\u5ea6\u901a\u8fc7\u53ef\u5fae\u538b\u7f29\u5c42\u53cd\u5411\u4f20\u64ad\uff0c"
+            "\u66f4\u65b0 NeRF \u53c2\u6570\u3002"
+            "NeRF \u6e32\u67d3\u5e27\u5148\u7ecf\u8fc7\u63a9\u7801\u8c03\u5236\u548c\u79ef\u5206\u538b\u7f29\uff0c"
+            "\u518d\u4e0e\u771f\u5b9e\u6d4b\u91cf\u6bd4\u8f83\u3002"
+        ),
+        answer_hits=merged,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "\u4f5c\u4e3a NeRF \u8bad\u7ec3\u7684\u4e00\u90e8\u5206 [2]" in repaired
+    assert "\u53cd\u5411\u4f20\u64ad" not in repaired
+    assert "\u53ef\u5fae\u538b\u7f29\u5c42" not in repaired
+    assert "\u63a9\u7801\u8c03\u5236" not in repaired
+    assert "\u79ef\u5206\u538b\u7f29" not in repaired
+    assert audit["dropped_unsupported_unplanned_claims"] == 2
     assert audit["minimum_ok"] is True
 
 
@@ -165,6 +736,48 @@ def test_shared_primary_evidence_prefers_query_aligned_plan_bridge() -> None:
     assert "tenfold lower" in primary["snippet"]
 
 
+def test_shared_primary_evidence_keeps_compound_citation_plan_passage() -> None:
+    compound = (
+        "The operation for digital refocusing can be achieved using two steps. "
+        "First, the photon trajectory is reconstructed through a ray tracing operation. "
+        "Thus, the second step applies a wave propagation of distance -z to bring the "
+        "sample back into focus."
+    )
+    primary = finalize_runtime._pick_shared_primary_evidence(
+        paper_guide_contracts_seed={
+            "primary_evidence": {
+                "source_path": "qclfm.en.md",
+                "heading_path": "A. Concept",
+                "snippet": compound.split("Thus,")[0].strip(),
+                "selection_reason": "answer_citation",
+            },
+            "citation_plan": {
+                "slots": [
+                    {
+                        "preferred_system": "system_a",
+                        "source_path": "qclfm.en.md",
+                        "source_name": "qCLFM.pdf",
+                        "heading_path": "A. Concept",
+                        "evidence_quote": compound,
+                        "block_id": "blk_concept",
+                        "anchor_id": "p_refocus",
+                        "page_start": 2,
+                    }
+                ]
+            },
+        },
+        evidence_cards=[],
+        support_resolution=[],
+        prompt_text="qCLFM 数字重聚焦的两个步骤是什么？",
+        answer_text="先做光线追迹，再做波传播逆运算。",
+    )
+
+    assert primary["selection_reason"] == "prompt_aligned"
+    assert primary["block_id"] == "blk_concept"
+    assert "ray tracing" in primary["snippet"]
+    assert "wave propagation" in primary["snippet"]
+
+
 def test_shared_primary_evidence_focuses_long_abstract_on_supporting_sentences() -> None:
     abstract = (
         "Single-pixel cameras measure correlations between a scene and a set of patterns. "
@@ -226,6 +839,33 @@ def test_normalize_supported_sequential_terms_keeps_answer_language():
 
     assert "Sequential adaptive compressed sensing（顺序自适应压缩感知）" in out
     assert "信号支撑集恢复（signal support recovery）" in out
+    assert "distilled sensing / 蒸馏感知" in out
+
+
+def test_normalize_supported_sequential_terms_completes_already_adaptive_label():
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        (
+            "Sequential adaptive compressed sensing（顺序自适应压缩感知）相比一次性随机测量，"
+            "会利用前一步结果指导下一步测量 [4]。\n\n"
+            "该方法主要保证信号支撑集恢复（signal support recovery）。"
+        ),
+        prompt="顺序压缩感知相比普通压缩感知多利用了什么信息？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "evidence_quote": (
+                        "A sequential adaptive compressed sensing procedure for signal support "
+                        "recovery is proposed. The procedure is based on distilled sensing."
+                    ),
+                }
+            ]
+        },
+    )
+
+    assert "distilled sensing / 蒸馏感知" in out
+    assert out.count("distilled sensing") == 1
+    assert "[4]" in out
 
 
 def test_normalize_supported_iism_live_cell_benefit_adds_missing_power_fact():
@@ -283,6 +923,47 @@ def test_normalize_supported_iism_fact_with_spaced_tenfold_value_is_idempotent()
     assert once.endswith("[1]")
 
 
+def test_normalize_supported_iism_marker_across_private_public_source_paths():
+    evidence = (
+        "The method achieves 120 nm lateral resolution at tenfold lower incident "
+        "illumination power, significantly reducing photodamage."
+    )
+    private_path = "F:/corpus/db/iism/iism.en.md"
+    public_path = "kb-source/0/iism/iism.en.md"
+    plan = {
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": private_path,
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+    hits = [
+        {
+            "text": evidence if index == 1 else "Same-paper retrieval passage.",
+            "meta": {
+                "source_path": public_path,
+                "heading_path": "Abstract" if index == 1 else "Results",
+            },
+        }
+        for index in range(1, 5)
+    ]
+
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "论文的 Abstract 报告约 120 nm 分辨率，照明功率降低约 10 倍，从而减少光损伤 [4]。",
+        prompt="iISM 在活细胞中有什么好处？",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+    out = finalize_runtime._collapse_adjacent_duplicate_numeric_citations(out)
+
+    assert out.count("[1]") == 1
+    assert "[4]" not in out
+
+
 def test_normalize_supported_scigs_variant_uses_exact_answer_hit():
     out = finalize_runtime._normalize_citation_plan_supported_terms(
         "SCIGS 的核心新意是从单张压缩图重建动态 3D 场景 [3]。",
@@ -322,6 +1003,326 @@ def test_normalize_supported_scigs_adds_single_image_term_and_drops_unasked_name
 
     assert "单张压缩图像（single compressed image）" in out
     assert "SCINeRF" not in out
+
+
+def test_scigs_scinerf_comparison_adds_exact_planned_method_fact_at_resolved_source_hit() -> None:
+    scinerf_quote = (
+        "Specifically, we formulate the physical imaging process of SCI as part "
+        "of the training of NeRF, allowing us to capture complex scene structures."
+    )
+    scinerf_path = "F:/kb/db/scinerf/scinerf.en.md"
+    scigs_path = "F:/kb/db/scigs/scigs.en.md"
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": scinerf_path,
+                "source_name": "SCINeRF",
+                "heading_path": "SCINeRF / Abstract",
+                "evidence_quote": scinerf_quote,
+                # The plan number predates canonical-hit recovery; source-local
+                # evidence must resolve this to the exact Abstract hit at [3].
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": scigs_path,
+                "source_name": "SCIGS",
+                "heading_path": "SCIGS / Abstract",
+                "evidence_quote": "SCIGS reconstructs explicit dynamic 3D scenes.",
+                "candidate_hits": [4],
+            },
+        ],
+    }
+    hits = [
+        {"text": "SCIGS title.", "meta": {"source_path": scigs_path}},
+        {"text": "SCINeRF title.", "meta": {"source_path": scinerf_path}},
+        {"text": scinerf_quote, "meta": {"source_path": scinerf_path, "heading_path": "SCINeRF / Abstract"}},
+        {"text": "SCIGS reconstructs explicit dynamic 3D scenes.", "meta": {"source_path": scigs_path}},
+    ]
+    answer = (
+        "SCIGS \u4ece\u5355\u5f20\u538b\u7f29\u56fe\u50cf\u91cd\u5efa\u663e\u5f0f\u52a8\u6001 3D \u573a\u666f [4]\u3002\n\n"
+        "SCINeRF \u57fa\u4e8e\u9690\u5f0f NeRF \u8868\u793a\uff0cSCIGS \u5219\u57fa\u4e8e\u663e\u5f0f 3DGS \u8868\u793a\u3002"
+    )
+
+    once = finalize_runtime._normalize_scigs_scinerf_plan_comparison_claim(
+        answer,
+        prompt="SCIGS \u60f3\u89e3\u51b3\u4ec0\u4e48\uff1f\u5b83\u548c SCINeRF \u7684\u533a\u522b\u5728\u54ea\u91cc\uff1f",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+    twice = finalize_runtime._normalize_scigs_scinerf_plan_comparison_claim(
+        once,
+        prompt="SCIGS \u60f3\u89e3\u51b3\u4ec0\u4e48\uff1f\u5b83\u548c SCINeRF \u7684\u533a\u522b\u5728\u54ea\u91cc\uff1f",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    assert "SCINeRF \u5219\u628a SCI \u7684\u7269\u7406\u6210\u50cf\u8fc7\u7a0b\u4f5c\u4e3a NeRF \u8bad\u7ec3\u7684\u4e00\u90e8\u5206 [3]\u3002" in once
+    assert twice == once
+
+
+def test_scigs_scinerf_comparison_does_not_add_fact_without_exact_plan_evidence() -> None:
+    answer = "SCIGS uses explicit 3DGS, whereas SCINeRF uses an implicit NeRF representation."
+    out = finalize_runtime._normalize_scigs_scinerf_plan_comparison_claim(
+        answer,
+        prompt="How does SCIGS differ from SCINeRF?",
+        citation_plan={
+            "intent": "comparison",
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scinerf.en.md",
+                    "source_name": "SCINeRF",
+                    "evidence_quote": "SCINeRF recovers a neural radiance field from a compressed image.",
+                    "candidate_hits": [1],
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scigs.en.md",
+                    "source_name": "SCIGS",
+                    "evidence_quote": "SCIGS uses an explicit 3DGS representation.",
+                    "candidate_hits": [2],
+                },
+            ],
+        },
+        answer_hits=[
+            {"text": "SCINeRF evidence.", "meta": {"source_path": "scinerf.en.md"}},
+            {"text": "SCIGS evidence.", "meta": {"source_path": "scigs.en.md"}},
+        ],
+    )
+
+    assert out == answer
+    assert "physical imaging process" not in out
+
+
+def test_scigs_scinerf_comparison_uses_english_sentence_for_english_answer() -> None:
+    evidence = (
+        "We formulate the physical imaging process of SCI as part of the training of NeRF."
+    )
+    out = finalize_runtime._normalize_scigs_scinerf_plan_comparison_claim(
+        "SCIGS uses explicit 3DGS, whereas SCINeRF uses an implicit NeRF representation.",
+        prompt="How does SCIGS differ from SCINeRF?",
+        citation_plan={
+            "intent": "comparison",
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scinerf.en.md",
+                    "source_name": "SCINeRF",
+                    "evidence_quote": evidence,
+                    "candidate_hits": [1],
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scigs.en.md",
+                    "source_name": "SCIGS",
+                    "evidence_quote": "SCIGS uses an explicit 3DGS representation.",
+                    "candidate_hits": [2],
+                },
+            ],
+        },
+        answer_hits=[
+            {"text": evidence, "meta": {"source_path": "scinerf.en.md"}},
+            {"text": "SCIGS uses an explicit 3DGS representation.", "meta": {"source_path": "scigs.en.md"}},
+        ],
+    )
+
+    assert "SCINeRF formulates the physical imaging process of SCI as part of the training of NeRF [1]." in out
+
+
+def test_scigs_scinerf_comparison_does_not_repeat_equivalent_forward_model_fact() -> None:
+    evidence = (
+        "We formulate the physical imaging process of SCI as part of the training of NeRF."
+    )
+    answer = (
+        "SCIGS uses explicit 3DGS. SCINeRF embeds the SCI forward model directly "
+        "in NeRF optimization."
+    )
+    out = finalize_runtime._normalize_scigs_scinerf_plan_comparison_claim(
+        answer,
+        prompt="How does SCIGS differ from SCINeRF?",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scinerf.en.md",
+                    "source_name": "SCINeRF",
+                    "evidence_quote": evidence,
+                    "candidate_hits": [1],
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scigs.en.md",
+                    "source_name": "SCIGS",
+                    "evidence_quote": "SCIGS uses an explicit 3DGS representation.",
+                    "candidate_hits": [2],
+                },
+            ]
+        },
+        answer_hits=[
+            {"text": evidence, "meta": {"source_path": "scinerf.en.md"}},
+            {"text": "SCIGS uses explicit 3DGS.", "meta": {"source_path": "scigs.en.md"}},
+        ],
+    )
+
+    assert out == answer
+
+
+def test_scigs_scinerf_comparison_never_appends_fact_to_markdown_heading() -> None:
+    evidence = (
+        "We formulate the physical imaging process of SCI as part of the training of NeRF."
+    )
+    out = finalize_runtime._normalize_scigs_scinerf_plan_comparison_claim(
+        "### SCIGS vs SCINeRF / NeRF",
+        prompt="How does SCIGS differ from SCINeRF?",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scinerf.en.md",
+                    "source_name": "SCINeRF",
+                    "evidence_quote": evidence,
+                    "candidate_hits": [1],
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scigs.en.md",
+                    "source_name": "SCIGS",
+                    "evidence_quote": "SCIGS uses an explicit 3DGS representation.",
+                    "candidate_hits": [2],
+                },
+            ]
+        },
+        answer_hits=[
+            {"text": evidence, "meta": {"source_path": "scinerf.en.md"}},
+            {"text": "SCIGS uses explicit 3DGS.", "meta": {"source_path": "scigs.en.md"}},
+        ],
+    )
+
+    lines = out.splitlines()
+    assert lines[0] == "### SCIGS vs SCINeRF / NeRF"
+    assert lines[1] == ""
+    assert lines[2].startswith("SCINeRF formulates")
+
+
+def test_scigs_scinerf_heading_context_prevents_repeating_anaphoric_fact() -> None:
+    evidence = (
+        "We formulate the physical imaging process of SCI as part of the training of NeRF."
+    )
+    answer = (
+        "### SCIGS vs SCINeRF / NeRF\n\n"
+        "The latter embeds the SCI forward model into its optimization."
+    )
+    out = finalize_runtime._normalize_scigs_scinerf_plan_comparison_claim(
+        answer,
+        prompt="How does SCIGS differ from SCINeRF?",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scinerf.en.md",
+                    "source_name": "SCINeRF",
+                    "evidence_quote": evidence,
+                    "candidate_hits": [1],
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scigs.en.md",
+                    "source_name": "SCIGS",
+                    "evidence_quote": "SCIGS uses an explicit 3DGS representation.",
+                    "candidate_hits": [2],
+                },
+            ]
+        },
+        answer_hits=[
+            {"text": evidence, "meta": {"source_path": "scinerf.en.md"}},
+            {"text": "SCIGS uses explicit 3DGS.", "meta": {"source_path": "scigs.en.md"}},
+        ],
+    )
+
+    assert out == answer
+
+
+def test_finalize_scigs_scinerf_comparison_keeps_added_plan_fact_grounded() -> None:
+    scinerf_quote = (
+        "Specifically, we formulate the physical imaging process of SCI as part "
+        "of the training of NeRF, allowing us to capture complex scene structures."
+    )
+    scinerf_path = "F:/kb/db/scinerf/scinerf.en.md"
+    scigs_path = "F:/kb/db/scigs/scigs.en.md"
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": scinerf_path,
+                "source_name": "SCINeRF",
+                "heading_path": "SCINeRF / Abstract",
+                "evidence_quote": scinerf_quote,
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": scigs_path,
+                "source_name": "SCIGS",
+                "heading_path": "SCIGS / Abstract",
+                "evidence_quote": "SCIGS reconstructs explicit dynamic 3D scenes.",
+                "candidate_hits": [4],
+            },
+        ],
+    }
+    hits = [
+        {"text": "SCIGS title.", "meta": {"source_path": scigs_path}},
+        {"text": "SCINeRF title.", "meta": {"source_path": scinerf_path}},
+        {
+            "text": scinerf_quote,
+            "meta": {
+                "source_path": scinerf_path,
+                "heading_path": "SCINeRF / Abstract",
+            },
+        },
+        {
+            "text": "SCIGS reconstructs explicit dynamic 3D scenes.",
+            "meta": {"source_path": scigs_path, "heading_path": "SCIGS / Abstract"},
+        },
+    ]
+
+    out = finalize_runtime._finalize_generation_answer(
+        (
+            "SCIGS \u4ece\u5355\u5f20\u538b\u7f29\u56fe\u50cf\u91cd\u5efa\u663e\u5f0f\u52a8\u6001 3D \u573a\u666f [10004]\u3002\n\n"
+            "SCINeRF \u57fa\u4e8e\u9690\u5f0f NeRF \u8868\u793a\uff0cSCIGS \u5219\u57fa\u4e8e\u663e\u5f0f 3DGS \u8868\u793a\u3002"
+        ),
+        prompt="SCIGS \u60f3\u89e3\u51b3\u4ec0\u4e48\uff1f\u5b83\u548c SCINeRF \u7684\u533a\u522b\u5728\u54ea\u91cc\uff1f",
+        prompt_for_user="SCIGS \u60f3\u89e3\u51b3\u4ec0\u4e48\uff1f\u5b83\u548c SCINeRF \u7684\u533a\u522b\u5728\u54ea\u91cc\uff1f",
+        answer_hits=hits,
+        db_dir=Path("db"),
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="L2",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=False,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="compare",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={"citation_plan": plan},
+        apply_paper_guide_answer_postprocess=lambda answer, **_kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **_kwargs: answer,
+        validate_structured_citations=lambda answer, **_kwargs: (answer, {}),
+    )
+
+    assert "SCINeRF \u5219\u628a SCI \u7684\u7269\u7406\u6210\u50cf\u8fc7\u7a0b\u4f5c\u4e3a NeRF \u8bad\u7ec3\u7684\u4e00\u90e8\u5206 [3]\u3002" in out["answer"]
+    assert out["answer_quality"]["claim_evidence"]["minimum_ok"] is True
+    assert out["answer_quality"]["claim_evidence"]["citation_mismatch_claims"] == 0
 
 
 def test_normalize_supported_terms_matches_virtual_and_absolute_source_paths():
@@ -496,6 +1497,288 @@ def test_normalize_supported_piln_adds_cited_abstract_definition() -> None:
     assert "part-based model" in compound
     assert "finer-grained learning" in compound
     assert compound.endswith("[1]")
+
+
+def test_normalize_supported_terms_completes_existing_microscopy_method_segments() -> None:
+    structured_evidence = (
+        "Structured detection provides super-resolution, high signal-to-noise ratio, "
+        "and enhanced optical sectioning. Since super-resolution and optical sectioning "
+        "are achieved simultaneously, we named our technique s2ISM."
+    )
+    light_field_evidence = (
+        "Light-field microscopy is a 3D microscopy technique whereby volumetric information "
+        "is gained in a single shot by simultaneously capturing both position and angular "
+        "information of light emanating from a sample."
+    )
+    plan = {
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "iism/iism.en.md",
+                "evidence_quote": "Interferometric detection achieves 120 nm lateral resolution.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "light/light.en.md",
+                "evidence_quote": light_field_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "structured/structured.en.md",
+                "evidence_quote": structured_evidence,
+            },
+        ],
+    }
+    hits = [
+        {"text": "Interferometric detection evidence.", "meta": {"source_path": "iism/iism.en.md"}},
+        {"text": structured_evidence, "meta": {"source_path": "structured/structured.en.md"}},
+        {"text": light_field_evidence, "meta": {"source_path": "light/light.en.md"}},
+    ]
+    answer = (
+        "1. **Structured detection（结构化检测，如 ISM）**：解决共聚焦显微中分辨率与信噪比的矛盾 [2]。\n\n"
+        "2. **Interferometric（干涉检测，如 iISM）**：降低活细胞成像的光损伤 [1]。\n\n"
+        "3. **Light-field（光场显微，LFM）**：缓解空间分辨率与景深之间的取舍 [3]。"
+    )
+
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="structured detection、interferometric、light-field 分别解决什么问题？",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    structured = next(part for part in out.split("\n\n") if "Structured detection" in part)
+    light_field = next(part for part in out.split("\n\n") if "Light-field" in part)
+    assert all(
+        term in structured
+        for term in ("s²ISM", "super-resolution", "optical sectioning", "SNR", "[2]")
+    )
+    assert all(
+        term in light_field
+        for term in ("position", "angular information", "volumetric reconstruction", "[3]")
+    )
+    assert "降低活细胞成像的光损伤 [1]" in out
+    assert (
+        finalize_runtime._normalize_citation_plan_supported_terms(
+            out,
+            prompt="structured detection、interferometric、light-field 分别解决什么问题？",
+            citation_plan=plan,
+            answer_hits=hits,
+        )
+        == out
+    )
+
+
+def test_method_bundle_completion_preserves_english_answer_language() -> None:
+    evidence = (
+        "Light-field microscopy obtains volumetric information in a single shot by "
+        "simultaneously capturing both position and angular information."
+    )
+    out = finalize_runtime._complete_grounded_method_bundle_claims(
+        "Light-field microscopy addresses the depth-of-field trade-off [1].",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "light.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "light.en.md"}}],
+    )
+
+    assert "captures both position and angular information" in out
+    assert "volumetric reconstruction [1]" in out
+    assert "该路线" not in out
+
+
+def test_method_bundle_completion_restores_light_field_name_in_chinese_answer() -> None:
+    evidence = (
+        "Light-field microscopy obtains volumetric information in a single shot by "
+        "simultaneously capturing both position and angular information."
+    )
+    out = finalize_runtime._complete_grounded_method_bundle_claims(
+        "光场显微镜（LFM）同时记录 position 与 angular information [1]。",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "light.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "light.en.md"}}],
+    )
+
+    assert "Light-field microscopy（光场显微，LFM）" in out
+    assert "position（位置）" in out
+    assert "angular information（角度信息）" in out
+
+
+def test_method_bundle_completion_adds_exact_iism_result_bundle() -> None:
+    evidence = (
+        "This next-generation technique combines interferometric detection with image "
+        "scanning microscopy to achieve about 120 nm lateral resolution while operating "
+        "at tenfold lower incident illumination power per diffraction limited spot, "
+        "significantly reducing photodamage while enhancing signal-to-noise and contrast."
+    )
+    answer = "High illumination power can damage live cells."
+    plan = {
+        "intent": "comparison",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "iism.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+    hits = [{"text": evidence, "meta": {"source_path": "iism.en.md"}}]
+
+    out = finalize_runtime._complete_grounded_method_bundle_claims(
+        answer,
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    assert "iISM combines interferometric detection" in out
+    assert "120 nm lateral resolution" in out
+    assert "tenfold lower incident illumination power" in out
+    assert "reducing photodamage [1]" in out
+    assert (
+        finalize_runtime._complete_grounded_method_bundle_claims(
+            out,
+            citation_plan=plan,
+            answer_hits=hits,
+        )
+        == out
+    )
+
+
+def test_method_bundle_completion_refuses_incomplete_plan_evidence() -> None:
+    answer = (
+        "Structured detection improves resolution [1].\n\n"
+        "Light-field microscopy improves depth of field [2]."
+    )
+    out = finalize_runtime._complete_grounded_method_bundle_claims(
+        answer,
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "structured.en.md",
+                    "evidence_quote": "s2ISM provides super-resolution at high SNR.",
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "light.en.md",
+                    "evidence_quote": "Light-field microscopy records position for 3D imaging.",
+                },
+            ]
+        },
+        answer_hits=[
+            {"meta": {"source_path": "structured.en.md"}},
+            {"meta": {"source_path": "light.en.md"}},
+        ],
+    )
+
+    assert out == answer
+
+
+def test_finalize_keeps_completed_microscopy_method_bundles_grounded(monkeypatch) -> None:
+    structured_evidence = (
+        "Structured detection provides super-resolution, high signal-to-noise ratio, "
+        "and enhanced optical sectioning. Since super-resolution and optical sectioning "
+        "are achieved simultaneously, we named our technique s2ISM."
+    )
+    iism_evidence = (
+        "This technique combines interferometric detection with image scanning microscopy "
+        "to achieve about 120 nm lateral resolution while operating at tenfold lower "
+        "incident illumination power per diffraction limited spot, significantly reducing "
+        "photodamage while enhancing signal-to-noise and contrast."
+    )
+    light_field_evidence = (
+        "Light-field microscopy gains volumetric information in a single shot by "
+        "simultaneously capturing both position and angular information."
+    )
+    hits = [
+        {"text": iism_evidence, "meta": {"source_path": "iism/iism.en.md"}},
+        {"text": structured_evidence, "meta": {"source_path": "structured/structured.en.md"}},
+        {"text": light_field_evidence, "meta": {"source_path": "light/light.en.md"}},
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "iism/iism.en.md",
+                "evidence_quote": iism_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "light/light.en.md",
+                "evidence_quote": light_field_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "structured/structured.en.md",
+                "evidence_quote": structured_evidence,
+            },
+        ],
+    }
+    monkeypatch.setattr(finalize_runtime, "_reconcile_kb_notice", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(finalize_runtime, "_enhance_kb_miss_fallback", lambda answer, **kwargs: answer)
+
+    out = finalize_runtime._finalize_generation_answer(
+        (
+            "1. Structured detection 同时改善分辨率与信噪比 [2]。\n\n"
+            "2. 传统高照明功率容易损伤活细胞。\n\n"
+            "3. Light-field microscopy 在单次采集中获得体积信息 [3]。"
+        ),
+        prompt="structured detection、interferometric、light-field 分别解决什么问题？",
+        prompt_for_user="structured detection、interferometric、light-field 分别解决什么问题？",
+        answer_hits=hits,
+        db_dir=Path("db"),
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="medium",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=False,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="method",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={"citation_plan": plan},
+        apply_paper_guide_answer_postprocess=lambda answer, **kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **kwargs: answer,
+        validate_structured_citations=lambda answer, **kwargs: (answer, {}),
+    )
+
+    assert all(
+        term in out["answer"]
+        for term in (
+            "s²ISM",
+            "super-resolution",
+            "optical sectioning",
+            "iISM",
+            "120 nm",
+            "入射照明功率",
+            "position",
+            "angular information",
+            "volumetric reconstruction",
+        )
+    )
+    assert out["answer_quality"]["claim_evidence"]["minimum_ok"] is True
+    assert out["answer_quality"]["claim_evidence"]["citation_mismatch_claims"] == 0
 
 
 def test_origin_question_requests_upstream_citation_lookup() -> None:
@@ -772,6 +2055,88 @@ def test_finalize_generation_answer_runs_postprocess_validate_and_quality(monkey
     assert out["paper_guide_contracts"]["intent"]["research_answer_plan"] == "method_explain"
 
 
+def test_finalize_binds_planned_source_before_final_claim_audit(monkeypatch) -> None:
+    audited_answers: list[str] = []
+
+    def _audit(answer, **_kwargs):
+        audited_answers.append(str(answer))
+        return str(answer), {"minimum_ok": True}
+
+    monkeypatch.setattr(finalize_runtime, "audit_and_repair_claim_evidence", _audit)
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_reconcile_kb_notice",
+        lambda answer, **_kwargs: answer,
+    )
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_apply_answer_contract_v1",
+        lambda answer, **_kwargs: answer,
+    )
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_enhance_kb_miss_fallback",
+        lambda answer, **_kwargs: answer,
+    )
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_build_answer_quality_probe",
+        lambda answer, **_kwargs: {"minimum_ok": True, "answer": answer},
+    )
+    evidence = (
+        "AlphaNet parallelizes coded detector acquisition within one integration time."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_name": "AlphaNet",
+                "source_path": "alpha-net.en.md",
+                "candidate_hits": [1],
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+
+    out = finalize_runtime._finalize_generation_answer(
+        evidence,
+        prompt="How does AlphaNet acquire measurements?",
+        prompt_for_user="How does AlphaNet acquire measurements?",
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {"source_path": "alpha-net.en.md"},
+            }
+        ],
+        db_dir=Path("db"),
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="L2",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=False,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="method",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={"citation_plan": plan},
+        apply_paper_guide_answer_postprocess=lambda answer, **_kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **_kwargs: answer,
+        validate_structured_citations=lambda answer, **_kwargs: (answer, {}),
+    )
+
+    assert audited_answers == [
+        "AlphaNet parallelizes coded detector acquisition within one integration time [1]."
+    ]
+    assert audited_answers[0] in out["answer"]
+
+
 def test_finalize_strips_model_system_b_marker_when_plan_disables_system_b(monkeypatch):
     citation_plan = {
         "version": 1,
@@ -872,6 +2237,80 @@ def test_finalize_keeps_precomputed_origin_reference_candidates(monkeypatch):
     )
 
     assert seen["paper_guide_candidate_refs_by_source"] == {"scinerf.md": [50]}
+
+
+def test_fast_exact_finalize_binds_planned_source_before_claim_audit(monkeypatch) -> None:
+    audited_answers: list[str] = []
+
+    def _audit(answer, **_kwargs):
+        audited_answers.append(str(answer))
+        return str(answer), {"minimum_ok": True}
+
+    monkeypatch.setattr(finalize_runtime, "audit_and_repair_claim_evidence", _audit)
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_build_answer_quality_probe",
+        lambda answer, **_kwargs: {"minimum_ok": True, "answer": answer},
+    )
+    evidence = "AlphaNet parallelizes coded acquisition within one integration time."
+    support = {
+        "source_path": "alpha-net.en.md",
+        "source_name": "AlphaNet",
+        "heading_path": "Methods",
+        "evidence_quote": evidence,
+        "locate_anchor": evidence,
+        "block_id": "blk_alpha",
+        "anchor_id": "p_alpha",
+    }
+    plan = {
+        "intent": "evidence_lookup",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_name": "AlphaNet",
+                "source_path": "alpha-net.en.md",
+                "candidate_hits": [1],
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+
+    out = finalize_runtime._finalize_fast_exact_generation_answer(
+        evidence,
+        prompt="How does AlphaNet acquire measurements?",
+        prompt_for_user="How does AlphaNet acquire measurements?",
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {"source_path": "alpha-net.en.md"},
+            }
+        ],
+        db_dir=Path("db"),
+        locked_citation_source={
+            "sid": "s1234abcd",
+            "source_name": "AlphaNet",
+            "source_path": "alpha-net.en.md",
+        },
+        answer_intent="reading",
+        answer_depth="L2",
+        answer_output_mode="reading_guide",
+        paper_guide_prompt_family="method",
+        paper_guide_bound_source_path="alpha-net.en.md",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[support],
+        paper_guide_evidence_cards=[],
+        paper_guide_precomputed_support_resolution=[support],
+        paper_guide_contracts_seed={"citation_plan": plan},
+        paper_guide_retrieval_confidence_hint=None,
+        research_answer_plan="",
+        validate_structured_citations=lambda answer, **_kwargs: (answer, {}),
+    )
+
+    assert audited_answers == [
+        "AlphaNet parallelizes coded acquisition within one integration time [1]."
+    ]
+    assert audited_answers[0] in out["answer"]
 
 
 def test_finalize_fast_exact_reuses_support_without_full_text_rescan(monkeypatch):

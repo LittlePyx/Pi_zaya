@@ -106,6 +106,24 @@ interface RefEntryLiteForLocatePrep {
   updated_at?: number
 }
 
+function fastRevisionDigest(value: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function messagePresentationRevision(
+  bodyContent: string,
+  citeDetails: Array<Record<string, unknown>>,
+): string {
+  const body = String(bodyContent || '')
+  const citations = JSON.stringify(citeDetails)
+  return `${body.length}:${fastRevisionDigest(body)}:${citeDetails.length}:${fastRevisionDigest(citations)}`
+}
+
 export interface BuildAssistantLocatePrepByMsgIdOptions {
   activeConvId?: string | null
   messages: Message[]
@@ -163,6 +181,7 @@ export function buildAssistantLocatePrepByMsgId(
       : undefined
     const refHits = Array.isArray(refEntry?.hits) ? refEntry.hits : []
     const rawCiteDetails = getMessageCiteDetailRecords(message)
+    const presentationRevision = messagePresentationRevision(bodyContent, rawCiteDetails)
     const hasRawCiteDetails = rawCiteDetails.length > 0
     const hasProvenancePayload = Boolean(message.provenance && typeof message.provenance === 'object')
     const hasRenderPacketLocate = Boolean(renderPacket?.readerOpen || renderPacket?.locateTarget)
@@ -178,6 +197,7 @@ export function buildAssistantLocatePrepByMsgId(
         message.id,
         String(message.render_cache_key || ''),
         locatePayloadSig,
+        presentationRevision,
         'light',
         refsUserMsgId,
       ].join('::')
@@ -230,6 +250,7 @@ export function buildAssistantLocatePrepByMsgId(
       message.id,
       String(message.render_cache_key || ''),
       locatePayloadSig,
+      presentationRevision,
       guideSourcePath,
       guideCandidateCount,
       locateSourcePath,

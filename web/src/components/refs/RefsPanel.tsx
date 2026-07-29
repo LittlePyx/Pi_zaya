@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { useT } from '../../i18n'
 import { referenceSourcePathCacheKey, referencesApi } from '../../api/references'
 import { useChatStore } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { basenameFromSourcePath } from '../../utils/sourcePath'
 import { internalDebugBrowserEnabled } from '../../utils/internalDebug'
 import type { ReaderOpenPayload } from '../chat/reader/readerTypes'
@@ -21,6 +22,7 @@ import {
   type RefsPanelRefHit as RefHit,
   type RefsPanelRefUiMeta as RefUiMeta,
 } from './refsPanelDisplay'
+import { selectLocalizedRefCardText, selectRefRelevanceText } from './refCardCopy'
 
 const { Link, Text } = Typography
 const expandedRefsPanelKeys = new Set<string>()
@@ -169,6 +171,9 @@ function polishStatusLabel(status: string, S: ReturnType<typeof useT>) {
 
 export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeSourceName }: Props) {
   const S = useT()
+  const uiLocale = useSettingsStore((state) => state.uiLocale)
+  const refsCardLocale = useSettingsStore((state) => state.refsCardLocale)
+  const cardCopyLocale = refsCardLocale === 'auto' ? uiLocale : refsCardLocale
   const showInternalRefDiagnostics = internalDebugBrowserEnabled()
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const nav = useNavigate()
@@ -412,9 +417,11 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                   const cardView = normalizeRefCardView(ui.card_view || ui.cardView)
                   const summarySection = refCardSection(cardView, 'summary')
                   const whySection = refCardSection(cardView, 'why')
-                  const summary = String(
-                    summarySection?.text || cardView?.summary || (!cardView ? ui.summary_line : '') || '',
-                  ).trim()
+                  const summary = selectLocalizedRefCardText({
+                    cardText: summarySection?.text,
+                    explicitTexts: [cardView?.summary, ui.summary_line],
+                    locale: cardCopyLocale,
+                  })
                   const summaryKind = String(ui.summary_kind || '').trim().toLowerCase()
                   const summaryRole = String(ui.summary_display_role || '').trim().toLowerCase()
                   const sourceKind = String(ui.source_kind || '').trim().toLowerCase()
@@ -446,7 +453,18 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
                         : isMetadata
                           ? S.refs_metadata_title
                           : S.refs_summary_title
-                  const why = String(whySection?.text || (!cardView ? ui.why_line : '') || '').trim()
+                  const why = selectRefRelevanceText({
+                    cardText: whySection?.text,
+                    explicitTexts: [
+                      ui.card_support_explanation,
+                      ui.user_question_relation,
+                      ui.support_relation,
+                      ui.why_relevant,
+                      ui.why_line,
+                    ],
+                    evidenceTexts: [summarySection?.text, cardView?.summary, ui.summary_line, hit.text],
+                    locale: cardCopyLocale,
+                  })
                   const whyLabel = S.refs_why_chip
                   const whyTitle = S.refs_why_title
                   const polishStatus = normalizePolishStatus(ui.polish_status)

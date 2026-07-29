@@ -4,9 +4,13 @@ from pathlib import Path
 import pytest
 
 from kb.chat_store import ChatStore
-from api.citation_display_registry import remap_system_a_citations_for_display
+from api.citation_display_registry import (
+    remap_system_a_citations_for_display,
+    system_a_source_key,
+)
 from api.chat_render import (
     _augment_hits_with_canonical_answer_citations,
+    _citation_free_answer_body,
     _enrich_provenance_segments_for_display,
     _normalize_chat_markdown_for_display,
     _normalize_double_numeric_citation_markers,
@@ -21,11 +25,45 @@ MOJIBAKE_REFERENCE_LOCATOR = "\u9359\u509d\u20ac\u51a8\u757e\u6d63"
 MOJIBAKE_REFERENCE_SOURCE_PREFIX = "\u93c9\u30e8\u569c" + MOJIBAKE_REFERENCE_LOCATOR + "?#1\u951b\u6b5a"
 
 
+def test_effective_citation_render_locale_prefers_current_card_preference(monkeypatch) -> None:
+    from api import chat_render
+
+    monkeypatch.setattr(
+        chat_render,
+        "load_prefs",
+        lambda: {"refs_card_locale": "en", "ui_locale": "zh"},
+    )
+
+    assert chat_render._effective_citation_render_locale(
+        {
+            "render_locale": "zh",
+            "rendered_payload": {"render_locale": "zh"},
+        }
+    ) == "en"
+
+
+def test_effective_citation_render_locale_uses_ui_then_pack_fallback(monkeypatch) -> None:
+    from api import chat_render
+
+    monkeypatch.setattr(
+        chat_render,
+        "load_prefs",
+        lambda: {"refs_card_locale": "auto", "ui_locale": "en"},
+    )
+    assert chat_render._effective_citation_render_locale({"render_locale": "zh"}) == "en"
+
+    monkeypatch.setattr(
+        chat_render,
+        "load_prefs",
+        lambda: {"refs_card_locale": "auto", "ui_locale": ""},
+    )
+    assert chat_render._effective_citation_render_locale({"render_locale": "zh"}) == "zh"
+
+
 def test_double_numeric_citations_never_render_as_empty_brackets() -> None:
     assert _normalize_double_numeric_citation_markers("A [[4]], B [[5；2]].") == "A [4], B [5；2]."
     stripped = _strip_freeform_numeric_citation_markers("A [[4]], B [[]], C [].")
-    assert "[]" not in stripped
-    assert "[[]]" not in stripped
+    assert stripped == "A, B [[]], C []."
 
 
 def test_system_a_display_registry_remaps_answer_hit_numbers_but_keeps_system_b() -> None:
@@ -70,6 +108,82 @@ def test_system_a_display_registry_remaps_answer_hit_numbers_but_keeps_system_b(
     assert [row["original_nums"] for row in registry] == [[4], [5]]
 
 
+def test_system_a_display_registry_skips_numbers_reserved_by_system_b() -> None:
+    markdown = (
+        'Direct evidence [4](#cite-direct "source: Direct.pdf | ref 4"). '
+        'Upstream reference [1](#cite-upstream "source: Review.pdf | ref 1").'
+    )
+    details = [
+        {
+            "num": 4,
+            "anchor": "cite-direct",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Direct\Direct.en.md",
+            "source_name": "Direct.pdf",
+        },
+        {
+            "num": 1,
+            "linked_nums": [1],
+            "anchor": "cite-upstream",
+            "citation_route": "system_b",
+            "is_inpaper": True,
+            "source_path": r"F:\db\Review\Review.en.md",
+            "inpaper_ref_num": 1,
+            "title": "Upstream work",
+        },
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert '[2](#cite-direct' in rendered
+    assert '[1](#cite-upstream' in rendered
+    assert [row["num"] for row in remapped] == [2, 1]
+    assert registry[0]["display_num"] == 2
+
+
+def test_system_a_source_key_keeps_same_named_papers_from_different_roots_distinct() -> None:
+    first = system_a_source_key(
+        {
+            "citation_route": "system_a",
+            "source_path": r"F:\project-one\Paper\Paper.en.md",
+        }
+    )
+    second = system_a_source_key(
+        {
+            "citation_route": "system_a",
+            "source_path": r"G:\project-two\Paper\Paper.en.md",
+        }
+    )
+
+    assert first.startswith("path:")
+    assert second.startswith("path:")
+    assert first != second
+    assert "project-one" not in first
+    assert "project-two" not in second
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(
+        'First [4](#cite-first "first"). Second [5](#cite-second "second").',
+        [
+            {
+                "num": 4,
+                "anchor": "cite-first",
+                "citation_route": "system_a",
+                "source_path": r"F:\project-one\Paper\Paper.en.md",
+            },
+            {
+                "num": 5,
+                "anchor": "cite-second",
+                "citation_route": "system_a",
+                "source_path": r"G:\project-two\Paper\Paper.en.md",
+            },
+        ],
+    )
+    assert '[1](#cite-first' in rendered
+    assert '[2](#cite-second' in rendered
+    assert [row["num"] for row in remapped] == [1, 2]
+    assert len(registry) == 2
+
+
 def test_system_a_display_registry_maps_multiple_passages_from_one_paper_to_one_card() -> None:
     markdown = '优势 [4](#cite-benefit "benefit")，局限 [5](#cite-limit "limit").'
     details = [
@@ -78,12 +192,14 @@ def test_system_a_display_registry_maps_multiple_passages_from_one_paper_to_one_
             "anchor": "cite-benefit",
             "citation_route": "system_a",
             "source_path": r"F:\db\Review\Review.en.md",
+            "answer_claim": "Review benefit claim.",
         },
         {
             "num": 5,
             "anchor": "cite-limit",
             "citation_route": "system_a",
             "source_path": r"F:\db\Review\Review.en.md",
+            "answer_claim": "Review limitation claim.",
         },
     ]
 
@@ -92,8 +208,48 @@ def test_system_a_display_registry_maps_multiple_passages_from_one_paper_to_one_
     assert '[1](#cite-benefit' in rendered
     assert '[1](#cite-limit' in rendered
     assert [row["num"] for row in remapped] == [1, 1]
+    assert remapped[0]["answer_claims"] == remapped[1]["answer_claims"] == [
+        "Review benefit claim.",
+        "Review limitation claim.",
+    ]
     assert len(registry) == 1
     assert registry[0]["original_nums"] == [4, 5]
+
+
+def test_system_a_display_registry_rebinds_repeated_source_to_matching_passage() -> None:
+    markdown = (
+        '先做光线追迹 [1](#cite-ray "source: qCLFM.pdf")。'
+        '再做波传播逆运算 [1](#cite-ray "source: qCLFM.pdf")。'
+        '两步共同完成重聚焦 [1](#cite-compound "source: qCLFM.pdf")。'
+    )
+    details = [
+        {
+            "num": 1,
+            "anchor": "cite-ray",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\qCLFM\qCLFM.en.md",
+            "source_name": "qCLFM.pdf",
+            "evidence_quote": "The photon trajectory is reconstructed through ray tracing.",
+        },
+        {
+            "num": 1,
+            "anchor": "cite-compound",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\qCLFM\qCLFM.en.md",
+            "source_name": "qCLFM.pdf",
+            "evidence_quote": (
+                "First, the photon trajectory is reconstructed through ray tracing. "
+                "Second, wave propagation of distance -z brings the sample back into focus."
+            ),
+        },
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert rendered.count('[1](#cite-ray') == 1
+    assert rendered.count('[1](#cite-compound') == 2
+    assert [row["anchor"] for row in remapped] == ["cite-ray", "cite-compound"]
+    assert len(registry) == 1
 
 
 def test_system_a_display_registry_is_idempotent_for_historical_render_packets() -> None:
@@ -121,7 +277,7 @@ def test_system_a_display_registry_is_idempotent_for_historical_render_packets()
     assert registry[0]["original_nums"] == [4]
 
 
-def test_system_a_display_registry_backfills_same_source_occurrence_alias() -> None:
+def test_system_a_display_registry_collapses_same_source_occurrence_to_card_anchor() -> None:
     markdown = (
         '直接结论 [4](#cite-result "source: Review.pdf | ref 4")；'
         'PDF 页码 [4](#cite-page "source: Review.pdf | ref 4").'
@@ -139,11 +295,67 @@ def test_system_a_display_registry_backfills_same_source_occurrence_alias() -> N
     rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
 
     assert '[1](#cite-result' in rendered
-    assert '[1](#cite-page' in rendered
-    assert [row["anchor"] for row in remapped] == ["cite-result", "cite-page"]
-    assert remapped[1]["citation_occurrence_alias"] is True
-    assert [row["num"] for row in remapped] == [1, 1]
+    assert '#cite-page' not in rendered
+    assert rendered.count('[1](#cite-result') == 2
+    assert [row["anchor"] for row in remapped] == ["cite-result"]
+    assert [row["num"] for row in remapped] == [1]
     assert len(registry) == 1
+
+
+def test_system_a_display_registry_prefers_original_number_over_colliding_display_number() -> None:
+    markdown = (
+        'First paper [2](#cite-first "source: First.pdf | ref 2"). '
+        'Repeated first paper [2](#cite-first-extra "source: First.pdf | ref 2"). '
+        'Second paper [3](#cite-second "source: Second.pdf | ref 3").'
+    )
+    details = [
+        {
+            "num": 2,
+            "anchor": "cite-first",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\First\First.en.md",
+            "source_name": "First.pdf",
+        },
+        {
+            "num": 3,
+            "anchor": "cite-second",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Second\Second.en.md",
+            "source_name": "Second.pdf",
+        },
+    ]
+
+    rendered, remapped, _registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert rendered.count('[1](#cite-first') == 2
+    assert '#cite-first-extra' not in rendered
+    assert '[2](#cite-second' in rendered
+    assert [(row["num"], row["anchor"]) for row in remapped] == [
+        (1, "cite-first"),
+        (2, "cite-second"),
+    ]
+
+
+def test_system_a_display_registry_collects_all_linked_claims_for_one_card() -> None:
+    markdown = (
+        '**Structured detection** solves the confocal trade-off [2](#cite-method "source: Method.pdf"). '
+        'The resulting s²ISM also provides optical sectioning [2](#cite-method "source: Method.pdf").'
+    )
+    details = [
+        {
+            "num": 2,
+            "anchor": "cite-method",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Method\Method.en.md",
+            "source_name": "Method.pdf",
+        }
+    ]
+
+    _rendered, remapped, _registry = remap_system_a_citations_for_display(markdown, details)
+
+    claims = remapped[0]["answer_claims"]
+    assert any("Structured detection" in claim for claim in claims)
+    assert any("s²ISM" in claim and "optical sectioning" in claim for claim in claims)
 
 
 def test_system_a_display_registry_does_not_alias_system_b_reader_anchor() -> None:
@@ -212,10 +424,239 @@ def test_system_a_backfill_rebinds_wrong_same_paper_passage_to_claim_block(tmp_p
     assert out[0]["block_id"]
 
 
+def test_inline_system_a_card_uses_claim_aligned_window_from_full_citation_plan() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source_path = r"F:\db\FDM\FDM.en.md"
+    opening = (
+        "We propose and experimentally realize frequency-division-multiplexed single-pixel imaging. "
+        "Our technique relies on metamaterial spatial light modulators. "
+        "Earlier implementations used one encoding frequency and were sensitive to narrowband noise."
+    )
+    support = (
+        "Here, we implement frequency-division methods to parallelize the single-pixel imaging process at 3.2 THz. "
+        "Our technique enables a trade-off between signal-to-noise ratio and acquisition speed—without altering "
+        "detector integration time."
+    )
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source_path,
+            "source_name": "FDM.pdf",
+            "heading_path": "FDM / Abstract",
+            "evidence_quote": opening,
+            "summary_line": opening,
+            "raw": f"{opening} Here, we implement frequency-division methods to parallelize",
+            "answer_claim": "频分复用把成像过程并行化，并以信噪比换取采集速度。",
+            "answer_claims": ["频分复用无需改变探测器积分时间。"],
+            "block_id": "blk-abstract",
+            "anchor_id": "p-abstract",
+            "anchor_kind": "paragraph",
+            "page_start": 1,
+        }
+    ]
+    citation_plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "FDM.pdf",
+                "heading_path": "FDM / Abstract",
+                "evidence_quote": f"## Abstract {opening} {support}",
+            }
+        ]
+    }
+
+    out = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        citation_plan,
+        render_locale="zh",
+    )
+
+    quote = out[0]["evidence_quote"]
+    assert quote.startswith("Here, we implement frequency-division methods")
+    assert all(
+        term in quote
+        for term in (
+            "parallelize",
+            "signal-to-noise ratio",
+            "acquisition speed",
+            "detector integration time",
+        )
+    )
+    evidence_section = next(
+        section
+        for section in out[0]["card_view"]["sections"]
+        if section["id"] == "evidence"
+    )
+    assert evidence_section["text"] == quote
+
+
+def test_inline_system_a_card_keeps_complete_multi_step_mechanism() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source_path = r"F:\db\qCLFM\qCLFM.en.md"
+    full_evidence = (
+        "The operation for digital refocusing of a sample placed out of focus by a distance z "
+        "can be achieved using two steps. First, using the position and angular information of "
+        "each photon, and knowing the optical elements used between them, the trajectory of the "
+        "photons can be reconstructed through a ray tracing operation. Thus, the second step is "
+        "to reverse this diffraction by applying a wave propagation of distance -z to the image "
+        "obtained after step one in order to bring the sample back into focus."
+    )
+    first_step_only = full_evidence.split(" Thus,")[0]
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source_path,
+            "source_name": "qCLFM.pdf",
+            "heading_path": "qCLFM / A. Concept",
+            "evidence_quote": first_step_only,
+            "summary_line": first_step_only,
+            "raw": first_step_only,
+            "answer_claim": "数字重聚焦先用 ray tracing 重建光子轨迹，再用 wave propagation 反演衍射。",
+            "block_id": "blk-concept",
+            "anchor_id": "p-refocus",
+            "anchor_kind": "paragraph",
+            "page_start": 2,
+        }
+    ]
+    citation_plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "qCLFM.pdf",
+                "heading_path": "qCLFM / A. Concept",
+                "evidence_quote": full_evidence,
+            }
+        ]
+    }
+
+    out = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        citation_plan,
+        render_locale="zh",
+    )
+
+    quote = out[0]["evidence_quote"]
+    assert len(quote) > 460
+    assert all(term in quote for term in ("two steps", "ray tracing", "wave propagation", "distance -z"))
+    assert "ray tracing" in out[0]["support_relation"]
+    assert "wave propagation" in out[0]["support_relation"]
+    evidence_section = next(
+        section for section in out[0]["card_view"]["sections"] if section["id"] == "evidence"
+    )
+    assert evidence_section["text"] == quote
+
+
+def test_inline_system_a_compound_card_and_reader_locator_ignore_plan_order() -> None:
+    from api.chat_render import (
+        _refine_system_a_cite_evidence_from_citation_plan,
+        _refine_system_a_cite_locators_from_final_primary,
+    )
+
+    source_path = r"F:\db\qCLFM\qCLFM.en.md"
+    framing = (
+        "The operation for digital refocusing of a sample placed out of focus by a distance z "
+        "can be achieved using two steps."
+    )
+    ray_step = (
+        "First, using the position and angular information of each photon, and knowing the optical "
+        "elements used between them, the trajectory of the photons can be reconstructed through a "
+        "ray tracing operation."
+    )
+    intervening = (
+        "For macroscopic samples, this first step, using ray optics, is enough to bring the sample "
+        "back into focus [15], however, for microscopic samples, interference and diffraction "
+        "effects from wave optics must also be taken into account. In the microscopic regime, the "
+        "image obtained after this first step is, in fact, the diffraction pattern of the sample "
+        "after propagating a distance z."
+    )
+    wave_step = (
+        "Thus, the second step is to reverse this diffraction by applying a wave propagation of "
+        "distance -z to the image obtained after step one in order to bring the sample back into "
+        "focus."
+    )
+    tail = (
+        "The refocusing process is illustrated in Fig.2. Details on the experimental setup and the "
+        "refocusing procedure can be found in the Methods section."
+    )
+    compact = " ".join((framing, ray_step, wave_step))
+    continuous = " ".join((framing, ray_step, intervening, wave_step, tail))
+    detail = {
+        "num": 1,
+        "citation_route": "system_a",
+        "source_path": source_path,
+        "source_name": "qCLFM.pdf",
+        "heading_path": "qCLFM / A. Concept",
+        "evidence_quote": " ".join((framing, ray_step)),
+        "summary_line": " ".join((framing, ray_step)),
+        "raw": " ".join((framing, ray_step)),
+        "answer_claim": (
+            "Digital refocusing uses two steps: first reconstruct photon trajectories with ray "
+            "tracing, then reverse diffraction with wave propagation."
+        ),
+    }
+    compact_slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "source_name": "qCLFM.pdf",
+        "heading_path": "qCLFM / A. Concept",
+        "evidence_quote": compact,
+        "page_start": 2,
+    }
+    located_slot = {
+        **compact_slot,
+        "evidence_quote": continuous,
+        "block_id": "blk-concept",
+        "anchor_id": "p-refocus",
+        "anchor_kind": "paragraph",
+    }
+
+    outputs = []
+    for slots in ([compact_slot, located_slot], [located_slot, compact_slot]):
+        refined = _refine_system_a_cite_evidence_from_citation_plan(
+            [detail],
+            {"slots": slots},
+            render_locale="zh",
+        )
+        outputs.append(
+            _refine_system_a_cite_locators_from_final_primary(
+                refined,
+                {
+                    "source_path": source_path,
+                    "heading_path": "qCLFM / A. Concept",
+                    "block_id": "blk-concept",
+                    "anchor_id": "p-refocus",
+                    "anchor_kind": "paragraph",
+                    "page_start": 2,
+                    "page_end": 2,
+                    "strict_locate": True,
+                },
+                render_locale="zh",
+            )[0]
+        )
+
+    for output in outputs:
+        assert output["evidence_quote"] == compact
+        assert "For macroscopic samples" not in output["evidence_quote"]
+        assert output["reader_evidence_quote"] == continuous
+        assert "For macroscopic samples" in output["reader_evidence_quote"]
+        assert "wave propagation" in output["reader_evidence_quote"]
+        assert output["block_id"] == "blk-concept"
+        assert output["anchor_id"] == "p-refocus"
+        assert output["page_start"] == 2
+        assert output["strict_locate"] is True
+
+
 def test_final_display_cleanup_removes_empty_citation_wrappers_but_keeps_task_boxes() -> None:
     value = (
         "Claim [ [[CITE:nonexistent:1]] ].\n"
         "Nested [ [ [[CITE:nonexistent:2]] ] ].\n"
+        "Literal [] remains.\n"
         "- [ ] keep this task\n"
         "1. [ ] keep this numbered task"
     )
@@ -224,10 +665,11 @@ def test_final_display_cleanup_removes_empty_citation_wrappers_but_keeps_task_bo
 
     assert "Claim." in out
     assert "Nested." in out
-    assert "[]" not in out
-    assert "[[]]" not in out
+    assert "Literal [] remains." in out
     assert "- [ ] keep this task" in out
     assert "1. [ ] keep this numbered task" in out
+
+    assert _citation_free_answer_body(value) == _citation_free_answer_body(out)
 
 
 def test_legacy_canonical_citations_recover_the_actual_answer_sources(tmp_path: Path) -> None:
@@ -799,12 +1241,8 @@ def test_existing_render_packet_citation_cards_are_refreshed() -> None:
 
     rendered = enrich_messages_with_reference_render(messages, refs_by_user={}, conv_id="conv-refresh-card")
     packet = (((rendered[-1].get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
-    detail = packet["cite_details"][0]
-
-    assert detail["answer_claim"] == ""
-    assert detail["card_claim"] == ""
-    assert detail["evidence_quote"] == detail["card_evidence"]
-    assert "low_value_answer_claim" in detail["card_quality_flags"]
+    assert packet["cite_details"] == []
+    assert "roadmap-a1" not in str(packet.get("rendered_body") or "")
 
 
 def test_non_paper_guide_message_preserves_minimal_primary_evidence_contract():
@@ -949,13 +1387,11 @@ def test_existing_render_packet_preserves_compat_render_fields_when_current_rend
     msg = rendered[-1]
     packet = (((msg.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
 
-    assert str(msg.get("rendered_body") or "") == "SPI relies on compressive sensing [1](#kb-cite-demo-1)."
-    assert str(msg.get("rendered_content") or "") == "SPI relies on compressive sensing [1](#kb-cite-demo-1)."
-    assert str(msg.get("copy_markdown") or "") == "SPI relies on compressive sensing [1](#kb-cite-demo-1)."
-    assert str(msg.get("copy_text") or "") == "SPI relies on compressive sensing [1]."
-    assert len(msg.get("cite_details") or []) == 1
-    assert packet["rendered_body"] == "SPI relies on compressive sensing [1](#kb-cite-demo-1)."
-    assert len(packet["cite_details"]) == 1
+    assert "#kb-cite-demo-1" not in str(msg.get("rendered_body") or "")
+    assert "[[CITE:" not in str(msg.get("rendered_body") or "")
+    assert msg.get("cite_details") == []
+    assert packet.get("rendered_body") == msg.get("rendered_body")
+    assert packet.get("cite_details") == []
 
 
 def test_render_packet_replaces_stale_primary_jump_target_when_current_provenance_is_better():
@@ -1162,8 +1598,8 @@ def test_normal_answer_does_not_auto_link_freeform_numeric_markers_from_refs_hit
 
     rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="conv-test")
     msg = rendered[-1]
-    assert "[2]" not in str(msg.get("rendered_body") or "")
-    assert "[2]" not in str(msg.get("rendered_content") or "")
+    assert "[2]" in str(msg.get("rendered_body") or "")
+    assert "[2]" in str(msg.get("rendered_content") or "")
     assert msg.get("cite_details") == []
 
 
@@ -1653,11 +2089,8 @@ def test_citation_lookup_variants_trigger_and_preserve_inpaper_reference_links(m
     assert "[1](#kb-cite-demo-1)" in str(msg.get("rendered_body") or "")
     assert "[[CITE:" not in str(msg.get("rendered_body") or "")
     assert len(msg.get("cite_details") or []) == 1
-    if (meta.get("paper_guide_contracts") or {}).get("intent"):
-        assert packet.get("rendered_body") == msg.get("rendered_body")
-        assert len(packet.get("cite_details") or []) == 1
-    else:
-        assert packet == {}
+    assert packet.get("rendered_body") == msg.get("rendered_body")
+    assert len(packet.get("cite_details") or []) == 1
 
 
 def test_citation_lookup_rendered_link_points_to_validated_target_reference(monkeypatch):
@@ -1889,7 +2322,7 @@ def test_non_citation_message_does_not_preserve_stale_existing_render_packet_lin
     packet = (((msg.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
 
     assert "[2](" not in str(packet.get("rendered_body") or "")
-    assert "[2]" not in str(packet.get("rendered_body") or "")
+    assert "[2]" in str(packet.get("rendered_body") or "")
     assert packet.get("cite_details") == []
 
 
@@ -2417,7 +2850,7 @@ def test_enrich_provenance_segments_for_display_rebinds_figure_claim_using_figur
 def test_enrich_messages_reuses_persisted_render_cache(monkeypatch, tmp_path: Path):
     from api import chat_render
 
-    calls = {"primary": 0}
+    calls = {"primary": 0, "merge": 0}
 
     def fake_primary(_md, _hits, *, anchor_ns="", canonical_paths=None):
         del _hits, anchor_ns, canonical_paths
@@ -2428,6 +2861,13 @@ def test_enrich_messages_reuses_persisted_render_cache(monkeypatch, tmp_path: Pa
         )
 
     monkeypatch.setattr(chat_render, "_annotate_inpaper_citations_with_hover_meta", fake_primary)
+    original_merge = chat_render._merge_render_packet_contract_meta
+
+    def counted_merge(**kwargs):
+        calls["merge"] += 1
+        return original_merge(**kwargs)
+
+    monkeypatch.setattr(chat_render, "_merge_render_packet_contract_meta", counted_merge)
 
     store = ChatStore(tmp_path / "chat.db")
     conv_id = store.create_conversation("cache test")
@@ -2459,15 +2899,127 @@ def test_enrich_messages_reuses_persisted_render_cache(monkeypatch, tmp_path: Pa
     render_cache = ((persisted.get("meta") or {}).get("render_cache") or {})
 
     assert calls["primary"] == 1
+    assert calls["merge"] == 1
     assert str(first[-1].get("rendered_content") or "") == str(second[-1].get("rendered_content") or "")
     assert str(second[-1].get("copy_text") or "").strip()
     assert isinstance(render_cache.get("render_packet"), dict)
 
 
-def test_historical_render_cache_reuse_requires_same_original_answer():
+def test_cached_render_packet_does_not_refresh_for_subset_primary_projection():
+    from api import chat_render
+
+    packet_primary = {
+        "source_path": "db/paper/paper.en.md",
+        "heading_path": "Abstract",
+        "snippet": "The method parallelizes acquisition without changing integration time.",
+        "block_id": "blk-1",
+        "anchor_id": "p-1",
+        "page_start": 1,
+        "selection_reason": "answer_aligned_block",
+        "strict_locate": True,
+    }
+    cached = {"render_packet": {"primary_evidence": packet_primary}}
+    projected_pack = {
+        "primary_evidence": {
+            "source_path": "db/paper/paper.en.md",
+            "heading_path": "Abstract",
+            "snippet": packet_primary["snippet"],
+        }
+    }
+
+    assert not chat_render._cached_render_packet_needs_contract_refresh(
+        cached,
+        enriched_provenance=None,
+        ref_pack=projected_pack,
+    )
+
+
+def test_cached_render_packet_refreshes_for_new_primary_identity_or_provenance():
+    from api import chat_render
+
+    cached = {
+        "render_packet": {
+            "primary_evidence": {
+                "source_path": "db/paper-a/paper-a.en.md",
+                "heading_path": "Abstract",
+                "snippet": "Existing evidence.",
+            }
+        }
+    }
+    changed_pack = {
+        "primary_evidence": {
+            "source_path": "db/paper-b/paper-b.en.md",
+            "heading_path": "Methods",
+            "snippet": "New evidence.",
+        }
+    }
+
+    assert chat_render._cached_render_packet_needs_contract_refresh(
+        cached,
+        enriched_provenance=None,
+        ref_pack=changed_pack,
+    )
+    assert chat_render._cached_render_packet_needs_contract_refresh(
+        cached,
+        enriched_provenance={"segments": [{"segment_id": "seg-1"}]},
+        ref_pack=None,
+    )
+
+
+def test_provenance_display_enrichment_reuses_exact_cached_inputs(monkeypatch):
+    from api import chat_render
+
+    calls = {"count": 0}
+
+    def fake_uncached(provenance, hits, *, anchor_ns):
+        calls["count"] += 1
+        return {
+            **dict(provenance or {}),
+            "segments": [{"segment_id": "seg-1", "anchor_ns": anchor_ns}],
+            "hit_count": len(hits or []),
+        }
+
+    chat_render._enrich_provenance_segments_for_display_cached.cache_clear()
+    monkeypatch.setattr(
+        chat_render,
+        "_enrich_provenance_segments_for_display_uncached",
+        fake_uncached,
+    )
+    provenance = {"segments": [{"segment_id": "seg-1"}]}
+    hits = [{"text": "evidence", "meta": {"source_path": "paper.en.md"}}]
+
+    first = chat_render._enrich_provenance_segments_for_display(
+        provenance,
+        hits,
+        anchor_ns="conv:1",
+    )
+    first["segments"][0]["anchor_ns"] = "mutated"
+    second = chat_render._enrich_provenance_segments_for_display(
+        provenance,
+        hits,
+        anchor_ns="conv:1",
+    )
+
+    assert calls["count"] == 1
+    assert second["segments"][0]["anchor_ns"] == "conv:1"
+
+
+def test_historical_render_cache_reuse_requires_same_answer_refs_and_plan():
     from api import chat_render
 
     answer = "The method reports a concrete reconstruction result."
+    input_ref_sig = "refs-current"
+    citation_plan_sig = "plan-current"
+    answer_sig = chat_render._answer_render_signature(answer)
+    render_packet = {
+        "answer_markdown": answer,
+        "notice": "",
+        "rendered_body": answer,
+        "rendered_content": answer,
+        "copy_markdown": answer,
+        "copy_text": answer,
+        "cite_details": [],
+    }
     cache = chat_render._build_render_cache_payload(
         cache_key="old-reference-card-key",
         notice="",
@@ -2477,23 +3029,436 @@ def test_historical_render_cache_reuse_requires_same_original_answer():
         copy_text=answer,
         cite_details=[],
         refs_user_msg_id=1,
-        render_packet={"answer_markdown": answer, "rendered_content": answer},
+        render_packet=render_packet,
+        answer_sig=answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale="en",
     )
 
     reused = chat_render._extract_compatible_historical_render_cache(
         {"render_cache": cache},
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
         raw_content=answer,
         hits=[],
+        answer_sig=answer_sig,
+        locale="en",
     )
     rejected = chat_render._extract_compatible_historical_render_cache(
         {"render_cache": cache},
-        raw_content="The answer has changed.",
+        input_ref_sig="refs-changed",
+        citation_plan_sig=citation_plan_sig,
+        raw_content=answer,
         hits=[],
+        answer_sig=answer_sig,
+        locale="en",
+    )
+    rejected_plan = chat_render._extract_compatible_historical_render_cache(
+        {"render_cache": cache},
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig="plan-changed",
+        raw_content=answer,
+        hits=[],
+        answer_sig=answer_sig,
+        locale="en",
+    )
+    rejected_answer = chat_render._extract_compatible_historical_render_cache(
+        {"render_cache": cache},
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        raw_content=answer,
+        hits=[],
+        answer_sig="answer-changed",
+        locale="en",
+    )
+    rejected_locale = chat_render._extract_compatible_historical_render_cache(
+        {"render_cache": cache},
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        raw_content=answer,
+        hits=[],
+        answer_sig=answer_sig,
+        locale="zh",
     )
 
     assert reused is not None
     assert reused["rendered_content"] == answer
     assert rejected is None
+    assert rejected_plan is None
+    assert rejected_answer is None
+    assert rejected_locale is None
+
+
+def test_enrich_rejects_scigs_lineage_whole_answer_rewrite(monkeypatch):
+    from api import chat_render
+
+    original = "SCIGS reconstructs an explicit dynamic 3D scene from one compressed image [1]."
+    rewritten = (
+        "### 从编码测量到 3D 表示\n\n"
+        "- CASSI encodes a spectral cube.\n"
+        "- Video SCI provides the upstream route.\n"
+        "- SCINeRF uses an implicit NeRF.\n"
+        "- SCIGS uses explicit 3DGS [1]."
+    )
+    annotate_inputs: list[str] = []
+
+    def fake_annotate(md, _hits, **_kwargs):
+        annotate_inputs.append(str(md))
+        rendered = str(md).replace("[1]", "[1](#kb-cite-scigs-1)")
+        return rendered, [
+            {
+                "num": 1,
+                "anchor": "kb-cite-scigs-1",
+                "source_name": "SCIGS.pdf",
+                "source_path": r"db\scigs\scigs.en.md",
+                "citation_route": "system_a",
+                "is_inpaper": False,
+            }
+        ]
+
+    monkeypatch.setattr(
+        chat_render,
+        "_answer_aligned_reference_render_pack",
+        lambda pack, _answer: dict(pack or {}),
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_should_link_inpaper_citations_for_message",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_reading_guide_repair_missing_system_a_citations",
+        lambda *_args, **_kwargs: rewritten,
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_annotate_inpaper_citations_with_hover_meta",
+        fake_annotate,
+    )
+
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": r"db\scigs\scigs.en.md",
+                "source_name": "SCIGS.pdf",
+                "evidence_quote": "SCIGS reconstructs an explicit dynamic 3D scene.",
+            }
+        ],
+    }
+    messages = [
+        {"id": 1, "role": "user", "content": "Compare the SCI lineage."},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": original,
+            "meta": {
+                "answer_quality": {
+                    "output_mode": "reading_guide",
+                    "citation_plan": plan,
+                }
+            },
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "SCIGS reconstructs an explicit dynamic 3D scene.",
+                    "meta": {
+                        "source_path": r"db\scigs\scigs.en.md",
+                        "ref_answer_citation_num": 1,
+                    },
+                }
+            ]
+        }
+    }
+
+    rendered = chat_render.enrich_messages_with_reference_render(
+        messages,
+        refs_by_user,
+        conv_id="scigs-render-guard",
+    )[-1]
+    rendered_body = str(rendered.get("rendered_body") or "")
+
+    assert annotate_inputs[0] == rewritten
+    assert annotate_inputs[-1] == original
+    assert "从编码测量到 3D 表示" not in rendered_body
+    assert "SCIGS reconstructs an explicit dynamic 3D scene" in rendered_body
+    assert "](#kb-cite-scigs-1)" in rendered_body
+    assert chat_render._rendered_body_preserves_answer_body(
+        answer_body=original,
+        rendered_body=rendered_body,
+    )
+
+
+def test_enrich_keeps_normal_citation_decoration_when_body_is_unchanged(monkeypatch):
+    from api import chat_render
+
+    original = "SCIGS reconstructs an explicit dynamic 3D scene [1]."
+    calls = {"annotate": 0}
+
+    def fake_annotate(md, _hits, **_kwargs):
+        calls["annotate"] += 1
+        return str(md).replace("[1]", "[1](#kb-cite-scigs-1)"), [
+            {
+                "num": 1,
+                "anchor": "kb-cite-scigs-1",
+                "source_name": "SCIGS.pdf",
+                "source_path": r"db\scigs\scigs.en.md",
+                "citation_route": "system_a",
+                "is_inpaper": False,
+            }
+        ]
+
+    monkeypatch.setattr(
+        chat_render,
+        "_answer_aligned_reference_render_pack",
+        lambda pack, _answer: dict(pack or {}),
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_should_link_inpaper_citations_for_message",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_annotate_inpaper_citations_with_hover_meta",
+        fake_annotate,
+    )
+    messages = [
+        {"id": 1, "role": "user", "content": "What does SCIGS do?"},
+        {"id": 2, "role": "assistant", "content": original},
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "SCIGS reconstructs an explicit dynamic 3D scene.",
+                    "meta": {
+                        "source_path": r"db\scigs\scigs.en.md",
+                        "ref_answer_citation_num": 1,
+                    },
+                }
+            ]
+        }
+    }
+
+    rendered = chat_render.enrich_messages_with_reference_render(
+        messages,
+        refs_by_user,
+        conv_id="citation-decoration-guard",
+    )[-1]
+    rendered_body = str(rendered.get("rendered_body") or "")
+
+    assert calls["annotate"] == 1
+    assert "](#kb-cite-scigs-1)" in rendered_body
+    assert chat_render._rendered_body_preserves_answer_body(
+        answer_body=original,
+        rendered_body=rendered_body,
+    )
+
+
+def test_enrich_rejects_semantic_change_from_final_markdown_cleanup(monkeypatch):
+    from api import chat_render
+
+    original = "The final answer prose must remain unchanged."
+    monkeypatch.setattr(
+        chat_render,
+        "_normalize_chat_markdown_for_display",
+        lambda _md: "A cleanup stage replaced the answer.",
+    )
+    messages = [
+        {"id": 1, "role": "user", "content": "test"},
+        {"id": 2, "role": "assistant", "content": original},
+    ]
+
+    rendered = chat_render.enrich_messages_with_reference_render(
+        messages,
+        {},
+        conv_id="final-cleanup-render-guard",
+    )[-1]
+
+    assert rendered["rendered_body"] == original
+    assert rendered["rendered_content"] == original
+
+
+def test_merge_render_packet_does_not_restore_semantically_drifted_body(monkeypatch):
+    from api import chat_render
+
+    original = "The stored answer remains the source of truth."
+    drifted = "A historical render packet replaced the answer with a different summary."
+    monkeypatch.setattr(
+        chat_render,
+        "_should_link_inpaper_citations_for_message",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_annotate_inpaper_citations_with_hover_meta",
+        lambda md, _hits, **_kwargs: (str(md), []),
+    )
+    messages = [
+        {"id": 1, "role": "user", "content": "test"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": original,
+            "meta": {
+                "paper_guide_contracts": {
+                    "render_packet": {
+                        "answer_markdown": original,
+                        "rendered_body": drifted,
+                        "rendered_content": drifted,
+                        "copy_markdown": drifted,
+                        "copy_text": drifted,
+                        "cite_details": [
+                            {
+                                "num": 1,
+                                "anchor": "kb-cite-stale-1",
+                                "source_name": "stale.pdf",
+                                "source_path": r"db\stale\stale.en.md",
+                                "citation_route": "system_a",
+                                "is_inpaper": False,
+                            }
+                        ],
+                    }
+                }
+            },
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "Evidence.",
+                    "meta": {"source_path": r"db\fresh\fresh.en.md"},
+                }
+            ]
+        }
+    }
+
+    rendered = chat_render.enrich_messages_with_reference_render(
+        messages,
+        refs_by_user,
+        conv_id="render-packet-body-guard",
+    )[-1]
+    packet = (
+        ((rendered.get("meta") or {}).get("paper_guide_contracts") or {}).get(
+            "render_packet"
+        )
+        or {}
+    )
+
+    assert rendered["rendered_body"] == original
+    assert packet.get("rendered_body") == original
+    assert drifted not in str(packet.get("rendered_content") or "")
+
+
+def test_historical_cache_signature_mismatch_rerenders_old_assistant(monkeypatch):
+    from api import chat_render
+
+    historical_answer = "Historical evidence remains linked [1]."
+    stale_rendered = "Historical evidence remains linked [1](#kb-cite-stale-1)."
+    cache = chat_render._build_render_cache_payload(
+        cache_key="stale-historical-key",
+        notice="",
+        rendered_body=stale_rendered,
+        rendered_content=stale_rendered,
+        copy_markdown=stale_rendered,
+        copy_text="Historical evidence remains linked [1].",
+        cite_details=[
+            {
+                "num": 1,
+                "anchor": "kb-cite-stale-1",
+                "source_name": "stale.pdf",
+                "source_path": r"db\stale\stale.en.md",
+                "citation_route": "system_a",
+                "is_inpaper": False,
+            }
+        ],
+        refs_user_msg_id=1,
+        render_packet={
+            "answer_markdown": historical_answer,
+            "rendered_content": stale_rendered,
+        },
+    )
+    cache["input_ref_sig"] = "stale-ref-signature"
+    cache["citation_plan_sig"] = "stale-plan-signature"
+    annotate_inputs: list[str] = []
+
+    def fake_annotate(md, _hits, **_kwargs):
+        annotate_inputs.append(str(md))
+        if "[1]" not in str(md):
+            return str(md), []
+        return str(md).replace("[1]", "[1](#kb-cite-fresh-1)"), [
+            {
+                "num": 1,
+                "anchor": "kb-cite-fresh-1",
+                "source_name": "fresh.pdf",
+                "source_path": r"db\fresh\fresh.en.md",
+                "citation_route": "system_a",
+                "is_inpaper": False,
+            }
+        ]
+
+    monkeypatch.setattr(
+        chat_render,
+        "_answer_aligned_reference_render_pack",
+        lambda pack, _answer: dict(pack or {}),
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_should_link_inpaper_citations_for_message",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_annotate_inpaper_citations_with_hover_meta",
+        fake_annotate,
+    )
+    messages = [
+        {"id": 1, "role": "user", "content": "Show the evidence."},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": historical_answer,
+            "meta": {"render_cache": cache},
+        },
+        {"id": 3, "role": "assistant", "content": "Latest answer without a citation."},
+    ]
+    refs_by_user = {
+        1: {
+            "prompt_sig": "fresh-prompt",
+            "hits": [
+                {
+                    "text": "Fresh evidence.",
+                    "meta": {
+                        "source_path": r"db\fresh\fresh.en.md",
+                        "ref_answer_citation_num": 1,
+                    },
+                }
+            ],
+        }
+    }
+
+    rendered = chat_render.enrich_messages_with_reference_render(
+        messages,
+        refs_by_user,
+        conv_id="historical-cache-signature-guard",
+    )
+    historical_rendered = str(rendered[1].get("rendered_body") or "")
+
+    assert historical_answer in annotate_inputs
+    assert "#kb-cite-fresh-1" in historical_rendered
+    assert "#kb-cite-stale-1" not in historical_rendered
+    assert cache["input_ref_sig"] == "stale-ref-signature"
+    assert cache["citation_plan_sig"] == "stale-plan-signature"
 
 
 def test_render_cache_persists_render_packet_when_contracts_present(monkeypatch, tmp_path: Path):
@@ -2889,6 +3854,61 @@ def test_enrich_messages_ignores_previous_schema_render_cache(tmp_path: Path):
     assert "](#kb-cite-" in str(msg.get("rendered_content") or "")
     assert int(persisted_cache.get("schema") or 0) == int(chat_render._RENDER_CACHE_SCHEMA_VERSION)
     assert len(persisted_cache.get("cite_details") or []) == 1
+
+
+def test_enrich_assistant_only_slice_recovers_reference_owner_without_empty_overwrite(
+    tmp_path: Path,
+) -> None:
+    content = "Learning-based SPI improves reconstruction quality [1]."
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("assistant-only page")
+    user_id = store.append_message(conv_id, "user", "what helps SPI reconstruction?")
+    store.append_message(conv_id, "assistant", content)
+    refs_by_user = {
+        user_id: {
+            "prompt_sig": "sig-assistant-only-page",
+            "updated_at": 1.0,
+            "used_query": "SPI reconstruction",
+            "used_translation": False,
+            "hits": [
+                {
+                    "text": "Deep learning improves reconstruction quality in single-pixel imaging.",
+                    "meta": {
+                        "source_path": r"db\LPR-2025\LPR-2025.en.md",
+                        "heading_path": "Benefits / Reconstruction quality",
+                    },
+                }
+            ],
+        }
+    }
+
+    primed = enrich_messages_with_reference_render(
+        store.get_messages(conv_id),
+        refs_by_user,
+        conv_id=conv_id,
+        chat_store=store,
+    )
+    assert primed[-1]["refs_user_msg_id"] == user_id
+    assert len(primed[-1].get("cite_details") or []) == 1
+
+    assistant_record = store.get_messages(conv_id)[-1]
+    rendered_slice = enrich_messages_with_reference_render(
+        [assistant_record],
+        refs_by_user,
+        conv_id=conv_id,
+        chat_store=store,
+    )
+
+    assert rendered_slice[0]["refs_user_msg_id"] == user_id
+    assert len(rendered_slice[0].get("cite_details") or []) == 1
+    persisted = store.get_messages(conv_id)[-1]
+    render_cache = ((persisted.get("meta") or {}).get("render_cache") or {})
+    packet = (
+        (((persisted.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet"))
+        or {}
+    )
+    assert render_cache.get("refs_user_msg_id") == user_id
+    assert len(packet.get("cite_details") or []) == 1
 
 
 def test_render_packet_only_rebuilds_legacy_answer_markdown_citations_when_content_empty(tmp_path: Path):
@@ -5050,7 +6070,7 @@ def test_reading_guide_budget_counts_only_bound_comparison_citations():
     assert any(term in comparison_detail["answer_claim"] for term in ("测量", "采样"))
 
 
-def test_comparison_rescue_adds_grounded_bridge_when_model_omits_all_citations():
+def test_comparison_rescue_does_not_append_prose_when_model_omits_all_citations():
     source_path = "hsi-fsi.en.md"
     heading = (
         "Hadamard single-pixel imaging versus Fourier single-pixel imaging / "
@@ -5130,15 +6150,9 @@ def test_comparison_rescue_adds_grounded_bridge_when_model_omits_all_citations()
     )[-1]
 
     assert rendered["content"] == answer
-    assert "定量对比依据" in rendered["rendered_content"]
-    assert rendered["rendered_content"].index("定量对比依据") < rendered["rendered_content"].index("一句话建议")
-    detail = next(item for item in rendered["cite_details"] if item["citation_route"] == "system_a")
-    assert detail["num"] == 1
-    assert detail["answer_hit_num"] > 6
-    assert detail["heading_path"] == heading
-    assert "sampling ratio" in detail["answer_claim"]
-    assert "PSNR" in detail["evidence_quote"]
-    assert "SSIM" in detail["evidence_quote"]
+    assert rendered["rendered_content"] == answer
+    assert "定量对比依据" not in rendered["rendered_content"]
+    assert rendered["cite_details"] == []
 
 
 def test_reading_guide_repairs_uncited_source_definition_from_abstract(tmp_path: Path):
@@ -6220,6 +7234,112 @@ def test_same_source_prompt_aligned_slots_do_not_overwrite_primary_visible_evide
     assert augmented[0]["text"] == taxonomy
     assert augmented[0]["meta"]["ref_answer_citation_num"] == 1
     assert any(hit.get("text") == wavelet for hit in augmented[1:])
+
+
+def test_single_source_marker_prefers_table_slot_aligned_with_numeric_answer():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "simple-baselines.en.md"
+    abstract = (
+        "We derive a Nonlinear Activation Free Network, namely NAFNet, from the "
+        "baseline. It achieves 40.30 dB PSNR on SIDD."
+    )
+    table = (
+        "Table 6. Image Denoising Results on SIDD. SIDD PSNR: "
+        "Restormer = 40.02; Baseline ours = 40.30; NAFNet ours = 40.30"
+    )
+    hits = [
+        {
+            "text": table,
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "5.2 Applications",
+                "ref_answer_citation_num": 1,
+            },
+            "ui_meta": {},
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": abstract,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "5.2 Applications",
+                "evidence_quote": table,
+                "candidate_hits": [1],
+                "block_id": "table-6",
+                "anchor_id": "tb-6",
+            },
+        ]
+    }
+    answer = (
+        "Table 6 shows that the highest SIDD PSNR is 40.30, tied by "
+        "Baseline ours and NAFNet ours [1]."
+    )
+
+    augmented = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=1,
+        canonical_paths=[source_path],
+        answer_text=answer,
+    )
+
+    assert augmented[0]["text"] == table
+    assert augmented[0]["meta"]["heading_path"] == "5.2 Applications"
+    assert augmented[0]["ui_meta"]["primary_evidence"]["block_id"] == "table-6"
+    assert any(hit.get("text") == abstract for hit in augmented[1:])
+
+
+def test_single_source_marker_keeps_abstract_when_method_answer_matches_it_best():
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "simple-baselines.en.md"
+    abstract = (
+        "Nonlinear activation functions can be replaced by multiplication or "
+        "removed, deriving NAFNet from the baseline."
+    )
+    table = "Table 6. SIDD PSNR: Baseline ours = 40.30; NAFNet ours = 40.30"
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": abstract,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "5.2 Applications",
+                "evidence_quote": table,
+                "candidate_hits": [1],
+                "block_id": "table-6",
+            },
+        ]
+    }
+
+    augmented = _augment_hits_with_system_a_plan_slots(
+        [{"text": table, "meta": {"source_path": source_path}, "ui_meta": {}}],
+        plan,
+        reserved_count=1,
+        canonical_paths=[source_path],
+        answer_text=(
+            "NAFNet is derived from the baseline by removing nonlinear activation "
+            "functions and replacing them with multiplication [1]."
+        ),
+    )
+
+    assert augmented[0]["text"] == abstract
+    assert augmented[0]["meta"]["heading_path"] == "Abstract"
 
 
 def test_prompt_aligned_source_slot_rebinds_compacted_hit_without_reserved_padding():
@@ -7388,12 +8508,16 @@ def test_enrich_messages_invalidates_render_cache_when_refs_change(monkeypatch, 
     def fake_primary(_md, _hits, *, anchor_ns="", canonical_paths=None):
         del _hits, anchor_ns, canonical_paths
         calls["primary"] += 1
+        anchor = f"kb-cite-demo-{calls['primary']}"
         return (
-            f"render-{calls['primary']}::{_md}",
+            str(_md).replace(
+                "[[CITE:s1234abcd:1]]",
+                f"[1](#{anchor})",
+            ),
             [
                 {
-                    "num": calls["primary"],
-                    "anchor": f"kb-cite-demo-{calls['primary']}",
+                    "num": 1,
+                    "anchor": anchor,
                     "source_name": "demo.pdf",
                     "is_inpaper": True,
                 }
@@ -7436,6 +8560,92 @@ def test_enrich_messages_invalidates_render_cache_when_refs_change(monkeypatch, 
 
     assert calls["primary"] == 2
     assert str(first[-1].get("rendered_content") or "") != str(second[-1].get("rendered_content") or "")
+
+
+def test_enrich_messages_invalidates_cache_when_only_render_evidence_revision_changes(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from api import chat_render
+
+    calls = {"primary": 0}
+
+    def fake_primary(_md, _hits, *, anchor_ns="", canonical_paths=None):
+        del _hits, anchor_ns, canonical_paths
+        calls["primary"] += 1
+        anchor = f"kb-cite-revision-{calls['primary']}"
+        return (
+            str(_md).replace("[[CITE:s1234abcd:1]]", f"[1](#{anchor})"),
+            [
+                {
+                    "num": 1,
+                    "anchor": anchor,
+                    "source_name": "demo.pdf",
+                    "is_inpaper": True,
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        chat_render,
+        "_annotate_inpaper_citations_with_hover_meta",
+        fake_primary,
+    )
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("render evidence revision cache test")
+    user_id = store.append_message(conv_id, "user", "test")
+    assistant_id = store.append_message(
+        conv_id,
+        "assistant",
+        "SPI relies on compressive sensing [[CITE:s1234abcd:1]].",
+    )
+    store.merge_message_meta(
+        assistant_id,
+        {
+            "answer_quality": {
+                "prompt_family": "citation_lookup",
+                "output_mode": "citation_lookup",
+            }
+        },
+    )
+    base_pack = {
+        "prompt_sig": "same-prompt",
+        "used_query": "same-query",
+        "used_translation": False,
+        "hits": [
+            {"text": "same evidence", "meta": {"source_path": r"db\doc\doc.en.md"}}
+        ],
+    }
+    refs_v1 = {
+        user_id: {
+            **base_pack,
+            "rendered_payload_sig": "render-v1",
+            "render_evidence_sig": "evidence-v1",
+        }
+    }
+    refs_v2 = {
+        user_id: {
+            **base_pack,
+            "rendered_payload_sig": "render-v2",
+            "render_evidence_sig": "evidence-v2",
+        }
+    }
+
+    first = enrich_messages_with_reference_render(
+        store.get_messages(conv_id),
+        refs_v1,
+        conv_id=conv_id,
+        chat_store=store,
+    )
+    second = enrich_messages_with_reference_render(
+        store.get_messages(conv_id),
+        refs_v2,
+        conv_id=conv_id,
+        chat_store=store,
+    )
+
+    assert calls["primary"] == 2
+    assert first[-1]["rendered_content"] != second[-1]["rendered_content"]
 
 
 def test_unlinked_reference_candidates_find_unique_venue_year(monkeypatch):
@@ -8380,6 +9590,218 @@ def test_normal_answer_binds_three_planned_sources_without_inserting_topic_speci
     assert "Paper Beta parallelizes the hardware acquisition [2]." in repaired
     assert "Paper Gamma adds learned reconstruction [3]." in repaired
     assert "single-pixel camera" not in repaired
+
+
+def test_comparison_binds_missing_planned_source_inside_matching_table_cell(monkeypatch):
+    from api.chat_render import (
+        _annotate_inpaper_citations_with_hover_meta,
+        _reading_guide_repair_missing_system_a_citations,
+    )
+
+    monkeypatch.setattr("ui.refs_renderer._is_temp_source_path", lambda _path: False)
+    monkeypatch.setattr("ui.refs_renderer._load_reference_index_cached", lambda: {})
+
+    scigs_path = "db/SCIGS/SCIGS.en.md"
+    scinerf_path = "db/SCINeRF/SCINeRF.en.md"
+    scigs_evidence = (
+        "SCIGS reconstructs an explicit 3D scene from a single compressed image "
+        "and extends the method to dynamic 3D scenes."
+    )
+    scinerf_evidence = (
+        "We formulate the physical imaging process of SCI as part of the training "
+        "of NeRF."
+    )
+    hits = [
+        {
+            "text": "SCIGS title.",
+            "meta": {"source_path": scigs_path, "ref_answer_citation_num": 1},
+        },
+        {
+            "text": scinerf_evidence,
+            "meta": {
+                "source_path": scinerf_path,
+                "heading_path": "Abstract",
+                "ref_answer_citation_num": 2,
+            },
+        },
+        {
+            "text": "SCINeRF mask-overlap experiment.",
+            "meta": {"source_path": scinerf_path, "ref_answer_citation_num": 3},
+        },
+        {
+            "text": scigs_evidence,
+            "meta": {
+                "source_path": scigs_path,
+                "heading_path": "Abstract",
+                "ref_answer_citation_num": 4,
+            },
+        },
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": scinerf_path,
+                "source_name": "SCINeRF",
+                "heading_path": "Abstract",
+                "evidence_quote": scinerf_evidence,
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": scigs_path,
+                "source_name": "SCIGS",
+                "heading_path": "Abstract",
+                "evidence_quote": scigs_evidence,
+                "candidate_hits": [4],
+            },
+        ],
+    }
+    answer = (
+        "SCIGS reconstructs explicit dynamic 3D scenes [4].\n\n"
+        "| \u5bf9\u6bd4\u7ef4\u5ea6 | SCIGS | SCINeRF |\n"
+        "| --- | --- | --- |\n"
+        "| \u6838\u5fc3\u65b9\u6cd5 | primitive transformation + 3DGS [4] | "
+        "\u5c06 SCI \u7269\u7406\u6210\u50cf\u8fc7\u7a0b\u878d\u5165 NeRF \u8bad\u7ec3 |\n"
+        "| SSIM | 0.9137 [4] | 0.7974 [3] |"
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=[scigs_path, scinerf_path, scinerf_path, scigs_path],
+    )
+
+    assert (
+        "\u5c06 SCI \u7269\u7406\u6210\u50cf\u8fc7\u7a0b\u878d\u5165 NeRF \u8bad\u7ec3 [2]|"
+        in repaired
+    )
+    assert repaired.count("[2]") == 1
+    assert "0.7974 [3]" in repaired
+    assert "0.7974 [2]" not in repaired
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        repaired,
+        hits,
+        canonical_paths=[scigs_path, scinerf_path, scinerf_path, scigs_path],
+        citation_plan=plan,
+        render_locale="zh",
+    )
+    scinerf_card = next(detail for detail in details if detail.get("num") == 2)
+    assert "[2](#" in rendered
+    assert scinerf_card["citation_route"] == "system_a"
+    assert scinerf_card["source_path"] == scinerf_path
+    assert "physical imaging process of SCI" in scinerf_card["card_evidence"]
+
+
+def test_origin_answer_binds_current_paper_evidence_beside_verified_upstream_marker():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    source_path = "F:/db/SCINeRF/SCINeRF.en.md"
+    evidence = (
+        "most of the existing methods employ alternating direction method of "
+        "multipliers (ADMM) [4],"
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "SCINeRF / 2. Related Work",
+                "ref_answer_citation_num": 1,
+            },
+        }
+    ]
+    plan = {
+        "intent": "origin_lookup",
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "SCINeRF",
+                "heading_path": "SCINeRF / 2. Related Work",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_b",
+                "source_path": source_path,
+                "source_name": "SCINeRF",
+                "heading_path": "SCINeRF / 2. Related Work",
+                "evidence_quote": evidence,
+                "candidate_refs": [4],
+                "candidate_cite_examples": ["[[CITE:s7f6b9404:4]]"],
+            },
+        ],
+    }
+    answer = (
+        "不是。ADMM 在这里是当前论文引用的已有方法背景 "
+        "[[CITE:s7f6b9404:4]]，不是本文原创。"
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=[source_path],
+    )
+
+    assert "[[CITE:s7f6b9404:4]]" in repaired
+    assert repaired.count("[1]") == 1
+    assert "不是本文原创 [1]。" in repaired
+
+
+def test_origin_answer_does_not_share_system_a_when_upstream_context_differs():
+    from api.chat_render import _reading_guide_attach_claim_level_system_a_citations
+
+    source_path = "F:/db/SCINeRF/SCINeRF.en.md"
+    system_a_evidence = "Most existing methods employ ADMM [4]."
+    plan = {
+        "intent": "origin_lookup",
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "evidence_quote": system_a_evidence,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_b",
+                "source_path": source_path,
+                "evidence_quote": "Boyd et al. provide an ADMM tutorial.",
+                "candidate_refs": [4],
+                "candidate_cite_examples": ["[[CITE:s7f6b9404:4]]"],
+            },
+        ],
+    }
+    answer = (
+        "ADMM is existing-method background [[CITE:s7f6b9404:4]], "
+        "not original to this paper."
+    )
+
+    repaired = _reading_guide_attach_claim_level_system_a_citations(
+        answer,
+        [
+            {
+                "text": system_a_evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert repaired == answer
 
 
 def test_multi_source_plan_normalizes_duplicate_canonical_markers_before_budgeting():
@@ -9342,8 +10764,50 @@ def test_system_a_render_backfills_public_bibliography_without_primary_evidence(
     assert detail["doi_url"] == "https://doi.org/10.1234/useful.paper"
     assert detail["venue_kind"] == "journal"
     assert "metadata_quality" not in detail
+    assert detail["metadata_export_acceptance"]["export_ready"] is True
+    assert detail["metadata_export_acceptance"]["export_mode"] == "complete_with_doi"
     assert detail["heading_path"] == "3. Results"
     assert detail["card_view"]["header"]["subtitle"] == "3. Results"
+
+
+def test_system_a_render_prefers_abstract_root_over_truncated_local_filename_title(monkeypatch):
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    monkeypatch.setattr(
+        "api.chat_render.load_local_source_citation_meta",
+        lambda *_args, **_kwargs: {
+            "title": "Interferometric Image Scanning...inside live cells",
+            "venue": "LSA",
+            "year": "2026",
+            "doi": "10.1038/example.iism",
+        },
+    )
+    article_title = (
+        "Interferometric Image Scanning Microscopy for label-free imaging at "
+        "120 nm lateral resolution inside live cells"
+    )
+    detail = {
+        "num": 1,
+        "anchor": "kb-cite-iism",
+        "source_name": "LSA-2026-Interferometric Image Scanning...inside live cells.pdf",
+        "source_path": "db/iism/iism.en.md",
+        "title": f"{article_title} / Abstract",
+        "heading_path": f"{article_title} / Abstract",
+        "citation_route": "system_a",
+        "is_inpaper": False,
+        "evidence_quote": "The method operates at lower incident illumination power.",
+        "summary_line": "The method operates at lower incident illumination power.",
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(
+        [detail],
+        {"hits": [{"meta": {"source_path": detail["source_path"]}, "ui_meta": {}}]},
+    )
+
+    assert out[0]["title"] == article_title
+    assert out[0]["bibliographic_title"] == article_title
+    assert out[0]["heading_path"] == f"{article_title} / Abstract"
+    assert out[0]["metadata_export_acceptance"]["export_ready"] is True
 
 
 def test_system_a_prompt_contract_refines_existing_locator(monkeypatch):
@@ -10791,6 +12255,48 @@ def test_canonical_answer_repair_preserves_authoritative_exact_support_hit():
     assert out[0]["meta"]["heading_path"] == "Introduction / Figure 1a"
     assert out[0]["meta"]["page_start"] == 2
     assert out[0]["meta"]["citation_plan_source"] == "exact_support_preflight"
+
+
+def test_system_a_backfill_keeps_spad_exact_compound_evidence() -> None:
+    from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
+
+    source_path = "db/PIDL/PIDL.en.md"
+    exact_evidence = (
+        "The multi-source physical noise model includes shot noise, fixed-pattern noise, "
+        "dark count rate, afterpulsing, crosstalk, and deadtime noise.\n\n"
+        "Single-source Poisson and Gaussian noise statistics lead to degraded imaging quality."
+    )
+    details = [
+        {
+            "num": 1,
+            "anchor": "kb-cite-pidl-1",
+            "citation_route": "system_a",
+            "source_path": source_path,
+            "source_name": "PIDL.pdf",
+            "heading_path": "Introduction / Figure 1a",
+            "answer_claim": "单源泊松统计遗漏多源噪声，并会导致成像质量退化。",
+            "evidence_quote": exact_evidence,
+            "raw": exact_evidence,
+            "page_start": 2,
+            "page_end": 2,
+            "selection_reason": "spad_noise_model_exact_source",
+            "strict_locate": True,
+        }
+    ]
+    ref_pack = {
+        "hits": [
+            {
+                "text": "Only a broad background sentence about single-photon imaging.",
+                "meta": {"source_path": source_path, "heading_path": "Introduction"},
+            }
+        ]
+    }
+
+    out = _backfill_system_a_cite_details_from_ref_pack(details, ref_pack, render_locale="zh")
+
+    assert " ".join(out[0]["evidence_quote"].split()) == " ".join(exact_evidence.split())
+    assert "degraded imaging quality" in out[0]["card_evidence"]
+    assert "deadtime noise" in out[0]["card_evidence"]
 
 
 def test_scigs_comparison_abstract_repair_keeps_appended_citation_numbers(monkeypatch):

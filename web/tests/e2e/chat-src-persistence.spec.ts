@@ -194,29 +194,27 @@ async function installMockBackend(page: Page, options: { messagesPageDelayMs?: n
   }
 }
 
-async function openConversationAndExpectSrcChip(page: Page) {
+async function openConversationAndExpectPacketBodyWithoutSrcChip(page: Page) {
   const conversationRow = page.locator('.kb-conv-row', { hasText: conversation.title })
   await expect(conversationRow).toBeVisible()
   await conversationRow.click()
   await expect(page.locator('body')).toContainText('The claim is supported by the fixture evidence')
-  const chip = page.locator('.kb-cite-chip').first()
-  await expect(chip).toBeVisible()
-  await expect(chip).toHaveText('1')
+  await expect(page.locator('.kb-cite-chip')).toHaveCount(0)
 }
 
-test('paper guide src chips survive refresh when render packet only uses top-level cite details', async ({ page }) => {
+test('paper guide keeps empty render-packet cite details authoritative across refresh', async ({ page }) => {
   const backend = await installMockBackend(page)
 
   await page.goto('/')
-  await openConversationAndExpectSrcChip(page)
+  await openConversationAndExpectPacketBodyWithoutSrcChip(page)
   expect(backend.renderPacketOnlyPageLoads()).toBeGreaterThanOrEqual(1)
 
   await page.reload()
-  await openConversationAndExpectSrcChip(page)
+  await openConversationAndExpectPacketBodyWithoutSrcChip(page)
   expect(backend.renderPacketOnlyPageLoads()).toBeGreaterThanOrEqual(2)
 })
 
-test('paper guide src chips survive direct URL restore without sidebar conversation cache', async ({ page }) => {
+test('paper guide direct URL restore does not revive top-level cites outside the render packet', async ({ page }) => {
   const backend = await installMockBackend(page, { hideConversationFromList: true })
 
   await page.goto(`/?conversation=${CONV_ID}`)
@@ -224,9 +222,7 @@ test('paper guide src chips survive direct URL restore without sidebar conversat
   await expect(page.getByTestId('research-context-state')).toHaveAttribute('data-research-mode', 'paper_guide')
   await expect(page.getByRole('radio', { name: '本文' })).toBeChecked()
   await expect(page.locator('body')).toContainText('The claim is supported by the fixture evidence')
-  const chip = page.locator('.kb-cite-chip').first()
-  await expect(chip).toBeVisible()
-  await expect(chip).toHaveText('1')
+  await expect(page.locator('.kb-cite-chip')).toHaveCount(0)
   expect(backend.renderPacketOnlyPageLoads()).toBeGreaterThanOrEqual(1)
 })
 

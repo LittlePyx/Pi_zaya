@@ -47,6 +47,64 @@ def test_paper_guide_messages_page_can_disable_render_packet_only(monkeypatch, t
     assert "rendered_content" in compat_msg
 
 
+def test_messages_page_assistant_only_slice_keeps_reference_packet(monkeypatch, tmp_path: Path):
+    from api.routers import chat as chat_router
+
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("assistant-only page")
+    user_id = store.append_message(conv_id, "user", "what helps SPI reconstruction?")
+    store.append_message(
+        conv_id,
+        "assistant",
+        "Learning-based SPI improves reconstruction quality [1].",
+    )
+    store.upsert_message_refs(
+        user_msg_id=user_id,
+        conv_id=conv_id,
+        prompt="what helps SPI reconstruction?",
+        prompt_sig="sig-assistant-only-route",
+        hits=[
+            {
+                "text": "Deep learning improves reconstruction quality in single-pixel imaging.",
+                "meta": {
+                    "source_path": r"db\LPR-2025\LPR-2025.en.md",
+                    "heading_path": "Benefits / Reconstruction quality",
+                },
+            }
+        ],
+        scores=[],
+        used_query="SPI reconstruction",
+        used_translation=False,
+    )
+
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+
+    primed = chat_router.get_messages(conv_id, render_packet_only=0)
+    assert primed[-1]["refs_user_msg_id"] == user_id
+    assert len(primed[-1].get("cite_details") or []) == 1
+
+    page = chat_router.get_messages_page(
+        conv_id,
+        limit=1,
+        before_id=None,
+        render_packet_only=0,
+    )
+
+    assert len(page["messages"]) == 1
+    assistant = page["messages"][0]
+    assert assistant["role"] == "assistant"
+    assert assistant["refs_user_msg_id"] == user_id
+    assert len(assistant.get("cite_details") or []) == 1
+    persisted = store.get_messages(conv_id)[-1]
+    render_cache = ((persisted.get("meta") or {}).get("render_cache") or {})
+    packet = (
+        (((persisted.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet"))
+        or {}
+    )
+    assert render_cache.get("refs_user_msg_id") == user_id
+    assert len(packet.get("cite_details") or []) == 1
+
+
 def test_messages_page_recovers_stale_live_assistant_marker(monkeypatch, tmp_path: Path):
     from api.routers import chat as chat_router
 

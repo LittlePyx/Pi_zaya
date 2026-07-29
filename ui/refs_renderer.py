@@ -37,6 +37,8 @@ from kb.evidence_text import (
 from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.evidence_binding import (
     _SYSTEM_A_STRONG_BINDING_TERMS,
+    _quantity_is_covered,
+    _system_a_fact_quantities,
     _system_a_domain_terms,
     _system_a_keyword_terms,
     assess_system_a_hit_binding as _assess_system_a_hit_binding,
@@ -3818,32 +3820,18 @@ def _system_a_score_evidence_candidate(
     claim_keywords = _system_a_keyword_terms(answer_claim, limit=48)
     candidate_keywords = _system_a_keyword_terms(" ".join([raw_text, scoring_text]), limit=64)
     claim_keyword_overlap = claim_keywords & candidate_keywords
-    claim_number_surface = re.sub(r"^\s*\d+[.)、]\s*", "", str(answer_claim or ""))
-    claim_number_surface = re.sub(
-        r"\[\d{1,5}\](?:\([^\n)]+\))?",
-        " ",
-        claim_number_surface,
-    )
-    claim_numbers = {
-        token
-        for token in re.findall(
-            r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
-            claim_number_surface,
-        )
-        if not (len(token) == 4 and 1900 <= int(float(token)) <= 2100)
-    }
-    candidate_numbers = set(
-        re.findall(
-            r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
-            raw_text,
-        )
-    )
-    if claim_numbers:
-        matched_numbers = claim_numbers & candidate_numbers
-        score += min(8.0, 2.0 * len(matched_numbers))
-        if not matched_numbers:
+    claim_quantities = _system_a_fact_quantities(answer_claim)
+    candidate_quantities = _system_a_fact_quantities(raw_text)
+    if claim_quantities:
+        matched_quantities = {
+            quantity
+            for quantity in claim_quantities
+            if _quantity_is_covered(quantity, candidate_quantities)
+        }
+        score += min(8.0, 2.0 * len(matched_quantities))
+        if not matched_quantities:
             score -= 6.0
-        elif matched_numbers != claim_numbers:
+        elif matched_quantities != claim_quantities:
             score -= 1.5
     claim_identifiers = {
         token.upper()
@@ -4196,7 +4184,7 @@ def _system_a_pick_best_evidence_candidate(
             primary_evidence.get("strict_locate")
             or primary_evidence.get("strictLocate")
         )
-        and str(primary.get("readable_text") or "").strip()
+        and str(primary.get("text") or "").strip()
         and not _system_a_is_low_value_evidence_text(str(primary.get("text") or ""))
     )
     if strict_plan_primary or authoritative_plan_primary:
@@ -4204,11 +4192,13 @@ def _system_a_pick_best_evidence_candidate(
         # block. Stale reader alternatives may score higher on generic prose
         # quality, but substituting them breaks the claim-to-evidence contract.
         best = dict(primary)
-        strict_text = _clean_evidence_display_text(
-            _system_a_candidate_text(primary_evidence),
-            max_len=520,
-        )
+        strict_text = _system_a_candidate_text(primary_evidence).strip()
         if strict_text:
+            # Keep the authoritative source passage intact until the caller's
+            # evidence-type-specific compaction runs.  Cleaning a normalized
+            # table here can select its heading as the only "readable sentence",
+            # discarding the sampling ratio and metric values needed by the
+            # citation card and locator contract.
             best["text"] = strict_text
             best["readable_text"] = strict_text
     elif (
@@ -4235,20 +4225,7 @@ def _system_a_pick_best_evidence_candidate(
         best["readable_text"] = compound_evidence
         best["source"] = "primary_evidence"
         best["compound_evidence"] = True
-    claim_number_surface = re.sub(r"^\s*\d+[.)、]\s*", "", str(answer_claim or ""))
-    claim_number_surface = re.sub(
-        r"\[\d{1,5}\](?:\([^\n)]+\))?",
-        " ",
-        claim_number_surface,
-    )
-    claim_number_tokens = {
-        token
-        for token in re.findall(
-            r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
-            claim_number_surface,
-        )
-        if not (len(token) == 4 and 1900 <= int(float(token)) <= 2100)
-    }
+    claim_number_tokens = _system_a_fact_quantities(answer_claim)
     claim_identifier_tokens = {
         token.upper()
         for token in re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])", str(answer_claim or ""))
@@ -4256,28 +4233,32 @@ def _system_a_pick_best_evidence_candidate(
     specificity_ranked: list[tuple[int, int, float, dict]] = []
     for candidate in scored:
         candidate_text = str(candidate.get("text") or "")
-        candidate_numbers = set(
-            re.findall(
-                r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
-                candidate_text,
-            )
-        )
+        candidate_numbers = _system_a_fact_quantities(candidate_text)
         candidate_identifiers = {
             token.upper()
             for token in re.findall(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])", candidate_text)
         }
-        number_match = len(claim_number_tokens & candidate_numbers)
+        number_match = sum(
+            1
+            for quantity in claim_number_tokens
+            if _quantity_is_covered(quantity, candidate_numbers)
+        )
         identifier_match = len(claim_identifier_tokens & candidate_identifiers)
         if (
             claim_number_tokens
-            and claim_number_tokens.issubset(candidate_numbers)
+            and number_match == len(claim_number_tokens)
         ) or (
             len(claim_identifier_tokens) >= 2 and identifier_match >= 2
         ):
             specificity_ranked.append(
                 (number_match, identifier_match, float(candidate.get("score") or 0.0), candidate)
             )
-    if specificity_ranked:
+    if (
+        specificity_ranked
+        and not compound_evidence
+        and not strict_plan_primary
+        and not authoritative_plan_primary
+    ):
         _number_match, _identifier_match, _score, specific = max(
             specificity_ranked,
             key=lambda item: (item[0], item[1], item[2]),
@@ -4850,9 +4831,14 @@ def _annotate_inpaper_citations_with_hover_meta(
             if target_keys & slot_keys:
                 source_matched.append(slot)
         claim_tokens = evidence_alignment_tokens(answer_claim)
-        candidates: list[tuple[tuple[int, int, int, int, int, int], dict]] = []
+        candidates: list[tuple[tuple[int, int, int, int, int, int, int], dict]] = []
         seen_slots: set[int] = set()
-        for slot in numbered + source_matched:
+        # Visible answer numbers can be reassigned after retrieval reranking.
+        # When the marker's resolved paper identity is available, ignore raw
+        # candidate numbers from other papers; retain their tie-break role only
+        # among multiple slots belonging to the same resolved source.
+        slot_pool = source_matched if source_matched else numbered
+        for slot in slot_pool:
             if id(slot) in seen_slots:
                 continue
             seen_slots.add(id(slot))
@@ -4864,9 +4850,28 @@ def _annotate_inpaper_citations_with_hover_meta(
             evidence_tokens = evidence_alignment_tokens(evidence_text)
             overlap = len(claim_tokens & evidence_tokens)
             overlap_density = int(1000 * overlap / max(1, len(evidence_tokens)))
+            metric_assignment_count = len(
+                re.findall(
+                    r"(?i)(?:PSNR|PNSR|SSIM|LPIPS|SNR)[^;\n]{0,100}"
+                    r"=\s*[-+]?\d+(?:\.\d+)?",
+                    evidence_text,
+                )
+            )
+            quantitative_comparison_fit = int(
+                overlap >= 2
+                and metric_assignment_count >= 3
+                and bool(
+                    re.search(
+                        r"(?i)compar|versus|\bvs\.?\b|better|worse|quality|performance|"
+                        r"undersampl|sampling|choose|优于|劣于|比较|对比|质量|性能|欠采样|采样|怎么选|如何选",
+                        answer_claim,
+                    )
+                )
+            )
             candidates.append(
                 (
                     (
+                        quantitative_comparison_fit,
                         _ordered_ascii_phrase_score(answer_claim, evidence_text),
                         overlap,
                         overlap_density,
@@ -4888,6 +4893,86 @@ def _annotate_inpaper_citations_with_hover_meta(
             candidates.sort(key=lambda item: item[0], reverse=True)
             return candidates[0][1]
         return {}
+
+    visible_hit_numbers_by_source: dict[str, set[int]] = {}
+    for hit in hits or []:
+        if not isinstance(hit, dict):
+            continue
+        hit_meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        hit_ui_meta = (
+            hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        )
+        try:
+            visible_num = int((hit_meta or {}).get("ref_answer_citation_num") or 0)
+        except (TypeError, ValueError):
+            visible_num = 0
+        if visible_num <= 0:
+            continue
+        source_keys = {
+            key
+            for key in (
+                _plan_source_key(hit.get("source_path")),
+                _plan_source_key((hit_meta or {}).get("source_path")),
+                _plan_source_key((hit_meta or {}).get("source_name")),
+                _plan_source_key((hit_ui_meta or {}).get("source_path")),
+                _plan_source_key((hit_ui_meta or {}).get("display_name")),
+            )
+            if key
+        }
+        for source_key in source_keys:
+            visible_hit_numbers_by_source.setdefault(source_key, set()).add(
+                visible_num
+            )
+
+    def _verified_citation_group_evidence_quotes(answer_claim: str) -> list[str]:
+        citation_numbers = {
+            int(match.group(1))
+            for match in _INPAPER_CITE_RE.finditer(str(answer_claim or ""))
+        }
+        if len(citation_numbers) < 2:
+            return []
+        quotes: list[str] = []
+        for slot in plan_system_a_slots:
+            slot_source_keys = {
+                key
+                for key in (
+                    _plan_source_key(slot.get("source_path") or slot.get("sourcePath")),
+                    _plan_source_key(slot.get("source_name") or slot.get("sourceName")),
+                )
+                if key
+            }
+            slot_numbers = {
+                number
+                for source_key in slot_source_keys
+                for number in visible_hit_numbers_by_source.get(source_key, set())
+            }
+            if not slot_numbers:
+                # Legacy hits may not carry authoritative answer numbers. Keep
+                # the old candidate fallback only when source-based resolution
+                # is unavailable; otherwise stale pre-rerank candidates would
+                # associate the slot with the wrong visible paper.
+                for raw in list(slot.get("candidate_hits") or []):
+                    try:
+                        slot_numbers.add(int(raw))
+                    except (TypeError, ValueError):
+                        continue
+            if not (citation_numbers & slot_numbers):
+                continue
+            quote = str(
+                slot.get("evidence_quote") or slot.get("evidenceQuote") or ""
+            ).strip()
+            if quote and quote not in quotes:
+                quotes.append(quote)
+        if len(quotes) < 2:
+            return []
+        claim_quantities = _system_a_fact_quantities(answer_claim)
+        union_quantities = _system_a_fact_quantities("\n".join(quotes))
+        if claim_quantities and not all(
+            _quantity_is_covered(quantity, union_quantities)
+            for quantity in claim_quantities
+        ):
+            return []
+        return quotes
 
     authoritative_answer_numbering = bool(canonical_paths)
     if not authoritative_answer_numbering:
@@ -5836,7 +5921,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             if compact_table_evidence:
                 evidence_quote = compact_table_evidence
                 ref_best_heading = str(meta_h.get("ref_best_heading_path") or "").strip()
-                if ref_best_heading:
+                if ref_best_heading and not authoritative_plan_evidence:
                     heading = ref_best_heading
             elif compact_detector_evidence:
                 evidence_quote = compact_detector_evidence
@@ -5876,30 +5961,16 @@ def _annotate_inpaper_citations_with_hover_meta(
                     or plan_slot.get("evidenceQuote")
                     or ""
                 ).strip()
-                answer_claim_numbers = {
-                    token
-                    for token in re.findall(
-                        r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
-                        re.sub(
-                            r"\[\d{1,5}\](?:\([^\n)]+\))?",
-                            " ",
-                            str(answer_claim or ""),
-                        ),
-                    )
-                    if not (
-                        len(token) == 4
-                        and 1900 <= int(float(token)) <= 2100
-                    )
-                }
-                picked_evidence_numbers = set(
-                    re.findall(
-                        r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
-                        str(evidence_pick.get("text") or evidence_quote or ""),
-                    )
+                answer_claim_numbers = _system_a_fact_quantities(answer_claim)
+                picked_evidence_numbers = _system_a_fact_quantities(
+                    str(evidence_pick.get("text") or evidence_quote or "")
                 )
                 picked_covers_claim_numbers = bool(
                     answer_claim_numbers
-                    and answer_claim_numbers.issubset(picked_evidence_numbers)
+                    and all(
+                        _quantity_is_covered(quantity, picked_evidence_numbers)
+                        for quantity in answer_claim_numbers
+                    )
                 )
                 compound_plan_specific = _compound_plan_evidence_excerpt(
                     plan_text,
@@ -6122,10 +6193,16 @@ def _annotate_inpaper_citations_with_hover_meta(
                 )
             except Exception:
                 score_value = 0.0
+            binding_meta = dict(meta_h)
+            group_evidence_quotes = _verified_citation_group_evidence_quotes(
+                answer_claim
+            )
+            if group_evidence_quotes:
+                binding_meta["citation_group_evidence_quotes"] = group_evidence_quotes
             binding = _assess_system_a_hit_binding(
                 answer_claim=answer_claim,
                 hit=hit or {},
-                meta=meta_h,
+                meta=binding_meta,
                 heading=heading,
                 evidence_quote=evidence_quote,
                 source_name=src_name,

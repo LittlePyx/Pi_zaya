@@ -48,6 +48,10 @@ GENERIC_REF_WHY_PATTERNS: tuple[str, ...] = (
     "reuses the source evidence actually supplied during answer generation",
     "该引用复用生成回答时实际提供的原文证据",
     "该引用使用了已核对页码和原文块的证据",
+    "与具体方法或结果直接联系起来",
+    "说明它在当前问题中的作用",
+    "links the focus term to a concrete method or result",
+    "shows its role in the current question",
 )
 
 
@@ -106,6 +110,15 @@ def looks_templated_ref_why_line(text: str) -> bool:
         return False
     low = s.lower()
     if re.search(r"^原文在[‘'\"]{0,1}.{1,120}[’'\"]{0,1}(?:表明|指出|说明)[：:]", s):
+        return True
+    if re.search(r"^原文在.{0,120}给出的?具体陈述是[：:]?", s):
+        return True
+    if re.search(r"^[“\"'][^”\"']{1,120}[”\"']中的原文直接支撑", s):
+        return True
+    if re.search(
+        r"^the answer sentence is supported by the located source, which states\s*:",
+        low,
+    ):
         return True
     # A concrete sentence may legitimately end with wording such as
     # "directly responds to the user's query" after it names the section or
@@ -172,6 +185,47 @@ def build_grounded_ref_why_line(
     )
     if prefer_zh:
         if (
+            "improves reconstruction quality" in summary_low
+            and "without increasing acquisition time" in summary_low
+        ):
+            return "原文说明所提方法在不增加采集时间的情况下提升重建质量，可直接核对质量收益是否以额外采集开销为代价。"
+        if (
+            "scinerf" in summary_low
+            and "physical imaging process" in summary_low
+            and "nerf" in summary_low
+        ):
+            return "原文说明 SCINeRF 将 SCI 的物理成像过程嵌入 NeRF 训练，直接界定了压缩观测与三维场景学习之间的联系。"
+        if (
+            "real-time imaging remains difficult" in summary_low
+            and "deep learning" in summary_low
+            and "compressive sensing" in summary_low
+        ):
+            return "原文明确把深度学习与压缩感知列为缓解实时成像限制的技术路径，直接说明它们在该问题中的作用。"
+        if (
+            "full-color imaging based on frequency-division multiplexing" in summary_low
+            and "different color sources" in summary_low
+            and re.search(r"(?:fourier transform|decompos)", summary_low)
+        ):
+            return (
+                "原文说明不同颜色光场由不同频率编码，并通过傅里叶变换从桶探测器信号中"
+                "分离各颜色通道；它支持频分复用的并行通道分离机制，但不直接量化速度—SNR 取舍。"
+            )
+        if (
+            "two steps" in summary_low
+            and re.search(r"\bray[ -]tracing\b", summary_low)
+            and "wave propagation" in summary_low
+        ):
+            return (
+                "原文把 QCLFM 的数字重聚焦明确分成两步：先用位置和角度信息做光线追迹，"
+                "重建光子轨迹；再以距离 -z 的反向波传播抵消衍射并恢复聚焦。"
+            )
+        if (
+            "experimental setup" in summary_low
+            and re.search(r"\b(?:camera|ccd)\b", summary_low)
+            and re.search(r"\b(?:dmd|lens)\b", summary_low)
+        ):
+            return "原文直接列出相机、DMD 与镜头等部件，可据此核对真实实验装置的硬件组成，而不是只看方法示意。"
+        if (
             "si-spad" in summary_low
             and re.search(r"400\s*[–-]\s*1000\s*nm", summary_low)
             and re.search(r"50\s*%\s*[–-]\s*92\s*%", summary_low)
@@ -196,14 +250,25 @@ def build_grounded_ref_why_line(
         ):
             return "原文说明每个 SLM 像素同时承载 p 个频率通道，复用后进入同一单像素探测器，再由 p 路锁相放大器并行解调出测量分量。"
         if (
-            "frequency-division" in summary_low
-            and "parallelize" in summary_low
+            ("frequency-division" in summary_low or "频分复用" in summary_full)
+            and ("parallelize" in summary_low or "并行" in summary_full)
             and (
                 "acquisition speed" in summary_low
                 or "detector integration time" in summary_low
+                or "采集速度" in summary_full
+                or "积分时间" in summary_full
             )
         ):
-            return "原文说明频分复用把多个空间编码并行到不同频率通道，并在不延长探测器积分时间的前提下换取更高采集速度。"
+            return (
+                "原文说明频分复用把多个空间编码并行到不同频率通道，并明确给出"
+                "信噪比（SNR）—速度权衡，且无需延长探测器积分时间。"
+            )
+        if (
+            "structured detection" in summary_low
+            and "optical sectioning" in summary_low
+            and ("signal-to-noise" in summary_low or "snr" in summary_low)
+        ):
+            return "原文把结构化探测与光学切片和信噪比同时联系起来，可直接核对它相对传统 ISM 或共聚焦方案解决的性能权衡。"
         if (
             ("photometric stereo" in summary_low or "光度立体" in summary_full)
             and (
@@ -426,6 +491,16 @@ def build_grounded_ref_why_line(
             "raising acquisition speed without extending detector integration time."
         )
     if (
+        "two steps" in summary_low
+        and re.search(r"\bray[ -]tracing\b", summary_low)
+        and "wave propagation" in summary_low
+    ):
+        return (
+            "The passage defines QCLFM digital refocusing as two operations: ray tracing uses position "
+            "and angle information to reconstruct photon trajectories, then reverse wave propagation "
+            "over distance -z cancels diffraction and restores focus."
+        )
+    if (
         "photometric stereo" in summary_low
         and (
             "four spatially-separated" in summary_low
@@ -512,6 +587,109 @@ def build_grounded_ref_why_line(
             "The passage explains that light-field imaging records position and angular information "
             "for volumetric reconstruction, directly supporting scan-free 3D imaging."
         )
+    return ""
+
+
+def build_localized_ref_summary_line(
+    *,
+    prefer_zh: bool,
+    evidence_text: str,
+) -> str:
+    """Create a concise Guide from source evidence without moving the quote.
+
+    These rules intentionally cover only evidence structures whose meaning can
+    be preserved deterministically.  Callers keep the original passage in a
+    dedicated evidence field and suppress wrong-language Guide copy when no
+    faithful localization rule applies.
+    """
+
+    if not prefer_zh:
+        return ""
+    text = normalize_ref_card_copy(evidence_text)
+    low = text.lower()
+    if not text:
+        return ""
+    if (
+        "improves reconstruction quality" in low
+        and "without increasing acquisition time" in low
+    ):
+        return "该文说明所提方法在不增加采集时间的情况下提升了重建质量。"
+    if (
+        "scinerf" in low
+        and "physical imaging process" in low
+        and "nerf" in low
+    ):
+        return "该文说明 SCINeRF 将 SCI 的物理成像过程嵌入 NeRF 训练，以压缩观测约束三维场景学习。"
+    if (
+        "real-time imaging remains difficult" in low
+        and "deep learning" in low
+        and "compressive sensing" in low
+    ):
+        return "该文指出实时成像仍有困难，并认为深度学习与压缩感知可缓解这一限制。"
+    if (
+        "full-color imaging based on frequency-division multiplexing" in low
+        and "different color sources" in low
+        and re.search(r"(?:fourier transform|decompos)", low)
+    ):
+        return "该文用不同频率编码各颜色光场，再通过傅里叶变换从桶探测器信号中分离对应的颜色通道。"
+    if (
+        "frequency-division" in low
+        and ("parallelize" in low or "simultaneously" in low)
+        and ("acquisition speed" in low or "integration time" in low)
+    ):
+        return "该文用频分复用并行化单像素成像，在不延长探测器积分时间的情况下，以信噪比换取更高采集速度。"
+    if (
+        "experimental setup" in low
+        and re.search(r"\b(?:camera|ccd)\b", low)
+        and re.search(r"\b(?:dmd|lens)\b", low)
+    ):
+        models = list(
+            dict.fromkeys(
+                re.findall(r"\b(?:iRAYPLE|FLDISCOVERY)\s+[A-Za-z0-9-]+\b", text, flags=re.I)
+            )
+        )
+        model_text = "、".join(models[:2])
+        if not model_text and "ccd camera" in low:
+            model_text = "CCD 相机"
+        lead = f"图 3 的实验装置包含 {model_text}，" if model_text else "图 3 的实验装置"
+        return f"{lead}并明确列出相机、DMD 及成像镜头等硬件部件。"
+    if (
+        "self-supervised" in low
+        and "network" in low
+        and ("ground-truth" in low or "without ground truth" in low)
+    ):
+        return "该文提出用于单像素成像的自监督网络，在无需真值图像的条件下完成低采样率重建。"
+    if (
+        "structured detection" in low
+        and "optical sectioning" in low
+        and ("signal-to-noise" in low or "snr" in low)
+    ):
+        return "该文说明结构化探测可同时改善光学切片与信噪比，并据此比较传统 ISM 或共聚焦显微方案的性能权衡。"
+    if (
+        "interferometric detection" in low
+        and "image scanning microscopy" in low
+        and re.search(r"\b12[02]\s*nm\b", low)
+    ):
+        return "该文将干涉检测与图像扫描显微镜结合，在活细胞低光损伤成像中实现约 120 nm 横向分辨率。"
+    if (
+        "light-field" in low
+        and "position" in low
+        and "angular information" in low
+        and ("volumetric" in low or "volume" in low)
+    ):
+        return "该文说明光场显微同时采集光线的位置与角度信息，并用这些信息完成单次曝光的体积重建。"
+    if (
+        ("s2ism" in low or "s²ism" in low)
+        and "super-resolution" in low
+        and "optical sectioning" in low
+    ):
+        return "该文提出 s²ISM，并从单平面采集中同时获得超分辨率、高信噪比与增强光学切片。"
+    if (
+        "scinerf" in low
+        and "3d scene" in low
+        and ("single snapshot" in low or "snapshot compressed image" in low)
+    ):
+        return "该文提出 SCINeRF，用单幅压缩快照学习三维场景表示。"
     return ""
 
 

@@ -57,6 +57,7 @@ _ALIAS_TO_SNAKE = {
     "cardQualityScore": "card_quality_score",
     "cardQualityFlags": "card_quality_flags",
     "cardWarning": "card_warning",
+    "cardDisplayContractVersion": "card_display_contract_version",
     "renderLocale": "render_locale",
 }
 _TEXT_PATCH_KEYS = ("card_takeaway", "card_claim", "card_context_summary", "card_support_explanation")
@@ -110,6 +111,25 @@ def normalize_citation_card_detail(detail: Mapping[str, Any] | None) -> dict[str
             rec[snake] = rec.get(camel)
     if "is_inpaper" not in rec:
         rec["is_inpaper"] = bool(rec.get("isInpaper"))
+    return rec
+
+
+def _prepare_citation_card_polish_detail(
+    detail: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    rec = normalize_citation_card_detail(detail)
+    try:
+        contract_version = int(rec.get("card_display_contract_version") or 0)
+    except (TypeError, ValueError):
+        contract_version = 0
+    authoritative_evidence = str(rec.get("card_evidence") or "").strip()
+    if contract_version >= 2 and not bool(rec.get("is_inpaper")) and authoritative_evidence:
+        # A v2 System-A card has already passed evidence selection and card
+        # compaction. Browser-normalized details can still carry an older,
+        # shorter ``evidence_quote`` beside it; feeding that field back into
+        # compose_citation_card would silently discard supported claim steps.
+        rec["evidence_quote"] = authoritative_evidence
+        rec["summary_line"] = authoritative_evidence
     return rec
 
 
@@ -313,11 +333,11 @@ def _candidate_payload(base: Mapping[str, Any]) -> str:
 
 
 def citation_card_polish_cache_key(detail: Mapping[str, Any] | None) -> str:
-    rec = normalize_citation_card_detail(detail)
+    rec = _prepare_citation_card_polish_detail(detail)
     render_locale = _citation_card_render_locale(rec)
     base = compose_citation_card(rec, locale=render_locale)
     selected = {
-        "version": 5,
+        "version": 6,
         "render_locale": render_locale,
         "is_inpaper": bool(base.get("is_inpaper")),
         "num": str(base.get("num") or ""),
@@ -580,7 +600,7 @@ def polish_citation_card_detail(
     *,
     llm_fn: Callable[..., str] | None = None,
 ) -> dict[str, Any]:
-    rec = normalize_citation_card_detail(detail)
+    rec = _prepare_citation_card_polish_detail(detail)
     render_locale = _citation_card_render_locale(rec)
     base = compose_citation_card(rec, locale=render_locale)
     payload = _candidate_payload(base)

@@ -61,7 +61,10 @@ def extract_structured_cite_answer_context_line(
     def _sentence_boundaries() -> tuple[int, int]:
         if re.search(r"(?:定量对比依据|quantitative\s+comparison\s+evidence)", line, flags=re.I):
             return 0, len(line)
-        boundary_re = re.compile(r"(?:[。！？!?]|(?<!\d)\.(?=\s|$))")
+        # A semicolon separates independently supportable claim units. Keeping
+        # the marker-local unit prevents a citation after the semicolon from
+        # appearing to support quantitative assertions made before it.
+        boundary_re = re.compile(r"(?:[;；。！？!?]|(?<!\d)\.(?=\s|$))")
         sentence_left = 0
         previous_matches = list(boundary_re.finditer(line[:rel_start]))
         marker_follows_boundary = bool(
@@ -88,6 +91,45 @@ def extract_structured_cite_answer_context_line(
         return sentence_left, sentence_right
 
     sentence_left, sentence_right = _sentence_boundaries()
+    if sentence_left > 0 and line[:sentence_left].rstrip().endswith((";", "；")):
+        current_clause = strip_structured_cite_tokens(
+            str(line[sentence_left:sentence_right] or "").strip()
+        )
+        navigation_only = bool(
+            re.search(
+                r"(?i)\b(?:open|follow|consult|read|see|refer\s+to)\b|"
+                r"打开|查看|参见|追溯|沿着.*(?:引用|文献|来源)",
+                current_clause,
+            )
+        )
+        if navigation_only:
+            delimiter_at = sentence_left - 1
+            prefix = line[:delimiter_at]
+            prior_boundaries = list(
+                re.finditer(r"(?:[;；。！？!?]|(?<!\d)\.(?=\s|$))", prefix)
+            )
+            previous_left = int(prior_boundaries[-1].end()) if prior_boundaries else 0
+            previous_clause = str(prefix[previous_left:] or "").strip()
+
+            def _method_tokens(value: str) -> set[str]:
+                return {
+                    token.lower()
+                    for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}", value)
+                    if token.lower()
+                    not in {
+                        "open",
+                        "follow",
+                        "consult",
+                        "read",
+                        "reference",
+                        "citation",
+                        "paper",
+                        "trail",
+                    }
+                }
+
+            if _method_tokens(previous_clause) & _method_tokens(current_clause):
+                sentence_left = previous_left
     raw = strip_structured_cite_tokens(str(line[sentence_left:sentence_right] or "").strip())
     clean_fn = normalizer or normalize_inline_markdown
     try:

@@ -199,20 +199,98 @@ def test_ref_card_polish_contract_unwraps_source_excerpt_summary():
     assert ui["card_view"]["summary"].startswith("However, the limited image quality")
 
 
-def test_mostly_english_wrapper_is_not_mislabeled_as_chinese_guide():
+def test_mostly_english_wrapper_is_localized_and_kept_as_raw_evidence():
+    raw = (
+        "原文片段写到：Choosing 333 unique patterns yields a reconstruction "
+        "frame rate of 30 Hz for multiple image resolutions."
+    )
     ui = attach_ref_card_polish_contract(
         {
             "summary_kind": "guide",
             "render_locale": "zh",
-            "summary_line": (
-                "原文片段写到：Choosing 333 unique patterns yields a reconstruction "
-                "frame rate of 30 Hz for multiple image resolutions."
-            ),
+            "summary_line": raw,
         }
     )
 
-    assert ui["summary_display_role"] == "source_evidence"
-    assert ui["summary_label"] == "原文证据"
+    assert "333" in ui["summary_line"]
+    assert "30 Hz" in ui["summary_line"]
+    assert ui["summary_generation"] == "deterministic_grounded"
+    assert ui["primary_evidence"]["snippet"].startswith("Choosing 333 unique patterns")
+    assert ui["summary_display_role"] == "guide"
+    assert ui["summary_label"] == "导读"
+
+
+def test_ref_card_locale_contract_derives_chinese_guide_and_keeps_raw_evidence():
+    evidence = (
+        "This next-generation technique combines interferometric detection with image scanning "
+        "microscopy to achieve about 120 nm lateral resolution while operating at lower power."
+    )
+    why = (
+        "原文说明干涉检测与图像扫描显微镜结合后达到约 120 nm 横向分辨率，"
+        "直接支撑干涉路线如何突破分辨率瓶颈。"
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "Interferometric Image Scanning Microscopy.pdf",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": "Interferometric Image Scanning Microscopy for label-free imaging at 120 nm.",
+            "why_line": why,
+            "why_generation": "deterministic_grounded",
+            "primary_evidence": {"snippet": evidence, "highlight_snippet": evidence},
+        }
+    )
+
+    assert ui["summary_line"].startswith("该文将干涉检测与图像扫描显微镜")
+    assert ui["why_line"] == why
+    assert ui["primary_evidence"]["snippet"] == evidence
+    sections = {section["id"]: section for section in ui["card_view"]["sections"]}
+    assert set(sections) >= {"summary", "why"}
+    assert sections["summary"]["text"] != sections["why"]["text"]
+
+
+def test_ref_card_view_keeps_relevance_that_extends_the_guide():
+    summary = "频分复用把多个空间编码并行到不同频率通道。"
+    why = (
+        "频分复用把多个空间编码并行到不同频率通道；这解释了为什么一次积分能够"
+        "恢复多个测量分量，并明确对应速度提升的来源。"
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "FDM.pdf",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": summary,
+            "why_line": why,
+            "summary_generation": "answer_citation_grounded",
+            "why_generation": "answer_citation_grounded",
+        }
+    )
+
+    assert ui["why_line"] == why
+    sections = {section["id"]: section for section in ui["card_view"]["sections"]}
+    assert sections["summary"]["text"] == summary
+    assert sections["why"]["text"] == why
+
+
+def test_ref_card_copy_suppresses_located_quote_shell_without_grounded_replacement():
+    why = (
+        "“Abstract”中的原文直接支撑“频分复用并行采集”，"
+        "可据此核对速度提升与探测器积分时间的关系。"
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "Frequency-division multiplexing.pdf",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": "频分复用通过多频通道实现并行采集。",
+            "why_line": why,
+        }
+    )
+
+    assert ui["why_line"] == ""
+    assert ui["why_generation"] == "locale_suppressed"
+    assert all(section["id"] != "why" for section in ui["card_view"]["sections"])
 
 
 def test_answer_citation_copy_cleanup_preserves_localized_guide_and_source_evidence_split():
@@ -967,6 +1045,29 @@ def test_citation_shelf_item_quality_treats_system_a_raw_as_evidence_not_bibliog
     assert quality["metadata"]["bibliographic"] is False
     assert quality["metadata"]["metadata_ready"] is True
     assert quality["metadata"]["review_needed"] is False
+
+
+def test_citation_shelf_item_quality_accepts_system_a_doi_or_local_source_export() -> None:
+    quality = citation_shelf_item_quality(
+        {
+            "num": 1,
+            "anchor": "a1",
+            "citation_route": "system_a",
+            "is_inpaper": False,
+            "source_name": "NatPhoton-2025-Structured detection.pdf",
+            "source_path": "db/NatPhoton-2025-Structured detection/Structured detection.en.md",
+            "bibliographic_title": "Structured detection for simultaneous super-resolution",
+            "title": "Structured detection for simultaneous super-resolution",
+            "heading_path": "Structured detection for simultaneous super-resolution / Abstract",
+            "doi": "10.1038/example.structured",
+            "summary_line": "The source describes structured detection as a way to retain optical sectioning and super-resolution.",
+        }
+    )
+
+    assert quality["ok"] is True
+    assert quality["metadata"]["export_ready"] is True
+    assert quality["metadata"]["export_acceptance"]["export_mode"] == "system_a_doi"
+    assert quality["metadata"]["has_author"] is False
 
 
 def test_citation_shelf_item_quality_rejects_placeholder_summary_and_markdown():

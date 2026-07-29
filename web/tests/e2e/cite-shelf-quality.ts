@@ -71,9 +71,11 @@ export async function expectCitationShelfQuality(
       '待复查',
       '待核对',
     ]
-    const summaryPendingPhrases = [
+    const summaryDeferredPhrases = [
       '文献摘要待补',
+      '已连接来源暂未提供摘要',
       'Article summary pending',
+      'No abstract was provided by the connected sources',
     ]
     const out: string[] = []
     const textOf = (el: Element | null) => String(el?.textContent || '').replace(/\s+/g, ' ').trim()
@@ -155,18 +157,21 @@ export async function expectCitationShelfQuality(
 
     const summary = root.querySelector('[data-testid="citation-shelf-summary"]')
     const summaryText = textOf(summary)
-    const summaryPending = summaryPendingPhrases.some((phrase) => summaryText.includes(phrase))
+    const summaryStatus = String(summary?.getAttribute('data-summary-status') || '').trim().toLowerCase()
+    const summaryDeferred = ['loading', 'unavailable'].includes(summaryStatus)
+      || summaryDeferredPhrases.some((phrase) => summaryText.includes(phrase))
     if (!summary) out.push('focused item does not show a summary panel')
-    else if (summaryPending) {
+    else if (summaryDeferred) {
+      const summaryItem = summary.closest('[data-testid="citation-shelf-item"]') || root
       const hasUsableFallback = Boolean(
-        textOf(root.querySelector('.kb-shelf-doi-link'))
-        || textOf(root.querySelector('[data-testid="citation-shelf-source-trail"]')).length > 16
-        || textOf(root.querySelector('[data-testid="citation-shelf-excerpt"]')).length > 16,
+        textOf(summaryItem.querySelector('.kb-shelf-doi-link'))
+        || textOf(summaryItem.querySelector('[data-testid="citation-shelf-source-trail"]')).length > 16
+        || textOf(summaryItem.querySelector('[data-testid="citation-shelf-excerpt"]')).length > 16,
       )
-      if (!hasUsableFallback) out.push(`focused summary pending and lacks DOI/source fallback: ${summaryText}`)
+      if (!hasUsableFallback) out.push(`focused summary deferred and lacks DOI/source/excerpt fallback: ${summaryText}`)
     } else if (summaryText.length < 24) out.push(`focused summary too short: ${summaryText}`)
     const summarySource = textOf(root.querySelector('.kb-shelf-summary-source'))
-    if (summary && !summaryPending && summarySource.length < 2) out.push('focused summary lacks source chip')
+    if (summary && !summaryDeferred && summarySource.length < 2) out.push('focused summary lacks source chip')
 
     return out
   }, { ...options, minItems })

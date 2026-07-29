@@ -26,6 +26,49 @@ class _FakeStore:
         return []
 
 
+def test_compatible_refs_cache_rejects_new_render_evidence_revision() -> None:
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    base_pack = {
+        "prompt": "same prompt",
+        "prompt_sig": "same-prompt",
+        "hits": [
+            {
+                "text": "same evidence",
+                "meta": {"source_path": "paper.en.md"},
+            }
+        ],
+    }
+    refs_v1 = {
+        7: {
+            **base_pack,
+            "rendered_payload_sig": "render-v1",
+            "render_evidence_sig": "evidence-v1",
+        }
+    }
+    references_router._store_cached_conversation_refs_payload(
+        conv_id="conv-render-revision",
+        signature="conversation-sig",
+        payload={7: {"hits": [{"text": "old rendered evidence"}]}},
+        refs=refs_v1,
+    )
+
+    assert references_router._get_compatible_cached_conversation_refs_payload(
+        conv_id="conv-render-revision",
+        refs=refs_v1,
+    )
+    refs_v2 = {
+        7: {
+            **base_pack,
+            "rendered_payload_sig": "render-v2",
+            "render_evidence_sig": "evidence-v2",
+        }
+    }
+    assert references_router._get_compatible_cached_conversation_refs_payload(
+        conv_id="conv-render-revision",
+        refs=refs_v2,
+    ) is None
+
+
 def test_state_validated_cache_skips_rendered_payload_json_loader(monkeypatch) -> None:
     references_router._REFS_CONVERSATION_CACHE.clear()
     conversation = {
@@ -163,6 +206,479 @@ def test_answer_citation_evidence_quote_prefers_claim_aligned_sentence_from_same
 
     assert "generalization ability" in quote
     assert "low- and high-light" in quote
+
+
+def test_answer_citation_evidence_quote_keeps_complete_multi_step_mechanism() -> None:
+    quote = references_router._answer_citation_evidence_quote(
+        {
+            "answer_claim": (
+                "Digital refocusing first reconstructs photon trajectories with ray tracing, "
+                "then reverses diffraction with wave propagation."
+            ),
+            "evidence_quote": (
+                "The operation for digital refocusing can be achieved using two steps. "
+                "First, photon trajectories are reconstructed through ray tracing."
+            ),
+            "citation_plan_evidence_quote": (
+                "The operation for digital refocusing of a sample placed out of focus by a distance z "
+                "can be achieved using two steps. First, using the position and angular information of "
+                "each photon, and knowing the optical elements used between them, the trajectory of the "
+                "photons can be reconstructed through a ray tracing operation. Thus, the second step is "
+                "to reverse this diffraction by applying a wave propagation of distance -z to the image "
+                "obtained after step one in order to bring the sample back into focus."
+            ),
+        }
+    )
+
+    assert len(quote) > 460
+    assert all(term in quote for term in ("two steps", "ray tracing", "wave propagation", "distance -z"))
+
+
+def _qclfm_refocusing_passages() -> tuple[str, str]:
+    framing = (
+        "The operation for digital refocusing of a sample placed out of focus by a distance z "
+        "can be achieved using two steps."
+    )
+    ray_step = (
+        "First, using the position and angular information of each photon, and knowing the optical "
+        "elements used between them, the trajectory of the photons can be reconstructed through a "
+        "ray tracing operation."
+    )
+    intervening = (
+        "For macroscopic samples, this first step, using ray optics, is enough to bring the sample "
+        "back into focus [15], however, for microscopic samples, interference and diffraction "
+        "effects from wave optics must also be taken into account. In the microscopic regime, the "
+        "image obtained after this first step is, in fact, the diffraction pattern of the sample "
+        "after propagating a distance z."
+    )
+    wave_step = (
+        "Thus, the second step is to reverse this diffraction by applying a wave propagation of "
+        "distance -z to the image obtained after step one in order to bring the sample back into "
+        "focus."
+    )
+    tail = (
+        "The refocusing process is illustrated in Fig.2. Details on the experimental setup and the "
+        "refocusing procedure can be found in the Methods section."
+    )
+    return " ".join((framing, ray_step, wave_step)), " ".join(
+        (framing, ray_step, intervening, wave_step, tail)
+    )
+
+
+def test_answer_citation_locator_prefers_claim_alignment_over_locator_completeness() -> None:
+    source_path = r"F:\db\qCLFM\qCLFM.en.md"
+    compact, continuous = _qclfm_refocusing_passages()
+    claim = (
+        "Digital refocusing uses two steps: first reconstruct photon trajectories with ray tracing, "
+        "then reverse diffraction with wave propagation."
+    )
+    unrelated = (
+        "The detector calibration section reports background count measurements and timing jitter. "
+        "Its fully instrumented acquisition procedure is repeated for every sensor configuration."
+    )
+    message = {
+        "meta": {
+            "answer_quality": {
+                "citation_plan": {
+                    "slots": [
+                        {
+                            "preferred_system": "system_a",
+                            "source_path": source_path,
+                            "heading_path": "qCLFM / A. Concept",
+                            "evidence_quote": unrelated,
+                            "block_id": "blk-unrelated",
+                            "anchor_id": "p-unrelated",
+                            "page_start": 2,
+                        },
+                        {
+                            "preferred_system": "system_a",
+                            "source_path": source_path,
+                            "heading_path": "qCLFM / A. Concept",
+                            "evidence_quote": continuous,
+                            "block_id": "blk-refocus",
+                            "page_start": 2,
+                        },
+                    ]
+                }
+            },
+            "paper_guide_contracts": {
+                "render_packet": {
+                    "cite_details": [
+                        {
+                            "num": 1,
+                            "citation_route": "system_a",
+                            "source_path": source_path,
+                            "source_name": "qCLFM.pdf",
+                            "heading_path": "qCLFM / A. Concept",
+                            "answer_claim": claim,
+                            "evidence_quote": compact,
+                        }
+                    ]
+                }
+            },
+        }
+    }
+
+    details, pending = references_router._grounded_answer_citation_state(message)
+
+    assert pending is False
+    assert len(details) == 1
+    assert details[0]["block_id"] == "blk-refocus"
+    assert details[0].get("anchor_id") in (None, "")
+    assert details[0]["citation_plan_reader_evidence_quote"] == continuous
+    assert "detector calibration" not in details[0]["citation_plan_reader_evidence_quote"]
+
+
+def test_answer_citation_fast_state_keeps_continuous_reader_passage() -> None:
+    source_path = r"F:\db\qCLFM\qCLFM.en.md"
+    _compact, continuous = _qclfm_refocusing_passages()
+    claim = (
+        "Digital refocusing uses two steps: first reconstruct photon trajectories with ray tracing, "
+        "then reverse diffraction with wave propagation."
+    )
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-qclfm-fast"
+            return [
+                {"id": 80, "role": "user", "content": "这篇论文怎样完成数字重聚焦？"},
+                {
+                    "id": 81,
+                    "role": "assistant",
+                    "content": "先做 ray tracing，再反向 wave propagation [1]。",
+                    "meta": {
+                        "answer_quality": {
+                            "citation_plan": {
+                                "slots": [
+                                    {
+                                        "preferred_system": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "qCLFM.pdf",
+                                        "heading_path": "qCLFM / A. Concept",
+                                        "answer_claim": claim,
+                                        "evidence_quote": continuous,
+                                        "block_id": "blk-concept",
+                                        "anchor_id": "p-refocus",
+                                        "anchor_kind": "paragraph",
+                                        "page_start": 2,
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv-qclfm-fast",
+        payload={
+            80: {
+                "prompt": "这篇论文怎样完成数字重聚焦？",
+                "hits": [
+                    {
+                        "meta": {"source_path": source_path},
+                        "ui_meta": {"source_path": source_path, "display_name": "qCLFM.pdf"},
+                    }
+                ],
+            }
+        },
+    )
+
+    ui = out[80]["hits"][0]["ui_meta"]
+    card_quote = str((ui.get("primary_evidence") or {}).get("snippet") or "")
+    reader = ui.get("reader_open") or {}
+    assert len(card_quote) <= 520
+    assert all(
+        term in card_quote
+        for term in ("two steps", "ray tracing", "wave propagation", "distance -z")
+    )
+    assert "For macroscopic samples" not in card_quote
+    assert reader["snippet"] == continuous
+    assert reader["highlightSnippet"] == continuous
+    assert reader["strictLocate"] is True
+    assert reader["blockId"] == "blk-concept"
+    assert reader["anchorId"] == "p-refocus"
+    assert reader["locateTarget"]["evidenceQuote"] == continuous
+
+
+def test_answer_citation_fast_state_reader_does_not_depend_on_plan_order() -> None:
+    source_path = r"F:\db\qCLFM\qCLFM.en.md"
+    compact, continuous = _qclfm_refocusing_passages()
+    claim = (
+        "Digital refocusing uses two steps: first reconstruct photon trajectories with ray tracing, "
+        "then reverse diffraction with wave propagation."
+    )
+    compact_slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "source_name": "qCLFM.pdf",
+        "heading_path": "qCLFM / A. Concept",
+        "answer_claim": claim,
+        "evidence_quote": compact,
+        "page_start": 2,
+    }
+    located_slot = {
+        **compact_slot,
+        "evidence_quote": continuous,
+        "block_id": "blk-concept",
+        "anchor_id": "p-refocus",
+        "anchor_kind": "paragraph",
+    }
+
+    def render(slots: list[dict]) -> dict:
+        class Store:
+            def get_messages(self, conv_id: str):
+                assert conv_id == "conv-qclfm-fast-order"
+                return [
+                    {"id": 90, "role": "user", "content": "这篇论文怎样完成数字重聚焦？"},
+                    {
+                        "id": 91,
+                        "role": "assistant",
+                        "content": "先做 ray tracing，再反向 wave propagation [1]。",
+                        "meta": {"answer_quality": {"citation_plan": {"slots": slots}}},
+                    },
+                ]
+
+        out = references_router._overlay_refs_payload_with_answer_citations(
+            store=Store(),
+            conv_id="conv-qclfm-fast-order",
+            payload={
+                90: {
+                    "prompt": "这篇论文怎样完成数字重聚焦？",
+                    "hits": [
+                        {
+                            "meta": {"source_path": source_path},
+                            "ui_meta": {
+                                "source_path": source_path,
+                                "display_name": "qCLFM.pdf",
+                            },
+                        }
+                    ],
+                }
+            },
+        )
+        return out[90]["hits"][0]["ui_meta"]
+
+    for slots in ([compact_slot, located_slot], [located_slot, compact_slot]):
+        ui = render(slots)
+        card_quote = str((ui.get("primary_evidence") or {}).get("snippet") or "")
+        reader = ui.get("reader_open") or {}
+        assert all(
+            term in card_quote
+            for term in ("two steps", "ray tracing", "wave propagation", "distance -z")
+        )
+        assert "For macroscopic samples" not in card_quote
+        assert reader["snippet"] == continuous
+        assert reader["highlightSnippet"] == continuous
+        assert reader["strictLocate"] is True
+        assert reader["blockId"] == "blk-concept"
+        assert reader["anchorId"] == "p-refocus"
+
+
+def test_answer_citation_overlay_replaces_stale_pack_primary_with_compound_card() -> None:
+    source_path = r"F:\db\qCLFM\qCLFM.en.md"
+    compact, continuous = _qclfm_refocusing_passages()
+    first_step = compact.split(" Thus,", 1)[0]
+    claim = (
+        "Digital refocusing uses two steps: first reconstruct photon trajectories with ray tracing, "
+        "then reverse diffraction with wave propagation."
+    )
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-qclfm-stale-pack-primary"
+            return [
+                {"id": 100, "role": "user", "content": "这篇论文怎样完成数字重聚焦？"},
+                {
+                    "id": 101,
+                    "role": "assistant",
+                    "content": "先做 ray tracing，再反向 wave propagation [1]。",
+                    "meta": {
+                        "answer_quality": {
+                            "citation_plan": {
+                                "slots": [
+                                    {
+                                        "preferred_system": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "qCLFM.pdf",
+                                        "heading_path": "qCLFM / A. Concept",
+                                        "evidence_quote": continuous,
+                                        "block_id": "blk-concept",
+                                        "anchor_id": "p-refocus",
+                                        "page_start": 2,
+                                    }
+                                ]
+                            }
+                        },
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "num": 1,
+                                        "display_num": 1,
+                                        "citation_route": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "qCLFM.pdf",
+                                        "heading_path": "qCLFM / A. Concept",
+                                        "answer_claim": claim,
+                                        "evidence_quote": compact,
+                                        "summary_line": compact,
+                                        "raw": compact,
+                                        "card_evidence": compact,
+                                        "reader_evidence_quote": continuous,
+                                        "block_id": "blk-concept",
+                                        "anchor_id": "p-refocus",
+                                        "anchor_kind": "paragraph",
+                                        "page_start": 2,
+                                    }
+                                ]
+                            }
+                        },
+                    },
+                },
+            ]
+
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv-qclfm-stale-pack-primary",
+        payload={
+            100: {
+                "prompt": "这篇论文怎样完成数字重聚焦？",
+                "answer": "先做 ray tracing，再反向 wave propagation。",
+                "primary_evidence": {
+                    "source_path": source_path,
+                    "source_name": "qCLFM.pdf",
+                    "heading_path": "qCLFM / A. Concept",
+                    "snippet": first_step,
+                    "highlight_snippet": first_step,
+                    "block_id": "blk-concept",
+                    "anchor_id": "p-refocus",
+                    "selection_reason": "answer_citation",
+                    "strict_locate": True,
+                },
+                "hits": [
+                    {
+                        "meta": {"source_path": source_path},
+                        "ui_meta": {"source_path": source_path, "display_name": "qCLFM.pdf"},
+                    }
+                ],
+            }
+        },
+    )
+
+    pack = out[100]
+    hit_ui = pack["hits"][0]["ui_meta"]
+    assert pack["primary_evidence"]["snippet"] == compact
+    assert hit_ui["primary_evidence"]["snippet"] == compact
+    assert "wave propagation" in pack["primary_evidence"]["snippet"]
+    assert hit_ui["reader_open"]["snippet"] == continuous
+
+    displayed = references_router._attach_pack_display_contract(pack)
+    assert displayed["primary_evidence"]["snippet"] == compact
+    assert displayed["hits"][0]["ui_meta"]["primary_evidence"]["snippet"] == compact
+
+
+def test_answer_citation_overlay_uses_full_plan_passage_for_late_claim_window() -> None:
+    source_path = r"F:\db\FDM\fdm.en.md"
+    opening = (
+        "We propose and experimentally realize frequency-division-multiplexed single-pixel imaging. "
+        "Our technique relies on metamaterial spatial light modulators. "
+        "Earlier implementations used one encoding frequency and were sensitive to narrowband noise."
+    )
+    support = (
+        "Here, we implement frequency-division methods to parallelize the single-pixel imaging process at 3.2 THz. "
+        "Our technique enables a trade-off between signal-to-noise ratio and acquisition speed—without altering "
+        "detector integration time."
+    )
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-fdm-window"
+            return [
+                {"id": 70, "role": "user", "content": "频分复用为何更快，代价是什么？"},
+                {
+                    "id": 71,
+                    "role": "assistant",
+                    "content": "它并行采集，并以信噪比换取速度 [1]。",
+                    "meta": {
+                        "answer_quality": {
+                            "citation_plan": {
+                                "slots": [
+                                    {
+                                        "preferred_system": "system_a",
+                                        "candidate_hits": [1],
+                                        "source_path": source_path,
+                                        "source_name": "FDM.pdf",
+                                        "heading_path": "Paper / Abstract",
+                                        "evidence_quote": f"## Abstract {opening} {support}",
+                                        "page_start": 1,
+                                    }
+                                ]
+                            }
+                        },
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "num": 1,
+                                        "display_num": 1,
+                                        "citation_route": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "FDM.pdf",
+                                        "heading_path": "Paper / Abstract",
+                                        "evidence_quote": opening,
+                                        "summary_line": opening,
+                                        # The visible render detail is compacted
+                                        # before the decisive sentence ends.
+                                        "raw": f"{opening} Here, we implement frequency-division methods to parallelize",
+                                        "answer_claim": "频分复用把成像过程并行化，并以信噪比换取采集速度。",
+                                        "answer_claims": [
+                                            "频分复用无需改变探测器积分时间。",
+                                        ],
+                                        "block_id": "blk-abstract",
+                                        "anchor_id": "p-abstract",
+                                        "anchor_kind": "paragraph",
+                                        "page_start": 1,
+                                    }
+                                ]
+                            }
+                        },
+                    },
+                },
+            ]
+
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv-fdm-window",
+        payload={
+            70: {
+                "prompt": "频分复用为何更快，代价是什么？",
+                "hits": [
+                    {
+                        "meta": {"source_path": source_path},
+                        "ui_meta": {"source_path": source_path, "display_name": "FDM.pdf"},
+                    }
+                ],
+            }
+        },
+    )
+
+    ui = out[70]["hits"][0]["ui_meta"]
+    snippet = str((ui.get("primary_evidence") or {}).get("snippet") or "")
+    reader_snippet = str((ui.get("reader_open") or {}).get("snippet") or "")
+    assert snippet.startswith("Here, we implement frequency-division methods")
+    assert all(
+        term in snippet
+        for term in (
+            "parallelize",
+            "signal-to-noise ratio",
+            "acquisition speed",
+            "detector integration time",
+        )
+    )
+    assert reader_snippet == snippet
+    assert str((ui.get("reader_open") or {}).get("highlightSnippet") or "") == snippet
 
 
 def test_comparison_reference_copy_deduplicates_repeated_heading_names() -> None:
@@ -2056,7 +2572,8 @@ def test_build_pending_conversation_refs_payload_localizes_provisional_evidence(
     assert ui["summary_kind"] == "evidence"
     assert ui["summary_display_role"] == "source_evidence"
     assert ui["summary_label"] == "原文证据"
-    assert "核验" in ui["why_line"]
+    assert "SCINeRF" in ui["why_line"]
+    assert "NeRF 训练" in ui["why_line"]
     assert "This pending match" not in ui["why_line"]
 
 

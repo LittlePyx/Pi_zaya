@@ -23,6 +23,10 @@ export interface RefsPanelRefUiMeta {
   summary_polish_status?: string
   why_polish_status?: string
   why_line?: string
+  card_support_explanation?: string
+  support_relation?: string
+  user_question_relation?: string
+  why_relevant?: string
   why_generation?: string
   why_basis?: string
   semantic_badges?: Array<{

@@ -134,6 +134,12 @@ def test_inline_citation_contract_accepts_reused_marker_in_detailed_body():
     assert eval_mod._inline_citation_contract_failures(answer, contracts) == []
 
 
+def test_quality_term_matching_treats_s2ism_superscript_as_same_method() -> None:
+    assert eval_mod._contains_term("s²ISM structured detection", "s2ISM")
+    assert eval_mod._contains_term("s2ISM structured detection", "s²ISM")
+    assert eval_mod._contains_term("s₂ISM structured detection", "s2ISM")
+
+
 def test_refs_payload_full_state_rejects_fast_or_pending_cards():
     assert _refs_payload_is_full({"9": {"payload_mode": "full", "render_status": "full"}}, user_msg_id=9)
     assert not _refs_payload_is_full({"9": {"payload_mode": "fast", "render_status": "fast"}}, user_msg_id=9)
@@ -428,6 +434,34 @@ def test_claim_contract_can_validate_split_claims_against_full_response():
     ]
 
     assert _claim_evidence_contract_failures(fixture, details, [contract], answer=answer) == []
+
+
+def test_claim_contract_requires_terms_in_visible_card_evidence_not_hidden_raw_metadata():
+    fixture = load_fixture()
+    contract = {
+        "id": "visible-compound-evidence",
+        "docId": "qclfm",
+        "route": "system_a",
+        "evidenceTerms": ["ray tracing", "wave propagation"],
+    }
+    detail = {
+        "citation_route": "system_a",
+        "source_path": source_path_for_doc(fixture, "qclfm"),
+        "evidence_quote": "First, photon trajectories are reconstructed through ray tracing.",
+        "card_evidence": "First, photon trajectories are reconstructed through ray tracing.",
+        "raw": (
+            "First, photon trajectories are reconstructed through ray tracing. "
+            "Second, diffraction is reversed through wave propagation."
+        ),
+        "support_relation": "ray tracing is followed by wave propagation",
+    }
+
+    failures = _claim_evidence_contract_failures(fixture, [detail], [contract])
+    assert [item["id"] for item in failures] == ["visible-compound-evidence"]
+
+    detail["card_evidence"] = str(detail["raw"])
+    detail["evidence_quote"] = str(detail["raw"])
+    assert _claim_evidence_contract_failures(fixture, [detail], [contract]) == []
 
 
 def test_claim_level_citation_gate_rejects_extra_uncited_mechanism_claim():

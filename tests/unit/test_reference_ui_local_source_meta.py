@@ -408,3 +408,39 @@ def test_local_source_identity_and_name_hints_accept_windows_paths_cross_platfor
         "2026",
         "Portable Paper",
     )
+
+
+def test_local_source_meta_returns_offline_filename_identity_with_cached_doi(tmp_path: Path) -> None:
+    from api.reference_local_source_meta import load_local_source_citation_meta
+
+    source_path = str(tmp_path / "NatPhoton-2025-Structured detection.en.md")
+    doi = "10.1038/example.structured"
+    _write_json(
+        tmp_path / "references_index.json",
+        {
+            "docs": {
+                source_path.lower(): {
+                    "path": source_path,
+                    "name": Path(source_path).name,
+                    "stem": Path(source_path).stem.lower(),
+                    "source_doi": doi,
+                    "refs": {},
+                }
+            }
+        },
+    )
+    _write_json(tmp_path / "crossref_cache.json", {"doi": {}, "source_work": {}})
+
+    meta = load_local_source_citation_meta(
+        source_path,
+        source_name="NatPhoton-2025-Structured detection.pdf",
+        db_dir=tmp_path,
+    )
+
+    assert meta == {
+        "title": "Structured detection",
+        "venue": "NatPhoton",
+        "year": "2025",
+        "doi": doi,
+        "doi_url": f"https://doi.org/{doi}",
+    }

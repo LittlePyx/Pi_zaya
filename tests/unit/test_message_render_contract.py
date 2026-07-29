@@ -8,6 +8,7 @@ from api.message_render_contract import (
     normalize_render_cache_payload,
     project_render_packet_to_record,
     render_payload_is_degraded_for_citations,
+    render_payload_has_citation_links,
     render_payload_is_missing_planned_system_a,
     strip_legacy_render_fields,
 )
@@ -35,6 +36,44 @@ def test_render_payload_rejects_missing_planned_system_a() -> None:
                 {"citation_route": "system_a", "source_path": "paper.en.md"}
             ]
         },
+        citation_plan=plan,
+    )
+
+
+def test_render_payload_ignores_ranked_system_a_fallbacks_beyond_budget() -> None:
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": f"paper-{idx}.en.md",
+                "heading_path": "Abstract",
+                "evidence_quote": f"Paper {idx} directly supports claim {idx}.",
+            }
+            for idx in (1, 2, 3)
+        ],
+    }
+    complete = {
+        "cite_details": [
+            {
+                "citation_route": "system_a",
+                "source_path": f"paper-{idx}.en.md",
+                "heading_path": "Abstract",
+                "evidence_quote": f"Paper {idx} directly supports claim {idx}.",
+            }
+            for idx in (1, 2)
+        ]
+    }
+    missing_selected_source = {
+        "cite_details": [complete["cite_details"][0]]
+    }
+
+    assert not render_payload_is_missing_planned_system_a(
+        complete,
+        citation_plan=plan,
+    )
+    assert render_payload_is_missing_planned_system_a(
+        missing_selected_source,
         citation_plan=plan,
     )
 
@@ -331,3 +370,196 @@ def test_render_packet_projection_and_legacy_strip_share_contract_fields():
     assert "content" in rec
     assert "rendered_body" not in rec
     assert rec["cite_details"] == [{"num": 1, "anchor": "kb-cite-demo-1"}]
+
+
+def test_numeric_citation_detection_protects_code_arrays_ranges_and_years() -> None:
+    hits = [{"meta": {"source_path": "paper-one.md"}}]
+
+    for content in (
+        "Use the empty array [].",
+        "The values are [1, 2].",
+        "The interval is [1-3].",
+        "The paper appeared in [2024].",
+        "Inline code: `[1]`.",
+        "```python\nvalues = [1]\n```",
+    ):
+        assert not content_has_linkable_answer_citations(content, hits)
+
+    assert content_has_linkable_answer_citations("Supported claim [1].", hits)
+
+
+def test_render_packet_is_authoritative_over_conflicting_legacy_cache_fields() -> None:
+    packet = {
+        "notice": "packet notice",
+        "rendered_body": "packet body",
+        "rendered_content": "packet notice\n\npacket body",
+        "copy_markdown": "packet notice\n\npacket body",
+        "copy_text": "packet notice packet body",
+        "cite_details": [],
+    }
+    cache = {
+        "schema": 5,
+        "cache_key": "abc",
+        "notice": "stale notice",
+        "rendered_body": "stale body",
+        "rendered_content": "stale content",
+        "copy_markdown": "stale copy",
+        "copy_text": "stale text",
+        "cite_details": [{"num": 9}],
+        "render_packet": packet,
+    }
+
+    payload = normalize_render_cache_payload(cache, schema=5, expected_key="abc")
+
+    assert payload is not None
+    assert payload.notice == "packet notice"
+    assert payload.rendered_body == "packet body"
+    assert payload.copy_markdown == "packet notice\n\npacket body"
+    assert payload.cite_details == []
+
+    rec = {"rendered_body": "other stale body", "cite_details": [{"num": 7}]}
+    assert project_render_packet_to_record(rec, packet)
+    assert rec["rendered_body"] == "packet body"
+    assert rec["cite_details"] == []
+
+
+def test_build_cache_atomically_projects_packet_and_signatures() -> None:
+    packet = {
+        "answer_markdown": "Answer [1].",
+        "notice": "Read with care.",
+        "rendered_body": "Answer [1](#kb-cite-a-1).",
+        "rendered_content": "Read with care.\n\nAnswer [1](#kb-cite-a-1).",
+        "copy_markdown": "Read with care.\n\nAnswer [1].",
+        "copy_text": "Read with care. Answer [1].",
+        "cite_details": [
+            {
+                "num": 1,
+                "anchor": "kb-cite-a-1",
+                "source_path": "paper-one.md",
+            }
+        ],
+    }
+
+    cache = build_render_cache_payload(
+        schema=48,
+        cache_key="cache-key",
+        notice="stale notice",
+        rendered_body="stale body",
+        rendered_content="stale content",
+        copy_markdown="stale copy",
+        copy_text="stale text",
+        cite_details=[],
+        refs_user_msg_id=10,
+        render_packet=packet,
+        answer_sig="answer-sig",
+        input_ref_sig="refs-sig",
+        citation_plan_sig="plan-sig",
+        locale="ZH",
+    )
+
+    assert cache["rendered_body"] == packet["rendered_body"]
+    assert cache["copy_markdown"].startswith("Read with care.")
+    assert cache["cite_details"] == packet["cite_details"]
+    assert cache["answer_sig"] == cache["render_packet"]["answer_sig"] == "answer-sig"
+    assert cache["input_ref_sig"] == cache["render_packet"]["input_ref_sig"] == "refs-sig"
+    assert cache["citation_plan_sig"] == cache["render_packet"]["citation_plan_sig"] == "plan-sig"
+    assert cache["locale"] == cache["render_packet"]["locale"] == "zh"
+    assert cache["schema"] == cache["render_packet"]["schema"] == 48
+
+
+def test_citation_link_health_requires_exact_card_anchor_number_and_source() -> None:
+    valid = {
+        "rendered_body": "Claim [1](#kb-cite-paper-1).",
+        "cite_details": [
+            {
+                "num": 1,
+                "anchor": "kb-cite-paper-1",
+                "source_path": "paper-one.md",
+            }
+        ],
+    }
+    hits = [{"meta": {"source_path": "paper-one.md"}}]
+
+    assert render_payload_has_citation_links(valid, hits=hits)
+    assert not render_payload_has_citation_links(
+        {**valid, "cite_details": []},
+        hits=hits,
+    )
+    assert not render_payload_has_citation_links(
+        {
+            **valid,
+            "rendered_body": "Claim [1](#kb-cite-missing-1).",
+        },
+        hits=hits,
+    )
+    assert not render_payload_has_citation_links(
+        {
+            **valid,
+            "cite_details": [
+                {
+                    "num": 0,
+                    "anchor": "kb-cite-paper-1",
+                    "source_path": "paper-one.md",
+                }
+            ],
+        },
+        hits=hits,
+    )
+    assert render_payload_has_citation_links(
+        {
+            "rendered_body": (
+                "Claim [1](#kb-cite-paper-1) and repeat "
+                "[1](#kb-cite-paper-duplicate)."
+            ),
+            "cite_details": [
+                {
+                    "num": 1,
+                    "anchor": "kb-cite-paper-1",
+                    "source_path": "paper-one.md",
+                },
+                {
+                    "num": 1,
+                    "anchor": "kb-cite-paper-duplicate",
+                    "source_path": "paper-one.md",
+                },
+            ],
+        },
+        hits=hits,
+    )
+    assert not render_payload_has_citation_links(
+        {
+            "rendered_body": (
+                "First [1](#kb-cite-paper-1) and conflicting "
+                "[1](#kb-cite-paper-two)."
+            ),
+            "cite_details": [
+                {
+                    "num": 1,
+                    "anchor": "kb-cite-paper-1",
+                    "source_path": "paper-one.md",
+                },
+                {
+                    "num": 1,
+                    "anchor": "kb-cite-paper-two",
+                    "source_path": "paper-two.md",
+                },
+            ],
+        },
+        hits=[
+            {"meta": {"source_path": "paper-one.md"}},
+            {"meta": {"source_path": "paper-two.md"}},
+        ],
+    )
+    assert not render_payload_has_citation_links(
+        {
+            **valid,
+            "cite_details": [
+                {
+                    "num": 1,
+                    "anchor": "kb-cite-paper-1",
+                    "source_path": "paper-two.md",
+                }
+            ],
+        },
+        hits=hits,
+    )

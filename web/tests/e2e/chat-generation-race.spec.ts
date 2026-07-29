@@ -845,7 +845,7 @@ test('generation start failure is localized in Chinese UI', async ({ page }) => 
   expect(backend.getGenerationStreamCalls()).toBe(0)
 })
 
-test('done generation stream clears running state when final message reload fails', async ({ page }) => {
+test('done generation stream keeps the streamed answer when final message hydration fails', async ({ page }) => {
   const backend = await installBackend(page, { completionMessageFailure: true })
 
   await page.goto('/')
@@ -860,9 +860,106 @@ test('done generation stream clears running state when final message reload fail
   await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
   await expect(page.locator('body')).toContainText('Question for A')
   await expect(page.locator('body')).toContainText(A_GENERATED_ANSWER)
-  await expect(page.locator('body')).toContainText(A_REFRESH_FAILED_ANSWER)
+  await expect(page.locator('body')).not.toContainText(A_REFRESH_FAILED_ANSWER)
   await expect(page.locator('body')).not.toContainText('messages page temporarily unavailable')
   await expect(page.locator('body')).not.toContainText(A_STREAM_FAILED_ANSWER)
+})
+
+test('terminal answer clears a stale render packet even when answer_markdown matches', async ({ page }) => {
+  const backend = await installBackend(page, { completionMessageFailure: true })
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill('Question for A')
+  await page.locator('button.kb-send-btn').click()
+  await expect(page.locator('button.kb-stop-btn')).toBeVisible({ timeout: 5_000 })
+
+  await page.evaluate(async ({ convId, finalAnswer }) => {
+    const { useChatStore } = await import('/src/stores/chatStore.ts')
+    useChatStore.setState((state) => {
+      const staleAssistant: (typeof state.messages)[number] = {
+        id: 102,
+        role: 'assistant',
+        content: finalAnswer,
+        rendered_body: 'STALE_PACKET_BODY [9](#stale-packet-anchor)',
+        rendered_content: 'STALE_PACKET_BODY [9](#stale-packet-anchor)',
+        copy_text: 'STALE_PACKET_COPY',
+        copy_markdown: 'STALE_PACKET_COPY',
+        notice: 'STALE_PACKET_NOTICE',
+        cite_details: [{ num: 9, anchor: 'stale-top-level-anchor' }],
+        refs_user_msg_id: 101,
+        render_cache_key: 'stale-render-cache-key',
+        created_at: Date.now() / 1000,
+        provenance: { status: 'ready', segments: [{ segment_id: 'stale-segment' }] },
+        meta: {
+          answer_quality: { retrieval: { low_confidence: true } },
+          agent_source_summary: { label: 'STALE_SOURCE_SUMMARY', should_show: true },
+          paper_guide_contracts: {
+            render_packet: {
+              answer_markdown: finalAnswer,
+              rendered_body: 'STALE_PACKET_BODY [9](#stale-packet-anchor)',
+              rendered_content: 'STALE_PACKET_BODY [9](#stale-packet-anchor)',
+              copy_text: 'STALE_PACKET_COPY',
+              copy_markdown: 'STALE_PACKET_COPY',
+              notice: 'STALE_PACKET_NOTICE',
+              cite_details: [{
+                num: 9,
+                anchor: 'stale-packet-anchor',
+                source_name: 'STALE_PACKET_SOURCE',
+                source_path: '/papers/stale-packet.md',
+              }],
+            },
+          },
+        },
+      }
+      const messages = [...state.messages, staleAssistant]
+      const cached = state.conversationCacheById[convId]
+      return {
+        messages,
+        conversationCacheById: {
+          ...state.conversationCacheById,
+          [convId]: { ...cached, messages },
+        },
+      }
+    })
+  }, { convId: CONV_A_ID, finalAnswer: A_GENERATED_ANSWER })
+
+  const assistant = page.locator('[data-msg-id="102"] .kb-msg-bubble-assistant')
+  await expect(assistant).toContainText('STALE_PACKET_BODY')
+  await expect(assistant.locator('.kb-cite-chip')).toHaveCount(1)
+
+  backend.releaseStream()
+  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+  await expect(assistant).toContainText(A_GENERATED_ANSWER)
+  await expect(assistant).not.toContainText('STALE_PACKET_BODY')
+  await expect(assistant).not.toContainText('STALE_PACKET_NOTICE')
+  await expect(assistant.locator('.kb-cite-chip')).toHaveCount(0)
+
+  const storedPresentation = await page.evaluate(async () => {
+    const { useChatStore } = await import('/src/stores/chatStore.ts')
+    const message = useChatStore.getState().messages.find((item) => item.id === 102)
+    const contracts = message?.meta?.paper_guide_contracts as Record<string, unknown> | undefined
+    return {
+      content: message?.content || '',
+      renderedBody: message?.rendered_body || '',
+      copyText: message?.copy_text || '',
+      citeCount: message?.cite_details?.length || 0,
+      hasRenderPacket: Boolean(contracts?.render_packet),
+      hasAnswerQuality: Boolean(message?.meta?.answer_quality),
+      hasStaleSourceSummary: Boolean(message?.meta?.agent_source_summary),
+      hasProvenance: Boolean(message?.provenance),
+    }
+  })
+  expect(storedPresentation).toEqual({
+    content: A_GENERATED_ANSWER,
+    renderedBody: '',
+    copyText: '',
+    citeCount: 0,
+    hasRenderPacket: false,
+    hasAnswerQuality: false,
+    hasStaleSourceSummary: false,
+    hasProvenance: false,
+  })
 })
 
 test('terminal error event is not treated as a successful answer and can retry the same prompt', async ({ page }) => {

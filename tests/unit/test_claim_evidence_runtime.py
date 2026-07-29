@@ -1,6 +1,8 @@
 import subprocess
 import sys
 
+import pytest
+
 from kb.claim_evidence_runtime import audit_and_repair_claim_evidence, claim_evidence_audit
 
 
@@ -174,6 +176,103 @@ def test_hard_numeric_citation_mismatch_is_removed():
 
     assert "真实 SPAD 噪声" in repaired
     assert "7%" not in repaired
+    assert meta["dropped_hard_mismatch_claims"] == 1
+
+
+def test_digit_fold_claim_keeps_english_number_word_multiplier_evidence() -> None:
+    answer = (
+        "\u5165\u5c04\u7167\u660e\u529f\u7387\u964d\u4f4e\u7ea6 10 \u500d\uff0c"
+        "\u53ef\u663e\u8457\u51cf\u5c11\u5149\u635f\u4f24 [1]\u3002"
+    )
+    evidence = (
+        "iISM can operate with tenfold lower incident illumination power while "
+        "reducing photodamage."
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [
+            {
+                "text": evidence,
+                "meta": {"citation_plan_evidence_quotes": [evidence]},
+            }
+        ],
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert repaired == answer
+    assert meta["dropped_hard_mismatch_claims"] == 0
+    assert meta["renderer_rejected_citations"] == 0
+    assert meta["citation_mismatch_claims"] == 0
+
+
+def test_fold_equivalence_rejects_same_value_and_direction_for_different_metric() -> None:
+    answer = (
+        "\u5149\u573a\u4f4d\u7f6e\u5206\u8fa8\u7387\u901a\u5e38\u964d\u4f4e\u7ea6 10 \u500d [1]\u3002"
+    )
+    evidence = (
+        "iISM can operate with tenfold lower incident illumination power while "
+        "reducing photodamage."
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [
+            {
+                "text": evidence,
+                "meta": {"citation_plan_evidence_quotes": [evidence]},
+            }
+        ],
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert repaired == ""
+    assert meta["dropped_hard_mismatch_claims"] == 1
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        (
+            "iISM can operate with twelvefold lower incident illumination power while "
+            "reducing photodamage."
+        ),
+        (
+            "iISM can operate with tenfold higher incident illumination power while "
+            "reducing photodamage."
+        ),
+        "iISM uses 10 Hz illumination while reducing photodamage.",
+    ],
+)
+def test_fold_equivalence_rejects_magnitude_direction_and_unit_conflicts(
+    evidence: str,
+) -> None:
+    answer = (
+        "\u5165\u5c04\u7167\u660e\u529f\u7387\u964d\u4f4e\u7ea6 10 \u500d\uff0c"
+        "\u53ef\u663e\u8457\u51cf\u5c11\u5149\u635f\u4f24 [1]\u3002"
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [
+            {
+                "text": evidence,
+                "meta": {"citation_plan_evidence_quotes": [evidence]},
+            }
+        ],
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert repaired == ""
     assert meta["dropped_hard_mismatch_claims"] == 1
 
 
@@ -854,6 +953,73 @@ def test_strict_plan_rebinds_hadamard_claim_from_foveated_to_basis_source() -> N
     assert meta["rebound_citations"] == 1
 
 
+def test_strict_plan_rebinds_scigs_claim_from_scinerf_to_scigs_source() -> None:
+    answer = (
+        "SCIGS uses 3DGS to reconstruct an explicit dynamic 3D scene from one compressed snapshot [1]."
+    )
+    hits = [
+        {
+            "text": (
+                "SCINeRF recovers a 3D scene representation from a single temporal "
+                "compressed image by incorporating the physical SCI process into NeRF training."
+            ),
+            "meta": {"source_name": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image.pdf"},
+        },
+        {
+            "text": (
+                "SCIGS is the first method to reconstruct an explicit 3D scene from a single "
+                "compressed image and extends the reconstruction to dynamic 3D scenes."
+            ),
+            "meta": {"source_name": "SCIGS: 3D Gaussians Splatting from a Snapshot Compressive Image.pdf"},
+        },
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 2},
+    )
+
+    assert "[2]" in repaired
+    assert "[1]" not in repaired
+    assert meta["rebound_citations"] == 1
+
+
+def test_strict_plan_adds_source_to_uncited_numeric_markdown_table_row() -> None:
+    answer = "\n".join(
+        [
+            "| Method | Dynamic-scene result |",
+            "| --- | --- |",
+            "| SCIGS vs SCINeRF | SSIM 0.9137 vs 0.7974 |",
+        ]
+    )
+    hits = [
+        {
+            "text": "SCINeRF incorporates the physical SCI process into NeRF training.",
+            "meta": {"source_name": "SCINeRF.pdf"},
+        },
+        {
+            "text": (
+                "On the dynamic dataset, SCIGS obtains SSIM 0.9137 while "
+                "SCINeRF obtains SSIM 0.7974."
+            ),
+            "meta": {"source_name": "SCIGS.pdf"},
+        },
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 2},
+    )
+
+    assert "SSIM 0.9137 vs 0.7974 [2] |" in repaired
+    assert any(
+        item.get("reason") == "markdown_table_fact"
+        for item in meta.get("repairs", [])
+    )
+
+
 def test_restores_reported_3d_video_frame_rate_from_eligible_evidence() -> None:
     answer = (
         "四个空间分离的单像素探测器并行采集不同照明方向，"
@@ -880,3 +1046,158 @@ def test_restores_reported_3d_video_frame_rate_from_eligible_evidence() -> None:
 
     assert "约为 8 帧/秒 [4]" in repaired
     assert meta["restored_evidence_numbers"] == 1
+
+
+def test_multi_source_numeric_comparison_is_kept_only_after_union_coverage() -> None:
+    answer = "SCIGS obtains 30.2 dB [1], while SCINeRF obtains 31.5 dB [2]."
+    hits = [
+        {
+            "text": "SCIGS obtains 30.2 dB on the benchmark.",
+            "meta": {"source_name": "SCIGS.pdf"},
+        },
+        {
+            "text": "SCINeRF obtains 31.5 dB on the benchmark.",
+            "meta": {"source_name": "SCINeRF.pdf"},
+        },
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 2},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert repaired == answer
+    assert meta["citation_mismatch_claims"] == 0
+    assert meta["dropped_hard_mismatch_claims"] == 0
+
+
+def test_incomplete_multi_source_numeric_union_does_not_false_bind_cards() -> None:
+    answer = "SCIGS obtains 30.2 dB [1], while SCINeRF obtains 31.5 dB [2]."
+    hits = [
+        {
+            "text": "SCIGS obtains 30.2 dB on the benchmark.",
+            "meta": {"source_name": "SCIGS.pdf"},
+        },
+        {
+            "text": "SCINeRF is a related reconstruction method.",
+            "meta": {"source_name": "SCINeRF.pdf"},
+        },
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 2},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert repaired == ""
+    assert meta["dropped_hard_mismatch_claims"] == 1
+
+
+def test_plain_comma_multi_source_comparison_uses_complete_union() -> None:
+    answer = "Alpha reaches PSNR 30 dB [1]，Beta reaches PSNR 40 dB [2]."
+    hits = [
+        {
+            "text": "Alpha reaches PSNR 30 dB on the benchmark.",
+            "meta": {"source_name": "Alpha.pdf"},
+        },
+        {
+            "text": "Beta reaches PSNR 40 dB on the benchmark.",
+            "meta": {"source_name": "Beta.pdf"},
+        },
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1, 2},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert repaired == answer
+    assert meta["citation_mismatch_claims"] == 0
+    assert meta["dropped_hard_mismatch_claims"] == 0
+
+
+def test_plain_comma_single_source_does_not_claim_unsupported_half() -> None:
+    answer = "Alpha reaches PSNR 30 dB [1], Beta reaches PSNR 40 dB."
+    hits = [
+        {
+            "text": "Alpha reaches PSNR 30 dB on the benchmark.",
+            "meta": {"source_name": "Alpha.pdf"},
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert repaired == ""
+    assert meta["dropped_hard_mismatch_claims"] == 1
+
+
+@pytest.mark.parametrize(
+    ("answer", "evidence"),
+    [
+        ("The model reaches SSIM 0.91 [1].", "The model reaches LPIPS 0.91."),
+        ("The reconstruction reaches PSNR 40 dB [1].", "The measured SNR is 40 dB."),
+    ],
+)
+def test_runtime_rejects_same_quantity_with_incompatible_metric(
+    answer: str,
+    evidence: str,
+) -> None:
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [{"text": evidence, "meta": {"source_name": "Benchmark.pdf"}}],
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert repaired == ""
+    assert meta["dropped_hard_mismatch_claims"] == 1
+
+
+def test_sidd_table_best_tie_is_cited_instead_of_dropped() -> None:
+    answer = (
+        "在《ECCV-2022-Simple Baselines for Image Restoration》的表 6 中，"
+        "SIDD PSNR 的最高值为 40.30，由 Baseline ours 和 NAFNet ours 并列取得。"
+    )
+    evidence = (
+        "Table 6. Simple Baselines for Image Restoration / 5 Experiments / "
+        "5.2 Applications. Table 6. Image Denoising Results on SIDD [1]. "
+        "SIDD PSNR: MPRNet [37] = 39.71; MIRNet [40] = 39.72; "
+        "NBNet [6] = 39.75; UFormer [36] = 39.89; MAXIM [32] = 39.96; "
+        "HINet [5] = 39.99; Restormer [39] = 40.02; "
+        "Baseline ours = 40.30; NAFNet ours = 40.30"
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {
+                "source_name": "ECCV-2022-Simple Baselines for Image Restoration",
+                "source_path": "simple-baselines.en.md",
+                "heading_path": "5 Experiments / 5.2 Applications",
+            },
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+    )
+
+    assert "Baseline ours" in repaired
+    assert "NAFNet ours" in repaired
+    assert "40.30" in repaired
+    assert "[1]" in repaired
+    assert meta["repaired_citations"] == 1
+    assert meta["dropped_unsupported_unplanned_claims"] == 0

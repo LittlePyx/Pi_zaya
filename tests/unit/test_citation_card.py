@@ -31,6 +31,50 @@ def test_system_a_card_composer_builds_quality_fields() -> None:
     assert detail["card_warning"] == ""
 
 
+def test_system_a_card_centers_long_evidence_on_claim_aligned_sentence() -> None:
+    target_sentence = (
+        "Specifically, we formulate the physical imaging process of SCI as part "
+        "of the training of NeRF, allowing us to exploit its impressive performance "
+        "in capturing complex scene structures."
+    )
+    long_abstract = (
+        "In this paper, we explore the potential of Snapshot Compressive Imaging (SCI) "
+        "technique for recovering the underlying 3D scene representation from a single "
+        "temporal compressed image. "
+        "SCI is a cost-effective method that enables the recording of high-dimensional "
+        "data into a single image using low-cost 2D imaging sensors. "
+        "To achieve this, a series of specially designed 2D masks are usually employed, "
+        "which reduces storage requirements and offers potential privacy protection. "
+        "Inspired by this, our approach builds upon the powerful 3D scene representation "
+        "capabilities of neural radiance fields (NeRF). "
+        f"{target_sentence} "
+        "To assess the method, we conduct extensive evaluations using synthetic and real data."
+    )
+
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "SCINeRF.pdf",
+            "heading_path": "Abstract",
+            "answer_claim": (
+                "\u5b83\u5c06 SCI \u7684\u7269\u7406\u6210\u50cf\u8fc7\u7a0b\u516c\u5f0f\u5316\u4e3a NeRF \u8bad\u7ec3\u7684\u4e00\u90e8\u5206\uff0c"
+                "\u5229\u7528 NeRF \u6355\u6349\u590d\u6742\u573a\u666f\u7ed3\u6784\u3002"
+            ),
+            "evidence_quote": long_abstract,
+            "location_label": "Abstract / p. 1",
+            "selection_reason": "prompt_aligned_source_sentence",
+            "strict_locate": True,
+            "page_start": 1,
+            "binding_status": "grounded",
+            "binding_confidence": 0.95,
+        }
+    )
+
+    assert target_sentence in detail["card_evidence"]
+    assert not detail["card_evidence"].startswith("In this paper")
+    assert not detail["card_evidence"].endswith("...")
+
+
 def test_system_a_card_preserves_strict_prompt_contract_evidence() -> None:
     evidence = (
         "Single photon avalanche diode (SPAD) operates in Geiger mode. "

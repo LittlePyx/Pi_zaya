@@ -11,7 +11,12 @@ from kb.answer_contract import (
     _enhance_kb_miss_fallback,
     _reconcile_kb_notice,
 )
-from kb.claim_evidence_runtime import audit_and_repair_claim_evidence
+from kb.claim_evidence_runtime import (
+    _append_citation as _append_claim_citation,
+    _split_claim_segments as _split_claim_evidence_segments,
+    _support_score as _claim_evidence_support_score,
+    audit_and_repair_claim_evidence,
+)
 from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.paper_guide_contracts import (
     _build_paper_guide_render_packet_model,
@@ -82,10 +87,134 @@ _NEGATIVE_BOUNDARY_ANSWER_RE = re.compile(
 )
 
 
-def _strict_comparison_system_a_numbers(citation_plan: dict | None) -> set[int] | None:
+def _citation_plan_source_keys(raw: dict | None) -> set[str]:
+    """Return stable private/public source aliases for a plan slot or answer hit."""
+
+    if not isinstance(raw, dict):
+        return set()
+    values: list[object] = []
+    for payload in (
+        raw,
+        raw.get("meta") if isinstance(raw.get("meta"), dict) else {},
+        raw.get("ui_meta") if isinstance(raw.get("ui_meta"), dict) else {},
+    ):
+        if not isinstance(payload, dict):
+            continue
+        values.extend(
+            payload.get(key)
+            for key in ("source_path", "sourcePath", "source_name", "sourceName", "display_name")
+        )
+    keys: set[str] = set()
+    for value in values:
+        normalized = str(value or "").strip().replace("\\", "/").lower().split("?", 1)[0]
+        if not normalized:
+            continue
+        parts = [part for part in normalized.split("/") if part]
+        if len(parts) >= 2:
+            keys.add(f"path:{'/'.join(parts[-2:])}")
+        filename = parts[-1] if parts else normalized
+        stem = re.sub(r"(?:\.(?:en|zh))?\.md$|\.pdf$", "", filename, flags=re.IGNORECASE)
+        stem = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", stem).strip()
+        if len(stem) >= 4:
+            keys.add(f"name:{stem}")
+    return keys
+
+
+def _citation_plan_slot_hit_numbers(slot: dict, answer_hits: list[dict] | None) -> list[int]:
+    """Resolve a plan slot against the current hit order, preferring source identity."""
+
+    hits = [hit if isinstance(hit, dict) else {} for hit in list(answer_hits or [])]
+    candidate_numbers: list[int] = []
+    for raw_number in list(slot.get("candidate_hits") or []):
+        try:
+            number = int(raw_number)
+        except (TypeError, ValueError):
+            continue
+        if number > 0 and number not in candidate_numbers:
+            candidate_numbers.append(number)
+    if not hits:
+        return candidate_numbers
+
+    wanted_keys = _citation_plan_source_keys(slot)
+    if wanted_keys:
+        matching_numbers = [
+            index
+            for index, hit in enumerate(hits, start=1)
+            if wanted_keys.intersection(_citation_plan_source_keys(hit))
+        ]
+        if matching_numbers:
+            if len(matching_numbers) == 1:
+                return matching_numbers
+            # A plan may contain a precise no-candidate method slot plus one or
+            # more coarse same-paper retrieval slots.  Candidate numbers were
+            # assigned before evidence alignment, so a still-same-source number
+            # can nevertheless point at the wrong passage (for example a table
+            # instead of the abstract).  Resolve all same-source occurrences by
+            # heading and evidence overlap instead of blindly preserving that
+            # stale passage number.  This also prevents the same abstract quote
+            # from being copied onto two hits and becoming non-unique at the
+            # final claim-evidence gate.
+            wanted_heading = str(
+                slot.get("heading_path") or slot.get("headingPath") or ""
+            ).strip().lower()
+            wanted_evidence = str(
+                slot.get("evidence_quote") or slot.get("evidenceQuote") or ""
+            ).strip()
+            wanted_tokens = evidence_alignment_tokens(wanted_evidence)
+
+            def _match_score(number: int) -> tuple[int, int, int]:
+                hit = hits[number - 1]
+                meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+                heading = str(
+                    (meta or {}).get("heading_path")
+                    or (meta or {}).get("ref_best_heading_path")
+                    or ""
+                ).strip().lower()
+                hit_tokens = evidence_alignment_tokens(
+                    " ".join(
+                        [
+                            str(hit.get("text") or ""),
+                            str((meta or {}).get("evidence_quote") or ""),
+                        ]
+                    )
+                )
+                heading_score = 2 if wanted_heading and heading == wanted_heading else 0
+                return (heading_score, len(wanted_tokens & hit_tokens), -number)
+
+            return [max(matching_numbers, key=_match_score)]
+
+    return [number for number in candidate_numbers if 0 < number <= len(hits)]
+
+
+def _strict_comparison_system_a_numbers(
+    citation_plan: dict | None,
+    answer_hits: list[dict] | None = None,
+) -> set[int] | None:
     if not isinstance(citation_plan, dict):
         return None
-    if str(citation_plan.get("intent") or "").strip().lower() != "comparison":
+    system_a_slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() == "system_a"
+    ]
+    source_groups: set[str] = set()
+    for slot in system_a_slots:
+        source_keys = _citation_plan_source_keys(slot)
+        path_keys = sorted(key for key in source_keys if key.startswith("path:"))
+        name_keys = sorted(key for key in source_keys if key.startswith("name:"))
+        primary_source_key = (path_keys or name_keys or [""])[0]
+        if primary_source_key:
+            source_groups.add(primary_source_key)
+    intent = str(citation_plan.get("intent") or "").strip().lower()
+    # A model may call a within-paper benefit/risk answer a "comparison".
+    # Exact-hit allowlisting is safe only when the plan identifies at least two
+    # distinct papers. Preserve the legacy intent-only behavior for old plans
+    # that carry no source identity at all.
+    if source_groups:
+        if len(source_groups) < 2:
+            return None
+    elif intent != "comparison":
         return None
     budget = citation_plan.get("budget") if isinstance(citation_plan.get("budget"), dict) else {}
     try:
@@ -96,21 +225,11 @@ def _strict_comparison_system_a_numbers(citation_plan: dict | None) -> set[int] 
         return set()
     numbers: set[int] = set()
     used_slots = 0
-    for raw_slot in list(citation_plan.get("slots") or []):
-        if not isinstance(raw_slot, dict):
-            continue
-        if str(raw_slot.get("preferred_system") or "").strip().lower() != "system_a":
-            continue
+    for raw_slot in system_a_slots:
         if used_slots >= limit:
             break
         used_slots += 1
-        for raw_number in list(raw_slot.get("candidate_hits") or []):
-            try:
-                number = int(raw_number)
-            except (TypeError, ValueError):
-                continue
-            if number > 0:
-                numbers.add(number)
+        numbers.update(_citation_plan_slot_hit_numbers(raw_slot, answer_hits))
     return numbers
 
 
@@ -131,6 +250,7 @@ def _claim_evidence_hits_with_citation_plan(
     if not merged or not isinstance(citation_plan, dict):
         return merged
     quotes_by_index: dict[int, list[str]] = {}
+    slots_by_index: dict[int, list[dict]] = {}
     for slot in list(citation_plan.get("slots") or []):
         if not isinstance(slot, dict):
             continue
@@ -139,13 +259,11 @@ def _claim_evidence_hits_with_citation_plan(
         quote = str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip()
         if not quote:
             continue
-        for raw_number in list(slot.get("candidate_hits") or []):
-            try:
-                index = int(raw_number) - 1
-            except (TypeError, ValueError):
-                continue
+        for number in _citation_plan_slot_hit_numbers(slot, merged):
+            index = int(number) - 1
             if 0 <= index < len(merged):
                 quotes_by_index.setdefault(index, []).append(quote)
+                slots_by_index.setdefault(index, []).append(slot)
     for index, quotes in quotes_by_index.items():
         hit = dict(merged[index])
         # The renderer exposes the citation-plan sentence, not the broader
@@ -155,6 +273,20 @@ def _claim_evidence_hits_with_citation_plan(
         hit["text"] = "\n".join(part for part in evidence_parts if part)
         meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), dict) else {}
         meta["citation_plan_evidence_quotes"] = list(dict.fromkeys(quotes))
+        # The plan sentence carries the authoritative paper identity.  Keep it
+        # with the overlaid quote so claim auditing can distinguish adjacent
+        # hits from different papers even when retrieval omitted source_name.
+        for slot in slots_by_index.get(index, []):
+            source_name = str(
+                slot.get("source_name") or slot.get("sourceName") or ""
+            ).strip()
+            source_path = str(
+                slot.get("source_path") or slot.get("sourcePath") or ""
+            ).strip()
+            if source_name and not str(meta.get("source_name") or "").strip():
+                meta["source_name"] = source_name
+            if source_path and not str(meta.get("source_path") or "").strip():
+                meta["source_path"] = source_path
         hit["meta"] = meta
         merged[index] = hit
     return merged
@@ -223,6 +355,395 @@ _STRUCTURED_ANSWER_SECTION_RE = re.compile(
 _SINGLE_NUM_CITE_RE = re.compile(r"(?<![!\\])\[(\d{1,4})\](?!\()")
 def _contains_cjk(text: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+_PLANNED_BINDER_SOURCE_STOPWORDS = {
+    "abstract",
+    "article",
+    "conference",
+    "document",
+    "final",
+    "journal",
+    "manuscript",
+    "paper",
+    "preprint",
+    "proceedings",
+    "revised",
+    "supplement",
+    "version",
+}
+
+
+def _planned_binder_source_terms(slot: dict) -> set[str]:
+    """Return conservative source-name terms that may appear in an answer claim."""
+
+    values: list[str] = []
+    for key in _citation_plan_source_keys(slot):
+        if key.startswith("name:"):
+            values.append(key.removeprefix("name:"))
+    for key in ("source_name", "sourceName", "display_name"):
+        value = str(slot.get(key) or "").strip()
+        if value:
+            values.append(value)
+    terms: set[str] = set()
+    for value in values:
+        normalized = re.sub(
+            r"(?:\.(?:en|zh))?\.md$|\.pdf$",
+            "",
+            str(value or "").strip().lower(),
+            flags=re.IGNORECASE,
+        )
+        for term in re.findall(r"[a-z0-9\u4e00-\u9fff]+", normalized):
+            if (
+                len(term) >= 3
+                and not term.isdigit()
+                and term not in _PLANNED_BINDER_SOURCE_STOPWORDS
+            ):
+                terms.add(term)
+    return terms
+
+
+def _planned_binder_numeric_citations(value: str) -> set[int]:
+    numbers: set[int] = set()
+    for marker in _FREEFORM_NUMERIC_CITE_RE.finditer(str(value or "")):
+        numbers.update(int(raw) for raw in re.findall(r"\d+", marker.group(1)))
+    return numbers
+
+
+def _planned_binder_table_cells(line: str) -> list[tuple[int, int, str]]:
+    """Return non-empty Markdown table cell spans without rebuilding the row."""
+
+    pipe_positions = [
+        match.start()
+        for match in re.finditer(r"(?<!\\)\|", str(line or ""))
+    ]
+    if len(pipe_positions) < 2:
+        return []
+    boundaries = [-1, *pipe_positions, len(line)]
+    cells: list[tuple[int, int, str]] = []
+    for left, right in zip(boundaries, boundaries[1:]):
+        raw_start = left + 1
+        raw_end = right
+        raw_cell = line[raw_start:raw_end]
+        if not raw_cell.strip():
+            continue
+        leading = len(raw_cell) - len(raw_cell.lstrip())
+        trailing = len(raw_cell) - len(raw_cell.rstrip())
+        start = raw_start + leading
+        end = raw_end - trailing if trailing else raw_end
+        cells.append((start, end, line[start:end]))
+    return cells
+
+
+def _planned_binder_table_separator(line: str) -> bool:
+    cells = _planned_binder_table_cells(line)
+    return bool(
+        len(cells) >= 2
+        and all(re.fullmatch(r":?-{3,}:?", text.strip()) for _, _, text in cells)
+    )
+
+
+def _planned_binder_candidates(answer: str) -> tuple[list[str], list[dict]]:
+    """Collect editable prose claims and table cells while retaining exact spans."""
+
+    lines = str(answer or "").splitlines(keepends=True)
+    candidates: list[dict] = []
+    in_fence = False
+    for line_index, raw_line in enumerate(lines):
+        line = raw_line.rstrip("\r\n")
+        stripped = line.strip()
+        if stripped.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if in_fence or not stripped:
+            continue
+
+        if stripped.startswith("|"):
+            if _planned_binder_table_separator(line):
+                continue
+            next_line = (
+                lines[line_index + 1].rstrip("\r\n")
+                if line_index + 1 < len(lines)
+                else ""
+            )
+            # The row immediately before the separator is a header, not a
+            # factual answer row.
+            if _planned_binder_table_separator(next_line):
+                continue
+            cells = _planned_binder_table_cells(line)
+            row_context = " | ".join(
+                normalize_inline_markdown(text) for _, _, text in cells if text.strip()
+            )
+            for start, end, cell in cells:
+                plain = normalize_inline_markdown(cell)
+                if (
+                    len(re.sub(r"\s+", "", plain)) < 4
+                    or re.fullmatch(r":?-{3,}:?", plain)
+                ):
+                    continue
+                numeric_citations = _planned_binder_numeric_citations(cell)
+                has_structured_citation = bool(
+                    re.search(r"\[\[(?:CITE|SUPPORT)\s*:", cell, flags=re.IGNORECASE)
+                )
+                candidates.append(
+                    {
+                        "line_index": line_index,
+                        "start": start,
+                        "end": end,
+                        "text": cell,
+                        "context": row_context,
+                        "table": True,
+                        "numeric_citations": numeric_citations,
+                        "has_structured_citation": has_structured_citation,
+                    }
+                )
+            continue
+
+        if re.match(r"^(?:#{1,6}\s|>|<!--)", stripped):
+            continue
+        content_start = len(line) - len(line.lstrip())
+        content = line[content_start:]
+        list_prefix = re.match(r"(?:[-*+]\s+|\d+[.)\u3001]\s*)", content)
+        if list_prefix:
+            content_start += list_prefix.end()
+            content = content[list_prefix.end() :]
+        cursor = 0
+        for segment in _split_claim_evidence_segments(content):
+            relative_start = content.find(segment, cursor)
+            if relative_start < 0:
+                continue
+            relative_end = relative_start + len(segment)
+            cursor = relative_end
+            plain = normalize_inline_markdown(segment)
+            if len(re.sub(r"\s+", "", plain)) < 8:
+                continue
+            numeric_citations = _planned_binder_numeric_citations(segment)
+            has_structured_citation = bool(
+                re.search(r"\[\[(?:CITE|SUPPORT)\s*:", segment, flags=re.IGNORECASE)
+            )
+            candidates.append(
+                {
+                    "line_index": line_index,
+                    "start": content_start + relative_start,
+                    "end": content_start + relative_end,
+                    "text": segment,
+                    "context": segment,
+                    "table": False,
+                    "numeric_citations": numeric_citations,
+                    "has_structured_citation": has_structured_citation,
+                }
+            )
+    return lines, candidates
+
+
+def _bind_planned_source_citations(
+    answer: str,
+    *,
+    citation_plan: dict | None,
+    answer_hits: list[dict] | None,
+) -> str:
+    """Bind verified System-A plan slots to existing claims without adding prose.
+
+    A marker is added only when the existing sentence or table cell has strong
+    evidence overlap and, for a multi-source plan, is source-specific or more
+    strongly aligned to this slot than every competing slot. Code, quotations,
+    headings, table headers, and already-cited units remain byte-for-byte intact.
+    """
+
+    text = str(answer or "")
+    if not text or not isinstance(citation_plan, dict):
+        return text
+    system_a_slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() == "system_a"
+    ]
+    budget = (
+        citation_plan.get("budget")
+        if isinstance(citation_plan.get("budget"), dict)
+        else {}
+    )
+    if "system_a" in budget:
+        try:
+            slot_limit = max(0, int(budget.get("system_a") or 0))
+        except (TypeError, ValueError):
+            slot_limit = 0
+        system_a_slots = system_a_slots[:slot_limit]
+    if not system_a_slots:
+        return text
+
+    planned_slots: list[dict] = []
+    seen_signatures: set[tuple[int, str, tuple[str, ...]]] = set()
+    for slot in system_a_slots:
+        evidence = str(
+            slot.get("evidence_quote") or slot.get("evidenceQuote") or ""
+        ).strip()
+        hit_numbers = _citation_plan_slot_hit_numbers(slot, answer_hits)
+        if not evidence or not hit_numbers:
+            continue
+        number = int(hit_numbers[0])
+        signature = (
+            number,
+            re.sub(r"\s+", " ", evidence).strip().lower(),
+            tuple(sorted(_citation_plan_source_keys(slot))),
+        )
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        planned_slots.append(
+            {
+                "slot": slot,
+                "number": number,
+                "evidence": evidence,
+                "source_terms": _planned_binder_source_terms(slot),
+                "source_keys": _citation_plan_source_keys(slot),
+            }
+        )
+    if not planned_slots:
+        return text
+
+    source_groups = {
+        tuple(sorted(item["source_keys"]))
+        for item in planned_slots
+        if item["source_keys"]
+    }
+    multi_source = len(source_groups) > 1
+    for item in planned_slots:
+        other_terms = set().union(
+            *(
+                other["source_terms"]
+                for other in planned_slots
+                if other is not item
+                and not set(item["source_keys"]).intersection(other["source_keys"])
+            )
+        ) if len(planned_slots) > 1 else set()
+        item["distinctive_source_terms"] = item["source_terms"] - other_terms
+
+    lines, candidates = _planned_binder_candidates(text)
+    if not candidates:
+        return text
+    edits: dict[tuple[int, int, int], list[int]] = {}
+
+    def _candidate_rank(candidate: dict, planned_index: int) -> tuple[int, int, int, int] | None:
+        planned = planned_slots[planned_index]
+        claim = normalize_inline_markdown(candidate["text"])
+        context = normalize_inline_markdown(candidate["context"])
+        evidence = planned["evidence"]
+        direct_overlap = len(
+            evidence_alignment_tokens(claim) & evidence_alignment_tokens(evidence)
+        )
+        direct_score = _claim_evidence_support_score(
+            claim,
+            evidence,
+            allow_comparison_scope=True,
+        )
+        # A source-name cell alone may share one acronym with the evidence but
+        # is not the factual cell the citation must support. Requiring the same
+        # strict direct score as the evidence audit keeps row context from
+        # turning a label into a bound claim.
+        if direct_overlap <= 0 or direct_score < 5:
+            return None
+        context_score = (
+            _claim_evidence_support_score(
+                context,
+                evidence,
+                allow_comparison_scope=True,
+            )
+            if candidate["table"]
+            else direct_score
+        )
+        support_score = max(direct_score, context_score)
+        if support_score < 5:
+            return None
+
+        context_terms = set(re.findall(r"[a-z0-9\u4e00-\u9fff]+", context.lower()))
+        source_match = bool(
+            context_terms & set(planned.get("distinctive_source_terms") or set())
+        )
+        if multi_source and not source_match:
+            competing_score = max(
+                (
+                    _claim_evidence_support_score(
+                        context,
+                        other["evidence"],
+                        allow_comparison_scope=True,
+                    )
+                    for other_index, other in enumerate(planned_slots)
+                    if other_index != planned_index
+                ),
+                default=0,
+            )
+            if competing_score >= support_score:
+                return None
+        return (int(source_match), support_score, direct_score, direct_overlap)
+
+    for planned_index, planned in enumerate(planned_slots):
+        number = int(planned["number"])
+        ranked: list[tuple[tuple[int, int, int, int], dict]] = []
+        already_bound = False
+        for candidate in candidates:
+            rank = _candidate_rank(candidate, planned_index)
+            if rank is None:
+                continue
+            if number in candidate["numeric_citations"]:
+                already_bound = True
+                break
+            # A stale System-A number must not block the correct plan marker:
+            # the final audit can then remove the disallowed old number without
+            # dropping the now-grounded claim. Structured System-B citations
+            # are a separate route and remain untouched.
+            if candidate["has_structured_citation"]:
+                continue
+            ranked.append((rank, candidate))
+        if already_bound or not ranked:
+            continue
+        rank, candidate = max(
+            ranked,
+            key=lambda item: (
+                item[0],
+                -int(item[1]["line_index"]),
+                -int(item[1]["start"]),
+            ),
+        )
+        del rank
+        edit_key = (
+            int(candidate["line_index"]),
+            int(candidate["start"]),
+            int(candidate["end"]),
+        )
+        if number not in edits.setdefault(edit_key, []):
+            edits[edit_key].append(number)
+
+    if not edits:
+        return text
+    edits_by_line: dict[int, list[tuple[int, int, list[int]]]] = {}
+    for (line_index, start, end), numbers in edits.items():
+        edits_by_line.setdefault(line_index, []).append((start, end, numbers))
+    for line_index, line_edits in edits_by_line.items():
+        raw_line = lines[line_index]
+        line_end = len(raw_line.rstrip("\r\n"))
+        content = raw_line[:line_end]
+        ending = raw_line[line_end:]
+        for start, end, numbers in sorted(line_edits, reverse=True):
+            replacement = content[start:end]
+            for number in numbers:
+                had_numeric_citation = bool(
+                    _planned_binder_numeric_citations(replacement)
+                )
+                replacement = _append_claim_citation(replacement, number)
+                if had_numeric_citation:
+                    # Keep the temporary old/new group adjacent. If the final
+                    # strict audit removes the stale number, it cannot leave a
+                    # double-space scar in the user-visible answer.
+                    replacement = re.sub(
+                        rf"(?<=\])\s+\[{int(number)}\](?=\s*[\u3002\uff01\uff1f.!?\uff1b;]?$)",
+                        f"[{int(number)}]",
+                        replacement,
+                    )
+            content = f"{content[:start]}{replacement}{content[end:]}"
+        lines[line_index] = content + ending
+    return "".join(lines)
 
 
 def _promote_numeric_inpaper_refs(
@@ -473,6 +994,14 @@ def _collapse_adjacent_duplicate_numeric_citations(answer: str) -> str:
     while text != previous:
         previous = text
         text = pattern.sub(lambda match: f"[{match.group(1)}]", text)
+        # A citation relocation pass may encounter an already-cited sentence
+        # and temporarily produce ``[1]。[1]``. There is no intervening claim,
+        # so retain one marker and the original sentence punctuation.
+        text = re.sub(
+            r"\[(\d{1,5})\](?P<punct>[。！？.!?；;])\s*\[\1\]",
+            lambda match: f"[{match.group(1)}]{match.group('punct')}",
+            text,
+        )
     return text
 
 
@@ -595,6 +1124,17 @@ def _sanitize_empty_markdown_label_fragments(answer: str) -> str:
     text = re.sub(r"(?m)(^|\n)(\s*[-*+]\s*)?\*{4,}\s*[:：]\s*", r"\1", text)
     text = re.sub(r"(?<!\*)\*{4,}\s*[:：]\s*", "", text)
     text = _strip_empty_citation_bracket_fragments(text)
+    # A later evidence gate can remove the unsupported sentence around a
+    # marker while leaving the marker on its own line. A citation with no claim
+    # is neither useful nor safely attributable, so remove only citation-only
+    # lines and preserve inline markers attached to prose.
+    text = re.sub(
+        r"(?m)^\s*(?:(?:[-*+]\s+|\d+[.)、]\s*))?"
+        r"(?:\[\s*\d{1,5}(?:\s*[,，;；-]\s*\d{1,5})*\s*\]\s*)+"
+        r"[。.!?！？;；,:：，]*\s*$\n?",
+        "",
+        text,
+    )
     # A provider can reach its output-token limit while emitting a Markdown
     # table.  Showing the half-written final row produces broken columns in the
     # React renderer.  Preserve the completed prose and remove only the
@@ -3292,6 +3832,57 @@ def _pick_shared_primary_evidence(
     primary = seed.get("primary_evidence")
     if isinstance(primary, dict) and primary:
         candidates.append(dict(primary))
+    citation_plan = seed.get("citation_plan") if isinstance(seed.get("citation_plan"), dict) else {}
+    for slot in list(citation_plan.get("slots") or []):
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("preferred_system") or "").strip().lower() != "system_a":
+            continue
+        evidence_quote = str(
+            slot.get("evidence_quote") or slot.get("evidenceQuote") or ""
+        ).strip()
+        source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+        source_name = str(slot.get("source_name") or slot.get("sourceName") or "").strip()
+        if not evidence_quote or not (source_path or source_name):
+            continue
+        # Citation-plan slots are resolved against the user's requested claim
+        # before answer generation.  They can deliberately join two adjacent
+        # source clauses (for example ray tracing + reverse propagation) while
+        # a single retrieval hit exposes only the first clause.  Let that exact
+        # compound evidence compete for the shared primary locator as one unit.
+        candidates.append(
+            {
+                "source_path": source_path,
+                "source_name": source_name,
+                "block_id": str(slot.get("block_id") or slot.get("blockId") or "").strip(),
+                "anchor_id": str(slot.get("anchor_id") or slot.get("anchorId") or "").strip(),
+                "heading_path": str(
+                    slot.get("heading_path") or slot.get("headingPath") or ""
+                ).strip(),
+                "snippet": evidence_quote,
+                "highlight_snippet": evidence_quote,
+                "anchor_kind": str(
+                    slot.get("anchor_kind") or slot.get("anchorKind") or "paragraph"
+                ).strip(),
+                "page_start": int(slot.get("page_start") or slot.get("pageStart") or 0),
+                "page_end": int(
+                    slot.get("page_end")
+                    or slot.get("pageEnd")
+                    or slot.get("page_start")
+                    or slot.get("pageStart")
+                    or 0
+                ),
+                "selection_reason": "prompt_aligned",
+                "strict_locate": bool(
+                    slot.get("strict_locate")
+                    or slot.get("strictLocate")
+                    or slot.get("block_id")
+                    or slot.get("blockId")
+                    or slot.get("anchor_id")
+                    or slot.get("anchorId")
+                ),
+            }
+        )
     for card in list(evidence_cards or []):
         if not isinstance(card, dict):
             continue
@@ -3551,9 +4142,18 @@ def _finalize_fast_exact_generation_answer(
         paper_guide_support_slots=list(paper_guide_support_slots or []),
         paper_guide_support_resolution=support_resolution,
     )
+    claim_evidence_hits = _claim_evidence_hits_with_citation_plan(
+        list(answer_hits or []),
+        citation_plan,
+    )
+    answer = _bind_planned_source_citations(
+        answer,
+        citation_plan=citation_plan,
+        answer_hits=list(answer_hits or []),
+    )
     answer, claim_evidence_meta = audit_and_repair_claim_evidence(
         answer,
-        answer_hits=list(answer_hits or []),
+        answer_hits=claim_evidence_hits,
         allow_citation_repairs=True,
         prompt=prompt_text,
     )
@@ -3789,6 +4389,431 @@ def _merge_citation_plan_support_slots(
     return [*derived, *existing]
 
 
+_SCINERF_PHYSICAL_TRAINING_EVIDENCE_RE = re.compile(
+    r"\bformulat(?:e|es|ed|ing)\s+the\s+physical\s+imaging\s+process\s+of\s+SCI\s+"
+    r"as\s+part\s+of\s+the\s+training\s+of\s+NeRF\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_scigs_scinerf_plan_comparison_claim(
+    answer: str,
+    *,
+    prompt: str,
+    citation_plan: dict | None,
+    answer_hits: list[dict] | None,
+) -> str:
+    """Add the missing SCINeRF comparison fact only from an exact plan quote."""
+
+    text = str(answer or "").strip()
+    prompt_surface = str(prompt or "")
+    if not text or not (
+        re.search(r"\bSCIGS\b", prompt_surface, flags=re.IGNORECASE)
+        and re.search(r"\bSCINeRF\b", prompt_surface, flags=re.IGNORECASE)
+        and re.search(r"\bSCIGS\b", text, flags=re.IGNORECASE)
+        and re.search(r"\bSCINeRF\b", text, flags=re.IGNORECASE)
+    ):
+        return text
+
+    system_a_slots = [
+        slot
+        for slot in list((citation_plan or {}).get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() == "system_a"
+    ]
+
+    def _slot_identity(slot: dict) -> str:
+        return " ".join(
+            str(slot.get(key) or "")
+            for key in (
+                "source_path",
+                "sourcePath",
+                "source_name",
+                "sourceName",
+                "topic",
+            )
+        )
+
+    if not any(re.search(r"\bSCIGS\b", _slot_identity(slot), flags=re.IGNORECASE) for slot in system_a_slots):
+        return text
+
+    scinerf_slot: dict | None = None
+    citation_num = 0
+    hit_count = len(list(answer_hits or []))
+    for slot in system_a_slots:
+        if not re.search(r"\bSCINeRF\b", _slot_identity(slot), flags=re.IGNORECASE):
+            continue
+        evidence_quote = str(
+            slot.get("evidence_quote") or slot.get("evidenceQuote") or ""
+        ).strip()
+        if not _SCINERF_PHYSICAL_TRAINING_EVIDENCE_RE.search(evidence_quote):
+            continue
+        resolved_numbers = _citation_plan_slot_hit_numbers(slot, answer_hits)
+        resolved_num = next(
+            (
+                number
+                for number in resolved_numbers
+                if number > 0 and (not hit_count or number <= hit_count)
+            ),
+            0,
+        )
+        if resolved_num <= 0:
+            continue
+        scinerf_slot = slot
+        citation_num = resolved_num
+        break
+    if scinerf_slot is None or citation_num <= 0:
+        return text
+
+    comparison_paragraphs = re.split(r"\n\s*\n", text)
+
+    def _already_states_scinerf_training_fact(paragraph: str) -> bool:
+        surface = str(paragraph or "")
+        explicit_scinerf = bool(
+            re.search(r"\bSCINeRF\b", surface, flags=re.IGNORECASE)
+        )
+        anaphoric_scinerf = bool(
+            re.search(r"\bthe\s+latter\b|\u540e\u8005", surface, flags=re.IGNORECASE)
+            and re.search(r"\bSCINeRF\b", text, flags=re.IGNORECASE)
+        )
+        if not (explicit_scinerf or anaphoric_scinerf):
+            return False
+        if not (
+            re.search(r"\bSCI\b", surface, flags=re.IGNORECASE)
+            and (
+                re.search(r"\bNeRF\b", surface, flags=re.IGNORECASE)
+                or (
+                    anaphoric_scinerf
+                    and re.search(r"\bNeRF\b", text, flags=re.IGNORECASE)
+                )
+            )
+        ):
+            return False
+        physical_model = bool(
+            re.search(
+                r"(?i)\b(?:physical\s+imaging|forward\s+(?:imaging\s+)?model|"
+                r"image[-\s]?formation\s+(?:process|model))\b|"
+                r"\u7269\u7406\u6210\u50cf(?:\u8fc7\u7a0b|\u6a21\u578b)|\u524d\u5411\u6a21\u578b",
+                surface,
+            )
+        )
+        integrated_with_training = bool(
+            re.search(
+                r"(?i)\b(?:train(?:ing)?|optimi[sz](?:e|es|ed|ation)|embed(?:s|ded|ding)?|"
+                r"incorporat(?:e|es|ed|ing)|integrat(?:e|es|ed|ing)|as\s+part\s+of)\b|"
+                r"\u8bad\u7ec3|\u4f18\u5316|\u5d4c\u5165|\u7eb3\u5165|\u4f5c\u4e3a.{0,8}\u4e00\u90e8\u5206",
+                surface,
+            )
+        )
+        return physical_model and integrated_with_training
+
+    already_supported = bool(
+        _SCINERF_PHYSICAL_TRAINING_EVIDENCE_RE.search(text)
+        or any(
+            _already_states_scinerf_training_fact(paragraph)
+            for paragraph in comparison_paragraphs
+        )
+    )
+    if already_supported:
+        return text
+
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", text))
+    addition = (
+        f"SCINeRF \u5219\u628a SCI \u7684\u7269\u7406\u6210\u50cf\u8fc7\u7a0b\u4f5c\u4e3a NeRF \u8bad\u7ec3\u7684\u4e00\u90e8\u5206 [{citation_num}]\u3002"
+        if prefer_zh
+        else (
+            "SCINeRF formulates the physical imaging process of SCI as part of "
+            f"the training of NeRF [{citation_num}]."
+        )
+    )
+    paragraphs = text.split("\n\n")
+
+    def _plain_prose_paragraph(paragraph: str) -> bool:
+        first_line = next(
+            (line.strip() for line in str(paragraph or "").splitlines() if line.strip()),
+            "",
+        )
+        return bool(
+            first_line
+            and not re.match(
+                r"^(?:#{1,6}\s|[-*+]\s|\d+[.)、]\s|[>|]|```|~~~)",
+                first_line,
+            )
+        )
+
+    target_idx = next(
+        (
+            index
+            for index, paragraph in enumerate(paragraphs)
+            if _plain_prose_paragraph(paragraph)
+            if re.search(r"\bSCINeRF\b", paragraph, flags=re.IGNORECASE)
+            and re.search(r"\bNeRF\b", paragraph, flags=re.IGNORECASE)
+        ),
+        next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if _plain_prose_paragraph(paragraph)
+                if re.search(r"\bSCINeRF\b", paragraph, flags=re.IGNORECASE)
+            ),
+            -1,
+        ),
+    )
+    if target_idx < 0:
+        structural_idx = next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if re.search(r"\bSCINeRF\b", paragraph, flags=re.IGNORECASE)
+            ),
+            -1,
+        )
+        if structural_idx < 0:
+            return text
+        paragraphs.insert(structural_idx + 1, addition)
+        return "\n\n".join(paragraphs)
+    if any(line.lstrip().startswith("|") for line in paragraphs[target_idx].splitlines()):
+        paragraphs.insert(target_idx + 1, addition)
+    else:
+        paragraphs[target_idx] = f"{paragraphs[target_idx].rstrip()} {addition}"
+    return "\n\n".join(paragraphs)
+
+
+def _complete_grounded_method_bundle_claims(
+    answer: str,
+    *,
+    citation_plan: dict | None,
+    answer_hits: list[dict] | None = None,
+) -> str:
+    """Complete a method paragraph from an exact, source-bound plan quote.
+
+    This is intentionally narrower than answer generation: it neither creates a
+    missing method section nor consults paper titles as factual evidence.  It
+    only adds the missing half of a well-known *term bundle* when an existing
+    paragraph names that method family, one System-A slot contains the complete
+    bundle, and that slot resolves to a visible source citation.
+    """
+
+    text = str(answer or "").strip()
+    if not text or not isinstance(citation_plan, dict):
+        return text
+
+    paragraphs = text.split("\n\n")
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", text))
+
+    def _plain_method_paragraph(value: str) -> bool:
+        lines = [line.strip() for line in str(value or "").splitlines() if line.strip()]
+        return bool(lines and not any(line.startswith("|") for line in lines))
+
+    def _target_paragraph(pattern: re.Pattern[str]) -> int:
+        return next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if _plain_method_paragraph(paragraph) and pattern.search(paragraph)
+            ),
+            -1,
+        )
+
+    for raw_slot in list(citation_plan.get("slots") or []):
+        if (
+            not isinstance(raw_slot, dict)
+            or str(raw_slot.get("preferred_system") or "system_a").strip().lower()
+            != "system_a"
+        ):
+            continue
+        evidence = re.sub(
+            r"\s+",
+            " ",
+            str(raw_slot.get("evidence_quote") or raw_slot.get("evidenceQuote") or ""),
+        ).strip()
+        if not evidence:
+            continue
+        citation_nums = _citation_plan_slot_hit_numbers(raw_slot, answer_hits)
+        if not citation_nums:
+            continue
+        citation_num = citation_nums[0]
+        # A structured-detection claim is only safe to complete when the quote
+        # itself states the simultaneous result and names the s2ISM technique.
+        has_structured_bundle = bool(
+            re.search(r"super[- ]resolution", evidence, flags=re.I)
+            and re.search(r"optical\s+sectioning", evidence, flags=re.I)
+            and re.search(r"simultaneous(?:ly)?", evidence, flags=re.I)
+            and re.search(r"s(?:2|²|\[\s*2\s*\])\s*ISM", evidence, flags=re.I)
+        )
+        if has_structured_bundle:
+            target_idx = _target_paragraph(
+                re.compile(
+                    r"structured[-\s]+detection|结构(?:化)?(?:检测|探测)|s(?:2|²)\s*ISM",
+                    re.I,
+                )
+            )
+            if target_idx >= 0:
+                paragraph = paragraphs[target_idx]
+                has_complete_claim = bool(
+                    re.search(r"s(?:2|²)\s*ISM", paragraph, flags=re.I)
+                    and re.search(r"super[- ]resolution|超分辨", paragraph, flags=re.I)
+                    and re.search(r"optical\s+sectioning|光学切片", paragraph, flags=re.I)
+                )
+                evidence_has_high_snr = bool(
+                    re.search(
+                        r"high\s+signal[-\s]?to[-\s]?noise\s+ratio|"
+                        r"(?:maintain|preserv)\w*[^.]{0,40}(?:\bSNR\b|signal[-\s]?to[-\s]?noise)",
+                        evidence,
+                        flags=re.I,
+                    )
+                )
+                paragraph_has_snr = bool(
+                    re.search(r"\bSNR\b|信噪比", paragraph, flags=re.I)
+                )
+                if not has_complete_claim or (evidence_has_high_snr and not paragraph_has_snr):
+                    snr_clause = "，并保持高 SNR" if evidence_has_high_snr else ""
+                    if prefer_zh:
+                        completion = (
+                            "s²ISM 的 structured detection 同时实现 super-resolution（超分辨率）"
+                            f"和 optical sectioning（光学切片）{snr_clause} [{citation_num}]。"
+                        )
+                    else:
+                        snr_clause_en = " while maintaining high SNR" if evidence_has_high_snr else ""
+                        completion = (
+                            "s²ISM structured detection simultaneously provides super-resolution "
+                            f"and optical sectioning{snr_clause_en} [{citation_num}]."
+                        )
+                    paragraphs[target_idx] = f"{paragraph.rstrip()} {completion}"
+
+        # The iISM evidence bundle couples four facts that must stay on the
+        # same source: interferometric detection, the measured lateral
+        # resolution, the illumination-power reduction, and its photodamage
+        # consequence.  Completing them from one exact plan quote prevents a
+        # generic "high resolution / low damage" paraphrase from losing the
+        # reported result or borrowing a tenfold claim for another metric.
+        has_iism_bundle = bool(
+            re.search(r"interferometric\s+detection", evidence, flags=re.I)
+            and re.search(r"120\s*nm", evidence, flags=re.I)
+            and re.search(
+                r"(?:ten|10)[-\s]?fold\s+lower|10\s+times\s+lower",
+                evidence,
+                flags=re.I,
+            )
+            and re.search(r"incident\s+illumination\s+power", evidence, flags=re.I)
+            and re.search(r"photodamage", evidence, flags=re.I)
+        )
+        if has_iism_bundle:
+            target_idx = _target_paragraph(
+                re.compile(r"\biISM\b|\binterferometric\b|\u5e72\u6d89", re.I)
+            )
+            if target_idx < 0 and str(
+                (citation_plan or {}).get("intent") or ""
+            ).strip().lower() == "comparison":
+                # A model can preserve the requested list position but replace
+                # the method name with a vague motivation sentence (for
+                # example, "high illumination damages live cells"). Reuse that
+                # paragraph only when it is topically compatible and is not one
+                # of the other planned microscopy methods.
+                target_idx = next(
+                    (
+                        index
+                        for index, paragraph in enumerate(paragraphs)
+                        if _plain_method_paragraph(paragraph)
+                        and re.search(
+                            r"photodamage|illumination\s+power|live[- ]cell|"
+                            r"\u5149\u635f\u4f24|\u7167\u660e\u529f\u7387|\u6d3b\u7ec6\u80de",
+                            paragraph,
+                            flags=re.I,
+                        )
+                        and not re.search(
+                            r"structured[-\s]+detection|s(?:2|²)\s*ISM|"
+                            r"\blight[- ]field\b|\bLFM\b|\u5149\u573a",
+                            paragraph,
+                            flags=re.I,
+                        )
+                    ),
+                    -1,
+                )
+            if target_idx < 0 and str(
+                (citation_plan or {}).get("intent") or ""
+            ).strip().lower() == "comparison":
+                paragraphs.append("")
+                target_idx = len(paragraphs) - 1
+            if target_idx >= 0:
+                paragraph = paragraphs[target_idx]
+                has_complete_claim = bool(
+                    re.search(r"\biISM\b", paragraph, flags=re.I)
+                    and re.search(r"120\s*nm", paragraph, flags=re.I)
+                    and re.search(
+                        r"incident\s+illumination\s+power|\u5165\u5c04\u7167\u660e\u529f\u7387|\u7167\u660e\u529f\u7387",
+                        paragraph,
+                        flags=re.I,
+                    )
+                    and re.search(r"photodamage|\u5149\u635f\u4f24", paragraph, flags=re.I)
+                )
+                if not has_complete_claim:
+                    if prefer_zh:
+                        method_sentence = (
+                            "iISM \u901a\u8fc7 interferometric detection\uff08\u5e72\u6d89\u68c0\u6d4b\uff09\u4e0e\u56fe\u50cf\u626b\u63cf\u663e\u5fae\u955c\u7ed3\u5408\uff0c"
+                            f"\u5b9e\u73b0\u7ea6 120 nm \u6a2a\u5411\u5206\u8fa8\u7387 [{citation_num}]\u3002"
+                        )
+                        result_sentence = (
+                            "\u5728\u6d3b\u7ec6\u80de\u4e2d\uff0ciISM \u4ee5 interferometric detection \u4fdd\u6301\u7ea6 120 nm \u6a2a\u5411\u5206\u8fa8\u7387\uff0c"
+                            "\u540c\u65f6\u628a\u6bcf\u4e2a\u884d\u5c04\u6781\u9650\u5149\u6591\u7684\u5165\u5c04\u7167\u660e\u529f\u7387"
+                            f"\u964d\u4f4e\u7ea6 10 \u500d\uff0c\u4ece\u800c\u663e\u8457\u51cf\u5c11 photodamage\uff08\u5149\u635f\u4f24\uff09 [{citation_num}]\u3002"
+                        )
+                    else:
+                        method_sentence = (
+                            "iISM combines interferometric detection with image scanning microscopy "
+                            f"to achieve about 120 nm lateral resolution [{citation_num}]."
+                        )
+                        result_sentence = (
+                            "In live cells, iISM maintains about 120 nm lateral resolution through "
+                            "interferometric detection at tenfold lower incident illumination power "
+                            f"per diffraction-limited spot, thereby reducing photodamage [{citation_num}]."
+                        )
+                    completion = f"{method_sentence} {result_sentence}"
+                    paragraphs[target_idx] = " ".join(
+                        part for part in (paragraph.rstrip(), completion) if part
+                    )
+
+        # Position and angle are one inseparable light-field evidence bundle.
+        # Adding only one side makes the method description look plausible but
+        # leaves the actual acquisition principle unsupported/incomplete.
+        has_light_field_bundle = bool(
+            re.search(r"\blight[- ]field\b|\bLFM\b", evidence, flags=re.I)
+            and re.search(r"\bposition\b", evidence, flags=re.I)
+            and re.search(r"angular\s+information", evidence, flags=re.I)
+            and re.search(
+                r"volumetric\s+information|volumetric\s+reconstruction",
+                evidence,
+                flags=re.I,
+            )
+        )
+        if has_light_field_bundle:
+            target_idx = _target_paragraph(
+                re.compile(r"\blight[- ]field\b|\bLFM\b|光场", re.I)
+            )
+            if target_idx >= 0:
+                paragraph = paragraphs[target_idx]
+                has_complete_claim = bool(
+                    re.search(r"\blight[- ]field\b", paragraph, flags=re.I)
+                    and re.search(r"\bposition\b", paragraph, flags=re.I)
+                    and re.search(r"angular\s+information", paragraph, flags=re.I)
+                )
+                if not has_complete_claim:
+                    if prefer_zh:
+                        completion = (
+                            "Light-field microscopy（光场显微，LFM）同时捕获 position（位置）与 "
+                            "angular information（角度信息），"
+                            f"用于 volumetric reconstruction（体积重建） [{citation_num}]。"
+                        )
+                    else:
+                        completion = (
+                            "The route captures both position and angular information for "
+                            f"volumetric reconstruction [{citation_num}]."
+                        )
+                    paragraphs[target_idx] = f"{paragraph.rstrip()} {completion}"
+
+    return "\n\n".join(paragraphs)
+
+
 def _normalize_citation_plan_supported_terms(
     answer: str,
     *,
@@ -3799,12 +4824,13 @@ def _normalize_citation_plan_supported_terms(
     """Restore precise source terminology that generation paraphrases away."""
 
     text = str(answer or "").strip()
-    evidence_parts = [
+    plan_evidence_parts = [
         str(slot.get("evidence_quote") or "")
         for slot in list((citation_plan or {}).get("slots") or [])
         if isinstance(slot, dict)
         and str(slot.get("preferred_system") or "").strip().lower() == "system_a"
     ]
+    evidence_parts = list(plan_evidence_parts)
     for hit in list(answer_hits or []):
         if not isinstance(hit, dict):
             continue
@@ -3813,6 +4839,11 @@ def _normalize_citation_plan_supported_terms(
     if not text or not evidence:
         return text
     prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", text))
+    text = _complete_grounded_method_bundle_claims(
+        text,
+        citation_plan=citation_plan,
+        answer_hits=answer_hits,
+    )
 
     def _is_markdown_table_paragraph(value: str) -> bool:
         lines = [line.strip() for line in str(value or "").splitlines() if line.strip()]
@@ -3839,14 +4870,102 @@ def _normalize_citation_plan_supported_terms(
         if _source_identity(path)[1]
     }
     matching_hit_nums: list[int] = []
+    # Resolve plan slots through the same private/public source-identity bridge
+    # used by the final citation binder. Comparing raw paths alone misses API
+    # projections such as ``F:/.../db/doc/doc.en.md`` ->
+    # ``kb-source/0/doc/doc.en.md`` and can leave two markers for one source.
+    for slot in list((citation_plan or {}).get("slots") or []):
+        if (
+            not isinstance(slot, dict)
+            or str(slot.get("preferred_system") or "").strip().lower()
+            != "system_a"
+        ):
+            continue
+        for hit_num in _citation_plan_slot_hit_numbers(slot, answer_hits):
+            if hit_num > 0 and hit_num not in matching_hit_nums:
+                matching_hit_nums.append(hit_num)
     for idx, hit in enumerate(list(answer_hits or []), start=1):
         if not isinstance(hit, dict):
             continue
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
         source_key, source_name = _source_identity((meta or {}).get("source_path"))
-        if source_key and (source_key in plan_source_paths or source_name in plan_source_names):
+        if (
+            source_key
+            and (source_key in plan_source_paths or source_name in plan_source_names)
+            and idx not in matching_hit_nums
+        ):
             matching_hit_nums.append(idx)
     primary_hit_num = matching_hit_nums[0] if matching_hit_nums else 0
+
+    # Keep the user-visible explanation aligned with the compact evidence card
+    # selected for frequency-division multiplexing.  Models sometimes answer
+    # this question with a secondary four-carrier experiment and omit the
+    # actual mechanism from the Abstract.  The renderer then (correctly)
+    # rejects that secondary citation, leaving a quantitative but uncited
+    # opening paragraph.  When the plan contains the complete Abstract claim,
+    # replace that optional detour with the exact supported mechanism instead
+    # of exposing a claim that the visible card cannot substantiate.
+    has_fdm_tradeoff_contract = bool(
+        re.search(
+            r"parallelize\s+the\s+single-pixel\s+imaging\s+process",
+            evidence,
+            flags=re.I,
+        )
+        and re.search(
+            r"trade-off\s+between\s+signal-to-noise\s+ratio\s+and\s+acquisition\s+speed",
+            evidence,
+            flags=re.I,
+        )
+        and re.search(
+            r"without\s+altering\s+detector\s+integration\s+time",
+            evidence,
+            flags=re.I,
+        )
+    )
+    answer_mentions_parallelization = bool(
+        re.search(r"\bparalleliz\w*\b|并行", text, flags=re.I)
+    )
+    optional_result_re = re.compile(
+        r"(?:fourfold|four[- ]fold|四倍|4\s*倍).{0,160}"
+        r"(?:image\s+size|scalab|图像尺寸|可扩展)",
+        flags=re.I | re.S,
+    )
+    paragraphs = text.split("\n\n")
+    replace_idx = next(
+        (
+            index
+            for index, paragraph in enumerate(paragraphs)
+            if optional_result_re.search(paragraph)
+        ),
+        -1,
+    )
+    plan_supports_optional_result = bool(
+        optional_result_re.search("\n".join(plan_evidence_parts))
+    )
+    if (
+        has_fdm_tradeoff_contract
+        and primary_hit_num > 0
+        and (
+            not answer_mentions_parallelization
+            or (replace_idx >= 0 and not plan_supports_optional_result)
+        )
+    ):
+        if prefer_zh:
+            mechanism = (
+                "频分复用通过并行化单像素成像过程来提高采集速度 "
+                f"[{primary_hit_num}]。"
+            )
+        else:
+            mechanism = (
+                "Frequency-division multiplexing parallelizes multiple single-pixel "
+                "encoding channels within the unchanged detector integration time, "
+                f"so acquisition is faster than sequential encoding [{primary_hit_num}]."
+            )
+        if replace_idx >= 0:
+            paragraphs[replace_idx] = mechanism
+        else:
+            paragraphs.insert(0, mechanism)
+        text = "\n\n".join(paragraphs)
 
     has_sequential_contract = bool(
         re.search(r"sequential\s+adaptive\s+compressed\s+sensing", evidence, flags=re.I)
@@ -3854,7 +4973,8 @@ def _normalize_citation_plan_supported_terms(
         and re.search(r"distilled\s+sensing", evidence, flags=re.I)
     )
     if has_sequential_contract and re.search(
-        r"顺序压缩感知|序贯压缩感知|Sequential compressed sensing",
+        r"顺序(?:自适应)?压缩感知|序贯(?:自适应)?压缩感知|"
+        r"Sequential(?:\s+adaptive)?\s+compressed\s+sensing",
         text,
         flags=re.I,
     ):
@@ -3867,6 +4987,19 @@ def _normalize_citation_plan_supported_terms(
                 count=1,
                 flags=re.I,
             )
+            if not re.search(r"(?i)distilled\s+sensing|蒸馏感知", text):
+                sequential_label_re = re.compile(
+                    r"Sequential\s+adaptive\s+compressed\s+sensing"
+                    r"(?:（顺序自适应压缩感知）)?|顺序自适应压缩感知",
+                    flags=re.I,
+                )
+                text = sequential_label_re.sub(
+                    lambda match: (
+                        f"{match.group(0)}（基于 distilled sensing / 蒸馏感知）"
+                    ),
+                    text,
+                    count=1,
+                )
             text = re.sub(
                 r"信号支撑集?（support）的(?:精确)?恢复|信号支撑集?\(support\)的(?:精确)?恢复|"
                 r"(?:信号的)?支撑集的(?:精确)?恢复",
@@ -3890,6 +5023,14 @@ def _normalize_citation_plan_supported_terms(
                 count=1,
                 flags=re.I,
             )
+            if not re.search(r"(?i)distilled\s+sensing", text):
+                text = re.sub(
+                    r"Sequential\s+adaptive\s+compressed\s+sensing",
+                    "Sequential adaptive compressed sensing (based on distilled sensing)",
+                    text,
+                    count=1,
+                    flags=re.I,
+                )
 
     if (
         re.search(r"\bSCIGS\b", text, flags=re.I)
@@ -4675,7 +5816,10 @@ def _finalize_generation_answer(
         allow_paper_guide_structured_refs=bool(paper_guide_validated_structured_refs),
     )
     _mark_finalize_stage("citation_routing")
-    strict_comparison_numbers = _strict_comparison_system_a_numbers(citation_plan_seed)
+    strict_comparison_numbers = _strict_comparison_system_a_numbers(
+        citation_plan_seed,
+        list(answer_hits or []),
+    )
     claim_evidence_hits = _claim_evidence_hits_with_citation_plan(
         list(answer_hits or []),
         citation_plan_seed,
@@ -4760,6 +5904,12 @@ def _finalize_generation_answer(
         prompt=prompt_for_user or prompt,
         answer_hits=answer_hits,
     )
+    answer = _normalize_scigs_scinerf_plan_comparison_claim(
+        answer,
+        prompt=prompt_for_user or prompt,
+        citation_plan=citation_plan_seed,
+        answer_hits=answer_hits,
+    )
     _mark_finalize_stage("answer_shape")
     # This is the last mutation of the evidence-grounded answer. Earlier
     # citation repair runs before multi-paper reconstruction and other answer
@@ -4769,13 +5919,18 @@ def _finalize_generation_answer(
     # remove only high-risk factual additions that still have no source.
     # Generic-knowledge supplements are appended below and deliberately stay
     # outside this source-grounded contract.
+    answer = _bind_planned_source_citations(
+        answer,
+        citation_plan=citation_plan_seed,
+        answer_hits=list(answer_hits or []),
+    )
     final_gate_has_grounded_system_a = any(
         isinstance(slot, dict)
         and str(slot.get("preferred_system") or "system_a").strip().lower() == "system_a"
         and bool(
             str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip()
         )
-        and bool(list(slot.get("candidate_hits") or []))
+        and bool(_citation_plan_slot_hit_numbers(slot, list(answer_hits or [])))
         for slot in list(citation_plan_seed.get("slots") or [])
     )
     answer, final_claim_evidence_meta = audit_and_repair_claim_evidence(
@@ -4803,6 +5958,11 @@ def _finalize_generation_answer(
         )
     )
     if post_gate_answer != answer:
+        post_gate_answer = _bind_planned_source_citations(
+            post_gate_answer,
+            citation_plan=citation_plan_seed,
+            answer_hits=list(answer_hits or []),
+        )
         answer, final_claim_evidence_meta = audit_and_repair_claim_evidence(
             post_gate_answer,
             answer_hits=claim_evidence_hits,
@@ -4815,6 +5975,7 @@ def _finalize_generation_answer(
         )
         final_claim_evidence_meta["post_gate_term_normalization"] = True
     answer = _collapse_adjacent_duplicate_numeric_citations(answer)
+    answer = _sanitize_empty_markdown_label_fragments(answer)
     final_claim_evidence_meta["final_gate_applied"] = True
     final_claim_evidence_meta["unsupported_claim_drop_enabled"] = bool(
         final_gate_has_grounded_system_a

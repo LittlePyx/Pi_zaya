@@ -322,7 +322,17 @@ test('refs cards render during generation and perf logs prove polling continued'
   await expect.poll(
     async () => {
       const logs = await page.evaluate(() => window.__kbRefsPerf?.getLogs() || [])
-      return logs.some((event) => event.phase === 'poll_stop' && event.reason === 'settled')
+      const pollWasSuperseded = logs.some((event) => (
+        event.phase === 'poll_stop'
+        && event.reason === 'superseded_by_direct_load'
+      ))
+      const terminalRefreshSettled = logs.some((event) => (
+        event.phase === 'fetch_success'
+        && ['generation_done', 'post_generation_message_hydration'].includes(String(event.reason || ''))
+        && event.needsEnrichment === false
+        && event.keepPolling === false
+      ))
+      return pollWasSuperseded && terminalRefreshSettled
     },
     { timeout: 5_000 },
   ).toBe(true)

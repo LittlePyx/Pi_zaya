@@ -415,13 +415,25 @@ test('reader hides conversion diagnostics and never linkifies citations inside m
 
 test('reader keeps page markers and figures out of an adjacent prose paragraph', async ({ page }) => {
   await openHarness(page, 'render-polish')
-  const markerParagraph = page.locator('[data-testid="reader-content"] p:has(> #kb-page-1)')
+  const reader = page.getByTestId('reader-content')
+  const markerParagraph = reader.locator('p:has(> #kb-page-1)')
+  const markerParagraphs = reader.locator('p:has(> [id^="kb-page-"])')
+  const leadParagraph = reader.locator('p').filter({ hasText: 'Lead paragraph immediately before' })
+  const underMarkerParagraph = reader.locator('p').filter({ hasText: 'Under each illumination' })
 
   await expect(markerParagraph).toHaveCount(1)
   await expect(markerParagraph).not.toContainText('Lead paragraph immediately before a physical page marker.')
   await expect(markerParagraph.locator('.kb-md-figure-shell')).toHaveCount(0)
-  await expect(page.locator('[data-testid="reader-content"] p:has(> .kb-md-figure-shell)')).toHaveCount(1)
+  await expect(reader.locator('p:has(> .kb-md-figure-shell)')).toHaveCount(1)
   await expect(page.locator('#kb-page-1')).toHaveCSS('display', 'flex')
+  await expect(leadParagraph).toHaveAttribute('data-kb-block-id', 'p-render-lead')
+  await expect(underMarkerParagraph).toHaveAttribute('data-kb-block-id', 'p-render-under-marker')
+  await expect(reader.locator('[data-kb-block-id="p-render-lead"]')).toHaveCount(1)
+  await expect(reader.locator('[data-kb-block-id="p-render-under-marker"]')).toHaveCount(1)
+  await expect(markerParagraphs).toHaveCount(2)
+  expect(await markerParagraphs.evaluateAll((nodes) => nodes.every((node) => (
+    !node.hasAttribute('data-kb-block-id') && !node.hasAttribute('data-kb-anchor-id')
+  )))).toBe(true)
 })
 
 test('legacy reader System B payload keeps its title-aligned article overview', async ({ page }) => {

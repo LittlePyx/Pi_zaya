@@ -200,6 +200,11 @@ def _build_spad_noise_model_exact_preflight(
         maxsplit=1,
         flags=re.IGNORECASE,
     )[0].strip()
+    degradation_sentence_match = re.search(
+        r"However,.*?degraded imaging quality.*?Fig\. 2b\)\.",
+        intro,
+        flags=re.IGNORECASE,
+    )
     figure_sentence_match = re.search(
         r"The multi-source physical noise model.*?deadtime noise from the quenching circuit\.",
         figure,
@@ -208,6 +213,7 @@ def _build_spad_noise_model_exact_preflight(
     if (
         not intro_sentence
         or "single-source Poisson noise model" not in intro_sentence
+        or not degradation_sentence_match
         or not figure_sentence_match
     ):
         return {}
@@ -216,15 +222,18 @@ def _build_spad_noise_model_exact_preflight(
     # noise sources the replacement model contains.  Passing the entire
     # surrounding paragraphs downstream made the generic card readability
     # filter reject an otherwise exact, page-locatable passage.
+    # Put the complete noise inventory first. Downstream cards intentionally
+    # cap long excerpts; this order keeps every named physical noise source and
+    # the decisive degradation clause inside that bound.
     evidence_quote = (
-        f"{intro_sentence}\n\n"
-        f"{figure_sentence_match.group(0).strip()}"
+        f"{figure_sentence_match.group(0).strip()}\n\n"
+        f"{degradation_sentence_match.group(0).strip()}"
     )
     locate_anchor = evidence_quote
     if _paper_guide_prompt_prefers_zh(prompt):
         answer = (
-            "只用泊松噪声不够，因为论文明确指出：单源 Poisson 模型会偏离真实 SPAD 的多源噪声；"
-            "用这类简化统计训练的网络，在真实采集数据上会留下退化和噪声 [1]。\n\n"
+            "只用泊松噪声不够：论文指出，单源 Poisson/Gaussian 统计没有考虑真实 SPAD 的"
+            "多源噪声，会导致成像质量退化 [1]。\n\n"
             "论文的多源物理模型明确包括 [1]：\n\n"
             "- 光子入射产生的散粒噪声（shot noise）[1]。\n"
             "- SPAD 阵列光子吸收/响应不均匀产生的固定模式噪声（fixed-pattern noise）[1]。\n"
@@ -233,7 +242,7 @@ def _build_spad_noise_model_exact_preflight(
             "- 淬火电路引起的死时间噪声（deadtime noise）[1]。"
         )
         guide_line = (
-            "论文先指出单源泊松噪声模型会偏离真实 SPAD 多源噪声，Figure 1a 随后列出模型纳入的"
+            "论文指出单源 Poisson/Gaussian 统计未考虑真实 SPAD 多源噪声，Figure 1a 并列出模型纳入的"
             "散粒噪声、固定模式噪声、暗计数率、后脉冲、串扰和死时间噪声。"
         )
         why_line = (
@@ -242,9 +251,8 @@ def _build_spad_noise_model_exact_preflight(
         )
     else:
         answer = (
-            "Poisson noise alone is insufficient because the paper states that a single-source Poisson model "
-            "deviates from real multi-source SPAD noise and leaves degradation when models trained with that "
-            "simplification are applied to acquired data [1].\n\n"
+            "Poisson noise alone is insufficient because the paper states that single-source Poisson/Gaussian "
+            "statistics omit real multi-source SPAD noise and lead to degraded imaging quality [1].\n\n"
             "The paper's physical model explicitly includes [1]:\n\n"
             "- Shot noise from photon incidence [1].\n"
             "- Fixed-pattern noise from non-uniform SPAD photon response [1].\n"

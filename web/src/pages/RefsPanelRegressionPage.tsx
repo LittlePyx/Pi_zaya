@@ -15,6 +15,7 @@ const REFS_PANEL_SCENARIOS = new Set([
   'dedupe-active-source',
   'polish-status',
   'card-view-contract',
+  'localized-relevance-fallback',
   'pending-with-hits',
   'research-basket-synthetic',
 ])
@@ -527,13 +528,13 @@ const REFS_PANEL_CARD_VIEW_PAYLOAD: Record<string, unknown> = {
                 id: 'summary',
                 label: 'Guide',
                 title: 'What this section gives you',
-                text: 'This section explains the method at the level a first reading needs.',
+                text: '\u8fd9\u4e00\u8282\u4ee5\u521d\u6b21\u9605\u8bfb\u6240\u9700\u7684\u7c92\u5ea6\u89e3\u91ca\u4e86\u8be5\u65b9\u6cd5\u3002',
               },
               {
                 id: 'why',
                 label: 'Relevance',
                 title: 'Why it matches your question',
-                text: 'It is a good first stop because it connects the paper title to the concrete method steps.',
+                text: '\u5b83\u628a\u8bba\u6587\u4e3b\u9898\u4e0e\u5177\u4f53\u65b9\u6cd5\u6b65\u9aa4\u76f4\u63a5\u8054\u7cfb\u8d77\u6765\uff0c\u9002\u5408\u7528\u4e8e\u56de\u7b54\u5f53\u524d\u95ee\u9898\u3002',
               },
               {
                 id: 'location',
@@ -542,11 +543,144 @@ const REFS_PANEL_CARD_VIEW_PAYLOAD: Record<string, unknown> = {
                 text: 'Fixture Paper / 2. Method',
               },
             ],
-            summary: 'This section explains the method at the level a first reading needs.',
+            summary: '\u8fd9\u4e00\u8282\u4ee5\u521d\u6b21\u9605\u8bfb\u6240\u9700\u7684\u7c92\u5ea6\u89e3\u91ca\u4e86\u8be5\u65b9\u6cd5\u3002',
             quality: {
               label: 'full',
               source: 'llm',
             },
+          },
+        },
+      },
+    ],
+  },
+}
+
+const REFS_PANEL_LOCALIZED_RELEVANCE_PAYLOAD: Record<string, unknown> = {
+  7: {
+    prompt: '\u9891\u5206\u590d\u7528\u5355\u50cf\u7d20\u6210\u50cf\u4e3a\u4ec0\u4e48\u66f4\u5feb\uff1f',
+    display_state: 'ready',
+    hits: [
+      {
+        text: 'We propose and experimentally realize frequency-division-multiplexed single-pixel imaging.',
+        meta: {
+          source_path: 'F:\\library\\Localized-Support.en.md',
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: 'Localized Support.pdf',
+          source_path: 'F:\\library\\Localized-Support.en.md',
+          heading_path: 'Abstract',
+          summary_line: '\u8be5\u6587\u5728\u6458\u8981\u4e2d\u7ed9\u51fa\u4e86\u9891\u5206\u590d\u7528\u7684\u5e76\u884c\u91c7\u96c6\u673a\u5236\u3002',
+          card_support_explanation: '\u8fd9\u6761\u8bc1\u636e\u76f4\u63a5\u56de\u7b54\u4e86\u52a0\u901f\u6765\u6e90\uff0c\u5e76\u8bf4\u660e\u901f\u5ea6\u4e0e\u4fe1\u566a\u6bd4\u4e4b\u95f4\u7684\u6743\u8861\u3002',
+          card_view: {
+            sections: [
+              {
+                id: 'summary',
+                text: 'English card guide that must not win in the Chinese locale.',
+              },
+              {
+                id: 'why',
+                text: 'We propose and experimentally realize frequency-division-multiplexed single-pixel imaging.',
+              },
+            ],
+          },
+        },
+      },
+      {
+        text: 'Multiple carriers are measured in parallel without changing detector integration time.',
+        meta: {
+          source_path: 'F:\\library\\Legacy-Why.en.md',
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: 'Legacy Why.pdf',
+          source_path: 'F:\\library\\Legacy-Why.en.md',
+          heading_path: '2. Method',
+          summary_line: '\u591a\u4e2a\u9891\u7387\u8f7d\u6ce2\u53ef\u4ee5\u5728\u540c\u4e00\u6b21\u79ef\u5206\u4e2d\u5e76\u884c\u6d4b\u91cf\u3002',
+          why_line: '\u8be5\u6bb5\u540c\u65f6\u652f\u6491\u201c\u66f4\u5feb\u201d\u548c\u201c\u65e0\u9700\u6539\u53d8\u79ef\u5206\u65f6\u95f4\u201d\u4e24\u4e2a\u7ed3\u8bba\u3002',
+          card_view: {
+            sections: [
+              {
+                id: 'summary',
+                text: '\u591a\u4e2a\u9891\u7387\u8f7d\u6ce2\u53ef\u4ee5\u5728\u540c\u4e00\u6b21\u79ef\u5206\u4e2d\u5e76\u884c\u6d4b\u91cf\u3002',
+              },
+            ],
+          },
+        },
+      },
+      {
+        text: 'Raw evidence must not be relabeled as relevance copy.',
+        meta: {
+          source_path: 'F:\\library\\Evidence-Only.en.md',
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: 'Evidence Only.pdf',
+          source_path: 'F:\\library\\Evidence-Only.en.md',
+          heading_path: '3. Results',
+          summary_line: '\u8be5\u6587\u62a5\u544a\u4e86\u591a\u9891\u7387\u5e76\u884c\u91c7\u96c6\u7ed3\u679c\u3002',
+          card_view: {
+            sections: [
+              {
+                id: 'summary',
+                text: '\u8be5\u6587\u62a5\u544a\u4e86\u591a\u9891\u7387\u5e76\u884c\u91c7\u96c6\u7ed3\u679c\u3002',
+              },
+              {
+                id: 'why',
+                text: 'Raw evidence must not be relabeled as relevance copy.',
+              },
+            ],
+          },
+        },
+      },
+      {
+        text: 'The source excerpt reports the measured acquisition result.',
+        meta: {
+          source_path: 'F:\\library\\English-Relevance.en.md',
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: 'English Relevance.pdf',
+          source_path: 'F:\\library\\English-Relevance.en.md',
+          heading_path: '4. Discussion',
+          summary_line: '\u8be5\u6587\u5bf9\u9891\u5206\u590d\u7528\u7684\u91c7\u96c6\u7ed3\u679c\u8fdb\u884c\u4e86\u5b9e\u9a8c\u8ba8\u8bba\u3002',
+          card_view: {
+            sections: [
+              {
+                id: 'summary',
+                text: '\u8be5\u6587\u5bf9\u9891\u5206\u590d\u7528\u7684\u91c7\u96c6\u7ed3\u679c\u8fdb\u884c\u4e86\u5b9e\u9a8c\u8ba8\u8bba\u3002',
+              },
+              {
+                id: 'why',
+                text: 'This discussion is relevant because it explains the acquisition-speed trade-off.',
+              },
+            ],
+          },
+        },
+      },
+      {
+        text: 'The paper compares parallel acquisition speed and signal quality.',
+        meta: {
+          source_path: 'F:\\library\\English-Summary.en.md',
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: 'English Summary.pdf',
+          source_path: 'F:\\library\\English-Summary.en.md',
+          heading_path: '5. Conclusion',
+          summary_line: 'This guide explains the measured speed and signal-quality trade-off.',
+          why_line: '\u8fd9\u6761\u5b9a\u4f4d\u7528\u4e8e\u6838\u5bf9\u56de\u7b54\u4e2d\u7684\u901f\u5ea6\u4e0e\u4fe1\u53f7\u8d28\u91cf\u6743\u8861\u3002',
+          card_view: {
+            sections: [
+              {
+                id: 'summary',
+                text: 'This guide explains the measured speed and signal-quality trade-off.',
+              },
+              {
+                id: 'why',
+                text: '\u8fd9\u6761\u5b9a\u4f4d\u7528\u4e8e\u6838\u5bf9\u56de\u7b54\u4e2d\u7684\u901f\u5ea6\u4e0e\u4fe1\u53f7\u8d28\u91cf\u6743\u8861\u3002',
+              },
+            ],
           },
         },
       },
@@ -580,6 +714,7 @@ export default function RefsPanelRegressionPage() {
     'dedupe-active-source': REFS_PANEL_DEDUPE_ACTIVE_SOURCE_PAYLOAD,
     'polish-status': REFS_PANEL_POLISH_STATUS_PAYLOAD,
     'card-view-contract': REFS_PANEL_CARD_VIEW_PAYLOAD,
+    'localized-relevance-fallback': REFS_PANEL_LOCALIZED_RELEVANCE_PAYLOAD,
     'pending-with-hits': REFS_PANEL_PENDING_WITH_HITS_PAYLOAD,
     'research-basket-synthetic': REFS_PANEL_RESEARCH_BASKET_SYNTHETIC_PAYLOAD,
   }

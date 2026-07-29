@@ -202,6 +202,89 @@ def test_polish_citation_card_rejects_metadata_repetition_in_narrative_fields() 
     assert any("card_support_explanation:metadata_repeated" in item for item in out["citation_card_polish_rejected"])
 
 
+def test_v2_system_a_polish_keeps_authoritative_compound_card_evidence() -> None:
+    first_step = (
+        "The operation for digital refocusing of a sample placed out of focus by a distance z "
+        "can be achieved using two steps. First, using the position and angular information of "
+        "each photon, and knowing the optical elements used between them, the trajectory of the "
+        "photons can be reconstructed through a ray tracing operation."
+    )
+    second_step = (
+        "Thus, the second step is to reverse this diffraction by applying a wave propagation of "
+        "distance -z to the image obtained after step one in order to bring the sample back into "
+        "focus."
+    )
+    compound = f"{first_step} {second_step}"
+    detail = {
+        "card_display_contract_version": 2,
+        "is_inpaper": False,
+        "source_name": "qCLFM.pdf",
+        "heading_path": "A. Concept",
+        "answer_claim": (
+            "Digital refocusing first reconstructs photon trajectories with ray tracing, then "
+            "reverses diffraction with wave propagation."
+        ),
+        "evidence_quote": first_step,
+        "card_evidence": compound,
+    }
+    captured: dict[str, object] = {}
+
+    def fake_llm(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return (
+            '{"card_takeaway":"The cited passage preserves both physical stages of the '
+            'refocusing mechanism."}'
+        )
+
+    out = polish_citation_card_detail(detail, llm_fn=fake_llm)
+
+    assert captured["evidence"] == compound
+    assert second_step in str(captured["candidate_payload"])
+    evidence_section = next(
+        section for section in out["card_view"]["sections"] if section["id"] == "evidence"
+    )
+    assert evidence_section["text"] == compound
+    assert "ray tracing" in evidence_section["text"]
+    assert "wave propagation" in evidence_section["text"]
+
+
+def test_v2_system_a_polish_cache_key_uses_authoritative_card_evidence() -> None:
+    first_step = "First, photon trajectories are reconstructed through ray tracing."
+    compound = (
+        f"{first_step} Second, wave propagation of distance -z reverses diffraction and restores "
+        "focus."
+    )
+    base = {
+        "card_display_contract_version": 2,
+        "is_inpaper": False,
+        "source_name": "qCLFM.pdf",
+        "heading_path": "A. Concept",
+        "answer_claim": "Digital refocusing uses ray tracing and wave propagation.",
+        "evidence_quote": first_step,
+        "card_evidence": compound,
+    }
+
+    key = citation_card_polish_cache_key(base)
+
+    assert key == citation_card_polish_cache_key(
+        {**base, "evidence_quote": "A stale and unrelated shorter quote."}
+    )
+    assert key == citation_card_polish_cache_key(
+        {
+            "cardDisplayContractVersion": 2,
+            "isInpaper": False,
+            "sourceName": "qCLFM.pdf",
+            "headingPath": "A. Concept",
+            "answerClaim": "Digital refocusing uses ray tracing and wave propagation.",
+            "evidenceQuote": first_step,
+            "cardEvidence": compound,
+        }
+    )
+    assert key != citation_card_polish_cache_key(
+        {**base, "card_evidence": first_step}
+    )
+
+
 def test_citation_card_polish_cache_key_normalizes_frontend_aliases() -> None:
     snake = {
         "source_name": "Fixture.pdf",

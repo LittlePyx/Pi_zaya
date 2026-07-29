@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from kb.evidence_binding import assess_system_a_hit_binding
-from kb.evidence_term_mapping import evidence_alignment_tokens
+from kb.evidence_binding import (
+    _claim_fact_quantities_for_evidence,
+    _quantity_is_covered,
+    _quantity_label,
+    _system_a_fact_quantities,
+    assess_system_a_hit_binding,
+)
+from kb.evidence_term_mapping import evidence_alignment_tokens, method_identity_conflicts
 
 
 _CITATION_RE = re.compile(
@@ -34,6 +41,15 @@ _RISK_RE = re.compile(
     r"include(?:s|d)?|model(?:s|ed)?|train(?:s|ed)?|validat(?:e|es|ed)|report(?:s|ed)?|"
     r"enable(?:s|d)?|solve(?:s|d)?|trade[- ]?off|limitation|does\s+not|not\s+validated|lack(?:s|ed)?)\b)",
     flags=re.IGNORECASE,
+)
+_OPTIMIZATION_DETAIL_RE = re.compile(
+    r"(?i)\b(?:backpropagat(?:e|es|ed|ion)|gradients?|differentiable|training\s+loss|"
+    r"loss\s+function)\b|\u53cd\u5411\u4f20\u64ad|\u68af\u5ea6|\u53ef\u5fae|"
+    r"\u8bad\u7ec3\u635f\u5931|\u635f\u5931\u51fd\u6570"
+)
+_MASK_COMPRESSION_DETAIL_RE = re.compile(
+    r"(?i)\bmasks?.{0,24}(?:modulat(?:e|es|ed|ion)|summ?(?:ation|ed|ing))\b|"
+    r"\u63a9(?:\u6a21|\u7801).{0,16}(?:\u8c03\u5236|\u6c42\u548c|\u79ef\u5206(?:\u538b\u7f29)?|\u538b\u7f29\u79ef\u5206)"
 )
 _ADVICE_RE = re.compile(
     r"(?:建议|可以(?:先|再)?|应该|值得|下一步|优先阅读|查阅|检查|查看|对照|"
@@ -76,6 +92,102 @@ _INFERENCE_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _ZH_RE = re.compile(r"[\u4e00-\u9fff]")
+
+_MULTIPLIER_NUMBER_WORDS = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "eleven": "11",
+    "twelve": "12",
+}
+_MULTIPLIER_NUMBER_TOKEN = "|".join(
+    sorted(_MULTIPLIER_NUMBER_WORDS, key=len, reverse=True)
+)
+_MULTIPLIER_RE = re.compile(
+    rf"(?<![A-Za-z0-9])(?P<en_value>\d+(?:\.\d+)?|{_MULTIPLIER_NUMBER_TOKEN})"
+    r"\s*(?:[-\u2010-\u2015]\s*)?(?:fold|times?)(?![A-Za-z])"
+    r"|(?<![A-Za-z0-9])(?P<zh_value>\d+(?:\.\d+)?)\s*\u500d",
+    flags=re.IGNORECASE,
+)
+_MULTIPLIER_DECREASE_RE = re.compile(
+    r"\b(?:lower|less|fewer|decreas(?:e|es|ed|ing)|reduc(?:e|es|ed|ing|tion)|"
+    r"drop(?:s|ped|ping)?|diminish(?:es|ed|ing)?|attenuat(?:e|es|ed|ing|ion))\b|"
+    r"\u964d\u4f4e|\u51cf\u5c11|\u4e0b\u964d|\u7f29\u51cf|\u51cf\u5c0f",
+    flags=re.IGNORECASE,
+)
+_MULTIPLIER_INCREASE_RE = re.compile(
+    r"\b(?:higher|more|greater|increas(?:e|es|ed|ing)|rais(?:e|es|ed|ing)|"
+    r"improv(?:e|es|ed|ing|ement)|enhanc(?:e|es|ed|ing|ement)|"
+    r"amplif(?:y|ies|ied|ication)|speedup|gain)\b|"
+    r"\u63d0\u9ad8|\u589e\u52a0|\u4e0a\u5347|\u589e\u5927|\u63d0\u5347|\u589e\u5f3a",
+    flags=re.IGNORECASE,
+)
+_MULTIPLIER_TARGET_PATTERNS = (
+    (
+        "resolution",
+        re.compile(
+            r"\b(?:(?:spatial|position|positional|axial|lateral|temporal|image)\s+)?"
+            r"resolution\b|\u4f4d\u7f6e\u5206\u8fa8\u7387|\u7a7a\u95f4\u5206\u8fa8\u7387|"
+            r"\u8f74\u5411\u5206\u8fa8\u7387|\u6a2a\u5411\u5206\u8fa8\u7387|\u65f6\u95f4\u5206\u8fa8\u7387|"
+            r"\u5206\u8fa8\u7387",
+            flags=re.IGNORECASE,
+        ),
+    ),
+    (
+        "illumination_power",
+        re.compile(
+            r"\b(?:(?:incident|input|optical|laser|excitation|illumination)\s+)?power\b|"
+            r"\b(?:illumination|excitation|incident\s+light)\s+(?:intensity|energy)\b|"
+            r"(?:\u5165\u5c04|\u7167\u660e|\u6fc0\u53d1|\u5149\u6e90|\u6fc0\u5149|\u5149\u5b66)"
+            r".{0,8}(?:\u529f\u7387|\u5f3a\u5ea6|\u80fd\u91cf)|\u529f\u7387",
+            flags=re.IGNORECASE,
+        ),
+    ),
+    (
+        "signal_to_noise",
+        re.compile(
+            r"\bSNR\b|\bsignal[-\s]?to[-\s]?noise(?:\s+ratio)?\b|\u4fe1\u566a\u6bd4",
+            flags=re.IGNORECASE,
+        ),
+    ),
+    (
+        "speed",
+        re.compile(
+            r"\b(?:speed|throughput|frame\s+rate|acquisition\s+rate|processing\s+rate|fps)\b|"
+            r"\u901f\u5ea6|\u541e\u5410\u91cf|\u5e27\u7387|\u91c7\u96c6\u7387|\u5904\u7406\u7387",
+            flags=re.IGNORECASE,
+        ),
+    ),
+    (
+        "sampling",
+        re.compile(
+            r"\bsampling\s+(?:rate|ratio)\b|\u91c7\u6837\u7387|\u91c7\u6837\u6bd4",
+            flags=re.IGNORECASE,
+        ),
+    ),
+    (
+        "time",
+        re.compile(
+            r"\b(?:time|latency|duration)\b|\u65f6\u95f4|\u5ef6\u8fdf|\u8017\u65f6",
+            flags=re.IGNORECASE,
+        ),
+    ),
+    (
+        "dose",
+        re.compile(
+            r"\b(?:dose|exposure|photon\s+budget)\b|\u5242\u91cf|\u66dd\u5149|\u5149\u5b50\u9884\u7b97",
+            flags=re.IGNORECASE,
+        ),
+    ),
+)
 
 _STOPWORDS = {
     "about",
@@ -199,27 +311,171 @@ def _plain_claim(text: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _normalize_multiplier_value(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in _MULTIPLIER_NUMBER_WORDS:
+        return _MULTIPLIER_NUMBER_WORDS[raw]
+    try:
+        return format(Decimal(raw).normalize(), "f")
+    except (InvalidOperation, ValueError):
+        return raw
+
+
+def _multiplier_direction(surface: str, start: int, end: int) -> str:
+    """Return the closest explicit direction attached to a multiplier."""
+
+    text = str(surface or "")
+    clause_start = max(
+        text.rfind(mark, 0, start) + 1
+        for mark in (".", ";", "!", "?", "\u3002", "\uff1b", "\uff01", "\uff1f", "\uff0c")
+    )
+    right_boundaries = [
+        pos
+        for mark in (".", ";", "!", "?", "\u3002", "\uff1b", "\uff01", "\uff1f", "\uff0c")
+        if (pos := text.find(mark, end)) >= 0
+    ]
+    clause_end = min(right_boundaries) if right_boundaries else len(text)
+    window_start = max(clause_start, start - 56)
+    window_end = min(clause_end, end + 56)
+    window = text[window_start:window_end]
+    relative_start = start - window_start
+    relative_end = end - window_start
+    candidates: list[tuple[int, str]] = []
+    for direction, pattern in (
+        ("decrease", _MULTIPLIER_DECREASE_RE),
+        ("increase", _MULTIPLIER_INCREASE_RE),
+    ):
+        for match in pattern.finditer(window):
+            if match.end() <= relative_start:
+                distance = relative_start - match.end()
+            elif match.start() >= relative_end:
+                distance = match.start() - relative_end
+            else:
+                distance = 0
+            candidates.append((distance, direction))
+    if not candidates:
+        return ""
+    closest = min(distance for distance, _direction in candidates)
+    directions = {
+        direction for distance, direction in candidates if distance == closest
+    }
+    return next(iter(directions)) if len(directions) == 1 else ""
+
+
+def _multiplier_target(surface: str, start: int, end: int) -> str:
+    """Return the closest measurable quantity modified by a multiplier."""
+
+    text = str(surface or "")
+    clause_start = max(
+        text.rfind(mark, 0, start) + 1
+        for mark in (".", ";", "!", "?", "\u3002", "\uff1b", "\uff01", "\uff1f", "\uff0c")
+    )
+    right_boundaries = [
+        pos
+        for mark in (".", ";", "!", "?", "\u3002", "\uff1b", "\uff01", "\uff1f", "\uff0c")
+        if (pos := text.find(mark, end)) >= 0
+    ]
+    clause_end = min(right_boundaries) if right_boundaries else len(text)
+    window_start = max(clause_start, start - 88)
+    window_end = min(clause_end, end + 88)
+    window = text[window_start:window_end]
+    relative_start = start - window_start
+    relative_end = end - window_start
+    candidates: list[tuple[int, str]] = []
+    for target, pattern in _MULTIPLIER_TARGET_PATTERNS:
+        for match in pattern.finditer(window):
+            if match.end() <= relative_start:
+                distance = relative_start - match.end()
+            elif match.start() >= relative_end:
+                distance = match.start() - relative_end
+            else:
+                distance = 0
+            candidates.append((distance, target))
+    if not candidates:
+        return ""
+    closest = min(distance for distance, _target in candidates)
+    targets = {target for distance, target in candidates if distance == closest}
+    return next(iter(targets)) if len(targets) == 1 else ""
+
+
+def _normalize_multiplier_surface(
+    value: str,
+) -> tuple[list[tuple[str, str, str]], str]:
+    """Normalize written multipliers while retaining magnitude and direction.
+
+    The normalized surface is used only for deterministic quantity comparison;
+    the user-visible answer remains untouched.  A multiplier stays distinct from
+    ordinary units such as ``10 Hz`` because callers enable this equivalence only
+    when both the claim and evidence contain an explicit fold/times/\u500d expression.
+    """
+
+    surface = str(value or "")
+    facts: list[tuple[str, str, str]] = []
+    parts: list[str] = []
+    cursor = 0
+    for match in _MULTIPLIER_RE.finditer(surface):
+        raw_value = str(match.group("en_value") or match.group("zh_value") or "")
+        normalized = _normalize_multiplier_value(raw_value)
+        if not normalized:
+            continue
+        facts.append(
+            (
+                normalized,
+                _multiplier_direction(surface, match.start(), match.end()),
+                _multiplier_target(surface, match.start(), match.end()),
+            )
+        )
+        parts.append(surface[cursor : match.start()])
+        # A hyphen keeps ``fold`` from being inferred as a scientific unit while
+        # exposing the canonical magnitude to the existing quantity parser.
+        parts.append(f"{normalized}-fold")
+        cursor = match.end()
+    if not facts:
+        return [], surface
+    parts.append(surface[cursor:])
+    return list(dict.fromkeys(facts)), "".join(parts)
+
+
+def _prepare_quantity_surfaces(
+    claim: str,
+    evidence: str,
+) -> tuple[str, str, bool]:
+    """Return comparable quantity surfaces and multiplier compatibility."""
+
+    claim_facts, normalized_claim = _normalize_multiplier_surface(claim)
+    if not claim_facts:
+        return str(claim or ""), str(evidence or ""), True
+    evidence_facts, normalized_evidence = _normalize_multiplier_surface(evidence)
+    if not evidence_facts:
+        return normalized_claim, str(evidence or ""), False
+    covered = all(
+        any(
+            claim_value == evidence_value
+            and (
+                not claim_direction
+                or not evidence_direction
+                or claim_direction == evidence_direction
+            )
+            and (
+                not claim_target
+                or not evidence_target
+                or claim_target == evidence_target
+            )
+            for evidence_value, evidence_direction, evidence_target in evidence_facts
+        )
+        for claim_value, claim_direction, claim_target in claim_facts
+    )
+    return normalized_claim, normalized_evidence, covered
+
+
 def _meaningful_numbers(text: str) -> list[str]:
-    plain = _CITATION_RE.sub(" ", str(text or ""))
-    values: list[str] = []
-    for match in _NUMBER_RE.finditer(plain):
-        raw_value = re.sub(r"\s+", "", match.group(0)).lower()
-        value = re.search(r"\d+(?:\.\d+)?", match.group(0))
-        value = value.group(0) if value else ""
-        # Bare single-digit list/order markers are not scientific claims.
-        if re.fullmatch(r"\d", raw_value):
-            continue
-        if re.fullmatch(r"\d{4}", raw_value) and 1900 <= int(raw_value) <= 2100:
-            # Publication years identify papers, but are not scientific result
-            # values that must occur in the supporting evidence sentence.
-            continue
-        if "." in value:
-            try:
-                value = str(float(value))
-            except ValueError:
-                pass
-        values.append(value)
-    return values
+    _multiplier_facts, quantity_surface = _normalize_multiplier_surface(
+        _CITATION_RE.sub(" ", str(text or ""))
+    )
+    return sorted(
+        _quantity_label(quantity)
+        for quantity in _system_a_fact_quantities(quantity_surface)
+    )
 
 
 def _is_high_risk_claim(unit: str) -> bool:
@@ -243,6 +499,8 @@ def _is_high_risk_claim(unit: str) -> bool:
     return bool(
         _meaningful_numbers(plain)
         or _RISK_RE.search(plain)
+        or _OPTIMIZATION_DETAIL_RE.search(plain)
+        or _MASK_COMPRESSION_DETAIL_RE.search(plain)
         or _PAPER_COVERAGE_CLAIM_RE.search(plain)
     )
 
@@ -260,6 +518,39 @@ def _hit_payload(hit: dict[str, Any]) -> str:
     return "\n".join(str(value or "") for value in values if str(value or "").strip())
 
 
+def _citation_group_covers_claim_quantities(
+    claim: str,
+    citations: list[int],
+    answer_hits: list[dict[str, Any]],
+) -> bool:
+    numbers = list(dict.fromkeys(int(number) for number in citations if int(number) > 0))
+    if len(numbers) < 2:
+        return False
+    evidence_parts = [
+        _hit_payload(answer_hits[number - 1])
+        for number in numbers
+        if 0 < number <= len(answer_hits) and answer_hits[number - 1]
+    ]
+    if len(evidence_parts) < 2:
+        return False
+    claim_surface = _plain_claim(claim)
+    evidence_surface = "\n".join(evidence_parts)
+    claim_surface, evidence_surface, multiplier_covered = _prepare_quantity_surfaces(
+        claim_surface,
+        evidence_surface,
+    )
+    if not multiplier_covered:
+        return False
+    claim_quantities = _system_a_fact_quantities(claim_surface)
+    if not claim_quantities:
+        return False
+    union_quantities = _system_a_fact_quantities(evidence_surface)
+    return all(
+        _quantity_is_covered(quantity, union_quantities)
+        for quantity in claim_quantities
+    )
+
+
 def _concept_ids(text: str) -> set[int]:
     normalized = re.sub(r"[\s_]+", " ", str(text or "").lower())
     return {
@@ -269,10 +560,18 @@ def _concept_ids(text: str) -> set[int]:
     }
 
 
-def _support_score(claim: str, evidence: str) -> int:
+def _support_score(
+    claim: str,
+    evidence: str,
+    *,
+    allow_comparison_scope: bool = False,
+) -> int:
     claim_plain = _plain_claim(claim)
-    evidence_norm = re.sub(r"\s+", " ", str(evidence or "")).lower()
+    evidence_text = str(evidence or "")
+    evidence_norm = re.sub(r"\s+", " ", evidence_text).lower()
     if not claim_plain or not evidence_norm:
+        return 0
+    if method_identity_conflicts(claim_plain, evidence_text):
         return 0
     claim_low = claim_plain.lower()
     claim_single_photon = bool(
@@ -361,14 +660,34 @@ def _support_score(claim: str, evidence: str) -> int:
             re.compile(r"正交(?:的|组合)|\borthogonal(?:ly)?(?: combin| design| dimension)", re.I),
         ),
     )
+    explicit_relation_requirements = (
+        *explicit_relation_requirements,
+        (_OPTIMIZATION_DETAIL_RE, _OPTIMIZATION_DETAIL_RE),
+        (_MASK_COMPRESSION_DETAIL_RE, _MASK_COMPRESSION_DETAIL_RE),
+    )
     if any(
         claim_pattern.search(claim_low) and not evidence_pattern.search(evidence_norm)
         for claim_pattern, evidence_pattern in explicit_relation_requirements
     ):
         return 0
-    claim_numbers = _meaningful_numbers(claim_plain)
-    if claim_numbers and not all(number in re.sub(r"\s+", "", evidence_norm) for number in claim_numbers):
+    quantity_claim, quantity_evidence, multiplier_covered = _prepare_quantity_surfaces(
+        claim_plain,
+        evidence_text,
+    )
+    if not multiplier_covered:
         return 0
+    claim_quantities = _claim_fact_quantities_for_evidence(
+        quantity_claim,
+        quantity_evidence,
+        allow_comparison_scope=allow_comparison_scope,
+    )
+    evidence_quantities = _system_a_fact_quantities(quantity_evidence)
+    if claim_quantities and not all(
+        _quantity_is_covered(quantity, evidence_quantities)
+        for quantity in claim_quantities
+    ):
+        return 0
+    claim_numbers = [_quantity_label(quantity) for quantity in claim_quantities]
     score = 2 * len(_concept_ids(claim_plain) & _concept_ids(evidence_norm))
     claim_acronyms = {item.lower() for item in _ACRONYM_RE.findall(claim_plain)}
     evidence_acronyms = {item.lower() for item in _ACRONYM_RE.findall(evidence_norm.upper())}
@@ -623,8 +942,17 @@ def _drop_hard_mismatched_claims(
         kept: list[str] = []
         for segment in segments:
             citations = [int(match.group(1)) for match in _NUMERIC_CITATION_RE.finditer(segment)]
+            group_quantity_coverage = _citation_group_covers_claim_quantities(
+                segment,
+                citations,
+                answer_hits,
+            )
             bound_scores = [
-                _support_score(segment, _hit_payload(answer_hits[number - 1]))
+                _support_score(
+                    segment,
+                    _hit_payload(answer_hits[number - 1]),
+                    allow_comparison_scope=group_quantity_coverage,
+                )
                 for number in citations
                 if 0 < number <= len(answer_hits)
             ]
@@ -758,10 +1086,16 @@ def _strip_weak_numeric_citations(
             ):
                 rebuilt.append(segment)
                 continue
+            group_quantity_coverage = _citation_group_covers_claim_quantities(
+                segment,
+                citations,
+                answer_hits,
+            )
             scored_citations = {
                 number: _support_score(
                     segment,
                     _hit_payload(answer_hits[number - 1]),
+                    allow_comparison_scope=group_quantity_coverage,
                 )
                 for number in citations
                 if answer_hits[number - 1]
@@ -847,6 +1181,16 @@ def _strip_user_visible_rejected_citations(
             ):
                 rebuilt.append(segment)
                 continue
+            group_quantity_coverage = _citation_group_covers_claim_quantities(
+                segment,
+                citations,
+                answer_hits,
+            )
+            group_evidence_quotes = [
+                _hit_payload(answer_hits[number - 1])
+                for number in list(dict.fromkeys(citations))
+                if 0 < number <= len(answer_hits) and answer_hits[number - 1]
+            ] if group_quantity_coverage else []
             rejected_numbers: list[int] = []
             binding_rows: list[dict[str, Any]] = []
             for number in list(dict.fromkeys(citations)):
@@ -869,21 +1213,44 @@ def _strip_user_visible_rejected_citations(
                 binding_meta["citation_plan_evidence_selection_reason"] = (
                     "prompt_aligned_source_sentence"
                 )
+                if group_evidence_quotes:
+                    binding_meta["citation_group_evidence_quotes"] = [
+                        _normalize_multiplier_surface(item)[1]
+                        for item in group_evidence_quotes
+                    ]
                 evidence_quote = quotes[0]
+                quantity_evidence = (
+                    "\n".join(group_evidence_quotes)
+                    if group_evidence_quotes
+                    else evidence_quote
+                )
+                binding_claim, _normalized_union, multiplier_covered = (
+                    _prepare_quantity_surfaces(segment, quantity_evidence)
+                )
+                _evidence_multiplier_facts, binding_evidence_quote = (
+                    _normalize_multiplier_surface(evidence_quote)
+                )
                 source_name = str(
                     meta.get("source_name")
                     or hit.get("source_name")
                     or hit.get("title")
                     or ""
                 ).strip()
-                binding = assess_system_a_hit_binding(
-                    answer_claim=segment,
-                    hit=hit,
-                    meta=binding_meta,
-                    heading=str(meta.get("heading_path") or meta.get("top_heading") or ""),
-                    evidence_quote=evidence_quote,
-                    source_name=source_name,
-                )
+                if not multiplier_covered:
+                    binding = {
+                        "status": "mismatch",
+                        "suppress_link": True,
+                        "reason": "The cited evidence has an incompatible multiplier magnitude or direction.",
+                    }
+                else:
+                    binding = assess_system_a_hit_binding(
+                        answer_claim=binding_claim,
+                        hit=hit,
+                        meta=binding_meta,
+                        heading=str(meta.get("heading_path") or meta.get("top_heading") or ""),
+                        evidence_quote=binding_evidence_quote,
+                        source_name=source_name,
+                    )
                 if bool(binding.get("suppress_link")):
                     rejected_numbers.append(number)
                     binding_rows.append(
@@ -947,7 +1314,42 @@ def _repair_uncited_unique_claims(
             )
             output_lines.append(raw_line)
             continue
-        if in_fence or not stripped or _TABLE_OR_CODE_RE.match(stripped):
+        if in_fence or not stripped:
+            output_lines.append(raw_line)
+            continue
+        if stripped.startswith("|"):
+            table_claim = re.sub(r"\s*\|\s*", " ", stripped).strip()
+            is_separator = bool(
+                re.fullmatch(r"(?::?-{3,}:?\s*)+", table_claim.replace(" ", ""))
+            )
+            if (
+                is_separator
+                or _CITATION_RE.search(stripped)
+                or not _is_high_risk_claim(table_claim)
+            ):
+                output_lines.append(raw_line)
+                continue
+            hit_index, score = _best_unique_hit(
+                table_claim,
+                answer_hits,
+                min_score=min_support_score,
+            )
+            if hit_index <= 0:
+                output_lines.append(raw_line)
+                continue
+            leading = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+            table_body = stripped[:-1].rstrip() if stripped.endswith("|") else stripped
+            output_lines.append(f"{leading}{table_body} [{hit_index}] |")
+            repairs.append(
+                {
+                    "claim": _plain_claim(table_claim)[:220],
+                    "citation": hit_index,
+                    "score": score,
+                    "reason": "markdown_table_fact",
+                }
+            )
+            continue
+        if _TABLE_OR_CODE_RE.match(stripped):
             output_lines.append(raw_line)
             continue
         prefix_match = _LIST_PREFIX_RE.match(stripped)
@@ -981,7 +1383,15 @@ def _repair_uncited_unique_claims(
                     flags=re.IGNORECASE,
                 )
                 and all(
-                    _support_score(segment, _hit_payload(answer_hits[number - 1]))
+                    _support_score(
+                        segment,
+                        _hit_payload(answer_hits[number - 1]),
+                        allow_comparison_scope=_citation_group_covers_claim_quantities(
+                            segment,
+                            comparison_citations,
+                            answer_hits,
+                        ),
+                    )
                     >= max(3, min_support_score - 1)
                     for number in comparison_citations
                 )
@@ -1146,6 +1556,7 @@ def _repair_mismatched_unique_citations(
     answer_hits: list[dict[str, Any]],
     *,
     min_support_score: int = 3,
+    strict_plan: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Rebind an incorrect System-A number only when one hit is uniquely stronger."""
 
@@ -1184,7 +1595,18 @@ def _repair_mismatched_unique_citations(
         previous_citations: list[int] = []
         for segment in segments:
             citations = [int(match.group(1)) for match in _NUMERIC_CITATION_RE.finditer(segment)]
-            if not citations or not _is_high_risk_claim(segment):
+            plain_segment = _plain_claim(segment)
+            strict_factual_candidate = bool(
+                strict_plan
+                and len(plain_segment) >= 20
+                and not _BOUNDARY_RE.search(plain_segment)
+                and not _INFERENCE_RE.search(plain_segment)
+                and not _NON_FACTUAL_GUIDANCE_RE.search(plain_segment)
+                and not re.search(r"[?\uFF1F]\s*$", plain_segment)
+            )
+            if not citations or not (
+                _is_high_risk_claim(segment) or strict_factual_candidate
+            ):
                 rebuilt.append(segment)
                 if citations:
                     previous_citations = list(dict.fromkeys(citations))
@@ -1209,7 +1631,15 @@ def _repair_mismatched_unique_citations(
                 previous_citations = [inherited]
                 continue
             cited_scores = [
-                _support_score(segment, _hit_payload(answer_hits[number - 1]))
+                _support_score(
+                    segment,
+                    _hit_payload(answer_hits[number - 1]),
+                    allow_comparison_scope=_citation_group_covers_claim_quantities(
+                        segment,
+                        citations,
+                        answer_hits,
+                    ),
+                )
                 for number in citations
                 if 0 < number <= len(answer_hits)
             ]
@@ -1495,6 +1925,7 @@ def audit_and_repair_claim_evidence(
             repaired,
             eligible_hits,
             min_support_score=min_support_score,
+            strict_plan=strict_plan,
         )
     else:
         repaired, repairs, rebound_repairs = scoped, [], []
@@ -1526,10 +1957,21 @@ def audit_and_repair_claim_evidence(
         if not numeric_citations or _STRUCTURED_CITATION_RE.search(unit):
             continue
         scores = []
+        group_quantity_coverage = _citation_group_covers_claim_quantities(
+            unit,
+            numeric_citations,
+            hits,
+        )
         for citation in numeric_citations:
             if citation <= 0 or citation > len(hits):
                 continue
-            scores.append(_support_score(unit, _hit_payload(hits[citation - 1])))
+            scores.append(
+                _support_score(
+                    unit,
+                    _hit_payload(hits[citation - 1]),
+                    allow_comparison_scope=group_quantity_coverage,
+                )
+            )
         # Only flag a hard mismatch for numeric/entity claims. Prose-only
         # bilingual paraphrases are too ambiguous for deterministic rejection.
         if scores and max(scores) <= 0 and (_meaningful_numbers(unit) or _ACRONYM_RE.search(_plain_claim(unit))):

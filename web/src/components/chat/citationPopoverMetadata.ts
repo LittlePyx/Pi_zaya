@@ -39,6 +39,7 @@ export function buildCitationPopoverMetadataPlan(
   const sourcePath = String(detail.sourcePath || '').trim()
   const isInPaperReference = Boolean(detail.isInpaper)
   const shouldFetchCitationMeta = Boolean(sourcePath) && !isInPaperReference
+  const hasSourceBoundMetadata = shouldFetchCitationMeta
   const hasDoi = Boolean(String(detail.doi || '').trim())
   const shelfItem = toShelfItem(detail)
   const needsSummaryBackfill = shelfItemNeedsSummaryBackfill(shelfItem)
@@ -46,7 +47,9 @@ export function buildCitationPopoverMetadataPlan(
     ? hasDoi
     : Boolean(detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
   const shouldFetchBibliometrics = Boolean(
-    (!detail.bibliometricsChecked || needsSummaryBackfill) && hasBibliometricsSeed,
+    !hasSourceBoundMetadata
+    && (!detail.bibliometricsChecked || needsSummaryBackfill)
+    && hasBibliometricsSeed,
   )
   const requestCount = Number(shouldFetchCitationMeta) + Number(shouldFetchBibliometrics)
 

@@ -80,6 +80,7 @@ from kb.generation_answer_finalize_runtime import (
     _exclude_bound_source_from_multi_paper_doc_list_contract as _finalize_runtime_exclude_bound_source_from_multi_paper_doc_list_contract,
     _filter_multi_paper_doc_list_contract as _finalize_runtime_filter_multi_paper_doc_list_contract,
     _finalize_generation_answer as _finalize_runtime_finalize_generation_answer,
+    _normalize_citation_plan_supported_terms as _finalize_runtime_normalize_citation_plan_supported_terms,
     _pick_shared_primary_evidence as _finalize_runtime_pick_shared_primary_evidence,
     _sanitize_canceled_generation_answer as _finalize_runtime_sanitize_canceled_generation_answer,
 )
@@ -6712,6 +6713,17 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             if runtime_repair.get("changed"):
                 repaired_answer = str(runtime_repair.get("answer") or "").strip()
                 if repaired_answer:
+                    # Runtime repair may ask the model to rewrite the already
+                    # finalized answer. Reapply deterministic, source-backed
+                    # terminology after that rewrite so it cannot silently drop
+                    # exact facts such as distilled sensing or a numeric method
+                    # bundle that the citation plan has already verified.
+                    repaired_answer = _finalize_runtime_normalize_citation_plan_supported_terms(
+                        repaired_answer,
+                        prompt=prompt_for_user or prompt,
+                        citation_plan=finalized_citation_plan,
+                        answer_hits=answer_hits,
+                    )
                     answer = repaired_answer
                     paper_guide_contracts = _sync_runtime_repaired_answer_contracts(
                         paper_guide_contracts,

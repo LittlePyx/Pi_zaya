@@ -4,7 +4,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.source_blocks import normalize_inline_markdown
+
+
+CITATION_CARD_EVIDENCE_MAX_LEN = 520
 
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[\u3002\uff01\uff1f\uff1b;!?\.])\s+")
@@ -263,6 +267,23 @@ def looks_broken_leading_prefix(value: str) -> bool:
         return False
     if looks_author_metadata_prefix(text):
         return True
+    # A source sentence may open with a substantive participial clause before
+    # its finite main clause, for example ``Performing structured illumination
+    # with four detectors, our system reconstructs ...``.  The metadata-prefix
+    # stripper sees the later ``our system`` content start, so preserve a long
+    # procedural lead instead of mistaking its capitalized first word for a
+    # detached title/OCR fragment.
+    if (
+        len(loose_tokens(text)) >= 7
+        and re.match(
+            r"^(?:performing|using|combining|applying|employing|leveraging|"
+            r"measuring|collecting|capturing|illuminating|sensing|reconstructing)\b",
+            text,
+            re.IGNORECASE,
+        )
+        and text.rstrip().endswith((",", "，"))
+    ):
+        return False
     # A complete evidence sentence can legitimately start with a capitalized
     # content word (for example, "All tested samples were ...").  Do not
     # mistake it for a detached title/author prefix merely because its first
@@ -500,6 +521,18 @@ def evidence_sentence_quality(value: str, *, claim: str = "", heading: str = "",
     if context_tokens:
         overlap = len(set(tokens) & context_tokens)
         score += min(2.0, overlap * 0.3)
+    # The general context above includes the paper title and heading, which
+    # often makes an abstract's opening sentence look relevant even when a
+    # later sentence is the one that directly supports the answer.  Give the
+    # answer claim itself a stronger, bilingual alignment signal so card
+    # excerpts center on the supporting sentence rather than the block prefix.
+    # ``evidence_alignment_tokens`` also maps common Chinese research terms to
+    # their English source forms without generating any user-facing wording.
+    if claim:
+        claim_tokens = evidence_alignment_tokens(claim)
+        if claim_tokens:
+            claim_overlap = len(claim_tokens & evidence_alignment_tokens(text))
+            score += min(3.0, float(claim_overlap))
     if re.search(r"\b(?:single[-\s]?pixel|imaging|deep learning|compressive|neural|reconstruction|sampling|dmd|admm|network|resolution|sectioning)\b", text, re.IGNORECASE):
         score += 1.0
     return score
@@ -548,6 +581,103 @@ def join_evidence_window(
     return " ".join(out).strip()
 
 
+def compound_claim_evidence_excerpt(
+    value: Any,
+    *,
+    claim: str,
+    max_len: int = 520,
+) -> str:
+    """Build a compact, explicit excerpt for a multi-sentence claim.
+
+    A normal evidence window is contiguous.  That is desirable for most
+    citations, but a mechanism can place its first and final steps around
+    explanatory sentences that do not fit on a card.  In that case, selecting
+    only the opening window silently drops part of the answer's support.  This
+    helper keeps the exact source sentences that add distinct claim terms and
+    joins non-contiguous sentences with an ellipsis.  It intentionally returns
+    an empty string for short passages and single-sentence claims so ordinary
+    evidence selection remains unchanged.
+    """
+
+    hard_limit = max(80, int(max_len or 520))
+    text = clean_display_text(value, max_len=max(4000, hard_limit + 1))
+    if not text or len(text) <= hard_limit or looks_low_value_citation_context(text):
+        return ""
+    sentences = [
+        sentence.strip()
+        for sentence in split_evidence_sentences(text)
+        if usable_evidence_sentence(sentence)
+    ]
+    if len(sentences) < 2:
+        return ""
+
+    claim_terms = evidence_alignment_tokens(claim)
+    if len(claim_terms) < 4:
+        return ""
+    overlaps = [claim_terms & evidence_alignment_tokens(sentence) for sentence in sentences]
+    available = set().union(*overlaps) if overlaps else set()
+    best_single = max((len(item) for item in overlaps), default=0)
+    if len(available) < 4 or len(available) < best_single + 2:
+        return ""
+
+    selected: set[int] = set()
+    covered: set[str] = set()
+    while len(selected) < min(4, len(sentences)):
+        choices = [
+            (len(overlap - covered), len(overlap), -idx, idx)
+            for idx, overlap in enumerate(overlaps)
+            if idx not in selected
+        ]
+        gain, _total, _neg_idx, idx = max(choices, default=(0, 0, 0, -1))
+        if gain <= 0 or idx < 0:
+            break
+        selected.add(idx)
+        covered.update(overlaps[idx])
+        if available <= covered:
+            break
+    if len(selected) < 2 or len(covered) < 4 or len(covered) < best_single + 2:
+        return ""
+
+    ordered = sorted(selected)
+    # Preserve an explicit step-count sentence when it frames the selected
+    # clauses and still fits.  This makes the resulting quote self-contained
+    # without retaining unrelated intervening prose.
+    first_selected = ordered[0]
+    framing_candidates = [
+        idx
+        for idx in range(0, first_selected + 1)
+        if re.search(
+            r"\b(?:two|three|four|2|3|4)\s+(?:distinct\s+)?steps?\b",
+            sentences[idx],
+            flags=re.IGNORECASE,
+        )
+    ]
+    if framing_candidates:
+        ordered = sorted(set([framing_candidates[-1], *ordered]))
+
+    excerpt_parts: list[str] = []
+    previous_idx = -1
+    for idx in ordered:
+        if excerpt_parts and idx > previous_idx + 1:
+            excerpt_parts.append("…")
+        excerpt_parts.append(sentences[idx])
+        previous_idx = idx
+    excerpt = " ".join(excerpt_parts)
+    if len(excerpt) > hard_limit and framing_candidates:
+        ordered = [idx for idx in ordered if idx != framing_candidates[-1]]
+        excerpt_parts = []
+        previous_idx = -1
+        for idx in ordered:
+            if excerpt_parts and idx > previous_idx + 1:
+                excerpt_parts.append("…")
+            excerpt_parts.append(sentences[idx])
+            previous_idx = idx
+        excerpt = " ".join(excerpt_parts)
+    if len(excerpt) > hard_limit:
+        return ""
+    return finish_evidence_text(excerpt, max_len=hard_limit)
+
+
 def pick_readable_evidence_text(
     value: Any,
     *,
@@ -582,7 +712,7 @@ def pick_readable_evidence_text(
             ),
             idx,
         )
-        for idx, sentence in enumerate(sentences[:10])
+        for idx, sentence in enumerate(sentences)
     ]
     identifier_matches.sort(key=lambda item: (-item[0], item[1]))
     identifier_count, identifier_idx = (
@@ -607,9 +737,24 @@ def pick_readable_evidence_text(
             if window:
                 return finish_evidence_text(window, max_len=max_len)
         return finish_evidence_text(identifier_sentence, max_len=max_len)
-    usable = [idx for idx, sentence in enumerate(sentences[:10]) if usable_evidence_sentence(sentence)]
+    usable = [idx for idx, sentence in enumerate(sentences) if usable_evidence_sentence(sentence)]
     if usable:
         first_idx = usable[0]
+        claim_alignment_tokens = evidence_alignment_tokens(claim)
+        alignment_matches = [
+            (
+                len(claim_alignment_tokens & evidence_alignment_tokens(sentences[idx])),
+                idx,
+            )
+            for idx in usable
+        ]
+        alignment_matches.sort(key=lambda item: (-item[0], item[1]))
+        alignment_count, alignment_idx = (
+            alignment_matches[0] if alignment_matches else (0, first_idx)
+        )
+        first_alignment_count = len(
+            claim_alignment_tokens & evidence_alignment_tokens(sentences[first_idx])
+        )
         claim_numbers = {
             token
             for token in re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", str(claim or ""))
@@ -641,7 +786,15 @@ def pick_readable_evidence_text(
             re.search(r"(?i)detector\s+type\s*:", text)
             and re.search(r"(?i)(?:working\s+parameter|performance)\s*(?:\([^)]*\))?\s*[:=]", text)
         )
-        if len(claim_numbers) >= 2 and numeric_count >= 2 and not structured_detector_record:
+        if alignment_count >= 3 and alignment_count > first_alignment_count:
+            # A later sentence with three or more claim-specific aligned terms
+            # is stronger evidence than a fluent abstract opener.  This is
+            # especially important for Chinese answers backed by English
+            # source text, where ordinary lexical overlap undercounts the
+            # actual match.  Keep the threshold conservative so a shared
+            # method name alone cannot move the excerpt.
+            center_idx = alignment_idx
+        elif len(claim_numbers) >= 2 and numeric_count >= 2 and not structured_detector_record:
             # Quantitative claims need the sentence carrying their values, not
             # merely the first qualitative sentence in the same source block.
             # The evidence window will also retain a useful preceding setup

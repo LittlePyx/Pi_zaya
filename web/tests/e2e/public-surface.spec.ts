@@ -25,6 +25,9 @@ const STORED_CARD_VIEW_BASENAME = 'Stored Card View Title.pdf'
 const STORED_CARD_TITLE_PATH = 'C:\\private\\research\\Stored Card Title.pdf'
 const STORED_CARD_TITLE_BASENAME = 'Stored Card Title.pdf'
 const INTERNAL_TRACE_OBSERVATION = 'internal trace observation: quality gate repair executed'
+const PUBLIC_SURFACE_BUILD = process.env.PW_PUBLIC_SURFACE === '1'
+
+test.skip(!PUBLIC_SURFACE_BUILD, 'run through npm run test:e2e:public-surface')
 
 const conversation = {
   id: CONV_ID,
@@ -443,6 +446,7 @@ async function installPublicChatBackend(page: Page) {
 }
 
 test.beforeAll(() => {
+  if (!PUBLIC_SURFACE_BUILD) return
   const expected = {
     PW_PUBLIC_SURFACE: '1',
     VITE_ENABLE_INTERNAL_DEBUG: '0',

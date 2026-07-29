@@ -33,7 +33,8 @@ def test_spad_noise_model_preflight_returns_grounded_localized_answer(tmp_path):
     assert out["support_resolution"][0]["page_start"] == 2
     assert "multi-source physical noise model" in out["support_resolution"][0]["locate_anchor"]
     evidence = out["support_resolution"][0]["evidence_quote"]
-    assert "single-source Poisson noise model" in evidence
+    assert "single-source based Poisson" in evidence
+    assert "degraded imaging quality" in evidence
     assert "multi-source physical noise model" in evidence
     assert "Mora-Mart" not in evidence
     assert "Figure 1." not in evidence

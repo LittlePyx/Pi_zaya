@@ -6,6 +6,7 @@ from typing import Any
 
 from kb.citation_context_summary import build_system_b_context_summary
 from kb.evidence_text import (
+    CITATION_CARD_EVIDENCE_MAX_LEN,
     clean_display_text,
     looks_low_value_citation_context,
     pick_readable_evidence_text,
@@ -302,7 +303,7 @@ def build_system_a_evidence_pack(
         title=title,
         claim=claim,
         heading=heading,
-        max_len=460,
+        max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
     )
     flags: list[str] = []
     score_delta = 0.0

@@ -141,12 +141,16 @@ async function messagePresentationValues(page: Page, message: Message) {
     const {
       getMessageCopyMarkdownValue,
       getMessageCopyTextValue,
+      getMessageCiteDetailRecords,
+      getMessageNoticeValue,
       getMessageRenderedBodyContent,
     } = await import('/src/components/chat/messageRenderPacket.ts')
     return {
       body: getMessageRenderedBodyContent(messageInput),
       copyText: getMessageCopyTextValue(messageInput),
       copyMarkdown: getMessageCopyMarkdownValue(messageInput),
+      citeDetails: getMessageCiteDetailRecords(messageInput),
+      notice: getMessageNoticeValue(messageInput) ?? null,
     }
   }, message)
 }
@@ -1154,32 +1158,90 @@ test('message list derived helpers keep rows, trace order, context, and live she
   }])
 })
 
-test('final message rendering wins over a stale simplified render packet', async ({ page }) => {
+test('render packet atomically wins over conflicting legacy presentation fields', async ({ page }) => {
   const values = await messagePresentationValues(page, {
     id: 44,
     role: 'assistant',
     content: 'raw final answer',
-    rendered_body: 'final four-step reading route',
-    rendered_content: 'final rendered markdown',
-    copy_text: 'final copy text',
-    copy_markdown: 'final copy markdown',
+    rendered_body: 'stale legacy body',
+    rendered_content: 'stale legacy markdown',
+    copy_text: 'stale legacy copy text',
+    copy_markdown: 'stale legacy copy markdown',
+    notice: 'stale legacy notice',
+    cite_details: [{
+      anchor: 'stale-legacy-anchor',
+      num: 9,
+      source_name: 'Stale legacy paper',
+      source_path: '/papers/stale.md',
+    }],
     meta: {
       paper_guide_contracts: {
         render_packet: {
-          answer_markdown: 'simplified document list',
-          rendered_body: 'stale simplified document list',
-          rendered_content: 'stale rendered content',
-          copy_text: 'stale copy text',
-          copy_markdown: 'stale copy markdown',
+          answer_markdown: 'The claim is supported [1](#fresh-packet-anchor).',
+          rendered_body: 'The claim is supported [1](#fresh-packet-anchor).',
+          rendered_content: 'The claim is supported [1](#fresh-packet-anchor).',
+          copy_text: 'The claim is supported [1].',
+          copy_markdown: 'The claim is supported [1](#fresh-packet-anchor).',
+          notice: 'Fresh packet notice',
+          cite_details: [{
+            anchor: 'fresh-packet-anchor',
+            num: 1,
+            source_name: 'Fresh packet paper',
+            source_path: '/papers/fresh.md',
+          }],
         },
       },
     },
   } as Message)
 
   expect(values).toEqual({
-    body: 'final four-step reading route',
-    copyText: 'final copy text',
-    copyMarkdown: 'final copy markdown',
+    body: 'The claim is supported [1](#fresh-packet-anchor).',
+    copyText: 'The claim is supported [1].',
+    copyMarkdown: 'The claim is supported [1](#fresh-packet-anchor).',
+    citeDetails: [{
+      anchor: 'fresh-packet-anchor',
+      num: 1,
+      source_name: 'Fresh packet paper',
+      source_path: '/papers/fresh.md',
+    }],
+    notice: 'Fresh packet notice',
+  })
+})
+
+test('empty render packet citation list does not revive stale legacy citation cards', async ({ page }) => {
+  const values = await messagePresentationValues(page, {
+    id: 45,
+    role: 'assistant',
+    content: 'The streamed answer stays semantically unchanged.',
+    rendered_body: 'stale legacy answer [9](#stale-legacy-anchor)',
+    notice: 'stale legacy notice',
+    cite_details: [{
+      anchor: 'stale-legacy-anchor',
+      num: 9,
+      source_name: 'Stale legacy paper',
+      source_path: '/papers/stale.md',
+    }],
+    meta: {
+      paper_guide_contracts: {
+        render_packet: {
+          answer_markdown: 'The streamed answer stays semantically unchanged.',
+          rendered_body: 'The streamed answer stays semantically unchanged.',
+          rendered_content: 'The streamed answer stays semantically unchanged.',
+          copy_text: 'The streamed answer stays semantically unchanged.',
+          copy_markdown: 'The streamed answer stays semantically unchanged.',
+          notice: '',
+          cite_details: [],
+        },
+      },
+    },
+  } as Message)
+
+  expect(values).toEqual({
+    body: 'The streamed answer stays semantically unchanged.',
+    copyText: 'The streamed answer stays semantically unchanged.',
+    copyMarkdown: 'The streamed answer stays semantically unchanged.',
+    citeDetails: [],
+    notice: null,
   })
 })
 
@@ -2079,14 +2141,13 @@ test('citation popover metadata helper plans route-specific citation and metric 
   expect(metadata.systemAPlan).toMatchObject({
     itemKey: 'key-a',
     needsSummaryBackfill: true,
-    requestCount: 2,
-    shouldFetchBibliometrics: true,
+    requestCount: 1,
+    shouldFetchBibliometrics: false,
     shouldFetchCitationMeta: true,
     sourcePath: '/tmp/paper-a.md',
   })
   expect(metadata.systemAMetas).toEqual([
     { sourcePath: '/tmp/paper-a.md' },
-    { kind: 'fresh' },
   ])
   expect(metadata.systemBPlan).toMatchObject({
     itemKey: 'key-b',
@@ -2114,11 +2175,10 @@ test('citation popover metadata helper plans route-specific citation and metric 
     sourcePath: '',
   })
   expect(metadata.cachedMetricMetas).toEqual([{ kind: 'cached' }])
-  expect(metadata.calls).toHaveLength(4)
+  expect(metadata.calls).toHaveLength(3)
   expect(metadata.calls[0]).toBe('citation:/tmp/paper-a.md')
   expect(metadata.calls[1]).toMatch(/^fresh:/)
-  expect(metadata.calls[2]).toMatch(/^fresh:/)
-  expect(metadata.calls[3]).toMatch(/^cached:/)
+  expect(metadata.calls[2]).toMatch(/^cached:/)
 })
 
 test('reader citation popover metadata helper plans reader-specific polish and metric requests', async ({ page }) => {
@@ -2651,6 +2711,35 @@ test('citation popover System B omits a SCINeRF summary misbound to the Boyd ADM
   expect(model.takeawayText).toContain('SCINeRF Related Work')
   expect(model.takeawayText).toContain('ADMM [4]')
   expect(model.systemBReferenceText).toBe(boydReference)
+})
+
+test('System A v2 card keeps every step in contract-owned evidence', async ({ page }) => {
+  const evidence = 'The operation for digital refocusing of a sample placed out of focus by a distance z can be achieved using two steps. First, using the position and angular information of each photon, and knowing the optical elements used between them, the trajectory of the photons can be reconstructed through a ray tracing operation. Thus, the second step is to reverse this diffraction by applying a wave propagation of distance -z to the image obtained after step one in order to bring the sample back into focus.'
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  const result = await page.evaluate(async (cardEvidence) => {
+    const { citationCardView, normalizeCiteDetail } = await import('/src/components/chat/citationState.ts')
+    const detail = normalizeCiteDetail({
+      anchor: 'system-a-two-step-evidence',
+      num: 1,
+      is_inpaper: false,
+      card_display_contract_version: 2,
+      card_visible_sections: ['evidence'],
+      evidence_quote: cardEvidence,
+      card_evidence: cardEvidence,
+    })
+    if (!detail) return null
+    return {
+      normalizedEvidenceQuote: detail.evidenceQuote,
+      normalizedCardEvidence: detail.cardEvidence,
+      renderedEvidence: citationCardView(detail).sections.find((section) => section.id === 'evidence')?.text || '',
+    }
+  }, evidence)
+
+  expect(result).not.toBeNull()
+  expect(result?.normalizedEvidenceQuote).toBe(evidence)
+  expect(result?.normalizedCardEvidence).toBe(evidence)
+  expect(result?.renderedEvidence).toContain('Thus, the second step')
+  expect(result?.renderedEvidence).toContain('wave propagation of distance -z')
 })
 
 test('System B metadata merge keeps only an upstream-identity-matched article summary', async ({ page }) => {

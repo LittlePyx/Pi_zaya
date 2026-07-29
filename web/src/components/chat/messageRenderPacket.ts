@@ -157,21 +157,29 @@ export function getMessageRenderPacket(message: Pick<Message, 'meta'>): MessageR
 
 export function getMessageRenderedBodyContent(message: Message): string {
   const packet = getMessageRenderPacket(message)
-  const clean = cleanMessagePresentationText(message, (
-    message.rendered_body
-    || message.rendered_content
-    || packet?.renderedBody
-    || packet?.renderedContent
-    || packet?.answerMarkdown
-    || message.content
-    || ''
-  ))
+  const presentation = packet
+    ? (
+        packet.renderedBody
+        || packet.renderedContent
+        || packet.answerMarkdown
+        || message.content
+        || ''
+      )
+    : (
+        message.rendered_body
+        || message.rendered_content
+        || message.content
+        || ''
+      )
+  const clean = cleanMessagePresentationText(message, presentation)
   return message.role === 'assistant' ? stripLeadingAssistantSourceNotice(clean) : clean
 }
 
 export function getMessageCiteDetailRecords(message: Message): Array<Record<string, unknown>> {
   const packet = getMessageRenderPacket(message)
-  if (packet && packet.citeDetails.length > 0) return packet.citeDetails
+  // A render packet is an atomic presentation contract. An intentionally
+  // empty packet citation list must not resurrect stale legacy details.
+  if (packet) return packet.citeDetails
   return Array.isArray(message.cite_details)
     ? message.cite_details.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
     : []
@@ -179,42 +187,54 @@ export function getMessageCiteDetailRecords(message: Message): Array<Record<stri
 
 export function getMessageCopyTextValue(message: Message): string {
   const packet = getMessageRenderPacket(message)
-  return cleanMessagePresentationText(message, (
-    message.copy_text
-    || message.rendered_body
-    || message.rendered_content
-    || packet?.copyText
-    || packet?.renderedBody
-    || packet?.answerMarkdown
-    || message.content
-    || ''
-  ))
+  const presentation = packet
+    ? (
+        packet.copyText
+        || packet.renderedBody
+        || packet.renderedContent
+        || packet.answerMarkdown
+        || message.content
+        || ''
+      )
+    : (
+        message.copy_text
+        || message.rendered_body
+        || message.rendered_content
+        || message.content
+        || ''
+      )
+  return cleanMessagePresentationText(message, presentation)
 }
 
 export function getMessageCopyMarkdownValue(message: Message): string | undefined {
   const packet = getMessageRenderPacket(message)
-  const value = cleanMessagePresentationText(message, (
-    message.copy_markdown
-    || message.rendered_content
-    || message.rendered_body
-    || packet?.copyMarkdown
-    || packet?.renderedContent
-    || packet?.renderedBody
-    || ''
-  )).trim()
+  const presentation = packet
+    ? (
+        packet.copyMarkdown
+        || packet.renderedContent
+        || packet.renderedBody
+        || packet.answerMarkdown
+        || message.content
+        || ''
+      )
+    : (
+        message.copy_markdown
+        || message.rendered_content
+        || message.rendered_body
+        || ''
+      )
+  const value = cleanMessagePresentationText(message, presentation).trim()
   return value || undefined
 }
 
 export function getMessageNoticeValue(message: Message): string | undefined {
   const packet = getMessageRenderPacket(message)
-  const value = String(packet?.notice || message.notice || '').trim()
+  if (packet) return packet.notice || undefined
+  const value = String(message.notice || '').trim()
   if (value) return value
   if (message.role !== 'assistant') return undefined
   const rendered = cleanMessagePresentationText(message, (
-    packet?.renderedBody
-    || packet?.renderedContent
-    || packet?.answerMarkdown
-    || message.rendered_body
+    message.rendered_body
     || message.rendered_content
     || message.content
     || ''

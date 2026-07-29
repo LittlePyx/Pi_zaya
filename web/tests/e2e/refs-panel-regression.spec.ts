@@ -70,7 +70,8 @@ test('refs panel renders synthetic research basket evidence as non-openable cont
   await expect(page.locator('.kb-ref-title')).toContainText('Research basket: A hard to find preprint')
   await expect(page.locator('.kb-ref-card').first()).toContainText('研究篮')
   await expect(page.locator('.kb-ref-card').first()).toContainText('本轮选中的上下文')
-  await expect(page.locator('.kb-ref-card').first()).toContainText('10.1234/example.1')
+  await expect(page.locator('.kb-ref-card').first()).toContainText('未提供摘要定位')
+  await expect(page.locator('.kb-ref-card').first()).not.toContainText('10.1234/example.1')
   await expect(page.locator('.kb-ref-score')).toHaveCount(0)
 
   const actions = page.locator('.kb-ref-action')
@@ -117,12 +118,55 @@ test('refs panel prefers the card_view contract over legacy card fields', async 
   await page.getByRole('button').first().click()
   await expect(page.locator('.kb-ref-card').first()).toContainText('摘要')
   await expect(page.locator('.kb-ref-card').first()).toContainText('这条证据说明什么')
-  await expect(page.locator('.kb-ref-card').first()).toContainText('This section explains the method at the level a first reading needs.')
+  await expect(page.locator('.kb-ref-card').first()).toContainText('\u8fd9\u4e00\u8282\u4ee5\u521d\u6b21\u9605\u8bfb\u6240\u9700\u7684\u7c92\u5ea6\u89e3\u91ca\u4e86\u8be5\u65b9\u6cd5')
   await expect(page.locator('.kb-ref-card').nth(1)).toContainText('相关性')
   await expect(page.locator('.kb-ref-card').nth(1)).toContainText('为什么与当前问题相关')
-  await expect(page.locator('.kb-ref-card').nth(1)).toContainText('It is a good first stop because it connects the paper title to the concrete method steps.')
+  await expect(page.locator('.kb-ref-card').nth(1)).toContainText('\u9002\u5408\u7528\u4e8e\u56de\u7b54\u5f53\u524d\u95ee\u9898')
   await expect(page.getByText('Old fallback summary should not be rendered when card_view is present.')).toHaveCount(0)
   await expect(page.getByText('Old fallback reason should not be rendered when card_view is present.')).toHaveCount(0)
+})
+
+test('refs panel prefers localized relevance fields and never relabels raw evidence as relevance', async ({ page }) => {
+  await page.goto('/__refs_panel_test__?scenario=localized-relevance-fallback')
+
+  await expect(page.getByTestId('refs-panel-test-scenario')).toHaveText('localized-relevance-fallback')
+  await page.getByRole('button').first().click()
+
+  const items = page.locator('.kb-ref-item')
+  await expect(items).toHaveCount(5)
+  await expect(items.nth(0).locator('.kb-ref-card')).toHaveCount(2)
+  await expect(items.nth(0).locator('.kb-ref-card').nth(0)).toContainText('\u8be5\u6587\u5728\u6458\u8981\u4e2d\u7ed9\u51fa\u4e86\u9891\u5206\u590d\u7528')
+  await expect(items.nth(0)).not.toContainText('English card guide that must not win')
+  await expect(items.nth(0).locator('.kb-ref-card').nth(1)).toContainText('\u8fd9\u6761\u8bc1\u636e\u76f4\u63a5\u56de\u7b54\u4e86\u52a0\u901f\u6765\u6e90')
+  await expect(items.nth(0).locator('.kb-ref-card').nth(1)).not.toContainText('We propose and experimentally realize')
+
+  await expect(items.nth(1).locator('.kb-ref-card')).toHaveCount(2)
+  await expect(items.nth(1).locator('.kb-ref-card').nth(1)).toContainText('\u65e0\u9700\u6539\u53d8\u79ef\u5206\u65f6\u95f4')
+
+  await expect(items.nth(2).locator('.kb-ref-card')).toHaveCount(1)
+  await expect(items.nth(2)).not.toContainText('Raw evidence must not be relabeled as relevance copy.')
+
+  await expect(items.nth(3).locator('.kb-ref-card')).toHaveCount(1)
+  await expect(items.nth(3)).not.toContainText('This discussion is relevant because')
+
+  await expect(items.nth(4)).not.toContainText('This guide explains the measured speed')
+  await expect(items.nth(4)).toContainText('\u8fd9\u6761\u5b9a\u4f4d\u7528\u4e8e\u6838\u5bf9')
+})
+
+test('refs panel en locale hides Chinese summary and relevance copy', async ({ page }) => {
+  await page.goto('/__refs_panel_test__?scenario=localized-relevance-fallback')
+  await page.evaluate(async () => {
+    const { useSettingsStore } = await import('/src/stores/settingsStore.ts')
+    useSettingsStore.setState({ uiLocale: 'en', refsCardLocale: 'en' })
+  })
+  await page.getByRole('button').first().click()
+
+  const items = page.locator('.kb-ref-item')
+  await expect(items).toHaveCount(5)
+  await expect(items.nth(3)).toContainText('This discussion is relevant because')
+  await expect(items.nth(3)).not.toContainText('\u8be5\u6587\u5bf9\u9891\u5206\u590d\u7528\u7684\u91c7\u96c6\u7ed3\u679c')
+  await expect(items.nth(4)).toContainText('This guide explains the measured speed')
+  await expect(items.nth(4)).not.toContainText('\u8fd9\u6761\u5b9a\u4f4d\u7528\u4e8e\u6838\u5bf9')
 })
 
 test('refs panel can render a section-level strict locate card directly in the page', async ({ page }) => {

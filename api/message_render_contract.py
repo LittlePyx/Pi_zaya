@@ -4,7 +4,10 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 
-_VISIBLE_NUMERIC_CITE_RE = re.compile(r"\[\d{1,4}(?:\s*(?:-|\u2013|\u2014|,)\s*\d{1,4})*\]")
+_VISIBLE_SINGLE_NUMERIC_CITE_RE = re.compile(r"(?<!\[)\[(\d{1,4})\](?![\]\(])")
+_LINKED_NUMERIC_CITE_RE = re.compile(
+    r"(?<![!\\])\[(\d{1,4})\]\(\#([^\s)]+)(?:\s+\"[^\"\r\n]*\")?\)"
+)
 _STRUCTURED_CITE_RE = re.compile(
     r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*\d{1,4}\s*\]\]",
     re.IGNORECASE,
@@ -29,6 +32,129 @@ def _dict_or_empty(raw: object) -> dict:
     return dict(raw) if isinstance(raw, dict) else {}
 
 
+def transform_markdown_outside_code(text: str, transform) -> str:
+    """Apply ``transform`` only to ordinary Markdown prose.
+
+    Citation syntax is never meaningful inside fenced or inline code.  Keeping
+    those spans byte-for-byte intact also prevents a renderer from silently
+    turning an array literal such as ``[1, 2]`` into citation UI.
+    """
+
+    raw = str(text or "")
+    if not raw:
+        return raw
+
+    def _transform_inline(line: str) -> str:
+        pieces: list[str] = []
+        cursor = 0
+        while cursor < len(line):
+            tick = line.find("`", cursor)
+            if tick < 0:
+                pieces.append(str(transform(line[cursor:])))
+                break
+            pieces.append(str(transform(line[cursor:tick])))
+            run_end = tick
+            while run_end < len(line) and line[run_end] == "`":
+                run_end += 1
+            marker = line[tick:run_end]
+            close = line.find(marker, run_end)
+            if close < 0:
+                # An unmatched delimiter is still code-like user content.  It
+                # is safer to preserve it than to interpret brackets inside it.
+                pieces.append(line[tick:])
+                break
+            close_end = close + len(marker)
+            pieces.append(line[tick:close_end])
+            cursor = close_end
+        return "".join(pieces)
+
+    out: list[str] = []
+    fence_char = ""
+    fence_len = 0
+    for line in raw.splitlines(keepends=True):
+        fence_match = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", line)
+        if fence_char:
+            out.append(line)
+            if fence_match:
+                marker = str(fence_match.group(1) or "")
+                if marker.startswith(fence_char) and len(marker) >= fence_len:
+                    fence_char = ""
+                    fence_len = 0
+            continue
+        if fence_match:
+            marker = str(fence_match.group(1) or "")
+            fence_char = marker[:1]
+            fence_len = len(marker)
+            out.append(line)
+            continue
+        out.append(_transform_inline(line))
+    return "".join(out)
+
+
+def markdown_without_code(text: str) -> str:
+    return _mask_markdown_code(text)
+
+
+def _mask_markdown_code(text: str) -> str:
+    """Return prose while replacing code spans with whitespace of equal shape."""
+
+    raw = str(text or "")
+    protected: list[str] = []
+
+    def _capture_code_preserving_newlines(value: str) -> str:
+        return "".join("\n" if char == "\n" else " " for char in value)
+
+    # Reuse the scanner by transforming prose into itself, then explicitly
+    # capture code through a small mirrored scan.  This keeps citation regexes
+    # from observing any brackets inside code while preserving line offsets.
+    cursor = 0
+    fence_char = ""
+    fence_len = 0
+    for line in raw.splitlines(keepends=True):
+        fence_match = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", line)
+        if fence_char:
+            protected.append(_capture_code_preserving_newlines(line))
+            if fence_match:
+                marker = str(fence_match.group(1) or "")
+                if marker.startswith(fence_char) and len(marker) >= fence_len:
+                    fence_char = ""
+                    fence_len = 0
+            cursor += len(line)
+            continue
+        if fence_match:
+            marker = str(fence_match.group(1) or "")
+            fence_char = marker[:1]
+            fence_len = len(marker)
+            protected.append(_capture_code_preserving_newlines(line))
+            cursor += len(line)
+            continue
+
+        line_out: list[str] = []
+        line_cursor = 0
+        while line_cursor < len(line):
+            tick = line.find("`", line_cursor)
+            if tick < 0:
+                line_out.append(line[line_cursor:])
+                break
+            line_out.append(line[line_cursor:tick])
+            run_end = tick
+            while run_end < len(line) and line[run_end] == "`":
+                run_end += 1
+            marker = line[tick:run_end]
+            close = line.find(marker, run_end)
+            if close < 0:
+                line_out.append(_capture_code_preserving_newlines(line[tick:]))
+                break
+            close_end = close + len(marker)
+            line_out.append(_capture_code_preserving_newlines(line[tick:close_end]))
+            line_cursor = close_end
+        protected.append("".join(line_out))
+        cursor += len(line)
+    if cursor < len(raw):
+        protected.append(raw[cursor:])
+    return "".join(protected)
+
+
 @dataclass(frozen=True)
 class MessageRenderPayload:
     notice: str = ""
@@ -45,32 +171,38 @@ class MessageRenderPayload:
         if not isinstance(cache, dict):
             return None
         render_packet = _dict_or_empty(cache.get("render_packet"))
-        cite_details = _dict_list(cache.get("cite_details"))
-        packet_cite_details = _dict_list(render_packet.get("cite_details"))
-        if not cite_details:
-            cite_details = packet_cite_details
+        authoritative = render_packet if render_packet else cache
         return cls(
-            notice=str(cache.get("notice") or render_packet.get("notice") or ""),
-            rendered_body=str(cache.get("rendered_body") or render_packet.get("rendered_body") or ""),
-            rendered_content=str(cache.get("rendered_content") or render_packet.get("rendered_content") or ""),
-            copy_markdown=str(cache.get("copy_markdown") or render_packet.get("copy_markdown") or ""),
-            copy_text=str(cache.get("copy_text") or render_packet.get("copy_text") or ""),
-            cite_details=cite_details,
-            refs_user_msg_id=int(cache.get("refs_user_msg_id") or 0),
+            notice=str(authoritative.get("notice") or ""),
+            rendered_body=str(authoritative.get("rendered_body") or ""),
+            rendered_content=str(authoritative.get("rendered_content") or ""),
+            copy_markdown=str(authoritative.get("copy_markdown") or ""),
+            copy_text=str(authoritative.get("copy_text") or ""),
+            cite_details=_dict_list(authoritative.get("cite_details")),
+            refs_user_msg_id=int(
+                authoritative.get("refs_user_msg_id")
+                or cache.get("refs_user_msg_id")
+                or 0
+            ),
             render_packet=render_packet,
         )
 
     @classmethod
     def from_record(cls, rec: dict, *, render_packet: dict | None = None) -> MessageRenderPayload:
         packet = _dict_or_empty(render_packet)
+        authoritative = packet if packet else rec
         return cls(
-            notice=str(rec.get("notice") or packet.get("notice") or ""),
-            rendered_body=str(rec.get("rendered_body") or packet.get("rendered_body") or ""),
-            rendered_content=str(rec.get("rendered_content") or packet.get("rendered_content") or ""),
-            copy_markdown=str(rec.get("copy_markdown") or packet.get("copy_markdown") or ""),
-            copy_text=str(rec.get("copy_text") or packet.get("copy_text") or ""),
-            cite_details=_dict_list(rec.get("cite_details")) or _dict_list(packet.get("cite_details")),
-            refs_user_msg_id=int(rec.get("refs_user_msg_id") or 0),
+            notice=str(authoritative.get("notice") or ""),
+            rendered_body=str(authoritative.get("rendered_body") or ""),
+            rendered_content=str(authoritative.get("rendered_content") or ""),
+            copy_markdown=str(authoritative.get("copy_markdown") or ""),
+            copy_text=str(authoritative.get("copy_text") or ""),
+            cite_details=_dict_list(authoritative.get("cite_details")),
+            refs_user_msg_id=int(
+                authoritative.get("refs_user_msg_id")
+                or rec.get("refs_user_msg_id")
+                or 0
+            ),
             render_packet=packet,
         )
 
@@ -111,31 +243,67 @@ class MessageRenderPayload:
             "cite_details": _dict_list(self.cite_details),
         }
 
-    def as_cache_payload(self, *, schema: int, cache_key: str) -> dict:
+    def as_cache_payload(
+        self,
+        *,
+        schema: int,
+        cache_key: str,
+        answer_sig: str = "",
+        input_ref_sig: str = "",
+        citation_plan_sig: str = "",
+        locale: str = "",
+    ) -> dict:
+        packet = _dict_or_empty(self.render_packet)
+        if not packet:
+            packet = {
+                "notice": self.notice,
+                "rendered_body": self.rendered_body,
+                "rendered_content": self.rendered_content,
+                "copy_markdown": self.copy_markdown,
+                "copy_text": self.copy_text,
+                "cite_details": _dict_list(self.cite_details),
+            }
+        packet["schema"] = int(schema or 0)
+        packet["answer_sig"] = str(answer_sig or packet.get("answer_sig") or "")
+        packet["input_ref_sig"] = str(
+            input_ref_sig or packet.get("input_ref_sig") or ""
+        )
+        packet["citation_plan_sig"] = str(
+            citation_plan_sig or packet.get("citation_plan_sig") or ""
+        )
+        packet["locale"] = str(locale or packet.get("locale") or "").strip().lower()
+        authoritative = MessageRenderPayload.from_render_packet(packet) or self
         return {
             "schema": int(schema or 0),
             "cache_key": str(cache_key or ""),
-            "notice": self.notice,
-            "rendered_body": self.rendered_body,
-            "rendered_content": self.rendered_content,
-            "copy_markdown": self.copy_markdown,
-            "copy_text": self.copy_text,
-            "cite_details": _dict_list(self.cite_details),
+            "answer_sig": str(packet.get("answer_sig") or ""),
+            "input_ref_sig": str(packet.get("input_ref_sig") or ""),
+            "citation_plan_sig": str(packet.get("citation_plan_sig") or ""),
+            "locale": str(packet.get("locale") or ""),
+            "notice": authoritative.notice,
+            "rendered_body": authoritative.rendered_body,
+            "rendered_content": authoritative.rendered_content,
+            "copy_markdown": authoritative.copy_markdown,
+            "copy_text": authoritative.copy_text,
+            "cite_details": _dict_list(authoritative.cite_details),
             "refs_user_msg_id": int(self.refs_user_msg_id or 0),
-            "render_packet": _dict_or_empty(self.render_packet),
+            "render_packet": packet,
         }
 
 
 def iter_numeric_citation_numbers(text: str) -> list[int]:
     nums: list[int] = []
-    for match in _VISIBLE_NUMERIC_CITE_RE.finditer(str(text or "")):
-        for raw in re.findall(r"\d{1,4}", str(match.group(0) or "")):
-            try:
-                n = int(raw)
-            except Exception:
-                continue
-            if n > 0:
-                nums.append(n)
+    prose = markdown_without_code(str(text or ""))
+    for match in _VISIBLE_SINGLE_NUMERIC_CITE_RE.finditer(prose):
+        try:
+            n = int(match.group(1) or 0)
+        except (TypeError, ValueError):
+            continue
+        # A bracketed publication year is content, never an answer-reference
+        # marker.  Multi-value arrays/ranges do not match the single-marker
+        # expression above.
+        if n > 0 and not 1800 <= n <= 2100:
+            nums.append(n)
     return nums
 
 
@@ -169,36 +337,145 @@ def _linkable_source_sids(hits: list[dict] | None) -> set[str]:
     return sids
 
 
+def _linkable_hit_numbers(hits: list[dict] | None) -> set[int]:
+    numbers: set[int] = set()
+    ordinal = 0
+    for hit in list(hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        if not str(meta.get("source_path") or "").strip():
+            continue
+        ordinal += 1
+        try:
+            explicit = int(meta.get("ref_answer_citation_num") or 0)
+        except (TypeError, ValueError):
+            explicit = 0
+        numbers.add(explicit if explicit > 0 else ordinal)
+    return numbers
+
+
 def content_has_linkable_answer_citations(content: str, hits: list[dict] | None) -> bool:
-    raw = str(content or "")
+    raw = markdown_without_code(str(content or ""))
     if not raw or "[" not in raw:
         return False
-    hit_count = count_linkable_source_hits(hits)
-    if hit_count <= 0:
+    linkable_numbers = _linkable_hit_numbers(hits)
+    if not linkable_numbers:
         return False
     structured_sids = {str(match.group(1) or "").strip().lower() for match in _STRUCTURED_CITE_RE.finditer(raw)}
     if structured_sids and structured_sids.intersection(_linkable_source_sids(hits)):
         return True
-    return any(1 <= int(n) <= hit_count for n in iter_numeric_citation_numbers(raw))
+    return any(int(n) in linkable_numbers for n in iter_numeric_citation_numbers(raw))
 
 
-def render_payload_has_citation_links(payload: MessageRenderPayload | dict | None) -> bool:
+def _normalized_source_path(value: object) -> str:
+    raw = str(value or "").strip().replace("\\", "/").casefold()
+    return re.sub(r"/+", "/", raw)
+
+
+def _source_tail(value: object) -> str:
+    path = _normalized_source_path(value)
+    parts = [part for part in path.split("/") if part]
+    return "/".join(parts[-2:]) if len(parts) >= 2 else path
+
+
+def _citation_detail_source_identity(detail: dict) -> str:
+    source_path = _normalized_source_path(detail.get("source_path"))
+    route = str(detail.get("citation_route") or "").strip().casefold()
+    is_system_b = bool(detail.get("is_inpaper")) or route == "system_b"
+    if is_system_b:
+        doi = str(detail.get("doi") or "").strip().casefold()
+        if doi:
+            return f"doi:{doi}"
+        reference_identity = " ".join(
+            str(detail.get(key) or "").strip().casefold()
+            for key in ("title", "raw", "cite_fmt")
+            if str(detail.get(key) or "").strip()
+        )
+        try:
+            ref_num = int(detail.get("inpaper_ref_num") or detail.get("ref_num") or 0)
+        except (TypeError, ValueError):
+            ref_num = 0
+        if source_path and (reference_identity or ref_num > 0):
+            return f"system_b:{source_path}:{ref_num}:{reference_identity}"
+    return f"source:{source_path}" if source_path else ""
+
+
+def _detail_matches_hits(detail: dict, hits: list[dict] | None) -> bool:
+    if hits is None:
+        return True
+    detail_tail = _source_tail(detail.get("source_path"))
+    if not detail_tail:
+        return False
+    hit_tails = {
+        _source_tail(
+            (hit.get("meta") if isinstance(hit.get("meta"), dict) else {}).get(
+                "source_path"
+            )
+        )
+        for hit in list(hits or [])
+        if isinstance(hit, dict)
+    }
+    return detail_tail in hit_tails
+
+
+def render_payload_has_citation_links(
+    payload: MessageRenderPayload | dict | None,
+    *,
+    hits: list[dict] | None = None,
+) -> bool:
     normalized = payload
     if isinstance(payload, dict):
         normalized = MessageRenderPayload.from_cache(payload)
     if not isinstance(normalized, MessageRenderPayload):
         return False
-    if any(isinstance(item, dict) for item in normalized.cite_details):
-        return True
-    render_packet = _dict_or_empty(normalized.render_packet)
-    if any(isinstance(item, dict) for item in _dict_list(render_packet.get("cite_details"))):
-        return True
-    for key in ("rendered_content", "rendered_body", "copy_markdown"):
-        if "#kb-cite-" in str(getattr(normalized, key) or ""):
-            return True
-        if "#kb-cite-" in str(render_packet.get(key) or ""):
-            return True
-    return False
+    details = _dict_list(normalized.cite_details)
+    surface = str(normalized.rendered_body or normalized.rendered_content or "")
+    links = [
+        (int(match.group(1)), str(match.group(2) or "").strip().lstrip("#"))
+        for match in _LINKED_NUMERIC_CITE_RE.finditer(markdown_without_code(surface))
+        if str(match.group(2) or "").strip().lower().startswith("kb-cite-")
+    ]
+    if not details or not links:
+        return False
+
+    details_by_anchor: dict[str, dict] = {}
+    num_to_identity: dict[int, str] = {}
+    identity_to_num: dict[str, int] = {}
+    for detail in details:
+        anchor = str(detail.get("anchor") or "").strip().lstrip("#")
+        try:
+            num = int(detail.get("num") or 0)
+        except (TypeError, ValueError):
+            return False
+        identity = _citation_detail_source_identity(detail)
+        if not anchor or num <= 0 or not identity or not _detail_matches_hits(detail, hits):
+            return False
+        if anchor in details_by_anchor:
+            return False
+        if num in num_to_identity and num_to_identity[num] != identity:
+            return False
+        if identity in identity_to_num and identity_to_num[identity] != num:
+            return False
+        details_by_anchor[anchor] = detail
+        num_to_identity[num] = identity
+        identity_to_num[identity] = num
+
+    linked_anchors: set[str] = set()
+    for label_num, anchor in links:
+        detail = details_by_anchor.get(anchor)
+        if not isinstance(detail, dict):
+            return False
+        try:
+            detail_num = int(detail.get("num") or 0)
+        except (TypeError, ValueError):
+            return False
+        if label_num <= 0 or detail_num != label_num:
+            return False
+        linked_anchors.add(anchor)
+
+    # No empty cards and no orphan anchors in either direction.
+    return linked_anchors == set(details_by_anchor)
 
 
 def render_payload_is_degraded_for_citations(
@@ -209,7 +486,7 @@ def render_payload_is_degraded_for_citations(
 ) -> bool:
     if not content_has_linkable_answer_citations(raw_content, hits):
         return False
-    return not render_payload_has_citation_links(payload)
+    return not render_payload_has_citation_links(payload, hits=hits)
 
 
 def render_payload_is_missing_planned_system_a(
@@ -239,6 +516,14 @@ def render_payload_is_missing_planned_system_a(
         and str(item.get("source_path") or item.get("sourcePath") or "").strip()
         and str(item.get("evidence_quote") or "").strip()
     ]
+    # Plans may retain ranked fallback candidates after the number of
+    # System-A citations the answer is actually allowed to use.  Treating
+    # every fallback as mandatory makes a complete cached packet look stale
+    # forever (and forces the full evidence renderer to run on every message
+    # poll).  Slot order is the plan's ranking, so only the authorized budget
+    # is part of the cache-completeness contract.
+    if system_a_budget > 0:
+        system_a_slots = system_a_slots[:system_a_budget]
     has_system_a_slot = bool(system_a_slots)
     if system_a_budget <= 0 or not has_system_a_slot:
         return False
@@ -448,6 +733,10 @@ def build_render_cache_payload(
     cite_details: list[dict],
     refs_user_msg_id: int,
     render_packet: dict | None = None,
+    answer_sig: str = "",
+    input_ref_sig: str = "",
+    citation_plan_sig: str = "",
+    locale: str = "",
 ) -> dict:
     return MessageRenderPayload(
         notice=str(notice or ""),
@@ -458,7 +747,14 @@ def build_render_cache_payload(
         cite_details=_dict_list(cite_details),
         refs_user_msg_id=int(refs_user_msg_id or 0),
         render_packet=_dict_or_empty(render_packet),
-    ).as_cache_payload(schema=schema, cache_key=cache_key)
+    ).as_cache_payload(
+        schema=schema,
+        cache_key=cache_key,
+        answer_sig=answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale=locale,
+    )
 
 
 def project_render_packet_to_record(rec: dict, render_packet: dict | None) -> bool:

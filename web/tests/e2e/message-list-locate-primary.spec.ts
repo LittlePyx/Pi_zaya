@@ -416,6 +416,34 @@ test('render packet contract can drive body render and strict locate without top
   await expect(page.locator('.kb-cite-chip-sysb').first()).toHaveText('[R1]')
 })
 
+test('empty packet citation list stays authoritative when refs contain hits', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=render-packet-empty-citations')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('render-packet-empty-citations')
+  const assistant = page.locator('.kb-msg-bubble-assistant').last()
+  await expect(assistant).toContainText('The packet intentionally exposes no citation card [1].')
+  await expect(assistant.locator('.kb-cite-chip')).toHaveCount(0)
+  await expect(assistant).not.toContainText('Stale top-level source')
+  await expect(page.locator('.kb-cite-pop')).toHaveCount(0)
+})
+
+test('packet citation number and card copy do not follow refs ordering', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=render-packet-refs-order')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('render-packet-refs-order')
+  const assistant = page.locator('.kb-msg-bubble-assistant').last()
+  const citeChip = assistant.locator('.kb-cite-chip')
+  await expect(citeChip).toHaveCount(1)
+  await expect(citeChip).toHaveText('1')
+  await expect(citeChip).toHaveAttribute('href', '#packet-order-anchor')
+
+  await citeChip.click()
+  await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText(
+    'The measured reconstruction result directly supports the method comparison stated in this answer.',
+  )
+  await expect(page.locator('.kb-cite-pop')).not.toContainText('Refs-authored takeaway must not replace packet copy.')
+})
+
 test('system B upstream reference citation is explicitly clickable and opens its card', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 600 })
   await mockReaderDoc(page)
@@ -1698,7 +1726,8 @@ test('citation popover and shelf prefer card_view over legacy fallback fields', 
   await expect(page.getByTestId('citation-popover-system-a-compact-meta')).toContainText('Clean Method Section')
   await expect(page.getByTestId('citation-popover-system-a-location')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('Source evidence')
-  await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('calibrated measurements')
+  await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('ray tracing operation')
+  await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('wave propagation of distance -z')
   await expect(popover).not.toContainText('Legacy fallback takeaway')
   await expect(popover).not.toContainText('Legacy markdown evidence')
 
@@ -1712,6 +1741,30 @@ test('citation popover and shelf prefer card_view over legacy fallback fields', 
   await expect(shelfSummary).toContainText('证据卡片')
   await expect(shelfSummary).toContainText('Polished card-view takeaway')
   await expect(shelfItem.getByTestId('citation-shelf-summary-quality')).toHaveCount(0)
+})
+
+test('citation popover keeps compact evidence while reader receives the continuous locator passage', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=card-view-priority-popover')
+
+  const citeChip = page.locator('.kb-cite-chip').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+
+  const popover = page.locator('.kb-cite-pop')
+  const evidence = page.getByTestId('citation-popover-system-a-evidence')
+  await expect(evidence).toContainText('ray tracing operation')
+  await expect(evidence).toContainText('wave propagation of distance -z')
+  await expect(evidence).not.toContainText('continuous source paragraph')
+
+  await popover.locator('.kb-cite-pop-action-primary').click()
+  const payload = page.getByTestId('message-list-open-payload')
+  await expect(payload).toContainText('continuous source paragraph')
+  await expect(payload).toContainText('ray tracing operation')
+  await expect(payload).toContainText('wave propagation of distance -z')
+  await expect(payload).toContainText('"blockId": "p-card-view-priority-method"')
+  await expect(payload).toContainText('"anchorId": "a-card-view-priority-method"')
+  await expect(payload).toContainText('"anchorKind": "paragraph"')
+  await expect(payload).toContainText('"strictLocate": true')
 })
 
 test('citation shelf export auto-completes metadata before download', async ({ page }) => {

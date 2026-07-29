@@ -1,4 +1,4 @@
-from kb.evidence_term_mapping import evidence_alignment_tokens
+from kb.evidence_term_mapping import evidence_alignment_tokens, method_identity_conflicts
 
 
 def test_chinese_3d_video_mechanism_aligns_with_english_source_terms() -> None:
@@ -70,6 +70,57 @@ def test_scigs_question_prefers_the_variant_claim_in_the_abstract() -> None:
 
     assert {"variant", "single", "compressed", "dynamic", "3d"} <= (
         question_tokens & evidence_tokens
+    )
+
+
+def test_method_identity_conflict_distinguishes_neighboring_3d_reconstruction_papers() -> None:
+    assert method_identity_conflicts(
+        "SCIGS reconstructs a dynamic 3D scene from one compressed image.",
+        "SCINeRF incorporates the physical SCI process into NeRF training.",
+    )
+    assert not method_identity_conflicts(
+        "SCIGS differs from SCINeRF in its scene representation.",
+        "SCINeRF incorporates the physical SCI process into NeRF training.",
+    )
+    assert not method_identity_conflicts(
+        "PILN is self-supervised.",
+        "ILNet uses a self-supervised image loop.",
+    )
+
+
+def test_iism_acronym_matches_its_spelled_out_method_name() -> None:
+    assert not method_identity_conflicts(
+        "iISM reaches about 120 nm lateral resolution.",
+        "Interferometric Image Scanning Microscopy achieves about 120 nm lateral resolution.",
+    )
+    assert not method_identity_conflicts(
+        "iISM reduces the incident illumination power by about tenfold.",
+        "LSA-2026-Interferometric Image Scanning Microscopy operates at tenfold lower incident illumination power.",
+    )
+
+
+def test_method_identity_conflict_ignores_bibliographic_filename_prefixes() -> None:
+    assert not method_identity_conflicts(
+        "CASSI uses two opposing dispersive elements and a binary-valued aperture.",
+        (
+            "The primary features are two dispersive elements surrounding a binary-valued "
+            "aperture. OE-2007-Single-shot compressive spectral imaging.pdf"
+        ),
+    )
+
+
+def test_cnr_metric_is_not_a_method_conflict_with_lsa_filename() -> None:
+    assert not method_identity_conflicts(
+        "CNR improves under the reported acquisition setting.",
+        (
+            "The contrast-to-noise ratio improves under the reported acquisition "
+            "setting. LSA-2025-Comprehensive compensation.pdf"
+        ),
+    )
+
+    assert method_identity_conflicts(
+        "SCIGS reconstructs a dynamic 3D scene.",
+        "SCINeRF reconstructs a neural radiance field.",
     )
 
 
@@ -149,6 +200,23 @@ def test_detector_manufacturing_challenges_align_with_english_source() -> None:
 def test_transposed_pnsr_table_header_aligns_with_psnr_claim() -> None:
     assert "psnr" in evidence_alignment_tokens(
         "Table 2: PNSR (dB), Hadamard = 8.01; Fourier = 8.08; SSIM = 11.1."
+    )
+
+
+def test_hsi_fsi_acronyms_match_spelled_out_single_pixel_basis_names() -> None:
+    assert not method_identity_conflicts(
+        "FSI has better reconstruction quality than HSI under undersampling.",
+        (
+            "Hadamard single-pixel imaging versus Fourier single-pixel imaging. "
+            "Table 2 reports PNSR and SSIM for both bases."
+        ),
+    )
+
+
+def test_pnsr_typo_is_a_metric_not_a_method_identity() -> None:
+    assert not method_identity_conflicts(
+        "HSI and FSI are compared under undersampling.",
+        "The same HSI/FSI comparison reports PNSR values in Table 2.",
     )
 
 

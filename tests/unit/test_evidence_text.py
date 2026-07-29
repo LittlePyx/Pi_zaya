@@ -1,11 +1,48 @@
 from __future__ import annotations
 
 from kb.evidence_text import (
+    compound_claim_evidence_excerpt,
     finish_evidence_text,
     looks_low_value_citation_context,
     pick_readable_evidence_text,
     strip_evidence_metadata_prefix,
 )
+
+
+def test_compound_claim_excerpt_keeps_distributed_mechanism_without_filler() -> None:
+    evidence = (
+        "The operation for digital refocusing of a sample placed out of focus by a distance z "
+        "can be achieved using two steps. First, using the position and angular information of "
+        "each photon, and knowing the optical elements used between them, the trajectory of the "
+        "photons can be reconstructed through a ray tracing operation. For macroscopic samples, "
+        "this first step, using ray optics, is enough to bring the sample back into focus [15], "
+        "however, for microscopic samples, interference and diffraction effects from wave optics "
+        "must also be taken into account. In the microscopic regime, the image obtained after this "
+        "first step is, in fact, the diffraction pattern of the sample after propagating a distance "
+        "z. Thus, the second step is to reverse this diffraction by applying a wave propagation of "
+        "distance -z to the image obtained after step one in order to bring the sample back into "
+        "focus. The refocusing process is illustrated in Fig.2. Details on the experimental setup "
+        "and the refocusing procedure can be found in the Methods section."
+    )
+
+    excerpt = compound_claim_evidence_excerpt(
+        evidence,
+        claim=(
+            "Digital refocusing uses two steps: first reconstruct photon trajectories with ray "
+            "tracing, then reverse diffraction with wave propagation."
+        ),
+        max_len=520,
+    )
+
+    assert len(evidence) > 1000
+    assert 460 < len(excerpt) <= 520
+    assert all(
+        term in excerpt
+        for term in ("two steps", "ray tracing", "wave propagation", "distance -z")
+    )
+    assert "For macroscopic samples" not in excerpt
+    assert "In the microscopic regime" not in excerpt
+    assert " … " in excerpt
 
 
 def test_finish_evidence_text_does_not_treat_decimal_point_as_sentence_end() -> None:
@@ -160,3 +197,22 @@ def test_metadata_prefix_strip_preserves_complete_capitalized_evidence_sentence(
     )
 
     assert strip_evidence_metadata_prefix(evidence) == evidence
+
+
+def test_metadata_prefix_strip_preserves_substantive_participial_lead() -> None:
+    evidence = (
+        "Performing high-speed structured illumination and sensing reflected light with four "
+        "spatially-separated, single-pixel detectors, our system reconstructs real-time 3D "
+        "video at 8 frames per second for image resolutions of 64 by 64 pixels."
+    )
+
+    assert strip_evidence_metadata_prefix(evidence) == evidence
+    picked = pick_readable_evidence_text(
+        evidence,
+        claim=(
+            "The system uses four spatially-separated single-pixel detectors and "
+            "reconstructs 3D video at 8 frames per second with 64 by 64 pixels."
+        ),
+    )
+    assert picked.startswith("Performing high-speed structured illumination")
+    assert "four spatially-separated, single-pixel detectors" in picked

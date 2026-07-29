@@ -54,6 +54,44 @@ def test_extract_structured_cite_answer_context_marker_after_period_stops_before
     assert "unrelated" not in out
 
 
+def test_extract_structured_cite_answer_context_stays_with_semicolon_clause() -> None:
+    sid = "abc12345"
+    token = f"[[CITE:{sid}:4]]"
+    text = (
+        "Hadamard requires 2N^2 measurements; "
+        f"the experiment compares PSNR and SSIM {token}."
+    )
+
+    out = extract_structured_cite_answer_context_line(
+        text,
+        text.index(token),
+        text.index(token) + len(token),
+    )
+
+    assert out == "the experiment compares PSNR and SSIM."
+    assert "2N^2" not in out
+
+
+def test_extract_structured_cite_answer_context_keeps_shared_method_claim_before_navigation() -> None:
+    sid = "abc12345"
+    token = f"[[CITE:{sid}:4]]"
+    text = (
+        "ADMM is prior optimization machinery; "
+        f"open ADMM {token} to follow the paper's citation trail."
+    )
+
+    out = extract_structured_cite_answer_context_line(
+        text,
+        text.index(token),
+        text.index(token) + len(token),
+    )
+
+    assert out == (
+        "ADMM is prior optimization machinery; "
+        "open ADMM to follow the paper's citation trail."
+    )
+
+
 def test_strip_structured_cite_tokens_removes_garbage_forms() -> None:
     out = strip_structured_cite_tokens("Use [CITE:abc12345:2] and [[CITE:abc12345]] plus [[CITE:broken]]")
 

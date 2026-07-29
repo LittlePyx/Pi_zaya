@@ -302,8 +302,8 @@ const renderPacketContractMessages: Message[] = [
         render_packet: {
           answer_markdown: 'Equation (1) gives the volume rendering integral. [[CITE:s1234abcd:1]]',
           notice: 'RenderPacket notice: this message should show notice without top-level fields.',
-          rendered_body: 'Equation (1) gives the volume rendering integral. [1]',
-          rendered_content: 'Equation (1) gives the volume rendering integral. [1]',
+          rendered_body: 'Equation (1) gives the volume rendering integral. [1](#kb-cite-demo-1)',
+          rendered_content: 'Equation (1) gives the volume rendering integral. [1](#kb-cite-demo-1)',
           copy_text: 'Equation (1) gives the volume rendering integral. [1]',
           copy_markdown: 'Equation (1) gives the volume rendering integral. [1]',
           cite_details: [
@@ -458,6 +458,127 @@ const unlinkedReferenceCandidateMessages: Message[] = [
     },
   },
 ]
+
+const renderPacketEmptyCitationsMessages: Message[] = [
+  {
+    id: 101,
+    role: 'user',
+    content: 'Show the packet-backed answer without inventing citation cards.',
+    created_at: Date.now(),
+  },
+  {
+    id: 102,
+    role: 'assistant',
+    content: 'The packet intentionally exposes no citation card [1].',
+    created_at: Date.now(),
+    refs_user_msg_id: 101,
+    cite_details: [
+      {
+        num: 9,
+        anchor: 'stale-top-level-citation',
+        source_name: 'Stale top-level source',
+        source_path: '__fixtures__/stale-top-level.en.md',
+      },
+    ],
+    meta: {
+      paper_guide_contracts: {
+        version: 1,
+        render_packet: {
+          answer_markdown: 'The packet intentionally exposes no citation card [1].',
+          rendered_body: 'The packet intentionally exposes no citation card [1].',
+          rendered_content: 'The packet intentionally exposes no citation card [1].',
+          copy_text: 'The packet intentionally exposes no citation card [1].',
+          copy_markdown: 'The packet intentionally exposes no citation card [1].',
+          cite_details: [],
+        },
+      },
+    },
+  },
+]
+
+const renderPacketRefsOrderMessages: Message[] = [
+  {
+    id: 201,
+    role: 'user',
+    content: 'Keep the packet citation numbering stable.',
+    created_at: Date.now(),
+  },
+  {
+    id: 202,
+    role: 'assistant',
+    content: 'The packet owns this citation [1].',
+    created_at: Date.now(),
+    refs_user_msg_id: 201,
+    meta: {
+      paper_guide_contracts: {
+        version: 1,
+        render_packet: {
+          answer_markdown: 'The packet owns this citation [1](#packet-order-anchor).',
+          rendered_body: 'The packet owns this citation [1](#packet-order-anchor).',
+          rendered_content: 'The packet owns this citation [1](#packet-order-anchor).',
+          copy_text: 'The packet owns this citation [1].',
+          copy_markdown: 'The packet owns this citation [1](#packet-order-anchor).',
+          cite_details: [
+            {
+              num: 1,
+              anchor: 'packet-order-anchor',
+              source_name: 'Packet-owned paper.pdf',
+              source_path: '__fixtures__/packet-owned-paper.en.md',
+              title: 'Packet-owned paper',
+              is_inpaper: false,
+              card_takeaway_label: 'Evidence focus',
+              card_takeaway: 'The measured reconstruction result directly supports the method comparison stated in this answer.',
+              card_claim: 'The packet owns this citation.',
+              card_evidence: 'Packet-owned evidence supports the answer claim.',
+              binding_status: 'grounded',
+            },
+          ],
+        },
+      },
+    },
+  },
+]
+
+const renderPacketAtomicRefs: Record<string, unknown> = {
+  '101': {
+    hits: [
+      {
+        score: 9.1,
+        text: 'A refs hit exists but the packet deliberately contains no citation details.',
+        ui_meta: {
+          display_name: 'Refs-only paper.pdf',
+          source_path: '__fixtures__/refs-only-paper.en.md',
+          summary_line: 'Refs-only summary must not become a packet citation card.',
+        },
+        meta: { source_path: '__fixtures__/refs-only-paper.en.md' },
+      },
+    ],
+  },
+  '201': {
+    hits: [
+      {
+        score: 9.9,
+        text: 'A different paper appears first in refs ordering.',
+        ui_meta: {
+          display_name: 'Different first paper.pdf',
+          source_path: '__fixtures__/different-first-paper.en.md',
+          summary_line: 'Different first summary.',
+        },
+        meta: { source_path: '__fixtures__/different-first-paper.en.md' },
+      },
+      {
+        score: 8.8,
+        text: 'The packet-owned paper appears second in refs ordering.',
+        ui_meta: {
+          display_name: 'Packet-owned paper.pdf',
+          source_path: '__fixtures__/packet-owned-paper.en.md',
+          summary_line: 'Refs-authored takeaway must not replace packet copy.',
+        },
+        meta: { source_path: '__fixtures__/packet-owned-paper.en.md' },
+      },
+    ],
+  },
+}
 
 const renderPacketHiddenLocateMessages: Message[] = [
   {
@@ -635,11 +756,11 @@ const systemACitationPopoverMessages: Message[] = [
         version: 1,
         intent: { family: 'method' },
         render_packet: {
-          answer_markdown: 'The method details are grounded in [1].',
-          rendered_body: 'The method details are grounded in [1].',
-          rendered_content: 'The method details are grounded in [1].',
+          answer_markdown: 'The method details are grounded in [1](#kb-cite-system-a-1).',
+          rendered_body: 'The method details are grounded in [1](#kb-cite-system-a-1).',
+          rendered_content: 'The method details are grounded in [1](#kb-cite-system-a-1).',
           copy_text: 'The method details are grounded in [1].',
-          copy_markdown: 'The method details are grounded in [1].',
+          copy_markdown: 'The method details are grounded in [1](#kb-cite-system-a-1).',
           cite_details: [
             {
               num: 1,
@@ -676,6 +797,10 @@ const systemACitationPopoverMessages: Message[] = [
   },
 ]
 
+const cardViewPriorityEvidenceQuote = 'The operation for digital refocusing of a sample placed out of focus by a distance z can be achieved using two steps. First, using the position and angular information of each photon, and knowing the optical elements used between them, the trajectory of the photons can be reconstructed through a ray tracing operation. Thus, the second step is to reverse this diffraction by applying a wave propagation of distance -z to the image obtained after step one in order to bring the sample back into focus.'
+
+const cardViewPriorityReaderQuote = 'The operation for digital refocusing of a sample placed out of focus by a distance z can be achieved using two steps. First, using the position and angular information of each photon, and knowing the optical elements used between them, the trajectory of the photons can be reconstructed through a ray tracing operation. The continuous source paragraph also records the calibration conditions that the compact evidence card intentionally omits. The ray tracing result forms an intermediate image at the sensor plane. Thus, the second step is to reverse this diffraction by applying a wave propagation of distance -z to the image obtained after step one in order to bring the sample back into focus.'
+
 const cardViewPriorityPopoverMessages: Message[] = [
   {
     id: 1,
@@ -699,6 +824,13 @@ const cardViewPriorityPopoverMessages: Message[] = [
               source_name: 'Legacy Repeated Source.pdf',
               source_path: READER_REGRESSION_SOURCE_PATH,
               is_inpaper: false,
+              heading_path: 'Clean Paper / Clean Method Section',
+              reader_evidence_quote: cardViewPriorityReaderQuote,
+              block_id: 'p-card-view-priority-method',
+              anchor_id: 'a-card-view-priority-method',
+              anchor_kind: 'paragraph',
+              page_start: 4,
+              page_end: 4,
               card_title: 'Legacy title should not win',
               card_subtitle: 'Legacy subtitle should not win',
               card_takeaway_label: 'Legacy label',
@@ -737,7 +869,7 @@ const cardViewPriorityPopoverMessages: Message[] = [
                   {
                     id: 'evidence',
                     label: 'Source evidence',
-                    text: 'The method uses calibrated measurements to reconstruct the scene in a verifiable way.',
+                    text: cardViewPriorityEvidenceQuote,
                     kind: 'quote',
                     hint: '',
                     tone: '',
@@ -1752,6 +1884,8 @@ type RegressionScenario =
   | 'guide-figure-remap'
   | 'guide-formula-remap'
   | 'render-packet-contract'
+  | 'render-packet-empty-citations'
+  | 'render-packet-refs-order'
   | 'unlinked-reference-candidate'
   | 'render-packet-hidden-locate'
   | 'citation-hover-race'
@@ -1789,6 +1923,8 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'guide-figure-remap') return 'guide-figure-remap'
     if (scenarioParam === 'guide-formula-remap') return 'guide-formula-remap'
     if (scenarioParam === 'render-packet-contract') return 'render-packet-contract'
+    if (scenarioParam === 'render-packet-empty-citations') return 'render-packet-empty-citations'
+    if (scenarioParam === 'render-packet-refs-order') return 'render-packet-refs-order'
     if (scenarioParam === 'unlinked-reference-candidate') return 'unlinked-reference-candidate'
     if (scenarioParam === 'render-packet-hidden-locate') return 'render-packet-hidden-locate'
     if (scenarioParam === 'citation-hover-race') return 'citation-hover-race'
@@ -1822,6 +1958,8 @@ export default function MessageListRegressionPage() {
     if (scenario === 'guide-figure-remap') return guideFigureRemapMessages
     if (scenario === 'guide-formula-remap') return guideFormulaRemapMessages
     if (scenario === 'render-packet-contract') return renderPacketContractMessages
+    if (scenario === 'render-packet-empty-citations') return renderPacketEmptyCitationsMessages
+    if (scenario === 'render-packet-refs-order') return renderPacketRefsOrderMessages
     if (scenario === 'unlinked-reference-candidate') return unlinkedReferenceCandidateMessages
     if (scenario === 'render-packet-hidden-locate') return renderPacketHiddenLocateMessages
     if (scenario === 'citation-hover-race') return citationHoverRaceMessages
@@ -1854,6 +1992,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyRefs
     if (scenario === 'plain-citation-refs-fallback') return plainCitationRefsFallbackRefs
     if (scenario === 'plain-citation-refs-partial') return plainCitationRefsFallbackRefs
+    if (scenario === 'render-packet-empty-citations' || scenario === 'render-packet-refs-order') return renderPacketAtomicRefs
     if (scenario === 'plain-math-width') return plainMathWidthRefs
     if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateRefs
     if (scenario === 'live-user-pending-refs') return liveUserPendingRefs

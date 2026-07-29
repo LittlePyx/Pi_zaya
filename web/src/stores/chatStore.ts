@@ -39,6 +39,10 @@ import { startUploadPolling, stopUploadPolling } from './chatStoreUploadPolling'
 let refsPollToken = 0
 let refsPollTimer: number | null = null
 let refsPollController: AbortController | null = null
+let refsLoadRequestSequence = 0
+const latestRefsLoadRequestByConversation = new Map<string, number>()
+const refsLoadControllerByConversation = new Map<string, AbortController>()
+let localeRefreshSequence = 0
 let messagePostprocessPollToken = 0
 let messagePostprocessPollTimer: number | null = null
 let conversationSwitchToken = 0
@@ -146,6 +150,63 @@ function generationFailureMessageContent(generation: GenerationState | null | un
   return `${partial}\n\n${message}`
 }
 
+function clearStaleMessagePresentation(message: Message): Message {
+  const next: Message = { ...message }
+  delete next.rendered_content
+  delete next.rendered_body
+  delete next.notice
+  delete next.cite_details
+  delete next.copy_text
+  delete next.copy_markdown
+  delete next.refs_user_msg_id
+  delete next.render_cache_key
+  delete next.provenance
+
+  const meta = message.meta && typeof message.meta === 'object'
+    ? { ...message.meta } as Record<string, unknown>
+    : {}
+  for (const key of [
+    'paper_guide_contracts',
+    'render_cache',
+    'provenance',
+    'answer_quality',
+    'answer_runtime_check',
+    'answer_contract',
+    'answerContract',
+    'research_trace',
+    'agent_trace',
+    'agent_source_summary',
+    'agentSourceSummary',
+    'agent_trace_available',
+    'agentTraceAvailable',
+  ]) {
+    delete meta[key]
+  }
+  if (Object.keys(meta).length > 0) next.meta = meta
+  else delete next.meta
+  return next
+}
+
+function terminalMessageBase(message: Message): Message {
+  // The terminal SSE event currently carries answer text, but no atomic
+  // render packet whose refs/locale/citation-plan signatures can prove that
+  // an existing packet belongs to this generation. Matching answer_markdown
+  // alone is insufficient: the same prose can have different source cards or
+  // locale. Clear presentation metadata and let message hydration install the
+  // server-authoritative packet.
+  return clearStaleMessagePresentation(message)
+}
+
+function currentGenerationMeta(generation: GenerationState | null | undefined): Record<string, unknown> {
+  return {
+    ...(generation?.traceId ? { trace_id: generation.traceId } : {}),
+    ...(generation?.researchTrace ? { research_trace: generation.researchTrace } : {}),
+    ...(generation?.agentTrace ? { agent_trace: generation.agentTrace } : {}),
+    ...(generation?.agentSourceSummary ? { agent_source_summary: generation.agentSourceSummary } : {}),
+    ...(generation?.answerContract ? { answer_contract: generation.answerContract } : {}),
+  }
+}
+
 function upsertGenerationFailureMessage(
   messages: Message[],
   generation: GenerationState | null | undefined,
@@ -158,17 +219,20 @@ function upsertGenerationFailureMessage(
     ? assistantMsgId
     : Math.floor(Date.now())
   const createdAt = Date.now() / 1000
-  const patchMessage = (message: Message): Message => ({
-    ...message,
-    role: 'assistant',
-    content,
-    created_at: Number.isFinite(Number(message.created_at)) ? message.created_at : createdAt,
-    meta: {
-      ...(message.meta || {}),
-      ...(generation?.traceId ? { trace_id: generation.traceId } : {}),
-      generation_status: 'failed',
-    },
-  })
+  const patchMessage = (message: Message): Message => {
+    const base = terminalMessageBase(message)
+    return {
+      ...base,
+      role: 'assistant',
+      content,
+      created_at: Number.isFinite(Number(message.created_at)) ? message.created_at : createdAt,
+      meta: {
+        ...(base.meta || {}),
+        ...currentGenerationMeta(generation),
+        generation_status: 'failed',
+      },
+    }
+  }
   if (assistantMsgId > 0) {
     let found = false
     const next = messages.map((message) => {
@@ -205,17 +269,20 @@ function upsertGenerationCompletedMessage(
     ? assistantMsgId
     : Math.floor(Date.now())
   const createdAt = Date.now() / 1000
-  const patchMessage = (message: Message): Message => ({
-    ...message,
-    role: 'assistant',
-    content,
-    created_at: Number.isFinite(Number(message.created_at)) ? message.created_at : createdAt,
-    meta: {
-      ...(message.meta || {}),
-      ...(generation?.traceId ? { trace_id: generation.traceId } : {}),
-      generation_status: 'done',
-    },
-  })
+  const patchMessage = (message: Message): Message => {
+    const base = terminalMessageBase(message)
+    return {
+      ...base,
+      role: 'assistant',
+      content,
+      created_at: Number.isFinite(Number(message.created_at)) ? message.created_at : createdAt,
+      meta: {
+        ...(base.meta || {}),
+        ...currentGenerationMeta(generation),
+        generation_status: 'done',
+      },
+    }
+  }
   if (assistantMsgId > 0) {
     let found = false
     const next = messages.map((message) => {
@@ -479,6 +546,47 @@ function stopRefsPolling() {
   }
 }
 
+function refsLocalePreferenceKey() {
+  const settings = useSettingsStore.getState()
+  return `${settings.uiLocale}:${settings.refsCardLocale}:${settings.localePreferencesRevision}`
+}
+
+function invalidateRefsLoadForConversation(convId: string) {
+  const key = String(convId || '').trim()
+  if (!key) return
+  latestRefsLoadRequestByConversation.set(key, ++refsLoadRequestSequence)
+  refsLoadControllerByConversation.get(key)?.abort()
+  refsLoadControllerByConversation.delete(key)
+}
+
+function beginRefsLoadForConversation(convId: string) {
+  const key = String(convId || '').trim()
+  const previous = refsLoadControllerByConversation.get(key)
+  previous?.abort()
+  const controller = new AbortController()
+  const requestSequence = ++refsLoadRequestSequence
+  latestRefsLoadRequestByConversation.set(key, requestSequence)
+  refsLoadControllerByConversation.set(key, controller)
+  return { controller, requestSequence, localePreferenceKey: refsLocalePreferenceKey() }
+}
+
+function refsLoadRequestIsCurrent(
+  convId: string,
+  requestSequence: number,
+  localePreferenceKey: string,
+  getActiveConvId: () => string | null,
+) {
+  return latestRefsLoadRequestByConversation.get(convId) === requestSequence
+    && refsLocalePreferenceKey() === localePreferenceKey
+    && getActiveConvId() === convId
+}
+
+function finishRefsLoadForConversation(convId: string, controller: AbortController) {
+  if (refsLoadControllerByConversation.get(convId) === controller) {
+    refsLoadControllerByConversation.delete(convId)
+  }
+}
+
 function stopMessagePostprocessPolling() {
   messagePostprocessPollToken += 1
   if (messagePostprocessPollTimer !== null) {
@@ -547,7 +655,24 @@ async function loadRefsForConversation(
   reason = 'load',
 ) {
   const startedAt = nowMs()
+  // A direct load supersedes any older polling response for the same visible
+  // refs surface. Abort the poll before assigning this request's token.
+  const supersededPoll = refsPollController !== null || refsPollTimer !== null
+  const supersededPollToken = refsPollToken
+  stopRefsPolling()
+  if (supersededPoll) {
+    pushRefsPerf({
+      ts: Date.now(),
+      convId,
+      phase: 'poll_stop',
+      token: supersededPollToken,
+      durationMs: 0,
+      reason: 'superseded_by_direct_load',
+      active: getActiveConvId() === convId,
+    })
+  }
   const token = refsPollToken
+  const { controller, requestSequence, localePreferenceKey } = beginRefsLoadForConversation(convId)
   pushRefsPerf({
     ts: Date.now(),
     convId,
@@ -558,9 +683,9 @@ async function loadRefsForConversation(
     active: getActiveConvId() === convId,
   })
   try {
-    const { data: refs, meta } = await chatApi.getRefsWithMeta(convId)
+    const { data: refs, meta } = await chatApi.getRefsWithMeta(convId, { signal: controller.signal })
     const durationMs = Number((nowMs() - startedAt).toFixed(2))
-    if (getActiveConvId() !== convId) {
+    if (!refsLoadRequestIsCurrent(convId, requestSequence, localePreferenceKey, getActiveConvId)) {
       pushRefsPerf({
         ts: Date.now(),
         convId,
@@ -576,6 +701,10 @@ async function loadRefsForConversation(
     }
     const nextRevision = refsPayloadRevision(refs)
     set((state) => {
+      if (
+        state.activeConvId !== convId
+        || !refsLoadRequestIsCurrent(convId, requestSequence, localePreferenceKey, getActiveConvId)
+      ) return {}
       if (refsPayloadRevision(state.refs) === nextRevision) return state
       return {
         refs,
@@ -600,10 +729,17 @@ async function loadRefsForConversation(
       ...refsBackendPerf(meta),
       summary: summarizeRefsPayload(refs),
     })
-    if (needsEnrichment || keepPolling) {
+    if (
+      (needsEnrichment || keepPolling)
+      && refsLoadRequestIsCurrent(convId, requestSequence, localePreferenceKey, getActiveConvId)
+    ) {
       void startRefsPolling(convId, set, getActiveConvId, shouldKeepPolling, `${reason}:followup`)
     }
   } catch (err) {
+    if (
+      controller.signal.aborted
+      || !refsLoadRequestIsCurrent(convId, requestSequence, localePreferenceKey, getActiveConvId)
+    ) return
     pushRefsPerf({
       ts: Date.now(),
       convId,
@@ -646,6 +782,8 @@ async function loadRefsForConversation(
       }))
       void startRefsPolling(convId, set, getActiveConvId, shouldKeepPolling, `${reason}:retry_after_error`)
     }
+  } finally {
+    finishRefsLoadForConversation(convId, controller)
   }
 }
 
@@ -697,6 +835,7 @@ async function startRefsPolling(
 ) {
   stopRefsPolling()
   const token = ++refsPollToken
+  const localePreferenceKey = refsLocalePreferenceKey()
   let tries = 0
   const pollingStartedAt = nowMs()
   let generationSettledAt = 0
@@ -720,6 +859,10 @@ async function startRefsPolling(
 
   const tick = async () => {
     if (token !== refsPollToken) return
+    if (localePreferenceKey !== refsLocalePreferenceKey()) {
+      refsPollTimer = null
+      return
+    }
     if (getActiveConvId() !== convId) {
       refsPollTimer = null
       pushRefsPerf({
@@ -741,6 +884,7 @@ async function startRefsPolling(
       const { data: refs, meta } = await chatApi.getRefsWithMeta(convId, { signal: ctrl.signal })
       if (refsPollController === ctrl) refsPollController = null
       if (token !== refsPollToken) return
+      if (localePreferenceKey !== refsLocalePreferenceKey()) return
       if (getActiveConvId() !== convId) {
         refsPollTimer = null
         pushRefsPerf({
@@ -819,7 +963,11 @@ async function startRefsPolling(
       }
     } catch (err) {
       if (refsPollController === ctrl) refsPollController = null
-      if (ctrl.signal.aborted || token !== refsPollToken) return
+      if (
+        ctrl.signal.aborted
+        || token !== refsPollToken
+        || localePreferenceKey !== refsLocalePreferenceKey()
+      ) return
       pushRefsPerf({
         ts: Date.now(),
         convId,
@@ -845,6 +993,10 @@ async function startRefsPolling(
       }
     }
     if (refsPollController === ctrl) refsPollController = null
+    if (token !== refsPollToken || localePreferenceKey !== refsLocalePreferenceKey()) {
+      refsPollTimer = null
+      return
+    }
     if (getActiveConvId() !== convId) {
       refsPollTimer = null
       pushRefsPerf({
@@ -895,10 +1047,22 @@ function getMessageRenderPacketForPostprocess(message: Message | null | undefine
 
 function messageCitationRevisionForPostprocess(message: Message | null | undefined): string {
   const packet = getMessageRenderPacketForPostprocess(message)
-  if (!packet) return ''
-  const details = Array.isArray(packet.cite_details) ? packet.cite_details : []
+  if (!message) return ''
+  const details = packet && Array.isArray(packet.cite_details)
+    ? packet.cite_details
+    : Array.isArray(message.cite_details)
+      ? message.cite_details
+      : []
   return JSON.stringify({
-    renderedContent: String(packet.rendered_content || message?.rendered_content || ''),
+    body: String(
+      packet?.rendered_body
+      || packet?.rendered_content
+      || packet?.answer_markdown
+      || message.rendered_body
+      || message.rendered_content
+      || message.content
+      || '',
+    ),
     details: details.map((raw) => {
       const detail = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
       return {
@@ -909,6 +1073,8 @@ function messageCitationRevisionForPostprocess(message: Message | null | undefin
         anchor: String(detail.anchor || ''),
         sourcePath: String(detail.source_path || ''),
         evidence: String(detail.evidence_quote || detail.summary_line || ''),
+        takeaway: String(detail.card_takeaway || ''),
+        claim: String(detail.card_claim || detail.answer_claim || ''),
       }
     }),
   })
@@ -995,7 +1161,7 @@ async function startMessagePostprocessPolling(
     try {
       const { page } = await getMessagesPageWithFallback(convId, {
         limit: MESSAGE_PAGE_SIZE,
-        renderPacketOnly: false,
+        renderPacketOnly: opts?.paperGuideMode ? true : undefined,
       })
       if (token !== messagePostprocessPollToken || getState().activeConvId !== convId) return
       set((state) => {
@@ -1500,6 +1666,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return
     }
     const myToken = ++conversationSwitchToken
+    localeRefreshSequence += 1
+    if (current.activeConvId) invalidateRefsLoadForConversation(current.activeConvId)
     const cachedConv = findConversationInState(current, convId)
     const cacheAfterLeaving = current.activeConvId
       ? upsertConversationViewCache(current.conversationCacheById, current.activeConvId, {
@@ -1708,32 +1876,44 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const initial = get()
     const convId = String(initial.activeConvId || '').trim()
     if (!convId) return
+    const refreshSequence = ++localeRefreshSequence
+    const localePreferenceKey = refsLocalePreferenceKey()
+    stopRefsPolling()
+    invalidateRefsLoadForConversation(convId)
+    const requestIsCurrent = () => (
+      refreshSequence === localeRefreshSequence
+      && refsLocalePreferenceKey() === localePreferenceKey
+      && get().activeConvId === convId
+    )
     const paperGuideMode = initial.activeConversation?.mode === 'paper_guide'
       || Boolean(initial.guideBindings?.[convId]?.sourcePath)
     const pageResult = await getMessagesPageWithFallback(convId, {
       limit: MESSAGE_PAGE_SIZE,
       renderPacketOnly: paperGuideMode ? true : undefined,
     })
-    if (get().activeConvId !== convId) return
+    if (!requestIsCurrent()) return
     const page = pageResult.page
-    set((state) => ({
-      messages: Array.isArray(page?.messages) ? page.messages : [],
-      messagesHasMoreBefore: Boolean(page?.has_more_before),
-      oldestLoadedMessageId: Number.isFinite(Number(page?.oldest_loaded_id))
-        ? Number(page?.oldest_loaded_id)
-        : null,
-      conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+    set((state) => {
+      if (!requestIsCurrent() || state.activeConvId !== convId) return {}
+      return {
         messages: Array.isArray(page?.messages) ? page.messages : [],
-        refs: {},
         messagesHasMoreBefore: Boolean(page?.has_more_before),
         oldestLoadedMessageId: Number.isFinite(Number(page?.oldest_loaded_id))
           ? Number(page?.oldest_loaded_id)
           : null,
-        cachedAt: Date.now(),
-      }),
-      refs: {},
-    }))
-    stopRefsPolling()
+        conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+          messages: Array.isArray(page?.messages) ? page.messages : [],
+          refs: {},
+          messagesHasMoreBefore: Boolean(page?.has_more_before),
+          oldestLoadedMessageId: Number.isFinite(Number(page?.oldest_loaded_id))
+            ? Number(page?.oldest_loaded_id)
+            : null,
+          cachedAt: Date.now(),
+        }),
+        refs: {},
+      }
+    })
+    if (!requestIsCurrent()) return
     await loadRefsForConversation(
       convId,
       set,

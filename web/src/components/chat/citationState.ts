@@ -112,6 +112,7 @@ export interface CiteDetail {
   answerClaim: string
   headingPath: string
   evidenceQuote: string
+  readerEvidenceQuote: string
   evidenceSource: string
   citationContext: string
   citationContextSource: string
@@ -1103,6 +1104,13 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     answerClaim: pickText(rec, 'answer_claim', 'answerClaim'),
     headingPath: pickText(rec, 'heading_path', 'headingPath'),
     evidenceQuote: pickText(rec, 'evidence_quote', 'evidenceQuote'),
+    readerEvidenceQuote: pickText(
+      rec,
+      'reader_evidence_quote',
+      'readerEvidenceQuote',
+      'citation_plan_reader_evidence_quote',
+      'citationPlanReaderEvidenceQuote',
+    ),
     evidenceSource: pickText(rec, 'evidence_source', 'evidenceSource'),
     citationContext: pickText(rec, 'citation_context', 'citationContext'),
     citationContextSource: pickText(rec, 'citation_context_source', 'citationContextSource'),
@@ -1175,6 +1183,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'answerClaim',
     'headingPath',
     'evidenceQuote',
+    'readerEvidenceQuote',
     'citationContext',
     'upstreamWorkRole',
     'userQuestionRelation',
@@ -1218,10 +1227,23 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
   for (const key of [
     'summaryLine',
     'evidenceQuote',
+    'readerEvidenceQuote',
     'citationContext',
     'cardEvidence',
     'systemBTraceContext',
   ] as const) {
+    const isContractOwnedSystemAEvidence = (key === 'evidenceQuote' || key === 'cardEvidence')
+      && !detail.isInpaper
+      && detail.cardDisplayContractVersion >= 2
+    if (key === 'readerEvidenceQuote' || isContractOwnedSystemAEvidence) {
+      // Reader evidence is the continuous source passage used for exact
+      // highlighting, while the evidence fields on a v2 System-A card are
+      // already a validated, display-ready evidence window. The sentence picker below intentionally
+      // compacts legacy text and can drop a later step from the same mechanism.
+      // Both values are already display-cleaned by the preceding loop, so keep
+      // their complete sentence sequence here.
+      continue
+    }
     if (key === 'summaryLine' && isArticleSummaryTextSource(detail.summarySource)) {
       detail[key] = cleanCitationDisplayText(detail[key])
     } else {
@@ -2053,43 +2075,66 @@ function splitCitationAuthors(value: string): string[] {
 
 export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: string; ris: string } {
   const title = isWeakField('title', asText(detail.title)) ? citationDisplay(detail).main : asText(detail.title)
-  const authors = asText(detail.authors) || '[Unknown Authors]'
+  const authors = asText(detail.authors)
   const authorList = splitCitationAuthors(authors)
-  const bibtexAuthors = authorList.length > 0 ? authorList.join(' and ') : authors
+  const bibtexAuthors = authorList.join(' and ')
   const venue =
     asText(detail.conferenceName) ||
     asText(detail.conferenceAcronym) ||
-    asText(detail.venue) ||
-    'Unknown Venue'
-  const year = asText(detail.year) || '20xx'
+    asText(detail.venue)
+  const year = /^\d{4}$/.test(asText(detail.year)) ? asText(detail.year) : ''
   const volume = asText(detail.volume)
   const issue = asText(detail.issue)
   const pages = asText(detail.pages)
   const doiUrl = asText(detail.doiUrl)
   const doi = extractDoiLike(detail.doi) || extractDoiLike(doiUrl)
   const canonicalDoiUrl = doiUrl || (doi ? `https://doi.org/${doi}` : '')
-  const entryType = detail.venueKind === 'conference' ? 'inproceedings' : 'article'
-  const gbtKind = detail.venueKind === 'conference' ? '[C]' : '[J]'
+  const sourceName = asText(detail.sourceName || detail.sourcePath)
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .pop() || ''
+  const hasBibliographicContainer = Boolean(venue || authors || year)
+  const entryType = detail.venueKind === 'conference'
+    ? 'inproceedings'
+    : hasBibliographicContainer
+      ? 'article'
+      : 'misc'
+  const gbtKind = detail.venueKind === 'conference' ? '[C]' : entryType === 'article' ? '[J]' : '[Z]'
 
-  let suffix = `, ${year}`
-  if (volume) suffix += `, ${volume}`
-  if (issue) suffix += `(${issue})`
-  if (pages) suffix += `: ${pages}`
-  const gbt = `${authors}. ${title} ${gbtKind}. ${venue}${suffix}.`
+  let publication = venue
+  if (year) publication += `${publication ? ', ' : ''}${year}`
+  if (volume) publication += `${publication ? ', ' : ''}${volume}`
+  if (issue) publication += `(${issue})`
+  if (pages) publication += `${publication ? ': ' : ''}${pages}`
+  const gbtParts = [
+    `${authors ? `${authors}. ` : ''}${title} ${gbtKind}.`,
+    publication ? `${publication}.` : '',
+    !publication && doi ? `DOI: ${doi}.` : '',
+    !publication && !doi && sourceName ? `Local source: ${sourceName}.` : '',
+  ].filter(Boolean)
+  const gbt = gbtParts.join(' ')
 
   const keyBase = title.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 24) || 'reference'
   const venueField = detail.venueKind === 'conference' ? 'booktitle' : 'journal'
-  const bibtex = `@${entryType}{ref_${year}_${keyBase},
-  title={${title}},
-  author={${bibtexAuthors}},
-  ${venueField}={${venue}},
-  year={${year}},${volume ? `\n  volume={${volume}},` : ''}${issue ? `\n  number={${issue}},` : ''}${pages ? `\n  pages={${pages}},` : ''}${doi ? `\n  doi={${doi}},` : ''}
-}`
+  const bibtexFields = [
+    `title={${title}}`,
+    bibtexAuthors ? `author={${bibtexAuthors}}` : '',
+    venue ? `${venueField}={${venue}}` : '',
+    year ? `year={${year}}` : '',
+    volume ? `volume={${volume}}` : '',
+    issue ? `number={${issue}}` : '',
+    pages ? `pages={${pages}}` : '',
+    doi ? `doi={${doi}}` : '',
+    canonicalDoiUrl ? `url={${canonicalDoiUrl}}` : '',
+    entryType === 'misc' && sourceName ? `file={${sourceName}}` : '',
+  ].filter(Boolean)
+  const bibtex = `@${entryType}{ref_${year || 'nd'}_${keyBase},\n  ${bibtexFields.join(',\n  ')}\n}`
 
-  const risType = detail.venueKind === 'conference' ? 'CPAPER' : 'JOUR'
+  const risType = detail.venueKind === 'conference' ? 'CPAPER' : entryType === 'article' ? 'JOUR' : 'GEN'
   const risAuthors = (() => {
     const raw = authors.trim()
-    if (!raw) return ['Unknown Authors']
+    if (!raw) return []
     const bySep = raw
       .split(/[；;]+/g)
       .map((part) => part.trim())
@@ -2108,10 +2153,8 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
   for (const author of (authorList.length > 0 ? authorList : risAuthors)) {
     risLines.push(`AU  - ${author}`)
   }
-  risLines.push(`${detail.venueKind === 'conference' ? 'T2' : 'JO'}  - ${venue}`)
-  if (/^\d{4}$/.test(year)) {
-    risLines.push(`PY  - ${year}`)
-  }
+  if (venue) risLines.push(`${detail.venueKind === 'conference' ? 'T2' : 'JO'}  - ${venue}`)
+  if (year) risLines.push(`PY  - ${year}`)
   if (volume) risLines.push(`VL  - ${volume}`)
   if (issue) risLines.push(`IS  - ${issue}`)
   if (pages) {
@@ -2125,6 +2168,7 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
   }
   if (doi) risLines.push(`DO  - ${doi}`)
   if (canonicalDoiUrl || doi) risLines.push(`UR  - ${canonicalDoiUrl || `https://doi.org/${doi}`}`)
+  if (entryType === 'misc' && sourceName) risLines.push(`L1  - ${sourceName}`)
   risLines.push('ER  -')
   const ris = risLines.join('\n')
 

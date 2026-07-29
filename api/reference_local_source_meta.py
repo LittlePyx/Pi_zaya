@@ -93,7 +93,23 @@ def load_local_source_citation_meta(
         if title_key and isinstance(title_bucket.get(title_key), Mapping):
             cached = public_citation_meta(title_bucket.get(title_key))
 
-    merged = dict(cached)
+    venue_hint, year_hint, title_hint = _source_name_hints(
+        str(doc.get("name") or doc.get("path") or source_name or source_path)
+    )
+    inferred_title = _source_doc_title(doc) or title_hint
+    inferred: dict[str, Any] = {}
+    if inferred_title:
+        inferred["title"] = inferred_title
+    if venue_hint:
+        inferred["venue"] = venue_hint
+    if year_hint:
+        inferred["year"] = year_hint
+
+    # Filename/index hints are already the local source's persisted identity.
+    # Keep them as a trustworthy offline fallback while allowing canonical
+    # cache records and explicit source fields to override them.
+    merged = dict(inferred)
+    merged.update(cached)
     merged.update(direct)
     if doi:
         merged.setdefault("doi", doi)

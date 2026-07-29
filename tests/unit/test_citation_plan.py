@@ -35,6 +35,82 @@ def test_prompt_aligned_abstract_keeps_complete_multi_sentence_claim(tmp_path: P
     assert "Background context" not in slot["evidence_quote"]
 
 
+def test_prompt_aligned_source_prefers_complete_dense_sentence_over_equal_long_paragraph(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "structured-detection.en.md"
+    broad_prefix = " ".join(
+        "Background survey material discusses structured detection, optical sectioning, "
+        "signal-to-noise ratio, and thick samples without stating the paper's result."
+        for _ in range(16)
+    )
+    direct = (
+        "The s2ISM structured-detection method simultaneously restores optical sectioning "
+        "and signal-to-noise ratio for thick samples."
+    )
+    source.write_text(
+        f"# Paper\n\n## Abstract\n\n{broad_prefix} {direct}\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "evidence_quote": "Generic detector-array background.",
+        },
+        ranking_texts=[
+            "s2ISM structured detection optical sectioning signal-to-noise ratio thick samples"
+        ],
+        prefer_source_summary=True,
+    )
+
+    assert slot["evidence_quote"] == direct
+    assert "Background survey material" not in slot["evidence_quote"]
+    assert not slot["evidence_quote"].endswith("...")
+
+
+def test_prompt_aligned_source_extracts_late_structured_detection_compound_claim(
+    tmp_path: Path,
+) -> None:
+    filler = " ".join(
+        "Background discussion covers detector arrays and conventional microscopy."
+        for _ in range(24)
+    )
+    source = tmp_path / "s2ism.en.md"
+    source.write_text(
+        "# Structured detection\n\n<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "From single-plane acquisition, we reconstruct an image with digital and optical "
+        "super-resolution, high signal-to-noise ratio and enhanced optical sectioning.\n\n"
+        "<!-- kb_page: 2 -->\n\n"
+        "Structured detection can leverage axial information for enhanced resolution and sectioning. "
+        f"{filler} "
+        "Since super-resolution and optical sectioning are achieved simultaneously, "
+        "we named our technique s2ISM.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "evidence_quote": "Generic detector-array background.",
+        },
+        ranking_texts=[
+            "structured detection s2ISM super-resolution optical sectioning"
+        ],
+        prefer_source_summary=True,
+    )
+
+    assert "Structured detection can leverage" in slot["evidence_quote"]
+    assert "super-resolution and optical sectioning are achieved simultaneously" in slot[
+        "evidence_quote"
+    ]
+    assert "high signal-to-noise ratio" in slot["evidence_quote"]
+    assert "s2ISM" in slot["evidence_quote"]
+    assert "Background discussion" not in slot["evidence_quote"]
+    assert slot["page_start"] == 1
+    assert slot["page_end"] == 2
+
+
 def test_comparison_source_summary_replaces_front_matter_hit(tmp_path: Path) -> None:
     source = tmp_path / "3d-video.en.md"
     source.write_text(
@@ -718,6 +794,11 @@ def test_multi_source_route_budgets_one_system_a_citation_per_planned_source():
     prompt_block = build_citation_plan_prompt_block(method_map)
     assert "per paragraph budget: SystemA=2" in prompt_block
     assert "whole answer coverage target: SystemA=3" in prompt_block
+    assert "This comparison has 3 planned SystemA sources" in prompt_block
+    assert "Cover all 3 explicitly and do not stop after a subset" in prompt_block
+    assert "two-sided comparison" not in prompt_block
+    assert "Do not introduce a third paper" not in prompt_block
+    assert "Do not introduce unplanned papers" in prompt_block
     assert "limits distinct evidence cards, not marker reuse" in prompt_block
     assert "Reuse the same marker after every later substantive sentence" in prompt_block
     assert "leave the detailed body uncited" in prompt_block

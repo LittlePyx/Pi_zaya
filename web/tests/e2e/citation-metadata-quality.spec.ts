@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import {
+  citationFormats,
   cleanCitationDisplayText,
   normalizeCiteDetail,
   toShelfItem,
@@ -104,6 +105,42 @@ test('citation shelf metadata ready follows export acceptance when present', () 
 
   expect(metadataQualityReady(ready)).toBe(true)
   expect(metadataQualityNeedsRepair(ready)).toBe(false)
+})
+
+test('citation exports omit unknown bibliographic fields instead of fabricating placeholders', () => {
+  const detail = normalizeCiteDetail({
+    anchor: 'system-a-doi',
+    citation_route: 'system_a',
+    is_inpaper: false,
+    source_path: 'db/NatPhoton-2025-Structured detection/Structured detection.en.md',
+    source_name: 'NatPhoton-2025-Structured detection.pdf',
+    title: 'Structured detection for simultaneous super-resolution',
+    authors: '',
+    venue: '',
+    year: '',
+    doi: '10.1038/example.structured',
+  })
+  if (!detail) throw new Error('minimal DOI fixture failed to normalize')
+
+  const formats = citationFormats(detail)
+
+  expect(formats.bibtex).toContain('@misc{ref_nd_')
+  expect(formats.bibtex).toContain('title={Structured detection for simultaneous super-resolution}')
+  expect(formats.bibtex).toContain('doi={10.1038/example.structured}')
+  expect(formats.bibtex).toContain('file={NatPhoton-2025-Structured detection.pdf}')
+  expect(formats.ris).toContain('TY  - GEN')
+  expect(formats.ris).toContain('DO  - 10.1038/example.structured')
+  for (const text of Object.values(formats)) {
+    expect(text).not.toContain('[Unknown Authors]')
+    expect(text).not.toContain('Unknown Venue')
+    expect(text).not.toContain('20xx')
+  }
+  expect(formats.bibtex).not.toContain('author={')
+  expect(formats.bibtex).not.toContain('journal={')
+  expect(formats.bibtex).not.toContain('year={')
+  expect(formats.ris).not.toContain('AU  -')
+  expect(formats.ris).not.toContain('JO  -')
+  expect(formats.ris).not.toContain('PY  -')
 })
 
 test('citation shelf live merge prefers export-ready metadata over quality-only metadata', () => {

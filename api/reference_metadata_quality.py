@@ -736,6 +736,16 @@ def citation_metadata_export_acceptance(detail: Mapping[str, Any] | None) -> dic
     venue = _text(data.get("venue"))
     year = _text(data.get("year"))
     doi = _norm_doi(data.get("doi") or data.get("doi_url") or data.get("doiUrl"))
+    source_path = _text(data.get("source_path") or data.get("sourcePath"))
+    route = _text(data.get("citation_route") or data.get("citationRoute")).lower()
+    explicit_system_a = bool(
+        route == "system_a"
+        or (
+            route != "system_b"
+            and ("is_inpaper" in data or "isInpaper" in data)
+            and not bool(data.get("is_inpaper") or data.get("isInpaper"))
+        )
+    )
     missing_fields = set(str(field or "") for field in list(quality.get("missing_fields") or []) if str(field or ""))
     field_ready = {
         "source": bool(source) and "source" not in missing_fields,
@@ -747,21 +757,78 @@ def citation_metadata_export_acceptance(detail: Mapping[str, Any] | None) -> dic
     }
     summary = _summary_export_state(data)
     metadata_ready = bool(quality.get("ok")) or _text(quality.get("status")).lower() == "ready"
-    strict_export_ready = all(field_ready.get(field) for field in _EXPORT_IDENTITY_FIELDS)
-    doi_export_ready = bool(
+    issue_codes = set(_quality_issue_codes(quality))
+    blocking_identity_issues = issue_codes.difference(
+        {"missing_authors", "missing_venue", "missing_year", "missing_doi"}
+    )
+    strict_export_ready = bool(
+        all(field_ready.get(field) for field in _EXPORT_IDENTITY_FIELDS)
+        and not blocking_identity_issues
+    )
+    doi_bibliographic_export_ready = bool(
         field_ready.get("source")
         and field_ready.get("title")
         and field_ready.get("year")
         and field_ready.get("doi")
         and (field_ready.get("venue") or field_ready.get("authors"))
+        and not blocking_identity_issues
     )
-    identity_ready = bool(strict_export_ready or doi_export_ready)
+    bibliographic_export_ready = bool(
+        field_ready.get("source")
+        and field_ready.get("title")
+        and field_ready.get("authors")
+        and field_ready.get("venue")
+        and field_ready.get("year")
+        and not blocking_identity_issues
+    )
+    bibliographic_title = _text(data.get("bibliographic_title") or data.get("bibliographicTitle"))
+    heading_path = _text(data.get("heading_path") or data.get("headingPath"))
+    title_is_locator = bool(
+        title
+        and heading_path
+        and normalize_title_for_match(title) == normalize_title_for_match(heading_path)
+        and not bibliographic_title
+    )
+    trusted_system_a_title = bool(field_ready.get("title") and not title_is_locator)
+    system_a_doi_export_ready = bool(
+        explicit_system_a
+        and source_path
+        and trusted_system_a_title
+        and field_ready.get("doi")
+        and not blocking_identity_issues
+    )
+    system_a_local_export_ready = bool(
+        explicit_system_a
+        and source_path
+        and trusted_system_a_title
+        and not blocking_identity_issues
+    )
+    identity_ready = bool(
+        strict_export_ready
+        or doi_bibliographic_export_ready
+        or bibliographic_export_ready
+        or system_a_doi_export_ready
+        or system_a_local_export_ready
+    )
     metadata_ready = bool(metadata_ready or identity_ready)
     export_ready = bool(metadata_ready and identity_ready)
+    if strict_export_ready:
+        export_mode = "complete_with_doi"
+    elif doi_bibliographic_export_ready:
+        export_mode = "doi_bibliography"
+    elif bibliographic_export_ready:
+        export_mode = "complete_bibliography"
+    elif system_a_doi_export_ready:
+        export_mode = "system_a_doi"
+    elif system_a_local_export_ready:
+        export_mode = "system_a_local_source"
+    else:
+        export_mode = ""
     return {
         "contract_version": 1,
         "quality_ok": bool(metadata_ready),
         "export_ready": export_ready,
+        "export_mode": export_mode,
         "required_fields": list(_EXPORT_IDENTITY_FIELDS),
         "field_ready": field_ready,
         "missing_fields": [field for field in _EXPORT_IDENTITY_FIELDS if not field_ready.get(field)],

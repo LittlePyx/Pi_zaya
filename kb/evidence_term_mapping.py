@@ -11,6 +11,88 @@ _ASCII_STOPWORDS = {
 }
 
 
+_GENERIC_METHOD_IDENTITIES = {
+    "2d",
+    "3d",
+    "3dgs",
+    "ai",
+    "ccd",
+    "cnn",
+    "cnr",
+    "cvpr",
+    "dl",
+    "dmd",
+    "dnn",
+    "doi",
+    "fps",
+    "ieee",
+    "lpips",
+    "lsa",
+    "natphoton",
+    "nerf",
+    "pdf",
+    "pnsr",
+    "psnr",
+    "rgb",
+    "rmse",
+    "sci",
+    "snr",
+    "spad",
+    "spi",
+    "ssim",
+}
+_METHOD_IDENTITY_EQUIVALENTS = (
+    frozenset({"piln", "ilnet"}),
+)
+
+
+def specific_method_identities(value: object) -> set[str]:
+    """Extract distinctive mixed-case/acronym method or paper identifiers."""
+
+    identities: set[str] = set()
+    # Split on hyphens instead of treating an entire bibliographic filename
+    # prefix (for example ``OE-2007-Single-shot``) as one mixed-case method
+    # identifier. Distinctive model names such as SCIGS, SCINeRF and NAFNet
+    # remain single alphanumeric tokens and are still protected.
+    surface = str(value or "")
+    for token in re.findall(r"\b[A-Za-z][A-Za-z0-9]{2,}\b", surface):
+        if sum(1 for char in token if char.isupper()) < 2:
+            continue
+        normalized = token.lower().strip("-")
+        if normalized and normalized not in _GENERIC_METHOD_IDENTITIES:
+            identities.add(normalized)
+    # Comparison tables commonly spell out the basis name while answer prose
+    # uses HSI/FSI. Treat those as the same method identity only in explicit
+    # single-pixel-imaging context; plain Fourier/Hadamard mathematics remains
+    # too broad to act as a paper/method identifier.
+    surface_low = surface.lower()
+    single_pixel_context = bool(
+        re.search(r"\bsingle[-\s]?pixel\s+imaging\b|\bspi\b", surface_low)
+    )
+    if single_pixel_context and "hadamard" in surface_low:
+        identities.add("hsi")
+    if single_pixel_context and "fourier" in surface_low:
+        identities.add("fsi")
+    if re.search(r"\binterferometric\s+image\s+scanning\s+microscopy\b", surface_low):
+        identities.add("iism")
+    return identities
+
+
+def method_identity_conflicts(claim: object, evidence: object) -> bool:
+    """Return true when both sides name disjoint distinctive methods/papers."""
+
+    claim_ids = specific_method_identities(claim)
+    evidence_ids = specific_method_identities(evidence)
+    if not claim_ids or not evidence_ids:
+        return False
+    if claim_ids & evidence_ids:
+        return False
+    return not any(
+        bool(claim_ids & equivalents) and bool(evidence_ids & equivalents)
+        for equivalents in _METHOD_IDENTITY_EQUIVALENTS
+    )
+
+
 # Conservative aliases used only to align Chinese questions and summaries with
 # English academic source passages. Values intentionally mirror terms commonly
 # written verbatim in papers; they are never used to generate user-facing prose.
@@ -131,4 +213,8 @@ def evidence_alignment_tokens(
     return tokens
 
 
-__all__ = ["evidence_alignment_tokens"]
+__all__ = [
+    "evidence_alignment_tokens",
+    "method_identity_conflicts",
+    "specific_method_identities",
+]

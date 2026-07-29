@@ -222,7 +222,7 @@ def test_build_hit_ui_meta_infers_prompt_figure_anchor_for_stale_hit(monkeypatch
 
     summary = str(ui_meta.get("summary_line") or "")
     reader_open = ui_meta.get("reader_open") or {}
-    assert "iRAYPLE A5402MU90" in summary or "CCD camera" in summary
+    assert "iRAYPLE A5402MU90" in summary or "CCD 相机" in summary
     assert "Figure 5" not in summary
     assert str(reader_open.get("anchorKind") or "") == "figure"
     assert int(reader_open.get("anchorNumber") or 0) == 3
@@ -690,7 +690,7 @@ def test_build_hit_ui_meta_falls_back_to_snippet_summary_when_ref_pack_missing(m
     assert "SCINeRF" in str(ui_meta.get("summary_line") or "")
     why_line = str(ui_meta.get("why_line") or "")
     assert all(term in why_line for term in ("SCINeRF", "单次压缩快照", "三维场景表示"))
-    assert ui_meta.get("summary_label") == "原文证据"
+    assert ui_meta.get("summary_label") == "导读"
     reader_open = ui_meta.get("reader_open") or {}
     assert str(reader_open.get("sourcePath") or "") == r"db\SCINeRF\SCINeRF.en.md"
     assert str(reader_open.get("headingPath") or "") == "3. Method / 3.1. Background on NeRF"
@@ -747,7 +747,9 @@ def test_answer_cited_card_localizes_guide_without_changing_direct_evidence(monk
     assert str(primary.get("snippet") or "") == str(reader.get("snippet") or "")
     assert summary != str(primary.get("snippet") or "")
     assert ui_meta.get("summary_label") == "导读"
-    assert not str(ui_meta.get("why_line") or "")
+    why = str(ui_meta.get("why_line") or "")
+    assert "真实退化样本" in why
+    assert "最低 LPIPS" in why
 
 
 def test_answer_cited_multi_block_summary_drops_stale_strict_locator(tmp_path: Path, monkeypatch):
@@ -941,8 +943,9 @@ def test_chinese_prompt_focus_aliases_select_deep_learning_evidence(monkeypatch)
     summary = str(ui_meta.get("summary_line") or "")
     assert "\u76f8\u5173\u5185\u5bb9\u4f4d\u4e8e" not in summary
     assert "The relevant discussion appears" not in summary
-    assert "deep learning" in summary
-    assert "low sampling" in summary or "ground-truth" in summary
+    assert "自监督" in summary
+    assert "无需真值图像" in summary
+    assert "低采样率" in summary
 
 
 def test_chinese_prompt_focus_aliases_keep_structured_detection_evidence(monkeypatch):
@@ -990,8 +993,10 @@ def test_chinese_prompt_focus_aliases_keep_structured_detection_evidence(monkeyp
     summary = str(ui_meta.get("summary_line") or "")
     assert "\u76f8\u5173\u5185\u5bb9\u4f4d\u4e8e" not in summary
     assert "The relevant discussion appears" not in summary
-    assert "Structured detection" in summary
-    assert "trade-off" in summary or "optical sectioning" in summary
+    assert "结构化探测" in summary
+    assert "光学切片" in summary
+    assert "信噪比" in summary
+    assert "性能权衡" in summary
 
 
 def test_chinese_multi_paper_focus_filter_requires_primary_concept():
@@ -1064,7 +1069,8 @@ def test_prompt_aligned_summary_can_use_late_focus_sentence(monkeypatch):
     )
 
     summary = str(ui_meta.get("summary_line") or "")
-    assert "deep learning" in summary
+    assert "深度学习" in summary
+    assert "压缩感知" in summary
     assert "detector memory" not in summary
 
 

@@ -4,7 +4,12 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from api.reference_card_copy import looks_generic_ref_why_line, looks_templated_ref_why_line
+from api.reference_card_copy import (
+    build_grounded_ref_why_line,
+    build_localized_ref_summary_line,
+    looks_generic_ref_why_line,
+    looks_templated_ref_why_line,
+)
 from kb.citation_audit import summarize_system_b_citation_audit
 from kb.evidence_text import finish_evidence_text, source_title_candidate, strip_evidence_metadata_prefix
 
@@ -140,16 +145,7 @@ def _align_summary_surface_to_render_locale(ui_meta: Mapping[str, Any] | None) -
         return ui
     locale = _ref_card_locale(ui)
     summary = _text(ui.get("summary_line"))
-    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", summary))
-    latin_count = len(re.findall(r"[A-Za-z]", summary))
-    locale_matches = bool(
-        (locale == "zh" and cjk_count >= 4 and (cjk_count >= 12 or cjk_count * 2 >= latin_count))
-        or (
-            locale == "en"
-            and latin_count >= 4
-            and (cjk_count == 0 or latin_count >= max(8, cjk_count * 2))
-        )
-    )
+    locale_matches = _ref_card_copy_matches_locale(summary, locale)
     locale_mismatch = bool(
         summary
         and not locale_matches
@@ -170,6 +166,147 @@ def _align_summary_surface_to_render_locale(ui_meta: Mapping[str, Any] | None) -
             if locale == "en"
             else "这条证据说明什么"
         )
+    return ui
+
+
+def _ref_card_copy_matches_locale(value: Any, locale: str) -> bool:
+    """Return whether explanatory card copy follows the requested UI locale.
+
+    English method names are allowed inside Chinese prose, and short Chinese
+    terms are allowed inside English prose.  A raw source quote, however, must
+    stay in ``primary_evidence`` instead of being surfaced as Guide/Relevance.
+    """
+
+    text = _text(value)
+    if not text:
+        return False
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_count = len(re.findall(r"[A-Za-z]", text))
+    if str(locale or "").strip().lower() == "en":
+        return latin_count >= 4 and (
+            cjk_count == 0 or latin_count >= max(8, cjk_count * 2)
+        )
+    return cjk_count >= 4 and (
+        cjk_count >= 12 or cjk_count * 2 >= latin_count
+    )
+
+
+def _preserve_mismatched_summary_as_evidence(ui: dict[str, Any], summary: str) -> None:
+    """Move a wrong-language summary to the evidence channel before hiding it."""
+
+    value = _clean_ref_card_text(summary, max_len=620)
+    if not value:
+        return
+    primary = _as_dict(ui.get("primary_evidence"))
+    if not _first_text(primary, ("snippet", "highlight_snippet", "highlightSnippet", "quote", "text")):
+        primary.update(
+            {
+                "snippet": value,
+                "highlight_snippet": value,
+                "selection_reason": "locale_evidence_fallback",
+            }
+        )
+        ui["primary_evidence"] = primary
+
+
+def _repair_ref_card_copy_locale(ui_meta: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Enforce Guide/Relevance locale at the final public card boundary.
+
+    Earlier retrieval stages may legitimately carry an English source quote
+    while the UI is Chinese.  This boundary keeps that quote in the evidence
+    payload, derives a localized Guide from already-grounded relevance copy
+    when possible, and never relabels the raw quote as explanatory prose.
+    """
+
+    ui = _as_dict(ui_meta)
+    if not ui:
+        return {}
+    explicit_locale = str(ui.get("render_locale") or "").strip().lower()
+    if explicit_locale not in {"zh", "en"}:
+        # Legacy/provisional payloads without an authoritative locale retain
+        # their existing copy until the rendering pipeline resolves one.
+        return ui
+    locale = _ref_card_locale(ui)
+    summary_kind = _norm(ui.get("summary_kind"))
+    summary = _text(ui.get("summary_line"))
+    why = _text(ui.get("why_line"))
+    primary = _as_dict(ui.get("primary_evidence"))
+    evidence = _first_text(
+        primary,
+        (
+            "snippet",
+            "highlight_snippet",
+            "highlightSnippet",
+            "quote",
+            "text",
+            "evidence_quote",
+            "anchor_text",
+        ),
+    )
+    source_identity = _first_text(ui, ("display_name", "source_name", "source_path"))
+    # Put source identity last: the evidence normalizer intentionally strips
+    # leading metadata-like labels, while a trailing paper name can still
+    # supply an otherwise omitted method name (for example SCINeRF).
+    evidence_seed = " ".join(
+        part for part in (evidence, summary, source_identity) if part
+    ).strip()
+
+    why_needs_rebuild = bool(
+        not _ref_card_copy_matches_locale(why, locale)
+        or looks_generic_ref_why_line(why)
+        or looks_templated_ref_why_line(why)
+    )
+    if why_needs_rebuild and evidence_seed:
+        grounded_why = build_grounded_ref_why_line(
+            prefer_zh=locale == "zh",
+            focus_terms=[],
+            heading_path=_first_text(ui, ("heading_path", "section_label", "subsection_label")),
+            summary_line=evidence_seed,
+        )
+        if grounded_why and _ref_card_copy_matches_locale(grounded_why, locale):
+            ui["why_line"] = grounded_why
+            ui["why_generation"] = "deterministic_grounded"
+            why = grounded_why
+        else:
+            # Relevance is explanatory UI copy.  A generic or wrong-language
+            # sentence must not be presented as if it were grounded analysis.
+            ui["why_line"] = ""
+            ui["why_generation"] = "locale_suppressed"
+            why = ""
+
+    why_is_localized = _ref_card_copy_matches_locale(why, locale)
+
+    if (
+        summary
+        and summary_kind not in {"evidence", "source_evidence"}
+        and not _ref_card_copy_matches_locale(summary, locale)
+    ):
+        _preserve_mismatched_summary_as_evidence(ui, summary)
+        localized_summary = build_localized_ref_summary_line(
+            prefer_zh=locale == "zh",
+            evidence_text=evidence_seed,
+        )
+        derived_summary = localized_summary
+        if (
+            not derived_summary
+            and why_is_localized
+            and not looks_generic_ref_why_line(why)
+            and not looks_templated_ref_why_line(why)
+        ):
+            derived_summary = _summary_from_specific_why_line(why)
+        if derived_summary and _ref_card_copy_matches_locale(derived_summary, locale):
+            ui["summary_line"] = derived_summary
+            ui["summary_generation"] = "deterministic_grounded"
+        else:
+            ui["summary_line"] = ""
+            ui["summary_generation"] = "locale_suppressed"
+
+    if why and not why_is_localized:
+        # why_line is generated UI copy, not source evidence.  Keeping a raw
+        # quote here both mixes languages and makes it compete with the real
+        # evidence field, so suppress it rather than mislabel it.
+        ui["why_line"] = ""
+        ui["why_generation"] = "locale_suppressed"
     return ui
 
 
@@ -244,6 +381,15 @@ def _append_ref_card_section(sections: list[dict[str, Any]], section: dict[str, 
     for item in sections:
         existing = str(item.get("text") or "").strip()
         if existing and _substantially_same_visible_text(existing, text):
+            pair = {str(item.get("id") or "").strip(), section_id}
+            if pair == {"summary", "why"} and not _ref_card_summary_why_redundant(
+                existing,
+                text,
+            ):
+                # A relevance sentence often restates the supported finding
+                # before explaining why it matters.  Do not hide that whole
+                # section merely because it contains the shorter Guide.
+                continue
             return
     sections.append(section)
 
@@ -386,6 +532,19 @@ def _substantially_same_visible_text(left: str, right: str) -> bool:
     return len(at & bt) / max(1, min(len(at), len(bt))) >= 0.84
 
 
+def _ref_card_summary_why_redundant(left: str, right: str) -> bool:
+    """Treat close paraphrases as duplicates, but keep added relevance logic."""
+
+    a = re.sub(r"\s+", " ", _text(left)).strip().lower()
+    b = re.sub(r"\s+", " ", _text(right)).strip().lower()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    length_ratio = min(len(a), len(b)) / max(1, max(len(a), len(b)))
+    return length_ratio >= 0.78 and _substantially_same_visible_text(a, b)
+
+
 def _compact_identity(value: str) -> str:
     return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", str(value or "").lower()).strip()
 
@@ -420,7 +579,8 @@ def _summary_from_specific_why_line(why_line: str) -> str:
         return ""
     if re.search(r"[\u4e00-\u9fff]", why):
         summary = re.sub(r"^摘要明确指出", "该综述指出", why)
-        summary = re.sub(r"^原文明确指出", "该文指出", summary)
+        summary = re.sub(r"^原文明确(?:指出|说明)", "该文明确说明", summary)
+        summary = re.sub(r"^原文(?:指出|说明)", "该文说明", summary)
         summary = re.sub(r"^原文(?:在[^，。]{0,50})?给出的具体陈述是[：:]?\s*", "", summary)
         summary = re.split(
             r"[，；](?:这是|这为|因此|由此|可(?:以)?|直接)(?:判断|说明|支撑|对应|用于)?",
@@ -793,7 +953,11 @@ def _shelf_metadata_contract(
         has_doi = bool(field_ready.get("doi"))
         title_ready = bool(field_ready.get("title"))
     external_status = _norm(data.get("external_metadata_status") or data.get("externalMetadataStatus"))
-    export_ready = bool(export_acceptance.get("export_ready")) if bibliographic and export_acceptance else bool(title_ready and source_identity and has_author and has_venue and has_year and has_doi)
+    export_ready = (
+        bool(export_acceptance.get("export_ready"))
+        if export_acceptance
+        else bool(title_ready and source_identity and has_author and has_venue and has_year and has_doi)
+    )
     source_ready = bool(source_open and source_identity and title_ready and has_summary)
     external_doi = _first_text(data, ("external_doi", "externalDoi", "external_doi_url", "externalDoiUrl"))
     visible_doi = _first_text(data, ("doi", "doi_url", "doiUrl"))
@@ -1082,7 +1246,7 @@ def ref_card_hit_quality(
         fail("ref_card_summary_too_short", field="summary_line")
     if len(why) < 12:
         fail("ref_card_why_too_short", field="why_line")
-    if summary and why and _substantially_same_visible_text(summary, why):
+    if summary and why and _ref_card_summary_why_redundant(summary, why):
         fail("ref_card_duplicate_summary_why", field="summary_line/why_line", detail=summary[:120])
 
     visible_texts = _visible_ref_card_texts(data)
@@ -1265,11 +1429,16 @@ def attach_ref_card_polish_contract(
     ui = _as_dict(ui_meta)
     if not ui:
         return {}
-    for key in ("summary_line", "why_line"):
-        cleaned = _clean_ref_card_copy_field(ui.get(key), ui)
-        if cleaned:
-            ui[key] = cleaned
-    ui = _align_summary_surface_to_render_locale(ui)
+    summary_cleaned = _clean_ref_card_copy_field(ui.get("summary_line"), ui)
+    if summary_cleaned:
+        ui["summary_line"] = summary_cleaned
+    # Relevance is generated explanatory copy, not source evidence.  Running
+    # source-title prefix stripping here used to turn a localized explanation
+    # such as “Abstract”中的原文直接支撑… into the quoted English fragment.
+    why_cleaned = _clean_ref_card_text(ui.get("why_line"), max_len=620)
+    if why_cleaned:
+        ui["why_line"] = why_cleaned
+    ui = _repair_ref_card_copy_locale(ui)
     identity_meta = {
         **_as_dict(ui.get("citation_meta")),
         **_as_dict(hit_meta),
@@ -1294,6 +1463,7 @@ def attach_ref_card_polish_contract(
         ):
             ui["summary_line"] = derived_summary
             ui["summary_generation"] = "deterministic_grounded"
+    ui = _align_summary_surface_to_render_locale(ui)
     ui.update(
         ref_card_polish_status(
             ui,

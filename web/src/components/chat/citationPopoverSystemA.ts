@@ -48,6 +48,12 @@ const GENERIC_SYSTEM_A_CLAIM_LABELS = new Set([
   '\u5bf9\u5e94\u56de\u7b54',
 ])
 
+// The backend card contract already caps System-A evidence at 520 characters.
+// Re-truncating it to 250/330 here can remove a later step of the same cited
+// mechanism and make the popover contradict the answer. Keep the complete
+// contract-owned quote; the popover itself provides the visual scroll bound.
+const SYSTEM_A_EVIDENCE_PREVIEW_LIMIT = 520
+
 export function buildSystemAEvidenceCardModel({
   detail,
   S,
@@ -91,7 +97,7 @@ export function buildSystemAEvidenceCardModel({
   const takeawayText = !isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, evidenceText)
     ? cardTakeaway
     : ''
-  const evidencePreviewText = evidencePreview(evidenceText, takeawayText ? 250 : 330)
+  const evidencePreviewText = evidencePreview(evidenceText, SYSTEM_A_EVIDENCE_PREVIEW_LIMIT)
   const hasReviewRisk = Boolean(
     hasBindingState
     || cardWarning

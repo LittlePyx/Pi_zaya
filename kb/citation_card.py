@@ -5,11 +5,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from kb.citation_evidence_pack import build_system_a_evidence_pack, build_system_b_evidence_pack
-from kb.evidence_text import clean_display_text, finish_evidence_text, source_title_candidate
+from kb.evidence_text import (
+    CITATION_CARD_EVIDENCE_MAX_LEN,
+    clean_display_text,
+    finish_evidence_text,
+    source_title_candidate,
+)
 
 CITATION_CARD_DISPLAY_CONTRACT_VERSION = 2
 CITATION_CARD_VIEW_CONTRACT_VERSION = 2
-
 _CARD_LABELS: dict[str, dict[str, str]] = {
     "zh": {
         "warning": "提醒",
@@ -137,7 +141,7 @@ _CARD_TEXT_LIMITS = {
     "card_locator_label": 80,
     "card_locator": 260,
     "card_evidence_label": 80,
-    "card_evidence": 520,
+    "card_evidence": CITATION_CARD_EVIDENCE_MAX_LEN,
     "card_context_summary": 220,
     "card_reference_label": 80,
     "card_reference_entry": 520,
@@ -1048,7 +1052,11 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
                 or rec.get("selectionReason")
                 or ""
             ).strip().lower()
-            == "prompt_contract_block"
+            in {
+                "exact_support_preflight",
+                "prompt_contract_block",
+                "spad_noise_model_exact_source",
+            }
         )
         and bool(rec.get("strict_locate") or rec.get("strictLocate"))
         and int(rec.get("page_start") or rec.get("pageStart") or 0) > 0

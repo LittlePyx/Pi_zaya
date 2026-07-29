@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import difflib
 import re
+from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 
-from kb.evidence_term_mapping import evidence_alignment_tokens
+from kb.evidence_term_mapping import (
+    evidence_alignment_tokens,
+    method_identity_conflicts,
+    specific_method_identities,
+)
 from kb.source_blocks import normalize_inline_markdown
 
 
@@ -422,6 +427,478 @@ def _system_a_term_label(terms: set[str] | list[str] | tuple[str, ...], *, max_t
     return " / ".join(vals[: max(1, int(max_terms))])
 
 
+_FACT_UNIT_ALIASES = {
+    "%": "%",
+    "percent": "%",
+    "percentage": "%",
+    "db": "db",
+    "nm": "nm",
+    "um": "um",
+    "µm": "um",
+    "μm": "um",
+    "mm": "mm",
+    "cm": "cm",
+    "hz": "hz",
+    "khz": "khz",
+    "mhz": "mhz",
+    "ghz": "ghz",
+    "fps": "fps",
+    "frame per second": "fps",
+    "frames per second": "fps",
+    "px": "pixel",
+    "pixel": "pixel",
+    "pixels": "pixel",
+    "k": "k",
+    "kelvin": "k",
+    "ms": "ms",
+    "detector": "detector",
+    "detectors": "detector",
+    "image": "image",
+    "images": "image",
+    "frame": "frame",
+    "frames": "frame",
+    "pattern": "pattern",
+    "patterns": "pattern",
+    "measurement": "measurement",
+    "measurements": "measurement",
+}
+_FACT_UNIT_PATTERN = "|".join(
+    sorted((re.escape(unit) for unit in _FACT_UNIT_ALIASES), key=len, reverse=True)
+)
+_FACT_MULTIPLIER_NUMBER_WORDS = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "eleven": "11",
+    "twelve": "12",
+}
+_FACT_MULTIPLIER_NUMBER_PATTERN = "|".join(
+    sorted(_FACT_MULTIPLIER_NUMBER_WORDS, key=len, reverse=True)
+)
+_FACT_MULTIPLIER_RE = re.compile(
+    rf"(?<![A-Za-z0-9])(?P<en_value>\d+(?:\.\d+)?|{_FACT_MULTIPLIER_NUMBER_PATTERN})"
+    r"\s*(?:[-\u2010-\u2015]\s*)?(?:fold|times?)(?![A-Za-z])"
+    r"|(?<![A-Za-z0-9])(?P<zh_value>\d+(?:\.\d+)?)\s*倍",
+    re.IGNORECASE,
+)
+_FACT_MULTIPLIER_DECREASE_RE = re.compile(
+    r"\b(?:lower|less|fewer|decreas(?:e|es|ed|ing)|reduc(?:e|es|ed|ing|tion)|"
+    r"drop(?:s|ped|ping)?|diminish(?:es|ed|ing)?|attenuat(?:e|es|ed|ing|ion))\b|"
+    r"降低|减少|下降|缩减|减小",
+    re.IGNORECASE,
+)
+_FACT_MULTIPLIER_INCREASE_RE = re.compile(
+    r"\b(?:higher|more|greater|increas(?:e|es|ed|ing)|rais(?:e|es|ed|ing)|"
+    r"improv(?:e|es|ed|ing|ement)|enhanc(?:e|es|ed|ing|ement)|"
+    r"amplif(?:y|ies|ied|ication)|speedup|gain)\b|"
+    r"提高|增加|上升|增大|提升|增强",
+    re.IGNORECASE,
+)
+_FACT_METRIC_PATTERN = re.compile(
+    r"(?<![A-Za-z])(?:PSNR|SNR|SSIM|LPIPS)(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_COMPARISON_SCOPE_SPLIT_RE = re.compile(
+    r"\s*(?:[;；,，]|[,，]\s*(?:while|whereas|but|however|而|但|然而|相比之下)\s*|"
+    r"\b(?:while|whereas|versus|vs\.?)\b)\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_structural_locators(value: str) -> str:
+    surface = str(value or "")
+    number_word = (
+        r"(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+    )
+    locator_number = rf"(?:\d+(?:\.\d+)*(?:[a-z])?|{number_word})"
+    surface = re.sub(
+        rf"(?i)\b(?:tables?|fig(?:ure)?s?|eq(?:uation)?s?|sections?|secs?|"
+        rf"chapters?|chaps?|appendices?|appendix|algorithms?|algs?)\s*"
+        rf"(?:no\.?\s*)?(?:[#:]\s*)?[（(]?{locator_number}[）)]?"
+        rf"(?:\s*(?:,|and|&|[-–—])\s*[（(]?{locator_number}[）)]?)*",
+        " ",
+        surface,
+    )
+    surface = re.sub(
+        r"(?:第\s*)?\d+(?:\.\d+)*\s*(?:号\s*)?(?:表|图|公式|方程|式|章节|章|节)",
+        " ",
+        surface,
+    )
+    surface = re.sub(
+        r"(?:表|图|公式|方程|式|章节|章|节)\s*(?:第\s*)?(?:[（(]\s*)?"
+        r"\d+(?:\.\d+)*(?:\s*[）)])?(?:\s*(?:、|,|和|至|[-–—])\s*\d+(?:\.\d+)*)*",
+        " ",
+        surface,
+    )
+    return surface
+
+
+def _fact_multiplier_direction(surface: str, start: int, end: int) -> str:
+    """Return the closest explicit increase/decrease direction for a multiplier."""
+
+    text = str(surface or "")
+    clause_start = max(
+        text.rfind(mark, 0, start) + 1
+        for mark in (".", ";", "!", "?", "。", "；", "！", "？", "，", ",")
+    )
+    right_boundaries = [
+        pos
+        for mark in (".", ";", "!", "?", "。", "；", "！", "？", "，", ",")
+        if (pos := text.find(mark, end)) >= 0
+    ]
+    clause_end = min(right_boundaries) if right_boundaries else len(text)
+    window_start = max(clause_start, start - 56)
+    window_end = min(clause_end, end + 56)
+    window = text[window_start:window_end]
+    relative_start = start - window_start
+    relative_end = end - window_start
+    candidates: list[tuple[int, str]] = []
+    for direction, pattern in (
+        ("decrease", _FACT_MULTIPLIER_DECREASE_RE),
+        ("increase", _FACT_MULTIPLIER_INCREASE_RE),
+    ):
+        for match in pattern.finditer(window):
+            if match.end() <= relative_start:
+                distance = relative_start - match.end()
+            elif match.start() >= relative_end:
+                distance = match.start() - relative_end
+            else:
+                distance = 0
+            candidates.append((distance, direction))
+    if not candidates:
+        return ""
+    closest = min(distance for distance, _direction in candidates)
+    directions = {
+        direction for distance, direction in candidates if distance == closest
+    }
+    return next(iter(directions)) if len(directions) == 1 else ""
+
+
+def _fact_multiplier_quantities(surface: str) -> set[tuple[str, str, str]]:
+    """Normalize ``tenfold``, ``10 times`` and ``10 倍`` as directed facts."""
+
+    facts: set[tuple[str, str, str]] = set()
+    for match in _FACT_MULTIPLIER_RE.finditer(str(surface or "")):
+        raw_value = str(match.group("en_value") or match.group("zh_value") or "")
+        normalized = _FACT_MULTIPLIER_NUMBER_WORDS.get(raw_value.casefold())
+        if normalized is None:
+            normalized = _normalize_fact_number(raw_value)
+        if not normalized:
+            continue
+        facts.add(
+            (
+                normalized,
+                "fold",
+                _fact_multiplier_direction(surface, match.start(), match.end()),
+            )
+        )
+    return facts
+
+
+def _normalize_fact_number(token: str) -> str:
+    try:
+        return format(Decimal(str(token or "")).normalize(), "f")
+    except (InvalidOperation, ValueError):
+        return str(token or "")
+
+
+def _fact_metric_qualifier(surface: str, start: int, end: int) -> str:
+    """Return the closest metric name in the number's comma-delimited clause."""
+
+    sentence_prefix = surface[:start]
+    sentence_matches = list(
+        re.finditer(r"[。！？!?\n]|(?<!\d)\.(?=\s|$)", sentence_prefix)
+    )
+    sentence_start = sentence_matches[-1].end() if sentence_matches else 0
+    sequence_boundary_matches = list(
+        re.finditer(r"[;；。！？!?\n]|(?<!\d)\.(?=\s|$)", sentence_prefix)
+    )
+    sequence_start = (
+        sequence_boundary_matches[-1].end() if sequence_boundary_matches else 0
+    )
+    sequence_numbers = list(
+        re.finditer(
+            r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
+            surface[sequence_start:start],
+        )
+    )
+    previous_sequence_number: tuple[int, int] | None = None
+    if sequence_numbers:
+        previous_sequence_number = (
+            sequence_start + sequence_numbers[-1].start(),
+            sequence_start + sequence_numbers[-1].end(),
+        )
+    left_matches = list(re.finditer(r"[;；,，。！？!?\n]", surface[:start]))
+    clause_start = left_matches[-1].end() if left_matches else 0
+    right_match = re.search(r"[;；,，。！？!?\n]", surface[end:])
+    clause_end = end + right_match.start() if right_match else len(surface)
+    number_pattern = re.compile(
+        r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])"
+    )
+    previous_numbers = list(number_pattern.finditer(surface[clause_start:start]))
+    if previous_numbers:
+        clause_start += previous_numbers[-1].end()
+    next_number = number_pattern.search(surface[end:clause_end])
+    if next_number:
+        clause_end = end + next_number.start()
+    clause = surface[clause_start:clause_end]
+    relative_start = max(0, start - clause_start)
+    relative_end = max(relative_start, end - clause_start)
+    ranked: list[tuple[int, str]] = []
+    for match in _FACT_METRIC_PATTERN.finditer(clause):
+        if match.end() <= relative_start:
+            distance = relative_start - match.end()
+        elif match.start() >= relative_end:
+            between = clause[relative_end : match.start()]
+            if re.search(r"[A-Za-z0-9\u4e00-\u9fff]", between):
+                # Postfix metrics are valid only when adjacent to the value,
+                # such as ``0.9 SSIM`` or ``40.3 dB PSNR``. Do not let a later
+                # clause verb pull the metric backward across substantive text
+                # (``100 images and reaches PSNR 30.5 dB``).
+                continue
+            distance = match.start() - relative_end
+        else:
+            distance = 0
+        if distance <= 48:
+            ranked.append((distance, match.group(0).lower()))
+    if not ranked:
+        if previous_sequence_number is not None:
+            previous_start, previous_end = previous_sequence_number
+            bridge = surface[previous_end:start]
+            if re.fullmatch(
+                r"\s*(?:(?:dB|%)\s*)?"
+                r"(?:to|and|or|,|，|/|[-–—]|至|到|和|与|、)\s*",
+                bridge,
+                re.IGNORECASE,
+            ):
+                inherited = _fact_metric_qualifier(
+                    surface,
+                    previous_start,
+                    previous_end,
+                )
+                if inherited:
+                    return inherited
+        # Compact table evidence commonly states the metric once as a header,
+        # then lists method/value cells separated by semicolons, e.g.
+        # ``SIDD PSNR: MPRNet = ...; Baseline = 40.30; NAFNet = 40.30``.
+        # Inherit only an explicit ``METRIC:`` header from the same sentence;
+        # ordinary prose in a previous sentence must not leak its metric.
+        header_surface = surface[sentence_start:start]
+        header_matches = list(
+            re.finditer(
+                r"(?<![A-Za-z])(?P<metric>PSNR|SNR|SSIM|LPIPS)(?![A-Za-z])"
+                r"\s*(?:(?:results?|scores?|values?)\s*)?:",
+                header_surface,
+                re.IGNORECASE,
+            )
+        )
+        if header_matches:
+            return str(header_matches[-1].group("metric") or "").lower()
+        return ""
+    ranked.sort(key=lambda item: item[0])
+    closest_distance = ranked[0][0]
+    closest_metrics = {
+        metric for distance, metric in ranked if distance == closest_distance
+    }
+    return next(iter(closest_metrics)) if len(closest_metrics) == 1 else ""
+
+
+def _system_a_fact_quantities(value: str) -> set[tuple[str, str, str]]:
+    """Return normalized ``(value, unit, metric)`` facts without locator labels."""
+
+    surface = re.sub(r"^\s*\d+[.)、]\s*", "", str(value or ""))
+    surface = re.sub(r"\[\d{1,5}\](?:\([^\n)]+\))?", " ", surface)
+    surface = _strip_structural_locators(surface)
+    out: set[tuple[str, str, str]] = set(_fact_multiplier_quantities(surface))
+    quantity_re = re.compile(
+        rf"(?<![A-Za-z0-9])(?P<number>\d+(?:\.\d+)?)(?![A-Za-z0-9])"
+        rf"(?:\s*(?P<unit>{_FACT_UNIT_PATTERN})\b|\s*(?P<percent>%))?",
+        re.IGNORECASE,
+    )
+    for match in quantity_re.finditer(surface):
+        token = str(match.group("number") or "")
+        raw_unit = str(match.group("unit") or match.group("percent") or "").lower()
+        unit = _FACT_UNIT_ALIASES.get(raw_unit, raw_unit)
+        is_year_range_value = bool(
+            not unit and len(token) == 4 and 1900 <= int(float(token)) <= 2100
+        )
+        if is_year_range_value:
+            # A year remains a year unless the following lowercase phrase is
+            # an explicit count expression. This retains ``2022 reconstructed
+            # images`` but rejects paper-title text such as
+            # ``ECCV-2022-Simple Baselines for Image Restoration``.
+            continuation = surface[match.end() : match.end() + 72]
+            explicit_count = re.match(
+                r"(?i)^\s+(?:(?:[a-z][a-z-]*|,)\s+){0,5}"
+                r"(?P<unit>detectors|images|frames|patterns|measurements)\b",
+                continuation,
+            )
+            if explicit_count:
+                raw_count_unit = str(explicit_count.group("unit") or "").lower()
+                unit = _FACT_UNIT_ALIASES.get(raw_count_unit, raw_count_unit)
+        if not unit and not is_year_range_value:
+            continuation = surface[match.end() : match.end() + 72]
+            continuation = re.split(r"[.!?;。！？；]", continuation, maxsplit=1)[0]
+            next_quantity_or_metric = re.search(
+                r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])|"
+                r"(?<![A-Za-z])(?:PSNR|SNR|SSIM|LPIPS)(?![A-Za-z])",
+                continuation,
+                re.IGNORECASE,
+            )
+            if next_quantity_or_metric:
+                continuation = continuation[: next_quantity_or_metric.start()]
+            count_unit = re.search(
+                r"(?i)\b(detectors?|images?|frames?|patterns?|measurements?)\b",
+                continuation,
+            )
+            if count_unit:
+                raw_count_unit = str(count_unit.group(1) or "").lower()
+                unit = _FACT_UNIT_ALIASES.get(raw_count_unit, raw_count_unit)
+        if not unit and is_year_range_value:
+            metric_context = surface[max(0, match.start() - 20) : match.start()]
+            if not re.search(
+                r"(?i)\b(?:psnr|ssim|lpips|fid|rmse|snr|score|metric|value)\b",
+                metric_context,
+            ):
+                # Unqualified four-digit numbers in academic prose are years.
+                # Explicit physical/rate/count units above keep 2000 nm,
+                # 2020 fps and 2048 pixels as measurable facts.
+                continue
+        metric = _fact_metric_qualifier(surface, match.start(), match.end())
+        if unit in {"detector", "image", "frame", "pattern", "measurement"}:
+            # Counts describe acquisition/data cardinality, not image-quality
+            # metrics. Even a range/list connector must not turn ``31 images``
+            # into a second PSNR value.
+            metric = ""
+        elif not unit and metric in {"psnr", "snr"}:
+            # PSNR/SNR table cells conventionally omit the repeated dB unit
+            # after an explicit metric header. Keep this normalization scoped
+            # to those two logarithmic metrics; other unitless values remain
+            # unitless and cannot satisfy a unit-bearing claim.
+            unit = "db"
+        out.add((_normalize_fact_number(token), unit, metric))
+    number_words = {
+        "zero": "0",
+        "one": "1",
+        "single": "1",
+        "two": "2",
+        "three": "3",
+        "four": "4",
+        "five": "5",
+        "six": "6",
+        "seven": "7",
+        "eight": "8",
+        "nine": "9",
+        "ten": "10",
+        "eleven": "11",
+        "twelve": "12",
+    }
+    number_word_pattern = "|".join(number_words)
+    for word in re.findall(
+        rf"(?<![A-Za-z-])(?:{number_word_pattern})(?![A-Za-z-])",
+        surface.lower(),
+    ):
+        normalized = number_words.get(word)
+        if normalized is None:
+            continue
+        word_match = re.search(
+            rf"(?<![A-Za-z-]){re.escape(word)}(?![A-Za-z-])",
+            surface,
+            re.IGNORECASE,
+        )
+        unit = ""
+        if word_match:
+            continuation = surface[word_match.end() : word_match.end() + 72]
+            continuation = re.split(r"[.!?;。！？；]", continuation, maxsplit=1)[0]
+            count_unit = re.search(
+                r"(?i)\b(detectors?|images?|frames?|patterns?|measurements?)\b",
+                continuation,
+            )
+            if count_unit:
+                raw_count_unit = str(count_unit.group(1) or "").lower()
+                unit = _FACT_UNIT_ALIASES.get(raw_count_unit, raw_count_unit)
+        metric = (
+            _fact_metric_qualifier(surface, word_match.start(), word_match.end())
+            if word_match
+            else ""
+        )
+        if unit in {"detector", "image", "frame", "pattern", "measurement"}:
+            metric = ""
+        out.add((normalized, unit, metric))
+    return out
+
+
+def _system_a_fact_numbers(value: str) -> set[str]:
+    return {number for number, _unit, _metric in _system_a_fact_quantities(value)}
+
+
+def _quantity_is_covered(
+    quantity: tuple[str, str, str],
+    evidence_quantities: set[tuple[str, str, str]],
+) -> bool:
+    number, unit, metric = quantity
+    return any(
+        evidence_number == number
+        and (not unit or evidence_unit == unit)
+        and (not metric or evidence_metric == metric)
+        for evidence_number, evidence_unit, evidence_metric in evidence_quantities
+    )
+
+
+def _quantity_label(quantity: tuple[str, str, str]) -> str:
+    number, unit, _metric = quantity
+    if not unit:
+        return number
+    if unit == "%":
+        return f"{number}%"
+    return f"{number} {unit}"
+
+
+def _claim_fact_quantities_for_evidence(
+    claim: str,
+    evidence: str,
+    *,
+    allow_comparison_scope: bool = False,
+) -> set[tuple[str, str, str]]:
+    """Scope comparison quantities to the clause supported by one evidence card."""
+
+    full = _system_a_fact_quantities(claim)
+    if not allow_comparison_scope:
+        return full
+    parts = [part.strip() for part in _COMPARISON_SCOPE_SPLIT_RE.split(claim) if part.strip()]
+    if len(parts) < 2:
+        return full
+    evidence_quantities = _system_a_fact_quantities(evidence)
+    evidence_tokens = evidence_alignment_tokens(evidence)
+    scored: list[tuple[tuple[int, int, int], set[tuple[str, str, str]]]] = []
+    for part in parts:
+        quantities = _system_a_fact_quantities(part)
+        part_tokens = evidence_alignment_tokens(part)
+        quantity_overlap = sum(
+            1 for quantity in quantities if _quantity_is_covered(quantity, evidence_quantities)
+        )
+        informative_overlap = len(
+            (part_tokens & evidence_tokens)
+            - {"approach", "image", "method", "paper", "result", "system", "using"}
+        )
+        identifiers = specific_method_identities(part) & specific_method_identities(evidence)
+        scored.append(((quantity_overlap, len(identifiers), informative_overlap), quantities))
+    ranked = sorted(scored, key=lambda item: item[0], reverse=True)
+    if not ranked or ranked[0][0] == (0, 0, 0):
+        return full
+    if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
+        return full
+    return ranked[0][1]
+
+
 def assess_system_a_hit_binding(
     *,
     answer_claim: str,
@@ -443,6 +920,23 @@ def assess_system_a_hit_binding(
     evidence_surface = " ".join([evidence_body_surface, str(source_name or "")])
     claim_low = claim.lower()
     evidence_body_low = evidence_body_surface.lower()
+    if method_identity_conflicts(claim, evidence_surface):
+        reason = (
+            "回答句与这张卡片明确指向不同的方法或论文，不能仅凭相邻领域词把它们绑定在一起。"
+            if _system_a_prefers_zh(claim)
+            else (
+                "The answer sentence and card name different methods or papers; "
+                "nearby domain terms are not sufficient evidence."
+            )
+        )
+        return {
+            "status": "mismatch",
+            "confidence": 0.0,
+            "suppress_link": True,
+            "reason": reason,
+            "overlap_terms": [],
+            "missing_terms": ["method identity"],
+        }
     source_tokens = {
         token
         for token in re.findall(r"[a-z0-9]+", str(source_name or "").lower())
@@ -536,6 +1030,57 @@ def assess_system_a_hit_binding(
             "reason": reason,
             "overlap_terms": [],
             "missing_terms": ["review identity"],
+        }
+    selected_evidence = str(evidence_quote or (hit or {}).get("text") or "").strip()
+    group_evidence_quotes = [
+        str(item or "").strip()
+        for item in list((meta or {}).get("citation_group_evidence_quotes") or [])
+        if str(item or "").strip()
+    ]
+    full_claim_quantities = _system_a_fact_quantities(claim)
+    group_evidence_quantities = _system_a_fact_quantities("\n".join(group_evidence_quotes))
+    verified_multi_source_group = bool(
+        len(group_evidence_quotes) >= 2
+        and full_claim_quantities
+        and all(
+            _quantity_is_covered(quantity, group_evidence_quantities)
+            for quantity in full_claim_quantities
+        )
+    )
+    claim_fact_quantities = _claim_fact_quantities_for_evidence(
+        claim,
+        selected_evidence,
+        allow_comparison_scope=verified_multi_source_group,
+    )
+    evidence_fact_quantities = _system_a_fact_quantities(selected_evidence)
+    missing_fact_quantities = {
+        quantity
+        for quantity in claim_fact_quantities
+        if not _quantity_is_covered(quantity, evidence_fact_quantities)
+    }
+    if missing_fact_quantities:
+        missing_labels = {
+            _quantity_label(quantity) for quantity in missing_fact_quantities
+        }
+        missing_label = _system_a_term_label(
+            sorted(missing_labels, key=lambda item: (len(item), item)),
+            max_terms=6,
+        )
+        reason = (
+            f"回答句中的数值“{missing_label}”没有出现在这张卡片的原文证据中，不能把该证据显示为这项定量主张的依据。"
+            if _system_a_prefers_zh(claim)
+            else (
+                f'The answer sentence includes the value(s) "{missing_label}", but the selected '
+                "card evidence does not; it cannot support the quantitative claim."
+            )
+        )
+        return {
+            "status": "mismatch",
+            "confidence": 0.0,
+            "suppress_link": True,
+            "reason": reason,
+            "overlap_terms": [],
+            "missing_terms": sorted(missing_labels),
         }
     verified_prompt_contract = bool(
         (meta or {}).get("citation_plan_evidence_authoritative")

@@ -667,6 +667,8 @@ def _contains_term(haystack: Any, term: str) -> bool:
 
 def _term_aliases(term: str) -> list[str]:
     raw = str(term or "").strip()
+    if raw.lower() in {"s2ism", "s²ism", "s₂ism"}:
+        return ["s2ISM", "s²ISM", "s₂ISM"]
     if raw == "不同层面":
         return [
             "不同层面",
@@ -1096,19 +1098,44 @@ def _strict_phrase_hits(payload: Any, phrases: list[str]) -> list[str]:
 
 
 def _detail_evidence_payload(detail: dict[str, Any]) -> dict[str, Any]:
-    return {
+    visible = {
         key: detail.get(key)
         for key in (
             "evidence_quote",
             "citation_context",
             "card_evidence",
-            "support_relation",
-            "upstream_work_role",
-            "user_question_relation",
-            "raw",
+            "card_reference_entry",
         )
         if detail.get(key)
     }
+    card_view = detail.get("card_view")
+    if isinstance(card_view, dict):
+        visible_sections = [
+            dict(section)
+            for section in list(card_view.get("sections") or [])
+            if isinstance(section, dict)
+            and str(section.get("id") or "").strip().lower()
+            in {"evidence", "context", "reference"}
+        ]
+        if visible_sections:
+            visible["card_view_sections"] = visible_sections
+    if _citation_route(detail) == "system_b":
+        # The upstream bibliography identity is itself a visible System-B
+        # section. Reviewed legacy rows may not yet have the structured card
+        # field, so retain their raw reference entry as the display fallback.
+        reference_fallback = detail.get("card_reference_entry") or detail.get("raw")
+        if reference_fallback:
+            visible["reference_entry_fallback"] = reference_fallback
+        for key in ("title", "year", "doi"):
+            if detail.get(key):
+                visible[key] = detail.get(key)
+    if visible:
+        return visible
+    # Legacy details without a card contract still render ``raw`` as their
+    # fallback evidence. Once visible evidence fields exist, hidden raw/support
+    # metadata must not make an incomplete card pass the quality gate.
+    raw = detail.get("raw")
+    return {"raw": raw} if raw else {}
 
 
 def _detail_locator_payload(detail: dict[str, Any]) -> dict[str, Any]:

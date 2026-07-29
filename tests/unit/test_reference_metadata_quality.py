@@ -219,6 +219,62 @@ def test_metadata_does_not_treat_bare_et_al_prefix_as_export_ready_authors() -> 
     assert acceptance["field_ready"]["authors"] is False
 
 
+def test_system_a_doi_identity_is_exportable_without_inventing_bibliographic_fields() -> None:
+    detail = {
+        "citation_route": "system_a",
+        "is_inpaper": False,
+        "source_path": "db/NatPhoton-2025-Structured detection/Structured detection.en.md",
+        "source_name": "NatPhoton-2025-Structured detection.pdf",
+        "bibliographic_title": "Structured detection",
+        "title": "Structured detection",
+        "heading_path": "Structured detection / Abstract",
+        "authors": "",
+        "venue": "",
+        "year": "",
+        "doi": "10.1038/example.structured",
+    }
+
+    acceptance = mq.citation_metadata_export_acceptance(detail)
+
+    assert acceptance["export_ready"] is True
+    assert acceptance["export_mode"] == "system_a_doi"
+    assert acceptance["field_ready"]["authors"] is False
+    assert acceptance["field_ready"]["venue"] is False
+    assert acceptance["field_ready"]["year"] is False
+
+
+def test_system_a_local_source_export_refuses_section_heading_as_article_title() -> None:
+    detail = {
+        "citation_route": "system_a",
+        "is_inpaper": False,
+        "source_path": "db/paper/paper.en.md",
+        "source_name": "paper.pdf",
+        "title": "3. Results",
+        "heading_path": "3. Results",
+    }
+
+    acceptance = mq.citation_metadata_export_acceptance(detail)
+
+    assert acceptance["export_ready"] is False
+    assert acceptance["export_mode"] == ""
+
+
+def test_complete_bibliography_is_exportable_without_a_doi() -> None:
+    detail = {
+        "source_path": "refs/classic-paper.en.md",
+        "title": "A classic paper without a DOI",
+        "authors": "Ada Researcher",
+        "venue": "Journal of Archival Results",
+        "year": "1988",
+    }
+
+    acceptance = mq.citation_metadata_export_acceptance(detail)
+
+    assert acceptance["export_ready"] is True
+    assert acceptance["export_mode"] == "complete_bibliography"
+    assert acceptance["field_ready"]["doi"] is False
+
+
 def test_repair_promotes_doi_from_reference_text(monkeypatch):
     raw = (
         "[24] Gehm M, Brady D. Single-shot compressive spectral imaging with a "

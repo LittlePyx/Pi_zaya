@@ -49,6 +49,343 @@ def test_compact_metric_table_must_match_the_bound_claim() -> None:
     )
 
 
+def test_system_a_hides_marker_when_card_evidence_misses_claim_value() -> None:
+    source_path = "db/hsi/hsi.en.md"
+    evidence = "At 1% sampling, HSI reaches PSNR 30.2 dB."
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "At 1% sampling, HSI reaches PSNR 30.2 dB and SSIM 0.91 [1].",
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Results",
+                    "citation_plan_evidence_authoritative": True,
+                    "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "Results",
+                    "evidence_quote": evidence,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                }
+            ],
+        },
+        anchor_ns="missing-value",
+    )
+
+    assert "[1]" not in rendered
+    assert "[]" not in rendered
+    assert details == []
+
+
+def test_system_a_keeps_cross_language_multiplier_citation() -> None:
+    source_path = "db/iism/iism.en.md"
+    evidence = (
+        "This technique achieves about 120 nm lateral resolution while operating at "
+        "tenfold lower incident illumination power, significantly reducing photodamage."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "在约 120 nm 横向分辨率下，入射照明功率可降低约 10 倍，从而显著减少光损伤 [1]。",
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Abstract",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "Abstract",
+                    "evidence_quote": evidence,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                }
+            ],
+        },
+        anchor_ns="cross-language-multiplier",
+        render_locale="zh",
+    )
+
+    assert "](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["citation_route"] == "system_a"
+    assert "tenfold lower" in details[0]["evidence_quote"]
+
+
+def test_system_a_keeps_table_locator_when_metric_value_is_grounded() -> None:
+    source_path = "db/simple-baselines/simple-baselines.en.md"
+    evidence = "SIDD PSNR: Baseline = 40.30 dB; NAFNet = 40.30 dB."
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "在表 6 中，Baseline 与 NAFNet 的 SIDD PSNR 都达到 40.30 dB [1]。",
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Table 6 / SIDD",
+                    "citation_plan_evidence_authoritative": True,
+                    "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "Table 6 / SIDD",
+                    "evidence_quote": evidence,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                }
+            ],
+        },
+        anchor_ns="table-locator",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["binding_status"] == "grounded"
+    assert "40.30" in details[0]["card_evidence"]
+
+
+def test_system_a_hides_marker_when_card_names_a_different_method() -> None:
+    source_path = "db/scinerf/scinerf.en.md"
+    evidence = (
+        "SCINeRF recovers a 3D scene from one compressed image by incorporating "
+        "the physical SCI process into NeRF training."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "SCIGS reconstructs an explicit dynamic 3D scene from one compressed image [1].",
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "SCINeRF.pdf",
+                    "heading_path": "Abstract",
+                    "citation_plan_evidence_authoritative": True,
+                    "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "SCINeRF.pdf",
+                    "heading_path": "Abstract",
+                    "evidence_quote": evidence,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                }
+            ],
+        },
+        anchor_ns="wrong-method",
+    )
+
+    assert "[1]" not in rendered
+    assert "[]" not in rendered
+    assert details == []
+
+
+def test_multi_source_numeric_comparison_renders_only_with_complete_union() -> None:
+    paths = ["db/scigs/scigs.en.md", "db/scinerf/scinerf.en.md"]
+    evidence = [
+        "SCIGS obtains 30.2 dB on the benchmark.",
+        "SCINeRF obtains 31.5 dB on the benchmark.",
+    ]
+    hits = [
+        {
+            "text": evidence[index],
+            "meta": {
+                "source_path": paths[index],
+                "source_name": f"method-{index + 1}.pdf",
+                "heading_path": "Results",
+                "citation_plan_evidence_authoritative": True,
+                "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+        }
+        for index in range(2)
+    ]
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [index + 1],
+                "source_path": paths[index],
+                "heading_path": "Results",
+                "evidence_quote": evidence[index],
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            }
+            for index in range(2)
+        ],
+    }
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "SCIGS obtains 30.2 dB [1], while SCINeRF obtains 31.5 dB [2].",
+        hits,
+        canonical_paths=paths,
+        citation_plan=plan,
+        anchor_ns="multi-source-comparison",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert "[2](#kb-cite-" in rendered
+    assert len(details) == 2
+    assert {detail["card_evidence"] for detail in details} == set(evidence)
+
+
+def test_multi_source_union_resolves_stale_plan_numbers_by_visible_source() -> None:
+    beta_path = "kb-source/0/beta/beta.en.md"
+    other_path = "kb-source/0/other/other.en.md"
+    alpha_path = "kb-source/0/alpha/alpha.en.md"
+    alpha_evidence = "Alpha obtains 30.2 dB on the benchmark."
+    beta_evidence = "Beta obtains 31.5 dB on the benchmark."
+    hits = [
+        {
+            "text": beta_evidence,
+            "meta": {
+                "source_path": beta_path,
+                "source_name": "Beta.pdf",
+                "heading_path": "Results",
+                "ref_answer_citation_num": 1,
+                "citation_plan_evidence_authoritative": True,
+            },
+        },
+        {
+            "text": "Other reports an unrelated result.",
+            "meta": {
+                "source_path": other_path,
+                "source_name": "Other.pdf",
+                "heading_path": "Results",
+                "ref_answer_citation_num": 2,
+            },
+        },
+        {
+            "text": alpha_evidence,
+            "meta": {
+                "source_path": alpha_path,
+                "source_name": "Alpha.pdf",
+                "heading_path": "Results",
+                "ref_answer_citation_num": 3,
+                "citation_plan_evidence_authoritative": True,
+            },
+        },
+    ]
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                # These candidates were assigned before visible-hit reranking.
+                "candidate_hits": [1],
+                "source_path": "F:/db/alpha/alpha.en.md",
+                "source_name": "Alpha.pdf",
+                "heading_path": "Results",
+                "evidence_quote": alpha_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": "F:/db/beta/beta.en.md",
+                "source_name": "Beta.pdf",
+                "heading_path": "Results",
+                "evidence_quote": beta_evidence,
+            },
+        ],
+    }
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Alpha obtains 30.2 dB [3], while Beta obtains 31.5 dB [1].",
+        hits,
+        canonical_paths=[beta_path, other_path, alpha_path],
+        citation_plan=plan,
+        anchor_ns="stale-plan-union",
+    )
+
+    assert "[3](#kb-cite-" in rendered
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 2
+    assert {str(detail["source_name"]).casefold() for detail in details} == {
+        "alpha.pdf",
+        "beta.pdf",
+    }
+    assert {detail["card_evidence"] for detail in details} == {
+        alpha_evidence,
+        beta_evidence,
+    }
+
+
+def test_multi_source_numeric_comparison_hides_cards_when_union_is_incomplete() -> None:
+    paths = ["db/scigs/scigs.en.md", "db/scinerf/scinerf.en.md"]
+    evidence = [
+        "SCIGS obtains 30.2 dB on the benchmark.",
+        "SCINeRF is a related reconstruction method.",
+    ]
+    hits = [
+        {
+            "text": evidence[index],
+            "meta": {
+                "source_path": paths[index],
+                "heading_path": "Results",
+                "citation_plan_evidence_authoritative": True,
+                "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+        }
+        for index in range(2)
+    ]
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [index + 1],
+                "source_path": paths[index],
+                "heading_path": "Results",
+                "evidence_quote": evidence[index],
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            }
+            for index in range(2)
+        ],
+    }
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "SCIGS obtains 30.2 dB [1], while SCINeRF obtains 31.5 dB [2].",
+        hits,
+        canonical_paths=paths,
+        citation_plan=plan,
+        anchor_ns="incomplete-multi-source-comparison",
+    )
+
+    assert "#kb-cite-" not in rendered
+    assert "[]" not in rendered
+    assert details == []
+
+
 def test_anaphoric_continuation_keeps_the_previous_grounded_link() -> None:
     source_path = "db/pidl/pidl.en.md"
     rendered, details = _annotate_inpaper_citations_with_hover_meta(
@@ -859,6 +1196,135 @@ def test_hsi_fsi_metric_table_compaction_restores_metric_and_sampling_label() ->
     assert "1% sampling ratio" in compact
     assert "PSNR is 8.01 dB versus 8.08 dB" in compact
     assert "SSIM is 10.0% versus 11.1%" in compact
+
+
+def test_authoritative_metric_plan_survives_readability_cleanup_and_keeps_plan_locator() -> None:
+    source_path = "db/hsi-fsi/hsi-fsi.en.md"
+    plan_evidence = (
+        "Table 2. Hadamard single-pixel imaging versus Fourier single-pixel imaging / "
+        "3. Comparison of experiment / 3.1 Numerical simulations. "
+        "Table 2. Quantitative comparison results for Siemens star. "
+        "1%: PNSR (dB) / Hadamard / circular = 8.01; "
+        "PNSR (dB) / Fourier / circular = 8.08; "
+        "SSIM (%) / Hadamard / circular = 10.0; "
+        "SSIM (%) / Fourier / circular = 11.1"
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "在 1% 采样率下，Hadamard 与 Fourier 的 PSNR 和 SSIM 很接近 [1]。",
+        [
+            {
+                "text": plan_evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "Hadamard versus Fourier",
+                    "heading_path": "2. Comparison of theory / 2.1 Principle of HSI and FSI",
+                    "ref_best_heading_path": "2. Comparison of theory / 2.1 Principle of HSI and FSI",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+                    "evidence_quote": plan_evidence,
+                    "block_id": "table-block",
+                    "anchor_id": "table-2",
+                    "anchor_kind": "table",
+                    "page_start": 3,
+                    "page_end": 3,
+                }
+            ],
+        },
+        anchor_ns="authoritative-metric-plan",
+        canonical_paths=[source_path],
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    detail = details[0]
+    evidence = str(detail.get("card_evidence") or "")
+    assert "1% sampling ratio" in evidence
+    assert "PSNR is 8.01 dB versus 8.08 dB" in evidence
+    assert "SSIM is 10.0% versus 11.1%" in evidence
+    assert detail["heading_path"] == (
+        "3. Comparison of experiment / 3.1 Numerical simulations"
+    )
+    assert detail["card_locator"].startswith("3. Comparison of experiment")
+    visible_texts = [
+        str(section.get("text") or "")
+        for section in detail["card_view"]["sections"]
+    ]
+    assert len(visible_texts) == len(set(visible_texts))
+
+
+def test_metric_table_plan_beats_same_source_generic_comparison_sentence() -> None:
+    source_path = "db/hsi-fsi/hsi-fsi.en.md"
+    generic_evidence = (
+        "We evaluate reconstruction quality using PSNR and SSIM. Based on the "
+        "comparison results, FSI has better performance than HSI under undersampling."
+    )
+    table_evidence = (
+        "Table 2. Quantitative comparison results for Siemens star. "
+        "1%: PNSR (dB) / Hadamard / circular = 8.01; "
+        "PNSR (dB) / Fourier / circular = 8.08; "
+        "SSIM (%) / Hadamard / circular = 10.0; "
+        "SSIM (%) / Fourier / circular = 11.1"
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "欠采样时，Fourier 单像素成像（FSI）的重建质量优于 Hadamard（HSI） [1]。",
+        [
+            {
+                "text": table_evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": (
+                        "Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                    ),
+                    "heading_path": "3. Comparison / 3.1 Numerical simulations",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "source_name": (
+                        "Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                    ),
+                    "heading_path": "3. Comparison / 3.1 Numerical simulations",
+                    "evidence_quote": generic_evidence,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                },
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": (
+                        "Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                    ),
+                    "heading_path": "3. Comparison / 3.1 Numerical simulations",
+                    "evidence_quote": table_evidence,
+                },
+            ],
+        },
+        anchor_ns="same-source-metric-plan",
+        canonical_paths=[source_path],
+        render_locale="zh",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert "1% sampling ratio" in details[0]["card_evidence"]
+    assert "PSNR is 8.01 dB versus 8.08 dB" in details[0]["card_evidence"]
+    assert "SSIM is 10.0% versus 11.1%" in details[0]["card_evidence"]
 
 
 def test_system_a_links_training_generalization_claim_across_chinese_and_english() -> None:

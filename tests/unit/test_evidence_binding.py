@@ -91,3 +91,581 @@ def test_review_claim_rejects_method_paper_evidence() -> None:
     assert binding["status"] == "mismatch"
     assert binding["suppress_link"] is True
     assert binding["missing_terms"] == ["review identity"]
+
+
+def test_authoritative_evidence_rejects_missing_claim_value() -> None:
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="At 1% sampling, HSI reaches PSNR 30.2 dB and SSIM 0.91.",
+        hit={"text": "At 1% sampling, HSI reaches PSNR 30.2 dB."},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote="At 1% sampling, HSI reaches PSNR 30.2 dB.",
+        source_name="Hadamard single-pixel imaging.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["suppress_link"] is True
+    assert binding["missing_terms"] == ["0.91"]
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "在表 6 中，Baseline 与 NAFNet 的 SIDD PSNR 都达到 40.30 dB。",
+        "Table 6 shows that Baseline and NAFNet both reach 40.30 dB PSNR on SIDD.",
+        "图 6 表明 Baseline 与 NAFNet 的 SIDD PSNR 都达到 40.30 dB。",
+        "As shown in Figure 6, Baseline and NAFNet both reach 40.30 dB PSNR on SIDD.",
+        "公式（6）给出的结果是 40.30 dB。",
+        "Section 6 reports a result of 40.30 dB.",
+    ],
+)
+def test_structure_locator_number_is_not_required_in_card_evidence(claim: str) -> None:
+    evidence = (
+        "SIDD PSNR: Baseline = 40.30 dB; NAFNet = 40.30 dB; "
+        "Restormer = 40.02 dB."
+    )
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Simple Baselines for Image Restoration.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_structure_locator_exemption_does_not_hide_missing_metric_value() -> None:
+    evidence = "SIDD PSNR: Baseline = 40.20 dB; NAFNet = 40.20 dB."
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="表 6 显示 Baseline 与 NAFNet 的 SIDD PSNR 都达到 40.30 dB。",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Simple Baselines for Image Restoration.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["suppress_link"] is True
+    assert binding["missing_terms"] == ["40.3 db"]
+
+
+def test_authoritative_evidence_accepts_digit_and_number_word_equivalence() -> None:
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="The system uses 4 detectors for parallel acquisition.",
+        hit={"text": "The system uses four detectors for parallel acquisition."},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Method",
+        evidence_quote="The system uses four detectors for parallel acquisition.",
+        source_name="Real-time 3D single-pixel video.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_system_a_rejects_neighboring_paper_with_different_method_identity() -> None:
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="SCIGS reconstructs an explicit dynamic 3D scene from one compressed image.",
+        hit={
+            "text": (
+                "SCINeRF recovers a 3D scene from a single compressed image by incorporating "
+                "the physical SCI process into NeRF training."
+            )
+        },
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Abstract",
+        evidence_quote=(
+            "SCINeRF recovers a 3D scene from a single compressed image by incorporating "
+            "the physical SCI process into NeRF training."
+        ),
+        source_name="SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["suppress_link"] is True
+    assert binding["missing_terms"] == ["method identity"]
+
+
+def test_single_card_must_cover_every_quantity_in_comparison_claim() -> None:
+    evidence = "SCIGS obtains 30.2 dB on the benchmark."
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="SCIGS obtains 30.2 dB while SCINeRF obtains 31.5 dB.",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="SCIGS.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["suppress_link"] is True
+    assert binding["missing_terms"] == ["31.5 db"]
+
+
+def test_verified_multi_card_union_can_bind_each_comparison_clause() -> None:
+    claim = "SCIGS obtains 30.2 dB while SCINeRF obtains 31.5 dB."
+    first = "SCIGS obtains 30.2 dB on the benchmark."
+    second = "SCINeRF obtains 31.5 dB on the benchmark."
+    common_meta = {
+        "citation_plan_evidence_authoritative": True,
+        "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        "citation_group_evidence_quotes": [first, second],
+    }
+
+    first_binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": first},
+        meta=common_meta,
+        heading="Results",
+        evidence_quote=first,
+        source_name="SCIGS.pdf",
+    )
+    second_binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": second},
+        meta=common_meta,
+        heading="Results",
+        evidence_quote=second,
+        source_name="SCINeRF.pdf",
+    )
+
+    assert first_binding["status"] == "grounded"
+    assert second_binding["status"] == "grounded"
+
+
+@pytest.mark.parametrize(
+    ("claim", "evidence", "missing"),
+    [
+        ("The wavelength is 40 nm.", "The measured SNR is 40 dB.", "40 nm"),
+        ("The reconstruction reaches 8 fps.", "The modulation rate is 8 Hz.", "8 fps"),
+    ],
+)
+def test_same_number_with_incompatible_unit_is_rejected(
+    claim: str,
+    evidence: str,
+    missing: str,
+) -> None:
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Benchmark.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["suppress_link"] is True
+    assert binding["missing_terms"] == [missing]
+
+
+@pytest.mark.parametrize(
+    ("claim", "evidence", "expected_missing"),
+    [
+        ("The wavelength is 2000 nm.", "The wavelength is 1550 nm.", "2000 nm"),
+        ("The system reaches 2020 fps.", "The system reaches 2000 fps.", "2020 fps"),
+        ("The image contains 2048 pixels.", "The image contains 1024 pixels.", "2048 pixel"),
+    ],
+)
+def test_four_digit_quantity_with_explicit_unit_is_not_treated_as_year(
+    claim: str,
+    evidence: str,
+    expected_missing: str,
+) -> None:
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Benchmark.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["missing_terms"] == [expected_missing]
+
+
+def test_unqualified_four_digit_publication_year_is_not_a_required_fact() -> None:
+    evidence = "The method reports a result of 40 dB."
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="Published in 2020, the method reports a result of 40 dB.",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Benchmark.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "Tables 5 and 6 report a result of 40.30 dB.",
+        "Figures 2-4 report a result of 40.30 dB.",
+        "Table six reports a result of 40.30 dB.",
+    ],
+)
+def test_structure_locator_lists_ranges_and_number_words_are_excluded(claim: str) -> None:
+    evidence = "The reported result is 40.30 dB."
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Benchmark.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "Alpha reaches PSNR 30 dB, Beta reaches PSNR 40 dB.",
+        "Alpha 达到 PSNR 30 dB，Beta 达到 PSNR 40 dB。",
+    ],
+)
+def test_verified_group_union_scopes_plain_comma_comparison(claim: str) -> None:
+    first = "Alpha reaches PSNR 30 dB."
+    second = "Beta reaches PSNR 40 dB."
+    common_meta = {
+        "citation_plan_evidence_authoritative": True,
+        "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        "citation_group_evidence_quotes": [first, second],
+    }
+
+    bindings = [
+        evidence_binding.assess_system_a_hit_binding(
+            answer_claim=claim,
+            hit={"text": evidence},
+            meta=common_meta,
+            heading="Results",
+            evidence_quote=evidence,
+            source_name="Benchmark.pdf",
+        )
+        for evidence in (first, second)
+    ]
+
+    assert [binding["status"] for binding in bindings] == ["grounded", "grounded"]
+
+
+def test_plain_comma_scope_is_not_enabled_for_a_single_card() -> None:
+    evidence = "Alpha reaches PSNR 30 dB."
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="Alpha reaches PSNR 30 dB, Beta reaches PSNR 40 dB.",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Alpha.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["missing_terms"] == ["40 db"]
+
+
+@pytest.mark.parametrize(
+    ("claim", "evidence"),
+    [
+        ("The model reaches SSIM 0.91.", "The model reaches LPIPS 0.91."),
+        ("The reconstruction reaches PSNR 40 dB.", "The measured SNR is 40 dB."),
+    ],
+)
+def test_same_value_and_unit_with_different_metric_is_rejected(
+    claim: str,
+    evidence: str,
+) -> None:
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Benchmark.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["suppress_link"] is True
+
+
+def test_year_in_hyphenated_paper_title_is_not_inferred_as_image_count() -> None:
+    evidence = "The paper reports SIDD PSNR of 40.30."
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=(
+            "ECCV-2022-Simple Baselines for Image Restoration reports "
+            "SIDD PSNR of 40.30."
+        ),
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="ECCV-2022-Simple Baselines for Image Restoration.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_compact_table_metric_header_applies_to_following_method_cells() -> None:
+    evidence = (
+        "SIDD PSNR: Restormer = 40.02; Baseline ours = 40.30; "
+        "NAFNet ours = 40.30"
+    )
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=(
+            "SIDD PSNR reaches 40.30 for both Baseline ours and NAFNet ours."
+        ),
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="5.2 Applications",
+        evidence_quote=evidence,
+        source_name="Simple Baselines for Image Restoration.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_psnr_table_value_without_repeated_unit_supports_db_claim() -> None:
+    evidence = "SIDD PSNR: Restormer = 40.02; Baseline ours = 40.30."
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="Restormer PSNR is 40.02 dB.",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="5.2 Applications",
+        evidence_quote=evidence,
+        source_name="Simple Baselines for Image Restoration.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_generic_unitless_value_does_not_support_db_claim() -> None:
+    evidence = "Restormer reports a benchmark value of 40.02."
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="Restormer reports a benchmark value of 40.02 dB.",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Benchmark.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["suppress_link"] is True
+
+
+def test_ssim_results_header_applies_across_comma_separated_cells() -> None:
+    evidence = "SSIM results: A = 0.50, B = 0.60, Ours = 0.76."
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="SSIM is 0.50 for A, 0.60 for B, and 0.76 for Ours.",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Benchmark.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_number_does_not_borrow_count_unit_from_a_later_quantity() -> None:
+    quantities = evidence_binding._system_a_fact_quantities(
+        "The model reaches PSNR 30.5 after training on 100 images."
+    )
+
+    assert ("30.5", "db", "psnr") in quantities
+    assert ("30.5", "image", "psnr") not in quantities
+    assert ("100", "image", "") in quantities
+
+    reversed_quantities = evidence_binding._system_a_fact_quantities(
+        "The model is trained on 100 images and reaches PSNR 30.5 dB."
+    )
+    assert ("100", "image", "") in reversed_quantities
+    assert ("100", "image", "psnr") not in reversed_quantities
+    assert ("30.5", "db", "psnr") in reversed_quantities
+
+
+def test_adjacent_postfix_metric_remains_attached_to_value() -> None:
+    quantities = evidence_binding._system_a_fact_quantities(
+        "The reported score is 0.9 SSIM."
+    )
+
+    assert ("0.9", "", "ssim") in quantities
+
+
+def test_metric_inherits_across_explicit_numeric_range_bridge_only() -> None:
+    claim = "PSNR improves from 30 dB to 31 dB."
+    evidence = "PSNR is 30 dB while SNR is 31 dB."
+
+    claim_quantities = evidence_binding._system_a_fact_quantities(claim)
+    evidence_quantities = evidence_binding._system_a_fact_quantities(evidence)
+
+    assert ("30", "db", "psnr") in claim_quantities
+    assert ("31", "db", "psnr") in claim_quantities
+    assert ("30", "db", "psnr") in evidence_quantities
+    assert ("31", "db", "snr") in evidence_quantities
+
+    for surface in (
+        "PSNR values are 30 dB, 31 dB.",
+        "PSNR improves from 30 to 31.",
+    ):
+        quantities = evidence_binding._system_a_fact_quantities(surface)
+        assert ("30", "db", "psnr") in quantities
+        assert ("31", "db", "psnr") in quantities
+
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Results",
+        evidence_quote=evidence,
+        source_name="Benchmark.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["suppress_link"] is True
+
+
+@pytest.mark.parametrize(
+    "surface",
+    [
+        "PSNR is 30 dB and 31 images.",
+        "PSNR: 30 dB / 31 images.",
+    ],
+)
+def test_count_quantity_never_inherits_quality_metric(surface: str) -> None:
+    quantities = evidence_binding._system_a_fact_quantities(surface)
+
+    assert ("30", "db", "psnr") in quantities
+    assert ("31", "image", "") in quantities
+    assert ("31", "image", "psnr") not in quantities
+
+
+def test_db_and_unitless_psnr_ranges_still_inherit_metric() -> None:
+    db_quantities = evidence_binding._system_a_fact_quantities(
+        "PSNR is 30 dB and 31 dB."
+    )
+    unitless_quantities = evidence_binding._system_a_fact_quantities(
+        "PSNR ranges from 30 to 31."
+    )
+
+    assert {("30", "db", "psnr"), ("31", "db", "psnr")} <= db_quantities
+    assert {("30", "db", "psnr"), ("31", "db", "psnr")} <= unitless_quantities
+
+
+def test_multiplier_quantities_normalize_language_magnitude_and_direction() -> None:
+    chinese = evidence_binding._system_a_fact_quantities("入射照明功率降低约 10 倍。")
+    english = evidence_binding._system_a_fact_quantities(
+        "Incident illumination power is tenfold lower."
+    )
+    opposite = evidence_binding._system_a_fact_quantities(
+        "Incident illumination power is tenfold higher."
+    )
+
+    assert ("10", "fold", "decrease") in chinese
+    assert ("10", "fold", "decrease") in english
+    assert ("10", "fold", "increase") in opposite
+    assert evidence_binding._quantity_is_covered(
+        ("10", "fold", "decrease"), english
+    )
+    assert not evidence_binding._quantity_is_covered(
+        ("10", "fold", "decrease"), opposite
+    )
+
+
+def test_multiplier_binding_accepts_cross_language_equivalence_but_not_units() -> None:
+    evidence = (
+        "iISM reaches about 120 nm lateral resolution at tenfold lower incident "
+        "illumination power while significantly reducing photodamage."
+    )
+    grounded = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="在约 120 nm 横向分辨率下，入射照明功率降低约 10 倍，可显著减少光损伤。",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="iISM.pdf",
+    )
+    unit_conflict = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="The acquisition frequency is 10 Hz.",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="iISM.pdf",
+    )
+
+    assert grounded["status"] == "grounded"
+    assert grounded["suppress_link"] is False
+    assert unit_conflict["status"] == "mismatch"
+    assert unit_conflict["suppress_link"] is True

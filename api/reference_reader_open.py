@@ -7,6 +7,9 @@ import re
 from api.reference_value_utils import _positive_int
 
 
+PRIMARY_REF_EVIDENCE_MAX_LEN = 520
+
+
 def _compact_reader_open_text(text: str, *, max_len: int = 360) -> str:
     raw = re.sub(r"\s+", " ", str(text or "").strip())
     if not raw:
@@ -1017,10 +1020,13 @@ def _normalize_primary_ref_evidence_payload(
 ) -> dict:
     if not isinstance(primary_evidence, dict):
         return {}
-    snippet = finish_evidence_text(str(primary_evidence.get("snippet") or "").strip(), max_len=460)
+    snippet = finish_evidence_text(
+        str(primary_evidence.get("snippet") or "").strip(),
+        max_len=PRIMARY_REF_EVIDENCE_MAX_LEN,
+    )
     highlight_snippet = finish_evidence_text(
         str(primary_evidence.get("highlight_snippet") or primary_evidence.get("highlightSnippet") or "").strip(),
-        max_len=460,
+        max_len=PRIMARY_REF_EVIDENCE_MAX_LEN,
     )
     out = {
         "source_path": str(primary_evidence.get("source_path") or primary_evidence.get("sourcePath") or "").strip() or None,

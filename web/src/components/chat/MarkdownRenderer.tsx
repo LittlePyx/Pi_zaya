@@ -79,17 +79,22 @@ function isPageMarkerLine(text: string): boolean {
 }
 
 function normalizeReaderPageMarkers(text: string): string {
+  const lines = String(text || '').split('\n')
   const out: string[] = []
-  for (const line of String(text || '').split('\n')) {
+  lines.forEach((line, index) => {
     const pageNo = pageMarkerNumber(line)
     if (!pageNo) {
       out.push(line)
-      continue
+      return
     }
-    while (out.length > 0 && !String(out[out.length - 1] || '').trim()) out.pop()
-    if (out.length > 0) out.push('')
-    out.push(`[Page ${pageNo}](#kb-page-${pageNo})`, '')
-  }
+    // Preserve the source line layout whenever the converter already emitted
+    // a standalone marker. Only add a separator for the uncommon malformed
+    // case where prose touches the marker; text-identity block resolution below
+    // keeps provenance stable even when that presentation repair shifts lines.
+    if (out.length > 0 && String(out[out.length - 1] || '').trim()) out.push('')
+    out.push(`[Page ${pageNo}](#kb-page-${pageNo})`)
+    if (index + 1 < lines.length && String(lines[index + 1] || '').trim()) out.push('')
+  })
   return out.join('\n')
 }
 
@@ -719,6 +724,7 @@ function normalizeReaderMarkdown(text: string): string {
 interface Props {
   content: string
   citeDetails?: CiteDetail[]
+  linkifyPlainCitations?: boolean
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
   onCitationAddToShelf?: (detail: CiteDetail) => void
   onCitationHover?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
@@ -1410,6 +1416,23 @@ function _readerTextSimilarity(left: string, right: string): number {
   return (2 * shared) / Math.max(1, leftTotal + rightTotal)
 }
 
+function _readerTextMatchScore(left: string, right: string): number {
+  const comparable = (value: string) => String(value || '')
+    .toLowerCase()
+    .replace(/\\[a-z]+/g, ' ')
+    .replace(/[^a-z0-9\u3400-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const leftNorm = comparable(left)
+  const rightNorm = comparable(right)
+  if (!leftNorm || !rightNorm) return 0
+  if (leftNorm === rightNorm) return 1
+  const shorter = leftNorm.length <= rightNorm.length ? leftNorm : rightNorm
+  const longer = leftNorm.length > rightNorm.length ? leftNorm : rightNorm
+  if (shorter.length >= 12 && longer.includes(shorter)) return 0.92
+  return _readerTextSimilarity(left, right)
+}
+
 function createReaderBlockResolver(readerBlocks: ReaderDocBlock[] | undefined): ReaderBlockResolver | null {
   const rows = Array.isArray(readerBlocks) ? readerBlocks : []
   if (rows.length <= 0) return null
@@ -1444,11 +1467,20 @@ function createReaderBlockResolver(readerBlocks: ReaderDocBlock[] | undefined): 
     pick: (node: unknown, kinds: string[]) => {
       const range = _nodeLineRange(node)
       const preferred = new Set((kinds || []).map((k) => normalizeReaderAnchorKind(k)))
-      if (preferred.has('table')) {
-        const nodeText = _readerNodeText(node)
-        const rankedByText = list
-          .filter((item) => item.kind === 'table' && item.token.text)
-          .map((item) => ({ item, score: _readerTextSimilarity(nodeText, String(item.token.text || '')) }))
+      const eligible = preferred.size > 0
+        ? list.filter((item) => preferred.has(item.kind))
+        : list
+      if (eligible.length <= 0) return null
+
+      // Several reader-only normalizers legitimately rewrite Markdown (for
+      // example, splitting collapsed reference entries). Prefer a unique text
+      // match before consulting line numbers so those presentation changes do
+      // not corrupt source provenance.
+      const nodeText = _readerNodeText(node)
+      if (nodeText) {
+        const rankedByText = eligible
+          .filter((item) => item.token.text)
+          .map((item) => ({ item, score: _readerTextMatchScore(nodeText, String(item.token.text || '')) }))
           .sort((left, right) => right.score - left.score)
         const bestText = rankedByText[0]
         const runnerUpText = rankedByText[1]
@@ -1464,7 +1496,14 @@ function createReaderBlockResolver(readerBlocks: ReaderDocBlock[] | undefined): 
       let best: (typeof list)[number] | null = null
       let bestScore = Number.NEGATIVE_INFINITY
 
-      for (const item of list) {
+      for (const item of eligible) {
+        if (
+          nodeText
+          && item.token.text
+          && _readerTextMatchScore(nodeText, String(item.token.text || '')) < 0.12
+        ) {
+          continue
+        }
         const overlap = Math.max(
           0,
           Math.min(range.end, item.lineEnd) - Math.max(range.start, item.lineStart) + 1,
@@ -1480,21 +1519,12 @@ function createReaderBlockResolver(readerBlocks: ReaderDocBlock[] | undefined): 
       }
 
       if (best) return best.token
-
-      for (const item of list) {
-        const dist = Math.min(
-          Math.abs(range.start - item.lineStart),
-          Math.abs(range.end - item.lineEnd),
-        )
-        if (dist > 2) continue
-        let score = 1.0 - (0.22 * dist)
-        if (preferred.has(item.kind)) score += 0.8
-        if (score > bestScore) {
-          best = item
-          bestScore = score
-        }
-      }
-      return best ? best.token : null
+      // A nearby line is not source identity. Page-marker paragraphs and
+      // image-only wrappers frequently sit one line from a real block; a ±2
+      // nearest fallback duplicates that block ID and makes strict locate
+      // resolve the wrong DOM node. Legacy documents without structured blocks
+      // still use the separate sequential allocator.
+      return null
     },
   }
 }
@@ -1582,8 +1612,10 @@ function buildMarkdownComponents(
   let locateRenderOrder = 0
   const pickReaderAnchor = (node: unknown, kinds: string[]) => {
     if (variant !== 'reader') return null
-    const byBlock = readerBlockResolver?.pick(node, kinds)
-    if (byBlock) return byBlock
+    // Structured blocks are authoritative. Falling through to the sequential
+    // allocator after a structured miss assigns unrelated anchors to visible
+    // page markers or normalized fragments and can duplicate block IDs.
+    if (readerBlockResolver) return readerBlockResolver.pick(node, kinds)
     return readerAnchorAllocator?.take(kinds) || null
   }
 
@@ -2247,6 +2279,7 @@ function buildMarkdownComponents(
 export function MarkdownRenderer({
   content,
   citeDetails = [],
+  linkifyPlainCitations = true,
   onCitationClick,
   onCitationAddToShelf,
   onCitationHover,
@@ -2273,7 +2306,9 @@ export function MarkdownRenderer({
     ? normalizeReaderMarkdown(rawContent)
     : normalize(rawContent)
   const citationByNum = buildCitationNumberMap(citeDetails)
-  const renderContent = linkifyPlainCitationMarkers(normalizedContent, citeDetails, citationByNum)
+  const renderContent = linkifyPlainCitations
+    ? linkifyPlainCitationMarkers(normalizedContent, citeDetails, citationByNum)
+    : normalizedContent
   const byAnchor = new Map(citeDetails.map((detail) => [detail.anchor, detail]))
   const duplicateCitationAnchors = new Set<string>()
   if (byAnchor.size > 0) {
