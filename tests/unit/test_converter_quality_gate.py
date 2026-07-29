@@ -74,6 +74,35 @@ def test_quality_gate_autofixes_safe_issue_before_indexing(tmp_path: Path):
     assert md_path.read_text(encoding="utf-8").lstrip().startswith("<!-- kb_page: 1 -->")
 
 
+def test_quality_gate_unwraps_prose_captured_as_display_math(tmp_path: Path):
+    md_path = tmp_path / "prose-math.en.md"
+    md_path.write_text(
+        _good_markdown().replace(
+            "The method section contains enough prose for retrieval.",
+            "\n".join(
+                [
+                    "$$",
+                    (
+                        r"about 1.4 \text{ Airy units (AU, with } 1\,\text{AU} = 1.22\,\lambda/(2\,\text{NA})"
+                        r"\text{), which for our parameters } \lambda = 445\,\text{nm},\ \text{NA} = 1.4"
+                    ),
+                    "$$",
+                ]
+            ),
+        ),
+        encoding="utf-8",
+    )
+
+    result = prepare_markdown_for_index(md_path, auto_repair=True)
+
+    repaired = md_path.read_text(encoding="utf-8")
+    assert result["indexable"] is True
+    assert result["status"] == "ready"
+    assert result["auto_repair"]["changed"] is True
+    assert "about 1.4 Airy units" in repaired
+    assert "$$" not in repaired
+
+
 def test_quality_gate_recovers_missing_source_pages_before_indexing(tmp_path: Path):
     import fitz
 
@@ -144,6 +173,68 @@ def test_quality_gate_blocks_persistent_critical_autofix_issue(tmp_path: Path):
     assert result["status"] == "blocked"
     assert result["action"] == "autofix"
     assert result["blocking_issue_codes"] == ["missing_source_pages"]
+
+
+def test_quality_gate_keeps_document_indexable_when_corruption_is_page_local(tmp_path: Path):
+    md_path = tmp_path / "partially-damaged.en.md"
+    md_path.write_text(_good_markdown(), encoding="utf-8")
+
+    result = assess_markdown_index_quality(
+        md_path,
+        quality_result={
+            "repair_plan": {
+                "action": "reconvert",
+                "scope": "pages",
+                "reason": "One converted page is unreliable.",
+                "issue_codes": ["source_page_text_corruption"],
+                "autofix_issue_codes": [],
+                "reconvert_issue_codes": ["source_page_text_corruption"],
+                "review_issue_codes": [],
+            },
+            "source_quality": {
+                "pdf_page_count": 3,
+                "evidence_unreliable_pages": [2],
+            },
+            "metrics": {},
+        },
+        refresh_stale=False,
+    )
+
+    assert result["indexable"] is True
+    assert result["status"] == "degraded"
+    assert result["action"] == "reconvert"
+    assert result["blocking_issue_codes"] == []
+    assert result["evidence_unreliable_pages"] == [2]
+
+
+def test_quality_gate_still_blocks_document_when_every_source_page_is_corrupt(tmp_path: Path):
+    md_path = tmp_path / "fully-damaged.en.md"
+    md_path.write_text(_good_markdown(), encoding="utf-8")
+
+    result = assess_markdown_index_quality(
+        md_path,
+        quality_result={
+            "repair_plan": {
+                "action": "reconvert",
+                "scope": "pages",
+                "reason": "Every converted page is unreliable.",
+                "issue_codes": ["source_page_text_corruption"],
+                "autofix_issue_codes": [],
+                "reconvert_issue_codes": ["source_page_text_corruption"],
+                "review_issue_codes": [],
+            },
+            "source_quality": {
+                "pdf_page_count": 2,
+                "evidence_unreliable_pages": [1, 2],
+            },
+            "metrics": {},
+        },
+        refresh_stale=False,
+    )
+
+    assert result["indexable"] is False
+    assert result["status"] == "blocked"
+    assert result["blocking_issue_codes"] == ["source_page_text_corruption"]
 
 
 def test_quality_gate_blocks_unresolved_source_page_marker_alignment(tmp_path: Path):

@@ -605,7 +605,18 @@ def fix_math_markdown(md: str) -> str:
         first_eq = t.find("=")
         if first_eq >= 0 and first_eq <= 12:
             return False
+        if first_eq >= 0 and re.search(
+            r"(?:\^|_|[+*/]|\\(?:frac|sqrt|sum|int|prod|partial|nabla)\b)",
+            t[:first_eq],
+            flags=re.IGNORECASE,
+        ):
+            # A prose-looking tail can follow a genuine equation (for example
+            # a boundary-condition qualifier).  Preserve the display block
+            # when its left-hand side still has clear mathematical structure.
+            return False
         if re.match(r"(?i)^(?:about|where|with|for|which|when|the|this|these|those)\b", plain_norm):
+            return True
+        if re.match(r"(?i)^\d+(?:\.\d+)?\s+[a-z].*\b(?:with|which|for)\b", plain_norm):
             return True
         return plain_norm[:1].islower()
 

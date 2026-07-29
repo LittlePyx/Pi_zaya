@@ -486,13 +486,12 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "strategies": [],
     },
     "prose_dominant_display_math": {
-        "label": "Reconvert prose captured as display math",
-        "safe": False,
-        "action": "reconvert",
-        "scope": "document",
-        "speed_mode": "normal",
+        "label": "Unwrap prose captured as display math",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
         "reason": "Natural-language prose was captured inside a display-math block, which breaks reading and formula rendering.",
-        "strategies": [],
+        "strategies": ["postprocess_markdown"],
     },
     "display_math_markdown_link": {
         "label": "Reconvert Markdown links captured inside display math",
@@ -4386,6 +4385,16 @@ def repair_markdown_text(
         after_source_quality = before_source_quality
         after_issue_codes = before_issue_codes
     regression_reasons = _regression_reasons(before_text, text) if changed_text else []
+    if (
+        "prose_dominant_display_math" in active_codes
+        and "prose_dominant_display_math" not in after_issue_codes
+        and "display_math_dropped" in regression_reasons
+    ):
+        # Removing a display-math block is the intended repair when that block
+        # was deterministically classified and unwrapped as natural-language
+        # prose. Other regression checks still protect real equations, tables,
+        # figures, references, and overall content volume.
+        regression_reasons = [reason for reason in regression_reasons if reason != "display_math_dropped"]
     transactional_target_codes = [
         code
         for code in active_codes

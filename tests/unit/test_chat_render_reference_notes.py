@@ -68,6 +68,99 @@ def test_double_numeric_citations_never_render_as_empty_brackets() -> None:
     assert stripped == "A, B [[]], C []."
 
 
+def test_signed_bpsk_values_do_not_consume_the_real_source_citation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    def fake_annotate(
+        markdown,
+        hits,
+        *,
+        anchor_ns="",
+        canonical_paths=None,
+        citation_plan=None,
+        render_locale=None,
+    ):
+        del hits, anchor_ns, canonical_paths, citation_plan, render_locale
+        assert "(+1, -1)" in markdown
+        assert "[1, -1]" not in markdown
+        return (
+            markdown.replace("[1]", "[1](#kb-cite-fdm-1)", 1),
+            [
+                {
+                    "num": 1,
+                    "anchor": "kb-cite-fdm-1",
+                    "citation_route": "system_a",
+                    "source_path": "FDM.en.md",
+                    "source_name": "FDM.pdf",
+                    "evidence_quote": "BPSK and parallel demodulation evidence.",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        chat_render,
+        "_annotate_inpaper_citations_with_hover_meta",
+        fake_annotate,
+    )
+    source_file = tmp_path / "FDM" / "FDM.en.md"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text(
+        "# FDM\n\n## B. Encoding\n\n"
+        "The mask values are encoded with binary phase-shift keying, and each "
+        "carrier frequency is demodulated by a lock-in amplifier.\n",
+        encoding="utf-8",
+    )
+    source_path = str(source_file)
+    messages = [
+        {"id": 1, "role": "user", "content": "FDM-SPI 如何编码？"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": (
+                "Each mask uses BPSK values [1, -1], and the carrier-frequency "
+                "channels are demodulated in parallel [1]."
+            ),
+            "meta": {"canonical_hit_paths": [source_path]},
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": (
+                        "The mask values are encoded with binary phase-shift keying, "
+                        "and each carrier frequency is demodulated by a lock-in amplifier."
+                    ),
+                    "meta": {
+                        "source_path": source_path,
+                        "source_name": "FDM.pdf",
+                        "heading_path": "B. Encoding",
+                        "page_start": 2,
+                        "ref_answer_citation_num": 1,
+                    },
+                }
+            ],
+            "display_state": "ready",
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(
+        messages,
+        refs_by_user,
+        conv_id="conv-bpsk-vector",
+    )[-1]
+    body = str(rendered.get("rendered_content") or "")
+
+    assert "(+1, -1)" in body
+    assert "[1, -1]" not in body
+    assert "[]" not in body
+    assert "](#kb-cite-" in body
+    assert len(rendered.get("cite_details") or []) == 1
+
+
 def test_adjacent_same_citation_links_collapse_even_when_titles_differ() -> None:
     first = '[1](#kb-cite-author-2 "source: paper | ref 1")'
     duplicate = '[1](#kb-cite-author-2 "source: paper | ref 2")'
@@ -228,6 +321,87 @@ def test_system_a_display_registry_maps_multiple_passages_from_one_paper_to_one_
     ]
     assert len(registry) == 1
     assert registry[0]["original_nums"] == [4, 5]
+
+
+def test_system_a_display_registry_collapses_exact_evidence_duplicates_only() -> None:
+    markdown = (
+        'Overview [1](#cite-overview "source: Review.pdf"). '
+        'Acquisition [1](#cite-acquisition "source: Review.pdf"). '
+        'Reconstruction [1](#cite-reconstruction "source: Review.pdf").'
+    )
+    details = [
+        {
+            "num": 1,
+            "anchor": "cite-overview",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+            "source_name": "Review.pdf",
+            "evidence_fingerprint": "same-evidence-12345678",
+            "evidence_quote": "The same exact source passage.",
+        },
+        {
+            "num": 1,
+            "anchor": "cite-acquisition",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+            "source_name": "Review.pdf",
+            "evidence_fingerprint": "same-evidence-12345678",
+            "answer_claim": "Acquisition claim.",
+            "evidence_quote": "The same exact source passage.",
+        },
+        {
+            "num": 1,
+            "anchor": "cite-reconstruction",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+            "source_name": "Review.pdf",
+            "evidence_fingerprint": "same-evidence-12345678",
+            "answer_claim": "Reconstruction claim.",
+            "evidence_quote": "The same exact source passage.",
+        },
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert len(remapped) == 1
+    assert rendered.count(f'](#{remapped[0]["anchor"]}') == 3
+    assert "cite-overview" not in rendered
+    assert set(remapped[0]["answer_claims"]) >= {
+        "Acquisition claim.",
+        "Reconstruction claim.",
+    }
+    assert len(registry) == 1
+
+
+def test_system_a_display_registry_keeps_distinct_evidence_from_same_paper() -> None:
+    markdown = (
+        'Benefit [1](#cite-benefit "source: Review.pdf"). '
+        'Limit [1](#cite-limit "source: Review.pdf").'
+    )
+    details = [
+        {
+            "num": 1,
+            "anchor": "cite-benefit",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+            "evidence_fingerprint": "benefit-evidence-1234",
+            "evidence_quote": "The method improves reconstruction quality.",
+        },
+        {
+            "num": 1,
+            "anchor": "cite-limit",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+            "evidence_fingerprint": "limit-evidence-567890",
+            "evidence_quote": "The method still requires extensive training data.",
+        },
+    ]
+
+    rendered, remapped, _registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert len(remapped) == 2
+    assert "#cite-benefit" in rendered
+    assert "#cite-limit" in rendered
 
 
 def test_system_a_display_registry_rebinds_repeated_source_to_matching_passage() -> None:
@@ -945,6 +1119,106 @@ def test_canonical_citation_reuses_numbered_plan_slot_without_rescan(
     )
 
     assert repaired == [hit]
+
+
+def test_canonical_citation_reuses_source_bound_authoritative_plan_without_rescan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "prompt-aligned.en.md"
+    source.write_text("# Paper\n\nPrompt-aligned source evidence.\n", encoding="utf-8")
+    hit = {
+        "text": "Prompt-aligned source evidence.",
+        "meta": {
+            "source_path": str(source),
+            "ref_answer_citation_num": 1,
+            "citation_plan_slot": True,
+            "citation_plan_evidence_authoritative": True,
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": str(source),
+                "heading_path": "Results",
+                "snippet": "Prompt-aligned source evidence.",
+                "strict_locate": False,
+                "selection_reason": "prompt_aligned_source_sentence",
+            }
+        },
+    }
+
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: pytest.fail(
+            "source-bound authoritative plan evidence should not rescan source blocks"
+        ),
+    )
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [hit],
+        canonical_paths=[str(source)],
+        answer_text="The answer uses prompt-aligned evidence [1].",
+    )
+
+    assert repaired == [hit]
+
+
+def test_canonical_citation_incomplete_authoritative_plan_still_scans_and_recovers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "recovery.en.md"
+    source.write_text(
+        "# Recovery\n\n## Abstract\n\nBroad background.\n\n"
+        "## Results\n\nThe method reconstructs single-pixel video at 30 Hz using 333 patterns.\n",
+        encoding="utf-8",
+    )
+    other_source = tmp_path / "other.en.md"
+    hit = {
+        "text": "An incomplete prompt-aligned passage.",
+        "meta": {
+            "source_path": str(source),
+            "ref_answer_citation_num": 1,
+            "citation_plan_slot": True,
+            "citation_plan_evidence_authoritative": True,
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": str(other_source),
+                "snippet": "An incomplete prompt-aligned passage.",
+                "strict_locate": False,
+                "selection_reason": "prompt_aligned_source_sentence",
+            }
+        },
+    }
+    real_load_source_blocks = chat_render.task_runtime.load_source_blocks
+    calls: list[Path] = []
+
+    def _tracked_load_source_blocks(path: Path, *args, **kwargs):
+        calls.append(Path(path))
+        return real_load_source_blocks(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        _tracked_load_source_blocks,
+    )
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [hit],
+        canonical_paths=[str(source)],
+        answer_text="The method reconstructs at 30 Hz using 333 patterns [1].",
+    )
+
+    assert calls == [source]
+    assert repaired[0]["meta"]["ref_answer_citation_num"] == 1
+    assert repaired[0]["meta"]["source_path"] == str(source)
+    assert repaired[0]["meta"]["ref_display_reason"] == "canonical_answer_repair"
+    assert "30 Hz" in repaired[0]["text"]
 
 
 def test_canonical_citation_seeds_persisted_answer_evidence_before_legacy_scan(
@@ -3271,6 +3545,142 @@ def test_enrich_rejects_scigs_lineage_whole_answer_rewrite(monkeypatch):
     )
 
 
+def test_comparison_plan_allows_typed_three_source_evidence_repair() -> None:
+    from api import chat_render
+
+    original = "Compare structured, interferometric, and light-field microscopy [1]."
+    repaired = (
+        "Structured detection provides super-resolution and optical sectioning [1].\n\n"
+        "Interferometric imaging reaches 120 nm lateral resolution [2].\n\n"
+        "Light-field microscopy records position and angular information [3]."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [index],
+                    "source_path": f"db/method-{index}/method-{index}.en.md",
+                    "evidence_quote": evidence,
+            }
+            for index, evidence in enumerate(
+                (
+                    "Structured detection provides super-resolution and optical sectioning.",
+                    "Interferometric imaging reaches 120 nm lateral resolution.",
+                    "Light-field microscopy records position and angular information.",
+                ),
+                start=1,
+            )
+        ],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body=original,
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_comparison_plan_does_not_authorize_single_token_hallucination() -> None:
+    from api import chat_render
+
+    original = "Compare AlphaNet and BetaNet [1]."
+    repaired = (
+        "AlphaNet cures cancer and guarantees perfect safety [1].\n\n"
+        "BetaNet reconstructs images [2]."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "db/alphanet/alphanet.en.md",
+                "evidence_quote": "AlphaNet reconstructs grayscale images.",
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": "db/betanet/betanet.en.md",
+                "evidence_quote": "BetaNet reconstructs images.",
+            },
+        ],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body=original,
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == original
+
+
+def test_comparison_plan_rejects_repair_with_unplanned_citation_numbers() -> None:
+    from api import chat_render
+
+    original = "Compare AlphaNet and BetaNet [1]."
+    repaired = (
+        "AlphaNet reconstructs grayscale images [1].\n\n"
+        "BetaNet reconstructs color images [2]."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [5],
+                "source_path": "db/alphanet/alphanet.en.md",
+                "evidence_quote": "AlphaNet reconstructs grayscale images.",
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [6],
+                "source_path": "db/betanet/betanet.en.md",
+                "evidence_quote": "BetaNet reconstructs color images.",
+            },
+        ],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body=original,
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == original
+
+
+def test_comparison_plan_does_not_authorize_unrelated_render_rewrite() -> None:
+    from api import chat_render
+
+    original = "Compare structured and interferometric microscopy [1]."
+    repaired = "The sky is green and unrelated to either method [1]."
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "db/structured/structured.en.md",
+                "evidence_quote": "Structured detection provides optical sectioning.",
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": "db/interferometric/interferometric.en.md",
+                "evidence_quote": "Interferometric detection improves lateral resolution.",
+            },
+        ],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body=original,
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == original
+
+
 def test_enrich_keeps_normal_citation_decoration_when_body_is_unchanged(monkeypatch):
     from api import chat_render
 
@@ -3650,6 +4060,133 @@ def test_enrich_messages_rebuilds_degraded_numeric_citation_cache(tmp_path: Path
     assert len(msg.get("cite_details") or []) == 2
     assert all(item.get("is_inpaper") is False for item in (msg.get("cite_details") or []))
     assert len(persisted_cache.get("cite_details") or []) == 2
+
+
+def test_enrich_messages_rebuilds_matching_empty_cache_after_fast_refs_arrive(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    content = (
+        "探测器综述总结了 PMT 和 SPAD 探测器限制 [2]。\n\n"
+        "PIDL 使用校准后的 SPAD 物理噪声模型（图 1a 及对应证据 [1]）训练网络。"
+    )
+    pidl_path = r"db\pidl.en.md"
+    detector_path = r"db\detector-review.en.md"
+    citation_plan: dict = {}
+    refs_pack = {
+        "prompt_sig": "fast-refs-sig",
+        "used_query": "single photon detector review physics informed learning",
+        "used_translation": False,
+        "render_status": "",
+        "render_attempts": 0,
+        "hits": [
+            {
+                "text": "PIDL 使用校准后的 SPAD 物理噪声模型训练网络。",
+                "meta": {
+                    "source_path": pidl_path,
+                    "source_name": "Physics-informed deep learning.pdf",
+                    "heading_path": "Introduction",
+                    "ref_answer_citation_num": 1,
+                },
+            },
+            {
+                "text": "探测器综述总结了 PMT 和 SPAD 探测器限制。",
+                "meta": {
+                    "source_path": detector_path,
+                    "source_name": "Detector review.pdf",
+                    "heading_path": "Abstract",
+                    "ref_answer_citation_num": 2,
+                },
+            },
+        ],
+    }
+    monkeypatch.setattr(
+        chat_render,
+        "_answer_aligned_reference_render_pack",
+        lambda raw_pack, _answer_text: dict(raw_pack or {}),
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_effective_citation_render_locale",
+        lambda _ref_pack=None: "zh",
+    )
+
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("late fast refs cache")
+    user_id = store.append_message(conv_id, "user", "这两篇应该怎样搭配阅读？")
+    assistant_id = store.append_message(
+        conv_id,
+        "assistant",
+        content,
+        meta={"answer_quality": {"citation_plan": citation_plan}},
+    )
+    input_ref_sig = chat_render._raw_reference_render_cache_input_signature(refs_pack)
+    answer_sig = chat_render._answer_render_signature(content)
+    citation_plan_sig = chat_render._stable_json_hash(citation_plan)
+    cache_key = chat_render._build_message_render_cache_key(
+        conv_id=conv_id,
+        msg_id=assistant_id,
+        role="assistant",
+        content=content,
+        refs_user_msg_id=user_id,
+        ref_pack=refs_pack,
+        provenance=None,
+        citation_plan=citation_plan,
+        render_locale="zh",
+    )
+    empty_cache = chat_render._build_render_cache_payload(
+        cache_key=cache_key,
+        notice="",
+        rendered_body=content,
+        rendered_content=content,
+        copy_markdown=content,
+        copy_text=content,
+        cite_details=[],
+        refs_user_msg_id=user_id,
+        render_packet={
+            "answer_markdown": content,
+            "rendered_body": content,
+            "rendered_content": content,
+            "copy_markdown": content,
+            "copy_text": content,
+            "cite_details": [],
+        },
+        answer_sig=answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale="zh",
+    )
+    assert empty_cache["schema"] == 54
+    assert empty_cache["cache_key"] == cache_key
+    assert empty_cache["answer_sig"] == answer_sig
+    assert empty_cache["input_ref_sig"] == input_ref_sig
+    assert empty_cache["citation_plan_sig"] == citation_plan_sig
+    assert empty_cache["locale"] == "zh"
+    store.merge_message_meta(assistant_id, {"render_cache": empty_cache})
+
+    rendered = enrich_messages_with_reference_render(
+        store.get_messages(conv_id),
+        {user_id: refs_pack},
+        conv_id=conv_id,
+        chat_store=store,
+    )
+    message = rendered[-1]
+    rendered_content = str(message.get("rendered_content") or "")
+    details = [
+        item for item in list(message.get("cite_details") or []) if isinstance(item, dict)
+    ]
+    persisted = store.get_messages(conv_id)[-1]
+    persisted_cache = ((persisted.get("meta") or {}).get("render_cache") or {})
+
+    assert rendered_content.count("](#kb-cite-") >= 2
+    assert {str(item.get("source_path") or "") for item in details} == {
+        pidl_path,
+        detector_path,
+    }
+    assert persisted_cache.get("cite_details")
+    assert (persisted_cache.get("render_packet") or {}).get("cite_details")
 
 
 def test_render_cache_key_changes_when_citation_plan_evidence_changes():
@@ -10156,6 +10693,284 @@ def test_single_photon_reading_pair_keeps_facts_on_two_sources_and_uncites_readi
     assert "### 3." not in repaired
 
 
+def test_single_photon_pair_restores_2790_plan_evidence_to_canonical_model_hit() -> None:
+    from api import chat_render
+
+    detector_evidence = (
+        "This review summarizes principles and technical challenges of mainstream "
+        "single-photon detectors."
+    )
+    model_evidence = (
+        "We studied the photon flow model of SPAD electronics and collected a real "
+        "SPAD image dataset (64 x 32 pixels, 90 scenes, 10 bit depths, 3 illumination "
+        "flux, 2790 images in total) to calibrate the noise model. To tackle low bit "
+        "depth, low resolution, and heavy noise, we built a deep transformer network."
+    )
+    hits = [
+        {
+            "text": detector_evidence,
+            "meta": {
+                "source_path": "detector-review.en.md",
+                "ref_answer_citation_num": 1,
+            },
+        },
+        {
+            "text": "Deep learning improves SPAD reconstruction quality.",
+            "meta": {
+                "source_path": "spad-pidl.en.md",
+                "ref_answer_citation_num": 2,
+            },
+        },
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "spad-pidl.en.md",
+                "source_name": "High-resolution single-photon imaging with physics-informed deep learning",
+                "heading_path": "Abstract",
+                "evidence_quote": model_evidence,
+                "candidate_hits": [2],
+                "page_start": 1,
+                "page_end": 1,
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "detector-review.en.md",
+                "source_name": "Emerging single-photon detection technique review",
+                "evidence_quote": detector_evidence,
+                "candidate_hits": [1],
+            },
+        ]
+    }
+    answer = (
+        "The physics-informed model is calibrated with 2790 real SPAD images [2]; "
+        "the single-photon detector review provides the hardware background [1]."
+    )
+
+    repaired = chat_render._reading_guide_repair_single_photon_reading_pair(
+        answer,
+        hits,
+        plan,
+        canonical_paths=["detector-review.en.md", "spad-pidl.en.md"],
+    )
+
+    assert repaired == answer
+    assert "2790 images" in hits[1]["text"]
+    assert hits[1]["meta"]["citation_plan_evidence_authoritative"] is True
+    assert (
+        hits[1]["meta"]["citation_plan_evidence_selection_reason"]
+        == "spad_noise_model_exact_source"
+    )
+    assert "2790 images" in hits[1]["ui_meta"]["primary_evidence"]["snippet"]
+
+
+def test_single_photon_pair_rebinds_reranked_model_hit_by_source_identity() -> None:
+    from api import chat_render
+
+    detector_path = "detector-review.en.md"
+    model_path = "spad-pidl.en.md"
+    detector_evidence = (
+        "Performance information of different single-photon detectors. "
+        "Detector type: Si-SPAD."
+    )
+    model_evidence = (
+        "Physics-informed deep learning uses a real-world physical noise model of "
+        "SPAD arrays and collected 2790 images to calibrate it."
+    )
+    hits = [
+        {
+            "text": "Deep learning improves SPAD reconstruction quality.",
+            "meta": {
+                "source_path": model_path,
+                "ref_answer_citation_num": 2,
+            },
+        },
+        {
+            "text": detector_evidence,
+            "meta": {
+                "source_path": detector_path,
+                "ref_answer_citation_num": 1,
+            },
+        },
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": detector_path,
+                "source_name": "Emerging single-photon detector review",
+                "evidence_quote": detector_evidence,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": model_path,
+                "source_name": "Physics-informed deep learning for SPAD imaging",
+                "evidence_quote": model_evidence,
+                "candidate_hits": [2],
+            },
+        ]
+    }
+
+    repaired = chat_render._reading_guide_repair_single_photon_reading_pair(
+        "single-photon SPAD physics-informed reading guide [1] [2]",
+        hits,
+        plan,
+        canonical_paths=[detector_path, model_path],
+    )
+
+    assert "[1]" in repaired and "[2]" in repaired
+    assert [hit["meta"]["source_path"] for hit in hits] == [model_path, detector_path]
+    assert [hit["meta"]["ref_answer_citation_num"] for hit in hits] == [2, 1]
+    assert "2790 images" in hits[0]["text"]
+    assert hits[0]["meta"]["citation_plan_full_evidence_quote"] == model_evidence
+    assert "citation_plan_full_evidence_quote" not in hits[1]["meta"]
+
+
+def test_full_enrich_keeps_independent_pidl_training_chain_citation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    monkeypatch.setattr("ui.refs_renderer._is_temp_source_path", lambda _path: False)
+    monkeypatch.setattr("ui.refs_renderer._load_reference_index_cached", lambda: {})
+    model_path = tmp_path / "High-resolution single-photon imaging with physics-informed deep learning.en.md"
+    detector_path = tmp_path / "Emerging single-photon detection technique review.en.md"
+    model_evidence = (
+        "with low bit depth, low resolution and heavy noise in photon-limited scenarios, "
+        "we first established a real-world physical noise model of SPAD arrays. The real "
+        "physical noise sources consist of shot noise, fixed-pattern noise, dark count rate, "
+        "afterpulsing, crosstalk noise, and deadtime noise. To calibrate the parameters, we "
+        "collected a real-shot SPAD image dataset containing 2790 images in total, each with "
+        "64 x 32 pixels. With the calibrated physical noise model under different illumination "
+        "and acquisition settings, we further employed off-the-shelf public high-resolution "
+        "images (collected from the PASCAL VOC2007 [31] and VOC2012 [32] datasets) to digitally "
+        "synthesize a large-scale realistic single-photon image dataset containing 2.6 million "
+        "image pairs. The gated fusion transformer network was trained as the deep learning "
+        "reconstruction network using the above large-scale single-photon image dataset."
+    )
+    detector_evidence = (
+        "This review summarizes mainstream single-photon detectors including PMTs, SAPDs, "
+        "SNSPDs, and TES devices, together with manufacturing and low-temperature challenges."
+    )
+    model_path.write_text(
+        "<!-- kb_page: 3 -->\n## Introduction\n" + model_evidence,
+        encoding="utf-8",
+    )
+    detector_path.write_text(
+        "<!-- kb_page: 1 -->\n## Abstract\n" + detector_evidence,
+        encoding="utf-8",
+    )
+    answer = (
+        "该单光子探测器综述给出硬件背景 [2]。\n\n"
+        "physics-informed 方法先建立 SPAD 物理噪声模型 [1]。\n\n"
+        "* **校准与数据合成**：通过采集 2790 张真实 SPAD 图像校准模型 [1]。"
+        "然后，利用校准后的模型和公开的高分辨率图像（如 PASCAL VOC2007）"
+        "合成配对数据，用于训练深度学习网络 [1]。"
+    )
+    plan = {
+        "source": "citation_plan_builder",
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "per_paragraph_budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": str(detector_path),
+                "source_name": "Emerging single-photon detection technique review",
+                "heading_path": "Abstract",
+                "page_start": 1,
+                "page_end": 1,
+                "evidence_quote": detector_evidence,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": str(model_path),
+                "source_name": (
+                    "High-resolution single-photon imaging with physics-informed deep learning"
+                ),
+                "heading_path": "Introduction",
+                "page_start": 3,
+                "page_end": 3,
+                "evidence_quote": model_evidence,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+        ],
+    }
+    messages = [
+        {"id": 1, "role": "user", "content": "单光子探测器综述和 physics-informed 论文怎么搭配读？"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": answer,
+            "meta": {
+                "answer_quality": {
+                    "output_mode": "reading_guide",
+                    "citation_plan": plan,
+                },
+                "canonical_hit_paths": [str(model_path), str(detector_path)],
+            },
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "prompt": messages[0]["content"],
+            "hits": [
+                {
+                    "text": (
+                        "To calibrate the noise model, we collected 2790 SPAD images. "
+                        "The physical noise model includes dark count and crosstalk noise."
+                    ),
+                    "meta": {
+                        "source_path": str(model_path),
+                        "source_name": plan["slots"][1]["source_name"],
+                        "heading_path": "Introduction",
+                        "page_start": 3,
+                        "ref_answer_citation_num": 1,
+                    },
+                },
+                {
+                    "text": detector_evidence,
+                    "meta": {
+                        "source_path": str(detector_path),
+                        "source_name": plan["slots"][0]["source_name"],
+                        "heading_path": "Abstract",
+                        "page_start": 1,
+                        "ref_answer_citation_num": 2,
+                    },
+                },
+            ],
+        }
+    }
+
+    rendered = chat_render.enrich_messages_with_reference_render(
+        messages,
+        refs_by_user,
+        conv_id="full-enrich-pidl-training",
+        chat_store=None,
+    )[-1]
+
+    target_line = next(
+        line
+        for line in str(rendered.get("rendered_content") or "").splitlines()
+        if "PASCAL VOC2007" in line
+    )
+    matching_details = [
+        detail
+        for detail in list(rendered.get("cite_details") or [])
+        if "PASCAL VOC2007" in str(detail.get("answer_claim") or "")
+    ]
+    assert "](#kb-cite-" in target_line.split("PASCAL VOC2007", 1)[1]
+    assert len(matching_details) == 1
+    assert "2.6 million image pairs" in matching_details[0]["evidence_quote"]
+    assert "network was trained" in matching_details[0]["evidence_quote"]
+
+
 def test_claim_level_citation_reuse_binds_supported_body_and_skips_unsupported_details():
     from api import chat_render
 
@@ -10644,6 +11459,51 @@ def test_missing_system_a_repair_does_not_force_single_pixel_source_onto_spad_re
 
     assert repaired.count("[1]") == 1
     assert "[2]" not in repaired
+
+
+def test_claim_level_repair_does_not_add_citation_to_navigation_only_reading_advice():
+    from api import chat_render
+
+    source_path = "pidl.en.md"
+    evidence = (
+        "We established a real-world physical noise model of SPAD arrays and calibrated "
+        "it with a real-shot dataset."
+    )
+    answer = (
+        "SPAD 单光子成像使用真实物理噪声模型改善重建 [1]。\n\n"
+        "**阅读建议**：如果想了解网络结构，可查阅原文的实验部分和结构图。"
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {
+                "source_path": source_path,
+                "source_name": "High-resolution single-photon imaging with physics-informed deep learning",
+                "ref_answer_citation_num": 1,
+            },
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": hits[0]["meta"]["source_name"],
+                "candidate_hits": [1],
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    repaired = chat_render._reading_guide_attach_claim_level_system_a_citations(
+        answer,
+        hits,
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert repaired == answer
+    assert repaired.count("[1]") == 1
 
 
 def test_missing_system_a_repair_does_not_force_detector_review_onto_cited_spad_tip():
@@ -13850,6 +14710,65 @@ def test_lineage_system_b_drops_unsupported_spectral_origin_relation(tmp_path: P
         for slot in repaired_plan["slots"]
     )
     assert repaired_plan["budget"]["system_b"] == 0
+
+
+def test_named_table_locator_survives_card_recomposition() -> None:
+    from api.chat_render import _normalize_system_a_named_table_locators
+
+    details = [
+        {
+            "num": 1,
+            "anchor": "kb-cite-table-1",
+            "citation_route": "system_a",
+            "source_path": "db/simple-baselines.en.md",
+            "source_name": "Simple Baselines.pdf",
+            "heading_path": "5 Experiments / 5.2 Applications",
+            "location_label": "5 Experiments / 5.2 Applications · sentence · p. 13",
+            "anchor_id": "tb_00006",
+            "anchor_kind": "sentence",
+            "reader_evidence_quote": (
+                "Table 6. Image Denoising Results on SIDD. "
+                "Baseline ours = 40.30; NAFNet ours = 40.30."
+            ),
+            "evidence_quote": "SIDD PSNR: Baseline ours = 40.30; NAFNet ours = 40.30.",
+            "answer_claim": "The highest SIDD PSNR in Table 6 is 40.30.",
+        }
+    ]
+
+    out = _normalize_system_a_named_table_locators(details, render_locale="en")
+
+    assert out[0]["anchor_kind"] == "table"
+    assert "Table 6" in out[0]["location_label"]
+    assert "Table 6" in out[0]["card_locator"]
+    assert out[0]["card_evidence"].startswith("Table 6.")
+    assert "sentence" not in out[0]["card_locator"].lower()
+
+
+def test_table_mention_does_not_turn_sentence_anchor_into_table_anchor() -> None:
+    from api.chat_render import _normalize_system_a_named_table_locators
+
+    details = [
+        {
+            "num": 1,
+            "anchor": "kb-cite-sentence-1",
+            "citation_route": "system_a",
+            "source_path": "db/paper.en.md",
+            "source_name": "Paper.pdf",
+            "heading_path": "Results",
+            "location_label": "Results · sentence · p. 4",
+            "anchor_id": "sent_42",
+            "block_id": "blk_42",
+            "anchor_kind": "sentence",
+            "reader_evidence_quote": "Table 2 summarizes the full benchmark.",
+            "evidence_quote": "The authors discuss the comparison in Table 2.",
+        }
+    ]
+
+    out = _normalize_system_a_named_table_locators(details, render_locale="en")
+
+    assert out[0]["anchor_kind"] == "sentence"
+    assert out[0]["anchor_id"] == "sent_42"
+    assert out[0]["location_label"] == "Results · sentence · p. 4"
 
 
 def test_mechanism_marker_stays_on_exact_sph_sentence_within_paragraph() -> None:

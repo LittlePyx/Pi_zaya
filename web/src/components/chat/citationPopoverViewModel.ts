@@ -86,7 +86,9 @@ export function buildCitationPopoverViewModel({
   loading,
 }: BuildCitationPopoverViewModelOptions): CitationPopoverViewModel {
   const { localizeKnownBody, localizeKnownLabel } = buildCitationPopoverLocalizers(S)
-  const isSystemB = Boolean(detail.isInpaper)
+  const explicitRoute = compact(detail.citationRoute).toLowerCase()
+  const isSystemB = explicitRoute === 'system_b'
+    || (explicitRoute !== 'system_a' && Boolean(detail.isInpaper))
   const view = citationCardView(detail)
   const takeawaySection = findSection(view.sections, 'takeaway')
   const claimSection = findSection(view.sections, 'claim')

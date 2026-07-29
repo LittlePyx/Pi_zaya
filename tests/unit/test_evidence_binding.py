@@ -669,3 +669,129 @@ def test_multiplier_binding_accepts_cross_language_equivalence_but_not_units() -
     assert grounded["suppress_link"] is False
     assert unit_conflict["status"] == "mismatch"
     assert unit_conflict["suppress_link"] is True
+
+
+def test_fact_quantities_normalize_chinese_word_multiplier() -> None:
+    quantities = evidence_binding._system_a_fact_quantities(
+        "缩小针孔可把横向分辨率提高到衍射极限的两倍。"
+    )
+
+    assert ("2", "fold", "increase") in quantities
+
+
+def test_latex_sim_does_not_hide_reported_frame_rate() -> None:
+    evidence = (
+        "The system reconstructs continuous real-time 3D video at $\\sim$8 "
+        "frames per second for image resolutions of $64 \\times 64$ pixels."
+    )
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="原文报告该三维视频系统的重建速度约为 8 帧/秒。",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="3D single-pixel video.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_authoritative_plan_does_not_bypass_missing_piln_identity() -> None:
+    evidence = (
+        "Single-pixel imaging combines compressive sensing with computational "
+        "reconstruction to recover images from bucket-detector measurements."
+    )
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=(
+            "PILN 将物理成像模型作为网络迭代指导，并通过可学习模块完成重建。"
+        ),
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Acquisition and image reconstruction strategies",
+        evidence_quote=evidence,
+        source_name="Principles and prospects for single-pixel imaging.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["suppress_link"] is True
+    assert "piln" in binding["missing_terms"]
+
+
+def test_physical_noise_evidence_does_not_support_unstated_black_box_or_robustness_claims() -> None:
+    evidence = (
+        "We established a real-world physical noise model of SPAD arrays and calibrated "
+        "it with real-shot images. The calibrated model was used to synthesize image "
+        "pairs for network training."
+    )
+    claims = (
+        "该方法用物理噪声模型替代纯数据驱动的黑箱学习。",
+        "该方法在训练数据有限或场景变化时仍能保持鲁棒性。",
+        "传统方法失效时，该网络仍能恢复清晰图像。",
+        "该网络从物理噪声中解耦出真实信号。",
+    )
+
+    for claim in claims:
+        binding = evidence_binding.assess_system_a_hit_binding(
+            answer_claim=claim,
+            hit={"text": evidence},
+            meta={
+                "citation_plan_evidence_authoritative": True,
+                "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+            heading="Introduction",
+            evidence_quote=evidence,
+            source_name="Physics-informed SPAD imaging.pdf",
+        )
+
+        assert binding["status"] == "mismatch"
+        assert binding["suppress_link"] is True
+        assert binding["missing_terms"] == ["explicit relation"]
+
+
+def test_authoritative_full_plan_evidence_is_distinct_from_short_locator_snippet() -> None:
+    locator_snippet = "The abstract introduces the overall network architecture."
+    full_plan_evidence = (
+        "1D signals collected by the single-pixel detector are used as labels "
+        "for adaptively optimizing and reconstructing the image."
+    )
+    claim = (
+        "单像素探测器采集的 1D 信号作为监督标签，"
+        "用于自适应优化和图像重建。"
+    )
+    common = {
+        "answer_claim": claim,
+        "hit": {"text": locator_snippet},
+        "heading": "Abstract",
+        "evidence_quote": locator_snippet,
+        "source_name": "Method paper.pdf",
+    }
+    binding = evidence_binding.assess_system_a_hit_binding(
+        hit={"text": locator_snippet},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+            "citation_plan_full_evidence_quote": full_plan_evidence,
+        },
+        answer_claim=claim,
+        heading=common["heading"],
+        evidence_quote=common["evidence_quote"],
+        source_name=common["source_name"],
+    )
+    ignored_untrusted_full_plan = evidence_binding.assess_system_a_hit_binding(
+        **common,
+        meta={
+            "citation_plan_evidence_authoritative": False,
+            "citation_plan_full_evidence_quote": full_plan_evidence,
+        },
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert ignored_untrusted_full_plan["suppress_link"] is True

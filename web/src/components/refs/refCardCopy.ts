@@ -28,9 +28,11 @@ function comparisonText(value: unknown): string {
 
 function textMatchesLocale(value: string, locale: RefCardCopyLocale): boolean {
   const cjkCount = (value.match(/[\u3400-\u9fff]/g) || []).length
-  if (locale === 'zh') return cjkCount >= 2
   const latinCount = (value.match(/[A-Za-z]/g) || []).length
-  return cjkCount <= 1 && latinCount >= 8
+  if (locale === 'zh') {
+    return cjkCount >= 4 && (cjkCount >= 12 || cjkCount * 2 >= latinCount)
+  }
+  return latinCount >= 4 && (cjkCount === 0 || latinCount >= Math.max(8, cjkCount * 2))
 }
 
 export function selectLocalizedRefCardText({

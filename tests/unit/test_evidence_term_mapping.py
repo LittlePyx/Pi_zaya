@@ -261,3 +261,27 @@ def test_detector_review_guide_aligns_with_english_abstract() -> None:
         "complexity",
         "adoption",
     }.issubset(answer_tokens & evidence_tokens)
+
+
+def test_piln_measurement_label_claim_aligns_with_english_source_sentence() -> None:
+    answer_tokens = evidence_alignment_tokens(
+        "无需真实图像标签：ILNet 不需要成对的高质量图像作为训练标签，"
+        "而是利用物理采集的 1D 信号作为监督信号。"
+    )
+    evidence_tokens = evidence_alignment_tokens(
+        "1D signals collected by the single-pixel detector are used as labels for "
+        "adaptively optimizing and reconstructing the image."
+    )
+
+    assert {
+        "signals",
+        "collected",
+        "single",
+        "pixel",
+        "detector",
+        "used",
+        "labels",
+        "adaptively",
+        "optimizing",
+        "reconstructing",
+    } <= (answer_tokens & evidence_tokens)

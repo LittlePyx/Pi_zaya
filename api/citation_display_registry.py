@@ -265,6 +265,111 @@ def _rebind_system_a_occurrence_anchors(markdown: str, rows: list[dict]) -> str:
     return "".join(pieces)
 
 
+def _exact_system_a_evidence_identity(detail: dict) -> tuple[str, str] | None:
+    """Identify repeated cards for the exact same passage of one document.
+
+    A paper may legitimately contribute several different passages, so source
+    identity alone is deliberately insufficient here.  Renderer-produced
+    evidence fingerprints (or their equivalent citation-budget key) are the
+    narrow signal that two rows describe the same evidence occurrence.
+    """
+
+    if not _system_a_detail(detail):
+        return None
+    fingerprint = str(
+        detail.get("evidence_fingerprint")
+        or detail.get("citation_budget_key")
+        or ""
+    ).strip().casefold()
+    source_key = system_a_source_key(detail)
+    if not source_key or len(fingerprint) < 8:
+        return None
+    return source_key, fingerprint
+
+
+def _dedupe_exact_system_a_evidence_cards(
+    markdown: str,
+    rows: list[dict],
+) -> tuple[str, list[dict]]:
+    """Collapse only exact-evidence duplicates and preserve every answer link."""
+
+    text = str(markdown or "")
+    groups: dict[tuple[str, str], list[int]] = {}
+    for index, row in enumerate(rows):
+        identity = _exact_system_a_evidence_identity(row)
+        if identity is not None:
+            groups.setdefault(identity, []).append(index)
+
+    replacements: dict[int, dict] = {}
+    skipped: set[int] = set()
+    for indexes in groups.values():
+        if len(indexes) < 2:
+            continue
+
+        def _quality(index: int) -> tuple[int, int, float, int, int]:
+            row = rows[index]
+            claim = str(row.get("answer_claim") or "").strip()
+            evidence = _detail_evidence_text(row, focused=True)
+            try:
+                confidence = float(row.get("binding_confidence") or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            anchor = str(row.get("anchor") or "").strip()
+            position = _link_position(text, anchor)
+            return (
+                1 if claim else 0,
+                1 if str(row.get("card_evidence") or "").strip() else 0,
+                confidence,
+                len(evidence),
+                -(position if position >= 0 else 10**12),
+            )
+
+        canonical_index = max(indexes, key=_quality)
+        canonical = dict(rows[canonical_index])
+        canonical_anchor = str(canonical.get("anchor") or "").strip()
+
+        merged_claims: list[str] = []
+        merged_original_numbers: list[int] = []
+        for index in indexes:
+            row = rows[index]
+            for raw_claim in [row.get("answer_claim"), *list(row.get("answer_claims") or [])]:
+                claim = str(raw_claim or "").strip()
+                if claim and claim not in merged_claims:
+                    merged_claims.append(claim)
+            for number in _detail_original_numbers(row):
+                if number not in merged_original_numbers:
+                    merged_original_numbers.append(number)
+            alias = str(row.get("anchor") or "").strip()
+            if canonical_anchor and alias and alias != canonical_anchor:
+                text = re.sub(
+                    rf"\]\(#{re.escape(alias)}(?=(?:\s|\)))",
+                    f"](#{canonical_anchor}",
+                    text,
+                )
+
+        if merged_claims:
+            canonical["answer_claims"] = merged_claims
+            if not str(canonical.get("answer_claim") or "").strip():
+                canonical["answer_claim"] = merged_claims[0]
+        if merged_original_numbers:
+            canonical["answer_hit_linked_nums"] = merged_original_numbers
+
+        first_index = min(indexes)
+        replacements[first_index] = canonical
+        skipped.update(indexes)
+        skipped.discard(first_index)
+
+    if not replacements:
+        return text, rows
+    deduped: list[dict] = []
+    for index, row in enumerate(rows):
+        if index in replacements:
+            deduped.append(replacements[index])
+        elif index not in skipped:
+            deduped.append(row)
+    return text, deduped
+
+
 def remap_system_a_citations_for_display(
     markdown: str,
     cite_details: list[dict] | None,
@@ -364,6 +469,8 @@ def remap_system_a_citations_for_display(
                 text,
             )
         remapped.append(next_row)
+
+    text, remapped = _dedupe_exact_system_a_evidence_cards(text, remapped)
 
     known_anchors = {
         str(row.get("anchor") or "").strip()

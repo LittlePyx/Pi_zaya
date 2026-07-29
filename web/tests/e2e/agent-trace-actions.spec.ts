@@ -2297,6 +2297,43 @@ test('citation popover view model assembles route-specific frame, status, and ca
     },
     S,
   })
+  const groundedSystemA = await citationPopoverViewModel(page, {
+    detail: {
+      num: 4,
+      sourceName: 'PILN.pdf',
+      sourcePath: '/tmp/piln.md',
+      title: 'Abstract',
+      headingPath: 'Abstract',
+      pageStart: 2,
+      cardEvidence: 'The reconstructed image is reused as input for the subsequent ILNet iteration.',
+      bindingStatus: 'grounded',
+      bindingReason: 'This citation reuses the source evidence actually supplied during answer generation.',
+      cardQualityFlags: [],
+      cardView: {
+        version: 2,
+        route: 'system_a',
+        kind: 'answer_evidence',
+        header: { kicker: 'Answer evidence', title: 'PILN.pdf', subtitle: 'Abstract / p. 2' },
+        sections: [
+          {
+            id: 'evidence',
+            label: 'Source evidence',
+            text: 'The reconstructed image is reused as input for the subsequent ILNet iteration.',
+            kind: 'quote',
+          },
+          {
+            id: 'support',
+            label: 'Why it supports the answer',
+            text: 'This passage connects the claimed image-loop mechanism to the next-iteration network input.',
+            kind: 'support',
+          },
+        ],
+        summary: 'The reconstructed image is reused as input for the subsequent ILNet iteration.',
+        quality: { label: 'Evidence matched', score: 0.9, flags: [], warning: '' },
+      },
+    },
+    S,
+  })
   const systemB = await citationPopoverViewModel(page, {
     detail: {
       isInpaper: true,
@@ -2331,6 +2368,11 @@ test('citation popover view model assembles route-specific frame, status, and ca
   expect(systemA.status.bindingOverlapText).toBe('calibration / drift')
   expect(systemA.systemA.showSupport).toBe(true)
   expect(systemA.systemA.contentCard.evidence).toContain('calibration reduces drift')
+
+  expect(groundedSystemA.status.bindingReason).toBe('')
+  expect(groundedSystemA.status.showBindingReason).toBe(false)
+  expect(groundedSystemA.systemA.showSupport).toBe(true)
+  expect(groundedSystemA.systemA.contentCard.support).toContain('next-iteration network input')
 
   expect(systemB.isSystemB).toBe(true)
   expect(systemB.frame.kindLabel).toBe('Upstream citation')

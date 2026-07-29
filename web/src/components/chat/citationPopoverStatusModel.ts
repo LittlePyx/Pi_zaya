@@ -49,6 +49,21 @@ export interface CitationPopoverStatusModel {
   supportText: string
 }
 
+function looksTemplateBindingReason(value: string): boolean {
+  const text = compact(value).replace(/\s+/g, ' ')
+  if (!text) return false
+  return (
+    /^this citation (?:reuses|uses|is only)/i.test(text)
+    || /^this (?:answer sentence|claim) is supported by/i.test(text)
+    || /^the (?:same )?source (?:passage )?(?:directly )?(?:contains|reports|provides)/i.test(text)
+    || /^the answer and source align/i.test(text)
+    || /^\u8be5?\u5f15\u7528\u590d\u7528\u751f\u6210\u56de\u7b54\u65f6/.test(text)
+    || /^\u8be5?\u5f15\u7528\u4f7f\u7528\u4e86\u5df2\u6838\u5bf9/.test(text)
+    || /^\u539f\u6587\u5728\u8be5\u5b9a\u4f4d\u5904\u7ed9\u51fa\u7684\u5177\u4f53\u9648\u8ff0/.test(text)
+    || /^\u7b54\u6848\u4e0e\u82f1\u6587\u539f\u6587\u5728.*\u591a\u4e2a\u5177\u4f53\u52a8\u4f5c/.test(text)
+  )
+}
+
 export function buildCitationPopoverStatusModel({
   detail,
   S,
@@ -67,7 +82,8 @@ export function buildCitationPopoverStatusModel({
     : []
   const whyText = compact(detail.whyLine)
   const bindingStatus = compact(detail.bindingStatus).toLowerCase()
-  const bindingReason = localizeKnownBody(detail.bindingReason)
+  const rawBindingReason = localizeKnownBody(detail.bindingReason)
+  const bindingReason = looksTemplateBindingReason(rawBindingReason) ? '' : rawBindingReason
   const bindingOverlapText = Array.isArray(detail.bindingOverlapTerms)
     ? detail.bindingOverlapTerms.map((item) => compact(item)).filter(Boolean).join(' / ')
     : ''
@@ -82,7 +98,7 @@ export function buildCitationPopoverStatusModel({
     || localizeKnownBody(detail.cardSupportExplanation)
     || localizeKnownBody(detail.supportRelation)
     || whyText
-    || bindingReason
+    || (isSystemB ? bindingReason : '')
   const explicitSupportText = looksNarrativeMetadataText(rawExplicitSupportText, detail) ? '' : rawExplicitSupportText
   const supportText = isSystemB
     ? (explicitSupportText || S.cite_system_b_support_default)

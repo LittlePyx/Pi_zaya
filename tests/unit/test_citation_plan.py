@@ -1482,6 +1482,184 @@ def test_answer_hit_slot_keeps_late_numeric_calibration_evidence() -> None:
     assert "90 scenes" in slot["evidence_quote"]
 
 
+def test_physics_informed_single_photon_focus_uses_introduction_noise_model(
+    tmp_path: Path,
+) -> None:
+    pidl = tmp_path / "High-resolution single-photon imaging with physics-informed deep learning.en.md"
+    pidl.write_text(
+        "<!-- kb_page: 2 -->\n\n# High-resolution single-photon imaging with physics-informed deep learning\n\n"
+        "## Introduction\n\nBackground motivation.\n\n"
+        "<!-- kb_page: 3 -->\n\n"
+        "We first established a real-world physical noise model of SPAD arrays. "
+        "The real physical noise sources include shot noise, dark count rate, afterpulsing, "
+        "crosstalk noise, and deadtime noise. "
+        "To calibrate the model, we collected 2790 images from 90 scenes, each with "
+        "10 different bit depths and 3 different illumination fluxes.\n\n"
+        "<!-- kb_page: 8 -->\n\n## Discussion\n\nThe technique adapts to several imaging modalities.\n",
+        encoding="utf-8",
+    )
+    detector = tmp_path / "Emerging single-photon detection technique for high-performance photodetector.en.md"
+    detector.write_text("# Detector review\n\n## Introduction\n\nA review of SPAD materials.\n", encoding="utf-8")
+
+    plan = build_citation_plan(
+        prompt="physics-informed deep learning 在单光子成像里到底帮了什么？",
+        answer_hits=[
+            {"text": "A review of SPAD materials.", "meta": {"source_path": str(detector)}},
+            {"text": "The technique adapts to several modalities.", "meta": {"source_path": str(pidl)}},
+        ],
+    )
+
+    system_a = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert len(system_a) == 1
+    focus = next(slot for slot in system_a if slot["source_path"] == str(pidl))
+    assert focus["heading_path"].endswith("Introduction")
+    assert focus["page_start"] == 3
+    assert "physical noise model of SPAD arrays" in focus["evidence_quote"]
+    assert "2790 images from 90 scenes" in focus["evidence_quote"]
+
+
+def test_physics_informed_role_plan_keeps_noise_and_training_evidence_in_one_source_slot(
+    tmp_path: Path,
+) -> None:
+    pidl = tmp_path / "High-resolution single-photon imaging with physics-informed deep learning.en.md"
+    pidl.write_text(
+        "# High-resolution single-photon imaging with physics-informed deep learning\n\n"
+        "## Introduction\n\n<!-- kb_page: 3 -->\n\n"
+        "We first established a real-world physical noise model of SPAD arrays. "
+        "The real physical noise sources consist of shot noise, fixed-pattern noise, "
+        "dark count rate, afterpulsing and crosstalk noise, and deadtime noise. "
+        "We collected a real-shot SPAD image dataset containing 2790 images in total, "
+        "each with 64 x 32 pixels. Among these images, there are 90 scenes, each with "
+        "10 different bit depths and 3 different illumination fluxes. "
+        "With the calibrated physical noise model, we employed public highresolution "
+        "images collected from the PASCAL VOC2007 [31] and\n\n"
+        "*an intervening figure caption*\n\n"
+        "VOC2012 [32] datasets) to digitally synthesize a realistic singlephoton image "
+        "dataset containing 2.6 million image pairs. The gated fusion transformer network "
+        "was trained using the above large-scale singlephoton image dataset.\n",
+        encoding="utf-8",
+    )
+
+    plan = build_citation_plan(
+        prompt="physics-informed deep learning 在单光子成像里到底帮了什么？",
+        answer_hits=[
+            {
+                "text": "The technique supports SPAD reconstruction.",
+                "meta": {"source_path": str(pidl)},
+            }
+        ],
+    )
+
+    system_a = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert len(system_a) == 1
+    assert {slot["source_path"] for slot in system_a} == {str(pidl)}
+    focus = system_a[0]
+    assert focus["candidate_hits"] == [1]
+    assert focus["page_start"] == 3
+    assert "physical noise model of SPAD arrays" in focus["evidence_quote"]
+    assert "PASCAL VOC2007" in focus["evidence_quote"]
+    assert "digitally synthesize" in focus["evidence_quote"]
+    assert "image pairs" in focus["evidence_quote"]
+    assert "network was trained" in focus["evidence_quote"]
+    prompt_block = build_citation_plan_prompt_block(plan)
+    assert "PASCAL images to synthesize paired data" in prompt_block
+    assert "Do not claim that it replaces a black box" in prompt_block
+    assert "scene changes" in prompt_block
+
+
+def test_single_photon_reading_pair_keeps_detector_review_and_pidl_introduction(
+    tmp_path: Path,
+) -> None:
+    detector = tmp_path / "Emerging single-photon detection technique for high-performance photodetector.en.md"
+    detector.write_text("# Detector review\n\n## Introduction\n\nSi-SPAD detectors have characteristic noise sources.\n", encoding="utf-8")
+    pidl = tmp_path / "High-resolution single-photon imaging with physics-informed deep learning.en.md"
+    pidl.write_text(
+        "# High-resolution single-photon imaging with physics-informed deep learning\n\n"
+        "## Introduction\n\n<!-- kb_page: 3 -->\n\n"
+        "We first established a real-world physical noise model of SPAD arrays. "
+        "The real physical noise sources include dark count rate and crosstalk noise. "
+        "We collected 2790 images from 90 scenes at 10 different bit depths and "
+        "3 different illumination fluxes.\n",
+        encoding="utf-8",
+    )
+
+    plan = build_citation_plan(
+        prompt="单光子成像里，探测器综述和 physics-informed deep learning 这篇应该怎么搭配读？",
+        answer_hits=[
+            {"text": "Si-SPAD detector review.", "meta": {"source_path": str(detector)}},
+            {"text": "Physics-informed SPAD reconstruction.", "meta": {"source_path": str(pidl)}},
+        ],
+    )
+
+    system_a = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert len(system_a) == 2
+    assert [slot["source_path"] for slot in system_a] == [str(detector), str(pidl)]
+    assert system_a[1]["page_start"] == 3
+    assert "2790 images" in system_a[1]["evidence_quote"]
+
+
+def test_physics_informed_spad_explicit_discussion_request_is_not_forced_to_introduction(
+    tmp_path: Path,
+) -> None:
+    pidl = tmp_path / "High-resolution single-photon imaging with physics-informed deep learning.en.md"
+    pidl.write_text(
+        "# High-resolution single-photon imaging with physics-informed deep learning\n\n"
+        "## Introduction\n\n<!-- kb_page: 3 -->\n\n"
+        "We established a physical noise model of SPAD arrays. The physical noise sources "
+        "include dark count and crosstalk. We collected 2790 images from 90 scenes at "
+        "10 different bit depths and 3 illumination fluxes.\n\n"
+        "## Discussion\n\n<!-- kb_page: 8 -->\n\n"
+        "The reported physics-informed technique adapts to several single-photon imaging modalities.\n",
+        encoding="utf-8",
+    )
+
+    plan = build_citation_plan(
+        prompt="From the Discussion section only, what does physics-informed SPAD imaging enable?",
+        answer_hits=[
+            {
+                "text": "The reported physics-informed technique adapts to several modalities.",
+                "meta": {
+                    "source_path": str(pidl),
+                    "heading_path": "Discussion",
+                    "page_start": 8,
+                },
+            }
+        ],
+    )
+
+    focus = next(slot for slot in plan["slots"] if slot["source_path"] == str(pidl))
+    assert focus["heading_path"] == "Discussion"
+    assert focus["page_start"] == 8
+
+
+def test_physics_informed_spad_comparison_preserves_the_other_method_and_budget(
+    tmp_path: Path,
+) -> None:
+    pidl = tmp_path / "High-resolution single-photon imaging with physics-informed deep learning.en.md"
+    pidl.write_text(
+        "# High-resolution single-photon imaging with physics-informed deep learning\n\n"
+        "## Introduction\n\n<!-- kb_page: 3 -->\n\n"
+        "We established a physical noise model of SPAD arrays. The physical noise sources "
+        "include dark count and crosstalk. We collected 2790 images from 90 scenes at "
+        "10 different bit depths and 3 illumination fluxes.\n",
+        encoding="utf-8",
+    )
+    other = tmp_path / "MethodX single-photon reconstruction.en.md"
+    other.write_text("# MethodX\n\n## Abstract\n\nMethodX uses a calibrated statistical prior.\n", encoding="utf-8")
+
+    plan = build_citation_plan(
+        prompt="Compare physics-informed SPAD reconstruction with MethodX.",
+        answer_hits=[
+            {"text": "Physics-informed SPAD reconstruction.", "meta": {"source_path": str(pidl)}},
+            {"text": "MethodX uses a calibrated statistical prior.", "meta": {"source_path": str(other)}},
+        ],
+    )
+
+    system_a = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert {slot["source_path"] for slot in system_a} == {str(pidl), str(other)}
+    assert plan["budget"]["system_a"] >= 2
+
+
 def test_implicit_two_sided_comparison_keeps_both_exact_sources() -> None:
     hits = [
         {

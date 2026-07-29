@@ -10,6 +10,7 @@ from kb.evidence_binding import (
     _quantity_label,
     _system_a_fact_quantities,
     assess_system_a_hit_binding,
+    explicit_claim_relations_covered,
 )
 from kb.evidence_term_mapping import evidence_alignment_tokens, method_identity_conflicts
 
@@ -605,6 +606,8 @@ def _support_score(
         and not review_identity_re.search(evidence_norm)
         and method_identity_re.search(evidence_norm)
     ):
+        return 0
+    if not explicit_claim_relations_covered(claim_plain, evidence_text):
         return 0
     explicit_relation_requirements = (
         (

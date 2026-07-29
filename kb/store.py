@@ -242,11 +242,16 @@ def _doc_index_is_ready(rec: dict | None) -> bool:
     if not isinstance(rec, dict):
         return False
     status = str(rec.get("index_status") or "").strip().lower()
-    if status and status != "ready":
+    if status and status not in {"ready", "quality_degraded"}:
         return False
-    if not status and int(rec.get("num_chunks") or 0) <= 0:
-        return False
-    if status == "ready" and int(rec.get("num_chunks") or 0) <= 0:
+    if status == "quality_degraded":
+        gate = rec.get("quality_gate") if isinstance(rec.get("quality_gate"), dict) else {}
+        # Degraded documents are safe only after the quality gate explicitly
+        # recorded page-level isolation.  Legacy/malformed records without that
+        # affirmative contract may still contain corrupt chunks.
+        if gate.get("indexable") is not True:
+            return False
+    if int(rec.get("num_chunks") or 0) <= 0:
         return False
     return True
 

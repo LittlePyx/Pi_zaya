@@ -2931,6 +2931,6 @@ def test_conversion_quality_result_routes_retry_markers_and_broken_math_to_recon
     assert {
         "conversion_retry_math_text",
         "conversion_retry_equation",
-        "prose_dominant_display_math",
         "display_math_markdown_link",
     }.issubset(set(payload["repair_plan"]["reconvert_issue_codes"]))
+    assert "prose_dominant_display_math" in payload["repair_plan"]["autofix_issue_codes"]

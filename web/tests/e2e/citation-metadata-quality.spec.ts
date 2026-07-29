@@ -26,6 +26,7 @@ import {
 import { restoreShelfItems } from '../../src/components/chat/citeShelfStorage'
 import type { ReaderLocateResult } from '../../src/components/chat/reader/readerTypes'
 import { prepareRefsPanelHits } from '../../src/components/refs/refsPanelDisplay'
+import { selectLocalizedRefCardText } from '../../src/components/refs/refCardCopy'
 
 function shelfItem(meta: Record<string, unknown>): CiteShelfItem {
   const detail = normalizeCiteDetail({
@@ -79,6 +80,38 @@ test('citation display text removes internal grounding markers', () => {
   expect(cleaned).toBe('Claim text still readable.')
   expect(cleaned).not.toContain('SUPPORT:')
   expect(cleaned).not.toContain('CITE:')
+})
+
+test('explicit citation route wins over the legacy in-paper flag', () => {
+  const routeOnlySystemB = normalizeCiteDetail({
+    anchor: 'route-only-system-b',
+    citation_route: 'system_b',
+    is_inpaper: false,
+    title: 'Upstream method',
+  })
+  const explicitSystemA = normalizeCiteDetail({
+    anchor: 'explicit-system-a',
+    citation_route: 'system_a',
+    is_inpaper: true,
+    source_name: 'Current paper.pdf',
+  })
+
+  expect(routeOnlySystemB?.isInpaper).toBe(true)
+  expect(explicitSystemA?.isInpaper).toBe(false)
+})
+
+test('reference-card locale fallback rejects token language mixing', () => {
+  expect(selectLocalizedRefCardText({
+    cardText: '中文 This entire explanation remains in English and should not pass.',
+    explicitTexts: ['原文说明该方法通过并行调制缩短采集时间。'],
+    locale: 'zh',
+  })).toBe('原文说明该方法通过并行调制缩短采集时间。')
+
+  expect(selectLocalizedRefCardText({
+    cardText: 'English text with 中文点缀 should remain an English card explanation.',
+    explicitTexts: ['这是完整的中文说明。'],
+    locale: 'en',
+  })).toBe('English text with 中文点缀 should remain an English card explanation.')
 })
 
 test('citation shelf metadata ready follows export acceptance when present', () => {

@@ -164,6 +164,66 @@ def _refs_payload_is_converged_for_case(
     return bool(card_quality.get("count")) and not _ref_card_quality_failures(card_quality)
 
 
+def _refs_payload_has_pending_card_work(
+    refs_payload: Any,
+    *,
+    user_msg_id: int | str | None,
+) -> bool:
+    """Return whether a full pack still advertises card work in progress.
+
+    A heuristic or failed polish result is terminal: waiting longer cannot turn
+    it into a passing card unless a new task is scheduled.  Distinguishing that
+    state from ``pending`` keeps real-user evaluations from adding a meaningless
+    45-second tail to an already-complete (but potentially low-quality) answer.
+    """
+
+    packs = _extract_ref_packs(refs_payload, user_msg_id=user_msg_id)
+    pending_statuses = {"pending", "queued", "running", "working"}
+    for pack in packs:
+        if bool(pack.get("pending") or pack.get("enrichment_pending")):
+            return True
+        if str(pack.get("display_state") or "").strip().lower() == "pending":
+            return True
+        if str(pack.get("polish_status") or "").strip().lower() in pending_statuses:
+            return True
+        for hit in _as_list(pack.get("hits")):
+            if not isinstance(hit, dict):
+                continue
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            for key in ("polish_status", "summary_polish_status", "why_polish_status"):
+                if str(ui_meta.get(key) or "").strip().lower() in pending_statuses:
+                    return True
+    return False
+
+
+def _refs_payload_is_terminal_for_case(
+    refs_payload: Any,
+    *,
+    user_msg_id: int | str | None,
+) -> bool:
+    """Return whether reference cards are complete even if quality checks fail."""
+
+    if not _refs_payload_is_full(refs_payload, user_msg_id=user_msg_id):
+        return False
+    packs = _extract_ref_packs(refs_payload, user_msg_id=user_msg_id)
+    if not packs or _refs_payload_has_pending_card_work(refs_payload, user_msg_id=user_msg_id):
+        return False
+    # A status emitted by the card pipeline proves this is an authoritative
+    # terminal packet rather than the short-lived legacy/full snapshot.
+    for pack in packs:
+        pack_status = str(pack.get("polish_status") or "").strip().lower()
+        hits = [hit for hit in _as_list(pack.get("hits")) if isinstance(hit, dict)]
+        if pack_status:
+            continue
+        if hits and all(
+            str((hit.get("ui_meta") or {}).get("polish_status") or "").strip()
+            for hit in hits
+        ):
+            continue
+        return False
+    return True
+
+
 def _generation_should_wait_for_full_refs(
     final_payload: dict[str, Any] | None,
     expected: dict[str, Any] | None,
@@ -205,6 +265,40 @@ def _latency_budget_checks(expected: dict[str, Any], result: dict[str, Any]) -> 
             }
         )
     return checks
+
+
+def _percentile_ms(values: list[float], percentile: float) -> float | None:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return None
+    if len(ordered) == 1:
+        return round(ordered[0], 2)
+    position = max(0.0, min(1.0, float(percentile))) * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(len(ordered) - 1, lower + 1)
+    fraction = position - lower
+    value = ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+    return round(value, 2)
+
+
+def _timing_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, float | int | None]]:
+    summary: dict[str, dict[str, float | int | None]] = {}
+    for key in ("first_answer_ms", "answer_complete_ms", "cards_complete_ms", "latency_ms"):
+        values: list[float] = []
+        for row in rows:
+            try:
+                value = float(row.get(key))
+            except (TypeError, ValueError):
+                continue
+            if value >= 0:
+                values.append(value)
+        summary[key] = {
+            "count": len(values),
+            "p50": _percentile_ms(values, 0.50),
+            "p95": _percentile_ms(values, 0.95),
+            "max": round(max(values), 2) if values else None,
+        }
+    return summary
 
 
 def load_fixture(path: Path | str = DEFAULT_FIXTURE) -> ResearchQaFixture:
@@ -930,6 +1024,7 @@ def _inline_inpaper_citation_details(answer: str) -> list[dict[str, Any]]:
 def _citation_details(result: dict[str, Any]) -> list[dict[str, Any]]:
     message = result.get("assistant_message")
     details: list[Any] = []
+    citation_plan_slots: list[dict[str, Any]] = []
     if isinstance(message, dict):
         details.extend(_as_list(message.get("cite_details")))
         meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
@@ -937,6 +1032,21 @@ def _citation_details(result: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(packet, dict):
             render_packet = packet.get("render_packet") if isinstance(packet.get("render_packet"), dict) else {}
             details.extend(_as_list(render_packet.get("cite_details")))
+        answer_quality = meta.get("answer_quality") if isinstance(meta.get("answer_quality"), dict) else {}
+        for plan in (
+            answer_quality.get("citation_plan"),
+            packet.get("citation_plan") if isinstance(packet, dict) else None,
+        ):
+            if isinstance(plan, dict):
+                plan_rows = _as_list(plan.get("slots"))
+            else:
+                plan_rows = _as_list(plan)
+            citation_plan_slots.extend(
+                dict(item)
+                for item in plan_rows
+                if isinstance(item, dict)
+                and str(item.get("evidence_quote") or item.get("summary_line") or "").strip()
+            )
     final_payload = result.get("final_payload")
     if isinstance(final_payload, dict):
         details.extend(_as_list(final_payload.get("cite_details")))
@@ -972,6 +1082,48 @@ def _citation_details(result: dict[str, Any]) -> list[dict[str, Any]]:
         structured.append(item)
         if route == "system_b" and num > 0:
             detailed_system_b_nums.add(num)
+    for item in structured:
+        if _citation_route(item) != "system_a":
+            continue
+        source_path = str(item.get("source_path") or item.get("sourcePath") or "").strip()
+        source_key = source_path.replace("\\", "/").casefold()
+        if not source_key:
+            continue
+        source_matches = [
+            slot
+            for slot in citation_plan_slots
+            if str(slot.get("source_path") or slot.get("sourcePath") or "")
+            .strip()
+            .replace("\\", "/")
+            .casefold()
+            == source_key
+        ]
+        if not source_matches:
+            continue
+        heading_key = str(item.get("heading_path") or item.get("location_label") or "").strip().casefold()
+        heading_matches = [
+            slot
+            for slot in source_matches
+            if str(slot.get("heading_path") or slot.get("location_label") or "").strip().casefold()
+            == heading_key
+        ]
+        if heading_matches:
+            source_matches = heading_matches
+        plan_match = max(
+            source_matches,
+            key=lambda slot: len(
+                str(slot.get("evidence_quote") or slot.get("summary_line") or "").strip()
+            ),
+        )
+        plan_quote = str(
+            plan_match.get("evidence_quote") or plan_match.get("summary_line") or ""
+        ).strip()
+        if plan_quote:
+            # This is not arbitrary hidden raw text: it is the source-bound
+            # evidence selected by the citation plan for this exact card.  Keep
+            # the compact evidence quote for display/locating, and retain the
+            # full plan passage for claim-level semantic validation.
+            item["citation_plan_evidence_quote"] = plan_quote
     for item in _inline_inpaper_citation_details(_answer_text(result)):
         try:
             ref_num = int(item.get("ref_num") or 0)
@@ -1102,6 +1254,7 @@ def _detail_evidence_payload(detail: dict[str, Any]) -> dict[str, Any]:
         key: detail.get(key)
         for key in (
             "evidence_quote",
+            "citation_plan_evidence_quote",
             "citation_context",
             "card_evidence",
             "card_reference_entry",
@@ -1987,6 +2140,7 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 def _build_report(rows: list[dict[str, Any]], *, fixture_path: Path, base_url: str, output_dir: Path) -> str:
     passed = [row for row in rows if bool((row.get("quality") or {}).get("ok"))]
     failed = [row for row in rows if not bool((row.get("quality") or {}).get("ok"))]
+    timing = _timing_summary(rows)
     lines = [
         "# Research QA Eval Report",
         "",
@@ -1998,9 +2152,28 @@ def _build_report(rows: list[dict[str, Any]], *, fixture_path: Path, base_url: s
         f"- Passed: {len(passed)}",
         f"- Failed: {len(failed)}",
         "",
+        "## User-visible latency",
+        "",
+        "| Milestone | Samples | p50 | p95 | Max |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for key, label in (
+        ("first_answer_ms", "First visible answer"),
+        ("answer_complete_ms", "Answer complete"),
+        ("cards_complete_ms", "Evidence cards complete"),
+        ("latency_ms", "End-to-end evaluation"),
+    ):
+        item = timing[key]
+        format_ms = lambda value: "n/a" if value is None else f"{float(value):.0f} ms"
+        lines.append(
+            f"| {label} | {int(item['count'] or 0)} | {format_ms(item['p50'])} | "
+            f"{format_ms(item['p95'])} | {format_ms(item['max'])} |"
+        )
+    lines.extend([
+        "",
         "## Failures",
         "",
-    ]
+    ])
     if not failed:
         lines.append("- None")
     for row in failed:
@@ -2289,6 +2462,14 @@ def run_case(
             ):
                 cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
                 break
+            if _refs_payload_is_terminal_for_case(
+                refs_payload,
+                user_msg_id=gen.get("user_msg_id"),
+            ):
+                # Terminal-but-low-quality cards should fail their quality
+                # contract promptly; further polling cannot improve them.
+                cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
+                break
     # References may refine primary evidence and backfill message render packets;
     # validate the converged message after the references endpoint has run.
     messages = _get_json(base_url, f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1", timeout_s)
@@ -2511,6 +2692,7 @@ def main(argv: list[str] | None = None) -> int:
         "base_url": base_url,
         "fixture": str(fixture_path),
         "output_dir": str(output_dir),
+        "timing": _timing_summary(rows),
     }
     _write_jsonl(output_dir / "raw_results.jsonl", rows)
     _write_json(output_dir / "summary.json", summary)

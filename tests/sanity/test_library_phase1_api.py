@@ -776,19 +776,22 @@ def test_library_files_route_exposes_authoritative_index_state(monkeypatch, tmp_
     db_dir.mkdir(parents=True, exist_ok=True)
 
     ready_pdf = pdf_dir / "ready.pdf"
+    degraded_pdf = pdf_dir / "degraded.pdf"
     blocked_pdf = pdf_dir / "blocked.pdf"
     stale_pdf = pdf_dir / "stale.pdf"
-    for p in (ready_pdf, blocked_pdf, stale_pdf):
+    for p in (ready_pdf, degraded_pdf, blocked_pdf, stale_pdf):
         p.write_bytes(b"%PDF-1.4 test")
 
     ready_md = md_dir / "ready" / "ready.en.md"
+    degraded_md = md_dir / "degraded" / "degraded.en.md"
     blocked_md = md_dir / "blocked" / "blocked.en.md"
     stale_md = md_dir / "stale" / "stale.en.md"
-    for md in (ready_md, blocked_md, stale_md):
+    for md in (ready_md, degraded_md, blocked_md, stale_md):
         md.parent.mkdir(parents=True, exist_ok=True)
         md.write_text("# Paper\n\n## Abstract\n\ncontent\n\n## References\n\n[1] Ref.", encoding="utf-8")
 
     ready_id = compute_doc_id(ready_md)
+    degraded_id = compute_doc_id(degraded_md)
     blocked_id = compute_doc_id(blocked_md)
     stale_id = compute_doc_id(stale_md)
     save_docs_index(
@@ -801,6 +804,19 @@ def test_library_files_route_exposes_authoritative_index_state(monkeypatch, tmp_
                 "num_chunks": 1,
                 "index_status": "ready",
                 "quality_gate": {"status": "ready", "action": "none"},
+            },
+            degraded_id: {
+                "doc_id": degraded_id,
+                "path": str(degraded_md),
+                "sha1": "degraded-sha",
+                "num_chunks": 1,
+                "index_status": "quality_degraded",
+                "quality_gate": {
+                    "status": "degraded",
+                    "indexable": True,
+                    "action": "reconvert",
+                    "issue_codes": ["source_page_text_corruption"],
+                },
             },
             blocked_id: {
                 "doc_id": blocked_id,
@@ -821,6 +837,11 @@ def test_library_files_route_exposes_authoritative_index_state(monkeypatch, tmp_
         },
     )
     write_doc_chunks(db_dir, ready_id, [{"text": "ready chunk", "meta": {"source_path": str(ready_md)}}])
+    write_doc_chunks(
+        db_dir,
+        degraded_id,
+        [{"text": "usable degraded chunk", "meta": {"source_path": str(degraded_md), "evidence_ready": True}}],
+    )
 
     class FakeStore:
         def list_records_by_paths(self, paths):
@@ -845,13 +866,17 @@ def test_library_files_route_exposes_authoritative_index_state(monkeypatch, tmp_
     assert by_name["ready.pdf"]["index_state"] == "ready"
     assert by_name["ready.pdf"]["index_ready"] is True
     assert by_name["ready.pdf"]["index_chunk_exists"] is True
+    assert by_name["degraded.pdf"]["index_state"] == "ready"
+    assert by_name["degraded.pdf"]["index_status"] == "quality_degraded"
+    assert by_name["degraded.pdf"]["index_ready"] is True
+    assert by_name["degraded.pdf"]["quality_gate"]["action"] == "reconvert"
     assert by_name["blocked.pdf"]["index_state"] == "quality_blocked"
     assert by_name["blocked.pdf"]["index_ready"] is False
     assert by_name["blocked.pdf"]["quality_gate"]["action"] == "reconvert"
     assert by_name["stale.pdf"]["index_state"] == "index_stale"
     assert by_name["stale.pdf"]["index_ready"] is False
     counts = payload.get("counts") or {}
-    assert counts["index_ready"] == 1
+    assert counts["index_ready"] == 2
     assert counts["index_quality_blocked"] == 1
     assert counts["index_stale"] == 1
 

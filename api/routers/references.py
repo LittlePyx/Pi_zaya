@@ -45,6 +45,7 @@ from api.reference_metadata_quality import (
 )
 from api.reference_card_copy import (
     build_grounded_ref_why_line,
+    build_localized_ref_summary_line,
     looks_generic_ref_why_line,
     looks_templated_ref_why_line,
 )
@@ -114,7 +115,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 34
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 35
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000
@@ -311,8 +312,264 @@ def _clear_answer_citation_source_bound_fields(meta: dict, ui: dict) -> tuple[di
     return clean_meta, clean_ui
 
 
-def _answer_citation_claim_text(detail: dict, *, prefer_zh: bool) -> str:
-    evidence = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
+def _strip_numeric_citation_markers_from_evidence(text: str) -> str:
+    """Remove numeric citations without deleting scientific bracket values."""
+
+    scientific_context = re.compile(
+        r"(?:array|bounds?|coordinates?|domain|indices|interval|mask|pixels?|range|"
+        r"values?|vector|数组|边界|坐标|定义域|区间|掩模|像素|范围|取值|向量)"
+        r"\s*(?:=|:|are|is|of|to|为|是|采用|使用)?\s*$",
+        flags=re.IGNORECASE,
+    )
+    marker_re = re.compile(r"\[([0-9,\-–—\s]+)\](?:\([^)]*\))?")
+
+    def _replace(match: re.Match[str]) -> str:
+        values = str(match.group(1) or "")
+        tokens = [token.strip() for token in re.split(r"[,，]", values) if token.strip()]
+        has_negative_value = any(re.fullmatch(r"-\s*\d+", token) for token in tokens)
+        has_zero_value = any(re.fullmatch(r"0+", token) for token in tokens)
+        prefix = text[max(0, match.start() - 48) : match.start()]
+        suffix = text[match.end() : match.end() + 24]
+        contextual_value = bool(
+            scientific_context.search(prefix)
+            or re.match(
+                r"\s*(?:array|bounds?|coordinates?|domain|interval|range|values?|vector|"
+                r"数组|边界|坐标|定义域|区间|范围|取值|向量)\b",
+                suffix,
+                flags=re.IGNORECASE,
+            )
+        )
+        if has_negative_value or has_zero_value or contextual_value:
+            return match.group(0)
+        return ""
+
+    return marker_re.sub(_replace, text)
+
+
+def _answer_citation_authoritative_evidence(detail: dict) -> str:
+    """Return source evidence only, never answer-generated explanatory copy."""
+
+    if not isinstance(detail, dict):
+        return ""
+    evidence = next(
+        (
+            str(detail.get(key) or "").strip()
+            for key in (
+                "evidence_quote",
+                "citation_plan_evidence_quote",
+                "reader_evidence_quote",
+                "citation_plan_reader_evidence_quote",
+            )
+            if str(detail.get(key) or "").strip()
+        ),
+        "",
+    )
+    evidence = re.sub(
+        r"^\s*#{1,6}\s+(?:abstract|introduction|conclusion|discussion|results?)\s+",
+        "",
+        evidence,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    evidence = _strip_numeric_citation_markers_from_evidence(evidence)
+    evidence = re.sub(r"[*_`#]+", "", evidence)
+    return " ".join(evidence.split()).strip(" -—:：;；,.。")
+
+
+def _answer_citation_guide_looks_like_navigation(text: str) -> bool:
+    """Reject answer-side reading advice from the evidence-summary surface."""
+
+    return bool(
+        re.search(
+            r"阅读建议|如果你想.{0,20}(?:了解|深入)|建议(?:先|再|阅读|查看)|"
+            r"(?:先读|接着读|下一篇|打开原文)|"
+            r"\b(?:reading suggestion|read first|read next|open next|start with|"
+            r"if you want to (?:learn|understand|explore))\b",
+            str(text or ""),
+            flags=re.I,
+        )
+    )
+
+
+def _answer_citation_guide_from_grounded_relation(text: str) -> str:
+    """Turn a deterministic evidence relation into a factual Chinese Guide."""
+
+    guide = " ".join(str(text or "").split()).strip()
+    if not guide or looks_generic_ref_why_line(guide) or looks_templated_ref_why_line(guide):
+        return ""
+    markers = (
+        "，可直接核对",
+        "，可据此",
+        "，直接支撑",
+        "，直接回答",
+        "，直接界定",
+        "；可直接核对",
+        "；可据此",
+        "；直接支撑",
+    )
+    positions = [guide.find(marker) for marker in markers if marker in guide]
+    if positions:
+        guide = guide[: min(positions)].rstrip(" ，；。")
+    replacements = (
+        ("这段原文", "该文"),
+        ("论文的", "该文的"),
+        ("原文", "该文"),
+    )
+    for prefix, replacement in replacements:
+        if guide.startswith(prefix):
+            guide = replacement + guide[len(prefix) :]
+            break
+    if guide and not guide.endswith(("。", "！", "？")):
+        guide += "。"
+    return guide
+
+
+def _answer_citation_is_pidl_synthetic_pair_evidence(
+    *,
+    evidence: str,
+    source_identity: str,
+) -> bool:
+    """Match the PIDL data-synthesis statement without borrowing answer prose."""
+
+    evidence_low = " ".join(str(evidence or "").split()).lower()
+    source_low = " ".join(str(source_identity or "").split()).lower()
+    return bool(
+        "physics-informed" in source_low
+        and "single-photon" in source_low
+        and "calibrated physical noise model" in evidence_low
+        and ("pascal voc2007" in evidence_low or "pascal voc2012" in evidence_low)
+        and "digitally synthesize" in evidence_low
+        and re.search(r"\b2\.6\s+million\s+image\s+pairs\b", evidence_low)
+    )
+
+
+def _answer_citation_zh_guide_from_evidence(*, evidence: str, source_identity: str) -> str:
+    """Faithfully localize common evidence statements without consulting answer prose."""
+
+    text = " ".join(str(evidence or "").split()).strip()
+    low = text.lower()
+    if not text:
+        return ""
+    if _answer_citation_is_pidl_synthetic_pair_evidence(
+        evidence=text,
+        source_identity=source_identity,
+    ):
+        return (
+            "该文使用在不同照明与采集设置下校准的物理噪声模型，结合 PASCAL "
+            "VOC2007/2012 高分辨率图像，合成了 260 万对真实感单光子训练数据。"
+        )
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_count = len(re.findall(r"[A-Za-z]", text))
+    if cjk_count >= 4 and (cjk_count >= 12 or cjk_count * 2 >= latin_count):
+        return text[:95].rstrip(" ,，。.;；:：") + ("…" if len(text) > 96 else "")
+    metric_match = re.search(r"\b(PSNR|SSIM|LPIPS|FID|FPS)\b", text, flags=re.I)
+    pairs = re.findall(
+        r"(?:^|[:,;])\s*([A-Za-z][A-Za-z0-9 +()_-]{0,48}?)\s*=\s*(-?\d+\.\d+)",
+        text,
+        flags=re.I,
+    )
+    if metric_match and pairs:
+        dataset_match = re.search(r"\b(SIDD|GoPro|ImageNet|CIFAR(?:-?10|-?100)?)\b", text, flags=re.I)
+        prefix = " ".join(
+            part
+            for part in (
+                str(dataset_match.group(1) or "") if dataset_match else "",
+                str(metric_match.group(1) or "").upper(),
+            )
+            if part
+        )
+        facts = "，".join(f"{method.strip()} = {value}" for method, value in pairs[:4])
+        return f"{prefix}：{facts}。" if prefix else f"{facts}。"
+
+    # These translations are deliberately narrow and keyed only by wording
+    # present in the cited passage. Unsupported evidence remains without a
+    # Guide rather than inheriting a fluent but unverified answer claim.
+    if "each frame" in low and "entire field of view" in low and "spatial information" in low:
+        return "每一帧仍从整个视场采集新的空间信息。"
+    if "high-resolution foveal region" in low and re.search(r"track\w* fast motion", low):
+        return "中央凹区域追踪快速运动。"
+    if re.search(r"reconstructs?\s+video\s+at\s+30\s+frames per second", low):
+        return "该系统以每秒 30 帧的实时速度重建视频。"
+    if "compressed sensing" in low and "number of measurements" in low and "unknown pixels" in low:
+        return "压缩感知可在测量次数少于未知像素总数时，通过欠采样恢复图像。"
+    if (
+        ("mainstream spds" in low or "mainstream single-photon detector" in low)
+        and re.search(r"\b(?:spad|sapd|sns?pd|tes|pmt)s?\b", low)
+        and ("manufacturing cost" in low or "low-temperature" in low)
+    ):
+        return (
+            "该文梳理 PMT、SPAD、SNSPD、TES 等主流单光子探测器，"
+            "并指出制造复杂、成本及低温工作条件会限制其普及。"
+        )
+    if (
+        "deep learning" in low
+        and "reconstruction quality" in low
+        and "reconstruction speed" in low
+        and ("training" in low or "generalization" in low)
+    ):
+        return "该文报告深度学习提高重建质量和速度，同时指出训练时间长且泛化能力有限。"
+    if "deep learning" in low and "reconstruction quality" in low and "reconstruction speed" in low:
+        return "该文报告深度学习提高了单像素成像的重建质量与重建速度。"
+    if "training" in low and ("prolonged" in low or "lengthy" in low) and "generalization" in low:
+        return "该文指出训练时间较长，且模型泛化能力有限。"
+    if (
+        "photometric stereo" in low
+        and ("four spatially-separated" in low or "four spatially separated" in low)
+    ):
+        speed = "，并实现约 8 帧/秒的连续实时 3D 视频" if re.search(r"(?:approximately|about|~)?\s*8\s+frames per second", low) else ""
+        return f"该系统用四个空间分离的单像素探测器同步获取光度立体测量{speed}。"
+    if (
+        ("four spatially-separated" in low or "four spatially separated" in low)
+        and "3d video" in low
+    ):
+        speed = "约 8 帧/秒的" if re.search(r"(?:approximately|about|~)?\s*8\s+frames per second", low) else ""
+        return f"四个空间分离的探测器支持{speed}连续实时 3D 视频重建。"
+    if "model-driven strategy" in low and "physical process" in low and "neural network" in low:
+        return "模型驱动策略把 SPI 物理过程与神经网络结合，并用测量差异指导优化。"
+    if (
+        "reconstruct" in low
+        and "dynamic 3d scene" in low
+        and ("snapshot compressive image" in low or "single compressed image" in low)
+    ):
+        return "该方法从单幅压缩图像重建动态三维场景。"
+    if "self-supervised" in low and "image-loop" in low and "part-based" in low:
+        return "该文提出用于单像素成像的自监督 image-loop 网络，并采用 part-based 模型。"
+    if "spatial domain methods" in low and "transform domain methods" in low:
+        return "该文将图像去噪方法分为空间域与变换域，并说明空间域方法利用像素或图像块相关性。"
+    if "turbulence" in low and "msgan" in low and "advantage" in low:
+        return "随着湍流增强，MsGAN 相对基线方法的优势更加显著。"
+    if "frequency-division" in low and "simultaneously" in low and "integration time" in low:
+        return "多个频分掩模可在不增加积分时间的情况下同步投射。"
+    if (
+        "hadamard" in low
+        and re.search(r"\[\s*1\s*,\s*-\s*1\s*\]", low)
+        and ("lock-in amplifier" in low or re.search(r"\blia\b", low))
+        and ("phase-sensitive detection" in low or "phase of intensity modulation" in low)
+    ):
+        if "bpsk" in low or (
+            re.search(r"(?:^|[^0-9])0\s*(?:or|and|/)\s*(?:\\?pi|π)", low)
+            and "phase" in low
+        ):
+            return "该文把 Hadamard 掩模的 [1,-1] 像素值映射为 0/π 的 BPSK 调制相位，并用 LIA 进行相敏检测。"
+        return "该文用调制相位表示 Hadamard 掩模的 [1,-1] 像素值，并通过 LIA 进行相敏检测。"
+
+    grounded = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="",
+        summary_line=" ".join(part for part in (text, source_identity) if part),
+    )
+    derived = _answer_citation_guide_from_grounded_relation(grounded)
+    if derived:
+        return derived
+    return build_localized_ref_summary_line(
+        prefer_zh=True,
+        evidence_text=" ".join(part for part in (text, source_identity) if part),
+    )
+
+
+def _answer_citation_evidence_guide(detail: dict, *, prefer_zh: bool) -> str:
+    evidence = _answer_citation_authoritative_evidence(detail)
     evidence_low = evidence.lower()
     source_low = " ".join(
         str(detail.get(key) or "").strip()
@@ -347,68 +604,22 @@ def _answer_citation_claim_text(detail: dict, *, prefer_zh: bool) -> str:
                 "SCIGS reconstructs an explicit 3D scene from a single compressed image "
                 "and extends the formulation to dynamic scenes."
             )
-    if prefer_zh and evidence:
-        metric_match = re.search(r"\b(PSNR|SSIM|LPIPS|FID|FPS)\b", evidence, flags=re.I)
-        pairs = re.findall(
-            r"(?:^|[:,;])\s*([A-Za-z][A-Za-z0-9 +()_-]{0,48}?)\s*=\s*(-?\d+\.\d+)",
-            evidence,
-            flags=re.I,
-        )
-        if metric_match and pairs:
-            dataset_match = re.search(r"\b(SIDD|GoPro|ImageNet|CIFAR(?:-?10|-?100)?)\b", evidence, flags=re.I)
-            prefix = " ".join(
-                part
-                for part in (
-                    str(dataset_match.group(1) or "") if dataset_match else "",
-                    str(metric_match.group(1) or "").upper(),
-                )
-                if part
-            )
-            facts = "，".join(f"{method.strip()} = {value}" for method, value in pairs[:4])
-            return f"{prefix}：{facts}。" if prefix else f"{facts}。"
-    claim_candidates = [
-        str(value or "").strip()
-        for value in [
-            detail.get("card_takeaway"),
-            detail.get("answer_claim"),
-            *list(detail.get("answer_claims") or []),
-        ]
-        if str(value or "").strip()
-    ]
-    evidence_terms = evidence_alignment_tokens(evidence)
-    raw = max(
-        claim_candidates,
-        key=lambda value: (
-            len(evidence_terms & evidence_alignment_tokens(value)),
-            min(len(value), 240),
-        ),
-        default="",
-    )
-    if (not prefer_zh) and len(re.findall(r"[\u4e00-\u9fff]", raw)) >= 3 and evidence:
-        raw = evidence
-    raw = re.sub(r"\[[0-9,\-–—\s]+\](?:\([^)]*\))?", "", raw)
-    raw = re.sub(r"[*_`#]+", "", raw)
-    raw = " ".join(raw.split()).strip(" -—:：;；,.。")
-    if not raw:
-        raw = " ".join(evidence.split()).strip()
+    if not evidence:
+        return ""
     if prefer_zh:
-        raw = re.sub(r"^\s*\d+\s*[.、)]\s*", "", raw)
-        raw = re.sub(r"^(?:具体来说|也就是说|换言之)[，,:：]\s*", "", raw)
-        raw = re.sub(
-            r"^(?:(?:论文|本文|该文|该论文|综述)\s*)?"
-            r"(?:摘要\s*)?(?:的\s*)?"
-            r"(?:关键表述|核心表述|结论|结果|要点)(?:是|为)?[，,:：]\s*",
-            "",
-            raw,
+        raw = _answer_citation_zh_guide_from_evidence(
+            evidence=evidence,
+            source_identity=source_low,
         )
-        raw = re.sub(r"^在.{0,180}?(?:中|里)[，,:：]\s*", "", raw)
-        raw = re.sub(r"^根据(?:本文|该文|这篇论文|文献库)[，,:：\s]*", "", raw)
     else:
-        raw = re.sub(r"^(?:in|according to)\s+.{0,180}?[,:]\s*", "", raw, flags=re.I)
-    if prefer_zh and "；" in raw:
-        raw = raw.split("；", 1)[0].strip()
-    elif (not prefer_zh) and ";" in raw:
-        raw = raw.split(";", 1)[0].strip()
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", evidence))
+        latin_count = len(re.findall(r"[A-Za-z]", evidence))
+        if latin_count < 4 or cjk_count > max(2, latin_count // 2):
+            return ""
+        raw = evidence
+    raw = " ".join(str(raw or "").split()).strip(" -—:：;；,.。")
+    if not raw or _answer_citation_guide_looks_like_navigation(raw):
+        return ""
     limit = 96 if prefer_zh else 180
     if len(raw) > limit:
         raw = raw[: limit - 1].rstrip(" ,，。.;；:：") + "…"
@@ -498,6 +709,26 @@ def _answer_citation_shared_focus_terms(
     return out
 
 
+_GENERIC_ANSWER_CITATION_SUPPORT_PATTERNS: tuple[str, ...] = (
+    "原文直接报告了回答所述的成像速度或实时性能",
+    "原文直接报告了回答所述的退化鲁棒性或跨域泛化结果",
+    "原文给出了回答所依据的图像质量或分辨率证据",
+    "the source reports the speed or real-time result stated in the answer",
+    "the source directly reports the robustness or cross-domain generalization claimed in the answer",
+    "the source provides the image-quality or resolution evidence used by the answer",
+)
+
+
+def _answer_citation_support_line_is_specific(text: str) -> bool:
+    value = " ".join(str(text or "").split()).strip()
+    if not value:
+        return False
+    low = value.casefold()
+    if any(pattern.casefold() in low for pattern in _GENERIC_ANSWER_CITATION_SUPPORT_PATTERNS):
+        return False
+    return not looks_generic_ref_why_line(value) and not looks_templated_ref_why_line(value)
+
+
 def _answer_citation_evidence_quote(detail: dict) -> str:
     """Prefer the sentence in the cited block that best matches the answer claim."""
 
@@ -574,6 +805,30 @@ def _answer_citation_evidence_quote(detail: dict) -> str:
 
     best = max(candidates, key=score)
     if score(best)[:2] > score(current)[:2]:
+        current_overlap = claim_terms & evidence_alignment_tokens(current)
+        best_overlap = claim_terms & evidence_alignment_tokens(best)
+        current_sentences = [
+            sentence
+            for sentence in re.split(r"(?<=[.!?])\s+", current)
+            if sentence.strip()
+        ]
+        best_sentences = [
+            sentence
+            for sentence in re.split(r"(?<=[.!?])\s+", best)
+            if sentence.strip()
+        ]
+        if (
+            current_overlap
+            and len(current_sentences) >= 2
+            and len(best_sentences) == 1
+            and len(current) <= CITATION_CARD_EVIDENCE_MAX_LEN
+            and not current_overlap.issubset(best_overlap)
+        ):
+            # The compact render quote can already contain a complete mechanism
+            # chain.  A later sentence may match more answer tokens while
+            # covering a different step; replacing the whole chain with that
+            # sentence loses evidence instead of improving alignment.
+            return current
         return best
     if (
         score(best)[:2] == score(current)[:2]
@@ -593,67 +848,62 @@ def _answer_citation_card_copy(
     rows: list[tuple[str, str]] = []
     seen: set[str] = set()
     for detail in details:
-        claim = _answer_citation_claim_text(detail, prefer_zh=prefer_zh)
-        if not claim:
+        guide = _answer_citation_evidence_guide(detail, prefer_zh=prefer_zh)
+        if not guide:
             continue
-        key = claim.lower()
+        key = guide.casefold()
         if key in seen:
             continue
         seen.add(key)
-        rows.append((_answer_citation_heading_leaf(detail, prefer_zh=prefer_zh), claim))
+        rows.append((_answer_citation_heading_leaf(detail, prefer_zh=prefer_zh), guide))
         if len(rows) >= 2:
             break
+    if prefer_zh and len(details) > 1:
+        combined_evidence = " ".join(
+            _answer_citation_authoritative_evidence(detail)
+            for detail in details
+            if _answer_citation_authoritative_evidence(detail)
+        ).strip()
+        combined_sources = " ".join(
+            str(detail.get("source_name") or detail.get("card_title") or "").strip()
+            for detail in details
+            if isinstance(detail, dict)
+        ).strip()
+        combined_guide = _answer_citation_zh_guide_from_evidence(
+            evidence=combined_evidence,
+            source_identity=combined_sources,
+        )
+        if combined_guide and not _answer_citation_guide_looks_like_navigation(combined_guide):
+            first_detail = next((detail for detail in details if isinstance(detail, dict)), {})
+            rows = [
+                (
+                    _answer_citation_heading_leaf(first_detail, prefer_zh=prefer_zh),
+                    combined_guide,
+                )
+            ]
     if not rows:
         return "", ""
-    summary = ("；" if prefer_zh else "; ").join(claim for _heading, claim in rows)
+    summary = ("；" if prefer_zh else "; ").join(guide for _heading, guide in rows)
     claim_focus = _answer_citation_claim_focus(summary, prefer_zh=prefer_zh)
     support_line = next(
         (
-            str(
-                detail.get("support_relation")
-                or detail.get("binding_reason")
-                or detail.get("card_support_explanation")
-                or ""
-            ).strip()
+            str(detail.get(field) or "").strip()
             for detail in details
             if isinstance(detail, dict)
-            and str(
-                detail.get("support_relation")
-                or detail.get("binding_reason")
-                or detail.get("card_support_explanation")
-                or ""
-            ).strip()
-            and not looks_generic_ref_why_line(
-                str(
-                    detail.get("support_relation")
-                    or detail.get("binding_reason")
-                    or detail.get("card_support_explanation")
-                    or ""
-                )
-            )
-            and not looks_templated_ref_why_line(
-                str(
-                    detail.get("support_relation")
-                    or detail.get("binding_reason")
-                    or detail.get("card_support_explanation")
-                    or ""
-                )
-            )
+            for field in ("support_relation", "binding_reason", "card_support_explanation")
+            if _answer_citation_support_line_is_specific(str(detail.get(field) or ""))
         ),
         "",
     )
     grounding_surface = " ".join(
         " ".join(
-            str(detail.get(key) or "").strip()
-            for key in (
-                "evidence_quote",
-                "summary_line",
-                "answer_claim",
-                "card_takeaway",
-                "source_name",
-                "card_title",
+            part
+            for part in (
+                _answer_citation_authoritative_evidence(detail),
+                str(detail.get("source_name") or "").strip(),
+                str(detail.get("card_title") or "").strip(),
             )
-            if str(detail.get(key) or "").strip()
+            if part
         )
         for detail in details
         if isinstance(detail, dict)
@@ -677,11 +927,14 @@ def _answer_citation_card_copy(
         or grounded_relation.casefold() == summary.casefold()
     ):
         grounded_relation = ""
-    resolved_support = support_line or grounded_relation
+    # A deterministic evidence-specific relation is more trustworthy than a
+    # precomputed support shell. Keep the latter only as a vetted fallback.
+    resolved_support = grounded_relation or support_line
     reading_route = bool(
         re.search(
             r"先读|哪几篇.{0,12}(?:读|看)|(?:阅读|学习|文献)(?:主线|路线|顺序|路径)|"
-            r"(?:主线|路线|顺序).{0,8}(?:阅读|学习|文献)|read first|which papers|"
+            r"(?:主线|路线|顺序).{0,8}(?:阅读|学习|文献)|(?:怎么|如何).{0,8}搭配(?:读|阅读)|"
+            r"搭配(?:读|阅读)|配合(?:读|阅读)|read first|which papers|read together|pair.{0,12}reading|"
             r"reading\s+(?:order|route|roadmap)|literature\s+roadmap|\broadmap\b",
             prompt_text,
             flags=re.I,
@@ -689,7 +942,7 @@ def _answer_citation_card_copy(
     )
     if reading_route:
         evidence_text = " ".join(
-            str(detail.get("evidence_quote") or detail.get("summary_line") or "")
+            _answer_citation_authoritative_evidence(detail)
             for detail in details
             if isinstance(detail, dict)
         )
@@ -699,10 +952,36 @@ def _answer_citation_card_copy(
             if isinstance(detail, dict)
         )
         role_text = f"{source_text} {evidence_text}".lower()
+        if prefer_zh and _answer_citation_is_pidl_synthetic_pair_evidence(
+            evidence=evidence_text,
+            source_identity=source_text,
+        ):
+            return (
+                summary,
+                "这篇论文适合接在探测器综述之后阅读：它把经实拍数据校准的物理噪声模型"
+                "用于合成大规模单光子训练数据，将器件噪声约束落实到学习流程中。",
+            )
+        if (
+            re.search(r"physics[- ]informed|物理(?:信息|先验)|pidl", prompt_text, flags=re.I)
+            and ("mainstream spds" in role_text or "mainstream single-photon detector" in role_text)
+            and re.search(r"\b(?:spad|sapd|sns?pd|tes|pmt)s?\b", role_text)
+            and ("manufacturing cost" in role_text or "low-temperature" in role_text)
+        ):
+            if prefer_zh:
+                return (
+                    summary,
+                    "这篇综述适合先用来区分各类探测器的工作条件与制造约束，再把其中的 SPAD 硬件限制"
+                    "与 physics-informed 方法建模的噪声项对应起来。",
+                )
+            return (
+                summary,
+                "Read this review first to separate detector operating and manufacturing constraints, "
+                "then map the SPAD hardware limits to the noise terms modeled by the physics-informed method.",
+            )
         if "hadamard" in role_text and "fourier" in role_text:
             if prefer_zh:
                 return (
-                    "本文用 Hadamard 基图案进行 HSI、用 Fourier 基图案进行 FSI，并从原理、成像效率和噪声鲁棒性等方面比较二者。",
+                    summary,
                     "它直接比较两种经典调制方案，适合在掌握基础原理后用于理解编码差异和方法选型。",
                 )
             return (
@@ -716,7 +995,7 @@ def _answer_citation_card_copy(
         ):
             if prefer_zh:
                 return (
-                    "压缩感知使单像素相机能在测量次数少于图像未知像素总数时，通过欠采样恢复图像。",
+                    summary,
                     "它建立单像素成像的采集与重建基础，是理解后续调制方法和学习方法的起点。",
                 )
             return (
@@ -730,7 +1009,7 @@ def _answer_citation_card_copy(
         ):
             if prefer_zh:
                 return (
-                    "这篇综述说明，深度学习单像素成像针对传统迭代重建的质量与耗时瓶颈，并带来更高的重建质量和速度。",
+                    summary,
                     "它总结学习型方法的进展与实际局限，适合放在经典原理和调制方法之后把握前沿。",
                 )
             return (
@@ -761,7 +1040,7 @@ def _answer_citation_card_copy(
             why = resolved_support or f"“{headings}”把原文结果与“{claim_focus}”直接对应起来，可作为这一限制的依据。"
         elif re.search(r"关系|相关|主线|值得.{0,8}(?:读|看)|交集", prompt_text):
             evidence_text = " ".join(
-                str(detail.get("evidence_quote") or detail.get("summary_line") or "")
+                _answer_citation_authoritative_evidence(detail)
                 for detail in details
                 if isinstance(detail, dict)
             )
@@ -805,7 +1084,7 @@ def _answer_citation_card_copy(
             )
         elif re.search(r"原创|发明|谁提出|来源|沿革|已有|新东西", prompt_text):
             evidence_text = " ".join(
-                str(detail.get("evidence_quote") or detail.get("summary_line") or "")
+                _answer_citation_authoritative_evidence(detail)
                 for detail in details
                 if isinstance(detail, dict)
             )
@@ -1417,24 +1696,17 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             ).strip()
             grounding_surface = " ".join(
                 " ".join(
-                    (
-                        " ".join(str(value or "").strip() for value in list(item.get("answer_claims") or []))
-                        if field == "answer_claims"
-                        else str(item.get(field) or "").strip()
-                    )
-                    for field in (
-                        "evidence_quote",
-                        "summary_line",
-                        "answer_claim",
-                        "answer_claims",
-                        "card_takeaway",
-                        # Keep source identity after the evidence text.  The
+                    part
+                    for part in (
+                        _answer_citation_authoritative_evidence(item),
+                        # Keep source identity after the evidence text. The
                         # evidence normalizer removes leading metadata labels,
                         # so a leading filename would erase method names such
                         # as SCINeRF before the grounded-copy rules see them.
-                        "source_name",
-                        "card_title",
+                        str(item.get("source_name") or "").strip(),
+                        str(item.get("card_title") or "").strip(),
                     )
+                    if part
                 ).strip()
                 for item in display_details
                 if isinstance(item, dict)
@@ -1708,7 +1980,6 @@ def _answer_citation_overlay_pack_is_complete(pack: dict | None) -> bool:
         if (
             not source_path
             or not str((ui or {}).get("summary_line") or "").strip()
-            or not str((ui or {}).get("why_line") or "").strip()
             or not str(
                 (primary or {}).get("snippet")
                 or (primary or {}).get("highlight_snippet")
@@ -1732,16 +2003,19 @@ def _refs_without_completed_answer_citation_overlays(
     }
     if not refs_out:
         return {}
-    ready_user_ids = set(
-        _answer_citation_details_by_user(
-            store=store,
-            conv_id=conv_id,
-        )
+    overlaid_payload = _overlay_refs_payload_with_answer_citations(
+        store=store,
+        conv_id=conv_id,
+        payload=refs_out,
     )
     return {
         user_msg_id: pack
         for user_msg_id, pack in refs_out.items()
-        if user_msg_id not in ready_user_ids
+        if not _answer_citation_overlay_pack_is_complete(
+            overlaid_payload.get(user_msg_id)
+            if isinstance(overlaid_payload, dict)
+            else None
+        )
     }
 
 
@@ -3256,6 +3530,12 @@ def _warm_conversation_refs_payload_async(
                         # the card away from the passage used in the answer.
                         allow_exact_locate=False,
                     )
+                    if has_answer_citation_locator:
+                        regular_payload = _overlay_refs_payload_with_answer_citations(
+                            store=get_chat_store(),
+                            conv_id=conv_key,
+                            payload=regular_payload,
+                        )
                     rendered = regular_payload.get(user_msg_id) if isinstance(regular_payload, dict) else None
                     if not isinstance(rendered, dict):
                         continue

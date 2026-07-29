@@ -16,6 +16,7 @@ CITATION_CARD_DISPLAY_CONTRACT_VERSION = 2
 CITATION_CARD_VIEW_CONTRACT_VERSION = 2
 _CARD_LABELS: dict[str, dict[str, str]] = {
     "zh": {
+        "support_relevance_system_a": "\u4e0e\u56de\u7b54\u7684\u5173\u7cfb",
         "warning": "提醒",
         "takeaway_system_a": "证据重点",
         "takeaway_system_b": "上游作用",
@@ -66,6 +67,7 @@ _CARD_LABELS: dict[str, dict[str, str]] = {
         "citation_context": "Citation context",
         "reference_entry": "Upstream reference entry",
         "support_system_a": "Reliability",
+        "support_relevance_system_a": "Why it supports the answer",
         "support_system_b": "Note",
         "header_system_a": "Answer evidence",
         "header_system_b": "Upstream citation",
@@ -218,12 +220,7 @@ def _card_visible_sections(out: Mapping[str, Any], *, route: str) -> list[str]:
             sections.append("evidence")
         if locator:
             sections.append("locator")
-        if support and (
-            warning
-            or "candidate_binding" in flags
-            or "binding_mismatch" in flags
-            or "missing_evidence_quote" in flags
-        ):
+        if support:
             sections.append("support")
         return sections
 
@@ -366,10 +363,7 @@ def _build_card_view(out: Mapping[str, Any], *, route: str, locale: str = "") ->
                 kind="reference",
             )
     show_support = is_system_b or bool(
-        _clean_text(out.get("card_warning"), max_len=360)
-        or "candidate_binding" in flags
-        or "binding_mismatch" in flags
-        or "missing_evidence_quote" in flags
+        _clean_text(out.get("card_support_explanation"), max_len=420)
     )
     if show_support:
         _append_card_view_section(
@@ -750,10 +744,62 @@ def _looks_low_value_takeaway(value: str) -> bool:
         return True
     if re.search(r"(?:这条证据|该证据|this evidence|the evidence).{0,12}(?:支持|支撑|supports?)", text, re.IGNORECASE):
         return True
+    if (
+        re.search(
+            r"(?:泛化能力|泛化性).{0,24}(?:受限|有限).{0,24}(?:优异|优秀|良好)",
+            text,
+        )
+        or re.search(
+            r"(?:泛化能力|泛化性).{0,24}(?:优异|优秀|良好).{0,24}(?:受限|有限)",
+            text,
+        )
+    ):
+        return True
     tokens = _loose_tokens(text)
     if _has_cjk(text):
         return len(text) < 12 and not re.search(r"[：:，,。；;]", text)
     return len(tokens) <= 6
+
+
+_SYSTEM_A_SUPPORT_TEMPLATE_RE = re.compile(
+    r"(?i)(?:"
+    r"^this\s+citation\s+(?:reuses|uses|is\s+only)|"
+    r"^this\s+(?:answer\s+sentence|claim)\s+is\s+supported\s+by|"
+    r"^the\s+(?:same\s+)?source\s+(?:passage\s+)?(?:directly\s+)?(?:contains|reports|provides)|"
+    r"^the\s+answer\s+and\s+source\s+align|"
+    r"^the\s+answer\s+(?:sentence\s+)?and\s+(?:the\s+)?source\s+both\s+(?:say|state|show)|"
+    r"^open\s+the\s+source\s+to\s+confirm|"
+    r"^\u8be5?\u5f15\u7528\u590d\u7528\u751f\u6210\u56de\u7b54\u65f6|"
+    r"^\u8be5?\u5f15\u7528\u4f7f\u7528\u4e86\u5df2\u6838\u5bf9|"
+    r"^\u8fd9\u6761\u5f15\u7528\u53ea\u80fd\u4f5c\u4e3a\u5019\u9009|"
+    r"^\u539f\u6587\u5728\u8be5\u5b9a\u4f4d\u5904\u7ed9\u51fa\u7684\u5177\u4f53\u9648\u8ff0|"
+    r"^\u7b54\u6848\u4e0e\u82f1\u6587\u539f\u6587\u5728.*\u591a\u4e2a\u5177\u4f53\u52a8\u4f5c|"
+    r"^\u7b54\u6848\u53e5\u548c\u539f\u6587\u90fd\u8bf4\u660e|"
+    r"^\u8bf7\u6253\u5f00\u539f\u6587\u6838\u5bf9"
+    r")"
+)
+
+
+def _meaningful_system_a_support(value: Any) -> str:
+    """Return user-facing relevance copy, never an internal binding template."""
+
+    text = _clean_text(value, max_len=420)
+    if not text or _SYSTEM_A_SUPPORT_TEMPLATE_RE.search(text):
+        return ""
+    tokens = _loose_tokens(text)
+    if _has_cjk(text):
+        return text if len(re.sub(r"\s+", "", text)) >= 18 else ""
+    return text if len(tokens) >= 7 and len(text) >= 40 else ""
+
+
+def _system_a_support_hint(rec: Mapping[str, Any]) -> str:
+    # ``binding_reason`` is an internal verifier explanation.  Even when it is
+    # accurate, its stock phrasing is not relevance copy for an end user.
+    for key in ("support_relation", "why_line"):
+        text = _meaningful_system_a_support(rec.get(key))
+        if text:
+            return text
+    return ""
 
 
 def _trim_takeaway(value: str, *, max_len: int = 96) -> str:
@@ -782,6 +828,16 @@ def _takeaway_from_english_evidence(evidence: str) -> str:
         return "单像素成像可以覆盖传统焦平面阵列探测器难以触达的波段，但实用性仍受图像质量和计算时间限制。"
     if "structured detection" in low and "optical sectioning" in low:
         return "结构化检测用于在激光扫描显微中同时改善层切、分辨率和信噪比。"
+    if (
+        "model-driven strategy" in low
+        and "physical process of spi" in low
+        and "neural network" in low
+        and "discrepancy between real and estimated measurements" in low
+    ):
+        return (
+            "模型驱动策略将 SPI 物理过程嵌入神经网络，并以真实与估计测量之间的差异约束优化；"
+            "原文将其描述为具有较强泛化能力的无监督模式。"
+        )
     if "deep learning" in low and "single-pixel" in low and re.search(r"\b(?:quality|speed|reconstruction)\b", low):
         return "深度学习方法主要用于提升单像素成像的重建质量、速度或采样效率。"
     if "snapshot compressive imaging" in low and ("recover" in low or "reconstruct" in low):
@@ -1028,7 +1084,7 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
     locator = _strip_redundant_locator_prefix(_locator(rec), source=source, title=title)
     if not locator and source:
         locator = f"Document-level match: {source}"
-    support_hint = _first_text(rec, "support_relation", "binding_reason", "why_line", max_len=420)
+    support_hint = _system_a_support_hint(rec)
     pack = build_system_a_evidence_pack(
         answer_claim=claim_raw,
         evidence_raw=evidence_raw_for_pack,
@@ -1143,6 +1199,16 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
     if needs_review:
         support_label = _card_label(locale, "support_label_review")
         support_text = support or _card_label(locale, "candidate_support")
+    elif (
+        binding_status == "grounded"
+        and binding_confidence >= 0.7
+        and support_hint
+        and not _sameish(support_hint, claim)
+        and not _sameish(support_hint, evidence)
+        and not _sameish(support_hint, takeaway)
+    ):
+        support_label = _card_label(locale, "support_relevance_system_a")
+        support_text = support_hint
     warning = ""
     if "binding_mismatch" in flags:
         warning = _card_label(locale, "warning_mismatch")
@@ -1288,7 +1354,15 @@ def compose_citation_card(detail: Mapping[str, Any] | None, *, locale: str = "")
         return {}
     render_locale = _card_locale(locale or rec.get("render_locale") or rec.get("locale"))
     rec["render_locale"] = render_locale
-    card = _compose_system_b(rec, locale=render_locale) if bool(rec.get("is_inpaper")) else _compose_system_a(rec, locale=render_locale)
+    explicit_route = _first_text(rec, "citation_route", "citationRoute", max_len=40).lower()
+    is_system_b = (
+        explicit_route == "system_b"
+        or (
+            explicit_route != "system_a"
+            and bool(rec.get("is_inpaper") or rec.get("isInpaper"))
+        )
+    )
+    card = _compose_system_b(rec, locale=render_locale) if is_system_b else _compose_system_a(rec, locale=render_locale)
     rec.update(card)
     return rec
 
@@ -1300,5 +1374,15 @@ def refresh_citation_card_contract(detail: Mapping[str, Any] | None, *, locale: 
         return {}
     render_locale = _card_locale(locale or rec.get("render_locale") or rec.get("locale"))
     rec["render_locale"] = render_locale
-    route = "system_b" if bool(rec.get("is_inpaper")) or str(rec.get("card_kind") or "") == "upstream_reference" else "system_a"
+    explicit_route = _first_text(rec, "citation_route", "citationRoute", max_len=40).lower()
+    route = "system_b" if (
+        explicit_route == "system_b"
+        or (
+            explicit_route != "system_a"
+            and (
+                bool(rec.get("is_inpaper") or rec.get("isInpaper"))
+                or str(rec.get("card_kind") or "") == "upstream_reference"
+            )
+        )
+    ) else "system_a"
     return _finalize_card_output(rec, route=route, locale=render_locale)

@@ -156,8 +156,27 @@ _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (r"压缩感知", ("compressed", "compressive", "sensing")),
     (r"支撑集恢复|稀疏支撑恢复|主要保证恢复", ("signal", "support", "recovery")),
     (r"蒸馏感知", ("distilled", "sensing")),
-    (r"自监督|不依赖成对真值|无需成对真值", ("self", "supervised", "labels")),
+    (
+        r"自监督|不依赖成对真值|无需成对真值|"
+        r"无需真实图像标签|不需要.{0,18}成对.{0,18}(?:图像|训练)?标签",
+        ("self", "supervised", "labels"),
+    ),
+    (
+        r"(?:物理采集的?)?\s*(?:1\s*D|一维)\s*信号|"
+        r"单像素探测器.{0,12}(?:采集|采样).{0,8}信号",
+        ("1d", "signals", "collected", "single", "pixel", "detector"),
+    ),
+    (
+        r"作为.{0,10}(?:监督信号|训练标签|标签)|"
+        r"用于.{0,12}(?:自适应)?优化.{0,12}重建",
+        ("used", "labels", "adaptively", "optimizing", "reconstructing"),
+    ),
     (r"图像循环|图像闭环|image-loop", ("image", "loop", "iteration")),
+    (
+        r"循环回.{0,24}(?:网络)?输入|半成品.{0,24}输入",
+        ("input", "subsequent", "iteration"),
+    ),
+    (r"原始随机信号", ("randomly", "signal")),
     (r"分块|基于部件|特征分块|part-based", ("part", "based", "finer", "grained", "details")),
     (r"入射照明功率|照明功率", ("incident", "illumination", "power")),
     (r"降低约?(?:10|十)倍|低十倍|十分之一", ("tenfold", "lower")),

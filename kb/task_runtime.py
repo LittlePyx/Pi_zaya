@@ -2163,6 +2163,127 @@ def _select_answer_seed_for_generation(
     ]
 
 
+def _prioritize_prompt_named_preferred_sources(
+    answer_seed: list[dict] | None,
+    *,
+    preferred_source_hints: list[str] | None,
+    prompt: str,
+    top_n: int,
+) -> list[dict]:
+    """Keep an explicitly named preferred paper ahead of answer truncation.
+
+    ``preferred_sources`` is only a hint: the normal whole-library ranking must
+    remain authoritative.  We therefore promote at most two already-retrieved
+    documents, and only when the user's wording names a distinctive title term
+    (for example ``physics-informed``) or a title acronym (for example PILN).
+    Unrelated recently uploaded papers are left in their retrieval order.
+    """
+
+    rows = [dict(hit) for hit in list(answer_seed or []) if isinstance(hit, dict)]
+    if len(rows) <= 1 or not preferred_source_hints:
+        return rows
+    try:
+        promotion_limit = min(2, max(1, int(top_n)))
+    except Exception:
+        promotion_limit = 1
+
+    prompt_text = str(prompt or "").strip()
+    if not prompt_text:
+        return rows
+    raw_prompt_tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9-]{1,}", prompt_text)
+    generic_tokens = {
+        "paper",
+        "method",
+        "model",
+        "network",
+        "review",
+        "deep",
+        "learning",
+        "single",
+        "pixel",
+        "imaging",
+    }
+    distinctive_tokens = {
+        token.casefold()
+        for token in raw_prompt_tokens
+        if token.casefold() not in generic_tokens
+        and (
+            "-" in token
+            or any(char.isdigit() for char in token)
+            or token.upper() == token
+            or (token != token.lower() and token != token.capitalize())
+        )
+    }
+
+    preferred_identities: list[set[str]] = []
+    for source_hint in list(preferred_source_hints or []):
+        identities = set(_refs_document_identity_keys(source_hint))
+        if identities and identities not in preferred_identities:
+            preferred_identities.append(identities)
+
+    acronym_stopwords = {
+        "a",
+        "an",
+        "and",
+        "based",
+        "for",
+        "in",
+        "of",
+        "on",
+        "the",
+        "to",
+        "using",
+        "with",
+    }
+
+    def _source_acronyms(source_surface: str) -> set[str]:
+        words = [
+            word
+            for word in re.findall(r"[A-Za-z]+", source_surface)
+            if word.casefold() not in acronym_stopwords
+        ]
+        acronyms: set[str] = set()
+        for start in range(len(words)):
+            for width in range(3, min(8, len(words) - start) + 1):
+                acronyms.add("".join(word[0] for word in words[start : start + width]).casefold())
+        return acronyms
+
+    promoted: list[dict] = []
+    promoted_indexes: set[int] = set()
+    for wanted_identities in preferred_identities:
+        for index, hit in enumerate(rows):
+            if index in promoted_indexes:
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            source_path = str((meta or {}).get("source_path") or hit.get("source_path") or "").strip()
+            if not (wanted_identities & set(_refs_document_identity_keys(source_path))):
+                continue
+            source_surface = " ".join(
+                str(value or "")
+                for value in (
+                    source_path,
+                    (meta or {}).get("source_name"),
+                    hit.get("source_name"),
+                )
+            )
+            source_low = source_surface.casefold()
+            acronyms = _source_acronyms(source_surface)
+            explicitly_named = any(
+                token in source_low or token in acronyms
+                for token in distinctive_tokens
+            )
+            if not explicitly_named:
+                continue
+            promoted.append(hit)
+            promoted_indexes.add(index)
+            break
+        if len(promoted) >= promotion_limit:
+            break
+    if not promoted:
+        return rows
+    return promoted + [hit for index, hit in enumerate(rows) if index not in promoted_indexes]
+
+
 def _should_sync_deep_seed_for_display(
     *,
     hits_raw: list[dict] | None,
@@ -5897,6 +6018,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 raw_hits=list(hits_raw or []),
                 prompt=(prompt or retrieval_prompt or ""),
             )
+        answer_seed = _prioritize_prompt_named_preferred_sources(
+            answer_seed,
+            preferred_source_hints=preferred_source_hints,
+            prompt=(prompt or retrieval_prompt or ""),
+            top_n=answer_hit_limit,
+        )
         if paper_guide_source_scoped and paper_guide_bound_source_ready:
             heading_hits_for_answer = list(grouped_docs or []) if paper_guide_cross_paper_refs else list(hits or [])
             if not paper_guide_cross_paper_refs:

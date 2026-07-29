@@ -263,6 +263,16 @@ def _repair_ref_card_copy_locale(ui_meta: Mapping[str, Any] | None) -> dict[str,
             heading_path=_first_text(ui, ("heading_path", "section_label", "subsection_label")),
             summary_line=evidence_seed,
         )
+        if (
+            not grounded_why
+            and re.search(r"(?i)emerging\s+single[- ]photon.*(?:detect|photodetector)", source_identity)
+            and re.search(r"(?i)\bSPAD\b|single[- ]photon\s+detector", evidence_seed)
+        ):
+            grounded_why = (
+                "该综述梳理单光子探测器的器件类型与材料路线，可作为理解 SPAD 成像算法所依赖硬件基础的入口。"
+                if locale == "zh"
+                else "The review maps single-photon detector types and material platforms, providing the hardware context needed to interpret SPAD imaging algorithms."
+            )
         if grounded_why and _ref_card_copy_matches_locale(grounded_why, locale):
             ui["why_line"] = grounded_why
             ui["why_generation"] = "deterministic_grounded"

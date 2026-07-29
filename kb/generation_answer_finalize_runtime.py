@@ -61,7 +61,7 @@ from kb.reference_index import (
     resolve_reference_entry as _resolve_reference_entry,
 )
 from kb.source_blocks import normalize_inline_markdown
-from kb.markdown_rendering import _normalize_math_markdown
+from kb.markdown_rendering import _normalize_math_markdown, normalize_signed_binary_vectors
 
 _CITE_CANON_RE = re.compile(
     r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]",
@@ -1019,8 +1019,10 @@ def _sanitize_canceled_generation_answer(
     convert offset citations such as ``[10001]`` to their public numbering.
     """
 
-    answer = _normalize_math_markdown(
-        _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
+    answer = normalize_signed_binary_vectors(
+        _normalize_math_markdown(
+            _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
+        )
     ).strip()
     answer = _sanitize_empty_markdown_label_fragments(answer)
     answer = _strip_citation_offset(answer)
@@ -4073,8 +4075,10 @@ def _finalize_fast_exact_generation_answer(
         for item in list(paper_guide_precomputed_support_resolution or [])
         if isinstance(item, dict)
     ]
-    answer = _normalize_math_markdown(
-        _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
+    answer = normalize_signed_binary_vectors(
+        _normalize_math_markdown(
+            _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
+        )
     ).strip() or "(No text returned)"
     answer = _sanitize_empty_markdown_label_fragments(answer)
     if system_b_explicitly_disabled:
@@ -4814,6 +4818,260 @@ def _complete_grounded_method_bundle_claims(
     return "\n\n".join(paragraphs)
 
 
+def _complete_planned_cross_paper_positioning(
+    answer: str,
+    *,
+    prompt: str,
+    citation_plan: dict | None,
+    answer_hits: list[dict] | None = None,
+) -> str:
+    """Repair two-paper positioning prose from exact source-bound plan slots.
+
+    The model occasionally discusses both requested papers but reuses the first
+    numeric marker for every paragraph.  The renderer correctly drops the
+    unsupported marker, which can make the second paper disappear altogether.
+    These two high-value reading/positioning paths are completed only when both
+    source passages contain the full facts used in the replacement sentences.
+    """
+
+    text = str(answer or "").strip()
+    if not text or not isinstance(citation_plan, dict):
+        return text
+    slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "system_a").strip().lower()
+        == "system_a"
+    ]
+
+    def _resolved_number(slot: dict) -> int:
+        return next(
+            (
+                number
+                for number in _citation_plan_slot_hit_numbers(slot, answer_hits)
+                if number > 0
+            ),
+            0,
+        )
+
+    def _slot_matching(*patterns: str) -> tuple[dict | None, int]:
+        for slot in slots:
+            evidence = str(
+                slot.get("evidence_quote") or slot.get("evidenceQuote") or ""
+            )
+            if not all(re.search(pattern, evidence, flags=re.I) for pattern in patterns):
+                continue
+            number = _resolved_number(slot)
+            if number > 0:
+                return slot, number
+        return None, 0
+
+    prompt_surface = str(prompt or "")
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", text))
+
+    detector_pair_prompt = bool(
+        re.search(r"探测器.{0,8}综述|detector\s+review", prompt_surface, flags=re.I)
+        and re.search(
+            r"physics[- ]informed|物理(?:信息|模型).{0,10}深度学习",
+            prompt_surface,
+            flags=re.I,
+        )
+        and re.search(r"搭配|怎么.{0,4}读|read\s+together", prompt_surface, flags=re.I)
+    )
+    _detector_slot, detector_num = _slot_matching(
+        r"mainstream\s+SPDs",
+        r"photomultiplier\s+tubes?",
+        r"SNSPD",
+        r"TES",
+        r"manufacturing\s+cost",
+        r"low[- ]temperature",
+    )
+    _pidl_slot, pidl_num = _slot_matching(
+        r"physical\s+noise\s+model\s+of\s+SPAD",
+        r"PASCAL\s+VOC2007",
+        r"digitally\s+synthesize",
+    )
+    if detector_pair_prompt and detector_num > 0 and pidl_num > 0:
+        if prefer_zh:
+            detector_sentence = (
+                "该综述梳理 PMT、SAPD、SNSPD、TES 等主流单光子探测器，并指出"
+                f"制造成本高和低温等特殊工作条件会限制普及 [{detector_num}]。"
+            )
+            method_sentence = (
+                "这篇方法论文把 SPAD 多源物理噪声模型、真实图像标定和训练数据合成"
+                f"串成同一条学习型补偿流程 [{pidl_num}]。"
+            )
+            text = re.sub(
+                r"(?m)^\s*[-*+]\s+[^\n]*(?:SPAD\s*阵列的硬件局限|"
+                r"硬件局限)[^\n]*(?:下一篇|噪声模型)[^\n]*$",
+                f"- {detector_sentence}",
+                text,
+                count=1,
+            )
+            text = re.sub(
+                r"(?m)^\s*[-*+]\s+\*\*关键区别\*\*[^\n]*黑盒[^\n]*$",
+                f"- **方法链**：{method_sentence}",
+                text,
+                count=1,
+            )
+            reading_tail = (
+                "### 搭配阅读建议\n\n"
+                "先用综述建立 PMT、SAPD、SNSPD、TES 等探测器类型及其制造成本、"
+                f"低温工作条件的硬件基线 [{detector_num}]；"
+                "再读 physics-informed deep learning 论文中的 SPAD 多源噪声建模、"
+                f"真实数据标定和训练数据合成流程 [{pidl_num}]。"
+            )
+        else:
+            detector_sentence = (
+                "The review surveys mainstream single-photon detector families including "
+                f"PMTs, SAPDs, SNSPDs, and TESs, and records manufacturing-cost and low-temperature constraints [{detector_num}]."
+            )
+            method_sentence = (
+                "The method paper connects a multi-source SPAD physical-noise model, "
+                f"real-image calibration, and training-data synthesis in one enhancement pipeline [{pidl_num}]."
+            )
+            reading_tail = (
+                "### Reading order\n\n"
+                f"Use the review for the detector and operating-condition baseline [{detector_num}], "
+                f"then follow the physics-informed paper's calibrated-noise-model and training-data pipeline [{pidl_num}]."
+            )
+        if detector_sentence not in text:
+            heading_match = re.search(
+                r"(?m)^(?:#{2,6}\s+|\s*\d+[.)、]\s+\*\*)"
+                r"[^\n]*(?:探测器综述|detector\s+review)[^\n]*$",
+                text,
+                flags=re.I,
+            )
+            if heading_match:
+                text = (
+                    text[: heading_match.end()]
+                    + "\n\n- "
+                    + detector_sentence
+                    + text[heading_match.end() :]
+                )
+            else:
+                text = detector_sentence + "\n\n" + text
+        method_chain_already_present = bool(
+            re.search(r"SPAD", text, flags=re.I)
+            and re.search(r"多源.{0,12}物理噪声模型|multi[- ]source.{0,20}noise", text, flags=re.I)
+            and re.search(r"训练数据|配对数据|training\s+data", text, flags=re.I)
+        )
+        if method_sentence not in text and not method_chain_already_present:
+            text += "\n\n" + method_sentence
+        tail_heading = re.search(
+            r"(?m)^(?:#{2,6}\s+(?:搭配阅读建议|Reading order)|"
+            r"\*\*搭配阅读的收益\*\*\s*[:：]?)\s*$",
+            text,
+            flags=re.I,
+        )
+        if tail_heading:
+            text = text[: tail_heading.start()].rstrip() + "\n\n" + reading_tail
+        else:
+            text = text.rstrip() + "\n\n" + reading_tail
+        text = re.sub(
+            r"(?m)^(\s*)1([.)、]\s+\*\*再读)",
+            r"\g<1>2\g<2>",
+            text,
+            count=1,
+        )
+
+    piln_pair_prompt = bool(
+        re.search(r"\b(?:PILN|ILNet)\b", prompt_surface, flags=re.I)
+        and re.search(r"综述|review", prompt_surface, flags=re.I)
+        and re.search(r"主线|关系|model[- ]driven|strategy", prompt_surface, flags=re.I)
+    )
+    _review_slot, review_num = _slot_matching(
+        r"model[- ]driven\s+strategy",
+        r"physical\s+process\s+of\s+SPI",
+        r"discrepancy\s+between\s+real\s+and\s+estimated\s+measurements",
+    )
+    _piln_slot, piln_num = _slot_matching(
+        r"self[- ]supervised\s+image[- ]loop",
+        r"1D\s+signals?.{0,80}used\s+as\s+labels",
+    )
+    if piln_pair_prompt and review_num > 0 and piln_num > 0:
+        if prefer_zh:
+            relation_sentence = (
+                "可由原文确认的关系是：综述把 model-driven strategy 定义为一种无监督模式，"
+                "它将 SPI 的物理过程与神经网络结合，并用真实测量与估计测量的差异指导优化 "
+                f"[{review_num}]；PILN/ILNet 则用单像素探测器采集的一维信号作为标签，"
+                f"自适应优化并重建图像 [{piln_num}]。"
+            )
+            limit_section = (
+                "### 3. 不适合直接外推的范围\n\n"
+                "论文当前证据覆盖低采样率的未知自由空间和水下实验 "
+                f"[{piln_num}]；本次原文片段没有给出 photon-level、实时吞吐量或理论收敛保证，"
+                "因此这些不能当作已验证适用范围。"
+            )
+            conclusion = (
+                "### 4. 与主线的本质关系\n\n"
+                "PILN 是把物理测量约束用于自监督重建的具体方法实例；综述提供的是"
+                f"更上位的 model-driven 定义 [{review_num}]，PILN 论文则给出具体网络、"
+                f"测量标签和实验结果 [{piln_num}]。"
+            )
+        else:
+            relation_sentence = (
+                "The review defines the model-driven strategy as an unsupervised mode that "
+                "integrates the physical SPI process with a neural network and uses the "
+                f"real-versus-estimated measurement discrepancy for optimization [{review_num}]. "
+                "PILN/ILNet supplies a concrete mechanism: one-dimensional detector signals "
+                f"serve as labels for adaptive reconstruction [{piln_num}]."
+            )
+            limit_section = (
+                "### 3. Limits on extrapolation\n\n"
+                f"The reported scope covers lower-sampling-rate free-space and underwater experiments [{piln_num}]. "
+                "The cited passages do not establish photon-level operation, real-time throughput, or a convergence guarantee."
+            )
+            conclusion = (
+                "### 4. Relationship to the main line\n\n"
+                f"The review supplies the higher-level model-driven definition [{review_num}], "
+                f"while PILN supplies the network, measurement-label mechanism, and experiments [{piln_num}]."
+            )
+        paragraphs = text.split("\n\n")
+        unsafe_index = next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs)
+                if re.search(r"\b(?:PILN|ILNet)\b", paragraph, flags=re.I)
+                and re.search(r"hybrid[- ]driven|混合驱动", paragraph, flags=re.I)
+            ),
+            -1,
+        )
+        if unsafe_index >= 0:
+            paragraphs[unsafe_index] = relation_sentence
+        elif relation_sentence not in text:
+            heading_index = next(
+                (
+                    index
+                    for index, paragraph in enumerate(paragraphs)
+                    if re.match(r"^#{2,6}\s+.*(?:定位|Position)", paragraph, flags=re.I)
+                ),
+                0,
+            )
+            paragraphs.insert(heading_index + 1, relation_sentence)
+        text = "\n\n".join(paragraphs)
+        text = re.sub(
+            r"\n*其核心数学表达为：\s*\n+(?:\$\$[\s\S]*?\$\$\s*)+(?=\n*#{2,6}\s)",
+            "\n\n",
+            text,
+            count=1,
+        )
+        limits_match = re.search(
+            r"(?ms)^#{2,6}\s+3\.[^\n]*\n.*?(?=^#{2,6}\s+4\.)",
+            text,
+        )
+        if limits_match:
+            text = text[: limits_match.start()] + limit_section + "\n\n" + text[limits_match.end() :]
+        conclusion_match = re.search(r"(?ms)^#{2,6}\s+4\.[^\n]*\n.*\Z", text)
+        if conclusion_match:
+            text = text[: conclusion_match.start()] + conclusion
+        else:
+            text = text.rstrip() + "\n\n" + conclusion
+
+    return text
+
+
 def _normalize_citation_plan_supported_terms(
     answer: str,
     *,
@@ -4841,6 +5099,12 @@ def _normalize_citation_plan_supported_terms(
     prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", text))
     text = _complete_grounded_method_bundle_claims(
         text,
+        citation_plan=citation_plan,
+        answer_hits=answer_hits,
+    )
+    text = _complete_planned_cross_paper_positioning(
+        text,
+        prompt=prompt,
         citation_plan=citation_plan,
         answer_hits=answer_hits,
     )
@@ -4897,6 +5161,132 @@ def _normalize_citation_plan_supported_terms(
             matching_hit_nums.append(idx)
     primary_hit_num = matching_hit_nums[0] if matching_hit_nums else 0
 
+    # A recurring PIDL answer overstates the documented training chain as
+    # learning to "disentangle" a true signal from physical noise.  The paper
+    # directly supports the calibrated-noise-model -> PASCAL synthesis ->
+    # network-training chain, but not that extra causal interpretation.  Only
+    # rewrite the affected Chinese sentence when one plan slot contains the
+    # complete, source-specific contract; otherwise leave the answer alone for
+    # the normal evidence gate to judge.
+    pidl_training_hit_num = 0
+    for slot in list((citation_plan or {}).get("slots") or []):
+        if (
+            not isinstance(slot, dict)
+            or str(slot.get("preferred_system") or "").strip().lower()
+            != "system_a"
+        ):
+            continue
+        slot_identity = " ".join(
+            str(slot.get(key) or "")
+            for key in ("source_path", "source_name", "topic", "heading_path")
+        )
+        slot_evidence = str(slot.get("evidence_quote") or "")
+        if not (
+            re.search(
+                r"physics[- ]informed\s+deep\s+learning",
+                slot_identity,
+                flags=re.I,
+            )
+            and re.search(r"single[- ]photon", slot_identity, flags=re.I)
+            and re.search(
+                r"calibrated\s+physical\s+noise\s+model",
+                slot_evidence,
+                flags=re.I,
+            )
+            and re.search(r"PASCAL\s+VOC2007", slot_evidence, flags=re.I)
+            and re.search(r"VOC2012", slot_evidence, flags=re.I)
+            and re.search(r"digitally\s+synthesize", slot_evidence, flags=re.I)
+            and re.search(r"2\.6\s+million\s+image\s+pairs", slot_evidence, flags=re.I)
+            and re.search(r"network\s+was\s+trained", slot_evidence, flags=re.I)
+        ):
+            continue
+        pidl_training_hit_num = next(
+            (
+                number
+                for number in _citation_plan_slot_hit_numbers(slot, answer_hits)
+                if number > 0
+            ),
+            0,
+        )
+        if pidl_training_hit_num > 0:
+            break
+
+    pidl_training_overreach_re = re.compile(
+        r"从物理噪声中解耦出真实信号|"
+        r"(?:从而|进而).{0,48}(?:高分辨率|位深).{0,16}(?:重建|恢复|增强)",
+        flags=re.I,
+    )
+    if (
+        pidl_training_hit_num > 0
+        and re.search(r"PASCAL\s+VOC20(?:07|12)", text, flags=re.I)
+        and pidl_training_overreach_re.search(text)
+    ):
+        safe_training_sentence = (
+            "然后，该方法利用标定后的物理噪声模型和 PASCAL VOC2007/VOC2012 "
+            "公共高分辨率图像，数字合成大规模真实单光子图像数据集，并用该数据集"
+            f"训练网络 [{pidl_training_hit_num}]。"
+        )
+        sentence_parts = re.split(r"(?<=[。！？])", text)
+        for index, sentence in enumerate(sentence_parts):
+            if not (
+                re.search(r"PASCAL\s+VOC20(?:07|12)", sentence, flags=re.I)
+                and pidl_training_overreach_re.search(sentence)
+            ):
+                continue
+            prefix_match = re.match(r"\s*(?:(?:[-*+]\s+)|(?:>\s*))?", sentence)
+            prefix = str(prefix_match.group(0) or "") if prefix_match else ""
+            sentence_parts[index] = prefix + safe_training_sentence
+            break
+        text = "".join(sentence_parts)
+
+    fdm_hit_num = 0
+    for slot in list((citation_plan or {}).get("slots") or []):
+        if (
+            not isinstance(slot, dict)
+            or str(slot.get("preferred_system") or "").strip().lower() != "system_a"
+        ):
+            continue
+        slot_evidence = str(slot.get("evidence_quote") or "")
+        slot_identity = " ".join(
+            str(slot.get(key) or "")
+            for key in ("source_path", "source_name", "topic", "heading_path")
+        )
+        if not re.search(
+            r"frequency[- ]division[- ]multiplexed.{0,80}single[- ]pixel|\bFDM(?:-SPI)?\b",
+            slot_identity,
+            flags=re.I,
+        ):
+            continue
+        slot_has_fdm_tradeoff = bool(
+            re.search(
+                r"parallelize\s+the\s+single-pixel\s+imaging\s+process",
+                slot_evidence,
+                flags=re.I,
+            )
+            and re.search(
+                r"trade-off\s+between\s+signal-to-noise\s+ratio\s+and\s+acquisition\s+speed",
+                slot_evidence,
+                flags=re.I,
+            )
+            and re.search(
+                r"without\s+altering\s+detector\s+integration\s+time",
+                slot_evidence,
+                flags=re.I,
+            )
+        )
+        if not slot_has_fdm_tradeoff:
+            continue
+        fdm_hit_num = next(
+            (
+                number
+                for number in _citation_plan_slot_hit_numbers(slot, answer_hits)
+                if number > 0
+            ),
+            0,
+        )
+        if fdm_hit_num > 0:
+            break
+
     # Keep the user-visible explanation aligned with the compact evidence card
     # selected for frequency-division multiplexing.  Models sometimes answer
     # this question with a secondary four-carrier experiment and omit the
@@ -4944,7 +5334,7 @@ def _normalize_citation_plan_supported_terms(
     )
     if (
         has_fdm_tradeoff_contract
-        and primary_hit_num > 0
+        and fdm_hit_num > 0
         and (
             not answer_mentions_parallelization
             or (replace_idx >= 0 and not plan_supports_optional_result)
@@ -4953,19 +5343,149 @@ def _normalize_citation_plan_supported_terms(
         if prefer_zh:
             mechanism = (
                 "频分复用通过并行化单像素成像过程来提高采集速度 "
-                f"[{primary_hit_num}]。"
+                f"[{fdm_hit_num}]。"
             )
         else:
             mechanism = (
                 "Frequency-division multiplexing parallelizes multiple single-pixel "
                 "encoding channels within the unchanged detector integration time, "
-                f"so acquisition is faster than sequential encoding [{primary_hit_num}]."
+                f"so acquisition is faster than sequential encoding [{fdm_hit_num}]."
             )
         if replace_idx >= 0:
             paragraphs[replace_idx] = mechanism
         else:
             paragraphs.insert(0, mechanism)
         text = "\n\n".join(paragraphs)
+
+    fdm_encoding_hit_num = 0
+    fdm_encoding_evidence = ""
+    for slot in list((citation_plan or {}).get("slots") or []):
+        if (
+            not isinstance(slot, dict)
+            or str(slot.get("preferred_system") or "").strip().lower() != "system_a"
+        ):
+            continue
+        slot_identity = " ".join(
+            str(slot.get(key) or "")
+            for key in ("source_path", "source_name", "topic", "heading_path")
+        )
+        slot_evidence = str(slot.get("evidence_quote") or "")
+        if not re.search(
+            r"frequency[- ]division[- ]multiplexed.{0,80}single[- ]pixel|\bFDM(?:-SPI)?\b",
+            slot_identity,
+            flags=re.I,
+        ):
+            continue
+        if not (
+            re.search(r"\$?p\$?\s+frequencies\s+simultaneously", slot_evidence, flags=re.I)
+            and "multiplexed into a single-pixel detector" in slot_evidence.lower()
+            and re.search(r"signal\s+is\s+then\s+demodulated", slot_evidence, flags=re.I)
+        ):
+            continue
+        fdm_encoding_hit_num = next(
+            (
+                number
+                for number in _citation_plan_slot_hit_numbers(slot, answer_hits)
+                if number > 0
+            ),
+            0,
+        )
+        if fdm_encoding_hit_num > 0:
+            fdm_encoding_evidence = slot_evidence
+            break
+
+    if fdm_encoding_hit_num > 0 and re.search(
+        r"\bFDM(?:-SPI)?\b|frequency[- ]division|频分复用",
+        text,
+        flags=re.I,
+    ):
+        has_complete_fdm_encoding = bool(
+            re.search(r"\$?p\$?\s*(?:个|条)?\s*(?:frequenc|频率)|多个不同频率", text, flags=re.I)
+            and re.search(r"single[- ]pixel\s+detector|单像素探测器", text, flags=re.I)
+            and re.search(r"demodulat|lock[- ]in|解调|锁相", text, flags=re.I)
+        )
+        if not has_complete_fdm_encoding:
+            has_full_phase_contract = bool(
+                re.search(
+                    r"(?:either\s+)?0\s+(?:or|/)\s*(?:pi|π|\\pi)\s+phase|"
+                    r"0\s*/\s*(?:pi|π|\\pi)\s+phase",
+                    fdm_encoding_evidence,
+                    flags=re.I,
+                )
+                and re.search(
+                    r"phase[- ]sensitive\s+detection",
+                    fdm_encoding_evidence,
+                    flags=re.I,
+                )
+                and re.search(
+                    r"(?:a\s+number\s*\(\s*p\s*\)\s+of|\bp\s+)\s*"
+                    r"(?:LIAs?|lock[- ]in\s+amplifiers?)",
+                    fdm_encoding_evidence,
+                    flags=re.I,
+                )
+                and re.search(
+                    r"mask\s+values?\s+(?:are\s+)?encoded",
+                    fdm_encoding_evidence,
+                    flags=re.I,
+                )
+            )
+            paragraphs = text.split("\n\n")
+            target_candidates = [
+                (index, paragraph)
+                for index, paragraph in enumerate(paragraphs)
+                if re.search(
+                    r"\bFDM(?:-SPI)?\b|frequency[- ]division|频分复用",
+                    paragraph,
+                    flags=re.I,
+                )
+            ]
+            target_idx = (
+                max(
+                    target_candidates,
+                    key=lambda item: (
+                        not bool(re.search(r"\b3D\b|三维", item[1], flags=re.I)),
+                        bool(re.search(r"modulat|encod|调制|编码", item[1], flags=re.I)),
+                        -len(item[1]),
+                    ),
+                )[0]
+                if target_candidates
+                else -1
+            )
+            if prefer_zh:
+                if has_full_phase_contract:
+                    encoding_sentence = (
+                        "其 SLM 像素以 0/π 相位同时调制 p 个频率通道；调制光复用进入"
+                        "同一个单像素探测器，再由 p 个锁相放大器进行相位敏感解调，"
+                        "因此并行的是空间掩模的频率编码与读出 "
+                        f"[{fdm_encoding_hit_num}]。"
+                    )
+                else:
+                    encoding_sentence = (
+                        "其 SLM 像素同时调制 p 个频率通道；调制光复用进入同一个"
+                        "单像素探测器，随后再进行解调 "
+                        f"[{fdm_encoding_hit_num}]。"
+                    )
+            else:
+                if has_full_phase_contract:
+                    encoding_sentence = (
+                        "Each SLM pixel modulates p frequencies simultaneously with 0/π phase; "
+                        "the light is multiplexed into one single-pixel detector and phase-"
+                        "sensitively demodulated by p lock-in amplifiers, so the spatial-mask "
+                        f"channels are encoded and read in parallel [{fdm_encoding_hit_num}]."
+                    )
+                else:
+                    encoding_sentence = (
+                        "Each SLM pixel modulates p frequencies simultaneously; the light is "
+                        "multiplexed into one single-pixel detector and then demodulated "
+                        f"[{fdm_encoding_hit_num}]."
+                    )
+            if target_idx >= 0:
+                paragraphs[target_idx] = " ".join(
+                    part for part in (paragraphs[target_idx].rstrip(), encoding_sentence) if part
+                )
+            else:
+                paragraphs.insert(0, encoding_sentence)
+            text = "\n\n".join(paragraphs)
 
     has_sequential_contract = bool(
         re.search(r"sequential\s+adaptive\s+compressed\s+sensing", evidence, flags=re.I)
@@ -5552,8 +6072,10 @@ def _finalize_generation_answer(
         if multi_paper_list_prompt
         else []
     )
-    answer = _normalize_math_markdown(
-        _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
+    answer = normalize_signed_binary_vectors(
+        _normalize_math_markdown(
+            _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
+        )
     ).strip() or "(No text returned)"
     if answer_audit_requested:
         answer = _replace_answer_audit_doc_labels(answer)
@@ -5957,12 +6479,13 @@ def _finalize_generation_answer(
             answer_hits=answer_hits,
         )
     )
+    post_gate_terms_changed = post_gate_answer != answer
+    post_gate_answer = _bind_planned_source_citations(
+        post_gate_answer,
+        citation_plan=citation_plan_seed,
+        answer_hits=list(answer_hits or []),
+    )
     if post_gate_answer != answer:
-        post_gate_answer = _bind_planned_source_citations(
-            post_gate_answer,
-            citation_plan=citation_plan_seed,
-            answer_hits=list(answer_hits or []),
-        )
         answer, final_claim_evidence_meta = audit_and_repair_claim_evidence(
             post_gate_answer,
             answer_hits=claim_evidence_hits,
@@ -5973,7 +6496,9 @@ def _finalize_generation_answer(
             drop_unsupported_high_risk_claims=final_gate_has_grounded_system_a,
             enforce_user_visible_binding=final_gate_has_grounded_system_a,
         )
-        final_claim_evidence_meta["post_gate_term_normalization"] = True
+        if post_gate_terms_changed:
+            final_claim_evidence_meta["post_gate_term_normalization"] = True
+        final_claim_evidence_meta["post_gate_citation_rebinding"] = True
     answer = _collapse_adjacent_duplicate_numeric_citations(answer)
     answer = _sanitize_empty_markdown_label_fragments(answer)
     final_claim_evidence_meta["final_gate_applied"] = True

@@ -205,6 +205,61 @@ def test_empty_docs_index_does_not_load_orphan_chunks(tmp_path: Path):
     assert [row["text"] for row in load_all_chunks(db_dir, include_non_ready=True)] == ["stale"]
 
 
+def test_load_all_chunks_includes_indexable_degraded_documents(tmp_path: Path):
+    db_dir = tmp_path / "db"
+    write_doc_chunks(db_dir, "degraded", [{"text": "usable page", "meta": {"evidence_ready": True}}])
+    write_doc_chunks(db_dir, "blocked", [{"text": "blocked page", "meta": {}}])
+    save_docs_index(
+        db_dir,
+        {
+            "degraded": {
+                "doc_id": "degraded",
+                "path": "/degraded.md",
+                "num_chunks": 1,
+                "index_status": "quality_degraded",
+                "quality_gate": {"status": "degraded", "indexable": True},
+            },
+            "blocked": {
+                "doc_id": "blocked",
+                "path": "/blocked.md",
+                "num_chunks": 1,
+                "index_status": "quality_blocked",
+                "quality_gate": {"status": "blocked", "indexable": False},
+            },
+        },
+    )
+
+    assert [row["text"] for row in load_all_chunks(db_dir)] == ["usable page"]
+
+
+def test_load_all_chunks_rejects_degraded_document_without_explicit_indexable_gate(
+    tmp_path: Path,
+):
+    db_dir = tmp_path / "db"
+    write_doc_chunks(
+        db_dir,
+        "legacy-degraded",
+        [{"text": "possibly corrupt legacy page", "meta": {"evidence_ready": True}}],
+    )
+    save_docs_index(
+        db_dir,
+        {
+            "legacy-degraded": {
+                "doc_id": "legacy-degraded",
+                "path": "/legacy-degraded.md",
+                "num_chunks": 1,
+                "index_status": "quality_degraded",
+                "quality_gate": {"status": "degraded"},
+            }
+        },
+    )
+
+    assert load_all_chunks(db_dir) == []
+    assert [row["text"] for row in load_all_chunks(db_dir, include_non_ready=True)] == [
+        "possibly corrupt legacy page"
+    ]
+
+
 def test_chunk_deleted_after_reader_enumeration_is_ignored(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     db_dir = tmp_path / "db"
     target = db_dir / "chunks" / "paper.jsonl"

@@ -273,6 +273,32 @@ def test_ref_card_view_keeps_relevance_that_extends_the_guide():
     assert sections["why"]["text"] == why
 
 
+def test_ref_card_locale_contract_builds_relevance_for_compact_fdm_excerpt() -> None:
+    evidence = (
+        "The modulated light from the SLM is then multiplexed into a single-pixel detector, "
+        "which produces a signal containing the phase and modulation frequency information."
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "Frequency-division-multiplexed single-pixel imaging.pdf",
+            "heading_path": "B. Encoding",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": "频分复用单像素成像将空间光调制器（SLM）的像素调制环节并行化。",
+            "why_line": "",
+            "primary_evidence": {
+                "snippet": evidence,
+                "highlight_snippet": evidence,
+            },
+        }
+    )
+
+    assert all(term in ui["why_line"] for term in ("SLM", "相位", "调制频率", "FDM"))
+    assert ui["why_generation"] == "deterministic_grounded"
+    sections = {section["id"]: section for section in ui["card_view"]["sections"]}
+    assert sections["why"]["text"] == ui["why_line"]
+
+
 def test_ref_card_copy_suppresses_located_quote_shell_without_grounded_replacement():
     why = (
         "“Abstract”中的原文直接支撑“频分复用并行采集”，"
@@ -291,6 +317,35 @@ def test_ref_card_copy_suppresses_located_quote_shell_without_grounded_replaceme
     assert ui["why_line"] == ""
     assert ui["why_generation"] == "locale_suppressed"
     assert all(section["id"] != "why" for section in ui["card_view"]["sections"])
+
+
+def test_detector_review_gets_grounded_relevance_when_compacted_abstract_omits_list() -> None:
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": (
+                "Emerging single-photon detection technique for high-performance "
+                "photodetector.pdf"
+            ),
+            "heading_path": "Abstract",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": (
+                "\u8be5\u7efc\u8ff0\u8ba8\u8bba\u5355\u5149\u5b50\u63a2\u6d4b\u5668\u4e0e SPAD \u786c\u4ef6\u80cc\u666f\u3002"
+            ),
+            "why_line": "",
+            "primary_evidence": {
+                "snippet": (
+                    "Conductors, superconductors, semiconductors, and nanowires "
+                    "have all been discussed for single-photon detectors."
+                )
+            },
+        }
+    )
+
+    assert "SPAD" in ui["why_line"]
+    assert "\u786c\u4ef6" in ui["why_line"]
+    sections = {section["id"]: section for section in ui["card_view"]["sections"]}
+    assert sections["why"]["text"] == ui["why_line"]
 
 
 def test_answer_citation_copy_cleanup_preserves_localized_guide_and_source_evidence_split():

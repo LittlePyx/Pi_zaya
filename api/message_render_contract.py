@@ -4,6 +4,8 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 
+from api.citation_display_registry import _canonical_source_path_identity
+
 _VISIBLE_SINGLE_NUMERIC_CITE_RE = re.compile(r"(?<!\[)\[(\d{1,4})\](?![\]\(])")
 _LINKED_NUMERIC_CITE_RE = re.compile(
     r"(?<![!\\])\[(\d{1,4})\]\(\#([^\s)]+)(?:\s+\"[^\"\r\n]*\")?\)"
@@ -379,6 +381,83 @@ def _source_tail(value: object) -> str:
     return "/".join(parts[-2:]) if len(parts) >= 2 else path
 
 
+def _system_b_explicit_source_sid(record: dict) -> str:
+    for key in ("sid", "source_sid", "sourceSid", "source_id", "sourceId"):
+        value = str(record.get(key) or "").strip().casefold()
+        if value:
+            return value
+    discovered: set[str] = set()
+    for example in list(record.get("candidate_cite_examples") or []):
+        discovered.update(
+            str(match.group(1) or "").strip().casefold()
+            for match in re.finditer(
+                r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*\d{1,4}\s*\]\]",
+                str(example or ""),
+                flags=re.IGNORECASE,
+            )
+            if str(match.group(1) or "").strip()
+        )
+    return next(iter(discovered)) if len(discovered) == 1 else ""
+
+
+def _system_b_source_path(record: dict) -> str:
+    return _normalized_source_path(
+        record.get("source_path")
+        or record.get("sourcePath")
+        or record.get("source_name")
+        or record.get("sourceName")
+    )
+
+
+def _source_path_is_absolute(path: str) -> bool:
+    value = str(path or "")
+    return bool(value.startswith("/") or re.match(r"^[a-z]:/", value))
+
+
+def _system_b_source_records_match(left: dict, right: dict) -> bool:
+    left_sid = _system_b_explicit_source_sid(left)
+    right_sid = _system_b_explicit_source_sid(right)
+    if left_sid and right_sid:
+        return left_sid == right_sid
+
+    left_path = _system_b_source_path(left)
+    right_path = _system_b_source_path(right)
+    if not left_path or not right_path:
+        return False
+    if left_path == right_path:
+        return True
+
+    left_public = left_path.startswith("kb-source/")
+    right_public = right_path.startswith("kb-source/")
+    if left_public or right_public:
+        left_canonical = _canonical_source_path_identity(left_path)
+        right_canonical = _canonical_source_path_identity(right_path)
+        return bool(
+            left_canonical
+            and right_canonical
+            and left_canonical == right_canonical
+        )
+
+    left_absolute = _source_path_is_absolute(left_path)
+    right_absolute = _source_path_is_absolute(right_path)
+    if left_absolute != right_absolute:
+        absolute_path = left_path if left_absolute else right_path
+        relative_path = right_path if left_absolute else left_path
+        relative_parts = [part for part in relative_path.split("/") if part]
+        if len(relative_parts) >= 2 and absolute_path.endswith(f"/{relative_path}"):
+            return True
+
+    return False
+
+
+def _system_b_source_coordinate(record: dict) -> str:
+    sid = _system_b_explicit_source_sid(record)
+    if sid:
+        return f"sid:{sid}"
+    path = _system_b_source_path(record)
+    return f"path:{path}" if path else ""
+
+
 def _citation_detail_source_identity(detail: dict) -> str:
     source_path = _normalized_source_path(detail.get("source_path"))
     route = str(detail.get("citation_route") or "").strip().casefold()
@@ -704,6 +783,124 @@ def render_payload_is_missing_planned_system_a(
         for detail in system_a_details
         for slot in system_a_slots
     )
+
+
+def render_payload_is_missing_planned_system_b(
+    payload: MessageRenderPayload | dict | None,
+    *,
+    citation_plan: dict | None,
+) -> bool:
+    """Reject a cached render that dropped an authorized System-B slot.
+
+    System-B markers are resolved after answer generation, so the raw answer
+    signature alone cannot prove that a cached packet still contains the
+    planned upstream-reference card.  Count only the authorized slots and
+    accept legacy details that identify the route through ``is_inpaper``.
+    """
+
+    plan = _dict_or_empty(citation_plan)
+    budget = _dict_or_empty(plan.get("budget"))
+    try:
+        system_b_budget = int(budget.get("system_b") or 0)
+    except (TypeError, ValueError):
+        system_b_budget = 0
+    raw_system_b_slots = [
+        item
+        for item in list(plan.get("slots") or [])
+        if isinstance(item, dict)
+        and str(item.get("preferred_system") or "").strip().lower() == "system_b"
+        and (
+            list(item.get("candidate_refs") or [])
+            or list(item.get("candidate_cite_examples") or [])
+            or str(item.get("evidence_quote") or "").strip()
+        )
+    ]
+
+    def _planned_ref_numbers(slot: dict) -> set[int]:
+        values = [slot.get("ref_num"), *list(slot.get("candidate_refs") or [])]
+        for example in list(slot.get("candidate_cite_examples") or []):
+            values.extend(
+                match.group(1)
+                for match in re.finditer(
+                    r"\[\[\s*CITE\s*:\s*[A-Za-z0-9_-]{4,24}\s*:\s*(\d{1,4})\s*\]\]",
+                    str(example or ""),
+                    flags=re.IGNORECASE,
+                )
+            )
+        numbers: set[int] = set()
+        for value in values:
+            try:
+                number = int(value or 0)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                numbers.add(number)
+        return numbers
+
+    # The builder already deduplicates System-B opportunities, but historical
+    # plans may contain the same source/reference coordinate more than once.
+    # Treat that as one cache obligation rather than forcing an impossible
+    # duplicate-card count on every message poll.
+    system_b_slots: list[dict] = []
+    seen_slot_coordinates: set[tuple[str, tuple[int, ...]]] = set()
+    for slot in raw_system_b_slots:
+        source_coordinate = _system_b_source_coordinate(slot)
+        ref_numbers = tuple(sorted(_planned_ref_numbers(slot)))
+        coordinate = (source_coordinate, ref_numbers)
+        if coordinate in seen_slot_coordinates:
+            continue
+        seen_slot_coordinates.add(coordinate)
+        system_b_slots.append(slot)
+
+    system_b_slots = system_b_slots[: max(0, system_b_budget)]
+    required_count = len(system_b_slots)
+    if required_count <= 0:
+        return False
+
+    normalized = payload
+    if isinstance(payload, dict):
+        normalized = MessageRenderPayload.from_cache(payload)
+    if not isinstance(normalized, MessageRenderPayload):
+        return True
+    details = list(normalized.cite_details or [])
+
+    system_b_details: list[dict] = []
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        route = str(detail.get("citation_route") or "").strip().lower()
+        if route != "system_b" and detail.get("is_inpaper") is not True:
+            continue
+        system_b_details.append(detail)
+
+    unmatched_detail_indexes = set(range(len(system_b_details)))
+    for slot in system_b_slots:
+        planned_source = _system_b_source_coordinate(slot)
+        planned_refs = _planned_ref_numbers(slot)
+        if not planned_source or not planned_refs:
+            return True
+        matched_index = -1
+        for index in sorted(unmatched_detail_indexes):
+            detail = system_b_details[index]
+            try:
+                detail_ref = int(
+                    detail.get("inpaper_ref_num")
+                    or detail.get("ref_num")
+                    or detail.get("num")
+                    or 0
+                )
+            except (TypeError, ValueError):
+                detail_ref = 0
+            if (
+                _system_b_source_records_match(slot, detail)
+                and detail_ref in planned_refs
+            ):
+                matched_index = index
+                break
+        if matched_index < 0:
+            return True
+        unmatched_detail_indexes.discard(matched_index)
+    return False
 
 
 def normalize_render_cache_payload(

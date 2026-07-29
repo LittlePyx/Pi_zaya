@@ -13,6 +13,8 @@ from tools.research_qa.run_research_qa_eval import (
     _missing_term_groups,
     _refs_payload_is_converged_for_case,
     _refs_payload_is_full,
+    _refs_payload_is_terminal_for_case,
+    _timing_summary,
     evaluate_retrieval_coverage,
     evaluate_replay_rows,
     load_fixture,
@@ -187,6 +189,41 @@ def test_refs_payload_convergence_waits_for_answer_aligned_card_copy() -> None:
         user_msg_id=9,
         expected={"requireRefsReady": True},
     )
+
+
+def test_refs_payload_terminal_distinguishes_finished_bad_copy_from_pending_work() -> None:
+    terminal_bad = {
+        "9": {
+            "payload_mode": "full",
+            "render_status": "full",
+            "polish_status": "heuristic",
+            "hits": [{"ui_meta": {"polish_status": "heuristic", "why_line": ""}}],
+        }
+    }
+    pending = {
+        "9": {
+            "payload_mode": "full",
+            "render_status": "full",
+            "polish_status": "pending",
+            "hits": [{"ui_meta": {"polish_status": "pending"}}],
+        }
+    }
+
+    assert _refs_payload_is_terminal_for_case(terminal_bad, user_msg_id=9)
+    assert not _refs_payload_is_terminal_for_case(pending, user_msg_id=9)
+
+
+def test_timing_summary_reports_user_visible_percentiles() -> None:
+    timing = _timing_summary(
+        [
+            {"first_answer_ms": 100, "answer_complete_ms": 500, "latency_ms": 900},
+            {"first_answer_ms": 300, "answer_complete_ms": 700, "cards_complete_ms": 800, "latency_ms": 1100},
+            {"first_answer_ms": 200, "answer_complete_ms": 600, "cards_complete_ms": 1000, "latency_ms": 1000},
+        ]
+    )
+
+    assert timing["first_answer_ms"] == {"count": 3, "p50": 200.0, "p95": 290.0, "max": 300.0}
+    assert timing["cards_complete_ms"] == {"count": 2, "p50": 900.0, "p95": 990.0, "max": 1000.0}
 
 
 def test_quality_contract_waits_for_full_reference_cards() -> None:
@@ -462,6 +499,79 @@ def test_claim_contract_requires_terms_in_visible_card_evidence_not_hidden_raw_m
     detail["card_evidence"] = str(detail["raw"])
     detail["evidence_quote"] = str(detail["raw"])
     assert _claim_evidence_contract_failures(fixture, [detail], [contract]) == []
+
+
+def test_fdm_claim_contract_uses_source_bound_full_plan_evidence() -> None:
+    fixture = load_fixture()
+    case = _case_by_id(fixture, "fdm-vs-3d-video-parallelism")
+    contract = next(
+        item
+        for item in (case.get("expected") or {}).get("claimEvidenceContracts") or []
+        if item.get("id") == "fdm-parallel-encoding-layer"
+    )
+    source_path = source_path_for_doc(fixture, "fdm-metamaterials")
+    compact = (
+        "Each pixel of the SLM is modulated with either 0 or \\pi phase on p frequencies "
+        "simultaneously. The modulated light is multiplexed into a single-pixel detector. "
+        "The signal is then demodulated by a number (p) of LIAs."
+    )
+    plan_evidence = (
+        "The mask values are encoded in the phase of intensity modulation, and thus we require "
+        "phase-sensitive detection, in this case provided by a lock-in amplifier (LIA). "
+        f"{compact}"
+    )
+    result = {
+        "assistant_message": {
+            "content": "Frequency-division methods parallelize the modulation and encoding layer.",
+            "meta": {
+                "paper_guide_contracts": {
+                    "render_packet": {
+                        "cite_details": [
+                            {
+                                "citation_route": "system_a",
+                                "source_path": source_path,
+                                "source_name": "FDM.pdf",
+                                "heading_path": "B. Encoding",
+                                "page_start": 2,
+                                "page_end": 2,
+                                "evidence_quote": compact,
+                            }
+                        ]
+                    }
+                },
+                "answer_quality": {
+                    "citation_plan": {
+                        "slots": [
+                            {
+                                "preferred_system": "system_a",
+                                "source_path": source_path,
+                                "heading_path": "B. Encoding",
+                                "page_start": 2,
+                                "page_end": 2,
+                                "evidence_quote": plan_evidence,
+                            }
+                        ]
+                    }
+                },
+            },
+        }
+    }
+
+    details = eval_mod._citation_details(result)
+
+    assert details[0]["citation_plan_evidence_quote"] == plan_evidence
+    assert _claim_evidence_contract_failures(
+        fixture,
+        details,
+        [contract],
+        answer="Frequency-division methods parallelize the modulation and encoding layer.",
+    ) == []
+
+    result["assistant_message"]["meta"]["answer_quality"]["citation_plan"]["slots"][0][
+        "source_path"
+    ] = source_path_for_doc(fixture, "3d-sp-video")
+    unmatched = eval_mod._citation_details(result)
+    assert "citation_plan_evidence_quote" not in unmatched[0]
 
 
 def test_claim_level_citation_gate_rejects_extra_uncited_mechanism_claim():

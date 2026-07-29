@@ -268,6 +268,50 @@ def _render_app_title() -> None:
     holder.markdown(f"<h1 class='kb-hero-title'>{safe_title}</h1>", unsafe_allow_html=True)
     st.session_state["_hero_title_typed_once"] = True
 
+
+def _strip_empty_display_math_blocks(markdown: str) -> str:
+    """Remove empty standalone ``$$`` blocks outside fenced code."""
+
+    empty_block_re = re.compile(
+        r"(?m)^[ \t]*\$\$[ \t]*(?:\r?\n[ \t]*)+\$\$[ \t]*(?=\r?$)"
+    )
+    chunks: list[str] = []
+    prose_lines: list[str] = []
+    fence_char = ""
+    fence_len = 0
+
+    def _flush_prose() -> None:
+        if prose_lines:
+            chunks.append(empty_block_re.sub("", "".join(prose_lines)))
+            prose_lines.clear()
+
+    for line in str(markdown or "").splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        if fence_char:
+            chunks.append(line)
+            if re.fullmatch(
+                rf"[ \t]{{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*",
+                body,
+            ):
+                fence_char = ""
+                fence_len = 0
+            continue
+
+        fence_match = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", body)
+        if fence_match:
+            _flush_prose()
+            token = str(fence_match.group(1) or "")
+            fence_char = token[:1]
+            fence_len = len(token)
+            chunks.append(line)
+            continue
+
+        prose_lines.append(line)
+
+    _flush_prose()
+    return "".join(chunks)
+
+
 def _normalize_math_markdown(text: str) -> str:
     """
     Make math rendering more stable in rendered markdown.
@@ -282,7 +326,7 @@ def _normalize_math_markdown(text: str) -> str:
 
     import re
 
-    s = text
+    s = _strip_empty_display_math_blocks(text)
 
     # Prefer $...$ and $$...$$ over \( \) and \[ \], but do it conservatively.
     # Avoid touching escaped citation brackets like \[24\].

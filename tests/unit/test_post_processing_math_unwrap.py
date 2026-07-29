@@ -239,6 +239,32 @@ $$
     assert "445" in out
 
 
+def test_unwrap_numeric_leading_sentence_style_display_math():
+    src = r"""
+$$
+1.4\ \text{Airy units (AU, with }1\,\text{AU}=1.22\lambda/2\text{NA}),\ \text{which for our parameters }(\lambda=445\,\text{nm},\ \text{NA}=1.4)
+$$
+"""
+    out = postprocess_markdown(src)
+    assert "$$" not in out
+    assert "1.4 Airy units" in out
+    assert "which for our parameters" in out
+    assert "445" in out
+
+
+def test_keep_numeric_leading_equation_with_prose_qualifier():
+    src = r"""
+$$
+2 x^2 + 3 x + 1 = 0 \quad \text{for all real values x which satisfy the boundary condition}
+$$
+"""
+
+    out = postprocess_markdown(src)
+
+    assert "$$" in out
+    assert "2 x^2 + 3 x + 1 = 0" in out
+
+
 def test_unwrap_variable_definition_with_superscripts_from_display_math():
     src = r"""
 $$

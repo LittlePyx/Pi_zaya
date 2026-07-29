@@ -1024,6 +1024,9 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
   const anchor = pickText(rec, 'anchor')
   if (!anchor) return null
   const libraryMatch = pickRecord(rec, 'library_match', 'libraryMatch') || {}
+  const citationRoute = pickText(rec, 'citation_route', 'citationRoute').trim().toLowerCase()
+  const isInpaper = citationRoute === 'system_b'
+    || (citationRoute !== 'system_a' && (rec.is_inpaper === true || rec.isInpaper === true))
   const detail: CiteDetail = {
     num: pickNumber(rec, 'num'),
     displayNum: pickNumber(rec, 'display_num', 'displayNum', 'visible_num', 'visibleNum'),
@@ -1037,7 +1040,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     traceUserMsgId: pickNumber(rec, 'trace_user_msg_id', 'traceUserMsgId'),
     raw: pickText(rec, 'raw'),
     citeFmt: pickText(rec, 'cite_fmt', 'citeFmt'),
-    isInpaper: rec.is_inpaper === true || rec.isInpaper === true,
+    isInpaper,
     title: pickText(rec, 'title'),
     authors: pickText(rec, 'authors'),
     venue: pickText(rec, 'venue'),
@@ -1050,7 +1053,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     linkedNums: pickNumberArray(rec, 'linked_nums', 'linkedNums'),
     evidenceFingerprint: pickText(rec, 'evidence_fingerprint', 'evidenceFingerprint'),
     renderLocale: pickText(rec, 'render_locale', 'renderLocale', 'locale'),
-    citationRoute: pickText(rec, 'citation_route', 'citationRoute'),
+    citationRoute,
     routingReason: pickText(rec, 'routing_reason', 'routingReason'),
     routingConfidence: pickNumber(rec, 'routing_confidence', 'routingConfidence'),
     citationCount: pickNumber(rec, 'citation_count', 'citationCount'),
@@ -1425,7 +1428,7 @@ export function citationCardView(detail: CiteDetail): CitationCardView {
       )
     }
   }
-  if (isSystemB || systemAHasReviewRisk) {
+  if (isSystemB || systemAHasReviewRisk || Boolean(storedSection('support')?.text)) {
     appendCardViewSection(
       sections,
       makeCardViewSection('support', sectionLabel('support', detail.cardSupportLabel, isSystemB ? '说明' : '可靠度'), sectionText('support', detail.cardSupportExplanation), 'support'),

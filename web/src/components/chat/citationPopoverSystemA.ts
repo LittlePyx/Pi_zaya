@@ -82,7 +82,7 @@ export function buildSystemAEvidenceCardModel({
     evidenceLabelOverride: cardEvidenceLabel,
     claimOverride: claimSection?.text || detail.cardClaim || detail.answerClaim,
     claimLabelOverride: cardClaimLabel,
-    supportOverride: supportSection?.text || detail.cardSupportExplanation || detail.supportRelation || detail.whyLine || detail.bindingReason,
+    supportOverride: supportSection?.text || detail.cardSupportExplanation || detail.supportRelation || detail.whyLine,
     supportLabelOverride: cardSupportLabel,
     includeCitationFallback: !suppressRawEvidenceFallback,
     includeRawFallback: false,
@@ -116,10 +116,11 @@ export function buildSystemAEvidenceCardModel({
     && !(showClaim && substantiallySame(takeawayText, claimText)),
   )
   const showSupport = Boolean(
-    hasReviewRisk
+    (hasReviewRisk || supportSection?.text)
     && supportText
     && !substantiallySame(supportText, evidenceText)
-    && !substantiallySame(supportText, claimText),
+    && !substantiallySame(supportText, claimText)
+    && !substantiallySame(supportText, takeawayText),
   )
   const contentCard: EvidenceCardViewModel = {
     ...evidenceCard,

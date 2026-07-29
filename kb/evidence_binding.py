@@ -13,6 +13,83 @@ from kb.evidence_term_mapping import (
 from kb.source_blocks import normalize_inline_markdown
 
 
+_EXPLICIT_CLAIM_RELATION_REQUIREMENTS: tuple[tuple[re.Pattern, re.Pattern], ...] = (
+    (
+        re.compile(
+            r"(?:替代|取代|摆脱).{0,28}(?:数据驱动|黑箱)|"
+            r"(?:数据驱动|黑箱).{0,28}(?:替代|取代|摆脱)|"
+            r"\b(?:replace|supplant|move\s+away\s+from).{0,40}"
+            r"(?:data[- ]driven|black[- ]box)\b",
+            re.I,
+        ),
+        re.compile(
+            r"(?:替代|取代|摆脱).{0,28}(?:数据驱动|黑箱)|"
+            r"(?:数据驱动|黑箱).{0,28}(?:替代|取代|摆脱)|"
+            r"\b(?:replace|supplant|move\s+away\s+from).{0,40}"
+            r"(?:data[- ]driven|black[- ]box)\b",
+            re.I,
+        ),
+    ),
+    (
+        re.compile(
+            r"(?:训练数据有限|有限.{0,12}训练数据|场景变化).{0,36}"
+            r"(?:鲁棒|泛化|仍能|保持)|(?:鲁棒|泛化).{0,36}"
+            r"(?:训练数据有限|有限.{0,12}训练数据|场景变化)|"
+            r"\b(?:robust|generaliz\w*).{0,44}(?:limited\s+training\s+data|"
+            r"scene\s+changes?)|(?:limited\s+training\s+data|scene\s+changes?)"
+            r".{0,44}\b(?:robust|generaliz\w*)",
+            re.I,
+        ),
+        re.compile(
+            r"(?:训练数据有限|有限.{0,12}训练数据|场景变化).{0,36}"
+            r"(?:鲁棒|泛化|仍能|保持)|(?:鲁棒|泛化).{0,36}"
+            r"(?:训练数据有限|有限.{0,12}训练数据|场景变化)|"
+            r"\b(?:robust|generaliz\w*).{0,44}(?:limited\s+training\s+data|"
+            r"scene\s+changes?)|(?:limited\s+training\s+data|scene\s+changes?)"
+            r".{0,44}\b(?:robust|generaliz\w*)",
+            re.I,
+        ),
+    ),
+    (
+        re.compile(
+            r"传统(?:方法|算法).{0,28}(?:失效|失败|无法|不能)|"
+            r"\btraditional\s+(?:methods?|algorithms?).{0,36}"
+            r"(?:fail|break\s+down|cannot|unable)",
+            re.I,
+        ),
+        re.compile(
+            r"传统(?:方法|算法).{0,28}(?:失效|失败|无法|不能)|"
+            r"\btraditional\s+(?:methods?|algorithms?).{0,36}"
+            r"(?:fail|break\s+down|cannot|unable)",
+            re.I,
+        ),
+    ),
+    (
+        re.compile(
+            r"解耦.{0,24}(?:真实|有效)?信号|"
+            r"\bdisentangl\w*.{0,32}(?:true|real|underlying)\s+signal",
+            re.I,
+        ),
+        re.compile(
+            r"解耦.{0,24}(?:真实|有效)?信号|"
+            r"\bdisentangl\w*.{0,32}(?:true|real|underlying)\s+signal",
+            re.I,
+        ),
+    ),
+)
+
+
+def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
+    """Reject a strong answer relation unless the evidence states that relation."""
+
+    claim_text = re.sub(r"\s+", " ", str(claim or "")).strip()
+    evidence_text = re.sub(r"\s+", " ", str(evidence or "")).strip()
+    return not any(
+        claim_pattern.search(claim_text) and not evidence_pattern.search(evidence_text)
+        for claim_pattern, evidence_pattern in _EXPLICIT_CLAIM_RELATION_REQUIREMENTS
+    )
+
+
 _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("iscat", re.compile(r"(?i)\biscat\b|干涉散射")),
     ("interferometric", re.compile(r"(?i)\binterferometric\b|干涉检测|干涉散射")),
@@ -480,13 +557,32 @@ _FACT_MULTIPLIER_NUMBER_WORDS = {
     "eleven": "11",
     "twelve": "12",
 }
+_FACT_MULTIPLIER_ZH_NUMBER_WORDS = {
+    "零": "0",
+    "一": "1",
+    "二": "2",
+    "两": "2",
+    "三": "3",
+    "四": "4",
+    "五": "5",
+    "六": "6",
+    "七": "7",
+    "八": "8",
+    "九": "9",
+    "十": "10",
+    "十一": "11",
+    "十二": "12",
+}
 _FACT_MULTIPLIER_NUMBER_PATTERN = "|".join(
     sorted(_FACT_MULTIPLIER_NUMBER_WORDS, key=len, reverse=True)
+)
+_FACT_MULTIPLIER_ZH_NUMBER_PATTERN = "|".join(
+    sorted(_FACT_MULTIPLIER_ZH_NUMBER_WORDS, key=len, reverse=True)
 )
 _FACT_MULTIPLIER_RE = re.compile(
     rf"(?<![A-Za-z0-9])(?P<en_value>\d+(?:\.\d+)?|{_FACT_MULTIPLIER_NUMBER_PATTERN})"
     r"\s*(?:[-\u2010-\u2015]\s*)?(?:fold|times?)(?![A-Za-z])"
-    r"|(?<![A-Za-z0-9])(?P<zh_value>\d+(?:\.\d+)?)\s*倍",
+    rf"|(?<![A-Za-z0-9])(?P<zh_value>\d+(?:\.\d+)?|{_FACT_MULTIPLIER_ZH_NUMBER_PATTERN})\s*倍",
     re.IGNORECASE,
 )
 _FACT_MULTIPLIER_DECREASE_RE = re.compile(
@@ -589,6 +685,8 @@ def _fact_multiplier_quantities(surface: str) -> set[tuple[str, str, str]]:
     for match in _FACT_MULTIPLIER_RE.finditer(str(surface or "")):
         raw_value = str(match.group("en_value") or match.group("zh_value") or "")
         normalized = _FACT_MULTIPLIER_NUMBER_WORDS.get(raw_value.casefold())
+        if normalized is None:
+            normalized = _FACT_MULTIPLIER_ZH_NUMBER_WORDS.get(raw_value)
         if normalized is None:
             normalized = _normalize_fact_number(raw_value)
         if not normalized:
@@ -716,6 +814,16 @@ def _system_a_fact_quantities(value: str) -> set[tuple[str, str, str]]:
 
     surface = re.sub(r"^\s*\d+[.)、]\s*", "", str(value or ""))
     surface = re.sub(r"\[\d{1,5}\](?:\([^\n)]+\))?", " ", surface)
+    # Relation operators are presentation syntax, not part of the number.  In
+    # compact TeX such as ``$\sim$8`` or ``\approx30`` the command's trailing
+    # letter otherwise makes the numeric boundary look alphanumeric and the
+    # quantity is silently missed.
+    surface = re.sub(
+        r"\\(?:sim|approx|simeq|lesssim|gtrsim)\s*\$?",
+        " ",
+        surface,
+        flags=re.IGNORECASE,
+    )
     surface = _strip_structural_locators(surface)
     out: set[tuple[str, str, str]] = set(_fact_multiplier_quantities(surface))
     quantity_re = re.compile(
@@ -909,9 +1017,20 @@ def assess_system_a_hit_binding(
     source_name: str,
 ) -> dict:
     claim = re.sub(r"\s+", " ", normalize_inline_markdown(str(answer_claim or ""))).strip()
+    # The reader locator may intentionally keep a short, claim-adjacent
+    # snippet.  Binding must still see the complete evidence passage selected
+    # by the authoritative citation plan; otherwise a later sentence in that
+    # passage can disappear from the evidence gate merely because the card
+    # chose an earlier sentence for navigation/display.
+    plan_binding_evidence = ""
+    if (meta or {}).get("citation_plan_evidence_authoritative"):
+        plan_binding_evidence = str(
+            (meta or {}).get("citation_plan_full_evidence_quote") or ""
+        ).strip()
     evidence_body_surface = " ".join(
         [
             str(evidence_quote or ""),
+            plan_binding_evidence,
             str((hit or {}).get("text") or ""),
             str(heading or ""),
             str((meta or {}).get("why_line") or ""),
@@ -920,6 +1039,23 @@ def assess_system_a_hit_binding(
     evidence_surface = " ".join([evidence_body_surface, str(source_name or "")])
     claim_low = claim.lower()
     evidence_body_low = evidence_body_surface.lower()
+    if not explicit_claim_relations_covered(claim, evidence_body_surface):
+        reason = (
+            "回答句加入了原文未明确陈述的因果、替代或鲁棒性关系，不能绑定到这张证据卡。"
+            if _system_a_prefers_zh(claim)
+            else (
+                "The answer adds a causal, replacement, or robustness relation that the "
+                "passage does not state, so this card cannot support it."
+            )
+        )
+        return {
+            "status": "mismatch",
+            "confidence": 0.0,
+            "suppress_link": True,
+            "reason": reason,
+            "overlap_terms": [],
+            "missing_terms": ["explicit relation"],
+        }
     if method_identity_conflicts(claim, evidence_surface):
         reason = (
             "回答句与这张卡片明确指向不同的方法或论文，不能仅凭相邻领域词把它们绑定在一起。"
@@ -1031,7 +1167,9 @@ def assess_system_a_hit_binding(
             "overlap_terms": [],
             "missing_terms": ["review identity"],
         }
-    selected_evidence = str(evidence_quote or (hit or {}).get("text") or "").strip()
+    selected_evidence = str(
+        plan_binding_evidence or evidence_quote or (hit or {}).get("text") or ""
+    ).strip()
     group_evidence_quotes = [
         str(item or "").strip()
         for item in list((meta or {}).get("citation_group_evidence_quotes") or [])
@@ -1103,6 +1241,16 @@ def assess_system_a_hit_binding(
         == "prompt_aligned_source_sentence"
     )
     if canonical_answer_evidence or verified_prompt_contract or prompt_aligned_plan_evidence:
+        fast_claim_domains = _system_a_domain_terms(claim)
+        fast_evidence_body_domains = _system_a_domain_terms(evidence_body_surface)
+        fast_missing_strong_terms = (
+            fast_claim_domains & _SYSTEM_A_STRONG_BINDING_TERMS
+        ) - fast_evidence_body_domains
+        fast_source_identity_overlap = _system_a_has_source_identity_overlap(
+            claim,
+            evidence_body_surface,
+            source_name,
+        )
         claim_keywords_fast = _system_a_keyword_terms(claim, limit=48)
         evidence_keywords_fast = _system_a_keyword_terms(evidence_surface, limit=64)
         keyword_overlap_fast = claim_keywords_fast & evidence_keywords_fast
@@ -1135,10 +1283,16 @@ def assess_system_a_hit_binding(
         shared_identifiers_fast = claim_identifiers_fast & evidence_identifiers_fast
         shared_numbers_fast = claim_numbers_fast & evidence_numbers_fast
         if (
-            len(keyword_overlap_fast) >= 2
-            or bool(shared_identifiers_fast)
-            or bool(shared_numbers_fast)
-            or _system_a_has_source_identity_overlap(claim, evidence_body_surface, source_name)
+            (
+                len(keyword_overlap_fast) >= 2
+                or bool(shared_identifiers_fast)
+                or bool(shared_numbers_fast)
+                or fast_source_identity_overlap
+            )
+            and not (
+                fast_missing_strong_terms
+                and not fast_source_identity_overlap
+            )
         ):
             prefer_zh_fast = _system_a_prefers_zh(claim)
             overlap_label = "、".join(sorted(keyword_overlap_fast | shared_identifiers_fast)[:4])
@@ -1182,7 +1336,11 @@ def assess_system_a_hit_binding(
         else 0.0
     )
     prefer_zh = _system_a_prefers_zh(claim)
-    quote_surface = re.sub(r"\s+", " ", str(evidence_quote or (hit or {}).get("text") or "")).strip()
+    quote_surface = re.sub(
+        r"\s+",
+        " ",
+        str(plan_binding_evidence or evidence_quote or (hit or {}).get("text") or ""),
+    ).strip()
     claim_similarity = difflib.SequenceMatcher(
         None,
         claim.lower(),

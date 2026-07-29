@@ -20,6 +20,7 @@ _CRITICAL_AUTOFIX_ISSUES = {
     "source_page_marker_alignment",
     "reference_index_truncated",
 }
+_PAGE_SCOPED_DEGRADABLE_ISSUES = {"source_page_text_corruption"}
 
 
 def _report_is_stale(md_path: Path, report: dict[str, Any]) -> bool:
@@ -71,6 +72,29 @@ def _unreliable_pages_from_report(report: dict[str, Any]) -> list[int]:
             if str(item or "").isdigit() and int(item) > 0
         }
     )[:500]
+
+
+def _page_scoped_degradable_issues(report: dict[str, Any], issue_codes: list[str]) -> set[str]:
+    """Return page-local issues that can be isolated from answer evidence.
+
+    A document should remain searchable when a conversion defect is confined to
+    a subset of pages: ingest marks those pages as ``evidence_ready=False`` and
+    the retriever excludes their chunks.  Keep blocking when the report cannot
+    prove that at least one source page remains reliable.
+    """
+
+    candidates = set(issue_codes).intersection(_PAGE_SCOPED_DEGRADABLE_ISSUES)
+    if not candidates:
+        return set()
+    source_quality = report.get("source_quality") if isinstance(report.get("source_quality"), dict) else {}
+    unreliable_pages = set(_unreliable_pages_from_report(report))
+    try:
+        page_count = int((source_quality or {}).get("pdf_page_count") or 0)
+    except (TypeError, ValueError):
+        page_count = 0
+    if not unreliable_pages or page_count <= len(unreliable_pages):
+        return set()
+    return candidates
 
 
 def load_or_write_conversion_quality_result(
@@ -141,14 +165,22 @@ def assess_markdown_index_quality(
     action = str(compact.get("action") or "review").strip().lower() or "review"
     issue_codes = [str(item) for item in list(compact.get("issue_codes") or []) if str(item or "").strip()]
     critical_autofix_codes = [code for code in issue_codes if code in _CRITICAL_AUTOFIX_ISSUES]
-    blocking_codes = (
+    candidate_blocking_codes = (
         list(compact.get("reconvert_issue_codes") or []) + list(compact.get("review_issue_codes") or [])
         if action in _BLOCKING_ACTIONS
         else []
     )
+    degradable_page_issues = _page_scoped_degradable_issues(report, issue_codes)
+    blocking_codes = [
+        str(code)
+        for code in candidate_blocking_codes
+        if str(code) not in degradable_page_issues
+    ]
     if critical_autofix_codes:
         blocking_codes = list(blocking_codes) + critical_autofix_codes
-    blocked = action in _BLOCKING_ACTIONS or bool(critical_autofix_codes)
+    blocked = bool(blocking_codes) or bool(critical_autofix_codes) or (
+        action in _BLOCKING_ACTIONS and not candidate_blocking_codes
+    )
     status = "blocked" if blocked else ("ready" if action == "none" else "degraded")
     indexable = (not blocked) or bool(allow_blocked)
     if blocked and allow_blocked:

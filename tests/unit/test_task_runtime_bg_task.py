@@ -67,6 +67,7 @@ from kb.task_runtime import (
     _should_sync_deep_seed_for_answer,
     _paper_guide_targeted_source_block_hits,
     _pick_recent_source_hint,
+    _prioritize_prompt_named_preferred_sources,
     _post_convert_source_retry_needed,
     _post_convert_source_retry_speed_mode,
     _repair_paper_guide_focus_answer,
@@ -1029,6 +1030,66 @@ def test_select_answer_seed_for_generation_prefers_cross_paper_grouped_docs():
     assert [str((item.get("meta") or {}).get("source_path") or "") for item in out] == [
         r"db\OE-2017\OE-2017.en.md"
     ]
+
+
+def test_prompt_named_preferred_paper_is_promoted_before_answer_hit_truncation():
+    piln = r"db\Optics-2024-Part-based image-loop network\paper.en.md"
+    rows = [
+        {"text": f"Generic evidence {idx}", "meta": {"source_path": f"db/generic-{idx}.en.md"}}
+        for idx in range(1, 5)
+    ] + [
+        {
+            "text": "We propose a self-supervised image-loop neural network called ILNet.",
+            "meta": {"source_path": piln},
+        }
+    ]
+
+    out = _prioritize_prompt_named_preferred_sources(
+        rows,
+        preferred_source_hints=[piln.replace(".en.md", ".pdf")],
+        prompt="PILN 这种网络方法适合解决什么？",
+        top_n=4,
+    )
+
+    assert out[0]["meta"]["source_path"] == piln
+    assert len(out) == 5
+
+
+def test_unmentioned_preferred_paper_does_not_override_whole_library_ranking():
+    recent = r"db\Recent upload\Unrelated calibration paper.en.md"
+    rows = [
+        {"text": "Relevant evidence", "meta": {"source_path": "db/relevant.en.md"}},
+        {"text": "Calibration evidence", "meta": {"source_path": recent}},
+    ]
+
+    out = _prioritize_prompt_named_preferred_sources(
+        rows,
+        preferred_source_hints=[recent],
+        prompt="单像素成像的主要重建路线是什么？",
+        top_n=4,
+    )
+
+    assert out == rows
+
+
+def test_preferred_source_body_topic_overlap_does_not_override_library_ranking():
+    recent = r"db\Recent upload\Generic spectroscopy study.en.md"
+    rows = [
+        {"text": "Authoritative physical-noise evidence", "meta": {"source_path": "db/relevant.en.md"}},
+        {
+            "text": "This appendix mentions physical noise, performance, and PILN in passing.",
+            "meta": {"source_path": recent},
+        },
+    ]
+
+    out = _prioritize_prompt_named_preferred_sources(
+        rows,
+        preferred_source_hints=[recent],
+        prompt="How does physical noise affect performance?",
+        top_n=4,
+    )
+
+    assert out == rows
 
 
 def test_build_doc_list_refs_render_payload_forwards_guide_filter_and_allows_empty_doc_list(monkeypatch):

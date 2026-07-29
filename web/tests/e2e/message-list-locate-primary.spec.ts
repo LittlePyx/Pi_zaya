@@ -1728,6 +1728,8 @@ test('citation popover and shelf prefer card_view over legacy fallback fields', 
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('Source evidence')
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('ray tracing operation')
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('wave propagation of distance -z')
+  await expect(page.getByTestId('citation-popover-system-a-support')).toContainText('Why it supports the answer')
+  await expect(page.getByTestId('citation-popover-system-a-support')).toContainText('ray-tracing and wave-propagation mechanism')
   await expect(popover).not.toContainText('Legacy fallback takeaway')
   await expect(popover).not.toContainText('Legacy markdown evidence')
 

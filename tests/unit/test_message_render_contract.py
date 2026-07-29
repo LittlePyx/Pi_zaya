@@ -10,6 +10,7 @@ from api.message_render_contract import (
     render_payload_is_degraded_for_citations,
     render_payload_has_citation_links,
     render_payload_is_missing_planned_system_a,
+    render_payload_is_missing_planned_system_b,
     strip_legacy_render_fields,
 )
 
@@ -36,6 +37,255 @@ def test_render_payload_rejects_missing_planned_system_a() -> None:
                 {"citation_route": "system_a", "source_path": "paper.en.md"}
             ]
         },
+        citation_plan=plan,
+    )
+
+
+def test_render_payload_rejects_missing_planned_system_b() -> None:
+    plan = {
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "source_path": "paper.en.md",
+                "candidate_refs": [4],
+                "candidate_cite_examples": ["[[CITE:s1234abcd:4]]"],
+            }
+        ],
+    }
+
+    assert render_payload_is_missing_planned_system_b(
+        {
+            "cite_details": [
+                {"citation_route": "system_a", "source_path": "paper.en.md"}
+            ]
+        },
+        citation_plan=plan,
+    )
+    assert not render_payload_is_missing_planned_system_b(
+        {
+            "render_packet": {
+                "cite_details": [
+                    {
+                        "is_inpaper": True,
+                        "source_path": "paper.en.md",
+                        "num": 4,
+                        "anchor": "kb-cite-upstream-4",
+                    }
+                ]
+            }
+        },
+        citation_plan=plan,
+    )
+
+
+def test_render_payload_rejects_system_b_card_from_wrong_source_or_ref() -> None:
+    plan = {
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "source_path": r"db\paper-a\paper-a.en.md",
+                "candidate_refs": [4],
+                "candidate_cite_examples": ["[[CITE:s1234abcd:4]]"],
+            }
+        ],
+    }
+
+    assert render_payload_is_missing_planned_system_b(
+        {
+            "cite_details": [
+                {
+                    "citation_route": "system_b",
+                    "source_path": r"db\paper-b\paper-b.en.md",
+                    "ref_num": 4,
+                    "anchor": "wrong-source",
+                }
+            ]
+        },
+        citation_plan=plan,
+    )
+    assert render_payload_is_missing_planned_system_b(
+        {
+            "cite_details": [
+                {
+                    "citation_route": "system_b",
+                    "source_path": "db/paper-a/paper-a.en.md",
+                    "ref_num": 9,
+                    "anchor": "wrong-ref",
+                }
+            ]
+        },
+        citation_plan=plan,
+    )
+    assert not render_payload_is_missing_planned_system_b(
+        {
+            "cite_details": [
+                {
+                    "citation_route": "system_b",
+                    "source_path": "C:/workspace/db/paper-a/paper-a.en.md",
+                    "ref_num": 4,
+                    "anchor": "exact-plan-coordinate",
+                }
+            ]
+        },
+        citation_plan=plan,
+    )
+
+
+def test_render_payload_rejects_system_b_same_tail_from_different_roots() -> None:
+    plan = {
+        "budget": {"system_a": 0, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "source_path": "C:/kb-one/shared/paper.en.md",
+                "candidate_refs": [4],
+            }
+        ],
+    }
+    payload = {
+        "cite_details": [
+            {
+                "citation_route": "system_b",
+                "source_path": "D:/kb-two/shared/paper.en.md",
+                "ref_num": 4,
+            }
+        ]
+    }
+
+    assert render_payload_is_missing_planned_system_b(payload, citation_plan=plan)
+
+
+def test_render_payload_keeps_same_tail_system_b_slots_as_distinct_obligations() -> None:
+    plan = {
+        "budget": {"system_a": 0, "system_b": 2},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "source_path": "C:/kb-one/shared/paper.en.md",
+                "candidate_refs": [4],
+            },
+            {
+                "preferred_system": "system_b",
+                "source_path": "D:/kb-two/shared/paper.en.md",
+                "candidate_refs": [4],
+            },
+        ],
+    }
+    payload = {
+        "cite_details": [
+            {
+                "citation_route": "system_b",
+                "source_path": "C:/kb-one/shared/paper.en.md",
+                "ref_num": 4,
+            }
+        ]
+    }
+
+    assert render_payload_is_missing_planned_system_b(payload, citation_plan=plan)
+
+
+def test_render_payload_rejects_unresolved_public_source_same_tail() -> None:
+    plan = {
+        "budget": {"system_a": 0, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "source_path": "kb-source/0/shared/paper.en.md",
+                "candidate_refs": [4],
+            }
+        ],
+    }
+    payload = {
+        "cite_details": [
+            {
+                "citation_route": "system_b",
+                "source_path": "D:/wrong/db/shared/paper.en.md",
+                "ref_num": 4,
+            }
+        ]
+    }
+
+    assert render_payload_is_missing_planned_system_b(payload, citation_plan=plan)
+
+
+def test_render_payload_accepts_public_source_after_canonical_resolution(
+    monkeypatch,
+) -> None:
+    from api import message_render_contract
+
+    public_path = "kb-source/0/shared/paper.en.md"
+    private_path = "C:/workspace/md_output/shared/paper.en.md"
+
+    def fake_canonical_source_path_identity(value: str) -> str:
+        if str(value or "").replace("\\", "/").casefold() in {
+            public_path.casefold(),
+            private_path.casefold(),
+        }:
+            return "c:/canonical/shared/paper.en.md"
+        return str(value or "").replace("\\", "/").casefold()
+
+    monkeypatch.setattr(
+        message_render_contract,
+        "_canonical_source_path_identity",
+        fake_canonical_source_path_identity,
+    )
+    plan = {
+        "budget": {"system_a": 0, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "source_path": public_path,
+                "candidate_refs": [4],
+            }
+        ],
+    }
+    payload = {
+        "cite_details": [
+            {
+                "citation_route": "system_b",
+                "source_path": private_path,
+                "ref_num": 4,
+            }
+        ]
+    }
+
+    assert not render_payload_is_missing_planned_system_b(
+        payload,
+        citation_plan=plan,
+    )
+
+
+def test_render_packet_does_not_duplicate_one_system_b_card_for_two_slots() -> None:
+    source_path = "db/paper/paper.en.md"
+    plan = {
+        "budget": {"system_a": 0, "system_b": 2},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "source_path": source_path,
+                "candidate_refs": [4, 5],
+            },
+            {
+                "preferred_system": "system_b",
+                "source_path": source_path,
+                "candidate_refs": [4, 6],
+            },
+        ],
+    }
+    detail = {
+        "citation_route": "system_b",
+        "source_path": source_path,
+        "ref_num": 4,
+    }
+
+    assert render_payload_is_missing_planned_system_b(
+        {"cite_details": [detail]},
+        citation_plan=plan,
+    )
+    assert render_payload_is_missing_planned_system_b(
+        {"render_packet": {"cite_details": [detail]}},
         citation_plan=plan,
     )
 

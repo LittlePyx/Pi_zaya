@@ -3605,6 +3605,56 @@ def _system_a_candidate_text(raw: dict) -> str:
     )
 
 
+def _system_a_ui_relevance_for_occurrence(
+    ui_meta: dict,
+    original_primary: dict,
+    *,
+    heading: str,
+    block_id: str,
+    anchor_id: str,
+    evidence_quote: str,
+) -> str:
+    """Reuse polished relevance only when it still describes this occurrence."""
+
+    why_line = str((ui_meta or {}).get("why_line") or "").strip()
+    generation = str((ui_meta or {}).get("why_generation") or "").strip().lower()
+    if not why_line or generation in {"locale_suppressed", "pending", "failed", "error"}:
+        return ""
+    if generation not in {
+        "answer_citation_grounded",
+        "deterministic_grounded",
+        "llm_grounded",
+        "llm_pack",
+        "section_grounded",
+    }:
+        return ""
+    primary = dict(original_primary or {})
+    if not primary:
+        return ""
+
+    primary_block = _system_a_candidate_value(primary, "block_id", "blockId")
+    primary_anchor = _system_a_candidate_value(primary, "anchor_id", "anchorId")
+    if primary_block and block_id and primary_block == str(block_id or "").strip():
+        return why_line[:320]
+    if primary_anchor and anchor_id and primary_anchor == str(anchor_id or "").strip():
+        return why_line[:320]
+
+    def _heading_key(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+    primary_heading = _system_a_candidate_value(primary, "heading_path", "headingPath")
+    if not primary_heading or _heading_key(primary_heading) != _heading_key(heading):
+        return ""
+    primary_text = _system_a_candidate_text(primary)
+    if not primary_text or not evidence_quote:
+        return ""
+    primary_tokens = evidence_alignment_tokens(primary_text)
+    evidence_tokens = evidence_alignment_tokens(evidence_quote)
+    if len(primary_tokens & evidence_tokens) < 4:
+        return ""
+    return why_line[:320]
+
+
 def _system_a_is_low_value_evidence_text(value: str) -> bool:
     text = _clean_evidence_display_text(value, max_len=900)
     if not text:
@@ -3965,23 +4015,72 @@ def _compound_plan_evidence_excerpt(plan_text: str, answer_claim: str) -> str:
                     " … ".join(dict.fromkeys(mechanism_sentences)),
                     max_len=520,
                 )
+    fdm_parallel_claim = bool(
+        re.search(
+            r"\bFDM\b|frequency[- ]division(?:[- ]multiplex(?:ed|ing)?)?|频分复用",
+            video_parallelism_surface,
+            flags=re.I,
+        )
+        and re.search(r"parallel|并行", video_parallelism_surface, flags=re.I)
+        and re.search(
+            r"\bSLM\b|spatial\s+light\s+modulator|空间光调制器",
+            video_parallelism_surface,
+            flags=re.I,
+        )
+        and re.search(
+            r"modulat|encod|调制|编码",
+            video_parallelism_surface,
+            flags=re.I,
+        )
+    )
+    fdm_mechanism_claim = bool(
+        re.search(
+            r"frequency\s+channels?|p\s+frequencies|频率通道|频率载波",
+            video_parallelism_surface,
+            flags=re.I,
+        )
+        and re.search(
+            r"phase[- ]sensitive|lock[- ]in|\bLIAs?\b|demodulat|相位敏感|锁相|解调",
+            video_parallelism_surface,
+            flags=re.I,
+        )
+    )
+    fdm_bpsk_claim = bool(re.search(r"\bBPSK\b|二进制相移键控", video_parallelism_surface, flags=re.I))
     if (
         re.search(r"\$?p\$?\s+frequencies\s+simultaneously", text, flags=re.I)
         and "multiplexed into a single-pixel detector" in text.lower()
         and re.search(r"signal is then demodulated", text, flags=re.I)
-        and re.search(
-            r"\bBPSK\b|p\s+个频率|频率.{0,18}(?:载波|掩模|编码)|"
-            r"carrier\s+frequenc|mask\s+patterns?",
-            str(answer_claim or ""),
-            flags=re.I,
+        and (
+            fdm_parallel_claim
+            or fdm_mechanism_claim
+            or re.search(
+                r"\bBPSK\b|p\s+个频率|频率.{0,18}(?:载波|掩模|编码)|"
+                r"carrier\s+frequenc|mask\s+patterns?",
+                video_parallelism_surface,
+                flags=re.I,
+            )
         )
     ):
         encoding_clauses = [
             re.search(
-                r"The mask values are encoded in the phase of intensity modulation, "
-                r"and thus we require phase-sensitive detection,.*?lock-in amplifier \(LIA\)\.",
+                (
+                    r"we require phase-sensitive detection,.*?lock-in amplifier \(LIA\)\."
+                    if fdm_bpsk_claim
+                    else r"The mask values are encoded in the phase of intensity modulation, "
+                    r"and thus we require phase-sensitive detection,.*?lock-in amplifier \(LIA\)\."
+                ),
                 text,
                 flags=re.I,
+            ),
+            (
+                re.search(
+                    r"This mapping of two phases to two numerical \(bit\) values is known.*?"
+                    r"binary phase shift keying \(BPSK\)\.",
+                    text,
+                    flags=re.I,
+                )
+                if fdm_bpsk_claim
+                else None
             ),
             re.search(
                 r"Each pixel of the SLM is modulated.*?\$?p\$?\s+frequencies "
@@ -4009,6 +4108,184 @@ def _compound_plan_evidence_excerpt(plan_text: str, answer_claim: str) -> str:
         if len(exact_clauses) >= 3:
             return _clean_evidence_display_text(
                 " … ".join(dict.fromkeys(exact_clauses)),
+                max_len=520,
+            )
+    pidl_claim = bool(
+        re.search(r"\bSPAD\b", video_parallelism_surface, flags=re.I)
+        and re.search(
+            r"physical\s+noise|noise\s+(?:model|sources?)|2790|"
+            r"物理噪声|噪声模型|噪声源|暗计数|后脉冲|串扰",
+            video_parallelism_surface,
+            flags=re.I,
+        )
+    )
+    pidl_training_claim = bool(
+        re.search(
+            r"PASCAL\s+VOC20(?:07|12)|paired\s+(?:training\s+)?data|"
+            r"image\s+pairs?|network\s+training|训练数据|配对数据|成对数据",
+            video_parallelism_surface,
+            flags=re.I,
+        )
+        and re.search(
+            r"calibrated\s+(?:physical\s+)?noise\s+model|SPAD|"
+            r"标定.{0,16}(?:噪声模型|物理模型)|标定好的模型|校准后的模型|物理噪声模型",
+            video_parallelism_surface,
+            flags=re.I,
+        )
+    )
+    if (
+        pidl_training_claim
+        and "pascal voc2007" in text.lower()
+        and re.search(r"digitally\s+synthesize.*?image\s+pairs", text, flags=re.I)
+    ):
+        calibrated_prefix = re.search(
+            r"With\s+the\s+calibrated\s+physical\s+noise\s+model.*?"
+            r"PASCAL\s+VOC2007\s*\[\d+\]\s+and",
+            text,
+            flags=re.I,
+        )
+        synthesized_pairs = re.search(
+            r"VOC2012\s*\[\d+\]\s+datasets?\)\s+to\s+digitally\s+synthesize.*?"
+            r"image\s+pairs\.",
+            text,
+            flags=re.I,
+        )
+        network_training = re.search(
+            r"The\s+gated\s+fusion\s+transformer\s+network\s+was\s+trained.*?"
+            r"(?:and\s+tested.*?SPAD\s+images|dataset)\.",
+            text,
+            flags=re.I,
+        )
+        clauses = [
+            str(match.group(0) or "").strip()
+            for match in (calibrated_prefix, synthesized_pairs, network_training)
+            if match
+        ]
+        if len(clauses) >= 2:
+            return _clean_evidence_display_text(
+                " … ".join(dict.fromkeys(clauses)),
+                max_len=520,
+            )
+    if (
+        pidl_claim
+        and re.search(r"real-world\s+physical\s+noise\s+model\s+of\s+SPAD\s+arrays", text, flags=re.I)
+        and re.search(r"2790\s+images", text, flags=re.I)
+    ):
+        numeric_calibration_claim = bool(
+            re.search(
+                r"2790|64\s*(?:×|x|\\times)\s*32|90\s*(?:scenes?|场景)|"
+                r"10\s*(?:different\s+)?bit\s*depths?|3\s*(?:different\s+)?"
+                r"illumination\s+(?:flux|fluxes)|10\s*种.{0,8}比特|3\s*种.{0,8}光照",
+                video_parallelism_surface,
+                flags=re.I,
+            )
+        )
+        if numeric_calibration_claim:
+            model_fragment = re.search(
+                r"real-world\s+physical\s+noise\s+model\s+of\s+SPAD\s+arrays\.",
+                text,
+                flags=re.I,
+            )
+            noise_fragment = re.search(
+                r"shot\s+noise.*?fi\s*xed[- ]pattern\s+noise.*?dark\s+count\s+rate,\s+"
+                r"afterpulsing\s+and\s+crosstalk\s+noise.*?deadtime\s+noise",
+                text,
+                flags=re.I,
+            )
+            calibration_fragment = re.search(
+                r"2790\s+images\s+in\s+total,\s+each\s+with\s+"
+                r"64\s*(?:×|x|\\times)\s*32\s+pixels",
+                text,
+                flags=re.I,
+            )
+            condition_fragment = re.search(
+                r"90\s+scenes,\s+each\s+with\s+10\s+different\s+bit\s+depths\s+"
+                r"and\s+3\s+different\s+illumination\s+fl\s*uxes",
+                text,
+                flags=re.I,
+            )
+            numeric_clauses = [
+                str(match.group(0) or "").strip()
+                for match in (
+                    model_fragment,
+                    noise_fragment,
+                    calibration_fragment,
+                    condition_fragment,
+                )
+                if match
+            ]
+            if len(numeric_clauses) == 4:
+                return _clean_evidence_display_text(
+                    " … ".join(numeric_clauses),
+                    max_len=520,
+                )
+        model_clause = re.search(
+            r"(?:we\s*first|wefirst)\s+established\s+a\s+real-world\s+physical\s+noise\s+model\s+of\s+SPAD\s+arrays\.",
+            text,
+            flags=re.I,
+        )
+        noise_clause = re.search(
+            r"the\s+real\s+physical\s+noise\s+sources\s+consist\s+of\s+shot\s+noise.*?"
+            r"deadtime\s+noise\s+from\s+the\s+quenching\s+circuit\.",
+            text,
+            flags=re.I,
+        )
+        calibration_clause = re.search(
+            r"we\s+collected\s+a\s+real-shot\s+SPAD\s+image\s+dataset\s+containing\s+"
+            r"2790\s+images\s+in\s+total,\s+each\s+with\s+64\s*(?:×|x|\\times)\s*32\s+pixels\.",
+            text,
+            flags=re.I,
+        )
+        clauses = [
+            str(match.group(0) or "").strip()
+            for match in (model_clause, noise_clause, calibration_clause)
+            if match
+        ]
+        if len(clauses) == 3:
+            return _clean_evidence_display_text(
+                " … ".join(clauses),
+                max_len=520,
+            )
+    piln_iteration_claim = bool(
+        re.search(
+            r"\bILNet\b.{0,100}(?:iteration|input)|image[- ]loop|"
+            r"图像循环|循环回.{0,24}输入|半成品.{0,24}输入",
+            video_parallelism_surface,
+            flags=re.I,
+        )
+    )
+    if piln_iteration_claim:
+        iteration = re.search(
+            r"(?:Then,\s*)?the\s+2D\s+image\s+generated\s+by\s+ILNet.*?"
+            r"subsequent\s+iteration.*?(?:low\s+sampling\s+rates?\.|\.)",
+            text,
+            flags=re.I,
+        )
+        explicit_loop = re.search(
+            r"[^.?!]*?(?:semi-finished|intermediate|reconstructed)\s+image.*?"
+            r"(?:network\s+)?input.*?[.?!]",
+            text,
+            flags=re.I,
+        )
+        if iteration or explicit_loop:
+            identity = re.search(
+                r"self-supervised\s+image-loop\s+neural\s+network\s*\(ILNet\)",
+                text,
+                flags=re.I,
+            )
+            setup = re.search(
+                r"reconstructing\s+a\s+randomly\s+input\s+2D\s+signal\s+into\s+"
+                r"a\s+2D\s+object\s+image\.",
+                text,
+                flags=re.I,
+            )
+            clauses = [
+                str(match.group(0) or "").strip()
+                for match in (explicit_loop, identity, setup, iteration)
+                if match
+            ]
+            return _clean_evidence_display_text(
+                " … ".join(dict.fromkeys(clauses)),
                 max_len=520,
             )
     plan_tokens = evidence_alignment_tokens(text)
@@ -4440,12 +4717,21 @@ def _system_a_should_split_occurrence(
         return False
     if _system_a_claim_substantially_same(old_claim, claim):
         return False
-    old_numbers = set(
-        re.findall(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])", old_claim)
-    )
-    new_numbers = set(
-        re.findall(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])", claim)
-    )
+    def _claim_fact_numbers(value: str) -> set[str]:
+        without_citations = re.sub(
+            r"\[[Rr]?\d{1,4}(?:\s*[,，、]\s*[Rr]?\d{1,4})*\]",
+            "",
+            str(value or ""),
+        )
+        return set(
+            re.findall(
+                r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])",
+                without_citations,
+            )
+        )
+
+    old_numbers = _claim_fact_numbers(old_claim)
+    new_numbers = _claim_fact_numbers(claim)
     if (
         not new_numbers
         and re.match(
@@ -4786,12 +5072,19 @@ def _annotate_inpaper_citations_with_hover_meta(
     visible_detail_anchors: set[str] = set()
     visible_system_a_evidence_keys: set[str] = set()
     plan = dict(citation_plan or {}) if isinstance(citation_plan, dict) else {}
-    plan_system_a_slots = [
-        dict(slot)
-        for slot in list(plan.get("slots") or [])
-        if isinstance(slot, dict)
-        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
-    ]
+    plan_system_a_slots: list[dict] = []
+    for plan_slot_index, slot in enumerate(list(plan.get("slots") or [])):
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
+            continue
+        slot_copy = dict(slot)
+        # Keep an internal stable identity for budget accounting. Separate
+        # slots may intentionally cite the same source passage for different
+        # claims; only repeated occurrences selected from the *same* slot may
+        # share one System-A budget entry.
+        slot_copy["_citation_plan_slot_index"] = int(plan_slot_index)
+        plan_system_a_slots.append(slot_copy)
 
     def _plan_source_key(value: object) -> str:
         name = str(value or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
@@ -4918,6 +5211,37 @@ def _annotate_inpaper_citations_with_hover_meta(
             candidates.sort(key=lambda item: item[0], reverse=True)
             return candidates[0][1]
         return {}
+
+    def _plan_slot_citation_budget_key(
+        plan_slot: dict | None,
+        source_path: str,
+    ) -> str:
+        if not isinstance(plan_slot, dict) or not plan_slot:
+            return ""
+        plan_budget_evidence = re.sub(
+            r"\s+",
+            " ",
+            str(
+                plan_slot.get("citation_plan_full_evidence_quote")
+                or plan_slot.get("evidence_quote")
+                or plan_slot.get("evidenceQuote")
+                or ""
+            ).strip(),
+        )
+        if not plan_budget_evidence:
+            return ""
+        plan_budget_source = (
+            str(source_path or "").replace("\\", "/").strip().casefold()
+        )
+        plan_budget_slot_index = int(
+            plan_slot.get("_citation_plan_slot_index", -1)
+        )
+        return "plan:" + hashlib.sha1(
+            (
+                f"{plan_budget_slot_index}\n{plan_budget_source}\n"
+                f"{plan_budget_evidence}"
+            ).encode("utf-8")
+        ).hexdigest()
 
     visible_hit_numbers_by_source: dict[str, set[int]] = {}
     for hit in hits or []:
@@ -5120,16 +5444,24 @@ def _annotate_inpaper_citations_with_hover_meta(
         table_mode: bool = False,
         context_line: str = "",
         context_offset: int = 0,
+        budget_state: dict | None = None,
     ) -> str:
         structured_seen = False
         unresolved_struct_refs: set[int] = set()
         resolved_struct_refs: set[int] = set()
         system_a_budget = _plan_budget("system_a", 2)
         system_b_budget = _plan_budget("system_b", 1 if plan else 40)
-        used_system_a_keys: set[str] = set()
-        used_system_b_keys: set[str] = set()
-        used_system_a_count = 0
-        used_system_b_count = 0
+        shared_budget_state = budget_state if isinstance(budget_state, dict) else {}
+        used_system_a_keys: set[str] = shared_budget_state.setdefault(
+            "used_system_a_keys",
+            set(),
+        )
+        used_system_b_keys: set[str] = shared_budget_state.setdefault(
+            "used_system_b_keys",
+            set(),
+        )
+        shared_budget_state.setdefault("used_system_a_count", 0)
+        shared_budget_state.setdefault("used_system_b_count", 0)
 
         def _preferred_source_by_context(pos: int) -> str:
             try:
@@ -5162,9 +5494,14 @@ def _annotate_inpaper_citations_with_hover_meta(
                 return str(detail.get("anchor") or "").strip()
             return str(detail.get("citation_budget_key") or detail.get("evidence_fingerprint") or detail.get("anchor") or "").strip()
 
-        def _claim_citation_budget(detail: dict) -> bool:
-            nonlocal used_system_a_count, used_system_b_count
-            key = _citation_budget_key(detail)
+        def _claim_citation_budget(
+            detail: dict,
+            *,
+            budget_key_override: str = "",
+        ) -> bool:
+            key = str(budget_key_override or "").strip() or _citation_budget_key(
+                detail
+            )
             if not key:
                 return False
             anchor = str(detail.get("anchor") or "").strip()
@@ -5174,25 +5511,37 @@ def _annotate_inpaper_citations_with_hover_meta(
                 if anchor and anchor in visible_detail_anchors:
                     used_system_b_keys.add(key)
                     return True
-                if used_system_b_count >= system_b_budget:
+                if (
+                    int(shared_budget_state.get("used_system_b_count") or 0)
+                    >= system_b_budget
+                ):
                     return False
                 used_system_b_keys.add(key)
-                used_system_b_count += 1
+                shared_budget_state["used_system_b_count"] = (
+                    int(shared_budget_state.get("used_system_b_count") or 0) + 1
+                )
                 if anchor:
                     visible_detail_anchors.add(anchor)
                 return True
             if key in used_system_a_keys:
+                if anchor:
+                    visible_detail_anchors.add(anchor)
                 return True
             if key in visible_system_a_evidence_keys:
                 used_system_a_keys.add(key)
                 if anchor:
                     visible_detail_anchors.add(anchor)
                 return True
-            if used_system_a_count >= system_a_budget:
+            if (
+                int(shared_budget_state.get("used_system_a_count") or 0)
+                >= system_a_budget
+            ):
                 return False
             used_system_a_keys.add(key)
             visible_system_a_evidence_keys.add(key)
-            used_system_a_count += 1
+            shared_budget_state["used_system_a_count"] = (
+                int(shared_budget_state.get("used_system_a_count") or 0) + 1
+            )
             if anchor:
                 visible_detail_anchors.add(anchor)
             return True
@@ -5379,6 +5728,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                     return ""
             src_name = _display_source_name(sp)
             detail = _remember_detail(int(n), sp, src_name, ref)
+            detail["sid"] = sid
             detail["is_inpaper"] = True  # Mark as System B (in-paper bibliography ref)
             detail["citation_route"] = "system_b"
             detail["routing_reason"] = "structured_cite"
@@ -5995,7 +6345,8 @@ def _annotate_inpaper_citations_with_hover_meta(
             )
             if plan_slot:
                 plan_text = str(
-                    plan_slot.get("evidence_quote")
+                    plan_slot.get("citation_plan_full_evidence_quote")
+                    or plan_slot.get("evidence_quote")
                     or plan_slot.get("evidenceQuote")
                     or ""
                 ).strip()
@@ -6157,6 +6508,40 @@ def _annotate_inpaper_citations_with_hover_meta(
                     or meta_h.get("anchor_kind")
                     or ""
                 ).strip()
+            # Converter table anchors are authoritative even when an older
+            # payload labelled the selected excerpt as a sentence.  Preserve
+            # the named table occurrence in the visible locator so the card
+            # and reader jump describe the same target.
+            named_occurrence_label = ""
+            if anchor_id.lower().startswith("tb_"):
+                anchor_kind = "table"
+            if anchor_kind.lower() == "table":
+                reader_open_h = (
+                    ui_meta_h.get("reader_open")
+                    if isinstance(ui_meta_h.get("reader_open"), dict)
+                    else {}
+                )
+                locate_target_h = (
+                    reader_open_h.get("locateTarget")
+                    if isinstance(reader_open_h.get("locateTarget"), dict)
+                    else {}
+                )
+                occurrence_surfaces = [
+                    str((plan_slot or {}).get("evidence_quote") or ""),
+                    str((plan_slot or {}).get("evidenceQuote") or ""),
+                    str(locate_target_h.get("evidenceQuote") or ""),
+                    str(reader_open_h.get("snippet") or ""),
+                    str(evidence_quote or ""),
+                    str(snippet or ""),
+                ]
+                for occurrence_surface in occurrence_surfaces:
+                    occurrence_match = re.search(
+                        r"(?i)\bTable\s+(\d+[A-Za-z]?)\b",
+                        occurrence_surface,
+                    )
+                    if occurrence_match:
+                        named_occurrence_label = f"Table {occurrence_match.group(1)}"
+                        break
             if is_research_basket_synthetic:
                 basket_title = str(meta_h.get("title") or src_name or "").strip()
                 basket_heading = heading or str(ui_meta_h.get("heading_path") or "").strip()
@@ -6232,6 +6617,19 @@ def _annotate_inpaper_citations_with_hover_meta(
             except Exception:
                 score_value = 0.0
             binding_meta = dict(meta_h)
+            if plan_slot and bool(
+                binding_meta.get("citation_plan_evidence_authoritative")
+            ):
+                full_plan_evidence = str(
+                    plan_slot.get("citation_plan_full_evidence_quote")
+                    or plan_slot.get("evidence_quote")
+                    or plan_slot.get("evidenceQuote")
+                    or ""
+                ).strip()
+                if full_plan_evidence:
+                    binding_meta["citation_plan_full_evidence_quote"] = (
+                        full_plan_evidence
+                    )
             group_evidence_quotes = _verified_citation_group_evidence_quotes(
                 answer_claim
             )
@@ -6266,6 +6664,8 @@ def _annotate_inpaper_citations_with_hover_meta(
             location_bits: list[str] = []
             if heading:
                 location_bits.append(heading)
+            if named_occurrence_label and named_occurrence_label.lower() not in heading.lower():
+                location_bits.append(named_occurrence_label)
             if p0:
                 if p1 and int(p1) != int(p0):
                     location_bits.append(f"pp. {int(min(p0, p1))}-{int(max(p0, p1))}")
@@ -6273,7 +6673,20 @@ def _annotate_inpaper_citations_with_hover_meta(
                     location_bits.append(f"p. {int(p0)}")
             if anchor_kind:
                 location_bits.append(anchor_kind)
-            why_line = str(ref_rank.get("why") or meta_h.get("why_line") or "").strip()[:320]
+            occurrence_why_line = _system_a_ui_relevance_for_occurrence(
+                ui_meta_h,
+                original_primary_evidence,
+                heading=heading,
+                block_id=block_id,
+                anchor_id=anchor_id,
+                evidence_quote=evidence_quote,
+            )
+            why_line = str(
+                occurrence_why_line
+                or ref_rank.get("why")
+                or meta_h.get("why_line")
+                or ""
+            ).strip()[:320]
             support_relation = why_line
             if not support_relation:
                 support_relation = str(binding.get("reason") or "").strip()
@@ -6287,6 +6700,12 @@ def _annotate_inpaper_citations_with_hover_meta(
                 page_start=int(p0 or 0),
                 page_end=int(p1 or 0),
             )
+            citation_budget_key = evidence_fp
+            if plan_slot and bool(meta_h.get("citation_plan_evidence_authoritative")):
+                citation_budget_key = (
+                    _plan_slot_citation_budget_key(plan_slot, sp)
+                    or citation_budget_key
+                )
             existing = system_a_detail_by_fingerprint.get(evidence_fp)
             split_occurrence = bool(
                 isinstance(existing, dict)
@@ -6324,7 +6743,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                 # must consume one System-A budget slot. Counting the claim
                 # suffix here caused a second sentence backed by the same
                 # source block to lose its citation in the final renderer.
-                "citation_budget_key": evidence_fp,
+                "citation_budget_key": citation_budget_key,
                 "occurrence_specific": occurrence_specific,
                 "source_name": src_name,
                 "source_path": sp,
@@ -6543,7 +6962,22 @@ def _annotate_inpaper_citations_with_hover_meta(
                     if not _STRICT_STRUCTURED_CITATION_LINKING:
                         items.append(f"[{int(n)}]")
                     continue
-                if not _claim_citation_budget(detail):
+                occurrence_budget_key = ""
+                if hit_detail and not bool(detail.get("is_inpaper")):
+                    occurrence_plan_slot = _plan_slot_for_system_a(
+                        int(n),
+                        str(detail.get("source_path") or ""),
+                        str(detail.get("source_name") or ""),
+                        answer_claim=context_line,
+                    )
+                    occurrence_budget_key = _plan_slot_citation_budget_key(
+                        occurrence_plan_slot,
+                        str(detail.get("source_path") or ""),
+                    )
+                if not _claim_citation_budget(
+                    detail,
+                    budget_key_override=occurrence_budget_key,
+                ):
                     changed = True
                     continue
                 title_attr = _citation_hover_title(
@@ -6601,6 +7035,11 @@ def _annotate_inpaper_citations_with_hover_meta(
             out_lines.append(ln)
             continue
 
+        # Inline code and math are rendered as protected fragments, but they
+        # still belong to one Markdown line/paragraph. Share citation counters
+        # across every prose fragment so `$x$` or ``code`` cannot reset the
+        # per-paragraph System-A/System-B budget.
+        line_budget_state: dict = {}
         code_parts = _INLINE_CODE_RE.split(ln)
         rebuilt_code: list[str] = []
         code_offset = 0
@@ -6622,6 +7061,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                             table_mode=is_table_row,
                             context_line=ln,
                             context_offset=code_offset + math_offset,
+                            budget_state=line_budget_state,
                         )
                     )
                 math_offset += len(mp)

@@ -233,22 +233,73 @@ def build_grounded_ref_why_line(
         ):
             return "原文给出 Si-SPAD 的工作波段、量子效率和温控范围，可用于把探测器选型的性能收益与工作条件放在同一硬件基线中比较。"
         if (
-            "single-photon detections" in summary_low
+            (
+                "single-photon detections" in summary_low
+                or "mainstream spds" in summary_low
+                or "mainstream single-photon detector" in summary_low
+            )
             and re.search(r"\b(?:spad|sapd|snsdp|snsdps|sns?pd|tes|pmt)s?\b", summary_low)
         ):
             return "原文列出 SPAD、PMT、SNSPD、TES 等主流单光子探测器路线，可作为理解硬件能力、工作条件与制造瓶颈的基线。"
         if (
-            "deep learning" in summary_low
-            and "spad" in summary_low
-            and ("physical noise" in summary_low or "photon flow model" in summary_low)
+            "spad" in summary_low
+            and (
+                re.search(r"physical(?:\s+multi[- ]source)?\s+noise\s+model", summary_low)
+                or "photon flow model" in summary_low
+                or "reported noise model" in summary_low
+            )
+            and (
+                "deep learning" in summary_low
+                or "network training" in summary_low
+                or "single-photon image dataset" in summary_low
+            )
         ):
             return "这段原文把 SPAD 噪声来源、真实数据标定和学习型补偿串成完整方法链，可据此判断算法具体回应了哪些硬件局限。"
+        if (
+            "hadamard" in summary_low
+            and re.search(r"\[\s*1\s*,\s*-\s*1\s*\]", summary_low)
+            and ("lock-in amplifier" in summary_low or re.search(r"\blia\b", summary_low))
+            and (
+                "phase-sensitive detection" in summary_low
+                or "phase of intensity modulation" in summary_low
+            )
+        ):
+            if "bpsk" in summary_low or (
+                re.search(
+                    r"(?:^|[^0-9])0\s*(?:or|and|/)\s*(?:\\?pi|π)",
+                    summary_low,
+                )
+                and "phase" in summary_low
+            ):
+                return (
+                    "原文把 Hadamard 掩模的 [1,-1] 数值映射为 0/π 的 BPSK 调制相位，"
+                    "并用 LIA 做相敏检测，直接界定 FDM 的编码与读出机制。"
+                )
+            return (
+                "原文把 Hadamard 掩模的 [1,-1] 数值与强度调制相位编码、LIA 相敏检测对应起来，"
+                "直接界定 FDM 的编码与读出机制。"
+            )
+        if (
+            "modulated light from the slm" in summary_low
+            and "multiplexed into a single-pixel detector" in summary_low
+            and "phase" in summary_low
+            and "modulation frequency" in summary_low
+        ):
+            return (
+                "原文说明经 SLM 调制的光被复用到同一个单像素探测器，输出信号同时保留相位与调制频率信息，"
+                "直接支撑 FDM 如何并行编码并按频率区分测量通道。"
+            )
         if (
             re.search(r"\$?p\$?\s+frequencies\s+simultaneously", summary_low)
             and "multiplexed into a single-pixel detector" in summary_low
             and "demodulated" in summary_low
         ):
-            return "原文说明每个 SLM 像素同时承载 p 个频率通道，复用后进入同一单像素探测器，再由 p 路锁相放大器并行解调出测量分量。"
+            if re.search(
+                r"\bp\s+(?:lock[- ]in\s+amplifiers?|lias?)\b",
+                summary_low,
+            ):
+                return "原文说明每个 SLM 像素同时承载 p 个频率通道，复用后进入同一单像素探测器，再由 p 路锁相放大器并行解调出测量分量。"
+            return "原文说明每个 SLM 像素同时承载 p 个频率通道，复用到同一个单像素探测器后再按通道解调。"
         if (
             ("frequency-division" in summary_low or "频分复用" in summary_full)
             and ("parallelize" in summary_low or "并行" in summary_full)
@@ -477,6 +528,43 @@ def build_grounded_ref_why_line(
         return (
             "The passage explicitly places ADMM among existing methods rather than the "
             "paper's new contributions, which resolves the method-origin question."
+        )
+    if (
+        "hadamard" in summary_low
+        and re.search(r"\[\s*1\s*,\s*-\s*1\s*\]", summary_low)
+        and ("lock-in amplifier" in summary_low or re.search(r"\blia\b", summary_low))
+        and (
+            "phase-sensitive detection" in summary_low
+            or "phase of intensity modulation" in summary_low
+        )
+    ):
+        if "bpsk" in summary_low or (
+            re.search(
+                r"(?:^|[^0-9])0\s*(?:or|and|/)\s*(?:\\?pi|π)",
+                summary_low,
+            )
+            and "phase" in summary_low
+        ):
+            return (
+                "The passage maps Hadamard [1,-1] mask values to 0/pi BPSK modulation "
+                "phases and uses an LIA for phase-sensitive detection, defining the FDM "
+                "encoding and readout mechanism."
+            )
+        return (
+            "The passage connects Hadamard [1,-1] mask values to intensity-modulation "
+            "phase encoding and LIA phase-sensitive detection, defining the FDM encoding "
+            "and readout mechanism."
+        )
+    if (
+        "modulated light from the slm" in summary_low
+        and "multiplexed into a single-pixel detector" in summary_low
+        and "phase" in summary_low
+        and "modulation frequency" in summary_low
+    ):
+        return (
+            "The passage shows that SLM-modulated light is multiplexed into one single-pixel "
+            "detector while preserving phase and modulation-frequency information, directly "
+            "supporting the channel-encoding mechanism used by FDM."
         )
     if (
         "frequency-division" in summary_low

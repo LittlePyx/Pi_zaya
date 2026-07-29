@@ -340,6 +340,307 @@ def test_claim_audit_uses_prompt_aligned_plan_evidence_for_numeric_claim() -> No
     assert audit["minimum_ok"] is True
 
 
+def test_pidl_pascal_claim_rebinds_from_adjacent_review_to_primary_paper() -> None:
+    pidl_path = "F:/kb/db/pidl/pidl.en.md"
+    evidence = (
+        "We established a real-world physical noise model of SPAD arrays and calibrated "
+        "it with real-shot images. With the calibrated physical noise model, public "
+        "high-resolution images from PASCAL VOC2007 and VOC2012 were used to digitally "
+        "synthesize 2.6 million image pairs. The gated fusion transformer network was "
+        "trained using the large-scale single-photon image dataset."
+    )
+    hits = [
+        {
+            "text": "A compact SPAD noise-model passage.",
+            "meta": {"source_path": "kb-source/0/pidl/pidl.en.md"},
+        },
+        {"text": "A detector review.", "meta": {"source_path": "detector.en.md"}},
+        {
+            "text": "A deep-learning single-pixel imaging review.",
+            "meta": {"source_path": "lpr-review.en.md"},
+        },
+    ]
+    plan = {
+        "intent": "method_explain",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": pidl_path,
+                "heading_path": "Introduction",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+    raw = (
+        "该方法利用标定的 SPAD 物理噪声模型和 PASCAL VOC2007 图像"
+        "合成配对训练数据 [3]。"
+    )
+
+    bound = finalize_runtime._bind_planned_source_citations(
+        raw,
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+    merged = finalize_runtime._claim_evidence_hits_with_citation_plan(hits, plan)
+    repaired, audit = finalize_runtime.audit_and_repair_claim_evidence(
+        bound,
+        answer_hits=merged,
+        allow_citation_repairs=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "[1]" in repaired
+    assert "[3]" not in repaired
+    assert "PASCAL VOC2007" in repaired
+    assert audit["minimum_ok"] is True
+
+
+def test_pidl_pascal_normalizer_rewrites_only_the_unsupported_disentanglement_tail() -> None:
+    source_path = "F:/kb/db/High-resolution single-photon imaging with physics-informed deep learning.en.md"
+    evidence = (
+        "With the calibrated physical noise model under different illumination and acquisition "
+        "settings, public highresolution images collected from the PASCAL VOC2007 and VOC2012 "
+        "datasets were used to digitally synthesize a large-scale realistic singlephoton image "
+        "dataset containing 2.6 million image pairs. The gated fusion transformer network was "
+        "trained using the above large-scale singlephoton image dataset."
+    )
+    plan = {
+        "intent": "method_explain",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "High-resolution single-photon imaging with physics-informed deep learning",
+                "heading_path": "Introduction",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+    raw = (
+        "该方法先用真实 SPAD 图像标定物理噪声模型 [1]。然后，利用这个标定好的物理模型，"
+        "结合公开的高分辨率自然图像（如 PASCAL VOC2007）生成大量配对的有噪-清晰训练数据，"
+        "使网络学会从物理噪声中解耦出真实信号 [3]。"
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        raw,
+        prompt="physics-informed deep learning 在单光子成像中的核心作用是什么？",
+        citation_plan=plan,
+        answer_hits=[
+            {"text": evidence, "meta": {"source_path": source_path}},
+            {"text": "A detector review.", "meta": {"source_path": "review.en.md"}},
+            {"text": "A broad SPI review.", "meta": {"source_path": "lpr.en.md"}},
+        ],
+    )
+
+    assert "从物理噪声中解耦出真实信号" not in normalized
+    assert "有噪-清晰训练数据" not in normalized
+    assert (
+        "利用标定后的物理噪声模型和 PASCAL VOC2007/VOC2012 公共高分辨率图像，"
+        "数字合成大规模真实单光子图像数据集，并用该数据集训练网络 [1]。"
+    ) in normalized
+    assert "先用真实 SPAD 图像标定物理噪声模型 [1]" in normalized
+
+
+def test_pidl_pascal_normalizer_does_not_rewrite_without_full_training_contract() -> None:
+    source_path = "F:/kb/db/High-resolution single-photon imaging with physics-informed deep learning.en.md"
+    incomplete_evidence = (
+        "With the calibrated physical noise model, public images from PASCAL VOC2007 were "
+        "used for a single-photon imaging experiment."
+    )
+    raw = (
+        "利用这个标定好的物理模型和 PASCAL VOC2007 图像生成训练数据，"
+        "使网络学会从物理噪声中解耦出真实信号 [1]。"
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        raw,
+        prompt="介绍该方法。",
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "High-resolution single-photon imaging with physics-informed deep learning",
+                    "evidence_quote": incomplete_evidence,
+                }
+            ],
+        },
+        answer_hits=[
+            {"text": incomplete_evidence, "meta": {"source_path": source_path}}
+        ],
+    )
+
+    assert normalized == raw
+
+
+def test_pidl_pascal_normalizer_removes_unsupported_reconstruction_result_tail() -> None:
+    source_path = "F:/kb/db/High-resolution single-photon imaging with physics-informed deep learning.en.md"
+    evidence = (
+        "With the calibrated physical noise model, public highresolution images from "
+        "PASCAL VOC2007 and VOC2012 were used to digitally synthesize a large-scale "
+        "realistic singlephoton image dataset containing 2.6 million image pairs. "
+        "The gated fusion transformer network was trained using the above dataset."
+    )
+    raw = (
+        "最后，利用校准后的模型和公开的高分辨率图像（如 PASCAL VOC2007）合成配对数据，"
+        "用于训练网络，从而实现对低质量 SPAD 图像的高分辨率重建 [1]。"
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        raw,
+        prompt="这篇 physics-informed deep learning 论文怎样训练网络？",
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "High-resolution single-photon imaging with physics-informed deep learning",
+                    "evidence_quote": evidence,
+                }
+            ],
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": source_path}}],
+    )
+
+    assert "从而实现" not in normalized
+    assert "高分辨率重建" not in normalized
+    assert "PASCAL VOC2007/VOC2012" in normalized
+    assert "训练网络 [1]" in normalized
+
+
+def test_detector_pidl_reading_pair_restores_both_grounded_sources() -> None:
+    review_path = "F:/kb/db/spd-review/spd-review.en.md"
+    pidl_path = "F:/kb/db/pidl/pidl.en.md"
+    review_evidence = (
+        "This technology mainly relies on the mainstream SPDs, such as photomultiplier "
+        "tubes (PMTs), avalanche photodiodes (SAPD), superconducting nanowire "
+        "single-photon detectors (SNSPDs), and superconducting transition-edge sensor "
+        "(TES). High manufacturing cost and special conditions like a low-temperature "
+        "environment pose challenges to adoption."
+    )
+    pidl_evidence = (
+        "We established a real-world physical noise model of SPAD arrays. With the "
+        "calibrated physical noise model, public images from PASCAL VOC2007 and VOC2012 "
+        "were used to digitally synthesize a realistic single-photon image dataset."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": review_path,
+                "candidate_hits": [2],
+                "evidence_quote": review_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": pidl_path,
+                "candidate_hits": [1],
+                "evidence_quote": pidl_evidence,
+            },
+        ],
+    }
+    raw = (
+        "### 1. 先读：探测器综述——建立硬件基础\n\n"
+        "- 这能让你对SPAD阵列的硬件局限有直观认识，为理解下一篇的噪声模型打下基础 [1]。\n\n"
+        "### 2. 后读：物理信息深度学习\n\n"
+        "- **关键区别**：这篇论文不是黑盒深度学习，而是把先验注入网络。\n\n"
+        "### 搭配阅读建议\n\n"
+        "**注意模态边界**：讨论的是单像素成像，不要混淆。和才是配套材料。"
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        raw,
+        prompt="单光子成像里，探测器综述和 physics-informed deep learning 这篇应该怎么搭配读？",
+        citation_plan=plan,
+        answer_hits=[
+            {"text": pidl_evidence, "meta": {"source_path": "kb-source/0/pidl/pidl.en.md"}},
+            {"text": review_evidence, "meta": {"source_path": "kb-source/0/spd-review/spd-review.en.md"}},
+        ],
+    )
+
+    assert "PMT、SAPD、SNSPD、TES" in normalized
+    assert "特殊工作条件会限制普及 [2]" in normalized
+    assert "训练数据合成流程 [1]" in normalized
+    assert "不是黑盒" not in normalized
+    assert "注意模态边界" not in normalized
+    assert "和才是配套材料" not in normalized
+
+
+def test_piln_review_positioning_uses_review_definition_and_removes_overreach() -> None:
+    piln_path = "F:/kb/db/piln/piln.en.md"
+    review_path = "F:/kb/db/dl-spi-review/dl-spi-review.en.md"
+    piln_evidence = (
+        "We proposed a self-supervised image-loop neural network (ILNet). 1D signals "
+        "collected by the single-pixel detector are used as labels for adaptively "
+        "optimizing and reconstructing the image. The method works at lower sample "
+        "rates in unknown free-space and underwater experiments."
+    )
+    review_evidence = (
+        "Model-driven strategy is an unsupervised learning mode. This strategy "
+        "integrates the physical process of SPI with neural networks and leverages "
+        "the discrepancy between real and estimated measurements to guide network optimization."
+    )
+    plan = {
+        "intent": "scope_boundary",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": piln_path,
+                "candidate_hits": [1],
+                "evidence_quote": piln_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": review_path,
+                "candidate_hits": [2],
+                "evidence_quote": review_evidence,
+            },
+        ],
+    }
+    raw = (
+        "### 1. 定位：一种自监督、混合驱动的具体实现\n\n"
+        "PILN（ILNet）属于 DL-SPI 中的混合驱动策略。\n\n"
+        "其核心数学表达为：\n\n$$\nimage=f(x)\n$$\n\n$$\n$$\n\n"
+        "### 2. 适合解决的问题\n\n低采样率重建 [1]。\n\n"
+        "### 3. 不适合/未解决的问题\n\n"
+        "| 场景 | 说明 |\n|---|---|\n| 理论保证 | 作为纯神经网络缺乏理论保证 |\n\n"
+        "### 4. 与主线的本质关系\n\n"
+        "ILNet 是数据驱动和模型驱动融合的案例。"
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        raw,
+        prompt="PILN 这种网络方法和综述里说的深度学习单像素成像主线是什么关系？",
+        citation_plan=plan,
+        answer_hits=[
+            {"text": piln_evidence, "meta": {"source_path": "kb-source/0/piln/piln.en.md"}},
+            {"text": review_evidence, "meta": {"source_path": "kb-source/0/dl-spi-review/dl-spi-review.en.md"}},
+        ],
+    )
+
+    assert "model-driven strategy 定义为一种无监督模式" in normalized
+    assert "差异指导优化 [2]" in normalized
+    assert "一维信号作为标签" in normalized
+    assert "重建图像 [1]" in normalized
+    assert "混合驱动策略" not in normalized
+    assert "纯神经网络" not in normalized
+    assert "核心数学表达" not in normalized
+    assert "photon-level、实时吞吐量或理论收敛保证" in normalized
+
+
 def test_cross_paper_plan_resolves_reordered_hits_by_source_before_evidence_audit() -> None:
     private_paths = {
         "alpha": "F:/kb/db/alpha/alpha.en.md",
@@ -507,6 +808,133 @@ def test_fdm_answer_replaces_secondary_result_with_planned_parallel_mechanism() 
     assert "[1]" in normalized
     assert "四倍的效率提升" not in normalized
     assert "任意图像尺寸" not in normalized
+
+
+def test_fdm_comparison_completes_bare_encoding_side_from_planned_mechanism() -> None:
+    fdm_evidence = (
+        "The mask values are encoded in the phase of intensity modulation, and thus "
+        "we require phase-sensitive detection with a lock-in amplifier. Each pixel of "
+        "the SLM is modulated with either 0 or pi phase on p frequencies simultaneously. "
+        "The modulated light from the SLM is then multiplexed into a single-pixel "
+        "detector. The signal is then demodulated by a number (p) of LIAs."
+    )
+    video_evidence = (
+        "Photometric stereo senses reflected light with four spatially-separated "
+        "single-pixel detectors and reconstructs real-time 3D video."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": "video.en.md",
+                "evidence_quote": video_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "Frequency-division-multiplexed single-pixel imaging.en.md",
+                "heading_path": "B. Encoding",
+                "evidence_quote": fdm_evidence,
+            },
+        ],
+    }
+    hits = [
+        {
+            "text": fdm_evidence,
+            "meta": {
+                "source_path": "Frequency-division-multiplexed single-pixel imaging.en.md"
+            },
+        },
+        {"text": video_evidence, "meta": {"source_path": "video.en.md"}},
+    ]
+    answer = (
+        "两种方法都追求速度，但并行环节不同 [2]。\n\n"
+        "**频分复用单像素成像（FDM-SPI）**并行化调制/编码环节。\n\n"
+        "**3D single-pixel video**使用四个探测器并行采集 [2]。"
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="两种方法分别把什么环节并行化？",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    fdm_paragraph = next(
+        paragraph for paragraph in normalized.split("\n\n") if "FDM-SPI" in paragraph
+    )
+    assert "p 个频率通道" in fdm_paragraph
+    assert "同一个单像素探测器" in fdm_paragraph
+    assert "锁相放大器" in fdm_paragraph
+    assert fdm_paragraph.endswith("[1]。")
+
+
+def test_fdm_completion_does_not_invent_phase_or_lockin_details() -> None:
+    evidence = (
+        "Each SLM pixel is used to modulate p frequencies simultaneously. "
+        "The modulated light is multiplexed into a single-pixel detector. "
+        "The signal is then demodulated."
+    )
+    source_path = "Frequency-division-multiplexed single-pixel imaging.en.md"
+    plan = {
+        "intent": "method_explain",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "heading_path": "B. Encoding",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "FDM-SPI parallelizes its encoding stage.",
+        prompt="How does FDM-SPI encode its channels?",
+        citation_plan=plan,
+        answer_hits=[{"text": evidence, "meta": {"source_path": source_path}}],
+    )
+
+    assert "p frequencies simultaneously" in normalized
+    assert "one single-pixel detector" in normalized
+    assert "then demodulated [1]" in normalized
+    assert "0/π" not in normalized
+    assert "lock-in" not in normalized
+    assert "phase-sensitive" not in normalized
+    assert "spatial-mask" not in normalized
+
+
+def test_final_gate_drops_unstated_pidl_black_box_and_scene_robustness_claim() -> None:
+    evidence = (
+        "We established a real-world physical noise model of SPAD arrays and calibrated "
+        "it with real-shot images. The calibrated model was used to synthesize image "
+        "pairs for network training."
+    )
+    answer = (
+        "该方法建立并标定了 SPAD 阵列的真实物理噪声模型 [1]。\n\n"
+        "该方法使用物理噪声模型替代纯数据驱动的黑箱学习，"
+        "使网络在训练数据有限或场景变化时仍能保持鲁棒性 [1]。"
+    )
+
+    repaired, audit = finalize_runtime.audit_and_repair_claim_evidence(
+        answer,
+        answer_hits=[{"text": evidence}],
+        allow_citation_repairs=True,
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "建立并标定了 SPAD 阵列的真实物理噪声模型 [1]" in repaired
+    assert "黑箱" not in repaired
+    assert "场景变化" not in repaired
+    assert audit["minimum_ok"] is True
 
 
 def test_four_hit_comparison_uses_plan_source_identity_for_claim_rebinding() -> None:
@@ -1497,6 +1925,87 @@ def test_normalize_supported_piln_adds_cited_abstract_definition() -> None:
     assert "part-based model" in compound
     assert "finer-grained learning" in compound
     assert compound.endswith("[1]")
+
+
+def test_normalize_fdm_comparison_uses_the_fdm_hit_not_the_first_plan_hit() -> None:
+    fdm_evidence = (
+        "Here, we implement frequency-division methods to parallelize the single-pixel "
+        "imaging process. The technique enables a trade-off between signal-to-noise ratio "
+        "and acquisition speed without altering detector integration time."
+    )
+    video_evidence = (
+        "Photometric stereo senses reflected light with four spatially-separated "
+        "single-pixel detectors and reconstructs 3D video at 8 frames per second."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [4],
+                "source_path": "video.en.md",
+                "evidence_quote": video_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "Frequency-division-multiplexed single-pixel imaging.en.md",
+                "evidence_quote": fdm_evidence,
+            },
+        ]
+    }
+    hits = [
+        {
+            "text": fdm_evidence,
+            "meta": {"source_path": "Frequency-division-multiplexed single-pixel imaging.en.md"},
+        },
+        {"text": "Other evidence", "meta": {"source_path": "other-1.en.md"}},
+        {"text": "Other evidence", "meta": {"source_path": "other-2.en.md"}},
+        {"text": video_evidence, "meta": {"source_path": "video.en.md"}},
+    ]
+    answer = (
+        "\u9891\u5206\u590d\u7528\u5b9e\u73b0\u4e86\u56db\u500d\u6548\u7387\u63d0\u5347\uff0c\u5e76\u4e14\u5bf9\u4efb\u610f\u56fe\u50cf\u5c3a\u5bf8\u90fd\u53ef\u6269\u5c55 [3]\u3002\n\n"
+        "**3D single-pixel video** \u7528\u56db\u4e2a\u63a2\u6d4b\u5668\u505a photometric stereo [4]\u3002"
+    )
+
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="\u9891\u5206\u590d\u7528\u548c 3D single-pixel video \u5206\u522b\u5e76\u884c\u5316\u4e86\u4ec0\u4e48？",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    fdm_paragraph = out.split("\n\n")[0]
+    assert "[1]" in fdm_paragraph
+    assert "[4]" not in fdm_paragraph
+    assert "[4]" in out.split("\n\n")[1]
+
+
+def test_normalize_does_not_treat_generic_lockin_evidence_as_fdm() -> None:
+    evidence = (
+        "The instrument uses phase-sensitive detection while several frequencies are "
+        "measured simultaneously and the signal is demodulated. It can parallelize the "
+        "single-pixel imaging process with a trade-off between signal-to-noise ratio and "
+        "acquisition speed without altering detector integration time."
+    )
+    answer = "The experiment reports an unsupported fourfold image-size improvement [3]."
+
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="Why is FDM faster?",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "Lock-in spectrometer.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "Lock-in spectrometer.en.md"}}],
+    )
+
+    assert out == answer
 
 
 def test_normalize_supported_terms_completes_existing_microscopy_method_segments() -> None:
@@ -4844,6 +5353,133 @@ def test_finalize_restores_precise_evidence_term_after_final_gate(monkeypatch) -
     assert "整个视场" in out["answer"]
     assert out["answer_quality"]["claim_evidence"]["post_gate_term_normalization"] is True
     assert audit_calls == 2
+
+
+def test_finalize_rebinds_surviving_fdm_claim_after_the_first_gate(monkeypatch) -> None:
+    audit_calls = 0
+    bind_calls = 0
+
+    def _drop_initial_bad_fdm_claim(answer, *args, **kwargs):
+        nonlocal audit_calls
+        audit_calls += 1
+        text = str(answer or "")
+        if audit_calls == 1:
+            text = "\n\n".join(
+                paragraph
+                for paragraph in text.split("\n\n")
+                if "four named carriers" not in paragraph
+            )
+        return text, {"minimum_ok": True, "audit_call": audit_calls}
+
+    def _staged_bind(answer, *args, **kwargs):
+        nonlocal bind_calls
+        bind_calls += 1
+        text = str(answer or "")
+        if bind_calls == 1:
+            # Reproduce the live failure: an earlier same-source marker makes
+            # the first binder leave the later valid mechanism untouched.
+            return text
+        paragraphs = text.split("\n\n")
+        for index, paragraph in enumerate(paragraphs):
+            if "p frequencies simultaneously" in paragraph and "[1]" not in paragraph:
+                paragraphs[index] = f"{paragraph} [1]"
+        return "\n\n".join(paragraphs)
+
+    monkeypatch.setattr(
+        finalize_runtime,
+        "audit_and_repair_claim_evidence",
+        _drop_initial_bad_fdm_claim,
+    )
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_bind_planned_source_citations",
+        _staged_bind,
+    )
+    monkeypatch.setattr(finalize_runtime, "_reconcile_kb_notice", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(finalize_runtime, "_enhance_kb_miss_fallback", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_build_answer_quality_probe",
+        lambda answer, **kwargs: {"minimum_ok": True},
+    )
+    fdm_evidence = (
+        "Each SLM pixel is modulated on p frequencies simultaneously according to the "
+        "mask patterns. The signal is demodulated by p lock-in amplifiers using "
+        "phase-sensitive detection."
+    )
+    video_evidence = (
+        "Photometric stereo uses four spatially-separated single-pixel detectors and "
+        "reconstructs 3D video at 8 frames per second."
+    )
+    answer = (
+        "FDM uses four named carriers f1, f2, f3, and f4 [1].\n\n"
+        "Frequency-division multiplexed single-pixel imaging parallelizes the encoding "
+        "layer: each SLM pixel carries p frequencies simultaneously and the detector "
+        "signal is demodulated.\n\n"
+        "3D single-pixel video uses photometric stereo with four detectors [4]."
+    )
+    hits = [
+        {"text": fdm_evidence, "meta": {"source_path": "fdm.en.md"}},
+        {"text": "Other evidence", "meta": {"source_path": "other-1.en.md"}},
+        {"text": "Other evidence", "meta": {"source_path": "other-2.en.md"}},
+        {"text": video_evidence, "meta": {"source_path": "video.en.md"}},
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [4],
+                "source_path": "video.en.md",
+                "evidence_quote": video_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "fdm.en.md",
+                "evidence_quote": fdm_evidence,
+            },
+        ],
+    }
+
+    out = finalize_runtime._finalize_generation_answer(
+        answer,
+        prompt="Compare FDM parallel encoding with 3D single-pixel video.",
+        prompt_for_user="Compare FDM parallel encoding with 3D single-pixel video.",
+        answer_hits=hits,
+        db_dir="db",
+        locked_citation_source=None,
+        answer_intent="comparison",
+        answer_depth="medium",
+        answer_output_mode="comparison",
+        paper_guide_mode=False,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="compare",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={"citation_plan": plan},
+        apply_paper_guide_answer_postprocess=lambda answer, **kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **kwargs: answer,
+        validate_structured_citations=lambda answer, **kwargs: (answer, {}),
+    )
+
+    assert "four named carriers" not in out["answer"]
+    surviving_fdm = next(
+        paragraph
+        for paragraph in out["answer"].split("\n\n")
+        if "p frequencies simultaneously" in paragraph
+    )
+    assert "[1]" in surviving_fdm
+    assert "photometric stereo with four detectors [4]" in out["answer"]
+    assert bind_calls == 2
+    assert audit_calls == 2
+    assert out["answer_quality"]["claim_evidence"]["post_gate_citation_rebinding"] is True
 
 
 def test_finalize_generation_answer_preserves_numeric_refs_for_citation_lookup(monkeypatch):

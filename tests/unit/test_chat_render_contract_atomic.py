@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 from api import chat_render
 
 
@@ -98,6 +101,233 @@ def test_render_packet_rebuild_keeps_notice_in_display_and_copy() -> None:
     assert packet["rendered_content"].startswith("Evidence is limited.")
     assert packet["copy_markdown"].startswith("Evidence is limited.")
     assert packet["copy_text"].startswith("Evidence is limited.")
+
+
+def test_reference_index_cache_refreshes_after_file_change(tmp_path: Path, monkeypatch) -> None:
+    index_path = tmp_path / "references_index.json"
+    index_path.write_text("old", encoding="utf-8")
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        chat_render,
+        "load_settings",
+        lambda: SimpleNamespace(db_dir=tmp_path),
+    )
+
+    def fake_load_reference_index(db_dir: Path) -> dict:
+        value = (Path(db_dir) / "references_index.json").read_text(encoding="utf-8")
+        calls.append(value)
+        return {"value": value}
+
+    monkeypatch.setattr(chat_render, "load_reference_index", fake_load_reference_index)
+    chat_render._load_reference_index_for_signature.cache_clear()
+
+    assert chat_render._load_reference_index_cached() == {"value": "old"}
+    assert chat_render._load_reference_index_cached() == {"value": "old"}
+    index_path.write_text("new-and-larger", encoding="utf-8")
+    assert chat_render._load_reference_index_cached() == {"value": "new-and-larger"}
+    assert calls == ["old", "new-and-larger"]
+
+
+def test_grounded_plan_repair_is_the_renderer_fidelity_baseline(monkeypatch) -> None:
+    source_path = "db/paper/paper.en.md"
+    second_source_path = "db/second/second.en.md"
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": "Grounded evidence for the missing step.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": second_source_path,
+                "heading_path": "Introduction",
+                "evidence_quote": "Second source confirms the sequence.",
+            },
+        ],
+    }
+
+    monkeypatch.setattr(
+        chat_render,
+        "_should_link_inpaper_citations_for_message",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_reading_guide_repair_missing_system_a_citations",
+        lambda md, *_args, **_kwargs: (
+            f"{md}\nGrounded missing step [1]. Second source confirms it [2]."
+        ),
+    )
+
+    def fake_annotate(md, _hits, **_kwargs):
+        if "[1]" not in md or "[2]" not in md:
+            return md, []
+        return md.replace("[1]", "[1](#kb-cite-a-1)").replace(
+            "[2]", "[2](#kb-cite-a-2)"
+        ), [
+            {
+                "num": 1,
+                "anchor": "kb-cite-a-1",
+                "citation_route": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": "Grounded evidence for the missing step.",
+                "answer_claim": "Grounded missing step.",
+            },
+            {
+                "num": 2,
+                "anchor": "kb-cite-a-2",
+                "citation_route": "system_a",
+                "source_path": second_source_path,
+                "heading_path": "Introduction",
+                "evidence_quote": "Second source confirms the sequence.",
+                "answer_claim": "Second source confirms it.",
+            },
+        ]
+
+    monkeypatch.setattr(
+        chat_render,
+        "_annotate_inpaper_citations_with_hover_meta",
+        fake_annotate,
+    )
+    rendered = chat_render.enrich_messages_with_reference_render(
+        [
+            {"id": 1, "role": "user", "content": "Explain the missing step."},
+            {
+                "id": 2,
+                "role": "assistant",
+                "content": "Original answer.",
+                "meta": {
+                    "answer_quality": {
+                        "output_mode": "reading_guide",
+                        "citation_plan": plan,
+                    }
+                },
+            },
+        ],
+        {
+            1: {
+                "hits": [
+                    {
+                        "text": "Grounded evidence for the missing step.",
+                        "meta": {
+                            "source_path": source_path,
+                            "heading_path": "Abstract",
+                        },
+                    }
+                ]
+            }
+        },
+        conv_id="grounded-baseline",
+    )[-1]
+
+    assert "Grounded missing step" in rendered["rendered_body"]
+    assert len(rendered["cite_details"]) == 2
+
+
+def test_structured_retry_keeps_system_a_and_system_b(monkeypatch) -> None:
+    source_path = "db/paper/paper.en.md"
+    marker = "[[CITE:s1234abcd:4]]"
+    plan = {
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "evidence_quote": "Local evidence.",
+            },
+            {
+                "preferred_system": "system_b",
+                "source_path": source_path,
+                "candidate_refs": [4],
+                "candidate_cite_examples": [marker],
+            },
+        ],
+    }
+    monkeypatch.setattr(
+        chat_render,
+        "_should_link_inpaper_citations_for_message",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_reading_guide_repair_missing_system_a_citations",
+        lambda md, *_args, **_kwargs: md,
+    )
+
+    def fake_primary(md, _hits, **_kwargs):
+        body = md.replace(marker, "")
+        if "[1]" not in body:
+            return body, []
+        return body.replace("[1]", "[1](#kb-cite-a-1)"), [
+            {
+                "num": 1,
+                "anchor": "kb-cite-a-1",
+                "citation_route": "system_a",
+                "source_path": source_path,
+            }
+        ]
+
+    def fake_fallback(md, _hits, **_kwargs):
+        return md.replace(marker, "[4](#kb-cite-b-4)"), [
+            {
+                "num": 4,
+                "anchor": "kb-cite-b-4",
+                "is_inpaper": True,
+                "source_path": source_path,
+                "title": "Upstream method",
+            }
+        ]
+
+    monkeypatch.setattr(
+        chat_render,
+        "_annotate_inpaper_citations_with_hover_meta",
+        fake_primary,
+    )
+    monkeypatch.setattr(
+        chat_render,
+        "_fallback_render_structured_citations",
+        fake_fallback,
+    )
+    rendered = chat_render.enrich_messages_with_reference_render(
+        [
+            {"id": 1, "role": "user", "content": "Where did the method originate?"},
+            {
+                "id": 2,
+                "role": "assistant",
+                "content": f"Existing method {marker}; local evidence [1].",
+                "meta": {
+                    "answer_quality": {
+                        "output_mode": "reading_guide",
+                        "citation_plan": plan,
+                    }
+                },
+            },
+        ],
+        {
+            1: {
+                "hits": [
+                    {
+                        "text": "Local evidence [4].",
+                        "meta": {"source_path": source_path},
+                    }
+                ]
+            }
+        },
+        conv_id="mixed-routes",
+    )[-1]
+
+    assert "[1](#kb-cite-a-1)" in rendered["rendered_body"]
+    assert "[4](#kb-cite-b-4)" in rendered["rendered_body"]
+    assert {detail["citation_route"] for detail in rendered["cite_details"]} == {
+        "system_a",
+        "system_b",
+    }
 
 
 def test_preserve_existing_rejects_signature_mismatch_even_with_current_refs() -> None:
@@ -206,3 +436,17 @@ def test_prompt_aligned_system_a_evidence_is_not_replaced_by_broader_ref_card_te
     assert out[0]["evidence_quote"] == exact
     assert out[0]["heading_path"] == "Abstract"
     assert out[0]["page_start"] == 1
+
+
+def test_prose_preservation_ignores_citation_gap_before_closing_parenthesis() -> None:
+    answer = "特别是表 1 中探测器的性能参数 [2]），可用于比较器件。"
+    linked = (
+        "特别是表 1 中探测器的性能参数 "
+        '[2](#kb-cite-demo-2 "source: detector-review.pdf | ref 2")），可用于比较器件。'
+    )
+
+    assert chat_render._rendered_body_preserves_answer_body(
+        answer_body=answer,
+        rendered_body=linked,
+        cite_details=[{"num": 2, "citation_route": "system_a"}],
+    )

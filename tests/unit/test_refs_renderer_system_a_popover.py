@@ -10,6 +10,7 @@ from ui.refs_renderer import (
     _compound_plan_evidence_excerpt,
     _system_a_is_low_value_evidence_text,
     _system_a_pick_best_evidence_candidate,
+    _system_a_ui_relevance_for_occurrence,
 )
 
 
@@ -166,6 +167,62 @@ def test_system_a_keeps_table_locator_when_metric_value_is_grounded() -> None:
     assert len(details) == 1
     assert details[0]["binding_status"] == "grounded"
     assert "40.30" in details[0]["card_evidence"]
+
+
+def test_system_a_table_anchor_restores_named_occurrence_in_locator() -> None:
+    source_path = "db/simple-baselines/simple-baselines.en.md"
+    compact = "SIDD PSNR: Baseline ours = 40.30; NAFNet ours = 40.30."
+    located = "Table 6. Image Denoising Results on SIDD. " + compact
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "SIDD PSNR 最高值为 40.30，Baseline ours 与 NAFNet ours 并列 [1]。",
+        [
+            {
+                "text": compact,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "5 Experiments / 5.2 Applications",
+                    "ref_answer_citation_num": 1,
+                },
+                "ui_meta": {
+                    "primary_evidence": {
+                        "heading_path": "5 Experiments / 5.2 Applications",
+                        "snippet": compact,
+                        "block_id": "blk_table_6",
+                        "anchor_id": "tb_00006",
+                        "anchor_kind": "sentence",
+                        "page_start": 13,
+                        "page_end": 13,
+                    }
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "5 Experiments / 5.2 Applications",
+                    "evidence_quote": located,
+                    "block_id": "blk_table_6",
+                    "anchor_id": "tb_00006",
+                    "anchor_kind": "sentence",
+                    "page_start": 13,
+                    "page_end": 13,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                }
+            ],
+        },
+        anchor_ns="named-table-locator",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["anchor_kind"] == "table"
+    assert "Table 6" in details[0]["location_label"]
+    assert "Table 6" in details[0]["card_locator"]
 
 
 def test_system_a_hides_marker_when_card_names_a_different_method() -> None:
@@ -1107,6 +1164,246 @@ def test_compound_fdm_excerpt_keeps_parallel_encoding_and_demodulation_chain() -
     assert "phase-sensitive detection" in excerpt
     assert "multiplexed into a single-pixel detector" in excerpt
     assert "demodulated" in excerpt
+
+
+def test_compound_fdm_excerpt_accepts_chinese_parallel_slm_claim() -> None:
+    plan_text = (
+        "The mask values are encoded in the phase of intensity modulation, and thus "
+        "we require phase-sensitive detection, in this case provided by a lock-in "
+        "amplifier (LIA). "
+        "Each pixel of the SLM is modulated with either 0 or pi phase on $p$ "
+        "frequencies simultaneously, according to the present mask patterns. "
+        "The modulated light from the SLM is then multiplexed into a single-pixel "
+        "detector. The signal is then demodulated by a number (p) of LIAs."
+    )
+
+    excerpt = _compound_plan_evidence_excerpt(
+        plan_text,
+        "频分复用单像素成像将空间光调制器（SLM）的像素调制并行化。",
+    )
+
+    assert "p frequencies simultaneously" in excerpt
+    assert "phase-sensitive detection" in excerpt
+    assert "multiplexed into a single-pixel detector" in excerpt
+    assert "demodulated" in excerpt
+    assert (
+        _compound_plan_evidence_excerpt(
+            plan_text,
+            "空间光调制器（SLM）的像素调制并行化。",
+        )
+        == ""
+    )
+
+
+def test_compound_fdm_excerpt_accepts_bound_mechanism_sentence() -> None:
+    plan_text = (
+        "The mask values are encoded in the phase of intensity modulation, and thus "
+        "we require phase-sensitive detection, in this case provided by a lock-in "
+        "amplifier (LIA). Each pixel of the SLM is modulated with either 0 or pi phase "
+        "on p frequencies simultaneously, according to the present mask patterns. "
+        "The modulated light from the SLM is then multiplexed into a single-pixel "
+        "detector. The signal is then demodulated by a number (p) of LIAs."
+    )
+
+    excerpt = _compound_plan_evidence_excerpt(
+        plan_text,
+        "单个探测器接收多个频率通道，并由锁相放大器同时解调空间编码掩模。",
+    )
+
+    assert "phase-sensitive detection" in excerpt
+    assert "p frequencies simultaneously" in excerpt
+    assert "demodulated" in excerpt
+
+
+def test_compound_pidl_excerpt_keeps_noise_chain_and_calibration_count() -> None:
+    plan_text = (
+        "With low bit depth and heavy noise, wefirst established a real-world physical "
+        "noise model of SPAD arrays. The real physical noise sources consist of shot "
+        "noise, fixed-pattern noise, dark count rate, afterpulsing and crosstalk noise, "
+        "and deadtime noise from the quenching circuit. To calibrate the parameters, "
+        "we collected a real-shot SPAD image dataset containing 2790 images in total, "
+        "each with 64 × 32 pixels."
+    )
+
+    excerpt = _compound_plan_evidence_excerpt(
+        plan_text,
+        "SPAD 物理噪声模型包含暗计数、后脉冲和串扰，并由 2790 张图像标定。",
+    )
+
+    assert "physical noise model of SPAD arrays" in excerpt
+    assert "dark count rate" in excerpt
+    assert "deadtime noise" in excerpt
+    assert "2790 images" in excerpt
+    assert "64 × 32 pixels" in excerpt
+    assert len(excerpt) <= 520
+
+
+def test_compound_pidl_numeric_excerpt_keeps_all_calibration_dimensions() -> None:
+    plan_text = (
+        "With low bit depth and heavy noise, wefirst established a real-world physical "
+        "noise model of SPAD arrays. The real physical noise sources consist of shot "
+        "noise, fi xed-pattern noise from the SPAD array, dark count rate, afterpulsing "
+        "and crosstalk noise from blind electron avalanche, and deadtime noise from the "
+        "quenching circuit. We collected a real-shot SPAD image dataset containing 2790 "
+        "images in total, each with 64 × 32 pixels. Among these images, there are 90 "
+        "scenes, each with 10 different bit depths and 3 different illumination fl uxes."
+    )
+
+    excerpt = _compound_plan_evidence_excerpt(
+        plan_text,
+        (
+            "The SPAD noise model was calibrated with 2790 images at 64 × 32 pixels, "
+            "covering 90 scenes, 10 bit depths, and 3 illumination fluxes."
+        ),
+    )
+
+    assert "physical noise model of SPAD arrays" in excerpt
+    assert "dark count rate" in excerpt
+    assert "2790 images" in excerpt
+    assert "64 × 32 pixels" in excerpt
+    assert "90 scenes" in excerpt
+    assert "10 different bit depths" in excerpt
+    assert "3 different illumination fl uxes" in excerpt
+    assert len(excerpt) <= 520
+
+
+def test_compound_pidl_training_excerpt_keeps_calibrated_model_and_image_pairs() -> None:
+    plan_text = (
+        "With the calibrated physical noise model under different illumination and "
+        "acquisition settings, we further employed off-the-shelf public highresolution "
+        "images (collected from the PASCAL VOC2007 [31] and … VOC2012 [32] datasets) "
+        "to digitally synthesize a large-scale realistic singlephoton image dataset "
+        "containing 2.6 million image pairs. The gated fusion transformer network was "
+        "trained using the above large-scale singlephoton image dataset and tested on "
+        "various SPAD images."
+    )
+
+    excerpt = _compound_plan_evidence_excerpt(
+        plan_text,
+        (
+            "最后，利用标定好的模型和公开的高分辨率图像（如 PASCAL VOC2007）"
+            "合成配对数据，用于训练深度学习网络。"
+        ),
+    )
+
+    assert "calibrated physical noise model" in excerpt
+    assert "PASCAL VOC2007" in excerpt
+    assert "digitally synthesize" in excerpt
+    assert "2.6 million image pairs" in excerpt
+    assert "network was trained" in excerpt
+    assert "tested on various SPAD images" in excerpt
+    assert len(excerpt) <= 520
+
+
+def test_system_a_ui_relevance_only_crosses_the_same_evidence_occurrence() -> None:
+    evidence = (
+        "The modulated light from the SLM is multiplexed into a single-pixel detector "
+        "and retains phase and modulation frequency information."
+    )
+    ui_meta = {
+        "why_line": "该段说明 SLM 调制信号如何进入单探测器并保留频率通道信息。",
+        "why_generation": "answer_citation_grounded",
+    }
+    primary = {
+        "heading_path": "B. Encoding",
+        "block_id": "blk-encoding",
+        "snippet": evidence,
+    }
+
+    assert _system_a_ui_relevance_for_occurrence(
+        ui_meta,
+        primary,
+        heading="B. Encoding",
+        block_id="blk-encoding",
+        anchor_id="",
+        evidence_quote=evidence,
+    ) == ui_meta["why_line"]
+    assert _system_a_ui_relevance_for_occurrence(
+        ui_meta,
+        primary,
+        heading="C. Frequency Selection",
+        block_id="blk-frequency",
+        anchor_id="",
+        evidence_quote="Carrier frequencies are selected to avoid crosstalk.",
+    ) == ""
+
+
+def test_compound_piln_excerpt_keeps_image_loop_iteration_chain() -> None:
+    excerpt = _compound_plan_evidence_excerpt(
+        (
+            "In this study, we proposed a self-supervised image-loop neural network "
+            "(ILNet) with a part-based model for single-pixel imaging (SPI). ILNet employs "
+            "a part-based model that divides image features into different parts to "
+            "facilitate finer-grained learning, resulting in improved image details when "
+            "reconstructing a randomly input 2D signal into a 2D object image. Then, the "
+            "2D image generated by ILNet can serve as input for the subsequent iteration "
+            "to continuously incorporate prior information and ensure high-quality "
+            "imaging at low sampling rates."
+        ),
+        "ILNet 的图像循环机制将半成品重建图像循环回网络输入，以逐步提升重建质量。",
+    )
+
+    assert "self-supervised image-loop neural network" in excerpt
+    assert "randomly input 2D signal" in excerpt
+    assert "subsequent iteration" in excerpt
+    assert "low sampling rates" in excerpt
+
+
+def test_system_a_keeps_piln_iteration_mechanism_link_after_binding() -> None:
+    source_path = "db/PILN/PILN.en.md"
+    plan_evidence = (
+        "In this study, we proposed a self-supervised image-loop neural network "
+        "(ILNet) with a part-based model for single-pixel imaging (SPI). ILNet employs "
+        "a part-based model that divides image features into different parts to "
+        "facilitate finer-grained learning, resulting in improved image details when "
+        "reconstructing a randomly input 2D signal into a 2D object image. Then, the "
+        "2D image generated by ILNet can serve as input for the subsequent iteration "
+        "to continuously incorporate prior information and ensure high-quality "
+        "imaging at low sampling rates."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "ILNet 的图像循环机制将半成品重建图像循环回网络输入，"
+            "替代原始随机信号，从而逐步提升重建质量 [1]。\n\n"
+            "| 场景 | 原因 |\n|---|---|\n"
+            "| 低采样率成像 | 图像循环机制支持高质量重建 [1] |"
+        ),
+        [
+            {
+                "text": plan_evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "PILN",
+                    "heading_path": "Abstract",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "per_paragraph_budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "PILN",
+                    "heading_path": "Abstract",
+                    "evidence_quote": plan_evidence,
+                }
+            ],
+        },
+        anchor_ns="piln-iteration",
+        canonical_paths=[source_path],
+        render_locale="zh",
+    )
+
+    assert rendered.count("[1](#kb-cite-") == 2
+    assert any(
+        "subsequent iteration" in str(detail.get("evidence_quote") or "")
+        and "low sampling rates" in str(detail.get("evidence_quote") or "")
+        for detail in details
+    )
 
 
 def test_system_a_selects_piln_abstract_slot_over_same_paper_methods_slot() -> None:
@@ -2343,6 +2640,317 @@ def test_system_a_splits_named_dataset_claim_within_same_source_block() -> None:
     assert named_detail["page_start"] == 3
 
 
+def test_system_a_keeps_real_pidl_calibration_and_training_sentence_links() -> None:
+    source_path = (
+        "db/NatCommun-2023-High-resolution single-photon imaging with physics-informed "
+        "deep learning/NatCommun-2023-High-resolution single-photon imaging with physics-informed "
+        "deep learning.en.md"
+    )
+    plan_evidence = (
+        "with low bit depth, low resolution and heavy noise in photon-limited scenarios, "
+        "wefirst established a real-world physical noise model of SPAD arrays. The real "
+        "physical noise sources consist of shot noise from photon incidence, fi xed-pattern "
+        "noise from SPAD array's photon absorption, dark count rate, afterpulsing and "
+        "crosstalk noise from blind electron avalanche, and deadtime noise from the quenching "
+        "circuit. We collected a real-shot SPAD image dataset containing 2790 images in total, "
+        "each with 64 × 32 pixels. Among these images, there are 90 scenes, each with 10 "
+        "different bit depths and 3 different illumination fl uxes. With the calibrated "
+        "physical noise model under different illumination and acquisition settings, we "
+        "further employed off-the-shelf public highresolution images (collected from the "
+        "PASCAL VOC2007 [31] and … VOC2012 [32] datasets) to digitally synthesize a large-scale "
+        "realistic singlephoton image dataset containing 2.6 million image pairs. The gated "
+        "fusion transformer network was trained using the above large-scale singlephoton image "
+        "dataset and tested on various SPAD images."
+    )
+    answer = (
+        "该方法采集 2790 张真实 SPAD 图像（64×32 像素，涵盖 90 个场景、10 种比特深度"
+        "和 3 种光照通量）来标定模型参数 [1]。然后，利用这个标定好的物理模型，结合"
+        "PASCAL VOC2007/VOC2012 公共高分辨率图像数字合成大规模真实单光子图像数据集，"
+        "并用该数据集训练网络 [1]。"
+    )
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        answer,
+        [
+            {
+                "text": (
+                    "wefirst established a real-world physical noise model of SPAD arrays. "
+                    "We collected a real-shot SPAD image dataset containing 2790 images in total, "
+                    "each with 64 × 32 pixels."
+                ),
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "High-resolution single-photon imaging with PIDL",
+                    "heading_path": "Introduction",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "per_paragraph_budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "High-resolution single-photon imaging with PIDL",
+                    "heading_path": "Introduction",
+                    "page_start": 3,
+                    "page_end": 3,
+                    "evidence_quote": plan_evidence,
+                }
+            ],
+        },
+        anchor_ns="real-pidl-training",
+        canonical_paths=[source_path],
+        render_locale="zh",
+    )
+
+    anchors = re.findall(r"\[1\]\(#([^) \"\n]+)", rendered)
+    assert len(anchors) == 2
+    assert len(set(anchors)) == 2
+    assert len(details) == 2
+    training_detail = next(
+        detail for detail in details if "PASCAL VOC2007" in str(detail.get("answer_claim") or "")
+    )
+    training_evidence = str(training_detail.get("card_evidence") or "")
+    assert "calibrated physical noise model" in training_evidence
+    assert "PASCAL VOC2007" in training_evidence
+    assert "2.6 million image pairs" in training_evidence
+    assert "network was trained" in training_evidence
+
+
+def test_system_a_budget_keeps_distinct_plan_slots_separate() -> None:
+    source_path = "db/paper/paper.en.md"
+    evidence = (
+        "AlphaNet reaches PSNR 30.0 dB on DatasetX. "
+        "BetaNet reaches SSIM 0.9 on DatasetY."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "AlphaNet reaches PSNR 30.0 dB on DatasetX [1]. "
+            "BetaNet reaches SSIM 0.9 on DatasetY [2]."
+        ),
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "Paper",
+                    "heading_path": "Section",
+                    "ref_answer_citation_num": number,
+                },
+            }
+            for number in (1, 2)
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "per_paragraph_budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [number],
+                    "source_path": source_path,
+                    "heading_path": "Section",
+                    "evidence_quote": evidence,
+                }
+                for number in (1, 2)
+            ],
+        },
+        anchor_ns="distinct-plan-slots",
+        canonical_paths=[source_path, source_path],
+    )
+
+    assert rendered.count("](#kb-cite-") == 1
+    assert len(details) == 1
+
+
+def test_system_a_budget_survives_inline_math_fragment_split() -> None:
+    sources = ["db/alpha/alpha.en.md", "db/beta/beta.en.md"]
+    evidence = [
+        "AlphaNet reaches PSNR 30.0 dB on DatasetX.",
+        "BetaNet reaches SSIM 0.9 on DatasetY.",
+    ]
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "AlphaNet reaches PSNR 30.0 dB on DatasetX [1]. "
+            "$x$ BetaNet reaches SSIM 0.9 on DatasetY [2]."
+        ),
+        [
+            {
+                "text": quote,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": f"Paper {number}",
+                    "heading_path": "Results",
+                    "ref_answer_citation_num": number,
+                },
+            }
+            for number, (source_path, quote) in enumerate(
+                zip(sources, evidence),
+                start=1,
+            )
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "per_paragraph_budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [number],
+                    "source_path": source_path,
+                    "heading_path": "Results",
+                    "evidence_quote": quote,
+                }
+                for number, (source_path, quote) in enumerate(
+                    zip(sources, evidence),
+                    start=1,
+                )
+            ],
+        },
+        anchor_ns="inline-math-budget",
+        canonical_paths=sources,
+    )
+
+    assert rendered.count("](#kb-cite-") == 1
+    assert len(details) == 1
+
+
+def test_system_a_keeps_real_pidl_calibrated_model_training_sentence_link() -> None:
+    source_path = (
+        "db/NatCommun-2023-High-resolution single-photon imaging with physics-informed "
+        "deep learning/NatCommun-2023-High-resolution single-photon imaging with physics-informed "
+        "deep learning.en.md"
+    )
+    plan_evidence = (
+        "With the calibrated physical noise model under different illumination and acquisition "
+        "settings, we further employed off-the-shelf public highresolution images (collected from "
+        "the PASCAL VOC2007 [31] and … VOC2012 [32] datasets) to digitally synthesize a large-scale "
+        "realistic singlephoton image dataset containing 2.6 million image pairs. The gated fusion "
+        "transformer network was trained using the above large-scale singlephoton image dataset "
+        "and tested on various SPAD images."
+    )
+    answer = (
+        "最后，利用校准后的模型和公开的高分辨率图像（如PASCAL VOC2007）合成配对数据，"
+        "用于训练深度学习网络进行图像增强 [1]。"
+    )
+    heading_path = (
+        "High-resolution single-photon imaging with physics-informed deep learning / "
+        "Introduction"
+    )
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        answer,
+        [
+            {
+                "text": (
+                    "wefirst established a real-world physical noise model of SPAD arrays. "
+                    "We collected a real-shot SPAD image dataset containing 2790 images in total."
+                ),
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "High-resolution single-photon imaging with PIDL",
+                    "heading_path": heading_path,
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "High-resolution single-photon imaging with PIDL",
+                    "heading_path": heading_path,
+                    "page_start": 3,
+                    "page_end": 3,
+                    "evidence_quote": plan_evidence,
+                }
+            ],
+        },
+        anchor_ns="real-pidl-calibrated-model",
+        canonical_paths=[source_path],
+        render_locale="zh",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    evidence = str(details[0].get("card_evidence") or "")
+    assert "calibrated physical noise model" in evidence
+    assert "PASCAL VOC2007" in evidence
+    assert "2.6 million image pairs" in evidence
+    assert "network was trained" in evidence
+
+
+def test_system_a_keeps_real_fdm_bpsk_and_demodulation_occurrence_cards() -> None:
+    source_path = (
+        "db/Optica-2016-Frequency-division-multiplexed single-pixel imaging with metamaterials/"
+        "Optica-2016-Frequency-division-multiplexed single-pixel imaging with metamaterials.en.md"
+    )
+    plan_evidence = (
+        "The mask values are encoded in the phase of intensity modulation, and thus we require "
+        "phase-sensitive detection, in this case provided by a lock-in amplifier (LIA). This "
+        "mapping of two phases to two numerical (bit) values is known in communications as "
+        "binary phase shift keying (BPSK). Each pixel of the SLM is modulated with either 0 or "
+        "pi phase on p frequencies simultaneously, according to the present mask patterns. "
+        "The modulated light from the SLM is then multiplexed into a single-pixel detector. "
+        "The signal is then demodulated by a number (p) of LIAs."
+    )
+    answer = (
+        "它利用超材料 SLM，让每个像素同时对多个不同频率的载波进行二进制相移键控"
+        "（BPSK）调制（相位 0 或 π）[1]。这样，多个 Hadamard 掩模的信息被编码到不同"
+        "频率的载波上，通过一个单像素探测器接收后，再用锁相放大器（LIA）进行相位敏感"
+        "解调，从而同时获取多个掩模对应的信号 [1]。"
+    )
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        answer,
+        [
+            {
+                "text": plan_evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "Frequency-division-multiplexed SPI",
+                    "heading_path": "B. Encoding",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 2, "system_b": 0},
+            "per_paragraph_budget": {"system_a": 2, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "Frequency-division-multiplexed SPI",
+                    "heading_path": "B. Encoding",
+                    "page_start": 2,
+                    "page_end": 2,
+                    "evidence_quote": plan_evidence,
+                }
+            ],
+        },
+        anchor_ns="real-fdm-bpsk",
+        canonical_paths=[source_path],
+        render_locale="zh",
+    )
+
+    anchors = re.findall(r"\[1\]\(#([^) \"\n]+)", rendered)
+    assert len(anchors) == 2
+    detail_anchors = {str(detail.get("anchor") or "") for detail in details}
+    assert set(anchors) <= detail_anchors
+    assert any("BPSK" in str(detail.get("answer_claim") or "") for detail in details)
+    card_evidence = " ".join(str(detail.get("card_evidence") or "") for detail in details)
+    assert "binary phase shift keying (BPSK)" in card_evidence
+    assert "phase-sensitive detection" in card_evidence
+    assert "demodulated by a number (p) of LIAs" in card_evidence
+
+
 def test_system_a_reading_tip_does_not_replace_substantive_card_claim() -> None:
     source_path = "db/pidl/pidl.en.md"
     evidence = "Deep learning with a calibrated SPAD noise model improves reconstruction quality."
@@ -2413,3 +3021,65 @@ def test_system_a_context_keeps_sentence_before_inline_math_split() -> None:
     assert "截止频率" in detail["answer_claim"]
     assert "下一句" not in detail["answer_claim"]
     assert detail["evidence_quote"]
+
+
+def test_system_a_keeps_real_piln_measurement_label_claim_link() -> None:
+    source_path = "db/piln/part-based-image-loop-network.en.md"
+    locator_snippet = (
+        "In this study, we proposed a self-supervised image-loop neural network "
+        "(ILNet) with a part-based model for single-pixel imaging (SPI). ILNet "
+        "employs a part-based model that divides image features into different "
+        "parts to facilitate finer-grained learning."
+    )
+    full_plan_evidence = (
+        locator_snippet
+        + " Then, the 2D image generated by ILNet can serve as input for the "
+        "subsequent iteration to ensure high-quality imaging at low sampling rates. "
+        "1D signals collected by the single-pixel detector are used as labels for "
+        "adaptively optimizing and reconstructing the image."
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "1. **无需真实图像标签的自监督重建**：ILNet 不需要成对的"
+            "高质量图像作为训练标签，而是利用物理采集的 1D 信号作为"
+            "监督信号 [1]。"
+        ),
+        [
+            {
+                "text": locator_snippet,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "Part-based image-loop network for single-pixel imaging",
+                    "heading_path": "Abstract",
+                    "page_start": 2,
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "source_name": "Part-based image-loop network for single-pixel imaging",
+                    "heading_path": "Abstract",
+                    "page_start": 2,
+                    "page_end": 2,
+                    "evidence_quote": full_plan_evidence,
+                    "evidence_selection_reason": "prompt_aligned_source_sentence",
+                }
+            ],
+        },
+        anchor_ns="real-piln-measurement-label",
+        canonical_paths=[source_path],
+        render_locale="zh",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    evidence = str(details[0].get("card_evidence") or "")
+    assert "1D signals collected by the single-pixel detector" in evidence
+    assert "used as labels" in evidence
+    assert details[0]["binding_status"] == "grounded"

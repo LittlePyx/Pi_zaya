@@ -284,6 +284,36 @@ def test_grounded_ref_why_line_explains_physical_degradation_generalization() ->
     assert "可用来核对" not in why
 
 
+def test_grounded_ref_why_line_handles_multi_source_spad_noise_wording() -> None:
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=["physics-informed", "SPAD"],
+        heading_path="Discussion",
+        summary_line=(
+            "The reported technique uses physical multi-source noise modeling of "
+            "SPAD arrays and a single-photon image dataset for network training."
+        ),
+    )
+
+    assert all(term in why for term in ("SPAD", "噪声", "数据标定", "学习型补偿"))
+    assert not looks_generic_ref_why_line(why)
+
+
+def test_grounded_ref_why_line_handles_mainstream_spd_review_wording() -> None:
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=["single-photon detectors"],
+        heading_path="Abstract",
+        summary_line=(
+            "This technology mainly relies on the mainstream SPDs, such as PMTs, "
+            "SAPD, SNSPDs and TES, while manufacturing cost limits adoption."
+        ),
+    )
+
+    assert all(term in why for term in ("SPAD", "PMT", "SNSPD", "TES", "制造"))
+    assert not looks_generic_ref_why_line(why)
+
+
 def test_grounded_ref_why_line_explains_microscopy_method_roles() -> None:
     cases = [
         (
@@ -469,6 +499,98 @@ def test_grounded_ref_why_line_explains_fdm_parallel_channels() -> None:
 
     assert changed is True
     assert all(term in why for term in ("子载波", "并行", "2.3%", "13.0%"))
+
+
+def test_grounded_ref_why_line_explains_compact_fdm_encoding_excerpt() -> None:
+    evidence = (
+        "The modulated light from the SLM is then multiplexed into a single-pixel detector, "
+        "which produces a signal containing the phase and modulation frequency information."
+    )
+
+    zh = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="B. Encoding",
+        summary_line=evidence,
+    )
+    en = build_grounded_ref_why_line(
+        prefer_zh=False,
+        focus_terms=[],
+        heading_path="B. Encoding",
+        summary_line=evidence,
+    )
+
+    assert all(term in zh for term in ("SLM", "单像素探测器", "相位", "调制频率", "FDM"))
+    assert all(
+        term in en
+        for term in (
+            "SLM",
+            "single-pixel detector",
+            "phase",
+            "modulation-frequency",
+            "FDM",
+        )
+    )
+    assert not looks_generic_ref_why_line(zh)
+    assert not looks_generic_ref_why_line(en)
+
+
+def test_grounded_ref_why_line_explains_hadamard_bpsk_lia_encoding() -> None:
+    evidence = (
+        "The mask values are encoded in the phase of intensity modulation, so phase-sensitive "
+        "detection is provided by a lock-in amplifier (LIA). True [1,-1] pixel values enable "
+        "the Hadamard matrix. The two values map to 0 or pi phase, which is binary phase "
+        "shift keying (BPSK)."
+    )
+
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="B. Encoding",
+        summary_line=evidence,
+    )
+
+    assert all(term in why for term in ("Hadamard", "[1,-1]", "0/π", "BPSK", "LIA"))
+    assert "p 路" not in why
+    assert "p 个" not in why
+    assert not looks_generic_ref_why_line(why)
+
+
+def test_grounded_ref_why_line_does_not_need_missing_bpsk_tail_or_invent_p_lias() -> None:
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="B. Encoding",
+        summary_line=(
+            "The mask values are encoded in the phase of intensity modulation, and thus "
+            "we require phase-sensitive detection, in this case provided by a lock-in "
+            "amplifier (LIA). Here we achieve true [1,-1] pixel values rather than the "
+            "classic [0,1] values associated with most SLMs. This distinction is key to "
+            "our use of the Hadamard matrix."
+        ),
+    )
+
+    assert all(term in why for term in ("Hadamard", "[1,-1]", "LIA", "相敏检测"))
+    assert "BPSK" not in why
+    assert "p 路" not in why
+    assert "p 个" not in why
+
+
+def test_fdm_relevance_does_not_invent_lock_in_amplifiers() -> None:
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="B. Encoding",
+        summary_line=(
+            "Each pixel is modulated on p frequencies simultaneously. The light is "
+            "multiplexed into a single-pixel detector and the signal is demodulated."
+        ),
+    )
+
+    assert "频率通道" in why
+    assert "单像素探测器" in why
+    assert "锁相放大器" not in why
+    assert "p 路" not in why
 
 
 def test_grounded_ref_why_line_explains_two_step_refocusing() -> None:

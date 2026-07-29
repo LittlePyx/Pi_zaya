@@ -761,7 +761,10 @@ def _library_markdown_index_state(md_path: Path | None, index_state: dict | None
         except Exception:
             chunk_exists = False
     quality_gate = rec.get("quality_gate") if isinstance(rec.get("quality_gate"), dict) else None
+    quality_indexable = bool((quality_gate or {}).get("indexable")) if isinstance(quality_gate, dict) else False
     if status == "ready" and chunk_exists and num_chunks > 0:
+        normalized = "ready"
+    elif status == "quality_degraded" and quality_indexable and chunk_exists and num_chunks > 0:
         normalized = "ready"
     elif status.startswith("quality_") or status in {"blocked", "not_indexable"}:
         normalized = "quality_blocked"

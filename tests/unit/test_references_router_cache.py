@@ -234,6 +234,49 @@ def test_answer_citation_evidence_quote_keeps_complete_multi_step_mechanism() ->
     assert all(term in quote for term in ("two steps", "ray tracing", "wave propagation", "distance -z"))
 
 
+def test_answer_citation_evidence_quote_keeps_real_fdm_parallel_encoding_chain() -> None:
+    compact = (
+        "Each pixel of the SLM is modulated with either 0 or \\pi phase on p frequencies "
+        "simultaneously, according to the present mask patterns. The modulated light from "
+        "the SLM is then multiplexed into a single-pixel detector, which produces a signal "
+        "containing the phase and modulation frequency information. The signal is then "
+        "demodulated by a number (p) of LIAs that compare the total signal to reference "
+        "waveforms."
+    )
+    plan_evidence = (
+        "The mask values are encoded in the phase of intensity modulation, and thus we require "
+        "phase-sensitive detection, in this case provided by a lock-in amplifier (LIA). "
+        f"{compact} Thus each LIA yields one element of the measurement vector Y."
+    )
+    detail = {
+        "source_name": "Optica-2016-Frequency-division-multiplexed single-pixel imaging.pdf",
+        "heading_path": "B. Encoding",
+        "answer_claim": (
+            "这样，原本需要依次投影的多个掩模被合并到一次测量中，通过锁相放大器"
+            "（LIA）进行相位敏感检测来分离各频率的信号，从而在不牺牲最优积分时间"
+            "的前提下缩短采集时间。"
+        ),
+        "evidence_quote": compact,
+        "citation_plan_evidence_quote": plan_evidence,
+    }
+
+    quote = references_router._answer_citation_evidence_quote(detail)
+
+    assert all(
+        term in quote
+        for term in ("p frequencies simultaneously", "multiplexed", "demodulated")
+    )
+    assert quote != "Thus each LIA yields one element of the measurement vector Y."
+
+    summary, why = references_router._answer_citation_card_copy(
+        [{**detail, "evidence_quote": quote}],
+        prefer_zh=True,
+        prompt="频分复用把什么环节并行化？",
+    )
+    assert all(term in summary for term in ("SLM", "单像素探测器", "相位", "调制频率"))
+    assert all(term in why for term in ("FDM", "并行编码", "频率"))
+
+
 def _qclfm_refocusing_passages() -> tuple[str, str]:
     framing = (
         "The operation for digital refocusing of a sample placed out of focus by a distance z "
@@ -762,6 +805,158 @@ def test_answer_citation_guide_removes_source_lead_in_after_list_number() -> Non
     assert summary == "中央凹区域追踪快速运动"
 
 
+def test_answer_citation_guide_uses_only_authoritative_evidence() -> None:
+    evidence = (
+        "Photometric stereo uses simultaneous measurements from four "
+        "spatially-separated single-pixel detectors."
+    )
+    first_summary, _first_why = references_router._answer_citation_card_copy(
+        [
+            {
+                "answer_claim": "阅读建议：先看这篇，因为四个探测器可以提高鲁棒性。",
+                "card_takeaway": "如果你想深入了解，就先打开这篇论文。",
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+            }
+        ],
+        prefer_zh=True,
+        prompt="为什么使用四个探测器？",
+    )
+    second_summary, _second_why = references_router._answer_citation_card_copy(
+        [
+            {
+                "answer_claim": "这是一段完全不同、且没有原文支持的回答。",
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+            }
+        ],
+        prefer_zh=True,
+        prompt="为什么使用四个探测器？",
+    )
+
+    assert first_summary == second_summary
+    assert all(term in first_summary for term in ("四个", "空间分离", "光度立体"))
+    assert "阅读建议" not in first_summary
+    assert "深入了解" not in first_summary
+    assert "鲁棒性" not in first_summary
+
+
+def test_answer_citation_prefers_specific_grounded_relation_over_generic_support() -> None:
+    _summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "heading_path": "Results / Interferometric detection",
+                "evidence_quote": (
+                    "Interferometric detection with image scanning microscopy achieved "
+                    "120 nm lateral resolution in live-cell imaging."
+                ),
+                "support_relation": "原文给出了回答所依据的图像质量或分辨率证据。",
+            }
+        ],
+        prefer_zh=True,
+        prompt="干涉检测达到了多高的横向分辨率？",
+    )
+
+    assert all(term in why for term in ("干涉检测", "120 nm", "横向分辨率"))
+    assert "回答所依据" not in why
+
+
+def test_answer_citation_overlay_completion_does_not_require_optional_why() -> None:
+    assert references_router._answer_citation_overlay_pack_is_complete(
+        {
+            "answer_aligned_citation_cards": True,
+            "hits": [
+                {
+                    "ui_meta": {
+                        "source_path": "paper.en.md",
+                        "summary_line": "The method reconstructs a dynamic 3D scene.",
+                        "why_line": "",
+                        "primary_evidence": {
+                            "source_path": "paper.en.md",
+                            "snippet": "The method reconstructs a dynamic 3D scene from one snapshot.",
+                        },
+                    }
+                }
+            ],
+        }
+    ) is True
+
+
+def test_detector_review_reading_pair_has_distinct_question_specific_relevance() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "Emerging single-photon detection technique.pdf",
+                "heading_path": "Abstract",
+                "evidence_quote": (
+                    "This technology mainly relies on the mainstream SPDs, such as "
+                    "photomultiplier tubes (PMTs), avalanche photodiodes (SAPD), "
+                    "superconducting nanowire single-photon detectors (SNSPDs), and "
+                    "superconducting transition-edge sensors (TES). However, high "
+                    "manufacturing cost and low-temperature requirements limit adoption."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt="探测器综述和 physics-informed deep learning 这篇应该怎么搭配读？",
+    )
+
+    assert all(term in summary for term in ("PMT", "SPAD", "SNSPD", "TES", "低温"))
+    assert all(term in why for term in ("工作条件", "SPAD", "physics-informed", "噪声项"))
+    assert summary.rstrip("。") != why.rstrip("。")
+    assert "当前问题" not in why
+    assert not references_router.looks_generic_ref_why_line(why)
+
+
+def test_fdm_hadamard_bpsk_card_copy_is_grounded_without_p_lia_inference() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "Frequency-division-multiplexed SPI.pdf",
+                "heading_path": "B. Encoding",
+                "evidence_quote": (
+                    "The mask values are encoded in the phase of intensity modulation, "
+                    "and phase-sensitive detection is provided by a lock-in amplifier "
+                    "(LIA). Here we achieve true [1,-1] pixel values, which is key to "
+                    "our use of the Hadamard matrix. These values map to 0 or pi phase "
+                    "in binary phase shift keying (BPSK)."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt="FDM 在哪个环节完成并行编码？",
+    )
+
+    assert all(term in summary for term in ("Hadamard", "[1,-1]", "0/π", "BPSK", "LIA"))
+    assert all(term in why for term in ("Hadamard", "[1,-1]", "编码", "读出"))
+    assert "p 路" not in summary + why
+    assert "p 个" not in summary + why
+
+
+def test_authoritative_evidence_keeps_scientific_numeric_brackets() -> None:
+    evidence = references_router._answer_citation_authoritative_evidence(
+        {
+            "evidence_quote": (
+                "The signal is normalized to [-1,1], the mask range is [0,1], "
+                "and the reference vector [1,2] is retained [37, 41]."
+            )
+        }
+    )
+
+    assert "[-1,1]" in evidence
+    assert "[0,1]" in evidence
+    assert "vector [1,2]" in evidence
+    assert "[37, 41]" not in evidence
+
+
+def test_authoritative_evidence_still_removes_plain_numeric_citations() -> None:
+    evidence = references_router._answer_citation_authoritative_evidence(
+        {"evidence_quote": "The method improves reconstruction quality [1, 2] and speed [3]."}
+    )
+
+    assert evidence == "The method improves reconstruction quality and speed"
+
+
 def test_reference_copy_links_exact_claim_and_pdf_page_without_generic_template() -> None:
     _summary, why = references_router._answer_citation_card_copy(
         [
@@ -972,26 +1167,35 @@ def test_answer_citation_overlay_exposes_contiguous_card_registry_after_raw_hit_
 
 
 def test_completed_answer_citation_overlays_do_not_need_background_warm() -> None:
+    source_path = r"F:\db\SPD\SPD.en.md"
+    evidence = (
+        "This technology mainly relies on the mainstream SPDs, such as photomultiplier "
+        "tubes (PMTs), avalanche photodiodes (SAPD), superconducting nanowire "
+        "single-photon detectors (SNSPDs), and superconducting transition-edge sensors "
+        "(TES). However, high manufacturing cost and low-temperature requirements limit "
+        "adoption."
+    )
+
     class Store:
         def get_messages(self, conv_id: str):
             assert conv_id == "conv"
             return [
-                {"id": 10, "role": "user", "content": "How did the method evolve?"},
+                {"id": 10, "role": "user", "content": "探测器综述应该怎么读？"},
                 {
                     "id": 11,
                     "role": "assistant",
-                    "content": "The first paper established the coded acquisition model [1].",
+                    "content": "先了解器件路线 [1]。",
                     "meta": {
                         "paper_guide_contracts": {
                             "render_packet": {
                                 "cite_details": [
                                     {
                                         "citation_route": "system_a",
-                                        "source_path": r"F:\db\CASSI\CASSI.en.md",
-                                        "source_name": "CASSI.pdf",
-                                        "heading_path": "Method",
-                                        "answer_claim": "The first paper established the coded acquisition model.",
-                                        "evidence_quote": "The camera uses coded aperture snapshot spectral imaging.",
+                                        "source_path": source_path,
+                                        "source_name": "Emerging single-photon detection technique.pdf",
+                                        "heading_path": "Abstract",
+                                        "answer_claim": "先了解器件路线。",
+                                        "evidence_quote": evidence,
                                     }
                                 ]
                             }
@@ -1002,8 +1206,8 @@ def test_completed_answer_citation_overlays_do_not_need_background_warm() -> Non
 
     refs = {
         10: {
-            "prompt": "How did the method evolve?",
-            "hits": [{"meta": {"source_path": "kb-source/0/CASSI/CASSI.en.md"}}],
+            "prompt": "探测器综述应该怎么读？",
+            "hits": [{"meta": {"source_path": source_path}}],
         },
         20: {
             "prompt": "What remains uncertain?",
@@ -1018,6 +1222,89 @@ def test_completed_answer_citation_overlays_do_not_need_background_warm() -> Non
     )
 
     assert list(remaining) == [20]
+
+
+def test_partial_answer_citation_overlay_still_needs_background_warm(monkeypatch) -> None:
+    source_path = r"F:\db\PIDL\PIDL.en.md"
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {"id": 30, "role": "user", "content": "这两篇应该怎么搭配读？"},
+                {
+                    "id": 31,
+                    "role": "assistant",
+                    "content": "先读器件，再读学习方法 [1]。",
+                    "meta": {
+                        "answer_quality": {
+                            "citation_plan": {
+                                "slots": [
+                                    {
+                                        "preferred_system": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": "Unmatched evidence paper.pdf",
+                                        "heading_path": "Introduction",
+                                        "evidence_quote": (
+                                            "An intentionally unmatched English evidence sentence "
+                                            "that has no deterministic Chinese guide rule."
+                                        ),
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda _prompt: "zh")
+    refs = {
+        30: {
+            "prompt": "这两篇应该怎么搭配读？",
+            "hits": [{"meta": {"source_path": source_path}}],
+        }
+    }
+
+    remaining = references_router._refs_without_completed_answer_citation_overlays(
+        store=Store(),
+        conv_id="conv",
+        refs=refs,
+    )
+
+    assert list(remaining) == [30]
+
+
+def test_pidl_synthetic_pair_evidence_has_source_bound_chinese_card_copy() -> None:
+    evidence = (
+        "With the calibrated physical noise model under different illumination and acquisition "
+        "settings, we further employed off-the-shelf public high-resolution images (collected "
+        "from the PASCAL VOC2007 and VOC2012 datasets) to digitally synthesize a large-scale "
+        "realistic single-photon image dataset containing 2.6 million image pairs."
+    )
+    detail = {
+        "source_name": (
+            "NatCommun-2023-High-resolution single-photon imaging with physics-informed "
+            "deep learning.pdf"
+        ),
+        "heading_path": "Introduction",
+        "evidence_quote": evidence,
+    }
+
+    summary, why = references_router._answer_citation_card_copy(
+        [detail],
+        prefer_zh=True,
+        prompt="探测器综述和 physics-informed deep learning 这篇应该怎么搭配读？",
+    )
+
+    assert all(term in summary for term in ("物理噪声模型", "PASCAL", "260 万对"))
+    assert all(term in why for term in ("探测器综述", "物理噪声模型", "学习流程"))
+
+    unrelated_summary, _ = references_router._answer_citation_card_copy(
+        [{**detail, "source_name": "Unrelated dataset paper.pdf"}],
+        prefer_zh=True,
+        prompt="这篇应该怎么读？",
+    )
+    assert unrelated_summary == ""
 
 
 def test_reading_route_cards_use_user_language_and_distinct_source_roles() -> None:
@@ -3600,6 +3887,116 @@ def test_warm_conversation_refs_payload_async_skips_llm_for_answer_citation_card
     kwargs = dict(calls.get("kwargs") or {})
     assert kwargs.get("allow_expensive_llm_for_ready") is False
     assert kwargs.get("allow_exact_locate") is False
+
+
+def test_warm_conversation_refs_payload_async_overlays_answer_citations_before_persist(monkeypatch):
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    source_path = r"F:\db\PIDL\PIDL.en.md"
+    evidence = (
+        "With the calibrated physical noise model under different illumination and acquisition "
+        "settings, we further employed off-the-shelf public high-resolution images from the "
+        "PASCAL VOC2007 and VOC2012 datasets to digitally synthesize a realistic single-photon "
+        "dataset containing 2.6 million image pairs."
+    )
+    calls: dict[str, object] = {}
+
+    class _ImmediateThread:
+        def __init__(self, *, target=None, daemon=None, name=None):
+            del daemon, name
+            self._target = target
+
+        def start(self):
+            if self._target is not None:
+                self._target()
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-warm-overlay"
+            return [
+                {"id": 13, "role": "user", "content": "这两篇应该怎么搭配读？"},
+                {
+                    "id": 14,
+                    "role": "assistant",
+                    "content": "再看物理噪声如何进入训练流程 [1]。",
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "citation_route": "system_a",
+                                        "source_path": source_path,
+                                        "source_name": (
+                                            "NatCommun-2023-High-resolution single-photon imaging "
+                                            "with physics-informed deep learning.pdf"
+                                        ),
+                                        "heading_path": "Introduction",
+                                        "answer_claim": "再看物理噪声如何进入训练流程。",
+                                        "evidence_quote": evidence,
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    monkeypatch.setattr(references_router.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: Store())
+    monkeypatch.setattr(references_router, "_pdf_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_md_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_lib_store", lambda: None)
+    monkeypatch.setattr(
+        references_router,
+        "enrich_refs_payload",
+        lambda *_args, **_kwargs: {
+            13: {
+                "prompt": "这两篇应该怎么搭配读？",
+                "hits": [
+                    {
+                        "text": evidence,
+                        "meta": {
+                            "source_path": source_path,
+                            "ref_answer_citation_num": 1,
+                        },
+                    }
+                ],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_persist_rendered_refs_payloads",
+        lambda **kwargs: calls.setdefault("persisted", kwargs.get("payload")),
+    )
+    monkeypatch.setattr(references_router, "_store_cached_conversation_refs_payload", lambda **_kwargs: None)
+
+    references_router._warm_conversation_refs_payload_async(
+        conv_id="conv-warm-overlay",
+        signature="sig-warm-overlay",
+        refs={
+            13: {
+                "prompt": "这两篇应该怎么搭配读？",
+                "hits": [
+                    {
+                        "text": evidence,
+                        "meta": {
+                            "source_path": source_path,
+                            "ref_answer_citation_num": 1,
+                        },
+                    }
+                ],
+            }
+        },
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+    )
+
+    rendered = dict((calls.get("persisted") or {}).get(13) or {})
+    assert rendered["answer_aligned_citation_cards"] is True
+    assert references_router._answer_citation_overlay_pack_is_complete(rendered) is True
+    assert "260 万对" in rendered["hits"][0]["ui_meta"]["summary_line"]
 
 
 def test_warm_conversation_refs_payload_async_polishes_authoritative_doc_list_and_merges_cache(monkeypatch):
