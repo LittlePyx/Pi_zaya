@@ -104,6 +104,53 @@ def test_library_quality_fallback_detects_new_table_rules_in_legacy_report(tmp_p
     assert plan["action"] == "autofix"
 
 
+def test_library_quality_fallback_detects_legacy_numeric_superscript_citations(tmp_path: Path):
+    from api.routers import library as library_router
+    from kb.converter.quality_repair import conversion_quality_result_path, write_conversion_quality_result
+
+    md_path = tmp_path / "legacy-citations.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Legacy Citation Paper",
+                "## Abstract",
+                r"Prior work\textsuperscript{[43]} established the method.",
+                "## Results",
+                "The result was independently confirmed<sup>[180]</sup>.",
+                "## References",
+                "[43] Ada Lovelace. Example reference. Journal, 2024.",
+                "[180] Grace Hopper. Another reference. Journal, 2025.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    legacy = write_conversion_quality_result(md_path)
+    legacy["quality_rules_version"] = 9
+    legacy["repair_plan"] = {
+        "action": "none",
+        "issue_codes": [],
+        "autofix_issue_codes": [],
+        "reconvert_issue_codes": [],
+        "review_issue_codes": [],
+    }
+    legacy["recommended_action"] = "none"
+    legacy["auto_repair"]["remaining_issue_codes"] = []
+    conversion_quality_result_path(md_path).write_text(json.dumps(legacy), encoding="utf-8")
+    library_router._CONVERSION_QUALITY_CACHE.clear()
+
+    summary = library_router._conversion_quality_summary(md_path)
+    plan = library_router._quality_repair_plan_from_summary(summary)
+
+    assert summary["conversion_report"]["stale"] is True
+    assert summary["status"] == "warning"
+    assert summary["metrics"]["legacy_numeric_superscript_citations"] == 2
+    assert "legacy_numeric_superscript_citation" in {
+        str(issue.get("code") or "") for issue in summary["issues"]
+    }
+    assert plan["action"] == "autofix"
+
+
 def test_quality_repair_route_honors_fresh_persisted_reconvert_plan(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 

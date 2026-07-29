@@ -431,6 +431,67 @@ def test_build_paper_guide_direct_answer_override_builds_component_role_answer_f
     assert "apr uses phase-correlation registration to estimate shift vectors" in low
 
 
+def test_build_paper_guide_direct_answer_override_defers_multi_author_biography_synthesis(monkeypatch):
+    def _unexpected_direct_answer(**_kwargs):
+        raise AssertionError("multi-author biography synthesis must bypass direct-answer skills")
+
+    monkeypatch.setattr(
+        direct_answer_runtime,
+        "_build_exact_support_direct_answer",
+        _unexpected_direct_answer,
+    )
+    monkeypatch.setattr(
+        direct_answer_runtime,
+        "_dispatch_paper_guide_broad_skill",
+        _unexpected_direct_answer,
+    )
+
+    out = _build_paper_guide_direct_answer_override(
+        paper_guide_mode=True,
+        prompt_family="strength_limits",
+        prompt_for_user=(
+            "请根据本文第21页 Author Biographies，分别概括 Kai Song、Yaoxing Bian 和 Liantuan Xiao "
+            "的教育经历、当前职位和研究方向，并逐人给出可定位的原文证据。"
+        ),
+        paper_guide_focus_source_path="focus.md",
+        paper_guide_direct_source_path="direct.md",
+        paper_guide_bound_source_path="bound.md",
+        answer_hits=[{"meta": {"source_path": "bound.md", "heading_path": "Author Biographies"}}],
+        special_focus_block="",
+        db_dir="db",
+        llm=None,
+        build_direct_abstract_answer=lambda **_kwargs: "",
+        build_direct_citation_lookup_answer=lambda **_kwargs: "",
+    )
+
+    assert out == ""
+
+
+def test_build_paper_guide_direct_answer_override_does_not_defer_single_biography_quote(monkeypatch):
+    monkeypatch.setattr(
+        direct_answer_runtime,
+        "_build_exact_support_direct_answer",
+        lambda **_kwargs: "Kai Song is currently a professor [1].",
+    )
+
+    out = _build_paper_guide_direct_answer_override(
+        paper_guide_mode=True,
+        prompt_family="overview",
+        prompt_for_user="请定位本文第21页 Author Biographies 中 Kai Song 当前职位的原句。",
+        paper_guide_focus_source_path="focus.md",
+        paper_guide_direct_source_path="direct.md",
+        paper_guide_bound_source_path="bound.md",
+        answer_hits=[{"meta": {"source_path": "bound.md", "heading_path": "Author Biographies"}}],
+        special_focus_block="",
+        db_dir="db",
+        llm=None,
+        build_direct_abstract_answer=lambda **_kwargs: "",
+        build_direct_citation_lookup_answer=lambda **_kwargs: "",
+    )
+
+    assert out == "Kai Song is currently a professor [1]."
+
+
 def test_build_paper_guide_direct_answer_override_uses_targeted_strength_limits_hit(monkeypatch):
     monkeypatch.setattr(
         direct_answer_runtime,

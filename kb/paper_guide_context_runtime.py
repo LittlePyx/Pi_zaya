@@ -353,6 +353,7 @@ def _prepare_paper_guide_prompt_context(
     paper_guide_candidate_refs_by_source: dict[str, list[int]] = {}
     paper_guide_support_slots: list[dict] = []
     citation_plan: dict[str, object] = {}
+    preliminary_citation_plan: dict[str, object] = {}
     citation_plan_block = ""
     paper_guide_target_scope = _build_paper_guide_target_scope(
         prompt or retrieval_prompt or used_query,
@@ -436,24 +437,38 @@ def _prepare_paper_guide_prompt_context(
             prompt=prompt_text,
             db_dir=db_dir,
         )
-        paper_guide_reference_opportunities = detect_paper_guide_reference_opportunities(
+        # Decide whether System B is even eligible before scanning the paper's
+        # bibliography and enriching upstream records.  That scan is useful
+        # for lineage/origin questions, but it added several seconds to normal
+        # summaries, author profiles, methods, and figure questions even though
+        # their final citation plan always disabled System B.
+        preliminary_citation_plan = build_citation_plan(
             prompt=prompt_text,
-            answer="",
             prompt_family=prompt_family,
-            source_path=paper_guide_focus_source_path or paper_guide_direct_source_path or paper_guide_bound_source_path,
+            answer_hits=answer_hits,
             support_slots=paper_guide_support_slots,
-            cards=paper_guide_evidence_cards,
-            max_items=3,
+            reference_opportunities=[],
+            retrieval_queries=[retrieval_prompt, used_query, *list(query_variants or [])],
         )
-        if paper_guide_reference_opportunities:
-            paper_guide_reference_opportunities_block = build_reference_opportunities_prompt_block(
-                paper_guide_reference_opportunities,
+        if str(preliminary_citation_plan.get("intent") or "").strip().lower() == "origin_lookup":
+            paper_guide_reference_opportunities = detect_paper_guide_reference_opportunities(
+                prompt=prompt_text,
+                answer="",
+                prompt_family=prompt_family,
+                source_path=paper_guide_focus_source_path or paper_guide_direct_source_path or paper_guide_bound_source_path,
+                support_slots=paper_guide_support_slots,
+                cards=paper_guide_evidence_cards,
                 max_items=3,
             )
-            paper_guide_candidate_refs_by_source = merge_reference_opportunity_candidate_refs(
-                paper_guide_candidate_refs_by_source,
-                paper_guide_reference_opportunities,
-            )
+            if paper_guide_reference_opportunities:
+                paper_guide_reference_opportunities_block = build_reference_opportunities_prompt_block(
+                    paper_guide_reference_opportunities,
+                    max_items=3,
+                )
+                paper_guide_candidate_refs_by_source = merge_reference_opportunity_candidate_refs(
+                    paper_guide_candidate_refs_by_source,
+                    paper_guide_reference_opportunities,
+                )
     elif answer_hits:
         # Ordinary multi-paper Q&A should surface System B after the answer is
         # grounded in concrete System A citations.  Pre-generation hints do not
@@ -469,13 +484,17 @@ def _prepare_paper_guide_prompt_context(
         paper_guide_citation_grounding_block = _build_paper_guide_citation_grounding_block(answer_hits)
 
     prompt_text = prompt or retrieval_prompt or used_query
-    citation_plan = build_citation_plan(
-        prompt=prompt_text,
-        prompt_family=prompt_family,
-        answer_hits=answer_hits,
-        support_slots=paper_guide_support_slots,
-        reference_opportunities=paper_guide_reference_opportunities,
-        retrieval_queries=[retrieval_prompt, used_query, *list(query_variants or [])],
+    citation_plan = (
+        dict(preliminary_citation_plan)
+        if preliminary_citation_plan and not paper_guide_reference_opportunities
+        else build_citation_plan(
+            prompt=prompt_text,
+            prompt_family=prompt_family,
+            answer_hits=answer_hits,
+            support_slots=paper_guide_support_slots,
+            reference_opportunities=paper_guide_reference_opportunities,
+            retrieval_queries=[retrieval_prompt, used_query, *list(query_variants or [])],
+        )
     )
     if (
         not paper_guide_mode

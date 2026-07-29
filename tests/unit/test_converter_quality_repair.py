@@ -1147,6 +1147,90 @@ def test_conversion_quality_detects_stray_inline_math(tmp_path: Path):
     assert report["repair_plan"]["action"] == "autofix"
 
 
+def test_conversion_quality_detects_repairable_adjacent_inline_math_superscript(tmp_path: Path):
+    md_path = tmp_path / "math-hazard.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Example paper",
+            "## Abstract",
+            r"The sensor area is $30\,\mu\mathrm{m}$$^2$.",
+            "## Results",
+            "The result remains searchable.",
+            "## References",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    report = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert "adjacent_inline_math_superscript" in report["repair_plan"]["issue_codes"]
+    assert report["repair_plan"]["action"] == "autofix"
+
+
+def test_conversion_quality_detects_legacy_numeric_superscript_citations(tmp_path: Path):
+    md_path = tmp_path / "legacy-citations.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Example paper",
+            "## Abstract",
+            r"Method\textsuperscript{[43]} agrees with result<sup>[180]</sup>.",
+            "## References",
+            "[43] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    report = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert "legacy_numeric_superscript_citation" in report["repair_plan"]["issue_codes"]
+    assert report["repair_plan"]["action"] == "autofix"
+
+
+def test_conversion_quality_does_not_flag_numeric_superscript_powers(tmp_path: Path):
+    md_path = tmp_path / "numeric-powers.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Example paper",
+            "## Abstract",
+            r"The area is m<sup>2</sup>, volume is cm<sup>3</sup>, scale is 10\textsuperscript{6}, and quantities are kg<sup>2</sup>, px², NA\textsuperscript{2}, σ<sup>2</sup>, β\textsuperscript{2}, and Δ².",
+            "## References",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    report = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert report["metrics"]["legacy_numeric_superscript_citation_count"] == 0
+    assert "legacy_numeric_superscript_citation" not in report["repair_plan"]["issue_codes"]
+
+
+def test_conversion_quality_flags_unbracketed_acronym_superscript_citations(tmp_path: Path):
+    md_path = tmp_path / "acronym-citations.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Example paper",
+                "## Abstract",
+                r"Prior CNN<sup>43</sup>, SPI<sup>180</sup>, DL\textsuperscript{12}, work<sup>2</sup>, and method\textsuperscript{3} studies agree.",
+                "## References",
+                "[12] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert report["metrics"]["legacy_numeric_superscript_citation_count"] == 5
+    assert "legacy_numeric_superscript_citation" in report["repair_plan"]["issue_codes"]
+
+
 def test_conversion_quality_detects_bare_numeric_latex_micro_unit(tmp_path: Path):
     md_path = tmp_path / "paper.en.md"
     original = "\n".join(

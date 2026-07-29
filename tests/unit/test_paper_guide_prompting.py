@@ -163,6 +163,70 @@ def test_paper_guide_prompt_family_prefers_strength_limits_for_benefits_and_pitf
     assert _paper_guide_prompt_family(prompt) == "strength_limits"
 
 
+def test_paper_guide_prompt_family_treats_profile_evidence_as_author_overview():
+    prompt = (
+        "\u8bf7\u6839\u636e\u672c\u6587\u7b2c21\u9875 Author Biographies\uff0c\u5206\u522b\u6982\u62ec Kai Song\u3001"
+        "Yaoxing Bian \u548c Liantuan Xiao \u7684\u6559\u80b2\u7ecf\u5386\u3001\u5f53\u524d\u804c\u4f4d\u548c\u7814\u7a76\u65b9\u5411\uff0c"
+        "\u5e76\u9010\u4eba\u7ed9\u51fa\u53ef\u5b9a\u4f4d\u7684\u539f\u6587\u8bc1\u636e\u3002"
+    )
+
+    assert _paper_guide_prompt_family(prompt) == "overview"
+
+
+def test_paper_guide_prompt_family_keeps_explicit_author_profile_critique():
+    prompts = (
+        (
+            "\u8bf7\u6839\u636e Author Biographies \u6982\u62ec\u4e09\u4f4d\u4f5c\u8005\u7684\u6559\u80b2\u7ecf\u5386\uff0c"
+            "\u5e76\u5206\u6790\u8fd9\u4e9b\u5c65\u5386\u4fe1\u606f\u7684\u5c40\u9650\uff0c\u4ee5\u53ca\u8bc1\u636e\u662f\u5426\u5145\u5206\u3002"
+        ),
+        (
+            "Using Author Biography, summarize Kai Song's education and assess whether the available "
+            "profile evidence is sufficient despite its limitations."
+        ),
+    )
+
+    assert all(_paper_guide_prompt_family(prompt) == "strength_limits" for prompt in prompts)
+
+
+def test_paper_guide_profile_source_locator_does_not_become_upstream_lookup():
+    prompt = (
+        "请依据论文的 Author Biographies，分别说明 Kai Song、Yaoxing Bian 和 "
+        "Liantuan Xiao 的教育经历、当前职位与研究方向；每个人都要有可点击的原文出处。"
+    )
+
+    assert _paper_guide_prompt_family(prompt) == "overview"
+
+
+def test_paper_guide_prompt_family_does_not_treat_requested_evidence_as_critique():
+    assert (
+        _paper_guide_prompt_family(
+            "\u8bf7\u8bf4\u660e\u771f\u5b9e\u9000\u5316\u9c81\u68d2\u6027\u7684\u76f4\u63a5\u8bc1\u636e\uff0c\u5e76\u7ed9\u51fa\u539f\u6587\u5b9a\u4f4d\u3002"
+        )
+        != "strength_limits"
+    )
+
+
+def test_paper_guide_prompt_family_keeps_evidence_sufficiency_as_critique():
+    assert _paper_guide_prompt_family("\u8fd9\u4e9b\u8bc1\u636e\u662f\u5426\u5145\u5206\uff0c\u80fd\u5426\u652f\u6491\u4f5c\u8005\u7684\u7ed3\u8bba\uff1f") == "strength_limits"
+
+
+def test_author_biography_retrieval_augmentation_stays_on_profile_fields():
+    prompt = (
+        "\u8bf7\u6839\u636e Author Biographies\uff0c\u5206\u522b\u6982\u62ec Kai Song\u3001Yaoxing Bian \u548c "
+        "Liantuan Xiao \u7684\u6559\u80b2\u7ecf\u5386\u3001\u5f53\u524d\u804c\u4f4d\u548c\u7814\u7a76\u65b9\u5411\u3002"
+    )
+
+    out = _augment_paper_guide_retrieval_prompt(prompt, family="overview")
+    low = out.lower()
+    assert "author profiles" in low
+    assert "current position" in low
+    assert "research interests" in low
+    assert "abstract" not in low
+    assert "results" not in low
+    assert "discussion" not in low
+    assert "generalization" not in low
+
+
 def test_paper_guide_prompt_family_keeps_explicit_comparison_tradeoff_as_compare():
     assert (
         _paper_guide_prompt_family(

@@ -158,6 +158,39 @@ def _paper_guide_prompt_prefers_zh(prompt: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", str(prompt or "")))
 
 
+def _paper_guide_prompt_requests_author_profile_synthesis(prompt: str) -> bool:
+    """Keep multi-part author profiles out of the single-passage fast path.
+
+    Section-target direct answers intentionally select one best passage.  That is
+    useful for an exact quote, but it cannot satisfy a request that combines
+    several authors or several biography fields.  Those requests need the normal
+    RAG/LLM synthesis path, which can combine all selected biography hits.
+    """
+
+    src = str(prompt or "").strip()
+    if not src or "author_biographies" not in _paper_guide_requested_section_targets(src):
+        return False
+
+    profile_fields = (
+        bool(re.search(r"学历|教育经历|学位|\b(?:education|educational\s+background|degrees?)\b", src, flags=re.IGNORECASE)),
+        bool(re.search(r"当前职位|现任|职位|任职|\b(?:current\s+(?:position|role)|position|affiliation)\b", src, flags=re.IGNORECASE)),
+        bool(re.search(r"研究方向|研究兴趣|\bresearch\s+(?:interests?|directions?|areas?|focus)\b", src, flags=re.IGNORECASE)),
+    )
+    field_count = sum(profile_fields)
+    multi_author_cue = bool(
+        re.search(r"分别|逐人|每位|各自|\b(?:for\s+each|each|respectively)\b", src, flags=re.IGNORECASE)
+    )
+    synthesis_cue = bool(
+        re.search(r"概括|总结|归纳|对比|比较|\b(?:summari[sz]e|profile|compare|synthesi[sz]e)\b", src, flags=re.IGNORECASE)
+    )
+
+    # Multiple profile dimensions already require synthesis even for one author.
+    # A multi-author request also needs synthesis as soon as it asks for a profile
+    # dimension or explicitly asks for a summary.  A single-field exact quote or
+    # locator therefore remains eligible for the direct-answer fast path.
+    return field_count >= 2 or (multi_author_cue and (field_count >= 1 or synthesis_cue))
+
+
 _SPAD_NOISE_MODEL_PROMPT_RE = re.compile(
     r"(?=.*\bspad\b)(?=.*(?:noise|噪声))(?:(?:poisson|泊松).*(?:不够|不足|insufficient|not enough)|"
     r"(?:哪些|什么|which|what).*(?:model|模型|纳入|include))",
@@ -481,6 +514,9 @@ def _build_paper_guide_direct_answer_override(
             db_dir=db_dir,
             has_hits=bool(answer_hits),
         )
+
+    if _paper_guide_prompt_requests_author_profile_synthesis(prompt_text):
+        return ""
 
     source_path = paper_guide_bound_source_path or paper_guide_direct_source_path or paper_guide_focus_source_path
     exact_direct_answer = _build_exact_support_direct_answer(

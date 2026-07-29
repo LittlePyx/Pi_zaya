@@ -15,7 +15,10 @@ from .post_heading_rules import (
 from .post_math_rules import (
     _cleanup_stray_latex_in_text,
     _normalize_math_for_typora,
+    _numeric_superscript_is_exponent_context,
+    _numeric_superscript_to_unicode,
     fix_math_markdown,
+    normalize_adjacent_inline_math_superscripts,
     restore_bare_tagged_display_math,
 )
 from .post_references import (
@@ -743,10 +746,15 @@ def _normalize_body_citation_markers(md: str) -> str:
     cite_pat = re.compile(r"\[\s*\d{1,4}(?:\s*[,;\u2013\-]\s*\d{1,4})*\s*\](?!\()")
     sup_pat = re.compile(r"\$\s*\^\{\s*(\[\s*\d{1,4}(?:\s*[,;\u2013\-]\s*\d{1,4})*\s*\])\s*\}\s*\$")
     bare_sup_pat = re.compile(r"\^\{\s*(\[\s*\d{1,4}(?:\s*[,;\u2013\-]\s*\d{1,4})*\s*\])\s*\}")
-    html_sup_pat = re.compile(r"<sup>\s*(\d{1,4}(?:\s*[,;\u2013\u2014\-]\s*\d{1,4})*)\s*</sup>", re.IGNORECASE)
+    html_sup_pat = re.compile(
+        r"<sup>\s*(?:\[\s*)?(\d{1,4}(?:\s*[,;\u2013\u2014\-]\s*\d{1,4})*)(?:\s*\])?\s*</sup>",
+        re.IGNORECASE,
+    )
     math_plain_sup_pat = re.compile(r"\$\s*\^\{\s*(\d{1,4}(?:\s*[,;\u2013\u2014\-]\s*\d{1,4})*)\s*\}\s*\$")
     bare_plain_sup_pat = re.compile(r"(?<!\w)\^\{\s*(\d{1,4}(?:\s*[,;\u2013\u2014\-]\s*\d{1,4})*)\s*\}")
-    latex_textsup_pat = re.compile(r"\\textsuperscript\{\s*(\d{1,4}(?:\s*[,;\u2013\u2014\-]\s*\d{1,4})*)\s*\}")
+    latex_textsup_pat = re.compile(
+        r"\\textsuperscript\{\s*(?:\[\s*)?(\d{1,4}(?:\s*[,;\u2013\u2014\-]\s*\d{1,4})*)(?:\s*\])?\s*\}"
+    )
 
     sup_digit_map = str.maketrans({
         "⁰": "0",
@@ -816,17 +824,34 @@ def _normalize_body_citation_markers(md: str) -> str:
         def _sup_repl(m: re.Match) -> str:
             return _stash(_norm_cite(m.group(1) or ""))
 
+        def _wrapped_numeric_sup_repl(m: re.Match) -> str:
+            body = m.group(1) or ""
+            if "[" not in m.group(0) and _numeric_superscript_is_exponent_context(
+                t,
+                m.start(),
+                body,
+            ):
+                return _stash(_numeric_superscript_to_unicode(body))
+            return _stash(_norm_cite(body))
+
+        def _unicode_sup_repl(m: re.Match) -> str:
+            body = (m.group(1) or "").translate(sup_digit_map)
+            if _numeric_superscript_is_exponent_context(t, m.start(), body):
+                return m.group(0)
+            return _stash(_norm_cite(body))
+
         t = ln
+        t = re.sub(r"(`+)[^`\n]*?\1", lambda m: _stash(m.group(0)), t)
         # Normalize escaped citation brackets from OCR/PDF text layer: \[12-14\] -> [12-14]
         t = re.sub(r"\\\[\s*(\d{1,4}(?:\s*[,;\u2013\-]\s*\d{1,4})*)\s*\\\]", r"[\1]", t)
         t = sup_pat.sub(_sup_repl, t)
         t = bare_sup_pat.sub(_sup_repl, t)
-        t = html_sup_pat.sub(lambda m: _stash(_norm_cite(m.group(1) or "")), t)
+        t = html_sup_pat.sub(_wrapped_numeric_sup_repl, t)
         t = math_plain_sup_pat.sub(lambda m: _stash(_norm_cite(m.group(1) or "")), t)
         t = bare_plain_sup_pat.sub(lambda m: _stash(_norm_cite(m.group(1) or "")), t)
-        t = latex_textsup_pat.sub(lambda m: _stash(_norm_cite(m.group(1) or "")), t)
+        t = latex_textsup_pat.sub(_wrapped_numeric_sup_repl, t)
         t = cite_pat.sub(lambda m: _norm_cite(m.group(0) or ""), t)
-        t = unicode_sup_pat.sub(lambda m: _stash(_norm_cite((m.group(1) or "").translate(sup_digit_map))), t)
+        t = unicode_sup_pat.sub(_unicode_sup_repl, t)
         # Some VL outputs drop the bracket/superscript wrapper entirely and leave
         # citation numbers inline, e.g. "VOC2007 31 and VOC2012 32 datasets" or
         # "transformer framework 33 , 34". Keep this intentionally narrow so we
@@ -1308,7 +1333,17 @@ def _normalize_common_rendering_artifacts(md: str) -> str:
             in_display_math = not in_display_math
             out.append(ln)
             continue
-        t = unicodedata.normalize("NFKC", ln)
+        protected_superscripts: dict[str, str] = {}
+
+        def _protect_superscript(match: re.Match) -> str:
+            key = f"__KB_SUPERSCRIPT_{len(protected_superscripts)}__"
+            protected_superscripts[key] = match.group(0)
+            return key
+
+        t = re.sub(r"[⁰¹²³⁴⁵⁶⁷⁸⁹]+", _protect_superscript, ln)
+        t = unicodedata.normalize("NFKC", t)
+        for key, value in protected_superscripts.items():
+            t = t.replace(key, value)
         t = re.sub(
             rf"\\mu([{unit_letters}])\b",
             lambda m: f"\\mu\\mathrm{{{m.group(1)}}}",
@@ -2858,6 +2893,7 @@ def postprocess_markdown(md: str) -> str:
     md = _split_inline_heading_markers(md)
     md = _split_inline_structural_heading_labels(md)
     md = restore_bare_tagged_display_math(md)
+    md = normalize_adjacent_inline_math_superscripts(md)
     md = fix_math_markdown(md)
     md = _normalize_math_for_typora(md)
     md = _cleanup_stray_latex_in_text(md)

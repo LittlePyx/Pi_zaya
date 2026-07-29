@@ -74,6 +74,8 @@ def test_summarize_conversion_quality_counts_research_paper_surfaces(tmp_path):
     assert metrics.prose_dominant_display_math_block_count == 0
     assert metrics.display_math_markdown_link_count == 0
     assert metrics.inline_math_count == 1
+    assert metrics.adjacent_inline_math_superscript_hazard_count == 0
+    assert metrics.legacy_numeric_superscript_citation_count == 0
     assert metrics.conversion_retry_marker_count == 0
     assert metrics.conversion_retry_kind_counts == {}
     assert metrics.reference_line_count == 2
@@ -122,6 +124,47 @@ def test_evaluate_conversion_quality_can_gate_conversion_retries(tmp_path):
 
     assert result["ok"] is False
     assert result["failures"] == ["conversion_retry_marker_count:1>0"]
+
+
+def test_evaluate_conversion_quality_gates_adjacent_inline_math_superscript(tmp_path):
+    md_path = tmp_path / "math-hazard.md"
+    md_path.write_text(
+        r"# Paper" + "\n\n" + r"The pixel area is $30\,\mu\mathrm{m}$$^2$." + "\n",
+        encoding="utf-8",
+    )
+
+    metrics = summarize_conversion_quality(md_path)
+    result = evaluate_conversion_quality(
+        md_path,
+        checks={"max_adjacent_inline_math_superscript_hazards": 0},
+    )
+
+    assert metrics.adjacent_inline_math_superscript_hazard_count == 1
+    assert result["ok"] is False
+    assert result["failures"] == ["adjacent_inline_math_superscript_hazard_count:1>0"]
+
+
+def test_evaluate_conversion_quality_gates_legacy_numeric_superscript_citations(tmp_path):
+    md_path = tmp_path / "legacy-citations.md"
+    md_path.write_text(
+        r"# Paper"
+        + "\n\n"
+        + r"Method\textsuperscript{[43]} and result<sup>[180]</sup>. "
+        + r"Valid powers m<sup>2</sup>, cm<sup>3</sup>, and 10\textsuperscript{6} remain semantic."
+        + r" Literal `Method<sup>[99]</sup>` and ``Result\textsuperscript{[100]}`` stay code."
+        + "\n",
+        encoding="utf-8",
+    )
+
+    metrics = summarize_conversion_quality(md_path)
+    result = evaluate_conversion_quality(
+        md_path,
+        checks={"max_legacy_numeric_superscript_citations": 0},
+    )
+
+    assert metrics.legacy_numeric_superscript_citation_count == 2
+    assert result["ok"] is False
+    assert result["failures"] == ["legacy_numeric_superscript_citation_count:2>0"]
 
 
 def test_summarize_conversion_quality_counts_duplicate_table_representations(tmp_path):

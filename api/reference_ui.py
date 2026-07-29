@@ -5750,6 +5750,144 @@ def _answer_aligned_block_snippet(block_text: str, *, terms: list[str]) -> str:
     return _summary_excerpt(snippet, max_sentences=3, max_len=420) or _compact_reader_open_text(snippet, max_len=420)
 
 
+def _answer_evidence_prefilter_matches_normalized_surface(
+    normalized_term: str,
+    normalized_surface: str,
+    surface_tokens: set[str],
+) -> bool:
+    """Cheap, intentionally broad filter used before expensive evidence cleanup.
+
+    This helper may admit extra blocks, but must not reject a block that the
+    precise matcher could accept.  The precise matcher still owns final scoring.
+    """
+
+    term = str(normalized_term or "").strip()
+    surface = str(normalized_surface or "").strip()
+    if not term or not surface:
+        return False
+    if re.search(r"[\u4e00-\u9fff]", term):
+        return term in surface
+    if re.search(rf"\b{re.escape(term)}\b", surface, flags=re.IGNORECASE):
+        return True
+    term_tokens = {
+        token
+        for token in term.split()
+        if token and token not in _PROMPT_FOCUS_STOPWORDS and len(token) >= 4
+    }
+    # The full focus matcher can accept an adjacent sequence or a distinctive
+    # token fallback.  Any such match necessarily shares at least one token.
+    return bool(term_tokens.intersection(surface_tokens))
+
+
+def _prefilter_answer_aligned_source_blocks(
+    blocks: list[dict],
+    *,
+    terms: list[str],
+    prompt: str,
+    source_path: str,
+    display_name: str,
+    limit: int = 72,
+) -> list[dict]:
+    """Shortlist source blocks before running citation-evidence normalization.
+
+    Building a reader-open evidence payload performs sentence cleanup, locator
+    normalization, and several quality passes.  Doing that for every block in a
+    long review paper made a single messages-page request take tens of seconds.
+    A broad lexical shortlist preserves the later authoritative scoring while
+    bounding that expensive work.
+    """
+
+    identity_terms = _ref_summary_identity_terms(
+        source_path=source_path,
+        title=display_name,
+    )
+    normalized_terms: list[tuple[str, str]] = []
+    seen_terms: set[str] = set()
+    for raw_term in list(terms or []):
+        normalized = _normalize_title_identity(raw_term)
+        if not normalized or normalized in seen_terms:
+            continue
+        seen_terms.add(normalized)
+        if normalized in _ANSWER_EVIDENCE_LOW_SIGNAL_TERMS:
+            continue
+        if any(
+            normalized == identity
+            or normalized in identity
+            or identity in normalized
+            for identity in identity_terms
+        ):
+            continue
+        normalized_terms.append((str(raw_term or "").strip(), normalized))
+    if not normalized_terms:
+        return []
+
+    prompt_requests_people = bool(
+        re.search(
+            r"\b(?:author|authors|biograph(?:y|ies)|affiliation|research interests?)\b|"
+            r"作者|履历|简介|单位|研究方向",
+            str(prompt or ""),
+            flags=re.IGNORECASE,
+        )
+    )
+    ranked: list[tuple[float, int, dict]] = []
+    max_blocks = min(1600, len(list(blocks or [])))
+    for index, block in enumerate(list(blocks or [])[:max_blocks]):
+        if not isinstance(block, dict):
+            continue
+        kind = str(block.get("kind") or "").strip().lower()
+        if kind in {"heading", "code"}:
+            continue
+        text = str(block.get("text") or block.get("raw_text") or "").strip()
+        if len(text) < 30:
+            continue
+        heading_path = str(block.get("heading_path") or "").strip()
+        surface = _normalize_title_identity(f"{heading_path}\n{text}")
+        if not surface:
+            continue
+        surface_tokens = {token for token in surface.split() if token}
+        matched = [
+            (raw_term, normalized)
+            for raw_term, normalized in normalized_terms
+            if _answer_evidence_prefilter_matches_normalized_surface(
+                normalized,
+                surface,
+                surface_tokens,
+            )
+        ]
+        if not matched:
+            continue
+        heading_norm = _normalize_title_identity(heading_path)
+        exact_matches = sum(
+            1
+            for _raw_term, normalized in matched
+            if (
+                normalized in surface
+                if re.search(r"[\u4e00-\u9fff]", normalized)
+                else bool(re.search(rf"\b{re.escape(normalized)}\b", surface, flags=re.IGNORECASE))
+            )
+        )
+        heading_matches = sum(
+            1
+            for _raw_term, normalized in matched
+            if normalized and normalized in heading_norm
+        )
+        score = 10.0 * float(len(matched)) + 2.0 * float(exact_matches) + 1.5 * float(heading_matches)
+        if kind == "paragraph":
+            score += 0.25
+        if prompt_requests_people and re.search(
+            r"\b(?:author biographies?|biograph(?:y|ies))\b",
+            heading_norm,
+        ):
+            score += 40.0
+        ranked.append((score, index, block))
+
+    if not ranked:
+        return []
+    ranked.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+    bounded_limit = max(12, min(160, int(limit or 72)))
+    return [item[2] for item in ranked[:bounded_limit]]
+
+
 def _select_answer_aligned_source_block_primary_evidence(
     *,
     pack: dict | None,
@@ -5768,7 +5906,14 @@ def _select_answer_aligned_source_block_primary_evidence(
             blocks = load_source_blocks(md_path)
         except Exception:
             blocks = []
-        for block in list(blocks or [])[:1600]:
+        candidate_blocks = _prefilter_answer_aligned_source_blocks(
+            list(blocks or []),
+            terms=terms,
+            prompt=prompt,
+            source_path=source_path,
+            display_name=display_name,
+        )
+        for block in candidate_blocks:
             if not isinstance(block, dict):
                 continue
             kind = str(block.get("kind") or "").strip().lower()

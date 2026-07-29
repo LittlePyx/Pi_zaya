@@ -551,6 +551,7 @@ def test_research_qa_fixture_enforces_system_b_trace_policy():
     assert roadmap_expected.get("maxRefHits") == 3
     assert roadmap_expected.get("maxRefDocCount") == 3
     assert roadmap_expected.get("maxCitationDocCount") == 3
+    assert roadmap_expected.get("maxCitationCount") == 3
 
     ordinary_case_ids = {
         "spi-roadmap-beginner",
@@ -943,6 +944,7 @@ def test_validate_case_rejects_system_b_for_multi_doc_ordinary_question():
     assert quality["ok"] is False
     assert quality["ref_hit_count"] == 3
     assert quality["system_b_count"] == 1
+    assert "citations_max_count" in {item["name"] for item in quality["failures"]}
     assert "system_b_max_count" in {item["name"] for item in quality["failures"]}
 
 
@@ -1052,6 +1054,50 @@ def test_validate_case_rejects_unready_unpolished_refs_without_forcing_ordinary_
     assert "refs_ready" in failed_names
     assert "refs_card_polish_status" in failed_names
     assert "system_b_min_count" not in failed_names
+
+
+def test_validate_case_counts_unlinked_system_b_candidates_against_budget():
+    fixture = load_fixture()
+    case = _case_by_id(fixture, "spi-roadmap-beginner")
+    spi_path = source_path_for_doc(fixture, "spi-prospects")
+    answer = "Read single-pixel imaging foundations before deep learning and Hadamard coding."
+    result = {
+        "status": "done",
+        "done": True,
+        "user_msg_id": 303,
+        "assistant_message": {
+            "role": "assistant",
+            "content": answer,
+            "meta": {
+                "paper_guide_contracts": {
+                    "render_packet": {
+                        "rendered_body": answer,
+                        "cite_details": [],
+                        "unlinked_reference_candidates": [
+                            {
+                                "title": "Real-time imaging of methane gas leaks using a single-pixel camera",
+                                "cite_detail": {
+                                    "is_inpaper": True,
+                                    "citation_route": "system_b",
+                                    "source_path": spi_path,
+                                },
+                            }
+                        ],
+                    }
+                }
+            },
+        },
+        "refs_payload": {},
+    }
+
+    quality = validate_case(case, fixture, result)
+    system_b_check = next(
+        item for item in quality["checks"] if item["name"] == "system_b_max_count"
+    )
+
+    assert system_b_check["ok"] is False
+    assert system_b_check["detail"]["citations"] == 0
+    assert system_b_check["detail"]["unlinked_candidates"] == 1
 
 
 def test_validate_case_rejects_template_answer_and_missing_system_b():

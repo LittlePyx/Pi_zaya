@@ -238,7 +238,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 9
+CONVERSION_QUALITY_RULES_VERSION = 11
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
@@ -537,6 +537,22 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "scope": "markdown",
         "reason": "Prose contains bare LaTeX or OCR math leftovers that should be normalized as inline math.",
         "strategies": ["postprocess_markdown", "promote_collapsed_review_headings"],
+    },
+    "adjacent_inline_math_superscript": {
+        "label": "Repair a detached numeric superscript beside an inline formula",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "Adjacent inline-math delimiters produce invalid KaTeX; the surrounding formula and punctuation distinguish a unit power from a citation marker.",
+        "strategies": ["postprocess_markdown"],
+    },
+    "legacy_numeric_superscript_citation": {
+        "label": "Normalize a legacy numeric superscript citation",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "Raw HTML or LaTeX superscript citation wrappers render as source markup unless they are normalized to canonical citation brackets.",
+        "strategies": ["postprocess_markdown"],
     },
     "out_of_order_sections": {
         "label": "Review numbered sections that appear out of source order",
@@ -1002,6 +1018,10 @@ def _issue_codes_from_metrics(metrics: dict[str, Any]) -> list[str]:
         out.append("prose_dominant_display_math")
     if int(metrics.get("display_math_markdown_link_count") or 0) > 0:
         out.append("display_math_markdown_link")
+    if int(metrics.get("adjacent_inline_math_superscript_hazard_count") or 0) > 0:
+        out.append("adjacent_inline_math_superscript")
+    if int(metrics.get("legacy_numeric_superscript_citation_count") or 0) > 0:
+        out.append("legacy_numeric_superscript_citation")
     if int(metrics.get("mojibake_count") or 0) > 0:
         out.append("mojibake")
     if int(metrics.get("analyzer_error_count") or 0) > 0:

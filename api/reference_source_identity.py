@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from api.reference_rendering import _parse_filename_meta
 
@@ -94,8 +95,8 @@ def _same_source_identity(source_path: str, bound_source_path: str) -> bool:
     return bool(left and right and left.intersection(right))
 
 
-def _normalize_title_identity(text: str) -> str:
-    raw = str(text or "").strip()
+@lru_cache(maxsize=32768)
+def _normalize_title_identity_cached(raw: str) -> str:
     if not raw:
         return ""
     low = raw.lower()
@@ -108,6 +109,18 @@ def _normalize_title_identity(text: str) -> str:
     raw = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", " ", raw)
     raw = re.sub(r"\s+", " ", raw).strip().lower()
     return raw
+
+
+def _normalize_title_identity(text: str) -> str:
+    """Normalize a title/surface without repeating the same regex pipeline.
+
+    Reference rendering compares the same answer terms, headings, source names,
+    and block surfaces many times while selecting citation evidence.  Caching on
+    the already-coerced string keeps the helper safe for arbitrary callers and
+    turns those repeated normalizations into constant-time lookups.
+    """
+
+    return _normalize_title_identity_cached(str(text or "").strip())
 
 
 def _title_identity_keys(source_like: str) -> set[str]:

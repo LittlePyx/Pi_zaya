@@ -1742,3 +1742,190 @@ def test_pair_reading_question_does_not_add_a_generic_third_paper() -> None:
         "detector-review.en.md",
         "physics-informed-deep-learning-spad.en.md",
     }
+
+
+def test_author_by_author_profile_request_budgets_one_locator_per_author() -> None:
+    source = "author-review.en.md"
+    plan = build_citation_plan(
+        prompt=(
+            "\u8bf7\u6839\u636e Author Biographies\uff0c\u5206\u522b\u6982\u62ec Kai Song\u3001Yaoxing Bian \u548c "
+            "Liantuan Xiao \u7684\u6559\u80b2\u7ecf\u5386\u3001\u5f53\u524d\u804c\u4f4d\u548c\u7814\u7a76\u65b9\u5411\uff0c\u5e76\u9010\u4eba\u7ed9\u51fa\u539f\u6587\u8bc1\u636e\u3002"
+        ),
+        prompt_family="overview",
+        answer_hits=[
+            {
+                "text": "Kai Song received his B.S. and M.S. degrees and is pursuing his Ph.D.",
+                "meta": {"source_path": source, "heading_path": "Author Biographies"},
+            },
+            {
+                "text": "Yaoxing Bian received his Ph.D. and is currently a lecturer.",
+                "meta": {"source_path": source, "heading_path": "Author Biographies"},
+            },
+            {
+                "text": "Liantuan Xiao is currently working as a Changjiang professor.",
+                "meta": {"source_path": source, "heading_path": "Author Biographies"},
+            },
+        ],
+        support_slots=[
+            {
+                "source_path": source,
+                "heading_path": "Author Biographies",
+                "evidence_quote": (
+                    "Kai Song received his B.S. and M.S. degrees and is pursuing his Ph.D."
+                ),
+            }
+        ],
+    )
+
+    biography_slots = [
+        slot
+        for slot in plan["slots"]
+        if slot["preferred_system"] == "system_a"
+        and "author biographies" in slot["heading_path"].lower()
+    ]
+    assert len(biography_slots) == 3
+    assert plan["budget"]["system_a"] == 3
+    assert plan["per_paragraph_budget"]["system_a"] == 3
+    assert plan["coverage_mode"] == "per_entity"
+    assert plan["coverage_entity_type"] == "author_profile"
+    assert plan["coverage_target_count"] == 3
+    assert plan["coverage_targets"] == ["Kai Song", "Yaoxing Bian", "Liantuan Xiao"]
+    assert [slot["candidate_hits"] for slot in biography_slots] == [[1], [2], [3]]
+    assert [slot["coverage_target"] for slot in biography_slots] == [
+        "Kai Song",
+        "Yaoxing Bian",
+        "Liantuan Xiao",
+    ]
+
+
+def test_author_profile_heading_aliases_share_per_author_coverage() -> None:
+    prompt = (
+        "\u8bf7\u6839\u636e Author Biographies\uff0c\u5206\u522b\u6982\u62ec Kai Song\u3001Yaoxing Bian \u548c "
+        "Liantuan Xiao \u7684\u6559\u80b2\u7ecf\u5386\u3001\u5f53\u524d\u804c\u4f4d\u548c\u7814\u7a76\u65b9\u5411\u3002"
+    )
+    evidence = (
+        "Kai Song received his degrees. Yaoxing Bian is currently a lecturer. "
+        "Liantuan Xiao is currently a professor."
+    )
+
+    for heading in ("Author Biography", "Author Biographies", "\u4f5c\u8005\u7b80\u4ecb"):
+        plan = build_citation_plan(
+            prompt=prompt,
+            prompt_family="overview",
+            answer_hits=[
+                {
+                    "text": evidence,
+                    "meta": {
+                        "source_path": "author-review.en.md",
+                        "heading_path": heading,
+                    },
+                }
+            ],
+        )
+
+        assert plan["budget"]["system_a"] == 3, heading
+        assert plan["per_paragraph_budget"]["system_a"] == 3, heading
+        assert plan["coverage_mode"] == "per_entity", heading
+        assert plan["coverage_target_count"] == 3, heading
+        assert plan["coverage_targets"] == ["Kai Song", "Yaoxing Bian", "Liantuan Xiao"], heading
+
+
+def test_aggregated_biography_hit_still_budgets_each_named_author() -> None:
+    plan = build_citation_plan(
+        prompt=(
+            "\u8bf7\u6839\u636e Author Biographies\uff0c\u5206\u522b\u6982\u62ec Kai Song\u3001Yaoxing Bian \u548c "
+            "Liantuan Xiao \u7684\u6559\u80b2\u7ecf\u5386\u3001\u5f53\u524d\u804c\u4f4d\u548c\u7814\u7a76\u65b9\u5411\uff0c\u5e76\u9010\u4eba\u7ed9\u51fa\u539f\u6587\u8bc1\u636e\u3002"
+        ),
+        prompt_family="overview",
+        answer_hits=[
+            {
+                "text": (
+                    "Kai Song received his degrees. Yaoxing Bian is a lecturer. "
+                    "Liantuan Xiao is a Changjiang professor."
+                ),
+                "meta": {
+                    "source_path": "author-review.en.md",
+                    "heading_path": "Author Biographies",
+                },
+            }
+        ],
+    )
+
+    assert plan["budget"]["system_a"] == 3
+    assert plan["per_paragraph_budget"]["system_a"] == 3
+    assert plan["coverage_mode"] == "per_entity"
+    assert plan["coverage_target_count"] == 3
+    assert plan["coverage_targets"] == ["Kai Song", "Yaoxing Bian", "Liantuan Xiao"]
+
+
+def test_author_profile_targets_exclude_title_case_field_labels() -> None:
+    plan = build_citation_plan(
+        prompt=(
+            "Using Author Biographies, respectively summarize Kai Song and Yaoxing Bian: "
+            "Current Position and Research Direction. Please Summarize with evidence."
+        ),
+        prompt_family="overview",
+        answer_hits=[
+            {
+                "text": (
+                    "Kai Song — Education Background: degrees; Research Direction: "
+                    "single-pixel imaging. Yaoxing Bian — Current Position: lecturer; "
+                    "Research Interests: random lasers."
+                ),
+                "meta": {
+                    "source_path": "author-review.en.md",
+                    "heading_path": "Author Biographies",
+                },
+            }
+        ],
+    )
+
+    assert plan["coverage_target_count"] == 2
+    assert plan["coverage_targets"] == ["Kai Song", "Yaoxing Bian"]
+    assert plan["budget"]["system_a"] == 2
+
+
+def test_author_profile_source_locator_keeps_system_a_overview_intent() -> None:
+    plan = build_citation_plan(
+        prompt=(
+            "请依据论文的 Author Biographies，分别说明 Kai Song、Yaoxing Bian 和 "
+            "Liantuan Xiao 的教育经历、当前职位与研究方向；每个人都要有可点击的原文出处。"
+        ),
+        prompt_family="overview",
+        answer_hits=[
+            {
+                "text": (
+                    "Kai Song received his degrees. Yaoxing Bian is a lecturer. "
+                    "Liantuan Xiao is a professor."
+                ),
+                "meta": {
+                    "source_path": "author-review.en.md",
+                    "heading_path": "Author Biographies",
+                },
+            }
+        ],
+    )
+
+    assert plan["intent"] == "beginner_overview"
+    assert plan["budget"]["system_a"] == 3
+    assert plan["budget"]["system_b"] == 0
+
+
+def test_unnamed_chinese_author_count_does_not_enable_target_aware_rendering() -> None:
+    plan = build_citation_plan(
+        prompt="请根据 Author Biographies 分别概括三位作者的教育经历和研究方向。",
+        prompt_family="overview",
+        answer_hits=[
+            {
+                "text": "Kai Song, Yaoxing Bian, and Liantuan Xiao are the three authors.",
+                "meta": {
+                    "source_path": "author-review.en.md",
+                    "heading_path": "Author Biographies",
+                },
+            }
+        ],
+    )
+
+    assert plan["budget"]["system_a"] == 3
+    assert "coverage_mode" not in plan
+    assert "coverage_target_count" not in plan

@@ -96,6 +96,11 @@ async function installBackend(
     generateStartFailure?: boolean
     delayedCancelFinalize?: boolean
     uiLocale?: 'en' | 'zh'
+    paperGuideMode?: boolean
+    lateCitationHydration?: boolean
+    legalZeroCitationTerminal?: boolean
+    partialCitationCoverage?: boolean
+    lateCitationPlanHydration?: boolean
   },
 ) {
   let releaseStream: (() => void) | null = null
@@ -112,11 +117,20 @@ async function installBackend(
   let generationCancelCalls = 0
   let cancelFinalizePageLoads = 0
   const deletedConversationIds = new Set<string>()
+  const activeConvA = opts?.paperGuideMode
+    ? {
+        ...convA,
+        mode: 'paper_guide' as const,
+        bound_source_path: '/papers/generation-race-a.md',
+        bound_source_name: 'Generation Race A.pdf',
+        bound_source_ready: true,
+      }
+    : convA
   const streamReleased = new Promise<void>((resolve) => {
     releaseStream = resolve
   })
 
-  await installAppShellMocks(page, { rootConversations: [convA, convB] })
+  await installAppShellMocks(page, { rootConversations: [activeConvA, convB] })
   await installEmptyCitationShelfMock(page, { scopeId: '__default__', projectId: null })
   await installIdleReferenceMocks(page)
 
@@ -174,7 +188,7 @@ async function installBackend(
   await page.route('**/api/sidebar**', async (route) => {
     await fulfillJson(route, {
       projects: [],
-      root_conversations: [convA, convB].filter((conv) => !deletedConversationIds.has(conv.id)),
+      root_conversations: [activeConvA, convB].filter((conv) => !deletedConversationIds.has(conv.id)),
       project_conversations: {},
     })
   })
@@ -193,7 +207,7 @@ async function installBackend(
       })
       return
     }
-    await fulfillJson(route, convA)
+    await fulfillJson(route, activeConvA)
   })
 
   await page.route(`**/api/conversations/${CONV_B_ID}`, async (route) => {
@@ -235,6 +249,77 @@ async function installBackend(
       })
       return
     }
+    const citationHydrationMessage = () => {
+      const anchors = opts?.partialCitationCoverage
+        ? ['partial-system-a-anchor-1', 'partial-system-a-anchor-2']
+        : ['late-system-a-anchor']
+      const latePlanReady = Boolean(opts?.lateCitationPlanHydration && convADonePageLoads >= 6)
+      const linked = Boolean(
+        opts?.partialCitationCoverage
+        || latePlanReady
+        || (opts?.lateCitationHydration && convADonePageLoads >= 6),
+      )
+      const citeDetails = opts?.legalZeroCitationTerminal
+        ? []
+        : opts?.lateCitationPlanHydration && !latePlanReady
+          ? []
+          : anchors.map((anchor, index) => ({
+            num: index + 1,
+            anchor,
+            citation_route: 'system_a',
+            source_name: 'Late citation source.pdf',
+            source_path: '/papers/late-citation-source.md',
+            evidence_quote: 'Late-arriving evidence for the generated answer.',
+          }))
+      const renderedBody = linked
+        ? `${A_GENERATED_ANSWER} ${anchors.map((anchor, index) => `[${index + 1}](#${anchor})`).join(' ')}`
+        : A_GENERATED_ANSWER
+      const citationPlan = {
+        system_a_enabled: true,
+        budget: { system_a: opts?.partialCitationCoverage ? 3 : 1, system_b: 0 },
+        ...(opts?.partialCitationCoverage
+          ? { coverage_mode: 'per_entity', coverage_target_count: 3 }
+          : {}),
+        slots: anchors.map((_anchor, index) => ({
+          preferred_system: 'system_a',
+          candidate_hits: [index + 1],
+        })),
+      }
+      const hasCitationPlan = !opts?.lateCitationPlanHydration || latePlanReady
+      return {
+        id: 102,
+        role: 'assistant',
+        content: A_GENERATED_ANSWER,
+        rendered_body: renderedBody,
+        cite_details: citeDetails,
+        refs_user_msg_id: 101,
+        created_at: 4,
+        provenance: {
+          status: 'ready',
+          strict_identity_ready: true,
+          segments: [{ segment_id: 'generation-race-evidence' }],
+        },
+        meta: {
+          ...(hasCitationPlan ? { answer_quality: { citation_plan: citationPlan } } : {}),
+          paper_guide_contracts: {
+            render_packet: {
+              answer_markdown: A_GENERATED_ANSWER,
+              rendered_body: renderedBody,
+              rendered_content: renderedBody,
+              cite_details: citeDetails,
+            },
+          },
+        },
+      }
+    }
+    const completedAssistant = (
+      opts?.lateCitationHydration
+      || opts?.legalZeroCitationTerminal
+      || opts?.partialCitationCoverage
+      || opts?.lateCitationPlanHydration
+    )
+      ? citationHydrationMessage()
+      : { id: 102, role: 'assistant', content: generationCanceled ? A_CANCELED_ANSWER : A_GENERATED_ANSWER, created_at: 4 }
     await fulfillJson(route, messagePage(generationStartFailed
       ? [
           { id: 101, role: 'user', content: 'Question for A', created_at: 3 },
@@ -243,7 +328,7 @@ async function installBackend(
       : generationDone
       ? [
           { id: 101, role: 'user', content: 'Question for A', created_at: 3 },
-          { id: 102, role: 'assistant', content: generationCanceled ? A_CANCELED_ANSWER : A_GENERATED_ANSWER, created_at: 4 },
+          completedAssistant,
         ]
       : [
           { id: 1, role: 'user', content: 'Existing question A', created_at: 1 },
@@ -426,7 +511,43 @@ async function installBackend(
   })
 
   await page.route(`**/api/references/conversation/${CONV_A_ID}`, async (route) => {
-    await fulfillJson(route, {}, {
+    const settledEmptyPack = {
+      payload_mode: 'full',
+      render_status: 'full',
+      display_state: 'empty',
+      suppression_reason: 'no_candidate_hits',
+      enrichment_pending: false,
+      pipeline_debug: { raw_hit_count: 0 },
+      hits: [],
+    }
+    const refs = (
+      opts?.lateCitationHydration
+      || opts?.partialCitationCoverage
+      || opts?.lateCitationPlanHydration
+    )
+      ? {
+          101: {
+            payload_mode: 'full',
+            render_status: 'full',
+            display_state: 'ready',
+            enrichment_pending: false,
+            hits: [{ text: 'Current-turn evidence is available.' }],
+          },
+          999: settledEmptyPack,
+        }
+      : opts?.legalZeroCitationTerminal
+        ? {
+            101: settledEmptyPack,
+            999: {
+              payload_mode: 'full',
+              render_status: 'full',
+              display_state: 'ready',
+              enrichment_pending: false,
+              hits: [{ text: 'Unrelated newer pack must not control this message.' }],
+            },
+          }
+        : {}
+    await fulfillJson(route, refs, {
       'server-timing': 'total;dur=1',
       'x-kb-refs-mode': 'empty',
       'x-kb-refs-counts': 'packs=0,hits=0,pending=0',
@@ -863,6 +984,161 @@ test('done generation stream keeps the streamed answer when final message hydrat
   await expect(page.locator('body')).not.toContainText(A_REFRESH_FAILED_ANSWER)
   await expect(page.locator('body')).not.toContainText('messages page temporarily unavailable')
   await expect(page.locator('body')).not.toContainText(A_STREAM_FAILED_ANSWER)
+})
+
+test('paper-guide polling keeps waiting for a late same-message citation packet', async ({ page }) => {
+  const backend = await installBackend(page, {
+    paperGuideMode: true,
+    lateCitationHydration: true,
+  })
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill('Question for A')
+  await page.locator('button.kb-send-btn').click()
+  backend.releaseStream()
+
+  const assistant = page.locator('[data-msg-id="102"] .kb-msg-bubble-assistant')
+  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+  await expect(assistant).toContainText(A_GENERATED_ANSWER)
+  await expect(assistant.locator('.kb-cite-chip')).toHaveCount(1, { timeout: 5_000 })
+  await expect.poll(
+    () => backend.getConvADonePageLoads(),
+    { timeout: 5_000 },
+  ).toBeGreaterThanOrEqual(6)
+})
+
+test('short postprocess tail merge preserves an already loaded long history', async ({ page }) => {
+  await installBackend(page)
+  await page.goto('/')
+
+  const merged = await page.evaluate(async () => {
+    const { mergeLatestMessagePage } = await import('/src/stores/chatStoreMessages.ts')
+    const currentMessages = Array.from({ length: 30 }, (_item, index) => ({
+      id: index + 1,
+      role: (index + 1) % 2 === 0 ? 'assistant' : 'user',
+      content: `history-${index + 1}`,
+      created_at: index + 1,
+    }))
+    const tailMessages = [29, 30, 31, 32].map((id) => ({
+      id,
+      role: id % 2 === 0 ? 'assistant' : 'user',
+      content: id === 30 ? 'history-30-with-late-citation' : `history-${id}`,
+      created_at: id,
+    }))
+    const result = mergeLatestMessagePage(currentMessages, true, {
+      messages: tailMessages,
+      has_more_before: true,
+      oldest_loaded_id: 29,
+      newest_loaded_id: 32,
+    })
+    return {
+      ids: result.messages.map((message) => Number(message.id || 0)),
+      contents: result.messages.map((message) => String(message.content || '')),
+      hasMoreBefore: result.hasMoreBefore,
+      oldestLoadedMessageId: result.oldestLoadedMessageId,
+    }
+  })
+
+  expect(merged.ids).toEqual(Array.from({ length: 32 }, (_item, index) => index + 1))
+  expect(new Set(merged.ids).size).toBe(32)
+  expect(merged.contents[0]).toBe('history-1')
+  expect(merged.contents[29]).toBe('history-30-with-late-citation')
+  expect(merged.hasMoreBefore).toBe(true)
+  expect(merged.oldestLoadedMessageId).toBe(1)
+})
+
+test('paper-guide polling settles when per-entity coverage stabilizes below its target', async ({ page }) => {
+  const backend = await installBackend(page, {
+    paperGuideMode: true,
+    partialCitationCoverage: true,
+  })
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill('Question for A')
+  await page.locator('button.kb-send-btn').click()
+  const pollingStartedAt = Date.now()
+  backend.releaseStream()
+
+  const assistant = page.locator('[data-msg-id="102"] .kb-msg-bubble-assistant')
+  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+  await expect(assistant.locator('.kb-cite-chip')).toHaveCount(2, { timeout: 5_000 })
+  await expect.poll(
+    () => backend.getConvADonePageLoads(),
+    { timeout: 5_000 },
+  ).toBeGreaterThanOrEqual(6)
+
+  await page.waitForTimeout(1_600)
+  const settledLoads = backend.getConvADonePageLoads()
+  const elapsedMs = Date.now() - pollingStartedAt
+  expect(settledLoads).toBe(6)
+  expect(elapsedMs).toBeLessThan(7_000)
+  await page.waitForTimeout(1_000)
+  expect(backend.getConvADonePageLoads()).toBe(settledLoads)
+})
+
+test('paper-guide polling waits when the citation plan and citation packet arrive together late', async ({ page }) => {
+  const backend = await installBackend(page, {
+    paperGuideMode: true,
+    lateCitationPlanHydration: true,
+  })
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill('Question for A')
+  await page.locator('button.kb-send-btn').click()
+  const pollingStartedAt = Date.now()
+  backend.releaseStream()
+
+  const assistant = page.locator('[data-msg-id="102"] .kb-msg-bubble-assistant')
+  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+  await expect(assistant.locator('.kb-cite-chip')).toHaveCount(1, { timeout: 5_000 })
+  await expect.poll(
+    () => backend.getConvADonePageLoads(),
+    { timeout: 5_000 },
+  ).toBeGreaterThanOrEqual(6)
+
+  await page.waitForTimeout(500)
+  const settledLoads = backend.getConvADonePageLoads()
+  const elapsedMs = Date.now() - pollingStartedAt
+  expect(settledLoads).toBe(6)
+  expect(elapsedMs).toBeLessThan(6_000)
+})
+
+test('paper-guide polling stops on the exact turn legal zero-citation terminal', async ({ page }) => {
+  const backend = await installBackend(page, {
+    paperGuideMode: true,
+    legalZeroCitationTerminal: true,
+  })
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill('Question for A')
+  await page.locator('button.kb-send-btn').click()
+  backend.releaseStream()
+
+  const assistant = page.locator('[data-msg-id="102"] .kb-msg-bubble-assistant')
+  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+  await expect(assistant).toContainText(A_GENERATED_ANSWER)
+  await expect(assistant.locator('.kb-cite-chip')).toHaveCount(0)
+  await expect.poll(
+    () => backend.getConvADonePageLoads(),
+    { timeout: 5_000 },
+  ).toBeGreaterThanOrEqual(5)
+
+  await page.waitForTimeout(500)
+  const settledLoads = backend.getConvADonePageLoads()
+  await page.waitForTimeout(1_600)
+  expect(backend.getConvADonePageLoads()).toBe(settledLoads)
 })
 
 test('terminal answer clears a stale render packet even when answer_markdown matches', async ({ page }) => {

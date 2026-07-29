@@ -59,6 +59,12 @@ _PLAN_CARDS: dict[str, ResearchAnswerPlan] = {
         answer_shape="bottom-line assessment; credible claims; weak claims; open questions; concrete verification step.",
         avoid="unsupported criticism or praise that cannot be tied back to retrieved evidence.",
     ),
+    "fact_extraction": ResearchAnswerPlan(
+        kind="fact_extraction",
+        evidence_need="one directly matching source passage for every named entity and every requested field.",
+        answer_shape="organize by named entity; keep the requested fields in the same order; attach a locator to each entity block.",
+        avoid="collapsing a multi-entity request into one example, adding unrelated paper-summary commentary, or leaving an entity without evidence.",
+    ),
 }
 
 
@@ -90,6 +96,15 @@ def infer_research_answer_plan(
     family = _normalize_family(paper_guide_prompt_family)
     intent = _normalize_family(answer_intent)
     output_mode = _normalize_family(answer_output_mode)
+
+    if re.search(r"(?i)\bauthor\s+biograph(?:y|ies)\b|\bauthor\s+profiles?\b", q) or (
+        re.search(r"\u4f5c\u8005", q)
+        and re.search(
+            r"\u5b66\u5386|\u5b66\u4f4d|\u6559\u80b2\u7ecf\u5386|\u5f53\u524d\u804c\u4f4d|\u7814\u7a76\u65b9\u5411|\u7814\u7a76\u5174\u8da3",
+            q,
+        )
+    ):
+        return _PLAN_CARDS["fact_extraction"]
 
     if family in {"citation_lookup"}:
         return _PLAN_CARDS["literature_positioning"]

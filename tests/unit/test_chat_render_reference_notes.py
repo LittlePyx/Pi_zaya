@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from api.citation_display_registry import (
 from api.chat_render import (
     _augment_hits_with_canonical_answer_citations,
     _citation_free_answer_body,
+    _collapse_adjacent_same_citation_links,
     _enrich_provenance_segments_for_display,
     _normalize_chat_markdown_for_display,
     _normalize_double_numeric_citation_markers,
@@ -64,6 +66,18 @@ def test_double_numeric_citations_never_render_as_empty_brackets() -> None:
     assert _normalize_double_numeric_citation_markers("A [[4]], B [[5；2]].") == "A [4], B [5；2]."
     stripped = _strip_freeform_numeric_citation_markers("A [[4]], B [[]], C [].")
     assert stripped == "A, B [[]], C []."
+
+
+def test_adjacent_same_citation_links_collapse_even_when_titles_differ() -> None:
+    first = '[1](#kb-cite-author-2 "source: paper | ref 1")'
+    duplicate = '[1](#kb-cite-author-2 "source: paper | ref 2")'
+    other = '[1](#kb-cite-author-3 "source: paper | ref 3")'
+
+    collapsed = _collapse_adjacent_same_citation_links(
+        f"Yaoxing {first}{duplicate}; Liantuan {other}"
+    )
+
+    assert collapsed == f"Yaoxing {first}; Liantuan {other}"
 
 
 def test_system_a_display_registry_remaps_answer_hit_numbers_but_keeps_system_b() -> None:
@@ -250,6 +264,66 @@ def test_system_a_display_registry_rebinds_repeated_source_to_matching_passage()
     assert rendered.count('[1](#cite-compound') == 2
     assert [row["anchor"] for row in remapped] == ["cite-ray", "cite-compound"]
     assert len(registry) == 1
+
+
+def test_system_a_display_registry_never_crosses_original_same_paper_occurrences() -> None:
+    markdown = (
+        'Kai profile [1](#cite-kai "source: LPR.pdf | ref 1"). '
+        'Yaoxing is currently a lecturer [2](#cite-yaoxing "source: LPR.pdf | ref 2"). '
+        'Liantuan is currently a professor at the university '
+        '[3](#cite-liantuan "source: LPR.pdf | ref 3").'
+    )
+    details = [
+        {
+            "num": 1,
+            "anchor": "cite-kai",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\LPR\LPR.en.md",
+            "source_name": "LPR.pdf",
+            "evidence_quote": "Kai completed his degrees and is pursuing a doctorate.",
+        },
+        {
+            "num": 2,
+            "anchor": "cite-yaoxing",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\LPR\LPR.en.md",
+            "source_name": "LPR.pdf",
+            "evidence_quote": (
+                "Yaoxing is currently a lecturer at the university and his research "
+                "interests include imaging."
+            ),
+        },
+        {
+            "num": 3,
+            "anchor": "cite-liantuan",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\LPR\LPR.en.md",
+            "source_name": "LPR.pdf",
+            # Exercise the real failure mode: the third occurrence's card
+            # evidence can be filtered before final citation-plan refinement.
+            "evidence_quote": "",
+        },
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert '[1](#cite-kai' in rendered
+    assert '[1](#cite-yaoxing' in rendered
+    assert '[1](#cite-liantuan' in rendered
+    assert [row["answer_hit_num"] for row in remapped] == [1, 2, 3]
+    assert registry[0]["original_nums"] == [1, 2, 3]
+
+    rendered_again, remapped_again, registry_again = remap_system_a_citations_for_display(
+        rendered,
+        remapped,
+    )
+    assert rendered_again == rendered
+    assert [row["anchor"] for row in remapped_again] == [
+        "cite-kai",
+        "cite-yaoxing",
+        "cite-liantuan",
+    ]
+    assert registry_again[0]["original_nums"] == [1, 2, 3]
 
 
 def test_system_a_display_registry_is_idempotent_for_historical_render_packets() -> None:
@@ -8696,6 +8770,48 @@ def test_unlinked_reference_candidates_find_unique_venue_year(monkeypatch):
     assert "answer_context_only" in candidates[0]["cite_detail"]["system_b_trace_flags"]
 
 
+def test_unlinked_reference_candidates_respect_zero_system_b_budget(monkeypatch):
+    from api import chat_render
+
+    monkeypatch.setattr(
+        chat_render,
+        "_load_reference_index_cached",
+        lambda: {
+            "docs": {
+                "demo": {
+                    "path": "current-paper.md",
+                    "name": "current-paper.en.md",
+                    "refs": {
+                        "7": {
+                            "num": 7,
+                            "raw": "Smith J. Fast rotation-shearing single-pixel imaging. Optica. 2024.",
+                            "title": "Fast rotation-shearing single-pixel imaging",
+                            "authors": "Smith J",
+                            "venue": "Optica",
+                            "year": "2024",
+                            "doi": "10.1364/optica.demo",
+                        }
+                    },
+                }
+            }
+        },
+    )
+
+    candidates = chat_render._build_unlinked_reference_candidates(
+        answer_markdown="For real-time imaging, the Optica 2024 work is a better comparison point.",
+        rendered_body="",
+        copy_text="",
+        cite_details=[],
+        ref_pack={"hits": [{"meta": {"source_path": "current-paper.md"}}]},
+        provenance_segments=[],
+        render_locale="en",
+        anchor_ns="test",
+        allow_system_b=False,
+    )
+
+    assert candidates == []
+
+
 def test_unlinked_reference_candidate_promotes_retrieved_library_document(monkeypatch):
     from api import chat_render
 
@@ -8756,6 +8872,7 @@ def test_unlinked_reference_candidate_promotes_retrieved_library_document(monkey
         provenance_segments=[],
         render_locale="en",
         anchor_ns="test",
+        allow_system_b=False,
     )
 
     assert len(candidates) == 1
@@ -10106,6 +10223,156 @@ def test_claim_level_citation_reuse_binds_supported_body_and_skips_unsupported_d
     assert "光场方法结合位置信息与角度信息支持三维重建 [3]。" in repaired
     assert "显著提高机械稳定性 [1]" not in repaired
     assert "lateral resolution 提高两倍 [2]" not in repaired
+
+
+def test_claim_level_citation_reuse_skips_a_different_named_paper():
+    from api import chat_render
+
+    source_path = "natphoton-2019-principles-and-prospects.en.md"
+    source_name = "Principles and prospects for single-pixel imaging"
+    evidence = (
+        "Single-pixel imaging uses deep learning to improve reconstruction quality "
+        "and reconstruction speed."
+    )
+    answer = (
+        "1. **《LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning》**（LPR, 2025）\n"
+        "- 这篇综述讨论深度学习单像素成像。\n"
+        "- 基础综述说明单像素成像的重建质量与重建速度。"
+    )
+
+    repaired = chat_render._reading_guide_attach_claim_level_system_a_citations(
+        answer,
+        [{"text": evidence, "meta": {"source_path": source_path, "source_name": source_name}}],
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "evidence_quote": evidence,
+                    "candidate_hits": [1],
+                }
+            ]
+        },
+    )
+
+    assert "Deep Learning》**（LPR, 2025） [1]" not in repaired
+    assert repaired.splitlines()[0] == answer.splitlines()[0]
+    assert "基础综述说明单像素成像的重建质量与重建速度 [1]。" in repaired
+
+
+def test_claim_level_citation_reuse_skips_markdown_wrapped_different_paper_title():
+    from api import chat_render
+
+    source_path = "natphoton-2019-principles-and-prospects.en.md"
+    source_name = "Principles and prospects for single-pixel imaging"
+    evidence = (
+        "Single-pixel imaging uses deep learning to improve reconstruction quality "
+        "and reconstruction speed."
+    )
+    answer = (
+        "- **LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep "
+        "Learning** reports that deep learning improves reconstruction quality and speed."
+    )
+
+    repaired = chat_render._reading_guide_attach_claim_level_system_a_citations(
+        answer,
+        [{"text": evidence, "meta": {"source_path": source_path, "source_name": source_name}}],
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "evidence_quote": evidence,
+                    "candidate_hits": [1],
+                }
+            ]
+        },
+    )
+
+    assert "[1]" not in repaired
+
+
+def test_claim_level_citation_reuse_keeps_bold_conclusion_claims_eligible():
+    from api import chat_render
+
+    source_path = "dl-spi-review.en.md"
+    source_name = "Principles and prospects for single-pixel imaging.pdf"
+    evidence = (
+        "Deep learning reconstruction improves reconstruction quality and reconstruction "
+        "speed for single-pixel imaging."
+    )
+    answer = (
+        "1. **Deep learning reconstruction improves reconstruction quality and "
+        "reconstruction speed for single-pixel imaging.**"
+    )
+
+    repaired = chat_render._reading_guide_attach_claim_level_system_a_citations(
+        answer,
+        [{"text": evidence, "meta": {"source_path": source_path, "source_name": source_name}}],
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "evidence_quote": evidence,
+                    "candidate_hits": [1],
+                }
+            ]
+        },
+    )
+
+    assert repaired.count("[1]") == 1
+    assert "single-pixel imaging" in repaired
+
+
+def test_paper_identity_line_recognizes_bold_title_with_year():
+    from api import chat_render
+
+    claim = (
+        "1. **LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on "
+        "Deep Learning** (LPR, 2025)"
+    )
+
+    assert chat_render._reading_claim_is_paper_identity_line(
+        claim,
+        "Principles and prospects for single-pixel imaging.pdf",
+    ) is True
+
+
+def test_claim_level_citation_reuse_keeps_bold_lead_in_claims_eligible():
+    from api import chat_render
+
+    source_path = "dl-spi-review.en.md"
+    source_name = "Principles and prospects for single-pixel imaging.pdf"
+    evidence = (
+        "Deep learning reconstruction improves reconstruction quality and reconstruction "
+        "speed for single-pixel imaging."
+    )
+    answer = (
+        "**Main conclusion about deep learning reconstruction**: single-pixel imaging "
+        "improves reconstruction quality and reconstruction speed."
+    )
+
+    repaired = chat_render._reading_guide_attach_claim_level_system_a_citations(
+        answer,
+        [{"text": evidence, "meta": {"source_path": source_path, "source_name": source_name}}],
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "evidence_quote": evidence,
+                    "candidate_hits": [1],
+                }
+            ]
+        },
+    )
+
+    assert repaired.count("[1]") == 1
 
 
 def test_claim_level_citation_reuse_does_not_cross_single_photon_pixel_modalities():
@@ -12820,6 +13087,602 @@ def test_prompt_aligned_rebind_keeps_same_source_answer_passage_as_alternative(
     assert any(item.get("snippet") == abstract for item in alternatives)
     assert any(item.get("snippet") == mechanism for item in alternatives)
     assert any(item.get("blockId") == "blk-encoding" for item in alternatives)
+
+
+def test_unbound_prompt_aligned_slot_does_not_steal_reserved_same_source_occurrence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _refine_system_a_cite_evidence_from_citation_plan,
+    )
+    from ui.refs_renderer import _annotate_inpaper_citations_with_hover_meta
+
+    monkeypatch.setattr("ui.refs_renderer._is_temp_source_path", lambda _path: False)
+    monkeypatch.setattr("ui.refs_renderer._load_reference_index_cached", lambda: {})
+
+    source_path = str(tmp_path / "LPR" / "LPR.en.md")
+    biographies = (
+        "Kai Song received his B.S. degree in 2019 and M.S. degree in 2022. "
+        "Yaoxing Bian is currently a lecturer. Liantuan Xiao is currently a "
+        "Changjiang professor."
+    )
+    unrelated = (
+        "Thanks to the unsupervised learning mode, the model-driven "
+        "reconstruction algorithm can be adapted to diverse imaging scenes."
+    )
+    hits = [
+        {
+            "text": biographies,
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "Author Biographies",
+                "ref_answer_citation_num": 1,
+                "page_start": 21,
+                "page_end": 21,
+            },
+            "ui_meta": {
+                "source_path": source_path,
+                "primary_evidence": {
+                    "source_path": source_path,
+                    "heading_path": "Author Biographies",
+                    "snippet": biographies,
+                    "page_start": 21,
+                    "page_end": 21,
+                },
+            },
+        }
+    ]
+    plan = {
+        "source": "generation_citation_planner",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [],
+                "source_path": source_path,
+                "heading_path": "4.1 Strategy",
+                "evidence_quote": unrelated,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "page_start": 8,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "heading_path": "Author Biographies",
+                "evidence_quote": biographies,
+                "page_start": 21,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": source_path,
+                "heading_path": "4.1 Strategy",
+                "evidence_quote": unrelated,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "page_start": 8,
+            },
+        ],
+    }
+
+    rebound = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=4,
+        canonical_paths=[source_path] * 4,
+        answer_text=(
+            "Kai Song completed his degrees in 2019 and 2022. Yaoxing Bian is "
+            "a lecturer. Liantuan Xiao is a Changjiang professor."
+        ),
+    )
+
+    assert rebound[0]["text"] == biographies
+    assert rebound[0]["meta"]["heading_path"] == "Author Biographies"
+    assert rebound[0]["meta"]["page_start"] == 21
+    assert rebound[1]["text"] == unrelated
+    assert rebound[2]["text"] == unrelated
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Liantuan Xiao earned his degrees in 1989, 1997, and 2001 [1].",
+        rebound,
+        anchor_ns="author-biographies-occurrence",
+        canonical_paths=[source_path] * 4,
+        citation_plan=plan,
+        render_locale="zh",
+    )
+
+    assert "[1](#" in rendered
+    assert len(details) == 1
+    assert details[0]["heading_path"] == "Author Biographies"
+    assert details[0]["page_start"] == 21
+    assert "Liantuan Xiao" in details[0]["evidence_quote"]
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="zh",
+    )
+    assert refined[0]["heading_path"] == "Author Biographies"
+    assert refined[0]["page_start"] == 21
+    assert "Liantuan Xiao" in refined[0]["evidence_quote"]
+    assert "unsupervised learning" not in refined[0]["evidence_quote"]
+
+
+def test_per_author_profiles_reuse_same_grounded_source_marker_for_each_entity() -> None:
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    source_path = "db/LPR/LPR-2025-Advances-and-Challenges.en.md"
+    evidence = (
+        "Kai Song received his B.S. and M.S. degrees and is pursuing his Ph.D. "
+        "Yaoxing Bian received his Ph.D. degree and is currently a lecturer. "
+        "Liantuan Xiao received his B.S., M.S., and Ph.D. degrees and is currently "
+        "a Changjiang professor."
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "Author Biographies",
+                "page_start": 21,
+                "page_end": 21,
+                "ref_answer_citation_num": 1,
+            },
+            "ui_meta": {"source_path": source_path},
+        }
+    ]
+    plan = {
+        "intent": "beginner_overview",
+        "coverage_mode": "per_entity",
+        "coverage_entity_type": "author_profile",
+        "coverage_target_count": 3,
+        "coverage_targets": ["Kai Song", "Yaoxing Bian", "Liantuan Xiao"],
+        "budget": {"system_a": 3, "system_b": 0},
+        "per_paragraph_budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "LPR.pdf",
+                "heading_path": "Author Biographies",
+                "evidence_quote": evidence,
+                "page_start": 21,
+                "page_end": 21,
+            }
+        ],
+    }
+    answer = """### Kai Song
+
+- Education: B.S. and M.S.; currently pursuing a Ph.D. [1]
+
+### Yaoxing Bian
+
+- Education: Ph.D.; current position: lecturer. [1]
+
+### Liantuan Xiao
+
+- Education: B.S., M.S., and Ph.D.; current position: Changjiang professor.
+"""
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=[source_path],
+    )
+
+    assert repaired.count("[1]") == 3
+    assert re.search(r"### Liantuan Xiao.*?\[1\]", repaired, flags=re.DOTALL)
+
+
+def test_per_author_profiles_keep_distinct_same_paper_occurrence_links(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_missing_system_a_citations,
+        _refine_system_a_cite_evidence_from_citation_plan,
+    )
+    from ui.refs_renderer import _annotate_inpaper_citations_with_hover_meta
+
+    monkeypatch.setattr("ui.refs_renderer._is_temp_source_path", lambda _path: False)
+    monkeypatch.setattr("ui.refs_renderer._load_reference_index_cached", lambda: {})
+
+    source_path = str(tmp_path / "LPR" / "LPR.en.md")
+    profiles = [
+        (
+            "Kai Song",
+            "Kai Song completed undergraduate and master degrees and is now pursuing "
+            "a doctorate in single-pixel imaging.",
+            "bio-kai",
+            "sent-kai",
+        ),
+        (
+            "Yaoxing Bian",
+            "Yaoxing Bian completed a doctorate and is currently a lecturer studying "
+            "random lasers and single-pixel imaging.",
+            "bio-yaoxing",
+            "sent-yaoxing",
+        ),
+        (
+            "Liantuan Xiao",
+            "Liantuan Xiao completed three degrees and is currently a Changjiang "
+            "professor studying laser spectroscopy.",
+            "bio-liantuan",
+            "sent-liantuan",
+        ),
+    ]
+    hits: list[dict] = []
+    slots: list[dict] = []
+    for num, (name, evidence, block_id, anchor_id) in enumerate(profiles, start=1):
+        primary = {
+            "source_path": source_path,
+            "source_name": "LPR.pdf",
+            "heading_path": "Author Biography",
+            "snippet": evidence,
+            "highlight_snippet": evidence,
+            "block_id": block_id,
+            "anchor_id": anchor_id,
+            "anchor_kind": "paragraph",
+            "page_start": 21,
+            "page_end": 21,
+            "strict_locate": True,
+        }
+        hits.append(
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "LPR.pdf",
+                    "heading_path": "Author Biography",
+                    "ref_answer_citation_num": num,
+                    "primary_block_id": block_id,
+                    "primary_anchor_id": anchor_id,
+                    "anchor_kind": "paragraph",
+                    "page_start": 21,
+                    "page_end": 21,
+                },
+                "ui_meta": {
+                    "source_path": source_path,
+                    "display_name": "LPR.pdf",
+                    "heading_path": "Author Biography",
+                    "summary_line": evidence,
+                    "primary_evidence": primary,
+                },
+            }
+        )
+        slots.append(
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [num],
+                "coverage_target": name,
+                "source_path": source_path,
+                "source_name": "LPR.pdf",
+                "heading_path": "Author Biography",
+                "evidence_quote": evidence,
+                "block_id": block_id,
+                "anchor_id": anchor_id,
+                "anchor_kind": "paragraph",
+                "page_start": 21,
+                "page_end": 21,
+                "strict_locate": True,
+            }
+        )
+    plan = {
+        "coverage_mode": "per_entity",
+        "coverage_entity_type": "author_profile",
+        "coverage_target_count": 3,
+        "coverage_targets": [profile[0] for profile in profiles],
+        "budget": {"system_a": 3, "system_b": 0},
+        "per_paragraph_budget": {"system_a": 3, "system_b": 0},
+        "slots": slots,
+    }
+    answer = """### Kai Song
+- Original evidence: `Kai Song completed undergraduate and master degrees and is now pursuing a doctorate in single-pixel imaging.` [1]
+
+### Yaoxing Bian
+- Original evidence: `Yaoxing Bian completed a doctorate and is currently a lecturer studying random lasers and single-pixel imaging.` [1][2]
+
+### Liantuan Xiao
+- Original evidence: `Liantuan Xiao completed three degrees and is currently a Changjiang professor studying laser spectroscopy.` [1][3]
+"""
+    canonical_paths = [source_path] * 3
+    citation_hits = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=3,
+        canonical_paths=canonical_paths,
+        answer_text=answer,
+    )
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        citation_hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=canonical_paths,
+    )
+
+    assert re.findall(r"(?<![!\\])\[(\d+)\](?!\()", repaired) == ["1", "2", "3"]
+    assert "[1][2]" not in repaired
+    assert "[1][3]" not in repaired
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        repaired,
+        citation_hits,
+        anchor_ns="author-biography-occurrences",
+        canonical_paths=canonical_paths,
+        citation_plan=plan,
+        render_locale="en",
+    )
+    rendered, details, registry = remap_system_a_citations_for_display(rendered, details)
+    rendered = _collapse_adjacent_same_citation_links(rendered)
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="en",
+    )
+
+    links = re.findall(r"\[1\]\(#([^\s)]+)", rendered)
+    assert len(links) == 3
+    assert len(set(links)) == 3
+    assert "[2](#" not in rendered
+    assert "[3](#" not in rendered
+    assert "[]" not in rendered
+    assert not re.search(r"\)\s*\[1\]\(#", rendered)
+    assert len(registry) == 1
+    assert registry[0]["display_num"] == 1
+    assert registry[0]["original_nums"] == [1, 2, 3]
+
+    details_by_anchor = {str(detail.get("anchor") or ""): detail for detail in refined}
+    for link, (name, _evidence, block_id, anchor_id), answer_hit_num in zip(
+        links,
+        profiles,
+        (1, 2, 3),
+    ):
+        detail = details_by_anchor[link]
+        assert detail["num"] == 1
+        assert detail["answer_hit_num"] == answer_hit_num
+        assert detail["block_id"] == block_id
+        assert detail["anchor_id"] == anchor_id
+        assert name in detail["evidence_quote"]
+        assert name in detail["card_evidence"]
+
+
+def test_per_author_citation_repair_does_not_mark_trailing_summary_or_inference() -> None:
+    from api.chat_render import _reading_guide_repair_per_entity_system_a_citations
+
+    source_path = "db/LPR/LPR-2025-Advances-and-Challenges.en.md"
+    evidence = (
+        "Kai Song received his degrees. Yaoxing Bian is currently a lecturer. "
+        "Liantuan Xiao is currently a Changjiang professor."
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "Author Biographies",
+                "ref_answer_citation_num": 1,
+            },
+        }
+    ]
+    plan = {
+        "coverage_mode": "per_entity",
+        "coverage_entity_type": "author_profile",
+        "coverage_target_count": 3,
+        "coverage_targets": ["Kai Song", "Yaoxing Bian", "Liantuan Xiao"],
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "heading_path": "Author Biographies",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+    compact_answer = """- Kai Song: degree holder.
+- Yaoxing Bian: current position is lecturer.
+- Liantuan Xiao: current position is Changjiang professor.
+
+Overall, this proves the team is internationally dominant.
+"""
+
+    repaired_compact = _reading_guide_repair_per_entity_system_a_citations(
+        compact_answer,
+        hits,
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert repaired_compact.count("[1]") == 3
+    assert "internationally dominant [1]" not in repaired_compact
+
+    headed_answer = """Kai Song
+- Current position: Ph.D. student.
+
+Yaoxing Bian
+- Current position: lecturer.
+
+Liantuan Xiao
+- Current position: Changjiang professor.
+- Inference: his research interests probably extend to quantum imaging.
+"""
+    repaired_headed = _reading_guide_repair_per_entity_system_a_citations(
+        headed_answer,
+        hits,
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert "Changjiang professor [1]." in repaired_headed
+    assert "quantum imaging [1]" not in repaired_headed
+
+
+def test_per_author_citation_prefers_supported_fact_over_hallucinated_later_field() -> None:
+    from api.chat_render import _reading_guide_repair_per_entity_system_a_citations
+
+    source_path = "db/LPR/LPR-2025-Advances-and-Challenges.en.md"
+    evidence = (
+        "Kai Song received his B.S. degree in 2019. "
+        "Yaoxing Bian is currently a lecturer."
+    )
+    plan = {
+        "coverage_mode": "per_entity",
+        "coverage_entity_type": "author_profile",
+        "coverage_target_count": 2,
+        "coverage_targets": ["Kai Song", "Yaoxing Bian"],
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "heading_path": "Author Biographies",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+    answer = """Kai Song
+- Education: B.S. degree.
+- Current position: professor at Stanford University.
+
+Yaoxing Bian
+- Current position: lecturer.
+"""
+
+    repaired = _reading_guide_repair_per_entity_system_a_citations(
+        answer,
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Author Biographies",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert "Education: B.S. degree [1]." in repaired
+    assert "Stanford University [1]" not in repaired
+
+    wrong_facts = """Kai Song
+- Education: M.S. and Ph.D. degrees in 2018.
+
+Yaoxing Bian
+- Current position: lecturer.
+"""
+    repaired_wrong_facts = _reading_guide_repair_per_entity_system_a_citations(
+        wrong_facts,
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Author Biographies",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert "M.S. and Ph.D. degrees in 2018 [1]" not in repaired_wrong_facts
+    assert repaired_wrong_facts.count("[1]") == 1
+
+
+def test_per_author_profile_plan_rebinds_stale_same_source_abstract_hit() -> None:
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "db/LPR/LPR-2025-Advances-and-Challenges.en.md"
+    abstract = "The review discusses reconstruction quality and speed."
+    biographies = (
+        "Kai Song received his degrees. Yaoxing Bian is currently a lecturer. "
+        "Liantuan Xiao is currently a Changjiang professor."
+    )
+    hits = [
+        {
+            "text": "Yaoxing Bian is currently a lecturer.",
+            "meta": {
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "page_start": 1,
+                "page_end": 1,
+                "ref_answer_citation_num": 1,
+            },
+            "ui_meta": {
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "primary_evidence": {
+                    "source_path": source_path,
+                    "heading_path": "Abstract",
+                    "snippet": "Yaoxing Bian is currently a lecturer.",
+                    "page_start": 1,
+                    "page_end": 1,
+                    "strict_locate": True,
+                    "selection_reason": "answer_citation_grounded",
+                },
+            },
+        }
+    ]
+    plan = {
+        "source": "citation_plan_builder",
+        "coverage_mode": "per_entity",
+        "coverage_entity_type": "author_profile",
+        "coverage_target_count": 3,
+        "coverage_targets": ["Kai Song", "Yaoxing Bian", "Liantuan Xiao"],
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [],
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": abstract,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "page_start": 1,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "heading_path": "Author Biographies",
+                "evidence_quote": biographies,
+                "page_start": 21,
+                "page_end": 21,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": abstract,
+                "page_start": 1,
+            },
+        ],
+    }
+
+    rebound = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        canonical_paths=[source_path],
+        answer_text=(
+            "Kai Song earned his degrees. Yaoxing Bian is a lecturer. "
+            "Liantuan Xiao is a Changjiang professor."
+        ),
+    )
+
+    assert rebound[0]["text"] == biographies
+    assert rebound[0]["meta"]["heading_path"] == "Author Biographies"
+    assert rebound[0]["meta"]["page_start"] == 21
+    assert rebound[0]["ui_meta"]["primary_evidence"]["page_start"] == 21
 
 
 def test_lineage_system_b_retargets_same_reference_to_downstream_paper(tmp_path: Path) -> None:

@@ -8,6 +8,10 @@ from typing import Any
 from urllib.parse import unquote
 
 from kb.converter.quality_compare import summarize_markdown_quality
+from kb.converter.post_math_rules import (
+    adjacent_inline_math_superscript_hazard_count,
+    legacy_numeric_superscript_citation_count,
+)
 from kb.converter.tables import markdown_table_issue_counts
 from kb.converter.text_utils import count_mojibake
 from kb.reference_index import extract_references_map_from_md
@@ -79,6 +83,8 @@ class ConversionQualityMetrics:
     prose_dominant_display_math_block_count: int
     display_math_markdown_link_count: int
     inline_math_count: int
+    adjacent_inline_math_superscript_hazard_count: int
+    legacy_numeric_superscript_citation_count: int
     conversion_retry_marker_count: int
     conversion_retry_math_text_count: int
     conversion_retry_equation_count: int
@@ -256,6 +262,8 @@ def summarize_conversion_quality(md_path: Path, md_text: str | None = None) -> C
         prose_dominant_display_math_block_count=prose_display_math_count,
         display_math_markdown_link_count=display_math_link_count,
         inline_math_count=base.inline_math_count,
+        adjacent_inline_math_superscript_hazard_count=adjacent_inline_math_superscript_hazard_count(text),
+        legacy_numeric_superscript_citation_count=legacy_numeric_superscript_citation_count(text),
         conversion_retry_marker_count=retry_count,
         conversion_retry_math_text_count=retry_math_text_count,
         conversion_retry_equation_count=retry_equation_count,
@@ -377,6 +385,8 @@ def evaluate_conversion_quality(
         "max_unclosed_display_math": "unclosed_display_math_block_count",
         "max_prose_dominant_display_math": "prose_dominant_display_math_block_count",
         "max_display_math_markdown_links": "display_math_markdown_link_count",
+        "max_adjacent_inline_math_superscript_hazards": "adjacent_inline_math_superscript_hazard_count",
+        "max_legacy_numeric_superscript_citations": "legacy_numeric_superscript_citation_count",
         "max_conversion_retries": "conversion_retry_marker_count",
         "max_conversion_retry_math_text": "conversion_retry_math_text_count",
         "max_conversion_retry_equation": "conversion_retry_equation_count",

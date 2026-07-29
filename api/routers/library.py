@@ -458,6 +458,12 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
             "display_math": int(metrics.display_math_block_count),
             "inline_math": int(metrics.inline_math_count),
             "unclosed_display_math": int(metrics.unclosed_display_math_block_count),
+            "adjacent_inline_math_superscript_hazards": int(
+                metrics.adjacent_inline_math_superscript_hazard_count
+            ),
+            "legacy_numeric_superscript_citations": int(
+                metrics.legacy_numeric_superscript_citation_count
+            ),
             "references": int(metrics.extracted_reference_count),
             "reference_lines": int(metrics.reference_line_count),
             "body_citations": int(metrics.body_citation_expanded_index_count),
@@ -479,6 +485,10 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
                 return int(metrics.missing_image_count)
             if code == "unclosed_display_math":
                 return int(metrics.unclosed_display_math_block_count)
+            if code == "adjacent_inline_math_superscript":
+                return int(metrics.adjacent_inline_math_superscript_hazard_count)
+            if code == "legacy_numeric_superscript_citation":
+                return int(metrics.legacy_numeric_superscript_citation_count)
             if code == "mojibake":
                 return int(metrics.mojibake_count)
             if code == "analyzer_errors":
@@ -533,6 +543,20 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
                 add_issue("missing_images", "Missing image assets", severity="error", count=metrics.missing_image_count, penalty=10)
             if metrics.unclosed_display_math_block_count > 0:
                 add_issue("unclosed_display_math", "Unclosed display math", severity="error", count=metrics.unclosed_display_math_block_count, penalty=18)
+            if metrics.adjacent_inline_math_superscript_hazard_count > 0:
+                add_issue(
+                    "adjacent_inline_math_superscript",
+                    issue_label_for_code("adjacent_inline_math_superscript"),
+                    count=metrics.adjacent_inline_math_superscript_hazard_count,
+                    penalty=8,
+                )
+            if metrics.legacy_numeric_superscript_citation_count > 0:
+                add_issue(
+                    "legacy_numeric_superscript_citation",
+                    issue_label_for_code("legacy_numeric_superscript_citation"),
+                    count=metrics.legacy_numeric_superscript_citation_count,
+                    penalty=6,
+                )
             if metrics.mojibake_count > 0:
                 add_issue("mojibake", "Encoding artifacts", severity="error", count=metrics.mojibake_count, penalty=12)
             if metrics.analyzer_error_count > 0:

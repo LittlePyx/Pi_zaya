@@ -229,6 +229,16 @@ const readerRegressionRenderPolishMarkdown = [
   '',
   'The reconstructed resolution is $128\\times128 \\to 256\\times256 [66]$, while the supporting prose cites [66].',
   '',
+  'Legacy citations remain visible as Method\\textsuperscript{[43]} and result<sup>[180]</sup>.',
+  '',
+  'Scientific superscripts stay semantic as m<sup>2</sup>, cm<sup>3</sup>, 10\\textsuperscript{6}, x², kg<sup>2</sup>, px², NA\\textsuperscript{2}, σ<sup>2</sup>, β\\textsuperscript{2}, and Δ².',
+  '',
+  'Inline code stays literal: `Method<sup>[43]</sup>` and ``Result\\textsuperscript{[180]}``.',
+  '',
+  'Acronym citations remain references as CNN<sup>12</sup> and SPI\\textsuperscript{99}.',
+  '',
+  'Low-number citations remain references as work<sup>2</sup> and method\\textsuperscript{3}.',
+  '',
   '$$',
   'O_l^{1} = W_l O_{l-1} + b_l [66]',
   '$$',
@@ -407,16 +417,38 @@ const readerRegressionCitationDetails = [
   },
 ]
 
-const readerRegressionRenderPolishCitationDetails = [{
-  ...readerRegressionCitationDetails[0],
-  num: 66,
-  display_num: 66,
-  linked_nums: [66],
-  anchor: 'kb-cite-reader-fixture-66',
-  raw: '[66] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007.',
-  cite_fmt: '[66] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007.',
-  location_label: 'Fixture Paper / References / [66]',
-}]
+const readerRegressionRenderPolishCitationDetails = [
+  {
+    ...readerRegressionCitationDetails[0],
+    num: 43,
+    display_num: 43,
+    linked_nums: [43],
+    anchor: 'kb-cite-reader-fixture-43',
+    raw: '[43] Example reference for a legacy LaTeX superscript citation.',
+    cite_fmt: '[43] Example reference for a legacy LaTeX superscript citation.',
+    location_label: 'Fixture Paper / References / [43]',
+  },
+  {
+    ...readerRegressionCitationDetails[0],
+    num: 66,
+    display_num: 66,
+    linked_nums: [66],
+    anchor: 'kb-cite-reader-fixture-66',
+    raw: '[66] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007.',
+    cite_fmt: '[66] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007.',
+    location_label: 'Fixture Paper / References / [66]',
+  },
+  {
+    ...readerRegressionCitationDetails[0],
+    num: 180,
+    display_num: 180,
+    linked_nums: [180],
+    anchor: 'kb-cite-reader-fixture-180',
+    raw: '[180] Example reference for a legacy HTML superscript citation.',
+    cite_fmt: '[180] Example reference for a legacy HTML superscript citation.',
+    location_label: 'Fixture Paper / References / [180]',
+  },
+]
 
 export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScenario) {
   if (scenario === 'citation-links' || scenario === 'citation-links-identity-conflict') {

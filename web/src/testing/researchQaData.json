@@ -607,6 +607,7 @@
         "minRefDocCount": 3,
         "maxRefDocCount": 3,
         "minCitationCount": 3,
+        "maxCitationCount": 3,
         "minCitationDocCount": 3,
         "maxCitationDocCount": 3,
         "maxSystemBCount": 0,

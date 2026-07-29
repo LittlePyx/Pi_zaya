@@ -216,6 +216,22 @@ def _rebind_system_a_occurrence_anchors(markdown: str, rows: list[dict]) -> str:
             if _positive_int(row.get("num")) == visible_num
             and str(row.get("anchor") or "").strip()
         ]
+        current_originals = set(_detail_original_numbers(current))
+        if current_originals:
+            same_occurrence = [
+                row
+                for row in candidates
+                if current_originals & set(_detail_original_numbers(row))
+            ]
+            if same_occurrence:
+                # Display compaction intentionally gives every passage from
+                # one paper the same visible number.  Preserve the internal
+                # answer-hit coordinate before using semantic similarity, or
+                # a weak/filtered quote for occurrence 3 can be rebound to the
+                # stronger quote belonging to occurrence 2.  Multiple rows
+                # with the same original coordinate remain eligible for the
+                # existing claim-aware passage selection.
+                candidates = same_occurrence
         if len(candidates) <= 1:
             pieces.append(surface)
             cursor = match.end()

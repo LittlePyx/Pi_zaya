@@ -23,6 +23,8 @@ db/
 chat.db
 kb_chat.db
 library.db
+*.db-wal
+*.db-shm
 
 # Local logs / temp outputs
 .runtime/

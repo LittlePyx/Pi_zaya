@@ -49,7 +49,13 @@ let conversationSwitchToken = 0
 const NEW_CONVERSATION_GENERATION_LOCK = '__new_conversation_generation__'
 const generationStartLocks = new Set<string>()
 const SIDEBAR_CONVERSATION_LIMIT = 80
-const MESSAGE_PAGE_SIZE = 24
+// Render packets can include source evidence and citation-card contracts for
+// every assistant turn.  Loading twelve messages keeps the first screen useful
+// while older turns remain available through the existing paged history UI.
+const MESSAGE_PAGE_SIZE = 12
+// Post-generation polling only needs the just-created user/assistant pair.
+// Keep a small safety margin without repeatedly re-rendering a whole history.
+const POSTPROCESS_MESSAGE_PAGE_SIZE = 4
 const GENERATION_START_FAILED_CODE = 'generation_start_failed'
 const GENERATION_START_FAILED_MESSAGE_EN = 'Generation could not be started. Please retry.'
 const GENERATION_START_FAILED_MESSAGE_ZH = '回答任务未能启动，请稍后重试。'
@@ -1080,48 +1086,164 @@ function messageCitationRevisionForPostprocess(message: Message | null | undefin
   })
 }
 
-function messageHasReadyLocatePostprocess(message: Message | null | undefined): boolean {
-  if (!message || String(message.role || '').trim().toLowerCase() !== 'assistant') return false
-  const provenance = getMessageProvenanceForPostprocess(message)
-  if (provenance) {
-    const status = String(provenance.status || '').trim().toLowerCase()
-    const segments = Array.isArray(provenance.segments) ? provenance.segments : []
-    const strictIdentityReady = Boolean(provenance.strict_identity_ready)
-    const mustLocateCount = Math.max(
-      0,
-      Number(provenance.must_locate_count || 0) || 0,
-      Number(provenance.must_locate_candidate_count || 0) || 0,
-    )
-    if (status === 'ready' && (strictIdentityReady || segments.length > 0 || mustLocateCount > 0)) {
-      return true
-    }
-    if (!status && (strictIdentityReady || segments.length > 0 || mustLocateCount > 0)) {
-      return true
-    }
-  }
+function messageCitationPlanForPostprocess(message: Message | null | undefined): Record<string, unknown> | null {
+  const meta = message?.meta && typeof message.meta === 'object'
+    ? message.meta as Record<string, unknown>
+    : null
+  const answerQuality = meta?.answer_quality && typeof meta.answer_quality === 'object'
+    ? meta.answer_quality as Record<string, unknown>
+    : null
+  const contracts = meta?.paper_guide_contracts && typeof meta.paper_guide_contracts === 'object'
+    ? meta.paper_guide_contracts as Record<string, unknown>
+    : null
+  const plan = answerQuality?.citation_plan || contracts?.citation_plan || meta?.citation_plan
+  return plan && typeof plan === 'object' ? plan as Record<string, unknown> : null
+}
+
+function messageExpectsSystemACitations(message: Message | null | undefined): boolean {
+  const plan = messageCitationPlanForPostprocess(message)
+  if (!plan) return false
+  if (plan.system_a_enabled === true) return true
+  if (plan.system_a_enabled === false) return false
+  const budget = plan.budget && typeof plan.budget === 'object'
+    ? plan.budget as Record<string, unknown>
+    : null
+  if (Math.max(0, Number(budget?.system_a || 0) || 0) > 0) return true
+  const slots = Array.isArray(plan.slots) ? plan.slots : []
+  return slots.some((raw) => {
+    const slot = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+    return String(slot?.preferred_system || '').trim().toLowerCase() === 'system_a'
+  })
+}
+
+function messageExpectsSystemBCitations(message: Message | null | undefined): boolean {
+  const plan = messageCitationPlanForPostprocess(message)
+  if (!plan) return false
+  if (plan.system_b_enabled === true) return true
+  if (plan.system_b_enabled === false) return false
+  const budget = plan.budget && typeof plan.budget === 'object'
+    ? plan.budget as Record<string, unknown>
+    : null
+  if (Math.max(0, Number(budget?.system_b || 0) || 0) > 0) return true
+  const slots = Array.isArray(plan.slots) ? plan.slots : []
+  return slots.some((raw) => {
+    const slot = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+    return String(slot?.preferred_system || '').trim().toLowerCase() === 'system_b'
+  })
+}
+
+function messageFinalRenderedBodyForPostprocess(message: Message | null | undefined): string {
   const packet = getMessageRenderPacketForPostprocess(message)
-  if (packet) {
-    const segmentIds = Array.isArray(packet.segment_ids) ? packet.segment_ids : []
-    const visibleSegmentIds = Array.isArray(packet.visible_segment_ids) ? packet.visible_segment_ids : []
-    if (
-      packet.locate_target
-      || packet.reader_open
-      || segmentIds.length > 0
-      || visibleSegmentIds.length > 0
-    ) {
-      return true
-    }
+  if (packet) return String(packet.rendered_body || '').trim()
+  return String(message?.rendered_body || '').trim()
+}
+
+function messageHasAnyAnchoredCitation(message: Message | null | undefined): boolean {
+  const renderedBody = messageFinalRenderedBodyForPostprocess(message)
+  if (!renderedBody) return false
+  const packet = getMessageRenderPacketForPostprocess(message)
+  const details = packet && Array.isArray(packet.cite_details)
+    ? packet.cite_details
+    : Array.isArray(message?.cite_details) ? message.cite_details : []
+  return details.some((raw) => {
+    const detail = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+    const anchor = String(detail?.anchor || '').trim().replace(/^#/, '')
+    return Boolean(anchor && renderedBody.includes(`#${anchor}`))
+  })
+}
+
+function messageHasAnchoredCitations(message: Message | null | undefined): boolean {
+  const renderedBody = messageFinalRenderedBodyForPostprocess(message)
+  if (!renderedBody) return false
+  const packet = getMessageRenderPacketForPostprocess(message)
+  const details = packet
+    ? (Array.isArray(packet.cite_details) ? packet.cite_details : [])
+    : (Array.isArray(message?.cite_details) ? message.cite_details : [])
+  const plan = messageCitationPlanForPostprocess(message)
+  const requiredCount = String(plan?.coverage_mode || '').trim().toLowerCase() === 'per_entity'
+    ? Math.max(1, Number(plan?.coverage_target_count || 0) || 0)
+    : 1
+  const expectsSystemA = messageExpectsSystemACitations(message)
+  const expectsSystemB = messageExpectsSystemBCitations(message)
+  let anchoredSystemA = 0
+  let anchoredSystemB = 0
+  const countedAnchors = new Set<string>()
+  for (const raw of details) {
+    const detail = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+    const route = String(detail?.citation_route || '').trim().toLowerCase()
+    const anchor = String(detail?.anchor || '').trim().replace(/^#/, '')
+    if (!anchor || countedAnchors.has(anchor)) continue
+    countedAnchors.add(anchor)
+    let occurrenceCount = 0
+    occurrenceCount += renderedBody.split(`](#${anchor})`).length - 1
+    occurrenceCount += renderedBody.split(`](#${anchor} `).length - 1
+    occurrenceCount += renderedBody.split(`href="#${anchor}"`).length - 1
+    occurrenceCount += renderedBody.split(`href='#${anchor}'`).length - 1
+    if (route === 'system_b') anchoredSystemB += occurrenceCount
+    else anchoredSystemA += occurrenceCount
   }
-  return false
+  if (!expectsSystemA && !expectsSystemB) return anchoredSystemA + anchoredSystemB > 0
+  return (!expectsSystemA || anchoredSystemA >= requiredCount)
+    && (!expectsSystemB || anchoredSystemB >= 1)
+}
+
+function refsPackForPostprocessMessage(
+  refs: Record<string, unknown> | null | undefined,
+  message: Message | null | undefined,
+): Record<string, unknown> | null {
+  const refsUserMsgId = Number(message?.refs_user_msg_id || 0)
+  if (!Number.isFinite(refsUserMsgId) || refsUserMsgId <= 0 || !refs || typeof refs !== 'object') {
+    return null
+  }
+  const pack = refs[String(refsUserMsgId)]
+  return pack && typeof pack === 'object' ? pack as Record<string, unknown> : null
+}
+
+function refsPackIsSettledForPostprocess(refPack: Record<string, unknown> | null): boolean {
+  if (!refPack) return false
+  const payloadMode = String(refPack.payload_mode || '').trim().toLowerCase()
+  const renderStatus = String(refPack.render_status || '').trim().toLowerCase()
+  const displayState = String(refPack.display_state || '').trim().toLowerCase()
+  const pending = refPack.enrichment_pending === true
+    || refPack.pending === true
+    || payloadMode === 'pending'
+    || displayState === 'pending'
+  const settled = refPack.enrichment_pending === false
+    || payloadMode === 'full'
+    || renderStatus === 'full'
+  return !pending && settled
+}
+
+function messageHasExplicitZeroCitationTerminal(
+  message: Message | null | undefined,
+  refs?: Record<string, unknown>,
+): boolean {
+  // A citation plan may legitimately end with no links when retrieval found
+  // no candidate at all.  Use only the pack for this assistant message's
+  // exact user turn; a settled historical pack must not stop current polling.
+  const refPack = refsPackForPostprocessMessage(refs, message)
+  if (!refPack) return false
+  const displayState = String(refPack.display_state || '').trim().toLowerCase()
+  const suppressionReason = String(refPack.suppression_reason || '').trim().toLowerCase()
+  const pipelineDebug = refPack.pipeline_debug && typeof refPack.pipeline_debug === 'object'
+    ? refPack.pipeline_debug as Record<string, unknown>
+    : null
+  const rawHitCount = Math.max(0, Number(pipelineDebug?.raw_hit_count || 0) || 0)
+  return refsPackIsSettledForPostprocess(refPack)
+    && displayState === 'empty'
+    && suppressionReason === 'no_candidate_hits'
+    && rawHitCount === 0
 }
 
 function messageNeedsPostprocessRefresh(
   message: Message | null | undefined,
-  opts?: { paperGuideMode?: boolean },
+  opts?: { paperGuideMode?: boolean; refs?: Record<string, unknown> },
 ): boolean {
   if (!message) return true
   if (String(message.role || '').trim().toLowerCase() !== 'assistant') return false
-  if (messageHasReadyLocatePostprocess(message)) return false
+  if (messageHasAnchoredCitations(message)) return false
+  if (messageHasExplicitZeroCitationTerminal(message, opts?.refs)) return false
+  if (messageExpectsSystemACitations(message) || messageExpectsSystemBCitations(message)) return true
   const provenance = getMessageProvenanceForPostprocess(message)
   const status = String(provenance?.status || '').trim().toLowerCase()
   if (status && status !== 'ready') return true
@@ -1140,7 +1262,9 @@ async function startMessagePostprocessPolling(
   if (!convId || !Number.isFinite(msgId) || msgId <= 0 || typeof window === 'undefined') return
   const token = ++messagePostprocessPollToken
   let tries = 0
-  const maxTries = opts?.paperGuideMode ? 60 : 18
+  let lastObservedRevision = ''
+  let stableRevisionTries = 0
+  const maxTries = opts?.paperGuideMode ? 24 : 18
   const minTries = opts?.paperGuideMode ? 4 : 1
   const nextDelay = () => {
     if (tries <= 4) return 350
@@ -1160,7 +1284,7 @@ async function startMessagePostprocessPolling(
     const previousCitationRevision = messageCitationRevisionForPostprocess(previousTarget)
     try {
       const { page } = await getMessagesPageWithFallback(convId, {
-        limit: MESSAGE_PAGE_SIZE,
+        limit: POSTPROCESS_MESSAGE_PAGE_SIZE,
         renderPacketOnly: opts?.paperGuideMode ? true : undefined,
       })
       if (token !== messagePostprocessPollToken || getState().activeConvId !== convId) return
@@ -1196,7 +1320,31 @@ async function startMessagePostprocessPolling(
           'message_postprocess_citations_changed',
         )
       }
-      if ((!messageNeedsPostprocessRefresh(target, opts) && tries >= minTries) || tries >= maxTries) {
+      const needsRefresh = messageNeedsPostprocessRefresh(target, {
+        ...opts,
+        refs: getState().refs,
+      })
+      if (nextCitationRevision && nextCitationRevision === lastObservedRevision) {
+        stableRevisionTries += 1
+      } else {
+        lastObservedRevision = nextCitationRevision
+        stableRevisionTries = 0
+      }
+      const hasSomeAnchoredCitation = messageHasAnyAnchoredCitation(target)
+      const exactRefsSettled = refsPackIsSettledForPostprocess(
+        refsPackForPostprocessMessage(getState().refs, target),
+      )
+      const provenanceStatus = String(
+        getMessageProvenanceForPostprocess(target)?.status || '',
+      ).trim().toLowerCase()
+      const stableTerminal = Boolean(
+        needsRefresh
+        && tries >= minTries
+        && provenanceStatus === 'ready'
+        && exactRefsSettled
+        && stableRevisionTries >= (hasSomeAnchoredCitation ? 4 : 8)
+      )
+      if ((!needsRefresh && tries >= minTries) || stableTerminal || tries >= maxTries) {
         messagePostprocessPollTimer = null
         return
       }
@@ -2805,7 +2953,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const assistantMessage = postprocessState.messages.find(
               (item) => Number(item.id || 0) === Number(res.assistant_msg_id || 0),
             ) || null
-            if (paperGuideMode || messageNeedsPostprocessRefresh(assistantMessage, { paperGuideMode })) {
+            if (paperGuideMode || messageNeedsPostprocessRefresh(assistantMessage, {
+              paperGuideMode,
+              refs: postprocessState.refs,
+            })) {
               void startMessagePostprocessPolling(
                 convId!,
                 res.assistant_msg_id,

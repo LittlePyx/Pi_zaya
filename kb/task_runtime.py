@@ -353,6 +353,7 @@ from kb.paper_guide_prompting import (
     _paper_guide_prompt_requests_citation_lookup,
     _paper_guide_prompt_requests_exact_method_support,
     _paper_guide_requested_heading_hints,
+    _paper_guide_requested_section_targets,
     _requested_figure_number as _prompting_requested_figure_number,
     _paper_guide_text_matches_requested_box,
     _paper_guide_text_matches_requested_section,
@@ -635,16 +636,63 @@ def _generation_refs_precompute_enabled() -> bool:
 
 
 def _generation_llm_retry_timeout_s() -> float:
-    raw = str(os.environ.get("KB_GENERATION_LLM_RETRY_TIMEOUT_S", "18") or "18").strip()
+    raw = str(os.environ.get("KB_GENERATION_LLM_RETRY_TIMEOUT_S", "8") or "8").strip()
     try:
         timeout_s = float(raw)
     except Exception:
-        timeout_s = 18.0
-    return max(8.0, min(30.0, timeout_s))
+        timeout_s = 8.0
+    return max(4.0, min(12.0, timeout_s))
 
 
 def _retrieval_query_expansion_allowed(*, current_paper_scoped: bool, cross_paper_requested: bool) -> bool:
     return bool((not current_paper_scoped) or cross_paper_requested)
+
+
+def _paper_guide_fast_bound_section_hits(
+    *,
+    paper_guide_source_scoped: bool,
+    paper_guide_cross_paper_refs: bool,
+    bound_source_path: str,
+    prompt: str,
+    db_dir,
+    top_k: int,
+) -> list[dict]:
+    """Return exact bound-source blocks for a safe, explicit section request.
+
+    Author-biography questions name a concrete section and already carry a
+    bound paper identity.  Searching the whole library before reading that
+    section adds translation/query-expansion latency and can only introduce
+    unrelated candidates.  Keep this intentionally narrow: if the requested
+    section is not recognized or the targeted scan cannot verify the target,
+    the caller falls back to the normal retrieval pipeline.
+    """
+
+    source_path = str(bound_source_path or "").strip()
+    prompt_text = str(prompt or "").strip()
+    if (
+        not paper_guide_source_scoped
+        or paper_guide_cross_paper_refs
+        or not source_path
+        or not prompt_text
+        or "author_biographies" not in _paper_guide_requested_section_targets(prompt_text)
+    ):
+        return []
+    try:
+        hits = _paper_guide_targeted_source_block_hits(
+            bound_source_path=source_path,
+            prompt=prompt_text,
+            db_dir=db_dir,
+            limit=max(4, min(8, int(top_k or 4) + 2)),
+        )
+    except Exception:
+        return []
+    verified = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
+    if not verified or not _paper_guide_has_requested_target_hits(
+        verified,
+        prompt=prompt_text,
+    ):
+        return []
+    return verified
 
 
 def _is_synthetic_research_basket_hit(hit: dict) -> bool:
@@ -1080,15 +1128,14 @@ def _should_retry_generation_non_stream(
     # including when no token was emitted at all.
     if isinstance(stream_exc, TimeoutError):
         return False
-    return bool(
-        (not streamed)
-        or _looks_like_incomplete_stream_partial(
-            partial,
-            paper_guide_mode=paper_guide_mode,
-            prompt_family=prompt_family,
-            has_hits=has_hits,
-        )
-    )
+    # Once any answer text is visible, keep and deterministically finalize it.
+    # Retrying a second full provider call after a broken connection is the
+    # failure-path long tail the user experiences as an unresponsive stop
+    # button.  A short, bounded retry remains useful only for failures before
+    # the provider emitted its first token.
+    if streamed or str(partial or "").strip():
+        return False
+    return True
 
 
 def _rendered_primary_precision_score(primary_evidence: dict | None) -> tuple[int, int, int, int, int, int]:
@@ -3923,6 +3970,24 @@ def _answer_ready_task_patch(
     }
 
 
+def _publish_answer_ready_then_start_refs(
+    *,
+    session_id: str,
+    task_id: str,
+    answer_ready_patch: dict,
+    start_deferred_refs,
+) -> None:
+    """Close the answer stream before starting optional reference enrichment."""
+
+    _gen_update_task(
+        session_id,
+        task_id,
+        **dict(answer_ready_patch or {}),
+    )
+    if callable(start_deferred_refs):
+        start_deferred_refs()
+
+
 def _select_refs_async_rebuild_hits_raw(
     *,
     hits_raw: list[dict],
@@ -4905,17 +4970,38 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         elif prompt and (not bypass_kb):
             _gen_update_task(session_id, task_id, stage="retrieve")
             t_ret0 = time.perf_counter()
-            hits_raw, scores_raw, used_query, used_translation, query_variants = _search_hits_with_fallback(
-                retrieval_prompt,
-                retriever,
-                top_k=top_k,
-                settings=settings_obj,
-                whole_library=bool(effective_query_scope == "library"),
-                allow_expand=_retrieval_query_expansion_allowed(
-                    current_paper_scoped=bool(paper_guide_source_scoped),
-                    cross_paper_requested=bool(paper_guide_cross_paper_refs),
-                ),
+            fast_bound_section_hits = _paper_guide_fast_bound_section_hits(
+                paper_guide_source_scoped=bool(paper_guide_source_scoped),
+                paper_guide_cross_paper_refs=bool(paper_guide_cross_paper_refs),
+                bound_source_path=paper_guide_bound_source_path,
+                prompt=prompt or retrieval_prompt or "",
+                db_dir=db_dir,
+                top_k=int(top_k or 4),
             )
+            if fast_bound_section_hits:
+                hits_raw = list(fast_bound_section_hits)
+                scores_raw = [float(hit.get("score") or 1_000_000.0) for hit in hits_raw]
+                used_query = str(prompt or retrieval_prompt or "").strip()
+                used_translation = False
+                query_variants = [used_query] if used_query else []
+                _perf_log(
+                    "gen.retrieve_fast_bound_section",
+                    elapsed=time.perf_counter() - t_ret0,
+                    hits_raw=len(hits_raw),
+                    section="author_biographies",
+                )
+            else:
+                hits_raw, scores_raw, used_query, used_translation, query_variants = _search_hits_with_fallback(
+                    retrieval_prompt,
+                    retriever,
+                    top_k=top_k,
+                    settings=settings_obj,
+                    whole_library=bool(effective_query_scope == "library"),
+                    allow_expand=_retrieval_query_expansion_allowed(
+                        current_paper_scoped=bool(paper_guide_source_scoped),
+                        cross_paper_requested=bool(paper_guide_cross_paper_refs),
+                    ),
+                )
             if answer_audit_source_hints:
                 current_audit_hits, _current_audit_scores = filter_hits_to_source_hints(
                     hits_raw,
@@ -5786,7 +5872,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 return
             refs_async_started = True
             refs_async_start()
-            _trace_event("refs_async_started", elapsed_s=0.0, after="provider_answer_complete")
+            _trace_event("refs_async_started", elapsed_s=0.0, after="answer_ready_published")
 
         _gen_update_task(session_id, task_id, stage="context", used_query=str(used_query or ""), used_translation=bool(used_translation), refs_done=True)
 
@@ -6351,7 +6437,6 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 elapsed_s=time.perf_counter() - t_answer0,
                 direct_override=True,
             )
-            _start_deferred_refs_async()
         else:
             try:
                 if ds is None:
@@ -6437,9 +6522,6 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         raise stream_exc
             else:
                 pass
-
-        if str(partial or "").strip():
-            _start_deferred_refs_async()
 
         _trace_event(
             "llm_answer",
@@ -6858,10 +6940,17 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             research_trace=research_trace,
         )
         answer_ready_patch["answer_published_before_refs"] = True
-        _gen_update_task(
-            session_id,
-            task_id,
-            **answer_ready_patch,
+        # Reference-card enrichment performs another provider call and can also
+        # contend for SQLite/CPU while it assembles source evidence.  Starting
+        # it before finalization previously left the UI in a long "stop" state
+        # even though answer text had already reached storage.  Publish the
+        # durable terminal answer first; cards continue independently after the
+        # SSE stream is allowed to close.
+        _publish_answer_ready_then_start_refs(
+            session_id=session_id,
+            task_id=task_id,
+            answer_ready_patch=answer_ready_patch,
+            start_deferred_refs=_start_deferred_refs_async,
         )
         refs_precompute_enabled = _generation_refs_precompute_enabled()
         if (

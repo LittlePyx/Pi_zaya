@@ -233,6 +233,42 @@ def test_chat_stream_routes_share_one_total_deadline(monkeypatch):
     assert len(secondary.calls) == 1
 
 
+def test_chat_stream_routes_share_one_first_visible_deadline(monkeypatch):
+    class _DelayedCompletions(_FakeCompletions):
+        def __init__(self, delay_s: float, pieces: list[str]) -> None:
+            super().__init__(pieces=pieces)
+            self.delay_s = delay_s
+
+        def create(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            time.sleep(self.delay_s)
+            return [_FakeEvent(piece) for piece in self.pieces]
+
+    settings = _FakeSettings()
+    settings.auto_route = True
+    primary = _DelayedCompletions(0.06, ["late primary"])
+    secondary = _DelayedCompletions(0.06, ["late secondary"])
+    ds = DeepSeekChat.__new__(DeepSeekChat)
+    ds._settings = settings
+    ds._text_client = _FakeClient(primary)
+    ds._vision_client = _FakeClient(secondary)
+    monkeypatch.setattr(ds, "_first_visible_token_timeout_s", lambda: 0.05)
+    monkeypatch.setattr(ds, "_first_visible_token_total_timeout_s", lambda: 0.08)
+    monkeypatch.setattr(ds, "_stream_total_timeout_s", lambda: 0.3)
+
+    started = time.monotonic()
+    try:
+        list(ds.chat_stream(messages=[{"role": "user", "content": "hello"}]))
+    except TimeoutError as exc:
+        assert "first visible token across provider routes" in str(exc)
+    else:
+        raise AssertionError("provider routes must share one first-visible deadline")
+
+    assert time.monotonic() - started < 0.14
+    assert len(primary.calls) == 1
+    assert len(secondary.calls) == 1
+
+
 def test_chat_supports_bounded_single_attempt_retry() -> None:
     class _ResponseCompletions:
         def __init__(self) -> None:

@@ -99,3 +99,18 @@ def test_research_answer_plan_prompt_block_is_compact():
     assert plan.kind == "critical_review"
     assert block.count("\n") <= 5
     assert "Research answer plan:" in block
+
+
+def test_infer_research_answer_plan_uses_fact_extraction_for_author_profiles():
+    plan = infer_research_answer_plan(
+        prompt=(
+            "\u8bf7\u6839\u636e Author Biographies\uff0c\u5206\u522b\u6982\u62ec Kai Song\u3001Yaoxing Bian \u548c "
+            "Liantuan Xiao \u7684\u6559\u80b2\u7ecf\u5386\u3001\u5f53\u524d\u804c\u4f4d\u548c\u7814\u7a76\u65b9\u5411\u3002"
+        ),
+        paper_guide_prompt_family="overview",
+        paper_guide_mode=True,
+    )
+
+    assert plan.kind == "fact_extraction"
+    assert "named entity" in plan.answer_shape
+    assert "locator" in plan.answer_shape

@@ -200,6 +200,65 @@ def test_prepare_paper_guide_prompt_context_builds_reference_opportunity_block(m
     assert out["paper_guide_contracts_seed"]["reference_opportunities"][0]["ref_num"] == 4
 
 
+def test_prepare_author_profile_context_skips_upstream_reference_scan(monkeypatch):
+    source_path = r"db\demo\paper.en.md"
+    biography_text = (
+        "Kai Song received his B.S. degree in 2019. "
+        "Yaoxing Bian received his B.S. degree in 2017. "
+        "Liantuan Xiao received his B.S. degree in 1989."
+    )
+    support_slot = {
+        "source_path": source_path,
+        "heading_path": "Author Biography",
+        "text": biography_text,
+        "evidence_quote": biography_text,
+        "snippet": biography_text,
+    }
+    monkeypatch.setattr(
+        context_runtime,
+        "_build_paper_guide_support_slots",
+        lambda *_args, **_kwargs: [support_slot],
+    )
+    monkeypatch.setattr(
+        context_runtime,
+        "detect_paper_guide_reference_opportunities",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("author profiles must not scan upstream references")
+        ),
+    )
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_evidence_cards_block", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_support_slots_block", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_special_focus_block", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(context_runtime, "_collect_paper_guide_candidate_refs_by_source", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_citation_grounding_block", lambda *_args, **_kwargs: "")
+
+    out = context_runtime._prepare_paper_guide_prompt_context(
+        paper_guide_mode=True,
+        paper_guide_bound_source_ready=True,
+        answer_hits=[
+            {
+                "text": biography_text,
+                "meta": {"source_path": source_path, "heading_path": "Author Biography"},
+            }
+        ],
+        paper_guide_evidence_cards=[],
+        prompt=(
+            "请根据作者简介分别概括 Kai Song、Yaoxing Bian 和 Liantuan Xiao 的教育经历，"
+            "并逐人给出原文证据。"
+        ),
+        retrieval_prompt="Author Biography Kai Song Yaoxing Bian Liantuan Xiao",
+        used_query="Author Biography",
+        prompt_family="overview",
+        paper_guide_bound_source_path=source_path,
+        db_dir="db",
+    )
+
+    assert out["paper_guide_reference_opportunities"] == []
+    assert out["citation_plan"]["intent"] == "beginner_overview"
+    assert out["citation_plan"]["system_b_enabled"] is False
+    assert out["citation_plan"]["coverage_mode"] == "per_entity"
+
+
 def test_prepare_ordinary_lineage_context_builds_grounded_reference_plan(monkeypatch):
     source_path = r"db\demo\scinerf.en.md"
     opportunity = {

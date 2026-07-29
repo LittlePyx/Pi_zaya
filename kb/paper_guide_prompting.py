@@ -51,13 +51,18 @@ _PAPER_GUIDE_REPRO_PROMPT_RE_CLEAN = re.compile(
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_STRENGTH_PROMPT_RE = re.compile(
-    r"(\bstrongest evidence\b|\blimitation\b|\bweakness\b|\bindirect(?:ly)? supported\b|\bwhat is missing\b|"
+    r"(\bstrongest evidence\b|\blimitations?\b|\bweakness\b|\bindirect(?:ly)? supported\b|\bwhat is missing\b|"
+    r"\bevidence\b.{0,24}\b(?:sufficient|adequate|enough)\b|"
     r"\bbenefits?\b|\bpitfalls?\b|\bpros\s+and\s+cons\b|\brisks?\b|\bchallenges?\b|"
-    r"证据|局限|不足|缺点|薄弱|支撑)",
+    r"局限|不足|缺点|薄弱)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_STRENGTH_PROMPT_RE_CLEAN = re.compile(
-    r"(\u8bc1\u636e|\u5c40\u9650|\u4e0d\u8db3|\u7f3a\u70b9|\u8584\u5f31|\u652f\u6491|"
+    r"((?:\u6700\u5f3a|\u6700\u6709\u529b|\u5173\u952e).{0,6}\u8bc1\u636e|"
+    r"\u8bc1\u636e.{0,10}(?:\u662f\u5426\u5145\u5206|\u591f\u4e0d\u591f|\u5145\u5206\u5417|\u4e0d\u8db3|\u8584\u5f31|\u7f3a\u5931|\u7f3a\u5c11)|"
+    r"(?:\u80fd\u5426|\u662f\u5426|\u591f\u4e0d\u591f).{0,10}(?:\u652f\u6491|\u652f\u6301)(?:.{0,10}(?:\u7ed3\u8bba|\u4e3b\u5f20|\u8bf4\u6cd5))?|"
+    r"(?:\u652f\u6491|\u652f\u6301).{0,10}(?:\u4e0d\u8db3|\u8584\u5f31|\u4e0d\u5145\u5206)|"
+    r"\u5c40\u9650|\u4e0d\u8db3|\u7f3a\u70b9|\u8584\u5f31|"
     r"\u597d\u5904|\u574f\u5904|\u5751|\u98ce\u9669|\u6311\u6218|\u6536\u76ca|"
     r"\u5229\u5f0a|\u4f18\u7f3a\u70b9)",
     flags=re.IGNORECASE,
@@ -463,6 +468,32 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
         return "discussion_only"
     if _PAPER_GUIDE_FIGURE_PROMPT_RE.search(q):
         return "figure_walkthrough"
+    author_biography_request = bool(
+        "author_biographies" in _paper_guide_requested_section_targets(q)
+    )
+    critical_review_request = bool(
+        _PAPER_GUIDE_STRENGTH_PROMPT_RE.search(q)
+        or _PAPER_GUIDE_STRENGTH_PROMPT_RE_CLEAN.search(q)
+    )
+    if author_biography_request and critical_review_request:
+        # Biography fields usually request a factual profile, but an explicit
+        # limitation/evidence-sufficiency cue still asks for critical review.
+        return "strength_limits"
+    author_profile_request = bool(
+        author_biography_request
+        and re.search(
+            r"教育(?:经历)?|学历|学位|当前职位|现任|研究(?:方向|兴趣)|"
+            r"\beducation\b|\bdegrees?\b|\bcurrent\s+position\b|"
+            r"\bresearch\s+(?:direction|interests?)\b",
+            q,
+            flags=re.IGNORECASE,
+        )
+    )
+    if author_profile_request:
+        # “原文出处 / source” is a locator request when the user explicitly
+        # asks for biography fields; it is not a question about which upstream
+        # work the current paper borrowed from.
+        return "overview"
     if _paper_guide_prompt_requests_citation_lookup(q):
         return "citation_lookup"
     # Allow citation lookup to explicitly scope to "in the Abstract" without being misclassified as abstract.
@@ -472,6 +503,13 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
         return "equation"
     if _PAPER_GUIDE_REPRO_PROMPT_RE.search(q) or _PAPER_GUIDE_REPRO_PROMPT_RE_CLEAN.search(q) or intent == "experiment":
         return "reproduce"
+    # Author-profile questions often ask for clickable "evidence".  That word
+    # is also a deliberate strength/limitations cue below, but here it describes
+    # the requested answer provenance rather than a critical-review intent.
+    # Route the section-specific profile request as an overview so retrieval and
+    # answer planning stay focused on the biography records.
+    if author_biography_request:
+        return "overview"
     tradeoff_without_explicit_comparison = bool(
         re.search(r"(?i)\btrade[\s-]?off\b", q)
         and not re.search(
@@ -481,7 +519,7 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
     )
     if _PAPER_GUIDE_MODEL_CONTENT_PROMPT_RE.search(q):
         return "method"
-    if _PAPER_GUIDE_STRENGTH_PROMPT_RE.search(q) or _PAPER_GUIDE_STRENGTH_PROMPT_RE_CLEAN.search(q):
+    if critical_review_request:
         return "strength_limits"
     if tradeoff_without_explicit_comparison and (
         _paper_guide_requested_section_targets(q)
@@ -533,6 +571,24 @@ def _augment_paper_guide_retrieval_prompt(
     explicit_hints = _paper_guide_requested_heading_hints(q)
     if (not family_norm) and (not explicit_hints):
         return q
+    if "author_biographies" in _paper_guide_requested_section_targets(q):
+        # An explicit author-profile target is already narrower than the broad
+        # overview family.  Adding abstract/results/discussion terms here makes
+        # generic paper summaries compete with the requested biography rows.
+        biography_hints = [
+            *explicit_hints,
+            "education",
+            "degree",
+            "current position",
+            "research interests",
+        ]
+        norm = normalize_match_text(q)
+        missing = [
+            hint
+            for hint in biography_hints
+            if normalize_match_text(hint) not in norm
+        ]
+        return f"{q} {' '.join(missing[:8])}".strip() if missing else q
     explicit_ref_list_request = bool(
         re.search(r"(?i)\b(?:reference\s+list|works?\s+cited|bibliography)\b", q)
     )

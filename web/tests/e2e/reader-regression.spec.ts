@@ -406,11 +406,20 @@ test('reader hides conversion diagnostics and never linkifies citations inside m
   await expect(reader).not.toContainText('kb:conversion_retry')
   await expect(reader).toContainText('The updated bias remains visible')
   await expect(reader).toContainText('and the gradient remains visible.')
+  await expect(reader).toContainText('Legacy citations remain visible as Method [43] and result [180].')
+  await expect(reader).toContainText('Scientific superscripts stay semantic as m², cm³, 10⁶, x², kg², px², NA², σ², β², and Δ².')
+  await expect(reader.locator('code').filter({ hasText: 'Method<sup>[43]</sup>' })).toHaveCount(1)
+  await expect(reader.locator('code').filter({ hasText: 'Result\\textsuperscript{[180]}' })).toHaveCount(1)
+  await expect(reader).toContainText('Acronym citations remain references as CNN [12] and SPI [99].')
+  await expect(reader).toContainText('Low-number citations remain references as work [2] and method [3].')
   await expect(reader.locator('.katex-error')).toHaveCount(0)
   await expect(reader.locator('.katex a')).toHaveCount(0)
 
   const proseCitation = reader.locator('.kb-cite-chip-sysb').filter({ hasText: '[66]' })
   await expect(proseCitation).toHaveCount(1)
+  await expect(reader.locator('.kb-cite-chip-sysb').filter({ hasText: '[43]' })).toHaveCount(1)
+  await expect(reader.locator('.kb-cite-chip-sysb').filter({ hasText: '[180]' })).toHaveCount(1)
+  await expect(reader.locator('.kb-cite-chip-sysb').filter({ hasText: /^\[(?:2|3|6)\]$/ })).toHaveCount(0)
 })
 
 test('reader keeps page markers and figures out of an adjacent prose paragraph', async ({ page }) => {

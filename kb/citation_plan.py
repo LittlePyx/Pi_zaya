@@ -69,6 +69,10 @@ _REVIEW_CONTEXT_RE = re.compile(r"(?i)\b(?:review|survey)\b|\u7efc\u8ff0")
 _BIBLIOGRAPHY_HEADING_RE = re.compile(
     r"(?i)(?:^|\s/\s)(?:references?|bibliography|works\s+cited|\u53c2\u8003\u6587\u732e)\s*$"
 )
+_AUTHOR_BIOGRAPHY_ALIAS_RE = re.compile(
+    r"(?i)(?:\bauthor(?:s)?\s+biograph(?:y|ies)\b|\bauthor\s+profiles?\b|"
+    r"\u4f5c\u8005(?:\u7b80\u4ecb|\u4ecb\u7ecd|\u5c65\u5386|\u4fe1\u606f))"
+)
 _INLINE_REFERENCE_MARKER_RE = re.compile(r"(?<!\[)\[([^\[\]]{1,80})\](?!\])")
 
 
@@ -77,6 +81,10 @@ def _compact_text(value: Any, *, max_len: int = 240) -> str:
     if len(text) <= max_len:
         return text
     return text[: max(0, max_len - 1)].rstrip() + "..."
+
+
+def _is_author_biography_surface(value: Any) -> bool:
+    return bool(_AUTHOR_BIOGRAPHY_ALIAS_RE.search(str(value or "")))
 
 
 def _first_text(raw: Mapping[str, Any], *keys: str, max_len: int = 240) -> str:
@@ -693,6 +701,18 @@ def _citation_intent(prompt: str, *, prompt_family: str = "") -> str:
     routing_prompt = strip_negated_reference_trail_requests(prompt)
     raw = " ".join([routing_prompt, str(prompt_family or "")]).strip()
     family = str(prompt_family or "").strip().lower()
+    author_profile_request = bool(
+        _is_author_biography_surface(routing_prompt)
+        and re.search(
+            r"教育(?:经历)?|学历|学位|当前职位|现任|研究(?:方向|兴趣)|"
+            r"\beducation\b|\bdegrees?\b|\bcurrent\s+position\b|"
+            r"\bresearch\s+(?:direction|interests?)\b",
+            routing_prompt,
+            flags=re.IGNORECASE,
+        )
+    )
+    if author_profile_request:
+        return "beginner_overview"
     origin_match = bool(_ORIGIN_INTENT_RE.search(raw))
     marker_request = bool(_SOURCE_MARKER_REQUEST_RE.search(raw))
     if _SCOPE_BOUNDARY_INTENT_RE.search(raw):
@@ -733,6 +753,108 @@ def _explicit_comparison_facet_count(prompt: str) -> int:
         if item.strip()
     ]
     return min(8, len(english_items)) if len(english_items) >= 3 else 0
+
+
+def _requested_author_profile_targets(prompt: str) -> list[str]:
+    """Return explicitly named authors for a per-author profile request."""
+
+    raw = str(prompt or "").strip()
+    if not raw:
+        return []
+    author_profile_target = bool(
+        _is_author_biography_surface(raw)
+        or (
+            re.search(r"\u4f5c\u8005", raw)
+            and re.search(
+                r"\u5b66\u5386|\u5b66\u4f4d|\u6559\u80b2\u7ecf\u5386|\u5f53\u524d\u804c\u4f4d|\u7814\u7a76\u65b9\u5411|\u7814\u7a76\u5174\u8da3",
+                raw,
+            )
+        )
+    )
+    per_author = bool(
+        re.search(
+            r"(?:\u5206\u522b|\u9010\u4eba|\u6bcf\u4f4d|\u5404\u81ea|\bfor\s+each\b|\beach\s+author\b|\brespectively\b)",
+            raw,
+            flags=re.IGNORECASE,
+        )
+    )
+    if not author_profile_target or not per_author:
+        return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+    excluded_title_phrases = {
+        "academic background",
+        "author biographies",
+        "author biography",
+        "current affiliation",
+        "current position",
+        "education background",
+        "educational background",
+        "please summarize",
+        "research direction",
+        "research directions",
+        "research interest",
+        "research interests",
+        "source evidence",
+    }
+    for match in re.finditer(
+        r"\b[A-Z][A-Za-z.'\u2019-]{1,30}\s+[A-Z][A-Za-z.'\u2019-]{1,30}\b",
+        raw,
+    ):
+        name = re.sub(r"\s+", " ", match.group(0)).strip()
+        key = name.casefold()
+        if (
+            "author" in key
+            or "biograph" in key
+            or key in excluded_title_phrases
+            or key in seen
+        ):
+            continue
+        seen.add(key)
+        names.append(name)
+    return names[:6]
+
+
+def _requested_author_profile_count(prompt: str) -> int:
+    """Estimate explicit per-author evidence obligations in a profile request."""
+
+    raw = str(prompt or "").strip()
+    if not raw:
+        return 0
+    names = _requested_author_profile_targets(raw)
+    author_profile_target = bool(
+        _is_author_biography_surface(raw)
+        or (
+            re.search(r"\u4f5c\u8005", raw)
+            and re.search(
+                r"\u5b66\u5386|\u5b66\u4f4d|\u6559\u80b2\u7ecf\u5386|\u5f53\u524d\u804c\u4f4d|\u7814\u7a76\u65b9\u5411|\u7814\u7a76\u5174\u8da3",
+                raw,
+            )
+        )
+    )
+    per_author = bool(
+        re.search(
+            r"(?:\u5206\u522b|\u9010\u4eba|\u6bcf\u4f4d|\u5404\u81ea|\bfor\s+each\b|\beach\s+author\b|\brespectively\b)",
+            raw,
+            flags=re.IGNORECASE,
+        )
+    )
+    if not author_profile_target or not per_author:
+        return 0
+    explicit_count = 0
+    chinese_counts = {
+        "\u4e8c": 2,
+        "\u4e24": 2,
+        "\u4e09": 3,
+        "\u56db": 4,
+        "\u4e94": 5,
+        "\u516d": 6,
+    }
+    count_match = re.search(r"([\u4e8c\u4e24\u4e09\u56db\u4e94\u516d])(?:\u4f4d\u4f5c\u8005|\u4f4d|\u4eba)", raw)
+    if count_match:
+        explicit_count = chinese_counts.get(count_match.group(1), 0)
+    return min(6, max(len(names), explicit_count))
 
 
 def _budget_for_intent(intent: str) -> dict[str, int]:
@@ -1039,6 +1161,88 @@ def _system_a_slots(
         if len(slots) >= max(1, int(max_items)):
             break
     return slots
+
+
+def _author_profile_entity_slots(
+    *,
+    answer_hits: Sequence[Mapping[str, Any]] | None,
+    targets: Sequence[str] | None,
+) -> list[dict[str, Any]]:
+    """Build one canonical System-A slot for every requested author."""
+
+    target_names = [str(target or "").strip() for target in list(targets or [])]
+    target_names = [target for target in target_names if target]
+    if len(target_names) < 2:
+        return []
+    indexed_hits = [
+        (idx, raw)
+        for idx, raw in enumerate(list(answer_hits or []), start=1)
+        if isinstance(raw, Mapping)
+    ]
+    out: list[dict[str, Any]] = []
+    for target in target_names:
+        candidates: list[tuple[int, int, int, Mapping[str, Any]]] = []
+        target_re = re.compile(
+            rf"(?<![A-Za-z]){re.escape(target)}(?![A-Za-z])",
+            flags=re.IGNORECASE,
+        )
+        for idx, raw in indexed_hits:
+            meta = raw.get("meta") if isinstance(raw.get("meta"), Mapping) else {}
+            heading = str(
+                raw.get("heading_path")
+                or (meta or {}).get("heading_path")
+                or (meta or {}).get("ref_best_heading_path")
+                or ""
+            ).strip()
+            if not _is_author_biography_surface(heading):
+                continue
+            primary = (
+                (meta or {}).get("primary_evidence")
+                if isinstance((meta or {}).get("primary_evidence"), Mapping)
+                else {}
+            )
+            evidence = " ".join(
+                str(value or "").strip()
+                for value in (
+                    raw.get("text"),
+                    raw.get("evidence_quote"),
+                    (meta or {}).get("evidence_quote"),
+                    (primary or {}).get("snippet"),
+                    (primary or {}).get("highlight_snippet"),
+                )
+                if str(value or "").strip()
+            )
+            if not target_re.search(evidence):
+                continue
+            mentioned_targets = sum(
+                1
+                for name in target_names
+                if re.search(
+                    rf"(?<![A-Za-z]){re.escape(name)}(?![A-Za-z])",
+                    evidence,
+                    flags=re.IGNORECASE,
+                )
+            )
+            # Prefer the narrow one-author paragraph over a section aggregate;
+            # preserve the original answer-hit number for deterministic [n]
+            # routing in the renderer.
+            candidates.append((mentioned_targets, len(evidence), idx, raw))
+        if not candidates:
+            return []
+        _, _, hit_num, selected = min(candidates, key=lambda item: item[:3])
+        built = _system_a_slots(
+            support_slots=[],
+            answer_hits=[selected],
+            max_items=1,
+            ranking_texts=[target],
+        )
+        if not built:
+            return []
+        slot = dict(built[0])
+        slot["candidate_hits"] = [int(hit_num)]
+        slot["coverage_target"] = target
+        out.append(slot)
+    return out
 
 
 _RANKING_STOPWORDS = {
@@ -1411,6 +1615,61 @@ def build_citation_plan(
     per_paragraph_budget = dict(budget)
     requested_paper_count = extract_requested_paper_count(prompt)
     requested_system_a = min(8, int(requested_paper_count or 0))
+    requested_author_profile_candidates = _requested_author_profile_targets(prompt)
+    biography_surfaces: list[str] = []
+    for raw in [*list(support_slots or []), *list(answer_hits or [])]:
+        if not isinstance(raw, Mapping):
+            continue
+        meta = raw.get("meta") if isinstance(raw.get("meta"), Mapping) else {}
+        heading = str(
+            raw.get("heading_path")
+            or (meta or {}).get("heading_path")
+            or (meta or {}).get("ref_best_heading_path")
+            or ""
+        ).strip()
+        if not _is_author_biography_surface(heading):
+            continue
+        biography_surfaces.append(
+            " ".join(
+                str(value or "").strip()
+                for value in (
+                    raw.get("text"),
+                    raw.get("evidence_quote"),
+                    (meta or {}).get("evidence_quote"),
+                )
+                if str(value or "").strip()
+            )
+        )
+    biography_surface = "\n".join(biography_surfaces)
+    requested_author_profile_targets = [
+        target
+        for target in requested_author_profile_candidates
+        if biography_surface
+        and re.search(
+            rf"(?<![A-Za-z]){re.escape(target)}(?![A-Za-z])",
+            biography_surface,
+            flags=re.IGNORECASE,
+        )
+    ]
+    requested_author_profiles = _requested_author_profile_count(prompt)
+    if requested_author_profile_candidates:
+        # Title-cased field labels in English prompts can look like personal
+        # names. Only evidence-confirmed biography names create per-entity
+        # obligations; numeric Chinese requests can still enlarge the general
+        # citation budget without enabling target-aware rendering.
+        requested_author_profiles = len(requested_author_profile_targets)
+    requested_system_a = max(
+        requested_system_a,
+        requested_author_profiles,
+    )
+    if requested_author_profiles > 0:
+        # The renderer currently applies the paragraph cap to one Markdown
+        # answer segment.  A profile list contains several entity paragraphs in
+        # that segment, so preserve one locator opportunity per named author.
+        per_paragraph_budget["system_a"] = max(
+            int(per_paragraph_budget.get("system_a") or 0),
+            requested_author_profiles,
+        )
     comparison_facet_count = _explicit_comparison_facet_count(prompt) if intent == "comparison" else 0
     if comparison_facet_count >= 3:
         requested_system_a = max(requested_system_a, comparison_facet_count)
@@ -1465,6 +1724,17 @@ def build_citation_plan(
         rank_answer_hits=bool(requested_system_a > 1 or intent == "comparison"),
         prefer_source_summary=bool(intent == "comparison"),
     )
+    if len(requested_author_profile_targets) >= 2:
+        entity_slots = _author_profile_entity_slots(
+            answer_hits=answer_hits,
+            targets=requested_author_profile_targets,
+        )
+        if len(entity_slots) == len(requested_author_profile_targets):
+            # Support-slot ranking is normally claim-centric and may spend the
+            # whole budget on two variants of the first biography.  A per-
+            # entity contract instead requires one independently locatable
+            # passage for every named author.
+            sys_a = entity_slots[:system_a_limit]
 
     def _named_answer_source_slot(pattern: str) -> dict[str, Any]:
         for index, raw in enumerate(list(answer_hits or []), start=1):
@@ -1707,6 +1977,27 @@ def build_citation_plan(
         if isinstance(slot, dict)
         and (str(slot.get("source_path") or "").strip() or str(slot.get("source_name") or "").strip())
     }
+    author_biography_slots = [
+        slot
+        for slot in sys_a
+        if _is_author_biography_surface(slot.get("heading_path"))
+    ]
+    author_by_author_request = bool(
+        len(author_biography_slots) >= 2
+        and re.search(
+            r"(?:\u5206\u522b|\u9010\u4eba|\u6bcf\u4f4d|\u5404\u81ea|\bfor\s+each\b|\beach\s+author\b|\brespectively\b)",
+            str(prompt or ""),
+            flags=re.IGNORECASE,
+        )
+    )
+    if author_by_author_request:
+        # These slots may all come from one paper, but each author is a distinct
+        # evidence obligation.  A source-count budget would otherwise stop at
+        # two and leave later author profiles without a clickable locator.
+        budget["system_a"] = max(
+            int(budget.get("system_a") or 0),
+            min(6, len(author_biography_slots)),
+        )
     lineage_prompt = strip_negated_reference_trail_requests(prompt)
     if (
         intent == "origin_lookup"
@@ -1737,6 +2028,16 @@ def build_citation_plan(
         "version": 1,
         "source": "citation_plan_builder",
         "intent": intent,
+        **(
+            {
+                "coverage_mode": "per_entity",
+                "coverage_entity_type": "author_profile",
+                "coverage_target_count": len(requested_author_profile_targets),
+                "coverage_targets": requested_author_profile_targets,
+            }
+            if len(requested_author_profile_targets) >= 2
+            else {}
+        ),
         "budget": dict(budget),
         "per_paragraph_budget": dict(per_paragraph_budget),
         "system_a_enabled": bool(int(budget.get("system_a") or 0) > 0 and sys_a),

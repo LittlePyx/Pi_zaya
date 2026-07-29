@@ -37,6 +37,201 @@ _BARE_TAGGED_DISPLAY_MATH_RE = re.compile(
     r"(?=[^\n]{1,1000}\btag\{\d{1,3}\}\s*$)(?=[^\n]*=)"
     r"(?=[^\n]*\b(?:widehat|widetilde|underset|mathcal|left|right)\s*[{(])[^\n]+$"
 )
+_ADJACENT_INLINE_MATH_SUPERSCRIPT_RE = re.compile(
+    r"(?<![$\\])\$(?P<body>(?:\\.|[^$\\\n])+?)\$\$\^\s*"
+    r"(?:\{\s*(?P<braced>[+-]?\d{1,4})\s*\}|(?P<plain>[+-]?\d{1,4}))\$(?!\$)"
+)
+_INLINE_CODE_SPAN_RE = re.compile(r"(`+)[^`\n]*?\1")
+_LEGACY_NUMERIC_SUPERSCRIPT_CITATION_RE = re.compile(
+    r"(?:"
+    r"<sup>\s*(?:\[\s*)?\d{1,4}(?:\s*[,;\u2013\u2014-]\s*\d{1,4})*(?:\s*\])?\s*</sup>|"
+    r"\\textsuperscript\{\s*(?:\[\s*)?\d{1,4}(?:\s*[,;\u2013\u2014-]\s*\d{1,4})*(?:\s*\])?\s*\}"
+    r")",
+    re.IGNORECASE,
+)
+_NUMERIC_TO_SUPERSCRIPT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+_NUMERIC_SUPERSCRIPT_BASE_UNITS = frozenset(
+    {
+        "cm",
+        "ft",
+        "ghz",
+        "hz",
+        "in",
+        "khz",
+        "kg",
+        "km",
+        "kpa",
+        "kw",
+        "mhz",
+        "mm",
+        "mol",
+        "mpa",
+        "mw",
+        "nm",
+        "ns",
+        "na",
+        "pa",
+        "pm",
+        "ps",
+        "px",
+        "rad",
+        "sr",
+        "µm",
+        "μm",
+    }
+)
+
+
+def _numeric_superscript_is_exponent_context(source: str, start: int, body: str) -> bool:
+    """Return whether an unbracketed numeric superscript is attached to a base."""
+
+    clean_body = re.sub(r"\s+", "", str(body or ""))
+    if not re.fullmatch(r"\d{1,4}", clean_body):
+        return False
+    prefix = str(source or "")[: max(0, int(start or 0))]
+    if not prefix or prefix[-1].isspace():
+        return False
+    if prefix[-1] in ")]}":
+        return True
+    base_match = re.search(
+        r"(?:[A-Za-zµμ\u0370-\u03ff\u1f00-\u1fff]+|\d+(?:\.\d+)?)$",
+        prefix,
+    )
+    if not base_match:
+        return False
+    base = base_match.group(0)
+    if re.fullmatch(r"\d+(?:\.\d+)?", base):
+        return True
+    return bool(
+        len(base) == 1
+        or base.casefold() in _NUMERIC_SUPERSCRIPT_BASE_UNITS
+        or (clean_body in {"2", "3"} and base.islower() and len(base) <= 3)
+    )
+
+
+def _numeric_superscript_to_unicode(body: str) -> str:
+    return re.sub(r"\s+", "", str(body or "")).translate(_NUMERIC_TO_SUPERSCRIPT)
+
+
+def _map_outside_inline_code(line: str, transform) -> str:
+    out: list[str] = []
+    last = 0
+    for match in _INLINE_CODE_SPAN_RE.finditer(line):
+        out.append(transform(line[last : match.start()]))
+        out.append(match.group(0))
+        last = match.end()
+    out.append(transform(line[last:]))
+    return "".join(out)
+
+
+def _map_outside_fenced_and_display_math(text: str, transform) -> str:
+    lines = str(text or "").splitlines(keepends=True)
+    out: list[str] = []
+    fence_char = ""
+    in_display_math = False
+    for raw in lines:
+        line = raw.rstrip("\r\n")
+        ending = raw[len(line) :]
+        fence_match = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if fence_match:
+            marker_char = str(fence_match.group(1) or "")[:1]
+            if not fence_char:
+                fence_char = marker_char
+            elif marker_char == fence_char:
+                fence_char = ""
+            out.append(raw)
+            continue
+        if not fence_char and line.strip() == "$$":
+            in_display_math = not in_display_math
+            out.append(raw)
+            continue
+        if fence_char or in_display_math:
+            out.append(raw)
+            continue
+        out.append(transform(line) + ending)
+    return "".join(out)
+
+
+def adjacent_inline_math_superscript_hazard_count(md: str) -> int:
+    """Count adjacent inline-math spans such as ``$x$$^2$`` outside protected blocks."""
+    count = 0
+
+    def _count(line: str) -> str:
+        nonlocal count
+        def _count_segment(segment: str) -> str:
+            nonlocal count
+            count += len(_ADJACENT_INLINE_MATH_SUPERSCRIPT_RE.findall(segment))
+            return segment
+
+        _map_outside_inline_code(line, _count_segment)
+        return line
+
+    _map_outside_fenced_and_display_math(md, _count)
+    return count
+
+
+def legacy_numeric_superscript_citation_count(md: str) -> int:
+    """Count legacy numeric citation wrappers outside code and display math."""
+
+    count = 0
+
+    def _count(line: str) -> str:
+        nonlocal count
+
+        def _count_segment(segment: str) -> str:
+            nonlocal count
+            for match in _LEGACY_NUMERIC_SUPERSCRIPT_CITATION_RE.finditer(segment):
+                raw = match.group(0)
+                body_match = re.search(
+                    r"\d{1,4}(?:\s*[,;\u2013\u2014-]\s*\d{1,4})*",
+                    raw,
+                )
+                body = body_match.group(0) if body_match else ""
+                if "[" not in raw and _numeric_superscript_is_exponent_context(
+                    segment,
+                    match.start(),
+                    body,
+                ):
+                    continue
+                count += 1
+            return segment
+
+        _map_outside_inline_code(line, _count_segment)
+        return line
+
+    _map_outside_fenced_and_display_math(md, _count)
+    return count
+
+
+def normalize_adjacent_inline_math_superscripts(md: str) -> str:
+    """Repair a detached numeric superscript without turning citations into powers."""
+    if not md or "$$^" not in md:
+        return md
+
+    def _normalize(line: str) -> str:
+        def _replace(match: re.Match[str]) -> str:
+            exponent = str(match.group("braced") or match.group("plain") or "").strip()
+            body = str(match.group("body") or "")
+            tail = str(match.string[match.end() :] or "")
+            citation_like = bool(
+                exponent.lstrip("+").isdigit()
+                and exponent not in {"2", "3"}
+                and re.match(r"^\s*[.,;:，。；：]", tail)
+                and re.search(
+                    r"(?:=|<|>|\\approx|\\sim|\\(?:le|ge)(?:q)?)",
+                    body,
+                )
+            )
+            if citation_like:
+                return f"${body}$ [{exponent.lstrip('+')}]"
+            return f"${body}^{{{exponent}}}$"
+
+        return _map_outside_inline_code(
+            line,
+            lambda segment: _ADJACENT_INLINE_MATH_SUPERSCRIPT_RE.sub(_replace, segment),
+        )
+
+    return _map_outside_fenced_and_display_math(md, _normalize)
 
 
 def contains_bare_tagged_display_math(text: str) -> bool:

@@ -1824,6 +1824,13 @@ def validate_case(
             len(citation_details) >= min_citation_count,
             {"actual": len(citation_details), "min": min_citation_count},
         )
+    max_citation_count = _expected_optional_int(expected, "maxCitationCount")
+    if max_citation_count is not None:
+        add_check(
+            "citations_max_count",
+            len(citation_details) <= max_citation_count,
+            {"actual": len(citation_details), "max": max_citation_count},
+        )
 
     min_citation_doc_count = _expected_int(expected, "minCitationDocCount")
     if min_citation_doc_count:
@@ -1843,12 +1850,25 @@ def validate_case(
         )
 
     inpaper_details = [item for item in citation_details if bool(item.get("is_inpaper"))]
+    unlinked_system_b_candidates = [
+        item
+        for item in _as_list(render_packet.get("unlinked_reference_candidates"))
+        if isinstance(item, dict)
+        and isinstance(item.get("cite_detail"), dict)
+        and bool((item.get("cite_detail") or {}).get("is_inpaper"))
+    ]
     max_system_b_count = _expected_optional_int(expected, "maxSystemBCount")
     if max_system_b_count is not None:
+        surfaced_system_b_count = len(inpaper_details) + len(unlinked_system_b_candidates)
         add_check(
             "system_b_max_count",
-            len(inpaper_details) <= max_system_b_count,
-            {"actual": len(inpaper_details), "max": max_system_b_count},
+            surfaced_system_b_count <= max_system_b_count,
+            {
+                "actual": surfaced_system_b_count,
+                "citations": len(inpaper_details),
+                "unlinked_candidates": len(unlinked_system_b_candidates),
+                "max": max_system_b_count,
+            },
         )
     min_system_b_count = _expected_int(expected, "minSystemBCount", 1 if bool(expected.get("requireSystemB")) else 0)
     if min_system_b_count:

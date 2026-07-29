@@ -312,7 +312,18 @@ class DeepSeekChat:
 
         last_err: Optional[Exception] = None
         total_timeout_s = self._stream_total_timeout_s()
-        stream_deadline = time.monotonic() + total_timeout_s
+        stream_started_at = time.monotonic()
+        stream_deadline = stream_started_at + total_timeout_s
+        # A silent primary route used to consume the complete first-token
+        # allowance and then give the fallback route a fresh allowance.  With
+        # two configured providers that made an answer with no visible output
+        # wait roughly twice as long as the UI promise.  Keep failover, but
+        # make every route share one wall-clock deadline for the first text the
+        # user can actually see.
+        first_visible_deadline = min(
+            stream_deadline,
+            stream_started_at + self._first_visible_token_total_timeout_s(),
+        )
         for route_index, (route_client, route_model, route_timeout, route_kind) in enumerate(routes):
             if time.monotonic() >= stream_deadline:
                 raise TimeoutError(
@@ -329,6 +340,7 @@ class DeepSeekChat:
                     max_tokens=max_tokens,
                     request_timeout_s=route_timeout,
                     deadline=stream_deadline,
+                    first_visible_deadline=first_visible_deadline,
                 ):
                     emitted = True
                     yield piece
@@ -351,6 +363,7 @@ class DeepSeekChat:
         max_tokens: int,
         request_timeout_s: float,
         deadline: float | None = None,
+        first_visible_deadline: float | None = None,
     ) -> Iterator[str]:
         """Stream one route with wall-clock deadlines for visible output.
 
@@ -449,17 +462,37 @@ class DeepSeekChat:
                         f"LLM stream exceeded the {total_timeout_s:.1f}s total visible-output deadline"
                     )
                 remaining_visible_s = visible_timeout_s - (time.monotonic() - last_visible_at)
+                remaining_first_visible_s = (
+                    float(first_visible_deadline) - time.monotonic()
+                    if (not emitted and first_visible_deadline is not None)
+                    else None
+                )
+                if remaining_first_visible_s is not None and remaining_first_visible_s <= 0:
+                    raise TimeoutError(
+                        "LLM stream timed out waiting for the first visible token across provider routes"
+                    )
                 if remaining_visible_s <= 0:
                     phase = "idle visible output" if emitted else "first visible token"
                     raise TimeoutError(
                         f"LLM stream timed out waiting for {phase} after {visible_timeout_s:.1f}s"
                     )
                 try:
-                    kind, payload = events.get(timeout=min(remaining_visible_s, remaining_total_s))
+                    wait_s = min(remaining_visible_s, remaining_total_s)
+                    if remaining_first_visible_s is not None:
+                        wait_s = min(wait_s, remaining_first_visible_s)
+                    kind, payload = events.get(timeout=wait_s)
                 except queue.Empty as exc:
                     if time.monotonic() >= absolute_deadline:
                         raise TimeoutError(
                             f"LLM stream exceeded the {total_timeout_s:.1f}s total visible-output deadline"
+                        ) from exc
+                    if (
+                        not emitted
+                        and first_visible_deadline is not None
+                        and time.monotonic() >= float(first_visible_deadline)
+                    ):
+                        raise TimeoutError(
+                            "LLM stream timed out waiting for the first visible token across provider routes"
                         ) from exc
                     phase = "idle visible output" if emitted else "first visible token"
                     raise TimeoutError(
@@ -528,6 +561,16 @@ class DeepSeekChat:
         except Exception:
             timeout_s = 12.0
         return max(3.0, min(float(self._settings.timeout_s), timeout_s))
+
+    def _first_visible_token_total_timeout_s(self) -> float:
+        configured = str(
+            os.environ.get("KB_LLM_FIRST_TOKEN_TOTAL_TIMEOUT_S", "18") or "18"
+        ).strip()
+        try:
+            timeout_s = float(configured)
+        except Exception:
+            timeout_s = 18.0
+        return max(6.0, min(35.0, timeout_s))
 
     def _stream_idle_timeout_s(self) -> float:
         configured = str(os.environ.get("KB_LLM_STREAM_IDLE_TIMEOUT_S", "25") or "25").strip()

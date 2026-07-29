@@ -57,6 +57,7 @@ from kb.citation_card import (
     compose_citation_card,
     refresh_citation_card_contract,
 )
+from kb.citation_plan import _is_author_biography_surface
 from kb.inpaper_citation_enrichment import (
     enrich_inpaper_detail_context,
     extract_structured_cite_answer_context_line,
@@ -148,7 +149,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 49
+_RENDER_CACHE_SCHEMA_VERSION = 54
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -1765,6 +1766,14 @@ def _refine_system_a_cite_evidence_from_citation_plan(
     ]
     if not slots:
         return [dict(item) for item in list(cite_details or []) if isinstance(item, dict)]
+    per_entity_author_profile = bool(
+        str((citation_plan or {}).get("coverage_mode") or "").strip().lower()
+        == "per_entity"
+        and str((citation_plan or {}).get("coverage_entity_type") or "")
+        .strip()
+        .lower()
+        == "author_profile"
+    )
 
     slots_by_source: dict[str, list[dict]] = {}
     for slot in slots:
@@ -1785,6 +1794,48 @@ def _refine_system_a_cite_evidence_from_citation_plan(
             continue
         source_key = _render_primary_source_identity(detail)
         matches = list(slots_by_source.get(source_key) or [])
+        try:
+            detail_num = int(
+                detail.get("answer_hit_num")
+                or detail.get("display_num")
+                or detail.get("num")
+                or 0
+            )
+        except (TypeError, ValueError):
+            detail_num = 0
+        explicit_nums: set[int] = set()
+        candidate_nums_by_slot: dict[int, set[int]] = {}
+        exact_occurrence_bound = False
+        for candidate_slot in matches:
+            slot_nums: set[int] = set()
+            for raw_num in list(candidate_slot.get("candidate_hits") or []):
+                try:
+                    candidate_num = int(raw_num)
+                except (TypeError, ValueError):
+                    continue
+                if candidate_num > 0:
+                    slot_nums.add(candidate_num)
+                    explicit_nums.add(candidate_num)
+            candidate_nums_by_slot[id(candidate_slot)] = slot_nums
+        if detail_num > 0 and len(explicit_nums) > 1:
+            exact_occurrence = [
+                slot
+                for slot in matches
+                if detail_num in candidate_nums_by_slot.get(id(slot), set())
+            ]
+            if exact_occurrence:
+                matches = exact_occurrence
+                exact_occurrence_bound = True
+            else:
+                # With multiple explicit occurrences from one paper, a slot
+                # routed to another number must not refine this card. Preserve
+                # the unnumbered semantic fallback only when no exact slot was
+                # produced for the visible occurrence.
+                matches = [
+                    slot
+                    for slot in matches
+                    if not candidate_nums_by_slot.get(id(slot), set())
+                ]
         if len(matches) > 1:
             heading_key = _render_primary_heading_identity(detail)
             exact_heading = [
@@ -1797,6 +1848,11 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         if not matches:
             out.append(detail)
             continue
+        authoritative_entity_occurrence = bool(
+            per_entity_author_profile
+            and exact_occurrence_bound
+            and any(str(slot.get("coverage_target") or "").strip() for slot in matches)
+        )
 
         claim = " ".join(
             part
@@ -1856,6 +1912,16 @@ def _refine_system_a_cite_evidence_from_citation_plan(
                 # Keep the selector's budget identical to the card contract.
                 max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
             )
+            if authoritative_entity_occurrence:
+                # The plan already bound this internal citation number to one
+                # named author and one page-locatable source block.  Keep that
+                # exact biography passage even if the generic readability
+                # heuristic considers it too similar to the answer's quoted
+                # original text.
+                candidate_readable = _clean_evidence_display_text(
+                    plan_evidence,
+                    max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
+                )
             if not candidate_readable:
                 continue
             evidence_candidates.append(
@@ -1961,10 +2027,13 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         existing_overlap = len(claim_terms & evidence_alignment_tokens(existing))
         readable_overlap = len(claim_terms & evidence_alignment_tokens(readable))
         if (
-            not readable
-            or not claim_terms
-            or readable_overlap < 3
-            or readable_overlap < existing_overlap + 2
+            not authoritative_entity_occurrence
+            and (
+                not readable
+                or not claim_terms
+                or readable_overlap < 3
+                or readable_overlap < existing_overlap + 2
+            )
         ):
             out.append(detail)
             continue
@@ -3951,6 +4020,34 @@ def _augment_hits_with_system_a_plan_slots(
             )
         )
     plan_slots = list(citation_plan.get("slots") or [])
+    per_entity_author_profile = bool(
+        str(citation_plan.get("coverage_mode") or "").strip().lower()
+        == "per_entity"
+        and str(citation_plan.get("coverage_entity_type") or "").strip().lower()
+        == "author_profile"
+    )
+    if per_entity_author_profile:
+        biography_slots = [
+            slot
+            for slot in plan_slots
+            if isinstance(slot, dict)
+            and str(slot.get("preferred_system") or "").strip().lower()
+            != "system_b"
+            and _is_author_biography_surface(
+                slot.get("heading_path") or slot.get("headingPath") or ""
+            )
+        ]
+        if biography_slots:
+            # The prompt names this section explicitly. A generic source-level
+            # Abstract slot can otherwise claim the paper's only visible [n]
+            # before the page-locatable biography passage is applied.
+            plan_slots = [
+                slot
+                for slot in plan_slots
+                if isinstance(slot, dict)
+                and str(slot.get("preferred_system") or "").strip().lower()
+                == "system_b"
+            ] + biography_slots
     if str(citation_plan.get("intent") or "").strip().lower() == "scope_boundary":
         # The first slot supplies the boundary-defining passage, but a scope
         # question can still require a second paper to position the method.
@@ -3972,8 +4069,8 @@ def _augment_hits_with_system_a_plan_slots(
             selected_scope_slots.append(scope_slot)
         plan_slots = selected_scope_slots
     answer_surface = str(answer_text or "").strip()
+    canonical_source_counts: dict[str, int] = {}
     if answer_surface and isinstance(canonical_paths, list) and canonical_paths:
-        canonical_source_counts: dict[str, int] = {}
         for canonical_path in canonical_paths:
             source_identity = _reading_slot_source_identity(canonical_path)
             if source_identity:
@@ -4049,6 +4146,35 @@ def _augment_hits_with_system_a_plan_slots(
         and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
         and _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
     }
+    explicit_candidate_nums_by_source: dict[str, set[int]] = {}
+    for raw_slot in plan_slots:
+        if not isinstance(raw_slot, dict):
+            continue
+        if str(raw_slot.get("preferred_system") or "").strip().lower() == "system_b":
+            continue
+        source_identity = _reading_slot_source_identity(
+            raw_slot.get("source_path")
+            or raw_slot.get("sourcePath")
+            or raw_slot.get("source_name")
+            or raw_slot.get("sourceName")
+        )
+        if not source_identity:
+            continue
+        if int(canonical_source_counts.get(source_identity) or 0) <= 1:
+            # A single visible occurrence intentionally allows an unnumbered,
+            # answer-aligned slot to beat a stale generation-time candidate.
+            # Hard occurrence reservations are only valid when the canonical
+            # contract exposes multiple passages from the same paper.
+            continue
+        for raw_num in list(raw_slot.get("candidate_hits") or []):
+            try:
+                candidate_num = int(raw_num)
+            except (TypeError, ValueError):
+                continue
+            if candidate_num > 0:
+                explicit_candidate_nums_by_source.setdefault(source_identity, set()).add(
+                    candidate_num
+                )
     multi_claim_candidate_counts: dict[str, int] = {}
     broad_benefit_risk_source_keys: set[str] = set()
     for raw_slot in plan_slots:
@@ -4154,8 +4280,27 @@ def _augment_hits_with_system_a_plan_slots(
         )
         candidate_bound = False
         candidate_nums = list(slot.get("candidate_hits") or [])
+        explicit_slot_candidate_nums: set[int] = set()
+        for raw_num in candidate_nums:
+            try:
+                explicit_candidate_num = int(raw_num)
+            except (TypeError, ValueError):
+                continue
+            if explicit_candidate_num > 0:
+                explicit_slot_candidate_nums.add(explicit_candidate_num)
+        reserved_candidate_nums = explicit_candidate_nums_by_source.get(
+            _reading_slot_source_identity(
+                source_path or source_name
+            ),
+            set(),
+        )
         exact_support_candidate_slot = bool(
             exact_support_plan_slot and candidate_nums
+        )
+        per_entity_author_profile_slot = bool(
+            per_entity_author_profile
+            and candidate_nums
+            and _is_author_biography_surface(heading_path)
         )
         multi_claim_candidate_slot = bool(
             candidate_nums
@@ -4163,7 +4308,9 @@ def _augment_hits_with_system_a_plan_slots(
             and multi_claim_candidate_counts.get(slot_source_key, 0) >= 2
         )
         authoritative_plan_evidence = bool(
-            authoritative_plan_evidence or multi_claim_candidate_slot
+            authoritative_plan_evidence
+            or multi_claim_candidate_slot
+            or per_entity_author_profile_slot
         )
         if (
             len(plan_source_keys) >= 3
@@ -4184,6 +4331,17 @@ def _augment_hits_with_system_a_plan_slots(
                 # extra row that no visible [n] marker can address.
                 fallback_scan_count = len(rows)
             for fallback_num in range(1, min(len(rows), fallback_scan_count) + 1):
+                if (
+                    fallback_num in reserved_candidate_nums
+                    and fallback_num not in explicit_slot_candidate_nums
+                ):
+                    # Another same-source slot was explicitly routed to this
+                    # occurrence by the generation-time plan. An unbound
+                    # prompt-aligned slot may use a spare canonical row, but it
+                    # must not steal that visible number before the reserved
+                    # slot is processed (for example p. 8 replacing a p. 21
+                    # Author Biographies citation on [1]).
+                    continue
                 fallback = rows[fallback_num - 1]
                 fallback_meta = (
                     dict(fallback.get("meta") or {})
@@ -4297,6 +4455,7 @@ def _augment_hits_with_system_a_plan_slots(
                 or prompt_aligned_source_slot
                 or exact_support_candidate_slot
                 or multi_claim_candidate_slot
+                or per_entity_author_profile_slot
                 or (structured_table_plan_slot and bool(candidate_nums))
                 or (
                     len(plan_source_keys) >= 3
@@ -8215,11 +8374,39 @@ def _reading_claim_names_different_paper(claim: str, source_name: str) -> bool:
     candidates = [
         next((part for part in match if part), "")
         for match in re.findall(
-            r"\((?:\*)?([^()]{24,}?)(?:\*)?\)|（(?:\*)?([^（）]{24,}?)(?:\*)?）|"
-            r"\*([^*\n]{24,})\*|《([^》\n]{24,})》",
+            r"《([^》\n]{24,})》|[\"“]([^\"”\n]{24,})[\"”]",
             str(claim or ""),
         )
     ]
+    markdown_title = re.match(
+        r"^\s*(?:[-+*]\s+|\d{1,2}[.)、]\s+)?\*{1,2}"
+        r"(?P<title>[^*\n]{18,}?)\*{1,2}(?P<tail>\s+.+)$",
+        str(claim or ""),
+    )
+    if markdown_title:
+        title = str(markdown_title.group("title") or "").strip()
+        tail = str(markdown_title.group("tail") or "").strip()
+        title_case_words = re.findall(r"\b[A-Z][A-Za-z0-9-]{2,}\b", title)
+        looks_like_title = bool(
+            re.search(r"\b(?:19|20)\d{2}\b|\b[A-Z]{2,8}[-_]?(?:19|20)\d{2}\b", title)
+            or len(title_case_words) >= 3
+            or (
+                re.search(
+                    r"\b(?:reports?|shows?|finds?|argues?|proposes?|discusses?|"
+                    r"demonstrates?|presents?|describes?)\b|指出|表明|报告|提出|讨论|证明",
+                    tail,
+                    flags=re.IGNORECASE,
+                )
+                and re.search(
+                    r"\b(?:review|survey|advances|challenges|principles|prospects|"
+                    r"foundations|applications)\b",
+                    title,
+                    flags=re.IGNORECASE,
+                )
+            )
+        )
+        if looks_like_title:
+            candidates.append(title)
     for candidate in candidates:
         title_tokens = {
             token
@@ -8233,6 +8420,78 @@ def _reading_claim_names_different_paper(claim: str, source_name: str) -> bool:
         if overlap < 0.45:
             return True
     return False
+
+
+def _reading_claim_is_paper_identity_line(claim: str, source_name: str = "") -> bool:
+    """Keep navigation-only paper titles free of auto-attached evidence markers."""
+
+    text = re.sub(
+        r"(?<![!\\])\[\d{1,5}\](?!\()",
+        "",
+        str(claim or ""),
+    ).strip()
+    prefix = re.match(r"^(?:[-+*]\s+|\d{1,2}[.)、]\s+)(?P<body>.+)$", text)
+    if not prefix:
+        return False
+    body = str(prefix.group("body") or "").strip()
+    wrapped_title = re.match(
+        r"^(?:\*{1,2}\s*)?(?:"
+        r"《(?P<book>[^》\n]{18,})》|"
+        r"[\"“](?P<quote>[^\"”\n]{18,})[\"”]|"
+        r"\*{1,2}(?P<bold>[^*\n]{24,})\*{1,2}"
+        r")(?:\s*\*{1,2})?"
+        r"(?P<tail>\s*(?:[（(][^)）\n]{0,100}[)）])?\s*[。.;；]?)$",
+        body,
+    )
+    if not wrapped_title:
+        return False
+    title = next(
+        (
+            str(wrapped_title.group(name) or "").strip()
+            for name in ("book", "quote", "bold")
+            if wrapped_title.group(name)
+        ),
+        "",
+    )
+    if not title:
+        return False
+    if re.search(r"(?:看什么|重点|理解|because|why|focus|read\s+for)\s*[:：]", title, flags=re.I):
+        return False
+    if wrapped_title.group("bold") and re.search(r"[。.!?！？:]\s*$", title):
+        return False
+    if wrapped_title.group("bold") and re.search(
+        r"\b(?:19|20)\d{2}\b",
+        f"{title} {wrapped_title.group('tail') or ''}",
+    ):
+        return True
+    stopwords = {
+        "and",
+        "based",
+        "for",
+        "from",
+        "journal",
+        "paper",
+        "the",
+        "with",
+    }
+    title_tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", title.casefold())
+        if len(token) >= 3 and token not in stopwords
+    }
+    source_tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(source_name or "").casefold())
+        if len(token) >= 3 and token not in stopwords | {"pdf", "2023", "2024", "2025"}
+    }
+    if len(title_tokens) < 3 or len(source_tokens) < 3:
+        return False
+    overlap = len(title_tokens & source_tokens)
+    return bool(
+        overlap >= 3
+        and overlap / max(1, len(title_tokens)) >= 0.65
+        and overlap / max(1, len(source_tokens)) >= 0.55
+    )
 
 
 def _reading_guide_attach_claim_level_system_a_citations(
@@ -8350,6 +8609,19 @@ def _reading_guide_attach_claim_level_system_a_citations(
             continue
         num = int(nums[0])
         hit = _reading_hit_for_slot(slot, hits, num)
+        hit_meta = hit.get("meta") if isinstance(hit, dict) and isinstance(hit.get("meta"), dict) else {}
+        source_path = str(
+            slot.get("source_path")
+            or slot.get("sourcePath")
+            or (hit_meta or {}).get("source_path")
+            or ""
+        ).strip()
+        source_name = str(
+            slot.get("source_name")
+            or slot.get("sourceName")
+            or (hit_meta or {}).get("source_name")
+            or (Path(source_path).stem if source_path else "")
+        ).strip()
         source_surface = _reading_source_surface(hit, slot)
         groups = _reading_claim_support_groups(source_surface)
         if len(groups) < 2:
@@ -8376,6 +8648,7 @@ def _reading_guide_attach_claim_level_system_a_citations(
                         )
                     )
                     or _reading_claim_is_retrieval_notice(claim)
+                    or _reading_claim_is_paper_identity_line(claim, source_name)
                     or re.search(
                         r"原文直接依据|direct evidence from|证据边界|boundary not established|"
                         r"以下为推断|the following is an inference",
@@ -8387,6 +8660,8 @@ def _reading_guide_attach_claim_level_system_a_citations(
                 if _reading_claim_has_modality_conflict(claim, source_surface):
                     continue
                 if _reading_claim_has_evidence_scope_conflict(claim, source_surface):
+                    continue
+                if _reading_claim_names_different_paper(claim, source_name):
                     continue
                 group_hits = _reading_claim_group_hits(claim, groups)
                 if len(group_hits) < 2:
@@ -8419,6 +8694,398 @@ def _reading_guide_attach_claim_level_system_a_citations(
 
     for line_idx, units in units_by_line.items():
         lines[line_idx] = "".join(units) + lines[line_idx]
+    return "".join(lines)
+
+
+def _reading_guide_repair_per_entity_system_a_citations(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict,
+    *,
+    canonical_paths: list[str] | None = None,
+) -> str:
+    """Reuse one grounded source marker across explicitly requested entity blocks.
+
+    Normal answer repair intentionally counts a visible source number only once.
+    That is the right default, but it leaves later entities unlinked when one
+    source passage (for example ``Author Biographies``) supports several
+    separately requested profiles.  The citation planner marks only that narrow
+    case as ``per_entity`` and records the named targets, so the exception does
+    not weaken ordinary source de-duplication.
+    """
+
+    text = str(md or "")
+    if (
+        not text.strip()
+        or str(citation_plan.get("coverage_mode") or "").strip().lower()
+        != "per_entity"
+        or str(citation_plan.get("coverage_entity_type") or "").strip().lower()
+        != "author_profile"
+    ):
+        return text
+    targets = [
+        re.sub(r"\s+", " ", str(raw or "")).strip()
+        for raw in list(citation_plan.get("coverage_targets") or [])
+        if re.sub(r"\s+", " ", str(raw or "")).strip()
+    ]
+    try:
+        target_count = min(6, max(0, int(citation_plan.get("coverage_target_count") or 0)))
+    except (TypeError, ValueError):
+        target_count = 0
+    if target_count < 2 or len(targets) < 2:
+        return text
+    targets = targets[:target_count]
+
+    biography_slots = [
+        slot
+        for slot in _dedupe_reading_system_a_slots(citation_plan)
+        if _is_author_biography_surface(
+            slot.get("heading_path") or slot.get("headingPath") or ""
+        )
+    ]
+    if not biography_slots:
+        return text
+
+    slot_surfaces: list[tuple[dict, str]] = []
+    for slot in biography_slots:
+        surfaces = [
+            str(
+                slot.get("evidence_quote")
+                or slot.get("evidence_atom_text")
+                or slot.get("snippet")
+                or ""
+            ).strip()
+        ]
+        slot_source = _reading_slot_source_identity(
+            slot.get("source_path")
+            or slot.get("sourcePath")
+            or slot.get("source_name")
+            or slot.get("sourceName")
+        )
+        for hit in hits:
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            hit_source = _reading_slot_source_identity(
+                (meta or {}).get("source_path")
+                or (ui_meta or {}).get("source_path")
+                or (ui_meta or {}).get("sourcePath")
+            )
+            hit_heading = str(
+                (meta or {}).get("heading_path")
+                or (meta or {}).get("ref_best_heading_path")
+                or ""
+            ).strip().lower()
+            if hit_source == slot_source and _is_author_biography_surface(hit_heading):
+                surfaces.append(str(hit.get("text") or hit.get("snippet") or "").strip())
+        slot_surfaces.append((slot, "\n".join(surface for surface in surfaces if surface)))
+
+    biography_marker_nums: set[int] = set()
+    for slot, _surface in slot_surfaces:
+        biography_marker_nums.update(
+            _reading_slot_hit_nums(
+                slot,
+                hits,
+                canonical_paths=canonical_paths,
+            )
+        )
+
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return text
+
+    def target_line_index(target: str) -> int:
+        pattern = re.compile(rf"(?<![A-Za-z]){re.escape(target)}(?![A-Za-z])", re.IGNORECASE)
+        ranked: list[tuple[int, int]] = []
+        for idx, raw_line in enumerate(lines):
+            if not pattern.search(raw_line):
+                continue
+            plain = re.sub(r"[*_`#>]", "", raw_line).strip().strip(":：")
+            score = 3 if plain.casefold() == target.casefold() else 1
+            if re.match(r"^\s*#{1,6}\s+", raw_line):
+                score += 2
+            elif re.match(r"^\s*(?:[-+*]\s+)?\*{1,2}", raw_line):
+                score += 1
+            ranked.append((score, idx))
+        if not ranked:
+            return -1
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        return int(ranked[0][1])
+
+    target_rows = [(target, target_line_index(target)) for target in targets]
+    target_rows = [(target, idx) for target, idx in target_rows if idx >= 0]
+    if len({idx for _target, idx in target_rows}) < 2:
+        return text
+    ordered_starts = sorted({idx for _target, idx in target_rows})
+
+    for target, start_idx in sorted(target_rows, key=lambda item: item[1]):
+        # A source may expose one hit per biography while every hit still has
+        # the same document/heading.  Prefer the explicit entity contract over
+        # the aggregate same-section surface; otherwise the first author's
+        # slot can accidentally claim every later author as well.
+        target_slot_row = next(
+            (
+                (slot, surface)
+                for slot, surface in slot_surfaces
+                if re.sub(
+                    r"\s+",
+                    " ",
+                    str(slot.get("coverage_target") or "").strip(),
+                ).casefold()
+                == target.casefold()
+            ),
+            None,
+        )
+        if not target_slot_row:
+            target_slot_row = next(
+                (
+                    (slot, surface)
+                    for slot, surface in slot_surfaces
+                    if re.search(
+                        rf"(?<![A-Za-z]){re.escape(target)}(?![A-Za-z])",
+                        str(
+                            slot.get("evidence_quote")
+                            or slot.get("evidence_atom_text")
+                            or slot.get("snippet")
+                            or ""
+                        ),
+                        flags=re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
+        if not target_slot_row:
+            target_slot_row = next(
+                (
+                    (slot, surface)
+                    for slot, surface in slot_surfaces
+                    if re.search(
+                        rf"(?<![A-Za-z]){re.escape(target)}(?![A-Za-z])",
+                        surface,
+                        flags=re.IGNORECASE,
+                    )
+                ),
+                None,
+            )
+        if not target_slot_row:
+            continue
+        target_slot, target_source_surface = target_slot_row
+        target_match = re.search(
+            rf"(?<![A-Za-z]){re.escape(target)}(?![A-Za-z])",
+            target_source_surface,
+            flags=re.IGNORECASE,
+        )
+        if target_match:
+            local_end = len(target_source_surface)
+            for other_target in targets:
+                if other_target.casefold() == target.casefold():
+                    continue
+                other_match = re.search(
+                    rf"(?<![A-Za-z]){re.escape(other_target)}(?![A-Za-z])",
+                    target_source_surface[target_match.end() :],
+                    flags=re.IGNORECASE,
+                )
+                if other_match:
+                    local_end = min(
+                        local_end,
+                        target_match.end() + int(other_match.start()),
+                    )
+            target_source_surface = target_source_surface[target_match.start() : local_end]
+        nums = _reading_slot_hit_nums(
+            target_slot,
+            hits,
+            canonical_paths=canonical_paths,
+        )
+        if not nums:
+            continue
+        num = int(nums[0])
+        next_target = next((idx for idx in ordered_starts if idx > start_idx), len(lines))
+        end_idx = next_target
+        heading_match = re.match(r"^\s*(#{1,6})\s+", lines[start_idx])
+        target_line_plain = re.sub(r"[*_`#>]", "", lines[start_idx]).strip().strip(":：")
+        header_like = bool(
+            heading_match or target_line_plain.casefold() == target.casefold()
+        )
+        if heading_match:
+            heading_level = len(heading_match.group(1))
+            for idx in range(start_idx + 1, next_target):
+                next_heading = re.match(r"^\s*(#{1,6})\s+", lines[idx])
+                if next_heading and len(next_heading.group(1)) <= heading_level:
+                    end_idx = idx
+                    break
+        elif not header_like:
+            # In a compact ``- Name: facts`` list the supported claim is the
+            # target line itself. Extending the last entity to end-of-answer
+            # can otherwise attach its source to a later overall conclusion.
+            end_idx = min(end_idx, start_idx + 1)
+        original_block_lines = list(lines[start_idx:end_idx])
+        if biography_marker_nums:
+            marker_re = re.compile(r"(?<![!\\])\[(\d{1,5})\](?!\()")
+
+            def strip_biography_marker(match: re.Match[str]) -> str:
+                try:
+                    marker_num = int(match.group(1) or 0)
+                except (TypeError, ValueError):
+                    return match.group(0)
+                return "" if marker_num in biography_marker_nums else match.group(0)
+
+            for idx in range(start_idx, end_idx):
+                cleaned_line = marker_re.sub(strip_biography_marker, lines[idx])
+                cleaned_line = re.sub(
+                    r"[ \t]+([,.;:!?\uFF0C\u3002\uFF1B\uFF1A\uFF01\uFF1F])",
+                    r"\1",
+                    cleaned_line,
+                )
+                lines[idx] = cleaned_line
+        attach_idx = -1
+        attach_score = 0.99
+        profile_fact_re = re.compile(
+            r"教育(?:经历)?|学历|学位|当前职位|现任|任职|研究(?:方向|兴趣)|博士后|"
+            r"\b(?:education|degree|currently|current\s+position|lecturer|professor|"
+            r"research\s+interests?|post-?doctoral)\b",
+            flags=re.IGNORECASE,
+        )
+        target_terms = _reading_coverage_terms(target_source_surface) - _reading_coverage_terms(
+            target
+        )
+        target_numeric_surface = (
+            re.sub(r"\s+", "", target_source_surface)
+            .replace("µ", "u")
+            .replace("μ", "u")
+            .lower()
+        )
+        role_requirements = (
+            (re.compile(r"\bprofessor\b|教授", re.IGNORECASE), r"\bprofessor\b|教授"),
+            (re.compile(r"\blecturer\b|讲师", re.IGNORECASE), r"\blecturer\b|讲师"),
+            (
+                re.compile(r"\b(?:ph\.?d\.?)\s+(?:student|candidate)\b|攻读博士|博士生", re.IGNORECASE),
+                r"\b(?:pursuing\s+(?:his|her|their)\s+)?ph\.?d\.?\b|攻读博士|博士生",
+            ),
+            (re.compile(r"\bpost-?doctoral\b|博士后", re.IGNORECASE), r"\bpost-?doctoral\b|博士后"),
+        )
+        profile_field_requirements = (
+            (
+                r"教育(?:经历)?|学历|学位|\beducation\b|\bdegrees?\b|\bB\.?S\.?\b|\bM\.?S\.?\b|\bPh\.?D\.?\b",
+                r"\beducation\b|\bdegrees?\b|\bB\.?S\.?\b|\bM\.?S\.?\b|\bPh\.?D\.?\b|教育|学历|学位",
+            ),
+            (
+                r"当前职位|现任|任职|\bcurrent(?:ly)?\b|\bposition\b|\blecturer\b|\bprofessor\b|\bresearcher\b",
+                r"\bcurrent(?:ly)?\b|\bposition\b|\blecturer\b|\bprofessor\b|\bresearcher\b|现任|任职|当前职位",
+            ),
+            (
+                r"研究(?:方向|兴趣)|\bresearch\s+(?:direction|interests?)\b",
+                r"\bresearch\s+interests?\b|研究方向|研究兴趣",
+            ),
+        )
+        for idx in range(start_idx, end_idx):
+            stripped = lines[idx].strip()
+            if (
+                not stripped
+                or stripped.startswith(("#", "<!--", "```", "~~~"))
+                or _reading_claim_is_retrieval_notice(stripped)
+                or re.search(r"原文证据|direct\s+evidence", stripped, flags=re.IGNORECASE)
+                or re.search(
+                    r"(?:^|[-*+]\s*)(?:推断|Inference)\s*[:：]|以下为推断|"
+                    r"the\s+following\s+is\s+an\s+inference|\bprobably\b|\bmay\b|"
+                    r"可能|推测",
+                    stripped,
+                    flags=re.IGNORECASE,
+                )
+                or (header_like and not profile_fact_re.search(stripped))
+            ):
+                continue
+            numeric_tokens = _reading_claim_numeric_tokens(stripped) | set(
+                re.findall(r"\b(?:19|20)\d{2}\b", stripped)
+            )
+            if any(token not in target_numeric_surface for token in numeric_tokens):
+                continue
+            claim_degrees = {
+                re.sub(r"[^a-z]", "", token.lower())
+                for token in re.findall(
+                    r"\b(?:B\.?S\.?|M\.?S\.?|Ph\.?D\.?)\b",
+                    stripped,
+                    flags=re.IGNORECASE,
+                )
+            }
+            source_degrees = {
+                re.sub(r"[^a-z]", "", token.lower())
+                for token in re.findall(
+                    r"\b(?:B\.?S\.?|M\.?S\.?|Ph\.?D\.?)\b",
+                    target_source_surface,
+                    flags=re.IGNORECASE,
+                )
+            }
+            if claim_degrees - source_degrees:
+                continue
+            if any(
+                claim_pattern.search(stripped)
+                and not re.search(source_pattern, target_source_surface, flags=re.IGNORECASE)
+                for claim_pattern, source_pattern in role_requirements
+            ):
+                continue
+            named_phrases = re.findall(
+                r"\b[A-Z][A-Za-z-]{2,}(?:\s+[A-Z][A-Za-z-]{2,})+\b",
+                stripped,
+            )
+            unsupported_named_phrase = False
+            for phrase in named_phrases:
+                if phrase.casefold() == target.casefold():
+                    continue
+                if phrase.casefold() in {
+                    "current position",
+                    "research direction",
+                    "research interests",
+                }:
+                    continue
+                if phrase.casefold() not in target_source_surface.casefold():
+                    unsupported_named_phrase = True
+                    break
+            if unsupported_named_phrase:
+                continue
+            matched_profile_fields = 0
+            unsupported_profile_field = False
+            for claim_field, source_field in profile_field_requirements:
+                if not re.search(claim_field, stripped, flags=re.IGNORECASE):
+                    continue
+                if not re.search(
+                    source_field,
+                    target_source_surface,
+                    flags=re.IGNORECASE,
+                ):
+                    unsupported_profile_field = True
+                    break
+                matched_profile_fields += 1
+            if unsupported_profile_field:
+                continue
+            score = _reading_paragraph_affinity(
+                stripped,
+                target_terms,
+                source_surface=target_source_surface,
+            )
+            score += 2.0 * matched_profile_fields
+            score += 4.0 * len(
+                {
+                    token
+                    for token in numeric_tokens
+                    if token in target_numeric_surface
+                }
+            )
+            if score > attach_score:
+                attach_score = score
+                attach_idx = idx
+        if attach_idx < 0:
+            lines[start_idx:end_idx] = original_block_lines
+            continue
+        raw_line = lines[attach_idx]
+        ending = ""
+        body = raw_line
+        if body.endswith("\r\n"):
+            body, ending = body[:-2], "\r\n"
+        elif body.endswith("\n") or body.endswith("\r"):
+            body, ending = body[:-1], body[-1:]
+        lines[attach_idx] = _append_numeric_citation_to_paragraph(body, num) + ending
+
     return "".join(lines)
 
 
@@ -8524,6 +9191,12 @@ def _reading_guide_repair_missing_system_a_citations(
                     citation_plan,
                     canonical_paths=canonical_paths,
                 )
+                text = _reading_guide_repair_per_entity_system_a_citations(
+                    text,
+                    hits,
+                    citation_plan,
+                    canonical_paths=canonical_paths,
+                )
                 text = _reading_guide_repair_dl_spi_benefit_marker(
                     text,
                     hits,
@@ -8619,6 +9292,12 @@ def _reading_guide_repair_missing_system_a_citations(
             canonical_paths=canonical_paths,
         )
         text = _reading_guide_attach_claim_level_system_a_citations(
+            text,
+            hits,
+            citation_plan,
+            canonical_paths=canonical_paths,
+        )
+        text = _reading_guide_repair_per_entity_system_a_citations(
             text,
             hits,
             citation_plan,
@@ -9984,6 +10663,7 @@ def _build_unlinked_reference_candidates(
     provenance_segments: list[dict] | None,
     render_locale: str = "",
     anchor_ns: str = "",
+    allow_system_b: bool = True,
     limit: int = 5,
 ) -> list[dict]:
     source_text = "\n\n".join([str(answer_markdown or ""), str(rendered_body or ""), str(copy_text or "")]).strip()
@@ -10035,7 +10715,6 @@ def _build_unlinked_reference_candidates(
         candidate_key = doi or f"{source_key}::{ref_num}" or title_key
         if not candidate_key or candidate_key in seen:
             return
-        seen.add(candidate_key)
         context = _supp_ref_context_line(source_text, start, end) if start >= 0 and end >= start else str(mention or "").strip()
         detail = _supp_ref_candidate_detail(
             row=row,
@@ -10046,6 +10725,9 @@ def _build_unlinked_reference_candidates(
             confidence=confidence,
             retrieved_document=_supp_ref_match_retrieved_document(row, source_identities),
         )
+        if not allow_system_b and bool(detail.get("is_inpaper", True)):
+            return
+        seen.add(candidate_key)
         detail_source_path = str(detail.get("source_path") or source_path).strip()
         detail_source_name = str(detail.get("source_name") or row.get("source_name") or "").strip()
         direct_library_source_key = (
@@ -10189,6 +10871,34 @@ def _normalize_double_numeric_citation_markers(md: str) -> str:
             prose,
         ),
     )
+
+
+_ADJACENT_SAME_CITATION_LINK_RE = re.compile(
+    r"(?P<first>\[(?P<label>\d{1,4})\]\((?P<href>\#kb-cite-[^\s\)\"]+)"
+    r"(?:\s+\"[^\"]*\")?\))\s*"
+    r"\[(?P=label)\]\((?P=href)(?:\s+\"[^\"]*\")?\)"
+)
+
+
+def _collapse_adjacent_same_citation_links(md: str) -> str:
+    """Collapse duplicate display links that resolve to the same cite card."""
+
+    text = str(md or "")
+    if "#kb-cite-" not in text:
+        return text
+
+    def _collapse(prose: str) -> str:
+        previous = ""
+        current = prose
+        while current != previous:
+            previous = current
+            current = _ADJACENT_SAME_CITATION_LINK_RE.sub(
+                lambda match: str(match.group("first") or ""),
+                current,
+            )
+        return current
+
+    return transform_markdown_outside_code(text, _collapse)
 
 
 def _strip_freeform_numeric_citation_markers(
@@ -11151,6 +11861,9 @@ def _merge_render_packet_contract_meta(
         provenance_segments=provenance_segments,
         render_locale=render_locale,
         anchor_ns=f"unlinked:{msg_id}",
+        allow_system_b=(
+            _citation_plan_system_b_budget(_message_citation_plan(rec)) > 0
+        ),
     )
     render_packet_model = _build_paper_guide_render_packet_model(
         answer_markdown=answer_markdown,
@@ -12250,6 +12963,7 @@ def enrich_messages_with_reference_render(
                 rendered_body,
                 cite_details,
             )
+            rendered_body = _collapse_adjacent_same_citation_links(rendered_body)
 
             rendered_full = ""
             if notice and rendered_body:
@@ -12291,6 +13005,7 @@ def enrich_messages_with_reference_render(
                     rendered_body,
                     cite_details,
                 )
+                rendered_body = _collapse_adjacent_same_citation_links(rendered_body)
                 rendered_full = (
                     f"{notice}\n\n{rendered_body}"
                     if notice and rendered_body

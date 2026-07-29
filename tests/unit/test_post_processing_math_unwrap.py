@@ -1,5 +1,9 @@
 from kb.converter.post_processing import postprocess_markdown
-from kb.converter.post_math_rules import contains_bare_tagged_display_math
+from kb.converter.post_math_rules import (
+    adjacent_inline_math_superscript_hazard_count,
+    contains_bare_tagged_display_math,
+    normalize_adjacent_inline_math_superscripts,
+)
 import re
 
 
@@ -66,6 +70,27 @@ $$T(x,y)^* = \\frac{1}{N} \\sum_{i=1}^N (\\Delta B_i - \\langle \\Delta B_i \\ra
     assert "$$" in out
     assert "^N" in out
     assert "\\hat{N}" not in out
+
+
+def test_merge_adjacent_inline_math_numeric_superscript_spans():
+    src = (
+        r"The pixel area is $30\,\mu\mathrm{m}$$^2$ and "
+        r"$FWHM_{theo} \approx 0.4\lambda/NA \approx 127~\mathrm{nm}$$^{8}$."
+    )
+
+    assert adjacent_inline_math_superscript_hazard_count(src) == 2
+    out = postprocess_markdown(src)
+
+    assert r"$30\,\mu\mathrm{m}^{2}$" in out
+    assert r"\approx 127~nm$ [8]" in out
+    assert adjacent_inline_math_superscript_hazard_count(out) == 0
+
+
+def test_adjacent_inline_math_superscript_normalizer_skips_code_and_display_math():
+    src = "`$x$$^2$`\n\n$$\n$x$$^3$\n$$\n"
+
+    assert adjacent_inline_math_superscript_hazard_count(src) == 0
+    assert normalize_adjacent_inline_math_superscripts(src) == src
 
 
 def test_fix_malformed_code_fence_inline_closer():

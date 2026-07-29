@@ -4811,6 +4811,7 @@ def _annotate_inpaper_citations_with_hover_meta(
         }
         numbered: list[dict] = []
         source_matched: list[dict] = []
+        candidate_hits_by_slot: dict[int, set[int]] = {}
         for slot in plan_system_a_slots:
             candidate_hits: set[int] = set()
             for raw in list(slot.get("candidate_hits") or []):
@@ -4818,6 +4819,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                     candidate_hits.add(int(raw))
                 except Exception:
                     continue
+            candidate_hits_by_slot[id(slot)] = candidate_hits
             if int(n) in candidate_hits:
                 numbered.append(slot)
             slot_keys = {
@@ -4838,6 +4840,29 @@ def _annotate_inpaper_citations_with_hover_meta(
         # candidate numbers from other papers; retain their tie-break role only
         # among multiple slots belonging to the same resolved source.
         slot_pool = source_matched if source_matched else numbered
+        visible_source_nums = {
+            visible_num
+            for target_key in target_keys
+            for visible_num in visible_hit_numbers_by_source.get(target_key, set())
+        }
+        if source_matched and len(visible_source_nums) > 1:
+            exact_occurrence_slots = [
+                slot
+                for slot in source_matched
+                if int(n) in candidate_hits_by_slot.get(id(slot), set())
+            ]
+            if exact_occurrence_slots:
+                slot_pool = exact_occurrence_slots
+            else:
+                # Repeated canonical paths represent different passages from
+                # one paper. A slot explicitly routed to [2] must not compete
+                # for [1]; only a genuinely unnumbered semantic fallback may
+                # participate when the plan omitted an exact occurrence.
+                slot_pool = [
+                    slot
+                    for slot in source_matched
+                    if not candidate_hits_by_slot.get(id(slot), set())
+                ]
         for slot in slot_pool:
             if id(slot) in seen_slots:
                 continue
@@ -5410,13 +5435,26 @@ def _annotate_inpaper_citations_with_hover_meta(
             if isinstance(canonical_paths, list) and 0 <= idx < len(canonical_paths):
                 target_sp = _source_path_key(canonical_paths[idx])
                 if target_sp:
+                    canonical_source_hits: list[dict] = []
                     for _h in hits or []:
                         _mh = (_h or {}).get("meta", {}) or {}
                         _sp_h = _source_path_key(_mh.get("source_path"))
                         if _sp_h == target_sp:
-                            hit = _h
-                            sp = str(_mh.get("source_path") or "").strip()
-                            break
+                            canonical_source_hits.append(_h)
+                            try:
+                                answer_num = int(
+                                    _mh.get("ref_answer_citation_num") or 0
+                                )
+                            except (TypeError, ValueError):
+                                answer_num = 0
+                            if answer_num == int(n):
+                                hit = _h
+                                sp = str(_mh.get("source_path") or "").strip()
+                                break
+                    if hit is None and canonical_source_hits:
+                        hit = canonical_source_hits[0]
+                        first_meta = (hit or {}).get("meta", {}) or {}
+                        sp = str(first_meta.get("source_path") or "").strip()
                     # A canonical source contract is authoritative.  If its
                     # source is absent from the display hits, do not guess by
                     # display position and attach a different paper.

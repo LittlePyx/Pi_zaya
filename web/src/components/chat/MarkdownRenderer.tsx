@@ -201,6 +201,14 @@ const SUPERSCRIPT_CHAR_MAP: Record<string, string> = {
   '⁹': '9',
 }
 
+const NUMERIC_SUPERSCRIPT_CHAR_MAP: Record<string, string> = Object.fromEntries(
+  Object.entries(SUPERSCRIPT_CHAR_MAP).map(([superscript, digit]) => [digit, superscript]),
+)
+const NUMERIC_SUPERSCRIPT_BASE_UNITS = new Set([
+  'cm', 'ft', 'ghz', 'hz', 'in', 'kg', 'khz', 'km', 'kpa', 'kw', 'mhz', 'mm', 'mol',
+  'mpa', 'mw', 'na', 'nm', 'ns', 'pa', 'pm', 'ps', 'px', 'rad', 'sr', 'µm', 'μm',
+])
+
 const SUBSCRIPT_CHAR_MAP: Record<string, string> = {
   '₀': '0',
   '₁': '1',
@@ -312,15 +320,21 @@ function normalizeAdjacentStrongMarkdown(text: string): string {
       return line
     }
     if (inFence) return line
-    return line
-      .split(/(`[^`\n]*`)/g)
-      .map((segment, index) => {
-        if (index % 2 === 1) return segment
-        // CommonMark does not close `**` when a CJK/Latin letter immediately
-        // follows it. The entity adds an invisible punctuation boundary.
-        return segment.replace(/(\*\*[^*\n]+?\*\*)(?=[\p{L}\p{N}])/gu, '$1&#8203;')
-      })
-      .join('')
+    const inlineCodeRe = /(`+)[^`\n]*?\1/g
+    const normalizeSegment = (segment: string) => segment.replace(
+      /(\*\*[^*\n]+?\*\*)(?=[\p{L}\p{N}])/gu,
+      '$1&#8203;',
+    )
+    let out = ''
+    let last = 0
+    for (const match of line.matchAll(inlineCodeRe)) {
+      const index = match.index ?? 0
+      out += normalizeSegment(line.slice(last, index))
+      out += match[0]
+      last = index + match[0].length
+    }
+    out += normalizeSegment(line.slice(last))
+    return out
   }).join('\n')
 }
 
@@ -680,7 +694,7 @@ function linkifyPlainCitationMarkers(
   // Citation-shaped text is valid LaTeX (for example, `[66]`). Protect math
   // before rewriting plain prose citations, otherwise the injected Markdown
   // destination is parsed by KaTeX and turns an otherwise valid formula red.
-  const protectedRe = /(```[\s\S]*?```|~~~[\s\S]*?~~~|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|`[^`\n]*`|\$(?:\\.|[^$\\\n])+\$|\\\((?:\\.|[^\\\n])*?\\\))/g
+  const protectedRe = /```[\s\S]*?```|~~~[\s\S]*?~~~|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|(`+)[^`\n]*?\1|\$(?:\\.|[^$\\\n])+\$|\\\((?:\\.|[^\\\n])*?\\\)/g
   let out = ''
   let last = 0
   for (const match of text.matchAll(protectedRe)) {
@@ -716,9 +730,96 @@ function dedupeRepeatedReaderImageMarkdown(text: string): string {
   return out.join('\n')
 }
 
+function normalizeReaderNumericSuperscriptCitationSegment(segment: string): string {
+  const renderCitation = (_match: string, body: string, offset: number, source: string) => {
+    const normalizedBody = String(body || '')
+      .replace(/[\u2013\u2014]/g, '-')
+      .replace(/\s*[,;]\s*/g, ',')
+      .replace(/\s*-\s*/g, '-')
+      .replace(/\s+/g, '')
+    const needsSpace = offset > 0 && /[A-Za-z0-9)*]/.test(source[offset - 1] || '')
+    return `${needsSpace ? ' ' : ''}[${normalizedBody}]`
+  }
+
+  const renderBareCitation = (match: string, body: string, offset: number, source: string) => {
+    const cleanBody = String(body || '').replace(/\s+/g, '')
+    const prefix = source.slice(0, Math.max(0, offset))
+    const directlyAttached = Boolean(prefix) && !/\s$/.test(prefix)
+    const baseMatch = directlyAttached
+      ? prefix.match(/(?:[A-Za-zµμ\u0370-\u03ff\u1f00-\u1fff]+|\d+(?:\.\d+)?)$/)
+      : null
+    const base = String(baseMatch?.[0] || '')
+    const exponentContext = /^\d{1,4}$/.test(cleanBody) && directlyAttached && (
+      /[)\]}]$/.test(prefix)
+      || /^\d+(?:\.\d+)?$/.test(base)
+      || (/^[A-Za-zµμ\u0370-\u03ff\u1f00-\u1fff]+$/.test(base) && (
+        base.length === 1
+        || NUMERIC_SUPERSCRIPT_BASE_UNITS.has(base.toLowerCase())
+        || ((cleanBody === '2' || cleanBody === '3') && base === base.toLowerCase() && base.length <= 3)
+      ))
+    )
+    if (exponentContext) {
+      return Array.from(cleanBody).map((digit) => NUMERIC_SUPERSCRIPT_CHAR_MAP[digit] || digit).join('')
+    }
+    return renderCitation(match, body, offset, source)
+  }
+
+  return String(segment || '')
+    .replace(
+      /<sup>\s*\[\s*(\d{1,4}(?:\s*[,;\u2013\u2014-]\s*\d{1,4})*)\s*\]\s*<\/sup>/gi,
+      renderCitation,
+    )
+    .replace(
+      /<sup>\s*(\d{1,4}(?:\s*[,;\u2013\u2014-]\s*\d{1,4})*)\s*<\/sup>/gi,
+      renderBareCitation,
+    )
+    .replace(
+      /\\textsuperscript\{\s*\[\s*(\d{1,4}(?:\s*[,;\u2013\u2014-]\s*\d{1,4})*)\s*\]\s*\}/g,
+      renderCitation,
+    )
+    .replace(
+      /\\textsuperscript\{\s*(\d{1,4}(?:\s*[,;\u2013\u2014-]\s*\d{1,4})*)\s*\}/g,
+      renderBareCitation,
+    )
+}
+
+function normalizeReaderNumericSuperscriptCitations(text: string): string {
+  const protectedInlineRe = /(`+)[^`\n]*?\1|\$(?:\\.|[^$\\\n])+\$|\\\((?:\\.|[^\\\n])*?\\\)/g
+  let fenceChar = ''
+  let inDisplayMath = false
+
+  return String(text || '').split('\n').map((line) => {
+    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/)
+    if (fenceMatch) {
+      const markerChar = String(fenceMatch[1] || '').slice(0, 1)
+      if (!fenceChar) fenceChar = markerChar
+      else if (markerChar === fenceChar) fenceChar = ''
+      return line
+    }
+    if (!fenceChar && line.trim() === '$$') {
+      inDisplayMath = !inDisplayMath
+      return line
+    }
+    if (fenceChar || inDisplayMath) return line
+
+    let out = ''
+    let last = 0
+    for (const match of line.matchAll(protectedInlineRe)) {
+      const index = match.index ?? 0
+      out += normalizeReaderNumericSuperscriptCitationSegment(line.slice(last, index))
+      out += match[0]
+      last = index + match[0].length
+    }
+    out += normalizeReaderNumericSuperscriptCitationSegment(line.slice(last))
+    return out
+  }).join('\n')
+}
+
 function normalizeReaderMarkdown(text: string): string {
   const withoutInternalMarkers = stripInternalConversionRetryMarkers(text)
-  return normalizeReaderPageMarkers(normalizeMicroUnitLatex(normalizeReferenceSectionSpacing(dedupeRepeatedReaderImageMarkdown(withoutInternalMarkers))))
+  const dedupedImages = dedupeRepeatedReaderImageMarkdown(withoutInternalMarkers)
+  const normalizedCitations = normalizeReaderNumericSuperscriptCitations(dedupedImages)
+  return normalizeReaderPageMarkers(normalizeMicroUnitLatex(normalizeReferenceSectionSpacing(normalizedCitations)))
 }
 
 interface Props {

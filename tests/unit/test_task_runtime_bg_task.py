@@ -1,6 +1,7 @@
 import api.reference_ui as reference_ui
 import api.routers.library as library_router
 import api.routers.references as references_router
+import kb.task_runtime as task_runtime
 from pathlib import Path
 
 from kb.chat_store import ChatStore
@@ -53,7 +54,9 @@ from kb.task_runtime import (
     _merge_paper_guide_deepread_context,
     _needs_conversational_source_hint,
     _paper_guide_has_requested_target_hits,
+    _paper_guide_fast_bound_section_hits,
     _paper_guide_prompt_family,
+    _publish_answer_ready_then_start_refs,
     _paper_guide_requests_cross_paper_refs,
     _exclude_bound_source_hits_for_cross_paper_refs,
     _select_answer_seed_for_generation,
@@ -167,6 +170,82 @@ def test_answer_ready_patch_closes_stream_with_final_answer() -> None:
     assert patch["answer_output_mode"] == "research"
     assert patch["answer_quality"] == {"minimum_ok": True}
     assert patch["finished_at"] > 0
+
+
+def test_answer_ready_is_published_before_deferred_reference_work(monkeypatch) -> None:
+    events: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        task_runtime,
+        "_gen_update_task",
+        lambda session_id, task_id, **patch: events.append(
+            ("publish", (session_id, task_id, patch))
+        ),
+    )
+
+    _publish_answer_ready_then_start_refs(
+        session_id="session-1",
+        task_id="task-1",
+        answer_ready_patch={"status": "done", "answer_ready": True, "answer": "ready"},
+        start_deferred_refs=lambda: events.append(("refs", None)),
+    )
+
+    assert [event[0] for event in events] == ["publish", "refs"]
+    published = events[0][1]
+    assert published[0:2] == ("session-1", "task-1")
+    assert published[2]["status"] == "done"
+    assert published[2]["answer_ready"] is True
+
+
+def test_author_biography_bound_section_uses_targeted_hits(monkeypatch) -> None:
+    expected = [
+        {
+            "text": "Kai Song received his B.S. degree in 2019.",
+            "meta": {
+                "source_path": "paper.md",
+                "heading_path": "Author Biographies",
+                "paper_guide_targeted_block": True,
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        task_runtime,
+        "_paper_guide_targeted_source_block_hits",
+        lambda **_kwargs: expected,
+    )
+    monkeypatch.setattr(
+        task_runtime,
+        "_paper_guide_has_requested_target_hits",
+        lambda *_args, **_kwargs: True,
+    )
+
+    out = _paper_guide_fast_bound_section_hits(
+        paper_guide_source_scoped=True,
+        paper_guide_cross_paper_refs=False,
+        bound_source_path="paper.md",
+        prompt="Summarize Kai Song in Author Biographies.",
+        db_dir="db",
+        top_k=4,
+    )
+
+    assert out == expected
+
+
+def test_author_biography_fast_section_falls_back_for_cross_paper_request(monkeypatch) -> None:
+    monkeypatch.setattr(
+        task_runtime,
+        "_paper_guide_targeted_source_block_hits",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not scan")),
+    )
+
+    assert _paper_guide_fast_bound_section_hits(
+        paper_guide_source_scoped=True,
+        paper_guide_cross_paper_refs=True,
+        bound_source_path="paper.md",
+        prompt="Compare the Author Biographies with other papers.",
+        db_dir="db",
+        top_k=4,
+    ) == []
 
 
 def test_exact_preflight_hit_keeps_locate_and_reference_identity():
@@ -729,6 +808,17 @@ def test_pre_output_stream_failure_can_still_use_bounded_retry():
         ConnectionError("provider unavailable"),
         streamed=False,
         partial="",
+    )
+
+
+def test_connection_failure_after_visible_partial_skips_second_full_request():
+    assert not _should_retry_generation_non_stream(
+        ConnectionError("provider connection reset"),
+        streamed=True,
+        partial="The evidence-backed answer has already started, but:",
+        paper_guide_mode=True,
+        prompt_family="overview",
+        has_hits=True,
     )
 
 
