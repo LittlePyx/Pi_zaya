@@ -3323,6 +3323,90 @@ def test_finalize_generation_answer_rechecks_claims_after_late_answer_mutation(m
     }
 
 
+def test_finalize_restores_precise_evidence_term_after_final_gate(monkeypatch) -> None:
+    original_audit = finalize_runtime.audit_and_repair_claim_evidence
+    audit_calls = 0
+
+    def _drop_first_normalized_clause(answer, *args, **kwargs):
+        nonlocal audit_calls
+        audit_calls += 1
+        if audit_calls == 1:
+            paragraphs = [
+                paragraph
+                for paragraph in str(answer or "").split("\n\n")
+                if "论文摘要的关键表述" not in paragraph
+            ]
+            answer = "\n\n".join(paragraphs)
+        return original_audit(answer, *args, **kwargs)
+
+    monkeypatch.setattr(
+        finalize_runtime,
+        "audit_and_repair_claim_evidence",
+        _drop_first_normalized_clause,
+    )
+    monkeypatch.setattr(finalize_runtime, "_reconcile_kb_notice", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(finalize_runtime, "_enhance_kb_miss_fallback", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(
+        finalize_runtime,
+        "_build_answer_quality_probe",
+        lambda answer, **kwargs: {"minimum_ok": True},
+    )
+    evidence = (
+        "A high-resolution foveal region tracks motion within the scene, yet unlike a "
+        "simple zoom, every frame delivers new spatial information from across the entire "
+        "field of view. This strategy accumulates detail of slower regions over several "
+        "consecutive frames."
+    )
+
+    out = finalize_runtime._finalize_generation_answer(
+        "Foveated dynamic supersampling 让高分辨率中央凹区域跟踪运动，并跨帧累积细节 [1]。",
+        prompt="foveated dynamic supersampling 如何分配时空采样？",
+        prompt_for_user="foveated dynamic supersampling 如何分配时空采样？",
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {"source_path": "foveated.en.md"},
+            }
+        ],
+        db_dir="db",
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="medium",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=False,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={
+            "citation_plan": {
+                "intent": "comparison",
+                "budget": {"system_a": 1, "system_b": 0},
+                "slots": [
+                    {
+                        "preferred_system": "system_a",
+                        "candidate_hits": [1],
+                        "source_path": "foveated.en.md",
+                        "evidence_quote": evidence,
+                    }
+                ],
+            }
+        },
+        apply_paper_guide_answer_postprocess=lambda answer, **kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **kwargs: answer,
+        validate_structured_citations=lambda answer, **kwargs: (answer, {}),
+    )
+
+    assert "整个视场" in out["answer"]
+    assert out["answer_quality"]["claim_evidence"]["post_gate_term_normalization"] is True
+    assert audit_calls == 2
+
+
 def test_finalize_generation_answer_preserves_numeric_refs_for_citation_lookup(monkeypatch):
     monkeypatch.setattr(finalize_runtime, "_reconcile_kb_notice", lambda answer, **kwargs: answer)
     monkeypatch.setattr(finalize_runtime, "_apply_answer_contract_v1", lambda answer, **kwargs: answer)

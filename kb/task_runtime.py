@@ -3855,6 +3855,73 @@ def _should_run_refs_async_enrich_for_request(
     return not prompt_multi_paper_list
 
 
+def _answer_hit_limit_for_request(
+    *,
+    top_k: int,
+    prompt: str,
+    prompt_multi_source_synthesis: bool,
+    paper_guide_source_scoped: bool,
+    paper_guide_prompt_family: str,
+) -> int:
+    """Keep the model context compact without starving explicit paper lists."""
+
+    top_k_safe = max(1, int(top_k or 1))
+    if prompt_multi_source_synthesis:
+        requested = extract_requested_paper_count(prompt)
+        synthesis_cap = max(4, min(6, int(requested or 4)))
+        return max(1, min(top_k_safe, synthesis_cap))
+    if (
+        paper_guide_source_scoped
+        and str(paper_guide_prompt_family or "").strip().lower()
+        in {"overview", "compare", "reproduce", "strength_limits", "figure_walkthrough", "citation_lookup"}
+    ):
+        return max(1, min(top_k_safe, 5))
+    return max(1, min(top_k_safe, 4))
+
+
+def _should_sync_deep_seed_for_answer(
+    *,
+    guide_strict_mode: bool,
+    inferred_source_hint: str,
+    applied_bound_source_hints: list[str] | None,
+) -> bool:
+    """Deep-build answer seeds only when a concrete source was actually bound."""
+
+    return bool(
+        guide_strict_mode
+        or str(inferred_source_hint or "").strip()
+        or any(str(item or "").strip() for item in list(applied_bound_source_hints or []))
+    )
+
+
+def _answer_ready_task_patch(
+    *,
+    answer: str,
+    answer_output_mode: str,
+    answer_quality: dict | None,
+    paper_guide_debug: dict | None,
+    citation_validation: dict | None,
+    research_trace: dict | None,
+) -> dict:
+    """Build the terminal stream patch published before reference-card refinement."""
+
+    text = str(answer or "")
+    return {
+        "status": "done",
+        "stage": "done",
+        "answer": text,
+        "partial": text,
+        "char_count": len(text),
+        "answer_ready": True,
+        "answer_output_mode": str(answer_output_mode or ""),
+        "answer_quality": dict(answer_quality or {}),
+        "paper_guide_debug": dict(paper_guide_debug or {}),
+        "citation_validation": dict(citation_validation or {}),
+        "research_trace": dict(research_trace or {}),
+        "finished_at": time.time(),
+    }
+
+
 def _select_refs_async_rebuild_hits_raw(
     *,
     hits_raw: list[dict],
@@ -4675,6 +4742,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 limit=6 if prompt_multi_source_synthesis else 3,
             )
         inferred_source_hint = ""
+        applied_bound_source_hints: list[str] = []
         if paper_guide_source_scoped and preferred_source_hints:
             retrieval_prompt = _apply_bound_source_hints(retrieval_prompt, preferred_source_hints, limit=2)
         # Detect deictic follow-ups from the user's text, before scope/context blocks add
@@ -4719,10 +4787,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             if preferred_source_hints:
                 for h in preferred_source_hints[:2]:
                     retrieval_prompt = _augment_prompt_with_source_hint(retrieval_prompt, h)
+                    applied_bound_source_hints.append(str(h or "").strip())
             else:
                 bound_hints = _pick_recent_bound_source_hints(conv_id=conv_id, chat_store=chat_store, limit=2)
                 for h in bound_hints:
                     retrieval_prompt = _augment_prompt_with_source_hint(retrieval_prompt, h)
+                    applied_bound_source_hints.append(str(h or "").strip())
         paper_guide_debug: dict[str, object] = {}
         if paper_guide_source_scoped:
             retrieval_prompt = _augment_paper_guide_retrieval_prompt(
@@ -5206,11 +5276,18 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     pass
             answer_hit_limit = max(1, min(int(top_k), 4))
             guide_strict_mode = bool(paper_guide_source_scoped and paper_guide_bound_source_ready)
+            generation_answer_hit_limit = _answer_hit_limit_for_request(
+                top_k=int(top_k),
+                prompt=prompt or retrieval_prompt or "",
+                prompt_multi_source_synthesis=bool(prompt_multi_source_synthesis),
+                paper_guide_source_scoped=bool(paper_guide_source_scoped),
+                paper_guide_prompt_family=paper_guide_prompt_family,
+            )
             answer_doc_cap = max(
                 answer_hit_limit,
                 min(
                     int(top_k),
-                    6
+                    generation_answer_hit_limit
                     if prompt_multi_source_synthesis
                     else (
                         5
@@ -5222,9 +5299,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     ),
                 ),
             )
-            should_sync_deep_seed = bool(hits_raw) and (
-                guide_strict_mode
-                or _needs_bound_source_hint(prompt or retrieval_prompt or "")
+            should_sync_deep_seed = bool(hits_raw) and _should_sync_deep_seed_for_answer(
+                guide_strict_mode=guide_strict_mode,
+                inferred_source_hint=inferred_source_hint,
+                applied_bound_source_hints=applied_bound_source_hints,
             )
             if should_sync_deep_seed:
                 try:
@@ -5707,27 +5785,18 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 return
             refs_async_started = True
             refs_async_start()
-            _trace_event("refs_async_started", elapsed_s=0.0, after="first_visible_answer")
+            _trace_event("refs_async_started", elapsed_s=0.0, after="provider_answer_complete")
 
         _gen_update_task(session_id, task_id, stage="context", used_query=str(used_query or ""), used_translation=bool(used_translation), refs_done=True)
 
         # Keep prompt compact for fast first-token latency.
         t_answer_selection0 = time.perf_counter()
-        answer_hit_limit = max(
-            1,
-            min(
-                int(top_k),
-                6
-                if prompt_multi_source_synthesis
-                else (
-                    5
-                    if (
-                        paper_guide_source_scoped
-                        and paper_guide_prompt_family in {"overview", "compare", "reproduce", "strength_limits", "figure_walkthrough", "citation_lookup"}
-                    )
-                    else 4
-                ),
-            ),
+        answer_hit_limit = _answer_hit_limit_for_request(
+            top_k=int(top_k),
+            prompt=prompt or retrieval_prompt or "",
+            prompt_multi_source_synthesis=bool(prompt_multi_source_synthesis),
+            paper_guide_source_scoped=bool(paper_guide_source_scoped),
+            paper_guide_prompt_family=paper_guide_prompt_family,
         )
         answer_seed = _select_answer_seed_for_generation(
             paper_guide_cross_paper_refs=bool(paper_guide_cross_paper_refs),
@@ -6150,6 +6219,17 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             allowed_image_roots=chat_image_upload_roots(db_dir),
         )
         messages = _build_generation_messages(system=system, hist=hist, user_content=user_content)
+        _trace_event(
+            "llm_payload",
+            elapsed_s=0.0,
+            system_chars=int(len(system or "")),
+            user_chars=int(len(user or "")),
+            history_chars=int(
+                sum(len(str(item.get("content") or "")) for item in hist if isinstance(item, dict))
+            ),
+            message_count=int(len(messages or [])),
+            answer_hit_limit=int(answer_hit_limit),
+        )
         ds = None
         agent_direct_answer_override = ""
         agent_generation_result: dict = {}
@@ -6288,7 +6368,6 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     partial += piece
                     streamed = True
                     _gen_update_task(session_id, task_id, stage="answer", partial=partial, char_count=len(partial))
-                    _start_deferred_refs_async()
                     now = time.monotonic()
                     # Reduce sqlite write frequency while still keeping crash-recovery checkpoints.
                     if (
@@ -6745,6 +6824,33 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     )
             except Exception:
                 pass
+        # The final, evidence-checked answer is now durable. Publish the
+        # terminal stream event before building or polishing reference cards;
+        # the refs endpoint already exposes pending seed cards and the frontend
+        # keeps polling them independently until they become ready.
+        _gen_store_paper_guide_contract_meta(
+            task,
+            paper_guide_contracts=paper_guide_contracts,
+        )
+        _trace_event(
+            "answer_published",
+            elapsed_s=0.0,
+            refs_continue_in_background=True,
+        )
+        answer_ready_patch = _answer_ready_task_patch(
+            answer=answer,
+            answer_output_mode=answer_output_mode,
+            answer_quality=answer_quality,
+            paper_guide_debug=paper_guide_debug,
+            citation_validation=citation_validation,
+            research_trace=research_trace,
+        )
+        answer_ready_patch["answer_published_before_refs"] = True
+        _gen_update_task(
+            session_id,
+            task_id,
+            **answer_ready_patch,
+        )
         refs_precompute_enabled = _generation_refs_precompute_enabled()
         if (
             (not prompt_multi_paper_list)
@@ -7034,6 +7140,21 @@ def _gen_worker(session_id: str, task_id: str) -> None:
 
     except Exception as e:
         snap = _gen_get_task(session_id) or {}
+        if bool(snap.get("answer_ready")) and str(
+            snap.get("answer") or snap.get("partial") or ""
+        ).strip():
+            # Reference-card/provenance refinement runs after the answer stream
+            # has completed. A late failure must never overwrite a successful,
+            # already-visible answer with an error message.
+            logger.warning("Post-answer refinement failed: %s", str(e)[:240])
+            _gen_update_task(
+                session_id,
+                task_id,
+                status="done",
+                stage="done",
+                post_answer_error=f"{type(e).__name__}: {str(e)}"[:500],
+            )
+            return
         cancel_requested = str(e) == "canceled" or (
             str(snap.get("id") or "") == str(task_id or "")
             and bool(snap.get("cancel") or False)

@@ -6,6 +6,8 @@ from pathlib import Path
 from kb.chat_store import ChatStore
 from kb.task_runtime import (
     _apply_bound_source_hints,
+    _answer_hit_limit_for_request,
+    _answer_ready_task_patch,
     _align_multi_paper_doc_list_contract_with_display_hits,
     _augment_paper_guide_retrieval_prompt,
     _augment_prompt_with_source_hint,
@@ -59,6 +61,7 @@ from kb.task_runtime import (
     _select_refs_async_rebuild_hits_raw,
     _should_allow_refs_async_enrich,
     _should_run_refs_async_enrich_for_request,
+    _should_sync_deep_seed_for_answer,
     _paper_guide_targeted_source_block_hits,
     _pick_recent_source_hint,
     _post_convert_source_retry_needed,
@@ -76,6 +79,94 @@ from kb.task_runtime import (
     _should_sync_deep_seed_for_display,
     _stabilize_paper_guide_output_mode,
 )
+
+
+def test_answer_hit_limit_keeps_default_library_context_compact() -> None:
+    assert _answer_hit_limit_for_request(
+        top_k=8,
+        prompt="Compare the main reconstruction approaches in my library.",
+        prompt_multi_source_synthesis=True,
+        paper_guide_source_scoped=False,
+        paper_guide_prompt_family="",
+    ) == 4
+
+
+def test_answer_hit_limit_preserves_explicit_larger_paper_request() -> None:
+    assert _answer_hit_limit_for_request(
+        top_k=8,
+        prompt="Please use only 6 papers for a comparison.",
+        prompt_multi_source_synthesis=True,
+        paper_guide_source_scoped=False,
+        paper_guide_prompt_family="",
+    ) == 6
+    assert _answer_hit_limit_for_request(
+        top_k=8,
+        prompt="Please give me 3 papers about SPI.",
+        prompt_multi_source_synthesis=True,
+        paper_guide_source_scoped=False,
+        paper_guide_prompt_family="",
+    ) == 4
+
+
+def test_answer_hit_limit_keeps_source_scoped_guide_budget() -> None:
+    assert _answer_hit_limit_for_request(
+        top_k=8,
+        prompt="Explain this paper's method.",
+        prompt_multi_source_synthesis=False,
+        paper_guide_source_scoped=True,
+        paper_guide_prompt_family="overview",
+    ) == 5
+    assert _answer_hit_limit_for_request(
+        top_k=8,
+        prompt="Explain the method.",
+        prompt_multi_source_synthesis=False,
+        paper_guide_source_scoped=False,
+        paper_guide_prompt_family="overview",
+    ) == 4
+
+
+def test_sync_deep_seed_requires_a_concrete_source_binding() -> None:
+    assert not _should_sync_deep_seed_for_answer(
+        guide_strict_mode=False,
+        inferred_source_hint="",
+        applied_bound_source_hints=[],
+    )
+    assert _should_sync_deep_seed_for_answer(
+        guide_strict_mode=True,
+        inferred_source_hint="",
+        applied_bound_source_hints=[],
+    )
+    assert _should_sync_deep_seed_for_answer(
+        guide_strict_mode=False,
+        inferred_source_hint="paper.md",
+        applied_bound_source_hints=[],
+    )
+    assert _should_sync_deep_seed_for_answer(
+        guide_strict_mode=False,
+        inferred_source_hint="",
+        applied_bound_source_hints=["paper.md"],
+    )
+
+
+def test_answer_ready_patch_closes_stream_with_final_answer() -> None:
+    patch = _answer_ready_task_patch(
+        answer="Grounded answer [1].",
+        answer_output_mode="research",
+        answer_quality={"minimum_ok": True},
+        paper_guide_debug={"prompt_family": "compare"},
+        citation_validation={"valid": True},
+        research_trace={"status": "running"},
+    )
+
+    assert patch["status"] == "done"
+    assert patch["stage"] == "done"
+    assert patch["answer_ready"] is True
+    assert patch["answer"] == "Grounded answer [1]."
+    assert patch["partial"] == patch["answer"]
+    assert patch["char_count"] == len(patch["answer"])
+    assert patch["answer_output_mode"] == "research"
+    assert patch["answer_quality"] == {"minimum_ok": True}
+    assert patch["finished_at"] > 0
 
 
 def test_exact_preflight_hit_keeps_locate_and_reference_identity():

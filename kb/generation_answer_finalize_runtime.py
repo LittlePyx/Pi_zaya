@@ -4788,6 +4788,32 @@ def _finalize_generation_answer(
         drop_unsupported_high_risk_claims=final_gate_has_grounded_system_a,
         enforce_user_visible_binding=final_gate_has_grounded_system_a,
     )
+    # The evidence gate may remove a weakly-bound sentence that happened to be
+    # the only occurrence of a precise source term. Re-run the deterministic
+    # terminology normalizer against the final grounded surface, then audit the
+    # result again only when it actually restored content.
+    post_gate_answer = (
+        answer
+        if multi_paper_list_prompt
+        else _normalize_citation_plan_supported_terms(
+            answer,
+            prompt=prompt_for_user or prompt,
+            citation_plan=citation_plan_seed,
+            answer_hits=answer_hits,
+        )
+    )
+    if post_gate_answer != answer:
+        answer, final_claim_evidence_meta = audit_and_repair_claim_evidence(
+            post_gate_answer,
+            answer_hits=claim_evidence_hits,
+            allow_citation_repairs=True,
+            prompt=prompt_for_user or prompt,
+            allowed_citation_numbers=strict_comparison_numbers,
+            drop_unsupported_unplanned_claims=strict_comparison_numbers is not None,
+            drop_unsupported_high_risk_claims=final_gate_has_grounded_system_a,
+            enforce_user_visible_binding=final_gate_has_grounded_system_a,
+        )
+        final_claim_evidence_meta["post_gate_term_normalization"] = True
     answer = _collapse_adjacent_duplicate_numeric_citations(answer)
     final_claim_evidence_meta["final_gate_applied"] = True
     final_claim_evidence_meta["unsupported_claim_drop_enabled"] = bool(

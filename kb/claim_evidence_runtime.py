@@ -433,6 +433,58 @@ def _append_citation(unit: str, citation_number: int) -> str:
     return f"{body} {marker}{punctuation}"
 
 
+def _relocate_possessive_numeric_citations(answer: str) -> tuple[str, int]:
+    """Move ``paper [n] 的...`` markers to the supported clause end.
+
+    A marker between a source noun and the Chinese possessive ``的`` has almost
+    no claim text on its left, so the renderer may hide it as weakly bound.
+    Moving the same marker to the clause end preserves source identity while
+    giving both readers and the renderer the complete supported claim.
+    """
+
+    citation_before_possessive = re.compile(
+        r"[ \t]*(?<!\[)(\[(\d{1,5})\](?:\([^\n)]+\))?)\s*的"
+    )
+    clause_split = re.compile(r"([；;。！？!?](?:\s+|$)?)")
+    relocated = 0
+    output_lines: list[str] = []
+    in_fence = False
+    for raw_line in str(answer or "").splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            output_lines.append(raw_line)
+            continue
+        if in_fence or not stripped or _TABLE_OR_CODE_RE.match(stripped):
+            output_lines.append(raw_line)
+            continue
+        parts = clause_split.split(raw_line)
+        rebuilt: list[str] = []
+        for index in range(0, len(parts), 2):
+            clause = parts[index]
+            punctuation = parts[index + 1] if index + 1 < len(parts) else ""
+            moved_markers: list[str] = []
+
+            def _remove_midphrase_marker(match: re.Match[str]) -> str:
+                nonlocal relocated
+                marker = str(match.group(1) or "").strip()
+                if marker and marker not in moved_markers:
+                    moved_markers.append(marker)
+                relocated += 1
+                return "的"
+
+            cleaned_clause = citation_before_possessive.sub(
+                _remove_midphrase_marker,
+                clause,
+            )
+            for marker in moved_markers:
+                if marker not in cleaned_clause:
+                    cleaned_clause = f"{cleaned_clause.rstrip()} {marker}"
+            rebuilt.append(f"{cleaned_clause}{punctuation}")
+        output_lines.append("".join(rebuilt))
+    return "\n".join(output_lines), relocated
+
+
 def _scope_absolute_negative_claims(answer: str) -> tuple[str, int]:
     text = str(answer or "")
     count = 0
@@ -1412,6 +1464,9 @@ def audit_and_repair_claim_evidence(
     scoped, scoped_count = _scope_absolute_negative_claims(scoped)
     scoped, trimmed_inference_count = _trim_unsupported_boundary_inferences(scoped)
     scoped, modality_count = _repair_modality_boundary_language(scoped)
+    scoped, relocated_midphrase_citations = _relocate_possessive_numeric_citations(
+        scoped
+    )
     scoped, spad_term_count = _ensure_prompt_spad_term(
         scoped,
         prompt=prompt,
@@ -1491,6 +1546,7 @@ def audit_and_repair_claim_evidence(
         "scoped_negative_claims": int(scoped_count),
         "trimmed_unsupported_inferences": int(trimmed_inference_count),
         "repaired_modality_boundaries": int(modality_count),
+        "relocated_midphrase_citations": int(relocated_midphrase_citations),
         "restored_prompt_terms": int(spad_term_count),
         "restored_evidence_numbers": int(frame_rate_count),
         "dropped_hard_mismatch_claims": len(dropped_mismatches),

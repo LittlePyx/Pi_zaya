@@ -200,6 +200,28 @@ def test_claim_audit_keeps_advice_out_of_high_risk_count():
     assert audit["uncited_high_risk_claims"] == 0
 
 
+def test_midphrase_chinese_citations_move_to_supported_clause_end() -> None:
+    answer = (
+        "搭配建议：先读探测器综述 [1] 的第 2.3 节和表 1，了解制造难点；"
+        "再读方法论文 [2] 的物理噪声模型，理解它如何指导训练。"
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [
+            {"text": "Section 2.3 and Table 1 compare detector manufacturing challenges."},
+            {"text": "The physical noise model guides deep network training."},
+        ],
+        allow_citation_repairs=False,
+    )
+
+    assert "综述的第 2.3 节和表 1，了解制造难点 [1]；" in repaired
+    assert "论文的物理噪声模型，理解它如何指导训练 [2]。" in repaired
+    assert "[1] 的" not in repaired
+    assert "[2] 的" not in repaired
+    assert meta["relocated_midphrase_citations"] == 2
+
+
 def test_anaphoric_core_claim_inherits_previous_grounded_source() -> None:
     answer = (
         "Foveated dynamic supersampling 让高分辨率中央凹区域跟踪运动，"
