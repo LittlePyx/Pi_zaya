@@ -2692,6 +2692,53 @@ def test_maybe_polish_single_ref_hit_card_rejects_unusable_llm_copy(monkeypatch)
     assert str(out.get("why_generation") or "") != "llm_grounded"
 
 
+def test_maybe_polish_single_ref_hit_card_reuses_passing_grounded_copy(monkeypatch):
+    evidence = (
+        "SCINeRF incorporates the physical SCI imaging process into NeRF training "
+        "to reconstruct a 3D scene representation from one compressed snapshot."
+    )
+    hit = {
+        "text": evidence,
+        "meta": {
+            "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+            "ref_show_snippets": [evidence],
+        },
+    }
+    ui_meta = {
+        "display_name": "CVPR-2024-SCINeRF.pdf",
+        "heading_path": "Abstract",
+        "summary_line": (
+            "SCINeRF reconstructs a 3D scene representation from one compressed snapshot "
+            "by incorporating the physical SCI model into NeRF training."
+        ),
+        "summary_kind": "guide",
+        "summary_generation": "section_grounded",
+        "why_line": (
+            "The abstract links SCINeRF's compressed measurement to NeRF-based 3D reconstruction, "
+            "which supports the method mechanism asked about."
+        ),
+        "why_generation": "deterministic_grounded",
+    }
+
+    monkeypatch.setattr(reference_ui, "_refs_card_polish_llm_enabled", lambda: True)
+
+    def fail_llm(**kwargs):
+        raise AssertionError(f"unexpected LLM polish for passing card: {kwargs}")
+
+    monkeypatch.setattr(reference_ui, "_force_llm_ground_ref_hit_card_copy", fail_llm)
+    monkeypatch.setattr(reference_ui, "_llm_ground_ref_why_line", fail_llm)
+
+    out = reference_ui._maybe_polish_single_ref_hit_card(
+        prompt="How does SCINeRF reconstruct a 3D scene from one compressed snapshot?",
+        hit=hit,
+        ui_meta=ui_meta,
+        allow_expensive_llm=True,
+    )
+
+    assert out["summary_line"] == ui_meta["summary_line"]
+    assert out["why_line"] == ui_meta["why_line"]
+
+
 def test_maybe_polish_single_ref_hit_card_falls_back_to_real_snippet_when_llm_empty(monkeypatch):
     hit = {
         "text": "Table 1. Quantitative comparison results for USAF 1951 test chart",
@@ -6475,7 +6522,7 @@ def test_ensure_summary_line_marks_existing_abstract_as_llm_distilled(monkeypatc
     assert out["summary_line"] == "这是一段被重新提炼过的摘要。"
 
 
-def test_enrich_refs_payload_uses_grounded_llm_for_why_basis_when_hits_are_ready(monkeypatch):
+def test_enrich_refs_payload_reuses_specific_definition_copy_without_llm(monkeypatch):
     refs = {
         43: {
             "prompt": "Which paper in my library most directly defines dynamic supersampling?",
@@ -6506,14 +6553,10 @@ def test_enrich_refs_payload_uses_grounded_llm_for_why_basis_when_hits_are_ready
     }
     monkeypatch.setattr(reference_ui, "_refs_card_polish_llm_enabled", lambda: True)
     monkeypatch.setattr(reference_ui, "_maybe_llm_filter_refs_hits", lambda **kwargs: list(kwargs.get("hits") or []))
-    monkeypatch.setattr(
-        reference_ui,
-        "_llm_polish_ref_card_copy_v2",
-        lambda **kwargs: (
-            "The section defines dynamic supersampling as shifting pixel boundaries across frames to accumulate complementary spatial samples.",
-            "This section is relevant because it explains the definition of dynamic supersampling itself rather than mentioning it in passing.",
-        ),
-    )
+    def fail_llm(**kwargs):
+        raise AssertionError(f"unexpected LLM polish for passing definition card: {kwargs}")
+
+    monkeypatch.setattr(reference_ui, "_llm_polish_ref_card_copy_v2", fail_llm)
     monkeypatch.setattr(reference_ui, "_maybe_llm_rerank_refs_hits", lambda **kwargs: list(kwargs.get("hits") or []))
 
     out = reference_ui.enrich_refs_payload(refs, pdf_root=None, md_root=None, lib_store=None)
@@ -6521,9 +6564,9 @@ def test_enrich_refs_payload_uses_grounded_llm_for_why_basis_when_hits_are_ready
 
     assert len(hits) == 1
     ui_meta = (hits[0].get("ui_meta") if isinstance(hits[0].get("ui_meta"), dict) else {}) or {}
-    assert "definition of dynamic supersampling" in str(ui_meta.get("why_line") or "")
-    assert str(ui_meta.get("why_generation") or "") == "llm_grounded"
-    assert "LLM" in str(ui_meta.get("why_basis") or "")
+    assert "defines or explains 'dynamic supersampling'" in str(ui_meta.get("why_line") or "")
+    assert str(ui_meta.get("why_generation") or "") == "deterministic_grounded"
+    assert "LLM" not in str(ui_meta.get("why_basis") or "")
 
 
 def test_enrich_refs_payload_skips_llm_filter_for_single_ready_hit(monkeypatch):

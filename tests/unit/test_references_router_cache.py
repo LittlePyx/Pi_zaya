@@ -201,8 +201,49 @@ def test_design_layer_question_uses_comparison_relation_instead_of_repeating_sum
     )
 
     assert "Hadamard" in summary
-    assert why == "“Introduction”给出该方法的定义或结果，是与另一方法逐项对照时的原文依据。"
+    assert why == "原文明确区分 Hadamard 与 Fourier 两类照明基图案，并从成像效率和噪声鲁棒性等方面比较底层编码选择。"
     assert summary not in why
+    assert not references_router.looks_generic_ref_why_line(why)
+
+
+def test_answer_citation_guide_removes_answer_scaffolding() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "answer_claim": (
+                    "2. 具体来说：论文摘要的关键表述是："
+                    "每一帧仍从整个视场采集新的空间信息。"
+                ),
+                "heading_path": "Paper / Abstract",
+                "evidence_quote": (
+                    "Each frame still delivers new spatial information from the entire field of view."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt="foveated dynamic supersampling 每帧保留了什么信息？",
+    )
+
+    assert summary == "每一帧仍从整个视场采集新的空间信息"
+    assert not summary.startswith("2.")
+    assert not summary.startswith("具体来说")
+    assert "整个视场" in why
+
+
+def test_answer_citation_guide_removes_source_lead_in_after_list_number() -> None:
+    summary, _why = references_router._answer_citation_card_copy(
+        [
+            {
+                "answer_claim": "1. 论文摘要的关键表述是：中央凹区域追踪快速运动。",
+                "heading_path": "Abstract",
+                "evidence_quote": "The high-resolution foveal region tracks fast motion.",
+            }
+        ],
+        prefer_zh=True,
+        prompt="中央凹区域在做什么？",
+    )
+
+    assert summary == "中央凹区域追踪快速运动"
 
 
 def test_reference_copy_links_exact_claim_and_pdf_page_without_generic_template() -> None:

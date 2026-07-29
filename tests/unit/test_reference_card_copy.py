@@ -23,6 +23,12 @@ def test_generic_why_line_detector_catches_prompt_echo_template() -> None:
     assert looks_generic_ref_why_line(
         "该引用复用生成回答时实际提供的原文证据，且与答案中的关键词一致。"
     )
+    assert looks_generic_ref_why_line(
+        "“Introduction”给出该方法的定义或结果，是与另一方法逐项对照时的原文依据。"
+    )
+    assert looks_generic_ref_why_line(
+        "'Introduction' provides the method definition or result needed for a point-by-point comparison."
+    )
 
 
 def test_templated_why_line_detector_does_not_reject_specific_evidence() -> None:

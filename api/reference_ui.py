@@ -2714,14 +2714,23 @@ def _guide_summary_should_prefer_llm_grounding(
     s = _clean_summary_line(summary_line)
     if not s:
         return False
-    if not _prefer_zh_ref_card_locale(prompt, title, heading_path, s):
-        return False
+    prefer_zh = _prefer_zh_ref_card_locale(prompt, title, heading_path, s)
     if _looks_formula_heavy_ref_text(s) or _looks_why_like_ref_summary(s):
         return True
     if _looks_surface_like_ref_summary(s) or _looks_fragmentary_ref_summary(s):
         return True
-    # User explicitly demands LLM polish for all languages including CJK.
-    return True
+    if _summary_line_needs_polish(
+        prompt=prompt,
+        title=title,
+        summary_line=s,
+    ):
+        return True
+    # High-quality card copy is reused as-is.  Only a language mismatch still
+    # justifies an LLM pass; this keeps card refinement off the answer latency
+    # path and avoids rewriting already-grounded prose merely for style.
+    if prefer_zh and not _ref_copy_matches_target_locale(s, "zh"):
+        return True
+    return False
 
 
 def _why_line_needs_polish(
@@ -4047,7 +4056,24 @@ def _maybe_polish_single_ref_hit_card(
         ui["summary_line"] = reusable_summary
         ui["why_line"] = reusable_why
         return ui
-    force_llm_card = bool(candidates and allow_llm_polish and summary_kind in ("guide", "section_grounded"))
+    initial_needs_summary = _summary_line_needs_polish(
+        prompt=prompt,
+        title=title,
+        summary_line=summary_line,
+    )
+    initial_needs_why = _why_line_needs_polish(
+        prompt=prompt,
+        display_name=title,
+        heading_path=heading_path,
+        summary_line=summary_line,
+        why_line=why_line,
+    )
+    force_llm_card = bool(
+        candidates
+        and allow_llm_polish
+        and summary_kind in ("guide", "section_grounded")
+        and (force_llm_summary or initial_needs_summary or initial_needs_why)
+    )
     if force_llm_card:
         return _force_llm_ground_ref_hit_card_copy(
             prompt=prompt,
@@ -4097,6 +4123,7 @@ def _maybe_polish_single_ref_hit_card(
         candidates
         and summary_kind != "metadata"
         and allow_llm_polish
+        and needs_why
         and why_generation != "llm_grounded"
     )
     if not (needs_summary or needs_why or attempt_grounded_why):
@@ -4147,7 +4174,7 @@ def _maybe_polish_single_ref_hit_card(
         why_line=why_line,
     )
     candidate_payload = "\n".join(f"- {item}" for item in candidates if item)
-    if candidate_payload and summary_kind != "metadata" and allow_llm_polish:
+    if attempt_grounded_why and candidate_payload:
         grounded_why = _llm_ground_ref_why_line(
             prompt=prompt,
             display_name=title,

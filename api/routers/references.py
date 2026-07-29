@@ -113,7 +113,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 33
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 34
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000
@@ -390,6 +390,15 @@ def _answer_citation_claim_text(detail: dict, *, prefer_zh: bool) -> str:
     if not raw:
         raw = " ".join(evidence.split()).strip()
     if prefer_zh:
+        raw = re.sub(r"^\s*\d+\s*[.、)]\s*", "", raw)
+        raw = re.sub(r"^(?:具体来说|也就是说|换言之)[，,:：]\s*", "", raw)
+        raw = re.sub(
+            r"^(?:(?:论文|本文|该文|该论文|综述)\s*)?"
+            r"(?:摘要\s*)?(?:的\s*)?"
+            r"(?:关键表述|核心表述|结论|结果|要点)(?:是|为)?[，,:：]\s*",
+            "",
+            raw,
+        )
         raw = re.sub(r"^在.{0,180}?(?:中|里)[，,:：]\s*", "", raw)
         raw = re.sub(r"^根据(?:本文|该文|这篇论文|文献库)[，,:：\s]*", "", raw)
     else:
@@ -456,6 +465,34 @@ def _answer_citation_named_entities(value: str) -> set[str]:
         )
         if distinctive_shape and token_low not in stopwords and not venue_year_token:
             out.add(token_low)
+    return out
+
+
+def _answer_citation_shared_focus_terms(
+    *,
+    summary: str,
+    grounding_surface: str,
+    limit: int = 3,
+) -> list[str]:
+    """Pick method-like terms that occur in both the card claim and evidence."""
+
+    summary_text = str(summary or "")
+    evidence_low = str(grounding_surface or "").lower()
+    stopwords = {
+        "about", "answer", "basis", "because", "comparison", "current",
+        "evidence", "figure", "method", "paper", "result", "section",
+        "single", "system", "using", "with",
+    }
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9²-]{2,}", summary_text):
+        key = token.lower()
+        if key in seen or key in stopwords or key not in evidence_low:
+            continue
+        seen.add(key)
+        out.append(token)
+        if len(out) >= max(1, int(limit or 3)):
+            break
     return out
 
 
@@ -556,9 +593,42 @@ def _answer_citation_card_copy(
         ),
         "",
     )
+    grounding_surface = " ".join(
+        " ".join(
+            str(detail.get(key) or "").strip()
+            for key in (
+                "evidence_quote",
+                "summary_line",
+                "answer_claim",
+                "card_takeaway",
+                "source_name",
+                "card_title",
+            )
+            if str(detail.get(key) or "").strip()
+        )
+        for detail in details
+        if isinstance(detail, dict)
+    ).strip()
     prompt_text = str(prompt or "")
     unique_headings = list(dict.fromkeys(heading for heading, _claim in rows if heading))
     headings = "”和“".join(unique_headings)
+    grounded_relation = build_grounded_ref_why_line(
+        prefer_zh=prefer_zh,
+        focus_terms=_answer_citation_shared_focus_terms(
+            summary=summary,
+            grounding_surface=grounding_surface,
+        ),
+        heading_path=" / ".join(unique_headings),
+        summary_line=grounding_surface or summary,
+        action=prompt_reference_focus_action(prompt_text),
+    )
+    if (
+        looks_generic_ref_why_line(grounded_relation)
+        or looks_templated_ref_why_line(grounded_relation)
+        or grounded_relation.casefold() == summary.casefold()
+    ):
+        grounded_relation = ""
+    resolved_support = support_line or grounded_relation
     reading_route = bool(
         re.search(
             r"先读|哪几篇.{0,12}(?:读|看)|(?:阅读|学习|文献)(?:主线|路线|顺序|路径)|"
@@ -629,17 +699,17 @@ def _answer_citation_card_copy(
                 "It first establishes the spatial-domain versus transform-domain taxonomy and then explains the mechanisms under each branch.",
             )
         if prefer_zh:
-            return summary, f"“{headings}”说明这篇文献在阅读路线中承担的具体知识环节，可据此安排阅读顺序。"
-        return summary, f"'{headings}' identifies the specific knowledge role this paper plays in the reading order."
+            return summary, resolved_support or f"“{headings}”说明这篇文献在阅读路线中承担的具体知识环节，可据此安排阅读顺序。"
+        return summary, resolved_support or f"'{headings}' identifies the specific knowledge role this paper plays in the reading order."
     if prefer_zh:
         asks_benefit = bool(re.search(r"好处|优势|收益", prompt_text))
         asks_limit = bool(re.search(r"坑|局限|挑战", prompt_text))
         if asks_benefit and asks_limit:
-            why = support_line or f"“{headings}”把原文结果与“{claim_focus}”直接对应起来，可据此分别核对收益与限制。"
+            why = resolved_support or f"“{headings}”把原文结果与“{claim_focus}”直接对应起来，可据此分别核对收益与限制。"
         elif asks_benefit:
-            why = support_line or f"“{headings}”把原文结果与“{claim_focus}”直接对应起来，可作为这一优势的依据。"
+            why = resolved_support or f"“{headings}”把原文结果与“{claim_focus}”直接对应起来，可作为这一优势的依据。"
         elif asks_limit:
-            why = support_line or f"“{headings}”把原文结果与“{claim_focus}”直接对应起来，可作为这一限制的依据。"
+            why = resolved_support or f"“{headings}”把原文结果与“{claim_focus}”直接对应起来，可作为这一限制的依据。"
         elif re.search(r"关系|相关|主线|值得.{0,8}(?:读|看)|交集", prompt_text):
             evidence_text = " ".join(
                 str(detail.get("evidence_quote") or detail.get("summary_line") or "")
@@ -669,15 +739,21 @@ def _answer_citation_card_copy(
                     "从而判断其方法定位、适用问题和证据边界。"
                 )
             else:
-                why = "卡片定位到论文的研究对象与方法边界，可据此判断它是否属于当前单像素成像主线。"
+                why = resolved_support or (
+                    f"“{headings}”中的证据具体说明“{claim_focus}”，"
+                    "可据此判断该方法是否落在用户关心的研究主线上。"
+                )
         elif re.search(r"最高|最低|并列|PSNR|SSIM|LPIPS|表格|基准", prompt_text, flags=re.I):
-            why = f"“{headings}”包含同一基准上的量化结果，可用于核对最优数值和并列情况。"
+            why = resolved_support or f"“{headings}”包含同一基准上的量化结果，可用于核对最优数值和并列情况。"
         elif re.search(
             r"区别|差异|比较|对比|同一层面|不同层面|分别(?:决定|作用)|vs\.?|versus",
             prompt_text,
             flags=re.I,
         ):
-            why = f"“{headings}”给出该方法的定义或结果，是与另一方法逐项对照时的原文依据。"
+            why = resolved_support or (
+                f"“{headings}”中的证据直接说明“{claim_focus}”；"
+                "比较另一方法时，应以这一已核实的定义或结果作为该方法一侧的依据。"
+            )
         elif re.search(r"原创|发明|谁提出|来源|沿革|已有|新东西", prompt_text):
             evidence_text = " ".join(
                 str(detail.get("evidence_quote") or detail.get("summary_line") or "")
@@ -691,15 +767,21 @@ def _answer_citation_card_copy(
             ):
                 why = f"“{headings}”明确把该方法归入已有工作，而非本文新贡献，可据此核对其来源与原创性。"
             else:
-                why = f"“{headings}”保留了方法归属或上游工作的原文线索，可用于核对来源判断。"
+                why = resolved_support or f"“{headings}”保留了方法归属或上游工作的原文线索，可用于核对来源判断。"
         else:
             if re.search(r"页码|第\s*\d+\s*页|page", prompt_text, flags=re.I):
-                why = support_line or (
-                    f"“{headings}”中的原文直接支撑“{claim_focus}”，并保留 PDF 页码定位，"
-                    "正好覆盖问题要求的结论与出处。"
-                )
+                if resolved_support:
+                    why = (
+                        f"{resolved_support.rstrip('。')}，并保留 PDF 页码定位，"
+                        "可同时核对结论与出处。"
+                    )
+                else:
+                    why = (
+                        f"“{headings}”中的原文直接支撑“{claim_focus}”，并保留 PDF 页码定位，"
+                        "正好覆盖问题要求的结论与出处。"
+                    )
             else:
-                why = support_line or (
+                why = resolved_support or (
                     f"“{headings}”中的原文直接支撑“{claim_focus}”，"
                     "可据此核对回答中的具体判断与上下文。"
                 )
@@ -707,11 +789,11 @@ def _answer_citation_card_copy(
         asks_benefit = bool(re.search(r"benefit|advantage|strength", prompt_text, flags=re.I))
         asks_limit = bool(re.search(r"pitfall|limit|challenge", prompt_text, flags=re.I))
         if asks_benefit and asks_limit:
-            why = support_line or f"'{headings}' ties the source result directly to '{claim_focus}', allowing both the benefit and limitation to be checked."
+            why = resolved_support or f"'{headings}' ties the source result directly to '{claim_focus}', allowing both the benefit and limitation to be checked."
         elif asks_benefit:
-            why = support_line or f"'{headings}' ties the source result directly to '{claim_focus}', providing evidence for this advantage."
+            why = resolved_support or f"'{headings}' ties the source result directly to '{claim_focus}', providing evidence for this advantage."
         elif asks_limit:
-            why = support_line or f"'{headings}' ties the source result directly to '{claim_focus}', providing evidence for this limitation."
+            why = resolved_support or f"'{headings}' ties the source result directly to '{claim_focus}', providing evidence for this limitation."
         elif re.search(r"relevan|research line|worth reading|scope", prompt_text, flags=re.I):
             evidence_text = " ".join(
                 str(detail.get("evidence_quote") or detail.get("summary_line") or "")
@@ -740,21 +822,31 @@ def _answer_citation_card_copy(
                     "The ILNet source specifies its self-supervised image-loop and part-based mechanisms, allowing a direct comparison with the review's model-driven criterion and scope."
                 )
             else:
-                why = "The card identifies the paper's research object and method boundary, which determines whether it belongs on the current research line."
+                why = resolved_support or (
+                    f"The evidence in '{headings}' states '{claim_focus}', which shows whether the method belongs on the research line in question."
+                )
         elif re.search(r"highest|lowest|tie|PSNR|SSIM|LPIPS|table|benchmark", prompt_text, flags=re.I):
-            why = f"'{headings}' contains results on the same benchmark, allowing the best value and any tie to be checked."
+            why = resolved_support or f"'{headings}' contains results on the same benchmark, allowing the best value and any tie to be checked."
         elif re.search(r"compare|difference|vs\.?|versus", prompt_text, flags=re.I):
-            why = f"'{headings}' provides the method definition or result needed for a point-by-point comparison."
+            why = resolved_support or (
+                f"The evidence in '{headings}' states '{claim_focus}'; this anchors that method's side of the comparison."
+            )
         elif re.search(r"origin|invent|original|novel|prior work|existing method", prompt_text, flags=re.I):
-            why = f"'{headings}' identifies whether the method is prior work or a contribution introduced by this paper."
+            why = resolved_support or f"'{headings}' identifies whether the method is prior work or a contribution introduced by this paper."
         else:
             if re.search(r"page|PDF", prompt_text, flags=re.I):
-                why = support_line or (
-                    f"The source text in '{headings}' directly supports '{claim_focus}' and retains the PDF page locator, "
-                    "covering both the requested conclusion and its source."
-                )
+                if resolved_support:
+                    why = (
+                        f"{resolved_support.rstrip('.')} It also retains the PDF page locator, "
+                        "so the conclusion and its source can be checked together."
+                    )
+                else:
+                    why = (
+                        f"The source text in '{headings}' directly supports '{claim_focus}' and retains the PDF page locator, "
+                        "covering both the requested conclusion and its source."
+                    )
             else:
-                why = support_line or (
+                why = resolved_support or (
                     f"The source text in '{headings}' directly supports '{claim_focus}', "
                     "so the answer's specific judgment can be checked in context."
                 )
