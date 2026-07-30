@@ -651,6 +651,7 @@ def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
         ("pidl", ("physics informed deep learning", "single photon imaging")),
         ("piln", ("part based image loop network",)),
         ("hatnet", ("dual scale transformer", "large scale single pixel imaging")),
+        ("ista-net", ("ista net", "interpretable optimization inspired deep network")),
         (
             "cassi",
             (
@@ -1911,6 +1912,43 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
             "learnable step size proximal mapping"
         )
 
+    if has_any("learned primal-dual", "learned primal dual") and has_any(
+        "pdhg",
+        "primal-dual",
+        "primal dual",
+        "可学习网络",
+        "替换",
+        "初始化",
+    ):
+        add(
+            "Learned PDHG proximal operators replaced parametrized convolutional neural networks "
+            "dual update primal update fixed iterations"
+        )
+        if has_any("初始化", "initialization", "initialise", "initialize", "starting point", "zero", "fbp"):
+            add(
+                "Learned Primal-Dual choice of starting point zero initialization "
+                "filtered back-projection FBP pseudo-inverse final results"
+            )
+
+    if has_any("ista-net", "ista net") and has_any(
+        "ista",
+        "iteration",
+        "iterative",
+        "algorithm",
+        "unroll",
+        "unfold",
+        "phase",
+        "module",
+        "迭代",
+        "展开",
+        "模块",
+        "可学习",
+    ):
+        add(
+            "ISTA-Net maps ISTA update steps fixed phases each phase one iteration "
+            "r(k) module x(k) module learnable step size shrinkage threshold nonlinear transforms"
+        )
+
     if has_any(
         "refocus",
         "refocusing",
@@ -2052,6 +2090,11 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
         add(
             "CASSI single-shot compressive spectral imaging dual-disperser "
             "two dispersive elements binary-valued aperture spectral datacube"
+        )
+    if wants_cassi and has_any("dcd") and has_any("dltr"):
+        add(
+            "DLTR dimension-discriminative low-rank tensor hyperspectral image "
+            "overlapped cubic patches mode unfolding weighted rank regularization"
         )
     if wants_sci_lineage or has_any("scinerf", "scigs"):
         add(

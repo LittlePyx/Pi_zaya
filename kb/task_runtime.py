@@ -77,6 +77,7 @@ from kb.conversation_followup import (
 )
 from kb.generation_answer_finalize_runtime import (
     _build_multi_paper_doc_list_contract as _finalize_runtime_build_multi_paper_doc_list_contract,
+    _claim_evidence_hits_with_citation_plan as _finalize_runtime_claim_evidence_hits_with_citation_plan,
     _exclude_bound_source_from_multi_paper_doc_list_contract as _finalize_runtime_exclude_bound_source_from_multi_paper_doc_list_contract,
     _filter_multi_paper_doc_list_contract as _finalize_runtime_filter_multi_paper_doc_list_contract,
     _finalize_generation_answer as _finalize_runtime_finalize_generation_answer,
@@ -367,6 +368,7 @@ from kb.retrieval_engine import (
     _extract_md_headings,
     _group_hits_by_doc_for_refs,
     _search_hits_with_fallback,
+    _source_prompt_match_score,
     _top_heading,
 )
 from kb.research_trace import (
@@ -693,6 +695,55 @@ def _paper_guide_fast_bound_section_hits(
     ):
         return []
     return verified
+
+
+def _paper_guide_supplemental_scan_prompts(
+    *,
+    prompt: str,
+    retrieval_prompt: str,
+    used_query: str,
+    query_variants: list[str] | None,
+    limit: int = 6,
+) -> list[str]:
+    """Keep precise expansion queries available to the bound-source scanner.
+
+    Retrieval expansions are ordered from broad to topic-specific.  The local
+    SourceBlock scan previously saw only the original/translated query, so a
+    good expansion could retrieve a relevant document while the answer window
+    still collapsed to its abstract.  Scan the most specific variants first,
+    after preserving the user's original wording for explicit section cues.
+    """
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    ordered = [
+        str(prompt or ""),
+        *[str(item or "") for item in reversed(list(query_variants or []))],
+        str(retrieval_prompt or ""),
+        str(used_query or ""),
+    ]
+    for candidate in ordered:
+        cand = candidate.strip()
+        if not cand:
+            continue
+        if cand != str(prompt or "").strip() and not re.search(
+            r"(?i)\b(?:methods?\s+section|materials?\s+and\s+methods?|from\s+the\s+methods?)\b",
+            cand,
+        ):
+            # Translators often emit a generic singular "method" keyword. It
+            # must not be reinterpreted as an explicit Methods-section lock.
+            cand = re.sub(r"(?i)(?<![A-Za-z])method(?![A-Za-z])", " ", cand)
+            cand = re.sub(r"\s+", " ", cand).strip()
+            if not cand:
+                continue
+        key = normalize_match_text(cand)
+        if (not key) or key in seen:
+            continue
+        seen.add(key)
+        candidates.append(cand)
+        if len(candidates) >= max(1, int(limit or 1)):
+            break
+    return candidates
 
 
 def _is_synthetic_research_basket_hit(hit: dict) -> bool:
@@ -2282,6 +2333,70 @@ def _prioritize_prompt_named_preferred_sources(
     if not promoted:
         return rows
     return promoted + [hit for index, hit in enumerate(rows) if index not in promoted_indexes]
+
+
+def _filter_current_paper_preference_for_scope(
+    preferred_source_hints: list[str] | None,
+    *,
+    effective_query_scope: str,
+    bound_source_path: str,
+    bound_source_name: str,
+) -> list[str]:
+    """Do not turn an explicit full-library request back into a reader query.
+
+    The frontend keeps the open paper identity on the conversation even after
+    the user switches the scope control to ``Full library``.  That identity is
+    useful for returning to paper mode, but it must not be prepended as a
+    preferred retrieval source for the current turn.  Papers explicitly named
+    in the question remain in the prompt and are still retrieved normally.
+    """
+
+    rows = [str(item or "").strip() for item in list(preferred_source_hints or [])]
+    rows = [item for item in rows if item]
+    if str(effective_query_scope or "").strip().lower() != "library":
+        return rows
+    bound_keys: set[str] = set()
+    for value in (bound_source_path, bound_source_name):
+        bound_keys.update(_refs_document_identity_keys(str(value or "")))
+    if not bound_keys:
+        return rows
+    return [
+        item
+        for item in rows
+        if not (bound_keys & set(_refs_document_identity_keys(item)))
+    ]
+
+
+def _focus_answer_seed_on_prompt_named_sources(
+    answer_seed: list[dict] | None,
+    *,
+    prompt: str,
+) -> list[dict]:
+    """Keep an explicit named-paper comparison free of neighboring papers."""
+
+    rows = [dict(hit) for hit in list(answer_seed or []) if isinstance(hit, dict)]
+    q = str(prompt or "").strip()
+    if len(rows) < 2 or not re.search(
+        r"(?i)(?:\bcompare\b|\bversus\b|\bvs\.?\b|\beach\b|\u6bd4\u8f83|\u5bf9\u6bd4|\u5206\u522b|\u5404\u81ea|\u6bcf\u7bc7)",
+        q,
+    ):
+        return rows
+
+    named: list[dict] = []
+    seen_sources: set[str] = set()
+    for hit in rows:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or hit.get("source_path") or "").strip()
+        source_name = str((meta or {}).get("source_name") or hit.get("source_name") or "").strip()
+        source_surface = source_path or source_name
+        if _source_prompt_match_score(q, source_surface) < 6.5:
+            continue
+        source_key = source_path.replace("\\", "/").casefold() or source_name.casefold()
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        named.append(hit)
+    return named if len(named) >= 2 else rows
 
 
 def _should_sync_deep_seed_for_display(
@@ -4906,6 +5021,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             if hint in preferred_source_hints:
                 preferred_source_hints.remove(hint)
             preferred_source_hints.insert(0, hint)
+        preferred_source_hints = _filter_current_paper_preference_for_scope(
+            preferred_source_hints,
+            effective_query_scope=effective_query_scope,
+            bound_source_path=paper_guide_bound_source_path,
+            bound_source_name=paper_guide_bound_source_name,
+        )
         if len(preferred_source_hints) > 12:
             preferred_source_hints = preferred_source_hints[:12]
         if paper_guide_source_scoped:
@@ -5233,24 +5354,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     )
                 )
                 if should_supplement:
-                    scan_candidates: list[str] = []
-                    scan_seen: set[str] = set()
-                    for candidate in (
-                        prompt or "",
-                        retrieval_prompt or "",
-                        (used_query or "") if bool(used_translation) else "",
-                        used_query or "",
-                    ):
-                        cand = str(candidate or "").strip()
-                        if not cand:
-                            continue
-                        cand_key = normalize_match_text(cand)
-                        if cand_key in scan_seen:
-                            continue
-                        scan_seen.add(cand_key)
-                        scan_candidates.append(cand)
-                        if len(scan_candidates) >= 3:
-                            break
+                    scan_candidates = _paper_guide_supplemental_scan_prompts(
+                        prompt=prompt or "",
+                        retrieval_prompt=retrieval_prompt or "",
+                        used_query=used_query or "",
+                        query_variants=query_variants,
+                    )
 
                     supplemental_hits: list[dict] = []
                     supplemental_seen: set[str] = set()
@@ -6018,6 +6127,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 raw_hits=list(hits_raw or []),
                 prompt=(prompt or retrieval_prompt or ""),
             )
+        named_source_seed = _focus_answer_seed_on_prompt_named_sources(
+            answer_seed,
+            prompt=(prompt or retrieval_prompt or ""),
+        )
+        if len(named_source_seed) < len(list(answer_seed or [])):
+            answer_seed = named_source_seed
+            answer_hit_limit = min(answer_hit_limit, max(1, len(named_source_seed)))
         answer_seed = _prioritize_prompt_named_preferred_sources(
             answer_seed,
             preferred_source_hints=preferred_source_hints,
@@ -6955,9 +7071,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         # matches the 1-based DOC-k numbering the LLM sees in its context.
         if cur_assistant_msg_id > 0 and answer_hits:
             try:
+                canonical_answer_hits = _finalize_runtime_claim_evidence_hits_with_citation_plan(
+                    list(answer_hits or []),
+                    finalized_citation_plan,
+                )
                 _canon_paths: list[str] = []
                 _canon_evidence: list[dict] = []
-                for _h in answer_hits:
+                for _h in canonical_answer_hits:
                     _meta_h = dict(_h.get("meta") or {}) if isinstance(_h.get("meta"), dict) else {}
                     _ui_h = dict(_h.get("ui_meta") or {}) if isinstance(_h.get("ui_meta"), dict) else {}
                     _sp_h = str(_meta_h.get("source_path") or _h.get("source_path") or "").strip()

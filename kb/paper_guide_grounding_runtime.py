@@ -2645,6 +2645,71 @@ def _resolve_paper_guide_support_ref_num(slot: dict, *, context_text: str = "") 
     return None, "no_ref"
 
 
+def _recent_blockquote_support_rebound(
+    resolutions: list[dict],
+    *,
+    lines: list[str],
+    line_index: int,
+    doc_idx: int,
+    source_path: str,
+    max_line_distance: int = 7,
+) -> dict:
+    """Reuse an immediately preceding cited quote for its translated bullets.
+
+    A Chinese explanation of an English quote often shares only a symbol such
+    as ``T^dagger`` with nearby source atoms. Re-running lexical alignment for
+    every bullet can therefore jump from the quoted paragraph to an adjacent
+    equation. A bullet directly following the same document's blockquote is an
+    explanation of that quote, so its locator should stay on the verified quote
+    block.
+    """
+
+    normalized_source = str(source_path or "").strip().replace("\\", "/").lower()
+    if not normalized_source or int(doc_idx or 0) <= 0:
+        return {}
+    for raw in reversed(list(resolutions or [])):
+        if not isinstance(raw, dict):
+            continue
+        try:
+            previous_line = int(raw.get("line_index") or 0)
+            previous_doc = int(raw.get("doc_idx") or 0)
+        except (TypeError, ValueError):
+            continue
+        distance = int(line_index) - previous_line
+        if distance <= 0:
+            continue
+        if distance > int(max_line_distance):
+            break
+        previous_source = str(raw.get("source_path") or "").strip().replace("\\", "/").lower()
+        if previous_doc != int(doc_idx) or previous_source != normalized_source:
+            continue
+        if not (0 <= previous_line < len(lines)):
+            continue
+        if not str(lines[previous_line] or "").lstrip().startswith(">"):
+            continue
+        block_id = str(raw.get("block_id") or "").strip()
+        anchor_id = str(raw.get("anchor_id") or "").strip()
+        if not (block_id or anchor_id):
+            continue
+        return {
+            "block_id": block_id,
+            "anchor_id": anchor_id,
+            "heading_path": str(raw.get("heading_path") or "").strip(),
+            "locate_anchor": str(
+                raw.get("locate_anchor") or raw.get("evidence_atom_text") or ""
+            ).strip(),
+            "evidence_atom_id": str(raw.get("evidence_atom_id") or "").strip(),
+            "evidence_atom_kind": str(raw.get("evidence_atom_kind") or "sentence").strip(),
+            "evidence_atom_text": str(
+                raw.get("evidence_atom_text") or raw.get("locate_anchor") or ""
+            ).strip(),
+            "candidate_refs": list(raw.get("candidate_refs") or []),
+            "ref_spans": list(raw.get("ref_spans") or []),
+            "target_scope": dict(raw.get("target_scope") or {}),
+        }
+    return {}
+
+
 def _resolve_paper_guide_support_markers(
     answer: str,
     *,
@@ -2714,7 +2779,33 @@ def _resolve_paper_guide_support_markers(
                     )
                 )
                 return ""
-            if str(slot.get("evidence_selection_reason") or "").strip() == "citation_plan_support_bridge":
+            inherited_quote = {}
+            if (
+                (
+                    re.match(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", str(raw_line or ""))
+                    or re.match(
+                        r"^\s*(?:(?:\u539f\u56e0|\u7406\u7531)[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\d]+|"
+                        r"reason\s*\d+)\s*[\uff08(:\uff1a]",
+                        surface,
+                        flags=re.IGNORECASE,
+                    )
+                )
+                and not re.search(
+                    r"(?i)(?:equation|formula|figure|table)\s*\d+|"
+                    r"(?:\u516c\u5f0f|\u56fe|\u8868)\s*\d+",
+                    surface,
+                )
+            ):
+                inherited_quote = _recent_blockquote_support_rebound(
+                    resolutions,
+                    lines=lines,
+                    line_index=int(idx),
+                    doc_idx=int(doc_idx),
+                    source_path=str(slot.get("source_path") or "").strip(),
+                )
+            if inherited_quote:
+                rebound = inherited_quote
+            elif str(slot.get("evidence_selection_reason") or "").strip() == "citation_plan_support_bridge":
                 # This slot already carries the exact source block selected by
                 # the citation plan. Re-scoring it against a translated answer
                 # sentence can drift to a nearby reference or figure block.

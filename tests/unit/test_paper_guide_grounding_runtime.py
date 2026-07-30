@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import kb.paper_guide_grounding_runtime as grounding_runtime
 from kb.paper_guide.grounder import (
     _build_paper_guide_support_slots,
     _build_paper_guide_support_slots_block,
@@ -551,6 +552,132 @@ def test_resolve_citation_plan_bridge_keeps_preselected_exact_locator():
     assert resolutions[0]["heading_path"] == "Paper / Abstract"
     assert resolutions[0]["locate_anchor"] == exact
     assert resolutions[0]["block_id"] == "blk_abstract"
+
+
+def test_translated_bullets_after_quote_keep_the_quote_locator(monkeypatch):
+    calls: list[str] = []
+
+    def fake_resolve(**kwargs):
+        snippet = str(kwargs.get("snippet") or "")
+        calls.append(snippet)
+        if "pseudo-inverse adds complexity" in snippet:
+            return {
+                "block_id": "blk_quote",
+                "anchor_id": "p_quote",
+                "heading_path": "Methods / Choice of starting point",
+                "locate_anchor": "The pseudo-inverse adds complexity.",
+                "evidence_atom_id": "blk_quote:sent:2",
+                "evidence_atom_kind": "sentence",
+                "evidence_atom_text": "The pseudo-inverse adds complexity.",
+                "candidate_refs": [],
+                "ref_spans": [],
+                "target_scope": {},
+            }
+        return {
+            "block_id": "blk_wrong_equation",
+            "anchor_id": "eq_wrong",
+            "heading_path": "Methods / Equation",
+            "locate_anchor": "f_0 = T dagger g",
+            "evidence_atom_id": "blk_wrong_equation:eq:1",
+            "evidence_atom_kind": "equation",
+            "evidence_atom_text": "f_0 = T dagger g",
+            "candidate_refs": [],
+            "ref_spans": [],
+            "target_scope": {},
+        }
+
+    monkeypatch.setattr(
+        grounding_runtime,
+        "_resolve_paper_guide_support_slot_block",
+        fake_resolve,
+    )
+    answer, resolutions = _resolve_paper_guide_support_markers(
+        (
+            '> "The pseudo-inverse adds complexity." [[SUPPORT:DOC-2]]\n\n'
+            "1. \u589e\u52a0\u4e0d\u5fc5\u8981\u7684\u590d\u6742\u5ea6\u3002 [[SUPPORT:DOC-2]]\n"
+            "2. \u6ca1\u6709\u6539\u5584\u6700\u7ec8\u7ed3\u679c\u3002 [[SUPPORT:DOC-2]]"
+        ),
+        support_slots=[
+            {
+                "doc_idx": 2,
+                "support_id": "DOC-2",
+                "support_example": "[[SUPPORT:DOC-2]]",
+                "source_path": "paper.en.md",
+                "heading_path": "Methods / Choice of starting point",
+                "snippet": "The pseudo-inverse adds complexity.",
+                "locate_anchor": "The pseudo-inverse adds complexity.",
+                "claim_type": "method_detail",
+                "cite_policy": "locate_only",
+            }
+        ],
+        prompt_family="method",
+        db_dir=None,
+    )
+
+    assert "[[SUPPORT:" not in answer
+    assert len(resolutions) == 3
+    assert [item["block_id"] for item in resolutions] == [
+        "blk_quote",
+        "blk_quote",
+        "blk_quote",
+    ]
+    assert len(calls) == 1
+
+
+def test_plain_reason_paragraphs_after_quote_keep_the_quote_locator(monkeypatch):
+    calls: list[str] = []
+
+    def fake_resolve(**kwargs):
+        calls.append(str(kwargs.get("snippet") or ""))
+        return {
+            "block_id": "blk_quote",
+            "anchor_id": "p_quote",
+            "heading_path": "Methods / Choice of starting point",
+            "locate_anchor": "The pseudo-inverse adds complexity.",
+            "evidence_atom_id": "blk_quote:sent:2",
+            "evidence_atom_kind": "sentence",
+            "evidence_atom_text": "The pseudo-inverse adds complexity.",
+            "candidate_refs": [],
+            "ref_spans": [],
+            "target_scope": {},
+        }
+
+    monkeypatch.setattr(
+        grounding_runtime,
+        "_resolve_paper_guide_support_slot_block",
+        fake_resolve,
+    )
+    answer, resolutions = _resolve_paper_guide_support_markers(
+        (
+            '> "The pseudo-inverse adds complexity." [[SUPPORT:DOC-2]]\n\n'
+            "理由一（最终效果）：没有改善最终结果。 [[SUPPORT:DOC-2]]\n\n"
+            "理由二（额外复杂度）：伪逆会增加复杂度。 [[SUPPORT:DOC-2]]"
+        ),
+        support_slots=[
+            {
+                "doc_idx": 2,
+                "support_id": "DOC-2",
+                "support_example": "[[SUPPORT:DOC-2]]",
+                "source_path": "paper.en.md",
+                "heading_path": "Methods / Choice of starting point",
+                "snippet": "The pseudo-inverse adds complexity.",
+                "locate_anchor": "The pseudo-inverse adds complexity.",
+                "claim_type": "method_detail",
+                "cite_policy": "locate_only",
+            }
+        ],
+        prompt_family="method",
+        db_dir=None,
+    )
+
+    assert "[[SUPPORT:" not in answer
+    assert len(resolutions) == 3
+    assert [item["block_id"] for item in resolutions] == [
+        "blk_quote",
+        "blk_quote",
+        "blk_quote",
+    ]
+    assert len(calls) == 1
 
 
 def test_resolve_paper_guide_support_markers_drops_broad_summary_markers():

@@ -669,6 +669,11 @@ def _markdown_table_signature(lines: list[str], start: int, end: int) -> dict:
     }
     width = max((len(row) for row in rows), default=0)
     non_empty = sum(1 for cell in cells if str(cell or "").strip())
+    truncated_decimal_cells = sum(
+        1
+        for cell in cells
+        if re.fullmatch(r"(?:\*{1,2})?[+-]?\d+\.(?:\*{1,2})?", str(cell or "").strip())
+    )
     score = float(width * max(1, len(rows))) + float(non_empty) * 0.2
     return {
         "start": start,
@@ -676,6 +681,7 @@ def _markdown_table_signature(lines: list[str], start: int, end: int) -> dict:
         "numbers": numbers,
         "words": words,
         "score": score,
+        "truncated_decimal_cells": truncated_decimal_cells,
     }
 
 
@@ -695,13 +701,33 @@ def _nearby_duplicate_table_pairs(md: str) -> list[tuple[dict, dict]]:
                 continue
             shared_numbers = sum((left_numbers & right_numbers).values())
             numeric_coverage = shared_numbers / max(1, max(left_total, right_total))
-            if numeric_coverage < 0.90:
-                continue
             left_words = set(left["words"])
             right_words = set(right["words"])
             shared_words = len(left_words & right_words)
             word_coverage = shared_words / max(1, min(len(left_words), len(right_words)))
-            if shared_words < 2 or (word_coverage < 0.50 and numeric_coverage < 0.98):
+            exact_duplicate = bool(
+                numeric_coverage >= 0.90
+                and shared_words >= 2
+                and (word_coverage >= 0.50 or numeric_coverage >= 0.98)
+            )
+            smaller, larger = (
+                (left, right)
+                if float(left["score"]) <= float(right["score"])
+                else (right, left)
+            )
+            partial_numeric_coverage = _fragment_aware_numeric_coverage(
+                smaller["numbers"],
+                larger["numbers"],
+            )
+            truncated_partial_duplicate = bool(
+                int(smaller.get("truncated_decimal_cells") or 0) >= 2
+                and sum(smaller["numbers"].values()) >= 6
+                and float(smaller["score"]) <= float(larger["score"]) * 0.85
+                and partial_numeric_coverage >= 0.85
+                and shared_words >= 2
+                and word_coverage >= 0.60
+            )
+            if not (exact_duplicate or truncated_partial_duplicate):
                 continue
             pairs.append((left, right))
     return pairs

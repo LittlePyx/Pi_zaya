@@ -4713,3 +4713,113 @@ def test_deep_unfolding_answer_cards_localize_guide_and_relevance_from_evidence(
     for value in (hat_summary, hat_why, ista_summary, ista_why):
         assert re.search(r"[\u4e00-\u9fff]", value)
         assert "未提供摘要定位" not in value
+
+
+def test_learned_primal_dual_answer_card_localizes_guide_and_relevance_from_evidence() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "TMI-2018-Learned Primal-Dual Reconstruction.pdf",
+                "heading_path": "Learned Primal-dual Reconstruction / Abstract",
+                "answer_claim": "Learned Primal-Dual 将整个近端算子替换为 CNN 参数化算子。",
+                "evidence_quote": (
+                    "We propose the Learned Primal-Dual algorithm for tomographic reconstruction. "
+                    "The algorithm accounts for a possibly non-linear forward operator in a deep "
+                    "neural network by unrolling a proximal primal-dual optimization method, but "
+                    "where the proximal operators have been replaced with convolutional neural networks."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt=(
+            "请在全库中比较 Learned Primal-Dual 和 ISTA-Net 的深度展开模块，"
+            "并为两篇论文各给独立证据。"
+        ),
+    )
+
+    assert all(term in summary for term in ("原始-对偶", "近端算子", "卷积神经网络"))
+    assert all(term in why for term in ("Learned Primal-Dual", "CNN", "可学习"))
+    for value in (summary, why):
+        assert re.search(r"[\u4e00-\u9fff]", value)
+        assert "未提供摘要定位" not in value
+
+
+def test_answer_citation_overlay_prefers_prompt_aligned_primary_within_one_source(monkeypatch) -> None:
+    source_path = r"F:\db\iism\iism.en.md"
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {
+                    "id": 70,
+                    "role": "user",
+                    "content": "iISM 在活细胞里同时改善了什么？120 nm 分辨率用什么代价换来？",
+                },
+                {
+                    "id": 71,
+                    "role": "assistant",
+                    "content": "iISM 达到约 120 nm 分辨率并降低光损伤 [4]；另有 FWHM 测量 [1]。",
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "citation_route": "system_a",
+                                        "answer_hit_num": 4,
+                                        "source_path": source_path,
+                                        "source_name": "iISM.pdf",
+                                        "heading_path": "Paper / Abstract",
+                                        "page_start": 1,
+                                        "answer_claim": "约 120 nm 分辨率和更低光损伤",
+                                        "evidence_quote": (
+                                            "This next-generation technique achieves about 120 nm lateral "
+                                            "resolution at tenfold lower incident illumination power, "
+                                            "significantly reducing photodamage."
+                                        ),
+                                    },
+                                    {
+                                        "citation_route": "system_a",
+                                        "answer_hit_num": 1,
+                                        "source_path": source_path,
+                                        "source_name": "iISM.pdf",
+                                        "heading_path": "Paper / Data analysis / Contrast",
+                                        "page_start": 10,
+                                        "answer_claim": "背景滤波配置",
+                                        "evidence_quote": (
+                                            "We estimate background intensity by low-pass filtering each "
+                                            "iISM frame with a Gaussian filter."
+                                        ),
+                                    },
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    payload = {
+        70: {
+            "prompt": "iISM 在活细胞里同时改善了什么？120 nm 分辨率用什么代价换来？",
+            "hits": [
+                {
+                    "text": "stale",
+                    "meta": {"source_path": source_path},
+                    "ui_meta": {"source_path": source_path},
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "zh")
+
+    hit = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload=payload,
+    )[70]["hits"][0]
+
+    primary = hit["ui_meta"]["primary_evidence"]
+    assert primary["heading_path"] == "Paper / Abstract"
+    assert primary["page_start"] == 1
+    assert "120 nm" in primary["snippet"]
+    assert hit["ui_meta"]["reader_open"]["headingPath"] == "Paper / Abstract"

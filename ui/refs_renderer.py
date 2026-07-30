@@ -9,6 +9,7 @@ import subprocess
 import time
 import difflib
 from functools import lru_cache
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote
 
@@ -2097,33 +2098,66 @@ def _guess_conf_acronym(venue: str) -> str:
     return ""
 
 
-def _core_parse_rows(html_text: str) -> list[dict]:
-    s = str(html_text or "")
-    rows: list[dict] = []
-    for m in re.finditer(
-        r"<tr[^>]*onclick=\"navigate\('[^']+'\)\"[^>]*>\s*"
-        r"<td>\s*(.*?)\s*</td>\s*"
-        r"<td[^>]*>\s*(.*?)\s*</td>\s*"
-        r"<td[^>]*>\s*(.*?)\s*</td>\s*"
-        r"<td[^>]*>\s*([A*BC]+)\s*</td>",
-        s,
-        flags=re.I | re.S,
-    ):
-        title = re.sub(r"<[^>]+>", " ", str(m.group(1) or ""))
-        acr = re.sub(r"<[^>]+>", " ", str(m.group(2) or ""))
-        source = re.sub(r"<[^>]+>", " ", str(m.group(3) or ""))
-        rank = re.sub(r"<[^>]+>", " ", str(m.group(4) or ""))
-        rows.append(
+class _CoreRankingTableParser(HTMLParser):
+    """Parse CORE result rows without regex backtracking across a whole page."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list[dict] = []
+        self._active_row = False
+        self._active_cell = False
+        self._cells: list[list[str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        name = str(tag or "").lower()
+        if name == "tr":
+            attr_map = {str(k or "").lower(): str(v or "") for k, v in attrs}
+            self._active_row = "navigate(" in attr_map.get("onclick", "").lower()
+            self._active_cell = False
+            self._cells = []
+            return
+        if self._active_row and name == "td":
+            self._active_cell = True
+            self._cells.append([])
+
+    def handle_endtag(self, tag: str) -> None:
+        name = str(tag or "").lower()
+        if name == "td":
+            self._active_cell = False
+            return
+        if name != "tr" or not self._active_row:
+            return
+        cells = [" ".join("".join(parts).split()).strip() for parts in self._cells]
+        self._active_row = False
+        self._active_cell = False
+        self._cells = []
+        if len(cells) < 4 or not re.fullmatch(r"[A*BC]+", cells[3], flags=re.I):
+            return
+        self.rows.append(
             {
-                "title": " ".join(title.split()).strip(),
-                "acronym": " ".join(acr.split()).strip(),
-                "source": " ".join(source.split()).strip(),
-                "rank": " ".join(rank.split()).strip(),
+                "title": cells[0],
+                "acronym": cells[1],
+                "source": cells[2],
+                "rank": cells[3],
             }
         )
-        if len(rows) >= 24:
-            break
-    return rows
+
+    def handle_data(self, data: str) -> None:
+        if self._active_row and self._active_cell and self._cells:
+            self._cells[-1].append(str(data or ""))
+
+
+def _core_parse_rows(html_text: str) -> list[dict]:
+    # The endpoint occasionally returns a large or malformed page.  Parsing is
+    # intentionally bounded so metadata warming can never starve the API.
+    payload = str(html_text or "")[:4_000_000]
+    parser = _CoreRankingTableParser()
+    try:
+        parser.feed(payload)
+        parser.close()
+    except Exception:
+        return list(parser.rows[:24])
+    return list(parser.rows[:24])
 
 
 @lru_cache(maxsize=256)

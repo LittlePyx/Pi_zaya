@@ -231,19 +231,24 @@ export function buildAssistantLocatePrepByMsgId(
           .filter(Boolean),
       ),
     )
-    const guideDocAvailable = Boolean(guideSourcePath && opts.guideSourcePathSet.has(guideSourcePath))
-    const guideCandidateCount = guideSourcePath
-      ? lookupGuideCandidatesBySourcePath(opts.guideDocCandidatesBySourcePath, guideSourcePath).length
+    const multiSourceAnswer = uniqueSourcePaths.length > 1
+    // A conversation can keep a reader paper open while the user explicitly
+    // switches this turn to Full library. Do not use that reader identity as a
+    // global locate fallback for claims spanning multiple papers.
+    const messageGuideSourcePath = multiSourceAnswer ? '' : guideSourcePath
+    const guideDocAvailable = Boolean(messageGuideSourcePath && opts.guideSourcePathSet.has(messageGuideSourcePath))
+    const guideCandidateCount = messageGuideSourcePath
+      ? lookupGuideCandidatesBySourcePath(opts.guideDocCandidatesBySourcePath, messageGuideSourcePath).length
       : 0
     const locateSourcePath = (
-      guideSourcePath && guideDocAvailable
-        ? guideSourcePath
-        : (uniqueSourcePaths.length === 1 ? uniqueSourcePaths[0] : guideSourcePath)
+      messageGuideSourcePath && guideDocAvailable
+        ? messageGuideSourcePath
+        : (uniqueSourcePaths.length === 1 ? uniqueSourcePaths[0] : '')
     )
     const locateSourceName = (
-      (guideSourcePath && guideDocAvailable ? guideSourceName : '')
+      (messageGuideSourcePath && guideDocAvailable ? guideSourceName : '')
       || (citeDetails.find((detail) => String(detail.sourcePath || '').trim() === locateSourcePath)?.sourceName || '')
-      || guideSourceName
+      || (locateSourcePath ? guideSourceName : '')
     )
     const refSig = `${refsUserMsgId}:${String(refEntry?.prompt_sig || '')}:${Number(refEntry?.updated_at || 0)}:${refHits.length}`
     const prepKey = [
@@ -251,7 +256,7 @@ export function buildAssistantLocatePrepByMsgId(
       String(message.render_cache_key || ''),
       locatePayloadSig,
       presentationRevision,
-      guideSourcePath,
+      messageGuideSourcePath,
       guideCandidateCount,
       locateSourcePath,
       refSig,
@@ -265,15 +270,18 @@ export function buildAssistantLocatePrepByMsgId(
     }
 
     const refsLocateCandidatesAll = buildRefsLocateCandidatesAll(refHits)
-    const guideSourceCandidates = guideSourcePath
-      ? lookupGuideCandidatesBySourcePath(opts.guideDocCandidatesBySourcePath, guideSourcePath)
+    const guideSourceCandidates = messageGuideSourcePath
+      ? lookupGuideCandidatesBySourcePath(opts.guideDocCandidatesBySourcePath, messageGuideSourcePath)
       : []
-    const refsScopedCandidates = guideSourcePath
-      ? refsLocateCandidatesAll.filter((item) => sourcePathsReferToSameDocument(item.sourcePath, guideSourcePath))
+    const refsScopedCandidates = messageGuideSourcePath
+      ? refsLocateCandidatesAll.filter((item) => sourcePathsReferToSameDocument(item.sourcePath, messageGuideSourcePath))
       : refsLocateCandidatesAll
-    const messageProvenance = (message.provenance && typeof message.provenance === 'object')
+    const rawMessageProvenance = (message.provenance && typeof message.provenance === 'object')
       ? message.provenance as Record<string, unknown>
       : null
+    // Current structured provenance is a single-source contract. It cannot be
+    // safely projected over a response whose grounded citations span papers.
+    const messageProvenance = multiSourceAnswer ? null : rawMessageProvenance
     const provenanceSourcePath = String(messageProvenance?.source_path || '').trim()
     const provenanceSourceName = String(messageProvenance?.source_name || '').trim()
     const provenanceBlockMap = (messageProvenance?.block_map && typeof messageProvenance.block_map === 'object')
@@ -297,7 +305,7 @@ export function buildAssistantLocatePrepByMsgId(
       && Array.isArray(messageProvenance?.segments),
     )
     const effectiveGuideSourcePath = String(
-      guideSourcePath
+      messageGuideSourcePath
       || provenanceSourcePath
       || locateSourcePath
       || '',
@@ -389,7 +397,7 @@ export function buildAssistantLocatePrepByMsgId(
       if (guideSourceCandidates.length > 0) return [...guideSourceCandidates, ...refsScopedCandidates]
       if (refsScopedCandidates.length > 0) return refsScopedCandidates
       if (refsLocateCandidatesAll.length > 0) return refsLocateCandidatesAll
-      if (guideSourcePath) return opts.guideDocCandidates
+      if (messageGuideSourcePath) return opts.guideDocCandidates
       return []
     })()
 

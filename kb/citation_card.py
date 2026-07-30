@@ -915,6 +915,14 @@ def _system_b_takeaway(*, title: str, claim: str, context: str, role: str, relat
         return "This upstream work provides ADMM optimization background for checking how the current paper builds on prior methods." if prefer_en else "这篇上游文献提供 ADMM 优化框架背景，用来判断当前论文是在借鉴既有方法。"
     if "single-shot compressive spectral imaging" in combined:
         return "This upstream work provides background for single-shot compressive spectral imaging." if prefer_en else "这篇上游文献提供单次压缩光谱成像的前人背景，是回答中相关概念的来源线索。"
+    if "snapshot compressive imaging" in combined or re.search(
+        r"\bvideo\s+SCI\b", combined, flags=re.I
+    ):
+        return (
+            "The current paper cites this upstream review when introducing video snapshot compressive imaging; it is a direct entry point to that route's theory, algorithms, and applications."
+            if prefer_en
+            else "当前论文在引出视频快照压缩成像路线时引用这篇上游综述；它可作为继续核对该路线理论、算法与应用的直接入口。"
+        )
     if "single-pixel imaging via compressive sampling" in combined or (
         "single-pixel" in combined and "compressive sampling" in combined
     ):
@@ -1112,6 +1120,7 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
                 "exact_support_preflight",
                 "prompt_contract_block",
                 "spad_noise_model_exact_source",
+                "lineage_exact_source_block",
             }
         )
         and bool(rec.get("strict_locate") or rec.get("strictLocate"))
@@ -1202,13 +1211,13 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
     elif (
         binding_status == "grounded"
         and binding_confidence >= 0.7
-        and support_hint
-        and not _sameish(support_hint, claim)
-        and not _sameish(support_hint, evidence)
-        and not _sameish(support_hint, takeaway)
+        and support
+        and not _sameish(support, claim)
+        and not _sameish(support, evidence)
+        and not _sameish(support, takeaway)
     ):
         support_label = _card_label(locale, "support_relevance_system_a")
-        support_text = support_hint
+        support_text = support
     warning = ""
     if "binding_mismatch" in flags:
         warning = _card_label(locale, "warning_mismatch")

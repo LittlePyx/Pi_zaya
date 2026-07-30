@@ -3,7 +3,20 @@ import sys
 
 import pytest
 
-from kb.claim_evidence_runtime import audit_and_repair_claim_evidence, claim_evidence_audit
+from kb.claim_evidence_runtime import (
+    _split_claim_segments,
+    audit_and_repair_claim_evidence,
+    claim_evidence_audit,
+)
+
+
+def test_claim_splitter_keeps_semicolon_inside_inline_math() -> None:
+    line = (
+        "For DCD, $Y = [Y^c;Y^p]$ and "
+        "$\\boldsymbol{\\Phi} = [\\boldsymbol{\\Phi}^c;\\boldsymbol{\\Phi}^p]$."
+    )
+
+    assert _split_claim_segments(line) == [line]
 
 
 def test_claim_evidence_runtime_does_not_load_legacy_ui_renderer() -> None:

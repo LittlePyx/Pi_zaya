@@ -32,6 +32,10 @@ _UNCLOSED_INLINE_MATH_SENTENCE_RE = re.compile(
     r"\$(\\(?:alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|chi|psi|omega|"
     r"Theta|Sigma|hat|mathbf|boldsymbol)[^$\n]{1,180}?)([.?!])(?=\s+[A-Z])"
 )
+_INLINE_MATH_CONNECTOR_BOUNDARY_RE = re.compile(
+    r"\$(?P<expr>[^$\n]{1,220}?)\s+(?P<connector>and|or)\s*\$(?P<next>\\?[A-Za-z])",
+    re.IGNORECASE,
+)
 _BARE_TAGGED_DISPLAY_MATH_RE = re.compile(
     r"(?mi)^(?=\\?(?:widehat|widetilde|underset|mathcal|left|right)\b)"
     r"(?=[^\n]{1,1000}\btag\{\d{1,3}\}\s*$)(?=[^\n]*=)"
@@ -333,6 +337,46 @@ def _close_unclosed_inline_math_before_sentence(text: str) -> str:
         return f"${expr}${punct}"
 
     return _UNCLOSED_INLINE_MATH_SENTENCE_RE.sub(_repl, text)
+
+
+def _restore_inline_math_connector_boundaries(text: str) -> str:
+    """Restore dropped ``$`` delimiters around prose connectors.
+
+    PDF/VL extraction can turn ``$a$ and $b$`` into ``$a and$b``.  The
+    malformed spans then pair with later math and make the whole line appear
+    to contain an unclosed formula.  Restrict the repair to expressions with
+    clear TeX/math signals so ordinary dollar-denominated prose is untouched.
+    """
+
+    if not text or "$" not in text:
+        return text
+
+    def _repl(match: re.Match) -> str:
+        expr = (match.group("expr") or "").rstrip()
+        if not re.search(r"\\[A-Za-z]+|[=<>_^{}]|\[[^\]\n]+\]", expr):
+            return match.group(0)
+        connector = (match.group("connector") or "").lower()
+        next_token = match.group("next") or ""
+        return f"${expr}$ {connector} ${next_token}"
+
+    repaired = _INLINE_MATH_CONNECTOR_BOUNDARY_RE.sub(_repl, text)
+    return re.sub(r"\$([,;:])\s*\$", r"$\1 $", repaired)
+
+
+def _remove_stray_citation_dollars(text: str) -> str:
+    """Remove a citation's stray ``$`` without touching a valid math close."""
+
+    if not text or "$" not in text:
+        return text
+
+    def _repl(match: re.Match) -> str:
+        # An odd number of preceding delimiters means this bracketed value is
+        # inside inline math, e.g. ``$\gamma \in [0,1]$ and``.
+        if text[: match.start()].count("$") % 2 == 1:
+            return match.group(0)
+        return f"{match.group(1) or ''} "
+
+    return _STRAY_CITATION_DOLLAR_RE.sub(_repl, text)
 
 
 def fix_math_markdown(md: str) -> str:
@@ -801,7 +845,7 @@ def fix_math_markdown(md: str) -> str:
 
     # 3) Normalize ALL inline-math segments ($...$) anywhere in the document.
     # This fixes cases like: N X $ˆ Y(r) -$  ->  N X $\hat{Y}(r) -$
-    out_s = "\n".join(out)
+    out_s = _restore_inline_math_connector_boundaries("\n".join(out))
     try:
         def _repl_inline(m: re.Match) -> str:
             inner = (m.group(1) or "").strip()
@@ -948,7 +992,7 @@ def _cleanup_stray_latex_in_text(md: str) -> str:
 
         t = s
         t = _close_unclosed_inline_math_before_sentence(t)
-        t = _STRAY_CITATION_DOLLAR_RE.sub(r"\1 ", t)
+        t = _remove_stray_citation_dollars(t)
         # Some PDFs leak italic/emphasis markers as stray `$` in plain text, e.g.:
         #   $representation$[11, 34]$. Others ...$
         # These are not math; strip dollars when the line looks like prose/citations.

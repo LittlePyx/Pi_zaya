@@ -212,6 +212,32 @@ The methods use variances $\sigma \in [30,50,75]. The BSD68 dataset comes from B
     assert r"$256 \times 256$" in out
 
 
+def test_restore_inline_math_boundaries_around_prose_connector():
+    src = r"""
+$$
+x = y
+$$
+
+Given $\gamma \in [0,1] and$f_0 \in X$,$h_0 \in U$.
+"""
+    out = postprocess_markdown(src)
+
+    assert r"$\gamma \in [0,1]$ and $f_0 \in X$, $h_0 \in U$." in out
+
+
+def test_valid_numeric_interval_does_not_look_like_stray_citation_dollar():
+    src = r"""
+$$
+x = y
+$$
+
+Given $\gamma \in [0,1]$ and $f_0 \in X$.
+"""
+    out = postprocess_markdown(src)
+
+    assert r"$\gamma \in [0,1]$ and $f_0 \in X$." in out
+
+
 def test_caption_cleanup_keeps_repaired_ocr_words_as_separate_words():
     src = """
 **Figure 1.** Interferometric ISM (iISM) principle. FM fl ip mirror, EF emission fi lter, FC fi ber coupler, PM SMF polarization-maintaining single-mode fi ber. Side-by- side comparison. g Line pro fi les in the three con fi gurations.

@@ -544,6 +544,27 @@ def _paper_guide_targeted_source_block_hits(
             family=family,
             bound_source_path=bound_source_path,
         )
+    named_acronyms = {
+        str(token or "").upper()
+        for token in re.findall(r"(?<![A-Za-z0-9])([A-Z][A-Z0-9+_-]{1,15})(?![A-Za-z0-9])", q)
+        if str(token or "").upper()
+        not in {"PDF", "DOI", "RGB", "HSI", "PSNR", "SSIM", "SNR", "CNR"}
+    }
+    named_comparison_pairs = {
+        (str(left or "").upper(), str(right or "").upper())
+        for left, right in re.findall(
+            r"(?i)(?<![A-Za-z0-9])([A-Z][A-Z0-9+_-]{1,15})\s*(?:\u4e0e|\u548c|\u53ca|vs\.?|versus|and)\s*([A-Z][A-Z0-9+_-]{1,15})(?![A-Za-z0-9])",
+            q,
+        )
+    }
+    observation_model_query = bool(
+        re.search(
+            r"(?i)(?:\b(?:observation|measurement|forward|imaging)\s+(?:model|matrix|equation)|"
+            r"\b(?:model|matrix|equation)\s+(?:difference|comparison)|"
+            r"\u89c2\u6d4b(?:\u6a21\u578b|\u77e9\u9635|\u65b9\u7a0b)|\u6d4b\u91cf\u503c|\u6210\u50cf\u6a21\u578b|\u516c\u5f0f)",
+            q,
+        )
+    )
     blocks = list(load_source_blocks(md_path))
     target_boxes = set(_paper_guide_requested_box_numbers(q))
     box_context_indices: set[int] = set()
@@ -590,6 +611,50 @@ def _paper_guide_targeted_source_block_hits(
             score += min(14.0, 2.0 * float(len(shared)))
         q_low = q.lower()
         text_low = text.lower()
+        matched_acronyms: set[str] = set()
+        if named_acronyms:
+            acronym_surface = f"{heading}\n{text}".upper()
+            matched_acronyms = {
+                token
+                for token in named_acronyms
+                if re.search(rf"(?<![A-Z0-9]){re.escape(token)}(?![A-Z0-9])", acronym_surface)
+            }
+            score += 14.0 * float(len(matched_acronyms))
+            if len(matched_acronyms) >= 2:
+                score += 28.0
+            matched_named_pair = any(
+                left in matched_acronyms and right in matched_acronyms
+                for left, right in named_comparison_pairs
+            )
+            if matched_named_pair:
+                model_definition = bool(
+                    ("for cassi" in text_low and "for dcd" in text_low)
+                    or (
+                        "cassi" in text_low
+                        and "dcd" in text_low
+                        and ("\\phi" in text_low or "forward imaging" in text_low)
+                        and ("y =" in text_low or "measurement" in text_low)
+                    )
+                )
+                if observation_model_query:
+                    # A model-comparison question needs the defining equations,
+                    # not any result caption that happens to mention both systems.
+                    score += 72.0 if model_definition else -36.0
+                else:
+                    score += 40.0
+        dltr_focus = bool(
+            "dltr" in q_low
+            or ("dimension-discriminative" in q_low and "low-rank tensor" in q_low)
+        )
+        if dltr_focus:
+            if "dimension-differ" in heading_low and "low-rank tensor" in heading_low:
+                score += 8.0
+            if "overlapped cubic patches" in text_low and "nearest similar" in text_low:
+                score += 52.0
+            if "sum of weighted ranks regularization" in text_low:
+                score += 58.0
+            if "unfolding" in text_low and "mode" in text_low and "rank" in text_low:
+                score += 26.0
         if family == "method":
             if any(token in heading_low for token in ("method", "methods", "materials and methods", "methodology", "implementation", "algorithm", "analysis")):
                 score += 7.0

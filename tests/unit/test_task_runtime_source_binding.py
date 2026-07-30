@@ -3,6 +3,51 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def test_full_library_scope_drops_open_reader_source_preference():
+    from kb import task_runtime
+
+    current = r"F:\papers\ICCV-2019-Computational Hyperspectral Imaging.pdf"
+    other = r"F:\papers\TMI-2018-Learned Primal-Dual Reconstruction.pdf"
+    out = task_runtime._filter_current_paper_preference_for_scope(
+        [current, other],
+        effective_query_scope="library",
+        bound_source_path=current,
+        bound_source_name="ICCV-2019-Computational Hyperspectral Imaging",
+    )
+
+    assert out == [other]
+
+
+def test_current_paper_scope_keeps_reader_source_preference():
+    from kb import task_runtime
+
+    current = r"F:\papers\ICCV-2019-Computational Hyperspectral Imaging.pdf"
+    assert task_runtime._filter_current_paper_preference_for_scope(
+        [current],
+        effective_query_scope="current_paper",
+        bound_source_path=current,
+        bound_source_name="ICCV-2019-Computational Hyperspectral Imaging",
+    ) == [current]
+
+
+def test_named_paper_comparison_excludes_neighboring_retrieval_sources():
+    from kb import task_runtime
+
+    def hit(path: str) -> dict:
+        return {"text": path, "meta": {"source_path": path, "source_name": Path(path).name}}
+
+    learned = hit(r"db\TMI-2018-Learned Primal-Dual Reconstruction.en.md")
+    ista = hit(r"db\CVPR-2018-ISTA-Net-Interpretable Optimization-Inspired Deep Network.en.md")
+    hatnet = hit(r"db\CVPR-2024-Dual-Scale Transformer for Large-Scale Single-Pixel Imaging.en.md")
+
+    out = task_runtime._focus_answer_seed_on_prompt_named_sources(
+        [learned, ista, hatnet],
+        prompt="比较 Learned Primal-Dual 与 ISTA-Net，并分别给出两篇论文的证据。",
+    )
+
+    assert out == [learned, ista]
+
+
 def test_needs_bound_source_hint_for_inpaper_queries():
     from kb import task_runtime
 
@@ -38,6 +83,43 @@ def test_should_apply_implicit_source_hints_skips_plain_multi_paper_list_queries
         prompt="Besides this paper, what other papers mention ADMM?",
         paper_guide_mode=True,
     ) is True
+
+
+def test_paper_guide_supplemental_scan_prompts_keeps_specific_query_expansions():
+    from kb import task_runtime
+
+    original = "请解释 Learned Primal-Dual 怎样把 PDHG 展开成网络"
+    variants = [
+        original,
+        "Learned Primal-Dual PDHG FBP motivation",
+        "Learned PDHG proximal operators dual update primal update",
+        "Learned Primal-Dual zero initialization FBP pseudo-inverse final results",
+    ]
+
+    out = task_runtime._paper_guide_supplemental_scan_prompts(
+        prompt=original,
+        retrieval_prompt=f"{original}\nQUERY SCOPE: Current paper.",
+        used_query=original,
+        query_variants=variants,
+    )
+
+    assert out[0] == original
+    assert "zero initialization" in out[1]
+    assert any("proximal operators" in item for item in out[:3])
+
+
+def test_paper_guide_supplemental_scan_does_not_turn_generic_method_keyword_into_section_lock():
+    from kb import task_runtime
+
+    out = task_runtime._paper_guide_supplemental_scan_prompts(
+        prompt="CASSI 与 DCD 的观测模型有什么区别？",
+        retrieval_prompt="CASSI DCD observation model formula",
+        used_query="CASSI DCD observation model formula",
+        query_variants=["CASSI DCD DLTR method equation spectral model"],
+    )
+
+    assert out[0] == "CASSI 与 DCD 的观测模型有什么区别？"
+    assert " method " not in f" {out[1].lower()} "
 
 
 def test_collect_doc_figure_assets_and_append_markdown(tmp_path: Path):

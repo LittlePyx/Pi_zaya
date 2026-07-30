@@ -372,6 +372,37 @@ def test_paper_guide_targeted_source_block_hits_covers_both_sides_of_transform_c
     assert any("inverse fourier transform" in text for text in texts)
 
 
+def test_targeted_source_scan_prioritizes_blocks_covering_named_system_pair(tmp_path: Path):
+    source_pdf = tmp_path / "Hyperspectral.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    db_root = tmp_path / "db"
+    md_dir = db_root / source_pdf.stem
+    md_dir.mkdir(parents=True, exist_ok=True)
+    (md_dir / f"{source_pdf.stem}.en.md").write_text(
+        (
+            "## Implementation Details\n\n"
+            "Our DLTR method is compared with baselines on CASSI.\n\n"
+            "## Representative Systems\n\n"
+            "For CASSI, Y = Yc and Phi = Phic. For DCD, Y = [Yc; Yp] and Phi = [Phic; Phip].\n"
+            "\n## Dimension-differentiated Low-rank Tensor Model\n\n"
+            "The three mode unfolding matrices have different ranks, so we use the sum of weighted ranks regularization.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source_pdf),
+        prompt="Compare CASSI and DCD observation models; explain the DLTR equation.",
+        db_dir=db_root,
+        limit=2,
+    )
+
+    assert hits
+    assert "For CASSI" in str(hits[0].get("text") or "")
+    assert "For DCD" in str(hits[0].get("text") or "")
+    assert any("weighted ranks regularization" in str(hit.get("text") or "") for hit in hits)
+
+
 def test_seed_query_tokens_merges_augmented_family_terms_when_prompt_has_cjk_tokens():
     tokens = retrieval_runtime._paper_guide_seed_query_tokens_for_targeted_scan(
         prompt="请解释这个方法的关键步骤",
@@ -944,3 +975,44 @@ def test_paper_guide_citation_lookup_signal_score_prefers_duarte_compressive_cla
         explicit_ref_list_request=False,
     )
     assert duarte_score > lidar_score
+
+
+def test_targeted_scan_prefers_model_equations_and_dltr_facets_over_result_captions(tmp_path: Path):
+    source_path = tmp_path / "hyperspectral.en.md"
+    source_path.write_text(
+        """# Computational Hyperspectral Imaging
+
+## 3.2. Model Formulation
+
+We first partition the HSI $\\mathcal{X}$ into overlapped cubic patches and search the nearest similar neighbors to construct a 3D tensor $\\mathcal{P}$.
+
+With the Tucker decomposition, tensor rank is characterized by the sum of ranks of unfolding matrices along each mode.
+
+Considering the discrepancy among different modes, DLTR uses the sum of weighted ranks regularization $\\sum_{n=1}^{3} w_n \\operatorname{rank}(P_{(n)})$.
+
+## 4.1. Representative Systems
+
+For CASSI, $Y = Y^c$ and $\\Phi = \\Phi^c$. For DCD, $Y = [Y^c; Y^p]$ and $\\Phi = [\\Phi^c; \\Phi^p]$.
+
+## Figure 5
+
+Figure 5. Visual results comparison for CASSI and DCD. Our proposed method obtains better results on both computational imaging systems.
+""",
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source_path),
+        prompt=(
+            "比较 CASSI 与 DCD 的观测模型，并解释 DLTR 如何从三维张量构造、"
+            "各模展开秩和加权正则三个层面利用低秩性，请给出公式。"
+        ),
+        db_dir=tmp_path,
+        limit=4,
+    )
+    texts = [str(hit.get("text") or "") for hit in hits]
+
+    assert any("For CASSI" in text and "For DCD" in text for text in texts)
+    assert any("overlapped cubic patches" in text for text in texts)
+    assert any("weighted ranks regularization" in text for text in texts)
+    assert all("Visual results comparison" not in text for text in texts)

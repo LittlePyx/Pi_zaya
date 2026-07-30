@@ -12722,6 +12722,23 @@ def _rendered_body_preserves_answer_body(
     )
 
 
+def _citation_only_render_repair(*, original_body: str, repaired_body: str) -> str:
+    """Accept renderer repairs only when they leave the generated prose intact."""
+
+    original = str(original_body or "")
+    repaired = str(repaired_body or "")
+    confirmed_numbers = set(_iter_numeric_citation_numbers(original))
+    confirmed_numbers.update(_iter_numeric_citation_numbers(repaired))
+    synthetic_details = [{"num": number} for number in sorted(confirmed_numbers)]
+    if _rendered_body_preserves_answer_body(
+        answer_body=original,
+        rendered_body=repaired,
+        cite_details=synthetic_details,
+    ):
+        return repaired
+    return original
+
+
 def _planned_answer_preservation_baseline(
     *,
     original_body: str,
@@ -13463,6 +13480,12 @@ def _extract_render_cache(
         return None
     if render_payload_is_degraded_for_citations(payload, raw_content=raw_content, hits=hits):
         return None
+    if str(raw_content or "").strip() and not _rendered_body_preserves_answer_body(
+        answer_body=raw_content,
+        rendered_body=str(normalized.get("rendered_body") or normalized.get("rendered_content") or ""),
+        cite_details=list(normalized.get("cite_details") or []),
+    ):
+        return None
     return normalized
 
 
@@ -13523,6 +13546,12 @@ def _extract_compatible_historical_render_cache(
     if render_payload_is_degraded_for_citations(payload, raw_content=raw_content, hits=hits):
         return None
     if not list(hits or []) and list(normalized.get("cite_details") or []):
+        return None
+    if str(raw_content or "").strip() and not _rendered_body_preserves_answer_body(
+        answer_body=raw_content,
+        rendered_body=str(normalized.get("rendered_body") or normalized.get("rendered_content") or ""),
+        cite_details=list(normalized.get("cite_details") or []),
+    ):
         return None
     return normalized
 
@@ -15005,12 +15034,17 @@ def enrich_messages_with_reference_render(
                     }
                     if citation_plan:
                         annotate_kwargs["citation_plan"] = citation_plan
-                    rendered_body = _reading_guide_repair_missing_system_a_citations(
-                        rendered_body,
+                    repair_source_body = rendered_body
+                    repaired_body = _reading_guide_repair_missing_system_a_citations(
+                        repair_source_body,
                         citation_hits,
                         citation_plan,
                         output_mode=_message_answer_output_mode(rec),
                         canonical_paths=_canon_paths or None,
+                    )
+                    rendered_body = _citation_only_render_repair(
+                        original_body=repair_source_body,
+                        repaired_body=repaired_body,
                     )
                     planned_answer_body = _planned_answer_preservation_baseline(
                         original_body=original_answer_body,
@@ -15031,12 +15065,16 @@ def enrich_messages_with_reference_render(
                         if isinstance(detail, dict)
                     )
                     if (not has_system_a) and citation_hits != hits:
-                        fallback_body = _reading_guide_repair_missing_system_a_citations(
+                        fallback_candidate = _reading_guide_repair_missing_system_a_citations(
                             raw_body,
                             hits,
                             citation_plan,
                             output_mode=_message_answer_output_mode(rec),
                             canonical_paths=_canon_paths or None,
+                        )
+                        fallback_body = _citation_only_render_repair(
+                            original_body=raw_body,
+                            repaired_body=fallback_candidate,
                         )
                         fallback_body, fallback_details = _call_with_optional_render_locale(
                             _annotate_inpaper_citations_with_hover_meta,

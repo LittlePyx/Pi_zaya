@@ -113,6 +113,26 @@ def test_summarize_conversion_quality_counts_retry_kinds_and_broken_display_math
     assert metrics.display_math_markdown_link_count == 1
 
 
+def test_display_math_operator_notation_is_not_counted_as_markdown_link(tmp_path):
+    md_path = tmp_path / "operator-notation.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "# Paper",
+                "",
+                "$$",
+                r"f_{i+1} = [\nabla \mathcal{F}](\mathcal{K}(f_i)) + [\partial \mathcal{K}(f_i)]^*(h)",
+                "$$",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metrics = summarize_conversion_quality(md_path)
+
+    assert metrics.display_math_markdown_link_count == 0
+
+
 def test_evaluate_conversion_quality_can_gate_conversion_retries(tmp_path):
     md_path = tmp_path / "retry.md"
     md_path.write_text(

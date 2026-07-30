@@ -23,7 +23,16 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _DISPLAY_MATH_DELIMITER_RE = re.compile(r"^\s*\$\$\s*$")
 _CONVERSION_RETRY_MARKER_RE = re.compile(r"<!--\s*kb:conversion_retry\s+(.+?)\s*-->", re.IGNORECASE)
 _CONVERSION_MARKER_ATTR_RE = re.compile(r"([A-Za-z_][\w-]*)=(?:\"([^\"]*)\"|'([^']*)'|([^\s]+))")
-_MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]{1,160}\]\([^)\n]+\)")
+# Inside TeX, constructs such as ``[\nabla F](x)`` and
+# ``[\partial K(f)]^*(h)`` are ordinary operator notation, not Markdown
+# links.  Only count targets that are unambiguously link-like; otherwise a
+# formula-heavy paper can be incorrectly blocked from indexing.
+_MARKDOWN_LINK_RE = re.compile(
+    r"(?<!!)\[[^\]\n]{1,160}\]\("
+    r"(?:#[^)\s]+|https?://[^)\s]+|mailto:[^)\s]+|(?:\.\.?/|/)[^)\n]+|[^)\s/]+/[^)\n]+)"
+    r"\)",
+    re.IGNORECASE,
+)
 _PROSE_DISPLAY_MATH_WORD_RE = re.compile(r"\b[A-Za-z]{2,}\b")
 _PROSE_DISPLAY_MATH_COMMON_WORDS = {
     "a",

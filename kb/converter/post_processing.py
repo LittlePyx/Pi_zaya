@@ -17,6 +17,7 @@ from .post_math_rules import (
     _normalize_math_for_typora,
     _numeric_superscript_is_exponent_context,
     _numeric_superscript_to_unicode,
+    _restore_inline_math_connector_boundaries,
     fix_math_markdown,
     normalize_adjacent_inline_math_superscripts,
     restore_bare_tagged_display_math,
@@ -2934,6 +2935,7 @@ def postprocess_markdown(md: str) -> str:
     md = _normalize_body_citation_markers(md)
     md = _normalize_common_rendering_artifacts(md)
     md = _fix_known_safe_ocr_terms(md)
+    md = _restore_inline_math_connector_boundaries(md)
     md = _split_inline_heading_markers(md)
     md = _normalize_page_marker_block_spacing(md)
     return md

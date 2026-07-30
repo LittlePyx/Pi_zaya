@@ -385,6 +385,12 @@ def _gen_store_answer_provenance(
 ) -> dict | None:
     if not bool(task.get("paper_guide_mode")):
         return None
+    query_scope = str(task.get("query_scope") or "").strip().lower().replace("-", "_")
+    if query_scope in {"library", "all", "all_library", "full_library", "basket", "shelf", "selected"}:
+        # Structured paper-guide provenance is intentionally single-source.
+        # Reusing the open reader paper for a full-library answer creates
+        # convincing but wrong inline locate buttons on other papers' claims.
+        return None
     source_path = str(task.get("paper_guide_bound_source_path") or "").strip()
     if not source_path:
         return None

@@ -309,6 +309,72 @@ def _paper_guide_answer_hit_score(hit: dict, *, prompt: str) -> float:
     return score
 
 
+def _paper_guide_method_aspect_priority_hits(
+    ranked: list[tuple[float, dict]],
+    *,
+    prompt: str,
+) -> list[dict]:
+    """Preserve one source block for each explicitly requested method aspect."""
+
+    q = str(prompt or "")
+    asks_updates = bool(
+        re.search(
+            r"(?i)(?:\bPDHG\b|\bprimal[- ]dual\b|\bdual update\b|\bprimal update\b|"
+            r"\bproximal\b|\u5bf9\u5076\u66f4\u65b0|\u539f\u59cb\u66f4\u65b0|\u8fd1\u7aef\u7b97\u5b50)",
+            q,
+        )
+    )
+    asks_initialization = bool(
+        re.search(
+            r"(?i)(?:\binitiali[sz](?:e|ed|ation)\b|\bstarting point\b|\binitial guess\b|"
+            r"\bzero[- ]initiali[sz]ation\b|\bpseudo[- ]inverse\b|\bFBP\b|\u521d\u59cb\u5316|\u521d\u59cb\u731c\u6d4b)",
+            q,
+        )
+    )
+    if not (asks_updates and asks_initialization):
+        return []
+
+    def _update_bonus(hit: dict) -> float:
+        text = normalize_match_text(
+            f"{str(((hit.get('meta') or {}).get('heading_path') or ''))} {str(hit.get('text') or '')}"
+        )
+        if ("primal proximal" in text) and ("dual proximal" in text):
+            return 24.0
+        if ("algorithm 2" in text) and ("learned proximal" in text):
+            return 18.0
+        if ("proximal operators" in text) and any(token in text for token in ("replaced", "learned", "network")):
+            return 8.0
+        return float("-inf")
+
+    def _initialization_bonus(hit: dict) -> float:
+        text = normalize_match_text(
+            f"{str(((hit.get('meta') or {}).get('heading_path') or ''))} {str(hit.get('text') or '')}"
+        )
+        if ("zero initialization" in text) and ("pseudo inverse" in text):
+            return 24.0
+        if ("initial guess" in text) and any(token in text for token in ("final results", "complexity", "earlier reconstruction")):
+            return 20.0
+        if any(token in text for token in ("zero initialization", "starting point", "initial guess")):
+            return 8.0
+        return float("-inf")
+
+    selected: list[dict] = []
+    for bonus_fn in (_update_bonus, _initialization_bonus):
+        best_hit: dict | None = None
+        best_score = float("-inf")
+        for base_score, hit in ranked:
+            bonus = bonus_fn(hit)
+            if bonus == float("-inf"):
+                continue
+            candidate_score = float(base_score) + bonus
+            if candidate_score > best_score:
+                best_score = candidate_score
+                best_hit = hit
+        if isinstance(best_hit, dict) and all(best_hit is not item for item in selected):
+            selected.append(best_hit)
+    return selected
+
+
 def _select_paper_guide_answer_hits(
     *,
     grouped_docs: list[dict],
@@ -388,7 +454,22 @@ def _select_paper_guide_answer_hits(
         _matches_effective_target(hit)
         for _score, hit in ranked
     )
-    for _score, hit in ranked:
+    priority_hits = (
+        _paper_guide_method_aspect_priority_hits(ranked, prompt=prompt)
+        if family == "method"
+        else []
+    )
+    ordered_ranked = [
+        (float("inf"), hit)
+        for hit in priority_hits
+        if (not has_target_ranked) or _matches_effective_target(hit)
+    ]
+    ordered_ranked.extend(
+        (score, hit)
+        for score, hit in ranked
+        if all(hit is not priority for priority in priority_hits)
+    )
+    for _score, hit in ordered_ranked:
         meta = hit.get("meta", {}) or {}
         src = str(meta.get("source_path") or "").strip()
         focus = str(meta.get("top_heading") or meta.get("heading_path") or "").strip()

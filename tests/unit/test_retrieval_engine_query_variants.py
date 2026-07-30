@@ -79,6 +79,31 @@ def test_deterministic_query_variants_expand_refocus_mechanism_terms() -> None:
     assert "wave propagation" in joined
 
 
+def test_deterministic_query_variants_expand_learned_primal_dual_method_terms() -> None:
+    variants = _deterministic_query_variants(
+        "Learned Primal-Dual 如何把传统 PDHG 变成可学习网络？"
+        "哪些更新被替换，为什么不需要 FBP 初始化？"
+    )
+    joined = " ".join(variants).lower()
+
+    assert "proximal operators" in joined
+    assert "dual update" in joined
+    assert "zero initialization" in joined
+    assert "pseudo-inverse" in joined
+
+
+def test_deterministic_query_variants_cover_both_named_unrolled_networks() -> None:
+    variants = _deterministic_query_variants(
+        "比较 Learned Primal-Dual 与 ISTA-Net：各自把什么迭代步骤变成可学习模块？"
+    )
+    joined = "\n".join(variants).lower()
+
+    assert "learned pdhg proximal operators" in joined
+    assert "ista-net maps ista update steps" in joined
+    assert "r(k) module" in joined
+    assert "shrinkage threshold" in joined
+
+
 def test_deterministic_query_variants_expand_thick_sample_tradeoff_terms() -> None:
     variants = _deterministic_query_variants("s2ISM 这篇说的 trade-off 是什么？为什么厚样本会麻烦？")
     joined = " ".join(variants).lower()
@@ -212,6 +237,17 @@ def test_cassi_alias_matches_dual_disperser_title_without_literal_acronym() -> N
         question,
         "library/SCIGS-3D-Gaussians-Splatting-from-a-Snapshot-Compressive-Image.en.md",
     ) == 0.0
+
+
+def test_deterministic_query_variants_split_cassi_dcd_and_dltr_facets() -> None:
+    variants = _deterministic_query_variants(
+        "CASSI 与 DCD 的观测模型有什么区别？DLTR 如何利用三维张量低秩性？"
+    )
+    joined = "\n".join(variants).lower()
+
+    assert "dual-disperser" in joined
+    assert "dimension-discriminative low-rank tensor" in joined
+    assert "mode unfolding" in joined
 
 
 def test_hatnet_alias_and_variants_resolve_dual_scale_transformer_source() -> None:

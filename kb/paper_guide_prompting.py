@@ -157,6 +157,13 @@ _PAPER_GUIDE_ANSWER_SOURCE_MARKER_RE = re.compile(
     r")",
     flags=re.IGNORECASE,
 )
+_PAPER_GUIDE_ANSWER_SOURCE_MARKER_RE_CLEAN = re.compile(
+    r"(?i)(?:"
+    r"(?:\u5206\u522b|\u9010\u6761|\u6bcf\u4e2a).{0,100}(?:\u5f15\u7528|\u539f\u6587|\u8bc1\u636e|\u5b9a\u4f4d)|"
+    r"(?:\u5f15\u7528|\u7ed9\u51fa|\u9644\u4e0a|\u6807\u51fa|\u6807\u6ce8).{0,80}(?:\u539f\u6587|\u8bc1\u636e|\u5b9a\u4f4d|\u6765\u6e90)|"
+    r"(?:\u539f\u6587|\u8bc1\u636e).{0,20}(?:\u5b9a\u4f4d|\u4f4d\u7f6e|\u8df3\u8f6c)"
+    r")"
+)
 _PAPER_GUIDE_CITATION_LOOKUP_QUERY_STOPWORDS = {
     "reference",
     "references",
@@ -199,7 +206,7 @@ def _paper_guide_prompt_requests_naive_source_trace(prompt: str) -> bool:
         return False
     if not _PAPER_GUIDE_NAIVE_SOURCE_TRACE_PROMPT_RE.search(q):
         return False
-    if _PAPER_GUIDE_ANSWER_SOURCE_MARKER_RE.search(q):
+    if _PAPER_GUIDE_ANSWER_SOURCE_MARKER_RE.search(q) or _PAPER_GUIDE_ANSWER_SOURCE_MARKER_RE_CLEAN.search(q):
         return False
     return bool(_PAPER_GUIDE_NAIVE_SOURCE_TRACE_OBJECT_RE.search(q))
 
@@ -213,8 +220,15 @@ def _paper_guide_prompt_requests_citation_lookup(prompt: str) -> bool:
     q = strip_negated_reference_trail_requests(str(prompt or "").strip())
     if not q:
         return False
+    # An explicit in-paper reference-number lookup can also ask for the exact
+    # source sentence.  That source-location phrase resembles the generic
+    # "attach evidence to every answer" output constraint, so recognize the
+    # narrow citation lookup first instead of letting the broader exclusion
+    # mask it.
     if _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE_CLEAN.search(q):
         return True
+    if _PAPER_GUIDE_ANSWER_SOURCE_MARKER_RE_CLEAN.search(q):
+        return False
     if _paper_guide_prompt_requests_naive_source_trace(q):
         return True
     return bool(
@@ -225,7 +239,12 @@ def _paper_guide_prompt_requests_citation_lookup(prompt: str) -> bool:
 
 _PAPER_GUIDE_METHOD_PROMPT_RE_CLEAN = re.compile(
     r"(\u8fd9\u4e2a?\u65b9\u6cd5.{0,8}(?:\u5177\u4f53)?\u4ecb\u7ecd|\u65b9\u6cd5.{0,4}\u4ecb\u7ecd|"
-    r"\u600e\u4e48\u5de5\u4f5c|\u600e\u4e48\u5b9e\u73b0|\u539f\u7406|\u673a\u5236|\u7b97\u6cd5)",
+    r"\b(?:pdhg|proximal|primal[-\s]?dual|zero[-\s]?initialization|pseudo[-\s]?inverse)\b|"
+    r"\u600e\u4e48\u5de5\u4f5c|\u600e\u4e48\u5b9e\u73b0|"
+    r"(?:\u5982\u4f55|\u600e\u6837).{0,20}(?:\u53d8\u6210|\u53d8\u4e3a|\u8f6c\u6210|\u6539\u6210|\u6539\u9020\u6210|\u6539\u4e3a|\u5c55\u5f00\u6210|\u5b9e\u73b0).{0,12}(?:\u7f51\u7edc|\u6a21\u5757|\u65b9\u6cd5|\u7b97\u6cd5)|"
+    r"(?:\u5982\u4f55|\u600e\u6837).{0,24}(?:\u88ab|\u7531).{0,16}(?:\u7f51\u7edc|\u6a21\u5757|\u7b97\u5b50).{0,8}(?:\u66ff\u6362|\u66ff\u4ee3|\u6539\u5199|\u5b66\u4e60)|"
+    r"(?:\u54ea\u4e9b|\u4ec0\u4e48).{0,16}(?:\u66f4\u65b0|\u6b65\u9aa4|\u7b97\u5b50).{0,12}(?:\u66ff\u6362|\u6539\u5199|\u5b66\u4e60)|"
+    r"\u539f\u7406|\u673a\u5236|\u7b97\u6cd5)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_METHOD_DETAIL_FAMILY_RE = re.compile(
@@ -499,7 +518,20 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
     # Allow citation lookup to explicitly scope to "in the Abstract" without being misclassified as abstract.
     if _PAPER_GUIDE_ABSTRACT_PROMPT_RE.search(q):
         return "abstract"
-    if _PAPER_GUIDE_EQUATION_PROMPT_RE.search(q) or _PAPER_GUIDE_EQUATION_PROMPT_RE_CLEAN.search(q):
+    equation_request = bool(
+        _PAPER_GUIDE_EQUATION_PROMPT_RE.search(q)
+        or _PAPER_GUIDE_EQUATION_PROMPT_RE_CLEAN.search(q)
+    )
+    comparison_request = bool(
+        _PAPER_GUIDE_COMPARE_PROMPT_RE.search(q)
+        or _PAPER_GUIDE_COMPARE_PROMPT_RE_CLEAN.search(q)
+        or intent == "compare"
+    )
+    # A comparison that also asks for formulas is still primarily a
+    # comparison; otherwise one formula can eclipse the other requested side.
+    if equation_request and comparison_request:
+        return "compare"
+    if equation_request:
         return "equation"
     if _PAPER_GUIDE_REPRO_PROMPT_RE.search(q) or _PAPER_GUIDE_REPRO_PROMPT_RE_CLEAN.search(q) or intent == "experiment":
         return "reproduce"
@@ -526,7 +558,7 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
         or re.search(r"(?i)\b(?:dynamic range|quantization electronics|mean square error|bottleneck|limitation|limitations|weakness)\b", q)
     ):
         return "strength_limits"
-    if _PAPER_GUIDE_COMPARE_PROMPT_RE.search(q) or _PAPER_GUIDE_COMPARE_PROMPT_RE_CLEAN.search(q) or intent == "compare":
+    if comparison_request:
         return "compare"
     if _PAPER_GUIDE_METHOD_DETAIL_FAMILY_RE.search(q):
         return "method"
@@ -543,6 +575,17 @@ def _paper_guide_prompt_requests_exact_method_support(prompt: str) -> bool:
     src = str(prompt or "").strip()
     if not src:
         return False
+    # A normal request for cited evidence (for example, "请给出原文证据和定位")
+    # still needs a synthesized answer backed by several passages.  Reserve the
+    # single-passage exact-support shortcut for prompts that explicitly ask us
+    # to identify the particular source sentence/paragraph/location.
+    if re.search(
+        r"(?:\u5b9a\u4f4d|\u6307\u51fa|\u544a\u8bc9\u6211).{0,10}\u539f\u6587(?:\u4e2d\u7684?)?.{0,6}(?:\u54ea\u4e00\u53e5|\u54ea\u53e5|\u54ea\u4e00\u6bb5|\u54ea\u6bb5|\u5177\u4f53\u4f4d\u7f6e)|"
+        r"\u539f\u6587(?:\u4e2d\u7684?)?.{0,6}(?:\u54ea\u4e00\u53e5|\u54ea\u53e5|\u54ea\u4e00\u6bb5|\u54ea\u6bb5|\u5177\u4f53\u4f4d\u7f6e)",
+        src,
+        flags=re.IGNORECASE,
+    ):
+        return True
     return bool(
         re.search(
             r"(?i)\b(?:"

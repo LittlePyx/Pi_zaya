@@ -254,3 +254,37 @@ def test_postprocess_markdown_drops_fragmented_aggregate_duplicate():
     assert "| ate | ncy- | 25 | 6 | Latenc |" not in out
     assert out.count("Identity (ours)") == 1
     assert "| NAFNet | 9 | 39.78 0.959 | 31.79 0.951 | 11.8 | 154.7 |" in out
+
+
+def test_postprocess_markdown_drops_truncated_decimal_duplicate_table():
+    src = "\n".join(
+        [
+            "**Table 3.** Comparison on two datasets.",
+            "",
+            "| Datasets | Indexes | AE | HSCNN | IS |",
+            "| --- | --- | --- | --- | --- |",
+            "| Harvard | PSNR | 29.20 | 27.60 | 29. |",
+            "|  | SSIM | 0.912 | 0.900 | 0. |",
+            "|  | ERGAS | 91.62 | 105.90 | 83. |",
+            "| KAIST | PSNR | 26.03 | 21.06 | 29. |",
+            "|  | SSIM | 0.920 | 0.814 | 0. |",
+            "|  | ERGAS | 172.32 | 273.37 | 15. |",
+            "",
+            "Short discussion between the duplicate representations.",
+            "",
+            "| Datasets | Indexes | AE | HSCNN | ISTA | Ours |",
+            "| --- | --- | --- | --- | --- | --- |",
+            "| Harvard | PSNR | 29.20 | 27.60 | 29.87 | 31.14 |",
+            "|  | SSIM | 0.912 | 0.900 | 0.913 | 0.932 |",
+            "|  | ERGAS | 91.62 | 105.90 | 85.21 | 74.92 |",
+            "| KAIST | PSNR | 26.03 | 21.06 | 28.57 | 34.87 |",
+            "|  | SSIM | 0.920 | 0.814 | 0.909 | 0.962 |",
+            "|  | ERGAS | 172.32 | 273.37 | 151.49 | 37.40 |",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "| Datasets | Indexes | AE | HSCNN | IS |" not in out
+    assert out.count("| Datasets | Indexes |") == 1
+    assert "| KAIST | PSNR | 26.03 | 21.06 | 28.57 | 34.87 |" in out

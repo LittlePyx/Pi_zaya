@@ -129,7 +129,7 @@ def test_reference_index_cache_refreshes_after_file_change(tmp_path: Path, monke
     assert calls == ["old", "new-and-larger"]
 
 
-def test_grounded_plan_repair_is_the_renderer_fidelity_baseline(monkeypatch) -> None:
+def test_grounded_plan_repair_cannot_rewrite_answer_prose_in_renderer(monkeypatch) -> None:
     source_path = "db/paper/paper.en.md"
     second_source_path = "db/second/second.en.md"
     plan = {
@@ -226,8 +226,8 @@ def test_grounded_plan_repair_is_the_renderer_fidelity_baseline(monkeypatch) -> 
         conv_id="grounded-baseline",
     )[-1]
 
-    assert "Grounded missing step" in rendered["rendered_body"]
-    assert len(rendered["cite_details"]) == 2
+    assert rendered["rendered_body"] == "Original answer."
+    assert rendered["cite_details"] == []
 
 
 def test_structured_retry_keeps_system_a_and_system_b(monkeypatch) -> None:

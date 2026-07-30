@@ -5,6 +5,7 @@ from kb.paper_guide_prompting import (
     _looks_like_reference_list_snippet_local,
     _merge_paper_guide_deepread_context,
     _paper_guide_prompt_family,
+    _paper_guide_prompt_requests_citation_lookup,
     _paper_guide_prompt_requests_exact_method_support,
     _paper_guide_requested_heading_hints,
     _paper_guide_text_matches_requested_targets,
@@ -121,6 +122,54 @@ def test_paper_guide_prompt_family_prefers_method_for_training_summary_questions
     )
 
 
+def test_paper_guide_prompt_family_detects_algorithm_unrolling_question_in_chinese():
+    prompt = (
+        "Learned Primal-Dual 如何把传统 PDHG 变成可学习网络？"
+        "哪些更新被替换，为什么不需要 FBP 初始化？"
+        "请给出原文证据和定位。"
+    )
+
+    assert _paper_guide_prompt_family(prompt) == "method"
+    assert _paper_guide_prompt_requests_exact_method_support(prompt) is False
+
+    variant = "Learned Primal-Dual 怎样把 PDHG 展开成可学习网络？"
+    assert _paper_guide_prompt_family(variant) == "method"
+
+
+def test_paper_guide_prompt_family_detects_passive_learned_module_replacement() -> None:
+    prompt = (
+        "\u8bf7\u5206\u522b\u8bf4\u660e Learned Primal-Dual \u4e2d PDHG \u7684\u539f\u59cb/\u5bf9\u5076\u8fd1\u7aef\u66f4\u65b0"
+        "\u5982\u4f55\u88ab\u5b66\u4e60\u6a21\u5757\u66ff\u6362\uff0c\u4ee5\u53ca\u4e3a\u4f55\u6700\u7ec8\u4e0d\u7528 FBP \u521d\u503c\u3002"
+    )
+
+    assert _paper_guide_prompt_family(prompt) == "method"
+
+
+def test_paper_guide_prompt_family_detects_pdhg_and_zero_initialization_bundle() -> None:
+    prompt = (
+        "\u8bf7\u5206\u4e24\u90e8\u5206\u5e76\u5206\u522b\u7ed9\u8bc1\u636e\u5b9a\u4f4d\uff1aA. PDHG \u7684 primal/dual proximal "
+        "\u5982\u4f55\u88ab \u0393 \u4e0e \u039b \u5b66\u4e60\u6a21\u5757\u66ff\u4ee3\uff1bB. \u4e3a\u4ec0\u4e48\u4f5c\u8005\u9009\u62e9 zero-initialization\u3002"
+    )
+
+    assert _paper_guide_prompt_family(prompt) == "method"
+
+
+def test_source_quote_output_constraint_does_not_become_bibliography_lookup() -> None:
+    prompt = (
+        "\u8bf7\u5206\u522b\u5f15\u7528 B. Learned PDHG \u548c Choice of starting point \u4e24\u5904\u539f\u6587\uff1a"
+        "\u8bf4\u660e\u539f\u59cb/\u5bf9\u5076\u8fd1\u7aef\u5404\u81ea\u5982\u4f55\u53d8\u4e3a\u5b66\u4e60\u6a21\u5757\u3002"
+    )
+
+    assert _paper_guide_prompt_requests_citation_lookup(prompt) is False
+    assert _paper_guide_prompt_family(prompt) == "method"
+
+
+def test_paper_guide_exact_method_support_requires_a_specific_source_location_request():
+    assert _paper_guide_prompt_requests_exact_method_support(
+        "请定位原文中的哪一段具体说明了网络更新。"
+    ) is True
+
+
 def test_paper_guide_prompt_family_treats_noise_model_contents_as_method_not_compare():
     assert (
         _paper_guide_prompt_family(
@@ -231,6 +280,15 @@ def test_paper_guide_prompt_family_keeps_explicit_comparison_tradeoff_as_compare
     assert (
         _paper_guide_prompt_family(
             "Compared with the open-pinhole condition, what trade-off do the authors report for iISM-APR in terms of CNR versus resolution?"
+        )
+        == "compare"
+    )
+
+
+def test_paper_guide_prompt_family_keeps_formula_backed_system_difference_as_compare():
+    assert (
+        _paper_guide_prompt_family(
+            "CASSI 与 DCD 的观测模型有什么区别？请定位相关公式。"
         )
         == "compare"
     )

@@ -293,11 +293,19 @@ def _prompt_aligned_source_slot(
         and re.search(r"(?i)\b(?:unfold(?:ing|ed)?|phase|iteration)\b|展开|迭代", ranking_surface)
         and unfolding_role_request
     )
+    spad_quenching_hint = bool(
+        re.search(
+            r"(?i)\bSPAD\b|single[- ]photon\s+avalanche\s+diode|单光子雪崩二极管",
+            f"{source_path} {ranking_surface}",
+        )
+        and re.search(r"(?i)Geiger|breakdown|quench|盖革|击穿|淬灭", ranking_surface)
+    )
     if (
         len(query_tokens) < 3
         and not degradation_chain_hint
         and not unfolding_module_hint
         and not table_detail_hint
+        and not spad_quenching_hint
     ) or not source_path:
         return out
     if table_detail_hint:
@@ -551,7 +559,7 @@ def _prompt_aligned_source_slot(
     if (
         best_score < 4
         or (not picked_source_summary and best_score < current_score + 2)
-    ) and not degradation_chain_hint and not unfolding_module_hint:
+    ) and not degradation_chain_hint and not unfolding_module_hint and not spad_quenching_hint:
         return out
 
     selected = [best_sentence]
@@ -709,6 +717,64 @@ def _prompt_aligned_source_slot(
                     max_len=1400,
                 )
                 break
+
+    # The SPAD definition and the reason for quenching sit at opposite ends of
+    # one long converted paragraph, followed by the circuit action on the next
+    # page.  Compacting that paragraph at 1,400 characters used to cut off the
+    # exact term ``quenching circuit`` even though the source contains it.  For
+    # this narrowly identified mechanism question, keep the three shortest
+    # source-verbatim statements that together form the complete causal chain.
+    spad_quenching_request = spad_quenching_hint
+    if spad_quenching_request:
+        geiger_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)\bSPAD\b|single\s+photon\s+avalanche\s+diode", row[1])
+            and re.search(r"(?i)operates?\s+in\s+Geiger\s+mode", row[1])
+        ]
+        breakdown_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)bias\s+voltage", row[1])
+            and re.search(r"(?i)reverse\s+bias\s+breakdown\s+voltage", row[1])
+        ]
+        damage_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)excessive\s+induced\s+current", row[1])
+        ]
+        support_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)(?:must\s+be\s+supported\s+by|requires?)", row[1])
+            and re.search(r"(?i)quenching\s+circuit", row[1])
+        ]
+        action_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)detecting\s+avalanche\s+current", row[1])
+            and re.search(r"(?i)quench\s+the\s+current", row[1])
+            and re.search(r"(?i)extra\s+reverse\s+bias", row[1])
+        ]
+        if geiger_rows and breakdown_rows and damage_rows and support_rows:
+            selected_rows = [
+                min(geiger_rows, key=lambda row: len(str(row[1] or ""))),
+                min(breakdown_rows, key=lambda row: len(str(row[1] or ""))),
+                min(damage_rows, key=lambda row: len(str(row[1] or ""))),
+                min(support_rows, key=lambda row: len(str(row[1] or ""))),
+            ]
+            if action_rows:
+                selected_rows.append(
+                    min(action_rows, key=lambda row: len(str(row[1] or "")))
+                )
+            evidence = _compact_text(
+                " ".join(
+                    dict.fromkeys(str(row[1] or "").strip() for row in selected_rows)
+                ),
+                max_len=1400,
+            )
+            best_heading = str(selected_rows[0][0] or best_heading)
+            best_page = int(selected_rows[0][2] or best_page or 0)
     frequency_mechanism_request = bool(
         re.search(
             r"(?i)frequency[-\s]?division|频分复用",
@@ -1672,6 +1738,36 @@ def _foveated_dynamic_supersampling_focus_slot(
             continue
         slot = dict(built[0])
         slot["candidate_hits"] = [hit_num]
+        # The abstract contains the complete user-facing contract: the
+        # high-resolution fovea tracks motion, every frame still covers the
+        # whole field, and slower regions accumulate detail across frames.
+        # A body hit about generic supersampling can otherwise make the
+        # in-source ranker stop at the introduction and lose this bundle.
+        exact_rows = [
+            row
+            for row in _source_sentence_records(str((meta or {}).get("source_path") or ""))
+            if re.search(r"high[- ]resolution\s+foveal\s+region", row[1], flags=re.I)
+            and re.search(r"entire\s+field\s+of\s+view", row[1], flags=re.I)
+            and re.search(r"consecutive\s+frames", row[1], flags=re.I)
+        ]
+        if exact_rows:
+            exact_heading, exact_evidence, exact_page = min(
+                exact_rows,
+                key=lambda row: len(str(row[1] or "")),
+            )
+            slot.update(
+                {
+                    "heading_path": exact_heading,
+                    "evidence_quote": exact_evidence,
+                    "evidence_selection_reason": "exact_foveated_dynamic_supersampling_source",
+                    "block_id": "",
+                    "anchor_id": "",
+                    "anchor_kind": "",
+                    "page_start": exact_page,
+                    "page_end": exact_page,
+                    "strict_locate": False,
+                }
+            )
         slot["evidence_selection_reason"] = (
             str(slot.get("evidence_selection_reason") or "").strip()
             or "exact_foveated_dynamic_supersampling_source"

@@ -752,13 +752,22 @@ export function createStructuredInlineLocateResolver(opts: CreateStructuredInlin
     const quoteEntries = provenanceLocateEntries.filter((entry) => {
       const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
       const claimType = String(entry.claimType || '').trim().toLowerCase()
+      const segmentKind = normalizeStructuredLocateKind(String(entry.segmentKind || ''))
       if (targetKind === 'quote') {
-        return anchorKind === 'quote' || claimType === 'quote_claim'
+        return anchorKind === 'quote' || claimType === 'quote_claim' || segmentKind === 'quote'
       }
       if (targetKind === 'blockquote') {
-        return anchorKind === 'blockquote' || claimType === 'blockquote_claim' || claimType === 'quote_claim'
+        return anchorKind === 'blockquote'
+          || claimType === 'blockquote_claim'
+          || claimType === 'quote_claim'
+          || segmentKind === 'blockquote'
       }
-      return anchorKind === 'quote' || anchorKind === 'blockquote' || claimType === 'quote_claim' || claimType === 'blockquote_claim'
+      return anchorKind === 'quote'
+        || anchorKind === 'blockquote'
+        || claimType === 'quote_claim'
+        || claimType === 'blockquote_claim'
+        || segmentKind === 'quote'
+        || segmentKind === 'blockquote'
     })
     if (quoteEntries.length <= 0) return null
 
@@ -766,7 +775,10 @@ export function createStructuredInlineLocateResolver(opts: CreateStructuredInlin
     let bestScore = Number.NEGATIVE_INFINITY
     for (const entry of quoteEntries) {
       const anchorKind = normalizeStructuredLocateKind(String(entry.anchorKind || ''))
-      const compat = scoreStructuredAnchorCompatibility(targetKind || anchorKind, entry)
+      const segmentKind = normalizeStructuredLocateKind(String(entry.segmentKind || ''))
+      const compat = segmentKind === targetKind
+        ? Math.max(0.5, scoreStructuredAnchorCompatibility(targetKind || anchorKind, entry))
+        : scoreStructuredAnchorCompatibility(targetKind || anchorKind, entry)
       if (targetKind && compat <= -0.9) continue
       let score = Math.max(
         scoreProvenanceSegment(raw, entry.segmentText, entry.snippetKey),
@@ -783,6 +795,8 @@ export function createStructuredInlineLocateResolver(opts: CreateStructuredInlin
       }
       if (targetKind && anchorKind === targetKind) {
         score += 0.16
+      } else if (targetKind && segmentKind === targetKind) {
+        score += 0.14
       }
       score += Math.max(-0.4, compat)
       if (score > bestScore) {
@@ -808,11 +822,15 @@ export function createStructuredInlineLocateResolver(opts: CreateStructuredInlin
     if (!targetKind) return true
     const claimType = String(entry.claimType || '').trim().toLowerCase()
     const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
+    const segmentKind = normalizeStructuredLocateKind(String(entry.segmentKind || ''))
     if (targetKind === 'quote') {
-      return anchorKind === 'quote' || claimType === 'quote_claim'
+      return anchorKind === 'quote' || claimType === 'quote_claim' || segmentKind === 'quote'
     }
     if (targetKind === 'blockquote') {
-      return anchorKind === 'blockquote' || claimType === 'blockquote_claim' || claimType === 'quote_claim'
+      return anchorKind === 'blockquote'
+        || claimType === 'blockquote_claim'
+        || claimType === 'quote_claim'
+        || segmentKind === 'blockquote'
     }
     if (targetKind === 'figure') {
       return anchorKind === 'figure' || claimType === 'figure_claim' || claimType === 'figure_panel'

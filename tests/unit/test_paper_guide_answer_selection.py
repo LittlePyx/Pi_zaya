@@ -102,6 +102,62 @@ def test_select_paper_guide_answer_hits_prefers_target_paragraph_over_heading_on
     assert str((out[0].get("meta") or {}).get("block_id") or "") == "blk_para"
 
 
+def test_select_paper_guide_answer_hits_preserves_update_and_initialization_aspects():
+    src = r"db\learned-primal-dual\paper.en.md"
+    hits = [
+        {
+            "score": 44.0,
+            "text": (
+                "An initial guess marginally decreased training time but did not improve final results. "
+                "The pseudo-inverse adds complexity, so we report zero-initialization."
+            ),
+            "meta": {
+                "source_path": src,
+                "heading_path": "Learned Primal-Dual / Choice of starting point",
+                "block_id": "blk_init",
+                "paper_guide_targeted_block": True,
+            },
+        },
+        {
+            "score": 10.0,
+            "text": (
+                "Algorithm 2 replaces the primal proximal with learned proximal Gamma and "
+                "the dual proximal with learned proximal Lambda."
+            ),
+            "meta": {
+                "source_path": src,
+                "heading_path": "Learned Primal-Dual / Learned PDHG",
+                "block_id": "blk_updates",
+                "paper_guide_targeted_block": True,
+            },
+        },
+        {
+            "score": 38.0,
+            "text": "Generic background about inverse problems.",
+            "meta": {
+                "source_path": src,
+                "heading_path": "Variational regularization",
+                "block_id": "blk_background",
+            },
+        },
+    ]
+
+    out = _select_paper_guide_answer_hits(
+        grouped_docs=[],
+        heading_hits=hits,
+        prompt=(
+            "Learned Primal-Dual 怎样把 PDHG 的对偶更新和原始更新改造成可学习模块？"
+            "为什么选择零初始化而不是 FBP？"
+        ),
+        top_n=2,
+    )
+
+    assert [str((item.get("meta") or {}).get("block_id") or "") for item in out] == [
+        "blk_updates",
+        "blk_init",
+    ]
+
+
 def test_select_paper_guide_answer_hits_prefers_author_biographies_over_high_score_abstract():
     src = r"db\demo\paper.en.md"
     hits = [

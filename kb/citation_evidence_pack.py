@@ -252,6 +252,17 @@ def _claim_support_sentence(*, claim: str, evidence: str, route: str, locale: st
             else "原文直接报告了回答所述的成像速度或实时性能。"
         )
     if (
+        re.search(r"\b(?:prolonged|lengthy)\s+training|training\s+duration\b|训练(?:时间|时长)", claim_low)
+        and re.search(r"\blimited\s+generalization\b|泛化(?:能力)?有限", claim_low)
+        and re.search(r"\b(?:prolonged|lengthy)\s+training|training\s+duration\b", evidence_low)
+        and re.search(r"\blimited\s+generalization\b", evidence_low)
+    ):
+        return (
+            "The source identifies prolonged training and limited generalization as limitations of the data-driven strategy."
+            if prefer_en
+            else "原文明确把训练时间长和泛化能力有限列为数据驱动策略的局限。"
+        )
+    if (
         re.search(r"\b(?:degradation[- ]?robust|domain shift|generalization|robustness)\b|退化鲁棒|域偏移|泛化", claim_low)
         and re.search(r"\b(?:degradation[- ]?robust|domain shift|generalization|robustness)\b|退化鲁棒|域偏移|泛化", evidence_low)
     ):
@@ -314,8 +325,21 @@ def build_system_a_evidence_pack(
         flags.append("evidence_quote_filtered")
         score_delta -= 0.06
     support = clean_display_text(support_hint, max_len=420)
-    if not support:
-        support = _claim_support_sentence(claim=claim, evidence=evidence, route="system_a", locale=locale)
+    generated_support = _claim_support_sentence(
+        claim=claim,
+        evidence=evidence,
+        route="system_a",
+        locale=locale,
+    )
+    generic_quote_relation = bool(
+        re.match(
+            r"^(?:原文在该定位处给出的具体陈述是|The source passage at this location states)",
+            support,
+            flags=re.IGNORECASE,
+        )
+    )
+    if generated_support and (not support or generic_quote_relation):
+        support = generated_support
     safe_location = _sanitize_location_label_for_evidence(
         location_label=location_label,
         evidence_raw=evidence_raw,

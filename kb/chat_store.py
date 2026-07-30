@@ -488,6 +488,72 @@ def _merge_citation_shelf_item(existing: dict, incoming: dict) -> dict:
         seen_tags.add(tag_key)
         merged_tags.append(clean)
     out["tags"] = merged_tags
+
+    # A shelf item is deduplicated by DOI/title and may have been saved before
+    # a later answer produced an exact evidence quote and locator.  Do not let
+    # the old hard-failure flags survive that richer merge merely because the
+    # incoming card omitted a redundant ``quality.flags: []`` field.
+    incoming_evidence = _shelf_first_text(
+        new,
+        "evidenceQuote",
+        "evidence_quote",
+        "cardEvidence",
+        "card_evidence",
+        "citationContext",
+        "citation_context",
+        "shelfExcerpt",
+        "shelf_excerpt",
+        limit=1600,
+    )
+    try:
+        incoming_page_start = int(
+            new.get("pageStart") or new.get("page_start") or 0
+        )
+    except (TypeError, ValueError):
+        incoming_page_start = 0
+    incoming_has_locator = bool(
+        _shelf_first_text(
+            new,
+            "blockId",
+            "block_id",
+            "anchorId",
+            "anchor_id",
+            "headingPath",
+            "heading_path",
+            "locationLabel",
+            "location_label",
+            limit=800,
+        )
+        or incoming_page_start > 0
+    )
+    resolved_flags: set[str] = set()
+    if incoming_evidence:
+        resolved_flags.update({"missing_evidence_quote", "evidence_quote_filtered"})
+    if incoming_has_locator:
+        resolved_flags.add("missing_precise_location")
+    if resolved_flags:
+        for key in ("card_quality_flags", "cardQualityFlags"):
+            if isinstance(out.get(key), list):
+                out[key] = [
+                    flag
+                    for flag in out[key]
+                    if str(flag or "").strip().lower() not in resolved_flags
+                ]
+        for key in ("cardView", "card_view"):
+            card_view = dict(out.get(key) or {}) if isinstance(out.get(key), dict) else {}
+            quality = (
+                dict(card_view.get("quality") or {})
+                if isinstance(card_view.get("quality"), dict)
+                else {}
+            )
+            if isinstance(quality.get("flags"), list):
+                quality["flags"] = [
+                    flag
+                    for flag in quality["flags"]
+                    if str(flag or "").strip().lower() not in resolved_flags
+                ]
+                card_view["quality"] = quality
+                out[key] = card_view
     return _normalize_citation_shelf_item(out)
 
 

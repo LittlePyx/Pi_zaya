@@ -1147,6 +1147,27 @@ def test_conversion_quality_detects_stray_inline_math(tmp_path: Path):
     assert report["repair_plan"]["action"] == "autofix"
 
 
+def test_conversion_quality_accepts_numeric_interval_inside_inline_math(tmp_path: Path):
+    md_path = tmp_path / "valid-inline-math.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Example paper",
+                "## Abstract",
+                r"Given $\gamma \in [0,1]$ and $f_0 \in X$.",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert "stray_inline_math" not in report["repair_plan"]["issue_codes"]
+
+
 def test_conversion_quality_detects_repairable_adjacent_inline_math_superscript(tmp_path: Path):
     md_path = tmp_path / "math-hazard.en.md"
     original = "\n".join(

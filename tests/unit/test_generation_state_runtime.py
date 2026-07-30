@@ -412,6 +412,31 @@ def test_gen_store_answer_provenance_forwards_primary_evidence():
     assert captured["message_id"] == 11
 
 
+def test_gen_store_answer_provenance_skips_full_library_turn():
+    called = False
+
+    def _fake_build_answer_provenance(**_kwargs):
+        nonlocal called
+        called = True
+        return {"status": "ready"}
+
+    out = _gen_store_answer_provenance(
+        {
+            "paper_guide_mode": True,
+            "query_scope": "library",
+            "paper_guide_bound_source_path": "/tmp/open-reader.pdf",
+            "chat_db": "/tmp/chat.db",
+            "assistant_msg_id": 12,
+        },
+        answer="A cross-paper answer.",
+        answer_hits=[{"text": "paper A"}, {"text": "paper B"}],
+        build_answer_provenance=_fake_build_answer_provenance,
+    )
+
+    assert out is None
+    assert called is False
+
+
 def test_gen_store_answer_quality_meta_merges_payload():
     captured: dict[str, object] = {}
 

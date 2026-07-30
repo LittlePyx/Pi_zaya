@@ -145,6 +145,44 @@ def test_prompt_aligned_source_extracts_late_structured_detection_compound_claim
     assert slot["page_end"] == 2
 
 
+def test_prompt_aligned_source_keeps_complete_spad_geiger_quenching_chain(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "spad-review.en.md"
+    source.write_text(
+        "# Detector review\n\n<!-- kb_page: 2 -->\n\n"
+        "## Principle of single photon detection avalanche diode\n\n"
+        "Single photon avalanche diode (SPAD) is a p-n junction that operates in Geiger mode. "
+        "The device operates with a bias voltage significantly higher than its reverse bias "
+        "breakdown voltage. "
+        + "Generic material-development background. " * 45
+        + "When the SPAD operates in Geiger mode, excessive induced current will damage the "
+        "device's performance. To optimize the avalanche diode, it must be supported by the "
+        "quenching circuit.\n\n<!-- kb_page: 3 -->\n\n"
+        "The quenching circuit extracts a digital pulse signal upon detecting avalanche current "
+        "and subsequently quench the current by applying an extra reverse bias.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "evidence_quote": "Generic SPAD background.",
+        },
+        ranking_texts=[
+            "SPAD 为什么工作在 Geiger 模式，为什么高于击穿电压，并需要淬灭电路？"
+        ],
+    )
+
+    evidence = slot["evidence_quote"]
+    assert "operates in Geiger mode" in evidence
+    assert "reverse bias breakdown voltage" in evidence
+    assert "quenching circuit" in evidence
+    assert "extra reverse bias" in evidence
+    assert "Generic material-development background" not in evidence
+    assert not evidence.endswith("...")
+
+
 def test_comparison_source_summary_replaces_front_matter_hit(tmp_path: Path) -> None:
     source = tmp_path / "3d-video.en.md"
     source.write_text(

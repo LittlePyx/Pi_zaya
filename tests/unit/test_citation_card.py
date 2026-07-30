@@ -56,6 +56,31 @@ def test_system_a_card_composer_builds_quality_fields() -> None:
     assert detail["card_warning"] == ""
 
 
+def test_system_a_card_describes_training_and_generalization_risk_specifically() -> None:
+    detail = compose_citation_card(
+        {
+            "citation_route": "system_a",
+            "source_name": "DL-SPI review.pdf",
+            "heading_path": "4. Strategy and Advantages / Data-Driven Strategy",
+            "answer_claim": (
+                "数据驱动策略存在 prolonged training duration（训练时间长）和 "
+                "limited generalization（泛化能力有限）。"
+            ),
+            "evidence_quote": (
+                "Data-driven strategies have prolonged training duration and limited "
+                "generalization when adapting to diverse imaging scenes."
+            ),
+            "render_locale": "zh",
+            "binding_status": "grounded",
+            "binding_confidence": 0.9,
+        }
+    )
+
+    assert detail["card_support_explanation"] == (
+        "原文明确把训练时间长和泛化能力有限列为数据驱动策略的局限。"
+    )
+
+
 def test_system_a_card_centers_long_evidence_on_claim_aligned_sentence() -> None:
     target_sentence = (
         "Specifically, we formulate the physical imaging process of SCI as part "
@@ -126,6 +151,34 @@ def test_system_a_card_preserves_strict_prompt_contract_evidence() -> None:
     assert "Geiger mode" in detail["card_evidence"]
     assert "breakdown voltage" in detail["card_evidence"]
     assert "quenching circuit" in detail["card_evidence"]
+
+
+def test_system_a_card_preserves_strict_lineage_evidence() -> None:
+    evidence = (
+        "In this paper, we explore Snapshot Compressive Imaging for recovering the "
+        "underlying 3D scene representation from a single temporal compressed image. … "
+        "Specifically, we formulate the physical imaging process of SCI as part of the "
+        "training of NeRF."
+    )
+    detail = compose_citation_card(
+        {
+            "citation_route": "system_a",
+            "source_name": "SCINeRF.pdf",
+            "heading_path": "Abstract",
+            "answer_claim": "SCINeRF 把 SCI 物理成像过程嵌入 NeRF 训练。",
+            "evidence_quote": evidence,
+            "location_label": "Abstract · p. 1",
+            "selection_reason": "lineage_exact_source_block",
+            "strict_locate": True,
+            "page_start": 1,
+            "binding_status": "grounded",
+            "binding_confidence": 0.9,
+        }
+    )
+
+    assert detail["card_evidence"] == evidence
+    assert "evidence_quote_filtered" not in detail["card_quality_flags"]
+    assert "missing_evidence_quote" not in detail["card_quality_flags"]
 
 
 def test_system_a_card_preserves_verified_structured_metric_evidence() -> None:
@@ -564,6 +617,8 @@ def test_system_b_card_keeps_precomputed_cassi_citation_context() -> None:
     assert "video Snapshot Compressive Imaging (SCI) [50]" in detail["card_evidence"]
     assert "missing_citation_context" not in detail["card_quality_flags"]
     assert "reference_entry_only" not in detail["card_quality_flags"]
+    assert "视频快照压缩成像路线" in detail["card_takeaway"]
+    assert "missing_takeaway" not in detail["card_quality_flags"]
     assert detail["system_b_trace_complete"] is True
     assert detail["system_b_trace_context"] == detail["card_evidence"]
     assert detail["system_b_trace_source"] == "structured_reference_index"

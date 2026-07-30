@@ -6,6 +6,7 @@ import { isHeadingLikeQuotedAnchor, scoreStructuredPrimaryCandidate } from './me
 
 export interface ProvenanceLocateEntry {
   segmentId: string
+  segmentKind?: string
   label: string
   segmentText: string
   evidenceQuote: string
@@ -599,6 +600,7 @@ export function buildStructuredProvenanceLocateEntries(
     ]
     const entry: ProvenanceLocateEntry = {
       segmentId,
+      segmentKind: String(targetSegment.kind || currentSegment.kind || '').trim().toLowerCase(),
       label: shortSegmentLabel(segmentAnchorText || evidenceQuote || segmentText || primary.focusSnippet),
       segmentText,
       evidenceQuote,

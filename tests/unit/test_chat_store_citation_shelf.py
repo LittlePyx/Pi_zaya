@@ -199,6 +199,55 @@ def test_citation_shelf_append_duplicate_merges_richer_metadata(tmp_path: Path):
     assert item["metadataRepairStatus"] == "ready"
 
 
+def test_citation_shelf_richer_duplicate_clears_resolved_evidence_quality_flags(
+    tmp_path: Path,
+) -> None:
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("refresh duplicate evidence")
+    store.save_citation_shelf(
+        conv_id=conv_id,
+        items=[
+            {
+                "key": "cassi-old",
+                "title": "CASSI architecture",
+                "doi": "10.1364/oe.15.012913",
+                "card_quality_flags": ["missing_evidence_quote", "missing_precise_location"],
+                "cardView": {
+                    "quality": {
+                        "flags": ["missing_evidence_quote", "missing_precise_location"]
+                    }
+                },
+            }
+        ],
+        open=True,
+    )
+
+    refreshed = store.append_citation_shelf_item(
+        conv_id=conv_id,
+        item={
+            "key": "cassi-new",
+            "title": "CASSI architecture",
+            "doi": "10.1364/oe.15.012913",
+            "evidenceQuote": (
+                "Two dispersive elements are arranged in opposition around a "
+                "binary-valued aperture."
+            ),
+            "blockId": "blk_cassi_abstract",
+            "headingPath": "Abstract",
+            "pageStart": 1,
+        },
+        open=True,
+    )
+
+    assert refreshed is not None
+    assert len(refreshed["items"]) == 1
+    item = refreshed["items"][0]
+    assert item["evidenceQuote"].startswith("Two dispersive elements")
+    assert not item.get("card_quality_flags")
+    card_view = item.get("cardView") if isinstance(item.get("cardView"), dict) else {}
+    quality = card_view.get("quality") if isinstance(card_view.get("quality"), dict) else {}
+    assert not quality.get("flags")
+
 def test_citation_shelf_save_sanitizes_large_nested_payload(tmp_path: Path):
     store = ChatStore(tmp_path / "chat.sqlite3")
     conv_id = store.create_conversation("large payload")

@@ -28,12 +28,31 @@ def test_sanitize_answer_removes_empty_citation_attribution_phrase() -> None:
     assert cleaned == "像素几何由每帧掩模图案定义。"
 
 
+def test_sanitize_answer_repairs_empty_prior_work_attribution() -> None:
+    answer = "作者遵循 的观察，即近端算子可以被其他算子替代。"
+
+    cleaned = finalize_runtime._sanitize_empty_markdown_label_fragments(answer)
+
+    assert cleaned == "作者基于已有工作的观察，即近端算子可以被其他算子替代。"
+
+
 def test_sanitize_answer_removes_orphan_citation_only_line() -> None:
     answer = "[1]\n\n在该配置下，测得的横向分辨率约为 120 nm [1]。"
 
     cleaned = finalize_runtime._sanitize_empty_markdown_label_fragments(answer)
 
     assert cleaned == "在该配置下，测得的横向分辨率约为 120 nm [1]。"
+
+
+def test_sanitize_answer_removes_only_empty_display_math_blocks() -> None:
+    answer = "第一段 [1]。\n\n$$\n$$\n\n$$\nx = Ay\n$$\n\n第二段 [2]。"
+
+    cleaned = finalize_runtime._sanitize_empty_markdown_label_fragments(answer)
+
+    assert "$$\n$$" not in cleaned
+    assert "$$\nx = Ay\n$$" in cleaned
+    assert cleaned.startswith("第一段 [1]。")
+    assert cleaned.endswith("第二段 [2]。")
 
 
 def test_collapse_duplicate_numeric_citation_across_sentence_punctuation() -> None:
@@ -641,6 +660,60 @@ def test_piln_review_positioning_uses_review_definition_and_removes_overreach() 
     assert "photon-level、实时吞吐量或理论收敛保证" in normalized
 
 
+def test_piln_review_positioning_rebuilds_complete_exact_scope_answer() -> None:
+    piln_evidence = (
+        "We proposed a self-supervised image-loop neural network (ILNet) with a "
+        "part-based model for single-pixel imaging. The part-based model divides image "
+        "features into different parts to facilitate finer-grained learning. 1D signals "
+        "collected by the single-pixel detector are used as labels for adaptively "
+        "optimizing and reconstructing the image. ILNet reconstructs high-quality images "
+        "with lower sample rates in unknown free-space and underwater experiments."
+    )
+    review_evidence = (
+        "Model-driven strategy is an unsupervised learning mode that exhibits exceptional "
+        "generalization. It integrates the physical process of SPI with neural networks "
+        "and leverages the discrepancy between real and estimated measurements to guide "
+        "network optimization."
+    )
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "PILN 是混合驱动方法。\n\n$$\n$$\n\n它什么都能做 [3]。",
+        prompt=(
+            "PILN 这种网络方法和综述里说的深度学习单像素成像主线是什么关系？"
+            "它适合解决什么，不适合解决什么？"
+        ),
+        citation_plan={
+            "intent": "scope_boundary",
+            "budget": {"system_a": 2, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "piln.en.md",
+                    "candidate_hits": [1],
+                    "evidence_quote": piln_evidence,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "review.en.md",
+                    "candidate_hits": [2],
+                    "evidence_quote": review_evidence,
+                },
+            ],
+        },
+        answer_hits=[
+            {"text": piln_evidence, "meta": {"source_path": "piln.en.md"}},
+            {"text": review_evidence, "meta": {"source_path": "review.en.md"}},
+        ],
+    )
+
+    assert "part-based image-loop network" in normalized
+    assert "finer-grained learning" in normalized
+    assert "generalization" in normalized
+    assert "未知自由空间和水下实验 [1]" in normalized
+    assert "实时吞吐量" in normalized
+    assert "$$" not in normalized
+    assert "[3]" not in normalized
+
+
 def test_cross_paper_plan_resolves_reordered_hits_by_source_before_evidence_audit() -> None:
     private_paths = {
         "alpha": "F:/kb/db/alpha/alpha.en.md",
@@ -1065,6 +1138,10 @@ def test_same_paper_method_slot_binds_abstract_once_and_drops_unsupported_detail
     assert "physical imaging process of SCI" in merged[1]["text"]
     assert "citation_plan_evidence_quotes" not in merged[0].get("meta", {})
     assert len(merged[1]["meta"]["citation_plan_evidence_quotes"]) == 2
+    assert merged[1]["meta"]["heading_path"] == "SCINeRF / Abstract"
+    assert "physical imaging process of SCI" in merged[1]["meta"]["evidence_quote"]
+    assert merged[1]["meta"]["primary_evidence"]["heading_path"] == "SCINeRF / Abstract"
+    assert "physical imaging process of SCI" in merged[1]["ui_meta"]["primary_evidence"]["snippet"]
 
     repaired, audit = finalize_runtime.audit_and_repair_claim_evidence(
         (
@@ -1088,6 +1165,156 @@ def test_same_paper_method_slot_binds_abstract_once_and_drops_unsupported_detail
     assert audit["dropped_unsupported_unplanned_claims"] == 2
     assert audit["minimum_ok"] is True
 
+
+def test_late_evidence_cards_preserve_two_facets_from_one_paper() -> None:
+    source_path = "F:/kb/learned-primal-dual/paper.en.md"
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "per_paragraph_budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Paper / Abstract",
+                "evidence_quote": "A broad abstract about learned reconstruction.",
+                "candidate_hits": [1],
+            }
+        ],
+    }
+    cards = [
+        {
+            "source_path": source_path,
+            "source_name": "Learned Primal-Dual Reconstruction.pdf",
+            "claim_type": "method_detail",
+            "primary_evidence": {
+                "source_path": source_path,
+                "source_name": "Learned Primal-Dual Reconstruction.pdf",
+                "heading_path": "B. Learned PDHG",
+                "block_id": "blk_method",
+                "anchor_id": "p_method",
+                "page_start": 4,
+                "snippet": (
+                    "The primal proximal has been replaced by a learned proximal and "
+                    "the dual proximal by a learned proximal."
+                ),
+            },
+        },
+        {
+            "source_path": source_path,
+            "source_name": "Learned Primal-Dual Reconstruction.pdf",
+            "claim_type": "method_detail",
+            "primary_evidence": {
+                "source_path": source_path,
+                "source_name": "Learned Primal-Dual Reconstruction.pdf",
+                "heading_path": "C. Learned Primal-Dual / Choice of starting point",
+                "block_id": "blk_start",
+                "anchor_id": "p_start",
+                "page_start": 5,
+                "snippet": (
+                    "The initial guess did not give better final results, while the "
+                    "pseudo-inverse added complexity, so results use zero-initialization."
+                ),
+            },
+        },
+    ]
+    hits = [
+        {
+            "text": "The learned method unrolls a primal-dual optimization method.",
+            "meta": {"source_path": source_path, "heading_path": "Paper / Abstract"},
+        }
+    ]
+
+    refreshed = finalize_runtime._citation_plan_with_late_evidence_cards(
+        plan,
+        evidence_cards=cards,
+        support_slots=[],
+        answer_hits=hits,
+        prompt=(
+            "\u8bf7\u5206\u4e24\u90e8\u5206\u89e3\u91ca\u53ef\u5b66\u4e60\u66f4\u65b0\u4e0e\u96f6\u521d\u59cb\u5316\uff0c"
+            "\u5e76\u5206\u522b\u7ed9\u51fa\u8bc1\u636e\u3002"
+        ),
+    )
+
+    assert refreshed["late_evidence_refresh"] is True
+    assert [slot["block_id"] for slot in refreshed["slots"]] == [
+        "blk_method",
+        "blk_start",
+    ]
+    assert all(slot["candidate_hits"] == [1] for slot in refreshed["slots"])
+    assert refreshed["per_paragraph_budget"]["system_a"] == 2
+
+    merged = finalize_runtime._claim_evidence_hits_with_citation_plan(hits, refreshed)
+    assert "primal proximal" in merged[0]["text"]
+    assert "zero-initialization" in merged[0]["text"]
+
+    refreshed_from_scanner_slots = finalize_runtime._citation_plan_with_late_evidence_cards(
+        plan,
+        evidence_cards=[],
+        support_slots=cards,
+        answer_hits=hits,
+        prompt=(
+            "\u8bf7\u5206\u4e24\u90e8\u5206\u89e3\u91ca\u53ef\u5b66\u4e60\u66f4\u65b0\u4e0e\u96f6\u521d\u59cb\u5316\uff0c"
+            "\u5e76\u5206\u522b\u7ed9\u51fa\u8bc1\u636e\u3002"
+        ),
+    )
+    assert refreshed_from_scanner_slots["late_evidence_refresh"] is True
+    assert [slot["block_id"] for slot in refreshed_from_scanner_slots["slots"]] == [
+        "blk_method",
+        "blk_start",
+    ]
+
+
+def test_bind_resolved_support_source_citations_keeps_translated_explanations() -> None:
+    source_path = "F:/kb/learned-primal-dual/paper.en.md"
+    answer = (
+        '## 初始化选择\n\n'
+        '> "The initial guess marginally decreased training time, but did not give better final results."'
+    )
+    support_resolution = [
+        {
+            "segment_kind": "paragraph",
+            "segment_text": "理由一（最终效果）：伪逆初值没有改善最终结果。",
+            "source_path": source_path,
+            "block_id": "blk_start",
+            "anchor_id": "p_start",
+        },
+        {
+            "segment_kind": "paragraph",
+            "segment_text": "理由二（额外复杂度）：伪逆会增加系统复杂度并依赖先前的重建。",
+            "source_path": source_path,
+            "block_id": "blk_start",
+            "anchor_id": "p_start",
+        },
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "block_id": "blk_start",
+                "candidate_hits": [1],
+            }
+        ]
+    }
+    hits = [
+        {
+            "text": "source evidence",
+            # The canonical hit can retain the PDF path while late evidence
+            # slots and support records point at the converted Markdown.
+            "meta": {"source_path": "F:/library/Learned Primal-Dual Reconstruction.pdf"},
+        }
+    ]
+
+    bound = finalize_runtime._bind_resolved_support_source_citations(
+        answer,
+        support_resolution=support_resolution,
+        answer_hits=hits,
+        citation_plan=plan,
+    )
+
+    assert "理由一（最终效果）：伪逆初值没有改善最终结果 [1]。" in bound
+    assert "理由二（额外复杂度）：伪逆会增加系统复杂度并依赖先前的重建 [1]。" in bound
+    assert '> "The initial guess marginally decreased training time' in bound
 
 def test_merge_citation_plan_support_slots_preserves_prompt_aligned_source_sentence():
     merged = finalize_runtime._merge_citation_plan_support_slots(
@@ -1296,6 +1523,50 @@ def test_normalize_supported_sequential_terms_completes_already_adaptive_label()
     assert "[4]" in out
 
 
+def test_normalize_supported_sequential_terms_rewrites_support_set_paraphrase():
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        (
+            "Sequential adaptive compressed sensing（顺序自适应压缩感知）基于 distilled sensing。\n\n"
+            "它主要保证恢复的是信号的支持集（support recovery），即非零元素的位置。"
+        ),
+        prompt="它主要保证恢复什么？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "evidence_quote": (
+                        "A sequential adaptive compressed sensing procedure for signal support "
+                        "recovery is proposed. The procedure is based on distilled sensing."
+                    ),
+                }
+            ]
+        },
+    )
+
+    assert "主要保证的是信号支撑集恢复（signal support recovery）" in out
+    assert "信号的支持集（support recovery）" not in out
+
+
+def test_normalize_scinerf_training_term_keeps_exact_source_relationship():
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "具体来说，SCI 的物理成像过程是这样进入训练的：NeRF 渲染后与压缩观测比较。",
+        prompt="SCI 的物理成像过程在哪里进入 SCINeRF 训练？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "evidence_quote": (
+                        "We formulate the physical imaging process of SCI as part of the "
+                        "training of NeRF."
+                    ),
+                }
+            ]
+        },
+    )
+
+    assert "SCI 的物理成像过程是这样进入 NeRF 训练的" in out
+
+
 def test_normalize_supported_iism_live_cell_benefit_adds_missing_power_fact():
     out = finalize_runtime._normalize_citation_plan_supported_terms(
         "iISM 在活细胞中实现约 120 nm 横向分辨率。",
@@ -1349,6 +1620,446 @@ def test_normalize_supported_iism_fact_with_spaced_tenfold_value_is_idempotent()
     assert twice == once
     assert once.count("Abstract 报告") == 1
     assert once.endswith("[1]")
+
+
+def test_exact_source_bound_repairs_cover_scope_architecture_tradeoff_and_iism_cost():
+    def normalize(answer: str, prompt: str, evidence: str) -> str:
+        return finalize_runtime._normalize_citation_plan_supported_terms(
+            answer,
+            prompt=prompt,
+            citation_plan={
+                "intent": "scope_boundary" if "perovskite" in prompt else "comparison",
+                "slots": [
+                    {
+                        "preferred_system": "system_a",
+                        "source_path": "paper.en.md",
+                        "candidate_hits": [1],
+                        "evidence_quote": evidence,
+                    }
+                ],
+            },
+            answer_hits=[{"text": evidence, "meta": {"source_path": "paper.en.md"}}],
+        )
+
+    perovskite = normalize(
+        "这篇论文与单像素成像主线关系不大。\n\n它报告了低阈值。",
+        "这篇 perovskite laser 和我的单像素成像主线关系大吗？",
+        "We demonstrate electrically driven lasing from a dual-cavity perovskite device.",
+    )
+    assert "dual-cavity perovskite" in perovskite
+    assert "而不是单像素成像方法 [1]" in perovskite
+
+    cassi = normalize(
+        "## 1. 起点\n\n光谱压缩成像采用双色散器架构 [1]。",
+        "SCI 如何从光谱成像走到 3D？",
+        "Two dispersive elements are arranged in opposition around a binary-valued aperture.",
+    )
+    assert "两个相向布置的色散元件" in cassi
+    assert "编码孔径快照光谱成像" in cassi
+    assert "binary-valued aperture） [1]" in cassi
+
+    s2ism = normalize(
+        "传统 ISM 缓解了分辨率与 SNR 的权衡，但厚样本仍会失败 [1]。",
+        "s2ISM 打破了什么三方权衡？",
+        "ISM overcomes the trade-off between spatial resolution and signal-to-noise ratio, "
+        "but does not provide optical sectioning and fails with thick samples unless detector size is limited.",
+    )
+    assert "空间分辨率与信噪比（SNR）" in s2ism
+
+    iism = normalize(
+        "iISM 达到 120 nm [1]。\n\n"
+        "这 120 nm 是通过牺牲光照强度换来的 [1]。另一个 122 nm 结果也值得讨论。",
+        "iISM 在活细胞中有什么好处，120 nm 是什么代价？",
+        "Interferometric detection achieves 120 nm lateral resolution at tenfold lower incident "
+        "illumination power per diffraction-limited spot, significantly reducing photodamage.",
+    )
+    assert "并不是以更高照明功率为代价" in iism
+    assert "122 nm" not in iism
+
+
+def test_exact_source_bound_focuses_iism_live_cell_cost_on_abstract_bundle() -> None:
+    evidence = (
+        "This next-generation technique combines interferometric detection with image scanning "
+        "microscopy to achieve about 120 nm lateral resolution while operating at tenfold lower "
+        "incident illumination power per diffraction limited spot, significantly reducing "
+        "photodamage while enhancing signal-to-noise and contrast."
+    )
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "iISM 达到 120 nm [1]。\n\n另一个 FWHM 122 nm 的结果 [2]。",
+        prompt="iISM 在活细胞里同时改善了什么？120 nm 分辨率是用什么代价换来的？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "iism.en.md",
+                    "candidate_hits": [2],
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[
+            {"text": "Distractor.", "meta": {"source_path": "other.en.md"}},
+            {"text": evidence, "meta": {"source_path": "iism.en.md"}},
+        ],
+    )
+
+    assert "120 nm" in normalized
+    assert "降低约 10 倍" in normalized
+    assert "photodamage" in normalized
+    assert "122 nm" not in normalized
+    assert "[2]" in normalized
+    assert "[1]" not in normalized
+
+
+def test_exact_source_bound_builds_complete_spad_geiger_answer() -> None:
+    evidence = (
+        "Single photon avalanche diode (SPAD) is a p-n junction that operates in Geiger mode. "
+        "The device operates with a bias voltage significantly higher than its reverse bias "
+        "breakdown voltage. When the SPAD operates in Geiger mode, excessive induced current "
+        "will damage the device's performance, so it must be supported by the quenching circuit. "
+        "The circuit detects avalanche current and quench the current by applying an extra "
+        "reverse bias."
+    )
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "SPAD 工作在盖革模式 [1]。",
+        prompt="SPAD 为什么要工作在 Geiger 模式？雪崩之后为什么还需要淬灭电路？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "spad.en.md",
+                    "candidate_hits": [1],
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "spad.en.md"}}],
+    )
+
+    assert "Geiger mode" in normalized
+    assert "breakdown voltage" in normalized
+    assert "quenching circuit（淬灭电路）" in normalized
+    assert "额外反向偏置" in normalized
+    assert normalized.count("[1]") == 2
+
+
+def test_exact_source_bound_builds_stable_three_paper_sci_lineage() -> None:
+    cassi = "Two dispersive elements are arranged in opposition around a binary-valued aperture."
+    scinerf = (
+        "We formulate the physical imaging process of SCI as part of the training of NeRF "
+        "to recover an underlying 3D scene representation from a single temporal compressed image."
+    )
+    scigs = (
+        "SCIGS is a variant of 3DGS. It reconstructs a dynamic 3D explicit scene from a "
+        "single compressed image using a primitive-level transformation network."
+    )
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "模型给出了一段混合且不稳定的技术史。",
+        prompt="SCI 或压缩快照成像这条线，是怎么从光谱成像走到 3D 场景重建的？",
+        citation_plan={
+            "intent": "origin_lookup",
+            "slots": [
+                {
+                    "preferred_system": "system_b",
+                    "sid": "s_scinerf",
+                    "candidate_refs": [50],
+                    "evidence_quote": (
+                        "video Snapshot Compressive Imaging (SCI) system has emerged to address these limitations."
+                    ),
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scinerf.en.md",
+                    "candidate_hits": [1],
+                    "evidence_quote": scinerf,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "scigs.en.md",
+                    "candidate_hits": [2],
+                    "evidence_quote": scigs,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "cassi.en.md",
+                    "candidate_hits": [3],
+                    "evidence_quote": cassi,
+                },
+            ],
+        },
+        answer_hits=[
+            {"text": scinerf, "meta": {"source_path": "scinerf.en.md"}},
+            {"text": scigs, "meta": {"source_path": "scigs.en.md"}},
+            {"text": cassi, "meta": {"source_path": "cassi.en.md"}},
+        ],
+    )
+
+    assert "CASSI 用两个相向布置的色散元件" in normalized
+    assert "SCI 的物理成像过程直接纳入 NeRF 训练" in normalized
+    assert "SCIGS 进一步把这条路线换成显式 3DGS" in normalized
+    assert "[[CITE:s_scinerf:50]]" in normalized
+    assert "混合且不稳定" not in normalized
+
+
+def test_exact_source_bound_completes_beginner_spi_roadmap() -> None:
+    prospects = (
+        "Their pioneering work has laid the foundations for recovering images from a single-pixel camera "
+        "when the number of measurements is fewer than the total number of unknown pixels in the image, "
+        "when the properties of the image were sensed compressively, also known as under-sampling or sub-sampling."
+    )
+    hsi_fsi = (
+        "HSI uses Hadamard basis patterns for illumination while FSI uses Fourier basis patterns. "
+        "We compare them in terms of principles, imaging efficiency, and noise robustness."
+    )
+    dl_review = (
+        "However, the limited image quality and lengthy computational times for iterative reconstruction still "
+        "hinder practical application. Deep learning attracts attention for reconstruction quality and fast "
+        "reconstruction speed."
+    )
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "前两篇已有证据 [1] [2]，第三篇只有标题。",
+        prompt="我刚开始看单像素成像，想先建立主线，应该先读哪几篇？每篇主要看什么？",
+        citation_plan={
+            "intent": "answer_grounding",
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "prospects.en.md",
+                    "candidate_hits": [1],
+                    "evidence_quote": prospects,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "dl-review.en.md",
+                    "candidate_hits": [2],
+                    "evidence_quote": dl_review,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "hsi-fsi.en.md",
+                    "candidate_hits": [3],
+                    "evidence_quote": hsi_fsi,
+                },
+            ],
+        },
+        answer_hits=[
+            {"text": prospects, "meta": {"source_path": "prospects.en.md"}},
+            {"text": dl_review, "meta": {"source_path": "dl-review.en.md"}},
+            {"text": hsi_fsi, "meta": {"source_path": "hsi-fsi.en.md"}},
+        ],
+    )
+
+    assert "领域框架 → 采样方法选择 → 学习型重建" in normalized
+    assert "Principles and prospects for single-pixel imaging" in normalized
+    assert "Hadamard single-pixel imaging versus Fourier single-pixel imaging" in normalized
+    assert "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning" in normalized
+    assert normalized.count("[1]") == 1
+    assert normalized.count("[2]") == 1
+    assert normalized.count("[3]") == 1
+    assert "第三篇只有标题" not in normalized
+
+
+def test_exact_source_bound_stabilizes_hadamard_fourier_choice() -> None:
+    evidence = (
+        "Under different sampling ratios, the curves of PSNR, SSIM, and RMSE show that "
+        "the convergence of HSI is lower than that of FSI in Fourier space."
+    )
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "追求速度就选 Hadamard [4]。",
+        prompt="我做单像素实验，Hadamard 和 Fourier 到底该怎么选？",
+        citation_plan={"slots": [{
+            "preferred_system": "system_a", "candidate_hits": [1],
+            "source_path": "hsi-fsi.en.md", "evidence_quote": evidence,
+        }]},
+        answer_hits=[{"text": evidence, "meta": {"source_path": "hsi-fsi.en.md"}}],
+    )
+
+    assert "不能脱离采样率" in out
+    assert "PSNR、SSIM" in out
+    assert "测量预算" in out
+    assert "[4]" not in out
+    assert out.count("[1]") == 2
+
+
+def test_exact_source_bound_stabilizes_dl_spi_benefits_and_risks() -> None:
+    benefit = "Deep learning attracts attention due to exceptional reconstruction quality and fast reconstruction speed."
+    risk = "Data-driven strategies face prolonged training duration and limited generalization in diverse imaging scenes."
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "深度学习速度快 [1]，但也有坑。",
+        prompt="深度学习给单像素成像带来的好处和坑分别是什么？",
+        citation_plan={"slots": [
+            {"preferred_system": "system_a", "candidate_hits": [1], "source_path": "review.en.md", "evidence_quote": benefit},
+            {"preferred_system": "system_a", "candidate_hits": [1], "source_path": "review.en.md", "evidence_quote": risk},
+        ]},
+        answer_hits=[{"text": f"{benefit} {risk}", "meta": {"source_path": "review.en.md"}}],
+    )
+
+    assert "重建质量" in out and "重建速度" in out
+    assert "数据驱动策略" in out and "泛化能力有限" in out
+    assert out.count("[1]") == 2
+
+
+def test_exact_source_bound_keeps_distinct_same_paper_benefit_and_risk_hits() -> None:
+    benefit = "Deep learning attracts attention due to exceptional reconstruction quality and fast reconstruction speed."
+    risk = "Data-driven strategies face prolonged training duration and limited generalization in diverse imaging scenes."
+    hits = [
+        {"text": risk, "meta": {"source_path": "review.en.md", "heading_path": "4. Strategy and Advantages"}},
+        {"text": benefit, "meta": {"source_path": "review.en.md", "heading_path": "Abstract"}},
+    ]
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "深度学习速度快 [2]，但也有坑 [1]。",
+        prompt="深度学习给单像素成像带来的好处和坑分别是什么？",
+        citation_plan={"slots": [
+            {
+                "preferred_system": "system_a", "candidate_hits": [2],
+                "source_path": "review.en.md", "heading_path": "Abstract",
+                "evidence_quote": benefit,
+            },
+            {
+                "preferred_system": "system_a", "candidate_hits": [1],
+                "source_path": "review.en.md", "heading_path": "4. Strategy and Advantages",
+                "evidence_quote": risk,
+            },
+        ]},
+        answer_hits=hits,
+    )
+
+    benefit_paragraph = next(part for part in out.split("\n\n") if "重建质量" in part)
+    risk_paragraph = next(part for part in out.split("\n\n") if "泛化能力有限" in part)
+    assert benefit_paragraph.endswith("[2]。")
+    assert "[1]" not in benefit_paragraph
+    assert risk_paragraph.count("[1]") == 1
+    assert "泛化能力有限） [1]；" in risk_paragraph
+    assert "[2]" not in risk_paragraph
+
+    rebound = finalize_runtime._bind_planned_source_citations(
+        out,
+        citation_plan={"budget": {"system_a": 2}, "slots": [
+            {
+                "preferred_system": "system_a", "candidate_hits": [2],
+                "source_path": "review.en.md", "heading_path": "Abstract",
+                "evidence_quote": benefit,
+            },
+            {
+                "preferred_system": "system_a", "candidate_hits": [1],
+                "source_path": "review.en.md", "heading_path": "4. Strategy and Advantages",
+                "evidence_quote": risk,
+            },
+        ]},
+        answer_hits=hits,
+    )
+    assert rebound == out
+
+
+def test_exact_source_bound_stabilizes_sequential_adaptive_scope() -> None:
+    evidence = (
+        "A sequential adaptive compressed sensing procedure for signal support recovery is proposed. "
+        "The procedure is based on distilled sensing and uses sparse sensing matrices for sketching observations."
+    )
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "它使用 distilled sensing [1]。",
+        prompt="Sequential compressed sensing 相比一次性随机测量多利用了什么信息？它主要保证恢复什么？",
+        citation_plan={"slots": [{
+            "preferred_system": "system_a", "candidate_hits": [1],
+            "source_path": "seq.en.md", "evidence_quote": evidence,
+        }]},
+        answer_hits=[{"text": evidence, "meta": {"source_path": "seq.en.md"}}],
+    )
+
+    assert "sequential adaptive（顺序自适应）" in out
+    assert "signal support recovery（信号支撑集恢复）" in out
+    assert "任意图像" in out
+    assert out.count("[1]") == 2
+
+
+def test_exact_source_bound_stabilizes_three_method_microscopy_map() -> None:
+    structured = "Structured detection provides super-resolution, high signal-to-noise ratio, and enhanced optical sectioning."
+    iism = "Interferometric detection reaches 120 nm at tenfold lower illumination power, reducing photodamage."
+    light_field = "Light-field microscopy captures position and angular information and addresses a trade-off in volumetric imaging."
+    hits = [
+        {"text": light_field, "meta": {"source_path": "qclfm.en.md"}},
+        {"text": iism, "meta": {"source_path": "iism.en.md"}},
+        {"text": structured, "meta": {"source_path": "s2ism.en.md"}},
+    ]
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "模型输出被截断。",
+        prompt="显微成像这些 structured detection、interferometric、light-field 方法分别是在解决什么麻烦？",
+        citation_plan={"intent": "comparison", "slots": [
+            {"preferred_system": "system_a", "candidate_hits": [1], "source_path": "qclfm.en.md", "evidence_quote": light_field},
+            {"preferred_system": "system_a", "candidate_hits": [2], "source_path": "iism.en.md", "evidence_quote": iism},
+            {"preferred_system": "system_a", "candidate_hits": [3], "source_path": "s2ism.en.md", "evidence_quote": structured},
+        ]},
+        answer_hits=hits,
+    )
+
+    assert "Structured detection" in out and "SNR" in out
+    assert "Interferometric detection" in out and "120 nm" in out
+    assert "Light-field" in out and "refocus" in out
+    assert out.count("[1]") == 2
+    assert out.count("[2]") == 2
+    assert out.count("[3]") == 2
+    assert "模型输出被截断" not in out
+
+
+def test_late_target_hits_rebuilds_basis_foveated_pair(tmp_path: Path) -> None:
+    foveated = tmp_path / "SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md"
+    foveated.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "A high-resolution foveal region tracks motion, yet every frame delivers new spatial information "
+        "from across the entire field of view while slower regions accumulate detail over consecutive frames.\n\n"
+        "<!-- kb_page: 3 -->\n\n## Method\n\nGeneric supersampling body text.\n",
+        encoding="utf-8",
+    )
+    basis = tmp_path / "Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+    basis.write_text(
+        "<!-- kb_page: 3 -->\n\n## Introduction\n\n"
+        "HSI uses Hadamard basis patterns for illumination while FSI uses Fourier basis patterns. "
+        "The paper compares principles, imaging efficiency, and noise robustness.\n",
+        encoding="utf-8",
+    )
+    hits = [
+        {"text": "Generic supersampling body text.", "meta": {"source_path": str(foveated)}},
+        {"text": "HSI and FSI comparison.", "meta": {"source_path": str(basis)}},
+    ]
+    rebuilt = finalize_runtime._citation_plan_with_late_target_hits(
+        {"budget": {"system_a": 2, "system_b": 0}, "slots": []},
+        answer_hits=hits,
+        prompt="Hadamard/Fourier 和 foveated dynamic supersampling 是同一层面吗？分别决定什么？",
+    )
+    slots = list(rebuilt.get("slots") or [])
+
+    assert len(slots) == 2
+    assert any("Hadamard basis patterns" in str(slot.get("evidence_quote")) for slot in slots)
+    assert any("entire field of view" in str(slot.get("evidence_quote")) for slot in slots)
+    assert any(str(slot.get("heading_path") or "").endswith("Abstract") for slot in slots)
+
+
+def test_late_target_hits_separates_dl_benefit_and_risk_passages(tmp_path: Path) -> None:
+    source = tmp_path / "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.en.md"
+    source.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "However, limited image quality and lengthy computational times for iterative reconstruction hinder use. "
+        "Single-pixel imaging based on deep learning has exceptional reconstruction quality and fast reconstruction speed.\n\n"
+        "<!-- kb_page: 8 -->\n\n## 4. Strategy and Advantages / Data-Driven Strategy\n\n"
+        "Data-driven strategies have prolonged training duration and limited generalization in diverse imaging scenes.\n",
+        encoding="utf-8",
+    )
+    hits = [
+        {"text": "Data-driven strategies have prolonged training duration and limited generalization.", "meta": {"source_path": str(source), "heading_path": "4. Strategy and Advantages / Data-Driven Strategy"}},
+        {"text": "Single-pixel imaging based on deep learning has exceptional reconstruction quality and fast reconstruction speed.", "meta": {"source_path": str(source), "heading_path": "Abstract"}},
+    ]
+    rebuilt = finalize_runtime._citation_plan_with_late_target_hits(
+        {"budget": {"system_a": 2, "system_b": 0}, "slots": []},
+        answer_hits=hits,
+        prompt="深度学习给单像素成像带来的好处和坑分别是什么？",
+    )
+    slots = list(rebuilt.get("slots") or [])
+
+    assert len(slots) == 2
+    assert {tuple(slot.get("candidate_hits") or []) for slot in slots} == {(1,), (2,)}
+    surface = "\n".join(str(slot.get("evidence_quote") or "") for slot in slots)
+    assert "reconstruction quality" in surface
+    assert "limited generalization" in surface
 
 
 def test_normalize_supported_iism_marker_across_private_public_source_paths():
@@ -3194,6 +3905,68 @@ def test_contract_snapshot_drops_stale_seed_render_text_when_final_answer_change
     assert packet["copy_text"] == ""
 
 
+def test_contract_snapshot_drops_stale_render_body_even_when_seed_answer_was_updated():
+    final_answer = "PILN 的机制见证据 [1]；综述定位见证据 [2]。"
+    contracts = finalize_runtime._build_paper_guide_contract_snapshot(
+        paper_guide_mode=False,
+        intent_model=None,
+        answer_markdown=final_answer,
+        final_answer_markdown=final_answer,
+        evidence_cards=[],
+        candidate_refs_by_source={},
+        support_slots=[],
+        support_resolution=[],
+        needs_supplement=False,
+        citation_validation={},
+        doc_list_contract=[{"source_path": "db/piln.md", "source_name": "PILN"}],
+        paper_guide_contracts_seed={
+            "render_packet": {
+                "answer_markdown": final_answer,
+                "rendered_body": "旧回答把无关论文也列为 PILN 证据 [3](#stale)。",
+                "rendered_content": "旧回答把无关论文也列为 PILN 证据 [3](#stale)。",
+                "copy_markdown": "旧回答把无关论文也列为 PILN 证据 [3]。",
+                "copy_text": "旧回答把无关论文也列为 PILN 证据。",
+            }
+        },
+    )
+
+    packet = contracts["render_packet"]
+    assert packet["answer_markdown"] == final_answer
+    assert packet["rendered_body"] == ""
+    assert packet["rendered_content"] == ""
+    assert packet["copy_markdown"] == ""
+    assert packet["copy_text"] == ""
+
+
+def test_contract_snapshot_drops_system_a_details_removed_by_final_evidence_gate():
+    contracts = finalize_runtime._build_paper_guide_contract_snapshot(
+        paper_guide_mode=False,
+        intent_model=None,
+        answer_markdown="PILN 的机制见证据 [1]；综述定位见证据 [2]。",
+        final_answer_markdown="PILN 的机制见证据 [1]；综述定位见证据 [2]。",
+        evidence_cards=[],
+        candidate_refs_by_source={},
+        support_slots=[],
+        support_resolution=[],
+        needs_supplement=False,
+        citation_validation={},
+        doc_list_contract=[{"source_path": "db/piln.md", "source_name": "PILN"}],
+        paper_guide_contracts_seed={
+            "render_packet": {
+                "answer_markdown": "PILN 的机制见证据 [1]；综述定位见证据 [2]。",
+                "cite_details": [
+                    {"citation_route": "system_a", "answer_hit_num": 1, "source_name": "PILN"},
+                    {"citation_route": "system_a", "answer_hit_num": 2, "source_name": "Review"},
+                    {"citation_route": "system_a", "answer_hit_num": 3, "source_name": "Stale neighbor"},
+                ],
+            }
+        },
+    )
+
+    details = contracts["render_packet"]["cite_details"]
+    assert [detail["answer_hit_num"] for detail in details] == [1, 2]
+
+
 def test_finalize_generation_answer_prefers_more_precise_card_primary_over_coarse_seed(monkeypatch):
     seen = {}
 
@@ -3598,6 +4371,34 @@ def test_finalize_generation_answer_skips_supplement_for_cross_paper_query(monke
 
     assert "Supplementary note" not in out["answer"]
     assert "补充说明" not in out["answer"]
+
+
+def test_supplement_skips_complete_two_section_grounded_answer() -> None:
+    answer = (
+        "## Learned updates\n\nThe primal and dual proximal operators are learned [1].\n\n"
+        "## Initialization\n\nThe pseudo-inverse adds complexity, so zero initialization is used [1]."
+    )
+    builder_calls: list[bool] = []
+
+    out = finalize_runtime._maybe_append_paper_guide_supplement_block(
+        answer,
+        paper_guide_mode=True,
+        has_hits=True,
+        prompt_text="Explain the learned updates and initialization choice.",
+        prompt_family="method",
+        retrieval_confidence_hint={},
+        grounded_answer=answer,
+        support_resolution=[
+            {"support_ok": True, "segment_text": "The proximal operators are learned."},
+            {"support_ok": True, "segment_text": "The pseudo-inverse adds complexity."},
+        ],
+        build_paper_guide_supplement_lines=lambda **kwargs: builder_calls.append(True) or [
+            "Implementation detail: unrelated result."
+        ],
+    )
+
+    assert out == answer
+    assert builder_calls == []
 
 
 def test_finalize_generation_answer_skips_supplement_for_structured_answer(monkeypatch):

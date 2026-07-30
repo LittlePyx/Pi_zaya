@@ -276,11 +276,25 @@ def _exact_system_a_evidence_identity(detail: dict) -> tuple[str, str] | None:
 
     if not _system_a_detail(detail):
         return None
-    fingerprint = str(
-        detail.get("citation_budget_key")
-        or detail.get("evidence_fingerprint")
-        or ""
+    budget_key = str(detail.get("citation_budget_key") or "").strip().casefold()
+    evidence_fingerprint = str(detail.get("evidence_fingerprint") or "").strip().casefold()
+    evidence_surface = re.sub(
+        r"\s+",
+        " ",
+        _detail_evidence_text(detail, focused=True),
     ).strip().casefold()
+
+    # A plan-level budget key is shared by every passage assigned to that
+    # citation slot.  It is therefore safe for deduplication only together
+    # with the actual evidence text; otherwise a paper's benefit and risk
+    # passages can incorrectly collapse into one display card.
+    if budget_key and evidence_surface:
+        evidence_digest = hashlib.sha1(
+            evidence_surface.encode("utf-8", "ignore")
+        ).hexdigest()[:20]
+        fingerprint = f"{budget_key}|evidence:{evidence_digest}"
+    else:
+        fingerprint = evidence_fingerprint or budget_key
     source_key = system_a_source_key(detail)
     if not source_key or len(fingerprint) < 8:
         return None

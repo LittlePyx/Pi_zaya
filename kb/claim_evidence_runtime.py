@@ -272,10 +272,32 @@ _CONCEPT_GROUPS = (
 
 
 def _split_claim_segments(value: str) -> list[str]:
+    math_tokens = {
+        ".": "<KB_MATH_DOT>",
+        ";": "<KB_MATH_SEMI>",
+        "!": "<KB_MATH_BANG>",
+        "?": "<KB_MATH_QUESTION>",
+        "\u3002": "<KB_MATH_CJK_DOT>",
+        "\uff1b": "<KB_MATH_CJK_SEMI>",
+        "\uff01": "<KB_MATH_CJK_BANG>",
+        "\uff1f": "<KB_MATH_CJK_QUESTION>",
+    }
+
+    def _protect_math(match: re.Match[str]) -> str:
+        text = str(match.group(0) or "")
+        for punctuation, token in math_tokens.items():
+            text = text.replace(punctuation, token)
+        return text
+
+    protected = re.sub(
+        r"(?<!\\)\$(?!\$)[^\n$]+?(?<!\\)\$|\\\([^\n]+?\\\)",
+        _protect_math,
+        str(value or ""),
+    )
     protected = re.sub(
         r"(?i)\b(?:nat|commun|fig|eq|et\s+al)\.",
         lambda match: match.group(0)[:-1] + "<KB_DOT>",
-        str(value or ""),
+        protected,
     )
     protected = re.sub(
         r"\b\d+\.(?=\s+[A-Z])",
@@ -286,7 +308,15 @@ def _split_claim_segments(value: str) -> list[str]:
         r"(?<=[。！？!?；;])\s*|(?<=[A-Za-z0-9\)\]]\.)\s+(?=[A-Z\u4e00-\u9fff])",
         protected,
     )
-    return [part.replace("<KB_DOT>", ".").strip() for part in parts if part.strip()]
+    restored: list[str] = []
+    for part in parts:
+        if not part.strip():
+            continue
+        value_out = part.replace("<KB_DOT>", ".")
+        for punctuation, token in math_tokens.items():
+            value_out = value_out.replace(token, punctuation)
+        restored.append(value_out.strip())
+    return restored
 
 
 def _claim_units(answer: str) -> list[str]:

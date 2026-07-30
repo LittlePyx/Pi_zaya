@@ -439,6 +439,40 @@ def test_system_a_display_registry_keeps_distinct_evidence_from_same_paper() -> 
     assert "#cite-limit" in rendered
 
 
+def test_system_a_display_registry_keeps_distinct_evidence_with_shared_plan_budget_key() -> None:
+    markdown = (
+        'Benefit [1](#cite-benefit "source: Review.pdf"). '
+        'Limit [1](#cite-limit "source: Review.pdf").'
+    )
+    details = [
+        {
+            "num": 1,
+            "anchor": "cite-benefit",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+            "evidence_fingerprint": "benefit-evidence-1234",
+            "citation_budget_key": "plan:shared-paper-slot",
+            "evidence_quote": "The method improves reconstruction quality and speed.",
+        },
+        {
+            "num": 1,
+            "anchor": "cite-limit",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Review\Review.en.md",
+            "evidence_fingerprint": "limit-evidence-567890",
+            "citation_budget_key": "plan:shared-paper-slot",
+            "evidence_quote": "The method requires lengthy training and generalizes poorly.",
+        },
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert len(remapped) == 2
+    assert "#cite-benefit" in rendered
+    assert "#cite-limit" in rendered
+    assert len(registry) == 1
+
+
 def test_system_a_display_registry_rebinds_repeated_source_to_matching_passage() -> None:
     markdown = (
         '先做光线追迹 [1](#cite-ray "source: qCLFM.pdf")。'
@@ -3567,6 +3601,49 @@ def test_historical_render_cache_reuse_requires_same_answer_refs_and_plan():
     assert rejected_answer is None
     assert rejected_locale is None
 
+    stale_packet = {
+        **render_packet,
+        "rendered_body": "A stale streaming draft that mentions a different paper.",
+        "rendered_content": "A stale streaming draft that mentions a different paper.",
+        "copy_markdown": "A stale streaming draft that mentions a different paper.",
+        "copy_text": "A stale streaming draft that mentions a different paper.",
+    }
+    stale_cache = chat_render._build_render_cache_payload(
+        cache_key="stale-prose-key",
+        notice="",
+        rendered_body=stale_packet["rendered_body"],
+        rendered_content=stale_packet["rendered_content"],
+        copy_markdown=stale_packet["copy_markdown"],
+        copy_text=stale_packet["copy_text"],
+        cite_details=[],
+        refs_user_msg_id=1,
+        render_packet=stale_packet,
+        answer_sig=answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale="en",
+    )
+
+    assert chat_render._extract_compatible_historical_render_cache(
+        {"render_cache": stale_cache},
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        raw_content=answer,
+        hits=[],
+        answer_sig=answer_sig,
+        locale="en",
+    ) is None
+    assert chat_render._extract_render_cache(
+        {"render_cache": stale_cache},
+        expected_key="stale-prose-key",
+        raw_content=answer,
+        hits=[],
+        answer_sig=answer_sig,
+        input_ref_sig=input_ref_sig,
+        citation_plan_sig=citation_plan_sig,
+        locale="en",
+    ) is None
+
 
 def test_enrich_rejects_scigs_lineage_whole_answer_rewrite(monkeypatch):
     from api import chat_render
@@ -3664,8 +3741,8 @@ def test_enrich_rejects_scigs_lineage_whole_answer_rewrite(monkeypatch):
     )[-1]
     rendered_body = str(rendered.get("rendered_body") or "")
 
-    assert annotate_inputs[0] == rewritten
-    assert annotate_inputs[-1] == original
+    assert annotate_inputs
+    assert all(value == original for value in annotate_inputs)
     assert "从编码测量到 3D 表示" not in rendered_body
     assert "SCIGS reconstructs an explicit dynamic 3D scene" in rendered_body
     assert "](#kb-cite-scigs-1)" in rendered_body
@@ -15798,6 +15875,30 @@ def test_preservation_gate_allows_exact_piln_definition() -> None:
         repaired_body=repaired,
         citation_plan=plan,
     ) == repaired
+
+
+def test_render_repair_rejects_whole_answer_piln_rewrite() -> None:
+    from api import chat_render
+
+    original = (
+        "PILN 使用自监督 image-loop 和 part-based model 改善单像素重建 [1]。\n\n"
+        "综述将这类方法放在 model-driven strategy 中 [2]。"
+    )
+    rewritten = (
+        "# PILN/ILNet 在深度学习单像素成像中的定位\n\n"
+        "## 关系定位\n\n"
+        "论文原文将该方法称为 ILNet，并重新组织了整篇回答 [1] [2]。"
+    )
+
+    assert chat_render._citation_only_render_repair(
+        original_body=original,
+        repaired_body=rewritten,
+    ) == original
+    citation_only = original.replace("[1]", "[1](#kb-cite-piln-1)")
+    assert chat_render._citation_only_render_repair(
+        original_body=original,
+        repaired_body=citation_only,
+    ) == citation_only
 
 
 def test_preservation_gate_allows_exact_basis_vs_foveated_comparison() -> None:

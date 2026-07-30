@@ -474,6 +474,15 @@ def _answer_citation_zh_guide_from_evidence(*, evidence: str, source_identity: s
     source_low = " ".join(str(source_identity or "").split()).lower()
     grounded_surface = f"{source_low} {low}"
     if (
+        "learned primal-dual" in grounded_surface
+        and ("proximal primal-dual" in grounded_surface or "primal-dual optimization" in grounded_surface)
+        and "proximal operators" in grounded_surface
+        and "convolutional neural networks" in grounded_surface
+    ):
+        return (
+            "该文将近端原始-对偶优化算法展开为深度网络，并用卷积神经网络取代其中的近端算子。"
+        )
+    if (
         "hatnet" in grounded_surface
         and "kronecker spi" in grounded_surface
         and "tensor gradient descent" in grounded_surface
@@ -666,6 +675,15 @@ def _answer_citation_architecture_support_line(
     """Explain architecture evidence with wording anchored to the cited passage."""
 
     surface = " ".join(part for part in (source_identity, evidence) if part).lower()
+    if (
+        "learned primal-dual" in surface
+        and ("proximal primal-dual" in surface or "primal-dual optimization" in surface)
+        and "proximal operators" in surface
+        and "convolutional neural networks" in surface
+    ):
+        if prefer_zh:
+            return "它直接支撑回答中 Learned Primal-Dual 将原始-对偶近端算子改造成可学习 CNN 模块的说明。"
+        return "It directly supports the answer's account of replacing the primal-dual proximal operators with learnable CNN modules."
     if (
         "hatnet" in surface
         and "kronecker spi" in surface
@@ -1796,6 +1814,7 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                 if part
             )
             reader_claim_terms = evidence_alignment_tokens(reader_claim)
+            reader_prompt_terms = evidence_alignment_tokens(prompt)
 
             def _reader_quote(item: dict) -> str:
                 return str(
@@ -1806,10 +1825,12 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                     or ""
                 ).strip()
 
-            def _reader_score(item: dict) -> tuple[int, int, bool, int, str]:
+            def _reader_score(item: dict) -> tuple[int, int, int, bool, int, str]:
                 reader_quote = _reader_quote(item)
+                quote_terms = evidence_alignment_tokens(reader_quote)
                 return (
-                    len(reader_claim_terms & evidence_alignment_tokens(reader_quote)),
+                    len(reader_prompt_terms & quote_terms),
+                    len(reader_claim_terms & quote_terms),
                     int(bool(str(item.get("block_id") or "").strip()))
                     + int(bool(str(item.get("anchor_id") or "").strip())),
                     int(item.get("page_start") or 0) > 0,

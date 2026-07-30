@@ -1142,8 +1142,12 @@ def _stray_inline_math_likely(text: str) -> bool:
             continue
         if re.match(r"^#{1,6}\s+", st) or re.match(r"^\s*!\[[^\]]*\]\([^)]+\)", st):
             continue
+        stray_citation_dollar = any(
+            line[: match.start()].count("$") % 2 == 0
+            for match in _STRAY_INLINE_CITATION_DOLLAR_RE.finditer(line)
+        )
         if (
-            _STRAY_INLINE_CITATION_DOLLAR_RE.search(line)
+            stray_citation_dollar
             or _STRAY_INLINE_CDOT_RE.search(line)
             or _STRAY_INLINE_UNCLOSED_SENTENCE_RE.search(line)
         ):
