@@ -192,6 +192,53 @@ def test_advantage_only_reference_copy_does_not_claim_the_prompt_asks_for_limits
     assert any(section["id"] == "why" for section in sections)
 
 
+def test_cassi_card_copy_uses_full_plan_passage_after_occurrence_compaction() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "CASSI: a novel dual-disperser architecture.pdf",
+                "heading_path": "Abstract",
+                "answer_claim": "双色散结构让系统形成灵活的光谱投影。",
+                "evidence_quote": (
+                    "Spatially-varying spectral filter functions enable a projective measurement."
+                ),
+                "citation_plan_evidence_quote": (
+                    "The primary features of the CASSI system are two dispersive elements, "
+                    "arranged in opposition and surrounding a binary-valued aperture code. "
+                    "This architecture creates nearly arbitrary spectral projections."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt="CASSI 的双色散结构怎么摆，为什么中间放二值孔径？",
+    )
+
+    assert all(term in summary for term in ("色散元件", "二值编码孔径", "CASSI"))
+    assert all(term in why for term in ("CASSI", "色散元件", "二值编码孔径"))
+
+
+def test_reading_roadmap_card_localizes_compressively_sensed_foundation() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "Principles and prospects for single-pixel imaging.pdf",
+                "heading_path": "Acquisition and image reconstruction strategies",
+                "evidence_quote": (
+                    "Their work laid the foundations for recovering images from a single-pixel "
+                    "camera when the number of measurements is fewer than the total number of "
+                    "unknown pixels. Such images are sensed compressively, also known as under-sampling."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt="我刚开始看单像素成像，想先建立主线，应该先读哪几篇？每篇主要看什么？",
+    )
+
+    assert all(term in summary for term in ("压缩感知", "测量次数", "未知像素", "欠采样"))
+    assert why
+    assert "基础" in why or "原理" in why
+
+
 def test_answer_citation_evidence_quote_prefers_claim_aligned_sentence_from_same_block() -> None:
     quote = references_router._answer_citation_evidence_quote(
         {
@@ -1478,6 +1525,58 @@ def test_denoising_method_map_card_uses_distinct_grounded_relevance_copy() -> No
     assert "空间域" in why
     assert "变换域" in why
     assert why != summary
+
+
+def test_exact_hadamard_fdm_and_prospects_cards_are_nonempty_and_distinct() -> None:
+    cases = [
+        (
+            "Hadamard 和 Fourier 在不同采样率下怎么选？",
+            "We compare HSI and FSI under different sampling ratios using PSNR and SSIM, "
+            "and FSI provides better reconstruction quality under undersampling.",
+            ("HSI", "FSI", "PSNR", "SSIM"),
+        ),
+        (
+            "频分复用为何更快，SNR 代价是什么？",
+            "Frequency-division methods parallelize the single-pixel imaging process and "
+            "show a trade-off between signal-to-noise ratio and acquisition speed without "
+            "altering detector integration time.",
+            ("频分复用", "采集速度", "信噪比", "积分时间"),
+        ),
+        (
+            "什么时候值得使用单像素成像？",
+            "SPI can use detector technologies in spectral regions where a focal-plane "
+            "array is unavailable, and supports high frame rate and three-dimensional imaging.",
+            ("SPI", "波段", "高帧率", "三维"),
+        ),
+    ]
+
+    for prompt, evidence, summary_terms in cases:
+        summary, why = references_router._answer_citation_card_copy(
+            [{"heading_path": "Abstract", "evidence_quote": evidence}],
+            prefer_zh=True,
+            prompt=prompt,
+        )
+        assert summary and why
+        assert all(term in summary for term in summary_terms)
+        assert references_router._ref_card_copy_text_key(summary) != references_router._ref_card_copy_text_key(why)
+
+
+def test_qclfm_refocusing_card_summary_and_relevance_do_not_duplicate() -> None:
+    evidence = (
+        "Digital refocusing can be achieved using two steps. First, position and angular "
+        "information are used for ray tracing. Second, wave propagation of distance -z "
+        "reverses diffraction."
+    )
+
+    summary, why = references_router._answer_citation_card_copy(
+        [{"heading_path": "Concept", "evidence_quote": evidence}],
+        prefer_zh=True,
+        prompt="QCLFM 是如何实现数字重聚焦的？",
+    )
+
+    assert summary and why
+    assert references_router._ref_card_copy_text_key(summary) != references_router._ref_card_copy_text_key(why)
+    assert "完整过程" in why or "两步" in why
 
 
 def test_answer_citation_overlay_uses_source_identity_for_scinerf_relevance(monkeypatch) -> None:
@@ -4517,3 +4616,26 @@ def test_get_conversation_refs_falls_back_to_cached_payload_when_conversation_re
     out = references_router.get_conversation_refs("conv-conversation-busy")
 
     assert out == cached_payload
+
+
+def test_scinerf_answer_card_has_grounded_localized_summary() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "CVPR-2024-SCINeRF.pdf",
+                "heading_path": "Abstract",
+                "answer_claim": "SCINeRF connects SCI observations with NeRF training.",
+                "evidence_quote": (
+                    "SCINeRF models the physical imaging process of SCI into NeRF training "
+                    "and learns a 3D scene representation from compressed measurements."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt="SCINeRF 如何把快照压缩成像连接到 NeRF？",
+    )
+
+    assert summary
+    assert "SCI" in summary
+    assert "NeRF" in summary
+    assert why

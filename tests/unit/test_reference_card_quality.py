@@ -299,6 +299,36 @@ def test_ref_card_locale_contract_builds_relevance_for_compact_fdm_excerpt() -> 
     assert sections["why"]["text"] == ui["why_line"]
 
 
+def test_ref_card_locale_contract_explains_perovskite_scope_boundary() -> None:
+    evidence = (
+        "In this work, we demonstrate electrically driven lasing from a dual-cavity "
+        "perovskite device, which integrates two microcavity sub-units in a vertically "
+        "stacked structure and shows a low lasing threshold."
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": (
+                "Nature-2025-Electrically driven lasing from a dual-cavity "
+                "perovskite device.pdf"
+            ),
+            "heading_path": "Abstract",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": evidence,
+            "why_line": "",
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert all(term in ui["summary_line"] for term in ("双腔钙钛矿", "电驱动激光", "激射阈值"))
+    assert all(term in ui["why_line"] for term in ("器件发光", "单像素成像", "编码", "重建"))
+    assert ui["summary_generation"] == "deterministic_grounded"
+    assert ui["why_generation"] == "deterministic_grounded"
+    sections = {section["id"]: section for section in ui["card_view"]["sections"]}
+    assert sections["summary"]["text"] == ui["summary_line"]
+    assert sections["why"]["text"] == ui["why_line"]
+
+
 def test_ref_card_copy_suppresses_located_quote_shell_without_grounded_replacement():
     why = (
         "“Abstract”中的原文直接支撑“频分复用并行采集”，"

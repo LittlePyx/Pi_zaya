@@ -795,3 +795,33 @@ def test_authoritative_full_plan_evidence_is_distinct_from_short_locator_snippet
     assert binding["status"] == "grounded"
     assert binding["suppress_link"] is False
     assert ignored_untrusted_full_plan["suppress_link"] is True
+
+
+def test_cassi_prompt_contract_ignores_stale_bibliography_acronyms() -> None:
+    evidence = (
+        "The primary features of the system design are two dispersive elements, "
+        "arranged in opposition and surrounding a binary-valued aperture code."
+    )
+    claim = (
+        "CASSI（编码孔径快照光谱成像）由两个相向布置的色散元件"
+        "围绕一个二值编码孔径组成。"
+    )
+
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": "LWIR coded aperture spectrometer. Proceedings of SPIE."},
+        meta={
+            "canonical_answer_evidence": True,
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_contract_block",
+            "citation_plan_full_evidence_quote": evidence,
+        },
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name=(
+            "Single-shot compressive spectral imaging with a dual-disperser architecture.pdf"
+        ),
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False

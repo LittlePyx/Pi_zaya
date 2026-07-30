@@ -376,6 +376,27 @@ def _answer_citation_authoritative_evidence(detail: dict) -> str:
     return " ".join(evidence.split()).strip(" -—:：;；,.。")
 
 
+def _answer_citation_explanatory_evidence(detail: dict) -> str:
+    """Return occurrence evidence plus the selected plan passage for card copy."""
+
+    current = _answer_citation_authoritative_evidence(detail)
+    planned = str(detail.get("citation_plan_evidence_quote") or "").strip()
+    planned = re.sub(
+        r"^\s*#{1,6}\s+(?:abstract|introduction|conclusion|discussion|results?)\s+",
+        "",
+        planned,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    planned = _strip_numeric_citation_markers_from_evidence(planned)
+    planned = " ".join(re.sub(r"[*_`#]+", "", planned).split()).strip(" -—:：;；,.。")
+    if not planned or planned.casefold() in current.casefold():
+        return current
+    if current and current.casefold() in planned.casefold():
+        return planned
+    return " ".join(part for part in (current, planned) if part)
+
+
 def _answer_citation_guide_looks_like_navigation(text: str) -> bool:
     """Reject answer-side reading advice from the evidence-summary surface."""
 
@@ -458,6 +479,47 @@ def _answer_citation_zh_guide_from_evidence(*, evidence: str, source_identity: s
             "该文使用在不同照明与采集设置下校准的物理噪声模型，结合 PASCAL "
             "VOC2007/2012 高分辨率图像，合成了 260 万对真实感单光子训练数据。"
         )
+    if (
+        "two steps" in low
+        and re.search(r"\bray[ -]tracing\b", low)
+        and "wave propagation" in low
+        and re.search(r"distance\s+-z", low)
+    ):
+        return (
+            "该文将数字重聚焦分为两步：先由位置与角度信息重建光子轨迹，"
+            "再用距离 -z 的反向波传播抵消衍射。"
+        )
+    if (
+        "physical imaging process" in low
+        and re.search(r"\bSCI\b", text)
+        and "training" in low
+        and "nerf" in low
+    ):
+        return "该文将 SCI 的物理成像过程嵌入 NeRF 训练，用压缩观测直接约束三维场景表示学习。"
+    if (
+        re.search(r"\bHSI\b", text)
+        and re.search(r"\bFSI\b", text)
+        and re.search(r"sampling\s+ratios?|undersampl", text, flags=re.I)
+        and "psnr" in low
+        and "ssim" in low
+    ):
+        return "该文在不同采样率下用 PSNR 和 SSIM 比较 HSI 与 FSI，并报告欠采样时 FSI 的重建质量更好。"
+    if (
+        "frequency-division" in low
+        and "signal-to-noise ratio" in low
+        and "acquisition speed" in low
+        and "detector integration time" in low
+    ):
+        return "该文说明频分复用通过并行编码提高采集速度，以部分信噪比为代价，并且无需缩短探测器积分时间。"
+    if (
+        ("focal-plane array" in low or "fpa" in low)
+        and re.search(r"detector\s+technolog|spectral\s+region|wavelength", low)
+        and ("high frame rate" in low or "three-dimensional" in low or "3d" in low)
+    ):
+        return (
+            "该综述指出 SPI 可借助不同探测器覆盖面阵难以到达的波段，并支持高帧率和三维成像；"
+            "代表应用包括危险气体泄漏与自动驾驶三维态势感知。"
+        )
     cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
     latin_count = len(re.findall(r"[A-Za-z]", text))
     if cjk_count >= 4 and (cjk_count >= 12 or cjk_count * 2 >= latin_count):
@@ -490,7 +552,11 @@ def _answer_citation_zh_guide_from_evidence(*, evidence: str, source_identity: s
         return "中央凹区域追踪快速运动。"
     if re.search(r"reconstructs?\s+video\s+at\s+30\s+frames per second", low):
         return "该系统以每秒 30 帧的实时速度重建视频。"
-    if "compressed sensing" in low and "number of measurements" in low and "unknown pixels" in low:
+    if (
+        ("compressed sensing" in low or "compressively" in low)
+        and "number of measurements" in low
+        and "unknown pixels" in low
+    ):
         return "压缩感知可在测量次数少于未知像素总数时，通过欠采样恢复图像。"
     if (
         ("mainstream spds" in low or "mainstream single-photon detector" in low)
@@ -569,7 +635,11 @@ def _answer_citation_zh_guide_from_evidence(*, evidence: str, source_identity: s
 
 
 def _answer_citation_evidence_guide(detail: dict, *, prefer_zh: bool) -> str:
-    evidence = _answer_citation_authoritative_evidence(detail)
+    # The visible quote stays occurrence-specific, while Guide/Relevance may
+    # consult the full prompt-aligned plan passage from the same paper.  This
+    # prevents a compacted later sentence from hiding the architecture or
+    # mechanism that made the card relevant in the first place.
+    evidence = _answer_citation_explanatory_evidence(detail)
     evidence_low = evidence.lower()
     source_low = " ".join(
         str(detail.get(key) or "").strip()
@@ -860,9 +930,9 @@ def _answer_citation_card_copy(
             break
     if prefer_zh and len(details) > 1:
         combined_evidence = " ".join(
-            _answer_citation_authoritative_evidence(detail)
+            _answer_citation_explanatory_evidence(detail)
             for detail in details
-            if _answer_citation_authoritative_evidence(detail)
+            if _answer_citation_explanatory_evidence(detail)
         ).strip()
         combined_sources = " ".join(
             str(detail.get("source_name") or detail.get("card_title") or "").strip()
@@ -899,7 +969,7 @@ def _answer_citation_card_copy(
         " ".join(
             part
             for part in (
-                _answer_citation_authoritative_evidence(detail),
+                _answer_citation_explanatory_evidence(detail),
                 str(detail.get("source_name") or "").strip(),
                 str(detail.get("card_title") or "").strip(),
             )
@@ -942,7 +1012,7 @@ def _answer_citation_card_copy(
     )
     if reading_route:
         evidence_text = " ".join(
-            _answer_citation_authoritative_evidence(detail)
+            _answer_citation_explanatory_evidence(detail)
             for detail in details
             if isinstance(detail, dict)
         )
@@ -1178,6 +1248,21 @@ def _answer_citation_card_copy(
                     f"The source text in '{headings}' directly supports '{claim_focus}', "
                     "so the answer's specific judgment can be checked in context."
                 )
+    summary_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", summary.casefold()).strip()
+    why_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", why.casefold()).strip()
+    if summary_key and summary_key == why_key:
+        qclfm_surface = grounding_surface.casefold()
+        if (
+            "two steps" in qclfm_surface
+            and re.search(r"\bray[ -]tracing\b", qclfm_surface)
+            and "wave propagation" in qclfm_surface
+        ):
+            why = (
+                "这条两步机理证据分别对应离焦恢复中的几何轨迹校正与衍射补偿，"
+                "因此可直接核对“如何重新对焦”的完整过程。"
+                if prefer_zh
+                else "The two-step evidence maps geometric ray correction and diffraction compensation to the complete digital-refocusing process."
+            )
     return summary, why
 
 

@@ -671,3 +671,37 @@ def test_comparison_evidence_gets_specific_relevance_copy() -> None:
     assert "四个" in video and "8 帧/秒" in video
     assert "中央凹" in foveated and "跨帧" in foveated
     assert "Hadamard" in bases and "Fourier" in bases
+
+
+def test_exact_comparison_evidence_gets_question_specific_relevance_copy() -> None:
+    hadamard = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="3. Comparison",
+        summary_line=(
+            "We compare HSI and FSI under different sampling ratios using PSNR and SSIM, "
+            "and FSI performs better under undersampling."
+        ),
+    )
+    fdm = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Abstract",
+        summary_line=(
+            "Frequency-division methods improve frame rate with a reduction in "
+            "signal-to-noise ratio and without altering detector integration time."
+        ),
+    )
+    prospects = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Prospects",
+        summary_line=(
+            "SPI can use detector technologies in spectral regions where a focal-plane "
+            "array is unavailable, and supports high frame rate and three-dimensional imaging."
+        ),
+    )
+
+    assert all(term in hadamard for term in ("HSI", "FSI", "采样率", "PSNR", "SSIM"))
+    assert all(term in fdm for term in ("频分复用", "信噪比", "速度", "积分时间"))
+    assert all(term in prospects for term in ("波段", "高帧率", "三维", "单像素"))

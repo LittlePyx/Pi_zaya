@@ -277,8 +277,8 @@ def _exact_system_a_evidence_identity(detail: dict) -> tuple[str, str] | None:
     if not _system_a_detail(detail):
         return None
     fingerprint = str(
-        detail.get("evidence_fingerprint")
-        or detail.get("citation_budget_key")
+        detail.get("citation_budget_key")
+        or detail.get("evidence_fingerprint")
         or ""
     ).strip().casefold()
     source_key = system_a_source_key(detail)

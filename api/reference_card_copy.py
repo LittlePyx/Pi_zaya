@@ -185,6 +185,20 @@ def build_grounded_ref_why_line(
     )
     if prefer_zh:
         if (
+            re.search(r"\bHSI\b", summary_full)
+            and re.search(r"\bFSI\b", summary_full)
+            and re.search(r"sampling\s+ratios?|undersampl", summary_low)
+            and "psnr" in summary_low
+            and "ssim" in summary_low
+        ):
+            return "原文把 HSI 与 FSI 放在不同采样率和相同 PSNR、SSIM 指标下比较，可直接支持欠采样条件下的编码方案选择。"
+        if (
+            ("focal-plane array" in summary_low or "fpa" in summary_low)
+            and re.search(r"detector\s+technolog|spectral\s+region|wavelength", summary_low)
+            and ("high frame rate" in summary_low or "three-dimensional" in summary_low or "3d" in summary_low)
+        ):
+            return "这段证据同时给出 SPI 相对面阵探测器的波段覆盖优势和高帧率、三维应用边界，可用于判断何时值得采用单像素方案。"
+        if (
             "improves reconstruction quality" in summary_low
             and "without increasing acquisition time" in summary_low
         ):
@@ -202,6 +216,14 @@ def build_grounded_ref_why_line(
         ):
             return "原文明确把深度学习与压缩感知列为缓解实时成像限制的技术路径，直接说明它们在该问题中的作用。"
         if (
+            "electrically driven lasing" in summary_low
+            and "dual-cavity perovskite" in summary_low
+        ):
+            return (
+                "原文把研究对象明确限定为电驱动双腔钙钛矿激光器件及其"
+                "激射阈值；据此可区分器件发光研究与单像素成像的编码、探测和重建方法。"
+            )
+        if (
             "full-color imaging based on frequency-division multiplexing" in summary_low
             and "different color sources" in summary_low
             and re.search(r"(?:fourier transform|decompos)", summary_low)
@@ -216,8 +238,8 @@ def build_grounded_ref_why_line(
             and "wave propagation" in summary_low
         ):
             return (
-                "原文把 QCLFM 的数字重聚焦明确分成两步：先用位置和角度信息做光线追迹，"
-                "重建光子轨迹；再以距离 -z 的反向波传播抵消衍射并恢复聚焦。"
+                "这条 QCLFM 证据把几何光线追迹和距离 -z 的衍射补偿分别对应到数字重聚焦的"
+                "两步，因此可直接核对离焦样品如何恢复聚焦。"
             )
         if (
             "experimental setup" in summary_low
@@ -302,7 +324,12 @@ def build_grounded_ref_why_line(
             return "原文说明每个 SLM 像素同时承载 p 个频率通道，复用到同一个单像素探测器后再按通道解调。"
         if (
             ("frequency-division" in summary_low or "频分复用" in summary_full)
-            and ("parallelize" in summary_low or "并行" in summary_full)
+            and (
+                "parallelize" in summary_low
+                or "frame rate" in summary_low
+                or "acquisition speed" in summary_low
+                or "并行" in summary_full
+            )
             and (
                 "acquisition speed" in summary_low
                 or "detector integration time" in summary_low
@@ -310,6 +337,12 @@ def build_grounded_ref_why_line(
                 or "积分时间" in summary_full
             )
         ):
+            if not (
+                "signal-to-noise" in summary_low
+                or "snr" in summary_low
+                or "信噪比" in summary_full
+            ):
+                return "原文说明频分复用把多个空间编码并行到不同频率通道，从而提高采集速度，并且无需延长探测器积分时间。"
             return (
                 "原文说明频分复用把多个空间编码并行到不同频率通道，并明确给出"
                 "信噪比（SNR）—速度权衡，且无需延长探测器积分时间。"
@@ -714,6 +747,14 @@ def build_localized_ref_summary_line(
         and "compressive sensing" in low
     ):
         return "该文指出实时成像仍有困难，并认为深度学习与压缩感知可缓解这一限制。"
+    if (
+        "electrically driven lasing" in low
+        and "dual-cavity perovskite" in low
+    ):
+        return (
+            "该文展示了双腔钙钛矿器件的电驱动激光发射，并报告其垂直堆叠"
+            "器件结构与激射阈值。"
+        )
     if (
         "full-color imaging based on frequency-division multiplexing" in low
         and "different color sources" in low

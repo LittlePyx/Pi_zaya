@@ -373,6 +373,41 @@ def test_system_a_display_registry_collapses_exact_evidence_duplicates_only() ->
     assert len(registry) == 1
 
 
+def test_system_a_display_registry_collapses_occurrences_with_shared_plan_budget_key() -> None:
+    markdown = (
+        'Paper title [3](#cite-title "source: HSI-FSI.pdf"). '
+        'Measured comparison [3](#cite-claim "source: HSI-FSI.pdf").'
+    )
+    details = [
+        {
+            "num": 3,
+            "anchor": "cite-title",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\HSI-FSI\HSI-FSI.en.md",
+            "evidence_fingerprint": "title-occurrence-12345678",
+            "citation_budget_key": "plan:shared-comparison-evidence",
+            "evidence_quote": "HSI and FSI are compared in imaging efficiency and noise robustness.",
+        },
+        {
+            "num": 3,
+            "anchor": "cite-claim",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\HSI-FSI\HSI-FSI.en.md",
+            "evidence_fingerprint": "claim-occurrence-87654321",
+            "citation_budget_key": "plan:shared-comparison-evidence",
+            "answer_claim": "The paper compares HSI and FSI directly.",
+            "evidence_quote": "HSI and FSI are compared in imaging efficiency and noise robustness.",
+        },
+    ]
+
+    rendered, remapped, registry = remap_system_a_citations_for_display(markdown, details)
+
+    assert len(remapped) == 1
+    assert rendered.count(f'](#{remapped[0]["anchor"]}') == 2
+    assert "cite-title" not in rendered or "cite-claim" not in rendered
+    assert len(registry) == 1
+
+
 def test_system_a_display_registry_keeps_distinct_evidence_from_same_paper() -> None:
     markdown = (
         'Benefit [1](#cite-benefit "source: Review.pdf"). '
@@ -6539,7 +6574,99 @@ def test_reading_guide_repairs_cross_language_application_evidence() -> None:
     )
 
     assert "[1]" in repaired
-    assert repaired.count("[1]") == 1
+    # The source supports two independent application claims, so each claim
+    # keeps an explicit marker even though both markers open the same card.
+    assert repaired.count("[1]") == 2
+
+
+def test_spi_prospects_repair_restores_full_use_case_boundary_and_clean_evidence() -> None:
+    from api.chat_render import _reading_guide_repair_spi_prospects_answer
+
+    source_path = "spi-prospects.en.md"
+    evidence = (
+        "Modern cameras use focal plane arrays. As the approach suits a wide variety of "
+        "detector technologies, images can be collected at wavelengths outside the reach "
+        "of FPA technology or at high frame rates or in three dimensions. Promising "
+        "applications include hazardous gas leaks and autonomous vehicles."
+    )
+    hits = [
+        {
+            "text": f"## Abstract {evidence}",
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+            "ui_meta": {
+                "source_path": source_path,
+                "reader_open": {"snippet": f"## Abstract {evidence}"},
+            },
+        }
+    ]
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "Principles and prospects for single-pixel imaging",
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+                "page_start": 1,
+            }
+        ],
+    }
+
+    repaired = _reading_guide_repair_spi_prospects_answer(
+        "代表应用包括危险气体泄漏和自动驾驶 [3]。",
+        hits,
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert all(term in repaired for term in ("波段", "高帧率", "三维", "危险气体", "自动驾驶"))
+    assert repaired.count("[1]") == 2
+    assert "[3]" not in repaired
+    assert not hits[0]["ui_meta"]["reader_open"]["snippet"].startswith("##")
+
+
+def test_fdm_tradeoff_promotes_complete_abstract_evidence_on_existing_hit() -> None:
+    from api.chat_render import _reading_guide_promote_fdm_abstract_evidence
+
+    source_path = "fdm.en.md"
+    exact = (
+        "Here, we implement frequency-division methods to parallelize the single-pixel "
+        "imaging process. Our technique enables a trade-off between signal-to-noise ratio "
+        "and acquisition speed—without altering detector integration time."
+    )
+    hits = [
+        {
+            "text": "Discussion reports a frame-rate increase with reduced SNR.",
+            "meta": {"source_path": source_path, "heading_path": "Discussion"},
+            "ui_meta": {"source_path": source_path, "heading_path": "Discussion"},
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "FDM",
+                "heading_path": "Paper / Abstract",
+                "evidence_quote": exact,
+                "page_start": 1,
+            }
+        ]
+    }
+
+    answer = _reading_guide_promote_fdm_abstract_evidence(
+        "频分复用通过并行化提高速度，以信噪比（SNR）为代价，且不改变积分时间 [1]。",
+        hits,
+        plan,
+    )
+
+    assert "[1]" in answer
+    assert hits[0]["text"] == exact
+    assert hits[0]["meta"]["heading_path"].endswith("Abstract")
+    assert "detector integration time" in hits[0]["ui_meta"]["reader_open"]["snippet"]
 
 
 def test_reading_guide_budget_counts_only_bound_comparison_citations():
@@ -7430,7 +7557,7 @@ def test_s2ism_tradeoff_repair_checks_correct_terms_only_in_target_paragraph(tmp
             {
                 "preferred_system": "system_a",
                 "source_path": str(source_path),
-                "source_name": "Structured detection for s2ISM",
+                "source_name": "Structured detection in laser scanning microscopy",
                 "heading_path": "Results",
                 "candidate_hits": [1],
             }
@@ -8765,6 +8892,97 @@ def test_cassi_normalization_moves_marker_across_display_equation_to_exact_bridg
     assert normalized.count("[1]") == 1
 
 
+def test_cassi_normalization_replaces_unsupported_generic_sci_origin_claim():
+    from api.chat_render import _reading_guide_normalize_cassi_architecture_terms
+
+    evidence = (
+        "The primary features of the system design are two dispersive elements, "
+        "arranged in opposition and surrounding a binary-valued aperture code."
+    )
+    answer = (
+        "Snapshot Compressive Imaging (SCI) 最初是为解决高维数据（如高光谱、视频）"
+        "记录问题而提出的 [1]。"
+    )
+
+    normalized = _reading_guide_normalize_cassi_architecture_terms(
+        answer,
+        {"slots": [{"candidate_hits": [1], "evidence_quote": evidence}]},
+    )
+
+    assert "两个相向布置的色散元件" in normalized
+    assert "二值编码孔径" in normalized
+    assert "为解决高维数据" not in normalized
+    assert normalized.count("[1]") == 1
+
+
+def test_sequential_support_terms_cover_natural_chinese_recovery_wording():
+    from api.chat_render import _reading_guide_normalize_sequential_support_terms
+
+    evidence = (
+        "A sequential adaptive compressed sensing procedure for signal support recovery is "
+        "proposed and analyzed based on the principle of distilled sensing."
+    )
+    answer = "顺序自适应压缩感知精确恢复信号的支撑集（support），并分配后续测量。"
+
+    normalized = _reading_guide_normalize_sequential_support_terms(
+        answer,
+        {"slots": [{"evidence_quote": evidence}]},
+    )
+
+    assert "信号支撑集恢复（signal support recovery）" in normalized
+    assert "distilled sensing" in normalized
+
+
+def test_cassi_normalization_recovers_compacted_answer_hit_number():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    source_path = "db/CASSI/CASSI.en.md"
+    evidence = (
+        "The primary features of the system design are two dispersive elements, "
+        "arranged in opposition and surrounding a binary-valued aperture code."
+    )
+    answer = (
+        "CASSI uses a dual-disperser architecture and a coded aperture.\n"
+        "$$\nB = Phi vec(I)\n$$\n"
+        "A compressive-sensing reconstruction recovers the spectral cube [2]."
+    )
+    plan = {
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [],
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+    hits = [
+        {
+            "text": "A compacted stale bibliography hit.",
+            "meta": {
+                "source_path": source_path,
+                "ref_answer_citation_num": 2,
+            },
+        }
+    ]
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=[source_path, source_path],
+    )
+
+    cited_line = next(line for line in repaired.splitlines() if "[2]" in line)
+    assert "two dispersive elements" in cited_line
+    assert "binary-valued aperture" in cited_line
+    assert "reconstruction recovers the spectral cube [2]" not in repaired
+    assert repaired.count("[2]") == 1
+
+
 def test_backfill_cassi_citation_uses_architecture_block_when_claim_omits_acronym(tmp_path):
     from api.chat_render import _backfill_system_a_cite_details_from_ref_pack
 
@@ -8923,6 +9141,47 @@ def test_s2ism_tradeoff_marker_targets_three_way_claim():
     )
 
     assert "打破三方权衡 [1]。" in repaired
+
+
+def test_s2ism_tradeoff_repair_uses_plan_identity_when_model_omits_method_name():
+    from api.chat_render import _reading_guide_repair_s2ism_tradeoff_answer
+
+    source_path = "s2ism.en.md"
+    evidence = (
+        "Fast detector arrays overcome the trade-off between spatial resolution and "
+        "signal-to-noise ratio. Current approaches do not provide optical sectioning and "
+        "fail with thick samples unless detector size is limited."
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+        }
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "Structured detection in laser scanning microscopy",
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+                "support_example": "State the two trade-offs and explain failure with thick samples.",
+            }
+        ],
+    }
+
+    repaired = _reading_guide_repair_s2ism_tradeoff_answer(
+        "普通 ISM 在厚样本中因缺乏光学切片机制而失败 [1]。",
+        hits,
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert all(term in repaired for term in ("s²ISM", "空间分辨率", "光学切片", "信噪比"))
 
 
 def test_spad_marker_targets_complete_geiger_breakdown_quenching_claim():
@@ -10352,6 +10611,78 @@ def test_comparison_binds_missing_planned_source_inside_matching_table_cell(monk
     assert "physical imaging process of SCI" in scinerf_card["card_evidence"]
 
 
+def test_authoritative_comparison_path_binds_scinerf_physics_claim_in_table() -> None:
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    scigs_path = "db/SCIGS/SCIGS.en.md"
+    scinerf_path = "db/SCINeRF/SCINeRF.en.md"
+    scigs_evidence = (
+        "SCIGS is a variant of 3DGS that reconstructs an explicit 3D scene from a "
+        "single compressed image and extends to dynamic 3D scenes."
+    )
+    scinerf_evidence = (
+        "We formulate the physical imaging process of SCI as part of the training of NeRF."
+    )
+    hits = [
+        {
+            "text": scigs_evidence,
+            "meta": {
+                "source_path": scigs_path,
+                "ref_answer_citation_num": 1,
+                "canonical_answer_citation_num": 1,
+            },
+        },
+        {
+            "text": scinerf_evidence,
+            "meta": {
+                "source_path": scinerf_path,
+                "ref_answer_citation_num": 2,
+                "canonical_answer_citation_num": 2,
+            },
+        },
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": scigs_path,
+                "source_name": "SCIGS",
+                "heading_path": "Abstract",
+                "evidence_quote": scigs_evidence,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": scinerf_path,
+                "source_name": "SCINeRF",
+                "heading_path": "Abstract",
+                "evidence_quote": scinerf_evidence,
+                "candidate_hits": [2],
+            },
+        ],
+    }
+    answer = (
+        "SCIGS reconstructs explicit dynamic 3D scenes [1].\n\n"
+        "SCINeRF uses an implicit neural field [2].\n\n"
+        "| 对比维度 | SCIGS | SCINeRF |\n"
+        "| --- | --- | --- |\n"
+        "| 核心训练 | 3DGS primitive transform [1] | "
+        "将 SCI 物理成像过程公式化为 NeRF 训练的一部分 |"
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=[scigs_path, scinerf_path],
+    )
+
+    assert "将 SCI 物理成像过程公式化为 NeRF 训练的一部分 [2]|" in repaired
+
+
 def test_origin_answer_binds_current_paper_evidence_beside_verified_upstream_marker():
     from api.chat_render import _reading_guide_repair_missing_system_a_citations
 
@@ -11574,6 +11905,341 @@ def test_perovskite_scope_bridge_does_not_rewrite_answer_without_boundary_claim(
     assert repaired == answer
 
 
+def test_perovskite_scope_bridge_accepts_direct_relevance_is_weak_wording() -> None:
+    from api.chat_render import _reading_guide_repair_scope_boundary_citation
+
+    source_path = "perovskite.en.md"
+    answer = (
+        "这篇论文研究电驱动钙钛矿激光器，与单像素成像的技术领域差异较大，"
+        "直接关联性不强 [1]。"
+    )
+    plan = {
+        "intent": "scope_boundary",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "evidence_quote": (
+                    "We demonstrate electrically driven lasing from a dual-cavity perovskite device."
+                ),
+                "candidate_hits": [1],
+            }
+        ],
+    }
+    hits = [
+        {
+            "text": "Device evidence.",
+            "meta": {
+                "source_path": source_path,
+                "ref_answer_citation_num": 1,
+                "citation_plan_scope_boundary": True,
+            },
+        }
+    ]
+
+    repaired = _reading_guide_repair_scope_boundary_citation(
+        answer,
+        hits,
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert "不是单像素成像方法 [1]" in repaired
+
+
+def test_beginner_roadmap_drops_title_marker_when_same_paper_has_claim_marker() -> None:
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    paths = ["spi-prospects.en.md", "dl-review.en.md", "hsi-fsi.en.md"]
+    hits = [
+        {
+            "text": "Paper evidence.",
+            "meta": {"source_path": path, "ref_answer_citation_num": num},
+        }
+        for num, path in enumerate(paths, start=1)
+    ]
+    plan = {
+        "intent": "beginner_overview",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": path,
+                "source_name": name,
+                "candidate_hits": [num],
+                "evidence_quote": evidence,
+            }
+            for num, (path, name, evidence) in enumerate(
+                zip(
+                    paths,
+                    (
+                        "Principles and prospects for single-pixel imaging",
+                        "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+                        "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                    ),
+                    (
+                        "Images can be recovered when measurements are fewer than unknown pixels.",
+                        "Deep learning improves reconstruction quality and speed.",
+                        "HSI and FSI are compared in efficiency and noise robustness.",
+                    ),
+                    ),
+                start=1,
+            )
+        ],
+    }
+    answer = (
+        "1. **《Principles and prospects for single-pixel imaging》** [1]\n"
+        "- 先建立基础原理。\n\n"
+        "2. **《Advances and Challenges of Single-Pixel Imaging Based on Deep Learning》** [2]\n"
+        "- 重点看深度学习如何改善重建质量和速度 [2]。\n\n"
+        "3. **《Hadamard single-pixel imaging versus Fourier single-pixel imaging》** [3]\n"
+        "- 重点看两种编码的效率和噪声鲁棒性 [3]。"
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=paths,
+    )
+
+    assert re.findall(r"(?<![!\\])\[(\d+)\](?!\()", repaired) == ["1", "2", "3"]
+    assert "imaging》** [2]" not in repaired
+    assert "imaging》** [3]" not in repaired
+
+
+def test_beginner_roadmap_moves_sole_title_marker_to_explanatory_claim() -> None:
+    from api.chat_render import _reading_guide_drop_redundant_paper_identity_markers
+
+    source_path = "spi-prospects.en.md"
+    source_name = "Principles and prospects for single-pixel imaging"
+    answer = (
+        "1. **Principles and prospects for single-pixel imaging** (2019) [1]\n"
+        "**What to read**: this review explains how a single-pixel camera recovers images "
+        "when measurements are fewer than unknown pixels."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": source_name,
+                "evidence_quote": (
+                    "Images can be recovered from a single-pixel camera when the number of "
+                    "measurements is fewer than the total number of unknown pixels."
+                ),
+            }
+        ]
+    }
+
+    repaired = _reading_guide_drop_redundant_paper_identity_markers(
+        answer,
+        [{"text": plan["slots"][0]["evidence_quote"], "meta": {"source_path": source_path}}],
+        canonical_paths=[source_path],
+        citation_plan=plan,
+    )
+
+    assert "imaging** (2019) [1]" not in repaired
+    assert "unknown pixels [1]." in repaired
+
+
+def test_beginner_roadmap_anchors_marker_before_narrow_focus_hint() -> None:
+    from api.chat_render import _reading_guide_drop_redundant_paper_identity_markers
+
+    source_path = "F:/library/OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+    answer = (
+        "1. **Hadamard single-pixel imaging versus Fourier single-pixel imaging** [3]\n"
+        "**看什么**：这篇直接对比了 Hadamard 基（HSI）和 Fourier 基（FSI）。"
+        "重点看 Table 4，它列出了每个系数的测量次数。\n"
+    )
+    repaired = _reading_guide_drop_redundant_paper_identity_markers(
+        answer,
+        [],
+        canonical_paths=["a.en.md", "b.en.md", source_path],
+        citation_plan={
+            "slots": [
+                {
+                    "source_path": source_path,
+                    "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                    "candidate_hits": [3],
+                    "evidence_quote": (
+                        "HSI uses Hadamard basis patterns for illumination while FSI uses Fourier basis patterns. "
+                        "We compare these two representative techniques."
+                    ),
+                }
+            ]
+        },
+    )
+
+    assert "imaging** [3]" not in repaired
+    assert "（FSI） [3]。重点看 Table 4" in repaired
+
+
+def test_preservation_gate_allows_exact_spad_mechanism_bridge() -> None:
+    from api import chat_render
+
+    original = "SPAD operates in Geiger mode to detect individual photons [1]."
+    bridge = (
+        "The source states the complete mechanism: a SPAD operates in Geiger mode above "
+        "its reverse bias breakdown voltage and requires a quenching circuit [1]."
+    )
+    repaired = f"{bridge}\n\n{original.replace(' [1]', '')}"
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "spad.en.md",
+                "evidence_quote": (
+                    "A SPAD operates in Geiger mode above its reverse bias breakdown voltage "
+                    "and must be supported by a quenching circuit."
+                ),
+            }
+        ],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body=original,
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_preservation_gate_allows_exact_single_source_s2ism_tradeoff_repair() -> None:
+    from api import chat_render
+
+    repaired = "s2ISM 同时改善空间分辨率、信噪比和光学切片能力 [1]。"
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "s2ism.en.md",
+                "evidence_quote": (
+                    "There is a trade-off between spatial resolution and signal-to-noise ratio. "
+                    "Existing methods lack optical sectioning for thick samples, while the "
+                    "achievable sectioning depends on detector size."
+                ),
+            }
+        ],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body="s2ISM resolves the trade-off [1].",
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_preservation_gate_allows_exact_single_source_sequential_support_repair() -> None:
+    from api import chat_render
+
+    repaired = (
+        "顺序自适应压缩感知（基于 distilled sensing / 蒸馏感知）实现"
+        "信号支撑集恢复（signal support recovery） [1]。"
+    )
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "sequential.en.md",
+                "evidence_quote": (
+                    "A sequential adaptive compressed sensing procedure for signal support "
+                    "recovery is based on the principle of distilled sensing."
+                ),
+            }
+        ],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body="Sequential sensing recovers the support [1].",
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_preservation_gate_allows_exact_single_source_spi_use_case_repair() -> None:
+    from api import chat_render
+
+    evidence = (
+        "Images can be collected at wavelengths outside the reach of FPA technology or "
+        "at high frame rates or in three dimensions. Promising applications include "
+        "hazardous gas leaks and autonomous vehicles."
+    )
+    repaired = (
+        "单像素相机适合面阵相机无法覆盖的波段、高帧率和三维成像；代表应用包括"
+        "危险气体泄漏与自动驾驶 [1]。"
+    )
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "spi-prospects.en.md",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body="代表应用包括危险气体泄漏和自动驾驶 [3]。",
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_preservation_gate_allows_exact_three_method_microscopy_map() -> None:
+    from api import chat_render
+
+    repaired = (
+        "s2ISM uses structured detection for optical sectioning [1].\n\n"
+        "iISM uses interferometric detection and reaches 120 nm [2].\n\n"
+        "Light-field microscopy records position and angular information for volumetric "
+        "reconstruction and digital refocusing [3]."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "s2ism.en.md",
+                "evidence_quote": "Structured detection provides optical sectioning.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "iism.en.md",
+                "evidence_quote": "Interferometric detection reaches 120 nm lateral resolution.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "light-field.en.md",
+                "evidence_quote": (
+                    "Light-field microscopy records position and angular information for "
+                    "volumetric reconstruction and digital refocusing."
+                ),
+            },
+        ],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body="Compare three microscopy methods [1].",
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
 def test_reading_guide_repair_bridges_perovskite_device_scope_to_chinese_claim():
     from api.chat_render import (
         _augment_hits_with_system_a_plan_slots,
@@ -11657,6 +12323,20 @@ def test_reading_guide_repair_bridges_perovskite_device_scope_to_chinese_claim()
     }
     assert "dual-cavity perovskite" in concise_repaired
     assert _should_link_inpaper_citations_for_message(rec=rec, content=answer, hits=hits)
+
+    omitted_identity_answer = (
+        "Direct answer: this is not central to the current imaging route.\n\n"
+        "The device details are outside a workflow focused on encoding and reconstruction."
+    )
+    omitted_identity_repaired = _reading_guide_repair_missing_system_a_citations(
+        omitted_identity_answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+    )
+
+    assert "dual-cavity perovskite lasing device" in omitted_identity_repaired
+    assert "not a single-pixel imaging method [1]" in omitted_identity_repaired
 
 
 def test_beginner_roadmap_restores_omitted_foundational_paper_without_rebuilding_answer():
@@ -12340,6 +13020,41 @@ def test_answer_aligned_ref_primary_becomes_page_aware_citation_plan_hit():
     assert hits[0]["meta"]["page_start"] == 2
     assert hits[0]["meta"]["primary_block_id"] == "blk-2"
     assert hits[0]["ui_meta"]["primary_evidence"]["page_start"] == 2
+
+
+def test_answer_aligned_ref_primary_keeps_authoritative_answer_number():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/CASSI/CASSI.en.md"
+    primary = {
+        "source_path": source_path,
+        "source_name": "CASSI",
+        "heading_path": "Abstract",
+        "snippet": "Two dispersive elements surround a binary-valued aperture.",
+        "block_id": "blk-cassi",
+        "anchor_id": "p-cassi",
+        "page_start": 1,
+        "selection_reason": "prompt_contract_block",
+        "strict_locate": True,
+    }
+
+    plan = _citation_plan_with_ref_primary(
+        {"budget": {"system_a": 1}, "slots": []},
+        {
+            "primary_evidence": primary,
+            "hits": [
+                {
+                    "text": primary["snippet"],
+                    "meta": {
+                        "source_path": source_path,
+                        "ref_answer_citation_num": 2,
+                    },
+                }
+            ],
+        },
+    )
+
+    assert plan["slots"][0]["candidate_hits"] == [2]
 
 
 def test_answer_aligned_ref_primary_preserves_multi_claim_same_paper_slots():
@@ -13852,6 +14567,11 @@ def test_prompt_aligned_rebind_discards_previous_source_card_fields(tmp_path: Pa
                     "sourcePath": "3d.en.md",
                     "evidenceAlternatives": [{"snippet": stale_3d}],
                 },
+                "summary_line": "Stale 3D summary.",
+                "summary_generation": "deterministic_grounded",
+                "why_line": "Stale 3D relevance.",
+                "why_generation": "deterministic_grounded",
+                "card_view": {"sections": [{"id": "guide", "body": "stale"}]},
             },
         }
     ]
@@ -13884,6 +14604,11 @@ def test_prompt_aligned_rebind_discards_previous_source_card_fields(tmp_path: Pa
     assert "ref_locs" not in hit["meta"]
     assert "citation_meta" not in hit["meta"]
     assert "citation_meta" not in hit["ui_meta"]
+    assert hit["ui_meta"]["summary_line"] == evidence
+    assert hit["ui_meta"].get("summary_generation") != "deterministic_grounded"
+    assert "why_line" not in hit["ui_meta"]
+    assert "why_generation" not in hit["ui_meta"]
+    assert "card_view" not in hit["ui_meta"]
     assert hit["ui_meta"]["reader_open"]["sourcePath"] == source_path
     assert hit["ui_meta"]["reader_open"]["evidenceAlternatives"] == [
         {
@@ -14641,9 +15366,11 @@ def test_lineage_system_b_retargets_same_reference_to_downstream_paper(tmp_path:
         plan,
     )
 
-    assert f"[[CITE:{new_sid}:42]]" in seeded_answer
-    assert "Snapshot Compressive Imaging: Theory, Algorithms, and Applications" in seeded_answer
-    assert seeded_plan["slots"][-1]["source_path"] == str(downstream_path)
+    assert seeded_answer == "Video SCI connects compressed measurements to the later 3D scene route."
+    assert all(
+        slot.get("preferred_system") != "system_b"
+        for slot in seeded_plan["slots"]
+    )
 
 
 def test_lineage_system_b_drops_unsupported_spectral_origin_relation(tmp_path: Path) -> None:
@@ -14744,6 +15471,438 @@ def test_named_table_locator_survives_card_recomposition() -> None:
     assert "sentence" not in out[0]["card_locator"].lower()
 
 
+def test_spi_prospects_repair_does_not_replace_foveated_answer() -> None:
+    from api.chat_render import _reading_guide_repair_spi_prospects_answer
+
+    answer = (
+        "Foveated dynamic supersampling tracks a high-resolution foveal region while "
+        "sampling the entire field in every frame [1]."
+    )
+    prospects = (
+        "Images can be collected at wavelengths outside the reach of FPA technology, at "
+        "high frame rates, or in three dimensions. Applications include hazardous gas "
+        "leaks and autonomous vehicles."
+    )
+    hits = [
+        {"text": answer, "meta": {"source_path": "foveated.en.md", "ref_answer_citation_num": 1}},
+        {"text": prospects, "meta": {"source_path": "prospects.en.md", "ref_answer_citation_num": 2}},
+    ]
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "foveated.en.md",
+                "evidence_quote": answer,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "prospects.en.md",
+                "evidence_quote": prospects,
+                "candidate_hits": [2],
+            },
+        ],
+    }
+
+    repaired = _reading_guide_repair_spi_prospects_answer(
+        answer,
+        hits,
+        plan,
+        canonical_paths=["foveated.en.md", "prospects.en.md"],
+    )
+
+    assert repaired == answer
+
+
+def test_beginner_numbered_roadmap_keeps_hsi_fsi_evidence_marker() -> None:
+    from api.chat_render import _reading_guide_repair_beginner_roadmap_missing_paper
+
+    paths = ["prospects.en.md", "dl-review.en.md", "hsi-fsi.en.md"]
+    hits = [
+        {"text": "foundation", "meta": {"source_path": paths[0], "ref_answer_citation_num": 1}},
+        {"text": "deep learning", "meta": {"source_path": paths[1], "ref_answer_citation_num": 2}},
+        {"text": "basis comparison", "meta": {"source_path": paths[2], "ref_answer_citation_num": 3}},
+    ]
+    plan = {
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[0],
+                "source_name": "Principles and prospects for single-pixel imaging",
+                "evidence_quote": "Images are recovered by compressive sensing.",
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[1],
+                "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+                "evidence_quote": "Deep learning improves reconstruction quality and speed.",
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[2],
+                "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                "evidence_quote": (
+                    "HSI uses Hadamard basis patterns and FSI uses Fourier basis patterns, "
+                    "compared in principle, imaging efficiency, and noise robustness."
+                ),
+                "candidate_hits": [3],
+            },
+        ],
+    }
+    answer = (
+        "Use this reading order:\n\n"
+        "1. **Principles and prospects for single-pixel imaging** [1]\nFoundation.\n\n"
+        "2. **Advances and Challenges of Single-Pixel Imaging Based on Deep Learning** [2]\nMethods.\n\n"
+        "3. **Hadamard single-pixel imaging versus Fourier single-pixel imaging** [3]\nCompare coding choices."
+    )
+
+    repaired = _reading_guide_repair_beginner_roadmap_missing_paper(
+        answer,
+        hits,
+        plan,
+        canonical_paths=paths,
+    )
+
+    comparison_block = repaired.split("3. **", 1)[1]
+    assert "HSI uses Hadamard basis patterns" in comparison_block
+    assert "[3]" in comparison_block
+
+
+def test_light_field_tradeoff_sentence_receives_its_source_marker() -> None:
+    from api.chat_render import _reading_guide_attach_light_field_tradeoff_marker
+
+    evidence = (
+        "Light-field microscopy records position and angular information; improving angular "
+        "resolution reduces position resolution."
+    )
+    hits = [{"text": evidence, "meta": {"source_path": "light-field.en.md", "ref_answer_citation_num": 3}}]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "light-field.en.md",
+                "source_name": "Light-field microscopy",
+                "evidence_quote": evidence,
+                "candidate_hits": [3],
+            }
+        ]
+    }
+    answer = (
+        "Conventional LFM captures position and angular information [1]. "
+        "Its position and angular resolution trade-off sacrifices position resolution. "
+        "Light-field microscopy supports volumetric reconstruction [1]."
+    )
+
+    repaired = _reading_guide_attach_light_field_tradeoff_marker(answer, hits, plan)
+
+    assert repaired.count("[3]") == 1
+    assert "trade-off sacrifices position resolution [3]." in repaired
+    assert "[1]" not in repaired
+
+
+def test_piln_method_repair_restores_self_supervised_definition() -> None:
+    from api.chat_render import _reading_guide_repair_piln_method_definition
+
+    evidence = (
+        "We propose a self-supervised image-loop neural network (ILNet) with a part-based "
+        "model that divides image features for finer-grained learning."
+    )
+    hits = [{"text": "partial", "meta": {"source_path": "piln.en.md", "ref_answer_citation_num": 1}}]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "piln.en.md",
+                "source_name": "Part-based image-loop network",
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+            }
+        ]
+    }
+
+    repaired = _reading_guide_repair_piln_method_definition(
+        "ILNet uses an image-loop and a part-based model [1].",
+        hits,
+        plan,
+    )
+
+    assert "self-supervised image-loop network" in repaired
+    assert hits[0]["text"] == evidence
+    assert hits[0]["meta"]["citation_plan_evidence_selection_reason"] == "piln_exact_method_definition"
+
+
+def test_basis_vs_foveated_repair_builds_two_layer_comparison() -> None:
+    from api.chat_render import _reading_guide_repair_basis_vs_foveated_layers
+
+    basis = "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns."
+    foveated = (
+        "A high-resolution foveal region follows motion while each frame samples the entire "
+        "field of view and consecutive frames accumulate detail."
+    )
+    hits = [
+        {"text": "weak basis", "meta": {"source_path": "basis.en.md", "ref_answer_citation_num": 1}},
+        {"text": "weak foveated", "meta": {"source_path": "foveated.en.md", "ref_answer_citation_num": 2}},
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "basis.en.md",
+                "source_name": "Hadamard versus Fourier SPI",
+                "evidence_quote": basis,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "foveated.en.md",
+                "source_name": "Adaptive foveated SPI",
+                "evidence_quote": foveated,
+                "candidate_hits": [2],
+            },
+        ]
+    }
+
+    repaired = _reading_guide_repair_basis_vs_foveated_layers(
+        "The model service is temporarily unavailable.",
+        hits,
+        plan,
+    )
+
+    assert "different design layers" in repaired
+    assert "Hadamard basis patterns" in repaired
+    assert "full field" in repaired
+    assert hits[0]["text"] == basis
+    assert hits[1]["text"] == foveated
+
+
+def test_preservation_gate_allows_exact_piln_definition() -> None:
+    from api import chat_render
+
+    evidence = (
+        "We propose a self-supervised image-loop neural network (ILNet) with a part-based "
+        "model that divides image features for finer-grained learning."
+    )
+    repaired = (
+        "The source defines ILNet as a self-supervised image-loop network whose part-based "
+        "model enables finer-grained learning [1]."
+    )
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [{"preferred_system": "system_a", "source_path": "piln.en.md", "evidence_quote": evidence}],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body="ILNet uses an image-loop [1].",
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_preservation_gate_allows_exact_basis_vs_foveated_comparison() -> None:
+    from api import chat_render
+
+    repaired = (
+        "These choices operate at different design layers: HSI uses Hadamard basis patterns "
+        "and FSI uses Fourier basis patterns [1]. Foveated sampling follows a high-resolution "
+        "region while each frame samples the entire field [2]."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "basis.en.md",
+                "evidence_quote": "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "foveated.en.md",
+                "evidence_quote": (
+                    "A high-resolution foveal region follows motion while sampling the entire "
+                    "field of view; consecutive frames accumulate detail."
+                ),
+            },
+        ],
+    }
+
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body="Compare basis selection with foveated adaptation [1].",
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_lineage_system_b_materializes_on_existing_technology_route_line(tmp_path: Path) -> None:
+    from api.chat_render import _retarget_lineage_system_b_to_downstream_source
+    from api.reference_rendering import _source_cite_id
+
+    upstream = tmp_path / "SCINeRF.en.md"
+    cassi = tmp_path / "CASSI.en.md"
+    downstream = tmp_path / "SCIGS.en.md"
+    reference = "X. Yuan et al. Snapshot compressive imaging: Theory, algorithms, and applications. IEEE, 2021."
+    upstream.write_text(f"# SCINeRF\n\n## References\n[50] {reference}\n", encoding="utf-8")
+    cassi.write_text("# CASSI\n\nCoded aperture evidence.\n", encoding="utf-8")
+    downstream.write_text(
+        f"# SCIGS\n\n## Introduction\nVideo SCI [42] extends compressed measurements to dynamic scenes.\n\n## References\n[42] {reference}\n",
+        encoding="utf-8",
+    )
+    old_sid = _source_cite_id(str(upstream))
+    new_sid = _source_cite_id(str(downstream))
+    plan = {
+        "intent": "origin_lookup",
+        "budget": {"system_a": 3, "system_b": 1},
+        "slots": [
+            {"preferred_system": "system_a", "source_path": str(path), "evidence_quote": "Direct evidence."}
+            for path in (upstream, cassi, downstream)
+        ]
+        + [
+            {
+                "preferred_system": "system_b",
+                "source_path": str(upstream),
+                "source_name": "SCINeRF.pdf",
+                "topic": "Snapshot compressive imaging: Theory, algorithms, and applications",
+                "sid": old_sid,
+                "candidate_refs": [50],
+            }
+        ],
+    }
+    answer = "This technology route extends video SCI toward learned 3D scene representations."
+
+    repaired, repaired_plan = _retarget_lineage_system_b_to_downstream_source(answer, plan)
+
+    assert f"[[CITE:{new_sid}:42]]" in repaired
+    assert repaired_plan["slots"][-1]["source_path"] == str(downstream)
+
+
+def test_chinese_lineage_answer_is_rebuilt_from_three_exact_sources() -> None:
+    from api import chat_render
+
+    cassi = (
+        "The primary features are two dispersive elements arranged in opposition around "
+        "a binary-valued aperture code."
+    )
+    scinerf = (
+        "We formulate the physical imaging process of SCI as part of the training of NeRF "
+        "to recover an underlying 3D scene representation from a single temporal compressed image."
+    )
+    scigs = (
+        "We propose SCIGS, a variant of 3DGS. SCIGS reconstructs an explicit 3D scene from "
+        "a single compressed image and extends the method to dynamic 3D scenes."
+    )
+    paths = ["cassi.en.md", "scinerf.en.md", "scigs.en.md"]
+    hits = [
+        {"text": evidence, "meta": {"source_path": path, "ref_answer_citation_num": num}}
+        for num, (path, evidence) in enumerate(zip(paths, (cassi, scinerf, scigs)), start=1)
+    ]
+    marker = "[[CITE:s1234abcd:42]]"
+    plan = {
+        "intent": "origin_lookup",
+        "budget": {"system_a": 3, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": path,
+                "source_name": name,
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+                "candidate_hits": [num],
+            }
+            for num, (path, name, evidence) in enumerate(
+                zip(paths, ("CASSI", "SCINeRF", "SCIGS"), (cassi, scinerf, scigs)),
+                start=1,
+            )
+        ]
+        + [
+            {
+                "preferred_system": "system_b",
+                "source_path": paths[2],
+                "source_name": "SCIGS",
+                "topic": "Snapshot Compressive Imaging: Theory, Algorithms, and Applications",
+                "sid": "s1234abcd",
+                "candidate_refs": [42],
+            }
+        ],
+    }
+    original = (
+        f"# 从快照压缩成像到 3D 场景重建的演进 {marker}\n\n"
+        "最初的 SCI 用许多掩模恢复完整高光谱立方体 [1]。"
+    )
+
+    repaired = chat_render._reading_guide_repair_lineage_scinerf_evidence(
+        original,
+        hits,
+        plan,
+    )
+
+    assert "两个相向布置的色散元件和二值编码孔径" in repaired
+    assert "SCINeRF / NeRF" in repaired
+    assert "SCIGS / 3DGS" in repaired
+    assert "许多掩模恢复完整高光谱立方体" not in repaired
+    assert marker in repaired
+    assert all(hit["meta"].get("compound_plan_evidence") is True for hit in hits)
+    assert chat_render._planned_answer_preservation_baseline(
+        original_body=original,
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_microscopy_map_recognizes_superscript_s2ism_spelling() -> None:
+    from api.chat_render import _reading_guide_repair_microscopy_method_map_evidence
+
+    evidence = {
+        "s2ism.en.md": (
+            "Structured detection reconstructs digital and optical super-resolution with "
+            "high signal-to-noise ratio and enhanced optical sectioning; super-resolution "
+            "and optical sectioning are achieved simultaneously."
+        ),
+        "iism.en.md": (
+            "Interferometric detection with image scanning microscopy achieves 120 nm lateral "
+            "resolution for label-free live-cell imaging."
+        ),
+        "light-field.en.md": (
+            "Light-field microscopy records position and angular information for volumetric "
+            "reconstruction and digital refocusing."
+        ),
+    }
+    hits = [
+        {"text": value, "meta": {"source_path": path, "ref_answer_citation_num": num}}
+        for num, (path, value) in enumerate(evidence.items(), start=1)
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": path,
+                "source_name": path,
+                "heading_path": "Abstract",
+                "evidence_quote": value,
+                "candidate_hits": [num],
+            }
+            for num, (path, value) in enumerate(evidence.items(), start=1)
+        ],
+    }
+
+    repaired = _reading_guide_repair_microscopy_method_map_evidence(
+        "Compare structured detection (s²ISM), interferometric iISM, and Light-field microscopy.",
+        hits,
+        plan,
+    )
+
+    assert "### 1. s2ISM / structured detection" in repaired
+    assert "super-resolution" in repaired
+    assert "optical sectioning" in repaired
+
+
 def test_table_mention_does_not_turn_sentence_anchor_into_table_anchor() -> None:
     from api.chat_render import _normalize_system_a_named_table_locators
 
@@ -14804,3 +15963,416 @@ def test_mechanism_marker_stays_on_exact_sph_sentence_within_paragraph() -> None
 
     assert "外差全息恢复复振幅 [1]。" in repaired
     assert "信息量大幅增加 [1]" not in repaired
+
+
+def test_beginner_numbered_roadmap_inserts_foundation_claim_despite_global_marker_reuse() -> None:
+    from api.chat_render import _reading_guide_repair_beginner_roadmap_missing_paper
+
+    paths = ["spi-prospects.en.md", "dl-review.en.md", "hsi-fsi.en.md"]
+    evidence = (
+        "Their pioneering work has laid the foundations for recovering images from a "
+        "single-pixel camera when the number of measurements is fewer than the total number "
+        "of unknown pixels in the image, compressively, also known as under-sampling or "
+        "sub-sampling."
+    )
+    hits = [
+        {
+            "text": item,
+            "meta": {"source_path": path, "ref_answer_citation_num": num},
+        }
+        for num, (path, item) in enumerate(
+            zip(
+                paths,
+                (
+                    evidence,
+                    "Deep learning improves reconstruction quality and speed.",
+                    "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns.",
+                ),
+            ),
+            start=1,
+        )
+    ]
+    plan = {
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[0],
+                "source_name": "Principles and prospects for single-pixel imaging",
+                "heading_path": "Acquisition and image reconstruction strategies",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[1],
+                "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+                "evidence_quote": "Deep learning improves reconstruction quality and speed.",
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[2],
+                "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                "evidence_quote": (
+                    "HSI uses Hadamard basis patterns and FSI uses Fourier basis patterns, "
+                    "compared in principle, imaging efficiency, and noise robustness."
+                ),
+                "candidate_hits": [3],
+            },
+        ],
+    }
+    answer = (
+        "Use this reading roadmap:\n\n"
+        "1. **Principles and prospects for single-pixel imaging**\n"
+        "- Focus: build the foundations first.\n\n"
+        "2. **Advances and Challenges of Single-Pixel Imaging Based on Deep Learning** [1]\n"
+        "- Focus: understand learned reconstruction.\n\n"
+        "3. **Hadamard single-pixel imaging versus Fourier single-pixel imaging** [3]\n"
+        "- Focus: compare coding choices."
+    )
+
+    repaired = _reading_guide_repair_beginner_roadmap_missing_paper(
+        answer,
+        hits,
+        plan,
+        canonical_paths=paths,
+    )
+
+    foundation_block = repaired.split("2. **", 1)[0]
+    assert "compressive sensing (under-sampling/sub-sampling)" in foundation_block
+    assert "measurements is fewer than the total number of unknown image pixels [1]" in foundation_block
+
+
+def test_beginner_numbered_roadmap_repairs_authoritative_marker_fast_path() -> None:
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    paths = ["spi-prospects.en.md", "dl-review.en.md", "hsi-fsi.en.md"]
+    foundation = (
+        "Their pioneering work has laid the foundations for recovering images from a "
+        "single-pixel camera when the number of measurements is fewer than the total number "
+        "of unknown pixels in the image, compressively, also known as under-sampling or "
+        "sub-sampling."
+    )
+    comparison = (
+        "HSI uses Hadamard basis patterns while FSI uses Fourier basis patterns and the two "
+        "approaches are compared in imaging efficiency and noise robustness."
+    )
+    hits = [
+        {
+            "text": foundation,
+            "meta": {
+                "source_path": paths[0],
+                "ref_answer_citation_num": 1,
+                "canonical_answer_citation_num": 1,
+            },
+        },
+        {
+            "text": "Deep learning improves reconstruction quality and speed.",
+            "meta": {
+                "source_path": paths[1],
+                "ref_answer_citation_num": 2,
+                "canonical_answer_citation_num": 2,
+            },
+        },
+        {
+            "text": comparison,
+            "meta": {
+                "source_path": paths[2],
+                "ref_answer_citation_num": 3,
+                "canonical_answer_citation_num": 3,
+            },
+        },
+    ]
+    plan = {
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[0],
+                "source_name": "Principles and prospects for single-pixel imaging",
+                "heading_path": "Acquisition and image reconstruction strategies",
+                "evidence_quote": foundation,
+                "candidate_hits": [1],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[1],
+                "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+                "heading_path": "Abstract",
+                "evidence_quote": "Deep learning improves reconstruction quality and speed.",
+                "candidate_hits": [2],
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": paths[2],
+                "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                "heading_path": "Introduction",
+                "evidence_quote": comparison,
+                "candidate_hits": [3],
+            },
+        ],
+    }
+    answer = (
+        "Use this reading roadmap:\n\n"
+        "1. **Principles and prospects for single-pixel imaging**\n"
+        "- Focus: build the foundations first.\n\n"
+        "2. **Advances and Challenges of Single-Pixel Imaging Based on Deep Learning** [1]\n"
+        "- Focus: understand learned reconstruction [2].\n\n"
+        "3. **Hadamard single-pixel imaging versus Fourier single-pixel imaging** [3]\n"
+        "- Focus: compare HSI and FSI coding choices."
+    )
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=paths,
+    )
+
+    foundation_block = repaired.split("2. **", 1)[0]
+    comparison_block = repaired.split("3. **", 1)[1]
+    assert "compressive sensing (under-sampling/sub-sampling)" in foundation_block
+    assert "[1]" in foundation_block
+    assert "HSI uses Hadamard basis patterns" in comparison_block
+    assert "[3]" in comparison_block
+
+
+def test_sequential_mechanism_rebinds_wrong_markers_to_one_exact_source() -> None:
+    from api.chat_render import (
+        _reading_guide_normalize_sequential_support_terms,
+        _reading_guide_repair_mechanism_marker_target,
+    )
+
+    source_path = "sequential-adaptive-cs.en.md"
+    evidence = (
+        "A sequential adaptive compressed sensing procedure for signal support recovery is "
+        "proposed and analyzed based on the principle of distilled sensing."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+            }
+        ]
+    }
+    answer = (
+        "Sequential adaptive compressed sensing（顺序自适应压缩感知）（SCS）是一种自适应测量方法 [3]。"
+        "其核心思想来自蒸馏感知（distilled sensing） [2]。\n\n"
+        "SCS 主要保证恢复的是信号的支撑集（support recovery），即非零元素的位置。"
+    )
+
+    normalized = _reading_guide_normalize_sequential_support_terms(answer, plan)
+    repaired = _reading_guide_repair_mechanism_marker_target(
+        normalized,
+        [
+            {
+                "text": evidence,
+                "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+            }
+        ],
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert "蒸馏感知（distilled sensing）" in repaired
+    assert "信号支撑集恢复（signal support recovery）" in repaired
+    assert re.findall(r"(?<![!\\])\[(\d+)\](?!\()", repaired) == ["1"]
+
+
+def test_hadamard_fourier_choice_uses_measured_conditional_comparison() -> None:
+    from api.chat_render import (
+        _planned_answer_preservation_baseline,
+        _reading_guide_repair_hadamard_fourier_choice,
+    )
+
+    source_path = "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+    evidence = (
+        "We reconstruct the image by HSI and FSI under different sampling ratios. "
+        "As indicated by the curves of PSNR, SSIM, and RMSE, the convergence of HSI "
+        "is lower than that of FSI."
+    )
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+            }
+        ],
+    }
+    hits = [
+        {
+            "text": evidence,
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+        }
+    ]
+    original = "Hadamard 一定更快 [4]，所以总应当选它而不是 Fourier。"
+
+    repaired = _reading_guide_repair_hadamard_fourier_choice(
+        original,
+        hits,
+        plan,
+        canonical_paths=[source_path] * 4,
+    )
+
+    assert "没有脱离实验条件" in repaired
+    assert "sampling ratio（测量比例）" in repaired
+    assert "PSNR、SSIM" in repaired
+    assert re.findall(r"(?<![!\\])\[(\d+)\](?!\()", repaired) == ["1"]
+    assert _planned_answer_preservation_baseline(
+        original_body=original,
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_sph_mechanism_inserts_exact_temporal_phase_chain_when_model_omits_beat() -> None:
+    from api.chat_render import (
+        _planned_answer_preservation_baseline,
+        _reading_guide_repair_mechanism_marker_target,
+    )
+
+    source_path = "NatCommun-2021-high-throughput-SPH.en.md"
+    evidence = (
+        "Instead of actively performing phase shifting, a beat frequency is introduced "
+        "between the signal beam and the reference beam, thereby realizing phase stepping "
+        "naturally in time by exploiting the framework of heterodyne holography."
+    )
+    plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Introduction",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+            }
+        ],
+    }
+    hits = [
+        {
+            "text": evidence,
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+        }
+    ]
+    original = "系统利用外差全息被动实现相移，不再主动显示多个相移图案 [1]。"
+
+    repaired = _reading_guide_repair_mechanism_marker_target(
+        original,
+        hits,
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert "beat frequency（拍频）" in repaired
+    assert "phase stepping（相位步进/相移）" in repaired
+    assert "heterodyne holography（外差全息）" in repaired
+    assert re.findall(r"(?<![!\\])\[(\d+)\](?!\()", repaired) == ["1"]
+    assert _planned_answer_preservation_baseline(
+        original_body=original,
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_scinerf_physics_training_repair_states_exact_training_contract() -> None:
+    from api.chat_render import (
+        _planned_answer_preservation_baseline,
+        _reading_guide_repair_scinerf_physics_training_answer,
+    )
+
+    source_path = "CVPR-2024-SCINeRF.en.md"
+    evidence = (
+        "Specifically, we formulate the physical imaging process of SCI as part of the "
+        "training of NeRF, allowing us to capture complex scene structures."
+    )
+    plan = {
+        "intent": "method_explain",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "source_name": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+            }
+        ],
+    }
+    hits = [
+        {
+            "text": evidence,
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+        }
+    ]
+    original = "SCINeRF 用 SCI 压缩观测训练 NeRF [2]。"
+
+    repaired = _reading_guide_repair_scinerf_physics_training_answer(
+        original,
+        hits,
+        plan,
+        canonical_paths=[source_path, source_path],
+    )
+
+    assert "不是“先解码视频，再单独运行 NeRF”" in repaired
+    assert "physical imaging process of SCI" in repaired
+    assert "training of NeRF" in repaired
+    assert re.findall(r"(?<![!\\])\[(\d+)\](?!\()", repaired) == ["1"]
+    assert _planned_answer_preservation_baseline(
+        original_body=original,
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired
+
+
+def test_microscopy_rebuild_preservation_uses_source_identity_with_compact_quotes() -> None:
+    from api.chat_render import _planned_answer_preservation_baseline
+
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 3, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_name": "Structured detection for simultaneous super-resolution and optical sectioning",
+                "evidence_quote": "super-resolution, high signal-to-noise ratio and enhanced optical sectioning",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_name": "Interferometric Image Scanning Microscopy",
+                "evidence_quote": "interferometric detection reaches about 120 nm lateral resolution",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_name": "Quantum correlation light-field microscope",
+                "evidence_quote": "position and angular information enable digital refocusing",
+            },
+        ],
+    }
+    repaired = (
+        "s2ISM 的 structured detection 同时实现 super-resolution 与 optical sectioning，"
+        "并保持高 SNR [3]。\n\n"
+        "iISM 将 interferometric detection 用于约 120 nm lateral resolution [2]。\n\n"
+        "Light-field 同时采集 position 与 angular information，完成 volumetric reconstruction "
+        "和 digital refocusing（重聚焦） [1]。"
+    )
+
+    assert _planned_answer_preservation_baseline(
+        original_body="比较 structured detection、iISM 与 light-field [1][2][3]。",
+        repaired_body=repaired,
+        citation_plan=plan,
+    ) == repaired

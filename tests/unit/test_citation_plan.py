@@ -5,10 +5,44 @@ from pathlib import Path
 from kb.citation_plan import (
     _prompt_aligned_source_slot,
     _rank_system_a_answer_hits,
+    _system_a_slots,
     build_citation_plan,
     build_citation_plan_prompt_block,
     citation_plan_prefers_system_b,
 )
+
+
+def test_hsi_fsi_source_focus_updates_stale_retrieval_page(tmp_path: Path) -> None:
+    source = tmp_path / "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+    source.write_text(
+        "# HSI versus FSI\n\n<!-- kb_page: 3 -->\n\n## Introduction\n\n"
+        "HSI uses Hadamard basis patterns for illumination while FSI uses Fourier basis patterns. "
+        "In this paper, we theoretically and experimentally compare HSI and FSI in terms of "
+        "principles, imaging efficiency, and noise robustness.\n\n"
+        "<!-- kb_page: 13 -->\n\n## Results\n\nLater measurements.\n",
+        encoding="utf-8",
+    )
+
+    slots = _system_a_slots(
+        support_slots=None,
+        answer_hits=[
+            {
+                "text": "Later measurements.",
+                "meta": {
+                    "source_path": str(source),
+                    "heading_path": "Results",
+                    "page_start": 13,
+                    "page_end": 13,
+                },
+            }
+        ],
+        max_items=1,
+        focus_multi_source_evidence=True,
+    )
+
+    assert slots[0]["heading_path"].endswith("Introduction")
+    assert slots[0]["page_start"] == 3
+    assert slots[0]["page_end"] == 3
 
 
 def test_prompt_aligned_abstract_keeps_complete_multi_sentence_claim(tmp_path: Path) -> None:
@@ -909,6 +943,33 @@ def test_single_paper_benefit_risk_question_preserves_risk_evidence(tmp_path: Pa
     assert any(slot["evidence_quote"] == benefit for slot in plan["slots"])
     assert any(slot["evidence_quote"] == risk for slot in plan["slots"])
     assert any(slot["heading_path"] == "4. Strategy and Advantages" for slot in plan["slots"])
+
+
+def test_prompt_alignment_skips_bibliography_without_references_heading(tmp_path: Path) -> None:
+    source_path = tmp_path / "perovskite.en.md"
+    abstract = (
+        "We demonstrate electrically driven lasing from a dual-cavity perovskite device "
+        "that integrates a low-threshold crystal microcavity with a high-power PeLED."
+    )
+    source_path.write_text(
+        "# Paper\n\n## Abstract\n\n"
+        f"{abstract}\n\n## Conclusion\n\n"
+        "1. Smith, J., Jones, A. Electrically driven lasers. Nature 620, 100-110 (2023).\n\n"
+        "2. Brown, T., Green, R. Dual cavity emitters. Science 381, 20-28 (2022).\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source_path),
+            "evidence_quote": "A generic device overview.",
+        },
+        ranking_texts=["dual-cavity electrically driven perovskite lasing device"],
+    )
+
+    assert "dual-cavity perovskite device" in slot["evidence_quote"]
+    assert "Smith" not in slot["evidence_quote"]
+    assert slot["heading_path"] == "Paper / Abstract"
 
 
 def test_piln_method_question_promotes_exact_abstract_definition(tmp_path: Path):
@@ -2107,3 +2168,164 @@ def test_unnamed_chinese_author_count_does_not_enable_target_aware_rendering() -
     assert plan["budget"]["system_a"] == 3
     assert "coverage_mode" not in plan
     assert "coverage_target_count" not in plan
+
+
+def test_prompt_aligned_source_pins_fdm_speed_snr_abstract_bundle(tmp_path: Path) -> None:
+    source = tmp_path / "frequency-division-multiplexed-spi.en.md"
+    exact = (
+        "Here, we implement frequency-division methods to parallelize the single-pixel "
+        "imaging process and demonstrate a trade-off between signal-to-noise ratio and "
+        "acquisition speed—without altering detector integration time."
+    )
+    source.write_text(
+        f"# FDM\n\n## Abstract\n\n{exact}\n\n## Discussion\n\n"
+        "Frequency-division imaging improves frame rate in several experiments.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {"source_path": str(source), "evidence_quote": "Generic discussion."},
+        ranking_texts=["频分复用单像素成像为什么能更快？代价是什么，是否需要改变探测器积分时间？"],
+    )
+
+    assert slot["evidence_quote"] == exact
+    assert slot["heading_path"].endswith("Abstract")
+
+
+def test_prompt_aligned_source_pins_sequential_support_abstract_bundle(tmp_path: Path) -> None:
+    source = tmp_path / "sequential-adaptive-compressed-sensing.en.md"
+    exact = (
+        "A sequential adaptive compressed sensing procedure for signal support recovery is "
+        "proposed and analyzed based on the principle of distilled sensing."
+    )
+    source.write_text(
+        f"# Sequential CS\n\n## Abstract\n\n{exact}\n\n## Prior work\n\n"
+        "Adaptive sensing procedures allocate measurements sequentially.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {"source_path": str(source), "evidence_quote": "Related work."},
+        ranking_texts=["顺序自适应压缩感知如何实现 signal support recovery？"],
+    )
+
+    assert slot["evidence_quote"] == exact
+    assert slot["heading_path"].endswith("Abstract")
+
+
+def test_foveated_intent_promotes_exact_sciadv_source_into_system_a_top_three(
+    tmp_path: Path,
+) -> None:
+    target = (
+        tmp_path
+        / "SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md"
+    )
+    target_evidence = (
+        "Adaptive foveated single-pixel imaging combines a foveal region with dynamic "
+        "supersampling, while successive frames acquire complementary spatial information."
+    )
+    target.write_text(
+        f"# Adaptive foveated single-pixel imaging\n\n## Abstract\n\n{target_evidence}\n",
+        encoding="utf-8",
+    )
+    distractors = [
+        {
+            "text": f"Generic adaptive imaging discussion {index}.",
+            "meta": {
+                "source_path": str(tmp_path / f"generic-{index}.en.md"),
+                "heading_path": "Abstract",
+            },
+        }
+        for index in range(1, 4)
+    ]
+    target_hit = {
+        "text": target_evidence,
+        "meta": {
+            "source_path": str(target),
+            "heading_path": "Abstract",
+            "page_start": 1,
+        },
+    }
+
+    for prompt in (
+        "dynamic supersampling 是不是就是只盯着画面重要的地方多拍一点？",
+        "foveated 成像如何分配采样？",
+        "是不是只盯着重要区域多拍一些？",
+    ):
+        plan = build_citation_plan(
+            prompt=prompt,
+            answer_hits=[*distractors, target_hit],
+        )
+        system_a = [
+            slot
+            for slot in plan["slots"]
+            if slot["preferred_system"] == "system_a"
+        ]
+
+        assert len(system_a) <= 3
+        assert system_a[0]["source_path"] == str(target)
+        assert system_a[0]["candidate_hits"] == [4]
+
+
+def test_sequential_exact_duplicate_slots_fold_and_bind_first_valid_hit() -> None:
+    source_path = "SSP-2012-Sequentially designed compressed sensing.en.md"
+    exact = (
+        "A sequential adaptive compressed sensing procedure for signal support recovery is "
+        "proposed and analyzed. The procedure is based on the principle of distilled sensing."
+    )
+    plan = build_citation_plan(
+        prompt="顺序自适应压缩感知相比一次性随机测量有什么优势？",
+        support_slots=[
+            {
+                "source_path": source_path,
+                "heading_path": "Sequentially Designed Compressed Sensing / Abstract",
+                "evidence_quote": exact,
+            }
+        ],
+        answer_hits=[
+            {
+                "text": exact,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Sequentially Designed Compressed Sensing / Abstract",
+                    "evidence_quote": exact,
+                },
+            },
+            {
+                "text": exact,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Abstract",
+                    "evidence_quote": exact,
+                },
+            },
+        ],
+    )
+    system_a = [
+        slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"
+    ]
+
+    assert len(system_a) == 1
+    assert system_a[0]["source_path"] == source_path
+    assert system_a[0]["candidate_hits"] == [1]
+
+
+def test_prompt_aligned_source_pins_hsi_fsi_sampling_metric_comparison(tmp_path: Path) -> None:
+    source = tmp_path / "hadamard-fourier-comparison.en.md"
+    exact = (
+        "We compare HSI and FSI under different sampling ratios using PSNR and SSIM, "
+        "and FSI provides better reconstruction quality in the undersampling regime."
+    )
+    source.write_text(
+        "# HSI and FSI\n\n## 3. Comparison\n\n"
+        f"{exact}\n\nA later table lists isolated PSNR and SSIM values.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {"source_path": str(source), "evidence_quote": "Table values."},
+        ranking_texts=["Hadamard 和 Fourier 在不同采样率下怎么选？比较 PSNR 与 SSIM。"],
+    )
+
+    assert slot["evidence_quote"] == exact
+    assert "Comparison" in slot["heading_path"]

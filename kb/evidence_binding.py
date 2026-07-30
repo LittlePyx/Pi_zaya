@@ -1056,7 +1056,19 @@ def assess_system_a_hit_binding(
             "overlap_terms": [],
             "missing_terms": ["explicit relation"],
         }
-    if method_identity_conflicts(claim, evidence_surface):
+    identity_evidence_surface = evidence_surface
+    if plan_binding_evidence:
+        # Once an authoritative plan has selected the exact passage, a stale
+        # retrieval hit (often a nearby bibliography block) must not inject
+        # unrelated acronyms such as SPIE/LWIR into the method-identity gate.
+        identity_evidence_surface = " ".join(
+            [
+                str(plan_binding_evidence or evidence_quote or ""),
+                str(heading or ""),
+                str(source_name or ""),
+            ]
+        )
+    if method_identity_conflicts(claim, identity_evidence_surface):
         reason = (
             "回答句与这张卡片明确指向不同的方法或论文，不能仅凭相邻领域词把它们绑定在一起。"
             if _system_a_prefers_zh(claim)
@@ -1250,6 +1262,27 @@ def assess_system_a_hit_binding(
             claim,
             evidence_body_surface,
             source_name,
+        )
+        # CASSI is the conventional acronym for coded-aperture snapshot
+        # spectral imaging, while the seminal paper's title and abstract spell
+        # out only the architecture.  Treat the exact two-disperser/binary-
+        # aperture mechanism as a high-precision cross-language identity match
+        # so a verified prompt-contract passage is not rejected merely because
+        # the Chinese answer uses the acronym.
+        cassi_architecture_identity_overlap = bool(
+            re.search(
+                r"(?i)\bCASSI\b|coded[- ]aperture\s+snapshot\s+spectral\s+imaging|"
+                r"编码孔径快照光谱成像",
+                claim,
+            )
+            and re.search(
+                r"(?is)two\s+dispersive\s+elements.*binary-valued\s+aperture|"
+                r"binary-valued\s+aperture.*two\s+dispersive\s+elements",
+                evidence_body_surface,
+            )
+        )
+        fast_source_identity_overlap = bool(
+            fast_source_identity_overlap or cassi_architecture_identity_overlap
         )
         claim_keywords_fast = _system_a_keyword_terms(claim, limit=48)
         evidence_keywords_fast = _system_a_keyword_terms(evidence_surface, limit=64)

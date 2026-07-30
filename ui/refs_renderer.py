@@ -5003,6 +5003,59 @@ def _system_b_reference_index_fallback_is_grounded(detail: dict) -> bool:
     return False
 
 
+def _relocate_trailing_display_math_citations(md: str) -> str:
+    """Move answer citations out of tagged display math so they can be linked."""
+
+    text = str(md or "")
+    if "$$" not in text or "[" not in text:
+        return text
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    out: list[str] = []
+    in_display_math = False
+    pending: list[str] = []
+    math_open_index = -1
+    trailing_re = re.compile(
+        r"^(?P<equation>.*(?:\\tag\{[^}\n]+\}|\\end\{(?:aligned|gathered|split|equation\*?)\})"
+        r"\s*[,.]?)\s+(?P<markers>(?:\[\d{1,5}\]\s*)+)$"
+    )
+    for line in lines:
+        if line.strip() == "$$":
+            if not in_display_math:
+                math_open_index = len(out)
+                out.append(line)
+                in_display_math = True
+                continue
+            if pending:
+                marker_text = "".join(pending)
+                attach_idx = next(
+                    (
+                        idx
+                        for idx in range(math_open_index - 1, -1, -1)
+                        if out[idx].strip()
+                        and not out[idx].lstrip().startswith(("#", "```", "~~~", "<!--"))
+                    ),
+                    -1,
+                )
+                if attach_idx >= 0:
+                    out[attach_idx] = out[attach_idx].rstrip() + " " + marker_text
+                else:
+                    out.append(marker_text)
+                pending.clear()
+            out.append(line)
+            in_display_math = False
+            continue
+        if in_display_math:
+            match = trailing_re.match(line)
+            if match:
+                out.append(str(match.group("equation") or "").rstrip())
+                pending.extend(re.findall(r"\[\d{1,5}\]", str(match.group("markers") or "")))
+                continue
+        out.append(line)
+    if pending:
+        out.extend(pending)
+    return "\n".join(out)
+
+
 def _annotate_inpaper_citations_with_hover_meta(
     md: str,
     hits: list[dict],
@@ -5012,7 +5065,7 @@ def _annotate_inpaper_citations_with_hover_meta(
     citation_plan: dict | None = None,
     render_locale: str = "",
 ) -> tuple[str, list[dict]]:
-    s = (md or "")
+    s = _relocate_trailing_display_math_citations(md or "")
     if not s or "[" not in s:
         return s, []
 

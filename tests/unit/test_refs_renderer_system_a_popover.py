@@ -3083,3 +3083,52 @@ def test_system_a_keeps_real_piln_measurement_label_claim_link() -> None:
     assert "1D signals collected by the single-pixel detector" in evidence
     assert "used as labels" in evidence
     assert details[0]["binding_status"] == "grounded"
+
+
+def test_system_a_does_not_leak_tagged_display_math_citation() -> None:
+    source_path = "db/piln/part-based-image-loop-network.en.md"
+    evidence = "The ILNet loss compares the real and reconstructed network outputs."
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "损失函数为：\n$$\nL = \\|I(real)-I(out)\\|^2 \\tag{1} [1]\n$$",
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Method / Loss function",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "Method / Loss function",
+                    "evidence_quote": evidence,
+                }
+            ],
+        },
+        anchor_ns="display-math-citation",
+    )
+
+    assert r"\tag{1} [1]" not in rendered
+    assert r"\tag{1}" in rendered
+    assert "[1]" not in rendered
+    assert details == []
+
+
+def test_system_a_does_not_move_scientific_brackets_inside_display_math() -> None:
+    source_path = "db/math/paper.en.md"
+    rendered, _details = _annotate_inpaper_citations_with_hover_meta(
+        "$$\nx \\in [0,1] \\tag{2}\n$$\nNo citation.",
+        [{"text": "Math definition.", "meta": {"source_path": source_path}}],
+        canonical_paths=[source_path],
+        citation_plan={"budget": {"system_a": 0, "system_b": 0}},
+    )
+
+    assert r"x \in [0,1] \tag{2}" in rendered
