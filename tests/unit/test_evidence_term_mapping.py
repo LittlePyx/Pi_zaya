@@ -263,6 +263,31 @@ def test_detector_review_guide_aligns_with_english_abstract() -> None:
     }.issubset(answer_tokens & evidence_tokens)
 
 
+def test_real_degradation_chain_terms_align_with_english_source() -> None:
+    claim = (
+        "投影端散射和非理想聚焦使照明图案模糊；空间下采样之后，机械抖动造成"
+        "相对错位和乘性波动；探测路径的散射缺陷再引入模糊，并叠加光子散粒噪声"
+        "与电子噪声。整个场景光强的积分会使读出噪声传播到整幅图像。"
+    )
+    tokens = evidence_alignment_tokens(claim)
+
+    assert {
+        "illumination",
+        "scattering",
+        "downsampling",
+        "jitters",
+        "misalignment",
+        "multiplicative",
+        "detection",
+        "photon",
+        "electronic",
+        "integrates",
+        "propagate",
+        "entire",
+        "image",
+    } <= tokens
+
+
 def test_piln_measurement_label_claim_aligns_with_english_source_sentence() -> None:
     answer_tokens = evidence_alignment_tokens(
         "无需真实图像标签：ILNet 不需要成对的高质量图像作为训练标签，"

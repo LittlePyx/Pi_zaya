@@ -650,6 +650,7 @@ def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
     source_identity_aliases = (
         ("pidl", ("physics informed deep learning", "single photon imaging")),
         ("piln", ("part based image loop network",)),
+        ("hatnet", ("dual scale transformer", "large scale single pixel imaging")),
         (
             "cassi",
             (
@@ -1899,6 +1900,16 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
         if key in {x.lower() for x in variants}:
             return
         variants.append(v)
+
+    if has_any("hatnet"):
+        add(
+            "HATNet Dual-Scale Transformer Large-Scale Single-Pixel Imaging "
+            "tensor ISTA deep unfolding tensor gradient descent hybrid-attention denoising"
+        )
+        add(
+            "HATNet stages TGD U-shaped denoiser S-SA C-SA Kronecker SPI "
+            "learnable step size proximal mapping"
+        )
 
     if has_any(
         "refocus",

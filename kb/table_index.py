@@ -155,6 +155,27 @@ def _combine_header_rows(headers: list[str], continuation: list[str]) -> list[st
         "",
     )
     percent_header = sum(1 for value in sub if re.fullmatch(r"\d+(?:\.\d+)?%", value)) >= 2
+    # PDF table extractors commonly flatten a spanning header into a compact
+    # sequence.  For example, a table whose visual columns are
+    # ``CS Ratio (7 columns) | Time | FPS`` may be emitted as
+    # ``CS Ratio | Time | FPS | ...`` while the continuation row still places
+    # the seven percentages in their physical columns.  Preserve the semantic
+    # trailing headers by moving the compact labels to the empty continuation
+    # columns after the percentage group.
+    trailing_parent_by_index: dict[int, str] = {}
+    if percent_header and ratio_group:
+        ratio_index = next((idx for idx, value in enumerate(main) if value == ratio_group), -1)
+        percent_indexes = [
+            idx for idx, value in enumerate(sub) if re.fullmatch(r"\d+(?:\.\d+)?%", value)
+        ]
+        trailing_indexes = [
+            idx
+            for idx in range((max(percent_indexes) + 1) if percent_indexes else width, width)
+            if not sub[idx]
+        ]
+        compact_trailing = [value for value in main[ratio_index + 1 :] if value]
+        if ratio_index >= 0 and compact_trailing and len(compact_trailing) <= len(trailing_indexes):
+            trailing_parent_by_index = dict(zip(trailing_indexes, compact_trailing))
     out: list[str] = []
     for idx in range(width):
         parent = main[idx]
@@ -165,7 +186,7 @@ def _combine_header_rows(headers: list[str], continuation: list[str]) -> list[st
             else:
                 out.append(" ".join(part for part in (parent or propagated[idx], child) if part).strip())
         else:
-            out.append(parent)
+            out.append(trailing_parent_by_index.get(idx, parent))
     return out
 
 

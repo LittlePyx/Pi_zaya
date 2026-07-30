@@ -2213,6 +2213,163 @@ def test_prompt_aligned_source_pins_sequential_support_abstract_bundle(tmp_path:
     assert slot["heading_path"].endswith("Abstract")
 
 
+def test_prompt_aligned_source_keeps_degradation_chain_and_global_propagation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "robust-imaging.en.md"
+    chain = (
+        "The degradation process is as follows: illumination blur occurs first, "
+        "spatial downsampling follows, mechanical jitter causes misalignment, the "
+        "detection path adds blur, and photon shot noise plus electronic noise affect detection."
+    )
+    propagation = (
+        "In SPI, as the single-pixel detector integrates light from the entire scene, "
+        "noise from each photodetector readout can propagate and spread to the entire "
+        "image after reconstruction."
+    )
+    source.write_text(
+        "# Robust imaging\n\n## Introduction\n\n"
+        "A comprehensive degradation model improves robust reconstruction under global noise.\n\n"
+        "## Results\n\n"
+        f"{chain}\n\n{propagation}\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "evidence_quote": (
+                "A comprehensive degradation model improves robust reconstruction "
+                "under global noise."
+            ),
+        },
+        ranking_texts=[
+            "真实退化链有哪些环节？局部读出噪声为什么会传播成全局污染？"
+        ],
+    )
+
+    assert chain in slot["evidence_quote"]
+    assert propagation in slot["evidence_quote"]
+    assert slot["heading_path"].endswith("Results")
+
+
+def test_prompt_aligned_source_uses_unfolding_module_contract_not_abstract(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "ista-net.en.md"
+    r_module = (
+        "$r^{(k)}$ Module: it corresponds to the data update, whose matrix term is "
+        "the gradient of the data-fidelity term; the step size may vary by iteration."
+    )
+    x_module = (
+        "$x^{(k)}$ Module: it computes the proximal mapping associated with the "
+        "nonlinear transform."
+    )
+    parameters = (
+        "Parameters in ISTA-Net: the learnable set includes the step size in the "
+        "$r^{(k)}$ module, the parameters of the forward and backward transforms, "
+        "and the shrinkage threshold in the $x^{(k)}$ module."
+    )
+    source.write_text(
+        "# ISTA-Net\n\n## Abstract\n\nThe proximal mapping uses learned parameters.\n\n"
+        "## 3.2 Framework\n\n"
+        f"{r_module}\n\n{x_module}\n\n{parameters}\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "evidence_quote": "The proximal mapping uses learned parameters.",
+        },
+        ranking_texts=[
+            "ISTA-Net unfolding 如何把一次 iteration 变成 phase？r 模块、x 模块和参数分别做什么？"
+        ],
+    )
+
+    assert r_module in slot["evidence_quote"]
+    assert x_module in slot["evidence_quote"]
+    assert parameters in slot["evidence_quote"]
+    assert slot["heading_path"].endswith("3.2 Framework")
+
+
+def test_prompt_aligned_source_recognizes_formula_role_wording_for_unfolding(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "CVPR-2018-ISTA-Net.en.md"
+    r_module = (
+        "$r^{(k)}$ Module: it corresponds to the data update, whose matrix term is "
+        "the gradient of the data-fidelity term; the step size may vary by iteration."
+    )
+    x_module = (
+        "$x^{(k)}$ Module: it computes the proximal mapping associated with the "
+        "nonlinear transform."
+    )
+    parameters = (
+        "Parameters in ISTA-Net: the learnable set includes the step size in the "
+        "$r^{(k)}$ module, the parameters of the forward and backward transforms, "
+        "and the shrinkage threshold in the $x^{(k)}$ module."
+    )
+    source.write_text(
+        "# ISTA-Net\n\n## Abstract\n\nThe proximal mapping uses learned parameters.\n\n"
+        "## 3.2 Framework\n\n"
+        f"{r_module}\n\n{x_module}\n\n{parameters}\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "evidence_quote": "The proximal mapping uses learned parameters.",
+        },
+        ranking_texts=[
+            "《ISTA-Net》把一次 ISTA 迭代展开成网络时，r^(k)、x^(k) 和"
+            "可学习参数分别承担什么作用？请给出原文章节证据。"
+        ],
+    )
+
+    assert r_module in slot["evidence_quote"]
+    assert x_module in slot["evidence_quote"]
+    assert parameters in slot["evidence_quote"]
+    assert slot["heading_path"].endswith("3.2 Framework")
+
+
+def test_prompt_aligned_source_bundles_requested_table_rows_with_trailing_metrics(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "CVPR-2018-ISTA-Net.en.md"
+    source.write_text(
+        "# ISTA-Net\n\n## 5.2 Comparison\n\n"
+        "**Table 1.** Average PSNR on Set11.\n"
+        "| Algorithm | CS Ratio | Time CPU/GPU | FPS CPU/GPU | | | | | | |\n"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+        "| | 50% | 40% | 30% | 25% | 10% | 4% | 1% | | |\n"
+        "| ISTA-Net | 37.43 | 35.36 | 32.91 | 31.53 | 25.80 | 21.23 | 17.30 | 0.923s/0.039s | 1.08/25.6 |\n"
+        "| ISTA-Net$^+$ | 38.07 | 36.06 | 33.82 | 32.57 | 26.64 | 21.31 | 17.34 | 1.375s/0.047s | 0.73/21.3 |\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "heading_path": "ISTA-Net / Abstract",
+            "evidence_quote": "A broad table summary.",
+        },
+        ranking_texts=[
+            "《ISTA-Net》表1里 Set11、25% CS ratio 时，ISTA-Net 与 ISTA-Net+ "
+            "的 PSNR、CPU/GPU 时间和 FPS 分别是多少？"
+        ],
+    )
+
+    assert "CS Ratio 25% = 31.53" in slot["evidence_quote"]
+    assert "Time CPU/GPU = 0.923s/0.039s" in slot["evidence_quote"]
+    assert "FPS CPU/GPU = 1.08/25.6" in slot["evidence_quote"]
+    assert "CS Ratio 25% = 32.57" in slot["evidence_quote"]
+    assert "Time CPU/GPU = 1.375s/0.047s" in slot["evidence_quote"]
+    assert "FPS CPU/GPU = 0.73/21.3" in slot["evidence_quote"]
+    assert slot["selection_reason"] == "prompt_aligned_table_rows"
+
+
 def test_foveated_intent_promotes_exact_sciadv_source_into_system_a_top_three(
     tmp_path: Path,
 ) -> None:

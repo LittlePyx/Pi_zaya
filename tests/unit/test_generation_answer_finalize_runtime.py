@@ -1811,6 +1811,81 @@ def test_foveated_exact_whole_field_clause_gets_occurrence_specific_citation():
     assert out.count("[3]") == 1
 
 
+def test_normalize_supported_terms_replaces_missing_table_values_from_plan_rows():
+    evidence = (
+        "Table 1. Results. Algorithm: ISTA-Net. CS Ratio 50% = 37.43; "
+        "CS Ratio 25% = 31.53; Time CPU/GPU = 0.923s/0.039s; "
+        "FPS CPU/GPU = 1.08/25.6 "
+        "Table 1. Results. Algorithm: ISTA-Net$^+$. CS Ratio 50% = 38.07; "
+        "CS Ratio 25% = 32.57; Time CPU/GPU = 1.375s/0.047s; "
+        "FPS CPU/GPU = 0.73/21.3"
+    )
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        (
+            "根据原文表1：\n\n"
+            "| 方法 | PSNR (dB) | CPU时间 | GPU时间 | FPS |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| ISTA-Net | 未在检索片段中显示 | — | — | 1.08/25.6 [1] |\n\n"
+            "**说明**：当前片段缺少完整数据。"
+        ),
+        prompt=(
+            "《ISTA-Net》表1里 Set11、25% CS ratio 时，ISTA-Net 与 ISTA-Net+ "
+            "的 PSNR、CPU/GPU 时间和 FPS 分别是多少？"
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "ista-net.en.md",
+                    "candidate_hits": [1],
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"meta": {"source_path": "ista-net.en.md"}}],
+    )
+
+    assert "| ISTA-Net | 31.53 | 0.923s | 0.039s | 1.08/25.6 [1] |" in out
+    assert "| ISTA-Net$^+$ | 32.57 | 1.375s | 0.047s | 0.73/21.3 [1] |" in out
+    assert "未在检索片段中显示" not in out
+    assert "当前片段缺少完整数据" not in out
+
+
+def test_normalize_supported_terms_restores_complete_degradation_chain() -> None:
+    evidence = (
+        "The illumination patterns from the projector undergo scattering and non-ideal focus, "
+        "introducing blur during the illumination stage. The modulated light pattern is projected "
+        "onto the object, where spatial downsampling occurs due to the limited resolution of the patterns. "
+        "Mechanical jitters between the object and projection system introduce relative misalignment, "
+        "leading to multiplicative fluctuations in the measurement. The reflected light may experience "
+        "additional degradation along the detection path due to scattering imperfections, resulting in "
+        "further blur. Finally, photon shot noise and electronic noise affect the detection process; photon "
+        "shot noise is modeled as a Poisson-distributed function. As the single-pixel detector integrates "
+        "the collected light intensities from the entire scene, noise from each photodetector readout can "
+        "propagate and spread to the entire image after reconstruction."
+    )
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "真实退化链包括空间下采样。局部读出噪声会传播为全局污染 [1]。",
+        prompt="真实退化链有哪些环节？为什么局部读出噪声会变成全局图像污染？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "degradation.en.md",
+                    "candidate_hits": [1],
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"meta": {"source_path": "degradation.en.md"}}],
+    )
+
+    for term in ("非理想聚焦", "空间下采样", "机械抖动", "探测路径", "光子散粒噪声", "电子噪声"):
+        assert term in out
+    assert "整个场景光强的积分值" in out
+    assert "传播到整幅图像" in out
+
+
 def test_normalize_supported_iism_fact_gets_existing_system_a_citation():
     out = finalize_runtime._normalize_citation_plan_supported_terms(
         (

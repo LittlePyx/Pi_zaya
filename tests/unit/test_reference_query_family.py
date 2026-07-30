@@ -84,6 +84,17 @@ def test_fixed_paper_set_format_and_reading_order_words_do_not_trigger_reselecti
     assert all(prompt_explicitly_requests_multi_paper_list(prompt) is False for prompt in prompts)
 
 
+def test_named_pair_evidence_request_is_synthesis_not_library_reselection() -> None:
+    prompt = (
+        "ISTA-Net 和 HATNet 都是 unfolding：它们分别把什么优化步骤变成网络模块？"
+        "HATNet 为什么更适合大尺寸单像素成像？请分别给出两篇论文的证据。"
+    )
+
+    assert extract_requested_paper_count(prompt) == 2
+    assert prompt_explicitly_requests_multi_paper_list(prompt) is False
+    assert prompt_likely_multi_paper_synthesis(prompt) is True
+
+
 def test_previous_answer_audit_is_not_a_multi_paper_list_request() -> None:
     prompt = (
         "审查上一条回答：是否严格只用了 4 篇？"

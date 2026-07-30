@@ -69,6 +69,27 @@ def test_compatible_refs_cache_rejects_new_render_evidence_revision() -> None:
     ) is None
 
 
+def test_attach_pack_render_state_applies_display_contract_once(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    def _attach(pack: dict) -> dict:
+        calls.append(dict(pack))
+        return {**pack, "display_state": "ready"}
+
+    monkeypatch.setattr(references_router, "_attach_pack_display_contract", _attach)
+
+    out = references_router._attach_pack_render_state(
+        {"hits": []},
+        source_pack={"render_status": "full", "render_attempts": 2},
+        default_status="full",
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["render_status"] == "full"
+    assert calls[0]["render_attempts"] == 2
+    assert out["display_state"] == "ready"
+
+
 def test_state_validated_cache_skips_rendered_payload_json_loader(monkeypatch) -> None:
     references_router._REFS_CONVERSATION_CACHE.clear()
     conversation = {
@@ -4149,6 +4170,11 @@ def test_warm_conversation_refs_payload_async_polishes_authoritative_doc_list_an
         "_store_cached_conversation_refs_payload",
         lambda **kwargs: calls.setdefault("cached", dict(kwargs)),
     )
+    monkeypatch.setattr(
+        references_router,
+        "_current_refs_conversation_state_signature",
+        lambda **kwargs: "post-persist-state",
+    )
 
     references_router._warm_conversation_refs_payload_async(
         conv_id="conv-authoritative-warm",
@@ -4169,6 +4195,7 @@ def test_warm_conversation_refs_payload_async_polishes_authoritative_doc_list_an
     }
     cached = dict(calls.get("cached") or {})
     assert cached.get("mode") == "full"
+    assert cached.get("state_signature") == "post-persist-state"
     assert set(dict(cached.get("payload") or {})) == {5, 13}
 
 
@@ -4639,3 +4666,50 @@ def test_scinerf_answer_card_has_grounded_localized_summary() -> None:
     assert "SCI" in summary
     assert "NeRF" in summary
     assert why
+
+
+def test_deep_unfolding_answer_cards_localize_guide_and_relevance_from_evidence() -> None:
+    prompt = (
+        "ISTA-Net 和 HATNet 的深度展开网络架构分别如何把迭代算法变成可学习网络？"
+        "请比较二者的模块划分与优化先验。"
+    )
+    hat_summary, hat_why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "CVPR-2024-Dual-Scale Transformer for Large-Scale Single-Pixel Imaging.pdf",
+                "heading_path": "Abstract",
+                "evidence_quote": (
+                    "We propose a deep unfolding network with hybrid-attention Transformer "
+                    "on Kronecker SPI model, dubbed HATNet. Specifically, we unfold ISTA "
+                    "into two alternative modules: efficient tensor gradient descent and "
+                    "hybrid-attention multiscale denoising."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt=prompt,
+    )
+    ista_summary, ista_why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "CVPR-2018-ISTA-Net.pdf",
+                "heading_path": "3.2. ISTA-Net Framework",
+                "evidence_quote": (
+                    "Parameters in ISTA-Net: Each module in each phase of ISTA-Net strictly "
+                    "corresponds to the update steps in an ISTA iteration. The learnable parameter "
+                    "set includes the step size rho^(k) in the r^(k) module and the parameters of "
+                    "the forward and backward transforms."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt=prompt,
+    )
+
+    assert all(term in hat_summary for term in ("HATNet", "张量梯度下降", "混合注意力多尺度去噪"))
+    assert all(term in hat_why for term in ("HATNet", "两类展开模块", "Kronecker SPI"))
+    assert all(term in ista_summary for term in ("ISTA-Net", "r^(k)", "可学习参数"))
+    assert all(term in ista_why for term in ("ISTA-Net", "迭代对应关系", "可学习参数"))
+    for value in (hat_summary, hat_why, ista_summary, ista_why):
+        assert re.search(r"[\u4e00-\u9fff]", value)
+        assert "未提供摘要定位" not in value

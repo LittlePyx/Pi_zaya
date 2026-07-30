@@ -48,6 +48,21 @@ _REQUESTED_PAPER_COUNT_PATTERNS = (
     r"(\d{1,2}|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24]{1,3})\s*\u7bc7",
 )
 
+# Asking for the evidence belonging to an already named pair is a synthesis
+# request, not a request to select a fresh list from the library.  Without this
+# distinction, prompts such as ``分别给出两篇论文的证据`` are rebuilt into a
+# generic two-paper recommendation list after the model has already answered
+# the actual comparison.
+_FIXED_PAPER_EVIDENCE_REQUEST_RE = re.compile(
+    r"(?:分别|各自).{0,20}?(?:给出|提供|列明).{0,12}?"
+    r"(?:\d{1,2}|[一二三四五六七八九十两]{1,3})\s*篇(?:论文|文章|文献)?(?:各自)?(?:的)?"
+    r"(?:证据|依据|原文|出处)|"
+    r"(?:evidence|support|source\s+passages?)\s+(?:from|for)\s+(?:each|both|these|those)\s+"
+    r"(?:\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)?\s*"
+    r"(?:papers?|articles?|studies)",
+    flags=re.IGNORECASE,
+)
+
 _CJK_PAPER_COUNT_DIGITS = {
     "\u4e00": 1,
     "\u4e8c": 2,
@@ -204,6 +219,8 @@ def prompt_explicitly_requests_multi_paper_list(prompt: str) -> bool:
         return False
     requested_count = extract_requested_paper_count(text)
     if requested_count is not None:
+        if _FIXED_PAPER_EVIDENCE_REQUEST_RE.search(text):
+            return False
         fixed_set_reference = _prompt_matches_any_pattern(text, _FIXED_PAPER_SET_REFERENCE_PATTERNS)
         selection_action = _prompt_matches_any_pattern(text, _MULTI_PAPER_SELECTION_ACTION_PATTERNS)
         if fixed_set_reference:
@@ -225,6 +242,8 @@ def prompt_likely_multi_paper_synthesis(prompt: str) -> bool:
     text = str(prompt or "").strip()
     if not text:
         return False
+    if _FIXED_PAPER_EVIDENCE_REQUEST_RE.search(text):
+        return True
     if prompt_explicitly_requests_multi_paper_list(text):
         return True
     return any(re.search(pattern, text, flags=re.I | re.S) for pattern in _MULTI_PAPER_SYNTHESIS_PATTERNS)

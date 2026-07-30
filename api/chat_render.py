@@ -2357,6 +2357,66 @@ def _answer_aligned_reference_render_pack(raw_pack: dict | None, answer_text: st
     return aligned if isinstance(aligned, dict) and aligned else pack
 
 
+def _authoritative_doc_list_plan_covers_pack(
+    raw_pack: dict | None,
+    citation_plan: dict | None,
+) -> bool:
+    """Return whether a doc-list pack already has complete planned evidence.
+
+    A complete citation plan is the answer-time authority for both source
+    identity and evidence text.  Running answer alignment over every block in
+    those same documents adds latency and can move a card away from the passage
+    that grounded the answer.
+    """
+
+    if not isinstance(raw_pack, dict) or not isinstance(citation_plan, dict):
+        return False
+    candidate_packs = [raw_pack]
+    if isinstance(raw_pack.get("rendered_payload"), dict):
+        candidate_packs.append(raw_pack["rendered_payload"])
+    authoritative_pack = next(
+        (
+            pack
+            for pack in candidate_packs
+            if isinstance(pack.get("pipeline_debug"), dict)
+            and bool((pack.get("pipeline_debug") or {}).get("doc_list_authoritative"))
+        ),
+        None,
+    )
+    if not isinstance(authoritative_pack, dict):
+        return False
+    slots = [
+        dict(slot)
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+    ]
+    if not slots:
+        return False
+    planned_sources: set[str] = set()
+    for slot in slots:
+        source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
+        evidence = re.sub(
+            r"\s+",
+            " ",
+            str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip(),
+        )
+        if not source_path or len(evidence) < 24:
+            return False
+        planned_sources.add(_reading_slot_source_identity(source_path))
+    pack_sources = {
+        _reading_slot_source_identity(
+            ((hit.get("meta") or {}).get("source_path") if isinstance(hit.get("meta"), dict) else "")
+            or ((hit.get("ui_meta") or {}).get("source_path") if isinstance(hit.get("ui_meta"), dict) else "")
+            or hit.get("source_path")
+        )
+        for hit in list(authoritative_pack.get("hits") or [])
+        if isinstance(hit, dict)
+    }
+    pack_sources.discard("")
+    return bool(pack_sources) and pack_sources.issubset(planned_sources)
+
+
 def _effective_citation_render_locale(ref_pack: dict | None = None) -> str:
     try:
         prefs = load_prefs()
@@ -4139,6 +4199,7 @@ def _augment_hits_with_system_a_plan_slots(
                         "ref_best_heading_path": heading,
                         "citation_plan_slot": True,
                         "citation_plan_scope_boundary": True,
+                        "citation_plan_evidence_authoritative": True,
                         "ref_answer_citation_num": int(stable_answer_num or row_idx + 1),
                         "primary_block_id": str(primary.get("block_id") or "").strip(),
                         "primary_anchor_id": str(primary.get("anchor_id") or "").strip(),
@@ -4475,11 +4536,30 @@ def _augment_hits_with_system_a_plan_slots(
                 evidence_quote,
             )
         )
+        scope_boundary_abstract_slot = bool(
+            str(citation_plan.get("intent") or "").strip().lower() == "scope_boundary"
+            and scope_boundary_slots
+            and slot_source_key
+            == _reading_slot_source_key(
+                scope_boundary_slots[0].get("source_path")
+                or scope_boundary_slots[0].get("sourcePath")
+            )
+            and (
+                re.search(r"(?i)(?:^|\s[/·>]\s)abstract$", heading_path)
+                or evidence_quote.casefold()
+                == re.sub(
+                    r"\s+",
+                    " ",
+                    str(scope_boundary_slots[0].get("evidence_quote") or "").strip(),
+                ).casefold()
+            )
+        )
         authoritative_plan_evidence = bool(
             exact_support_plan_slot
             or trusted_prompt_contract_slot
             or prompt_aligned_source_slot
             or structured_table_plan_slot
+            or scope_boundary_abstract_slot
         )
         candidate_bound = False
         candidate_nums = list(slot.get("candidate_hits") or [])
@@ -11257,17 +11337,14 @@ def _augment_hits_with_canonical_answer_citations(
         if not source_key:
             continue
         source_identity = _reading_slot_source_identity(source_path)
-        authoritative_existing = next(
-            (
-                hit
-                for hit in out
-                if isinstance(hit, dict)
+        def _is_authoritative_source_hit(hit: dict) -> bool:
+            return bool(
+                isinstance(hit, dict)
                 and _reading_slot_source_identity(
                     ((hit.get("meta") or {}).get("source_path") if isinstance(hit.get("meta"), dict) else "")
                     or hit.get("source_path")
                 )
                 == source_identity
-                and _hit_answer_num(hit) == int(num)
                 and isinstance((hit.get("ui_meta") or {}).get("primary_evidence"), dict)
                 and (
                     (
@@ -11346,9 +11423,39 @@ def _augment_hits_with_canonical_answer_citations(
                         )
                     )
                 )
-            ),
+            )
+
+        authoritative_candidates = [
+            hit for hit in out if isinstance(hit, dict) and _is_authoritative_source_hit(hit)
+        ]
+        authoritative_existing = next(
+            (hit for hit in authoritative_candidates if _hit_answer_num(hit) == int(num)),
             None,
         )
+        if authoritative_existing is None and len(authoritative_candidates) == 1:
+            # Citation numbering can be reassigned after the plan is built. If
+            # there is exactly one authoritative passage for this source, reuse
+            # it under the final answer number instead of scanning the paper.
+            # Keep the plan's original number so occurrence-level diagnostics
+            # and later cache repair can still recover the generation mapping.
+            reused = dict(authoritative_candidates[0])
+            reused_meta = (
+                dict(reused.get("meta") or {})
+                if isinstance(reused.get("meta"), dict)
+                else {}
+            )
+            original_num = _hit_answer_num(reused)
+            if original_num > 0:
+                reused_meta["citation_plan_original_answer_citation_num"] = original_num
+            reused_meta["ref_answer_citation_num"] = int(num)
+            reused_meta["canonical_answer_evidence"] = True
+            reused["meta"] = reused_meta
+            if original_num > 0 and original_num in cited_nums:
+                out.append(reused)
+            else:
+                reused_idx = out.index(authoritative_candidates[0])
+                out[reused_idx] = reused
+            authoritative_existing = reused
         if authoritative_existing is not None:
             # The converged References payload or the citation plan already
             # carries the answer-number/source binding and a concrete evidence
@@ -14703,6 +14810,20 @@ def enrich_messages_with_reference_render(
         raw_ref_pack_dict = raw_ref_pack if isinstance(raw_ref_pack, dict) else None
         input_ref_sig = _raw_reference_render_cache_input_signature(raw_ref_pack_dict)
         message_citation_plan = _message_citation_plan(rec)
+        if _authoritative_doc_list_plan_covers_pack(
+            raw_ref_pack_dict,
+            message_citation_plan,
+        ):
+            raw_ref_pack_dict = dict(raw_ref_pack_dict or {})
+            pipeline_debug = dict(raw_ref_pack_dict.get("pipeline_debug") or {})
+            pipeline_debug["allow_answer_alignment_source_scan"] = False
+            raw_ref_pack_dict["pipeline_debug"] = pipeline_debug
+            if isinstance(raw_ref_pack_dict.get("rendered_payload"), dict):
+                rendered_payload = dict(raw_ref_pack_dict["rendered_payload"])
+                rendered_debug = dict(rendered_payload.get("pipeline_debug") or {})
+                rendered_debug["allow_answer_alignment_source_scan"] = False
+                rendered_payload["pipeline_debug"] = rendered_debug
+                raw_ref_pack_dict["rendered_payload"] = rendered_payload
         citation_plan_sig = _stable_json_hash(message_citation_plan or {})
         answer_sig = _answer_render_signature(render_source)
         expected_render_locale = _effective_citation_render_locale(

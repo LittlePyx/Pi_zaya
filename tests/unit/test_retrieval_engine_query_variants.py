@@ -214,6 +214,22 @@ def test_cassi_alias_matches_dual_disperser_title_without_literal_acronym() -> N
     ) == 0.0
 
 
+def test_hatnet_alias_and_variants_resolve_dual_scale_transformer_source() -> None:
+    question = (
+        "ISTA-Net 和 HATNet 的深度展开架构如何把迭代算法变成可学习网络？"
+    )
+    source = (
+        "library/CVPR-2024-Dual-Scale Transformer for Large-Scale "
+        "Single-Pixel Imaging.en.md"
+    )
+
+    assert _source_prompt_match_score(question, source) >= 7.5
+    variants = " ".join(_deterministic_query_variants(question)).lower()
+    assert "dual-scale transformer" in variants
+    assert "tensor gradient descent" in variants
+    assert "s-sa" in variants and "c-sa" in variants
+
+
 def test_deterministic_query_variants_expand_snapshot_compressive_3d_lineage() -> None:
     variants = _deterministic_query_variants(
         "SCI 或压缩快照成像这条线，是怎么从光谱成像走到 3D 场景重建的？"

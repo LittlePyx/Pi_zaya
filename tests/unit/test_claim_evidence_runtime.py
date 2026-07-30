@@ -1048,6 +1048,40 @@ def test_restores_reported_3d_video_frame_rate_from_eligible_evidence() -> None:
     assert meta["restored_evidence_numbers"] == 1
 
 
+def test_restores_dmd_pattern_pair_and_frame_budget_as_one_relation() -> None:
+    answer = (
+        "每个测量值使用一对正负图案，因此 333 个测量需要 666 次切换 [1]。"
+    )
+    hits = [
+        {
+            "text": (
+                "We chose to operate the DMD at 20 kHz. Since our detector senses "
+                "only one output port, after each pattern we display the corresponding "
+                "negative pattern, and take the difference of the two signals. Motivated "
+                "to achieve 30 fps or 15 fps this allowed for a maximum of 333 or 666 "
+                "patterns respectively."
+            )
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        prompt=(
+            "为什么能做到 128×128、30 fps？20 kHz DMD、正负图案和 "
+            "333 个测量之间是什么关系？"
+        ),
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "DMD 实际运行在 20 kHz [1]" in repaired
+    assert "每帧测量上限分别为 333 和 666 组 [1]" in repaired
+    assert meta["restored_evidence_numbers"] == 1
+
+
 def test_multi_source_numeric_comparison_is_kept_only_after_union_coverage() -> None:
     answer = "SCIGS obtains 30.2 dB [1], while SCINeRF obtains 31.5 dB [2]."
     hits = [

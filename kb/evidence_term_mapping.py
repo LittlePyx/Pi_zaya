@@ -202,6 +202,29 @@ _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (r"串扰", ("crosstalk",)),
     (r"死区时间", ("dead", "time")),
     (r"泊松", ("poisson",)),
+    (
+        r"(?:照明图案|投影端).{0,24}(?:散射|非理想聚焦|模糊)|非理想聚焦",
+        ("illumination", "patterns", "scattering", "non", "ideal", "focus", "blur"),
+    ),
+    (r"空间下采样|图案分辨率有限", ("spatial", "downsampling", "limited", "resolution", "patterns")),
+    (
+        r"机械抖动|相对错位|乘性波动",
+        ("mechanical", "jitters", "relative", "misalignment", "multiplicative", "fluctuations"),
+    ),
+    (
+        r"探测路径.{0,24}(?:散射|模糊)|散射缺陷",
+        ("detection", "path", "scattering", "imperfections", "further", "blur"),
+    ),
+    (r"光子散粒噪声|散粒噪声", ("photon", "shot", "noise", "poisson")),
+    (r"电子噪声", ("electronic", "noise")),
+    (
+        r"整个场景.{0,16}(?:光强|积分)|全局测量",
+        ("single", "pixel", "detector", "integrates", "light", "intensities", "entire", "scene", "readout"),
+    ),
+    (
+        r"传播到整幅图像|扩散到整幅图像|全局污染",
+        ("propagate", "spread", "entire", "image", "reconstruction"),
+    ),
 )
 
 

@@ -6,7 +6,7 @@ import re
 from .table_index import table_chunks_from_markdown
 
 
-CHUNK_SCHEMA_VERSION = 9
+CHUNK_SCHEMA_VERSION = 10
 
 
 @dataclass

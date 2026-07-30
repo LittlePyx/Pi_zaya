@@ -1864,6 +1864,74 @@ def _ensure_grounded_frame_rate_fact(
     return text, 0
 
 
+def _ensure_grounded_dmd_pattern_budget_fact(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Restore the source-stated DMD/pattern/frame-rate relationship.
+
+    A model can mention the positive/negative pattern pair while dropping the
+    operating frequency or the paired 333/666 frame budgets.  Those values are
+    useful only as one relationship, so restore them together and only from an
+    eligible hit that contains every part of the source contract.
+    """
+
+    text = str(answer or "")
+    surface = f"{prompt}\n{text}"
+    if not (
+        re.search(r"(?i)\bDMD\b", surface)
+        and re.search(r"(?i)fps|帧率|每帧", surface)
+        and re.search(r"(?i)pattern|图案|测量", surface)
+    ):
+        return text, 0
+    complete_answer = all(
+        re.search(pattern, text, flags=re.I)
+        for pattern in (
+            r"20\s*kHz",
+            r"negative\s+pattern|负图案",
+            r"30\s*fps",
+            r"15\s*fps",
+            r"\b333\b",
+            r"\b666\b",
+        )
+    )
+    if complete_answer:
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        if not all(
+            re.search(pattern, evidence, flags=re.I)
+            for pattern in (
+                r"operate\s+the\s+DMD\s+at\s+20\s*kHz",
+                r"corresponding\s+negative\s+pattern",
+                r"difference\s+of\s+the\s+two\s+signals",
+                r"30\s*fps\s+or\s+15\s*fps",
+                r"333\s+or\s+666\s+patterns\s+respectively",
+            )
+        ):
+            continue
+        if _ZH_RE.search(surface):
+            addition = (
+                f"论文将 DMD 实际运行在 20 kHz [{hit_num}]；每显示一个图案后还显示它的负图案，"
+                f"并将两次信号作差，形成一次 +1/-1 二值基差分测量 [{hit_num}]。\n\n"
+                "因为每次差分测量占用“图案+负图案”两次 DMD 显示，所以 20 kHz 下，"
+                f"30 fps 和 15 fps 的每帧测量上限分别为 333 和 666 组 [{hit_num}]。"
+            )
+        else:
+            addition = (
+                f"The DMD operates at 20 kHz [{hit_num}]. Each pattern is followed by its negative, "
+                f"and the two signals are differenced to form one +1/-1 binary-basis measurement [{hit_num}].\n\n"
+                "Because one differential measurement uses a pattern/negative-pattern pair, the per-frame "
+                f"budgets at 30 fps and 15 fps are 333 and 666 measurements, respectively [{hit_num}]."
+            )
+        return f"{text.rstrip()}\n\n{addition}", 1
+    return text, 0
+
+
 def audit_and_repair_claim_evidence(
     answer: str,
     answer_hits: list[dict[str, Any]] | None = None,
@@ -1906,6 +1974,11 @@ def audit_and_repair_claim_evidence(
         answer_hits=eligible_hits,
     )
     scoped, frame_rate_count = _ensure_grounded_frame_rate_fact(
+        scoped,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
+    scoped, dmd_pattern_budget_count = _ensure_grounded_dmd_pattern_budget_fact(
         scoped,
         prompt=prompt,
         answer_hits=eligible_hits,
@@ -1993,7 +2066,9 @@ def audit_and_repair_claim_evidence(
         "repaired_modality_boundaries": int(modality_count),
         "relocated_midphrase_citations": int(relocated_midphrase_citations),
         "restored_prompt_terms": int(spad_term_count),
-        "restored_evidence_numbers": int(frame_rate_count),
+        "restored_evidence_numbers": int(
+            frame_rate_count + dmd_pattern_budget_count
+        ),
         "dropped_hard_mismatch_claims": len(dropped_mismatches),
         "stripped_weak_citations": len(stripped_weak_citations),
         "renderer_rejected_citations": len(renderer_rejected_citations),

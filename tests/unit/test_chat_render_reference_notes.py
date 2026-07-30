@@ -1200,6 +1200,101 @@ def test_canonical_citation_reuses_source_bound_authoritative_plan_without_resca
     assert repaired == [hit]
 
 
+def test_canonical_citation_reuses_unique_authoritative_plan_across_number_reassignment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "renumbered.en.md"
+    source.write_text("# Paper\n\nUnique planned evidence.\n", encoding="utf-8")
+    hit = {
+        "text": "Unique planned evidence for the final claim.",
+        "meta": {
+            "source_path": str(source),
+            "ref_answer_citation_num": 1,
+            "citation_plan_slot": True,
+            "citation_plan_evidence_authoritative": True,
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": str(source),
+                "snippet": "Unique planned evidence for the final claim.",
+                "selection_reason": "prompt_aligned_source_sentence",
+            }
+        },
+    }
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: pytest.fail("unique same-source plan evidence must be reused"),
+    )
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [hit],
+        canonical_paths=["a.md", "b.md", "c.md", str(source)],
+        answer_text="The final answer cites the same planned paper under its final number [4].",
+    )
+
+    assert len(repaired) == 1
+    assert repaired[0]["meta"]["ref_answer_citation_num"] == 4
+    assert repaired[0]["meta"]["citation_plan_original_answer_citation_num"] == 1
+
+
+def test_authoritative_doc_list_complete_plan_disables_answer_source_scan() -> None:
+    from api import chat_render
+
+    source = r"db\paper\paper.en.md"
+    pack = {
+        "pipeline_debug": {"doc_list_authoritative": True},
+        "hits": [{"meta": {"source_path": source}}],
+    }
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source,
+                "evidence_quote": "A complete source-bound passage that grounded the answer.",
+            }
+        ]
+    }
+
+    assert chat_render._authoritative_doc_list_plan_covers_pack(pack, plan) is True
+    nested_pack = {
+        "hits": [{"meta": {"source_path": "stale.md"}}],
+        "rendered_payload": pack,
+    }
+    assert chat_render._authoritative_doc_list_plan_covers_pack(nested_pack, plan) is True
+    plan["slots"][0]["evidence_quote"] = "too short"
+    assert chat_render._authoritative_doc_list_plan_covers_pack(pack, plan) is False
+
+
+def test_scope_boundary_abstract_plan_is_authoritative_without_seed_hit(tmp_path: Path) -> None:
+    from api import chat_render
+
+    source = tmp_path / "scope.en.md"
+    evidence = "This paper studies the reconstruction scope of the proposed imaging method."
+    source.write_text(f"# Scope\n\n## Abstract\n\n{evidence}\n", encoding="utf-8")
+    plan = {
+        "intent": "scope_boundary",
+        "budget": {"system_a": 1},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": str(source),
+                "source_name": "scope.pdf",
+                "heading_path": "Scope / Abstract",
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+
+    hits = chat_render._augment_hits_with_system_a_plan_slots([], plan)
+
+    assert len(hits) == 1
+    assert hits[0]["meta"]["citation_plan_evidence_authoritative"] is True
+
+
 def test_canonical_citation_incomplete_authoritative_plan_still_scans_and_recovers(
     tmp_path: Path,
     monkeypatch,
@@ -13832,6 +13927,7 @@ def test_scope_boundary_abstract_row_is_not_overwritten_by_later_plan_slot(monke
     assert len(hits) == 1
     assert hits[0]["text"] == abstract_evidence
     assert hits[0]["meta"]["citation_plan_scope_boundary"] is True
+    assert hits[0]["meta"]["citation_plan_evidence_authoritative"] is True
     assert hits[0]["meta"]["primary_block_id"] == "blk-abstract"
     assert hits[0]["meta"]["ref_answer_citation_num"] == 1
 

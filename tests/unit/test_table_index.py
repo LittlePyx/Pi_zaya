@@ -95,6 +95,52 @@ def test_multi_level_headers_keep_dataset_method_and_sampling_ratio_together() -
     assert "Set11 / ISTA-Net+ [69] = 21.32/0.6037" in ratio_4["text"]
 
 
+def test_compact_multi_level_headers_restore_trailing_runtime_columns() -> None:
+    md = "\n".join(
+        [
+            "# Experiments",
+            "**Table 1.** Average PSNR performance on Set11.",
+            "| Algorithm | CS Ratio | Time CPU/GPU | FPS CPU/GPU |  |  |  |  |  |  |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "|  | 50% | 40% | 30% | 25% | 10% | 4% | 1% |  |  |",
+            "| TVAL3 | 33.55 | 31.46 | 29.23 | 27.92 | 22.99 | 18.75 | 16.43 | 3.135s/- | 0.32/- |",
+            "| ISTA-Net | 37.43 | 35.36 | 32.91 | 31.53 | 25.80 | 21.23 | 17.30 | 0.923s/0.039s | 1.08/25.6 |",
+            "| ISTA-Net$^+$ | 38.07 | 36.06 | 33.82 | 32.57 | 26.64 | 21.31 | 17.34 | 1.375s/0.047s | 0.73/21.3 |",
+        ]
+    )
+
+    headers, _rows = parse_markdown_table("\n".join(md.splitlines()[2:]))
+    assert headers == [
+        "Algorithm",
+        "CS Ratio 50%",
+        "CS Ratio 40%",
+        "CS Ratio 30%",
+        "CS Ratio 25%",
+        "CS Ratio 10%",
+        "CS Ratio 4%",
+        "CS Ratio 1%",
+        "Time CPU/GPU",
+        "FPS CPU/GPU",
+    ]
+
+    chunks = chunk_markdown(md, source_path="ista-net.md", overlap=0)
+    row = next(
+        chunk
+        for chunk in chunks
+        if chunk["meta"].get("structured_kind") == "table_row"
+        and chunk["meta"].get("table_row_label") == "ISTA-Net$^+$"
+    )
+    assert "Time CPU/GPU = 1.375s/0.047s" in row["text"]
+    assert "FPS CPU/GPU = 0.73/21.3" in row["text"]
+
+    hits = BM25Retriever(chunks).search(
+        "ISTA-Net+ Set11 25% PSNR CPU/GPU time and FPS",
+        top_k=3,
+    )
+    assert hits[0]["meta"].get("structured_kind") == "table_row"
+    assert hits[0]["meta"].get("table_row_label") == "ISTA-Net$^+$"
+
+
 def test_with_without_metric_subheaders_are_merged_and_not_indexed_as_data() -> None:
     md = "\n".join(
         [

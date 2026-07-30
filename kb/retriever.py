@@ -11,7 +11,7 @@ from .tokenize import tokenize
 
 _TABLE_QUERY_RE = re.compile(
     r"(?:\b(?:table|tabular|highest|lowest|best|worst|maximum|minimum|compare|comparison|"
-    r"PSNR|SSIM|LPIPS|RMSE|NMSE|MSE|MAE|SNR|FID|mAP|F1|AUC|IoU)\b|"
+    r"PSNR|SSIM|LPIPS|RMSE|NMSE|MSE|MAE|SNR|FID|mAP|F1|AUC|IoU|FPS|Latency|Time|Speed)\b|"
     r"表格|表中|最高|最低|最好|最差|最大|最小|比较|对比)",
     flags=re.I,
 )
@@ -34,6 +34,41 @@ _TABLE_VARIANT_QUERY_RE = re.compile(
     r"消融|块数|层数|深度|宽度|变体|设置|配置|组件|激活|采样率",
     flags=re.I,
 )
+
+_TABLE_FIELD_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:LPIPS|PSNR|SSIM|RMSE|NMSE|MSE|MAE|SNR|FID|"
+    r"mAP(?:@[.\d:]+)?|AP(?:50|75)?|F1|AUC|IoU|Dice|Accuracy|Precision|Recall|"
+    r"FPS|FLOPs|Params?|Latency|Time|CPU|GPU|Speed|Sampling\s+Ratio|CS\s+Ratio|SR)"
+    r"(?![A-Za-z0-9])",
+    flags=re.I,
+)
+
+
+def _table_field_terms(value: object) -> set[str]:
+    return {
+        re.sub(r"\s+", " ", str(match.group(0) or "").strip().lower())
+        for match in _TABLE_FIELD_RE.finditer(str(value or ""))
+        if str(match.group(0) or "").strip()
+    }
+
+
+def _table_identity_surface(value: object) -> str:
+    text = re.sub(r"\[[^\]]+\]", " ", str(value or ""))
+    text = text.replace("$", "").replace("^", "").replace("{", "").replace("}", "")
+    return re.sub(r"[^a-z0-9+]+", " ", text.lower()).strip()
+
+
+def _query_names_table_row(query: object, row_label: object) -> bool:
+    query_surface = _table_identity_surface(query)
+    label_surface = _table_identity_surface(row_label)
+    if not query_surface or not label_surface:
+        return False
+    return bool(
+        re.search(
+            rf"(?<![a-z0-9+]){re.escape(label_surface)}(?![a-z0-9+])",
+            query_surface,
+        )
+    )
 
 
 @dataclass
@@ -115,6 +150,28 @@ class BM25Retriever:
                     if adjusted_scores[idx] <= 0.0:
                         continue
                     adjusted_scores[idx] = adjusted_scores[idx] * 1.18 + (0.02 if comparison_intent else 0.04)
+                    # A named row plus several requested fields is a lookup of
+                    # that row, not an extrema/comparison over one metric.  A
+                    # table_metric chunk intentionally contains one complete
+                    # column and can otherwise outrank the only chunk that has
+                    # all requested values (for example quality, runtime and
+                    # FPS for one model).
+                    row_label_tokens = {
+                        str(token or "").lower()
+                        for token in tokenize(str(meta.get("table_row_label") or ""))
+                        if str(token or "").strip()
+                    }
+                    row_label_overlap = row_label_tokens.intersection(query_tokens)
+                    query_fields = _table_field_terms(query)
+                    row_field_overlap = query_fields.intersection(_table_field_terms(chunk.get("text") or ""))
+                    if (
+                        row_label_tokens
+                        and len(row_label_overlap) / len(row_label_tokens) >= 0.5
+                        and len(row_field_overlap) >= 2
+                    ):
+                        adjusted_scores[idx] += 3.0 + (1.15 * min(4, len(row_field_overlap)))
+                        if _query_names_table_row(query, meta.get("table_row_label") or ""):
+                            adjusted_scores[idx] += 2.0
         try:
             best = float(max(adjusted_scores)) if adjusted_scores else 0.0
         except Exception:

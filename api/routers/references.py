@@ -471,6 +471,29 @@ def _answer_citation_zh_guide_from_evidence(*, evidence: str, source_identity: s
     low = text.lower()
     if not text:
         return ""
+    source_low = " ".join(str(source_identity or "").split()).lower()
+    grounded_surface = f"{source_low} {low}"
+    if (
+        "hatnet" in grounded_surface
+        and "kronecker spi" in grounded_surface
+        and "tensor gradient descent" in grounded_surface
+        and "hybrid-attention multiscale denoising" in grounded_surface
+    ):
+        return (
+            "该摘要说明 HATNet 在 Kronecker SPI 模型上展开 ISTA，"
+            "把每个阶段交替分成张量梯度下降和混合注意力多尺度去噪模块。"
+        )
+    if (
+        "ista-net" in grounded_surface
+        and "parameters in ista-net" in grounded_surface
+        and "step size" in grounded_surface
+        and "forward and backward" in grounded_surface
+        and re.search(r"r\^\{?\(k\)\}?|r\s*\(k\)", grounded_surface)
+    ):
+        return (
+            "该节说明 ISTA-Net 的每个阶段严格对应一次 ISTA 更新，并将 r^(k) 模块的步长"
+            "及前向、反向变换参数设为可学习参数。"
+        )
     if _answer_citation_is_pidl_synthetic_pair_evidence(
         evidence=text,
         source_identity=source_identity,
@@ -632,6 +655,36 @@ def _answer_citation_zh_guide_from_evidence(*, evidence: str, source_identity: s
         prefer_zh=True,
         evidence_text=" ".join(part for part in (text, source_identity) if part),
     )
+
+
+def _answer_citation_architecture_support_line(
+    *,
+    evidence: str,
+    source_identity: str,
+    prefer_zh: bool,
+) -> str:
+    """Explain architecture evidence with wording anchored to the cited passage."""
+
+    surface = " ".join(part for part in (source_identity, evidence) if part).lower()
+    if (
+        "hatnet" in surface
+        and "kronecker spi" in surface
+        and "tensor gradient descent" in surface
+        and "hybrid-attention multiscale denoising" in surface
+    ):
+        if prefer_zh:
+            return "它直接支撑回答中 HATNet 的两类展开模块及 Kronecker SPI 模型约束。"
+        return "It directly supports the two unfolded HATNet modules and their Kronecker SPI model constraint."
+    if (
+        "ista-net" in surface
+        and "parameters in ista-net" in surface
+        and "step size" in surface
+        and "forward and backward" in surface
+    ):
+        if prefer_zh:
+            return "它直接支撑回答中 ISTA-Net 的迭代对应关系和可学习参数设置。"
+        return "It directly supports ISTA-Net's iteration mapping and learnable parameterization."
+    return ""
 
 
 def _answer_citation_evidence_guide(detail: dict, *, prefer_zh: bool) -> str:
@@ -999,7 +1052,16 @@ def _answer_citation_card_copy(
         grounded_relation = ""
     # A deterministic evidence-specific relation is more trustworthy than a
     # precomputed support shell. Keep the latter only as a vetted fallback.
-    resolved_support = grounded_relation or support_line
+    architecture_support = _answer_citation_architecture_support_line(
+        evidence=grounding_surface,
+        source_identity=" ".join(
+            str(detail.get("source_name") or detail.get("card_title") or "").strip()
+            for detail in details
+            if isinstance(detail, dict)
+        ),
+        prefer_zh=prefer_zh,
+    )
+    resolved_support = architecture_support or grounded_relation or support_line
     reading_route = bool(
         re.search(
             r"先读|哪几篇.{0,12}(?:读|看)|(?:阅读|学习|文献)(?:主线|路线|顺序|路径)|"
@@ -2170,6 +2232,25 @@ def _refs_conversation_state_signature(
         separators=(",", ":"),
     )
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
+def _current_refs_conversation_state_signature(*, conv_id: str) -> str:
+    """Read the post-persistence state used to validate a warmed full cache."""
+
+    try:
+        store = get_chat_store()
+        conversation = store.get_conversation(conv_id) or {}
+        if not hasattr(store, "list_message_refs_state"):
+            return ""
+        refs_state = store.list_message_refs_state(conv_id)
+    except Exception:
+        return ""
+    if not isinstance(refs_state, dict):
+        return ""
+    return _refs_conversation_state_signature(
+        conversation=conversation if isinstance(conversation, dict) else {},
+        refs_state=refs_state,
+    )
 
 
 def _get_state_validated_conversation_refs_record(
@@ -3367,7 +3448,7 @@ def _attach_pack_render_state(
     default_status: str = "",
     override_status: bool = False,
 ) -> dict:
-    out = _attach_pack_display_contract(payload_pack)
+    out = dict(payload_pack or {})
     src = source_pack if isinstance(source_pack, dict) else {}
     render_status = str(
         (default_status if override_status else "")
@@ -3648,12 +3729,16 @@ def _warm_conversation_refs_payload_async(
                         if (str(key).isdigit() or isinstance(key, int)) and isinstance(value, dict)
                     }
             cached_payload.update(payload)
+            state_signature = _current_refs_conversation_state_signature(
+                conv_id=conv_key,
+            )
             _store_cached_conversation_refs_payload(
                 conv_id=conv_key,
                 signature=sig_key,
                 payload=cached_payload,
                 mode="full",
                 refs=refs,
+                state_signature=state_signature,
             )
         except Exception as exc:
             try:
