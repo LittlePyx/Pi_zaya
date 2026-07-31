@@ -1030,7 +1030,11 @@ async function startRefsPolling(
     refsPollTimer = window.setTimeout(tick, delay)
   }
 
-  void tick()
+  // ``startRefsPolling`` always follows a completed direct request. Running
+  // the first tick immediately just fetches the same state twice and competes
+  // with message hydration for the API/SQLite connection. Give the background
+  // render one normal polling interval to advance first.
+  refsPollTimer = window.setTimeout(tick, nextDelay())
 }
 
 function getMessageProvenanceForPostprocess(message: Message | null | undefined): Record<string, unknown> | null {
@@ -1241,7 +1245,15 @@ function messageNeedsPostprocessRefresh(
 ): boolean {
   if (!message) return true
   if (String(message.role || '').trim().toLowerCase() !== 'assistant') return false
-  if (messageHasAnchoredCitations(message)) return false
+  if (messageHasAnchoredCitations(message)) {
+    const anchoredProvenanceStatus = String(
+      getMessageProvenanceForPostprocess(message)?.status || '',
+    ).trim().toLowerCase()
+    // A guide answer is complete once both its citation links and strict
+    // location provenance are ready. Do not poll merely because it belongs to
+    // guide mode, but keep polling when the locator contract is still pending.
+    return Boolean(opts?.paperGuideMode && anchoredProvenanceStatus !== 'ready')
+  }
   if (messageHasExplicitZeroCitationTerminal(message, opts?.refs)) return false
   if (messageExpectsSystemACitations(message) || messageExpectsSystemBCitations(message)) return true
   const provenance = getMessageProvenanceForPostprocess(message)
@@ -1262,7 +1274,8 @@ async function startMessagePostprocessPolling(
   if (!convId || !Number.isFinite(msgId) || msgId <= 0 || typeof window === 'undefined') return
   const token = ++messagePostprocessPollToken
   let tries = 0
-  let lastObservedRevision = ''
+  const initialTarget = getState().messages.find((item) => Number(item.id || 0) === msgId) || null
+  let lastObservedRevision = messageCitationRevisionForPostprocess(initialTarget)
   let stableRevisionTries = 0
   const maxTries = opts?.paperGuideMode ? 24 : 18
   const minTries = opts?.paperGuideMode ? 4 : 1
@@ -1358,7 +1371,10 @@ async function startMessagePostprocessPolling(
     messagePostprocessPollTimer = window.setTimeout(tick, nextDelay())
   }
 
-  void tick()
+  // The caller has just completed a message hydration. An immediate first
+  // tick can only repeat that request; wait one normal interval for any
+  // server-side citation packet refinement.
+  messagePostprocessPollTimer = window.setTimeout(tick, nextDelay())
 }
 
 interface GenerationState {
@@ -2861,9 +2877,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
               }
             })
             if (visibleAtCompletion) {
-              scheduleLoadRefsForConversation(convId!, set, () => get().activeConvId, 120, undefined, 'generation_done')
+              // The backend can compose final evidence cards directly from the
+              // completed answer citation plan. Start that single terminal
+              // refs read immediately and let message packet hydration proceed
+              // in parallel; neither result depends on the other response.
+              scheduleLoadRefsForConversation(
+                convId!,
+                set,
+                () => get().activeConvId,
+                0,
+                undefined,
+                'generation_done',
+              )
             }
-
             // The completed answer is already visible. Hydrating server-side
             // metadata and post-processing must never keep the streaming UI
             // open or turn a successful generation into a visible failure.
@@ -2929,16 +2955,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 conversationCacheById: nextCache,
               }
             })
-            if (page && visibleAtCompletion) {
-              scheduleLoadRefsForConversation(
-                convId!,
-                set,
-                () => get().activeConvId,
-                40,
-                undefined,
-                'post_generation_message_hydration',
-              )
-            }
             const postprocessState = get()
             if (!visibleAtCompletion || postprocessState.activeConvId !== convId) {
               void get().loadSidebarData()
@@ -2953,7 +2969,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const assistantMessage = postprocessState.messages.find(
               (item) => Number(item.id || 0) === Number(res.assistant_msg_id || 0),
             ) || null
-            if (paperGuideMode || messageNeedsPostprocessRefresh(assistantMessage, {
+            if (messageNeedsPostprocessRefresh(assistantMessage, {
               paperGuideMode,
               refs: postprocessState.refs,
             })) {

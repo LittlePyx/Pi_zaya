@@ -90,6 +90,63 @@ def test_attach_pack_render_state_applies_display_contract_once(monkeypatch) -> 
     assert out["display_state"] == "ready"
 
 
+def test_answer_citation_state_ignores_unused_generation_plan_sources() -> None:
+    sources = ["hadamard.en.md", "overview.en.md", "foveated.en.md"]
+    slots = [
+        {
+            "preferred_system": "system_a",
+            "candidate_hits": [index],
+            "source_path": source,
+            "source_name": Path(source).stem,
+            "heading_path": f"Paper {index} / Abstract",
+            "page_start": 1,
+            "evidence_quote": evidence,
+        }
+        for index, (source, evidence) in enumerate(
+            zip(
+                sources,
+                (
+                    "Hadamard and Fourier patterns offer different basis choices for imaging.",
+                    "The review surveys structured illumination and single-pixel detectors.",
+                    "Every frame receives new information across the full field of view.",
+                ),
+            ),
+            start=1,
+        )
+    ]
+    details = [
+        {
+            "num": index,
+            "citation_route": "system_a",
+            "source_path": source,
+            "source_name": Path(source).stem,
+            "heading_path": f"Paper {index} / Abstract",
+            "evidence_quote": slots[index - 1]["evidence_quote"],
+        }
+        for index, source in enumerate(sources, start=1)
+    ]
+    message = {
+        "role": "assistant",
+        "content": "动态超采样仍从整个视场获得新信息 [3]。",
+        "meta": {
+            "answer_quality": {"citation_plan": {"slots": slots}},
+            "paper_guide_contracts": {
+                "render_packet": {"cite_details": details}
+            },
+        },
+    }
+
+    planned = references_router._grounded_system_a_details_from_citation_plan(
+        {"slots": slots},
+        answer_text=message["content"],
+    )
+    grounded, pending = references_router._grounded_answer_citation_state(message)
+
+    assert [item["source_path"] for item in planned] == [sources[2]]
+    assert [item["source_path"] for item in grounded] == [sources[2]]
+    assert pending is False
+
+
 def test_state_validated_cache_skips_rendered_payload_json_loader(monkeypatch) -> None:
     references_router._REFS_CONVERSATION_CACHE.clear()
     conversation = {
@@ -1367,6 +1424,14 @@ def test_pidl_synthetic_pair_evidence_has_source_bound_chinese_card_copy() -> No
     assert all(term in summary for term in ("物理噪声模型", "PASCAL", "260 万对"))
     assert all(term in why for term in ("探测器综述", "物理噪声模型", "学习流程"))
 
+    direct_summary, direct_why = references_router._answer_citation_card_copy(
+        [detail],
+        prefer_zh=True,
+        prompt="physics-informed deep learning 在单光子成像里到底帮了什么？",
+    )
+    assert direct_summary == summary
+    assert all(term in direct_why for term in ("实拍数据", "物理噪声模型", "训练数据生成"))
+
     unrelated_summary, _ = references_router._answer_citation_card_copy(
         [{**detail, "source_name": "Unrelated dataset paper.pdf"}],
         prefer_zh=True,
@@ -2545,6 +2610,102 @@ def test_get_conversation_refs_exposes_route_timing_headers(monkeypatch):
     counts = str(response.headers.get("x-kb-refs-counts") or "")
     assert "packs=1" in counts
     assert "hits=1" in counts
+
+
+def test_get_conversation_refs_uses_completed_answer_citations_without_fast_render(monkeypatch):
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    source_path = r"db\SciAdv-2017\SciAdv-2017.en.md"
+    refs = {
+        7: {
+            "prompt": "Which paper discusses dynamic supersampling?",
+            "hits": [
+                {
+                    "text": "retrieval seed",
+                    "meta": {
+                        "source_path": source_path,
+                        "ref_pack_state": "ready",
+                    },
+                }
+            ],
+        }
+    }
+    store = _FakeStore({"mode": "chat"}, refs)
+    persisted: list[dict] = []
+
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(
+        references_router,
+        "_attach_assistant_answers_to_refs",
+        lambda **kwargs: dict(kwargs["refs"]),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_answer_citation_details_by_user",
+        lambda **_kwargs: {7: [{"source_path": source_path}]},
+    )
+
+    def _overlay(**kwargs):
+        payload = dict(kwargs["payload"])
+        pack = dict(payload[7])
+        pack.update(
+            {
+                "answer_aligned_citation_cards": True,
+                "payload_mode": "full",
+                "render_status": "full",
+                "display_state": "ready",
+                "hits": [
+                    {
+                        "text": "exact cited passage",
+                        "meta": {"source_path": source_path},
+                        "ui_meta": {
+                            "source_path": source_path,
+                            "summary_line": "The cited passage defines dynamic supersampling.",
+                            "primary_evidence": {
+                                "source_path": source_path,
+                                "snippet": "exact cited passage",
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+        return {7: pack}
+
+    monkeypatch.setattr(
+        references_router,
+        "_overlay_refs_payload_with_answer_citations",
+        _overlay,
+    )
+    monkeypatch.setattr(
+        references_router,
+        "enrich_refs_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed answer citations must bypass fast card rendering")
+        ),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_persist_rendered_refs_payloads",
+        lambda **kwargs: persisted.append(dict(kwargs)),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_warm_conversation_refs_payload_async",
+        lambda **_kwargs: None,
+    )
+
+    response = Response()
+    out = references_router.get_conversation_refs(
+        "conv-answer-overlay-fast-path",
+        response=response,
+    )
+
+    assert out[7]["payload_mode"] == "full"
+    assert out[7]["render_status"] == "full"
+    assert out[7]["display_state"] == "ready"
+    assert persisted
+    assert "fast_render;dur=" not in str(response.headers.get("server-timing") or "")
 
 
 def test_get_conversation_refs_invalidates_cache_when_refs_change(monkeypatch):
@@ -3911,6 +4072,90 @@ def test_warm_conversation_refs_payload_async_uses_bounded_full_variant(monkeypa
     assert kwargs.get("allow_exact_locate") is False
     assert calls.get("persisted_payload") == {13: {"hits": [{"ui_meta": {"summary_line": "bounded-full"}}]}}
     assert calls.get("cache_mode") == "full"
+
+
+def test_scheduled_conversation_warm_skips_when_answer_overlay_is_complete(
+    monkeypatch,
+):
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    references_router._REFS_CONVERSATION_WARM_SCHEDULED.clear()
+    filter_calls: list[dict] = []
+
+    monkeypatch.setattr(references_router, "_refs_background_warm_delay_s", lambda: 0.0)
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: object())
+
+    def fake_filter(**kwargs):
+        filter_calls.append(dict(kwargs))
+        return {}
+
+    monkeypatch.setattr(
+        references_router,
+        "_refs_without_completed_answer_citation_overlays",
+        fake_filter,
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_warm_conversation_refs_payload_async",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("completed answer cards must not be warmed")
+        ),
+    )
+
+    references_router._schedule_conversation_refs_payload_warm(
+        conv_id="conv-answer-complete",
+        signature="sig-answer-complete",
+        refs={7: {"prompt": "question", "hits": []}},
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+    )
+
+    assert len(filter_calls) == 1
+    assert not references_router._REFS_CONVERSATION_WARM_SCHEDULED
+
+
+def test_scheduled_conversation_warm_filters_refs_and_authoritative_docs(
+    monkeypatch,
+):
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    references_router._REFS_CONVERSATION_WARM_SCHEDULED.clear()
+    warm_calls: list[dict] = []
+
+    monkeypatch.setattr(references_router, "_refs_background_warm_delay_s", lambda: 0.0)
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: object())
+    monkeypatch.setattr(
+        references_router,
+        "_refs_without_completed_answer_citation_overlays",
+        lambda **kwargs: {2: dict((kwargs.get("refs") or {})[2])},
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_warm_conversation_refs_payload_async",
+        lambda **kwargs: warm_calls.append(dict(kwargs)),
+    )
+
+    references_router._schedule_conversation_refs_payload_warm(
+        conv_id="conv-filtered-warm",
+        signature="sig-filtered-warm",
+        refs={
+            1: {"prompt": "complete", "hits": []},
+            2: {"prompt": "needs fallback", "hits": []},
+        },
+        guide_mode=True,
+        guide_source_path="bound.md",
+        guide_source_name="Bound paper",
+        authoritative_doc_list_by_user={
+            1: [{"source_path": "complete.md"}],
+            2: [{"source_path": "fallback.md"}],
+        },
+    )
+
+    assert len(warm_calls) == 1
+    assert list(warm_calls[0]["refs"]) == [2]
+    assert warm_calls[0]["authoritative_doc_list_by_user"] == {
+        2: [{"source_path": "fallback.md"}]
+    }
+    assert not references_router._REFS_CONVERSATION_WARM_SCHEDULED
 
 
 def test_warm_conversation_refs_payload_async_allows_background_llm_when_enabled(monkeypatch):

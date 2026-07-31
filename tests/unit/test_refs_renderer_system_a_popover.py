@@ -547,6 +547,70 @@ def test_chinese_foveated_mechanism_keeps_cross_language_source_link() -> None:
     )
 
 
+def test_foveated_support_copy_describes_the_actual_mechanism() -> None:
+    claim = (
+        "高分辨率焦点区域跟踪场景中的运动；它不同于简单放大，每帧仍从整个视场"
+        "获取新的空间信息，并在连续多帧中为慢变区域累积细节。"
+    )
+    evidence = (
+        "A high-resolution foveal region tracks motion within the scene, yet unlike "
+        "a simple zoom, every frame delivers new spatial information from across the "
+        "entire field of view."
+    )
+
+    binding = _assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={},
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="foveated-single-pixel-imaging.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert "全视场" in binding["reason"]
+    assert "动态超采样" in binding["reason"]
+    assert "低照度" not in binding["reason"]
+
+
+def test_suppressed_identity_marker_does_not_leave_broken_chinese_prose() -> None:
+    source_path = "db/foveated/foveated.en.md"
+    evidence = (
+        "A high-resolution foveal region tracks motion while every frame delivers "
+        "new spatial information across the entire field of view."
+    )
+
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "上述机制描述均基于 [1] 的正文内容。",
+        [
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Abstract",
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 0, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "Abstract",
+                    "evidence_quote": evidence,
+                }
+            ],
+        },
+        anchor_ns="suppressed-identity",
+    )
+
+    assert rendered == "上述机制描述均基于上述文献的正文内容。"
+    assert details == []
+
+
 def test_chinese_efficiency_and_noise_claim_keeps_exact_english_source_link() -> None:
     claim = "\u4e24\u79cd\u65b9\u6cd5\u5728\u6210\u50cf\u6548\u7387\u548c\u566a\u58f0\u9c81\u68d2\u6027\u65b9\u9762\u5b58\u5728\u5dee\u5f02\u3002"
     evidence = (

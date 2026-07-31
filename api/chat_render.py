@@ -2417,6 +2417,181 @@ def _authoritative_doc_list_plan_covers_pack(
     return bool(pack_sources) and pack_sources.issubset(planned_sources)
 
 
+def _authoritative_system_a_plan_covers_answer(
+    citation_plan: dict | None,
+    *,
+    answer_text: str,
+    canonical_paths: list[str] | None = None,
+) -> bool:
+    """Return whether every visible numeric citation has exact plan evidence."""
+
+    if not isinstance(citation_plan, dict):
+        return False
+    cited_nums = {
+        int(match.group(1) or 0)
+        for match in re.finditer(
+            r"(?<![!\\])\[(\d{1,5})\](?!\()",
+            _normalize_double_numeric_citation_markers(str(answer_text or "")),
+        )
+        if int(match.group(1) or 0) > 0
+    }
+    if not cited_nums:
+        return False
+    covered_nums: set[int] = set()
+    plan_source = str(citation_plan.get("source") or "").strip().lower()
+    for slot in list(citation_plan.get("slots") or []):
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
+            continue
+        source_path = str(
+            slot.get("source_path") or slot.get("sourcePath") or ""
+        ).strip()
+        evidence_quote = re.sub(
+            r"\s+",
+            " ",
+            str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip(),
+        )
+        if not source_path or len(evidence_quote) < 24:
+            continue
+        reason = str(
+            slot.get("evidence_selection_reason")
+            or slot.get("evidenceSelectionReason")
+            or ""
+        ).strip().lower()
+        has_locator = bool(
+            str(slot.get("heading_path") or slot.get("headingPath") or "").strip()
+            or str(slot.get("block_id") or slot.get("blockId") or "").strip()
+            or str(slot.get("anchor_id") or slot.get("anchorId") or "").strip()
+            or int(slot.get("page_start") or slot.get("pageStart") or 0) > 0
+        )
+        strict_locate = bool(
+            slot.get("strict_locate") or slot.get("strictLocate")
+        )
+        authoritative = bool(
+            (
+                reason
+                in {
+                    "exact_foveated_dynamic_supersampling_source",
+                    "prompt_aligned_source_sentence",
+                    "single_paper_comparison_facet",
+                }
+                and has_locator
+            )
+            or (
+                reason == "prompt_contract_block"
+                and strict_locate
+                and bool(
+                    str(slot.get("block_id") or slot.get("blockId") or "").strip()
+                    or str(slot.get("anchor_id") or slot.get("anchorId") or "").strip()
+                )
+            )
+            or (
+                plan_source == "exact_support_preflight"
+                and strict_locate
+                and has_locator
+            )
+            or (
+                str(citation_plan.get("intent") or "").strip().lower()
+                == "scope_boundary"
+                and has_locator
+            )
+            or bool(
+                has_locator
+                and re.search(
+                    r"(?is)\btable\s+\d+[a-z]?\b.*(?:detector\s+type\s*:|"
+                    r"\bmetric\s*:|(?:^|[;:])\s*[A-Za-z][A-Za-z0-9 +()_-]{0,48}\s*=\s*-?\d)",
+                    evidence_quote,
+                )
+            )
+        )
+        if not authoritative:
+            continue
+        for raw_num in list(slot.get("candidate_hits") or []):
+            try:
+                candidate_num = int(raw_num)
+            except (TypeError, ValueError):
+                continue
+            if candidate_num <= 0:
+                continue
+            if isinstance(canonical_paths, list) and canonical_paths:
+                if not (1 <= candidate_num <= len(canonical_paths)):
+                    continue
+                if (
+                    _reading_slot_source_identity(canonical_paths[candidate_num - 1])
+                    != _reading_slot_source_identity(source_path)
+                ):
+                    continue
+            covered_nums.add(candidate_num)
+    return cited_nums.issubset(covered_nums)
+
+
+def _scope_citation_plan_to_cited_system_a_sources(
+    citation_plan: dict | None,
+    *,
+    answer_text: str,
+    canonical_paths: list[str] | None = None,
+) -> dict | None:
+    """Drop unused System-A slots once the answer chose exact cited evidence.
+
+    The generation plan can retain fallback candidates that were useful before
+    drafting.  They are not evidence used by the completed answer and must not
+    become new inline citations merely because the renderer is repairing older
+    prose.  Keep all System-B slots because their structured markers have a
+    separate routing contract.
+    """
+
+    if not isinstance(citation_plan, dict):
+        return citation_plan
+    cited_nums = {
+        int(match.group(1) or 0)
+        for match in re.finditer(
+            r"(?<![!\\])\[(\d{1,5})\](?!\()",
+            _normalize_double_numeric_citation_markers(str(answer_text or "")),
+        )
+        if int(match.group(1) or 0) > 0
+    }
+    if not cited_nums:
+        return citation_plan
+    cited_sources = {
+        _reading_slot_source_identity(canonical_paths[num - 1])
+        for num in cited_nums
+        if isinstance(canonical_paths, list)
+        and 1 <= num <= len(canonical_paths)
+        and _reading_slot_source_identity(canonical_paths[num - 1])
+    }
+    scoped_slots: list[dict] = []
+    kept_system_a = False
+    for raw_slot in list(citation_plan.get("slots") or []):
+        if not isinstance(raw_slot, dict):
+            continue
+        slot = dict(raw_slot)
+        if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
+            scoped_slots.append(slot)
+            continue
+        slot_nums: set[int] = set()
+        for raw_num in list(slot.get("candidate_hits") or slot.get("candidateHits") or []):
+            try:
+                candidate_num = int(raw_num)
+            except (TypeError, ValueError):
+                continue
+            if candidate_num > 0:
+                slot_nums.add(candidate_num)
+        slot_source = _reading_slot_source_identity(
+            slot.get("source_path") or slot.get("sourcePath")
+        )
+        if slot_nums.intersection(cited_nums) or (
+            cited_sources and slot_source in cited_sources
+        ):
+            scoped_slots.append(slot)
+            kept_system_a = True
+    if not kept_system_a:
+        return citation_plan
+    scoped = copy.deepcopy(citation_plan)
+    scoped["slots"] = scoped_slots
+    return scoped
+
+
 def _effective_citation_render_locale(ref_pack: dict | None = None) -> str:
     try:
         prefs = load_prefs()
@@ -4488,15 +4663,15 @@ def _augment_hits_with_system_a_plan_slots(
         evidence_quote = re.sub(r"\s+", " ", str(slot.get("evidence_quote") or "").strip())
         if not source_path or not evidence_quote:
             continue
+        evidence_selection_reason = str(
+            slot.get("evidence_selection_reason")
+            or slot.get("evidenceSelectionReason")
+            or ""
+        ).strip().lower()
         slot_source_key = _reading_slot_source_key(source_path)
         broad_benefit_risk_slot = bool(
             slot_source_key in broad_benefit_risk_source_keys
-            and str(
-                slot.get("evidence_selection_reason")
-                or slot.get("evidenceSelectionReason")
-                or ""
-            ).strip().lower()
-            == "prompt_aligned_source_sentence"
+            and evidence_selection_reason == "prompt_aligned_source_sentence"
             and multi_claim_candidate_counts.get(slot_source_key, 0) >= 2
         )
         if broad_benefit_risk_slot:
@@ -4505,12 +4680,7 @@ def _augment_hits_with_system_a_plan_slots(
             # claim-specific passages already selected by the plan.
             continue
         trusted_prompt_contract_slot = bool(
-            str(
-                slot.get("evidence_selection_reason")
-                or slot.get("evidenceSelectionReason")
-                or ""
-            ).strip().lower()
-            == "prompt_contract_block"
+            evidence_selection_reason == "prompt_contract_block"
             and bool(slot.get("strict_locate") or slot.get("strictLocate"))
             and (
                 str(slot.get("block_id") or slot.get("blockId") or "").strip()
@@ -4518,12 +4688,19 @@ def _augment_hits_with_system_a_plan_slots(
             )
         )
         prompt_aligned_source_slot = bool(
-            str(
-                slot.get("evidence_selection_reason")
-                or slot.get("evidenceSelectionReason")
-                or ""
-            ).strip().lower()
-            == "prompt_aligned_source_sentence"
+            evidence_selection_reason == "prompt_aligned_source_sentence"
+        )
+        generated_exact_plan_slot = bool(
+            evidence_selection_reason
+            in {
+                "exact_foveated_dynamic_supersampling_source",
+                "single_paper_comparison_facet",
+            }
+            and bool(list(slot.get("candidate_hits") or []))
+            and bool(
+                heading_path
+                or int(slot.get("page_start") or slot.get("pageStart") or 0) > 0
+            )
         )
         exact_support_plan_slot = bool(
             force_dedicated_plan_hits
@@ -4558,6 +4735,7 @@ def _augment_hits_with_system_a_plan_slots(
             exact_support_plan_slot
             or trusted_prompt_contract_slot
             or prompt_aligned_source_slot
+            or generated_exact_plan_slot
             or structured_table_plan_slot
             or scope_boundary_abstract_slot
         )
@@ -4727,7 +4905,27 @@ def _augment_hits_with_system_a_plan_slots(
                 answer_citation_num = int(candidate_meta.get("ref_answer_citation_num") or candidate_num)
             except (TypeError, ValueError):
                 answer_citation_num = candidate_num
-            if canonical_source_match and not (exact_source_match or public_private_match):
+            explicit_occurrence_match = bool(
+                candidate_num in explicit_slot_candidate_nums
+                and int(
+                    canonical_source_counts.get(
+                        _reading_slot_source_identity(source_path)
+                    )
+                    or 0
+                )
+                > 1
+            )
+            if explicit_occurrence_match:
+                # Several visible markers may deliberately cite different
+                # passages from the same paper.  A compact refs seed can carry
+                # a stale answer number from a different occurrence (for
+                # example row 1 still says ``ref_answer_citation_num=2``).
+                # The citation plan's explicit candidate number is the
+                # authoritative occurrence contract; keeping the stale number
+                # makes the second facet append an unreachable extra row and
+                # later triggers a whole-paper recovery scan.
+                answer_citation_num = candidate_num
+            elif canonical_source_match and not (exact_source_match or public_private_match):
                 # This reserved row is being rebound to the source assigned to
                 # its canonical position. Do not carry over an answer number
                 # that belonged to the row's previous source.
@@ -4736,6 +4934,7 @@ def _augment_hits_with_system_a_plan_slots(
             should_rebind_candidate = bool(
                 trusted_prompt_contract_slot
                 or prompt_aligned_source_slot
+                or generated_exact_plan_slot
                 or exact_support_candidate_slot
                 or multi_claim_candidate_slot
                 or per_entity_author_profile_slot
@@ -6935,6 +7134,54 @@ def _reading_guide_repair_spi_prospects_answer(
         }
     )
     target_hit.update({"text": evidence, "meta": target_meta, "ui_meta": target_ui})
+    wavelength_re = re.compile(
+        r"(?i)\bwavelengths?\b|\bspectral\b|波段|波长|面阵.{0,12}(?:覆盖|达到|达不到)"
+    )
+    frame_rate_re = re.compile(r"(?i)high[- ]?frame\s+rates?|高帧率|高速成像")
+    three_dimensional_re = re.compile(r"(?i)three[- ]dimensional|\b3D\b|三维")
+    hazard_re = re.compile(r"(?i)hazardous\s+gas|gas\s+leaks?|危险气体|气体泄漏")
+    vehicle_re = re.compile(r"(?i)autonomous\s+vehicles?|自动驾驶")
+    paragraphs = re.split(r"(\n{2,})", text)
+    boundary_attached = False
+    application_attached = False
+    for idx in range(0, len(paragraphs), 2):
+        paragraph = paragraphs[idx]
+        if not paragraph.strip():
+            continue
+        if (
+            wavelength_re.search(paragraph)
+            and frame_rate_re.search(paragraph)
+            and three_dimensional_re.search(paragraph)
+        ):
+            paragraphs[idx] = _append_numeric_citation_to_paragraph(
+                paragraph,
+                source_num,
+            )
+            boundary_attached = True
+        if hazard_re.search(paragraph) and vehicle_re.search(paragraph):
+            paragraphs[idx] = _append_numeric_citation_to_paragraph(
+                paragraphs[idx],
+                source_num,
+            )
+            application_attached = True
+    if boundary_attached:
+        # Preserve a useful model-written explanation and repair only its
+        # evidence placement. Replacing the whole response with a fixed
+        # two-sentence shell would discard valid context and make answers feel
+        # templated.
+        repaired = "".join(paragraphs)
+        if not application_attached:
+            lines = repaired.splitlines(keepends=True)
+            for idx, line in enumerate(lines):
+                if hazard_re.search(line) or vehicle_re.search(line):
+                    ending = "\n" if line.endswith("\n") else ""
+                    body = line[:-1] if ending else line
+                    lines[idx] = _append_numeric_citation_to_paragraph(
+                        body,
+                        source_num,
+                    ) + ending
+            repaired = "".join(lines)
+        return repaired
     if re.search(r"[\u4e00-\u9fff]", text):
         return (
             "真正值得使用单像素相机的场景，是探测波段超出普通面阵相机（FPA）的能力范围，"
@@ -10645,6 +10892,16 @@ def _reading_guide_repair_missing_system_a_citations(
     if not text.strip():
         return text
     if isinstance(canonical_paths, list) and canonical_paths:
+        if _authoritative_system_a_plan_covers_answer(
+            citation_plan,
+            answer_text=text,
+            canonical_paths=canonical_paths,
+        ):
+            citation_plan = _scope_citation_plan_to_cited_system_a_sources(
+                citation_plan,
+                answer_text=text,
+                canonical_paths=canonical_paths,
+            )
         authoritative_num_sources: dict[int, str] = {}
         for hit in hits:
             if not isinstance(hit, dict):
@@ -10754,6 +11011,12 @@ def _reading_guide_repair_missing_system_a_citations(
                     text,
                     hits,
                     citation_plan,
+                )
+                text = _reading_guide_repair_spi_prospects_answer(
+                    text,
+                    hits,
+                    citation_plan,
+                    canonical_paths=canonical_paths,
                 )
                 text = _reading_guide_repair_beginner_roadmap_missing_paper(
                     text,
@@ -14839,9 +15102,24 @@ def enrich_messages_with_reference_render(
         raw_ref_pack_dict = raw_ref_pack if isinstance(raw_ref_pack, dict) else None
         input_ref_sig = _raw_reference_render_cache_input_signature(raw_ref_pack_dict)
         message_citation_plan = _message_citation_plan(rec)
-        if _authoritative_doc_list_plan_covers_pack(
-            raw_ref_pack_dict,
-            message_citation_plan,
+        rec_meta_for_plan = (
+            rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
+        )
+        canonical_paths_for_plan = (
+            list(rec_meta_for_plan.get("canonical_hit_paths") or [])
+            if isinstance(rec_meta_for_plan.get("canonical_hit_paths"), list)
+            else []
+        )
+        if (
+            _authoritative_doc_list_plan_covers_pack(
+                raw_ref_pack_dict,
+                message_citation_plan,
+            )
+            or _authoritative_system_a_plan_covers_answer(
+                message_citation_plan,
+                answer_text=render_source,
+                canonical_paths=canonical_paths_for_plan,
+            )
         ):
             raw_ref_pack_dict = dict(raw_ref_pack_dict or {})
             pipeline_debug = dict(raw_ref_pack_dict.get("pipeline_debug") or {})

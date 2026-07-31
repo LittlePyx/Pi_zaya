@@ -1517,7 +1517,7 @@ export function MessageList({
       window.clearTimeout(shelfAutoRepairTimerRef.current)
       shelfAutoRepairTimerRef.current = null
     }
-    if (shelfItems.length <= 0) return
+    if (!shelfOpen || shelfItems.length <= 0) return
     shelfAutoRepairTimerRef.current = window.setTimeout(() => {
       shelfAutoRepairTimerRef.current = null
       const now = Date.now()
@@ -1542,7 +1542,7 @@ export function MessageList({
         shelfAutoRepairTimerRef.current = null
       }
     }
-  }, [repairShelfItemsMetadataBatch, shelfItems, shelfRepairLoadingKey])
+  }, [repairShelfItemsMetadataBatch, shelfItems, shelfOpen, shelfRepairLoadingKey])
 
   const mergeCitationMetaForItemKey = (itemKey: string, metas: Array<Record<string, unknown>>) => {
     const usable = mergePopoverDetailForItemKey(itemKey, metas)

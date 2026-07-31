@@ -253,7 +253,10 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
   }, [S.refs_fetch_meta_failed])
 
   useEffect(() => {
-    if (hasPending || visibleHits.length <= 0) return
+    // Bibliographic metadata is supplementary to the already-visible evidence
+    // card. Do not spend API/SQLite capacity on collapsed shelves while the
+    // answer and its citation packet are still settling.
+    if (!activeKeys.includes('refs') || hasPending || visibleHits.length <= 0) return
     for (const [index, hit] of visibleHits.entries()) {
       const ui = hit.ui_meta || {}
       const sourceKey = refSourceStateKey(hit, index)
@@ -266,7 +269,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
       autoFetchedCitationMetaRef.current.add(fetchKey)
       void fetchCitationMeta(sourceKey, ui, { silent: true })
     }
-  }, [fetchCitationMeta, hasPending, msgId, remoteMeta, visibleHits])
+  }, [activeKeys, fetchCitationMeta, hasPending, msgId, remoteMeta, visibleHits])
 
   const citeDetail = useMemo<CiteDetail | null>(() => {
     if (citeSourceKey === null) return null

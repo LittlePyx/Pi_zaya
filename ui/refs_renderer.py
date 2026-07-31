@@ -7084,6 +7084,17 @@ def _annotate_inpaper_citations_with_hover_meta(
                 and plain_fallback_count == len(items)
             ):
                 return raw
+            if (
+                not items
+                and re.search(
+                    r"基于\s*$",
+                    seg[max(0, int(m.start()) - 12) : int(m.start())],
+                )
+                and re.match(r"\s*的(?:正文|原文)", seg[int(m.end()) :])
+            ):
+                # Removing a low-value identity citation from “基于 [n] 的正文”
+                # must not leave the user-visible fragment “基于的正文”.
+                return "上述文献"
             return "".join(items)
 
         seg2 = _STRUCT_CITE_RE.sub(_repl_struct, seg)
@@ -7185,7 +7196,15 @@ def _annotate_inpaper_citations_with_hover_meta(
         return (min(nums) if nums else 0, str(rec.get("source_name") or ""))
 
     details = [compose_citation_card(rec, locale=render_locale) for rec in sorted(unique_details.values(), key=_detail_sort_key)]
-    return "\n".join(out_lines), details
+    rendered_text = "\n".join(out_lines)
+    rendered_text = re.sub(
+        r"基于\s+上述文献\s+的(?:正文|原文)",
+        lambda match: "基于上述文献的" + (
+            "原文" if str(match.group(0) or "").rstrip().endswith("原文") else "正文"
+        ),
+        rendered_text,
+    )
+    return rendered_text, details
 
 
 

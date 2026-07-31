@@ -35,15 +35,41 @@ const assistantMessage = {
   id: ASSISTANT_MSG_ID,
   role: 'assistant',
   refs_user_msg_id: USER_MSG_ID,
-  content: 'The direct match is Fixture Paper because it compares Hadamard and Fourier single-pixel imaging.',
-  rendered_body: 'The direct match is Fixture Paper because it compares Hadamard and Fourier single-pixel imaging.',
-  copy_text: 'The direct match is Fixture Paper because it compares Hadamard and Fourier single-pixel imaging.',
-  copy_markdown: 'The direct match is Fixture Paper because it compares Hadamard and Fourier single-pixel imaging.',
+  content: 'The direct match is Fixture Paper because it compares Hadamard and Fourier single-pixel imaging. 这种差异是**动态分配**的。',
+  rendered_body: 'The direct match is Fixture Paper because it compares Hadamard and Fourier single-pixel imaging. 这种差异是**动态分配**的。',
+  copy_text: 'The direct match is Fixture Paper because it compares Hadamard and Fourier single-pixel imaging. 这种差异是动态分配的。',
+  copy_markdown: 'The direct match is Fixture Paper because it compares Hadamard and Fourier single-pixel imaging. 这种差异是**动态分配**的。',
   created_at: 1_700_000_002,
 }
 
 const assistantMessageWithProvenance = {
   ...assistantMessage,
+  meta: {
+    paper_guide_contracts: {
+      citation_plan: {
+        system_a_enabled: true,
+        system_b_enabled: false,
+        budget: { system_a: 1, system_b: 0 },
+      },
+      render_packet: {
+        answer_markdown: assistantMessage.content,
+        rendered_body: `${assistantMessage.content} [1](#kb-cite-fixture)`,
+        rendered_content: `${assistantMessage.content} [1](#kb-cite-fixture)`,
+        copy_text: assistantMessage.content,
+        copy_markdown: assistantMessage.content,
+        cite_details: [
+          {
+            num: 1,
+            display_num: 1,
+            anchor: 'kb-cite-fixture',
+            citation_route: 'system_a',
+            source_path: REF_SOURCE_MD_PATH,
+            source_name: 'External Fixture Paper.pdf',
+          },
+        ],
+      },
+    },
+  },
   provenance: {
     status: 'ready',
     source_path: SOURCE_MD_PATH,
@@ -141,6 +167,7 @@ async function installMockChatBackend(page: Page) {
   let generatePosted = false
   let generationDone = false
   let refsCalls = 0
+  let refsCallsAfterDone = 0
   let messagePageCallsAfterDone = 0
 
   await installAppShellMocks(page, { rootConversations: [conversation] })
@@ -199,7 +226,7 @@ async function installMockChatBackend(page: Page) {
     if (generationDone) {
       messagePageCallsAfterDone += 1
     }
-    const assistant = generationDone && messagePageCallsAfterDone >= 2
+    const assistant = generationDone
       ? assistantMessageWithProvenance
       : assistantMessage
     await fulfillJson(route, {
@@ -211,7 +238,7 @@ async function installMockChatBackend(page: Page) {
   })
 
   await page.route(/\/api\/conversations\/conv-live-refs\/messages(?:\?.*)?$/, async (route) => {
-    const assistant = generationDone && messagePageCallsAfterDone >= 2
+    const assistant = generationDone
       ? assistantMessageWithProvenance
       : assistantMessage
     await fulfillJson(route, generationDone ? [userMessage, assistant] : [])
@@ -244,7 +271,8 @@ async function installMockChatBackend(page: Page) {
 
   await page.route(`**/api/references/conversation/${CONV_ID}`, async (route) => {
     refsCalls += 1
-    const state = generatePosted && refsCalls >= 3 ? 'ready' : 'pending'
+    if (generationDone) refsCallsAfterDone += 1
+    const state = generationDone ? 'ready' : 'pending'
     await fulfillJson(route, generatePosted ? refsPayload(state) : {}, {
       'server-timing': `total;dur=${state === 'ready' ? 18 : 9}, fast_render;dur=4`,
       'x-kb-refs-mode': state === 'ready' ? 'fast' : 'pending',
@@ -272,6 +300,7 @@ async function installMockChatBackend(page: Page) {
 
   return {
     getRefsCalls: () => refsCalls,
+    getRefsCallsAfterDone: () => refsCallsAfterDone,
     getMessagePageCallsAfterDone: () => messagePageCallsAfterDone,
   }
 }
@@ -295,10 +324,12 @@ test('refs cards render during generation and perf logs prove polling continued'
 
   await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 10_000 })
   await expect(page.locator('body')).toContainText('The direct match is Fixture Paper', { timeout: 5_000 })
+  await expect(page.locator('.kb-message-row.is-assistant strong')).toContainText('动态分配')
+  await expect(page.locator('.kb-message-row.is-assistant')).not.toContainText('**动态分配**')
   await expect.poll(
     () => backend.getMessagePageCallsAfterDone(),
     { timeout: 5_000 },
-  ).toBeGreaterThanOrEqual(2)
+  ).toBe(1)
   const locateChip = page.getByRole('button', { name: '定位到原文证据', exact: true }).first()
   await expect(locateChip).toBeVisible({ timeout: 5_000 })
   await expect(page.locator('.kb-ref-title')).toContainText('Fixture Paper.pdf')
@@ -310,7 +341,7 @@ test('refs cards render during generation and perf logs prove polling continued'
   const generationStartedEvents = refsLogs.filter((event) => event.reason === 'generation_started')
 
   expect(backend.getRefsCalls()).toBeGreaterThanOrEqual(3)
-  expect(backend.getMessagePageCallsAfterDone()).toBeGreaterThanOrEqual(2)
+  expect(backend.getMessagePageCallsAfterDone()).toBe(1)
   expect(refsSummary?.fetchSuccess).toBeGreaterThanOrEqual(2)
   expect(refsSummary?.lastMode).toBe('fast')
   expect(refsSummary?.lastCounts).toContain('packs=1')
@@ -328,7 +359,7 @@ test('refs cards render during generation and perf logs prove polling continued'
       ))
       const terminalRefreshSettled = logs.some((event) => (
         event.phase === 'fetch_success'
-        && ['generation_done', 'post_generation_message_hydration'].includes(String(event.reason || ''))
+        && String(event.reason || '') === 'generation_done'
         && event.needsEnrichment === false
         && event.keepPolling === false
       ))
@@ -336,6 +367,7 @@ test('refs cards render during generation and perf logs prove polling continued'
     },
     { timeout: 5_000 },
   ).toBe(true)
+  expect(backend.getRefsCallsAfterDone()).toBe(1)
   const settledRefsCalls = backend.getRefsCalls()
   await page.waitForTimeout(1_200)
   expect(backend.getRefsCalls()).toBe(settledRefsCalls)

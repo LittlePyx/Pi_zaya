@@ -825,3 +825,64 @@ def test_cassi_prompt_contract_ignores_stale_bibliography_acronyms() -> None:
 
     assert binding["status"] == "grounded"
     assert binding["suppress_link"] is False
+
+
+def test_english_application_gloss_is_not_treated_as_another_paper_title() -> None:
+    evidence = (
+        "As the approach suits a wide variety of detector technologies, images can be "
+        "collected at wavelengths outside the reach of FPA technology or at high frame "
+        "rates or in three dimensions. Promising applications include the visualization "
+        "of hazardous gas leaks and 3D situation awareness for autonomous vehicles."
+    )
+    claim = (
+        "代表性应用包括危险气体泄漏的可视化和自动驾驶的三维态势感知"
+        "（3D situation awareness for autonomous vehicles）。"
+    )
+
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+            "citation_plan_full_evidence_quote": evidence,
+        },
+        heading="Abstract",
+        evidence_quote=evidence,
+        source_name="Principles and prospects for single-pixel imaging.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "适用场景" in binding["reason"]
+
+
+def test_spad_physics_informed_binding_explains_training_mechanism() -> None:
+    evidence = (
+        "We first established a real-world physical noise model of SPAD arrays and "
+        "calibrated it with a real-shot SPAD image dataset. With the calibrated physical "
+        "noise model, we synthesized a realistic single-photon image dataset containing "
+        "image pairs for network training."
+    )
+    claim = (
+        "physics-informed deep learning 用真实物理噪声模型生成训练数据，"
+        "让网络学习真实 SPAD 成像退化。"
+    )
+
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+            "citation_plan_full_evidence_quote": evidence,
+        },
+        heading="Introduction",
+        evidence_quote=evidence,
+        source_name="High-resolution single-photon imaging with physics-informed deep learning.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+    assert "标定真实物理噪声模型" in binding["reason"]
+    assert "训练数据" in binding["reason"]

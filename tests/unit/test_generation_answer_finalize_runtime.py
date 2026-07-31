@@ -5,6 +5,25 @@ import pytest
 import kb.generation_answer_finalize_runtime as finalize_runtime
 
 
+def test_collapse_single_item_numbered_block_after_evidence_pruning() -> None:
+    answer = (
+        "完整机制还包括：\n"
+        "1. **空间自适应**：采样密度随区域重要性变化。\n\n"
+        "这也是它与简单放大的区别。"
+    )
+
+    collapsed = finalize_runtime._collapse_single_item_numbered_blocks(answer)
+
+    assert "完整机制还包括： **空间自适应**：采样密度随区域重要性变化。" in collapsed
+    assert "\n1." not in collapsed
+
+
+def test_collapse_single_item_numbered_block_preserves_real_multi_item_list() -> None:
+    answer = "步骤：\n1. 采样。\n2. 重建。"
+
+    assert finalize_runtime._collapse_single_item_numbered_blocks(answer) == answer
+
+
 def test_sanitize_answer_drops_only_incomplete_markdown_table_tail() -> None:
     answer = (
         "两类选择分别决定编码基底与空间采样几何。\n\n"
@@ -2487,6 +2506,48 @@ def test_normalize_supported_terms_matches_virtual_and_absolute_source_paths():
 
     assert "foveal region" in out
     assert out.endswith("[1]")
+
+
+def test_foveated_grounded_supplement_keeps_direct_answer_first():
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        (
+            "不完全对。动态超采样不是简单地只对重点区域多拍，"
+            "而是通过跨帧互补采样提升空间分辨率。"
+        ),
+        prompt="动态超采样是不是只盯着重要区域多拍？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "foveated.en.md",
+                    "heading_path": "Foveated / Abstract",
+                    "page_start": 1,
+                    "evidence_quote": (
+                        "A high-resolution foveal region tracks motion. Unlike a simple "
+                        "zoom, every frame delivers new spatial information from across "
+                        "the entire field of view while detail accumulates over several "
+                        "consecutive frames."
+                    ),
+                }
+            ]
+        },
+        answer_hits=[
+            {
+                "meta": {
+                    "source_path": "foveated.en.md",
+                    "ref_answer_citation_num": 1,
+                }
+            }
+        ],
+    )
+
+    paragraphs = out.split("\n\n")
+    assert paragraphs[0].startswith("不完全对")
+    assert "foveal region" in paragraphs[0]
+    assert "整个视场" in paragraphs[0]
+    assert "连续多帧" in paragraphs[0]
+    assert out.count("foveal region") == 1
 
 
 def test_foveated_exact_whole_field_clause_gets_occurrence_specific_citation():

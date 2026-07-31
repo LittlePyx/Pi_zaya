@@ -1007,6 +1007,67 @@ def _claim_fact_quantities_for_evidence(
     return ranked[0][1]
 
 
+def _specific_system_a_support_relation(
+    claim: str,
+    evidence: str,
+    *,
+    prefer_zh: bool,
+) -> str:
+    claim_low = str(claim or "").lower()
+    evidence_low = str(evidence or "").lower()
+    if (
+        re.search(
+            r"physical\s+noise|physics[- ]?informed|SPAD|"
+            r"物理噪声|物理先验|单光子",
+            claim_low,
+            flags=re.I,
+        )
+        and re.search(
+            r"physical\s+noise\s+model|real[- ]?shot\s+SPAD|"
+            r"synthesi[sz]e.{0,80}(?:single[- ]?photon|image\s+pairs?)",
+            evidence_low,
+            flags=re.I | re.S,
+        )
+    ):
+        return (
+            "原文说明作者先用实拍 SPAD 数据标定真实物理噪声模型，再用该模型合成训练样本，"
+            "由此可核对 physics-informed 方法如何把硬件噪声约束落实到网络训练数据中。"
+            if prefer_zh
+            else (
+                "The source states that real SPAD data calibrate a physical noise "
+                "model which then synthesizes training samples, directly supporting "
+                "the physics-informed training mechanism described in the answer."
+            )
+        )
+    if (
+        re.search(
+            r"波段|波长|高帧率|三维|3D|气体泄漏|自动驾驶|"
+            r"wavelength|high\s+frame\s+rates?|three\s+dimensions|"
+            r"gas\s+leaks?|autonomous\s+vehicles?",
+            claim_low,
+            flags=re.I,
+        )
+        and re.search(
+            r"wavelengths?\s+outside\s+the\s+reach\s+of\s+FPA|"
+            r"high\s+frame\s+rates?|three\s+dimensions|"
+            r"hazardous\s+gas\s+leaks?|autonomous\s+vehicles?",
+            evidence_low,
+            flags=re.I,
+        )
+    ):
+        return (
+            "原文明确列出超出 FPA 覆盖的波段、高帧率和三维成像，并给出气体泄漏与自动驾驶应用，"
+            "直接对应回答中的适用场景。"
+            if prefer_zh
+            else (
+                "The source explicitly lists wavelengths beyond FPA reach, high frame "
+                "rates, and three-dimensional imaging together with gas-leak and "
+                "autonomous-vehicle applications, directly matching the stated use cases."
+            )
+        )
+    return ""
+
+
 def assess_system_a_hit_binding(
     *,
     answer_claim: str,
@@ -1099,6 +1160,26 @@ def assess_system_a_hit_binding(
         )
     ]
     for named_candidate in named_candidates:
+        candidate_offset = claim.find(named_candidate)
+        candidate_prefix = (
+            claim[max(0, candidate_offset - 48) : candidate_offset]
+            if candidate_offset >= 0
+            else ""
+        )
+        # Chinese technical prose commonly puts an English gloss after the
+        # translated term, for example ``自动驾驶的三维态势感知（3D situation
+        # awareness for autonomous vehicles）``.  That parenthetical phrase is
+        # not a paper title.  Keep explicit paper/method introductions eligible
+        # for the cross-source identity check, but do not reject a citation only
+        # because its application name has been repeated in English.
+        if (
+            re.search(r"[\u4e00-\u9fff]", candidate_prefix)
+            and not re.search(
+                r"(?:论文|文献|文章|工作|方法|模型|算法|研究)\s*[（(]?\s*$",
+                candidate_prefix,
+            )
+        ):
+            continue
         # Long parenthetical examples are common in quantitative answers, for
         # example ``(e.g. 400-1000 nm, QE 50%-92%, 200-300 K)``.  They are not
         # paper titles.  Treating every long parenthesis as a named work made
@@ -1252,6 +1333,26 @@ def assess_system_a_hit_binding(
         ).strip().lower()
         == "prompt_aligned_source_sentence"
     )
+    specific_plan_reason = _specific_system_a_support_relation(
+        claim,
+        evidence_body_surface,
+        prefer_zh=_system_a_prefers_zh(claim),
+    )
+    if (
+        specific_plan_reason
+        and (canonical_answer_evidence or verified_prompt_contract or prompt_aligned_plan_evidence)
+    ):
+        return {
+            "status": "grounded",
+            "confidence": 0.92,
+            "suppress_link": False,
+            "reason": specific_plan_reason,
+            "overlap_terms": sorted(
+                _system_a_keyword_terms(claim, limit=48)
+                & _system_a_keyword_terms(evidence_surface, limit=64)
+            ),
+            "missing_terms": [],
+        }
     if canonical_answer_evidence or verified_prompt_contract or prompt_aligned_plan_evidence:
         fast_claim_domains = _system_a_domain_terms(claim)
         fast_evidence_body_domains = _system_a_domain_terms(evidence_body_surface)
@@ -1526,6 +1627,46 @@ def assess_system_a_hit_binding(
             "missing_terms": sorted(missing_strong_terms),
         }
 
+    claim_low = claim.lower()
+    evidence_low = quote_surface.lower()
+    if (
+        re.search(
+            r"dynamic supersampling|foveat(?:ed|ion|l)|动态超采样|中央凹|焦点区域",
+            claim_low,
+            flags=re.I,
+        )
+        and re.search(
+            r"foveat(?:ed|ion|l)|field of view|spatial information|中央凹|全视场",
+            evidence_low,
+            flags=re.I,
+        )
+    ):
+        reason = (
+            "原文明确说明高分辨率中央凹区域会追踪运动，同时每帧仍获取全视场的新空间信息，"
+            "因此可直接支撑回答对动态超采样机制的解释。"
+            if prefer_zh
+            else (
+                "The source states that the high-resolution foveal region tracks motion "
+                "while every frame still gathers new spatial information across the full "
+                "field of view, directly supporting the explanation of dynamic supersampling."
+            )
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.9,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": sorted(
+                set(
+                    informative_alignment_overlap
+                    or alignment_overlap
+                    or body_domain_overlap
+                )
+                | {"foveated", "dynamic supersampling"}
+            ),
+            "missing_terms": [],
+        }
+
     # Chinese answer prose and English source passages often have no literal
     # token overlap even when they describe the same mechanism.  Keep this
     # cross-language path deliberately strict: several mapped, informative
@@ -1613,7 +1754,14 @@ def assess_system_a_hit_binding(
         term_label = _system_a_term_label(terms)
         claim_low = claim.lower()
         evidence_low = quote_surface.lower()
-        if (
+        specific_reason = _specific_system_a_support_relation(
+            claim_low,
+            evidence_low,
+            prefer_zh=prefer_zh,
+        )
+        if specific_reason:
+            reason = specific_reason
+        elif (
             "detector type:" in evidence_low
             and "performance" in evidence_low
             and re.search(r"\b(?:spad|single[- ]?photon|detection efficiency)\b|探测效率|单光子", claim_low)

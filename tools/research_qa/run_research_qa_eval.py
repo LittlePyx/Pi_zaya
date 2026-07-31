@@ -2423,16 +2423,6 @@ def run_case(
         else {}
     )
     refs_payload = _get_json(base_url, f"/api/references/conversation/{parse.quote(conv_id)}", timeout_s)
-    # The product refreshes the converged message packet as soon as generation
-    # completes, then requests the reference shelf again. Reproduce that order:
-    # the first refs read makes full evidence available, the message read binds
-    # answer citations, and the second refs read aligns card copy to those cites.
-    _get_json(
-        base_url,
-        f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1",
-        timeout_s,
-    )
-    refs_payload = _get_json(base_url, f"/api/references/conversation/{parse.quote(conv_id)}", timeout_s)
     cards_complete_ms: float | None = None
     expected = case.get("expected") if isinstance(case.get("expected"), dict) else {}
     if _refs_payload_is_converged_for_case(
@@ -2442,7 +2432,32 @@ def run_case(
         forbidden_phrases=fixture.forbidden_phrases,
     ):
         cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
-    elif _generation_should_wait_for_full_refs(
+
+    # The product starts its single terminal refs read and latest-message
+    # hydration together. Keep the calls serial in this portable runner, but
+    # record card completion as soon as the first refs response is sufficient
+    # and avoid a redundant second read in that common path.
+    messages = _get_json(
+        base_url,
+        f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1",
+        timeout_s,
+    )
+    refs_refined_after_message = False
+    if cards_complete_ms is None:
+        refs_payload = _get_json(
+            base_url,
+            f"/api/references/conversation/{parse.quote(conv_id)}",
+            timeout_s,
+        )
+        refs_refined_after_message = True
+        if _refs_payload_is_converged_for_case(
+            refs_payload,
+            user_msg_id=gen.get("user_msg_id"),
+            expected=expected,
+            forbidden_phrases=fixture.forbidden_phrases,
+        ):
+            cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
+    if cards_complete_ms is None and _generation_should_wait_for_full_refs(
         final_payload,
         expected,
     ):
@@ -2454,6 +2469,7 @@ def run_case(
                 f"/api/references/conversation/{parse.quote(conv_id)}",
                 timeout_s,
             )
+            refs_refined_after_message = True
             if _refs_payload_is_converged_for_case(
                 refs_payload,
                 user_msg_id=gen.get("user_msg_id"),
@@ -2470,9 +2486,14 @@ def run_case(
                 # contract promptly; further polling cannot improve them.
                 cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
                 break
-    # References may refine primary evidence and backfill message render packets;
-    # validate the converged message after the references endpoint has run.
-    messages = _get_json(base_url, f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1", timeout_s)
+    # A later references pass may refine primary evidence and backfill the
+    # message render packet. Re-read messages only when such a pass occurred.
+    if refs_refined_after_message:
+        messages = _get_json(
+            base_url,
+            f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1",
+            timeout_s,
+        )
     assistant_message = _assistant_message_by_id(messages, gen.get("assistant_msg_id"))
     user_msg_id = gen.get("user_msg_id")
     row = {

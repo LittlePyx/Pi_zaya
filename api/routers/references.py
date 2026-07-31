@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote, unquote
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -98,6 +98,7 @@ router = APIRouter(prefix="/api/references", tags=["references"])
 
 _REFS_CONVERSATION_CACHE: dict[str, dict] = {}
 _REFS_CONVERSATION_WARMING: set[str] = set()
+_REFS_CONVERSATION_WARM_SCHEDULED: set[str] = set()
 _REFS_CONVERSATION_WARMING_LOCK = threading.Lock()
 _CANONICAL_ANSWER_HITS_CACHE: dict[str, list[dict]] = {}
 _CANONICAL_ANSWER_HITS_CACHE_LOCK = threading.Lock()
@@ -1090,17 +1091,30 @@ def _answer_citation_card_copy(
             flags=re.I,
         )
     )
+    evidence_text = " ".join(
+        _answer_citation_explanatory_evidence(detail)
+        for detail in details
+        if isinstance(detail, dict)
+    )
+    source_text = " ".join(
+        str(detail.get("source_name") or detail.get("card_title") or "")
+        for detail in details
+        if isinstance(detail, dict)
+    )
+    if (
+        prefer_zh
+        and not reading_route
+        and _answer_citation_is_pidl_synthetic_pair_evidence(
+            evidence=evidence_text,
+            source_identity=source_text,
+        )
+    ):
+        return (
+            summary,
+            "这段证据把实拍数据标定、物理噪声模型与合成训练样本串成同一条链，"
+            "说明 physics-informed 的作用发生在训练数据生成环节。",
+        )
     if reading_route:
-        evidence_text = " ".join(
-            _answer_citation_explanatory_evidence(detail)
-            for detail in details
-            if isinstance(detail, dict)
-        )
-        source_text = " ".join(
-            str(detail.get("source_name") or detail.get("card_title") or "")
-            for detail in details
-            if isinstance(detail, dict)
-        )
         role_text = f"{source_text} {evidence_text}".lower()
         if prefer_zh and _answer_citation_is_pidl_synthetic_pair_evidence(
             evidence=evidence_text,
@@ -1346,7 +1360,11 @@ def _answer_citation_card_copy(
     return summary, why
 
 
-def _grounded_system_a_details_from_citation_plan(citation_plan: dict | None) -> list[dict]:
+def _grounded_system_a_details_from_citation_plan(
+    citation_plan: dict | None,
+    *,
+    answer_text: str | None = None,
+) -> list[dict]:
     """Project evidence-bearing System-A plan slots into temporary card details.
 
     Generation has already selected these source passages before the answer is
@@ -1361,6 +1379,40 @@ def _grounded_system_a_details_from_citation_plan(citation_plan: dict | None) ->
         except (TypeError, ValueError):
             return 0
 
+    def _slot_candidate_nums(slot: dict) -> list[int]:
+        candidate_nums: list[int] = []
+        for raw_num in list(
+            slot.get("candidate_hits") or slot.get("candidateHits") or []
+        ):
+            try:
+                candidate_num = int(raw_num)
+            except (TypeError, ValueError):
+                continue
+            if candidate_num > 0 and candidate_num not in candidate_nums:
+                candidate_nums.append(candidate_num)
+        return candidate_nums
+
+    cited_nums = {
+        int(match.group(1) or 0)
+        for match in re.finditer(
+            r"(?<![!\\])\[(\d{1,5})\](?!\()",
+            str(answer_text or ""),
+        )
+        if int(match.group(1) or 0) > 0
+    }
+    cited_plan_sources = {
+        _answer_citation_source_key(
+            slot.get("source_path") or slot.get("sourcePath")
+        )
+        for slot in list((citation_plan or {}).get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "system_a").strip().lower()
+        != "system_b"
+        and cited_nums.intersection(_slot_candidate_nums(slot))
+        and _answer_citation_source_key(
+            slot.get("source_path") or slot.get("sourcePath")
+        )
+    }
     out: list[dict] = []
     for slot in list((citation_plan or {}).get("slots") or []):
         if not isinstance(slot, dict):
@@ -1386,16 +1438,12 @@ def _grounded_system_a_details_from_citation_plan(citation_plan: dict | None) ->
             or re.match(r"(?i)^\s*(?:title|paper title)\s*:", evidence_quote)
         ):
             continue
-        candidate_nums: list[int] = []
-        for raw_num in list(
-            slot.get("candidate_hits") or slot.get("candidateHits") or []
+        candidate_nums = _slot_candidate_nums(slot)
+        if (
+            cited_plan_sources
+            and _answer_citation_source_key(source_path) not in cited_plan_sources
         ):
-            try:
-                candidate_num = int(raw_num)
-            except (TypeError, ValueError):
-                continue
-            if candidate_num > 0 and candidate_num not in candidate_nums:
-                candidate_nums.append(candidate_num)
+            continue
         source_name = str(
             slot.get("source_name")
             or slot.get("sourceName")
@@ -1490,7 +1538,11 @@ def _grounded_answer_citation_state(message: dict | None) -> tuple[list[dict], b
     )
     if not citation_plan and isinstance(contracts.get("citation_plan"), dict):
         citation_plan = contracts.get("citation_plan")
-    planned_grounded = _grounded_system_a_details_from_citation_plan(citation_plan)
+    answer_text = str(message_in.get("content") or "")
+    planned_grounded = _grounded_system_a_details_from_citation_plan(
+        citation_plan,
+        answer_text=answer_text,
+    )
     if grounded:
         if planned_grounded:
             planned_by_source: dict[str, list[dict]] = {}
@@ -1498,6 +1550,15 @@ def _grounded_answer_citation_state(message: dict | None) -> tuple[list[dict], b
                 source_key = _answer_citation_source_key(planned.get("source_path"))
                 if source_key:
                     planned_by_source.setdefault(source_key, []).append(planned)
+            if re.search(r"(?<![!\\])\[\d{1,5}\](?!\()", answer_text):
+                grounded = [
+                    item
+                    for item in grounded
+                    if _answer_citation_source_key(item.get("source_path"))
+                    in planned_by_source
+                ]
+                if not grounded:
+                    return planned_grounded, False
             enriched_grounded: list[dict] = []
             for item in grounded:
                 detail = dict(item)
@@ -3603,6 +3664,16 @@ def _refs_background_llm_polish_enabled() -> bool:
     return False
 
 
+def _refs_background_warm_delay_s() -> float:
+    try:
+        raw = float(
+            str(os.environ.get("KB_REFS_BACKGROUND_WARM_DELAY_S", "5") or "5")
+        )
+    except Exception:
+        raw = 5.0
+    return max(0.0, min(15.0, raw))
+
+
 def _refs_payload_has_fast_exact_hit(refs: dict | None) -> bool:
     for pack in dict(refs or {}).values():
         if not isinstance(pack, dict):
@@ -3614,6 +3685,97 @@ def _refs_payload_has_fast_exact_hit(refs: dict | None) -> bool:
             if bool((meta or {}).get("paper_guide_fast_exact")):
                 return True
     return False
+
+
+def _schedule_conversation_refs_payload_warm(
+    *,
+    conv_id: str,
+    signature: str,
+    refs: dict,
+    guide_mode: bool,
+    guide_source_path: str,
+    guide_source_name: str,
+    authoritative_doc_list_by_user: dict[int, list[dict]] | None = None,
+) -> None:
+    """Defer expensive full-card work until the answer render has settled.
+
+    The first references response already contains local, source-grounded fast
+    cards. Starting full-card source scans at the same time as the terminal
+    message render made both requests contend for SQLite and disk IO. The
+    delayed task rechecks the completed answer citation overlay before doing
+    any work, so the normal path finishes from the answer's exact evidence and
+    skips the fallback warm entirely.
+    """
+
+    conv_key = str(conv_id or "").strip()
+    sig_key = str(signature or "").strip()
+    if (not conv_key) or (not sig_key):
+        return
+    scheduled_key = f"{conv_key}:{sig_key}"
+    with _REFS_CONVERSATION_WARMING_LOCK:
+        if (
+            scheduled_key in _REFS_CONVERSATION_WARM_SCHEDULED
+            or scheduled_key in _REFS_CONVERSATION_WARMING
+        ):
+            return
+        _REFS_CONVERSATION_WARM_SCHEDULED.add(scheduled_key)
+
+    refs_snapshot = {
+        int(key): dict(value)
+        for key, value in dict(refs or {}).items()
+        if (str(key).isdigit() or isinstance(key, int)) and isinstance(value, dict)
+    }
+    authoritative_snapshot = {
+        int(key): [dict(item) for item in list(value or []) if isinstance(item, dict)]
+        for key, value in dict(authoritative_doc_list_by_user or {}).items()
+        if str(key).isdigit() or isinstance(key, int)
+    }
+
+    def _run_if_still_needed() -> None:
+        try:
+            try:
+                store = get_chat_store()
+            except Exception:
+                store = None
+            refs_to_warm = refs_snapshot
+            if store is not None:
+                refs_to_warm = _refs_without_completed_answer_citation_overlays(
+                    store=store,
+                    conv_id=conv_key,
+                    refs=refs_snapshot,
+                )
+            if not refs_to_warm:
+                return
+            authoritative_to_warm = {
+                user_msg_id: authoritative_snapshot[user_msg_id]
+                for user_msg_id in refs_to_warm
+                if user_msg_id in authoritative_snapshot
+            }
+            _warm_conversation_refs_payload_async(
+                conv_id=conv_key,
+                signature=sig_key,
+                refs=refs_to_warm,
+                guide_mode=bool(guide_mode),
+                guide_source_path=str(guide_source_path or "").strip(),
+                guide_source_name=str(guide_source_name or "").strip(),
+                authoritative_doc_list_by_user=authoritative_to_warm,
+            )
+        finally:
+            with _REFS_CONVERSATION_WARMING_LOCK:
+                _REFS_CONVERSATION_WARM_SCHEDULED.discard(scheduled_key)
+
+    delay_s = _refs_background_warm_delay_s()
+    if delay_s <= 0.0:
+        _run_if_still_needed()
+        return
+    try:
+        timer = threading.Timer(delay_s, _run_if_still_needed)
+        timer.daemon = True
+        timer.name = "kb_refs_conv_warm_delay"
+        timer.start()
+    except Exception:
+        with _REFS_CONVERSATION_WARMING_LOCK:
+            _REFS_CONVERSATION_WARM_SCHEDULED.discard(scheduled_key)
 
 
 def _warm_conversation_refs_payload_async(
@@ -3953,7 +4115,11 @@ def _build_diagnostic_report(*, store, conv_id: str, refs: dict) -> dict:
     }
 
 
-def get_conversation_refs(conv_id: str, response: Response | None = None):
+def get_conversation_refs(
+    conv_id: str,
+    response: Response | None = None,
+    background_tasks: BackgroundTasks | None = None,
+):
     route_started_at = time.perf_counter()
     route_deadline_at = route_started_at + _refs_ready_budget_s()
     timings: list[tuple[str, float]] = []
@@ -3966,6 +4132,15 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
 
     def _record(name: str, started_at: float) -> None:
         timings.append((name, _refs_perf_ms(started_at)))
+
+    def _queue_warm(**kwargs: Any) -> None:
+        if background_tasks is None:
+            _warm_conversation_refs_payload_async(**kwargs)
+            return
+        background_tasks.add_task(
+            _schedule_conversation_refs_payload_warm,
+            **kwargs,
+        )
 
     def _finish(payload: dict | None, mode: str) -> dict:
         payload_out = payload if isinstance(payload, dict) else {}
@@ -4156,6 +4331,8 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
     authoritative_sync_refs: dict[int, dict] = {}
     authoritative_fast_payloads: dict[int, dict] = {}
     authoritative_fast_refs: dict[int, dict] = {}
+    answer_overlay_seed_payloads: dict[int, dict] = {}
+    answer_overlay_seed_refs: dict[int, dict] = {}
     numeric_user_msg_ids = [
         int(key)
         for key in refs_norm
@@ -4258,6 +4435,18 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             continue
         if _refs_pack_has_pending(pack, include_stale=False):
             pending_refs[int(user_msg_id)] = pack
+        elif int(user_msg_id) in answer_citation_ready_user_ids:
+            # The completed answer already carries source-bound citation
+            # details, including the exact evidence passage and card copy.
+            # Building a separate heuristic card pack here only to replace it
+            # in ``_finish`` adds a synchronous 0.5-2 second delay.  Seed the
+            # overlay from the retrieval row, as the authoritative doc-list
+            # branch above already does.
+            answer_seed = _without_nested_render_payload(pack)
+            answer_seed["payload_mode"] = "fast"
+            answer_seed["enrichment_pending"] = True
+            answer_overlay_seed_payloads[int(user_msg_id)] = answer_seed
+            answer_overlay_seed_refs[int(user_msg_id)] = pack
         elif str((pack or {}).get("render_status") or "").strip().lower() == "failed":
             failed_ready_refs[int(user_msg_id)] = pack
         else:
@@ -4312,7 +4501,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
                 refs=refs_norm,
             )
             if refs_to_warm:
-                _warm_conversation_refs_payload_async(
+                _queue_warm(
                     conv_id=conv_id,
                     signature=signature,
                     refs=refs_to_warm,
@@ -4348,6 +4537,20 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         )
         for user_msg_id, pack in authoritative_fast_refs.items():
             payload_pack = annotated_authoritative.get(int(user_msg_id))
+            if isinstance(payload_pack, dict):
+                payload[int(user_msg_id)] = _attach_pack_render_state(
+                    payload_pack,
+                    source_pack=pack,
+                    default_status="fast",
+                    override_status=True,
+                )
+    if answer_overlay_seed_payloads:
+        annotated_answer_seeds = _annotate_refs_payload_refresh_state(
+            answer_overlay_seed_payloads,
+            mode="fast",
+        )
+        for user_msg_id, pack in answer_overlay_seed_refs.items():
+            payload_pack = annotated_answer_seeds.get(int(user_msg_id))
             if isinstance(payload_pack, dict):
                 payload[int(user_msg_id)] = _attach_pack_render_state(
                     payload_pack,
@@ -4418,7 +4621,12 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
         _record("fast_render", phase_started_at)
 
     cache_mode = "full"
-    if authoritative_fast_payloads or normal_ready_refs or historical_stale_payloads:
+    if (
+        authoritative_fast_payloads
+        or answer_overlay_seed_payloads
+        or normal_ready_refs
+        or historical_stale_payloads
+    ):
         cache_mode = "fast"
     elif failed_ready_refs:
         cache_mode = "fast"
@@ -4436,6 +4644,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
     ready_refs_to_warm = {
         **historical_stale_refs,
         **authoritative_fast_refs,
+        **answer_overlay_seed_refs,
         **normal_ready_refs,
     }
     if ready_refs_to_warm and (not pending_refs) and (not failed_ready_refs):
@@ -4450,7 +4659,7 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
             if user_msg_id in authoritative_doc_lists
         }
         if refs_to_warm:
-            _warm_conversation_refs_payload_async(
+            _queue_warm(
                 conv_id=conv_id,
                 signature=signature,
                 refs=refs_to_warm,
@@ -4463,8 +4672,16 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
 
 
 @router.get("/conversation/{conv_id}")
-def get_conversation_refs_route(conv_id: str, response: Response):
-    return get_conversation_refs(conv_id, response=response)
+def get_conversation_refs_route(
+    conv_id: str,
+    response: Response,
+    background_tasks: BackgroundTasks,
+):
+    return get_conversation_refs(
+        conv_id,
+        response=response,
+        background_tasks=background_tasks,
+    )
 
 
 @router.get("/diagnose/{conv_id}")

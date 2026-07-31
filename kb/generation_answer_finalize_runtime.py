@@ -1444,6 +1444,26 @@ def _collapse_adjacent_duplicate_numeric_citations(answer: str) -> str:
     return text
 
 
+def _collapse_single_item_numbered_blocks(answer: str) -> str:
+    """Render a surviving one-item list as prose after evidence pruning."""
+
+    text = str(answer or "")
+    if not text.strip():
+        return text
+    pattern = re.compile(
+        r"(?m)(?P<intro>^[^\n]+[:：])\n"
+        r"[ \t]*1[.)、]\s+(?P<item>[^\n]+)"
+        r"(?=\n{2,}|\Z)"
+    )
+
+    def _replace(match: re.Match) -> str:
+        intro = str(match.group("intro") or "").rstrip()
+        item = str(match.group("item") or "").strip()
+        return f"{intro} {item}"
+
+    return pattern.sub(_replace, text)
+
+
 def _sanitize_canceled_generation_answer(
     partial: str,
     *,
@@ -6211,6 +6231,72 @@ def _complete_exact_source_bound_answer_claims(
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def _insert_grounded_supplement_after_direct_answer(
+    answer: str,
+    supplement: str,
+) -> str:
+    """Keep the direct response first when adding an exact evidence clause."""
+
+    paragraphs = [
+        paragraph
+        for paragraph in str(answer or "").split("\n\n")
+        if paragraph.strip()
+    ]
+    supplement_text = str(supplement or "").strip()
+    if not paragraphs or not supplement_text:
+        return str(answer or "").strip()
+    insert_at = 1
+    for idx, paragraph in enumerate(paragraphs):
+        stripped = paragraph.strip()
+        if re.fullmatch(r"#{1,6}\s+.+", stripped):
+            continue
+        if re.search(r"(?m)^\s*\|.+\|\s*$", stripped):
+            continue
+        insert_at = idx + 1
+        break
+    paragraphs.insert(insert_at, supplement_text)
+    return "\n\n".join(paragraphs)
+
+
+def _insert_grounded_supplement_after_direct_statement(
+    answer: str,
+    supplement: str,
+) -> str:
+    """Add exact terminology after the opening conclusion, in the same claim."""
+
+    paragraphs = [
+        paragraph
+        for paragraph in str(answer or "").split("\n\n")
+        if paragraph.strip()
+    ]
+    supplement_text = str(supplement or "").strip()
+    if not paragraphs or not supplement_text:
+        return str(answer or "").strip()
+    target_idx = 0
+    for idx, paragraph in enumerate(paragraphs):
+        stripped = paragraph.strip()
+        if re.fullmatch(r"#{1,6}\s+.+", stripped):
+            continue
+        if re.search(r"(?m)^\s*\|.+\|\s*$", stripped):
+            continue
+        target_idx = idx
+        break
+    target = paragraphs[target_idx]
+    sentence_end = re.search(r"[。！？.!?](?:\s|$)", target)
+    if sentence_end:
+        insert_at = sentence_end.end()
+        paragraphs[target_idx] = (
+            target[:insert_at].rstrip()
+            + " "
+            + supplement_text
+            + " "
+            + target[insert_at:].lstrip()
+        ).strip()
+    else:
+        paragraphs[target_idx] = f"{target.rstrip()} {supplement_text}"
+    return "\n\n".join(paragraphs)
+
+
 def _normalize_citation_plan_supported_terms(
     answer: str,
     *,
@@ -7046,9 +7132,23 @@ def _normalize_citation_plan_supported_terms(
         if prefer_zh:
             text = re.sub(r"运动区域", "高分辨率焦点区域（foveal region）", text, count=1)
             if "foveal region" not in text.lower():
-                text = "高分辨率焦点区域（foveal region）跟踪场景中的运动，同时每帧仍采集整个视场的信息。\n\n" + text
+                text = _insert_grounded_supplement_after_direct_statement(
+                    text,
+                    (
+                        "高分辨率焦点区域（foveal region）跟踪场景中的运动；"
+                        "它不同于简单 zoom，每帧仍从整个视场采集新的空间信息，"
+                        "并在连续多帧中为慢变区域累积细节。"
+                    ),
+                )
         else:
-            text = "A high-resolution foveal region tracks motion while every frame still samples the full field of view.\n\n" + text
+            text = _insert_grounded_supplement_after_direct_statement(
+                text,
+                (
+                    "A high-resolution foveal region tracks motion; unlike a simple "
+                    "zoom, every frame still samples the full field of view and "
+                    "accumulates slower detail over consecutive frames."
+                ),
+            )
 
     if (
         re.search(r"high[- ]resolution\s+foveal\s+region", evidence, flags=re.I)
@@ -7069,10 +7169,10 @@ def _normalize_citation_plan_supported_terms(
                 if prefer_zh
                 else "The Abstract states that a high-resolution foveal region tracks motion; unlike a simple zoom, every frame still gathers new spatial information across the entire field of view and accumulates slower detail over consecutive frames."
             )
-            parts = text.split("\n\n", 1)
-            text = f"{parts[0]}\n\n{compound_claim}"
-            if len(parts) > 1:
-                text += f"\n\n{parts[1]}"
+            text = _insert_grounded_supplement_after_direct_answer(
+                text,
+                compound_claim,
+            )
 
     has_qclfm_refocus_contract = bool(
         re.search(r"digital\s+refocusing", evidence, flags=re.I)
@@ -7926,6 +8026,7 @@ def _finalize_generation_answer(
         final_claim_evidence_meta["post_gate_citation_rebinding"] = True
     answer = _collapse_adjacent_duplicate_numeric_citations(answer)
     answer = _sanitize_empty_markdown_label_fragments(answer)
+    answer = _collapse_single_item_numbered_blocks(answer)
     final_claim_evidence_meta["final_gate_applied"] = True
     final_claim_evidence_meta["unsupported_claim_drop_enabled"] = bool(
         final_gate_has_grounded_system_a

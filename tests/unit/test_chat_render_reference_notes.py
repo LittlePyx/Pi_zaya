@@ -1303,6 +1303,57 @@ def test_authoritative_doc_list_complete_plan_disables_answer_source_scan() -> N
     assert chat_render._authoritative_doc_list_plan_covers_pack(pack, plan) is False
 
 
+def test_authoritative_system_a_plan_covers_each_visible_answer_citation() -> None:
+    from api import chat_render
+
+    source = "review.en.md"
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": source,
+                "heading_path": "Review / Abstract",
+                "page_start": 1,
+                "evidence_quote": (
+                    "Deep learning provides exceptional reconstruction quality "
+                    "and fast reconstruction speed."
+                ),
+                "evidence_selection_reason": "single_paper_comparison_facet",
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "Review / Risks",
+                "page_start": 2,
+                "evidence_quote": (
+                    "Data-driven strategies have prolonged training duration "
+                    "and limited generalization."
+                ),
+                "evidence_selection_reason": "single_paper_comparison_facet",
+            },
+        ]
+    }
+
+    assert (
+        chat_render._authoritative_system_a_plan_covers_answer(
+            plan,
+            answer_text="The risk matters [1], while the benefit is direct [2].",
+            canonical_paths=[source, source],
+        )
+        is True
+    )
+    assert (
+        chat_render._authoritative_system_a_plan_covers_answer(
+            plan,
+            answer_text="The plan does not provide this third citation [3].",
+            canonical_paths=[source, source, source],
+        )
+        is False
+    )
+
+
 def test_scope_boundary_abstract_plan_is_authoritative_without_seed_hit(tmp_path: Path) -> None:
     from api import chat_render
 
@@ -1327,6 +1378,300 @@ def test_scope_boundary_abstract_plan_is_authoritative_without_seed_hit(tmp_path
 
     assert len(hits) == 1
     assert hits[0]["meta"]["citation_plan_evidence_authoritative"] is True
+
+
+def test_foveated_exact_generated_plan_is_authoritative_without_source_rescan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "foveated.en.md"
+    evidence = (
+        "A high-resolution foveal region tracks motion while every frame delivers "
+        "new spatial information from across the entire field of view."
+    )
+    source.write_text(f"# Foveated\n\n## Abstract\n\n{evidence}\n", encoding="utf-8")
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [3],
+                "source_path": str(source),
+                "source_name": "Adaptive foveated SPI",
+                "heading_path": "Adaptive foveated SPI / Abstract",
+                "evidence_quote": evidence,
+                "page_start": 1,
+                "page_end": 1,
+                "evidence_selection_reason": "exact_foveated_dynamic_supersampling_source",
+            }
+        ]
+    }
+    hits = chat_render._augment_hits_with_system_a_plan_slots(
+        [
+            {"text": "unrelated one", "meta": {"source_path": "one.en.md"}},
+            {"text": "unrelated two", "meta": {"source_path": "two.en.md"}},
+            {
+                "text": "broad foveated seed",
+                "meta": {
+                    "source_path": str(source),
+                    "ref_answer_citation_num": 3,
+                },
+                "ui_meta": {},
+            },
+        ],
+        plan,
+        reserved_count=3,
+        canonical_paths=["one.en.md", "two.en.md", str(source)],
+    )
+
+    assert hits[2]["text"] == evidence
+    assert hits[2]["meta"]["citation_plan_evidence_authoritative"] is True
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: pytest.fail("exact foveated plan must not rescan the paper"),
+    )
+    repaired = chat_render._augment_hits_with_canonical_answer_citations(
+        hits,
+        canonical_paths=["one.en.md", "two.en.md", str(source)],
+        answer_text="The foveal region still receives whole-field information [3].",
+    )
+    assert repaired[2]["text"] == evidence
+
+
+def test_authoritative_answer_does_not_gain_unused_system_a_plan_citations() -> None:
+    from api import chat_render
+
+    sources = ["hadamard.en.md", "overview.en.md", "foveated.en.md"]
+    foveated_evidence = (
+        "Every frame delivers new spatial information from across the entire "
+        "field of view while a high-resolution foveal region tracks motion."
+    )
+    plan = {
+        "budget": {"system_a": 3},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": sources[0],
+                "heading_path": "Hadamard / Abstract",
+                "page_start": 1,
+                "evidence_quote": (
+                    "Hadamard and Fourier patterns provide different basis choices "
+                    "for conventional single-pixel imaging."
+                ),
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": sources[1],
+                "heading_path": "Overview / Introduction",
+                "page_start": 1,
+                "evidence_quote": (
+                    "Single-pixel imaging combines structured illumination with "
+                    "a single-element detector."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [3],
+                "source_path": sources[2],
+                "heading_path": "Foveated / Abstract",
+                "page_start": 1,
+                "evidence_quote": foveated_evidence,
+                "evidence_selection_reason": (
+                    "exact_foveated_dynamic_supersampling_source"
+                ),
+            },
+        ],
+    }
+    hits = [
+        {
+            "text": str(slot["evidence_quote"]),
+            "meta": {
+                "source_path": str(slot["source_path"]),
+                "ref_answer_citation_num": index,
+            },
+            "ui_meta": {},
+        }
+        for index, slot in enumerate(plan["slots"], start=1)
+    ]
+    answer = (
+        "不完全对。动态超采样仍从整个视场获得新信息，只把更高分辨率集中在"
+        "随运动更新的焦点区域 [3]。"
+    )
+
+    scoped = chat_render._scope_citation_plan_to_cited_system_a_sources(
+        plan,
+        answer_text=answer,
+        canonical_paths=sources,
+    )
+    assert [
+        slot["source_path"]
+        for slot in scoped["slots"]
+        if slot.get("preferred_system") == "system_a"
+    ] == [sources[2]]
+
+    repaired = chat_render._reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=sources,
+    )
+    assert set(re.findall(r"(?<![!\\])\[(\d+)\](?!\()", repaired)) == {"3"}
+
+
+def test_single_paper_comparison_facets_remain_authoritative_without_rescan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "piln.en.md"
+    method_evidence = (
+        "ILNet is a self-supervised image-loop neural network with a part-based "
+        "model for finer-grained learning."
+    )
+    positioning_evidence = (
+        "The method embeds the single-pixel imaging model in an untrained network "
+        "and optimizes it for each measurement."
+    )
+    source.write_text(
+        f"# PILN\n\n## Abstract\n\n{method_evidence}\n\n{positioning_evidence}\n",
+        encoding="utf-8",
+    )
+    slots = [
+        {
+            "preferred_system": "system_a",
+            "candidate_hits": [1],
+            "source_path": str(source),
+            "source_name": "PILN",
+            "heading_path": "PILN / Abstract",
+            "evidence_quote": method_evidence,
+            "page_start": 1,
+            "evidence_selection_reason": "single_paper_comparison_facet",
+        },
+        {
+            "preferred_system": "system_a",
+            "candidate_hits": [2],
+            "source_path": str(source),
+            "source_name": "PILN",
+            "heading_path": "PILN / Introduction",
+            "evidence_quote": positioning_evidence,
+            "page_start": 2,
+            "evidence_selection_reason": "single_paper_comparison_facet",
+        },
+    ]
+    hits = chat_render._augment_hits_with_system_a_plan_slots(
+        [
+            {
+                "text": "generic method seed",
+                "meta": {"source_path": str(source), "ref_answer_citation_num": 1},
+                "ui_meta": {},
+            },
+            {
+                "text": "generic positioning seed",
+                "meta": {"source_path": str(source), "ref_answer_citation_num": 2},
+                "ui_meta": {},
+            },
+        ],
+        {"slots": slots},
+        reserved_count=2,
+        canonical_paths=[str(source), str(source)],
+    )
+
+    assert [hit["text"] for hit in hits] == [method_evidence, positioning_evidence]
+    assert all(
+        hit["meta"]["citation_plan_evidence_authoritative"] is True
+        for hit in hits
+    )
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: pytest.fail("comparison facets must not rescan the paper"),
+    )
+    repaired = chat_render._augment_hits_with_canonical_answer_citations(
+        hits,
+        canonical_paths=[str(source), str(source)],
+        answer_text="PILN is self-supervised [1] and model-driven per measurement [2].",
+    )
+    assert [hit["text"] for hit in repaired] == [method_evidence, positioning_evidence]
+
+
+def test_single_paper_facets_rebind_stale_same_source_occurrence_numbers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "review.en.md"
+    benefit = "Deep learning provides exceptional reconstruction quality and fast reconstruction speed."
+    risk = "Data-driven strategies have prolonged training duration and limited generalization."
+    source.write_text(
+        f"# Review\n\n## Abstract\n\n{benefit}\n\n## Risks\n\n{risk}\n",
+        encoding="utf-8",
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": str(source),
+                "source_name": "Review",
+                "heading_path": "Review / Abstract",
+                "evidence_quote": benefit,
+                "page_start": 1,
+                "evidence_selection_reason": "single_paper_comparison_facet",
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": str(source),
+                "source_name": "Review",
+                "heading_path": "Review / Risks",
+                "evidence_quote": risk,
+                "page_start": 2,
+                "evidence_selection_reason": "single_paper_comparison_facet",
+            },
+        ]
+    }
+
+    hits = chat_render._augment_hits_with_system_a_plan_slots(
+        [
+            {
+                "text": "compact seed carrying the other occurrence number",
+                "meta": {
+                    "source_path": str(source),
+                    "ref_answer_citation_num": 2,
+                },
+                "ui_meta": {},
+            }
+        ],
+        plan,
+        reserved_count=2,
+        canonical_paths=[str(source), str(source)],
+        answer_text="The risk matters [1], while the benefit is direct [2].",
+    )
+
+    assert len(hits) == 2
+    assert [hit["meta"]["ref_answer_citation_num"] for hit in hits] == [1, 2]
+    assert [hit["text"] for hit in hits] == [risk, benefit]
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: pytest.fail(
+            "explicit same-source occurrences must not rescan the paper"
+        ),
+    )
+    repaired = chat_render._augment_hits_with_canonical_answer_citations(
+        hits,
+        canonical_paths=[str(source), str(source)],
+        answer_text="The risk matters [1], while the benefit is direct [2].",
+    )
+    assert [hit["text"] for hit in repaired] == [risk, benefit]
 
 
 def test_canonical_citation_incomplete_authoritative_plan_still_scans_and_recovers(
@@ -6798,6 +7143,76 @@ def test_spi_prospects_repair_restores_full_use_case_boundary_and_clean_evidence
     assert repaired.count("[1]") == 2
     assert "[3]" not in repaired
     assert not hits[0]["ui_meta"]["reader_open"]["snippet"].startswith("##")
+
+
+def test_authoritative_multi_source_path_still_repairs_spi_use_case_marker() -> None:
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    prospects_path = "spi-prospects.en.md"
+    upstream_path = "duarte-comparison.md"
+    evidence = (
+        "Images can be collected at wavelengths outside the reach of FPA technology, "
+        "at high frame rates or in three dimensions. Promising applications include "
+        "hazardous gas leaks and autonomous vehicles."
+    )
+    answer = (
+        "核心原理是压缩感知重建 [1]。在面阵无法覆盖的波段、高帧率或三维成像场景，"
+        "单像素相机更值得采用。\n\n"
+        "代表应用包括危险气体泄漏和自动驾驶 3D 态势感知。\n\n"
+        "与逐点扫描相比仍有探测器动态范围权衡 [2]。"
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {
+                "source_path": prospects_path,
+                "ref_answer_citation_num": 1,
+            },
+        },
+        {
+            "text": "The detailed comparison discusses detector dynamic range.",
+            "meta": {
+                "source_path": upstream_path,
+                "ref_answer_citation_num": 2,
+            },
+        },
+    ]
+    plan = {
+        "intent": "answer_grounding",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": prospects_path,
+                "source_name": "Principles and prospects for single-pixel imaging",
+                "heading_path": "Abstract",
+                "evidence_quote": evidence,
+                "candidate_hits": [1],
+                "page_start": 1,
+            },
+            {
+                "preferred_system": "system_b",
+                "source_path": upstream_path,
+                "candidate_hits": [2],
+            },
+        ],
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=[prospects_path, upstream_path],
+    )
+
+    boundary_paragraph = next(
+        paragraph
+        for paragraph in repaired.split("\n\n")
+        if all(term in paragraph for term in ("波段", "高帧率", "三维"))
+    )
+    assert "[1]" in boundary_paragraph
+    assert "危险气体泄漏和自动驾驶 3D 态势感知 [1]" in repaired
+    assert "动态范围权衡 [2]" in repaired
 
 
 def test_fdm_tradeoff_promotes_complete_abstract_evidence_on_existing_hit() -> None:

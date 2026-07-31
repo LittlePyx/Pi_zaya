@@ -321,10 +321,15 @@ function normalizeAdjacentStrongMarkdown(text: string): string {
     }
     if (inFence) return line
     const inlineCodeRe = /(`+)[^`\n]*?\1/g
-    const normalizeSegment = (segment: string) => segment.replace(
-      /(\*\*[^*\n]+?\*\*)(?=[\p{L}\p{N}])/gu,
-      '$1&#8203;',
-    )
+    const normalizeSegment = (segment: string) => segment
+      .replace(
+        /(?<=[\p{L}\p{N}])(\*\*[^*\n]+?\*\*)/gu,
+        '&#8203;$1',
+      )
+      .replace(
+        /(\*\*[^*\n]+?\*\*)(?=[\p{L}\p{N}])/gu,
+        '$1&#8203;',
+      )
     let out = ''
     let last = 0
     for (const match of line.matchAll(inlineCodeRe)) {
