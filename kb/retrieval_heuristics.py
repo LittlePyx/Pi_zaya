@@ -282,7 +282,13 @@ def _is_noise_snippet_text(t: str) -> bool:
         "usd",
     )
     if any(x in low for x in bad):
-        return True
+        # Converted chunks can begin with the tail of a figure caption and
+        # continue with a long, directly relevant paragraph. Do not discard
+        # the whole evidence chunk merely because it contains one copyright
+        # or DOI line; reserve the noise label for short metadata-dominant text.
+        word_count = len(re.findall(r"[A-Za-z][A-Za-z0-9-]*", s))
+        if len(s) < 420 or word_count < 70:
+            return True
     # "$" is common in LaTeX math (e.g. "$\\mu$m", "$r_{\\min}$", "$9 \\times 9$") and must NOT be treated as noise.
     # Only treat it as noise when it looks like a *lone* currency token (no closing "$" nearby).
     if ("$" in s) and (s.count("$") < 2) and re.search(r"(?<!\\\\)\\$\\s*\\d", s):

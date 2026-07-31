@@ -1569,6 +1569,17 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
         ("钙钛矿激光器", "perovskite laser"),
         ("光泵浦", "optically pumped"),
         ("器件问题", "device challenge"),
+        ("彩色单像素成像", "color single-pixel imaging"),
+        ("彩色单像素", "color single-pixel"),
+        ("彩色 SPI", "color SPI"),
+        ("彩色SPI", "color SPI"),
+        ("灰度 SPI", "gray SPI"),
+        ("灰度SPI", "gray SPI"),
+        ("颜色响应系数", "color response coefficient"),
+        ("颜色失真", "color distortion"),
+        ("系统复杂度", "system complexity"),
+        ("成像时间", "imaging time"),
+        ("额外挑战", "additional challenges"),
         ("\u5355\u50cf\u7d20", "single-pixel"),
         ("\u5355\u5149\u5b50", "single-photon"),
         ("\u5355\u66dd\u5149", "single-shot"),
@@ -1901,6 +1912,17 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
         if key in {x.lower() for x in variants}:
             return
         variants.append(v)
+
+    if has_any("彩色单像素", "彩色 spi", "color single-pixel", "color spi"):
+        add(
+            "color single-pixel imaging compared with gray SPI "
+            "color response coefficient color distortion imaging time"
+        )
+        if has_any("深度学习", "deep learning", "dl", "复杂度", "成像时间", "imaging time"):
+            add(
+                "deep learning color SPI reduce system complexity imaging time "
+                "color filter array frequency-division multiplexing"
+            )
 
     if has_any("hatnet"):
         add(
@@ -2244,8 +2266,18 @@ def _merge_expanded_results(
 
     # Sort by RRF score descending
     ordered = sorted(chunk_order, key=lambda cid: rrf_scores.get(cid, 0.0), reverse=True)
-    merged_hits = [hit_map[cid] for cid in ordered[:top_k]]
-    merged_scores = [rrf_scores.get(cid, 0.0) for cid in ordered[:top_k]]
+    merged_hits: list[dict] = []
+    merged_scores: list[float] = []
+    for cid in ordered[:top_k]:
+        fused_score = float(rrf_scores.get(cid, 0.0) or 0.0)
+        hit = dict(hit_map[cid])
+        hit.setdefault("_bm25_score", float(hit.get("score", 0.0) or 0.0))
+        # Downstream document grouping sorts this field. Keeping the original
+        # BM25 value here would silently undo the fused ranking and can select
+        # a generic chunk instead of the query-specific evidence.
+        hit["score"] = fused_score
+        merged_hits.append(hit)
+        merged_scores.append(fused_score)
     return merged_hits, merged_scores
 
 
@@ -2308,11 +2340,11 @@ def _search_hits_with_fallback(
             hits1, scores1, best1 = merged_q1q2, merged_s1s2, merged_best
             used_trans = True
             for _h in hits1:
-                _h["_bm25_score"] = _h.get("score", 0.0)
+                _h.setdefault("_bm25_score", _h.get("score", 0.0))
         elif not hits1 and hits2:
             hits1, scores1, best1 = hits2, scores2, best2
             for _h in hits1:
-                _h["_bm25_score"] = _h.get("score", 0.0)
+                _h.setdefault("_bm25_score", _h.get("score", 0.0))
             used_trans = True
 
     # LLM-based query expansion to improve recall for synonym-variant queries.
@@ -2338,7 +2370,7 @@ def _search_hits_with_fallback(
         for _h in merged_hits:
             _h["_expansion_variants"] = list(deterministic_variants)
         for _h in merged_hits:
-            _h["_bm25_score"] = _h.get("score", 0.0)
+            _h.setdefault("_bm25_score", _h.get("score", 0.0))
         hits1, scores1, best1 = merged_hits, merged_scores, float(max(merged_scores) if merged_scores else best1)
 
     # LLM-based query expansion to improve recall for synonym-variant queries.
@@ -2374,7 +2406,7 @@ def _search_hits_with_fallback(
             )
             # Preserve original BM25 score so downstream sorters can use it.
             for _h in merged_hits:
-                _h["_bm25_score"] = _h.get("score", 0.0)
+                    _h.setdefault("_bm25_score", _h.get("score", 0.0))
             # Tag hits with the variant list so the focus filter can be more
             # lenient for expansion-discovered papers.
             _expansion_variants = [v for v in query_variants if v.lower() != q1.lower()]
@@ -2536,6 +2568,14 @@ def _group_hits_by_doc_for_refs(
             )
         )
         expansion_focus_query = " ".join(expansion_variants[:3]).strip()
+        evidence_focus_query = " ".join(
+            part
+            for part in [
+                str(prompt_text or deep_query or "").strip(),
+                expansion_focus_query,
+            ]
+            if part
+        ).strip()
         primary_table_hit = next(
             (
                 h
@@ -2589,7 +2629,12 @@ def _group_hits_by_doc_for_refs(
             if top and (not _is_non_navigational_heading(top, question=nav_question, source_path=src)):
                 hp_raw = _normalize_heading_path_for_display(str(meta.get("heading_path") or ""))
                 hp = _sanitize_heading_path_for_navigation(hp_raw or top, question=nav_question, source_path=src)
-                sc_adj = sc_h + _heading_intent_bonus_for_question(hp or top, nav_question) + (2.0 * anchor_bonus)
+                intent_bonus = (
+                    0.0
+                    if expansion_focus_query
+                    else _heading_intent_bonus_for_question(hp or top, nav_question)
+                )
+                sc_adj = sc_h + intent_bonus + (2.0 * anchor_bonus)
                 cand.append((sc_adj, top))
                 if hp:
                     p0, p1 = _page_range_from_meta(meta)
@@ -2744,7 +2789,7 @@ def _group_hits_by_doc_for_refs(
             prefer = _preferred_section_keys(prompt_text)
             picked = _pick_heading_from_md(
                 Path(src),
-                anchor_focus_query or deep_query or prompt_text,
+                anchor_focus_query or evidence_focus_query or deep_query or prompt_text,
                 prefer=prefer,
                 source_path=src,
             )
@@ -2802,7 +2847,7 @@ def _group_hits_by_doc_for_refs(
         # Build display snippets: pick the most relevant, non-noise snippets.
         q_for_pick = (
             anchor_focus_query
-            or expansion_augmented_query
+            or evidence_focus_query
             or deep_query
             or prompt_text
             or ""
@@ -2829,8 +2874,13 @@ def _group_hits_by_doc_for_refs(
             if profile.get("wants_single_shot") and any(k in low for k in ["single-pixel", "single pixel"]):
                 sc -= 3.0
             scored_snips.append((float(sc), s2))
-        scored_snips.sort(key=lambda x: x[0], reverse=True)
-        show_snips = [_clean_snippet_for_display(s, max_chars=900) for _, s in scored_snips[:2]]
+        if not expansion_focus_query:
+            scored_snips.sort(key=lambda x: x[0], reverse=True)
+        snippet_display_limit = 1200 if expansion_focus_query else 900
+        show_snips = [
+            _clean_snippet_for_display(s, max_chars=snippet_display_limit)
+            for _, s in scored_snips[:2]
+        ]
         show_snips = [s for s in show_snips if str(s or "").strip()]
         if primary_table_text:
             # A document group can contain many tables that share the same
@@ -2962,7 +3012,7 @@ def _group_hits_by_doc_for_refs(
             )
         else:
             meta_out["ref_snippets"] = (
-                show_snips[:3] if use_expansion_deep_read and show_snips else snippets[:3]
+                show_snips[:3] if expansion_focus_query and show_snips else snippets[:3]
             )
         if primary_table_text:
             # Keep the card, locator and async reference summary grounded on
@@ -3335,8 +3385,29 @@ def _looks_like_reference_list_snippet(text: str) -> bool:
         return False
     if _REF_HEADING_RE.search(s[:160]):
         return True
-    if len(re.findall(r"\[\d{1,3}\]", s)) >= 2:
-        return True
+    citation_markers = re.findall(r"\[\d{1,3}\]", s)
+    if len(citation_markers) >= 2:
+        raw_lines = str(text or "").splitlines()
+        line_start_entries = sum(
+            1
+            for line in raw_lines
+            if re.match(r"^\s*\[\d{1,3}\]\s+[A-Z]", str(line or ""))
+        )
+        bibliography_signals = len(re.findall(r"\b(?:19|20)\d{2}\b", s))
+        bibliography_surface = bool(
+            re.search(
+                r"\b(?:doi:|journal|proceedings?|conference|arxiv|ieee|springer|"
+                r"vol\.?|volume|pp\.?)\b",
+                s,
+                flags=re.I,
+            )
+        )
+        if line_start_entries >= 2 or (
+            len(citation_markers) >= 3
+            and bibliography_signals >= 2
+            and bibliography_surface
+        ):
+            return True
     if re.match(r"^\[\d{1,3}\]\s+[A-Z][A-Za-z][^.!?]{8,}", s):
         low = s.lower()
         if (

@@ -2316,8 +2316,10 @@ test('CJK-adjacent strong markdown renders as emphasis without leaking delimiter
   const assistant = page.locator('.kb-msg-bubble-assistant').last()
   await expect(assistant.locator('.kb-markdown strong')).toHaveText([
     '快照压缩成像（CASSI）',
+    '显著降低系统复杂度',
     '三维场景表示',
   ])
   await expect(assistant).not.toContainText('**')
   await expect(assistant).toContainText('快照压缩成像（CASSI）的物理原理')
+  await expect(assistant).toContainText('深度学习能够显著降低系统复杂度')
 })

@@ -321,15 +321,25 @@ function normalizeAdjacentStrongMarkdown(text: string): string {
     }
     if (inFence) return line
     const inlineCodeRe = /(`+)[^`\n]*?\1/g
-    const normalizeSegment = (segment: string) => segment
-      .replace(
-        /(?<=[\p{L}\p{N}])(\*\*[^*\n]+?\*\*)/gu,
-        '&#8203;$1',
-      )
-      .replace(
-        /(\*\*[^*\n]+?\*\*)(?=[\p{L}\p{N}])/gu,
-        '$1&#8203;',
-      )
+    const normalizeSegment = (segment: string) => {
+      const markers = [...segment.matchAll(/(?<!\\)\*\*(?!\*)/g)]
+      if (markers.length < 2 || markers.length % 2 !== 0) return segment
+      let normalized = ''
+      let cursor = 0
+      for (let index = 0; index < markers.length; index += 2) {
+        const opener = markers[index].index ?? -1
+        const closer = markers[index + 1].index ?? -1
+        if (opener < cursor || closer <= opener + 2) return segment
+        const before = segment.slice(cursor, opener)
+        normalized += /[\p{L}\p{N}]$/u.test(before) ? `${before}&#8203;` : before
+        normalized += segment.slice(opener, closer + 2)
+        const next = segment.slice(closer + 2, closer + 3)
+        if (/[\p{L}\p{N}]/u.test(next)) normalized += '&#8203;'
+        cursor = closer + 2
+      }
+      normalized += segment.slice(cursor)
+      return normalized
+    }
     let out = ''
     let last = 0
     for (const match of line.matchAll(inlineCodeRe)) {

@@ -223,6 +223,8 @@ def test_merge_expanded_results_overlap():
     # "a" is in both sets so it should rank first
     assert ids[0] == "a"
     assert "b" in ids
+    assert [hit["score"] for hit in merged_hits] == pytest.approx(merged_scores)
+    assert merged_hits[0]["_bm25_score"] == pytest.approx(1.0)
 
 
 def test_merge_expanded_results_empty():

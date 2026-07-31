@@ -320,6 +320,85 @@ def test_quality_gate_targets_page_with_missing_wrapped_word_prefixes(tmp_path: 
     assert "source_page_text_corruption" not in assessment["issue_codes"]
 
 
+def test_quality_gate_repairs_source_proven_interior_prose_omission(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "omitted-prose.pdf"
+    stable_prefix = " ".join(
+        f"science{chr(97 + index // 26)}{chr(97 + index % 26)}" for index in range(70)
+    )
+    omitted_phrase = (
+        "the color imaging system preserves appropriate calibration and stable spectral response"
+    )
+    stable_suffix = " ".join(
+        f"result{chr(97 + index // 26)}{chr(97 + index % 26)}" for index in range(70)
+    )
+    source_paragraph = (
+        f"{stable_prefix}. The experiment confirms that {omitted_phrase} during every acquisition. "
+        f"{stable_suffix}. These measurements support the final reconstruction conclusion."
+    )
+
+    doc = fitz.open()
+    front_page = doc.new_page()
+    front_page.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "Omitted Prose\nAbstract\nThis paper studies scientific image reconstruction.",
+        fontsize=10,
+    )
+    page = doc.new_page()
+    page.insert_textbox(fitz.Rect(40, 60, 560, 760), source_paragraph, fontsize=7)
+    reference_page = doc.new_page()
+    reference_page.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "References\n[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+        fontsize=10,
+    )
+    doc.save(pdf_path)
+    doc.close()
+
+    damaged_paragraph = source_paragraph.replace(f" {omitted_phrase}", "")
+    md_path = tmp_path / "omitted-prose.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Omitted Prose",
+                "## Abstract",
+                "This paper studies scientific image reconstruction.",
+                "<!-- kb_page: 2 -->",
+                "## Results",
+                damaged_paragraph,
+                "<!-- kb_page: 3 -->",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+
+    assert report["repair_plan"]["action"] == "autofix"
+    assert report["repair_plan"]["scope"] == "markdown"
+    assert "source_page_prose_omission" in report["repair_plan"]["issue_codes"]
+    assert report["source_quality"]["evidence_unreliable_pages"] == [2]
+    omission = report["source_quality"]["source_page_prose_omission_pages"][0]
+    assert omission["anchored_omitted_word_count"] >= 8
+    assert "color imaging system" in " ".join(omission["examples"])
+
+    assessment = prepare_markdown_for_index(md_path, source_pdf_path=pdf_path)
+
+    assert assessment["indexable"] is True
+    assert assessment["status"] == "ready"
+    assert assessment["action"] == "none"
+    assert assessment["auto_repair"]["attempted"] is True
+    assert assessment["auto_repair"]["changed"] is True
+    assert "recover_source_prose_omissions" in assessment["auto_repair"]["applied"]
+    assert assessment["evidence_unreliable_pages"] == []
+    assert "source_page_prose_omission" not in assessment["issue_codes"]
+    assert omitted_phrase in md_path.read_text(encoding="utf-8")
+
+
 def test_quality_repair_moves_next_page_anchor_before_high_confidence_table(tmp_path: Path):
     import fitz
 

@@ -185,6 +185,39 @@ def build_grounded_ref_why_line(
     )
     if prefer_zh:
         if (
+            "compared with the gray spi" in summary_low
+            and "color spi" in summary_low
+            and "longer imaging times" in summary_low
+            and "color response coefficient" in summary_low
+            and "color distortion" in summary_low
+        ):
+            dl_result = (
+                "；同时，原文说明深度学习可降低系统复杂度并缩短成像时间"
+                if (
+                    "dl algorithms" in summary_low
+                    and "complexity of the system" in summary_low
+                    and "reduce the imaging time" in summary_low
+                )
+                else ""
+            )
+            return (
+                "原文把彩色 SPI 相对灰度 SPI 的额外挑战具体落到更长的成像时间，"
+                f"以及未知颜色响应系数引起的颜色失真{dl_result}，"
+                "可直接核对问题中的挑战与改进机制。"
+            )
+        if (
+            "hatnet" in summary_low
+            and "kronecker spi" in summary_low
+            and "computational costs" in summary_low
+            and "gpu memory" in summary_low
+            and "inference time" in summary_low
+            and re.search(r"(?:two|tow)\s+small\s+matrices", summary_low)
+        ):
+            return (
+                "原文说明 HATNet 借助 Kronecker SPI，用两个小矩阵替代大型测量矩阵，"
+                "从而降低计算开销、GPU 显存占用和推理时间，可核对回答中的系统效率结论。"
+            )
+        if (
             re.search(r"\bHSI\b", summary_full)
             and re.search(r"\bFSI\b", summary_full)
             and re.search(r"sampling\s+ratios?|undersampl", summary_low)
@@ -730,6 +763,38 @@ def build_localized_ref_summary_line(
     low = text.lower()
     if not text:
         return ""
+    if (
+        "compared with the gray spi" in low
+        and "color spi" in low
+        and "longer imaging times" in low
+        and "color response coefficient" in low
+        and "color distortion" in low
+    ):
+        dl_result = (
+            "；深度学习则可降低系统复杂度并缩短成像时间"
+            if (
+                "dl algorithms" in low
+                and "complexity of the system" in low
+                and "reduce the imaging time" in low
+            )
+            else ""
+        )
+        return (
+            "该文指出彩色 SPI 相比灰度 SPI 需要更长的成像时间，"
+            f"且未知颜色响应系数会造成颜色失真{dl_result}。"
+        )
+    if (
+        "hatnet" in low
+        and "kronecker spi" in low
+        and "computational costs" in low
+        and "gpu memory" in low
+        and "inference time" in low
+        and re.search(r"(?:two|tow)\s+small\s+matrices", low)
+    ):
+        return (
+            "该文说明 HATNet 借助 Kronecker SPI，以两个小矩阵替代大型测量矩阵，"
+            "从而降低计算开销、GPU 显存占用和推理时间。"
+        )
     if (
         "improves reconstruction quality" in low
         and "without increasing acquisition time" in low

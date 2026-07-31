@@ -20,7 +20,10 @@ _CRITICAL_AUTOFIX_ISSUES = {
     "source_page_marker_alignment",
     "reference_index_truncated",
 }
-_PAGE_SCOPED_DEGRADABLE_ISSUES = {"source_page_text_corruption"}
+_PAGE_SCOPED_DEGRADABLE_ISSUES = {
+    "source_page_prose_omission",
+    "source_page_text_corruption",
+}
 
 
 def _report_is_stale(md_path: Path, report: dict[str, Any]) -> bool:

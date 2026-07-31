@@ -295,6 +295,75 @@ def test_cassi_card_copy_uses_full_plan_passage_after_occurrence_compaction() ->
     assert all(term in why for term in ("CASSI", "色散元件", "二值编码孔径"))
 
 
+def test_color_spi_card_uses_full_plan_passage_for_localized_guide_and_relevance() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": (
+                    "LPR-2025-Advances and Challenges of Single-Pixel Imaging "
+                    "Based on Deep Learning.pdf"
+                ),
+                "heading_path": (
+                    "5. Single-Pixel Imaging Relizations with Deep Learning / "
+                    "5.5. Color Single-Pixel Imaging"
+                ),
+                "answer_claim": "如需了解具体实现，可查看 Figure 9。",
+                "evidence_quote": (
+                    "h) Full-color images recovered by colorCGI, CNN, and GAN."
+                ),
+                "citation_plan_evidence_quote": (
+                    "Compared with the gray SPI, the color SPI system may require longer "
+                    "imaging times, and the unknown color response coefficient can inevitably "
+                    "lead to color distortion. Recently, the DL algorithms have been introduced "
+                    "into these strategies, which can significantly mitigate the complexity of "
+                    "the system and reduce the imaging time."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt=(
+            "彩色单像素成像相比灰度 SPI 有哪些额外挑战？"
+            "深度学习怎样降低系统复杂度和成像时间？"
+        ),
+    )
+
+    assert all(term in summary for term in ("彩色 SPI", "灰度 SPI", "颜色响应系数", "颜色失真"))
+    assert all(term in summary for term in ("深度学习", "系统复杂度", "成像时间"))
+    assert all(term in why for term in ("彩色 SPI", "颜色响应系数", "深度学习"))
+    assert "未提供摘要定位" not in f"{summary}{why}"
+
+
+def test_hatnet_efficiency_card_localizes_full_plan_passage() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": (
+                    "CVPR-2024-Dual-Scale Transformer for Large-Scale "
+                    "Single-Pixel Imaging.pdf"
+                ),
+                "heading_path": "5. Conclusion",
+                "answer_claim": "HATNet 降低了计算与显存开销。",
+                "evidence_quote": (
+                    "We propose a deep unfolding network with hybrid-attention Transformer "
+                    "on Kronecker SPI model, dubbed HATNet."
+                ),
+                "citation_plan_evidence_quote": (
+                    "By virtue of Kronecker SPI, HATNet can efficiently reduce the "
+                    "computational costs, GPU memory, and inference time by replacing a "
+                    "regular large measurement matrix with two small matrices."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt="HATNet 怎样提高单像素成像的系统效率？",
+    )
+
+    assert all(term in summary for term in ("HATNet", "Kronecker SPI", "两个小矩阵"))
+    assert all(term in summary for term in ("计算开销", "GPU 显存", "推理时间"))
+    assert all(term in why for term in ("HATNet", "Kronecker SPI", "系统效率"))
+    assert "未提供摘要定位" not in f"{summary}{why}"
+
+
 def test_reading_roadmap_card_localizes_compressively_sensed_foundation() -> None:
     summary, why = references_router._answer_citation_card_copy(
         [
@@ -2706,6 +2775,125 @@ def test_get_conversation_refs_uses_completed_answer_citations_without_fast_rend
     assert out[7]["display_state"] == "ready"
     assert persisted
     assert "fast_render;dur=" not in str(response.headers.get("server-timing") or "")
+
+
+def test_get_conversation_refs_keeps_latest_answer_overlay_beside_older_full_pack(
+    monkeypatch,
+):
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    refs = {
+        1: {
+            "prompt": "older question",
+            "hits": [
+                {
+                    "text": "older evidence",
+                    "meta": {
+                        "source_path": r"db\Older\Older.en.md",
+                        "ref_pack_state": "ready",
+                    },
+                }
+            ],
+            "render_status": "full",
+        },
+        3: {
+            "prompt": "latest question",
+            "hits": [
+                {
+                    "text": "latest evidence",
+                    "meta": {
+                        "source_path": r"db\Latest\Latest.en.md",
+                        "ref_pack_state": "ready",
+                    },
+                }
+            ],
+            # Reproduce the live race: the stored card signature was created
+            # before the final assistant answer metadata settled.
+            "render_status": "full",
+            "rendered_payload": {"hits": [{"ui_meta": {"summary_line": "stale"}}]},
+            "rendered_payload_sig": "stale-after-answer-finalize",
+        },
+    }
+    store = _FakeStore({"mode": "chat"}, refs)
+
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(
+        references_router,
+        "_attach_assistant_answers_to_refs",
+        lambda **kwargs: dict(kwargs["refs"]),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_answer_citation_details_by_user",
+        lambda **_kwargs: {
+            3: [{"source_path": r"db\Latest\Latest.en.md"}],
+        },
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_get_stored_rendered_pack_payload",
+        lambda *, user_msg_id, **_kwargs: (
+            {
+                "payload_mode": "full",
+                "hits": [{"ui_meta": {"summary_line": "older full"}}],
+            }
+            if int(user_msg_id) == 1
+            else None
+        ),
+    )
+
+    def _overlay(**kwargs):
+        out = {
+            int(user_msg_id): dict(pack)
+            for user_msg_id, pack in dict(kwargs["payload"]).items()
+        }
+        latest = dict(out[3])
+        latest.update(
+            {
+                "payload_mode": "full",
+                "render_status": "full",
+                "display_state": "ready",
+                "enrichment_pending": False,
+                "hits": [
+                    {
+                        "text": "latest exact evidence",
+                        "ui_meta": {"summary_line": "latest answer-aligned"},
+                    }
+                ],
+            }
+        )
+        out[3] = latest
+        return out
+
+    monkeypatch.setattr(
+        references_router,
+        "_overlay_refs_payload_with_answer_citations",
+        _overlay,
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_persist_rendered_refs_payloads",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_warm_conversation_refs_payload_async",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        references_router,
+        "enrich_refs_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("answer overlay should not invoke heuristic card rendering")
+        ),
+    )
+
+    out = references_router.get_conversation_refs("conv-old-full-latest-overlay")
+
+    assert set(out) == {1, 3}
+    assert out[1]["hits"][0]["ui_meta"]["summary_line"] == "older full"
+    assert out[3]["hits"][0]["ui_meta"]["summary_line"] == "latest answer-aligned"
+    assert out[3]["render_status"] == "full"
 
 
 def test_get_conversation_refs_invalidates_cache_when_refs_change(monkeypatch):

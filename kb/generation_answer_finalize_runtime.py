@@ -5722,6 +5722,94 @@ def _complete_exact_source_bound_answer_claims(
                 return slot, int(number), evidence
         return None, 0, ""
 
+    # A color-SPI comparison has two source-stated challenges that form one
+    # compound answer contract: longer acquisition and color distortion from
+    # an unknown response coefficient. Models regularly keep the first fact
+    # while omitting the second during their final rewrite, even though both
+    # are present in the same evidence slot. Restore only the missing
+    # source-bound fact, and retain the English technical terms alongside the
+    # localized wording so the claim/evidence gate can verify the relation.
+    _color_spi_slot, color_spi_num, _color_spi_evidence = _matching_slot(
+        r"compared\s+with\s+the\s+gray\s+SPI",
+        r"require\s+longer\s+imaging\s+times",
+        r"unknown\s+color\s+response\s+coefficient",
+        r"lead\s+to\s+color\s+distortion",
+        r"DL\s+algorithms?.*complexity\s+of\s+the\s+system",
+        r"reduce\s+the\s+imaging\s+time",
+    )
+    color_spi_comparison_prompt = bool(
+        re.search(
+            r"彩色.{0,12}(?:单像素|SPI)|color(?:ed)?\s+(?:single[- ]pixel|SPI)",
+            prompt_surface,
+            flags=re.I,
+        )
+        and re.search(
+            r"灰度.{0,8}SPI|gray(?:scale)?\s+(?:single[- ]pixel|SPI)",
+            prompt_surface,
+            flags=re.I,
+        )
+        and re.search(
+            r"额外挑战|相比|比较|challenge|compared?",
+            prompt_surface,
+            flags=re.I,
+        )
+    )
+    has_color_response_distortion = bool(
+        re.search(
+            r"颜色响应系数|color\s+response\s+coefficient",
+            text,
+            flags=re.I,
+        )
+        and re.search(r"颜色失真|color\s+distortion", text, flags=re.I)
+    )
+    if (
+        color_spi_num > 0
+        and color_spi_comparison_prompt
+        and not has_color_response_distortion
+    ):
+        missing_challenge = (
+            "**颜色响应系数未知会导致颜色失真**：原文明确指出，未知的颜色响应系数"
+            "（color response coefficient）会不可避免地导致颜色失真"
+            f"（color distortion） [{color_spi_num}]。"
+            if prefer_zh
+            else "**An unknown color response coefficient causes color distortion**: "
+            "the source states that an unknown color response coefficient inevitably "
+            f"leads to color distortion [{color_spi_num}]."
+        )
+        challenge_heading = re.search(
+            r"(?im)^#{2,6}\s+[^\n]*(?:彩色.{0,20}挑战|color[^\n]{0,40}challenge)[^\n]*$",
+            text,
+        )
+        if challenge_heading:
+            next_heading = re.search(
+                r"(?m)^#{2,6}\s+",
+                text[challenge_heading.end() :],
+            )
+            section_end = (
+                challenge_heading.end() + next_heading.start()
+                if next_heading
+                else len(text)
+            )
+            section = text[challenge_heading.end() : section_end].rstrip()
+            list_numbers = [
+                int(value)
+                for value in re.findall(r"(?m)^\s*(\d+)[.)、]\s+", section)
+            ]
+            prefix = f"{max(list_numbers, default=0) + 1}. " if list_numbers else "- "
+            text = (
+                text[:section_end].rstrip()
+                + "\n\n"
+                + prefix
+                + missing_challenge
+                + "\n\n"
+                + text[section_end:].lstrip()
+            ).strip()
+        else:
+            text = _insert_grounded_supplement_after_direct_answer(
+                text,
+                missing_challenge,
+            )
+
     _basis_slot, basis_num, _basis_evidence = _matching_slot(
         r"HSI\s+uses\s+Hadamard\s+basis\s+patterns",
         r"FSI\s+uses\s+Fourier\s+basis\s+patterns",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -238,7 +239,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 11
+CONVERSION_QUALITY_RULES_VERSION = 13
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
@@ -250,6 +251,9 @@ SOURCE_PAGE_MIN_WRAPPED_WORDS = 3
 SOURCE_PAGE_MAX_WRAP_PREFIX_CHARS = 12
 SOURCE_PAGE_MAX_WRAP_SUFFIX_CHARS = 24
 SOURCE_PAGE_MISSING_WRAP_RATIO = 0.20
+SOURCE_PAGE_MIN_PROSE_BLOCK_TOKENS = 80
+SOURCE_PAGE_MIN_ANCHORED_OMITTED_WORDS = 8
+SOURCE_PAGE_MIN_PROSE_SENTENCES = 2
 PAGE_ALIGNMENT_ANCHOR_DRIFT_CHARS = 1200
 PAGE_ALIGNMENT_BEAM_SIZE = 300
 PAGE_ALIGNMENT_BEAM_PER_MATCH = 80
@@ -513,6 +517,33 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
             "so those pages are not reliable enough for retrieval or answer evidence."
         ),
         "strategies": ["recover_corrupted_source_pages", "postprocess_markdown"],
+    },
+    "source_page_prose_omission": {
+        "label": "Restore source-proven words missing from interior prose",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": (
+            "One or more converted pages dropped source-proven words from the middle of long prose blocks, "
+            "so bounded differences are restored from the PDF text layer before indexing."
+        ),
+        "strategies": ["recover_source_prose_omissions", "postprocess_markdown"],
+    },
+    "numeric_only_headings": {
+        "label": "Demote plot-axis numbers captured as headings",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "Numeric plot labels were captured as document headings and would distort reader navigation.",
+        "strategies": ["postprocess_markdown"],
+    },
+    "plain_method_subheadings": {
+        "label": "Promote recognized Methods subsection titles",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "Recognized Methods subsection titles were left as body text, weakening navigation and retrieval paths.",
+        "strategies": ["postprocess_markdown"],
     },
     "heading_level_jumps": {
         "label": "Rebalance heading levels using the established heading policy",
@@ -844,8 +875,6 @@ def write_conversion_quality_result(
         for page in list(source_quality.get("evidence_unreliable_pages") or [])
         if str(page or "").isdigit() and int(page) > 0
     ]
-    if retry_pages and str(repair_plan.get("action") or "").strip().lower() == "reconvert":
-        repair_plan["retry_pages"] = sorted(set(retry_pages))[:500]
     if exhausted_issue_codes:
         repair_plan = _escalate_persistent_source_autofix(
             repair_plan,
@@ -855,6 +884,8 @@ def write_conversion_quality_result(
             },
             source_available=bool(source_quality.get("source_pdf_available")),
         )
+    if retry_pages and str(repair_plan.get("action") or "").strip().lower() == "reconvert":
+        repair_plan["retry_pages"] = sorted(set(retry_pages))[:500]
     recommended_action = str(repair_plan.get("action") or "review")
     prev_attempts = prev.get("repair_attempts") if isinstance(prev.get("repair_attempts"), list) else []
     prev_attempts = [item for item in prev_attempts if isinstance(item, dict)][-MAX_CONVERSION_REPAIR_ATTEMPTS:]
@@ -899,6 +930,7 @@ _PERSISTENT_SOURCE_AUTOFIX_ISSUES = {
     "page_marker_gaps",
     "source_page_marker_alignment",
     "source_table_page_alignment",
+    "source_page_prose_omission",
 }
 
 
@@ -928,6 +960,12 @@ def _escalate_persistent_source_autofix(
         return repair_plan
 
     plan = dict(repair_plan)
+    page_scoped = persistent == {"source_page_prose_omission"}
+    persistent_reason = (
+        "Source-proven prose omissions remain after bounded text-layer repair."
+        if page_scoped
+        else "Page anchors remain inconsistent after deterministic Markdown repair."
+    )
     issue_actions: list[dict[str, Any]] = []
     for raw in list(plan.get("issue_actions") or []):
         row = dict(raw) if isinstance(raw, Mapping) else {}
@@ -937,8 +975,8 @@ def _escalate_persistent_source_autofix(
                 {
                     "action": "reconvert",
                     "safe": False,
-                    "scope": "document",
-                    "reason": "Page anchors remain inconsistent after deterministic Markdown repair.",
+                    "scope": "pages" if page_scoped else "document",
+                    "reason": persistent_reason,
                     "speed_mode": "normal",
                     "strategies": ["source_reconversion"],
                 }
@@ -954,12 +992,16 @@ def _escalate_persistent_source_autofix(
         plan.update(
             {
                 "action": "reconvert",
-                "scope": "document",
+                "scope": "pages" if page_scoped else "document",
                 "speed_mode": "normal",
                 "no_llm": False,
                 "replace": True,
                 "md_autofix_first": bool(autofix_codes),
-                "reason": "Page anchors remain inconsistent after deterministic repair; rerun source conversion.",
+                "reason": (
+                    "Bounded source-text repair could not resolve every omission; retry only the affected pages."
+                    if page_scoped
+                    else "Page anchors remain inconsistent after deterministic repair; rerun source conversion."
+                ),
                 "reconvert_issue_codes": sorted(persistent),
                 "autofix_issue_codes": autofix_codes,
                 "issue_actions": issue_actions,
@@ -1215,6 +1257,45 @@ def _out_of_order_numbered_sections_likely(text: str) -> bool:
     return False
 
 
+_NUMERIC_ONLY_HEADING_RE = re.compile(
+    r"^#{1,6}\s+(?:\d+(?:\.\d+)?\s*){2,}$",
+    re.MULTILINE,
+)
+_PLAIN_METHOD_SUBHEADING_TITLES = {
+    "deep feature fusion",
+    "image reconstruction",
+    "loss function",
+    "network structure",
+    "network training",
+    "noise modeling of spad arrays",
+    "noise parameter calibration",
+    "shallow feature extraction",
+}
+
+
+def _plain_method_subheading_count(text: str) -> int:
+    lines = str(text or "").splitlines()
+    in_methods = False
+    count = 0
+    for line in lines:
+        stripped = str(line or "").strip()
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*$", stripped)
+        if heading:
+            title = str(heading.group(1) or "").strip().lower()
+            if re.match(r"^(?:\d+(?:\.\d+)*\.?\s+)?methods?\b", title):
+                in_methods = True
+                continue
+            if in_methods and re.match(
+                r"^(?:\d+(?:\.\d+)*\.?\s+)?(?:references|discussion|conclusions?)\b",
+                title,
+            ):
+                in_methods = False
+            continue
+        if in_methods and stripped.lower() in _PLAIN_METHOD_SUBHEADING_TITLES:
+            count += 1
+    return count
+
+
 def _issue_codes_from_context(
     md_path: Path,
     text: str,
@@ -1237,6 +1318,8 @@ def _issue_codes_from_context(
         codes.append("missing_source_pages")
     if int(quality.get("source_page_text_corruption_count") or 0) > 0:
         codes.append("source_page_text_corruption")
+    if int(quality.get("source_page_prose_omission_count") or 0) > 0:
+        codes.append("source_page_prose_omission")
     if int(quality.get("source_page_anchor_issue_count") or 0) > 0:
         codes.append("source_page_marker_alignment")
     if (
@@ -1263,6 +1346,10 @@ def _issue_codes_from_context(
         codes.append("conversion_retry_math_text")
     if _out_of_order_numbered_sections_likely(text):
         codes.append("out_of_order_sections")
+    if _NUMERIC_ONLY_HEADING_RE.search(text):
+        codes.append("numeric_only_headings")
+    if _plain_method_subheading_count(text) >= 2:
+        codes.append("plain_method_subheadings")
     return _dedupe_codes(codes)
 
 
@@ -2078,6 +2165,152 @@ def _source_page_wrapped_word_damage(page_text: str, local_segment: str) -> dict
     }
 
 
+_SOURCE_PROSE_BLOCK_SKIP_RE = re.compile(
+    r"^\s*(?:"
+    r"fig(?:ure)?\.?\s*\d|table\s*\d|algorithm\s*\d|"
+    r"acknowledg(?:e)?ments?|author\s+details?|funding|"
+    r"supplementary\s+information|publisher(?:'s|’s)?\s+note|open\s+access"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _source_prose_tokens(text: str) -> list[str]:
+    return [token for token, _start, _end in _source_prose_token_spans(text)]
+
+
+def _source_prose_token_spans(text: str) -> list[tuple[str, int, int]]:
+    """Return comparison tokens while retaining Markdown character offsets."""
+
+    value = str(text or "")
+    out: list[tuple[str, int, int]] = []
+    for match in re.finditer(
+        r"([A-Za-z]{2,})-\s*\n\s*([a-z]{2,})|[A-Za-z0-9]+",
+        value,
+    ):
+        if match.group(1) and match.group(2):
+            token = f"{match.group(1)}{match.group(2)}"
+        else:
+            token = str(match.group(0) or "")
+        if token:
+            out.append((token.lower(), int(match.start()), int(match.end())))
+    return out
+
+
+def _merge_source_prose_ligature_spans(
+    spans: list[tuple[str, int, int]],
+    local_vocabulary: set[str],
+) -> list[tuple[str, int, int]]:
+    """Join PDF ligature fragments only when the converted page proves the word."""
+
+    merged: list[tuple[str, int, int]] = []
+    token_index = 0
+    while token_index < len(spans):
+        token, start, end = spans[token_index]
+        if token_index + 1 < len(spans):
+            next_token, _next_start, next_end = spans[token_index + 1]
+            joined = token + next_token
+            if joined in local_vocabulary:
+                merged.append((joined, start, next_end))
+                token_index += 2
+                continue
+        merged.append((token, start, end))
+        token_index += 1
+    return merged
+
+
+def _eligible_source_prose_block(block: str) -> bool:
+    value = str(block or "").strip()
+    if not value or _SOURCE_PROSE_BLOCK_SKIP_RE.match(value):
+        return False
+    if len(_source_prose_tokens(value)) < SOURCE_PAGE_MIN_PROSE_BLOCK_TOKENS:
+        return False
+    alpha_chars = sum(char.isalpha() for char in value)
+    alnum_chars = sum(char.isalnum() for char in value)
+    if alpha_chars / max(1, alnum_chars) < 0.90:
+        return False
+    return len(re.findall(r"[.!?](?:\s|$)", value)) >= SOURCE_PAGE_MIN_PROSE_SENTENCES
+
+
+def _source_page_prose_omission_damage(block_texts: list[str], local_segment: str) -> dict[str, Any]:
+    """Detect source words deleted from inside otherwise matching prose.
+
+    Set-based page coverage can look healthy when a converter drops short
+    phrases from a long two-column paragraph.  Compare long prose blocks in
+    sequence and count only deletions bounded by stable three-token anchors on
+    both sides.  This deliberately ignores captions, front matter, formulas,
+    references, and wholesale rewrites so a retry is requested only for a
+    high-confidence interior omission.
+    """
+
+    local_tokens = _source_prose_tokens(local_segment)
+    local_vocabulary = set(local_tokens)
+    if not local_tokens:
+        return {
+            "assessed_prose_block_count": 0,
+            "anchored_omitted_word_count": 0,
+            "anchored_omission_group_count": 0,
+            "anchored_omission_examples": [],
+            "text_omission": False,
+        }
+
+    assessed = 0
+    omitted_words = 0
+    omission_groups = 0
+    examples: list[str] = []
+    for raw_block in block_texts:
+        block = str(raw_block or "").strip()
+        if not _eligible_source_prose_block(block):
+            continue
+        source_tokens_raw = _source_prose_tokens(block)
+
+        # PDF text layers often split a ligature into tokens such as
+        # ``di`` + ``erent``.  Join it only when the resulting token is
+        # actually present in the converted page, preventing false omissions.
+        source_tokens = [
+            token
+            for token, _start, _end in _merge_source_prose_ligature_spans(
+                [(token, index, index + 1) for index, token in enumerate(source_tokens_raw)],
+                local_vocabulary,
+            )
+        ]
+
+        assessed += 1
+        opcodes = difflib.SequenceMatcher(
+            a=source_tokens,
+            b=local_tokens,
+            autojunk=False,
+        ).get_opcodes()
+        for opcode_index, (tag, source_start, source_end, _local_start, _local_end) in enumerate(opcodes):
+            if tag != "delete" or opcode_index <= 0 or opcode_index + 1 >= len(opcodes):
+                continue
+            previous = opcodes[opcode_index - 1]
+            following = opcodes[opcode_index + 1]
+            if previous[0] != "equal" or following[0] != "equal":
+                continue
+            if previous[2] - previous[1] < 3 or following[2] - following[1] < 3:
+                continue
+            missing = [
+                token
+                for token in source_tokens[source_start:source_end]
+                if token.isalpha() and len(token) >= 2
+            ]
+            if not missing:
+                continue
+            omitted_words += len(missing)
+            omission_groups += 1
+            if len(examples) < 12:
+                examples.append(" ".join(missing[:18]))
+
+    return {
+        "assessed_prose_block_count": int(assessed),
+        "anchored_omitted_word_count": int(omitted_words),
+        "anchored_omission_group_count": int(omission_groups),
+        "anchored_omission_examples": examples[:12],
+        "text_omission": bool(omitted_words >= SOURCE_PAGE_MIN_ANCHORED_OMITTED_WORDS),
+    }
+
+
 def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str, Any]:
     empty = {
         "min_source_page_coverage": 0.0,
@@ -2086,6 +2319,8 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
         "source_page_coverage_threshold": SOURCE_PAGE_COVERAGE_THRESHOLD,
         "source_page_text_corruption_count": 0,
         "source_page_text_corruption_pages": [],
+        "source_page_prose_omission_count": 0,
+        "source_page_prose_omission_pages": [],
         "evidence_unreliable_pages": [],
         "page_evidence_profiles": [],
     }
@@ -2137,6 +2372,7 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
 
     low_pages: list[dict[str, Any]] = []
     corrupted_pages: list[dict[str, Any]] = []
+    prose_omission_pages: list[dict[str, Any]] = []
     page_profiles: list[dict[str, Any]] = []
     min_coverage = 1.0
     assessed = 0
@@ -2148,9 +2384,16 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
         for page_index in range(len(doc)):
             page_no = page_index + 1
             try:
-                page_text = str(doc.load_page(page_index).get_text("text") or "")
+                page = doc.load_page(page_index)
+                page_text = str(page.get_text("text") or "")
+                page_block_texts = [
+                    str(block[4] or "")
+                    for block in list(page.get_text("blocks", sort=True) or [])
+                    if len(block) >= 5
+                ]
             except Exception:
                 page_text = ""
+                page_block_texts = []
             if marker_pages and page_no < min(marker_pages) and _pdf_page_looks_like_download_landing_page(page_text):
                 continue
             page_tokens = _rare_source_tokens(page_text)
@@ -2197,6 +2440,7 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
                 local_tokens = _rare_source_tokens(local_segment)
                 local_coverage = len(page_tokens.intersection(local_tokens)) / max(1, len(page_tokens))
             wrap_damage = _source_page_wrapped_word_damage(page_text, local_segment)
+            prose_omission = _source_page_prose_omission_damage(page_block_texts, local_segment)
             if bool(wrap_damage.get("text_corruption")):
                 corrupted_pages.append(
                     {
@@ -2206,6 +2450,23 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
                         "missing_wrapped_word_ratio": float(wrap_damage.get("missing_wrapped_word_ratio") or 0.0),
                         "examples": list(wrap_damage.get("missing_wrapped_word_examples") or [])[:12],
                         "reason": "missing_wrapped_word_prefixes",
+                    }
+                )
+            if bool(prose_omission.get("text_omission")):
+                prose_omission_pages.append(
+                    {
+                        "page": int(page_no),
+                        "assessed_prose_block_count": int(
+                            prose_omission.get("assessed_prose_block_count") or 0
+                        ),
+                        "anchored_omitted_word_count": int(
+                            prose_omission.get("anchored_omitted_word_count") or 0
+                        ),
+                        "anchored_omission_group_count": int(
+                            prose_omission.get("anchored_omission_group_count") or 0
+                        ),
+                        "examples": list(prose_omission.get("anchored_omission_examples") or [])[:12],
+                        "reason": "source_prose_omission",
                     }
                 )
             empty_marked_page_segment = bool(
@@ -2248,6 +2509,8 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
                     )
             if bool(wrap_damage.get("text_corruption")):
                 reason_codes.append("missing_wrapped_word_prefixes")
+            if bool(prose_omission.get("text_omission")):
+                reason_codes.append("source_prose_omission")
             page_profiles.append(
                 {
                     "page": int(page_no),
@@ -2258,6 +2521,9 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
                     "has_page_marker": bool(page_no in marker_pages),
                     "missing_wrapped_word_count": int(wrap_damage.get("missing_wrapped_word_count") or 0),
                     "missing_wrapped_word_ratio": float(wrap_damage.get("missing_wrapped_word_ratio") or 0.0),
+                    "anchored_omitted_word_count": int(
+                        prose_omission.get("anchored_omitted_word_count") or 0
+                    ),
                     "reason_codes": reason_codes,
                 }
             )
@@ -2269,7 +2535,7 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
     unreliable_pages = sorted(
         {
             int(item.get("page") or 0)
-            for item in low_pages + corrupted_pages
+            for item in low_pages + corrupted_pages + prose_omission_pages
             if int(item.get("page") or 0) > 0
         }
     )
@@ -2280,6 +2546,8 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
         "source_page_coverage_threshold": SOURCE_PAGE_COVERAGE_THRESHOLD,
         "source_page_text_corruption_count": int(len(corrupted_pages)),
         "source_page_text_corruption_pages": corrupted_pages[:50],
+        "source_page_prose_omission_count": int(len(prose_omission_pages)),
+        "source_page_prose_omission_pages": prose_omission_pages[:50],
         "evidence_unreliable_pages": unreliable_pages[:500],
         "page_evidence_profiles": page_profiles[:500],
     }
@@ -3680,6 +3948,144 @@ def _recover_missing_source_pages_from_pdf_text(md_text: str, md_path: Path, sou
     return fixed, fixed != text
 
 
+def _bounded_source_prose_edits(
+    block_texts: list[str],
+    local_segment: str,
+) -> list[tuple[int, int, str]]:
+    """Build source-backed edits bounded by stable token sequences.
+
+    Only pages already classified with a high-confidence omission are eligible.
+    Individual differences must also have three unchanged tokens on both sides.
+    Replacing the small gap between those anchors preserves Markdown headings,
+    figures, paragraph breaks, and citations outside the damaged phrase.
+    """
+
+    damage = _source_page_prose_omission_damage(block_texts, local_segment)
+    if not bool(damage.get("text_omission")):
+        return []
+
+    local_spans = _source_prose_token_spans(local_segment)
+    if not local_spans:
+        return []
+    local_tokens = [token for token, _start, _end in local_spans]
+    local_vocabulary = set(local_tokens)
+    proposed: list[tuple[int, int, str]] = []
+
+    for raw_block in block_texts:
+        block = str(raw_block or "").strip()
+        if not _eligible_source_prose_block(block):
+            continue
+        source_text = _clean_pdf_page_block_text(block)
+        raw_source_spans = _source_prose_token_spans(source_text)
+        source_spans = _merge_source_prose_ligature_spans(raw_source_spans, local_vocabulary)
+        source_tokens = [token for token, _start, _end in source_spans]
+        if len(source_tokens) < SOURCE_PAGE_MIN_PROSE_BLOCK_TOKENS:
+            continue
+
+        opcodes = difflib.SequenceMatcher(
+            a=source_tokens,
+            b=local_tokens,
+            autojunk=False,
+        ).get_opcodes()
+        for opcode_index, (tag, _source_start, _source_end, _local_start, _local_end) in enumerate(opcodes):
+            if tag not in {"delete", "replace"} or opcode_index <= 0 or opcode_index + 1 >= len(opcodes):
+                continue
+            previous = opcodes[opcode_index - 1]
+            following = opcodes[opcode_index + 1]
+            if previous[0] != "equal" or following[0] != "equal":
+                continue
+            if previous[2] - previous[1] < 3 or following[2] - following[1] < 3:
+                continue
+
+            source_gap_start = source_spans[previous[2] - 1][2]
+            source_gap_end = source_spans[following[1]][1]
+            local_gap_start = local_spans[previous[4] - 1][2]
+            local_gap_end = local_spans[following[3]][1]
+            if source_gap_end <= source_gap_start or local_gap_end < local_gap_start:
+                continue
+            if source_gap_end - source_gap_start > 320 or local_gap_end - local_gap_start > 320:
+                continue
+            replacement = source_text[source_gap_start:source_gap_end]
+            current = local_segment[local_gap_start:local_gap_end]
+            if not replacement.strip() or replacement == current:
+                continue
+            proposed.append((int(local_gap_start), int(local_gap_end), replacement))
+
+    if not proposed:
+        return []
+
+    # Source blocks can overlap at column boundaries. Keep a deterministic,
+    # non-overlapping set and apply it from the end of the page.
+    accepted: list[tuple[int, int, str]] = []
+    for edit in sorted(set(proposed), key=lambda item: (item[0], item[1], item[2])):
+        start, end, _replacement = edit
+        if any(start < accepted_end and end > accepted_start for accepted_start, accepted_end, _ in accepted):
+            continue
+        accepted.append(edit)
+    return accepted
+
+
+def _recover_source_prose_omissions_from_pdf_text(
+    md_text: str,
+    md_path: Path,
+    source_pdf_path: Path | str | None = None,
+) -> tuple[str, bool]:
+    """Repair page-local prose gaps from the source PDF text layer."""
+
+    text = str(md_text or "")
+    pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
+    if fitz is None or not pdf_path:
+        return text, False
+    coverage = _source_page_coverage_quality(text, pdf_path)
+    pages = [
+        int(item.get("page") or 0)
+        for item in list(coverage.get("source_page_prose_omission_pages") or [])
+        if int(item.get("page") or 0) > 0
+    ]
+    if not pages:
+        return text, False
+
+    try:
+        doc = fitz.open(str(pdf_path))
+    except Exception:
+        return text, False
+    fixed = text
+    try:
+        for page_no in sorted(set(pages), reverse=True):
+            occurrence = next(
+                (
+                    item
+                    for item in _page_marker_occurrences(fixed)
+                    if int(item.get("page") or 0) == int(page_no)
+                ),
+                None,
+            )
+            if occurrence is None or not 1 <= page_no <= len(doc):
+                continue
+            segment_start = int(occurrence.get("segment_start") or 0)
+            segment_end = int(occurrence.get("segment_end") or len(fixed))
+            local_segment = fixed[segment_start:segment_end]
+            try:
+                page = doc.load_page(page_no - 1)
+                block_texts = [
+                    str(block[4] or "")
+                    for block in list(page.get_text("blocks", sort=True) or [])
+                    if len(block) >= 5
+                ]
+            except Exception:
+                continue
+            edits = _bounded_source_prose_edits(block_texts, local_segment)
+            if not edits:
+                continue
+            repaired_segment = local_segment
+            for start, end, replacement in sorted(edits, key=lambda item: item[0], reverse=True):
+                repaired_segment = repaired_segment[:start] + replacement + repaired_segment[end:]
+            fixed = fixed[:segment_start] + repaired_segment + fixed[segment_end:]
+    finally:
+        doc.close()
+    return fixed, fixed != text
+
+
 def _recover_corrupted_source_pages_from_pdf_text(
     md_text: str,
     md_path: Path,
@@ -4346,6 +4752,11 @@ def repair_markdown_text(
             if changed:
                 applied.append("recover_missing_source_pages")
 
+        if source_repairs_enabled and "recover_source_prose_omissions" in active_strategy_names:
+            text, changed = _recover_source_prose_omissions_from_pdf_text(text, path, source_pdf_path)
+            if changed:
+                applied.append("recover_source_prose_omissions")
+
         if source_repairs_enabled and "recover_corrupted_source_pages" in active_strategy_names:
             text, changed = _recover_corrupted_source_pages_from_pdf_text(text, path, source_pdf_path)
             if changed:
@@ -4462,6 +4873,18 @@ def repair_markdown_text(
                 candidate, changed = _promote_collapsed_review_headings(fallback_text)
             elif source_repairs_enabled and label == "recover_missing_source_pages":
                 candidate, changed = _recover_missing_source_pages_from_pdf_text(fallback_text, path, source_pdf_path)
+            elif source_repairs_enabled and label == "recover_source_prose_omissions":
+                candidate, changed = _recover_source_prose_omissions_from_pdf_text(
+                    fallback_text,
+                    path,
+                    source_pdf_path,
+                )
+            elif source_repairs_enabled and label == "recover_corrupted_source_pages":
+                candidate, changed = _recover_corrupted_source_pages_from_pdf_text(
+                    fallback_text,
+                    path,
+                    source_pdf_path,
+                )
             elif source_repairs_enabled and label == "pdf_reference_backfill":
                 candidate, changed = _backfill_references_from_pdf_text(fallback_text, path, source_pdf_path)
             if not changed or candidate == fallback_text:

@@ -135,6 +135,107 @@ def test_query_translation_keeps_explicit_table_intent() -> None:
     assert "table" in translated.split()
 
 
+def test_query_translation_preserves_color_spi_challenge_terms() -> None:
+    translated = _translate_query_for_search(
+        SimpleNamespace(api_key=None),
+        "彩色单像素成像相比灰度 SPI 有哪些额外挑战？"
+        "深度学习怎样降低系统复杂度和成像时间？",
+    )
+
+    assert translated
+    assert "color single-pixel imaging" in translated
+    assert "gray SPI" in translated
+    assert "system complexity" in translated
+    assert "imaging time" in translated
+
+
+def test_deterministic_query_variants_target_color_spi_source_evidence() -> None:
+    variants = _deterministic_query_variants(
+        "彩色单像素成像相比灰度 SPI 有哪些额外挑战？"
+        "深度学习怎样降低系统复杂度和成像时间？",
+    )
+    joined = "\n".join(variants).lower()
+
+    assert "color response coefficient" in joined
+    assert "color distortion" in joined
+    assert "reduce system complexity" in joined
+    assert "frequency-division multiplexing" in joined
+
+
+def test_grouped_evidence_keeps_fused_color_spi_chunk_and_page(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("KB_DB_DIR", str(tmp_path))
+    source = tmp_path / "LPR-color-spi.en.md"
+    source.write_text(
+        "# Advances and Challenges\n\n"
+        "<!-- kb_page: 1 -->\n"
+        "## Abstract\n"
+        "Deep learning improves general single-pixel imaging reconstruction quality and speed.\n\n"
+        "<!-- kb_page: 14 -->\n"
+        "### 5.5. Color Single-Pixel Imaging\n"
+        "Compared with gray SPI, an unknown color response coefficient causes color distortion.\n",
+        encoding="utf-8",
+    )
+    expansion = [
+        "color single-pixel imaging compared with gray SPI "
+        "color response coefficient color distortion imaging time"
+    ]
+    exact = {
+        "id": "exact-color",
+        "score": 0.325,
+        "text": (
+            "Reproduced with permission.[71] Copyright 2023, The Optical Society. "
+            "Additional color methods were reported in related configurations.[185] "
+            "Compared with gray SPI, the color SPI system requires longer imaging time, "
+            "and an unknown color response coefficient causes color distortion.[31] "
+            "The color-filter-array method preserves the gray SPI structure while "
+            "deep learning reduces system complexity and reconstruction time.[182] "
+            "Frequency-division multiplexing supports multi-channel color acquisition "
+            "and real-time hyperspectral reconstruction across many spectral channels. "
+            "The learned reconstruction network processes every spectral band faster "
+            "than iterative optimization while retaining the directly measured evidence. "
+            "This source paragraph therefore answers both the acquisition challenge and "
+            "the practical reason for introducing deep learning into color SPI."
+        ),
+        "meta": {
+            "source_path": str(source),
+            "heading_path": "Advances and Challenges / 5.5. Color Single-Pixel Imaging",
+            "page_start": 14,
+            "page_end": 14,
+        },
+        "_expansion_variants": expansion,
+    }
+    abstract = {
+        "id": "generic-abstract",
+        "score": 0.315,
+        "text": (
+            "Deep learning improves general single-pixel imaging reconstruction quality "
+            "and reconstruction speed."
+        ),
+        "meta": {
+            "source_path": str(source),
+            "heading_path": "Advances and Challenges / Abstract",
+            "page_start": 1,
+            "page_end": 1,
+        },
+        "_expansion_variants": expansion,
+    }
+
+    docs = _group_hits_by_doc_for_refs(
+        [exact, abstract],
+        "彩色单像素成像相比灰度 SPI 有哪些额外挑战？",
+        1,
+        deep_query="彩色单像素成像相比灰度 SPI 有哪些额外挑战？",
+        deep_read=False,
+        llm_rerank=False,
+        settings=SimpleNamespace(api_key=None),
+    )
+
+    assert "unknown color response coefficient" in docs[0]["text"]
+    assert docs[0]["meta"]["page_start"] == 14
+    assert "Color Single-Pixel Imaging" in docs[0]["meta"]["ref_best_heading_path"]
+    assert "unknown color response coefficient" in docs[0]["meta"]["ref_snippets"][0]
+
+
 def test_deterministic_query_variants_split_multi_method_microscopy_question() -> None:
     variants = _deterministic_query_variants(
         "显微成像这些 structured detection、interferometric、light-field 方法分别在解决什么麻烦？"

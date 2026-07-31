@@ -377,6 +377,48 @@ We implemented the network with the Pytorch framework.
     assert "We implemented the network with the Pytorch framework." in out
 
 
+def test_promote_spad_method_subheadings_and_demote_plot_axis_headings():
+    src = """
+# Paper Title
+
+## 0 10 20
+
+### 0.375 0.488 0.599
+
+## Methods
+
+Noise modeling of SPAD arrays
+
+The noise sources include shot noise and fixed-pattern noise.
+
+Noise parameter calibration
+
+We acquired dark-field images for calibration.
+
+Network structure
+
+We designed a gated-fusion transformer.
+
+Shallow feature extraction
+
+The first module maps the input into a feature space.
+
+Deep feature fusion
+
+The network combines several transformer blocks.
+"""
+    out = postprocess_markdown(src)
+
+    assert "## 0 10 20" not in out
+    assert "### 0.375 0.488 0.599" not in out
+    assert "\n0 10 20\n" in f"\n{out}\n"
+    assert "### Noise modeling of SPAD arrays" in out
+    assert "### Noise parameter calibration" in out
+    assert "### Network structure" in out
+    assert "### Shallow feature extraction" in out
+    assert "### Deep feature fusion" in out
+
+
 def test_promote_plain_document_title_line_when_followed_by_section_headings():
     src = """
 Interferometric Image Scanning Microscopy for label-free imaging at 120 nm lateral resolution inside live cells

@@ -1121,6 +1121,10 @@ def _looks_like_formulaish_heading_text(text: str) -> bool:
     t = _normalize_text(text or "").strip()
     if not t:
         return False
+    # Plot axes and tick labels sometimes arrive as Markdown headings. They
+    # are never useful document structure and render as giant numeric rows.
+    if re.fullmatch(r"(?:\d+(?:\.\d+)?\s*){2,}", t):
+        return True
     mathish = bool(re.search(r"[=^_{}\\|<>~∑⊛⊙∘¼½¾×÷±·⋅]", t))
     controlish = bool(re.search(r"[\x00-\x1f\ufffd]", t))
     if _is_common_section_heading(t):
@@ -2625,9 +2629,14 @@ def _promote_known_plain_subheadings(md: str) -> str:
     heading_re = re.compile(r"^\s*#{1,6}\s+")
     structural_re = re.compile(r"^\s*(?:!\[[^\]]*\]\([^)]+\)|\||```|\$\$)")
     known_titles = {
+        "deep feature fusion",
+        "noise modeling of spad arrays",
+        "noise parameter calibration",
+        "network structure",
         "network training",
         "image reconstruction",
         "loss function",
+        "shallow feature extraction",
         "data availability",
         "code availability",
         "competing interests",
@@ -2912,8 +2921,8 @@ def postprocess_markdown(md: str) -> str:
     md = _drop_abstract_leading_metadata_lines(md)
     md = _insert_missing_introduction_heading(md)
     md = _promote_known_plain_subheadings(md)
-    md = _enforce_heading_policy(md)
     md = _demote_formulaish_headings(md)
+    md = _enforce_heading_policy(md)
     md = _demote_panel_headings(md)
     md = _rebalance_custom_headings_within_structural_sections(md)
     md = _drop_empty_figure_duplicate_headings(md)

@@ -68,6 +68,36 @@
       }
     },
     {
+      "id": "lpr_deep_learning_spi_two_column_prose",
+      "title": "LPR deep-learning SPI review keeps two-column prose, figures, equations, and bibliography",
+      "md_path": "db/LPR-2025-Advances and Challenges of Single‐Pixel Imaging Based on Deep Learning/LPR-2025-Advances and Challenges of Single‐Pixel Imaging Based on Deep Learning.en.md",
+      "checks": {
+        "min_page_markers": 21,
+        "min_chars": 90000,
+        "min_nonempty_lines": 450,
+        "min_headings": 32,
+        "min_h2": 8,
+        "require_abstract_heading": true,
+        "min_images": 10,
+        "min_captions": 10,
+        "min_display_math": 18,
+        "min_inline_math": 60,
+        "min_references": 230,
+        "min_reference_lines": 230,
+        "min_body_citations": 220,
+        "must_contain_text": [
+          "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+          "Compared with the gray SPI, the color SPI system may require longer imaging times",
+          "unknown color response coefficient can inevitably lead to color distortion",
+          "Recently, the DL algorithms have been introduced into these strategies",
+          "complexity of the system and reduce the imaging time",
+          "hyperspectral single-pixel video reconstruction at a rate of 12 fps",
+          "Figure 9f shows the spectral images",
+          "## References"
+        ]
+      }
+    },
+    {
       "id": "visual_computing_denoising_formula_refs",
       "title": "Image denoising review keeps section structure, formulas, table, and long bibliography",
       "md_path": "db/Visual Computing for Industry, Biomedicine, and Art-2019-Brief review...techniques/Visual Computing for Industry, Biomedicine, and Art-2019-Brief review...techniques.en.md",

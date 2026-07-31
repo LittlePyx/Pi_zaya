@@ -6599,3 +6599,68 @@ def test_finalize_generation_answer_low_confidence_notice_includes_candidate_ref
     assert "低置信证据匹配" in out["answer"]
     assert "候选参考文献：" in out["answer"]
     assert "[7]" in out["answer"]
+
+
+def test_color_spi_comparison_restores_source_stated_distortion_challenge() -> None:
+    source_path = r"F:\db\LPR\LPR.en.md"
+    evidence = (
+        "Compared with the gray SPI, the color SPI system may require longer "
+        "imaging times, and the unknown color response coefficient can inevitably "
+        "lead to color distortion. Recently, the DL algorithms have been introduced "
+        "into these strategies, which can significantly mitigate the complexity of "
+        "the system and reduce the imaging time."
+    )
+    citation_plan = {
+        "intent": "answer_grounding",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+    answer_hits = [
+        {
+            "text": evidence,
+            "meta": {"source_path": source_path},
+        }
+    ]
+    answer = (
+        "## 直接回答\n\n"
+        "深度学习可以降低彩色 SPI 的系统复杂度和成像时间 [1]。\n\n"
+        "### 一、彩色 SPI 相比灰度 SPI 的额外挑战\n\n"
+        "1. **成像时间更长**：彩色 SPI 需要更长的成像时间 [1]。\n\n"
+        "### 二、深度学习如何改善\n\n"
+        "深度学习算法可以降低系统复杂度和成像时间 [1]。"
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt=(
+            "彩色单像素成像相比灰度 SPI 有哪些额外挑战？"
+            "深度学习怎样降低系统复杂度和成像时间？"
+        ),
+        citation_plan=citation_plan,
+        answer_hits=answer_hits,
+    )
+
+    assert "颜色响应系数未知会导致颜色失真" in normalized
+    assert "color response coefficient" in normalized
+    assert normalized.count("颜色响应系数未知会导致颜色失真") == 1
+    assert normalized.index("颜色响应系数未知会导致颜色失真") < normalized.index(
+        "### 二、深度学习如何改善"
+    )
+    audited, meta = finalize_runtime.audit_and_repair_claim_evidence(
+        normalized,
+        answer_hits=answer_hits,
+        allow_citation_repairs=True,
+        prompt="彩色单像素成像相比灰度 SPI 有哪些额外挑战？",
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+    assert "颜色响应系数未知会导致颜色失真" in audited
+    assert "color distortion） [1]" in audited
+    assert meta["minimum_ok"] is True
