@@ -185,6 +185,15 @@ def build_grounded_ref_why_line(
     )
     if prefer_zh:
         if (
+            "式（3）" in summary_full
+            and "可微" in summary_full
+            and ("压缩测量" in summary_full or "压缩图像" in summary_full)
+        ):
+            return (
+                "这条原文把式（3）的变量定义与可微压缩图像合成步骤连在一起，"
+                "可直接核对前向模型为何能够进入 NeRF 与相机位姿的联合优化。"
+            )
+        if (
             "compared with the gray spi" in summary_low
             and "color spi" in summary_low
             and "longer imaging times" in summary_low
@@ -800,6 +809,25 @@ def build_localized_ref_summary_line(
         and "without increasing acquisition time" in low
     ):
         return "该文说明所提方法在不增加采集时间的情况下提升了重建质量。"
+    if (
+        "scinerf" in low
+        and (
+            (
+                "synthesize the compressed image" in low
+                and "differentiable with respect to nerf" in low
+            )
+            or (
+                ("equation (3)" in low or "equation 3" in low or "eq. (3)" in low)
+                and "binary mask" in low
+                and "measurement noise" in low
+                and "differentiable" in low
+            )
+        )
+    ):
+        return (
+            "式（3）说明二值掩模将各帧编码后叠加为 SCI 测量，测量噪声作为加性项进入模型；"
+            "由 NeRF 与相机位姿合成的压缩图像可微，因此可用于场景和位姿的联合优化。"
+        )
     if (
         "scinerf" in low
         and "physical imaging process" in low

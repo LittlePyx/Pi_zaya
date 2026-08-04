@@ -613,8 +613,16 @@ def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
         return 0.0
     prompt_low = prompt_raw.lower()
     prompt_norm = _norm_text_for_match(prompt_raw)
+    prompt_surface = _direct_phrase_surface(prompt_raw)
     p = Path(src)
-    candidates = [p.name, p.stem, re.sub(r"^[A-Za-z]+-\d{4}[-_ ]*", "", p.stem)]
+    source_stem = p.stem
+    title_stem = re.sub(r"\.(?:en|zh|cn)$", "", source_stem, flags=re.I)
+    candidates = [
+        p.name,
+        source_stem,
+        title_stem,
+        re.sub(r"^[A-Za-z]+-\d{4}[-_ ]*", "", title_stem),
+    ]
     score = 0.0
     for cand in candidates:
         c = str(cand or "").strip()
@@ -622,9 +630,12 @@ def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
             continue
         c_low = c.lower()
         c_norm = _norm_text_for_match(c)
+        c_surface = _direct_phrase_surface(c)
         if c_low and (c_low in prompt_low):
             score = max(score, 9.0 if c_low.endswith(".pdf") else 8.0)
         if c_norm and (len(c_norm) >= 12) and (c_norm in prompt_norm):
+            score = max(score, 8.0)
+        if c_surface and (len(c_surface) >= 12) and (c_surface in prompt_surface):
             score = max(score, 8.0)
 
     # A natural Chinese paper pointer can identify an English-titled source even
@@ -2032,8 +2043,13 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
         "\u6df1\u5ea6\u5b66\u4e60",
     ):
         add(
-            "deep learning single-pixel imaging advantages challenges data generalization "
-            "interpretability speed reconstruction quality"
+            "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning "
+            "advantages limitations training data generalization interpretability "
+            "reconstruction speed reconstruction quality"
+        )
+        add(
+            "Challenges and Outlooks reliance on extensive datasets limited "
+            "interpretability susceptibility to overfitting limited generalization"
         )
     if has_any("pidl"):
         add(
@@ -2118,6 +2134,25 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
             "DLTR dimension-discriminative low-rank tensor hyperspectral image "
             "overlapped cubic patches mode unfolding weighted rank regularization"
         )
+    wants_scinerf_formula = bool(
+        has_any("scinerf")
+        and has_any(
+            "formula",
+            "equation",
+            "forward model",
+            "image formation",
+            "\u516c\u5f0f",
+            "\u524d\u5411",
+            "\u6210\u50cf\u6a21\u578b",
+        )
+    )
+    if wants_scinerf_formula:
+        add(
+            "SCINeRF 3.2 Image Formation Model of Video SCI equation 3 "
+            "captured compressed image virtual image binary mask element-wise "
+            "multiplication measurement noise synthesize compressed image "
+            "differentiable with respect to NeRF and poses"
+        )
     if wants_sci_lineage or has_any("scinerf", "scigs"):
         add(
             "SCINeRF neural radiance fields snapshot compressive image "
@@ -2126,6 +2161,27 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
         add(
             "SCIGS 3D Gaussian Splatting snapshot compressive image "
             "single compressed image dynamic 3D scenes"
+        )
+    if has_any(
+        "frequency-division-multiplexed",
+        "frequency division multiplexed",
+        "frequency-division multiplexing",
+        "frequency division multiplexing",
+        "\u9891\u5206\u590d\u7528",
+    ) and has_any(
+        "parallel",
+        "speed",
+        "simultaneous",
+        "detector",
+        "\u5e76\u884c",
+        "\u901f\u5ea6",
+        "\u540c\u65f6",
+        "\u63a2\u6d4b\u5668",
+    ):
+        add(
+            "Frequency-division-multiplexed single-pixel imaging B. Encoding "
+            "phase-sensitive detection p frequencies simultaneously multiplexed "
+            "into a single-pixel detector signal demodulated by p lock-in amplifiers"
         )
     microscopy_method_count = sum(
         (
@@ -2495,7 +2551,23 @@ def _group_hits_by_doc_for_refs(
         except Exception:
             best_score = 0.0
         _bm25_scores.append(best_score)
-        doc_hint_score = _source_prompt_match_score(prompt_text or deep_query or "", src)
+        expansion_hint_query = " ".join(
+            dict.fromkeys(
+                str(variant or "").strip()
+                for hit in hs[:6]
+                for variant in list(hit.get("_expansion_variants") or [])
+                if str(variant or "").strip()
+            )
+        ).strip()
+        hint_query = " ".join(
+            part
+            for part in [
+                str(prompt_text or deep_query or "").strip(),
+                expansion_hint_query,
+            ]
+            if part
+        ).strip()
+        doc_hint_score = _source_prompt_match_score(hint_query, src)
         doc_focus_score = _doc_focus_match_score(
             prompt_text=(prompt_text or deep_query or ""),
             source_path=src,

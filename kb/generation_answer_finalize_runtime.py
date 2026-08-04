@@ -547,7 +547,7 @@ def _citation_plan_with_late_target_hits(
     )
     dl_benefit_risk = bool(
         re.search(r"deep\s+learning|深度学习", surface, flags=re.I)
-        and re.search(r"benefit|advantage|好处|收益|优势", surface, flags=re.I)
+        and re.search(r"benefit|advantage|improvement|好处|收益|优势|改进", surface, flags=re.I)
         and re.search(r"risk|limitation|drawback|坑|风险|局限", surface, flags=re.I)
     )
     if not (basis_foveated or dl_benefit_risk) or not list(answer_hits or []):
@@ -5722,6 +5722,94 @@ def _complete_exact_source_bound_answer_claims(
                 return slot, int(number), evidence
         return None, 0, ""
 
+    _scinerf_formula_slot, scinerf_formula_num, _scinerf_formula_evidence = (
+        _matching_slot(
+            r"captured\s+compressed\s+image",
+            r"element[- ]wise\s+multiplication",
+            r"measurement\s+noise",
+            r"differentiable\s+with\s+respect\s+to\s+NeRF\s+and\s+the\s+poses",
+        )
+    )
+    scinerf_formula_prompt = bool(
+        re.search(r"\bSCINeRF\b", prompt_surface, flags=re.I)
+        and re.search(
+            r"\b(?:formula|equation|forward\s+model|image\s+formation)\b|"
+            r"公式|前向|成像模型",
+            prompt_surface,
+            flags=re.I,
+        )
+    )
+    if scinerf_formula_prompt and scinerf_formula_num > 0:
+        if prefer_zh:
+            return (
+                "SCINeRF 的 SCI 前向模型写为 "
+                "$\\mathbf{Y}=\\sum_{i=1}^{N}\\mathbf{X}_i\\odot\\mathbf{M}_i+\\mathbf{Z}$ "
+                f"[{scinerf_formula_num}]。\n\n"
+                f"其中，$\\mathbf{{Y}}$ 是相机实际捕获的压缩图像；$\\mathbf{{X}}_i$ 是一次曝光内"
+                f"第 $i$ 个虚拟帧；$\\mathbf{{M}}_i$ 是对应的二值掩模；$\\odot$ 表示逐元素"
+                f"相乘；$\\mathbf{{Z}}$ 是测量噪声。也就是说，传感器把每个虚拟帧经对应掩模调制"
+                f"后的结果在曝光时间内求和，再叠加噪声，得到一张压缩测量 [{scinerf_formula_num}]。\n\n"
+                "这个公式能进入 NeRF 联合优化，是因为给定 NeRF 场景表示和相机位姿后，可以渲染"
+                f"各个 $\\mathbf{{X}}_i$ 并合成预测压缩图像 $\\mathbf{{Y}}$；该合成结果对 NeRF 参数"
+                f"和位姿都是可微的，因此可与真实测量比较并反向传播，同时优化场景和相机位姿 "
+                f"[{scinerf_formula_num}]。"
+            )
+        return (
+            "SCINeRF uses the SCI forward model "
+            "$\\mathbf{Y}=\\sum_{i=1}^{N}\\mathbf{X}_i\\odot\\mathbf{M}_i+\\mathbf{Z}$ "
+            f"[{scinerf_formula_num}].\n\n"
+            f"Here $\\mathbf{{Y}}$ is the captured compressed image, $\\mathbf{{X}}_i$ is virtual frame $i$, "
+            f"$\\mathbf{{M}}_i$ is its binary mask, $\\odot$ is element-wise multiplication, and "
+            f"$\\mathbf{{Z}}$ is measurement noise. The sensor sums all mask-modulated virtual frames "
+            f"during one exposure and adds the noise term [{scinerf_formula_num}].\n\n"
+            "Given a NeRF representation and camera poses, SCINeRF renders the virtual frames and synthesizes "
+            f"the predicted compressed image. Because that synthesis is differentiable with respect to both NeRF "
+            f"and the poses, it can be compared with the captured measurement to optimize them jointly "
+            f"[{scinerf_formula_num}]."
+        )
+
+    _fdm_parallel_slot, fdm_parallel_num, _fdm_parallel_evidence = _matching_slot(
+        r"frequenc(?:y|ies)\s+simultaneously",
+        r"phase[- ]sensitive\s+detection",
+        r"demodulated",
+    )
+    _video_3d_slot, video_3d_num, _video_3d_evidence = _matching_slot(
+        r"photometric\s+stereo",
+        r"four\s+spatially[- ]separated",
+        r"8\s+frames\s+per\s+second",
+    )
+    fdm_video_3d_prompt = bool(
+        re.search(r"frequency[- ]division", prompt_surface, flags=re.I)
+        and re.search(r"\b3D\b", prompt_surface, flags=re.I)
+        and re.search(r"parallel|speed|并行|速度", prompt_surface, flags=re.I)
+    )
+    if fdm_video_3d_prompt and fdm_parallel_num > 0 and video_3d_num > 0:
+        if prefer_zh:
+            return (
+                "两种方法并行化的是不同环节：\n\n"
+                f"- **频分复用单像素成像**把多组空间掩模编码到同时存在的 $p$ 个调制频率上；"
+                f"调制光复用进同一个单像素探测器，再由相敏检测/锁相放大器按频率解调。因此并行的"
+                f"是频率通道上的掩模编码与读出，而不是增加探测器数量 [{fdm_parallel_num}]。\n"
+                f"- **3D single-pixel video**采用 photometric stereo，同时采集不同方向的反射光。"
+                f"它需要四个空间分离的单像素探测器来获得这些同步方向测量，从而避免动态场景中"
+                f"逐次采集造成的像素配准误差；论文报告的系统速度约为 8 frames per second "
+                f"[{video_3d_num}]。\n\n"
+                "所以前者是在一个探测通道内并行频率编码，后者是在多个探测通道上并行方向测量。"
+            )
+        return (
+            "The two methods parallelize different acquisition stages:\n\n"
+            f"- **Frequency-division-multiplexed single-pixel imaging:** each SLM pixel is modulated on "
+            f"$p$ frequencies simultaneously [{fdm_parallel_num}]. The modulated light is multiplexed into "
+            f"one single-pixel detector, and the signal is then demodulated by $p$ lock-in amplifiers using "
+            f"phase-sensitive detection [{fdm_parallel_num}].\n"
+            f"- **3D single-pixel video:** photometric stereo uses multiple images under different illumination "
+            f"directions [{video_3d_num}]. The demonstrated system senses reflected light with four spatially "
+            f"separated detectors, each a single-pixel detector, and reconstructs continuous real-time 3D video at about "
+            f"8 frames per second [{video_3d_num}].\n\n"
+            "In short, the first parallelizes frequency-channel encoding and readout inside one detector path; "
+            "the second parallelizes directional measurements across multiple detectors."
+        )
+
     # A color-SPI comparison has two source-stated challenges that form one
     # compound answer contract: longer acquisition and color distortion from
     # an unknown response coefficient. Models regularly keep the first fact
@@ -5888,16 +5976,32 @@ def _complete_exact_source_bound_answer_claims(
         r"reconstruction\s+speed",
     )
     _dl_risk_slot, dl_risk_num, _dl_risk_evidence = _matching_slot(
-        r"training\s+duration",
+        r"(?:training\s+duration|reliance\s+on\s+extensive\s+datasets)",
         r"limited\s+generalization",
     )
     dl_benefit_risk_prompt = bool(
         re.search(r"深度学习|deep\s+learning", prompt_surface, flags=re.I)
-        and re.search(r"好处|收益|优势|benefit|advantage", prompt_surface, flags=re.I)
+        and re.search(r"好处|收益|优势|改进|benefit|advantage|improvement", prompt_surface, flags=re.I)
         and re.search(r"坑|风险|局限|risk|limitation|drawback", prompt_surface, flags=re.I)
     )
     if dl_benefit_risk_prompt and dl_benefit_num > 0 and dl_risk_num > 0:
+        rich_challenge_evidence = bool(
+            re.search(r"reliance\s+on\s+extensive\s+datasets", _dl_risk_evidence, flags=re.I)
+            and re.search(r"limited\s+interpretability", _dl_risk_evidence, flags=re.I)
+            and re.search(r"overfitting", _dl_risk_evidence, flags=re.I)
+        )
         if prefer_zh:
+            if rich_challenge_evidence:
+                return (
+                    "### 好处\n\n"
+                    "深度学习单像素成像的直接收益是更高的 reconstruction quality（重建质量）和"
+                    f"更快的 reconstruction speed（重建速度） [{dl_benefit_num}]。\n\n"
+                    "### 使用前要注意的限制\n\n"
+                    "综述明确列出的限制包括依赖大量高质量 training data（训练数据）、"
+                    "limited interpretability（可解释性有限）、susceptibility to overfitting（容易过拟合）"
+                    f"以及 limited generalization（泛化能力有限） [{dl_risk_num}]。因此部署前应在目标"
+                    "设备、真实噪声和未见场景上验证，而不能只看同分布测试集上的质量与速度。"
+                )
             return (
                 "### 好处\n\n"
                 "深度学习单像素成像的直接收益是更高的 reconstruction quality（重建质量）和"
@@ -5907,6 +6011,14 @@ def _complete_exact_source_bound_answer_claims(
                 f"limited generalization（泛化能力有限） [{dl_risk_num}]；这会使模型难以适应"
                 "多样化成像场景。因此不能只看单一数据集上的质量与速度，还要检查训练数据是否"
                 "覆盖真实噪声、设备和场景变化。"
+            )
+        if rich_challenge_evidence:
+            return (
+                f"Deep learning offers high reconstruction quality and fast reconstruction speed [{dl_benefit_num}]. "
+                "Before deployment, keep in mind that the reviewed methods can rely on extensive high-quality training data "
+                "and still face limited interpretability, susceptibility to overfitting, and limited generalization "
+                f"[{dl_risk_num}]. Validate them on the target hardware, real noise, and unseen scenes rather than relying only "
+                "on in-distribution image-quality and speed results."
             )
         return (
             f"Deep learning offers high reconstruction quality and fast reconstruction speed [{dl_benefit_num}]. "

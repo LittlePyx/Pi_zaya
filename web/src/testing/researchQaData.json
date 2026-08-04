@@ -199,8 +199,121 @@
       "sequential-cs-adaptive-advantage",
       "iism-live-cell-benefit",
       "fdm-vs-3d-video-parallelism",
-      "basis-choice-vs-foveated-adaptation"
+      "basis-choice-vs-foveated-adaptation",
+      "scinerf-forward-model-equation",
+      "dl-spi-benefits-risks-en",
+      "fdm-vs-3d-video-parallelism-en"
     ]
+  },
+  "suites": {
+    "full_library_acceptance_v1": {
+      "description": "发布前全库真实用户问答验收：只显示用户需要的回答与证据，质量诊断留在内部报告。",
+      "caseIds": [
+        "scigs-dynamic-3d",
+        "scinerf-admm-origin",
+        "hadamard-fourier-choice",
+        "foveated-dynamic-supersampling",
+        "dl-spi-benefits-risks",
+        "qclfm-refocus",
+        "s2ism-thick-samples",
+        "single-photon-pidl",
+        "perovskite-boundary",
+        "spi-roadmap-beginner",
+        "cassi-to-3d-sci-lineage",
+        "microscopy-methods-map",
+        "single-photon-reading-pair",
+        "piln-dl-spi-position",
+        "simple-baselines-sidd-best",
+        "three-d-video-real-time-mechanism",
+        "sph-throughput-mechanism",
+        "spi-prospects-when-use-single-pixel",
+        "s2ism-three-way-tradeoff",
+        "pidl-real-spad-noise",
+        "cassi-dual-disperser-design",
+        "fdm-speed-snr-tradeoff",
+        "denoising-classical-map",
+        "scinerf-physics-in-training",
+        "sequential-cs-adaptive-advantage",
+        "basis-choice-vs-foveated-adaptation",
+        "scinerf-forward-model-equation",
+        "dl-spi-benefits-risks-en",
+        "fdm-vs-3d-video-parallelism-en"
+      ],
+      "minCases": 20,
+      "maxCases": 30,
+      "requireAllDocs": true,
+      "requiredLocales": ["zh", "en"],
+      "requiredCoverage": [
+        "cross_paper_synthesis",
+        "table_lookup",
+        "formula_reasoning",
+        "figure_architecture",
+        "exact_location",
+        "negative_or_insufficient_evidence",
+        "system_a",
+        "system_b",
+        "answer_reference_alignment",
+        "zh_locale",
+        "en_locale"
+      ],
+      "coverage": {
+        "cross_paper_synthesis": [
+          "scigs-dynamic-3d",
+          "spi-roadmap-beginner",
+          "fdm-vs-3d-video-parallelism-en"
+        ],
+        "table_lookup": ["simple-baselines-sidd-best"],
+        "formula_reasoning": ["scinerf-forward-model-equation"],
+        "figure_architecture": ["cassi-dual-disperser-design"],
+        "exact_location": [
+          "simple-baselines-sidd-best",
+          "scinerf-forward-model-equation"
+        ],
+        "negative_or_insufficient_evidence": ["perovskite-boundary"],
+        "system_a": [
+          "dl-spi-benefits-risks",
+          "scinerf-forward-model-equation"
+        ],
+        "system_b": ["scinerf-admm-origin"],
+        "answer_reference_alignment": [
+          "spi-roadmap-beginner",
+          "microscopy-methods-map"
+        ],
+        "zh_locale": ["simple-baselines-sidd-best"],
+        "en_locale": [
+          "dl-spi-benefits-risks-en",
+          "fdm-vs-3d-video-parallelism-en"
+        ]
+      }
+    },
+    "live_smoke_v1": {
+      "description": "每次问答、检索或引用改动后的五题真实模型快速复测。",
+      "caseIds": [
+        "scinerf-admm-origin",
+        "simple-baselines-sidd-best",
+        "scinerf-forward-model-equation",
+        "dl-spi-benefits-risks-en",
+        "fdm-vs-3d-video-parallelism-en"
+      ],
+      "minCases": 5,
+      "maxCases": 5,
+      "requiredLocales": ["zh", "en"],
+      "requiredCoverage": [
+        "system_b",
+        "table_lookup",
+        "formula_reasoning",
+        "en_locale"
+      ],
+      "coverage": {
+        "system_b": ["scinerf-admm-origin"],
+        "table_lookup": ["simple-baselines-sidd-best"],
+        "formula_reasoning": ["scinerf-forward-model-equation"],
+        "en_locale": [
+          "dl-spi-benefits-risks-en",
+          "fdm-vs-3d-video-parallelism-en"
+        ]
+      }
+    }
   },
   "cases": [
     {
@@ -854,6 +967,7 @@
     },
     {
       "id": "simple-baselines-sidd-best",
+      "uiLocale": "zh",
       "queryScope": "current_paper",
       "docIds": ["simple-baselines"],
       "question": "ECCV-2022 Simple Baselines 论文的 SIDD 基准测试里，PSNR 最高的模型是谁？如果并列请全部列出。",
@@ -1741,6 +1855,234 @@
             "sourcePage": 1,
             "locatorTerms": ["Abstract"],
             "evidenceTerms": ["foveal region tracks motion", "entire field of view"]
+          }
+        ],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 2,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "scinerf-forward-model-equation",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["scinerf"],
+      "question": "SCINeRF 的 SCI 前向成像公式到底表达了什么？请逐项解释压缩图像、虚拟帧、二值掩模和噪声，并说明这个公式为什么能进入 NeRF 的联合优化。",
+      "acceptance": [
+        "回答必须解释式（3）中压缩测量是各虚拟帧与对应二值掩模逐元素调制后的求和，再叠加测量噪声。",
+        "回答要把公式和训练连接起来：由 NeRF 与相机位姿渲染虚拟帧、合成可微压缩图像，再与真实测量比较。",
+        "证据与定位必须落到 3.2 节的式（3），不能只引用摘要里的概括。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["SCINeRF", "SCI"],
+        "requiredAnswerTermGroups": [
+          ["binary masks", "二值掩模", "二进制掩模"],
+          ["element-wise", "逐元素", "对应元素"],
+          ["measurement noise", "测量噪声"],
+          ["differentiable", "可微"]
+        ],
+        "requiredRefDocIds": ["scinerf"],
+        "requiredCitationDocIds": ["scinerf"],
+        "allowedRefDocIds": ["scinerf"],
+        "allowedCitationDocIds": ["scinerf"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "scinerf-sci-forward-equation",
+            "docId": "scinerf",
+            "route": "system_a",
+            "answerScope": "response",
+            "sourcePage": 4,
+            "answerTerms": ["SCI"],
+            "answerTermGroups": [
+              ["binary masks", "二值掩模", "二进制掩模"],
+              ["measurement noise", "测量噪声"]
+            ],
+            "evidenceTerms": [
+              "captured compressed image",
+              "element-wise multiplication",
+              "measurement noise"
+            ]
+          },
+          {
+            "id": "scinerf-differentiable-training-link",
+            "docId": "scinerf",
+            "route": "system_a",
+            "answerScope": "response",
+            "sourcePage": 4,
+            "answerTerms": ["NeRF"],
+            "answerTermGroups": [["differentiable", "可微"]],
+            "evidenceTerms": [
+              "synthesize the compressed image",
+              "differentiable with respect to NeRF and the poses"
+            ]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "scinerf-forward-model-locate",
+            "docId": "scinerf",
+            "route": "system_a",
+            "sourcePage": 4,
+            "locatorTerms": ["3.2. Image Formation Model of Video SCI"],
+            "evidenceTerms": [
+              "captured compressed image",
+              "measurement noise",
+              "differentiable with respect to NeRF"
+            ]
+          }
+        ],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "dl-spi-benefits-risks-en",
+      "uiLocale": "en",
+      "queryScope": "current_paper",
+      "docIds": ["dl-spi-review"],
+      "question": "What practical improvements does deep learning bring to single-pixel imaging, and what limitations should I keep in mind before using it?",
+      "acceptance": [
+        "The answer must balance reconstruction quality and speed improvements against training-data, generalization, interpretability, and deployment limitations.",
+        "The Guide and Relevance copy on every evidence card must follow the English UI setting rather than switching back to Chinese."
+      ],
+      "expected": {
+        "renderLocale": "en",
+        "requireAnswerLocale": true,
+        "requiredAnswerTerms": ["deep learning"],
+        "requiredAnswerTermGroups": [
+          ["reconstruction quality", "image quality"],
+          ["reconstruction speed", "faster reconstruction", "computational speed"],
+          ["training data", "training dataset", "synthetic data"],
+          ["generalization", "generalisation"]
+        ],
+        "requiredRefDocIds": ["dl-spi-review"],
+        "requiredCitationDocIds": ["dl-spi-review"],
+        "allowedRefDocIds": ["dl-spi-review"],
+        "allowedCitationDocIds": ["dl-spi-review"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "dl-spi-benefit-en",
+            "docId": "dl-spi-review",
+            "route": "system_a",
+            "answerTerms": ["deep learning"],
+            "answerTermGroups": [
+              ["reconstruction quality", "image quality"],
+              ["reconstruction speed", "faster reconstruction", "computational speed"]
+            ],
+            "evidenceTerms": ["reconstruction quality", "reconstruction speed"]
+          },
+          {
+            "id": "dl-spi-generalization-risk-en",
+            "docId": "dl-spi-review",
+            "route": "system_a",
+            "answerTermGroups": [
+              ["training data", "training dataset", "synthetic data"],
+              ["generalization", "generalisation"]
+            ],
+            "evidenceTerms": ["training", "limited generalization"]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "dl-spi-benefits-risks-en-locate",
+            "docId": "dl-spi-review",
+            "route": "system_a",
+            "locatorTerms": ["Challenges and Outlooks"],
+            "evidenceTerms": ["limited generalization"]
+          }
+        ],
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "fdm-vs-3d-video-parallelism-en",
+      "uiLocale": "en",
+      "sourceGrounded": true,
+      "docIds": ["fdm-metamaterials", "3d-sp-video"],
+      "question": "Both frequency-division-multiplexed single-pixel imaging and 3D single-pixel video claim speedups. What does each method parallelize, and why does the 3D method need multiple detectors?",
+      "acceptance": [
+        "The answer must distinguish simultaneous frequency-channel encoding and demodulation from simultaneous directional measurements used for photometric stereo.",
+        "It must cite both papers, state that the 3D system uses four spatially separated detectors, and keep all card copy in English."
+      ],
+      "expected": {
+        "renderLocale": "en",
+        "requireAnswerLocale": true,
+        "requiredAnswerTerms": ["3D"],
+        "requiredAnswerTermGroups": [
+          ["frequency-division", "frequency channels"],
+          ["photometric stereo"],
+          ["four detectors", "four spatially separated detectors", "four spatially-separated detectors"],
+          ["8 frames per second", "8 fps"]
+        ],
+        "requiredRefDocIds": ["fdm-metamaterials", "3d-sp-video"],
+        "requiredCitationDocIds": ["fdm-metamaterials", "3d-sp-video"],
+        "allowedRefDocIds": ["fdm-metamaterials", "3d-sp-video"],
+        "allowedCitationDocIds": ["fdm-metamaterials", "3d-sp-video"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "fdm-parallel-encoding-layer-en",
+            "docId": "fdm-metamaterials",
+            "route": "system_a",
+            "answerScope": "response",
+            "sourcePage": 2,
+            "answerTermGroups": [["frequency-division", "frequency channels"]],
+            "evidenceTerms": [
+              "p frequencies simultaneously",
+              "phase-sensitive detection",
+              "demodulated"
+            ]
+          },
+          {
+            "id": "three-d-video-parallel-detectors-en",
+            "docId": "3d-sp-video",
+            "route": "system_a",
+            "answerScope": "response",
+            "sourcePage": 2,
+            "answerTerms": ["3D"],
+            "answerTermGroups": [
+              ["photometric stereo"],
+              ["four detectors", "four spatially separated detectors", "four spatially-separated detectors"],
+              ["8 frames per second", "8 fps"]
+            ],
+            "evidenceTerms": [
+              "photometric stereo",
+              "four spatially-separated",
+              "8 frames per second"
+            ]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "fdm-parallel-encoding-locate-en",
+            "docId": "fdm-metamaterials",
+            "route": "system_a",
+            "sourcePage": 2,
+            "locatorTerms": ["B. Encoding"],
+            "evidenceTerms": ["p frequencies simultaneously", "demodulated"]
+          },
+          {
+            "id": "three-d-video-detectors-locate-en",
+            "docId": "3d-sp-video",
+            "route": "system_a",
+            "sourcePage": 2,
+            "locatorTerms": ["Abstract"],
+            "evidenceTerms": ["four spatially-separated", "8 frames per second"]
           }
         ],
         "requireClaimLevelCitations": true,

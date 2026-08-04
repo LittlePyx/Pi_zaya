@@ -235,6 +235,28 @@ def test_run_section_target_skill_builds_strength_limits_answer():
     ]
 
 
+def test_run_section_target_skill_defers_two_sided_strength_limit_question():
+    result = paper_guide_skills.run_section_target_skill(
+        prompt_text=(
+            "What practical improvements does deep learning bring, and what limitations "
+            "should I keep in mind before using it?"
+        ),
+        prompt_family="strength_limits",
+        source_path="bound.md",
+        db_dir="db",
+        has_hits=True,
+        has_non_ref_target=True,
+        select_target_hit=lambda *_args, **_kwargs: {
+            "text": "A one-sided limitation passage.",
+            "meta": {"heading_path": "Challenges"},
+        },
+        extract_discussion_future_snippet=lambda text: text,
+        sanitize_answer=lambda answer, **_kwargs: answer,
+    )
+
+    assert result is None
+
+
 def test_run_abstract_skill_returns_direct_answer_and_anchor_support():
     result = paper_guide_skills.run_abstract_skill(
         prompt_text="Please summarize the abstract and give me one exact anchor sentence.",

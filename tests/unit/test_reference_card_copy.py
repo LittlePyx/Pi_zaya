@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from api.reference_card_copy import (
     build_grounded_ref_why_line,
+    build_localized_ref_summary_line,
     finalize_ref_card_copy,
     looks_generic_ref_why_line,
     looks_templated_ref_why_line,
@@ -38,6 +39,30 @@ def test_templated_why_line_detector_does_not_reject_specific_evidence() -> None
     assert not looks_generic_ref_why_line(
         "Related Work 中明确提及 Snapshot Compressive Imaging（SCI），直接回应用户查询。"
     )
+
+
+def test_scinerf_forward_model_copy_is_specific_and_localized() -> None:
+    evidence = (
+        "SCINeRF / 3.2 Physics based Rendering. The synthesized measurement follows equation (3), "
+        "where binary masks modulate the scene, G is the measurement noise, and the rendering "
+        "process is differentiable for joint NeRF training."
+    )
+
+    summary = build_localized_ref_summary_line(prefer_zh=True, evidence_text=evidence)
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=["SCINeRF", "前向成像公式"],
+        heading_path="SCINeRF / 3.2 Physics based Rendering",
+        summary_line=summary,
+        action="explain",
+    )
+
+    assert "式（3）" in summary
+    assert "二值掩模" in summary
+    assert "可微" in summary
+    assert "式（3）" in why
+    assert "联合优化" in why
+    assert not looks_generic_ref_why_line(why)
 
 
 def test_english_grounded_copy_uses_evidence_instead_of_a_template_shell() -> None:

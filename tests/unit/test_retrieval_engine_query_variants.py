@@ -381,6 +381,31 @@ def test_deterministic_query_variants_expand_snapshot_compressive_3d_lineage() -
     assert "dynamic 3d scenes" in joined
 
 
+def test_deterministic_query_variants_expand_scinerf_forward_equation() -> None:
+    variants = _deterministic_query_variants(
+        "SCINeRF 的 SCI 前向成像公式如何连接二值掩模、噪声和 NeRF 联合优化？"
+    )
+    joined = "\n".join(variants).lower()
+
+    assert "3.2 image formation model of video sci" in joined
+    assert "element-wise multiplication" in joined
+    assert "measurement noise" in joined
+    assert "differentiable with respect to nerf and poses" in joined
+
+
+def test_deterministic_query_variants_expand_fdm_parallel_encoding() -> None:
+    variants = _deterministic_query_variants(
+        "Both frequency-division-multiplexed SPI and 3D single-pixel video claim speedups. "
+        "What does each parallelize and why are multiple detectors needed?"
+    )
+    joined = "\n".join(variants).lower()
+
+    assert "b. encoding" in joined
+    assert "p frequencies simultaneously" in joined
+    assert "phase-sensitive detection" in joined
+    assert "demodulated by p lock-in amplifiers" in joined
+
+
 def test_snapshot_compressive_3d_lineage_retrieves_all_named_stages_without_an_llm() -> None:
     cassi_source = (
         "library/OE-2007-Single-shot compressive spectral imaging with "
@@ -466,6 +491,32 @@ def test_deterministic_query_variants_expand_exact_mechanism_terms() -> None:
     for question, required in cases.items():
         joined = " ".join(_deterministic_query_variants(question)).lower()
         assert all(term in joined for term in required)
+
+
+def test_deterministic_query_variants_target_dl_spi_review_in_english() -> None:
+    joined = " ".join(
+        _deterministic_query_variants(
+            "What practical improvements does deep learning bring to single-pixel imaging, "
+            "and what limitations should I keep in mind before using it?"
+        )
+    ).lower()
+
+    assert "advances and challenges of single-pixel imaging based on deep learning" in joined
+    assert "training data" in joined
+    assert "generalization" in joined
+
+
+def test_source_prompt_match_recognizes_exact_title_before_language_suffix() -> None:
+    source = (
+        "library/LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on "
+        "Deep Learning.en.md"
+    )
+    score = _source_prompt_match_score(
+        "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+        source,
+    )
+
+    assert score >= 8.0
 
 
 def test_pidl_piln_comparison_retrieves_both_named_sources_without_an_llm() -> None:

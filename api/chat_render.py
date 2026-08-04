@@ -9566,7 +9566,11 @@ def _reading_guide_repair_dl_spi_benefit_marker(
             for slot in list(citation_plan.get("slots") or [])
             if isinstance(slot, dict)
             and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
-            and re.search(r"(?i)prolonged\s+training|training\s+duration", str(slot.get("evidence_quote") or ""))
+            and re.search(
+                r"(?i)prolonged\s+training|training\s+duration|"
+                r"reliance\s+on\s+extensive\s+datasets",
+                str(slot.get("evidence_quote") or ""),
+            )
             and re.search(r"(?i)limited\s+generalization", str(slot.get("evidence_quote") or ""))
         ),
         None,
@@ -9577,6 +9581,77 @@ def _reading_guide_repair_dl_spi_benefit_marker(
         else []
     )
     risk_num = int(risk_nums[0]) if risk_nums else 0
+    risk_evidence = (
+        str(risk_slot.get("evidence_quote") or "").strip()
+        if isinstance(risk_slot, dict)
+        else ""
+    )
+    rich_risk_evidence = bool(
+        re.search(r"(?i)reliance\s+on\s+extensive\s+datasets", risk_evidence)
+        and re.search(r"(?i)limited\s+interpretability", risk_evidence)
+        and re.search(r"(?i)overfitting", risk_evidence)
+        and re.search(r"(?i)limited\s+generalization", risk_evidence)
+    )
+    if (
+        isinstance(risk_slot, dict)
+        and risk_evidence
+        and (risk_num <= 0 or risk_num == num)
+    ):
+        source_path = str(
+            risk_slot.get("source_path") or risk_slot.get("sourcePath") or ""
+        ).strip()
+        source_name = str(
+            risk_slot.get("source_name") or risk_slot.get("sourceName") or ""
+        ).strip()
+        heading = str(
+            risk_slot.get("heading_path")
+            or risk_slot.get("topic")
+            or "Challenges and Outlooks"
+        ).strip()
+        answer_citation_num = len(hits) + 1
+        hits.append(
+            {
+                "text": risk_evidence,
+                "score": 10.0,
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "heading_path": heading,
+                    "ref_best_heading_path": heading,
+                    "evidence_quote": risk_evidence,
+                    "citation_plan_slot": True,
+                    "citation_plan_dl_spi_risk": True,
+                    "ref_answer_citation_num": answer_citation_num,
+                    "page_start": int(risk_slot.get("page_start") or 0),
+                    "page_end": int(
+                        risk_slot.get("page_end")
+                        or risk_slot.get("page_start")
+                        or 0
+                    ),
+                    "ref_rank": {"display_score": 10.0, "semantic_score": 10.0},
+                },
+                "ui_meta": {
+                    "display_name": source_name,
+                    "source_path": source_path,
+                    "heading_path": heading,
+                    "summary_line": risk_evidence,
+                    "primary_evidence": {
+                        "source_path": source_path,
+                        "source_name": source_name,
+                        "heading_path": heading,
+                        "snippet": risk_evidence,
+                        "highlight_snippet": risk_evidence,
+                        "page_start": int(risk_slot.get("page_start") or 0),
+                        "page_end": int(
+                            risk_slot.get("page_end")
+                            or risk_slot.get("page_start")
+                            or 0
+                        ),
+                    },
+                },
+            }
+        )
+        risk_num = answer_citation_num
     cleaned = re.sub(rf"\s*\[{num}\](?!\()", "", text)
     evidence_surface = " ".join(
         str(slot.get("evidence_quote") or "")
@@ -9598,8 +9673,16 @@ def _reading_guide_repair_dl_spi_benefit_marker(
         )
     if risk_num:
         supported_risk_line = any(
-            re.search(r"数据驱动|data[- ]driven", line, flags=re.I)
-            and re.search(r"训练(?:时间|周期)|training", line, flags=re.I)
+            (
+                (
+                    re.search(r"数据驱动|data[- ]driven", line, flags=re.I)
+                    and re.search(r"训练(?:时间|周期)|training", line, flags=re.I)
+                )
+                or (
+                    rich_risk_evidence
+                    and re.search(r"训练数据|training\s+data|datasets?", line, flags=re.I)
+                )
+            )
             and re.search(r"泛化|generalization", line, flags=re.I)
             for line in cleaned.splitlines()
         )
@@ -9608,8 +9691,16 @@ def _reading_guide_repair_dl_spi_benefit_marker(
             target_idx = next(
                 idx
                 for idx, line in enumerate(lines)
-                if re.search(r"数据驱动|data[- ]driven", line, flags=re.I)
-                and re.search(r"训练(?:时间|周期)|training", line, flags=re.I)
+                if (
+                    (
+                        re.search(r"数据驱动|data[- ]driven", line, flags=re.I)
+                        and re.search(r"训练(?:时间|周期)|training", line, flags=re.I)
+                    )
+                    or (
+                        rich_risk_evidence
+                        and re.search(r"训练数据|training\s+data|datasets?", line, flags=re.I)
+                    )
+                )
                 and re.search(r"泛化|generalization", line, flags=re.I)
             )
             lines[target_idx] = _append_numeric_citation_to_paragraph(
@@ -9631,11 +9722,18 @@ def _reading_guide_repair_dl_spi_benefit_marker(
             cleaned = "\n".join(lines)
         if not supported_risk_line:
             cleaned = re.sub(rf"\s*\[{risk_num}\](?!\()", "", cleaned)
-            risk_line = (
-                f"- 数据驱动策略的直接局限是训练时间较长、泛化能力有限，难以适应多样化成像场景 [{risk_num}]。"
-                if re.search(r"[\u4e00-\u9fff]", cleaned)
-                else f"- The directly supported limitation is that data-driven strategies have prolonged training and limited generalization across imaging scenes [{risk_num}]."
-            )
+            if rich_risk_evidence:
+                risk_line = (
+                    f"- 综述明确列出的限制包括依赖大量训练数据、可解释性有限、容易过拟合和泛化能力有限 [{risk_num}]。"
+                    if re.search(r"[\u4e00-\u9fff]", cleaned)
+                    else f"- The review explicitly identifies reliance on extensive training datasets, limited interpretability, susceptibility to overfitting, and limited generalization [{risk_num}]."
+                )
+            else:
+                risk_line = (
+                    f"- 数据驱动策略的直接局限是训练时间较长、泛化能力有限，难以适应多样化成像场景 [{risk_num}]。"
+                    if re.search(r"[\u4e00-\u9fff]", cleaned)
+                    else f"- The directly supported limitation is that data-driven strategies have prolonged training and limited generalization across imaging scenes [{risk_num}]."
+                )
             lines = cleaned.splitlines()
             replace_idx = next(
                 (

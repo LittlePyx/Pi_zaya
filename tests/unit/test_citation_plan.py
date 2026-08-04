@@ -983,6 +983,186 @@ def test_single_paper_benefit_risk_question_preserves_risk_evidence(tmp_path: Pa
     assert any(slot["heading_path"] == "4. Strategy and Advantages" for slot in plan["slots"])
 
 
+def test_single_paper_improvements_and_limitations_prefers_richer_challenges(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / (
+        "LPR-2025-Advances and Challenges of Single‐Pixel Imaging Based on Deep Learning.en.md"
+    )
+    source_path.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "Single-pixel imaging based on deep learning has exceptional reconstruction "
+        "quality and fast reconstruction speed.\n\n"
+        "<!-- kb_page: 16 -->\n\n## 6. Challenges and Outlooks\n\n"
+        "The inherent limitations include reliance on extensive datasets, limited "
+        "interpretability, susceptibility to overfitting, and limited generalization.\n",
+        encoding="utf-8",
+    )
+    unrelated = tmp_path / "generic-single-pixel-review.en.md"
+    unrelated.write_text("## Abstract\n\nA generic review.\n", encoding="utf-8")
+
+    plan = build_citation_plan(
+        prompt=(
+            "What practical improvements does deep learning bring to single-pixel imaging, "
+            "and what limitations should I keep in mind before using it?"
+        ),
+        prompt_family="strength_limits",
+        answer_hits=[
+            {
+                "text": "A generic single-pixel imaging overview.",
+                "meta": {"source_path": str(unrelated), "heading_path": "Abstract"},
+            },
+            {
+                "text": "Single-pixel imaging based on deep learning has exceptional "
+                "reconstruction quality and fast reconstruction speed.",
+                "meta": {"source_path": str(source_path), "heading_path": "Abstract"},
+            },
+        ],
+    )
+
+    system_a = [
+        slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"
+    ]
+    assert plan["intent"] == "comparison"
+    assert len(system_a) == 2
+    assert {slot["source_path"] for slot in system_a} == {str(source_path)}
+    assert any("reconstruction speed" in slot["evidence_quote"] for slot in system_a)
+    challenge = next(
+        slot for slot in system_a if "limited interpretability" in slot["evidence_quote"]
+    )
+    assert challenge["heading_path"].endswith("6. Challenges and Outlooks")
+    assert challenge["page_start"] == 16
+
+
+def test_scinerf_formula_question_pins_equation_roles_and_training_link(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "CVPR-2024-SCINeRF.en.md"
+    source_path.write_text(
+        "# SCINeRF\n\n<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "SCINeRF recovers a 3D scene from one compressed image.\n\n"
+        "<!-- kb_page: 4 -->\n\n### 3.2. Image Formation Model of Video SCI\n\n"
+        "$$\\mathbf{Y} = \\sum_{i=1}^{N} \\mathbf{X}_i \\odot \\mathbf{M}_i + "
+        "\\mathbf{Z}.$$ \n\n"
+        "Y is the captured compressed image, Xi is a virtual image, odot denotes "
+        "element-wise multiplication, and Z is the measurement noise.\n\n"
+        "We render Xi to synthesize the compressed image Y, which is differentiable "
+        "with respect to NeRF and the poses.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source_path),
+            "evidence_quote": "SCINeRF recovers a 3D scene from one compressed image.",
+            "heading_path": "Abstract",
+            "page_start": 1,
+        },
+        ranking_texts=[
+            "SCINeRF SCI forward image formation equation binary masks measurement noise "
+            "differentiable NeRF poses"
+        ],
+    )
+
+    assert slot["heading_path"].endswith("3.2. Image Formation Model of Video SCI")
+    assert slot["page_start"] == 4
+    assert "\\mathbf{Y}" in slot["evidence_quote"]
+    assert "element-wise multiplication" in slot["evidence_quote"]
+    assert "differentiable with respect to NeRF and the poses" in slot["evidence_quote"]
+
+    full_evidence = slot["evidence_quote"]
+    plan = build_citation_plan(
+        prompt=(
+            "SCINeRF 的 SCI 前向成像公式表达了什么？请解释二值掩模、噪声和"
+            "可微联合优化。"
+        ),
+        prompt_family="method",
+        support_slots=[
+            {
+                "source_path": str(source_path),
+                "heading_path": "Abstract",
+                "evidence_quote": "SCINeRF recovers a 3D scene from one compressed image.",
+            }
+        ],
+        answer_hits=[
+            {
+                "text": "SCINeRF recovers a 3D scene from one compressed image.",
+                "meta": {"source_path": str(source_path), "heading_path": "Abstract"},
+            },
+            {
+                "text": "The captured image is modulated by N binary masks.",
+                "meta": {
+                    "source_path": str(source_path),
+                    "heading_path": "3.2. Image Formation Model of Video SCI",
+                },
+            },
+            {
+                "text": full_evidence,
+                "meta": {
+                    "source_path": str(source_path),
+                    "heading_path": "3.2. Image Formation Model of Video SCI",
+                },
+            },
+        ],
+    )
+    formula_slot = next(
+        item
+        for item in plan["slots"]
+        if "element-wise multiplication" in item["evidence_quote"]
+    )
+    assert formula_slot["candidate_hits"] == [3]
+
+
+def test_both_each_method_prompt_is_a_two_source_comparison() -> None:
+    hits = [
+        {
+            "text": (
+                "Each SLM pixel is modulated on p frequencies simultaneously; the signal "
+                "uses phase-sensitive detection and is demodulated by p lock-in amplifiers."
+            ),
+            "meta": {
+                "source_path": "frequency-division-multiplexed-spi.en.md",
+                "heading_path": "B. Encoding",
+            },
+        },
+        {
+            "text": (
+                "Photometric stereo uses four spatially-separated detectors and reconstructs "
+                "3D video at 8 frames per second."
+            ),
+            "meta": {
+                "source_path": "3d-single-pixel-video.en.md",
+                "heading_path": "Abstract",
+            },
+        },
+        {
+            "text": "HSI uses Hadamard patterns and FSI uses Fourier patterns.",
+            "meta": {
+                "source_path": "hadamard-versus-fourier.en.md",
+                "heading_path": "Introduction",
+            },
+        },
+    ]
+
+    plan = build_citation_plan(
+        prompt=(
+            "Both frequency-division-multiplexed single-pixel imaging and 3D single-pixel "
+            "video claim speedups. What does each method parallelize?"
+        ),
+        answer_hits=hits,
+    )
+
+    system_a = [
+        slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"
+    ]
+    assert plan["intent"] == "comparison"
+    assert len(system_a) == 2
+    assert {slot["source_path"] for slot in system_a} == {
+        "frequency-division-multiplexed-spi.en.md",
+        "3d-single-pixel-video.en.md",
+    }
+
+
 def test_prompt_alignment_skips_bibliography_without_references_heading(tmp_path: Path) -> None:
     source_path = tmp_path / "perovskite.en.md"
     abstract = (

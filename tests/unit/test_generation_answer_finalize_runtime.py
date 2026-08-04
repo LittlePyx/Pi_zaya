@@ -1970,6 +1970,135 @@ def test_exact_source_bound_keeps_distinct_same_paper_benefit_and_risk_hits() ->
     assert rebound == out
 
 
+def test_exact_source_bound_uses_richer_dl_spi_challenge_evidence_in_english() -> None:
+    benefit = (
+        "Deep learning attracts attention due to exceptional reconstruction quality "
+        "and fast reconstruction speed."
+    )
+    risk = (
+        "The inherent limitations include reliance on extensive datasets, limited "
+        "interpretability, susceptibility to overfitting, and limited generalization."
+    )
+    hits = [
+        {"text": benefit, "meta": {"source_path": "review.en.md"}},
+        {"text": risk, "meta": {"source_path": "review.en.md"}},
+    ]
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "Deep learning is useful, but deployment needs care.",
+        prompt=(
+            "What practical improvements does deep learning bring to single-pixel imaging, "
+            "and what limitations should I keep in mind before using it?"
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "review.en.md",
+                    "evidence_quote": benefit,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [2],
+                    "source_path": "review.en.md",
+                    "evidence_quote": risk,
+                },
+            ]
+        },
+        answer_hits=hits,
+    )
+
+    assert "reconstruction quality" in out
+    assert "training data" in out
+    assert "limited interpretability" in out
+    assert "overfitting" in out
+    assert "limited generalization" in out
+    assert out.count("[1]") == 1
+    assert out.count("[2]") == 1
+
+
+def test_exact_source_bound_stabilizes_scinerf_forward_equation() -> None:
+    evidence = (
+        "$$\\mathbf{Y}=\\sum_i\\mathbf{X}_i\\odot\\mathbf{M}_i+\\mathbf{Z}.$$ "
+        "Y is the captured compressed image, Xi is a virtual image, odot denotes "
+        "element-wise multiplication, and Z is the measurement noise. Given NeRF and "
+        "camera poses, we render Xi to synthesize the compressed image Y, which is "
+        "differentiable with respect to NeRF and the poses."
+    )
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "SCINeRF 将多帧压缩成一个测量。",
+        prompt=(
+            "SCINeRF 的 SCI 前向成像公式到底表达了什么？请解释二值掩模、测量噪声"
+            "以及它为什么能进入 NeRF 联合优化。"
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "scinerf.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "scinerf.en.md"}}],
+    )
+
+    assert "\\mathbf{Y}=\\sum" in out
+    assert "二值掩模" in out
+    assert "逐元素" in out
+    assert "测量噪声" in out
+    assert "可微" in out
+    assert out.count("[1]") == 3
+
+
+def test_exact_source_bound_stabilizes_fdm_vs_3d_parallelism() -> None:
+    fdm = (
+        "Each SLM pixel is modulated on p frequencies simultaneously. The system uses "
+        "phase-sensitive detection, and the signal is demodulated by p lock-in amplifiers."
+    )
+    video = (
+        "Photometric stereo senses reflected light with four spatially-separated detectors "
+        "and reconstructs continuous real-time 3D video at 8 frames per second."
+    )
+    hits = [
+        {"text": fdm, "meta": {"source_path": "fdm.en.md"}},
+        {"text": video, "meta": {"source_path": "3d-video.en.md"}},
+    ]
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "Both systems parallelize acquisition.",
+        prompt=(
+            "Both frequency-division-multiplexed single-pixel imaging and 3D single-pixel "
+            "video claim speedups. What does each method parallelize, and why does the 3D "
+            "method need multiple detectors?"
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "fdm.en.md",
+                    "evidence_quote": fdm,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [2],
+                    "source_path": "3d-video.en.md",
+                    "evidence_quote": video,
+                },
+            ]
+        },
+        answer_hits=hits,
+    )
+
+    assert "phase-sensitive detection" in out
+    assert "photometric stereo" in out
+    assert "four spatially separated detectors" in out
+    assert "8 frames per second" in out
+    assert out.count("[1]") == 2
+    assert out.count("[2]") == 2
+
+
 def test_exact_source_bound_stabilizes_sequential_adaptive_scope() -> None:
     evidence = (
         "A sequential adaptive compressed sensing procedure for signal support recovery is proposed. "

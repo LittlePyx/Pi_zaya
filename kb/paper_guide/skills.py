@@ -521,6 +521,23 @@ def run_section_target_skill(
         return None
     if (not prompt) or (not has_non_ref_target):
         return None
+    if family == "strength_limits":
+        asks_positive_and_negative = bool(
+            re.search(
+                r"(?i)好处|收益|优势|改进|benefits?|advantages?|improvements?",
+                prompt,
+            )
+            and re.search(
+                r"(?i)坑|风险|局限|限制|缺点|挑战|risks?|limitations?|"
+                r"drawbacks?|challenges?",
+                prompt,
+            )
+        )
+        if asks_positive_and_negative:
+            # A two-sided question needs at least one benefit passage and one
+            # limitation passage. Returning one selected section here bypasses
+            # ordinary generation and produces a polished but one-sided quote.
+            return None
 
     target_hit = dict(
         select_target_hit(

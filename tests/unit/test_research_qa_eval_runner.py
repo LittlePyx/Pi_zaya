@@ -3,6 +3,7 @@ from __future__ import annotations
 from tools.research_qa import run_research_qa_eval as eval_mod
 from tools.research_qa.run_research_qa_eval import (
     ResearchQaFixture,
+    _answer_matches_locale,
     _assistant_message_by_id,
     _build_report,
     _case_requires_full_refs_wait,
@@ -14,6 +15,7 @@ from tools.research_qa.run_research_qa_eval import (
     _refs_payload_is_converged_for_case,
     _refs_payload_is_full,
     _refs_payload_is_terminal_for_case,
+    _ref_hit_locale_failures,
     _timing_summary,
     evaluate_retrieval_coverage,
     evaluate_replay_rows,
@@ -21,10 +23,24 @@ from tools.research_qa.run_research_qa_eval import (
     load_replay,
     select_fixture_cases,
     source_path_for_doc,
+    summarize_suite_coverage,
     validate_case,
     validate_fixture_contracts,
     validate_fixture_sources,
 )
+
+
+def test_locale_gate_checks_answer_and_reference_card_setting():
+    assert _answer_matches_locale("这是一个有依据的中文回答，说明了方法和限制。", "zh")
+    assert _answer_matches_locale(
+        "This grounded English answer explains the method and its practical limitations.",
+        "en",
+    )
+    assert not _answer_matches_locale("这不是英文回答。", "en")
+    assert _ref_hit_locale_failures(
+        [{"ui_meta": {"render_locale": "en"}}, {"ui_meta": {"render_locale": "zh"}}],
+        "en",
+    ) == [{"index": 2, "expected": "en", "actual": "zh"}]
 
 
 def test_retrieval_coverage_reports_required_document_ranks(monkeypatch, tmp_path):
@@ -272,7 +288,7 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
     fixture = load_fixture()
 
     assert len(fixture.docs) == 22
-    assert len(fixture.cases) == 32
+    assert len(fixture.cases) == 35
     case_ids = {str(item.get("id") or "") for item in fixture.cases}
     assert {
         "spi-roadmap-beginner",
@@ -290,9 +306,9 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
         "ECCV-2022-Simple Baselines for Image Restoration/"
         "ECCV-2022-Simple Baselines for Image Restoration.en.md"
     )
-    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 18
+    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 20
     assert len(fixture.splits["baseline_real_v1"]) == 12
-    assert len(fixture.splits["holdout_v1"]) == 20
+    assert len(fixture.splits["holdout_v1"]) == 23
     assert set(fixture.splits["baseline_real_v1"]).isdisjoint(fixture.splits["holdout_v1"])
     assert set(fixture.splits["baseline_real_v1"]) | set(fixture.splits["holdout_v1"]) == case_ids
 
@@ -309,6 +325,34 @@ def test_research_qa_fixture_split_selection_is_stable_and_intersectable():
 
     assert [case["id"] for case in holdout] == fixture.splits["holdout_v1"]
     assert [case["id"] for case in one_case] == ["fdm-vs-3d-video-parallelism"]
+
+
+def test_full_library_acceptance_suite_is_bounded_and_covers_the_corpus():
+    fixture = load_fixture()
+
+    cases = select_fixture_cases(fixture, suite_names=["full_library_acceptance_v1"])
+    one_case = select_fixture_cases(
+        fixture,
+        suite_names=["live_smoke_v1"],
+        case_ids={"scinerf-forward-model-equation"},
+    )
+    coverage = summarize_suite_coverage(fixture, "full_library_acceptance_v1")
+
+    assert len(cases) == 29
+    assert [case["id"] for case in one_case] == ["scinerf-forward-model-equation"]
+    assert coverage["case_count"] == 29
+    assert coverage["doc_count"] == len(fixture.docs) == 22
+    assert coverage["locales"] == ["en", "zh"]
+    assert {
+        "cross_paper_synthesis",
+        "table_lookup",
+        "formula_reasoning",
+        "figure_architecture",
+        "negative_or_insufficient_evidence",
+        "system_a",
+        "system_b",
+        "answer_reference_alignment",
+    }.issubset(coverage["coverage"])
 
 
 def test_fixture_validation_rejects_split_overlap_and_unassigned_cases():
@@ -347,6 +391,38 @@ def test_fixture_validation_rejects_split_overlap_and_unassigned_cases():
 
     assert "case alpha appears in multiple splits: baseline, holdout" in errors
     assert "fixture cases missing a split: beta" in errors
+
+
+def test_fixture_validation_rejects_incomplete_full_library_suite():
+    fixture = ResearchQaFixture(
+        db_root="db",
+        docs=[{"id": "alpha"}, {"id": "beta"}],
+        cases=[
+            {
+                "id": "alpha-question",
+                "question": "What is alpha?",
+                "docIds": ["alpha"],
+                "acceptance": ["one", "two"],
+                "expected": {},
+            }
+        ],
+        forbidden_phrases=[],
+        suites={
+            "full_library_acceptance_v1": {
+                "caseIds": ["alpha-question"],
+                "requireAllDocs": True,
+                "requiredLocales": ["zh", "en"],
+                "requiredCoverage": ["formula_reasoning"],
+                "coverage": {},
+            }
+        },
+    )
+
+    errors = validate_fixture_contracts(fixture)
+
+    assert "suite full_library_acceptance_v1 does not cover all docs: beta" in errors
+    assert "suite full_library_acceptance_v1 missing locales: zh" in errors
+    assert "suite full_library_acceptance_v1 missing required coverage: formula_reasoning" in errors
 
 
 def test_source_grounded_contracts_match_page_marked_markdown(tmp_path):

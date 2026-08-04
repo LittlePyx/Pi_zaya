@@ -51,6 +51,7 @@ class ResearchQaFixture:
     cases: list[dict[str, Any]]
     forbidden_phrases: list[str]
     splits: dict[str, list[str]] = field(default_factory=dict)
+    suites: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def docs_by_id(self) -> dict[str, dict[str, Any]]:
@@ -64,6 +65,18 @@ def _post_json(base_url: str, path: str, payload: dict[str, Any], timeout_s: flo
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
+    )
+    with request.urlopen(req, timeout=timeout_s) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="ignore") or "{}")
+
+
+def _patch_json(base_url: str, path: str, payload: dict[str, Any], timeout_s: float) -> dict[str, Any]:
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = request.Request(
+        f"{base_url}{path}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="PATCH",
     )
     with request.urlopen(req, timeout=timeout_s) as resp:
         return json.loads(resp.read().decode("utf-8", errors="ignore") or "{}")
@@ -308,6 +321,7 @@ def load_fixture(path: Path | str = DEFAULT_FIXTURE) -> ResearchQaFixture:
     cases = data.get("cases") if isinstance(data, dict) else []
     forbidden = data.get("forbiddenPhrases") if isinstance(data, dict) else []
     raw_splits = data.get("splits") if isinstance(data, dict) else {}
+    raw_suites = data.get("suites") if isinstance(data, dict) else {}
     return ResearchQaFixture(
         db_root=str(data.get("dbRoot") or "") if isinstance(data, dict) else "",
         docs=[item for item in list(docs or []) if isinstance(item, dict)],
@@ -322,13 +336,28 @@ def load_fixture(path: Path | str = DEFAULT_FIXTURE) -> ResearchQaFixture:
             for name, case_ids in dict(raw_splits or {}).items()
             if str(name or "").strip() and isinstance(case_ids, list)
         },
+        suites={
+            str(name): dict(spec)
+            for name, spec in dict(raw_suites or {}).items()
+            if str(name or "").strip() and isinstance(spec, dict)
+        },
     )
+
+
+def _suite_case_ids(fixture: ResearchQaFixture, suite_name: str) -> list[str]:
+    spec = fixture.suites.get(str(suite_name or "").strip()) or {}
+    return [
+        str(case_id)
+        for case_id in _as_list(spec.get("caseIds"))
+        if str(case_id or "").strip()
+    ]
 
 
 def select_fixture_cases(
     fixture: ResearchQaFixture,
     *,
     split_names: list[str] | None = None,
+    suite_names: list[str] | None = None,
     case_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     selected_ids: set[str] | None = None
@@ -342,6 +371,17 @@ def select_fixture_cases(
             for split_name in wanted_splits
             for case_id in fixture.splits.get(split_name, [])
         }
+    wanted_suites = [str(name or "").strip() for name in list(suite_names or []) if str(name or "").strip()]
+    if wanted_suites:
+        unknown_suites = sorted(set(wanted_suites) - set(fixture.suites))
+        if unknown_suites:
+            raise ValueError(f"unknown fixture suites: {', '.join(unknown_suites)}")
+        suite_ids = {
+            str(case_id)
+            for suite_name in wanted_suites
+            for case_id in _suite_case_ids(fixture, suite_name)
+        }
+        selected_ids = suite_ids if selected_ids is None else selected_ids & suite_ids
     if case_ids:
         requested = {str(case_id) for case_id in case_ids if str(case_id or "").strip()}
         selected_ids = requested if selected_ids is None else selected_ids & requested
@@ -352,6 +392,48 @@ def select_fixture_cases(
         for case in fixture.cases
         if str(case.get("id") or "").strip() in selected_ids
     ]
+
+
+def _case_ui_locale(case: dict[str, Any]) -> str:
+    explicit = str(case.get("uiLocale") or "").strip().lower()
+    if explicit in {"zh", "en"}:
+        return explicit
+    question = str(case.get("question") or "")
+    return "zh" if re.search(r"[\u4e00-\u9fff]", question) else "en"
+
+
+def summarize_suite_coverage(
+    fixture: ResearchQaFixture,
+    suite_name: str,
+) -> dict[str, Any]:
+    spec = fixture.suites.get(str(suite_name or "").strip()) or {}
+    case_ids = _suite_case_ids(fixture, suite_name)
+    selected = select_fixture_cases(fixture, suite_names=[suite_name])
+    covered_docs = sorted(
+        {
+            str(doc_id)
+            for case in selected
+            for doc_id in _as_list(case.get("docIds"))
+            if str(doc_id or "").strip()
+        }
+    )
+    coverage = {
+        str(name): [
+            str(case_id)
+            for case_id in _as_list(raw_case_ids)
+            if str(case_id or "").strip()
+        ]
+        for name, raw_case_ids in dict(spec.get("coverage") or {}).items()
+        if str(name or "").strip()
+    }
+    return {
+        "suite": str(suite_name or "").strip(),
+        "case_count": len(case_ids),
+        "doc_count": len(covered_docs),
+        "doc_ids": covered_docs,
+        "locales": sorted({_case_ui_locale(case) for case in selected}),
+        "coverage": coverage,
+    }
 
 
 def load_replay(path: Path | str = DEFAULT_REPLAY) -> list[dict[str, Any]]:
@@ -430,6 +512,81 @@ def validate_fixture_contracts(fixture: ResearchQaFixture) -> list[str]:
             errors.append(
                 f"fixture cases missing a split: {', '.join(unassigned_case_ids)}"
             )
+    for suite_name, spec in fixture.suites.items():
+        suite_case_ids = _suite_case_ids(fixture, suite_name)
+        duplicate_suite_ids = sorted(
+            case_id for case_id in set(suite_case_ids) if suite_case_ids.count(case_id) > 1
+        )
+        if duplicate_suite_ids:
+            errors.append(
+                f"suite {suite_name} has duplicate case ids: {', '.join(duplicate_suite_ids)}"
+            )
+        unknown_suite_ids = sorted(set(suite_case_ids) - known_case_ids)
+        if unknown_suite_ids:
+            errors.append(
+                f"suite {suite_name} references unknown cases: {', '.join(unknown_suite_ids)}"
+            )
+        min_cases = _expected_int(spec, "minCases")
+        max_cases = _expected_optional_int(spec, "maxCases")
+        if min_cases and len(suite_case_ids) < min_cases:
+            errors.append(
+                f"suite {suite_name} has too few cases: {len(suite_case_ids)}<{min_cases}"
+            )
+        if max_cases is not None and len(suite_case_ids) > max_cases:
+            errors.append(
+                f"suite {suite_name} has too many cases: {len(suite_case_ids)}>{max_cases}"
+            )
+        suite_cases = [
+            case
+            for case in fixture.cases
+            if str(case.get("id") or "").strip() in set(suite_case_ids)
+        ]
+        if bool(spec.get("requireAllDocs")):
+            covered_docs = {
+                str(doc_id)
+                for case in suite_cases
+                for doc_id in _as_list(case.get("docIds"))
+                if str(doc_id or "").strip()
+            }
+            missing_docs = sorted(known_docs - covered_docs)
+            if missing_docs:
+                errors.append(
+                    f"suite {suite_name} does not cover all docs: {', '.join(missing_docs)}"
+                )
+        required_locales = {
+            str(locale or "").strip().lower()
+            for locale in _as_list(spec.get("requiredLocales"))
+            if str(locale or "").strip()
+        }
+        actual_locales = {_case_ui_locale(case) for case in suite_cases}
+        missing_locales = sorted(required_locales - actual_locales)
+        if missing_locales:
+            errors.append(
+                f"suite {suite_name} missing locales: {', '.join(missing_locales)}"
+            )
+        coverage = dict(spec.get("coverage") or {})
+        required_coverage = [
+            str(name or "").strip()
+            for name in _as_list(spec.get("requiredCoverage"))
+            if str(name or "").strip()
+        ]
+        for coverage_name in required_coverage:
+            coverage_case_ids = [
+                str(case_id)
+                for case_id in _as_list(coverage.get(coverage_name))
+                if str(case_id or "").strip()
+            ]
+            if not coverage_case_ids:
+                errors.append(
+                    f"suite {suite_name} missing required coverage: {coverage_name}"
+                )
+                continue
+            outside_suite = sorted(set(coverage_case_ids) - set(suite_case_ids))
+            if outside_suite:
+                errors.append(
+                    f"suite {suite_name} coverage {coverage_name} references cases outside suite: "
+                    f"{', '.join(outside_suite)}"
+                )
     focus_cases: dict[str, list[str]] = {}
     for case in fixture.cases:
         case_id = str(case.get("id") or "").strip() or "<missing-id>"
@@ -1521,6 +1678,38 @@ def _unique_doc_ids_in_payload(fixture: ResearchQaFixture, payload: Any) -> list
     return sorted(doc_id for doc_id in fixture.docs_by_id if _doc_matches_payload(fixture, doc_id, payload))
 
 
+def _answer_matches_locale(answer: str, locale: str) -> bool:
+    text = str(answer or "").strip()
+    if not text:
+        return False
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_count = len(re.findall(r"[A-Za-z]", text))
+    if str(locale or "").strip().lower() == "zh":
+        return cjk_count >= 6
+    return latin_count >= 24 and cjk_count <= 2
+
+
+def _ref_hit_locale_failures(ref_hits: list[dict[str, Any]], locale: str) -> list[dict[str, Any]]:
+    target = str(locale or "").strip().lower()
+    failures: list[dict[str, Any]] = []
+    for index, hit in enumerate(ref_hits, start=1):
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        actual = str(
+            ui_meta.get("render_locale")
+            or hit.get("render_locale")
+            or ""
+        ).strip().lower()
+        if actual != target:
+            failures.append(
+                {
+                    "index": index,
+                    "expected": target,
+                    "actual": actual or "missing",
+                }
+            )
+    return failures
+
+
 def _ref_card_quality_summary(
     refs_payload: Any,
     forbidden_phrases: list[str],
@@ -1802,6 +1991,17 @@ def validate_case(
             "answer_contains_required_term_groups",
             not missing_answer_term_groups,
             missing_answer_term_groups,
+        )
+    expected_locale = str(
+        expected.get("renderLocale")
+        or case.get("uiLocale")
+        or ""
+    ).strip().lower()
+    if bool(expected.get("requireAnswerLocale")) and expected_locale in {"zh", "en"}:
+        add_check(
+            "answer_matches_requested_locale",
+            _answer_matches_locale(answer, expected_locale),
+            {"expected": expected_locale},
         )
 
     forbidden_answer_terms = _contract_terms(expected.get("forbiddenAnswerTerms"))
@@ -2093,6 +2293,13 @@ def validate_case(
     )
     card_failures = _ref_card_quality_failures(ref_card_quality)
     add_check("refs_card_copy_quality", not card_failures, card_failures)
+    if expected_locale in {"zh", "en"}:
+        locale_failures = _ref_hit_locale_failures(ref_hits, expected_locale)
+        add_check(
+            "refs_cards_match_requested_locale",
+            bool(ref_hits) and not locale_failures,
+            locale_failures or {"expected": expected_locale, "cards": len(ref_hits)},
+        )
 
     required_primary_terms = [
         str(item) for item in _as_list(expected.get("requiredPrimaryEvidenceTerms")) if str(item or "").strip()
@@ -2531,6 +2738,12 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Run one or more named fixture splits (for example baseline_real_v1 or holdout_v1).",
     )
+    parser.add_argument(
+        "--suite",
+        action="append",
+        default=[],
+        help="Run one or more overlapping acceptance suites (for example full_library_acceptance_v1).",
+    )
     parser.add_argument("--top-k", type=int, default=6, help="Retrieval top_k sent to /api/generate.")
     parser.add_argument("--max-tokens", type=int, default=1800, help="Max tokens sent to /api/generate.")
     parser.add_argument(
@@ -2575,6 +2788,7 @@ def main(argv: list[str] | None = None) -> int:
         selected_cases = select_fixture_cases(
             fixture,
             split_names=list(args.split or []),
+            suite_names=list(args.suite or []),
             case_ids=wanted_ids or None,
         )
     except ValueError as exc:
@@ -2647,7 +2861,15 @@ def main(argv: list[str] | None = None) -> int:
         summary = evaluate_replay_rows(
             fixture,
             load_replay(args.replay),
-            selected_case_ids=wanted_ids or None,
+            selected_case_ids=(
+                {
+                    str(case.get("id") or "").strip()
+                    for case in selected_cases
+                    if str(case.get("id") or "").strip()
+                }
+                if args.split or args.suite or wanted_ids
+                else None
+            ),
         )
         for row in summary["cases"]:
             quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
@@ -2666,6 +2888,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[OK] cases: {len(selected_cases)}")
         if args.split:
             print(f"[OK] splits: {', '.join(str(item) for item in args.split)}")
+        if args.suite:
+            print(f"[OK] suites: {', '.join(str(item) for item in args.suite)}")
+            for suite_name in args.suite:
+                coverage = summarize_suite_coverage(fixture, str(suite_name))
+                print(
+                    "[OK] suite coverage: "
+                    f"{suite_name} cases={coverage['case_count']} "
+                    f"docs={coverage['doc_count']} "
+                    f"locales={','.join(coverage['locales'])} "
+                    f"areas={','.join(sorted(coverage['coverage']))}"
+                )
         print(f"[OK] source-grounded cases: {sum(1 for case in selected_cases if bool(case.get('sourceGrounded')))}")
         focus_counts: dict[str, int] = {}
         for idx, case in enumerate(selected_cases, start=1):
@@ -2683,28 +2916,66 @@ def main(argv: list[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict[str, Any]] = []
-    for idx, case in enumerate(selected_cases, start=1):
-        case_id = str(case.get("id") or f"case-{idx}")
-        try:
-            row = run_case(
-                base_url=base_url,
-                fixture=fixture,
-                case=case,
-                timeout_s=float(args.timeout_s),
-                top_k=int(args.top_k),
-                max_tokens=int(args.max_tokens),
-            )
-        except Exception as exc:
-            row = {
-                "id": case_id,
-                "status": "error",
-                "done": True,
-                "error": str(exc),
-                "quality": {"ok": False, "failures": [{"name": "runner_error", "detail": str(exc)}]},
+    saved_locale_prefs: dict[str, str] = {}
+    active_locale = ""
+    try:
+        settings_payload = _get_json(base_url, "/api/settings", float(args.timeout_s))
+        prefs = settings_payload.get("prefs") if isinstance(settings_payload, dict) else {}
+        if isinstance(prefs, dict):
+            saved_locale_prefs = {
+                "ui_locale": str(prefs.get("ui_locale") or "zh").strip().lower(),
+                "refs_card_locale": str(prefs.get("refs_card_locale") or "auto").strip().lower(),
             }
-        rows.append(row)
-        ok = bool((row.get("quality") or {}).get("ok")) if isinstance(row.get("quality"), dict) else False
-        print(f"[{idx}/{len(selected_cases)}] {case_id} -> {'pass' if ok else 'fail'} ({row.get('latency_ms', 0)} ms)")
+    except Exception as exc:
+        print(f"[WARN] could not snapshot locale settings: {exc}", file=sys.stderr)
+    try:
+        for idx, case in enumerate(selected_cases, start=1):
+            case_id = str(case.get("id") or f"case-{idx}")
+            desired_locale = _case_ui_locale(case)
+            try:
+                if desired_locale != active_locale:
+                    _patch_json(
+                        base_url,
+                        "/api/settings",
+                        {
+                            "ui_locale": desired_locale,
+                            "refs_card_locale": desired_locale,
+                        },
+                        timeout_s=float(args.timeout_s),
+                    )
+                    active_locale = desired_locale
+                row = run_case(
+                    base_url=base_url,
+                    fixture=fixture,
+                    case=case,
+                    timeout_s=float(args.timeout_s),
+                    top_k=int(args.top_k),
+                    max_tokens=int(args.max_tokens),
+                )
+                row["ui_locale"] = desired_locale
+            except Exception as exc:
+                row = {
+                    "id": case_id,
+                    "status": "error",
+                    "done": True,
+                    "error": str(exc),
+                    "ui_locale": desired_locale,
+                    "quality": {"ok": False, "failures": [{"name": "runner_error", "detail": str(exc)}]},
+                }
+            rows.append(row)
+            ok = bool((row.get("quality") or {}).get("ok")) if isinstance(row.get("quality"), dict) else False
+            print(f"[{idx}/{len(selected_cases)}] {case_id} -> {'pass' if ok else 'fail'} ({row.get('latency_ms', 0)} ms)")
+    finally:
+        if saved_locale_prefs:
+            try:
+                _patch_json(
+                    base_url,
+                    "/api/settings",
+                    saved_locale_prefs,
+                    timeout_s=float(args.timeout_s),
+                )
+            except Exception as exc:
+                print(f"[WARN] could not restore locale settings: {exc}", file=sys.stderr)
 
     summary = {
         "total": len(rows),
@@ -2713,6 +2984,8 @@ def main(argv: list[str] | None = None) -> int:
         "base_url": base_url,
         "fixture": str(fixture_path),
         "output_dir": str(output_dir),
+        "splits": [str(item) for item in args.split],
+        "suites": [str(item) for item in args.suite],
         "timing": _timing_summary(rows),
     }
     _write_jsonl(output_dir / "raw_results.jsonl", rows)

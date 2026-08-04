@@ -6813,3 +6813,92 @@ def test_pack_primary_does_not_overwrite_answer_cited_card_evidence(monkeypatch)
 
     assert hit_ui["summary_line"] == cited_primary["snippet"]
     assert hit_ui["primary_evidence_heading_path"] == "Results / Simulation results"
+
+
+def test_non_llm_scinerf_formula_card_uses_grounded_chinese_copy(monkeypatch):
+    monkeypatch.setattr(reference_card_locale, "_refs_card_ui_locale_pref", lambda: "zh")
+    ui_meta = {
+        "display_name": "CVPR-2024-SCINeRF.pdf",
+        "heading_path": "3.2 Physics based Rendering",
+        "summary_line": "",
+        "summary_generation": "answer_citation_grounded",
+        "why_line": "",
+        "why_generation": "locale_suppressed",
+        "primary_evidence": {
+            "snippet": (
+                "The synthesized measurement follows equation (3), where binary masks modulate "
+                "the scene, G is the measurement noise, and the rendering process is "
+                "differentiable for joint NeRF training."
+            )
+        },
+    }
+
+    out = reference_ui._suppress_non_llm_ref_card_copy(
+        prompt=(
+            "SCINeRF 的 SCI 前向成像公式到底表达了什么？"
+            "请解释二值掩模、测量噪声和可微渲染各自的作用。"
+        ),
+        ui_meta=ui_meta,
+    )
+
+    assert out["summary_generation"] == "deterministic_grounded"
+    assert "式（3）" in out["summary_line"]
+    assert "二值掩模" in out["summary_line"]
+    assert "可微" in out["summary_line"]
+    assert out["why_generation"] == "deterministic_grounded"
+    assert "式（3）" in out["why_line"]
+    assert "联合优化" in out["why_line"]
+
+
+def test_scinerf_formula_prompt_contract_selects_exact_source_block(monkeypatch):
+    source_path = r"db\SCINeRF\SCINeRF.en.md"
+    monkeypatch.setattr(reference_ui, "_resolve_source_md_path", lambda _path: Path("SCINeRF.en.md"))
+    monkeypatch.setattr(
+        reference_ui,
+        "load_source_blocks",
+        lambda _path: [
+            {
+                "kind": "paragraph",
+                "heading_path": "3.2. Image Formation Model of Video SCI",
+                "text": (
+                    "Y and Xi are the captured compressed image and virtual image. "
+                    "The operator denotes element-wise multiplication, and Z is the measurement noise."
+                ),
+                "page_start": 4,
+                "page_end": 4,
+                "block_id": "blk_formula",
+            },
+            {
+                "kind": "paragraph",
+                "heading_path": "3.2. Image Formation Model of Video SCI",
+                "text": "The synthesized Y is differentiable with respect to NeRF and the poses.",
+                "page_start": 4,
+                "page_end": 4,
+                "block_id": "blk_training",
+            }
+        ],
+    )
+    pack = {
+        "hits": [
+            {
+                "meta": {
+                    "source_path": source_path,
+                    "source_name": "CVPR-2024-SCINeRF.pdf",
+                }
+            }
+        ]
+    }
+
+    primary, alignment = reference_ui._select_prompt_contract_primary_ref_evidence(
+        pack=pack,
+        prompt=(
+            "SCINeRF 的 SCI 前向成像公式表达了什么？"
+            "请解释二值掩模、测量噪声和可微渲染。"
+        ),
+    )
+
+    assert primary["heading_path"] == "3.2. Image Formation Model of Video SCI"
+    assert primary["page_start"] == 4
+    assert "measurement noise" in primary["snippet"]
+    assert primary["selection_reason"] == "prompt_contract_block"
+    assert alignment["selected_source"] == "prompt_contract"

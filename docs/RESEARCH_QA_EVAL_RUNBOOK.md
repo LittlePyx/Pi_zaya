@@ -1,6 +1,6 @@
 # Research QA Eval Runbook
 
-Updated: 2026-07-20
+Updated: 2026-08-04
 
 ## Purpose
 
@@ -13,9 +13,17 @@ The research QA eval protects the real researcher-facing workflow:
 5. Reference locator card quality, including summary, relevance, polish state, and reader-open evidence.
 6. Citation shelf quality, so saved literature keeps a useful title, source/export identity, summary, and clean visible copy.
 
-The shared fixture is `web/src/testing/researchQaData.json`. It contains 30
-natural research questions. Fifteen are source-grounded cases whose claim and
+The shared fixture is `web/src/testing/researchQaData.json`. It contains 35
+natural research questions. Twenty are source-grounded cases whose claim and
 reader-locator contracts are pinned to a page in the current Markdown corpus.
+
+The overlapping `full_library_acceptance_v1` suite is the release baseline. It
+reuses 29 of those questions to cover every configured paper and both UI
+locales, plus cross-paper synthesis, table lookup, formula reasoning, figure
+architecture, exact location, negative evidence, System A/System B routing, and
+answer/reference alignment. `live_smoke_v1` is the five-question paid-model
+spot check. These suites select existing cases; they do not duplicate the
+underlying regression definitions.
 
 Six focused user journeys also have a human-reviewed deterministic replay in
 `docs/research_qa_grounded_replay_v1.jsonl`. The replay uses real paper identities
@@ -28,6 +36,7 @@ CI runs the fixture smoke check:
 
 ```bash
 python tools/research_qa/run_research_qa_eval.py --dry-run
+python tools/research_qa/run_research_qa_eval.py --suite full_library_acceptance_v1 --dry-run
 python tools/research_qa/run_research_qa_eval.py --replay docs/research_qa_grounded_replay_v1.jsonl --fail-on-quality
 ```
 
@@ -62,13 +71,13 @@ uvicorn api.main:app --host 127.0.0.1 --port 8000
 Then run:
 
 ```bash
-python tools/research_qa/run_research_qa_eval.py --base-url http://127.0.0.1:8000 --fail-on-quality
+python tools/research_qa/run_research_qa_eval.py --base-url http://127.0.0.1:8000 --suite full_library_acceptance_v1 --fail-on-quality
 ```
 
-For a faster spot check:
+For the faster five-question real-model spot check:
 
 ```bash
-python tools/research_qa/run_research_qa_eval.py --base-url http://127.0.0.1:8000 --limit 3 --fail-on-quality
+python tools/research_qa/run_research_qa_eval.py --base-url http://127.0.0.1:8000 --suite live_smoke_v1 --fail-on-quality
 ```
 
 For one case:
@@ -90,6 +99,11 @@ Files:
 1. `raw_results.jsonl`: full per-case payloads and quality checks.
 2. `summary.json`: total, passed, failed, base URL, fixture path, output path.
 3. `report.md`: human-readable report with failures, reference-card quality, citation-shelf quality, and System B audit.
+
+The runner temporarily applies each case's Chinese or English UI/card locale
+through the same settings API used by the product, then restores the user's
+original locale preferences in a `finally` block. The resulting diagnostics
+remain in `test_results`; they are never inserted into the visible answer.
 
 ## Go/No-Go
 

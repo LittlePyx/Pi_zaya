@@ -189,10 +189,15 @@ Research QA dry run:
 python tools\research_qa\run_research_qa_eval.py --dry-run
 ```
 
-The shared suite currently contains 30 natural paper questions. Fifteen are
-bound to reviewed Markdown pages and can be checked after conversion or repair:
+The shared fixture currently contains 35 natural paper questions. The
+`full_library_acceptance_v1` release suite selects 29 cases covering all 22
+configured papers, both UI locales, cross-paper synthesis, table/figure/formula
+questions, negative evidence, and System A/System B routing. Twenty fixture
+cases are bound to reviewed Markdown pages and can be checked after conversion
+or repair:
 
 ```powershell
+python tools\research_qa\run_research_qa_eval.py --suite full_library_acceptance_v1 --dry-run
 python tools\research_qa\run_research_qa_eval.py --validate-sources --db-root db
 ```
 

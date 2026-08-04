@@ -10314,6 +10314,69 @@ def test_reading_guide_repair_binds_benefit_and_risk_evidence_to_distinct_claims
     assert "多样场景 [2]。" in repaired
 
 
+def test_reading_guide_repair_splits_rich_dl_risk_from_same_source_number():
+    from api.chat_render import _reading_guide_repair_dl_spi_benefit_marker
+
+    source_path = "dl-spi-review.en.md"
+    benefit = (
+        "Deep learning provides exceptional reconstruction quality and fast "
+        "reconstruction speed."
+    )
+    risk = (
+        "The inherent limitations include reliance on extensive datasets, limited "
+        "interpretability, susceptibility to overfitting, and limited generalization. "
+        "A substantial amount of high-quality data is indispensable for effective "
+        "training and generalization."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "DL-SPI review",
+                "heading_path": "Abstract",
+                "evidence_quote": benefit,
+                "page_start": 1,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "DL-SPI review",
+                "heading_path": "6. Challenges and Outlooks",
+                "evidence_quote": risk,
+                "page_start": 16,
+            },
+        ]
+    }
+    hits = [
+        {
+            "text": benefit,
+            "meta": {"source_path": source_path, "heading_path": "Abstract"},
+        }
+    ]
+    answer = (
+        "Deep learning offers high reconstruction quality and fast reconstruction speed [1]. "
+        "Before deployment, it can rely on extensive training data and still face limited "
+        "interpretability, overfitting, and limited generalization [1]."
+    )
+
+    repaired = _reading_guide_repair_dl_spi_benefit_marker(
+        answer,
+        hits,
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    assert repaired.count("[1]") == 1
+    assert repaired.count("[2]") == 1
+    assert len(hits) == 2
+    assert hits[1]["meta"]["ref_answer_citation_num"] == 2
+    assert hits[1]["meta"]["heading_path"] == "6. Challenges and Outlooks"
+    assert "limited generalization" in hits[1]["text"]
+
+
 def test_reading_guide_repair_combines_adjacent_risks_supported_by_one_evidence_sentence():
     from api.chat_render import (
         _augment_hits_with_system_a_plan_slots,
@@ -12271,9 +12334,13 @@ def test_dl_spi_benefit_risk_repair_keeps_only_two_direct_markers():
         canonical_paths=["dl-spi.en.md"],
     )
 
-    assert repaired.count("[1]") == 2
+    assert repaired.count("[1]") == 1
+    assert repaired.count("[2]") == 1
+    assert len(hits) == 2
+    assert hits[1]["meta"]["ref_answer_citation_num"] == 2
     assert "重建质量和重建速度 [1]。" in repaired
     assert "训练时间长、泛化能力有限" in repaired
+    assert "泛化能力有限，难以适应多样场景 [2]。" in repaired
     assert "固有限制" not in repaired
 
 

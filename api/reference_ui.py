@@ -15,6 +15,7 @@ from typing import Any
 
 from api.reference_card_copy import (
     build_grounded_ref_why_line as _build_grounded_ref_why_line,
+    build_localized_ref_summary_line as _build_localized_ref_summary_line,
     finalize_ref_card_copy as _finalize_ref_card_copy,
     looks_generic_ref_why_line as _card_copy_looks_generic_ref_why_line,
     looks_templated_ref_why_line as _card_copy_looks_templated_ref_why_line,
@@ -3252,7 +3253,23 @@ def _suppress_non_llm_ref_card_copy(
     )
     existing_summary = _normalize_ref_copy_text(str(ui.get("summary_line") or "").strip())
     existing_why = _normalize_ref_copy_text(str(ui.get("why_line") or "").strip())
+    primary_evidence = (
+        ui.get("primary_evidence")
+        if isinstance(ui.get("primary_evidence"), dict)
+        else {}
+    )
+    evidence_seed = " ".join(
+        part
+        for part in (
+            display_name,
+            heading_path,
+            str((primary_evidence or {}).get("snippet") or "").strip(),
+            str((primary_evidence or {}).get("highlight_snippet") or "").strip(),
+        )
+        if part
+    )
     summary_needs_replacement = False
+    localized_summary = ""
     if not _is_llm_ref_summary_generation(str(ui.get("summary_generation") or "")):
         if existing_summary and not _summary_line_needs_polish(
             prompt=prompt,
@@ -3263,20 +3280,29 @@ def _suppress_non_llm_ref_card_copy(
             ui["summary_generation"] = "deterministic_preserved"
         else:
             summary_needs_replacement = True
-            # Build a clean section-grounded summary from the heading path.
+            localized_summary = _build_localized_ref_summary_line(
+                prefer_zh=prefer_zh,
+                evidence_text=evidence_seed,
+            )
             leaf = heading_path.rsplit("/", 1)[-1].strip() if heading_path else ""
-            if prefer_zh:
+            if localized_summary:
+                ui["summary_line"] = localized_summary
+                ui["summary_generation"] = "deterministic_grounded"
+                ui["summary_basis"] = "基于原文证据" if prefer_zh else "Grounded in source evidence"
+            elif prefer_zh:
                 ui["summary_line"] = (
                     f"可查看章节：{leaf}" if leaf
                     else f"该文献保留了可核对的章节线索。"
                 )
+                ui["summary_generation"] = "deterministic_heading_grounded"
+                ui["summary_basis"] = "基于章节定位"
             else:
                 ui["summary_line"] = (
                     f"Check section: {leaf}." if leaf
                     else "This paper has section evidence to inspect."
                 )
-            ui["summary_generation"] = "deterministic_heading_grounded"
-            ui["summary_basis"] = "基于章节定位" if prefer_zh else "Grounded in section heading"
+                ui["summary_generation"] = "deterministic_heading_grounded"
+                ui["summary_basis"] = "Grounded in section heading"
     if not _is_llm_ref_why_generation(str(ui.get("why_generation") or "")):
         if existing_why and not _why_line_needs_polish(
             prompt=prompt,
@@ -3288,20 +3314,33 @@ def _suppress_non_llm_ref_card_copy(
             ui["why_generation"] = "deterministic_preserved"
         else:
             leaf = heading_path.rsplit("/", 1)[-1].strip() if heading_path else heading_path
-            if prefer_zh:
+            grounded_why = _build_grounded_ref_why_line(
+                prefer_zh=prefer_zh,
+                focus_terms=_refs_prompt_focus_terms(prompt),
+                heading_path=heading_path,
+                summary_line=str(ui.get("summary_line") or localized_summary),
+                action=_shared_prompt_reference_focus_action(prompt),
+            )
+            if grounded_why:
+                ui["why_line"] = grounded_why
+                ui["why_generation"] = "deterministic_grounded"
+                ui["why_basis"] = "基于原文证据" if prefer_zh else "Grounded in source evidence"
+            elif prefer_zh:
                 ui["why_line"] = (
                     f"可用来核对“{leaf}”这一节里的证据。"
                     if leaf
                     else "可用来核对这篇论文里的原文证据。"
                 )
+                ui["why_generation"] = "deterministic_heading_grounded"
+                ui["why_basis"] = "基于章节定位"
             else:
                 ui["why_line"] = (
                     f"Use section \"{leaf}\" to inspect the source evidence."
                     if leaf
                     else "Use this paper card to inspect the source evidence."
                 )
-            ui["why_generation"] = "deterministic_heading_grounded"
-            ui["why_basis"] = "基于章节定位" if prefer_zh else "Grounded in section heading"
+                ui["why_generation"] = "deterministic_heading_grounded"
+                ui["why_basis"] = "Grounded in section heading"
     return ui
 
 
@@ -5536,6 +5575,27 @@ def _select_prompt_contract_primary_ref_evidence(
     terms: tuple[str, ...] = ()
     required_patterns: tuple[str, ...] = ()
     if (
+        re.search(r"(?i)\bSCINeRF\b", prompt_text)
+        and re.search(
+            r"(?i)forward|formula|equation|mask|noise|differentiab|"
+            r"前向|公式|方程|掩模|噪声|可微",
+            prompt_text,
+        )
+    ):
+        contract_name = "scinerf_forward_model"
+        terms = (
+            "captured compressed image",
+            "element-wise multiplication",
+            "measurement noise",
+            "differentiable with respect to NeRF and the poses",
+        )
+        required_patterns = (
+            r"captured\s+compressed\s+image",
+            r"element-wise\s+multiplication",
+            r"measurement\s+noise",
+            r"differentiable\s+with\s+respect\s+to\s+NeRF\s+and\s+the\s+poses",
+        )
+    elif (
         re.search(r"(?i)\bCASSI\b|dual[- ]disperser|双色散", prompt_text)
         and re.search(r"(?i)aperture|孔径|色散", prompt_text)
     ):
@@ -5612,13 +5672,38 @@ def _select_prompt_contract_primary_ref_evidence(
             ):
                 continue
             block_text = str(block.get("text") or block.get("raw_text") or "").strip()
+            contract_block = block
+            if contract_name == "scinerf_forward_model" and block_text:
+                # The converted source keeps the equation's variable definitions
+                # and its differentiability statement as adjacent paragraphs in
+                # the same section.  Treat that local span as one evidence unit so
+                # the reference card lands on the exact mechanism instead of the
+                # more generic abstract citation from the same paper.
+                adjacent_texts = [block_text]
+                for nearby in block_rows[block_idx + 1 : block_idx + 4]:
+                    if not isinstance(nearby, dict):
+                        continue
+                    nearby_heading = str(nearby.get("heading_path") or "").strip()
+                    if nearby_heading and heading and nearby_heading != heading:
+                        break
+                    nearby_kind = str(nearby.get("kind") or "").strip().lower()
+                    if nearby_kind in {"heading", "code"}:
+                        continue
+                    nearby_text = str(nearby.get("text") or nearby.get("raw_text") or "").strip()
+                    if nearby_text:
+                        adjacent_texts.append(nearby_text)
+                block_text = " ".join(adjacent_texts).strip()
+                if len(adjacent_texts) > 1:
+                    contract_block = dict(block)
+                    contract_block["text"] = block_text
+                    contract_block["raw_text"] = block_text
             if len(block_text) < 30 or not all(
                 re.search(pattern, block_text, flags=re.IGNORECASE)
                 for pattern in required_patterns
             ):
                 continue
             primary = _source_block_to_answer_primary_evidence(
-                block=block,
+                block=contract_block,
                 prompt=prompt_text,
                 source_path=source_path,
                 display_name=display_name,

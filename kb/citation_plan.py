@@ -51,7 +51,10 @@ _COMPARE_INTENT_RE = re.compile(
     r"(?i)(对比|比较|区别|差异|哪个更|优缺点|"
     r"(?:分别|各自).{0,30}(?:什么|哪些|如何|怎样|决定|并行|作用|机制)|"
     r"同一(?:层面|类型|维度)|(?:搭配|一起)(?:读|阅读)|"
-    r"trade-?off|versus|vs\.?|compare|comparison|difference|respectively)"
+    r"trade-?off|versus|vs\.?|compare|comparison|difference|respectively|"
+    r"\bboth\b.{0,160}\beach(?:\s+method)?\b|"
+    r"(?:benefits?|advantages?|improvements?).{0,120}(?:risks?|limitations?|drawbacks?|challenges?)|"
+    r"(?:risks?|limitations?|drawbacks?|challenges?).{0,120}(?:benefits?|advantages?|improvements?))"
 )
 _METHOD_INTENT_RE = re.compile(
     r"(?i)(怎么做|如何做|如何实现|流程|步骤|训练|公式|算法|方法|(?:技术|研究|方法)路线|"
@@ -300,12 +303,21 @@ def _prompt_aligned_source_slot(
         )
         and re.search(r"(?i)Geiger|breakdown|quench|盖革|击穿|淬灭", ranking_surface)
     )
+    scinerf_formula_hint = bool(
+        re.search(r"(?i)\bSCINeRF\b", f"{source_path} {ranking_surface}")
+        and re.search(
+            r"(?i)\b(?:formula|equation|forward\s+model|image\s+formation)\b|"
+            r"公式|前向|成像模型",
+            ranking_surface,
+        )
+    )
     if (
         len(query_tokens) < 3
         and not degradation_chain_hint
         and not unfolding_module_hint
         and not table_detail_hint
         and not spad_quenching_hint
+        and not scinerf_formula_hint
     ) or not source_path:
         return out
     if table_detail_hint:
@@ -816,6 +828,59 @@ def _prompt_aligned_source_slot(
             best_heading = str(encoding_rows[0][0] or best_heading)
             best_page = int(encoding_rows[0][2] or best_page or 0)
 
+    if scinerf_formula_hint:
+        formula_rows = [
+            row
+            for row in records
+            if re.search(
+                r"(?:^|\s/\s)3\.2\.?\s+Image Formation Model of Video SCI$",
+                str(row[0] or ""),
+                flags=re.I,
+            )
+        ]
+        equation_row = next(
+            (
+                row
+                for row in formula_rows
+                if re.search(r"\\mathbf\{Y\}\s*=", str(row[1] or ""))
+                and re.search(r"\\odot", str(row[1] or ""))
+                and re.search(r"\\mathbf\{Z\}", str(row[1] or ""))
+            ),
+            None,
+        )
+        role_row = next(
+            (
+                row
+                for row in formula_rows
+                if "captured compressed image" in str(row[1] or "").lower()
+                and "element-wise multiplication" in str(row[1] or "").lower()
+                and "measurement noise" in str(row[1] or "").lower()
+            ),
+            None,
+        )
+        training_row = next(
+            (
+                row
+                for row in formula_rows
+                if "synthesize the compressed image" in str(row[1] or "").lower()
+                and "differentiable with respect to nerf and the poses"
+                in str(row[1] or "").lower()
+            ),
+            None,
+        )
+        if equation_row and role_row and training_row:
+            evidence = _compact_text(
+                " ".join(
+                    dict.fromkeys(
+                        str(row[1] or "").strip()
+                        for row in (equation_row, role_row, training_row)
+                    )
+                ),
+                max_len=1400,
+            )
+            best_heading = str(role_row[0] or best_heading)
+            best_page = int(role_row[2] or equation_row[2] or best_page or 0)
+
     # A process-chain question needs the enumerated stages, while a nearby
     # abstract often wins ordinary token overlap by repeating broad words such
     # as "degradation", "noise" and "reconstruction".  When the source also
@@ -1000,6 +1065,46 @@ def _deep_learning_spi_abstract_evidence(source_path: str) -> str:
 def _deep_learning_spi_risk_evidence(source_path: str) -> tuple[str, str, int]:
     """Return the paper's direct training/generalization limitation statement."""
 
+    rich_matches = [
+        (heading, sentence, page_num)
+        for heading, sentence, page_num in _source_sentence_records(source_path)
+        if "reliance on extensive datasets" in str(sentence or "").lower()
+        and "limited interpretability" in str(sentence or "").lower()
+        and "overfitting" in str(sentence or "").lower()
+        and "limited generalization" in str(sentence or "").lower()
+    ]
+    if rich_matches:
+        heading, sentence, page_num = min(
+            rich_matches,
+            key=lambda item: len(str(item[1] or "")),
+        )
+        training_matches = [
+            candidate
+            for candidate_heading, candidate, candidate_page in _source_sentence_records(
+                source_path
+            )
+            if candidate_heading == heading
+            and candidate_page == page_num
+            and "high-quality data" in str(candidate or "").lower()
+            and "effective training and generalization"
+            in str(candidate or "").lower()
+        ]
+        training_sentence = min(
+            training_matches,
+            key=lambda value: len(str(value or "")),
+            default="",
+        )
+        evidence = " ".join(
+            dict.fromkeys(
+                part
+                for part in (
+                    str(sentence or "").strip(),
+                    str(training_sentence or "").strip(),
+                )
+                if part
+            )
+        )
+        return _compact_text(evidence, max_len=900), heading, page_num
     for heading, sentence, page_num in _source_sentence_records(source_path):
         low = str(sentence or "").lower()
         if (
@@ -1470,8 +1575,14 @@ def _system_a_slots(
     slots: list[dict[str, Any]] = []
     seen: set[str] = set()
     exact_evidence_slots: dict[tuple[str, str], int] = {}
+    candidate_alignment_scores: dict[int, int] = {}
 
-    def add_slot(raw: Mapping[str, Any], *, hit_num: int = 0) -> None:
+    def add_slot(
+        raw: Mapping[str, Any],
+        *,
+        hit_num: int = 0,
+        hit_alignment_score: int = 0,
+    ) -> None:
         source_path = str(raw.get("source_path") or "").strip()
         heading = _first_text(raw, "heading_path", "heading", "ref_best_heading_path", max_len=180)
         page_override = 0
@@ -1528,12 +1639,22 @@ def _system_a_slots(
         if existing_exact_index is not None:
             # Support slots do not carry an answer-hit number. When the same
             # exact passage later arrives through retrieval, keep one evidence
-            # obligation and bind it to the first valid original hit number.
+            # obligation and bind it to the original hit that best overlaps the
+            # promoted passage. Source-level alignment can promote every hit
+            # from one paper to the same exact section; taking the first such
+            # hit used to bind an equation to the paper Abstract.
             existing = slots[existing_exact_index]
-            if int(hit_num or 0) > 0 and not _positive_ints(
-                existing.get("candidate_hits"), limit=1
+            current_score = int(
+                candidate_alignment_scores.get(existing_exact_index) or 0
+            )
+            if int(hit_num or 0) > 0 and (
+                not _positive_ints(existing.get("candidate_hits"), limit=1)
+                or int(hit_alignment_score or 0) > current_score
             ):
                 existing["candidate_hits"] = [int(hit_num)]
+                candidate_alignment_scores[existing_exact_index] = int(
+                    hit_alignment_score or 0
+                )
             return
         identity = "|".join([source_path.lower(), heading.lower(), snippet[:120].lower(), str(hit_num)])
         if not source_path or not snippet or identity in seen:
@@ -1541,6 +1662,8 @@ def _system_a_slots(
         seen.add(identity)
         exact_evidence_slots[exact_evidence_key] = len(slots)
         candidate_hits = [int(hit_num)] if int(hit_num or 0) > 0 else []
+        if candidate_hits:
+            candidate_alignment_scores[len(slots)] = int(hit_alignment_score or 0)
         page_start = page_override or _nonnegative_int(raw.get("page_start"))
         page_end = page_override or _nonnegative_int(raw.get("page_end"), default=page_start)
         slots.append(
@@ -1692,12 +1815,39 @@ def _system_a_slots(
                 or meta.get("strict_locate")
             ),
         }
+        original_hit_evidence = _first_text(
+            raw,
+            "evidence_quote",
+            "text",
+            max_len=1400,
+        )
         raw = _prompt_aligned_source_slot(
             raw,
             ranking_texts=ranking_texts,
             prefer_source_summary=prefer_source_summary,
         )
-        add_slot(raw, hit_num=idx)
+        aligned_hit_evidence = _first_text(
+            raw,
+            "evidence_quote",
+            "text",
+            max_len=1400,
+        )
+        alignment_score = len(
+            evidence_alignment_tokens(original_hit_evidence)
+            & evidence_alignment_tokens(aligned_hit_evidence)
+        )
+        if (
+            original_hit_evidence
+            and aligned_hit_evidence
+            and re.sub(r"\s+", " ", original_hit_evidence).strip().lower()
+            == re.sub(r"\s+", " ", aligned_hit_evidence).strip().lower()
+        ):
+            alignment_score += 1000
+        add_slot(
+            raw,
+            hit_num=idx,
+            hit_alignment_score=alignment_score,
+        )
         if len(slots) >= max(1, int(max_items)):
             break
     return slots
@@ -2358,15 +2508,32 @@ def build_citation_plan(
         # forcing every slot back to the abstract collapses those facets.
         prefer_source_summary=bool(intent == "comparison" and len(source_focus_keys) >= 2),
     )
+    dl_strength_source_keys = {
+        source_path
+        for source_path in source_focus_keys
+        if re.search(
+            r"(?i)advances[-_\s]+and[-_\s]+challenges.*"
+            r"single[-_\s\u2010-\u2015]*pixel.*deep[-_\s]+learning",
+            source_path,
+        )
+    }
     single_paper_dl_strength_limits = bool(
         intent == "comparison"
-        and len(source_focus_keys) == 1
+        and len(dl_strength_source_keys) == 1
         and re.search(r"(?i)deep\s+learning|\u6df1\u5ea6\u5b66\u4e60", str(prompt or ""))
-        and re.search(r"(?i)benefits?|advantages?|\u597d\u5904|\u4f18\u52bf|\u6536\u76ca", str(prompt or ""))
-        and re.search(r"(?i)risks?|limits?|challenges?|\u5751|\u98ce\u9669|\u5c40\u9650|\u95ee\u9898", str(prompt or ""))
+        and re.search(
+            r"(?i)benefits?|advantages?|improvements?|"
+            r"\u597d\u5904|\u4f18\u52bf|\u6536\u76ca",
+            str(prompt or ""),
+        )
+        and re.search(
+            r"(?i)risks?|limits?|limitations?|drawbacks?|challenges?|"
+            r"\u5751|\u98ce\u9669|\u5c40\u9650|\u95ee\u9898",
+            str(prompt or ""),
+        )
     )
     if single_paper_dl_strength_limits:
-        source_path = next(iter(source_focus_keys), "")
+        source_path = next(iter(dl_strength_source_keys), "")
         # Recover the original path casing for filesystem access.
         source_path = next(
             (

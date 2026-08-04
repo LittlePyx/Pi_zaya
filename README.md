@@ -406,6 +406,7 @@ python tools\research_qa\review_research_agent_samples.py merge --samples test_r
 python tools\research_qa\run_agent_trace_eval.py --real-samples test_results\research_agent_answer_samples.jsonl --json-out test_results\agent_trace_real_replay_eval.json
 python tools\research_qa\run_reviewed_replay_eval.py
 python tools\research_qa\run_research_qa_eval.py --dry-run
+python tools\research_qa\run_research_qa_eval.py --suite full_library_acceptance_v1 --dry-run
 python tools\research_qa\run_research_qa_eval.py --validate-sources --db-root db
 python tools\converter_quality\run_converter_quality_eval.py --dry-run
 
