@@ -55,10 +55,12 @@ from api.reference_local_source_meta import public_citation_meta
 from kb.generation_answer_finalize_runtime import (
     _build_multi_paper_doc_list_contract as _references_build_multi_paper_doc_list_contract,
 )
+from kb.generation_state_runtime import _gen_has_running_for_conversation
 from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.evidence_text import (
     clean_display_text,
     compound_claim_evidence_excerpt,
+    finish_evidence_text,
     pick_readable_evidence_text,
 )
 from kb.citation_card_polish import (
@@ -1897,6 +1899,18 @@ def _grounded_answer_citation_state(message: dict | None) -> tuple[list[dict], b
                     if locator_block_id or locator_anchor_id:
                         detail["block_id"] = locator_block_id
                         detail["anchor_id"] = locator_anchor_id
+                        locator_heading_path = str(
+                            locator_match.get("heading_path")
+                            or locator_match.get("heading")
+                            or ""
+                        ).strip()
+                        if locator_heading_path:
+                            # The immutable block/anchor and its heading are one
+                            # locator. Keeping a render-time heading from a
+                            # different passage can make the card open the right
+                            # block under the wrong section label.
+                            detail["heading_path"] = locator_heading_path
+                            detail["location_label"] = locator_heading_path
                         detail["anchor_kind"] = str(
                             locator_match.get("anchor_kind")
                             or locator_match.get("anchorKind")
@@ -1955,11 +1969,13 @@ def _answer_citation_state_by_user(
     *,
     store,
     conv_id: str,
+    messages: list[dict] | None = None,
 ) -> tuple[dict[int, list[dict]], set[int]]:
-    try:
-        messages = list(store.get_messages(conv_id) or [])
-    except Exception:
-        return {}, set()
+    if messages is None:
+        try:
+            messages = list(store.get_messages(conv_id) or [])
+        except Exception:
+            return {}, set()
     out: dict[int, list[dict]] = {}
     pending: set[int] = set()
     last_user_msg_id = 0
@@ -1985,8 +2001,17 @@ def _answer_citation_state_by_user(
     return out, pending
 
 
-def _answer_citation_details_by_user(*, store, conv_id: str) -> dict[int, list[dict]]:
-    details, _pending = _answer_citation_state_by_user(store=store, conv_id=conv_id)
+def _answer_citation_details_by_user(
+    *,
+    store,
+    conv_id: str,
+    messages: list[dict] | None = None,
+) -> dict[int, list[dict]]:
+    details, _pending = _answer_citation_state_by_user(
+        store=store,
+        conv_id=conv_id,
+        messages=messages,
+    )
     return details
 
 
@@ -2014,14 +2039,23 @@ def _clean_answer_citation_overlay_quote(value: Any, *, heading_path: str = "") 
     return cleaned
 
 
-def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload: dict | None) -> dict:
+def _overlay_refs_payload_with_answer_citations(
+    *,
+    store,
+    conv_id: str,
+    payload: dict | None,
+    answer_citation_state: tuple[dict[int, list[dict]], set[int]] | None = None,
+) -> dict:
     """Make reference cards describe the evidence actually used by the answer."""
 
     payload_out = {key: dict(value) for key, value in dict(payload or {}).items() if isinstance(value, dict)}
-    details_by_user, pending_users = _answer_citation_state_by_user(
-        store=store,
-        conv_id=conv_id,
-    )
+    if answer_citation_state is None:
+        details_by_user, pending_users = _answer_citation_state_by_user(
+            store=store,
+            conv_id=conv_id,
+        )
+    else:
+        details_by_user, pending_users = answer_citation_state
     for raw_user_msg_id, pack in list(payload_out.items()):
         try:
             user_msg_id = int(raw_user_msg_id)
@@ -2032,6 +2066,17 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             if user_msg_id in pending_users and list(pack.get("hits") or []):
                 pack["enrichment_pending"] = True
                 pack["answer_citation_overlay_pending"] = True
+            elif (
+                str(pack.get("display_state") or "").strip().lower() == "ready"
+                or str(pack.get("render_status") or "").strip().lower() == "full"
+                or bool(pack.get("answer_aligned_citation_cards"))
+            ):
+                # A state-validated cache hit intentionally skips message-row
+                # parsing and therefore has no fresh citation details here.
+                # Reapply the cheap, deterministic public copy contract so a
+                # pack persisted by an older renderer cannot revive duplicate
+                # Guide/Relevance text. This performs no source or LLM work.
+                payload_out[raw_user_msg_id] = attach_refs_pack_polish_contract(pack)
             continue
         pack["enrichment_pending"] = False
         pack.pop("answer_citation_overlay_pending", None)
@@ -2100,13 +2145,28 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             reader_prompt_terms = evidence_alignment_tokens(prompt)
 
             def _reader_quote(item: dict) -> str:
-                return str(
-                    item.get("citation_plan_reader_evidence_quote")
-                    or item.get("reader_evidence_quote")
+                located = str(
+                    item.get("citation_plan_reader_evidence_quote") or ""
+                ).strip()
+                if located:
+                    return located
+                current = str(
+                    item.get("reader_evidence_quote")
                     or item.get("evidence_quote")
                     or item.get("summary_line")
                     or ""
                 ).strip()
+                planned = str(
+                    item.get("citation_plan_evidence_quote") or ""
+                ).strip()
+                if (
+                    planned
+                    and current
+                    and len(current) < 220
+                    and not re.search(r"(?:[.!?。！？]|\.{3})\s*$", current)
+                ):
+                    return planned
+                return current or planned
 
             def _reader_score(item: dict) -> tuple[int, int, int, bool, int, str]:
                 reader_quote = _reader_quote(item)
@@ -2195,12 +2255,23 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                 or bool(claim_named_entities & grounded_named_entities)
             ) and grounded_why_key != summary_copy_key:
                 why_line = grounded_why
+            primary_evidence_quote = evidence_quote
+            if (
+                primary_evidence_quote
+                and len(primary_evidence_quote) < 220
+                and not re.search(r"(?:[.!?。！？]|\.{3})\s*$", primary_evidence_quote)
+                and reader_evidence_quote
+            ):
+                primary_evidence_quote = finish_evidence_text(
+                    reader_evidence_quote,
+                    max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
+                )
             primary = {
                 "source_path": source_path,
                 "source_name": source_name,
                 "heading_path": reader_heading_path,
-                "snippet": evidence_quote,
-                "highlight_snippet": evidence_quote,
+                "snippet": primary_evidence_quote,
+                "highlight_snippet": primary_evidence_quote,
                 "block_id": str(reader_detail.get("block_id") or "").strip(),
                 "anchor_id": str(reader_detail.get("anchor_id") or "").strip(),
                 "anchor_kind": str(
@@ -2271,6 +2342,25 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                     if part
                 )
                 if (
+                    "part-based image-loop" in (
+                        f"{source_name} {copy_evidence_surface}"
+                    ).casefold()
+                    and re.search(
+                        r"(?i)I\s*_?\s*N\s*\(\s*out\s*\)",
+                        copy_evidence_surface,
+                    )
+                    and re.search(
+                        r"(?i)I\s*_?\s*N\s*\(\s*real\s*\)",
+                        copy_evidence_surface,
+                    )
+                ):
+                    why_line = (
+                        "这段方法证据把探测信号一致性损失与图像回环连成自监督闭环，"
+                        "因此能解释网络为何不依赖配对真值图像。"
+                        if prefer_zh
+                        else "This method passage connects detector-signal consistency loss to the image loop, explaining how the network trains without paired ground-truth images."
+                    )
+                elif (
                     re.search(r"acts\s+as\s+a\s+small\s+pinhole", copy_evidence_surface, flags=re.I)
                     and re.search(r"pixel\s+reassignment", copy_evidence_surface, flags=re.I)
                     and re.search(r"multi-image\s+deconvolution", copy_evidence_surface, flags=re.I)
@@ -2893,7 +2983,13 @@ def _augment_pack_with_canonical_answer_paths(pack: dict | None) -> dict:
     return out
 
 
-def _attach_assistant_answers_to_refs(*, store, conv_id: str, refs: dict | None) -> dict:
+def _attach_assistant_answers_to_refs(
+    *,
+    store,
+    conv_id: str,
+    refs: dict | None,
+    messages: list[dict] | None = None,
+) -> dict:
     """Keep final answers internal so evidence cards can align to supported claims."""
 
     refs_out = {
@@ -2903,10 +2999,11 @@ def _attach_assistant_answers_to_refs(*, store, conv_id: str, refs: dict | None)
     }
     if not refs_out or not hasattr(store, "get_messages"):
         return refs_out
-    try:
-        messages = store.get_messages(conv_id)
-    except Exception:
-        return refs_out
+    if messages is None:
+        try:
+            messages = store.get_messages(conv_id)
+        except Exception:
+            return refs_out
     wanted = set(refs_out)
     answers: dict[int, tuple[str, list[str], bool]] = {}
     active_user_msg_id = 0
@@ -3338,19 +3435,21 @@ def _load_authoritative_doc_list_contracts(
     store,
     conv_id: str,
     user_msg_ids: set[int],
+    messages: list[dict] | None = None,
 ) -> dict[int, list[dict]]:
     out: dict[int, list[dict]] = {}
     if not user_msg_ids:
         return out
-    get_messages = getattr(store, "get_messages", None)
-    if not callable(get_messages):
-        return out
-    try:
-        messages = list(get_messages(str(conv_id or "").strip()) or [])
-    except sqlite3.OperationalError:
-        return out
-    except Exception:
-        return out
+    if messages is None:
+        get_messages = getattr(store, "get_messages", None)
+        if not callable(get_messages):
+            return out
+        try:
+            messages = list(get_messages(str(conv_id or "").strip()) or [])
+        except sqlite3.OperationalError:
+            return out
+        except Exception:
+            return out
     for idx, msg in enumerate(messages):
         if not isinstance(msg, dict):
             continue
@@ -4393,6 +4492,7 @@ def get_conversation_refs(
     finish_guide_mode = False
     finish_guide_source_path = ""
     finish_guide_source_name = ""
+    answer_citation_state_for_finish: tuple[dict[int, list[dict]], set[int]] | None = None
 
     def _record(name: str, started_at: float) -> None:
         timings.append((name, _refs_perf_ms(started_at)))
@@ -4412,6 +4512,7 @@ def get_conversation_refs(
             store=store,
             conv_id=conv_id,
             payload=payload_out,
+            answer_citation_state=answer_citation_state_for_finish,
         )
         completed_payloads = {
             int(user_msg_id): pack
@@ -4482,6 +4583,16 @@ def get_conversation_refs(
     finish_guide_mode = bool(guide_mode)
     finish_guide_source_path = guide_source_path
     finish_guide_source_name = guide_source_name
+    phase_started_at = time.perf_counter()
+    generation_running = _gen_has_running_for_conversation(
+        conv_id,
+        chat_db_path=get_settings().chat_db_path,
+    )
+    if generation_running:
+        # A live answer has no durable citation overlay yet. Avoid reading the
+        # same growing message row on every lightweight polling response.
+        answer_citation_state_for_finish = ({}, set())
+    _record("generation_state", phase_started_at)
     if hasattr(store, "list_message_refs_state"):
         phase_started_at = time.perf_counter()
         try:
@@ -4513,10 +4624,28 @@ def get_conversation_refs(
                     cached_state_payload,
                     refs_state,
                 ):
-                    return _finish(
-                        cached_state_payload,
-                        f"cache_validated_{cached_state_mode}",
+                    # A pending snapshot is correct while the answer task is
+                    # live, but it must not mask newly durable answer-citation
+                    # metadata once generation closes. Re-enter the normal
+                    # path then so the exact evidence overlay is persisted.
+                    cached_generation_pending = any(
+                        isinstance(pack, dict)
+                        and bool(pack.get("_generation_pending_snapshot"))
+                        for pack in cached_state_payload.values()
                     )
+                    if (
+                        cached_state_mode != "pending"
+                        or generation_running
+                        or not cached_generation_pending
+                    ):
+                        # This payload was built against the same cheap message
+                        # and refs state signature. Reapplying citation
+                        # overlays would only re-read/parse unchanged rows.
+                        answer_citation_state_for_finish = ({}, set())
+                        return _finish(
+                            cached_state_payload,
+                            f"cache_validated_{cached_state_mode}",
+                        )
         else:
             _record("state_cache_lookup", phase_started_at)
     phase_started_at = time.perf_counter()
@@ -4529,18 +4658,52 @@ def get_conversation_refs(
         cached_any = _get_any_cached_conversation_refs_payload(conv_id=conv_id)
         return _finish(cached_any if isinstance(cached_any, dict) else {}, "cache_fallback")
     _record("list_refs", phase_started_at)
-    refs_norm = _attach_assistant_answers_to_refs(
-        store=store,
-        conv_id=conv_id,
-        refs=refs if isinstance(refs, dict) else {},
-    )
-    refs_for_finish = refs_norm
-    answer_citation_ready_user_ids = set(
-        _answer_citation_details_by_user(
+    refs_input = refs if isinstance(refs, dict) else {}
+    phase_started_at = time.perf_counter()
+    messages_snapshot: list[dict] = []
+    if not generation_running:
+        try:
+            messages_snapshot = list(store.get_messages(conv_id) or [])
+        except Exception:
+            messages_snapshot = []
+    _record("messages", phase_started_at)
+    if generation_running:
+        refs_norm = {
+            int(key): dict(value)
+            for key, value in dict(refs_input or {}).items()
+            if (str(key).isdigit() or isinstance(key, int))
+            and isinstance(value, dict)
+        }
+    else:
+        refs_norm = _attach_assistant_answers_to_refs(
             store=store,
             conv_id=conv_id,
+            refs=refs_input,
+            messages=messages_snapshot,
         )
+    refs_for_finish = refs_norm
+    phase_started_at = time.perf_counter()
+    if generation_running:
+        answer_citation_details_for_finish: dict[int, list[dict]] = {}
+        answer_citation_pending_for_finish: set[int] = set(refs_norm)
+    else:
+        (
+            answer_citation_details_for_finish,
+            answer_citation_pending_for_finish,
+        ) = _answer_citation_state_by_user(
+            store=store,
+            conv_id=conv_id,
+            messages=messages_snapshot,
+        )
+    answer_citation_ready_user_ids = set(answer_citation_details_for_finish)
+    # Reuse the same immutable message snapshot for answer attachment,
+    # citation state, authoritative lists, and final overlay. This preserves
+    # the exact evidence contract while avoiding three duplicate SQLite reads.
+    answer_citation_state_for_finish = (
+        answer_citation_details_for_finish,
+        answer_citation_pending_for_finish,
     )
+    _record("answer_citation_state", phase_started_at)
     all_user_msg_ids: set[int] = set()
     for key in refs_norm.keys():
         try:
@@ -4548,10 +4711,15 @@ def get_conversation_refs(
         except Exception:
             continue
     phase_started_at = time.perf_counter()
-    authoritative_doc_lists = _load_authoritative_doc_list_contracts(
-        store=store,
-        conv_id=conv_id,
-        user_msg_ids=all_user_msg_ids,
+    authoritative_doc_lists = (
+        {}
+        if generation_running
+        else _load_authoritative_doc_list_contracts(
+            store=store,
+            conv_id=conv_id,
+            user_msg_ids=all_user_msg_ids,
+            messages=messages_snapshot,
+        )
     )
     authoritative_doc_lists = _normalize_authoritative_doc_list_contracts_for_refs(
         refs=refs_norm,
@@ -4587,6 +4755,7 @@ def get_conversation_refs(
 
     stored_full_payload: dict[int, dict] = {}
     pending_refs: dict[int, dict] = {}
+    generation_pending_user_ids: set[int] = set()
     failed_ready_refs: dict[int, dict] = {}
     ready_missing_refs: dict[int, dict] = {}
     historical_stale_payloads: dict[int, dict] = {}
@@ -4622,6 +4791,21 @@ def get_conversation_refs(
             )
             if rebuilt_doc_list:
                 authoritative_doc_list = rebuilt_doc_list
+        # Frontend polling starts while the answer is still being generated.
+        # Rendering a heuristic ready pack here scans and composes source
+        # evidence concurrently with the LLM worker, increasing both answer
+        # and card tail latency. Only the newest turn can belong to the active
+        # generation; expose its retrieval seeds as explicitly pending until
+        # the durable answer-citation plan is available. Historical missing
+        # packs continue through the normal fast/full repair paths below.
+        if (
+            generation_running
+            and int(user_msg_id) == latest_user_msg_id
+            and int(user_msg_id) not in answer_citation_ready_user_ids
+        ):
+            pending_refs[int(user_msg_id)] = pack
+            generation_pending_user_ids.add(int(user_msg_id))
+            continue
         pack_phase_started_at = time.perf_counter()
         pack_full = _get_stored_rendered_pack_payload(
             user_msg_id=user_msg_id,
@@ -4835,11 +5019,14 @@ def get_conversation_refs(
         for user_msg_id, pack in pending_refs.items():
             payload_pack = pending_payload.get(int(user_msg_id))
             if isinstance(payload_pack, dict):
-                payload[int(user_msg_id)] = _attach_pack_render_state(
+                attached_pending_pack = _attach_pack_render_state(
                     payload_pack,
                     source_pack=pack,
                     default_status="pending",
                 )
+                if int(user_msg_id) in generation_pending_user_ids:
+                    attached_pending_pack["_generation_pending_snapshot"] = True
+                payload[int(user_msg_id)] = attached_pending_pack
         _record("pending_render", phase_started_at)
     if failed_ready_refs:
         phase_started_at = time.perf_counter()

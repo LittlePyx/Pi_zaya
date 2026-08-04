@@ -50,6 +50,70 @@ def test_targeted_scan_prefers_metric_enumeration_over_numeric_mentions(
     assert hits[0]["meta"]["page_start"] == 10
 
 
+def test_targeted_scan_keeps_late_quantity_and_boundary_sentences(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "heterodyne.en.md"
+    source.write_text(
+        "# Heterodyne method\n\n<!-- kb_page: 10 -->\n\n## Experimental setup\n\n"
+        "A long setup preamble describes mirrors, lenses, polarization, alignment, and the sample. "
+        "The beat frequency is 62,500 Hz. "
+        "The signal was digitized at a sampling rate of 1.25 Ms/s. "
+        "Considering the 48-μs pattern time, three beating cycles last for each pattern and 20 data points were acquired within one cycle. "
+        "For another beat frequency the quality remains stable provided the Nyquist sampling criterion is followed. "
+        "An integer number of beating cycles for each displayed pattern is desired.\n\n"
+        "## Discussion\n\nThe DMD memory limits the reconstructed pixel count.\n",
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source),
+        prompt=(
+            "实验里 62.5 kHz 拍频、1.25 Ms/s 采样和 48 μs 图案周期怎样配合？"
+            "说明更换拍频仍保持质量的条件。"
+        ),
+        db_dir=tmp_path,
+        limit=2,
+    )
+
+    assert hits
+    evidence = hits[0]["text"]
+    assert "62,500 Hz" in evidence
+    assert "20 data points" in evidence
+    assert "Nyquist sampling criterion" in evidence
+    assert "integer number of beating cycles" in evidence
+
+
+def test_targeted_scan_ranks_complete_two_stage_result_over_intro(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sequential.en.md"
+    source.write_text(
+        "# Sequential Compressed Sensing\n\n<!-- kb_page: 1 -->\n\n"
+        "## I. INTRODUCTION\n\nAdaptive designs improve the SNR and focus sensing energy.\n\n"
+        "## II. MAIN RESULT\n\nThe algorithm consists of two stages. The first stage uses log_2 log n steps "
+        "to remove half of the zero components while all non-zero components are retained. "
+        "The remaining set is bounded by n / log n + k. The second stage uses k log n "
+        "additional measurements, so exact support is recovered at much lower SNRs.\n\n"
+        "## References\n\nCompressed sensing references and adaptive sensing references.\n",
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source),
+        prompt=(
+            "Sequential Compressed Sensing 的两阶段筛除过程分别做什么？"
+            "请给出第一阶段、剩余维度、额外测量和低 SNR 优势。"
+        ),
+        db_dir=tmp_path,
+        limit=2,
+    )
+
+    assert hits
+    assert "II. MAIN RESULT" in hits[0]["meta"]["heading_path"]
+    assert "additional measurements" in hits[0]["text"]
+
+
 def test_paper_guide_deepread_heading_prefers_meta_heading_then_markdown_header():
     assert _paper_guide_deepread_heading({"meta": {"heading_path": "Methods > APR"}}) == "Methods > APR"
     assert _paper_guide_deepread_heading({"text": "# Discussion\nFuture work."}) == "Discussion"

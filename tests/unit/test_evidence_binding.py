@@ -869,6 +869,101 @@ def test_english_application_gloss_is_not_treated_as_another_paper_title() -> No
     assert "适用场景" in binding["reason"]
 
 
+def test_instrument_vendor_tuple_is_not_treated_as_another_paper_title() -> None:
+    evidence = (
+        "The beat frequency is 62,500 Hz and the detector signal was digitized "
+        "by a data acquisition card (DAC, USB-6251, National Instrument) with "
+        "a sampling rate of 1.25 Ms/s."
+    )
+    claim = (
+        "Verified source excerpt: the beat frequency is 62,500 Hz. The detector "
+        "signal was digitized by a data acquisition card (DAC, USB-6251, "
+        "National Instrument) with a sampling rate of 1.25 Ms/s."
+    )
+
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Methods / Experimental setup",
+        evidence_quote=evidence,
+        source_name=(
+            "Imaging biological tissue with high-throughput single-pixel "
+            "compressive holography.pdf"
+        ),
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_sph_sampling_conditions_bind_to_english_source_terms() -> None:
+    evidence = (
+        "The quality of the reconstructed signal should not be sensitive to the "
+        "choice of beating frequency, provided the Nyquist sampling criterion was "
+        "followed. An integer number of beating cycles for each displayed pattern "
+        "is also desired for computational convenience."
+    )
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=(
+            "更换拍频时仍保持重建质量需满足奈奎斯特采样准则，"
+            "并使每个显示图案包含整数个拍频周期。"
+        ),
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Methods / Experimental setup",
+        evidence_quote=evidence,
+        source_name="High-throughput single-pixel compressive holography.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_latex_micro_unit_with_converter_comma_keeps_quantitative_binding() -> None:
+    evidence = (
+        "The method achieves a DOF between 2–5 times larger at the "
+        "5 ,\\mu\\mathrm{m} resolution."
+    )
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim="The reported DOF is 2–5 times larger at 5 μm resolution.",
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Discussion",
+        evidence_quote=evidence,
+        source_name="Quantum correlation light-field microscope.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_latex_thin_space_keeps_ordinary_physical_unit() -> None:
+    claim = "The illumination wavelength is 810 nm."
+    evidence = r"The illumination wavelength is $810\,nm$."
+
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={},
+        heading="Experimental Results",
+        evidence_quote=evidence,
+        source_name="QCLFM.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
 def test_spad_physics_informed_binding_explains_training_mechanism() -> None:
     evidence = (
         "We first established a real-world physical noise model of SPAD arrays and "

@@ -1817,6 +1817,57 @@ def test_canonical_citation_marks_matching_plan_hit_before_legacy_scan(
     assert repaired[0]["text"] == existing["text"]
 
 
+def test_canonical_citation_upgrades_stale_locator_on_matching_seed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "sph.en.md"
+    source.write_text("# SPH\n", encoding="utf-8")
+    evidence = "The 62,500 Hz beat and 1.25 Ms/s sampling rate are used."
+    existing = {
+        "text": evidence,
+        "meta": {"source_path": str(source), "ref_answer_citation_num": 1},
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": str(source),
+                "snippet": evidence,
+                "block_id": "blk-stale",
+                "page_start": 2,
+                "strict_locate": True,
+            }
+        },
+    }
+    canonical = {
+        "text": evidence,
+        "meta": {
+            "source_path": str(source),
+            "heading_path": "Methods / Experimental setup",
+            "block_id": "blk-exact",
+            "anchor_id": "p-exact",
+            "page_start": 10,
+        },
+    }
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: [],
+    )
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [existing],
+        canonical_paths=[str(source)],
+        canonical_evidence=[canonical],
+        answer_text="The setup uses 62,500 Hz [1].",
+    )
+    primary = repaired[0]["ui_meta"]["primary_evidence"]
+
+    assert primary["block_id"] == "blk-exact"
+    assert primary["anchor_id"] == "p-exact"
+    assert primary["page_start"] == 10
+
+
 def test_canonical_citation_combines_distinct_blocks_for_one_multi_signal_claim(tmp_path: Path) -> None:
     source = tmp_path / "hatnet.en.md"
     source.write_text(
@@ -4710,7 +4761,7 @@ def test_enrich_messages_rebuilds_matching_empty_cache_after_fast_refs_arrive(
         citation_plan_sig=citation_plan_sig,
         locale="zh",
     )
-    assert empty_cache["schema"] == 54
+    assert empty_cache["schema"] == chat_render._RENDER_CACHE_SCHEMA_VERSION
     assert empty_cache["cache_key"] == cache_key
     assert empty_cache["answer_sig"] == answer_sig
     assert empty_cache["input_ref_sig"] == input_ref_sig
@@ -9658,6 +9709,46 @@ def test_mechanism_marker_targets_sph_beat_frequency_sentence():
     assert "采用外差全息 [1]。" in repaired
 
 
+def test_sph_mechanism_keeps_beat_and_phase_in_one_cited_claim() -> None:
+    from api.chat_render import _reading_guide_repair_mechanism_marker_target
+
+    evidence = (
+        "Instead of actively performing phase shifting, a beat frequency is introduced "
+        "between the signal beam and the reference beam, thereby realizing phase stepping "
+        "naturally in time by exploiting the framework of heterodyne holography."
+    )
+    answer = (
+        "\u8bba\u6587\u91c7\u7528 heterodyne holography\uff1a\u5728\u4fe1\u53f7\u5149\u4e0e\u53c2\u8003\u5149\u4e4b\u95f4\u5f15\u5165 "
+        "beat frequency\uff08\u62cd\u9891\uff09\uff1b\u5bf9\u65f6\u95f4\u4fe1\u53f7\u91c7\u6837\u5c31\u8ba9 phase stepping "
+        "naturally in time\uff08\u76f8\u4f4d\u6b65\u8fdb\uff09\u5b8c\u6210\u3002"
+    )
+    hits = [{"text": evidence, "meta": {"source_path": "sph.en.md"}}]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "sph.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    repaired = _reading_guide_repair_mechanism_marker_target(
+        answer,
+        hits,
+        plan,
+        canonical_paths=["sph.en.md"],
+    )
+    cited_unit = next(
+        unit for unit in re.split(r"[\u3002\uff1b;]", repaired) if "[1]" in unit
+    )
+
+    assert "beat frequency" in cited_unit
+    assert "phase stepping" in cited_unit
+    assert "heterodyne holography" in cited_unit
+
+
 def test_sequential_support_terms_and_marker_are_normalized_from_exact_source():
     from api.chat_render import (
         _reading_guide_normalize_sequential_support_terms,
@@ -13910,6 +14001,94 @@ def test_prompt_aligned_slot_survives_unrelated_same_paper_section_rescue():
     assert resolved["slots"] == original["slots"]
 
 
+def test_precise_prompt_aligned_slot_survives_different_prompt_contract_block():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/SPH/SPH.en.md"
+    exact = (
+        "The 62,500 Hz beat, 1.25 Ms/s sampling rate, and 48 microsecond "
+        "pattern give 20 samples per cycle and three cycles per pattern; "
+        "Nyquist sampling and an integer number of cycles are required."
+    )
+    original = {
+        "source": "citation_plan_builder",
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Methods / Experimental setup",
+                "evidence_quote": exact,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "block_id": "blk-methods",
+                "anchor_id": "p-methods",
+                "page_start": 10,
+            }
+        ],
+    }
+
+    resolved = _citation_plan_with_ref_primary(
+        original,
+        {
+            "primary_evidence": {
+                "source_path": "kb-source/0/SPH/SPH.en.md",
+                "heading_path": "Introduction",
+                "snippet": "A beat frequency realizes phase stepping naturally in time.",
+                "block_id": "blk-introduction",
+                "anchor_id": "p-introduction",
+                "selection_reason": "prompt_contract_block",
+                "strict_locate": True,
+            }
+        },
+    )
+
+    assert resolved["slots"] == original["slots"]
+
+
+def test_answer_surface_cleanup_preserves_sampling_rate_unit_ratio():
+    from api.chat_render import _cleanup_answer_surface_artifacts
+
+    assert (
+        _cleanup_answer_surface_artifacts("The sampling rate is 1.25 Ms/s.")
+        == "The sampling rate is 1.25 Ms/s."
+    )
+
+
+def test_page_aligned_slot_survives_prompt_contract_from_different_page():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/SPH/SPH.en.md"
+    exact = "Experimental setup gives the full sampling budget and conditions."
+    original = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Methods / Experimental setup",
+                "evidence_quote": exact,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "page_start": 10,
+            }
+        ]
+    }
+
+    resolved = _citation_plan_with_ref_primary(
+        original,
+        {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "Introduction",
+                "snippet": "A beat frequency realizes natural phase stepping.",
+                "block_id": "blk-introduction",
+                "page_start": 2,
+                "selection_reason": "prompt_contract_block",
+                "strict_locate": True,
+            }
+        },
+    )
+
+    assert resolved["slots"] == original["slots"]
+
+
 def test_prompt_contract_primary_recovers_public_source_path_from_matching_hit():
     from api.chat_render import _citation_plan_with_ref_primary
 
@@ -15327,6 +15506,120 @@ def test_prompt_aligned_rebind_keeps_same_source_answer_passage_as_alternative(
     assert any(item.get("snippet") == abstract for item in alternatives)
     assert any(item.get("snippet") == mechanism for item in alternatives)
     assert any(item.get("blockId") == "blk-encoding" for item in alternatives)
+
+
+def test_unanchored_prompt_aligned_slot_inherits_matching_canonical_locator() -> None:
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "db/SPH/SPH.en.md"
+    evidence = (
+        "Experimental setup. The beat frequency is 62,500 Hz and the sampling "
+        "rate is 1.25 Ms/s. Three beating cycles last for each pattern, with 20 "
+        "data points per cycle, under Nyquist sampling and an integer cycle count."
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {
+                "source_path": source_path,
+                "ref_answer_citation_num": 1,
+                "page_start": 10,
+            },
+            "ui_meta": {
+                "source_path": source_path,
+                "primary_evidence": {
+                    "source_path": source_path,
+                    "heading_path": "Methods / Principle of SPH",
+                    "snippet": evidence,
+                    "block_id": "blk-sph-setup",
+                    "anchor_id": "p-sph-setup",
+                    "anchor_kind": "paragraph",
+                    "page_start": 10,
+                    "page_end": 10,
+                    "strict_locate": True,
+                },
+            },
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "heading_path": "Methods / Principle of SPH / Experimental setup",
+                "evidence_quote": evidence,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "page_start": 10,
+                "page_end": 10,
+            }
+        ]
+    }
+
+    rebound = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=1,
+        canonical_paths=[source_path],
+        answer_text="The setup uses 62,500 Hz and 1.25 Ms/s [1].",
+    )
+    primary = rebound[0]["ui_meta"]["primary_evidence"]
+
+    assert primary["block_id"] == "blk-sph-setup"
+    assert primary["anchor_id"] == "p-sph-setup"
+    assert primary["strict_locate"] is True
+
+
+def test_unanchored_prompt_aligned_slot_discards_same_text_stale_page_locator() -> None:
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "db/SPH/SPH.en.md"
+    evidence = "Experimental setup gives a 62,500 Hz beat and 1.25 Ms/s sampling rate."
+    hits = [
+        {
+            "text": evidence,
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+            "ui_meta": {
+                "source_path": source_path,
+                "primary_evidence": {
+                    "source_path": source_path,
+                    "heading_path": "Introduction",
+                    "snippet": evidence,
+                    "block_id": "blk-stale-introduction",
+                    "anchor_id": "p-stale-introduction",
+                    "page_start": 2,
+                    "strict_locate": True,
+                },
+            },
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "heading_path": "Methods / Experimental setup",
+                "evidence_quote": evidence,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "page_start": 10,
+                "page_end": 10,
+            }
+        ]
+    }
+
+    rebound = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=1,
+        canonical_paths=[source_path],
+        answer_text="The setup uses 62,500 Hz [1].",
+    )
+    primary = rebound[0]["ui_meta"]["primary_evidence"]
+
+    assert primary.get("block_id") == ""
+    assert primary.get("anchor_id") == ""
+    assert primary["page_start"] == 10
 
 
 def test_unbound_prompt_aligned_slot_does_not_steal_reserved_same_source_occurrence(
@@ -17055,3 +17348,75 @@ def test_microscopy_rebuild_preservation_uses_source_identity_with_compact_quote
         repaired_body=repaired,
         citation_plan=plan,
     ) == repaired
+def test_citation_plan_refiner_keeps_scinerf_synthesis_and_differentiability_bundle() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source_path = "db/SCINeRF/CVPR-2024-SCINeRF.en.md"
+    full_evidence = (
+        "where Y is the captured compressed image, X_i is the virtual image, "
+        "the mask denotes element-wise multiplication, and Z is the measurement noise. "
+        "Given the NeRF representation and the current poses, we render X_i to "
+        "synthesize the compressed image Y. We can see that Y is differentiable "
+        "with respect to NeRF and the poses, which lays the foundation for jointly "
+        "optimizing the scene representation and camera poses."
+    )
+    details = [
+        {
+            "num": 1,
+            # Canonical answer recovery remapped this occurrence after the
+            # plan was built; heading/page identity must still bind it.
+            "answer_hit_num": 2,
+            "citation_route": "system_a",
+            "source_path": source_path,
+            "source_name": "SCINeRF.pdf",
+            "heading_path": "3. Method",
+            "answer_claim": (
+                "The rendered views synthesize the compressed image, and the result "
+                "is differentiable with respect to NeRF parameters and camera poses."
+            ),
+            "summary_line": (
+                "We can see that Y is differentiable with respect to NeRF and the poses."
+            ),
+            "evidence_quote": (
+                "We can see that Y is differentiable with respect to NeRF and the poses."
+            ),
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "SCINeRF.pdf",
+                "heading_path": "3. Method",
+                "evidence_quote": full_evidence,
+                "page_start": 4,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [4],
+                "source_path": source_path,
+                "source_name": "SCINeRF.pdf",
+                "heading_path": "1. Introduction",
+                "evidence_quote": (
+                    "SCINeRF jointly optimizes camera poses and NeRF by comparing "
+                    "a synthesized compressed image with the real measurement."
+                ),
+                "page_start": 2,
+            },
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="en",
+    )
+
+    evidence = str(refined[0].get("evidence_quote") or "")
+    assert "captured compressed image" in evidence
+    assert "measurement noise" in evidence
+    assert "synthesize the compressed image" in evidence
+    assert "differentiable with respect to NeRF and the poses" in evidence
+    assert refined[0]["heading_path"].endswith("3. Method")

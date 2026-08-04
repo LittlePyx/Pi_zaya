@@ -299,6 +299,88 @@ def test_ref_card_locale_contract_builds_relevance_for_compact_fdm_excerpt() -> 
     assert sections["why"]["text"] == ui["why_line"]
 
 
+def test_piln_metadata_guide_replacement_does_not_duplicate_relevance() -> None:
+    evidence = (
+        "The difference between the I_N(out) of the retrieved image and the "
+        "I_N(real) captured by the SPD is used as a loss function to train ILNet. "
+        "The generated 2D image serves as input for the subsequent image-loop iteration."
+    )
+    original_why = (
+        "ILNet 在没有配对真值图像时，通过物理模型与 1D 信号标签形成"
+        "自监督闭环，而不是依赖配对真值图像。"
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": (
+                "Part-based image-loop network for single-pixel imaging.pdf"
+            ),
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": "已核对的原文要点：" + evidence,
+            "why_line": original_why,
+            "primary_evidence": {
+                "snippet": evidence,
+                "highlight_snippet": evidence,
+            },
+        }
+    )
+
+    assert ui["summary_line"] != ui["why_line"]
+    assert "一致性损失" in ui["why_line"]
+    assert "图像回环" in ui["why_line"]
+    sections = {section["id"]: section for section in ui["card_view"]["sections"]}
+    assert sections["summary"]["text"] != sections["why"]["text"]
+
+
+def test_qclfm_card_explains_architecture_tradeoff_in_relevance() -> None:
+    evidence = (
+        "Since each degree of freedom can be measured on separate cameras, one does "
+        "not need to sacrifice position resolution for angular resolution or vice versa."
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "Quantum correlation light-field microscope.pdf",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": "QCLFM 同时保留位置与角度分辨率，避免传统 LFM 的权衡。",
+            "why_line": "",
+            "primary_evidence": {"snippet": evidence, "highlight_snippet": evidence},
+        }
+    )
+
+    assert all(term in ui["why_line"] for term in ("独立相机", "采集架构", "权衡"))
+    assert ui["summary_line"] != ui["why_line"]
+
+
+def test_ref_card_locale_contract_keeps_spi_guide_and_relevance_complementary() -> None:
+    evidence = (
+        "The DMD can project patterns of light onto a scene, termed structured illumination, "
+        "or structure detected image intensities, called structured detection. For the latter, "
+        "the DMD is located in an image plane of the object. The modulation rate of the DMD "
+        "is the acquisition-time bottleneck."
+    )
+    summary = (
+        "同一段原文既区分了 DMD 在照明侧与探测像面的两种配置，"
+        "也明确指出两者共同受 DMD 图案切换速率这一采集瓶颈限制。"
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "Principles and prospects for single-pixel imaging.pdf",
+            "heading_path": "Camera architecture",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": summary,
+            "why_line": "",
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert ui["summary_line"] == summary
+    assert all(term in ui["why_line"] for term in ("DMD", "照明侧", "探测侧", "像面"))
+    assert ui["why_line"] != ui["summary_line"]
+    assert ui["why_generation"] == "deterministic_grounded"
+
+
 def test_ref_card_locale_contract_explains_perovskite_scope_boundary() -> None:
     evidence = (
         "In this work, we demonstrate electrically driven lasing from a dual-cavity "

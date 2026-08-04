@@ -1523,6 +1523,298 @@ def test_piln_method_question_promotes_exact_abstract_definition(tmp_path: Path)
     assert slot["page_start"] == 2
 
 
+def test_piln_physical_loop_question_keeps_method_and_transfer_bundle(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "Part-based image-loop network for single-pixel imaging.en.md"
+    source_path.write_text(
+        "<!-- kb_page: 2 -->\n\n## Abstract\n\n"
+        "The generated image serves as input for the subsequent iteration for continuous incorporation of prior information. "
+        "Signals collected by the single-pixel detector are used as labels. "
+        "The method reconstructs unknown free-space and underwater experiments.\n\n"
+        "## 2.1. Methods\n\n"
+        "The part-based model divides image features into different parts. "
+        "The difference between the $I_N(out)$ image signal and $I_N(real)$ captured by the SPD is used as a loss function. "
+        "The generated image is used as input for the subsequent iterations. "
+        "Providing prior information improves the final image.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source_path),
+            "heading_path": "2.1. Methods",
+            "evidence_quote": "Broad ILNet description.",
+        },
+        ranking_texts=[
+            "ILNet 如何用 part-based 特征、I_N(out) 与 I_N(real) 损失和迭代形成物理闭环，"
+            "并迁移到自由空间和水下？"
+        ],
+    )
+
+    evidence = slot["evidence_quote"]
+    assert "divides image features into different parts" in evidence
+    assert "I_N(out)" in evidence and "I_N(real)" in evidence
+    assert "input for the subsequent iterations" in evidence
+    assert "continuous incorporation of prior information" in evidence
+    assert "unknown free-space and underwater" in evidence
+
+
+def test_prompt_aligned_slot_keeps_daq_channel_budget_not_video_abstract(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "3D single-pixel video.en.md"
+    source_path.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "Four detectors reconstruct real-time 3D video at eight frames per second.\n\n"
+        "<!-- kb_page: 4 -->\n\n## Methods / Custom single-pixel system design\n\n"
+        "The DAQ has a maximum acquisition rate of 250 kHz for all channels. "
+        "As there are four channels employed, the sampling rate for each channel is set to 62.5 kHz. "
+        "Given that each pattern is displayed for 50 μs, there are approximately three samples acquired for each pattern.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source_path),
+            "heading_path": "Abstract",
+            "evidence_quote": "Four detectors reconstruct real-time video.",
+        },
+        ranking_texts=[
+            "3D single-pixel video 的 DAQ 总采样率如何分给四个通道？"
+            "50 μs 显示时间每个图案得到多少样本？"
+        ],
+    )
+
+    assert "Custom single-pixel system design" in slot["heading_path"]
+    assert "250 kHz for all channels" in slot["evidence_quote"]
+    assert "approximately three samples" in slot["evidence_quote"]
+
+
+def test_prompt_aligned_slot_bundles_fdm_detector_boundary(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "Frequency-division-multiplexed single-pixel imaging.en.md"
+    source_path.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "FDM trades signal-to-noise ratio for acquisition speed without altering detector integration time.\n\n"
+        "<!-- kb_page: 3 -->\n\n## 4. DISCUSSION\n\n"
+        "If we assume that the primary source of noise is additive white Gaussian (AWG), the SNR is proportional to the square root of the integration time. "
+        "Detector integration time cannot be reduced without bound. "
+        "All detectors have inherent limits, typically characterized by the 3 dB down point. "
+        "At frequencies greater than f_{3 dB}, the noise increases and it is no longer advantageous to trade off SNR for integration time. "
+        "Our FDM scheme sacrifices some SNR for acquisition speed without lowering the integration time and does not suffer from the same fundamental limitation. "
+        "If noise is not AWG, there may be a characteristic time for optimal SNR. "
+        "FDM decreases acquisition time without deviation from such an optimal integration time.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source_path),
+            "heading_path": "Abstract",
+            "evidence_quote": "FDM is faster.",
+        },
+        ranking_texts=[
+            "FDM 与缩短积分时间在 AWG 下哪里相似，3 dB 边界为何失效，"
+            "非 AWG 的 characteristic time for optimal SNR 有何影响？"
+        ],
+    )
+
+    assert slot["heading_path"].endswith("4. DISCUSSION")
+    assert "square root of the integration time" in slot["evidence_quote"]
+    assert "3 dB down point" in slot["evidence_quote"]
+    assert "noise is not AWG" in slot["evidence_quote"]
+    assert "characteristic time for optimal SNR" in slot["evidence_quote"]
+    assert "without lowering the integration time" in slot["evidence_quote"]
+    assert "without deviation from such an optimal integration time" in slot["evidence_quote"]
+    assert not slot["evidence_quote"].endswith("...")
+
+
+def test_fdm_boundary_prefers_one_complete_anchored_duplicate_block(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "Frequency-division-multiplexed single-pixel imaging.en.md"
+    boundary = (
+        "If we assume that the primary source of noise is additive white Gaussian (AWG), "
+        "the SNR is proportional to the square root of the integration time. "
+        "Detector integration time cannot be reduced without bound. "
+        "All detectors have inherent limits, typically characterized by the 3 dB down point. "
+        "At frequencies greater than f 3 dB it is no longer advantageous to trade off SNR for integration time. "
+        "Our FDM scheme sacrifices SNR without lowering the integration time and avoids that fundamental limitation. "
+        "When noise is not AWG, there may be a characteristic time for optimal SNR. "
+        "FDM decreases acquisition time without deviation from such an optimal integration time."
+    )
+    source_path.write_text(
+        "<!-- kb_page: 3 -->\n\n## 4. DISCUSSION\n\n"
+        "If we assume that the primary source of noise is additive white Gaussian (AWG), "
+        "the SNR is proportional to the square root of the integration time.\n\n"
+        "Detector integration time cannot be reduced without bound. All detectors have inherent limits, "
+        "typically characterized by the 3 dB down point. At frequencies greater than f_{3 dB} it is no longer advantageous. "
+        "Our FDM scheme works without lowering the integration time and avoids that fundamental limitation.\n\n"
+        "When noise is not AWG, there may be a characteristic time for optimal SNR. "
+        "FDM decreases acquisition time without deviation from such an optimal integration time.\n\n"
+        "<!-- kb_page: 4 -->\n\n## 4. DISCUSSION\n\n"
+        + boundary
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = build_citation_plan(
+        prompt="FDM 在 AWG 下的相似处、3 dB 边界和非 AWG 特征时间是什么？",
+        answer_hits=[
+            {
+                "text": boundary,
+                "meta": {
+                    "source_path": str(source_path),
+                    "heading_path": "4. DISCUSSION",
+                    "block_id": "blk-fdm-page-4",
+                    "anchor_id": "p-fdm-page-4",
+                    "page_start": 4,
+                    "page_end": 4,
+                    "paper_guide_targeted_block": True,
+                },
+            }
+        ],
+    )
+
+    slot = plan["slots"][0]
+    assert slot["page_start"] == 4
+    assert slot["block_id"] == "blk-fdm-page-4"
+    assert slot["anchor_id"] == "p-fdm-page-4"
+    assert "characteristic time for optimal SNR" in slot["evidence_quote"]
+
+
+def test_prompt_aligned_slot_bundles_complete_sph_sampling_conditions(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "Imaging biological tissue with high-throughput single-pixel compressive holography.en.md"
+    source_path.write_text(
+        "<!-- kb_page: 10 -->\n\n## Methods / Principle of high-throughput SPH\n\n"
+        "**Experimental setup.** The experimental setup is schematically shown in Fig. 7. "
+        "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 μs. "
+        "The detector signal was digitized with a sampling rate of 1.25 Ms/s. "
+        "Considering the 48-μs refresh time, three beating cycles last for each Hadamard pattern and 20 data points were acquired within one cycle. "
+        "For the same number of data points, signal quality is insensitive to beat frequency provided the Nyquist sampling criterion was followed. "
+        "An integer number of beating cycles for each displayed pattern is also desired.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source_path),
+            "heading_path": "Figure 7",
+            "evidence_quote": "AOMs produce a beating frequency.",
+        },
+        ranking_texts=[
+            "SPH 中 62.5 kHz 拍频、1.25 Ms/s 采样和 48 μs 图案周期怎样配合？"
+        ],
+    )
+
+    evidence = slot["evidence_quote"]
+    assert slot["page_start"] == 10
+    assert slot["heading_path"].endswith("Experimental setup")
+    assert "Experimental setup" in evidence
+    assert "62,500 Hz" in evidence and "1.25 Ms/s" in evidence
+    assert "three beating cycles" in evidence and "20 data points" in evidence
+    assert "Nyquist sampling criterion" in evidence
+    assert "integer number of beating cycles" in evidence
+
+    plan = build_citation_plan(
+        prompt=(
+            "SPH 中 62.5 kHz 拍频、1.25 Ms/s 采样和 48 μs 图案周期怎样配合？"
+        ),
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": str(source_path),
+                    "heading_path": "Methods / Principle of high-throughput SPH",
+                    "block_id": "blk-sph-experiment",
+                    "anchor_id": "p-sph-experiment",
+                    "page_start": 10,
+                    "paper_guide_targeted_block": True,
+                },
+            }
+        ],
+    )
+    assert plan["slots"][0]["block_id"] == "blk-sph-experiment"
+    assert plan["slots"][0]["anchor_id"] == "p-sph-experiment"
+    assert plan["slots"][0]["strict_locate"] is True
+
+
+def test_prompt_aligned_slot_bundles_complete_iism_depth_phase_relation(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "Interferometric Image Scanning Microscopy.en.md"
+    source_path.write_text(
+        "<!-- kb_page: 2 -->\n\n## Results / Principle of interferometric ISM (iISM)\n\n"
+        "In a confocal geometry, the relative phase between reflected and scattered "
+        "electric fields is:\n\n"
+        "$$ \\Delta\\varphi = \\frac{4\\pi}{\\lambda} n z + "
+        "\\varphi_{\\text{Gouy}} \\tag{2} $$\n\n"
+        "with n the refractive index of the medium, z the axial position of the "
+        "scatterer relative to the interface, lambda the illumination wavelength, "
+        "and phi_Gouy the Gouy phase.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source_path),
+            "heading_path": "Abstract",
+            "evidence_quote": "The phase carries depth.",
+        },
+        ranking_texts=[
+            "iISM 的相位为何携带深度？z、n、lambda 与 Gouy phase 分别是什么？"
+        ],
+    )
+
+    evidence = slot["evidence_quote"]
+    assert slot["page_start"] == 2
+    assert "relative phase between reflected and scattered electric fields" in evidence
+    assert "refractive index of the medium" in evidence
+    assert "axial position of the scatterer" in evidence
+    assert "illumination wavelength" in evidence
+    assert "Gouy phase" in evidence
+
+
+def test_prompt_aligned_slot_bundles_sequential_two_stage_main_result(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "Sequentially designed compressed sensing.en.md"
+    source_path.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "Sequential adaptive compressed sensing recovers weaker sparse signals.\n\n"
+        "## II. MAIN RESULT\n\n"
+        "The algorithm consists of two stages. The first stage involves $\\log_2 \\log n$ steps. "
+        "The measurements remove half of the zero components while all the non-zero components are retained. "
+        "The expected number remaining is bounded by $n / \\log n + k$. "
+        "The second stage faces a lower dimensional problem and uses only $k \\log n$ additional measurements. "
+        "The support can be recovered exactly at much lower SNRs than non-adaptive compressed sensing.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source_path),
+            "heading_path": "Abstract",
+            "evidence_quote": "Sequential adaptive compressed sensing recovers weaker sparse signals.",
+        },
+        ranking_texts=[
+            "Sequential Compressed Sensing 的两阶段分别做什么？说明剩余维度、额外测量和 lower SNR。"
+        ],
+    )
+
+    evidence = slot["evidence_quote"]
+    assert slot["heading_path"].endswith("II. MAIN RESULT")
+    assert "two stages" in evidence and "\\log_2 \\log n" in evidence
+    assert "remove half of the zero components" in evidence
+    assert "n / \\log n + k" in evidence
+    assert "k \\log n" in evidence and "additional measurements" in evidence
+    assert "much lower SNRs" in evidence
+
+
 def test_classical_denoising_question_promotes_two_family_taxonomy(tmp_path: Path):
     source_path = tmp_path / "Visual Computing-2019-Brief review of image denoising techniques.en.md"
     source_path.write_text(
@@ -2767,6 +3059,63 @@ def test_prompt_aligned_source_pins_sequential_support_abstract_bundle(tmp_path:
 
     assert slot["evidence_quote"] == exact
     assert slot["heading_path"].endswith("Abstract")
+
+
+def test_prompt_aligned_source_pins_scinerf_abstract_for_scigs_comparison(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "CVPR-2024-SCINeRF.en.md"
+    exact = (
+        "Specifically, we formulate the physical imaging process of SCI as part of "
+        "the training of NeRF, allowing the scene representation to be optimized."
+    )
+    source.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        + exact
+        + "\n\n<!-- kb_page: 5 -->\n\n## 4. Experiments\n\n"
+        "SCINeRF compares GAP-TV, PnP-FFDNet, and EfficientSCI.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {"source_path": str(source), "evidence_quote": "Experimental baselines."},
+        ranking_texts=["What is the difference between SCIGS and SCINeRF?"],
+    )
+
+    assert slot["evidence_quote"] == exact
+    assert slot["heading_path"].endswith("Abstract")
+    assert slot["page_start"] == 1
+
+
+def test_prompt_aligned_source_pins_cassi_dual_disperser_architecture(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / (
+        "OE-2007-Single-shot compressive spectral imaging with a "
+        "dual-disperser architecture.en.md"
+    )
+    exact = (
+        "The primary features of the system design are two dispersive elements, "
+        "arranged in opposition and surrounding a binary-valued aperture code."
+    )
+    source.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        + exact
+        + "\n\n<!-- kb_page: 10 -->\n\n## Figure 8\n\n"
+        "A citrus target is imaged under broadband illumination.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {"source_path": str(source), "evidence_quote": "Figure 8 citrus target."},
+        ranking_texts=[
+            "CASSI \u7684\u53cc\u8272\u6563\u7ed3\u6784\u600e\u4e48\u6446\uff1f\u4e3a\u4ec0\u4e48\u4e2d\u95f4\u662f\u4e8c\u503c\u5b54\u5f84\uff1f"
+        ],
+    )
+
+    assert slot["evidence_quote"] == exact
+    assert slot["heading_path"].endswith("Abstract")
+    assert slot["page_start"] == 1
 
 
 def test_sequential_scope_plan_rebinds_algorithm_hit_to_abstract_hit(

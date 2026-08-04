@@ -1,6 +1,6 @@
 # Research QA Eval Runbook
 
-Updated: 2026-08-04
+Updated: 2026-08-05
 
 ## Purpose
 
@@ -13,8 +13,8 @@ The research QA eval protects the real researcher-facing workflow:
 5. Reference locator card quality, including summary, relevance, polish state, and reader-open evidence.
 6. Citation shelf quality, so saved literature keeps a useful title, source/export identity, summary, and clean visible copy.
 
-The shared fixture is `web/src/testing/researchQaData.json`. It contains 50
-natural research questions. Thirty-five are source-grounded cases whose claim and
+The shared fixture is `web/src/testing/researchQaData.json`. It contains 56
+natural research questions. Forty-one are source-grounded cases whose claim and
 reader-locator contracts are pinned to a page in the current Markdown corpus.
 
 The overlapping `full_library_acceptance_v1` suite is the release baseline. It
@@ -128,6 +128,55 @@ facet. It must keep the same answer terms, document identities, citation routes,
 and reader locators. Incomplete plans continue through normal model generation;
 they must never be made faster by omitting requested evidence or suppressing a
 quality failure.
+
+## 2026-08-05 Tail-Latency Acceptance
+
+The follow-up optimization measures the answer path in phases: first visible
+answer, answer completion, evidence-card completion, UI readiness, and final
+quality validation. During generation the browser no longer polls for evidence
+cards that cannot yet be final. At the terminal state it hydrates the final
+message and evidence cards in parallel. The reference endpoint returns a cheap
+pending snapshot for an active generation and reuses authoritative cached
+snapshots after completion. These scheduling changes do not remove retrieval,
+source checks, card polishing, or claim/evidence validation.
+
+For the comparable 15-question `blind_holdout_v2` run, the serialized baseline
+and accepted implementation were:
+
+| Milestone | Serialized baseline p50 / p95 / max | Accepted p50 / p95 / max |
+|---|---:|---:|
+| First visible answer | 1951 / 3601 / 3701 ms | 1875 / 3702 / 3879 ms |
+| Answer complete | 2711 / 6263 / 7000 ms | 2661 / 7671 / 10598 ms |
+| Evidence cards complete | 4062 / 9289 / 11665 ms | 4879 / 9665 / 14011 ms |
+| UI/evaluation ready | 6746 / 12525 / 13158 ms | 5382 / 9665 / 14011 ms |
+
+The UI/evaluation-ready p50 improved by 20.2% and p95 by 22.8%. The maximum
+regressed by 6.5%, and the answer/card p95 values also regressed because one
+QCLFM real-model answer took 10598 ms. Keep those values visible: the accepted
+change removes avoidable client/server serialization, but does not claim to
+eliminate provider/model variance. The accepted phased result is in
+`test_results/research_qa_blind/tail_latency_acceptance_v2_final_pass/20260805_015708`;
+the serialized baseline is in
+`test_results/research_qa_blind/next_card_baseline/20260804_221632`.
+
+Quality and coverage gates after the final implementation:
+
+1. Full-library live QA: 29/29 passed in
+   `test_results/research_qa_blind/full_library_acceptance_final/20260805_023427`.
+2. Paid-model smoke: 5/5 passed in
+   `test_results/research_qa_blind/live_smoke_final_pass/20260805_022037`.
+3. New long-tail blind cases: 6/6 passed in
+   `test_results/research_qa_blind/blind_holdout_v3_acceptance/20260805_012040`.
+4. Source validation: 41/41 passed, deterministic full-library retrieval passed
+   29/29, and the reviewed replay passed 6/6.
+5. The complete backend suite passed 4292 tests with 43 skips. Frontend
+   production build, ESLint, and the terminal-reference Playwright regression
+   also passed.
+
+The final 29-question run reported first-visible p50/p95/max of
+2476/3840/4926 ms and UI-ready p50/p95/max of 7465/12747/14092 ms. It is a
+broader suite than `blind_holdout_v2`, so use it as a quality/coverage release
+gate rather than as a direct latency comparison with the 15-question baseline.
 
 ## Outputs
 

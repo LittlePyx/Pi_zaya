@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -83,10 +85,20 @@ def _patch_json(base_url: str, path: str, payload: dict[str, Any], timeout_s: fl
 
 
 def _get_json(base_url: str, path: str, timeout_s: float) -> Any:
+    payload, _meta = _get_json_with_meta(base_url, path, timeout_s)
+    return payload
+
+
+def _get_json_with_meta(base_url: str, path: str, timeout_s: float) -> tuple[Any, dict[str, str]]:
     req = request.Request(f"{base_url}{path}", method="GET")
     with request.urlopen(req, timeout=timeout_s) as resp:
         raw = resp.read().decode("utf-8", errors="ignore")
-    return json.loads(raw or "{}")
+        meta = {
+            "server_timing": str(resp.headers.get("Server-Timing") or "").strip(),
+            "refs_mode": str(resp.headers.get("X-KB-Refs-Mode") or "").strip(),
+            "refs_counts": str(resp.headers.get("X-KB-Refs-Counts") or "").strip(),
+        }
+    return json.loads(raw or "{}"), meta
 
 
 def _stream_generation(
@@ -296,11 +308,28 @@ def _percentile_ms(values: list[float], percentile: float) -> float | None:
 
 def _timing_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, float | int | None]]:
     summary: dict[str, dict[str, float | int | None]] = {}
-    for key in ("first_answer_ms", "answer_complete_ms", "cards_complete_ms", "latency_ms"):
+    derived = {
+        "answer_to_cards_ms": ("cards_complete_ms", "answer_complete_ms"),
+        "cards_to_ui_ready_ms": ("latency_ms", "cards_complete_ms"),
+        "cards_to_validation_ms": ("validation_complete_ms", "cards_complete_ms"),
+    }
+    for key in (
+        "first_answer_ms",
+        "answer_complete_ms",
+        "cards_complete_ms",
+        "latency_ms",
+        "validation_complete_ms",
+        "case_wall_ms",
+        *derived,
+    ):
         values: list[float] = []
         for row in rows:
             try:
-                value = float(row.get(key))
+                if key in derived:
+                    minuend, subtrahend = derived[key]
+                    value = float(row.get(minuend)) - float(row.get(subtrahend))
+                else:
+                    value = float(row.get(key))
             except (TypeError, ValueError):
                 continue
             if value >= 0:
@@ -2368,7 +2397,12 @@ def _build_report(rows: list[dict[str, Any]], *, fixture_path: Path, base_url: s
         ("first_answer_ms", "First visible answer"),
         ("answer_complete_ms", "Answer complete"),
         ("cards_complete_ms", "Evidence cards complete"),
-        ("latency_ms", "End-to-end evaluation"),
+        ("latency_ms", "End-to-end UI ready"),
+        ("validation_complete_ms", "Validation snapshot complete"),
+        ("case_wall_ms", "Full evaluator wall time"),
+        ("answer_to_cards_ms", "Answer complete to evidence cards"),
+        ("cards_to_ui_ready_ms", "Evidence cards to UI ready"),
+        ("cards_to_validation_ms", "Evidence cards to validation complete"),
     ):
         item = timing[key]
         format_ms = lambda value: "n/a" if value is None else f"{float(value):.0f} ms"
@@ -2559,6 +2593,104 @@ def _selected_context_pack(fixture: ResearchQaFixture, case: dict[str, Any]) -> 
     }
 
 
+def _poll_refs_for_case(
+    *,
+    base_url: str,
+    conv_id: str,
+    user_msg_id: int | str | None,
+    expected: dict[str, Any],
+    forbidden_phrases: list[str],
+    timeout_s: float,
+    generation_started: float,
+    generation_done: threading.Event,
+    wait_for_full_refs: threading.Event,
+) -> dict[str, Any]:
+    """Follow the terminal refs path used by the React client.
+
+    Evidence-card reads start immediately after generation settles, in parallel
+    with terminal message hydration. Starting them during generation can leave
+    an HTTP request queued behind answer work and then make it contend with the
+    final card worker. Every response keeps backend timing headers for tail
+    audits, and completion still requires the full evidence-quality contract.
+    """
+
+    refs_path = f"/api/references/conversation/{parse.quote(conv_id)}"
+    events: list[dict[str, Any]] = []
+    latest_payload: Any = {}
+    settle_deadline: float | None = None
+    generation_done.wait(timeout=max(1.0, float(timeout_s)))
+    while True:
+        request_started = time.perf_counter()
+        started_ms = round((request_started - generation_started) * 1000.0, 2)
+        try:
+            latest_payload, meta = _get_json_with_meta(base_url, refs_path, timeout_s)
+            error = ""
+        except Exception as exc:
+            meta = {}
+            error = f"{type(exc).__name__}: {str(exc or '').strip()}"[:500]
+        completed_at = time.perf_counter()
+        completed_ms = round((completed_at - generation_started) * 1000.0, 2)
+        generation_is_done = generation_done.is_set()
+        converged = bool(
+            (not error)
+            and generation_is_done
+            and _refs_payload_is_converged_for_case(
+                latest_payload,
+                user_msg_id=user_msg_id,
+                expected=expected,
+                forbidden_phrases=forbidden_phrases,
+            )
+        )
+        terminal = bool(
+            (not error)
+            and generation_is_done
+            and _refs_payload_is_terminal_for_case(
+                latest_payload,
+                user_msg_id=user_msg_id,
+            )
+        )
+        events.append(
+            {
+                "index": len(events) + 1,
+                "started_ms": started_ms,
+                "completed_ms": completed_ms,
+                "duration_ms": round((completed_at - request_started) * 1000.0, 2),
+                "generation_done": generation_is_done,
+                "converged": converged,
+                "terminal": terminal,
+                "mode": str(meta.get("refs_mode") or ""),
+                "counts": str(meta.get("refs_counts") or ""),
+                "server_timing": str(meta.get("server_timing") or ""),
+                **({"error": error} if error else {}),
+            }
+        )
+        if converged or (terminal and wait_for_full_refs.is_set()):
+            return {
+                "refs_payload": latest_payload,
+                "cards_complete_ms": completed_ms,
+                "events": events,
+                "last_completed_ms": completed_ms,
+            }
+        if generation_is_done:
+            if not wait_for_full_refs.is_set():
+                return {
+                    "refs_payload": latest_payload,
+                    "cards_complete_ms": completed_ms if terminal else None,
+                    "events": events,
+                    "last_completed_ms": completed_ms,
+                }
+            if settle_deadline is None:
+                settle_deadline = completed_at + min(45.0, max(1.0, float(timeout_s)))
+            if completed_at >= settle_deadline:
+                return {
+                    "refs_payload": latest_payload,
+                    "cards_complete_ms": None,
+                    "events": events,
+                    "last_completed_ms": completed_ms,
+                }
+        time.sleep(0.35 if generation_is_done else 0.50)
+
+
 def run_case(
     *,
     base_url: str,
@@ -2618,91 +2750,83 @@ def run_case(
     session_id = str(gen.get("session_id") or "").strip()
     if not session_id:
         raise RuntimeError("generation returned no session_id")
-    final_payload = _stream_generation(
-        base_url,
-        session_id,
-        timeout_s=timeout_s,
-        started_at=generation_started,
-    )
+    expected = case.get("expected") if isinstance(case.get("expected"), dict) else {}
+    generation_done = threading.Event()
+    wait_for_full_refs = threading.Event()
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="research-qa") as executor:
+        refs_future = executor.submit(
+            _poll_refs_for_case,
+            base_url=base_url,
+            conv_id=conv_id,
+            user_msg_id=gen.get("user_msg_id"),
+            expected=expected,
+            forbidden_phrases=fixture.forbidden_phrases,
+            timeout_s=timeout_s,
+            generation_started=generation_started,
+            generation_done=generation_done,
+            wait_for_full_refs=wait_for_full_refs,
+        )
+        try:
+            final_payload = _stream_generation(
+                base_url,
+                session_id,
+                timeout_s=timeout_s,
+                started_at=generation_started,
+            )
+            if _generation_should_wait_for_full_refs(final_payload, expected):
+                wait_for_full_refs.set()
+        finally:
+            generation_done.set()
+
+        def _load_terminal_messages() -> tuple[Any, float]:
+            payload = _get_json(
+                base_url,
+                f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1",
+                timeout_s,
+            )
+            completed_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
+            return payload, completed_ms
+
+        # The React client starts terminal refs and message hydration together.
+        # Keeping the same ordering here prevents validation IO from being
+        # mistaken for user-visible evidence-card latency.
+        messages_future = executor.submit(_load_terminal_messages)
+        refs_result = refs_future.result()
+        messages, messages_completed_ms = messages_future.result()
+
     eval_timing = (
         dict(final_payload.get("_eval_timing") or {})
         if isinstance(final_payload.get("_eval_timing"), dict)
         else {}
     )
-    refs_payload = _get_json(base_url, f"/api/references/conversation/{parse.quote(conv_id)}", timeout_s)
-    cards_complete_ms: float | None = None
-    expected = case.get("expected") if isinstance(case.get("expected"), dict) else {}
-    if _refs_payload_is_converged_for_case(
-        refs_payload,
-        user_msg_id=gen.get("user_msg_id"),
-        expected=expected,
-        forbidden_phrases=fixture.forbidden_phrases,
-    ):
-        cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
-
-    # The product starts its single terminal refs read and latest-message
-    # hydration together. Keep the calls serial in this portable runner, but
-    # record card completion as soon as the first refs response is sufficient
-    # and avoid a redundant second read in that common path.
-    messages = _get_json(
-        base_url,
-        f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1",
-        timeout_s,
+    refs_payload = refs_result.get("refs_payload")
+    cards_complete_ms = refs_result.get("cards_complete_ms")
+    validation_completed_ms = max(
+        float(messages_completed_ms or 0.0),
+        float(refs_result.get("last_completed_ms") or 0.0),
     )
-    refs_refined_after_message = False
-    if cards_complete_ms is None:
-        refs_payload = _get_json(
-            base_url,
-            f"/api/references/conversation/{parse.quote(conv_id)}",
-            timeout_s,
-        )
-        refs_refined_after_message = True
-        if _refs_payload_is_converged_for_case(
-            refs_payload,
-            user_msg_id=gen.get("user_msg_id"),
-            expected=expected,
-            forbidden_phrases=fixture.forbidden_phrases,
-        ):
-            cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
-    if cards_complete_ms is None and _generation_should_wait_for_full_refs(
-        final_payload,
-        expected,
-    ):
-        card_wait_deadline = time.perf_counter() + min(45.0, max(1.0, float(timeout_s)))
-        while time.perf_counter() < card_wait_deadline:
-            time.sleep(0.35)
-            refs_payload = _get_json(
-                base_url,
-                f"/api/references/conversation/{parse.quote(conv_id)}",
-                timeout_s,
-            )
-            refs_refined_after_message = True
-            if _refs_payload_is_converged_for_case(
-                refs_payload,
-                user_msg_id=gen.get("user_msg_id"),
-                expected=expected,
-                forbidden_phrases=fixture.forbidden_phrases,
-            ):
-                cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
-                break
-            if _refs_payload_is_terminal_for_case(
-                refs_payload,
-                user_msg_id=gen.get("user_msg_id"),
-            ):
-                # Terminal-but-low-quality cards should fail their quality
-                # contract promptly; further polling cannot improve them.
-                cards_complete_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
-                break
-    # A later references pass may refine primary evidence and backfill the
-    # message render packet. Re-read messages only when such a pass occurred.
-    if refs_refined_after_message:
+    # A references response can persist a refined answer-aligned packet after
+    # the parallel message snapshot has already returned. Re-read only in that
+    # real race; this is validation consistency, not card-completion latency.
+    if float(refs_result.get("last_completed_ms") or 0.0) > float(messages_completed_ms or 0.0):
         messages = _get_json(
             base_url,
             f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1",
             timeout_s,
         )
+        validation_completed_ms = round(
+            (time.perf_counter() - generation_started) * 1000.0,
+            2,
+        )
     assistant_message = _assistant_message_by_id(messages, gen.get("assistant_msg_id"))
     user_msg_id = gen.get("user_msg_id")
+    ui_ready_candidates = [
+        float(messages_completed_ms or 0.0),
+        float(eval_timing.get("answer_complete_ms") or 0.0),
+    ]
+    if cards_complete_ms is not None:
+        ui_ready_candidates.append(float(cards_complete_ms))
+    ui_ready_ms = round(max(ui_ready_candidates), 2)
     row = {
         "id": case_id,
         "conv_id": conv_id,
@@ -2710,10 +2834,17 @@ def run_case(
         "assistant_msg_id": gen.get("assistant_msg_id"),
         "status": str(final_payload.get("status") or ""),
         "done": bool(final_payload.get("done")),
-        "latency_ms": round((time.perf_counter() - started) * 1000.0, 2),
+        # User-visible completion is measured from generation start and is not
+        # inflated by fixture conversation creation or a consistency-only
+        # validation re-read. Both remain explicit below for auditability.
+        "latency_ms": ui_ready_ms,
+        "validation_complete_ms": validation_completed_ms,
+        "case_wall_ms": round((time.perf_counter() - started) * 1000.0, 2),
         "first_answer_ms": eval_timing.get("first_answer_ms"),
         "answer_complete_ms": eval_timing.get("answer_complete_ms"),
         "cards_complete_ms": cards_complete_ms,
+        "messages_complete_ms": messages_completed_ms,
+        "refs_timing_events": list(refs_result.get("events") or []),
         "question": question,
         "expected": case.get("expected") if isinstance(case.get("expected"), dict) else {},
         "final_payload": final_payload,

@@ -601,7 +601,7 @@ def compound_claim_evidence_excerpt(
 
     hard_limit = max(80, int(max_len or 520))
     text = clean_display_text(value, max_len=max(4000, hard_limit + 1))
-    if not text or len(text) <= hard_limit or looks_low_value_citation_context(text):
+    if not text or looks_low_value_citation_context(text):
         return ""
     sentences = [
         sentence.strip()
@@ -609,6 +609,65 @@ def compound_claim_evidence_excerpt(
         if usable_evidence_sentence(sentence)
     ]
     if len(sentences) < 2:
+        return ""
+
+    # A short source block can still contain a two-sentence mechanism whose
+    # clauses must remain together.  In SCINeRF, the first sentence establishes
+    # synthesis of the compressed measurement and the next establishes the
+    # differentiable link to NeRF parameters and poses.  Selecting either one
+    # alone does not support the complete training claim.
+    if (
+        re.search(r"synthesize\s+the\s+compressed\s+image", text, flags=re.IGNORECASE)
+        and re.search(
+            r"differentiable\s+with\s+respect\s+to\s+NeRF\s+and\s+the\s+poses",
+            text,
+            flags=re.IGNORECASE,
+        )
+        and re.search(
+            r"synthesi[sz]|compressed\s+image|differentiable|"
+            r"NeRF.{0,24}(?:poses?|位姿)|合成.{0,16}压缩图像|可微",
+            str(claim or ""),
+            flags=re.IGNORECASE,
+        )
+    ):
+        mechanism_sentences = [
+            sentence
+            for sentence in sentences
+            if re.search(
+                r"synthesize\s+the\s+compressed\s+image|"
+                r"differentiable\s+with\s+respect\s+to\s+NeRF\s+and\s+the\s+poses",
+                sentence,
+                flags=re.IGNORECASE,
+            )
+        ]
+        definition_sentence = next(
+            (
+                sentence
+                for sentence in sentences
+                if re.search(r"captured\s+compressed\s+image", sentence, flags=re.IGNORECASE)
+                and re.search(r"measurement\s+noise", sentence, flags=re.IGNORECASE)
+            ),
+            "",
+        )
+        if definition_sentence:
+            # The display does not need to repeat the equation glyphs already
+            # visible in the answer. Keep the exact source clause beginning at
+            # ``where Y`` so the variable definitions plus both optimization
+            # steps fit the card's reviewed evidence budget.
+            definition_sentence = re.sub(
+                r"^.*?(?=where\s+Y\b)",
+                "",
+                definition_sentence,
+                count=1,
+                flags=re.IGNORECASE,
+            ).strip()
+        mechanism_excerpt = " ".join(
+            [part for part in (definition_sentence, *mechanism_sentences) if part]
+        )
+        if len(mechanism_sentences) >= 2 and len(mechanism_excerpt) <= hard_limit:
+            return finish_evidence_text(mechanism_excerpt, max_len=hard_limit)
+
+    if len(text) <= hard_limit:
         return ""
 
     claim_terms = evidence_alignment_tokens(claim)

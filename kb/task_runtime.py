@@ -3026,7 +3026,13 @@ def _selected_context_evidence_text(item: dict, *, title: str, doi: str, year: s
     return text
 
 
-def _selected_research_context_evidence_hits(items: list[dict], *, max_hits: int = 4) -> list[dict]:
+def _selected_research_context_evidence_hits(
+    items: list[dict],
+    *,
+    max_hits: int = 4,
+    prompt: str = "",
+    db_dir: Path | str | None = None,
+) -> list[dict]:
     try:
         limit = max(1, int(max_hits))
     except Exception:
@@ -3075,6 +3081,100 @@ def _selected_research_context_evidence_hits(items: list[dict], *, max_hits: int
         )
         if source_role == "synthetic_basket_item" and title:
             source_name = f"Research basket: {title[:120]}"
+        selected_copy = any(
+            _selected_context_first_text(
+                item,
+                key,
+            )
+            for key in (
+                "summary",
+                "excerpt",
+                "shelfExcerpt",
+                "shelf_excerpt",
+                "evidenceQuote",
+                "evidence_quote",
+                "note",
+                "userNote",
+                "user_note",
+            )
+        )
+        # A source-only basket item selects a paper, not a title string as
+        # evidence. Resolve the best claim-bearing blocks inside that exact
+        # paper before generation. This stays source-scoped and extractive, and
+        # preserves user-selected excerpts verbatim when they are present.
+        if (
+            str(prompt or "").strip()
+            and source_role in {"selected_source", "matched_library_paper"}
+            and str(source_path or "").strip()
+            and not selected_copy
+        ):
+            try:
+                targeted_hits = _paper_guide_targeted_source_block_hits(
+                    bound_source_path=str(source_path or "").strip(),
+                    prompt=str(prompt or "").strip(),
+                    db_dir=db_dir,
+                    limit=2,
+                )
+            except Exception:
+                targeted_hits = []
+            appended = 0
+            for targeted in list(targeted_hits or []):
+                if len(out) >= limit:
+                    break
+                if not isinstance(targeted, dict):
+                    continue
+                targeted_text = str(targeted.get("text") or "").strip()
+                if not targeted_text:
+                    continue
+                targeted_meta = dict(targeted.get("meta") or {})
+                targeted_key = "\n".join(
+                    (
+                        str(targeted_meta.get("source_path") or source_path).replace("\\", "/").casefold(),
+                        str(targeted_meta.get("block_id") or "").casefold(),
+                        str(targeted_meta.get("anchor_id") or "").casefold(),
+                        hashlib.sha1(targeted_text[:320].encode("utf-8", "ignore")).hexdigest()[:12],
+                    )
+                )
+                if targeted_key in seen:
+                    continue
+                seen.add(targeted_key)
+                targeted_meta.update(
+                    {
+                        "source_path": str(targeted_meta.get("source_path") or source_path),
+                        "source_name": source_name,
+                        "title": title,
+                        "ref_pack_state": "ready",
+                        "metadata_quality": "ready",
+                        "source_kind": "research_basket",
+                        "research_basket_evidence": True,
+                        "basket_evidence": True,
+                        "basket_item_index": idx,
+                        "basket_item_key": stable_key,
+                        "shelf_item_kind": kind,
+                        "basket_source_role": source_role,
+                        "selected_context_source_path": original_source_path,
+                        "selected_context_source_name": original_source_name,
+                        "citation_context_source": "research_basket_source_scan",
+                    }
+                )
+                targeted_meta = {
+                    key: value
+                    for key, value in targeted_meta.items()
+                    if value not in (None, "", [], {})
+                }
+                targeted_out = dict(targeted)
+                targeted_out["meta"] = targeted_meta
+                targeted_out["ui_meta"] = {
+                    "source_path": str(targeted_meta.get("source_path") or source_path),
+                    "source_name": source_name,
+                    "display_name": source_name,
+                    "heading_path": str(targeted_meta.get("heading_path") or ""),
+                    "source_kind": "research_basket",
+                }
+                out.append(targeted_out)
+                appended += 1
+            if appended:
+                continue
         text = _selected_context_evidence_text(
             item,
             title=title,
@@ -6179,7 +6279,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         if selected_research_context_items:
             selected_research_context_evidence_hits = _selected_research_context_evidence_hits(
                 selected_research_context_items,
-                max_hits=min(4, max(1, len(selected_research_context_items))),
+                max_hits=min(8, max(1, len(selected_research_context_items) * 2)),
+                prompt=(prompt or retrieval_prompt or ""),
+                db_dir=db_dir,
             )
             if selected_research_context_evidence_hits:
                 merged_answer_hit_limit = max(

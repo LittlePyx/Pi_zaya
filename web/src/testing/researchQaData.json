@@ -220,6 +220,14 @@
       "rt-spi-silver-mask",
       "visual-perception-local-origin",
       "nafnet-activation-free-en"
+    ],
+    "blind_holdout_v3": [
+      "sph-heterodyne-sampling-conditions",
+      "three-d-video-daq-budget",
+      "sequential-cs-two-stage-elimination",
+      "piln-self-supervised-physical-loop",
+      "fdm-integration-time-boundary",
+      "qclfm-vs-iism-depth-signal"
     ]
   },
   "suites": {
@@ -3055,6 +3063,403 @@
         "maxUncitedHighRiskClaims": 0,
         "requireCitationCardQuality": true,
         "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "sph-heterodyne-sampling-conditions",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["sph-biological"],
+      "question": "SPH 实验里 62.5 kHz 拍频、1.25 Ms/s 采样和 DMD 的 48 μs 图案周期怎样配合？请给出每周期采样点数、每图案拍频周期数，并说明更换拍频仍保持重建质量的两个条件。",
+      "acceptance": [
+        "回答必须给出 20 点/拍频周期、3 个拍频周期/图案，并把数值关系解释清楚。",
+        "必须说明重建质量不敏感的前提是满足 Nyquist 采样准则，同时每个显示图案最好包含整数个拍频周期。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["62.5 kHz", "62,500 Hz"],
+          ["1.25 Ms/s", "1.25 MS/s"],
+          ["20 个", "20点", "20 data points"],
+          ["3 个拍频周期", "三个拍频周期", "three beating cycles"],
+          ["Nyquist", "奈奎斯特"],
+          ["整数个拍频周期", "integer number of beating cycles"]
+        ],
+        "requiredRefDocIds": ["sph-biological"],
+        "requiredCitationDocIds": ["sph-biological"],
+        "allowedRefDocIds": ["sph-biological"],
+        "allowedCitationDocIds": ["sph-biological"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "sph-heterodyne-sampling-bundle",
+          "docId": "sph-biological",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 10,
+          "answerTermGroups": [
+            ["62.5 kHz", "62,500 Hz"],
+            ["1.25 Ms/s", "1.25 MS/s"],
+            ["20 个", "20点", "20 data points"],
+            ["3 个拍频周期", "三个拍频周期", "three beating cycles"],
+            ["Nyquist", "奈奎斯特"]
+          ],
+          "evidenceTerms": [
+            "beat frequency of these two beams is 62,500 Hz",
+            "sampling rate of 1.25 Ms/s",
+            "three beating cycles last for each Hadamard pattern",
+            "20 data points were acquired within one cycle",
+            "Nyquist sampling criterion",
+            "integer number of beating cycles"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "sph-experimental-setup-sampling-locate",
+          "docId": "sph-biological",
+          "route": "system_a",
+          "sourcePage": 10,
+          "locatorTerms": ["Experimental setup"],
+          "evidenceTerms": ["62,500 Hz", "1.25 Ms/s", "Nyquist sampling criterion"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "three-d-video-daq-budget",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["3d-sp-video"],
+      "question": "3D single-pixel video 的 DAQ 总采样率怎样分给四路探测器？在 50 μs 图案显示时间下，每个图案实际得到多少个样本？",
+      "acceptance": [
+        "回答必须从总计 250 kHz、四通道推到每通道 62.5 kHz。",
+        "必须给出 50 μs 对应每图案约 3 个样本，不能把总采样率误写成每通道采样率。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["250 kHz"],
+          ["四通道", "4 个通道", "four channels"],
+          ["62.5 kHz"],
+          ["50 μs", "50 µs"],
+          ["约 3 个", "大约 3 个", "约获得 3 个样本", "约采集 3 个样本", "大约三个", "大约获得 3 个样本", "approximately three samples"]
+        ],
+        "requiredRefDocIds": ["3d-sp-video"],
+        "requiredCitationDocIds": ["3d-sp-video"],
+        "allowedRefDocIds": ["3d-sp-video"],
+        "allowedCitationDocIds": ["3d-sp-video"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "three-d-video-daq-channel-budget",
+          "docId": "3d-sp-video",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 4,
+          "answerTermGroups": [
+            ["250 kHz"],
+            ["62.5 kHz"],
+            ["50 μs", "50 µs"],
+            ["约 3 个", "大约 3 个", "约获得 3 个样本", "约采集 3 个样本", "大约三个", "大约获得 3 个样本", "approximately three samples"]
+          ],
+          "evidenceTerms": [
+            "maximum acquisition rate of 250 kHz for all channels",
+            "four channels employed",
+            "sampling rate for each channel is set to 62.5 kHz",
+            "each pattern is displayed for 50 μs",
+            "approximately three samples acquired for each pattern"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "three-d-video-daq-method-locate",
+          "docId": "3d-sp-video",
+          "route": "system_a",
+          "sourcePage": 4,
+          "locatorTerms": ["Custom single-pixel system design"],
+          "evidenceTerms": ["250 kHz for all channels", "approximately three samples"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "sequential-cs-two-stage-elimination",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["seq-cs"],
+      "question": "Sequential Compressed Sensing 的两阶段筛除过程分别做什么？请给出第一阶段步数、剩余维度界、第二阶段额外测量数，并说明它相对非自适应 CS 的低 SNR 优势。",
+      "acceptance": [
+        "回答必须说明第一阶段每步期望去掉一半零分量且高概率保留所有非零分量。",
+        "必须给出 log2 log n、n/log n + k、k log n，并指出支持集能在更低 SNR 下精确恢复。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["Sequential Compressed Sensing"],
+        "requiredAnswerTermGroups": [
+          ["log2 log n", "log₂ log n", "log_2 log n", "\\log_2 \\log n"],
+          ["一半零分量", "一半的零分量", "每步去掉一半", "每步剔除一半", "half of the zero components"],
+          ["n/log n + k", "n / log n + k", "n / \\log n + k"],
+          ["k log n", "k \\log n"],
+          ["更低 SNR", "lower SNR"]
+        ],
+        "requiredRefDocIds": ["seq-cs"],
+        "requiredCitationDocIds": ["seq-cs"],
+        "allowedRefDocIds": ["seq-cs"],
+        "allowedCitationDocIds": ["seq-cs"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "sequential-cs-two-stage-main-result",
+          "docId": "seq-cs",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 1,
+          "answerTermGroups": [
+            ["log2 log n", "log₂ log n", "log_2 log n", "\\log_2 \\log n"],
+            ["一半零分量", "一半的零分量", "每步去掉一半", "每步剔除一半", "half of the zero components"],
+            ["n/log n + k", "n / log n + k", "n / \\log n + k"],
+            ["k log n", "k \\log n"],
+            ["更低 SNR", "lower SNR"]
+          ],
+          "evidenceTerms": [
+            "first stage involves",
+            "remove half of the zero components",
+            "all the non-zero components are retained",
+            "n / \\log n + k",
+            "k \\log n additional measurements",
+            "much lower SNRs"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "sequential-cs-main-result-locate-v3",
+          "docId": "seq-cs",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["II. MAIN RESULT"],
+          "evidenceTerms": ["two stages", "lower SNRs"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "piln-self-supervised-physical-loop",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["piln"],
+      "question": "ILNet 没有配对真值图像时怎样形成自监督闭环？请按 part-based 特征、I_N(out) 与 I_N(real) 损失、迭代先验三个环节解释，并说明为何能迁移到未知自由空间和水下场景。",
+      "acceptance": [
+        "回答必须说明网络按部分拆分特征，重建图像经散斑前向计算得到 I_N(out)，并与探测器真实强度 I_N(real) 做平方误差。",
+        "必须说明上一轮 2D 重建作为下一轮输入以持续注入先验，并把未知场景泛化连接到物理测量监督而非配对图像标签。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["ILNet"],
+        "requiredAnswerTermGroups": [
+          ["part-based", "分块特征", "分部分特征"],
+          ["I_N(out)", "Iₙ(out)"],
+          ["I_N(real)", "Iₙ(real)"],
+          ["平方误差", "squared error", "loss"],
+          ["下一次迭代", "subsequent iteration"],
+          ["自由空间", "free-space"],
+          ["水下", "underwater"]
+        ],
+        "requiredRefDocIds": ["piln"],
+        "requiredCitationDocIds": ["piln"],
+        "allowedRefDocIds": ["piln"],
+        "allowedCitationDocIds": ["piln"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "piln-self-supervised-loop-v3",
+          "docId": "piln",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 2,
+          "answerTerms": ["ILNet"],
+          "answerTermGroups": [
+            ["part-based", "分块特征", "分部分特征"],
+            ["I_N(out)", "Iₙ(out)"],
+            ["I_N(real)", "Iₙ(real)"],
+            ["下一次迭代", "subsequent iteration"]
+          ],
+          "evidenceTerms": [
+            "divide image features into different parts",
+            "difference between the I_N(out)",
+            "I_N(real) captured by the SPD",
+            "loss function",
+            "input for the subsequent iterations",
+            "continuous incorporation of prior information"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "piln-method-loop-locate-v3",
+          "docId": "piln",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["2.1. Methods"],
+          "evidenceTerms": ["I_N(real)", "loss function", "subsequent iterations"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "fdm-integration-time-boundary",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["fdm-metamaterials"],
+      "question": "FDM 提速是否等价于直接缩短探测器积分时间？请给出二者在 AWG 噪声下的相似处，并明确说明这个等价在哪个探测器边界失效、非 AWG 噪声下 FDM 又为什么更有利。",
+      "acceptance": [
+        "回答不能简单说二者等价；应说明 AWG 下二者都以 SNR 换速度。",
+        "必须指出积分时间受 f3dB 响应边界限制，而 FDM 不降低每次测量的积分时间；非 AWG 下还可保持最优特征时间。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["FDM"],
+        "requiredAnswerTermGroups": [
+          ["不等价", "并不等价", "不完全等价", "not equivalent"],
+          ["AWG", "additive white Gaussian"],
+          ["f3dB", "f_3dB", "3 dB"],
+          ["不降低积分时间", "不降低每次测量的积分时间", "并不降低每次测量的积分时间", "不降低单次测量的积分时间", "并不降低单次测量的积分时间", "without lowering the integration time"],
+          ["特征时间", "characteristic time"],
+          ["最优 SNR", "optimal SNR"]
+        ],
+        "requiredRefDocIds": ["fdm-metamaterials"],
+        "requiredCitationDocIds": ["fdm-metamaterials"],
+        "allowedRefDocIds": ["fdm-metamaterials"],
+        "allowedCitationDocIds": ["fdm-metamaterials"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "fdm-integration-time-negative-boundary",
+          "docId": "fdm-metamaterials",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 4,
+          "answerTermGroups": [
+            ["AWG", "additive white Gaussian"],
+            ["f3dB", "f_3dB", "3 dB"],
+            ["不降低积分时间", "不降低每次测量的积分时间", "并不降低每次测量的积分时间", "不降低单次测量的积分时间", "并不降低单次测量的积分时间", "without lowering the integration time"],
+            ["特征时间", "characteristic time"]
+          ],
+          "evidenceTerms": [
+            "additive white Gaussian",
+            "SNR is proportional to the square root of the integration time",
+            "3 dB down point",
+            "without lowering the integration time",
+            "noise is not AWG",
+            "characteristic time for optimal SNR"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "fdm-discussion-boundary-locate-v3",
+          "docId": "fdm-metamaterials",
+          "route": "system_a",
+          "sourcePage": 4,
+          "locatorTerms": ["4. DISCUSSION"],
+          "evidenceTerms": ["3 dB down point", "characteristic time for optimal SNR"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "qclfm-vs-iism-depth-signal",
+      "sourceGrounded": true,
+      "queryScope": "selected_context",
+      "docIds": ["qclfm", "iism"],
+      "question": "QCLFM 和 iISM 都含有轴向/深度信息，但物理载体并不相同。请比较：QCLFM 怎样用位置与角度信息做两步数字重聚焦，iISM 的深度又怎样进入干涉相位；不要把计算传播和 Gouy 相位混成一件事。",
+      "acceptance": [
+        "回答必须把 QCLFM 的光线追迹加反向波传播，与 iISM 的 4πnz/λ 加 Gouy 相位明确分开。",
+        "必须分别引用两篇论文，且每张证据卡只承担对应方法的深度信息机制。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["QCLFM", "iISM"],
+        "requiredAnswerTermGroups": [
+          ["光线追迹", "ray tracing"],
+          ["波传播", "wave propagation"],
+          ["4π", "4\\pi"],
+          ["Gouy 相位", "Gouy phase"],
+          ["轴向位置", "axial position"]
+        ],
+        "requiredRefDocIds": ["qclfm", "iism"],
+        "requiredCitationDocIds": ["qclfm", "iism"],
+        "allowedRefDocIds": ["qclfm", "iism"],
+        "allowedCitationDocIds": ["qclfm", "iism"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {
+            "id": "qclfm-two-step-depth-refocus",
+            "docId": "qclfm",
+            "route": "system_a",
+            "answerScope": "response",
+            "sourcePage": 2,
+            "answerTerms": ["QCLFM"],
+            "answerTermGroups": [["光线追迹", "ray tracing"], ["波传播", "wave propagation"]],
+            "evidenceTerms": [
+              "position and angular information of each photon",
+              "ray tracing operation",
+              "reverse this diffraction",
+              "wave propagation of distance -z"
+            ]
+          },
+          {
+            "id": "iism-depth-phase-components",
+            "docId": "iism",
+            "route": "system_a",
+            "answerScope": "response",
+            "sourcePage": 2,
+            "answerTerms": ["iISM"],
+            "answerTermGroups": [["4π", "4\\pi"], ["Gouy 相位", "Gouy phase"]],
+            "evidenceTerms": [
+              "4\\pi",
+              "axial position of the scatterer",
+              "illumination wavelength",
+              "Gouy phase"
+            ]
+          }
+        ],
+        "requiredLocateContracts": [
+          {
+            "id": "qclfm-concept-refocus-locate-v3",
+            "docId": "qclfm",
+            "route": "system_a",
+            "sourcePage": 2,
+            "locatorTerms": ["A. Concept"],
+            "evidenceTerms": ["ray tracing operation", "wave propagation of distance -z"]
+          },
+          {
+            "id": "iism-phase-equation-locate-v3",
+            "docId": "iism",
+            "route": "system_a",
+            "sourcePage": 2,
+            "locatorTerms": ["Principle of interferometric ISM"],
+            "evidenceTerms": ["axial position of the scatterer", "Gouy phase"]
+          }
+        ],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 2,
         "maxSystemBCount": 0
       }
     }

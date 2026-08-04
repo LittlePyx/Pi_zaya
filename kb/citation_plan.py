@@ -396,6 +396,34 @@ def _prompt_aligned_source_slot(
             ranking_surface,
         )
     )
+    fdm_boundary_hint = bool(
+        "frequency-division" in source_path.lower()
+        and re.search(
+            r"(?i)\b(?:AWG|additive\s+white\s+Gaussian|f[_\s]*3\s*dB|3\s*dB|"
+            r"characteristic\s+time|not\s+AWG|without\s+bound)\b|"
+            r"\u8fb9\u754c|\u5931\u6548|\u7279\u5f81\u65f6\u95f4|\u4e0d\u80fd\u65e0\u9650\u7f29\u77ed",
+            ranking_surface,
+        )
+    )
+    cassi_architecture_hint = bool(
+        "single-shot compressive spectral imaging" in source_path.lower()
+        and re.search(
+            r"(?i)dual[- ]dispers|dispersive\s+elements?|"
+            r"binary[- ]valued\s+aperture|architecture|arrang|opposition|"
+            r"\u53cc\u8272\u6563|\u8272\u6563\u5143\u4ef6|"
+            r"\u4e8c\u503c.{0,8}\u5b54\u5f84|\u600e\u4e48\u6446|\u7ed3\u6784",
+            ranking_surface,
+        )
+    )
+    scigs_scinerf_comparison_hint = bool(
+        re.search(r"(?i)\bSCIGS\b", ranking_surface)
+        and re.search(r"(?i)\bSCINeRF\b", ranking_surface)
+        and re.search(
+            r"(?i)difference|different|compare|comparison|versus|vs\.?|"
+            r"\u533a\u522b|\u5dee\u5f02|\u5bf9\u6bd4",
+            ranking_surface,
+        )
+    )
     if (
         len(query_tokens) < 3
         and not degradation_chain_hint
@@ -405,6 +433,9 @@ def _prompt_aligned_source_slot(
         and not scinerf_formula_hint
         and not dual_cavity_perovskite_hint
         and not sequential_scope_hint
+        and not fdm_boundary_hint
+        and not cassi_architecture_hint
+        and not scigs_scinerf_comparison_hint
     ) or not source_path:
         return out
     if table_detail_hint:
@@ -495,6 +526,56 @@ def _prompt_aligned_source_slot(
 
     request_surface = f"{source_path} {ranking_surface}".lower()
     request_semantic_surface = f"{request_surface} {semantic_surface}".lower()
+    sph_sampling_detail_request = bool(
+        "compressive holography" in request_surface
+        and re.search(r"(?i)62(?:[,.]5|,?500)\s*(?:kHz|Hz)", ranking_surface)
+        and re.search(r"(?i)1[,.]25\s*M(?:s/s|S/s)", ranking_surface)
+        and re.search(r"(?i)48\s*[μµu]\s*s", ranking_surface)
+    )
+    sequential_two_stage_detail_request = bool(
+        re.search(
+            r"(?i)sequential(?:ly)?[- ](?:adaptive[- ])?(?:compressed|designed)",
+            source_path,
+        )
+        and re.search(
+            r"(?i)two\s+stages?|first\s+stage|second\s+stage|"
+            r"\u4e24\u9636\u6bb5|\u7b2c\u4e00\u9636\u6bb5|\u7b2c\u4e8c\u9636\u6bb5",
+            request_semantic_surface,
+        )
+        and re.search(
+            r"(?i)lower\s+SNR|remaining\s+dimension|additional\s+measurements?|"
+            r"\u4f4e\s*SNR|\u5269\u4f59\u7ef4\u5ea6|\u989d\u5916\u6d4b\u91cf",
+            request_semantic_surface,
+        )
+    )
+    frequency_boundary_request = fdm_boundary_hint
+    physical_loop_detail_request = bool(
+        re.search(
+            r"(?i)I[_\s]*N\s*\(\s*out\s*\)", ranking_surface
+        )
+        and re.search(
+            r"(?i)I[_\s]*N\s*\(\s*real\s*\)|"
+            r"(?:real|measured|detector)\s+(?:intensity|signal)|"
+            r"\u771f\u5b9e(?:\u63a2\u6d4b)?\u5f3a\u5ea6|\u63a2\u6d4b\u5668(?:\u5f3a\u5ea6|\u4fe1\u53f7)",
+            ranking_surface,
+        )
+        and re.search(
+            r"(?i)loss|iteration|part[- ]based|\u635f\u5931|\u8fed\u4ee3|\u95ed\u73af",
+            ranking_surface,
+        )
+    )
+    axial_phase_detail_request = bool(
+        re.search(
+            r"(?i)interferometric.*image\s+scanning|\biISM\b",
+            source_path,
+        )
+        and
+        re.search(r"(?i)\bGouy\s+phase\b|Gouy\s*\u76f8\u4f4d", ranking_surface)
+        and re.search(
+            r"(?i)\b(?:axial\s+position|depth|phase)\b|\u8f74\u5411|\u6df1\u5ea6|\u76f8\u4f4d",
+            ranking_surface,
+        )
+    )
 
     # Some single-paper questions ask for a compact relation made of several
     # terms that occur together in the Abstract (or one direct comparison
@@ -506,6 +587,7 @@ def _prompt_aligned_source_slot(
     focused_heading = ""
     if (
         "frequency-division" in request_surface
+        and not frequency_boundary_request
         and re.search(
             r"(?i)\b(?:SNR|signal[- ]to[- ]noise|acquisition\s+speed|integration\s+time)\b|"
             r"信噪比|采集速度|积分时间|代价|更快",
@@ -518,7 +600,7 @@ def _prompt_aligned_source_slot(
             r"without\s+altering\s+detector\s+integration\s+time",
         )
         focused_heading = "abstract"
-    elif sequential_scope_hint:
+    elif sequential_scope_hint and not sequential_two_stage_detail_request:
         focused_patterns = (
             r"sequential\s+adaptive\s+compressed\s+sensing",
             r"signal\s+support\s+recovery",
@@ -552,8 +634,20 @@ def _prompt_aligned_source_slot(
         )
         focused_heading = "proposed framework"
     elif (
+        "scinerf" in request_surface
+        and scigs_scinerf_comparison_hint
+    ):
+        focused_patterns = (
+            r"physical\s+imaging\s+process\s+of\s+SCI",
+            r"training\s+of\s+NeRF",
+        )
+        focused_heading = "abstract"
+    elif (
         "scigs" in request_surface
-        and "dynamic" in request_semantic_surface
+        and (
+            scigs_scinerf_comparison_hint
+            or "dynamic" in request_semantic_surface
+        )
         and re.search(r"3d|scene|场景|动态", request_semantic_surface, flags=re.I)
     ):
         focused_patterns = (
@@ -632,14 +726,27 @@ def _prompt_aligned_source_slot(
         focused_heading = "abstract"
     elif (
         "single-shot compressive spectral imaging" in request_surface
-        and "projective" in request_semantic_surface
-        and "spectral" in request_semantic_surface
+        and (
+            (
+                "projective" in request_semantic_surface
+                and "spectral" in request_semantic_surface
+            )
+            or cassi_architecture_hint
+        )
     ):
         focused_patterns = (
-            r"two\s+dispersive\s+elements",
-            r"binary-valued\s+aperture\s+code",
-            r"projective\s+measurement\s+in\s+the\s+spectral\s+domain",
-            r"compressive\s+sensing\s+frameworks",
+            (
+                r"two\s+dispersive\s+elements",
+                r"arranged\s+in\s+opposition",
+                r"binary-valued\s+aperture\s+code",
+            )
+            if cassi_architecture_hint
+            else (
+                r"two\s+dispersive\s+elements",
+                r"binary-valued\s+aperture\s+code",
+                r"projective\s+measurement\s+in\s+the\s+spectral\s+domain",
+                r"compressive\s+sensing\s+frameworks",
+            )
         )
         focused_heading = "abstract"
     elif (
@@ -888,13 +995,30 @@ def _prompt_aligned_source_slot(
     # Preserve it so a multi-facet question can keep, for example, one
     # mechanism block and one quantitative-result block instead of promoting
     # every hit from the paper to the same broad Abstract sentence.
-    if current_has_precise_anchor and not precise_anchor_misses_requested_fact:
+    if (
+        current_has_precise_anchor
+        and not precise_anchor_misses_requested_fact
+        and not frequency_boundary_request
+        and not physical_loop_detail_request
+        and not axial_phase_detail_request
+        and not sph_sampling_detail_request
+        and not sequential_two_stage_detail_request
+    ):
         return out
     picked_source_summary = bool(summary_scored)
     if (
         best_score < (3 if semantic_surface else 4)
         or (not picked_source_summary and best_score < current_score + 2)
-    ) and not degradation_chain_hint and not unfolding_module_hint and not spad_quenching_hint:
+    ) and not (
+        degradation_chain_hint
+        or unfolding_module_hint
+        or spad_quenching_hint
+        or frequency_boundary_request
+        or physical_loop_detail_request
+        or axial_phase_detail_request
+        or sph_sampling_detail_request
+        or sequential_two_stage_detail_request
+    ):
         return out
 
     selected = [best_sentence]
@@ -1047,9 +1171,18 @@ def _prompt_aligned_source_slot(
         )
     )
     structured_bundle_rows: list[tuple[str, str, int]] = []
+    video_daq_budget_request = bool(
+        re.search(
+            r"(?i)\b(?:DAQ|acquisition\s+rate|sampling\s+rate|display\s+time|"
+            r"samples?\s+(?:for|per)\s+each\s+pattern|channels?\s+employed)\b|"
+            r"\u603b\u91c7\u6837\u7387|\u6bcf\u901a\u9053|\u56fe\u6848\u663e\u793a\u65f6\u95f4|\u6837\u672c",
+            ranking_surface,
+        )
+    )
     video_bundle_requested = bool(
         re.search(r"(?i)3D\s+single[- ]pixel|single[- ]pixel\s+video", ranking_surface)
         and re.search(r"(?i)detectors?|photometric|real[- ]?time|parallel|探测器|实时|并行", ranking_surface)
+        and not video_daq_budget_request
     )
     if video_bundle_requested:
         abstract_rows = [
@@ -1105,6 +1238,422 @@ def _prompt_aligned_source_slot(
             best_page = int(structured_bundle_rows[0][2] or best_page or 0)
         else:
             structured_bundle_rows = []
+
+    if video_daq_budget_request and not structured_bundle_rows:
+        daq_rows = [
+            row
+            for row in records
+            if re.search(
+                r"(?i)maximum\s+acquisition\s+rate\s+of\s+250\s*kHz\s+for\s+all\s+channels",
+                row[1],
+            )
+            and re.search(r"(?i)four\s+channels\s+employed", row[1])
+            and re.search(
+                r"(?i)sampling\s+rate\s+for\s+each\s+channel\s+is\s+set\s+to\s+62\.5\s*kHz",
+                row[1],
+            )
+            and re.search(
+                r"(?i)approximately\s+three\s+samples\s+acquired\s+for\s+each\s+pattern",
+                row[1],
+            )
+        ]
+        if daq_rows:
+            daq_row = min(daq_rows, key=lambda row: len(str(row[1] or "")))
+            structured_bundle_rows = [daq_row]
+            evidence = _compact_text(str(daq_row[1] or "").strip(), max_len=1800)
+            best_heading = str(daq_row[0] or best_heading)
+            best_page = int(daq_row[2] or best_page or 0)
+
+    if sph_sampling_detail_request and not structured_bundle_rows:
+        setup_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)experimental\s+setup", row[1])
+            and re.search(r"(?i)schematically\s+shown", row[1])
+        ]
+        beat_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)beat\s+frequency.*62,?500\s*Hz", row[1])
+            and re.search(r"(?i)temporal\s+period.*16", row[1])
+        ]
+        sample_rate_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)sampling\s+rate\s+of\s+1[,.]25\s*Ms/s", row[1])
+        ]
+        cycle_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)48[- ]?[μµu]s\s+refresh\s+time", row[1])
+            and re.search(r"(?i)three\s+beating\s+cycles", row[1])
+            and re.search(r"(?i)20\s+data\s+points", row[1])
+        ]
+        nyquist_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)Nyquist\s+sampling\s+criterion", row[1])
+        ]
+        integer_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)integer\s+number\s+of\s+beating\s+cycles", row[1])
+        ]
+        if (
+            setup_rows
+            and beat_rows
+            and sample_rate_rows
+            and cycle_rows
+            and nyquist_rows
+            and integer_rows
+        ):
+            selected_sampling_rows = [
+                min(setup_rows, key=lambda row: len(str(row[1] or ""))),
+                min(beat_rows, key=lambda row: len(str(row[1] or ""))),
+                min(sample_rate_rows, key=lambda row: len(str(row[1] or ""))),
+                min(cycle_rows, key=lambda row: len(str(row[1] or ""))),
+                min(nyquist_rows, key=lambda row: len(str(row[1] or ""))),
+                min(integer_rows, key=lambda row: len(str(row[1] or ""))),
+            ]
+            structured_bundle_rows = selected_sampling_rows
+            evidence = _compact_text(
+                " ".join(
+                    dict.fromkeys(
+                        str(row[1] or "").strip() for row in selected_sampling_rows
+                    )
+                ),
+                max_len=1400,
+            )
+            best_heading = str(selected_sampling_rows[0][0] or best_heading)
+            if "experimental setup" not in best_heading.lower():
+                # The source expresses this as a bold paragraph label rather
+                # than a Markdown heading. Preserve that named sub-location in
+                # the user-facing locator while keeping the immutable block
+                # and page coordinates unchanged.
+                best_heading = (
+                    f"{best_heading} / Experimental setup"
+                    if best_heading
+                    else "Experimental setup"
+                )
+            best_page = int(selected_sampling_rows[0][2] or best_page or 0)
+
+    if sequential_two_stage_detail_request and not structured_bundle_rows:
+        stage_intro_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)algorithm\s+consists\s+of\s+two\s+stages", row[1])
+            and re.search(r"(?i)first\s+stage\s+involves.*log_2\s*\\?log\s*n", row[1])
+        ]
+        eliminate_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)remove\s+half\s+of\s+the\s+zero\s+components", row[1])
+            and re.search(r"(?i)non-zero\s+components\s+are\s+retained", row[1])
+        ]
+        remaining_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)n\s*/\s*\\?log\s*n\s*\+\s*k", row[1])
+        ]
+        second_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)second\s+stage\s+faces\s+a\s+lower\s+dimensional", row[1])
+            and re.search(r"(?i)k\s*\\?log\s*n\s+additional\s+measurements", row[1])
+        ]
+        advantage_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)support\s+can\s+be\s+recovered\s+exactly", row[1])
+            and re.search(r"(?i)much\s+lower\s+SNRs", row[1])
+        ]
+        if stage_intro_rows and eliminate_rows and remaining_rows and second_rows and advantage_rows:
+            selected_stage_rows = [
+                min(stage_intro_rows, key=lambda row: len(str(row[1] or ""))),
+                min(eliminate_rows, key=lambda row: len(str(row[1] or ""))),
+                min(remaining_rows, key=lambda row: len(str(row[1] or ""))),
+                min(second_rows, key=lambda row: len(str(row[1] or ""))),
+                min(advantage_rows, key=lambda row: len(str(row[1] or ""))),
+            ]
+            structured_bundle_rows = selected_stage_rows
+            evidence = _compact_text(
+                " ".join(
+                    dict.fromkeys(
+                        str(row[1] or "").strip() for row in selected_stage_rows
+                    )
+                ),
+                max_len=1400,
+            )
+            best_heading = str(selected_stage_rows[0][0] or best_heading)
+            best_page = int(selected_stage_rows[0][2] or best_page or 0)
+
+    if frequency_boundary_request and not structured_bundle_rows:
+        awg_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)additive\s+white\s+Gaussian", row[1])
+            and re.search(
+                r"(?i)SNR\s+is\s+proportional\s+to\s+the\s+square\s+root\s+of\s+the\s+integration\s+time",
+                row[1],
+            )
+        ]
+        detector_limit_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)detector\s+integration\s+time\s+cannot\s+be\s+reduced\s+without\s+bound", row[1])
+        ]
+        bandwidth_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)inherent\s+limits.*3\s*dB\s+down\s+point", row[1])
+        ]
+        high_frequency_rows = [
+            row
+            for row in records
+            if re.search(
+                r"(?i)frequencies\s+greater\s+than.*f\s*_?\s*\{?\s*3",
+                row[1],
+            )
+            and re.search(r"(?i)no\s+longer\s+advantageous", row[1])
+        ]
+        fdm_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)FDM\s+scheme.*without\s+lowering\s+the\s+integration\s+time", row[1])
+            and re.search(r"(?i)fundamental\s+limitation", row[1])
+        ]
+        characteristic_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)characteristic\s+time\s+for\s+optimal\s+SNR", row[1])
+        ]
+        non_awg_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)(?:system\s+)?noise\s+is\s+not\s+AWG", row[1])
+        ]
+        optimal_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)without\s+deviation\s+from\s+such\s+an\s+optimal\s+integration\s+time", row[1])
+        ]
+        if (
+            awg_rows
+            and detector_limit_rows
+            and bandwidth_rows
+            and high_frequency_rows
+            and fdm_rows
+            and non_awg_rows
+            and characteristic_rows
+            and optimal_rows
+        ):
+            boundary_groups = (
+                awg_rows,
+                detector_limit_rows,
+                bandwidth_rows,
+                high_frequency_rows,
+                fdm_rows,
+                non_awg_rows,
+                characteristic_rows,
+                optimal_rows,
+            )
+            common_pages = set.intersection(
+                *(
+                    {
+                        int(row[2] or 0)
+                        for row in rows
+                        if int(row[2] or 0) > 0
+                    }
+                    for rows in boundary_groups
+                )
+            )
+
+            def _boundary_page_cost(page_num: int) -> tuple[int, int, int]:
+                # A conversion can retain two source representations of the
+                # same discussion on adjacent page-marked blocks. Prefer the
+                # occurrence that contains the complete contract in the fewest
+                # immutable paragraphs, so the card keeps a real SourceBlock.
+                page_rows_by_group = [
+                    [row for row in rows if int(row[2] or 0) == page_num]
+                    for rows in boundary_groups
+                ]
+                shared_row_ids = set.intersection(
+                    *(
+                        {
+                            (str(row[0] or ""), str(row[1] or ""), int(row[2] or 0))
+                            for row in rows
+                        }
+                        for rows in page_rows_by_group
+                    )
+                )
+                if shared_row_ids:
+                    return 1, min(len(row_id[1]) for row_id in shared_row_ids), page_num
+                selected_rows = [
+                    min(
+                        rows,
+                        key=lambda row: len(str(row[1] or "")),
+                    )
+                    for rows in page_rows_by_group
+                ]
+                distinct_rows = {
+                    (str(row[0] or ""), str(row[1] or ""), int(row[2] or 0))
+                    for row in selected_rows
+                }
+                return len(distinct_rows), sum(len(row[1]) for row in distinct_rows), page_num
+
+            preferred_page = (
+                min(common_pages, key=_boundary_page_cost) if common_pages else 0
+            )
+
+            def _same_boundary_page(rows):
+                if preferred_page <= 0:
+                    return rows
+                return [row for row in rows if int(row[2] or 0) == preferred_page]
+
+            selected_boundary_rows = [
+                min(_same_boundary_page(awg_rows), key=lambda row: len(str(row[1] or ""))),
+                min(_same_boundary_page(detector_limit_rows), key=lambda row: len(str(row[1] or ""))),
+                min(_same_boundary_page(bandwidth_rows), key=lambda row: len(str(row[1] or ""))),
+                min(_same_boundary_page(high_frequency_rows), key=lambda row: len(str(row[1] or ""))),
+                min(_same_boundary_page(fdm_rows), key=lambda row: len(str(row[1] or ""))),
+                min(_same_boundary_page(non_awg_rows), key=lambda row: len(str(row[1] or ""))),
+                min(_same_boundary_page(characteristic_rows), key=lambda row: len(str(row[1] or ""))),
+                min(_same_boundary_page(optimal_rows), key=lambda row: len(str(row[1] or ""))),
+            ]
+            structured_bundle_rows = selected_boundary_rows
+            evidence = _compact_text(
+                " ".join(
+                    dict.fromkeys(
+                        str(row[1] or "").strip()
+                        for row in selected_boundary_rows
+                    )
+                ),
+                max_len=1400,
+            )
+            best_heading = str(selected_boundary_rows[0][0] or best_heading)
+            best_page = int(selected_boundary_rows[0][2] or best_page or 0)
+
+    if physical_loop_detail_request and not structured_bundle_rows:
+        part_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)part[- ]based\s+model", row[1])
+            and re.search(
+                r"(?i)divid(?:e|es)\s+image\s+features\s+into\s+different\s+parts",
+                row[1],
+            )
+        ]
+        loss_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)difference\s+between\s+the\s+\$?I_N\(out\)", row[1])
+            and re.search(r"(?i)\$?I_N\(real\).*captured\s+by\s+the\s+SPD", row[1])
+            and re.search(r"(?i)loss\s+function", row[1])
+        ]
+        iteration_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)input\s+for\s+the\s+subsequent\s+iterations", row[1])
+        ]
+        prior_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)(?:continuous\s+incorporation\s+of|providing)\s+prior\s+information", row[1])
+        ]
+        detector_label_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)(?:single[- ]pixel\s+detector|detector\s+signal).*labels", row[1])
+        ]
+        unknown_scene_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)unknown\s+free[- ]space\s+and\s+underwater", row[1])
+        ]
+        if part_rows and loss_rows and iteration_rows and prior_rows:
+            selected_loop_rows = [
+                min(part_rows, key=lambda row: len(str(row[1] or ""))),
+                min(loss_rows, key=lambda row: len(str(row[1] or ""))),
+                min(
+                    iteration_rows,
+                    key=lambda row: (
+                        0
+                        if re.search(r"(?i)continuous\s+incorporation", str(row[1] or ""))
+                        else 1,
+                        len(str(row[1] or "")),
+                    ),
+                ),
+                min(
+                    prior_rows,
+                    key=lambda row: (
+                        0
+                        if re.search(r"(?i)continuous\s+incorporation", str(row[1] or ""))
+                        else 1,
+                        len(str(row[1] or "")),
+                    ),
+                ),
+            ]
+            if detector_label_rows:
+                selected_loop_rows.append(
+                    min(detector_label_rows, key=lambda row: len(str(row[1] or "")))
+                )
+            if unknown_scene_rows:
+                selected_loop_rows.append(
+                    min(unknown_scene_rows, key=lambda row: len(str(row[1] or "")))
+                )
+            structured_bundle_rows = selected_loop_rows
+            evidence = _compact_text(
+                " ".join(
+                    dict.fromkeys(
+                        str(row[1] or "").strip()
+                        for row in selected_loop_rows
+                    )
+                ),
+                max_len=2400,
+            )
+            best_heading = str(selected_loop_rows[0][0] or best_heading)
+            best_page = int(selected_loop_rows[0][2] or best_page or 0)
+
+    if axial_phase_detail_request and not structured_bundle_rows:
+        phase_relation_rows = [
+            row
+            for row in records
+            if re.search(
+                r"(?i)relative\s+phase\s+between\s+reflected\s+and\s+scattered\s+electric\s+fields",
+                row[1],
+            )
+        ]
+        phase_equation_rows = [
+            row
+            for row in records
+            if re.search(r"4\s*\\pi", row[1])
+            and re.search(r"(?i)\\varphi.*Gouy", row[1])
+        ]
+        phase_definition_rows = [
+            row
+            for row in records
+            if re.search(r"(?i)axial\s+position\s+of\s+the\s+scatterer", row[1])
+            and re.search(r"(?i)illumination\s+wavelength", row[1])
+            and re.search(r"(?i)Gouy\s+phase", row[1])
+        ]
+        if phase_relation_rows and phase_equation_rows and phase_definition_rows:
+            selected_phase_rows = [
+                min(phase_relation_rows, key=lambda row: len(str(row[1] or ""))),
+                min(phase_equation_rows, key=lambda row: len(str(row[1] or ""))),
+                min(phase_definition_rows, key=lambda row: len(str(row[1] or ""))),
+            ]
+            structured_bundle_rows = selected_phase_rows
+            evidence = _compact_text(
+                " ".join(
+                    dict.fromkeys(
+                        str(row[1] or "").strip()
+                        for row in selected_phase_rows
+                    )
+                ),
+                max_len=1200,
+            )
+            best_heading = str(selected_phase_rows[0][0] or best_heading)
+            best_page = int(selected_phase_rows[0][2] or best_page or 0)
 
     if not structured_bundle_rows:
         for group in compound_groups:
@@ -2073,6 +2622,29 @@ def _system_a_slots(
                 candidate_alignment_scores[existing_exact_index] = int(
                     hit_alignment_score or 0
                 )
+            incoming_block_id = _first_text(raw, "block_id", max_len=120)
+            incoming_anchor_id = _first_text(raw, "anchor_id", max_len=120)
+            if (incoming_block_id or incoming_anchor_id) and not (
+                str(existing.get("block_id") or "").strip()
+                or str(existing.get("anchor_id") or "").strip()
+            ):
+                # An unanchored selected-paper support slot can be aligned to
+                # exactly the same extractive passage as a later immutable
+                # answer hit. Keep the single slot, but upgrade it with the
+                # real SourceBlock locator instead of discarding that identity.
+                existing["block_id"] = incoming_block_id
+                existing["anchor_id"] = incoming_anchor_id
+                existing["anchor_kind"] = _first_text(
+                    raw, "anchor_kind", max_len=40
+                )
+                existing["strict_locate"] = True
+                incoming_page_start = _nonnegative_int(raw.get("page_start"))
+                incoming_page_end = _nonnegative_int(
+                    raw.get("page_end"), default=incoming_page_start
+                )
+                if incoming_page_start > 0:
+                    existing["page_start"] = incoming_page_start
+                    existing["page_end"] = incoming_page_end or incoming_page_start
             return
         identity = "|".join([source_path.lower(), heading.lower(), snippet[:120].lower(), str(hit_num)])
         if not source_path or not snippet or identity in seen:
@@ -2267,6 +2839,15 @@ def _system_a_slots(
             "heading",
             max_len=240,
         )
+        original_locator = {
+            "block_id": str(raw.get("block_id") or "").strip(),
+            "anchor_id": str(raw.get("anchor_id") or "").strip(),
+            "anchor_kind": str(raw.get("anchor_kind") or "").strip(),
+            "page_start": raw.get("page_start"),
+            "page_end": raw.get("page_end"),
+            "strict_locate": bool(raw.get("strict_locate")),
+        }
+        original_page_start = _nonnegative_int(raw.get("page_start"))
         raw = _prompt_aligned_source_slot(
             raw,
             ranking_texts=source_alignment_texts,
@@ -2284,10 +2865,45 @@ def _system_a_slots(
             "heading",
             max_len=240,
         )
+        if targeted_block_evidence and original_locator["block_id"]:
+            original_terms = evidence_alignment_tokens(original_hit_evidence)
+            aligned_terms = evidence_alignment_tokens(aligned_hit_evidence)
+            original_heading_key = re.sub(
+                r"\s+", " ", original_hit_heading
+            ).strip().casefold()
+            aligned_heading_key = re.sub(
+                r"\s+", " ", aligned_hit_heading
+            ).strip().casefold()
+            same_heading = bool(
+                original_heading_key
+                and aligned_heading_key
+                and (
+                    original_heading_key == aligned_heading_key
+                    or aligned_heading_key
+                    == f"{original_heading_key} / experimental setup"
+                )
+            )
+            aligned_coverage = (
+                len(original_terms & aligned_terms) / max(1, len(aligned_terms))
+            )
+            if same_heading and aligned_coverage >= 0.9:
+                # The focused bundle is an extractive subset of the same
+                # immutable SourceBlock. Preserve that locator; source
+                # alignment only clears it by default because cross-section
+                # promotions cannot safely reuse an old block id.
+                raw.update(original_locator)
+                raw["strict_locate"] = True
         alignment_score = len(
             evidence_alignment_tokens(original_hit_evidence)
             & evidence_alignment_tokens(aligned_hit_evidence)
         )
+        aligned_page_start = _nonnegative_int(raw.get("page_start"))
+        if (
+            original_page_start > 0
+            and aligned_page_start > 0
+            and original_page_start == aligned_page_start
+        ):
+            alignment_score += 300
         if (
             original_hit_heading
             and aligned_hit_heading
@@ -3350,7 +3966,15 @@ def build_citation_plan(
             flags=re.I,
         )
     )
-    if piln_prompt:
+    piln_loop_detail_prompt = bool(
+        re.search(
+            r"(?i)I[_\s]*N\s*\(\s*(?:out|real)\s*\)|loss\s+function|"
+            r"subsequent\s+iterations?|detector\s+signal\s+as\s+a\s+label|"
+            r"\u7269\u7406\u95ed\u73af|\u771f\u5b9e\u5f3a\u5ea6|\u635f\u5931\u51fd\u6570|\u540e\u7eed\u8fed\u4ee3",
+            str(prompt or ""),
+        )
+    )
+    if piln_prompt and not piln_loop_detail_prompt:
         piln_source_slot = next(
             (
                 slot

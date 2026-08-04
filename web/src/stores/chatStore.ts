@@ -2591,10 +2591,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       done: false,
     }
     const ctrl = new AbortController()
-    const shouldKeepPollingRefs = () => {
-      const state = get()
-      return state.activeConvId === convId && Boolean(state.generation)
-    }
     const requestGenerationIsCurrent = () => {
       const state = get()
       const cachedGeneration = convId ? state.conversationCacheById[convId]?.generation : null
@@ -2731,15 +2727,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await get().loadSidebarData().catch(() => {})
       throw new Error(startFailureMessage)
     }
-    scheduleLoadRefsForConversation(
-      convId,
-      set,
-      () => get().activeConvId,
-      350,
-      shouldKeepPollingRefs,
-      'generation_started',
-    )
-
     try {
       const sseRes = await authFetch(`/api/generate/${res.session_id}/stream`, {
         signal: ctrl.signal,

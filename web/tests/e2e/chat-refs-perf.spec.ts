@@ -167,6 +167,7 @@ async function installMockChatBackend(page: Page) {
   let generatePosted = false
   let generationDone = false
   let refsCalls = 0
+  let refsCallsDuringGeneration = 0
   let refsCallsAfterDone = 0
   let messagePageCallsAfterDone = 0
 
@@ -271,6 +272,7 @@ async function installMockChatBackend(page: Page) {
 
   await page.route(`**/api/references/conversation/${CONV_ID}`, async (route) => {
     refsCalls += 1
+    if (generatePosted && !generationDone) refsCallsDuringGeneration += 1
     if (generationDone) refsCallsAfterDone += 1
     const state = generationDone ? 'ready' : 'pending'
     await fulfillJson(route, generatePosted ? refsPayload(state) : {}, {
@@ -300,12 +302,13 @@ async function installMockChatBackend(page: Page) {
 
   return {
     getRefsCalls: () => refsCalls,
+    getRefsCallsDuringGeneration: () => refsCallsDuringGeneration,
     getRefsCallsAfterDone: () => refsCallsAfterDone,
     getMessagePageCallsAfterDone: () => messagePageCallsAfterDone,
   }
 }
 
-test('refs cards render during generation and perf logs prove polling continued', async ({ page }) => {
+test('terminal refs load starts after generation and runs beside message hydration', async ({ page }) => {
   const backend = await installMockChatBackend(page)
 
   await page.goto('/')
@@ -317,13 +320,14 @@ test('refs cards render during generation and perf logs prove polling continued'
   await page.locator('button.kb-send-btn').click()
 
   await expect(page.locator('button.kb-stop-btn')).toBeVisible({ timeout: 5_000 })
-  await expect(page.locator('.kb-refs-panel')).toBeVisible({ timeout: 5_000 })
-  await page.locator('.kb-refs-panel .ant-collapse-header').click()
-  await expect(page.locator('.kb-ref-title')).toContainText('Fixture Paper.pdf', { timeout: 5_000 })
+  await page.waitForTimeout(800)
+  expect(backend.getRefsCallsDuringGeneration()).toBe(0)
   await expect(page.locator('button.kb-stop-btn')).toBeVisible()
 
   await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 10_000 })
   await expect(page.locator('body')).toContainText('The direct match is Fixture Paper', { timeout: 5_000 })
+  await expect(page.locator('.kb-refs-panel')).toBeVisible({ timeout: 5_000 })
+  await page.locator('.kb-refs-panel .ant-collapse-header').click()
   await expect(page.locator('.kb-message-row.is-assistant strong')).toContainText('动态分配')
   await expect(page.locator('.kb-message-row.is-assistant')).not.toContainText('**动态分配**')
   await expect.poll(
@@ -337,33 +341,27 @@ test('refs cards render during generation and perf logs prove polling continued'
 
   const refsSummary = await page.evaluate(() => window.__kbRefsPerf?.summary())
   const refsLogs = await page.evaluate(() => window.__kbRefsPerf?.getLogs() || [])
-  const pollSuccesses = refsLogs.filter((event) => event.phase === 'poll_success')
-  const generationStartedEvents = refsLogs.filter((event) => event.reason === 'generation_started')
+  const generationDoneEvents = refsLogs.filter((event) => event.reason === 'generation_done')
 
-  expect(backend.getRefsCalls()).toBeGreaterThanOrEqual(3)
+  expect(backend.getRefsCalls()).toBeGreaterThanOrEqual(2)
+  expect(backend.getRefsCallsDuringGeneration()).toBe(0)
   expect(backend.getMessagePageCallsAfterDone()).toBe(1)
   expect(refsSummary?.fetchSuccess).toBeGreaterThanOrEqual(2)
   expect(refsSummary?.lastMode).toBe('fast')
   expect(refsSummary?.lastCounts).toContain('packs=1')
-  expect(generationStartedEvents.length).toBeGreaterThan(0)
-  expect(pollSuccesses.some((event) => event.keepPolling === true)).toBe(true)
-  expect(refsLogs.some((event) => event.summary?.pendingPackCount === 1)).toBe(true)
+  expect(generationDoneEvents.length).toBeGreaterThan(0)
   expect(refsLogs.some((event) => event.summary?.fastPackCount === 1)).toBe(true)
 
   await expect.poll(
     async () => {
       const logs = await page.evaluate(() => window.__kbRefsPerf?.getLogs() || [])
-      const pollWasSuperseded = logs.some((event) => (
-        event.phase === 'poll_stop'
-        && event.reason === 'superseded_by_direct_load'
-      ))
       const terminalRefreshSettled = logs.some((event) => (
         event.phase === 'fetch_success'
         && String(event.reason || '') === 'generation_done'
         && event.needsEnrichment === false
         && event.keepPolling === false
       ))
-      return pollWasSuperseded && terminalRefreshSettled
+      return terminalRefreshSettled
     },
     { timeout: 5_000 },
   ).toBe(true)

@@ -564,7 +564,7 @@ def test_answer_citation_locator_prefers_claim_alignment_over_locator_completene
                             "citation_route": "system_a",
                             "source_path": source_path,
                             "source_name": "qCLFM.pdf",
-                            "heading_path": "qCLFM / A. Concept",
+                            "heading_path": "qCLFM / B. Experimental Results / Digital Refocusing Procedure",
                             "answer_claim": claim,
                             "evidence_quote": compact,
                         }
@@ -580,6 +580,7 @@ def test_answer_citation_locator_prefers_claim_alignment_over_locator_completene
     assert len(details) == 1
     assert details[0]["block_id"] == "blk-refocus"
     assert details[0].get("anchor_id") in (None, "")
+    assert details[0]["heading_path"] == "qCLFM / A. Concept"
     assert details[0]["citation_plan_reader_evidence_quote"] == continuous
     assert "detector calibration" not in details[0]["citation_plan_reader_evidence_quote"]
 
@@ -2050,6 +2051,143 @@ def test_answer_citation_overlay_discards_previous_source_metadata(monkeypatch) 
     assert stale_3d not in str(hit)
 
 
+def test_answer_citation_overlay_keeps_piln_guide_and_relevance_distinct(
+    monkeypatch,
+) -> None:
+    source_path = r"F:\db\PILN\PILN.en.md"
+    evidence = (
+        "The difference between the I_N(out) of the retrieved image and the "
+        "I_N(real) captured by the SPD is used as a loss function to train ILNet. "
+        "The generated 2D image then serves as input for the subsequent iteration."
+    )
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {"id": 52, "role": "user", "content": "PILN 如何自监督训练？"},
+                {
+                    "id": 53,
+                    "role": "assistant",
+                    "content": (
+                        "ILNet 比较重建信号 I_N(out) 与探测信号 I_N(real)，"
+                        "并把差值用作训练损失 [1]。"
+                    ),
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "citation_route": "system_a",
+                                        "num": 1,
+                                        "source_path": source_path,
+                                        "source_name": (
+                                            "Part-based image-loop network for "
+                                            "single-pixel imaging.pdf"
+                                        ),
+                                        "heading_path": "Methods",
+                                        "answer_claim": (
+                                            "ILNet 比较重建信号 I_N(out) 与探测信号 "
+                                            "I_N(real)，并把差值用作训练损失。"
+                                        ),
+                                        "evidence_quote": evidence,
+                                        "block_id": "blk-piln",
+                                        "anchor_id": "p-piln",
+                                        "page_start": 2,
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "zh")
+    result = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload={
+            52: {
+                "prompt": "PILN 如何自监督训练？",
+                "hits": [
+                    {
+                        "text": evidence,
+                        "meta": {"source_path": source_path},
+                        "ui_meta": {"source_path": source_path},
+                    }
+                ],
+            }
+        },
+    )
+    ui = result[52]["hits"][0]["ui_meta"]
+
+    assert ui["summary_line"] != ui["why_line"]
+    assert "一致性损失" in ui["why_line"]
+    assert "图像回环" in ui["why_line"]
+    assert "配对真值图像" in ui["why_line"]
+
+
+def test_cached_piln_pack_reapplies_public_copy_contract() -> None:
+    summary = (
+        "ILNet 在没有配对真值图像时，通过物理模型与 1D 信号标签形成"
+        "自监督闭环。"
+    )
+    evidence = (
+        "The difference between the I_N(out) of the retrieved image and the "
+        "I_N(real) captured by the SPD is used as a loss function. The generated "
+        "2D image serves as input for the subsequent image-loop iteration."
+    )
+    source_path = r"F:\db\PILN\PILN.en.md"
+    result = references_router._overlay_refs_payload_with_answer_citations(
+        store=object(),
+        conv_id="conv",
+        answer_citation_state=({}, set()),
+        payload={
+            62: {
+                "display_state": "ready",
+                "render_status": "full",
+                "answer_aligned_citation_cards": True,
+                "hits": [
+                    {
+                        "text": evidence,
+                        "meta": {
+                            "source_path": source_path,
+                            "source_name": (
+                                "Part-based image-loop network for "
+                                "single-pixel imaging.pdf"
+                            ),
+                            "ref_pack_state": "ready",
+                        },
+                        "ui_meta": {
+                            "source_path": source_path,
+                            "display_name": (
+                                "Part-based image-loop network for "
+                                "single-pixel imaging.pdf"
+                            ),
+                            "render_locale": "zh",
+                            "summary_line": summary,
+                            "summary_kind": "guide",
+                            "summary_generation": "answer_citation_grounded",
+                            "why_line": summary,
+                            "why_generation": "answer_citation_grounded",
+                            "primary_evidence": {
+                                "source_path": source_path,
+                                "snippet": evidence,
+                                "highlight_snippet": evidence,
+                            },
+                        },
+                    }
+                ],
+            }
+        },
+    )
+    ui = result[62]["hits"][0]["ui_meta"]
+
+    assert ui["summary_line"] != ui["why_line"]
+    assert "一致性损失" in ui["why_line"]
+    assert "图像回环" in ui["why_line"]
+
+
 def test_reference_cards_stay_pending_until_planned_answer_citations_are_ready() -> None:
     source_path = r"F:\db\Paper\Paper.en.md"
 
@@ -2099,6 +2237,28 @@ def test_reference_cards_stay_pending_until_planned_answer_citations_are_ready()
         store=Store(),
         conv_id="conv",
         payload=payload,
+    )
+
+    assert out[20]["enrichment_pending"] is True
+    assert out[20]["answer_citation_overlay_pending"] is True
+
+
+def test_answer_citation_overlay_reuses_preloaded_state_without_reading_messages(monkeypatch):
+    class Store:
+        def get_messages(self, _conv_id):
+            raise AssertionError("preloaded answer citation state should avoid a second message read")
+
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "en")
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload={
+            20: {
+                "prompt": "What supports this claim?",
+                "hits": [{"meta": {"source_path": "paper.en.md"}, "ui_meta": {}}],
+            }
+        },
+        answer_citation_state=({}, {20}),
     )
 
     assert out[20]["enrichment_pending"] is True
@@ -2728,8 +2888,8 @@ def test_get_conversation_refs_uses_completed_answer_citations_without_fast_rend
     )
     monkeypatch.setattr(
         references_router,
-        "_answer_citation_details_by_user",
-        lambda **_kwargs: {7: [{"source_path": source_path}]},
+        "_answer_citation_state_by_user",
+        lambda **_kwargs: ({7: [{"source_path": source_path}]}, set()),
     )
 
     def _overlay(**kwargs):
@@ -2842,10 +3002,11 @@ def test_get_conversation_refs_keeps_latest_answer_overlay_beside_older_full_pac
     )
     monkeypatch.setattr(
         references_router,
-        "_answer_citation_details_by_user",
-        lambda **_kwargs: {
-            3: [{"source_path": r"db\Latest\Latest.en.md"}],
-        },
+        "_answer_citation_state_by_user",
+        lambda **_kwargs: (
+            {3: [{"source_path": r"db\Latest\Latest.en.md"}]},
+            set(),
+        ),
     )
     monkeypatch.setattr(
         references_router,
@@ -3039,6 +3200,58 @@ def test_get_conversation_refs_returns_fast_pending_payload_without_enrich(monke
     assert list((out.get(7) or {}).get("hits") or []) == []
     assert str((out.get(7) or {}).get("display_state") or "") == "pending"
     assert str((out.get(7) or {}).get("suppression_reason") or "") == "pending_enrichment"
+
+
+def test_get_conversation_refs_keeps_latest_ready_seed_lightweight_while_generation_runs(
+    monkeypatch,
+):
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    references_router._REFS_CONVERSATION_WARMING.clear()
+    refs = {
+        7: {
+            "prompt": "Which paper discusses ADMM?",
+            "hits": [
+                {
+                    "text": "ADMM retrieval seed",
+                    "meta": {
+                        "source_path": r"db\A\A.en.md",
+                        "ref_pack_state": "ready",
+                    },
+                }
+            ],
+        }
+    }
+    store = _FakeStore({"mode": "chat"}, refs)
+
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(
+        references_router,
+        "_gen_has_running_for_conversation",
+        lambda conv_id, *, chat_db_path=None: conv_id == "conv-active",
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_warm_conversation_refs_payload_async",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("active generation must not start a card warm")
+        ),
+    )
+    monkeypatch.setattr(
+        references_router,
+        "enrich_refs_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("active generation must bypass ready-card enrichment")
+        ),
+    )
+
+    response = Response()
+    out = references_router.get_conversation_refs("conv-active", response=response)
+
+    assert out[7]["display_state"] == "pending"
+    assert out[7]["payload_mode"] == "pending"
+    assert out[7]["enrichment_pending"] is True
+    assert "fast_render;dur=" not in str(response.headers.get("server-timing") or "")
+    assert response.headers.get("x-kb-refs-mode") == "pending"
 
 
 def test_get_conversation_refs_treats_stale_pending_pack_as_fast_ready(monkeypatch):

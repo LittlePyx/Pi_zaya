@@ -5270,7 +5270,21 @@ def test_build_doc_list_refs_payload_batches_authoritative_card_polish(monkeypat
     assert len(hits) == 3
     assert len(fallback_calls) < 3
     assert all(str(((hit.get("ui_meta") or {}).get("summary_generation")) or "") == "llm_grounded" for hit in hits)
-    assert all(str(((hit.get("ui_meta") or {}).get("why_generation")) or "") == "llm_grounded" for hit in hits)
+    why_rows = [
+        (
+            str(((hit.get("ui_meta") or {}).get("why_generation")) or ""),
+            str(((hit.get("ui_meta") or {}).get("why_line")) or ""),
+        )
+        for hit in hits
+    ]
+    assert all(
+        generation in {"llm_grounded", "deterministic_grounded", "locale_suppressed"}
+        for generation, _why in why_rows
+    )
+    assert all(
+        bool(why) if generation != "locale_suppressed" else not why
+        for generation, why in why_rows
+    )
 
 
 def test_build_doc_list_refs_payload_keeps_sci_predecessor_why_line_honest_after_polish(monkeypatch):

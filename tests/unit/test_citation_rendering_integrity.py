@@ -119,6 +119,105 @@ def test_num_cite_maps_to_second_source(monkeypatch):
     assert PAPER2 in d["source_path"], f"Expected {PAPER2}, got {d['source_path']}"
 
 
+def test_rebound_same_source_number_uses_exact_quantitative_plan_bundle(monkeypatch):
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(
+        refs_renderer,
+        "_resolve_reference_entry_from_index",
+        lambda *args, **kwargs: None,
+    )
+    source_path = "Quantum correlation light-field microscope with extreme depth of field.en.md"
+    mechanism = (
+        "The design uses position and angular/momentum correlation. Each degree of "
+        "freedom can be measured on separate cameras."
+    )
+    quantitative = (
+        "This allowed a DOF between 2–5 times larger at the $5\\,\\mu\\mathrm{m}$ "
+        "resolution, at about $3\\,pW$, or $15 \\times 10^6$ photons per second "
+        "at $810\\,nm$."
+    )
+    hits = [
+        {
+            "text": "Digital refocusing uses two steps.",
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 1},
+        },
+        {
+            "text": "Ray tracing is followed by wave propagation.",
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 2},
+        },
+        {
+            "text": f"{mechanism} {quantitative}",
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 3},
+            "ui_meta": {
+                "primary_evidence": {
+                    "source_name": "QCLFM.pdf",
+                    "heading_path": "III. DISCUSSION",
+                    "snippet": mechanism,
+                    "highlight_snippet": mechanism,
+                    "page_start": 3,
+                    "page_end": 3,
+                }
+            },
+        },
+        {
+            "text": "The signal and idler paths use different event cameras.",
+            "meta": {"source_path": source_path, "ref_answer_citation_num": 4},
+        },
+    ]
+    citation_plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [4],
+                "source_path": source_path,
+                "heading_path": "III. DISCUSSION",
+                "evidence_quote": f"{mechanism} {quantitative}",
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "page_start": 3,
+                "page_end": 3,
+            }
+        ],
+    }
+    md = (
+        "QCLFM measures position and angular information on separate cameras [3].\n\n"
+        "Refocusing uses ray tracing and wave propagation [2].\n\n"
+        "The reported DOF is 2–5 times larger at 5 μm resolution, about 3 pW, "
+        "15 × 10^6 photons per second at 810 nm [3]."
+    )
+
+    rendered, _details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
+        md,
+        hits,
+        anchor_ns="qclfm-quant",
+        canonical_paths=[source_path] * 4,
+        citation_plan=citation_plan,
+    )
+
+    assert "810 nm [3](#" in rendered
+
+
+def test_scinerf_compound_excerpt_keeps_synthesis_and_differentiability() -> None:
+    plan_text = (
+        "where Y is the captured compressed image, X_i is the virtual image, the mask "
+        "denotes element-wise multiplication, and Z is the measurement noise. "
+        "Given the NeRF representation and corresponding camera poses, we are able to "
+        "render X_i to synthesize the compressed image Y. We can see that Y is "
+        "differentiable with respect to NeRF and the poses, which lays the foundation "
+        "for the optimization step."
+    )
+
+    excerpt = refs_renderer._compound_plan_evidence_excerpt(
+        plan_text,
+        "渲染各个 X_i 并合成压缩图像 Y；该结果对 NeRF 和位姿可微。",
+    )
+
+    assert "synthesize the compressed image" in excerpt
+    assert "differentiable with respect to NeRF and the poses" in excerpt
+    assert "captured compressed image" in excerpt
+    assert "measurement noise" in excerpt
+
+
 def test_missing_canonical_source_does_not_fall_back_to_wrong_display_hit(monkeypatch):
     monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
     monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *a, **kw: None)

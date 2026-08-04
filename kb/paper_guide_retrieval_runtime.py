@@ -100,6 +100,235 @@ _PAPER_GUIDE_SCAN_TOKEN_STOPWORDS = {
 }
 
 
+_PAPER_GUIDE_TECHNICAL_TOKEN_STOPWORDS = {
+    *_PAPER_GUIDE_SCAN_TOKEN_STOPWORDS,
+    "answer",
+    "compare",
+    "conditions",
+    "explain",
+    "give",
+    "quality",
+    "result",
+    "results",
+    "stage",
+    "stages",
+}
+
+
+def _paper_guide_quantity_anchors(text: str) -> set[str]:
+    """Normalize exact quantities so equivalent unit spellings still align.
+
+    The bound-source scanner is often asked for a bundle of experimental
+    settings.  Lexical ranking treats ``62.5 kHz`` and ``62,500 Hz`` as
+    unrelated tokens, even though they identify the same source fact.  Keep a
+    small, deterministic quantity surface for ranking only; answer text and
+    evidence always remain source-verbatim.
+    """
+
+    raw = str(text or "")
+    if not raw:
+        return set()
+    anchors: set[str] = set()
+    pattern = re.compile(
+        r"(?i)(?<![A-Za-z0-9])"
+        r"(\d+(?:[.,]\d+)?)\s*"
+        r"(GHz|MHz|kHz|Hz|GS/s|MS/s|Ms/s|kS/s|samples?/s|"
+        r"ms|[\u03bc\u00b5]s|us|ns|ps|dB|%)"
+        r"(?![A-Za-z0-9])"
+    )
+    for match in pattern.finditer(raw):
+        number_text = str(match.group(1) or "").replace(",", "")
+        unit_raw = str(match.group(2) or "")
+        try:
+            value = float(number_text)
+        except Exception:
+            continue
+        unit_low = unit_raw.lower().replace("\u00b5", "\u03bc")
+        if unit_low in {"ghz", "mhz", "khz", "hz"}:
+            factor = {"ghz": 1e9, "mhz": 1e6, "khz": 1e3, "hz": 1.0}[unit_low]
+            anchors.add(f"hz:{round(value * factor, 9):g}")
+        elif unit_raw in {"GS/s", "MS/s", "Ms/s"} or unit_low in {"ks/s", "samples/s", "sample/s"}:
+            factor = {
+                "GS/s": 1e9,
+                "MS/s": 1e6,
+                "Ms/s": 1e6,
+            }.get(unit_raw, 1e3 if unit_low == "ks/s" else 1.0)
+            anchors.add(f"samples_per_s:{round(value * factor, 9):g}")
+        elif unit_low in {"ms", "\u03bcs", "us", "ns", "ps"}:
+            factor = {"ms": 1e-3, "\u03bcs": 1e-6, "us": 1e-6, "ns": 1e-9, "ps": 1e-12}[unit_low]
+            anchors.add(f"seconds:{round(value * factor, 15):g}")
+        elif unit_low == "db":
+            anchors.add(f"db:{round(value, 9):g}")
+        elif unit_low == "%":
+            anchors.add(f"percent:{round(value, 9):g}")
+    return anchors
+
+
+def _paper_guide_math_anchors(text: str) -> set[str]:
+    """Return compact signatures for formulas explicitly present in a query."""
+
+    raw = str(text or "").lower()
+    if not raw:
+        return set()
+    normalized = raw
+    normalized = normalized.replace("\\operatorname", " ").replace("\\mathrm", " ")
+    normalized = normalized.replace("\\log", " log ").replace("\\pi", " pi ")
+    normalized = normalized.replace("\u03c0", " pi ").replace("\u2082", " 2 ")
+    normalized = re.sub(r"[_{}$]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    anchors: set[str] = set()
+    signatures = (
+        ("log2_log_n", r"\blog\s*2\s*log\s*n\b"),
+        ("n_over_log_n_plus_k", r"\bn\s*/\s*log\s*n\s*\+\s*k\b"),
+        ("k_log_n", r"\bk\s*(?:\\?\s*)log\s*n\b"),
+        ("four_pi", r"(?:^|\W)4\s*(?:\*\s*)?pi"),
+        ("f_3db", r"\bf\s*3\s*db\b|\b3\s*db\b"),
+    )
+    for key, pattern in signatures:
+        if re.search(pattern, normalized, flags=re.IGNORECASE):
+            anchors.add(key)
+    return anchors
+
+
+def _paper_guide_technical_anchors(text: str) -> set[str]:
+    raw = str(text or "")
+    if not raw:
+        return set()
+    normalized = raw.replace("\u2010", "-").replace("\u2011", "-")
+    anchors: set[str] = set()
+    for token in re.findall(
+        r"[A-Za-z][A-Za-z0-9_]*(?:\([A-Za-z0-9_]+\))?|"
+        r"[A-Za-z][A-Za-z0-9]+(?:-[A-Za-z0-9]+)+",
+        normalized,
+    ):
+        key = str(token or "").strip().lower()
+        if len(key) < 3 or key in _PAPER_GUIDE_TECHNICAL_TOKEN_STOPWORDS:
+            continue
+        anchors.add(key)
+    return anchors
+
+
+def _paper_guide_focus_long_block_excerpt(text: str, *, prompt: str, max_len: int = 2800) -> str:
+    """Keep the claim-bearing sentences from a long converted source block.
+
+    This is deliberately extractive.  It never invents a value or paraphrases
+    source evidence; it only prevents a fixed prefix truncation from discarding
+    the decisive settings or boundary conditions near the end of a paragraph.
+    """
+
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    cap = max(600, int(max_len or 2800))
+    if len(raw) <= cap:
+        return raw
+    sentences = [
+        str(part or "").strip()
+        for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9$*\\])", raw)
+        if str(part or "").strip()
+    ]
+    if len(sentences) <= 1:
+        return raw[:cap].rsplit(" ", 1)[0].strip()
+
+    query_quantities = _paper_guide_quantity_anchors(prompt)
+    query_math = _paper_guide_math_anchors(prompt)
+    query_technical = _paper_guide_technical_anchors(prompt)
+    query_tokens = set(_paper_guide_scan_tokens(prompt, limit=120))
+    query_tokens.update(_paper_guide_semantic_query_terms(prompt))
+    query_relations = _paper_guide_requested_relation_anchors(query_tokens)
+    ranked: list[
+        tuple[float, int, str, set[str], set[str], set[str], set[str]]
+    ] = []
+    for index, sentence in enumerate(sentences):
+        sentence_quantities = _paper_guide_quantity_anchors(sentence)
+        sentence_math = _paper_guide_math_anchors(sentence)
+        sentence_technical = _paper_guide_technical_anchors(sentence)
+        shared_tokens = query_tokens.intersection(
+            _paper_guide_scan_tokens(sentence, limit=180)
+        )
+        shared_quantities = query_quantities.intersection(sentence_quantities)
+        shared_math = query_math.intersection(sentence_math)
+        shared_technical = query_technical.intersection(sentence_technical)
+        shared_relations = query_relations.intersection(
+            _paper_guide_source_relation_anchors(sentence)
+        )
+        score = (
+            20.0 * float(len(shared_quantities))
+            + 18.0 * float(len(shared_math))
+            + 5.0 * float(len(shared_technical))
+            + 22.0 * float(len(shared_relations))
+            + 1.5 * float(len(shared_tokens))
+        )
+        if re.search(r"(?i)\b(?:provided|criterion|integer|cannot|without|limit|advantage|subsequent|retained)\b", sentence):
+            score += 2.0
+        ranked.append(
+            (
+                score,
+                index,
+                sentence,
+                shared_quantities,
+                shared_math,
+                shared_technical,
+                shared_relations,
+            )
+        )
+
+    selected: set[int] = set()
+    covered_quantities: set[str] = set()
+    covered_math: set[str] = set()
+    covered_technical: set[str] = set()
+    covered_relations: set[str] = set()
+    used_chars = 0
+    remaining = list(ranked)
+    while remaining and len(selected) < 7:
+        best = max(
+            remaining,
+            key=lambda item: (
+                float(item[0])
+                + 15.0 * len(item[3] - covered_quantities)
+                + 14.0 * len(item[4] - covered_math)
+                + 3.0 * len(item[5] - covered_technical)
+                + 14.0 * len(item[6] - covered_relations),
+                -len(item[2]),
+            ),
+        )
+        remaining.remove(best)
+        (
+            score,
+            index,
+            sentence,
+            quantities,
+            math_anchors,
+            technical,
+            relations,
+        ) = best
+        if score <= 0.0 and selected:
+            break
+        projected = used_chars + len(sentence) + (1 if selected else 0)
+        if projected > cap and selected:
+            continue
+        selected.add(index)
+        used_chars = projected
+        covered_quantities.update(quantities)
+        covered_math.update(math_anchors)
+        covered_technical.update(technical)
+        covered_relations.update(relations)
+        if (
+            covered_quantities.issuperset(query_quantities)
+            and covered_math.issuperset(query_math)
+            and covered_relations.issuperset(query_relations)
+            and len(selected) >= 3
+        ):
+            # Keep one more high-value relation/boundary sentence when space
+            # permits; it often states why the numerical settings matter.
+            if len(selected) >= 5:
+                break
+    if not selected:
+        return raw[:cap].rsplit(" ", 1)[0].strip()
+    excerpt = " ".join(sentences[index] for index in sorted(selected)).strip()
+    if len(excerpt) > cap:
+        excerpt = excerpt[:cap].rsplit(" ", 1)[0].strip()
+    return excerpt
+
+
 def _paper_guide_scan_tokens(text: str, *, limit: int = 160) -> list[str]:
     """Return a fuller lexical surface than the compact citation cue list.
 
@@ -140,6 +369,33 @@ def _paper_guide_semantic_query_terms(prompt: str) -> list[str]:
     if not q:
         return []
     rules: tuple[tuple[str, str], ...] = (
+        (r"\u4f4d\u7f6e|position", "position spatial coordinate"),
+        (r"\u89d2\u5ea6|\u52a8\u91cf|angular|momentum", "angular momentum angle"),
+        (r"\u8f74\u5411|\u6df1\u5ea6|axial|depth", "depth axial position phase difference"),
+        (
+            r"\u91cd\u805a\u7126|\u91cd\u65b0\u5bf9\u7126|\u79bb\u7126|refocus|refocusing",
+            "digital refocusing ray tracing diffraction reverse wave propagation",
+        ),
+        (r"\u6ce2\u4f20\u64ad|wave\s+propagation", "wave propagation diffraction distance"),
+        (r"\u62cd\u9891|beat\s+frequency", "beat frequency beating cycles temporal period"),
+        (r"\u91c7\u6837|sampling", "sampling rate data points samples Nyquist criterion"),
+        (r"\u79ef\u5206\u65f6\u95f4|integration\s+time", "detector integration time responsivity"),
+        (r"\u7279\u5f81\u65f6\u95f4|characteristic\s+time", "characteristic time optimal SNR"),
+        (r"\u81ea\u76d1\u7763|self[- ]supervised", "self-supervised loss detector signal label"),
+        (r"\u8fed\u4ee3|iteration", "iteration subsequent iterations prior information"),
+        (
+            r"\u4e24\u9636\u6bb5|two\s+stages?",
+            "two stages first stage second stage remove zero components retained",
+        ),
+        (
+            r"\u5269\u4f59\u7ef4\u5ea6|remaining\s+dimension",
+            "remaining components lower dimensional bounded",
+        ),
+        (
+            r"\u989d\u5916\u6d4b\u91cf|additional\s+measurements?",
+            "additional measurements reliably remove remaining zero components",
+        ),
+        (r"\u4f4e\s*SNR|lower\s+SNR", "much lower SNR exact support recovered"),
         (r"位置|position", "position spatial coordinate"),
         (r"角度|动量|angular|momentum", "angular momentum angle"),
         (r"分辨率|resolution", "resolution spatial axial lateral"),
@@ -260,6 +516,61 @@ def _paper_guide_seed_query_tokens_for_targeted_scan(
     src_seed = re.sub(r"\.pdf$", "", raw_src, flags=re.IGNORECASE)
     seeded = f"{src_seed} method methods result results figure equation reference discussion"
     return set(_paper_guide_cue_tokens(seeded))
+
+
+def _paper_guide_requested_relation_anchors(query_tokens: set[str]) -> set[str]:
+    tokens = {str(token or "").strip().lower() for token in query_tokens if str(token or "").strip()}
+    requested: set[str] = set()
+    rules: tuple[tuple[str, set[str]], ...] = (
+        ("ray_tracing", {"ray", "tracing"}),
+        ("wave_propagation", {"wave", "propagation"}),
+        ("nyquist", {"nyquist", "criterion"}),
+        ("integer_beating_cycles", {"beating", "cycles"}),
+        ("additional_measurements", {"additional", "measurements"}),
+        ("zero_component_elimination", {"zero", "components", "retained"}),
+        ("subsequent_iterations", {"subsequent", "iterations"}),
+        ("characteristic_optimal_snr", {"characteristic", "optimal", "snr"}),
+        ("detector_integration_boundary", {"detector", "integration", "responsivity"}),
+        ("axial_phase_definition", {"axial", "phase", "position"}),
+    )
+    for key, required in rules:
+        if required.issubset(tokens):
+            requested.add(key)
+    return requested
+
+
+def _paper_guide_source_relation_anchors(text: str) -> set[str]:
+    raw = str(text or "")
+    if not raw:
+        return set()
+    rules: tuple[tuple[str, str], ...] = (
+        ("ray_tracing", r"(?i)\bray\s+tracing\b"),
+        ("wave_propagation", r"(?i)\bwave\s+propagation\b"),
+        ("nyquist", r"(?i)\bNyquist\s+sampling\s+criterion\b"),
+        (
+            "integer_beating_cycles",
+            r"(?i)\binteger\s+number\s+of\s+beating\s+cycles\b",
+        ),
+        ("additional_measurements", r"(?i)\badditional\s+measurements\b"),
+        (
+            "zero_component_elimination",
+            r"(?is)remove\s+half\s+of\s+the\s+zero\s+components.*all\s+the\s+non-zero\s+components\s+are\s+retained",
+        ),
+        ("subsequent_iterations", r"(?i)\bsubsequent\s+iterations\b"),
+        (
+            "characteristic_optimal_snr",
+            r"(?is)characteristic\s+time.*optimal\s+SNR|optimal\s+SNR.*characteristic\s+time",
+        ),
+        (
+            "detector_integration_boundary",
+            r"(?is)detector\s+integration\s+time.*(?:3\s*dB|responsivity)|(?:3\s*dB|responsivity).*integration\s+time",
+        ),
+        (
+            "axial_phase_definition",
+            r"(?is)(?:4\s*\\?pi.*(?:Gouy|varphi)|axial\s+position\s+of\s+the\s+scatterer.*Gouy\s+phase)",
+        ),
+    )
+    return {key for key, pattern in rules if re.search(pattern, raw)}
 
 
 def _paper_guide_best_block_for_fallback_hit(
@@ -716,6 +1027,10 @@ def _paper_guide_targeted_source_block_hits(
             family=family,
             bound_source_path=bound_source_path,
         )
+    query_quantity_anchors = _paper_guide_quantity_anchors(q)
+    query_math_anchors = _paper_guide_math_anchors(q)
+    query_technical_anchors = _paper_guide_technical_anchors(q)
+    query_relation_anchors = _paper_guide_requested_relation_anchors(query_tokens)
     named_acronyms = {
         str(token or "").upper()
         for token in re.findall(r"(?<![A-Za-z0-9])([A-Z][A-Z0-9+_-]{1,15})(?![A-Za-z0-9])", q)
@@ -818,6 +1133,12 @@ def _paper_guide_targeted_source_block_hits(
         if box_context_match:
             score += 14.0
         heading_low = heading.lower()
+        if (
+            not is_citation_lookup
+            and not explicit_ref_list_request
+            and re.search(r"(?:^|\s/\s)(?:references?|bibliography|works cited)(?:\s/\s|$)", heading_low)
+        ):
+            continue
         tokens = set(_paper_guide_cue_tokens(combined))
         if idx < len(block_scan_tokens):
             tokens.update(block_scan_tokens[idx])
@@ -840,6 +1161,43 @@ def _paper_guide_targeted_source_block_hits(
             score += min(42.0, 2.4 * float(weighted_overlap))
             if len(shared) >= 3:
                 score += min(12.0, 1.5 * float(len(shared) - 2))
+        exact_anchor_surface = f"{heading}\n{text}"
+        combined_quantity_anchors = _paper_guide_quantity_anchors(
+            exact_anchor_surface
+        )
+        shared_quantities = query_quantity_anchors.intersection(
+            combined_quantity_anchors
+        )
+        if shared_quantities:
+            score += 22.0 * float(len(shared_quantities))
+            if len(shared_quantities) >= 2:
+                score += 12.0
+        combined_math_anchors = _paper_guide_math_anchors(exact_anchor_surface)
+        shared_math = query_math_anchors.intersection(combined_math_anchors)
+        if shared_math:
+            score += 24.0 * float(len(shared_math))
+            if len(shared_math) >= 2:
+                score += 14.0
+        combined_technical_anchors = _paper_guide_technical_anchors(
+            exact_anchor_surface
+        )
+        shared_technical = query_technical_anchors.intersection(
+            combined_technical_anchors
+        )
+        if shared_technical:
+            score += min(32.0, 4.0 * float(len(shared_technical)))
+            if len(shared_technical) >= 3:
+                score += min(16.0, 2.0 * float(len(shared_technical) - 2))
+        source_relation_anchors = _paper_guide_source_relation_anchors(
+            exact_anchor_surface
+        )
+        shared_relations = query_relation_anchors.intersection(
+            source_relation_anchors
+        )
+        if shared_relations:
+            score += 34.0 * float(len(shared_relations))
+            if len(shared_relations) >= 2:
+                score += 18.0
         semantic_text_overlap = semantic_query_tokens.intersection(
             _paper_guide_scan_tokens(text, limit=220)
         )
@@ -1089,7 +1447,11 @@ def _paper_guide_targeted_source_block_hits(
                 )
         if score <= 0.0:
             continue
-        hit_text = text
+        hit_text = _paper_guide_focus_long_block_excerpt(
+            text,
+            prompt=q,
+            max_len=2800,
+        )
         if family == "strength_limits":
             sentences = [
                 part.strip()
@@ -1153,7 +1515,7 @@ def _paper_guide_targeted_source_block_hits(
             (
                 score,
                 {
-                    "text": hit_text[:1200],
+                        "text": hit_text[:2800],
                     "score": score,
                     "meta": meta,
                 },

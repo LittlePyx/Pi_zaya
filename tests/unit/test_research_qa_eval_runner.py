@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from tools.research_qa import run_research_qa_eval as eval_mod
 from tools.research_qa.run_research_qa_eval import (
     ResearchQaFixture,
@@ -233,13 +235,63 @@ def test_timing_summary_reports_user_visible_percentiles() -> None:
     timing = _timing_summary(
         [
             {"first_answer_ms": 100, "answer_complete_ms": 500, "latency_ms": 900},
-            {"first_answer_ms": 300, "answer_complete_ms": 700, "cards_complete_ms": 800, "latency_ms": 1100},
-            {"first_answer_ms": 200, "answer_complete_ms": 600, "cards_complete_ms": 1000, "latency_ms": 1000},
+            {"first_answer_ms": 300, "answer_complete_ms": 700, "cards_complete_ms": 800, "latency_ms": 1100, "validation_complete_ms": 1200},
+            {"first_answer_ms": 200, "answer_complete_ms": 600, "cards_complete_ms": 1000, "latency_ms": 1000, "validation_complete_ms": 1300},
         ]
     )
 
     assert timing["first_answer_ms"] == {"count": 3, "p50": 200.0, "p95": 290.0, "max": 300.0}
     assert timing["cards_complete_ms"] == {"count": 2, "p50": 900.0, "p95": 990.0, "max": 1000.0}
+    assert timing["answer_to_cards_ms"] == {"count": 2, "p50": 250.0, "p95": 385.0, "max": 400.0}
+    assert timing["cards_to_ui_ready_ms"] == {"count": 2, "p50": 150.0, "p95": 285.0, "max": 300.0}
+    assert timing["cards_to_validation_ms"] == {"count": 2, "p50": 350.0, "p95": 395.0, "max": 400.0}
+
+
+def test_progressive_refs_poll_records_backend_phases_and_waits_for_full_cards(monkeypatch) -> None:
+    pending = {
+        "9": {
+            "payload_mode": "pending",
+            "render_status": "pending",
+            "pending": True,
+            "hits": [],
+        }
+    }
+    full = {
+        "9": {
+            "payload_mode": "full",
+            "render_status": "full",
+            "hits": [],
+        }
+    }
+    responses = iter(
+        [
+            (pending, {"refs_mode": "pending", "refs_counts": "packs=1;pending=1", "server_timing": "total;dur=12.0"}),
+            (full, {"refs_mode": "full", "refs_counts": "packs=1;ready=1", "server_timing": "total;dur=3.0"}),
+        ]
+    )
+    monkeypatch.setattr(eval_mod, "_get_json_with_meta", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(eval_mod.time, "sleep", lambda _seconds: None)
+    generation_done = threading.Event()
+    generation_done.set()
+    wait_for_full_refs = threading.Event()
+    wait_for_full_refs.set()
+
+    result = eval_mod._poll_refs_for_case(
+        base_url="http://test",
+        conv_id="conv",
+        user_msg_id=9,
+        expected={},
+        forbidden_phrases=[],
+        timeout_s=5.0,
+        generation_started=eval_mod.time.perf_counter(),
+        generation_done=generation_done,
+        wait_for_full_refs=wait_for_full_refs,
+    )
+
+    assert result["refs_payload"] == full
+    assert result["cards_complete_ms"] is not None
+    assert [event["mode"] for event in result["events"]] == ["pending", "full"]
+    assert result["events"][1]["server_timing"] == "total;dur=3.0"
 
 
 def test_quality_contract_waits_for_full_reference_cards() -> None:
@@ -288,7 +340,7 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
     fixture = load_fixture()
 
     assert len(fixture.docs) == 22
-    assert len(fixture.cases) == 50
+    assert len(fixture.cases) == 56
     case_ids = {str(item.get("id") or "") for item in fixture.cases}
     assert {
         "spi-roadmap-beginner",
@@ -306,10 +358,11 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
         "ECCV-2022-Simple Baselines for Image Restoration/"
         "ECCV-2022-Simple Baselines for Image Restoration.en.md"
     )
-    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 35
+    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 41
     assert len(fixture.splits["baseline_real_v1"]) == 12
     assert len(fixture.splits["holdout_v1"]) == 23
     assert len(fixture.splits["blind_holdout_v2"]) == 15
+    assert len(fixture.splits["blind_holdout_v3"]) == 6
     assert set(fixture.splits["baseline_real_v1"]).isdisjoint(fixture.splits["holdout_v1"])
     assert set(fixture.splits["baseline_real_v1"]).isdisjoint(
         fixture.splits["blind_holdout_v2"]
@@ -317,10 +370,16 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
     assert set(fixture.splits["holdout_v1"]).isdisjoint(
         fixture.splits["blind_holdout_v2"]
     )
+    assert set(fixture.splits["blind_holdout_v3"]).isdisjoint(
+        set(fixture.splits["baseline_real_v1"])
+        | set(fixture.splits["holdout_v1"])
+        | set(fixture.splits["blind_holdout_v2"])
+    )
     assert (
         set(fixture.splits["baseline_real_v1"])
         | set(fixture.splits["holdout_v1"])
         | set(fixture.splits["blind_holdout_v2"])
+        | set(fixture.splits["blind_holdout_v3"])
     ) == case_ids
 
 

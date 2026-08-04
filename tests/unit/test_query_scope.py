@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import kb.task_runtime as task_runtime
 from kb.task_runtime import (
     _effective_query_scope,
     _filter_hits_for_selected_research_context,
@@ -17,6 +20,51 @@ def test_normalize_query_scope_aliases() -> None:
     assert _normalize_query_scope("citation_shelf") == "basket"
     assert _normalize_query_scope("full_library") == "library"
     assert _normalize_query_scope("unknown") == ""
+
+
+def test_source_only_selected_context_scans_exact_paper_blocks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "paper.en.md"
+    source.write_text("# Paper\n\n## Method\n\nExact source evidence.\n", encoding="utf-8")
+    calls: list[dict] = []
+
+    def fake_scan(**kwargs):
+        calls.append(dict(kwargs))
+        return [
+            {
+                "text": "Exact source evidence.",
+                "score": 88.0,
+                "meta": {
+                    "source_path": str(source),
+                    "heading_path": "Paper / Method",
+                    "block_id": "blk-method",
+                    "anchor_id": "p-method",
+                    "paper_guide_targeted_block": True,
+                },
+            }
+        ]
+
+    monkeypatch.setattr(task_runtime, "_paper_guide_targeted_source_block_hits", fake_scan)
+    hits = _selected_research_context_evidence_hits(
+        [
+            {
+                "kind": "source",
+                "sourcePath": str(source),
+                "sourceName": "Paper",
+                "title": "Paper",
+            }
+        ],
+        max_hits=2,
+        prompt="How does the exact method work?",
+        db_dir=tmp_path,
+    )
+
+    assert calls and calls[0]["bound_source_path"] == str(source)
+    assert hits[0]["text"] == "Exact source evidence."
+    assert hits[0]["meta"]["block_id"] == "blk-method"
+    assert hits[0]["meta"]["citation_context_source"] == "research_basket_source_scan"
 
 
 def test_effective_query_scope_respects_available_context() -> None:

@@ -19,6 +19,71 @@ def test_claim_splitter_keeps_semicolon_inside_inline_math() -> None:
     assert _split_claim_segments(line) == [line]
 
 
+def test_display_equation_inherits_adjacent_cited_variable_definition() -> None:
+    answer = (
+        "其相位关系为：\n\n"
+        "$$\n"
+        "\\Delta\\varphi = \\frac{4\\pi}{\\lambda} n z + "
+        "\\varphi_{\\text{Gouy}} \\tag{2}\n"
+        "$$\n\n"
+        "其中 $n$ 为折射率，$z$ 为轴向位置，$\\lambda$ 为波长 [2](#source)。"
+    )
+
+    audit = claim_evidence_audit(answer)
+
+    assert audit["uncited_high_risk_claims"] == 0
+    assert not audit["unresolved_claims"]
+
+
+def test_final_gate_restores_complete_iism_depth_phase_relation() -> None:
+    evidence = (
+        "In a confocal geometry, the relative phase between reflected and scattered "
+        "electric fields is Delta phi = 4\\pi n z / \\lambda + phi_Gouy, with n "
+        "the refractive index of the medium, z the axial position of the scatterer, "
+        "lambda the illumination wavelength, and phi_Gouy the Gouy phase."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        "相位公式给出了深度项。",
+        [
+            {
+                "text": evidence,
+                "meta": {"citation_plan_evidence_quotes": [evidence]},
+            }
+        ],
+        prompt="iISM 的相位为何携带深度？z、n、λ 和 Gouy phase 分别是什么？",
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert all(term in repaired for term in ("iISM", "4\\pi", "反射光", "散射光", "轴向位置", "折射率", "照明波长", "Gouy"))
+    assert "[1]" in repaired
+    assert meta["restored_source_facts"] == 1
+
+
+def test_final_gate_restores_qclfm_refocus_steps_after_claim_removal() -> None:
+    evidence = (
+        "The operation for digital refocusing can be achieved using two steps. First, "
+        "using the position and angular information of each photon, the trajectory can "
+        "be reconstructed through a ray tracing operation. The second step is to reverse "
+        "this diffraction by applying a wave propagation of distance -z."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        "iISM 的相位携带深度信息 [[CITE:source=QCLFM.pdf]]。",
+        [{"text": evidence, "meta": {"citation_plan_evidence_quotes": [evidence]}}],
+        prompt="比较 QCLFM 怎样用位置与角度信息做两步数字重聚焦与 iISM 的 Gouy phase。",
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert all(term in repaired for term in ("QCLFM", "光线追踪", "波传播", "-z", "[1]"))
+    assert meta["restored_source_facts"] == 1
+    assert meta["minimum_ok"] is True
+
+
 def test_claim_evidence_runtime_does_not_load_legacy_ui_renderer() -> None:
     completed = subprocess.run(
         [
@@ -1095,6 +1160,148 @@ def test_restores_dmd_pattern_pair_and_frame_budget_as_one_relation() -> None:
     assert meta["restored_evidence_numbers"] == 1
 
 
+def test_restores_empty_part_based_step_only_from_complete_method_evidence() -> None:
+    answer = (
+        "按三个环节说明：\n\n"
+        "1. Part-based 特征\n\n"
+        "2. I_N(out) 与 I_N(real) 损失\n"
+        "探测信号差用于训练 ILNet [1]。"
+    )
+    hits = [
+        {
+            "text": (
+                "The ILNet first uses the part-based model to divide image features into "
+                "different parts to facilitate fine-grained learning. The difference between "
+                "I_N(out) and I_N(real) is used as a loss function."
+            )
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        prompt=(
+            "ILNet 如何按 part-based 特征、I_N(out) 与 I_N(real) 损失形成自监督闭环？"
+        ),
+        allowed_citation_numbers={1},
+    )
+
+    assert "image features（图像特征）划分为 different parts（不同部分）" in repaired
+    assert "更细粒度学习并改善重建细节 [1]" in repaired
+    assert meta["restored_source_facts"] == 1
+
+
+def test_restores_sequential_cs_full_name_from_source_definition() -> None:
+    repaired, meta = audit_and_repair_claim_evidence(
+        "SCS uses two stages [1].",
+        [
+            {
+                "text": (
+                    "Our procedure is referred to as Sequential Compressed Sensing "
+                    "(SCS), and the algorithm consists of two stages."
+                )
+            }
+        ],
+        prompt="What does Sequential Compressed Sensing do in two stages?",
+        allowed_citation_numbers={1},
+    )
+
+    assert repaired.startswith("Sequential Compressed Sensing（SCS）")
+    assert meta["restored_source_facts"] == 1
+
+
+def test_restores_fdm_non_awg_optimum_from_complete_source_relation() -> None:
+    evidence = (
+        "Our FDM scheme increases acquisition speed without lowering integration time. "
+        "If system noise is not AWG, there may exist a characteristic time for optimal "
+        "SNR. FDM decreases acquisition time without deviation from such an optimal "
+        "integration time."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        "FDM is not fully equivalent to reducing integration time [1].",
+        [{"text": evidence}],
+        prompt="Why is FDM more useful for non-AWG noise?",
+        allowed_citation_numbers={1},
+    )
+
+    assert "characteristic time may provide optimal SNR" in repaired
+    assert "without moving away from that optimal integration time [1]" in repaired
+    assert meta["restored_source_facts"] == 1
+
+
+def test_restores_complete_sph_sampling_budget_from_one_source_block() -> None:
+    evidence = (
+        "Thus, the beat frequency of these two beams is 62,500 Hz. The signal was "
+        "digitized with a sampling rate of 1.25 Ms/s. Considering the 48-μs refresh "
+        "time, three beating cycles last for each Hadamard pattern and 20 data points "
+        "were acquired within one cycle."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        "The Nyquist sampling criterion must be followed [1].",
+        [{"text": evidence}],
+        prompt=(
+            "How do 62.5 kHz, 1.25 Ms/s, and the 48 μs pattern period fit together?"
+        ),
+        allowed_citation_numbers={1},
+    )
+
+    assert repaired.startswith("The experiment uses a 62.5 kHz beat frequency")
+    assert "20 data points per beat cycle" in repaired
+    assert "three beating cycles per pattern [1]" in repaired
+    assert meta["restored_source_facts"] == 1
+
+
+def test_restores_both_sph_frequency_change_conditions_from_exact_source() -> None:
+    evidence = (
+        "Thus, the beat frequency of these two beams is 62,500 Hz and the signal was "
+        "digitized at a sampling rate of 1.25 Ms/s. Considering the 48-μs refresh "
+        "time, three beating cycles last for each Hadamard pattern and 20 data points "
+        "were acquired within one cycle. Reconstruction quality is not sensitive to "
+        "the beat frequency provided the Nyquist sampling criterion was followed. An "
+        "integer number of beating cycles for each displayed pattern is also desired."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        (
+            "62.5 kHz and 1.25 Ms/s give 20 data points per cycle, while the 48 μs "
+            "pattern contains three beating cycles [1]. Nyquist sampling is required [1]."
+        ),
+        [{"text": evidence}],
+        prompt=(
+            "How do 62.5 kHz, 1.25 Ms/s, and 48 μs fit together, and what two "
+            "conditions preserve reconstruction quality when changing the beat frequency?"
+        ),
+        allowed_citation_numbers={1},
+    )
+
+    assert "integer number of beating cycles per displayed pattern [1]" in repaired
+    assert meta["restored_source_facts"] == 1
+
+
+def test_drops_distilled_energy_explanation_not_present_in_planned_evidence() -> None:
+    answer = (
+        "SCS removes half the zero components [1].\n"
+        "Its distilled sensing concentrates sensing energy at likely signal locations [1]."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [
+            {
+                "text": (
+                    "The procedure is based on distilled sensing and uses sparse sensing "
+                    "matrices to remove half the zero components and identify irrelevant "
+                    "signal components."
+                )
+            }
+        ],
+        prompt="Explain Sequential Compressed Sensing.",
+        allowed_citation_numbers={1},
+    )
+
+    assert "removes half" in repaired
+    assert "concentrates sensing energy" not in repaired
+    assert meta["dropped_unsupported_inferences"] == 1
+
+
 def test_multi_source_numeric_comparison_is_kept_only_after_union_coverage() -> None:
     answer = "SCIGS obtains 30.2 dB [1], while SCINeRF obtains 31.5 dB [2]."
     hits = [
@@ -1341,3 +1548,39 @@ def test_qclfm_tradeoff_claim_rebinds_from_title_neighbor_to_exact_mechanism() -
 
     assert repaired.endswith("[2]。")
     assert meta["rebound_citations"] == 1
+
+
+def test_strict_plan_prefers_uniquely_stronger_qclfm_occurrence() -> None:
+    broad = (
+        "The design uses the inherent position and angular/momentum correlation of "
+        "entangled photon pairs. Each degree of freedom can be measured on separate cameras."
+    )
+    exact = (
+        "Type II SPDC generates signal and idler photon pairs correlated in time, position "
+        "and momentum. The signal event camera captures position information, while a "
+        "different idler event camera records momentum/angular information. Time correlation "
+        "identifies photon pairs, so the signal photon's angular information is inferred from "
+        "its time-correlated partner."
+    )
+    answer = (
+        "QCLFM 利用 II 型 SPDC 纠缠光子对的位置与动量关联：信号光子的位置信息和"
+        "闲频光子的动量信息分别由两台事件相机记录，再通过时间关联识别光子对并推断"
+        "信号光子的角信息 [1]。"
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [
+            {"text": broad, "meta": {"source_name": "QCLFM"}},
+            {"text": exact, "meta": {"source_name": "QCLFM"}},
+        ],
+        allowed_citation_numbers={1, 2},
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert repaired.endswith("[2]。")
+    assert any(
+        item.get("reason") == "uniquely_stronger_evidence"
+        for item in meta.get("rebound_repairs", [])
+    )

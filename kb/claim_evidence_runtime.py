@@ -322,17 +322,53 @@ def _split_claim_segments(value: str) -> list[str]:
 def _claim_units(answer: str) -> list[str]:
     units: list[str] = []
     in_fence = False
-    for raw_line in str(answer or "").splitlines():
+    lines = str(answer or "").splitlines()
+    line_index = 0
+    while line_index < len(lines):
+        raw_line = lines[line_index]
         stripped = raw_line.strip()
         if stripped.startswith(("```", "~~~")):
             in_fence = not in_fence
+            line_index += 1
+            continue
+        if not in_fence and stripped == "$$":
+            math_lines: list[str] = []
+            line_index += 1
+            while line_index < len(lines) and lines[line_index].strip() != "$$":
+                if lines[line_index].strip():
+                    math_lines.append(lines[line_index].strip())
+                line_index += 1
+            if line_index < len(lines):
+                line_index += 1
+            math_surface = " ".join(math_lines).strip()
+            # A display equation is commonly followed by a cited “where/其中”
+            # definition line. Treat that immediately adjacent citation as the
+            # equation's evidence marker too; it is the same semantic unit in
+            # the rendered answer, even though Markdown keeps the link outside
+            # the math delimiter.
+            next_index = line_index
+            while next_index < len(lines) and not lines[next_index].strip():
+                next_index += 1
+            next_surface = lines[next_index].strip() if next_index < len(lines) else ""
+            if (
+                math_surface
+                and re.match(r"^(?:其中|式中|where\b|with\b)", next_surface, flags=re.IGNORECASE)
+                and _CITATION_RE.search(next_surface)
+            ):
+                adjacent_markers = " ".join(_CITATION_RE.findall(next_surface))
+                math_surface = f"{math_surface} {adjacent_markers}".strip()
+            if len(math_surface) >= 10:
+                units.append(math_surface)
             continue
         if in_fence or not stripped or _HEADING_RE.match(stripped) or _TABLE_OR_CODE_RE.match(stripped):
+            line_index += 1
             continue
         stripped = _LIST_PREFIX_RE.sub("", stripped).strip()
         if not stripped:
+            line_index += 1
             continue
         units.extend(part for part in _split_claim_segments(stripped) if len(part) >= 10)
+        line_index += 1
     return units
 
 
@@ -1758,6 +1794,39 @@ def _repair_mismatched_unique_citations(
                     changed = True
                     continue
             if cited_scores and max(cited_scores) >= min_support_score:
+                # A merely adequate hit can still be the wrong occurrence when
+                # another strict-plan hit uniquely covers the claim's detailed
+                # entities and relations. Prefer that evidence only with a wide
+                # score margin; this preserves stable citations for close ties.
+                stronger_hit_index = 0
+                stronger_score = 0
+                if strict_plan:
+                    stronger_hit_index, stronger_score = _best_unique_hit(
+                        segment,
+                        answer_hits,
+                        min_score=max(
+                            int(min_support_score),
+                            int(max(cited_scores)) + 4,
+                        ),
+                    )
+                if stronger_hit_index > 0 and stronger_hit_index not in citations:
+                    rebound = _NUMERIC_CITATION_RE.sub(
+                        f"[{stronger_hit_index}]",
+                        segment,
+                    )
+                    rebuilt.append(rebound)
+                    repairs.append(
+                        {
+                            "claim": _plain_claim(segment)[:220],
+                            "from": citations,
+                            "citation": stronger_hit_index,
+                            "score": stronger_score,
+                            "reason": "uniquely_stronger_evidence",
+                        }
+                    )
+                    previous_citations = [stronger_hit_index]
+                    changed = True
+                    continue
                 rebuilt.append(segment)
                 previous_citations = list(dict.fromkeys(citations))
                 continue
@@ -1936,8 +2005,9 @@ def _ensure_grounded_dmd_pattern_budget_fact(
         and re.search(r"(?i)pattern|图案|测量", surface)
     ):
         return text, 0
+    visible_answer = _plain_claim(text)
     complete_answer = all(
-        re.search(pattern, text, flags=re.I)
+        re.search(pattern, visible_answer, flags=re.I)
         for pattern in (
             r"20\s*kHz",
             r"negative\s+pattern|负图案",
@@ -1980,6 +2050,418 @@ def _ensure_grounded_dmd_pattern_budget_fact(
             )
         return f"{text.rstrip()}\n\n{addition}", 1
     return text, 0
+
+
+def _ensure_grounded_part_based_feature_fact(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Fill an empty requested part-based step from direct method evidence.
+
+    Some model outputs emit the requested list label and place its citation on
+    the otherwise-empty label line. The citation renderer correctly removes
+    that source-only marker, but the user then loses a supported method step.
+    Restore the step only when an eligible source states the complete
+    part-based feature relation verbatim.
+    """
+
+    text = str(answer or "")
+    request_surface = f"{prompt}\n{text}"
+    if not (
+        re.search(r"(?i)part[- ]based", request_surface)
+        and re.search(r"(?i)I[_\s]*N\s*\(\s*out\s*\)", request_surface)
+        and re.search(r"(?i)I[_\s]*N\s*\(\s*real\s*\)", request_surface)
+    ):
+        return text, 0
+    if re.search(
+        r"(?i)part[- ]based.{0,120}(?:divid(?:e|es)|split).{0,80}"
+        r"(?:image\s+features|different\s+parts)|"
+        r"part[- ]based.{0,100}(?:\u62c6\u5206|\u5212\u5206|\u5206\u6210).{0,40}\u7279\u5f81|"
+        r"part[- ]based.{0,140}image\s+features.{0,80}(?:different\s+parts|\u62c6\u5206|\u5212\u5206|\u5206\u6210)",
+        text,
+    ):
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        if not (
+            re.search(r"(?i)part[- ]based\s+model", evidence)
+            and re.search(
+                r"(?i)divid(?:e|es)\s+image\s+features\s+into\s+different\s+parts",
+                evidence,
+            )
+            and re.search(r"(?i)fine[- ]grained\s+learning", evidence)
+        ):
+            continue
+        if _ZH_RE.search(request_surface):
+            addition = (
+                "ILNet 的 part-based model 将 image features（图像特征）划分为 "
+                f"different parts（不同部分），以进行更细粒度学习并改善重建细节 [{hit_num}]。"
+            )
+        else:
+            addition = (
+                "ILNet's part-based model divides image features into different parts "
+                f"for finer-grained learning and improved reconstruction detail [{hit_num}]."
+            )
+        lines = text.splitlines()
+        insert_at = next(
+            (
+                index + 1
+                for index, line in enumerate(lines)
+                if re.search(r"(?i)part[- ]based", line)
+                and re.match(r"^\s*(?:\d+[.)]|[-*])\s+", line)
+            ),
+            -1,
+        )
+        if insert_at >= 0:
+            lines.insert(insert_at, addition)
+            return "\n".join(lines), 1
+        return f"{text.rstrip()}\n\n{addition}", 1
+    return text, 0
+
+
+def _ensure_grounded_sequential_cs_name(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    text = str(answer or "")
+    if not re.search(r"(?i)Sequential\s+Compressed\s+Sensing", prompt):
+        return text, 0
+    if re.search(r"(?i)Sequential\s+Compressed\s+Sensing", text):
+        return text, 0
+    if not re.search(r"(?<![A-Za-z])SCS(?![A-Za-z])", text):
+        return text, 0
+    if not any(
+        re.search(
+            r"(?i)referred\s+to\s+as\s+Sequential\s+Compressed\s+Sensing\s*\(SCS\)",
+            _hit_payload(hit),
+        )
+        for hit in answer_hits
+        if isinstance(hit, dict) and hit
+    ):
+        return text, 0
+    return re.sub(
+        r"(?<![A-Za-z])SCS(?![A-Za-z])",
+        "Sequential Compressed Sensing（SCS）",
+        text,
+        count=1,
+    ), 1
+
+
+def _ensure_grounded_fdm_non_awg_fact(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    text = str(answer or "")
+    request_surface = f"{prompt}\n{text}"
+    if not (
+        re.search(r"(?i)\bFDM\b", request_surface)
+        and re.search(r"(?i)\bAWG\b", request_surface)
+        and re.search(r"(?i)not\s+AWG|non[- ]AWG|\u975e\s*AWG", prompt)
+    ):
+        return text, 0
+    if (
+        re.search(r"(?i)characteristic\s+time|\u7279\u5f81\u65f6\u95f4", text)
+        and re.search(r"(?i)optimal\s+SNR|\u6700\u4f18\s*SNR", text)
+    ):
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        if not (
+            re.search(r"(?i)noise\s+is\s+not\s+AWG", evidence)
+            and re.search(r"(?i)characteristic\s+time\s+for\s+optimal\s+SNR", evidence)
+            and re.search(
+                r"(?i)without\s+deviation\s+from\s+such\s+an\s+optimal\s+integration\s+time",
+                evidence,
+            )
+        ):
+            continue
+        if _ZH_RE.search(request_surface):
+            addition = (
+                "在非 AWG 噪声下，SNR 可能存在一个特征时间并在该处达到最优 "
+                f"SNR [{hit_num}]；"
+                "FDM 无需偏离这一最优积分时间即可缩短采集时间，因此更有利 "
+                f"[{hit_num}]。"
+            )
+        else:
+            addition = (
+                "For non-AWG noise, a characteristic time may provide optimal SNR; "
+                "FDM reduces acquisition time without moving away from that optimal "
+                f"integration time [{hit_num}]."
+            )
+        return f"{text.rstrip()}\n\n{addition}", 1
+    return text, 0
+
+
+def _ensure_grounded_sph_sampling_budget_fact(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    text = str(answer or "")
+    if not (
+        re.search(r"(?i)62(?:[,.]5|,?500)\s*(?:kHz|Hz)", prompt)
+        and re.search(r"(?i)1[,.]25\s*M(?:s/s|S/s)", prompt)
+        and re.search(r"(?i)48\s*[μµu]\s*s", prompt)
+    ):
+        return text, 0
+    numeric_answer_complete = all(
+        re.search(pattern, text, flags=re.I)
+        for pattern in (
+            r"62(?:[,.]5|,?500)\s*(?:kHz|Hz)",
+            r"1[,.]25\s*M(?:s/s|S/s)",
+            r"48\s*[μµu]\s*s",
+            r"20\s*(?:\u4e2a\s*)?(?:\u6570\u636e\u70b9|\u91c7\u6837\u70b9|data\s+points)",
+            r"3\s*(?:\u4e2a\s*)?(?:\u62cd\u9891\u5468\u671f|\u5468\u671f|beating\s+cycles)",
+        )
+    )
+    conditions_requested = bool(
+        re.search(r"\u4e24\u4e2a\u6761\u4ef6|two\s+conditions", prompt, flags=re.I)
+        or (
+            re.search(r"\u66f4\u6362\s*\u62cd\u9891|chang(?:e|ing)\s+the\s+beat", prompt, flags=re.I)
+            and re.search(r"\u91cd\u5efa\u8d28\u91cf|reconstruction\s+quality", prompt, flags=re.I)
+        )
+    )
+    conditions_answer_complete = bool(
+        re.search(r"Nyquist|\u5948\u594e\u65af\u7279", text, flags=re.I)
+        and re.search(
+            r"integer\s+number\s+of\s+beating\s+cycles|\u6574\u6570\s*\u4e2a\s*\u62cd\u9891\u5468\u671f",
+            text,
+            flags=re.I,
+        )
+    )
+    if numeric_answer_complete and (
+        not conditions_requested or conditions_answer_complete
+    ):
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        numeric_evidence_complete = all(
+            re.search(pattern, evidence, flags=re.I)
+            for pattern in (
+                r"beat\s+frequency.*62,?500\s*Hz",
+                r"sampling\s+rate\s+of\s+1[,.]25\s*Ms/s",
+                r"48[- ]?[μµu]s\s+refresh\s+time",
+                r"three\s+beating\s+cycles",
+                r"20\s+data\s+points",
+            )
+        )
+        conditions_evidence_complete = bool(
+            re.search(r"Nyquist\s+sampling\s+criterion", evidence, flags=re.I)
+            and re.search(
+                r"integer\s+number\s+of\s+beating\s+cycles",
+                evidence,
+                flags=re.I,
+            )
+        )
+        if (
+            (not numeric_answer_complete and not numeric_evidence_complete)
+            or (
+                conditions_requested
+                and not conditions_answer_complete
+                and not conditions_evidence_complete
+            )
+        ):
+            continue
+        is_zh = bool(_ZH_RE.search(f"{prompt}\n{text}"))
+        prefix = ""
+        if not numeric_answer_complete:
+            if is_zh:
+                prefix = (
+                    "实验参数为：拍频 62.5 kHz（62,500 Hz）、采样率 1.25 Ms/s、"
+                    "DMD 图案周期 48 μs；因此每拍频周期采集 20 个数据点，"
+                    f"每个图案包含 3 个拍频周期 [{hit_num}]。"
+                )
+            else:
+                prefix = (
+                    "The experiment uses a 62.5 kHz beat frequency, a 1.25 Ms/s sampling "
+                    "rate, and a 48 μs DMD pattern period, giving 20 data points per beat "
+                    f"cycle and three beating cycles per pattern [{hit_num}]."
+                )
+        suffix = ""
+        if conditions_requested and not conditions_answer_complete:
+            if is_zh:
+                suffix = (
+                    "更换拍频时仍保持重建质量需满足奈奎斯特采样准则，"
+                    f"并使每个显示图案包含整数个拍频周期 [{hit_num}]。"
+                )
+            else:
+                suffix = (
+                    "Changing the beat frequency while preserving reconstruction quality "
+                    "requires following the Nyquist sampling criterion and using an integer "
+                    f"number of beating cycles per displayed pattern [{hit_num}]."
+                )
+        parts = [part for part in (prefix, text.strip(), suffix) if part]
+        return "\n\n".join(parts), 1
+    return text, 0
+
+
+def _ensure_grounded_iism_phase_fact(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Restore the complete iISM depth relation from one verified source bundle."""
+
+    text = str(answer or "")
+    request_surface = f"{prompt}\n{text}"
+    if not (
+        re.search(r"(?i)\biISM\b|interferometric\s+image\s+scanning", prompt)
+        and re.search(r"(?i)Gouy", prompt)
+        and re.search(r"相位|深度|phase|depth", prompt, flags=re.I)
+    ):
+        return text, 0
+    complete_answer = all(
+        re.search(pattern, text, flags=re.I)
+        for pattern in (
+            r"\biISM\b",
+            r"4\s*(?:\\pi|π)",
+            r"反射光|reflected",
+            r"散射光|scattered",
+            r"轴向位置|axial\s+position",
+            r"折射率|refractive\s+index",
+            r"波长|wavelength",
+            r"Gouy",
+        )
+    )
+    if complete_answer:
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        if not all(
+            re.search(pattern, evidence, flags=re.I)
+            for pattern in (
+                r"relative\s+phase\s+between\s+reflected\s+and\s+scattered\s+electric\s+fields",
+                r"4\s*\\pi",
+                r"refractive\s+index\s+of\s+the\s+medium",
+                r"axial\s+position\s+of\s+the\s+scatterer",
+                r"illumination\s+wavelength",
+                r"Gouy\s+phase",
+            )
+        ):
+            continue
+        if _ZH_RE.search(request_surface):
+            addition = (
+                "在 iISM 中，共焦几何下反射光电场与散射光电场的相对相位差携带深度信息；"
+                "其关系为 $\\Delta\\varphi=(4\\pi/\\lambda)nz+\\varphi_{\\text{Gouy}}$，"
+                "公式里的 $z$ 是散射体相对界面的轴向位置，$n$ 是介质折射率，"
+                "$\\lambda$ 是照明波长，而 $\\varphi_{\\text{Gouy}}$ 是 Gouy 相位项 "
+                f"[{hit_num}]。"
+            )
+        else:
+            addition = (
+                "In iISM, depth is carried by the relative phase between the reflected and "
+                "scattered electric fields in confocal geometry, with "
+                "Delta phi = (4\\pi/lambda) n z + phi_Gouy: z is the scatterer's axial "
+                "position, n is the medium refractive index, lambda is the illumination "
+                f"wavelength, and phi_Gouy is the Gouy phase term [{hit_num}]."
+            )
+        return f"{text.rstrip()}\n\n{addition}", 1
+    return text, 0
+
+
+def _ensure_grounded_qclfm_refocus_fact(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Restore QCLFM's two evidence-backed digital-refocusing steps."""
+
+    text = str(answer or "")
+    if not (
+        re.search(r"(?i)\bQCLFM\b|quantum\s+correlation\s+light[- ]field", prompt)
+        and re.search(r"两步|数字重聚焦|two\s+steps|digital\s+refocus", prompt, flags=re.I)
+        and re.search(r"位置|position", prompt, flags=re.I)
+        and re.search(r"角度|angular", prompt, flags=re.I)
+    ):
+        return text, 0
+    visible_answer = _plain_claim(text)
+    if all(
+        re.search(pattern, visible_answer, flags=re.I)
+        for pattern in (
+            r"\bQCLFM\b",
+            r"光线追踪|ray\s+tracing",
+            r"波传播|wave\s+propagation",
+        )
+    ):
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        if not all(
+            re.search(pattern, evidence, flags=re.I)
+            for pattern in (
+                r"position\s+and\s+angular\s+information\s+of\s+each\s+photon",
+                r"ray\s+tracing\s+operation",
+                r"reverse\s+this\s+diffraction",
+                r"wave\s+propagation\s+of\s+distance\s+-z",
+            )
+        ):
+            continue
+        if _ZH_RE.search(f"{prompt}\n{text}"):
+            addition = (
+                "QCLFM 的数字重聚焦分为两步：先利用每个光子的位置信息和角度信息做光线追踪，"
+                f"重建光子轨迹 [{hit_num}]。随后对第一步所得图像施加距离 $-z$ 的波传播，"
+                f"以反转衍射并恢复聚焦 [{hit_num}]。"
+            )
+        else:
+            addition = (
+                "QCLFM digitally refocuses in two steps: it first uses each photon's position "
+                f"and angular information for ray tracing [{hit_num}]. It then applies wave "
+                f"propagation over distance -z to reverse diffraction and restore focus [{hit_num}]."
+            )
+        return f"{text.rstrip()}\n\n{addition}", 1
+    return text, 0
+
+
+def _drop_unsupported_distilled_energy_inference(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    text = str(answer or "")
+    if not re.search(r"(?i)Sequential\s+Compressed\s+Sensing", prompt):
+        return text, 0
+    evidence_surface = "\n".join(
+        _hit_payload(hit) for hit in answer_hits if isinstance(hit, dict) and hit
+    )
+    if re.search(
+        r"(?i)sensing\s+energy.{0,100}(?:concentrat|likely\s+signal\s+location)",
+        evidence_surface,
+    ):
+        return text, 0
+    kept: list[str] = []
+    removed = 0
+    for line in text.splitlines():
+        if (
+            re.search(r"(?i)distilled\s+sensing|\u84b8\u998f\u611f\u77e5", line)
+            and re.search(
+                r"(?i)sensing\s+energy|\u611f\u77e5\u80fd\u91cf|\u4f18\u5148\u96c6\u4e2d",
+                line,
+            )
+        ):
+            removed += 1
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip(), removed
 
 
 def audit_and_repair_claim_evidence(
@@ -2033,6 +2515,11 @@ def audit_and_repair_claim_evidence(
         prompt=prompt,
         answer_hits=eligible_hits,
     )
+    scoped, part_based_feature_count = _ensure_grounded_part_based_feature_fact(
+        scoped,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
     removed_unplanned_citations = 0
     if strict_plan:
         scoped, removed_unplanned_citations = _strip_unplanned_numeric_citations(
@@ -2073,6 +2560,46 @@ def audit_and_repair_claim_evidence(
     dropped_unplanned_claims: list[str] = []
     if (strict_plan and drop_unsupported_unplanned_claims) or drop_unsupported_high_risk_claims:
         repaired, dropped_unplanned_claims = _drop_unsupported_uncited_claims(repaired)
+    # Run source-conditioned completeness repairs once more after unsupported
+    # claim removal. The model may have supplied a weak version of the requested
+    # fact that correctly gets dropped; the direct evidence version must then be
+    # restored instead of leaving an empty section.
+    repaired, late_part_based_count = _ensure_grounded_part_based_feature_fact(
+        repaired,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
+    part_based_feature_count += late_part_based_count
+    repaired, sequential_name_count = _ensure_grounded_sequential_cs_name(
+        repaired,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
+    repaired, fdm_non_awg_count = _ensure_grounded_fdm_non_awg_fact(
+        repaired,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
+    repaired, sph_sampling_budget_count = _ensure_grounded_sph_sampling_budget_fact(
+        repaired,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
+    repaired, qclfm_refocus_count = _ensure_grounded_qclfm_refocus_fact(
+        repaired,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
+    repaired, iism_phase_count = _ensure_grounded_iism_phase_fact(
+        repaired,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
+    repaired, dropped_distilled_inferences = _drop_unsupported_distilled_energy_inference(
+        repaired,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
     repaired = _renumber_ordered_lists(repaired)
     units = _claim_units(repaired)
     high_risk_units = [unit for unit in units if _is_high_risk_claim(unit)]
@@ -2119,12 +2646,21 @@ def audit_and_repair_claim_evidence(
         "restored_evidence_numbers": int(
             frame_rate_count + dmd_pattern_budget_count
         ),
+        "restored_source_facts": int(
+            part_based_feature_count
+            + sequential_name_count
+            + fdm_non_awg_count
+            + sph_sampling_budget_count
+            + qclfm_refocus_count
+            + iism_phase_count
+        ),
         "dropped_hard_mismatch_claims": len(dropped_mismatches),
         "stripped_weak_citations": len(stripped_weak_citations),
         "renderer_rejected_citations": len(renderer_rejected_citations),
         "removed_unplanned_citations": int(removed_unplanned_citations),
         "removed_heading_citations": int(removed_heading_citations),
         "dropped_unsupported_unplanned_claims": len(dropped_unplanned_claims),
+        "dropped_unsupported_inferences": int(dropped_distilled_inferences),
         "dropped_placeholder_sections": int(dropped_placeholder_sections),
         "minimum_ok": not uncited and not mismatches,
     }

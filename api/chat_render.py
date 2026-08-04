@@ -157,7 +157,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 54
+_RENDER_CACHE_SCHEMA_VERSION = 57
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -1814,6 +1814,7 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         explicit_nums: set[int] = set()
         candidate_nums_by_slot: dict[int, set[int]] = {}
         exact_occurrence_bound = False
+        locator_occurrence_bound = False
         for candidate_slot in matches:
             slot_nums: set[int] = set()
             for raw_num in list(candidate_slot.get("candidate_hits") or []):
@@ -1835,15 +1836,56 @@ def _refine_system_a_cite_evidence_from_citation_plan(
                 matches = exact_occurrence
                 exact_occurrence_bound = True
             else:
+                detail_heading = _render_primary_heading_identity(detail)
+                try:
+                    detail_page = int(
+                        detail.get("page_start") or detail.get("pageStart") or 0
+                    )
+                except (TypeError, ValueError):
+                    detail_page = 0
+                locator_occurrence = []
+                for slot in matches:
+                    slot_heading = _render_primary_heading_identity(slot)
+                    heading_matches = bool(
+                        detail_heading
+                        and slot_heading
+                        and (
+                            detail_heading == slot_heading
+                            or slot_heading.endswith(f" / {detail_heading}")
+                            or detail_heading.endswith(f" / {slot_heading}")
+                        )
+                    )
+                    try:
+                        slot_page = int(
+                            slot.get("page_start") or slot.get("pageStart") or 0
+                        )
+                    except (TypeError, ValueError):
+                        slot_page = 0
+                    if heading_matches and (
+                        detail_page <= 0 or slot_page <= 0 or detail_page == slot_page
+                    ):
+                        locator_occurrence.append(slot)
+                if len(locator_occurrence) == 1:
+                    # Citation numbers can be remapped after canonical answer
+                    # recovery.  A unique same-source heading/page occurrence
+                    # remains authoritative and is safer than discarding the
+                    # full plan passage because the pre-remap number is stale.
+                    matches = locator_occurrence
+                    exact_occurrence_bound = True
+                    locator_occurrence_bound = True
+                    continue_with_locator_occurrence = True
+                else:
+                    continue_with_locator_occurrence = False
                 # With multiple explicit occurrences from one paper, a slot
                 # routed to another number must not refine this card. Preserve
                 # the unnumbered semantic fallback only when no exact slot was
                 # produced for the visible occurrence.
-                matches = [
-                    slot
-                    for slot in matches
-                    if not candidate_nums_by_slot.get(id(slot), set())
-                ]
+                if not continue_with_locator_occurrence:
+                    matches = [
+                        slot
+                        for slot in matches
+                        if not candidate_nums_by_slot.get(id(slot), set())
+                    ]
         if len(matches) > 1:
             heading_key = _render_primary_heading_identity(detail)
             exact_heading = [
@@ -1988,6 +2030,14 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         locator_anchor_id = str(
             locator_slot.get("anchor_id") or locator_slot.get("anchorId") or ""
         ).strip()
+        if locator_occurrence_bound:
+            locator_heading = str(
+                locator_slot.get("heading_path")
+                or locator_slot.get("headingPath")
+                or ""
+            ).strip()
+            if locator_heading:
+                detail["heading_path"] = locator_heading
         if locator_block_id or locator_anchor_id:
             reader_evidence = _clean_evidence_display_text(
                 locator_slot.get("evidence_quote")
@@ -2036,6 +2086,7 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         readable_overlap = len(claim_terms & evidence_alignment_tokens(readable))
         if (
             not authoritative_entity_occurrence
+            and not (locator_occurrence_bound and bool(compound))
             and (
                 not readable
                 or not claim_terms
@@ -2747,6 +2798,7 @@ _BARE_EMPTY_EXAMPLE_CONNECTOR_RE = re.compile(
     re.IGNORECASE,
 )
 _DUPLICATE_NEIGHBOR_TERM_RE = re.compile(
+    r"(?<![A-Za-z0-9\u4e00-\u9fff])"
     r"(?P<term>[A-Za-z][A-Za-z0-9+.-]*(?:\s+[A-Za-z][A-Za-z0-9+.-]*){0,4}|[\u4e00-\u9fff]{2,12})"
     r"\s*(?:、|，|,|/)\s*(?P=term)(?=\s*(?:[，。,.;；、)）]|$))"
 )
@@ -2937,6 +2989,43 @@ def _citation_plan_with_ref_primary(plan: dict | None, ref_pack: dict | None) ->
         and _reading_slot_source_identity(slot.get("source_path") or slot.get("sourcePath")) == primary_source_key
         and str(slot.get("evidence_quote") or "").strip()
     ]
+    if trusted_prompt_contract and any(
+        str(
+            slot.get("evidence_selection_reason")
+            or slot.get("evidenceSelectionReason")
+            or ""
+        ).strip().lower()
+        == "prompt_aligned_source_sentence"
+        and (
+            (
+                int(slot.get("page_start") or slot.get("pageStart") or 0) > 0
+                and int(primary.get("page_start") or primary.get("pageStart") or 0) > 0
+                and int(slot.get("page_start") or slot.get("pageStart") or 0)
+                != int(primary.get("page_start") or primary.get("pageStart") or 0)
+            )
+            or (
+                bool(
+                    str(slot.get("block_id") or slot.get("blockId") or "").strip()
+                    or str(slot.get("anchor_id") or slot.get("anchorId") or "").strip()
+                )
+                and not (
+                    block_id
+                    and str(slot.get("block_id") or slot.get("blockId") or "").strip()
+                    == block_id
+                )
+                and not (
+                    anchor_id
+                    and str(slot.get("anchor_id") or slot.get("anchorId") or "").strip()
+                    == anchor_id
+                )
+            )
+        )
+        for slot in same_source_system_a_slots
+    ):
+        # Generation has already bound the requested relation to an exact
+        # source occurrence. A different later card block may supplement the
+        # UI, but must not downgrade the authoritative answer citation.
+        return out
     if not trusted_prompt_contract and any(
         str(
             slot.get("evidence_selection_reason")
@@ -5058,11 +5147,58 @@ def _augment_hits_with_system_a_plan_slots(
                         ),
                     }
                 existing_primary_text = _primary_evidence_text(candidate_primary)
+                slot_locator_block = str(
+                    slot.get("block_id") or slot.get("blockId") or ""
+                ).strip()
+                slot_locator_anchor = str(
+                    slot.get("anchor_id") or slot.get("anchorId") or ""
+                ).strip()
+                slot_locator_page = int(
+                    slot.get("page_start") or slot.get("pageStart") or 0
+                )
+                candidate_locator_block = str(
+                    candidate_primary.get("block_id")
+                    or candidate_primary.get("blockId")
+                    or candidate_meta.get("primary_block_id")
+                    or candidate_meta.get("block_id")
+                    or ""
+                ).strip()
+                candidate_locator_anchor = str(
+                    candidate_primary.get("anchor_id")
+                    or candidate_primary.get("anchorId")
+                    or candidate_meta.get("primary_anchor_id")
+                    or candidate_meta.get("anchor_id")
+                    or ""
+                ).strip()
+                candidate_locator_page = int(
+                    candidate_primary.get("page_start")
+                    or candidate_primary.get("pageStart")
+                    or candidate_meta.get("page_start")
+                    or 0
+                )
+                existing_primary_locator_compatible = bool(
+                    (
+                        slot_locator_block
+                        and slot_locator_block == candidate_locator_block
+                    )
+                    or (
+                        slot_locator_anchor
+                        and slot_locator_anchor == candidate_locator_anchor
+                    )
+                    or (
+                        not (slot_locator_block or slot_locator_anchor)
+                        and (
+                            slot_locator_page <= 0
+                            or candidate_locator_page == slot_locator_page
+                        )
+                    )
+                )
                 if (
                     authoritative_plan_evidence
                     and existing_primary_text
                     and re.sub(r"\s+", " ", existing_primary_text).strip().casefold()
                     == evidence_quote.casefold()
+                    and existing_primary_locator_compatible
                 ):
                     # The second idempotent overlay runs after canonical answer
                     # recovery. Keep the same-source alternatives assembled by
@@ -5071,9 +5207,98 @@ def _augment_hits_with_system_a_plan_slots(
                     candidate_bound = True
                     rebound_answer_keys.add(answer_source_key)
                     break
+                slot_block_id = str(
+                    slot.get("block_id") or slot.get("blockId") or ""
+                ).strip()
+                slot_anchor_id = str(
+                    slot.get("anchor_id") or slot.get("anchorId") or ""
+                ).strip()
+                slot_anchor_kind = str(
+                    slot.get("anchor_kind") or slot.get("anchorKind") or ""
+                ).strip()
+                slot_page_start = int(
+                    slot.get("page_start") or slot.get("pageStart") or 0
+                )
+                slot_page_end = int(
+                    slot.get("page_end")
+                    or slot.get("pageEnd")
+                    or slot_page_start
+                    or 0
+                )
+                candidate_primary_text = _primary_evidence_text(candidate_primary)
+                candidate_primary_page = int(
+                    candidate_primary.get("page_start")
+                    or candidate_primary.get("pageStart")
+                    or candidate_meta.get("page_start")
+                    or 0
+                )
+                plan_terms = evidence_alignment_tokens(evidence_quote)
+                candidate_primary_terms = evidence_alignment_tokens(
+                    candidate_primary_text
+                )
+                candidate_primary_coverage = (
+                    len(plan_terms & candidate_primary_terms) / max(1, len(plan_terms))
+                )
+                reuse_candidate_locator = bool(
+                    not (slot_block_id or slot_anchor_id)
+                    and exact_source_match
+                    and slot_page_start > 0
+                    and candidate_primary_page == slot_page_start
+                    and candidate_primary_coverage >= 0.8
+                    and bool(
+                        str(
+                            candidate_primary.get("block_id")
+                            or candidate_primary.get("blockId")
+                            or candidate_meta.get("primary_block_id")
+                            or candidate_meta.get("block_id")
+                            or ""
+                        ).strip()
+                        or str(
+                            candidate_primary.get("anchor_id")
+                            or candidate_primary.get("anchorId")
+                            or candidate_meta.get("primary_anchor_id")
+                            or candidate_meta.get("anchor_id")
+                            or ""
+                        ).strip()
+                    )
+                )
+                if reuse_candidate_locator:
+                    slot_block_id = str(
+                        candidate_primary.get("block_id")
+                        or candidate_primary.get("blockId")
+                        or candidate_meta.get("primary_block_id")
+                        or candidate_meta.get("block_id")
+                        or ""
+                    ).strip()
+                    slot_anchor_id = str(
+                        candidate_primary.get("anchor_id")
+                        or candidate_primary.get("anchorId")
+                        or candidate_meta.get("primary_anchor_id")
+                        or candidate_meta.get("anchor_id")
+                        or ""
+                    ).strip()
+                    slot_anchor_kind = str(
+                        candidate_primary.get("anchor_kind")
+                        or candidate_primary.get("anchorKind")
+                        or candidate_meta.get("anchor_kind")
+                        or slot_anchor_kind
+                        or "paragraph"
+                    ).strip()
                 candidate_meta, candidate_ui = _clear_plan_rebind_source_bound_fields(
                     candidate_meta,
                     candidate_ui,
+                )
+                full_plan_evidence = max(
+                    (
+                        str(
+                            candidate_meta.get(
+                                "citation_plan_full_evidence_quote"
+                            )
+                            or ""
+                        ).strip(),
+                        evidence_quote,
+                    ),
+                    key=len,
                 )
                 candidate_meta.pop("citation_plan_padding", None)
                 candidate_meta.update(
@@ -5084,29 +5309,18 @@ def _augment_hits_with_system_a_plan_slots(
                         "ref_best_heading_path": heading_path,
                         "citation_plan_slot": True,
                         "citation_plan_evidence_authoritative": authoritative_plan_evidence,
+                        "citation_plan_full_evidence_quote": full_plan_evidence,
                         "citation_plan_source": str(citation_plan.get("source") or "").strip(),
                         "citation_plan_evidence_selection_reason": str(
                             slot.get("evidence_selection_reason")
                             or slot.get("evidenceSelectionReason")
                             or ""
                         ).strip(),
-                        "primary_block_id": str(
-                            slot.get("block_id") or slot.get("blockId") or ""
-                        ).strip(),
-                        "primary_anchor_id": str(
-                            slot.get("anchor_id") or slot.get("anchorId") or ""
-                        ).strip(),
-                        "anchor_kind": str(
-                            slot.get("anchor_kind") or slot.get("anchorKind") or ""
-                        ).strip(),
-                        "page_start": int(slot.get("page_start") or slot.get("pageStart") or 0),
-                        "page_end": int(
-                            slot.get("page_end")
-                            or slot.get("pageEnd")
-                            or slot.get("page_start")
-                            or slot.get("pageStart")
-                            or 0
-                        ),
+                        "primary_block_id": slot_block_id,
+                        "primary_anchor_id": slot_anchor_id,
+                        "anchor_kind": slot_anchor_kind,
+                        "page_start": slot_page_start,
+                        "page_end": slot_page_end,
                     }
                 )
                 candidate_ui.update(
@@ -5126,25 +5340,14 @@ def _augment_hits_with_system_a_plan_slots(
                                 or slot.get("evidenceSelectionReason")
                                 or "citation_plan_slot"
                             ).strip(),
-                            "block_id": str(
-                                slot.get("block_id") or slot.get("blockId") or ""
-                            ).strip(),
-                            "anchor_id": str(
-                                slot.get("anchor_id") or slot.get("anchorId") or ""
-                            ).strip(),
-                            "anchor_kind": str(
-                                slot.get("anchor_kind") or slot.get("anchorKind") or ""
-                            ).strip(),
-                            "page_start": int(slot.get("page_start") or slot.get("pageStart") or 0),
-                            "page_end": int(
-                                slot.get("page_end")
-                                or slot.get("pageEnd")
-                                or slot.get("page_start")
-                                or slot.get("pageStart")
-                                or 0
-                            ),
+                            "block_id": slot_block_id,
+                            "anchor_id": slot_anchor_id,
+                            "anchor_kind": slot_anchor_kind,
+                            "page_start": slot_page_start,
+                            "page_end": slot_page_end,
                             "strict_locate": bool(
                                 slot.get("strict_locate") or slot.get("strictLocate")
+                                or reuse_candidate_locator
                             ),
                         },
                     }
@@ -5257,6 +5460,7 @@ def _augment_hits_with_system_a_plan_slots(
                     "ref_best_heading_path": heading_path,
                     "citation_plan_slot": True,
                     "citation_plan_evidence_authoritative": authoritative_plan_evidence,
+                    "citation_plan_full_evidence_quote": evidence_quote,
                     "citation_plan_source": str(citation_plan.get("source") or "").strip(),
                     "citation_plan_evidence_selection_reason": str(
                         slot.get("evidence_selection_reason")
@@ -5867,6 +6071,18 @@ def _reading_guide_repair_mechanism_marker_target(
                     clean_target_line[start:end].rstrip(),
                     num,
                 )
+                if mechanism == "sph":
+                    # The claim extractor treats semicolons as hard factual
+                    # boundaries. Here both sides are one source-stated
+                    # relation: beat frequency produces temporal phase
+                    # stepping through heterodyne holography.
+                    cited_sentence = re.sub(
+                        r"[;\uff1b]\s*",
+                        "\uff0c\u5e76"
+                        if re.search(r"[\u4e00-\u9fff]", cited_sentence)
+                        else ", and ",
+                        cited_sentence,
+                    )
                 lines[target_idx] = (
                     clean_target_line[:start]
                     + cited_sentence
@@ -11606,6 +11822,124 @@ def _augment_hits_with_canonical_answer_citations(
                 if isinstance(seeded.get("meta"), dict)
                 else {}
             )
+            canonical_ui = (
+                dict(row.get("ui_meta") or {})
+                if isinstance(row.get("ui_meta"), dict)
+                else {}
+            )
+            canonical_primary = (
+                dict(canonical_ui.get("primary_evidence") or {})
+                if isinstance(canonical_ui.get("primary_evidence"), dict)
+                else {}
+            )
+            canonical_block_id = str(
+                canonical_primary.get("block_id")
+                or canonical_primary.get("blockId")
+                or row_meta.get("block_id")
+                or ""
+            ).strip()
+            canonical_anchor_id = str(
+                canonical_primary.get("anchor_id")
+                or canonical_primary.get("anchorId")
+                or row_meta.get("anchor_id")
+                or ""
+            ).strip()
+            seeded_ui = (
+                dict(seeded.get("ui_meta") or {})
+                if isinstance(seeded.get("ui_meta"), dict)
+                else {}
+            )
+            seeded_primary = (
+                dict(seeded_ui.get("primary_evidence") or {})
+                if isinstance(seeded_ui.get("primary_evidence"), dict)
+                else {}
+            )
+            seeded_block_id = str(
+                seeded_primary.get("block_id")
+                or seeded_primary.get("blockId")
+                or seeded_meta.get("primary_block_id")
+                or ""
+            ).strip()
+            seeded_anchor_id = str(
+                seeded_primary.get("anchor_id")
+                or seeded_primary.get("anchorId")
+                or seeded_meta.get("primary_anchor_id")
+                or ""
+            ).strip()
+            if (
+                (canonical_block_id or canonical_anchor_id)
+                and (
+                    canonical_block_id != seeded_block_id
+                    or canonical_anchor_id != seeded_anchor_id
+                )
+            ):
+                canonical_source_name = str(
+                    row_meta.get("source_name")
+                    or canonical_primary.get("source_name")
+                    or _source_name_from_path(row_path)
+                    or ""
+                ).strip()
+                canonical_heading = str(
+                    canonical_primary.get("heading_path")
+                    or row_meta.get("heading_path")
+                    or ""
+                ).strip()
+                canonical_anchor_kind = str(
+                    canonical_primary.get("anchor_kind")
+                    or canonical_primary.get("anchorKind")
+                    or row_meta.get("anchor_kind")
+                    or "paragraph"
+                ).strip()
+                canonical_page_start = int(
+                    canonical_primary.get("page_start")
+                    or canonical_primary.get("pageStart")
+                    or row_meta.get("page_start")
+                    or 0
+                )
+                canonical_page_end = int(
+                    canonical_primary.get("page_end")
+                    or canonical_primary.get("pageEnd")
+                    or row_meta.get("page_end")
+                    or canonical_page_start
+                    or 0
+                )
+                canonical_primary.update(
+                    {
+                        "source_path": row_path,
+                        "source_name": canonical_source_name,
+                        "heading_path": canonical_heading,
+                        "snippet": evidence_text,
+                        "highlight_snippet": evidence_text,
+                        "block_id": canonical_block_id,
+                        "anchor_id": canonical_anchor_id,
+                        "anchor_kind": canonical_anchor_kind,
+                        "page_start": canonical_page_start,
+                        "page_end": canonical_page_end,
+                        "strict_locate": True,
+                    }
+                )
+                seeded_meta.update(
+                    {
+                        "source_path": row_path,
+                        "source_name": canonical_source_name,
+                        "heading_path": canonical_heading,
+                        "primary_block_id": canonical_block_id,
+                        "primary_anchor_id": canonical_anchor_id,
+                        "anchor_kind": canonical_anchor_kind,
+                        "page_start": canonical_page_start,
+                        "page_end": canonical_page_end,
+                    }
+                )
+                seeded_ui.update(
+                    {
+                        "source_path": row_path,
+                        "heading_path": canonical_heading,
+                        "summary_line": evidence_text,
+                        "primary_evidence": canonical_primary,
+                    }
+                )
+                seeded["text"] = evidence_text
+                seeded["ui_meta"] = seeded_ui
             seeded_meta["canonical_answer_evidence"] = True
             seeded["meta"] = seeded_meta
             out[already_seeded_idx] = seeded
@@ -15522,6 +15856,11 @@ def enrich_messages_with_reference_render(
                     render_locale=render_locale,
                     answer_text=render_source,
                 )
+            cite_details = _refine_system_a_cite_evidence_from_citation_plan(
+                cite_details,
+                citation_plan,
+                render_locale=render_locale,
+            )
             cite_details = _normalize_system_a_named_table_locators(
                 cite_details,
                 render_locale=render_locale,
@@ -15568,6 +15907,11 @@ def enrich_messages_with_reference_render(
                         render_locale=render_locale,
                         answer_text=render_source,
                     )
+                cite_details = _refine_system_a_cite_evidence_from_citation_plan(
+                    cite_details,
+                    citation_plan,
+                    render_locale=render_locale,
+                )
                 cite_details = _normalize_system_a_named_table_locators(
                     cite_details,
                     render_locale=render_locale,
