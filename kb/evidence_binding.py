@@ -814,6 +814,16 @@ def _system_a_fact_quantities(value: str) -> set[tuple[str, str, str]]:
 
     surface = re.sub(r"^\s*\d+[.)、]\s*", "", str(value or ""))
     surface = re.sub(r"\[\d{1,5}\](?:\([^\n)]+\))?", " ", surface)
+    # Reader-facing answers may render an exact source quantity such as
+    # ``$5\,\mu\mathrm{m}$`` as ``5 μm``. Canonicalize that presentation-only
+    # difference before quantity comparison so the evidence gate does not
+    # reject a value that is byte-for-byte equivalent in magnitude and unit.
+    surface = re.sub(
+        r"\$?(?P<number>\d+(?:\.\d+)?)\s*\\,\s*\\mu\s*"
+        r"\\mathrm\{(?P<unit>[A-Za-z]+)\}\s*\$?",
+        lambda match: f"{match.group('number')} μ{match.group('unit')}",
+        surface,
+    )
     # Relation operators are presentation syntax, not part of the number.  In
     # compact TeX such as ``$\sim$8`` or ``\approx30`` the command's trailing
     # letter otherwise makes the numeric boundary look alphanumeric and the

@@ -203,6 +203,23 @@
       "scinerf-forward-model-equation",
       "dl-spi-benefits-risks-en",
       "fdm-vs-3d-video-parallelism-en"
+    ],
+    "blind_holdout_v2": [
+      "qclfm-correlation-resolution",
+      "scinerf-motion-assumption-en",
+      "spd-detector-metrics",
+      "scigs-transformation-filter",
+      "iism-depth-phase",
+      "sph-sampling-ratio",
+      "pidl-cross-camera-transfer",
+      "spi-illumination-vs-detection",
+      "s2ism-array-reassignment",
+      "perovskite-dual-cavity-threshold",
+      "cassi-projective-single-shot",
+      "hsi-fsi-binary-pattern-cost",
+      "rt-spi-silver-mask",
+      "visual-perception-local-origin",
+      "nafnet-activation-free-en"
     ]
   },
   "suites": {
@@ -283,6 +300,64 @@
         "en_locale": [
           "dl-spi-benefits-risks-en",
           "fdm-vs-3d-video-parallelism-en"
+        ]
+      }
+    },
+    "blind_holdout_v2": {
+      "description": "冻结于实现修改前的未见问题集，用于检验证据完整回答能力能否迁移到新的事实组合与问法。",
+      "caseIds": [
+        "qclfm-correlation-resolution",
+        "scinerf-motion-assumption-en",
+        "spd-detector-metrics",
+        "scigs-transformation-filter",
+        "iism-depth-phase",
+        "sph-sampling-ratio",
+        "pidl-cross-camera-transfer",
+        "spi-illumination-vs-detection",
+        "s2ism-array-reassignment",
+        "perovskite-dual-cavity-threshold",
+        "cassi-projective-single-shot",
+        "hsi-fsi-binary-pattern-cost",
+        "rt-spi-silver-mask",
+        "visual-perception-local-origin",
+        "nafnet-activation-free-en"
+      ],
+      "minCases": 15,
+      "maxCases": 15,
+      "requiredLocales": ["zh", "en"],
+      "requiredCoverage": [
+        "new_fact_composition",
+        "mechanism_explanation",
+        "scope_boundary",
+        "exact_location",
+        "system_a",
+        "zh_locale",
+        "en_locale"
+      ],
+      "coverage": {
+        "new_fact_composition": [
+          "scigs-transformation-filter",
+          "sph-sampling-ratio",
+          "hsi-fsi-binary-pattern-cost"
+        ],
+        "mechanism_explanation": [
+          "qclfm-correlation-resolution",
+          "iism-depth-phase",
+          "cassi-projective-single-shot"
+        ],
+        "scope_boundary": [
+          "pidl-cross-camera-transfer",
+          "scinerf-motion-assumption-en"
+        ],
+        "exact_location": [
+          "rt-spi-silver-mask",
+          "visual-perception-local-origin"
+        ],
+        "system_a": ["spd-detector-metrics"],
+        "zh_locale": ["spi-illumination-vs-detection"],
+        "en_locale": [
+          "scinerf-motion-assumption-en",
+          "nafnet-activation-free-en"
         ]
       }
     },
@@ -2089,6 +2164,897 @@
         "maxUncitedHighRiskClaims": 0,
         "requireCitationCardQuality": true,
         "minSystemAQualityCount": 2,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "qclfm-correlation-resolution",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["qclfm"],
+      "question": "QCLFM 为什么能同时保住位置和角度分辨率？论文实际报告的景深提升有多大？",
+      "acceptance": [
+        "回答应解释纠缠光子的位置与角度/动量相关性如何允许两个自由度由不同相机测量。",
+        "必须给出论文报告的 2–5 倍景深和 5 μm 分辨率条件，并定位到 Discussion。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["QCLFM"],
+        "requiredAnswerTermGroups": [
+          ["位置", "position"],
+          ["角度", "angular", "动量", "momentum"],
+          ["不同相机", "独立相机", "separate cameras"],
+          ["2–5", "2-5", "2 到 5"],
+          ["5 μm", "5 µm", "5μm"]
+        ],
+        "requiredRefDocIds": ["qclfm"],
+        "requiredCitationDocIds": ["qclfm"],
+        "allowedRefDocIds": ["qclfm"],
+        "allowedCitationDocIds": ["qclfm"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "qclfm-separate-correlation-channels",
+          "docId": "qclfm",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 3,
+          "answerTerms": ["QCLFM"],
+          "answerTermGroups": [
+            ["位置", "position"],
+            ["角度", "angular", "动量", "momentum"],
+            ["2–5", "2-5", "2 到 5"]
+          ],
+          "evidenceTerms": [
+            "angular/momentum correlation",
+            "position resolution for angular resolution",
+            "measured on separate cameras",
+            "DOF that is between 2–5 times larger"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "qclfm-discussion-locate-v2",
+          "docId": "qclfm",
+          "route": "system_a",
+          "sourcePage": 3,
+          "locatorTerms": ["III. DISCUSSION"],
+          "evidenceTerms": ["separate cameras", "2–5 times larger"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "scinerf-motion-assumption-en",
+      "uiLocale": "en",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["scinerf"],
+      "question": "What camera-motion assumption does SCINeRF make during one compressed exposure, and what alternatives does the paper suggest for more complex motion?",
+      "acceptance": [
+        "The answer must state the linear-trajectory assumption and linear interpolation used within a short exposure.",
+        "It must mention both proposed alternatives for complex motion and keep the answer and evidence cards in English."
+      ],
+      "expected": {
+        "renderLocale": "en",
+        "requireAnswerLocale": true,
+        "requiredAnswerTerms": ["SCINeRF"],
+        "requiredAnswerTermGroups": [
+          ["linear trajectory", "trajectory is linear"],
+          ["linear interpolation"],
+          ["higher-order spline", "higher order spline"],
+          ["individual poses", "optimize each pose"]
+        ],
+        "requiredRefDocIds": ["scinerf"],
+        "requiredCitationDocIds": ["scinerf"],
+        "allowedRefDocIds": ["scinerf"],
+        "allowedCitationDocIds": ["scinerf"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "scinerf-linear-motion-boundary",
+          "docId": "scinerf",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 4,
+          "answerTerms": ["SCINeRF"],
+          "answerTermGroups": [
+            ["linear trajectory", "trajectory is linear"],
+            ["linear interpolation"],
+            ["higher-order spline", "higher order spline"],
+            ["individual poses", "optimize each pose"]
+          ],
+          "evidenceTerms": [
+            "camera trajectory during the imaging process is linear",
+            "linear interpolation",
+            "higher-order spline",
+            "optimize individual poses"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "scinerf-motion-method-locate",
+          "docId": "scinerf",
+          "route": "system_a",
+          "sourcePage": 4,
+          "locatorTerms": ["3.3. Proposed Framework"],
+          "evidenceTerms": ["camera trajectory", "higher-order spline"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "spd-detector-metrics",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["spd-review"],
+      "question": "评价单光子探测器不能只看探测效率，还必须同时看哪些关键指标？",
+      "acceptance": [
+        "回答必须把探测效率与暗计数、系统死时间和时间抖动并列，而不是只泛泛谈灵敏度。",
+        "证据应定位到综述的 Detection efficiency 小节并覆盖完整指标列表。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["探测效率", "detection efficiency"],
+          ["暗计数", "dark count"],
+          ["死时间", "dead time"],
+          ["时间抖动", "time jitter"]
+        ],
+        "requiredRefDocIds": ["spd-review"],
+        "requiredCitationDocIds": ["spd-review"],
+        "allowedRefDocIds": ["spd-review"],
+        "allowedCitationDocIds": ["spd-review"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "spd-four-core-metrics",
+          "docId": "spd-review",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 10,
+          "answerTermGroups": [
+            ["探测效率", "detection efficiency"],
+            ["暗计数", "dark count"],
+            ["死时间", "dead time"],
+            ["时间抖动", "time jitter"]
+          ],
+          "evidenceTerms": ["detection efficiency", "dark count", "system dead time", "time jitter"]
+        }],
+        "requiredLocateContracts": [{
+          "id": "spd-metrics-locate",
+          "docId": "spd-review",
+          "route": "system_a",
+          "sourcePage": 10,
+          "locatorTerms": ["3.1 Detection efficiency"],
+          "evidenceTerms": ["dark count", "time jitter"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "scigs-transformation-filter",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["scigs"],
+      "question": "SCIGS 的 transformation network 吃进去什么、输出什么？后面的高频滤波器又是在修什么问题？",
+      "acceptance": [
+        "回答应区分变换网络的输入输出与高频滤波器的职责。",
+        "必须说明输入包含 Gaussian 位置和 camera pose stamp，输出 Gaussian 变换，并用滤波器去除变换伪影。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["SCIGS"],
+        "requiredAnswerTermGroups": [
+          ["Gaussian 位置", "positions of", "高斯位置"],
+          ["camera pose stamp", "相机位姿标记"],
+          ["Gaussian 变换", "transformation of Gaussians", "高斯变换"],
+          ["高频伪影", "high-frequency artifacts"]
+        ],
+        "requiredRefDocIds": ["scigs"],
+        "requiredCitationDocIds": ["scigs"],
+        "allowedRefDocIds": ["scigs"],
+        "allowedCitationDocIds": ["scigs"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "scigs-transform-and-filter",
+          "docId": "scigs",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 3,
+          "answerTerms": ["SCIGS"],
+          "answerTermGroups": [
+            ["camera pose stamp", "相机位姿标记"],
+            ["Gaussian 变换", "transformation of Gaussians", "高斯变换"],
+            ["高频伪影", "high-frequency artifacts"]
+          ],
+          "evidenceTerms": [
+            "positions of each 3D Gaussians",
+            "camera pose stamp",
+            "outputs transformation of Gaussians",
+            "high-frequency artifacts"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "scigs-pipeline-locate-v2",
+          "docId": "scigs",
+          "route": "system_a",
+          "sourcePage": 3,
+          "locatorTerms": ["3. Method"],
+          "evidenceTerms": ["transformation network", "high-frequency filter"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "iism-depth-phase",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["iism"],
+      "question": "iISM 的干涉信号为什么会携带深度信息？相位公式里的 z、n、λ 和 Gouy phase 分别扮演什么角色？",
+      "acceptance": [
+        "回答应说明参考反射光与样品散射光发生干涉，相对相位随轴向位置变化。",
+        "必须逐项解释 z、折射率 n、波长 λ 与 Gouy 相位，并绑定到 Principle of iISM。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["iISM"],
+        "requiredAnswerTermGroups": [
+          ["反射光", "reflected"],
+          ["散射光", "scattered"],
+          ["轴向位置", "axial position"],
+          ["折射率", "refractive index"],
+          ["Gouy"]
+        ],
+        "requiredRefDocIds": ["iism"],
+        "requiredCitationDocIds": ["iism"],
+        "allowedRefDocIds": ["iism"],
+        "allowedCitationDocIds": ["iism"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "iism-phase-depth-terms",
+          "docId": "iism",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 2,
+          "answerTerms": ["iISM"],
+          "answerTermGroups": [
+            ["反射光", "reflected"],
+            ["散射光", "scattered"],
+            ["轴向位置", "axial position"],
+            ["Gouy"]
+          ],
+          "evidenceTerms": [
+            "relative phase between reflected and scattered electric fields",
+            "axial position of the scatterer",
+            "refractive index",
+            "Gouy phase"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "iism-principle-depth-locate",
+          "docId": "iism",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["Principle of interferometric ISM"],
+          "evidenceTerms": ["relative phase", "axial position"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "sph-sampling-ratio",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["sph-biological"],
+      "question": "这篇单像素压缩全息里 sampling ratio 应该怎么选？为什么降采样有时反而更干净，但降到 3.125% 又会坏掉？",
+      "acceptance": [
+        "回答应同时解释高阶 Hadamard 模式更易受噪声影响和过低采样率造成分辨率下降。",
+        "必须给出论文在当前噪声下建议的 25%、3.125% 失效点及分辨率随 SR 平方根下降的依据。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["25%"],
+          ["3.125%"],
+          ["高阶", "higher orders"],
+          ["平方根", "square root"],
+          ["伪影", "artifacts"]
+        ],
+        "requiredRefDocIds": ["sph-biological"],
+        "requiredCitationDocIds": ["sph-biological"],
+        "allowedRefDocIds": ["sph-biological"],
+        "allowedCitationDocIds": ["sph-biological"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "sph-sr-noise-resolution-tradeoff",
+          "docId": "sph-biological",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 4,
+          "answerTermGroups": [
+            ["25%"],
+            ["3.125%"],
+            ["高阶", "higher orders"],
+            ["平方根", "square root"]
+          ],
+          "evidenceTerms": [
+            "higher orders is more sensitive to measurement noises",
+            "SR of 25% might be a suitable choice",
+            "SR was further reduced to 3.125%",
+            "spatial resolution is expected to degrade along with the square root of the SR"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "sph-sr-results-locate",
+          "docId": "sph-biological",
+          "route": "system_a",
+          "sourcePage": 4,
+          "locatorTerms": ["Verification of holographic performance"],
+          "evidenceTerms": ["SR of 25%", "3.125%"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "pidl-cross-camera-transfer",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["pidl-single-photon"],
+      "question": "这套 physics-informed SPAD 增强模型能直接换到另一台相机吗？论文承认的跨设备限制和建议是什么？",
+      "acceptance": [
+        "回答必须区分噪声模型形式可泛化与具体噪声参数不能直接复用。",
+        "必须指出参数来自特定 SPAD 相机、同型号阵列也可能不同，并列出自动校准与迁移学习建议。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["特定 SPAD", "specific SPAD"],
+          ["参数", "parameters"],
+          ["同一型号", "same version"],
+          ["自动校准", "automatic calibration"],
+          ["迁移学习", "transfer learning"]
+        ],
+        "requiredRefDocIds": ["pidl-single-photon"],
+        "requiredCitationDocIds": ["pidl-single-photon"],
+        "allowedRefDocIds": ["pidl-single-photon"],
+        "allowedCitationDocIds": ["pidl-single-photon"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "pidl-camera-calibration-boundary",
+          "docId": "pidl-single-photon",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 8,
+          "answerTermGroups": [
+            ["特定 SPAD", "specific SPAD"],
+            ["同一型号", "same version"],
+            ["自动校准", "automatic calibration"],
+            ["迁移学习", "transfer learning"]
+          ],
+          "evidenceTerms": [
+            "calibrated employing a set of collected images acquired using a specific SPAD camera",
+            "even for the same version of cameras",
+            "automatic calibration",
+            "transfer learning technique"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "pidl-camera-transfer-discussion-locate",
+          "docId": "pidl-single-photon",
+          "route": "system_a",
+          "sourcePage": 8,
+          "locatorTerms": ["Discussion"],
+          "evidenceTerms": ["specific SPAD camera", "transfer learning"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "spi-illumination-vs-detection",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["spi-prospects"],
+      "question": "单像素相机里的 structured illumination 和 structured detection 到底差在哪一侧？采集速度真正卡在哪里？",
+      "acceptance": [
+        "回答应说明 DMD 投影到场景是结构照明，放在物体像面调制检测强度是结构探测。",
+        "必须指出两种配置共享的采集瓶颈是 DMD 调制速率。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["结构照明", "structured illumination"],
+          ["结构探测", "structured detection"],
+          ["投影", "project patterns"],
+          ["像面", "image plane"],
+          ["DMD 调制速率", "modulation rate of the DMD"]
+        ],
+        "requiredRefDocIds": ["spi-prospects"],
+        "requiredCitationDocIds": ["spi-prospects"],
+        "allowedRefDocIds": ["spi-prospects"],
+        "allowedCitationDocIds": ["spi-prospects"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "spi-two-dmd-configurations",
+          "docId": "spi-prospects",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 2,
+          "answerTermGroups": [
+            ["结构照明", "structured illumination"],
+            ["结构探测", "structured detection"],
+            ["DMD 调制速率", "modulation rate of the DMD"]
+          ],
+          "evidenceTerms": [
+            "project patterns of light onto a scene",
+            "structured illumination",
+            "structured detection",
+            "modulation rate of the DMD"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "spi-camera-architecture-locate-v2",
+          "docId": "spi-prospects",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["Camera architecture"],
+          "evidenceTerms": ["structured illumination", "structured detection", "bottleneck"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "s2ism-array-reassignment",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["s2ism"],
+      "question": "ISM 为什么把共焦针孔和单点探测器换成阵列？每个阵列像素和整个阵列分别起什么作用，数据最后怎样合成？",
+      "acceptance": [
+        "回答应说明每个阵列单元像小针孔，整个阵列保证高集光效率。",
+        "必须指出每个探测单元产生一幅 confocal-like 图像，最后通过 pixel reassignment 或 multi-image deconvolution 融合。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["小针孔", "small pinhole"],
+          ["集光效率", "light collection efficiency"],
+          ["confocal-like", "类共焦"],
+          ["pixel reassignment", "像素重分配"],
+          ["multi-image deconvolution", "多图像反卷积"]
+        ],
+        "requiredRefDocIds": ["s2ism"],
+        "requiredCitationDocIds": ["s2ism"],
+        "allowedRefDocIds": ["s2ism"],
+        "allowedCitationDocIds": ["s2ism"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "s2ism-array-fusion-chain",
+          "docId": "s2ism",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 2,
+          "answerTermGroups": [
+            ["小针孔", "small pinhole"],
+            ["集光效率", "light collection efficiency"],
+            ["pixel reassignment", "像素重分配"],
+            ["multi-image deconvolution", "多图像反卷积"]
+          ],
+          "evidenceTerms": [
+            "acts as a small pinhole",
+            "entire array guarantees high light collection efficiency",
+            "confocal-like images",
+            "adaptive pixel reassignment",
+            "multi-image deconvolution"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "s2ism-array-intro-locate",
+          "docId": "s2ism",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["small pinhole", "pixel reassignment"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "perovskite-dual-cavity-threshold",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["perovskite-laser"],
+      "question": "这篇钙钛矿激光器为什么要做成双腔？两个子单元各自负责什么，最低阈值和耦合效率是多少？",
+      "acceptance": [
+        "回答应区分高功率 microcavity PeLED 子单元与低阈值单晶钙钛矿微腔子单元。",
+        "必须给出 92 A cm⁻² 最低阈值和约 82.7% 耦合效率，并解释方向性发光建立激光作用。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["PeLED"],
+          ["单晶", "single-crystal"],
+          ["92 A cm", "92A cm"],
+          ["82.7%"],
+          ["方向性", "directional emission"]
+        ],
+        "requiredRefDocIds": ["perovskite-laser"],
+        "requiredCitationDocIds": ["perovskite-laser"],
+        "allowedRefDocIds": ["perovskite-laser"],
+        "allowedCitationDocIds": ["perovskite-laser"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "perovskite-two-cavity-roles",
+          "docId": "perovskite-laser",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 1,
+          "answerTermGroups": [
+            ["PeLED"],
+            ["单晶", "single-crystal"],
+            ["92 A cm", "92A cm"],
+            ["82.7%"]
+          ],
+          "evidenceTerms": [
+            "low-threshold single-crystal perovskite microcavity",
+            "high-power microcavity perovskite LED",
+            "minimum lasing threshold of 92 A cm",
+            "coupling efficiency of about 82.7%"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "perovskite-dual-cavity-abstract-locate",
+          "docId": "perovskite-laser",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["dual-cavity", "92 A cm", "82.7%"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "cassi-projective-single-shot",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["cassi"],
+      "question": "CASSI 为什么一次曝光就能做光谱成像？它实际测到的不是完整数据立方体，那重建依据是什么？",
+      "acceptance": [
+        "回答应说明双色散元件夹着二值编码孔径，形成可控的空间变化窄带光谱滤波。",
+        "必须指出测量等价于光谱域投影，因此可用 compressive sensing 框架重建。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["双色散", "two dispersive elements"],
+          ["二值", "binary-valued aperture"],
+          ["光谱域", "spectral domain"],
+          ["投影测量", "projective measurement"],
+          ["压缩感知", "compressive sensing"]
+        ],
+        "requiredRefDocIds": ["cassi"],
+        "requiredCitationDocIds": ["cassi"],
+        "allowedRefDocIds": ["cassi"],
+        "allowedCitationDocIds": ["cassi"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "cassi-projective-cs-basis",
+          "docId": "cassi",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 1,
+          "answerTermGroups": [
+            ["双色散", "two dispersive elements"],
+            ["二值", "binary-valued aperture"],
+            ["投影测量", "projective measurement"],
+            ["压缩感知", "compressive sensing"]
+          ],
+          "evidenceTerms": [
+            "two dispersive elements",
+            "binary-valued aperture code",
+            "projective measurement in the spectral domain",
+            "compressive sensing frameworks"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "cassi-projective-abstract-locate",
+          "docId": "cassi",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["projective measurement", "compressive sensing"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "hsi-fsi-binary-pattern-cost",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["hsi-fsi"],
+      "question": "Fourier 单像素成像为什么在 DMD 上会慢？把 Fourier 图案二值化以后，速度和空间分辨率之间怎么交换？",
+      "acceptance": [
+        "回答应指出原生 Fourier 基图是灰度图，而 DMD 的灰度刷新远慢于二值刷新。",
+        "必须给出约 20,000 binary patterns/s 对约 250 grayscale patterns/s，并说明 binary FSI 以空间分辨率下降为代价。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["灰度", "grayscale"],
+          ["20,000", "20000"],
+          ["250"],
+          ["binary FSI", "二值 FSI"],
+          ["空间分辨率", "spatial resolution"]
+        ],
+        "requiredRefDocIds": ["hsi-fsi"],
+        "requiredCitationDocIds": ["hsi-fsi"],
+        "allowedRefDocIds": ["hsi-fsi"],
+        "allowedCitationDocIds": ["hsi-fsi"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "fsi-binary-speed-resolution-tradeoff",
+          "docId": "hsi-fsi",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 7,
+          "answerTermGroups": [
+            ["灰度", "grayscale"],
+            ["20,000", "20000"],
+            ["250"],
+            ["空间分辨率", "spatial resolution"]
+          ],
+          "evidenceTerms": [
+            "Fourier basis patterns are naturally grayscale",
+            "20,000 binary patterns per second",
+            "250 8-bit",
+            "expense of reduced spatial resolution"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "fsi-binary-basis-locate",
+          "docId": "hsi-fsi",
+          "route": "system_a",
+          "sourcePage": 7,
+          "locatorTerms": ["2.2 Basis patterns generation"],
+          "evidenceTerms": ["naturally grayscale", "reduced spatial resolution"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "rt-spi-silver-mask",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["rt-spi-supp"],
+      "question": "实时单像素差分系统的旋转掩模为什么最后选银而不是铬？这个材料选择改善了哪一个差分测量条件？",
+      "acceptance": [
+        "回答应说明银盘反射率更高、透射率更低。",
+        "必须把材料性质连接到两束光中的互补图案对比度，并定位到补充材料的掩模制造小节。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["银", "Ag"],
+          ["铬", "Cr"],
+          ["反射率", "reflectivity"],
+          ["透射率", "transmissivity"],
+          ["互补图案", "complementary patterns"],
+          ["对比度", "contrast"]
+        ],
+        "requiredRefDocIds": ["rt-spi-supp"],
+        "requiredCitationDocIds": ["rt-spi-supp"],
+        "allowedRefDocIds": ["rt-spi-supp"],
+        "allowedCitationDocIds": ["rt-spi-supp"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "rt-spi-ag-mask-contrast",
+          "docId": "rt-spi-supp",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 2,
+          "answerTermGroups": [
+            ["银", "Ag"],
+            ["铬", "Cr"],
+            ["反射率", "reflectivity"],
+            ["互补图案", "complementary patterns"],
+            ["对比度", "contrast"]
+          ],
+          "evidenceTerms": [
+            "Ag mask exhibits superior reflectivity",
+            "lower transmissivity",
+            "better contrast for the complementary patterns",
+            "Ag mask was selected"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "rt-spi-mask-fabrication-locate",
+          "docId": "rt-spi-supp",
+          "route": "system_a",
+          "sourcePage": 2,
+          "locatorTerms": ["1. FABRICATION OF THE SPINNING MASK"],
+          "evidenceTerms": ["superior reflectivity", "complementary patterns"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "visual-perception-local-origin",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["visual-perception"],
+      "question": "这篇信息论视角的知觉论文为什么说用局部原点描述点簇更省信息？什么时候反而不划算？",
+      "acceptance": [
+        "回答应说明簇内坐标相对局部原点的取值范围更小，因此描述成本下降。",
+        "必须给出净节省条件：省下的信息量要大于额外描述局部原点位置的成本。"
+      ],
+      "expected": {
+        "requiredAnswerTermGroups": [
+          ["局部原点", "local origin"],
+          ["坐标", "coordinates"],
+          ["取值范围", "range"],
+          ["净节省", "net saving"],
+          ["额外", "separate component", "成本"]
+        ],
+        "requiredRefDocIds": ["visual-perception"],
+        "requiredCitationDocIds": ["visual-perception"],
+        "allowedRefDocIds": ["visual-perception"],
+        "allowedCitationDocIds": ["visual-perception"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "visual-local-origin-information-saving",
+          "docId": "visual-perception",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 8,
+          "answerTermGroups": [
+            ["局部原点", "local origin"],
+            ["取值范围", "range"],
+            ["净节省", "net saving"]
+          ],
+          "evidenceTerms": [
+            "with respect to some local origin",
+            "smaller range of alternative coordinates",
+            "amount of information thus saved",
+            "a net saving will result"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "visual-economical-description-locate",
+          "docId": "visual-perception",
+          "route": "system_a",
+          "sourcePage": 8,
+          "locatorTerms": ["PERCEPTION AS ECONOMICAL DESCRIPTION"],
+          "evidenceTerms": ["local origin", "net saving"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
+        "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "nafnet-activation-free-en",
+      "uiLocale": "en",
+      "sourceGrounded": true,
+      "queryScope": "current_paper",
+      "docIds": ["simple-baselines"],
+      "question": "In what precise sense is NAFNet activation-free, and what does the paper use instead of conventional nonlinear activation functions?",
+      "acceptance": [
+        "The answer must not claim that the network is entirely linear; it should state that named activation functions can be replaced by multiplication or removed.",
+        "It must identify NAFNet as the derived Nonlinear Activation Free Network and keep the answer and cards in English."
+      ],
+      "expected": {
+        "renderLocale": "en",
+        "requireAnswerLocale": true,
+        "requiredAnswerTerms": ["NAFNet"],
+        "requiredAnswerTermGroups": [
+          ["nonlinear activation functions"],
+          ["multiplication"],
+          ["removed", "removal"],
+          ["Nonlinear Activation Free Network"]
+        ],
+        "forbiddenAnswerTerms": ["the whole network is linear", "entirely linear network"],
+        "requiredRefDocIds": ["simple-baselines"],
+        "requiredCitationDocIds": ["simple-baselines"],
+        "allowedRefDocIds": ["simple-baselines"],
+        "allowedCitationDocIds": ["simple-baselines"],
+        "maxUnexpectedRefDocCount": 0,
+        "maxUnexpectedCitationDocCount": 0,
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{
+          "id": "nafnet-activation-free-definition",
+          "docId": "simple-baselines",
+          "route": "system_a",
+          "answerScope": "response",
+          "sourcePage": 1,
+          "answerTerms": ["NAFNet"],
+          "answerTermGroups": [
+            ["nonlinear activation functions"],
+            ["multiplication"],
+            ["removed", "removal"]
+          ],
+          "evidenceTerms": [
+            "nonlinear activation functions",
+            "replaced by multiplication or removed",
+            "Nonlinear Activation Free Network",
+            "NAFNet"
+          ]
+        }],
+        "requiredLocateContracts": [{
+          "id": "nafnet-abstract-definition-locate",
+          "docId": "simple-baselines",
+          "route": "system_a",
+          "sourcePage": 1,
+          "locatorTerms": ["Abstract"],
+          "evidenceTerms": ["replaced by multiplication or removed", "NAFNet"]
+        }],
+        "requireClaimLevelCitations": true,
+        "maxUncitedHighRiskClaims": 0,
+        "requireCitationCardQuality": true,
+        "minSystemAQualityCount": 1,
         "maxSystemBCount": 0
       }
     }

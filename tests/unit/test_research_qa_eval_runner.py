@@ -288,7 +288,7 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
     fixture = load_fixture()
 
     assert len(fixture.docs) == 22
-    assert len(fixture.cases) == 35
+    assert len(fixture.cases) == 50
     case_ids = {str(item.get("id") or "") for item in fixture.cases}
     assert {
         "spi-roadmap-beginner",
@@ -306,11 +306,22 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
         "ECCV-2022-Simple Baselines for Image Restoration/"
         "ECCV-2022-Simple Baselines for Image Restoration.en.md"
     )
-    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 20
+    assert sum(1 for case in fixture.cases if case.get("sourceGrounded")) == 35
     assert len(fixture.splits["baseline_real_v1"]) == 12
     assert len(fixture.splits["holdout_v1"]) == 23
+    assert len(fixture.splits["blind_holdout_v2"]) == 15
     assert set(fixture.splits["baseline_real_v1"]).isdisjoint(fixture.splits["holdout_v1"])
-    assert set(fixture.splits["baseline_real_v1"]) | set(fixture.splits["holdout_v1"]) == case_ids
+    assert set(fixture.splits["baseline_real_v1"]).isdisjoint(
+        fixture.splits["blind_holdout_v2"]
+    )
+    assert set(fixture.splits["holdout_v1"]).isdisjoint(
+        fixture.splits["blind_holdout_v2"]
+    )
+    assert (
+        set(fixture.splits["baseline_real_v1"])
+        | set(fixture.splits["holdout_v1"])
+        | set(fixture.splits["blind_holdout_v2"])
+    ) == case_ids
 
 
 def test_research_qa_fixture_split_selection_is_stable_and_intersectable():

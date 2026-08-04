@@ -554,6 +554,18 @@ def test_adjacent_postfix_metric_remains_attached_to_value() -> None:
     assert ("0.9", "", "ssim") in quantities
 
 
+def test_latex_micro_unit_matches_reader_visible_unicode_unit() -> None:
+    latex_quantities = evidence_binding._system_a_fact_quantities(
+        r"The reported resolution is $5\,\mu\mathrm{m}$."
+    )
+    reader_quantities = evidence_binding._system_a_fact_quantities(
+        "The reported resolution is 5 μm."
+    )
+
+    assert ("5", "um", "") in latex_quantities
+    assert latex_quantities == reader_quantities
+
+
 def test_metric_inherits_across_explicit_numeric_range_bridge_only() -> None:
     claim = "PSNR improves from 30 dB to 31 dB."
     evidence = "PSNR is 30 dB while SNR is 31 dB."

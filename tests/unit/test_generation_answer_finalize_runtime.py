@@ -121,6 +121,64 @@ def test_strict_comparison_numbers_do_not_exact_allowlist_one_identified_paper()
     assert finalize_runtime._strict_comparison_system_a_numbers(same_paper_plan) is None
 
 
+def test_plan_hit_resolution_keeps_explicit_candidate_on_same_source_quote_tie() -> None:
+    source_path = "qclfm.en.md"
+    exact = (
+        "Each degree of freedom is measured on separate cameras, and the reported "
+        "DOF is 2–5 times larger at 5 μm resolution."
+    )
+    hits = [
+        {
+            "text": exact,
+            "meta": {"source_path": source_path, "heading_path": "Discussion"},
+        },
+        {
+            "text": "An unrelated setup paragraph.",
+            "meta": {"source_path": source_path, "heading_path": "Setup"},
+        },
+        {
+            "text": exact,
+            "meta": {"source_path": source_path, "heading_path": "Discussion"},
+        },
+    ]
+    slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "heading_path": "Discussion",
+        "candidate_hits": [3],
+        "evidence_quote": exact,
+    }
+
+    assert finalize_runtime._citation_plan_slot_hit_numbers(slot, hits) == [3]
+
+
+def test_plan_hit_resolution_replaces_low_coverage_stale_candidate() -> None:
+    source_path = "paper.en.md"
+    exact = (
+        "The exact result reports 120 nm resolution at tenfold lower illumination "
+        "power, which significantly reduces photodamage."
+    )
+    hits = [
+        {
+            "text": "The paper studies resolution and imaging.",
+            "meta": {"source_path": source_path, "heading_path": "Abstract"},
+        },
+        {
+            "text": exact,
+            "meta": {"source_path": source_path, "heading_path": "Results"},
+        },
+    ]
+    slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "heading_path": "Results",
+        "candidate_hits": [1],
+        "evidence_quote": exact,
+    }
+
+    assert finalize_runtime._citation_plan_slot_hit_numbers(slot, hits) == [2]
+
+
 def test_planned_source_binder_rebinds_reordered_sources_without_adding_prose() -> None:
     plan = {
         "intent": "comparison",
@@ -1730,6 +1788,102 @@ def test_exact_source_bound_focuses_iism_live_cell_cost_on_abstract_bundle() -> 
     assert "[1]" not in normalized
 
 
+def test_exact_source_bound_stabilizes_iism_depth_phase_roles() -> None:
+    relation = (
+        "In a confocal geometry, the interference occurs between two quasi-spherical waves "
+        "and the relative phase between reflected and scattered electric fields is:"
+    )
+    variables = (
+        "with n the refractive index of the medium, z the axial position of the scatterer "
+        "relative to the interface, lambda the illumination wavelength, and phi_Gouy the "
+        "Gouy phase."
+    )
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "相位随深度变化。",
+        prompt="iISM 的相位为什么携带深度？z、n、λ 和 Gouy phase 分别是什么？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "iism.en.md",
+                    "candidate_hits": [1],
+                    "evidence_quote": relation,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "iism.en.md",
+                    "candidate_hits": [2],
+                    "evidence_quote": variables,
+                },
+            ]
+        },
+        answer_hits=[
+            {"text": relation, "meta": {"source_path": "iism.en.md"}},
+            {"text": variables, "meta": {"source_path": "iism.en.md"}},
+        ],
+    )
+
+    assert all(term in out for term in ("iISM", "反射光", "散射光", "轴向位置", "折射率", "Gouy"))
+    assert "[1]" in out
+    assert "[2]" in out
+
+
+def test_source_term_normalization_preserves_spi_image_plane_and_dmd_bottleneck() -> None:
+    evidence = (
+        "For the latter, the DMD is located in an image plane of the object after a lens. "
+        "Nonetheless, it is the modulation rate of the DMD that is the bottleneck in the "
+        "acquisition time of a single-pixel camera."
+    )
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "DMD 位于物像平面，采集瓶颈是 DMD 的调制速率 [1]。",
+        prompt="结构照明和结构探测有什么差别？速度瓶颈在哪里？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "spi.en.md",
+                    "candidate_hits": [1],
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "spi.en.md"}}],
+    )
+
+    assert "像面（image plane）" in out
+    assert "DMD 调制速率（modulation rate of the DMD）" in out
+
+
+def test_exact_source_bound_stabilizes_spi_configuration_and_bottleneck() -> None:
+    evidence = (
+        "The DMD can project patterns of light onto a scene, also termed structured "
+        "illumination, or structure detected image intensities, called structured detection. "
+        "For the latter, the DMD is located in an image plane of the object after a lens. "
+        "It is the modulation rate of the DMD that is the bottleneck in acquisition time."
+    )
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "两种方式使用 DMD。",
+        prompt="structured illumination 和 structured detection 有何区别，速度瓶颈是什么？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "spi.en.md",
+                    "candidate_hits": [1],
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "spi.en.md"}}],
+    )
+
+    assert "结构化照明" in out
+    assert "结构化探测" in out
+    assert "投影（project patterns）" in out
+    assert "像面（image plane）" in out
+    assert "DMD 调制速率（modulation rate of the DMD）" in out
+
+
 def test_exact_source_bound_builds_complete_spad_geiger_answer() -> None:
     evidence = (
         "Single photon avalanche diode (SPAD) is a p-n junction that operates in Geiger mode. "
@@ -2272,7 +2426,10 @@ def test_exact_source_bound_stabilizes_sequential_adaptive_scope() -> None:
 def test_exact_source_bound_stabilizes_three_method_microscopy_map() -> None:
     structured = "Structured detection provides super-resolution, high signal-to-noise ratio, and enhanced optical sectioning."
     iism = "Interferometric detection reaches 120 nm at tenfold lower illumination power, reducing photodamage."
-    light_field = "Light-field microscopy captures position and angular information and addresses a trade-off in volumetric imaging."
+    light_field = (
+        "Light-field microscopy gains volumetric information in a single shot by "
+        "simultaneously capturing both position and angular information."
+    )
     hits = [
         {"text": light_field, "meta": {"source_path": "qclfm.en.md"}},
         {"text": iism, "meta": {"source_path": "iism.en.md"}},
@@ -2292,7 +2449,7 @@ def test_exact_source_bound_stabilizes_three_method_microscopy_map() -> None:
     assert "Structured detection" in out and "SNR" in out
     assert "Interferometric detection" in out and "120 nm" in out
     assert "Light-field" in out and "refocus" in out
-    assert out.count("[1]") == 2
+    assert out.count("[1]") == 3
     assert out.count("[2]") == 2
     assert out.count("[3]") == 2
     assert "模型输出被截断" not in out
@@ -2329,6 +2486,52 @@ def test_late_target_hits_rebuilds_basis_foveated_pair(tmp_path: Path) -> None:
     assert any("Hadamard basis patterns" in str(slot.get("evidence_quote")) for slot in slots)
     assert any("entire field of view" in str(slot.get("evidence_quote")) for slot in slots)
     assert any(str(slot.get("heading_path") or "").endswith("Abstract") for slot in slots)
+
+
+def test_late_target_hits_preserves_structured_table_metric_evidence() -> None:
+    evidence = (
+        "Table 6 | SIDD | Baseline ours | 40.30 PSNR; "
+        "NAFNet ours | 40.30 PSNR"
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {
+                "source_path": "simple-baselines.en.md",
+                "source_name": "Simple Baselines for Image Restoration",
+                "heading_path": "Experiments / Table 6",
+                "structured_kind": "table_metric",
+                "block_id": "table-6",
+                "anchor_id": "table-6-sidd-psnr",
+                "anchor_kind": "table",
+                "page_start": 8,
+            },
+        }
+    ]
+
+    rebuilt = finalize_runtime._citation_plan_with_late_target_hits(
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": "simple-baselines.en.md",
+                    "heading_path": "Introduction",
+                    "evidence_quote": "A generic restoration overview.",
+                }
+            ]
+        },
+        answer_hits=hits,
+        prompt="SIDD 的 PSNR 最高模型是谁？并列请全部列出。",
+    )
+
+    slot = rebuilt["slots"][0]
+    assert slot["candidate_hits"] == [1]
+    assert slot["evidence_quote"] == evidence
+    assert slot["heading_path"] == "Experiments / Table 6"
+    assert slot["block_id"] == "table-6"
+    assert slot["anchor_kind"] == "table"
+    assert slot["page_start"] == 8
+    assert rebuilt["late_target_hit_refresh"] is True
 
 
 def test_late_target_hits_separates_dl_benefit_and_risk_passages(tmp_path: Path) -> None:
@@ -6996,3 +7199,81 @@ def test_color_spi_comparison_restores_source_stated_distortion_challenge() -> N
     assert "颜色响应系数未知会导致颜色失真" in audited
     assert "color distortion） [1]" in audited
     assert meta["minimum_ok"] is True
+
+
+def test_normalizer_completes_source_enumeration_without_inventing_definitions() -> None:
+    evidence = (
+        "The main parameters of single photon detectors are detection efficiency "
+        "(DE), dark count, system dead time, time jitter, and so on."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "detector-review.en.md",
+                "evidence_quote": evidence,
+                "page_start": 10,
+            }
+        ]
+    }
+    hits = [{"text": evidence, "meta": {"source_path": "detector-review.en.md"}}]
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "还要关注系统死时间和时间抖动 [1]。",
+        prompt="除了探测效率，还必须同时看哪些关键指标？",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+    repeated = finalize_runtime._normalize_citation_plan_supported_terms(
+        normalized,
+        prompt="除了探测效率，还必须同时看哪些关键指标？",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    assert "detection efficiency" in normalized
+    assert "dark count" in normalized
+    assert "system dead time" in normalized
+    assert "time jitter" in normalized
+    assert normalized.count("Complete source enumeration") == 0
+    assert repeated == normalized
+
+
+def test_normalizer_adds_missing_reported_quantity_from_exact_plan_sentence() -> None:
+    evidence = (
+        "We use inherent position and angular/momentum correlation. "
+        "Since each degree of freedom can be measured on separate cameras, no position "
+        "resolution is sacrificed for angular resolution. This has allowed us to achieve "
+        r"a DOF that is between 2–5 times larger, at the $5\,\mu\mathrm{m}$ resolution, than other methods."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "qclfm.en.md",
+                "evidence_quote": evidence,
+                "page_start": 3,
+            }
+        ]
+    }
+    hits = [{"text": evidence, "meta": {"source_path": "qclfm.en.md"}}]
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "QCLFM 用不同相机分别测量位置和角度自由度 [1]。",
+        prompt="QCLFM 为什么能保住位置和角度分辨率？实际报告的景深提升有多大？",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+    repeated = finalize_runtime._normalize_citation_plan_supported_terms(
+        normalized,
+        prompt="QCLFM 为什么能保住位置和角度分辨率？实际报告的景深提升有多大？",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    assert "2–5 times larger" in normalized
+    assert "5 μm" in normalized
+    assert "[1]" in normalized
+    assert repeated == normalized

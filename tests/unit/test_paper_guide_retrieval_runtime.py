@@ -21,6 +21,35 @@ from kb.paper_guide_retrieval_runtime import (
 from tests._paper_guide_fixtures import build_paper_guide_runtime_fixture
 
 
+def test_targeted_scan_prefers_metric_enumeration_over_numeric_mentions(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "detector-review.en.md"
+    source.write_text(
+        "# Detector review\n\n"
+        "<!-- kb_page: 10 -->\n\n"
+        "## 3 Single photon detection parameter\n\n"
+        "The main parameters of single photon detectors are detection efficiency "
+        "(DE), dark count, system dead time, time jitter, and so on.\n\n"
+        "<!-- kb_page: 14 -->\n\n"
+        "## 4.2 Waveguide\n\n"
+        "A waveguide SPAD reached 85% detection efficiency at 78 K, and its timing "
+        "jitter was measured at several excess-bias values.\n",
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source),
+        prompt="评价单光子探测器时，除了探测效率还必须看哪些关键指标？请按原文列出。",
+        db_dir=tmp_path,
+        limit=2,
+    )
+
+    assert hits
+    assert "main parameters" in hits[0]["text"]
+    assert hits[0]["meta"]["page_start"] == 10
+
+
 def test_paper_guide_deepread_heading_prefers_meta_heading_then_markdown_header():
     assert _paper_guide_deepread_heading({"meta": {"heading_path": "Methods > APR"}}) == "Methods > APR"
     assert _paper_guide_deepread_heading({"text": "# Discussion\nFuture work."}) == "Discussion"

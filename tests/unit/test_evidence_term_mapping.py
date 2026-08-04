@@ -99,6 +99,20 @@ def test_iism_acronym_matches_its_spelled_out_method_name() -> None:
     )
 
 
+def test_qclfm_acronym_matches_spelled_out_source_title() -> None:
+    assert not method_identity_conflicts(
+        "QCLFM keeps position and angular resolution on separate cameras.",
+        (
+            "Quantum correlation light-field microscope with extreme depth of field. "
+            "Each degree of freedom can be measured on separate cameras."
+        ),
+    )
+    assert method_identity_conflicts(
+        "QCLFM keeps position and angular resolution on separate cameras.",
+        "A conventional LFM uses one sensor for position and angular sampling.",
+    )
+
+
 def test_method_identity_conflict_ignores_bibliographic_filename_prefixes() -> None:
     assert not method_identity_conflicts(
         "CASSI uses two opposing dispersive elements and a binary-valued aperture.",

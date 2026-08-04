@@ -26,6 +26,24 @@ class _FakeStore:
         return []
 
 
+def test_single_photon_overview_guide_differs_from_reading_relevance() -> None:
+    evidence = (
+        "Single-photon detections represent a highly sensitive technique. This technology "
+        "mainly relies on the mainstream SPDs, such as photomultiplier tubes (PMTs), "
+        "avalanche photodiodes (SAPD), superconducting nanowire single-photon detectors "
+        "(SNSPDs), superconducting transition-edge sensors (TES), and perovskite devices."
+    )
+
+    guide = references_router._answer_citation_zh_guide_from_evidence(
+        evidence=evidence,
+        source_identity="Emerging single-photon detection technique",
+    )
+
+    assert "归纳" in guide
+    assert "PMT" in guide and "SAPD" in guide and "SNSPD" in guide and "TES" in guide
+    assert "硬件能力、工作条件与制造瓶颈" not in guide
+
+
 def test_compatible_refs_cache_rejects_new_render_evidence_revision() -> None:
     references_router._REFS_CONVERSATION_CACHE.clear()
     base_pack = {
@@ -5099,6 +5117,107 @@ def test_scinerf_answer_card_has_grounded_localized_summary() -> None:
     assert "SCI" in summary
     assert "NeRF" in summary
     assert why
+
+
+def test_answer_card_falls_back_to_grounded_localized_claim() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "RT-SPI.pdf",
+                "heading_path": "Methods / Binary mask fabrication",
+                "binding_status": "grounded",
+                "answer_claim": (
+                    "银层需要保持足够厚度，是因为它必须在目标波段提供高反射率，"
+                    "同时避免透射泄漏。 [3]"
+                ),
+                "evidence_quote": (
+                    "The deposited silver film was chosen to maintain high reflectivity "
+                    "and suppress transmission through the binary mask."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt="为什么实时单像素成像的二值掩模需要足够厚的银层？",
+    )
+
+    assert summary == "银层需要保持足够厚度。"
+    assert "高反射率" in why
+    assert "透射泄漏" in why
+    assert "[3]" not in summary + why
+
+
+def test_answer_card_does_not_fallback_to_unverified_claim() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "RT-SPI.pdf",
+                "heading_path": "Methods / Binary mask fabrication",
+                "binding_status": "candidate",
+                "answer_claim": "这个尚未核验的中文说法不应进入证据卡。",
+                "evidence_quote": "A short source sentence with no known translation template.",
+            }
+        ],
+        prefer_zh=True,
+        prompt="说明掩模设计。",
+    )
+
+    assert summary == ""
+    assert why == ""
+
+
+def test_answer_card_splits_grounded_effect_claim_into_specific_relevance() -> None:
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "Detector-review.pdf",
+                "heading_path": "3.2 Dark count rate",
+                "binding_status": "grounded",
+                "answer_claim": (
+                    "暗计数率是无光照时产生虚假计数信号的速率，"
+                    "直接影响弱光检测的信噪比和最低可探测光强。 [2]"
+                ),
+                "evidence_quote": (
+                    "Dark count rate describes false counts in the absence of photon irradiation."
+                ),
+            }
+        ],
+        prefer_zh=True,
+        prompt="除了探测效率还要看哪些指标？",
+    )
+
+    assert summary == "暗计数率是无光照时产生虚假计数信号的速率。"
+    assert "影响弱光检测的信噪比" in why
+    assert "[2]" not in summary + why
+
+
+def test_detector_parameter_enumeration_card_copy_is_grounded_and_distinct() -> None:
+    evidence = (
+        "The main parameters of single photon detectors are detection efficiency "
+        "(DE), dark count, system dead time, time jitter, and so on."
+    )
+
+    summary, why = references_router._answer_citation_card_copy(
+        [
+            {
+                "source_name": "Detector-review.pdf",
+                "heading_path": "3 Single photon detection parameter",
+                "binding_status": "grounded",
+                "answer_claim": (
+                    "系统死时间（system dead time）：探测器响应一个光子后无法再响应"
+                    "下一个光子的时间间隔，决定最大计数率。"
+                ),
+                "answer_claims": [
+                    "时间抖动（time jitter）影响时间分辨能力。",
+                ],
+                "evidence_quote": evidence,
+            }
+        ],
+        prefer_zh=True,
+        prompt="除了探测效率，还必须同时看哪些关键指标？",
+    )
+
+    assert all(term in summary for term in ("detection efficiency", "dark count", "system dead time", "time jitter"))
+    assert references_router._ref_card_copy_text_key(summary) != references_router._ref_card_copy_text_key(why)
 
 
 def test_deep_unfolding_answer_cards_localize_guide_and_relevance_from_evidence() -> None:

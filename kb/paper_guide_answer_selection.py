@@ -135,7 +135,12 @@ def _paper_guide_answer_hit_score(hit: dict, *, prompt: str) -> float:
     if _paper_guide_hit_matches_requested_targets(hit, prompt=prompt):
         score += 22.0
     if bool(meta.get("paper_guide_targeted_block")):
-        score += 10.0
+        # A targeted SourceBlock is already constrained to the bound paper and
+        # ranked against every block in that paper.  Grouped reference cards
+        # carry larger document-level BM25 scores that are not comparable and
+        # used to push the precise paragraph behind a broad abstract.  Give the
+        # verified block enough priority to lead generation and citation plans.
+        score += 45.0
 
     if heading_norm:
         score += 1.8 * _text_token_overlap_score(prompt_norm, heading_norm)

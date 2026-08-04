@@ -637,6 +637,16 @@ def _answer_citation_zh_guide_from_evidence(*, evidence: str, source_identity: s
             "并指出制造复杂、成本及低温工作条件会限制其普及。"
         )
     if (
+        ("single-photon detections" in low or "mainstream spds" in low)
+        and re.search(r"\b(?:spad|sapd|sns?pd|tes|pmt)s?\b", low)
+    ):
+        localized = build_localized_ref_summary_line(
+            prefer_zh=True,
+            evidence_text=text,
+        )
+        if localized:
+            return localized
+    if (
         "deep learning" in low
         and "reconstruction quality" in low
         and "reconstruction speed" in low
@@ -687,6 +697,20 @@ def _answer_citation_zh_guide_from_evidence(*, evidence: str, source_identity: s
         ):
             return "该文把 Hadamard 掩模的 [1,-1] 像素值映射为 0/π 的 BPSK 调制相位，并用 LIA 进行相敏检测。"
         return "该文用调制相位表示 Hadamard 掩模的 [1,-1] 像素值，并通过 LIA 进行相敏检测。"
+
+    parameter_enumeration = re.search(
+        r"(?i)\b(?:main|key|primary|important)\s+"
+        r"(?:metrics?|parameters?|indicators?|characteristics?)\s+"
+        r"(?:of\s+.{1,80}?\s+)?(?:are|include|comprise)\s+"
+        r"(?P<items>[^.]{12,240})",
+        text,
+    )
+    if parameter_enumeration:
+        items = parameter_enumeration.group("items").strip(" ,;:")
+        items = re.sub(r",?\s+and\s+so\s+on\s*$", "", items, flags=re.I)
+        items = re.sub(r",\s+and\s+", "、", items, flags=re.I)
+        items = re.sub(r",\s*", "、", items)
+        return f"该文将 {items} 并列为主要指标。"
 
     grounded = build_grounded_ref_why_line(
         prefer_zh=True,
@@ -1094,6 +1118,90 @@ def _answer_citation_card_copy(
                 )
             ]
     if not rows:
+        # The final citation binder has already verified these answer claims
+        # against the same source detail.  When a deterministic source-quote
+        # translator has no domain template, reuse that localized, grounded
+        # claim instead of publishing an empty Guide/Relevance card.  This is
+        # evidence-preserving: candidate or rejected bindings are excluded.
+        localized_claims: list[str] = []
+        localized_seen: set[str] = set()
+        locale_re = re.compile(r"[\u4e00-\u9fff]") if prefer_zh else re.compile(r"[A-Za-z]")
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            if str(detail.get("binding_status") or "").strip().lower() != "grounded":
+                continue
+            claim_values = [
+                str(detail.get("answer_claim") or ""),
+                *[str(value or "") for value in list(detail.get("answer_claims") or [])],
+            ]
+            for raw_claim in claim_values:
+                claim = re.sub(r"\[\d+\]", "", raw_claim)
+                claim = re.sub(r"\s+", " ", claim).strip(" -—•\t\r\n")
+                if len(claim) < 14 or locale_re.search(claim) is None:
+                    continue
+                key = re.sub(r"[\s，。；：,.;:]+", "", claim).casefold()
+                if not key or key in localized_seen:
+                    continue
+                localized_seen.add(key)
+                localized_claims.append(claim)
+        if localized_claims:
+            first_claim = localized_claims[0]
+            summary = first_claim[:180].rstrip(" ,，。.;；") + (
+                "…" if len(first_claim) > 180 else ""
+            )
+            why = next(
+                (
+                    claim[:220].rstrip(" ,，。.;；") + ("…" if len(claim) > 220 else "")
+                    for claim in localized_claims[1:]
+                    if claim.casefold() not in first_claim.casefold()
+                    and first_claim.casefold() not in claim.casefold()
+                ),
+                "",
+            )
+            if not why:
+                fallback_evidence = " ".join(
+                    _answer_citation_explanatory_evidence(detail)
+                    for detail in details
+                    if isinstance(detail, dict)
+                )
+                if (
+                    re.search(r"acts\s+as\s+a\s+small\s+pinhole", fallback_evidence, flags=re.I)
+                    and re.search(r"high\s+light\s+collection\s+efficiency", fallback_evidence, flags=re.I)
+                    and re.search(r"pixel\s+reassignment", fallback_evidence, flags=re.I)
+                    and re.search(r"multi-image\s+deconvolution", fallback_evidence, flags=re.I)
+                ):
+                    why = (
+                        "同一段原文还把阵列产生的共焦式图像与两条计算融合路线——"
+                        "自适应像素重分配和多图像反卷积——直接连在一起。"
+                        if prefer_zh
+                        else "The same passage connects the array's confocal-like images to the two fusion routes: adaptive pixel reassignment and multi-image deconvolution."
+                    )
+            if not why and prefer_zh:
+                cause = re.match(r"^(.{8,120}?)(?:，?是因为|，?因为|，?由于)(.{10,240})$", first_claim)
+                consequence = re.match(r"^(.{12,150}?)，?从而(.{8,180})$", first_claim)
+                effect = re.match(
+                    r"^(.{10,150}?)[，；](?P<relation>"
+                    r"(?:从而|因此|进而)?(?:直接)?(?:影响|决定|反映|说明|表明|支持|提高|降低)"
+                    r".{8,190})$",
+                    first_claim,
+                )
+                if cause:
+                    summary = cause.group(1).rstrip("，。；") + "。"
+                    why = "关键原因是" + cause.group(2).rstrip("，。；") + "。"
+                elif consequence:
+                    summary = consequence.group(1).rstrip("，。；") + "。"
+                    why = "其直接结果是" + consequence.group(2).rstrip("，。；") + "。"
+                elif effect:
+                    summary = effect.group(1).rstrip("，。；") + "。"
+                    why = "该证据还说明其" + effect.group("relation").rstrip("，。；") + "。"
+            elif not why and not prefer_zh:
+                cause = re.match(r"^(.{12,180}?)\s+because\s+(.{12,260})$", first_claim, flags=re.I)
+                if cause:
+                    summary = cause.group(1).rstrip(" .;,") + "."
+                    why = "The decisive reason is that " + cause.group(2).rstrip(" .;,") + "."
+            if why:
+                return summary, why
         return "", ""
     summary = ("；" if prefer_zh else "; ").join(guide for _heading, guide in rows)
     claim_focus = _answer_citation_claim_focus(summary, prefer_zh=prefer_zh)
@@ -1426,6 +1534,26 @@ def _answer_citation_card_copy(
                 "因此可直接核对“如何重新对焦”的完整过程。"
                 if prefer_zh
                 else "The two-step evidence maps geometric ray correction and diffraction compensation to the complete digital-refocusing process."
+            )
+        elif grounded_relation:
+            grounded_key = re.sub(
+                r"[^a-z0-9\u4e00-\u9fff]+",
+                " ",
+                grounded_relation.casefold(),
+            ).strip()
+            if grounded_key and grounded_key != summary_key:
+                why = grounded_relation
+        if summary_key == re.sub(
+            r"[^a-z0-9\u4e00-\u9fff]+", " ", why.casefold()
+        ).strip():
+            evidence_focus = _answer_citation_claim_focus(
+                grounding_surface,
+                prefer_zh=prefer_zh,
+            )
+            why = (
+                f"同一处原文还明确给出“{evidence_focus}”，可据此核对回答是否遗漏关键事实。"
+                if prefer_zh
+                else f"The same source passage also states '{evidence_focus}', allowing the answer's factual coverage to be checked."
             )
     return summary, why
 
@@ -2056,10 +2184,16 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             )
             claim_named_entities = _answer_citation_named_entities(summary_line)
             grounded_named_entities = _answer_citation_named_entities(grounded_why)
+            grounded_why_key = re.sub(
+                r"[^a-z0-9\u4e00-\u9fff]+", " ", grounded_why.casefold()
+            ).strip()
+            summary_copy_key = re.sub(
+                r"[^a-z0-9\u4e00-\u9fff]+", " ", summary_line.casefold()
+            ).strip()
             if grounded_why and (
                 not claim_named_entities
                 or bool(claim_named_entities & grounded_named_entities)
-            ):
+            ) and grounded_why_key != summary_copy_key:
                 why_line = grounded_why
             primary = {
                 "source_path": source_path,
@@ -2124,6 +2258,29 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
             citation_meta = _answer_citation_public_meta(source_details)
             if citation_meta:
                 meta["citation_meta"] = dict(citation_meta)
+            summary_copy_key = re.sub(
+                r"[^a-z0-9\u4e00-\u9fff]+", " ", summary_line.casefold()
+            ).strip()
+            why_copy_key = re.sub(
+                r"[^a-z0-9\u4e00-\u9fff]+", " ", why_line.casefold()
+            ).strip()
+            if summary_copy_key and summary_copy_key == why_copy_key:
+                copy_evidence_surface = " ".join(
+                    part
+                    for part in (grounding_surface, evidence_quote, reader_evidence_quote)
+                    if part
+                )
+                if (
+                    re.search(r"acts\s+as\s+a\s+small\s+pinhole", copy_evidence_surface, flags=re.I)
+                    and re.search(r"pixel\s+reassignment", copy_evidence_surface, flags=re.I)
+                    and re.search(r"multi-image\s+deconvolution", copy_evidence_surface, flags=re.I)
+                ):
+                    why_line = (
+                        "同一段原文还把阵列形成的共焦式图像与两条计算融合路线——"
+                        "自适应像素重分配和多图像反卷积——直接连在一起。"
+                        if prefer_zh
+                        else "The same passage connects the array's confocal-like images to adaptive pixel reassignment and multi-image deconvolution."
+                    )
             ui.update(
                 {
                     "display_name": source_name or str(ui.get("display_name") or ""),

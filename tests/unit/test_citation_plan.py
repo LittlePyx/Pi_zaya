@@ -42,6 +42,190 @@ def test_source_sentence_records_cache_reuses_and_invalidates_file_versions(
     assert any(page == 7 and "Second, longer" in text for _heading, text, page in refreshed)
 
 
+def test_system_a_slot_keeps_complete_targeted_source_block_over_card_excerpt(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "qclfm.en.md"
+    full_evidence = (
+        "We use the inherent position and angular/momentum correlation of entangled "
+        "photon pairs. Since each degree of freedom can be measured on separate "
+        "cameras, position resolution need not be sacrificed for angular resolution. "
+        "This allowed a DOF between 2–5 times larger at 5 μm resolution."
+    )
+    source.write_text(
+        "# QCLFM\n\n<!-- kb_page: 3 -->\n\n## III. DISCUSSION\n\n"
+        + full_evidence
+        + "\n",
+        encoding="utf-8",
+    )
+    hit = {
+        "text": full_evidence,
+        "meta": {
+            "source_path": str(source),
+            "heading_path": "QCLFM / III. DISCUSSION",
+            "block_id": "blk-discussion",
+            "anchor_id": "p-discussion",
+            "page_start": 3,
+            "paper_guide_targeted_block": True,
+            "primary_evidence": {
+                "snippet": full_evidence.split(". ", 1)[0] + ".",
+                "block_id": "blk-discussion",
+                "anchor_id": "p-discussion",
+                "page_start": 3,
+            },
+        },
+    }
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=[hit],
+        max_items=1,
+        ranking_texts=[
+            "QCLFM 为什么能同时保住位置和角度分辨率？论文实际报告的景深提升有多大？"
+        ],
+    )
+
+    assert len(slots) == 1
+    assert "separate cameras" in slots[0]["evidence_quote"]
+    assert "2–5 times larger" in slots[0]["evidence_quote"]
+    assert "5 μm" in slots[0]["evidence_quote"]
+    assert slots[0]["candidate_hits"] == [1]
+
+
+def test_prompt_alignment_expands_anchored_excerpt_missing_requested_result(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "qclfm.en.md"
+    first_sentence = (
+        "We use the inherent position and angular/momentum correlation of entangled "
+        "photon pairs."
+    )
+    full_evidence = (
+        first_sentence
+        + " Since each degree of freedom can be measured on separate cameras, position "
+        "resolution need not be sacrificed for angular resolution. This allowed a DOF "
+        "between 2–5 times larger at 5 μm resolution."
+    )
+    source.write_text(
+        "# QCLFM\n\n<!-- kb_page: 3 -->\n\n## III. DISCUSSION\n\n"
+        + full_evidence
+        + "\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "heading_path": "QCLFM / III. DISCUSSION",
+            "evidence_quote": first_sentence,
+            "block_id": "blk-discussion",
+            "anchor_id": "p-discussion",
+        },
+        ranking_texts=[
+            "QCLFM 为什么能同时保住位置和角度分辨率？论文实际报告的景深提升有多大？"
+        ],
+    )
+
+    assert "separate cameras" in slot["evidence_quote"]
+    assert "2–5 times larger" in slot["evidence_quote"]
+    assert slot["page_start"] == 3
+
+
+def test_prompt_alignment_ignores_scoped_source_path_title_noise(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "Quantum correlation light-field microscope with extreme depth of field"
+    source_dir.mkdir()
+    source = source_dir / "Quantum correlation light-field microscope with extreme depth of field.en.md"
+    requested = (
+        "We use the inherent position and angular/momentum correlation of entangled "
+        "photon pairs. Since each degree of freedom can be measured on separate "
+        "cameras, position resolution need not be sacrificed for angular resolution. "
+        "This allowed a DOF between 2–5 times larger at 5 μm resolution."
+    )
+    distractor = (
+        "A major limitation to quantum correlation light-field microscope imaging is "
+        "slow acquisition speed for the event camera. Detection efficiency is 7%, "
+        "timing resolution is 8 ns, and signal-to-noise ratio limits digital refocusing."
+    )
+    source.write_text(
+        "# QCLFM\n\n<!-- kb_page: 3 -->\n\n## Discussion\n\n"
+        + requested
+        + "\n\n<!-- kb_page: 4 -->\n\n## Limitations\n\n"
+        + distractor
+        + "\n",
+        encoding="utf-8",
+    )
+    question = "QCLFM 为什么能同时保住位置和角度分辨率？论文实际报告的景深提升有多大？"
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "heading_path": "QCLFM / Limitations",
+            "evidence_quote": distractor,
+            "block_id": "blk-limit",
+            "anchor_id": "p-limit",
+            "page_start": 4,
+        },
+        ranking_texts=[
+            question,
+            f"{source} {question}",
+            (
+                f"{question}\nQUERY SCOPE: Current paper. Use this paper only. "
+                "structured detection interferometric detection light-field microscopy "
+                "optical sectioning super-resolution signal-to-noise ratio SNR "
+                "digital refocusing"
+            ),
+            f"{source} {question}",
+            "motivation",
+        ],
+    )
+
+    assert "separate cameras" in slot["evidence_quote"]
+    assert "2–5 times larger" in slot["evidence_quote"]
+    assert slot["page_start"] == 3
+
+
+def test_prompt_alignment_replaces_metric_experiment_with_parameter_enumeration(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "detector-review.en.md"
+    enumeration = (
+        "The main parameters of single photon detectors are detection efficiency "
+        "(DE), dark count, system dead time, time jitter, and so on."
+    )
+    distractor = (
+        "A waveguide SPAD reached 85% detection efficiency at 78 K, and timing "
+        "jitter varied with excess bias."
+    )
+    source.write_text(
+        "# Review\n\n<!-- kb_page: 10 -->\n\n"
+        "## 3 Single photon detection parameter\n\n"
+        + enumeration
+        + "\n\n<!-- kb_page: 14 -->\n\n## 4.2 Waveguide\n\n"
+        + distractor
+        + "\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "heading_path": "Review / 4.2 Waveguide",
+            "evidence_quote": distractor,
+            "block_id": "blk-waveguide",
+            "anchor_id": "p-waveguide",
+            "page_start": 14,
+        },
+        ranking_texts=[
+            "评价单光子探测器时，除了探测效率还必须看哪些关键指标？请按原文列出。"
+        ],
+    )
+
+    assert slot["evidence_quote"] == enumeration
+    assert slot["page_start"] == 10
+
+
 def test_hsi_fsi_source_focus_updates_stale_retrieval_page(tmp_path: Path) -> None:
     source = tmp_path / "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
     source.write_text(
@@ -1220,6 +1404,93 @@ def test_prompt_alignment_skips_bibliography_without_references_heading(tmp_path
     assert slot["heading_path"] == "Paper / Abstract"
 
 
+def test_perovskite_scope_alignment_prefers_abstract_over_result_metrics(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "Electrically driven lasing from a dual-cavity perovskite device.en.md"
+    abstract = (
+        "We demonstrate an electrically driven perovskite laser based on a dual-cavity "
+        "perovskite device with a low lasing threshold."
+    )
+    conclusion = (
+        "The dual-cavity perovskite device has a minimum lasing threshold of 92 A cm-2, "
+        "lower than the integrated single-cavity device."
+    )
+    source_path.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        + abstract
+        + "\n\n<!-- kb_page: 5 -->\n\n## Conclusion\n\n"
+        + conclusion
+        + "\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source_path),
+            "heading_path": "Conclusion",
+            "evidence_quote": conclusion,
+            "page_start": 5,
+        },
+        ranking_texts=["这篇 perovskite laser 和单像素成像主线关系大吗？"],
+    )
+
+    assert "electrically driven perovskite laser" in slot["evidence_quote"]
+    assert slot["heading_path"].endswith("Abstract")
+    assert slot["page_start"] == 1
+
+
+def test_perovskite_scope_plan_keeps_abstract_hit_locator(tmp_path: Path) -> None:
+    source_path = tmp_path / "Electrically driven lasing from a dual-cavity perovskite device.en.md"
+    abstract = (
+        "We demonstrate an electrically driven perovskite laser based on a dual-cavity "
+        "perovskite device with a low lasing threshold."
+    )
+    conclusion = (
+        "The dual-cavity perovskite device has a minimum lasing threshold of 92 A cm-2, "
+        "lower than the integrated single-cavity device."
+    )
+    source_path.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        + abstract
+        + "\n\n<!-- kb_page: 5 -->\n\n## Conclusion\n\n"
+        + conclusion
+        + "\n",
+        encoding="utf-8",
+    )
+    hits = [
+        {
+            "text": abstract,
+            "meta": {
+                "source_path": str(source_path),
+                "heading_path": "Abstract",
+                "block_id": "abstract-block",
+                "anchor_id": "abstract-paragraph",
+            },
+        },
+        {
+            "text": conclusion,
+            "meta": {
+                "source_path": str(source_path),
+                "heading_path": "Conclusion",
+                "block_id": "conclusion-block",
+                "anchor_id": "conclusion-paragraph",
+            },
+        },
+    ]
+
+    plan = build_citation_plan(
+        prompt="这篇 perovskite laser 和我的单像素成像主线关系大吗？值得一起读吗？",
+        prompt_family="overview",
+        answer_hits=hits,
+    )
+
+    slot = next(item for item in plan["slots"] if item["preferred_system"] == "system_a")
+    assert slot["candidate_hits"] == [1]
+    assert slot["heading_path"].endswith("Abstract")
+    assert "electrically driven perovskite laser" in slot["evidence_quote"]
+
+
 def test_piln_method_question_promotes_exact_abstract_definition(tmp_path: Path):
     source_path = tmp_path / "Optics & Laser Technology-2024-Part-based image-loop network for single-pixel imaging.en.md"
     source_path.write_text(
@@ -2096,6 +2367,43 @@ def test_comparison_answer_hits_align_each_source_summary_and_keep_hit_locator(
     assert "eight frames per second" in by_source[str(video_3d)]["evidence_quote"]
 
 
+def test_prompt_alignment_bundles_video_result_with_photometric_mechanism(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "real-time-3d-single-pixel-video.en.md"
+    source.write_text(
+        "<!-- kb_page: 2 -->\n\n## Abstract\n\n"
+        "Four spatially-separated single-pixel detectors reconstruct continuous "
+        "three-dimensional video at 8 frames per second with a resolution of "
+        r"$64 \times 64$ pixels."
+        "\n\n<!-- kb_page: 3 -->\n\n## Introduction\n\n"
+        "Photometric stereo estimates surface orientation from images acquired under "
+        "multiple lighting directions.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "heading_path": "Introduction",
+            "evidence_quote": "A generic real-time imaging overview.",
+        },
+        ranking_texts=[
+            "How does real-time 3D single-pixel video use photometric stereo and four "
+            "spatially separated detectors for parallel reconstruction, and what frame "
+            "rate and 64 x 64 resolution does it report?"
+        ],
+    )
+
+    assert "four spatially-separated" in slot["evidence_quote"].lower()
+    assert "8 frames per second" in slot["evidence_quote"]
+    assert r"64 \times 64" in slot["evidence_quote"]
+    assert "Photometric stereo" in slot["evidence_quote"]
+    assert "multiple lighting directions" in slot["evidence_quote"]
+    assert slot["heading_path"].endswith("Abstract")
+    assert slot["page_start"] == 2
+
+
 def test_basis_vs_foveated_answer_hit_uses_foveated_abstract(tmp_path: Path) -> None:
     basis = tmp_path / "hadamard-versus-fourier.en.md"
     basis.write_text(
@@ -2459,6 +2767,61 @@ def test_prompt_aligned_source_pins_sequential_support_abstract_bundle(tmp_path:
 
     assert slot["evidence_quote"] == exact
     assert slot["heading_path"].endswith("Abstract")
+
+
+def test_sequential_scope_plan_rebinds_algorithm_hit_to_abstract_hit(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "SSP-2012-Sequentially designed compressed sensing.en.md"
+    abstract = (
+        "A sequential adaptive compressed sensing procedure for signal support recovery is "
+        "proposed and analyzed. The procedure is based on the principle of distilled sensing, "
+        "and makes use of sparse sensing matrices to perform sketching observations."
+    )
+    algorithm = (
+        "The sequential compressed sensing procedure uses a multi-step acquisition process "
+        "where each step involves measurement and refinement."
+    )
+    source.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        + abstract
+        + "\n\n## III. SEQUENTIAL COMPRESSED SENSING ALGORITHM\n\n"
+        + algorithm
+        + "\n",
+        encoding="utf-8",
+    )
+    hits = [
+        {
+            "text": algorithm,
+            "meta": {
+                "source_path": str(source),
+                "heading_path": "III. SEQUENTIAL COMPRESSED SENSING ALGORITHM",
+                "block_id": "algorithm-block",
+                "anchor_id": "algorithm-paragraph",
+            },
+        },
+        {
+            "text": abstract,
+            "meta": {
+                "source_path": str(source),
+                "heading_path": "Abstract",
+                "block_id": "abstract-block",
+                "anchor_id": "abstract-paragraph",
+            },
+        },
+    ]
+
+    plan = build_citation_plan(
+        prompt="Sequential compressed sensing 相比一次性随机测量多利用了什么信息？它主要保证恢复什么？",
+        answer_hits=hits,
+    )
+
+    system_a = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert len(system_a) == 1
+    assert system_a[0]["candidate_hits"] == [2]
+    assert system_a[0]["heading_path"].endswith("Abstract")
+    assert "signal support recovery" in system_a[0]["evidence_quote"]
+    assert "distilled sensing" in system_a[0]["evidence_quote"]
 
 
 def test_prompt_aligned_source_keeps_degradation_chain_and_global_propagation(

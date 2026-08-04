@@ -13,8 +13,8 @@ The research QA eval protects the real researcher-facing workflow:
 5. Reference locator card quality, including summary, relevance, polish state, and reader-open evidence.
 6. Citation shelf quality, so saved literature keeps a useful title, source/export identity, summary, and clean visible copy.
 
-The shared fixture is `web/src/testing/researchQaData.json`. It contains 35
-natural research questions. Twenty are source-grounded cases whose claim and
+The shared fixture is `web/src/testing/researchQaData.json`. It contains 50
+natural research questions. Thirty-five are source-grounded cases whose claim and
 reader-locator contracts are pinned to a page in the current Markdown corpus.
 
 The overlapping `full_library_acceptance_v1` suite is the release baseline. It
@@ -40,9 +40,9 @@ python tools/research_qa/run_research_qa_eval.py --suite full_library_acceptance
 python tools/research_qa/run_research_qa_eval.py --replay docs/research_qa_grounded_replay_v1.jsonl --fail-on-quality
 ```
 
-These commands do not call the API or an LLM. The first validates fixture coverage;
-the second sends reviewed answers and evidence payloads through the same validator
-used by live runs. The replay rejects unexpected source documents, unsupported
+These commands do not call the API or an LLM. The first two validate fixture and
+suite coverage; the replay sends reviewed answers and evidence payloads through
+the same validator used by live runs. The replay rejects unexpected source documents, unsupported
 claim/evidence bindings, wrong citation routes, and incorrect reader locators.
 
 When the local paper corpus is available, also verify that every reviewed
@@ -80,11 +80,54 @@ For the faster five-question real-model spot check:
 python tools/research_qa/run_research_qa_eval.py --base-url http://127.0.0.1:8000 --suite live_smoke_v1 --fail-on-quality
 ```
 
+For the 15-question source-grounded blind regression set:
+
+```bash
+python tools/research_qa/run_research_qa_eval.py --base-url http://127.0.0.1:8000 --split blind_holdout_v2 --fail-on-quality
+```
+
 For one case:
 
 ```bash
 python tools/research_qa/run_research_qa_eval.py --base-url http://127.0.0.1:8000 --case-id scinerf-admm-origin --fail-on-quality
 ```
+
+## 2026-08-04 Latency And Quality Baseline
+
+Latency is measured at four user-visible milestones. Do not compare only the
+provider request: citation planning, answer finalization, and evidence-card
+completion are part of the product latency.
+
+The 15-question `blind_holdout_v2` run improved without changing its reviewed
+answer, document, citation-route, or locator contracts:
+
+| Milestone | Baseline p50 / p95 / max | Optimized p50 / p95 / max |
+|---|---:|---:|
+| First visible answer | 2940 / 3910 / 3923 ms | 1561 / 2994 / 3004 ms |
+| Answer complete | 7564 / 12243 / 13277 ms | 2371 / 6618 / 6989 ms |
+| Evidence cards complete | 11680 / 17436 / 19973 ms | 4632 / 8222 / 10184 ms |
+| End-to-end evaluation | 12492 / 18393 / 20492 ms | 5772 / 10561 / 11075 ms |
+
+The final release evidence for this baseline is:
+
+1. Blind live QA: 15/15 passed in
+   `test_results/research_qa_blind/final_regression/20260804_185023`.
+2. Full-library live QA: 29/29 passed in
+   `test_results/research_qa_full_library/final_live_pass/20260804_184619`;
+   end-to-end p50/p95/max was 6357/12061/14563 ms.
+3. Paid-model smoke: 5/5 passed in
+   `test_results/research_qa_live_smoke/final/20260804_184007`.
+4. Deterministic full-library retrieval: 29/29 passed in
+   `test_results/research_qa_full_library/final_retrieval/20260804_185016`.
+5. Source validation: 35/35 source-grounded contracts passed, and the reviewed
+   replay passed 6/6.
+
+The optimized path may bypass free-form model generation only when the complete
+System A citation plan contains source-verbatim evidence for every requested
+facet. It must keep the same answer terms, document identities, citation routes,
+and reader locators. Incomplete plans continue through normal model generation;
+they must never be made faster by omitting requested evidence or suppressing a
+quality failure.
 
 ## Outputs
 

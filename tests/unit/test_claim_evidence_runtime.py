@@ -1248,3 +1248,96 @@ def test_sidd_table_best_tie_is_cited_instead_of_dropped() -> None:
     assert "[1]" in repaired
     assert meta["repaired_citations"] == 1
     assert meta["dropped_unsupported_unplanned_claims"] == 0
+
+
+def test_cross_language_causal_mask_claim_is_repaired_and_kept_grounded() -> None:
+    evidence = (
+        "The Ag mask exhibits superior reflectivity and consequently lower "
+        "transmissivity, resulting in better contrast for the complementary "
+        "patterns than the Cr master plate. Therefore, the Ag mask was selected."
+    )
+    answer = (
+        "最终选择银掩模而不是铬掩模，是因为银的反射率更高、透射率更低，"
+        "从而为互补图案提供更好的对比度。"
+    )
+    hits = [
+        {
+            "text": evidence,
+            "meta": {
+                "source_name": "RT-SPI supplement",
+                "source_path": "rt-spi-supp.en.md",
+                "heading_path": "1. FABRICATION OF THE SPINNING MASK",
+                "block_id": "blk-mask",
+                "anchor_id": "p-mask",
+                "page_start": 2,
+                "citation_plan_evidence_quotes": [evidence],
+            },
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert repaired.endswith("[1]。")
+    assert meta["repaired_citations"] == 1
+    assert meta["renderer_rejected_citations"] == 0
+
+
+def test_reader_visible_micro_unit_remains_grounded_against_latex_source() -> None:
+    answer = (
+        "The reported DOF is 2–5 times larger at 5 μm resolution [1]."
+    )
+    evidence = (
+        r"This allowed a DOF between 2–5 times larger at the "
+        r"$5\,\mu\mathrm{m}$ resolution."
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [{"text": evidence, "meta": {"source_name": "QCLFM.pdf"}}],
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert repaired == answer
+    assert meta["dropped_hard_mismatch_claims"] == 0
+
+
+def test_qclfm_tradeoff_claim_rebinds_from_title_neighbor_to_exact_mechanism() -> None:
+    source_name = "Quantum correlation light-field microscope with extreme depth of field"
+    limitation = (
+        "A major limitation is the slow data acquisition speed of the event camera, "
+        "which is limited by detection efficiency and timing resolution."
+    )
+    mechanism = (
+        "The design uses the inherent position and angular/momentum correlation of "
+        "entangled photon pairs. Since each degree of freedom can be measured on "
+        "separate cameras, position resolution need not be sacrificed for angular resolution."
+    )
+    answer = (
+        "QCLFM 利用位置和角度/动量关联，让两个自由度在不同相机上测量，"
+        "从而不必牺牲位置或角度分辨率 [1]。"
+    )
+    hits = [
+        {"text": limitation, "meta": {"source_name": source_name}},
+        {"text": mechanism, "meta": {"source_name": source_name}},
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allow_citation_repairs=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert repaired.endswith("[2]。")
+    assert meta["rebound_citations"] == 1

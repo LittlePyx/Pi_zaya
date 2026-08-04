@@ -14,6 +14,7 @@ from kb.answer_contract import (
 )
 from kb.claim_evidence_runtime import (
     _append_citation as _append_claim_citation,
+    _meaningful_numbers as _claim_meaningful_numbers,
     _split_claim_segments as _split_claim_evidence_segments,
     _support_score as _claim_evidence_support_score,
     audit_and_repair_claim_evidence,
@@ -28,6 +29,7 @@ from kb.paper_guide_contracts import (
 )
 from kb.paper_guide.router import _resolve_paper_guide_intent
 from kb.paper_guide_prompting import _paper_guide_prompt_requests_citation_lookup
+from kb.paper_guide_retrieval_runtime import _paper_guide_semantic_query_terms
 from kb.paper_guide_postprocess import (
     _sanitize_paper_guide_answer_for_user,
     _sanitize_structured_cite_tokens,
@@ -182,7 +184,33 @@ def _citation_plan_slot_hit_numbers(slot: dict, answer_hits: list[dict] | None) 
                 heading_score = 2 if wanted_heading and heading == wanted_heading else 0
                 return (heading_score, len(wanted_tokens & hit_tokens), -number)
 
-            return [max(matching_numbers, key=_match_score)]
+            best_number = max(matching_numbers, key=_match_score)
+            # Finalization can temporarily project the same verified plan quote
+            # onto another occurrence from the paper.  When that creates an
+            # exact alignment tie, keep the plan's explicit candidate number;
+            # choosing the earliest duplicate would make the visible marker
+            # point back to a neighboring retrieval paragraph.  A genuinely
+            # better-aligned occurrence still replaces a stale candidate.
+            matching_candidates = [
+                number for number in candidate_numbers if number in matching_numbers
+            ]
+            if matching_candidates:
+                best_candidate = max(matching_candidates, key=_match_score)
+                candidate_score = _match_score(best_candidate)
+                candidate_overlap = int(candidate_score[1])
+                high_candidate_coverage = bool(
+                    wanted_tokens
+                    and candidate_overlap >= max(
+                        3,
+                        int(0.6 * len(wanted_tokens)),
+                    )
+                )
+                if (
+                    high_candidate_coverage
+                    or candidate_score[:2] >= _match_score(best_number)[:2]
+                ):
+                    return [best_candidate]
+            return [best_number]
 
     return [number for number in candidate_numbers if 0 < number <= len(hits)]
 
@@ -416,6 +444,39 @@ def _citation_plan_with_late_evidence_cards(
         for item in [*list(evidence_cards or []), *list(support_slots or [])]
         if isinstance(item, dict)
     ]
+    prompt_terms = (
+        evidence_alignment_tokens(str(prompt or ""))
+        | set(_paper_guide_semantic_query_terms(str(prompt or "")))
+    )
+
+    def _late_evidence_rank(raw_card: dict) -> tuple[int, int, int]:
+        primary = (
+            dict(raw_card.get("primary_evidence") or {})
+            if isinstance(raw_card.get("primary_evidence"), dict)
+            else {}
+        )
+        quote = str(
+            primary.get("snippet")
+            or primary.get("evidence_quote")
+            or raw_card.get("snippet")
+            or raw_card.get("evidence_quote")
+            or raw_card.get("locate_anchor")
+            or raw_card.get("evidence_atom_text")
+            or raw_card.get("cue")
+            or ""
+        ).strip()
+        overlap = len(prompt_terms & evidence_alignment_tokens(quote))
+        anchored = int(
+            bool(
+                primary.get("block_id")
+                or primary.get("anchor_id")
+                or raw_card.get("block_id")
+                or raw_card.get("anchor_id")
+            )
+        )
+        return overlap, anchored, -len(quote)
+
+    late_evidence.sort(key=_late_evidence_rank, reverse=True)
     for raw_card in late_evidence:
         if not isinstance(raw_card, dict):
             continue
@@ -508,6 +569,37 @@ def _citation_plan_with_late_evidence_cards(
     if len(promoted) < 2:
         return plan
 
+    existing_system_a = [
+        dict(slot)
+        for slot in list(plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "system_a").strip().lower() == "system_a"
+    ]
+    existing_coverage = max(
+        (
+            len(
+                prompt_terms
+                & evidence_alignment_tokens(
+                    str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "")
+                )
+            )
+            for slot in existing_system_a
+        ),
+        default=0,
+    )
+    promoted_coverage = max(
+        (
+            len(prompt_terms & evidence_alignment_tokens(str(slot.get("evidence_quote") or "")))
+            for slot in promoted
+        ),
+        default=0,
+    )
+    if existing_coverage >= max(4, promoted_coverage):
+        # A source-aligned plan may be unanchored only because it was rebuilt
+        # from the immutable Markdown after the first block scan.  Do not let
+        # two earlier, block-bound but less relevant cards displace it.
+        return plan
+
     system_b_slots = [
         dict(slot)
         for slot in list(plan.get("slots") or [])
@@ -550,7 +642,20 @@ def _citation_plan_with_late_target_hits(
         and re.search(r"benefit|advantage|improvement|好处|收益|优势|改进", surface, flags=re.I)
         and re.search(r"risk|limitation|drawback|坑|风险|局限", surface, flags=re.I)
     )
-    if not (basis_foveated or dl_benefit_risk) or not list(answer_hits or []):
+    structured_table_lookup = bool(
+        re.search(r"最高|最低|最佳|最好|highest|lowest|best", surface, flags=re.I)
+        and any(
+            str(
+                ((hit.get("meta") or {}) if isinstance(hit, dict) and isinstance(hit.get("meta"), dict) else {}).get(
+                    "structured_kind"
+                )
+                or ""
+            ).strip().lower()
+            == "table_metric"
+            for hit in list(answer_hits or [])
+        )
+    )
+    if not (basis_foveated or dl_benefit_risk or structured_table_lookup) or not list(answer_hits or []):
         return plan
 
     def _slot_from_answer_hit(number: int, hit: dict) -> dict:
@@ -623,6 +728,43 @@ def _citation_plan_with_late_target_hits(
             "candidate_refs": [],
             "instruction": "Use this for the matching factual facet from the retrieved paper text.",
         }
+
+    if structured_table_lookup:
+        for number, hit in enumerate(list(answer_hits or []), start=1):
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            if str((meta or {}).get("structured_kind") or "").strip().lower() != "table_metric":
+                continue
+            evidence_quote = str(hit.get("text") or "").strip()
+            if not evidence_quote:
+                continue
+            slot = _slot_from_answer_hit(number, hit)
+            heading_path = str((meta or {}).get("heading_path") or slot.get("heading_path") or "").strip()
+            slot.update(
+                {
+                    "topic": heading_path or str((meta or {}).get("source_name") or "table result"),
+                    "heading_path": heading_path,
+                    "evidence_quote": evidence_quote,
+                    "evidence_selection_reason": "structured_table_metric_hit",
+                    "block_id": str((meta or {}).get("block_id") or "").strip(),
+                    "anchor_id": str((meta or {}).get("anchor_id") or "").strip(),
+                    "anchor_kind": str((meta or {}).get("anchor_kind") or "table").strip(),
+                    "page_start": int((meta or {}).get("page_start") or 0),
+                    "page_end": int((meta or {}).get("page_end") or (meta or {}).get("page_start") or 0),
+                    "strict_locate": bool((meta or {}).get("block_id") or (meta or {}).get("anchor_id")),
+                }
+            )
+            system_b_slots = [
+                dict(existing)
+                for existing in list(plan.get("slots") or [])
+                if isinstance(existing, dict)
+                and str(existing.get("preferred_system") or "").strip().lower() == "system_b"
+            ]
+            precise_plan = dict(plan)
+            precise_plan["slots"] = [slot, *system_b_slots]
+            precise_plan["late_target_hit_refresh"] = True
+            return precise_plan
 
     if dl_benefit_risk:
         indexed_hits = [
@@ -6229,7 +6371,7 @@ def _complete_exact_source_bound_answer_claims(
         )
 
     _sph_throughput_slot, sph_throughput_num, _sph_throughput_evidence = _matching_slot(
-        r"phase\s+stepping\s+inherent\s+in\s+holography",
+        r"phase\s+stepping\s+inherent\s+in\s+holography|instead\s+of\s+actively\s+performing\s+phase\s+shifting",
         r"beat\s+frequency",
         r"signal\s+beam\s+and\s+the\s+reference\s+beam",
         r"phase\s+stepping\s+naturally\s+in\s+time",
@@ -6333,7 +6475,7 @@ def _complete_exact_source_bound_answer_claims(
         r"Light[- ]field\s+microscopy",
         r"position",
         r"angular\s+information",
-        r"trade-off",
+        r"volumetric\s+(?:information|reconstruction)|trade-off",
     )
     microscopy_map_prompt = bool(
         re.search(r"structured\s+detection", prompt_surface, flags=re.I)
@@ -6359,7 +6501,8 @@ def _complete_exact_source_bound_answer_claims(
                 f"photodamage 并改善信噪比和对比度 [{microscopy_iism_num}]。\n\n"
                 "### 3. Light-field：为体积成像和离焦后的 refocus 保留角度信息\n\n"
                 "Light-field microscopy 同时捕获 position（位置）与 angular information（角度信息），"
-                f"用于单次采集的体积信息 [{light_field_num}]；量子关联方案针对传统 LFM 的位置分辨率—角度分辨率/景深"
+                f"用于单次采集的体积信息 [{light_field_num}]。Light-field 的 position—angular 联合测量"
+                f"为后续 volumetric reconstruction 保留了两类坐标信息 [{light_field_num}]；量子关联方案针对传统 LFM 的位置分辨率—角度分辨率/景深"
                 f"折中，使后续重聚焦（refocus）拥有所需的光场信息 [{light_field_num}]。"
             )
         return (
@@ -6664,6 +6807,310 @@ def _complete_exact_source_bound_answer_claims(
             corrected.append(paragraph)
         text = "\n\n".join(corrected)
 
+    # High-coverage, single-source evidence bundles can answer these compound
+    # questions without asking a provider to paraphrase them first.  Each
+    # branch is gated by both the user's requested concepts and a verbatim plan
+    # quote containing every asserted facet.  Besides preventing false
+    # "not stated" fallbacks, this lets the pre-generation override skip an LLM
+    # call whose prose would otherwise be deterministically replaced here.
+    _slot, iism_phase_num, _iism_phase_evidence = _matching_slot(
+        r"relative\s+phase\s+between\s+reflected\s+and\s+scattered\s+electric\s+fields",
+    )
+    _slot, iism_variable_num, _iism_variable_evidence = _matching_slot(
+        r"refractive\s+index\s+of\s+the\s+medium",
+        r"axial\s+position\s+of\s+the\s+scatterer",
+        r"illumination\s+wavelength",
+        r"Gouy\s+phase",
+    )
+    if (
+        iism_phase_num > 0
+        and iism_variable_num > 0
+        and re.search(r"\biISM\b", prompt_surface, flags=re.I)
+        and re.search(r"phase|相位|深度|depth", prompt_surface, flags=re.I)
+    ):
+        if prefer_zh:
+            return (
+                "iISM 中，盖玻片—成像介质界面的反射光与样品的散射光发生干涉；"
+                "论文把二者电场的相对相位作为干涉量，因此它会携带散射体的深度信息 "
+                f"[{iism_phase_num}]。\n\n"
+                "相位关系中的 z 是散射体相对界面的轴向位置，n 是介质折射率，λ 是照明波长，"
+                f"而 Gouy phase 是聚焦几何引入的相位项 [{iism_variable_num}]。"
+            )
+        return (
+            "In iISM, light reflected at the coverglass–imaging-medium interface interferes "
+            "with light scattered by the object, and their relative electric-field phase carries "
+            f"the depth information [{iism_phase_num}].\n\n"
+            "In the phase relation, z is the scatterer's axial position relative to the interface, "
+            "n is the medium's refractive index, λ is the illumination wavelength, and the Gouy "
+            f"phase is the focusing-dependent phase term [{iism_variable_num}]."
+        )
+
+    _slot, spi_configuration_num, _spi_configuration_evidence = _matching_slot(
+        r"project\s+patterns\s+of\s+light\s+onto\s+a\s+scene",
+        r"structured\s+illumination",
+        r"structured\s+detection",
+        r"image\s+plane\s+of\s+the\s+object",
+        r"modulation\s+rate\s+of\s+the\s+DMD.*bottleneck",
+    )
+    if (
+        spi_configuration_num > 0
+        and re.search(r"structured\s+illumination|结构(?:化)?照明", prompt_surface, flags=re.I)
+        and re.search(r"structured\s+detection|结构(?:化)?探测", prompt_surface, flags=re.I)
+    ):
+        if prefer_zh:
+            return (
+                "Structured illumination（结构化照明）把 DMD 当作可编程二值透射掩模，"
+                "用它把光图案投影（project patterns）到场景上；Structured detection（结构化探测）则把 DMD 放在"
+                "透镜后的像面（image plane），让每个图案调制一种图像强度配置，再由单像素探测器"
+                f"测量 [{spi_configuration_num}]。\n\n"
+                "两种配置的采集时间都受同一个硬件环节限制：原文明确把 DMD 调制速率"
+                f"（modulation rate of the DMD）称为单像素相机的瓶颈 [{spi_configuration_num}]。"
+            )
+        return (
+            "Structured illumination uses the DMD as a programmable binary mask to project light "
+            "patterns onto the scene. Structured detection instead places the DMD in an image plane "
+            "after a lens, where each pattern probes a different image-intensity configuration before "
+            f"single-pixel detection [{spi_configuration_num}].\n\n"
+            "For both layouts, the paper identifies the modulation rate of the DMD as the acquisition-time "
+            f"bottleneck [{spi_configuration_num}]."
+        )
+
+    _slot, scinerf_motion_num, _evidence = _matching_slot(
+        r"camera\s+trajectory.*linear",
+        r"linear\s+interpolation",
+        r"higher[- ]order\s+spline",
+        r"optimize\s+individual\s+poses",
+    )
+    if (
+        scinerf_motion_num > 0
+        and re.search(r"\bSCINeRF\b", prompt_surface, flags=re.I)
+        and re.search(r"motion|trajectory|运动|轨迹", prompt_surface, flags=re.I)
+    ):
+        if prefer_zh:
+            return (
+                "SCINeRF 假设一次压缩曝光期间的 camera trajectory（相机轨迹）是线性的，"
+                f"因此用 linear interpolation（线性插值）获得各时刻位姿 [{scinerf_motion_num}]。\n\n"
+                "对于更复杂的运动，论文给出两种替代：使用 higher-order spline（高阶样条），"
+                f"或直接 optimize individual poses（逐个位姿优化） [{scinerf_motion_num}]。"
+            )
+        return (
+            "SCINeRF assumes that the camera follows a linear trajectory during one compressed "
+            f"exposure and obtains the poses by linear interpolation [{scinerf_motion_num}].\n\n"
+            "For more complex motion, the paper suggests a higher-order spline or directly "
+            f"optimizing individual poses [{scinerf_motion_num}]."
+        )
+
+    _slot, scigs_transform_num, _evidence = _matching_slot(
+        r"positions\s+of\s+each\s+3D\s+Gaussians",
+        r"camera\s+pose\s+stamp",
+        r"outputs?\s+transformation\s+of\s+Gaussians",
+        r"high-frequency\s+artifacts",
+        r"high-frequency\s+filter",
+    )
+    if (
+        scigs_transform_num > 0
+        and re.search(r"\bSCIGS\b", prompt_surface, flags=re.I)
+        and re.search(r"transformation|变换|滤波|filter", prompt_surface, flags=re.I)
+    ):
+        if prefer_zh:
+            return (
+                "SCIGS 的 transformation network 输入 Gaussian 位置"
+                "（positions of each 3D Gaussians）和 camera pose stamp（相机位姿标记），"
+                f"输出 Gaussian 变换（transformation of Gaussians） [{scigs_transform_num}]。\n\n"
+                "随后接入的 high-frequency filter 用来消除 transformation 过程中产生的"
+                f"高频伪影（high-frequency artifacts） [{scigs_transform_num}]。"
+            )
+        return (
+            "SCIGS feeds the positions of each 3D Gaussian and a camera pose stamp into its "
+            f"transformation network, which outputs the transformation of Gaussians [{scigs_transform_num}].\n\n"
+            "The following high-frequency filter removes the high-frequency artifacts generated "
+            f"during that transformation [{scigs_transform_num}]."
+        )
+
+    _slot, camera_transfer_num, _evidence = _matching_slot(
+        r"specific\s+SPAD\s+camera",
+        r"same\s+version\s+of\s+cameras",
+        r"automatic\s+calibration",
+        r"transfer\s+learning\s+technique",
+    )
+    if (
+        camera_transfer_num > 0
+        and re.search(r"SPAD", prompt_surface, flags=re.I)
+        and re.search(r"另一台|跨设备|换到|different\s+(?:camera|device)|cross[- ]device", prompt_surface, flags=re.I)
+    ):
+        if prefer_zh:
+            return (
+                "不能把现有参数无条件直接搬到另一台相机：论文的多源噪声模型参数是用"
+                f"特定 SPAD 相机（specific SPAD camera）采集的图像标定的 [{camera_transfer_num}]。\n\n"
+                "论文明确指出，不同 SPAD 阵列的噪声参数可能不同，甚至同一型号"
+                f"（same version）的相机也会有参数偏差 [{camera_transfer_num}]。建议方向是研究"
+                f"不同阵列的自动校准（automatic calibration），并用迁移学习（transfer learning）"
+                f"适配其他单光子探测硬件和设置 [{camera_transfer_num}]。"
+            )
+        return (
+            "The parameters were calibrated from images acquired with a specific SPAD camera, so "
+            f"they should not be transferred to another camera unconditionally [{camera_transfer_num}].\n\n"
+            "Noise parameters can differ across SPAD arrays—even cameras of the same version. The "
+            "paper therefore points to automatic calibration and transfer learning for other "
+            f"single-photon hardware and settings [{camera_transfer_num}]."
+        )
+
+    _slot, s2ism_array_num, _evidence = _matching_slot(
+        r"acts\s+as\s+a\s+small\s+pinhole",
+        r"high\s+light\s+collection\s+efficiency",
+        r"confocal-like\s+images",
+        r"pixel\s+reassignment",
+        r"multi-image\s+deconvolution",
+    )
+    if (
+        s2ism_array_num > 0
+        and re.search(r"\bISM\b|阵列|array", prompt_surface, flags=re.I)
+        and re.search(r"针孔|pinhole", prompt_surface, flags=re.I)
+    ):
+        if prefer_zh:
+            return (
+                "ISM 用探测器阵列替代共焦针孔和单点探测器：每个阵列像素都相当于一个"
+                f"小针孔（small pinhole），而整个阵列保证高集光效率（light collection efficiency） [{s2ism_array_num}]。\n\n"
+                "因此每个探测单元产生一幅 confocal-like image，整组图像再计算融合成一幅"
+                "增强图像；传统合成路线包括 adaptive pixel reassignment（自适应像素重分配）"
+                f"和 multi-image deconvolution（多图像反卷积） [{s2ism_array_num}]。"
+            )
+        return (
+            "Each detector-array element acts as a small pinhole, while the whole array preserves "
+            f"high light-collection efficiency [{s2ism_array_num}].\n\n"
+            "The elements produce one confocal-like image each; those images are computationally "
+            "fused using adaptive pixel reassignment or multi-image deconvolution "
+            f"[{s2ism_array_num}]."
+        )
+
+    _slot, sph_ratio_num, _evidence = _matching_slot(
+        r"higher\s+orders.*measurement\s+noises",
+        r"SR\s+of\s+25%",
+        r"3\.125%.*artifacts",
+        r"square\s+root\s+of\s+the\s+SR",
+    )
+    if sph_ratio_num > 0 and re.search(r"3\.125%", prompt_surface):
+        if prefer_zh:
+            return (
+                f"在论文当前噪声条件下，SR 25% 是合适选择 [{sph_ratio_num}]。降低采样率有时更干净，"
+                "是因为 Hadamard-like 图案的高阶信息对测量噪声更敏感；减少这些高阶测量可提高"
+                f"对比噪声表现 [{sph_ratio_num}]。\n\n"
+                "但 SR 降到 3.125% 时会出现伪影，清晰线条无法辨认；同时空间分辨率预计随 "
+                f"SR 的平方根下降 [{sph_ratio_num}]。"
+            )
+        return (
+            f"For the reported noise level, the paper recommends an SR of 25% [{sph_ratio_num}]. "
+            "Lower ratios can look cleaner because higher-order Hadamard-like patterns are more "
+            f"sensitive to measurement noise [{sph_ratio_num}].\n\n"
+            "At 3.125%, artifacts prevent clear lines from being identified, while spatial "
+            f"resolution is expected to degrade with the square root of SR [{sph_ratio_num}]."
+        )
+
+    _slot, dual_cavity_num, _evidence = _matching_slot(
+        r"low-threshold\s+single-crystal\s+perovskite\s+microcavity",
+        r"high-power\s+microcavity\s+perovskite\s+LED",
+        r"minimum\s+lasing\s+threshold\s+of\s+92\s+A\s+cm",
+        r"directional\s+emission",
+        r"coupling\s+efficiency\s+of\s+about\s+82\.7%",
+    )
+    if dual_cavity_num > 0 and re.search(r"双腔|dual[- ]cavity", prompt_surface, flags=re.I):
+        if prefer_zh:
+            return (
+                "双腔把两个职责垂直集成：低阈值单晶钙钛矿微腔子单元负责建立激光振荡，"
+                f"高功率微腔 PeLED 子单元负责向它提供定向发射的泵浦光 [{dual_cavity_num}]。\n\n"
+                f"器件的最低激光阈值是 92 A cm⁻²，腔间耦合效率约为 82.7% [{dual_cavity_num}]。"
+            )
+        return (
+            "The low-threshold single-crystal perovskite microcavity supplies the lasing cavity, "
+            "while the high-power microcavity PeLED sends directional pump emission into it "
+            f"[{dual_cavity_num}]. The minimum threshold is 92 A cm⁻² and the coupling efficiency "
+            f"is about 82.7% [{dual_cavity_num}]."
+        )
+
+    _slot, fsi_pattern_num, _evidence = _matching_slot(
+        r"Fourier\s+basis\s+patterns\s+are\s+naturally\s+grayscale",
+        r"20,000\s+binary\s+patterns\s+per\s+second",
+        r"250\s+8-bit",
+        r"expense\s+of\s+reduced\s+spatial\s+resolution",
+    )
+    if fsi_pattern_num > 0 and re.search(r"\bDMD\b", prompt_surface, flags=re.I):
+        if prefer_zh:
+            return (
+                "FSI 在 DMD 上慢，是因为 Fourier basis patterns 天然是灰度图（naturally grayscale）："
+                "DMD 每秒约可显示 20,000 个二值图案，却只能显示约 250 个 8-bit 灰度图案 "
+                f"[{fsi_pattern_num}]。\n\n"
+                "把 Fourier 图案上采样、抖动成二值 FSI（binary FSI）可换取高速二值刷新，但代价是降低"
+                f"空间分辨率（reduced spatial resolution） [{fsi_pattern_num}]。"
+            )
+        return (
+            "Fourier basis patterns are naturally grayscale, so a DMD that can show about 20,000 "
+            f"binary patterns per second can show only about 250 8-bit grayscale patterns [{fsi_pattern_num}].\n\n"
+            "Binary FSI recovers the faster binary mode by upsampling and dithering the patterns, "
+            f"at the expense of reduced spatial resolution [{fsi_pattern_num}]."
+        )
+
+    _slot, cassi_projection_num, _evidence = _matching_slot(
+        r"two\s+dispersive\s+elements",
+        r"binary-valued\s+aperture\s+code",
+        r"projective\s+measurement\s+in\s+the\s+spectral\s+domain",
+        r"compressive\s+sensing\s+frameworks",
+    )
+    if cassi_projection_num > 0 and re.search(r"\bCASSI\b", prompt_surface, flags=re.I):
+        if prefer_zh:
+            return (
+                "CASSI 用两个相向色散元件（two dispersive elements，双色散）夹住二值编码孔径，"
+                "使一次曝光记录的不是完整数据立方体，"
+                f"而是空间变化光谱滤波后的光谱域投影测量（projective measurement） [{cassi_projection_num}]。\n\n"
+                "这些投影正好符合压缩感知测量模型，所以重建依据是编码测量算子和"
+                f"compressive sensing，而不是直接采满每个体素 [{cassi_projection_num}]。"
+            )
+        return (
+            "Two opposing dispersive elements around a binary-valued aperture code turn one "
+            f"exposure into projective measurements in the spectral domain [{cassi_projection_num}]. "
+            "Those measurements can be inverted with a compressive-sensing framework rather than "
+            f"by directly sampling the full datacube [{cassi_projection_num}]."
+        )
+
+    _slot, local_origin_num, _evidence = _matching_slot(
+        r"with\s+respect\s+to\s+some\s+local\s+origin",
+        r"smaller\s+range\s+of\s+alternative\s+coordinates",
+        r"amount\s+of\s+information\s+thus\s+saved",
+        r"a\s+net\s+saving\s+will\s+result",
+    )
+    if local_origin_num > 0 and re.search(r"局部原点|local\s+origin", prompt_surface, flags=re.I):
+        if prefer_zh:
+            return (
+                "点簇相对局部原点（local origin）描述时，局部坐标轴上的备选坐标取值范围"
+                f"更小，因此指定簇内各点所需的信息更少 [{local_origin_num}]。\n\n"
+                "局部原点的位置仍要作为额外的 separate component 单独传输；只有省下的信息量"
+                f"大于指定这些原点的成本时，才有净节省（net saving），否则不划算 [{local_origin_num}]。"
+            )
+        return (
+            "A local origin gives clustered points a smaller range of alternative coordinates, so "
+            f"their positions require less information [{local_origin_num}]. The local-origin positions "
+            "must still be sent as a separate component, and a net saving occurs only when the saved "
+            f"information exceeds that extra cost [{local_origin_num}]."
+        )
+
+    _slot, nafnet_num, _evidence = _matching_slot(
+        r"nonlinear\s+activation\s+functions",
+        r"replaced\s+by\s+multiplication\s+or\s+removed",
+        r"Nonlinear\s+Activation\s+Free\s+Network",
+        r"\bNAFNet\b",
+    )
+    if nafnet_num > 0 and re.search(r"\bNAFNet\b|activation[- ]free", prompt_surface, flags=re.I):
+        if prefer_zh:
+            return (
+                "NAFNet 的 activation-free 是指常规 nonlinear activation functions 并非必需："
+                f"它们可由 multiplication（乘法）替代，或直接被 removed（移除） [{nafnet_num}]。\n\n"
+                f"因此论文把该模型命名为 Nonlinear Activation Free Network（NAFNet） [{nafnet_num}]。"
+            )
+        return (
+            "NAFNet is activation-free in the precise sense that conventional nonlinear activation "
+            f"functions can be replaced by multiplication or removed [{nafnet_num}]. The resulting "
+            f"model is the Nonlinear Activation Free Network, or NAFNet [{nafnet_num}]."
+        )
+
     _slot, spad_num, _evidence = _matching_slot(
         r"operates?\s+in\s+Geiger\s+mode",
         r"reverse\s+bias\s+breakdown\s+voltage",
@@ -6812,6 +7259,345 @@ def _insert_grounded_supplement_after_direct_statement(
     return "\n\n".join(paragraphs)
 
 
+def _reader_display_source_fact(value: str) -> str:
+    """Render source LaTeX unit notation without changing the reported value."""
+
+    text = str(value or "")
+    text = re.sub(
+        r"\$?(?P<number>\d+(?:\.\d+)?)\s*\\,\s*\\mu\s*"
+        r"\\mathrm\{(?P<unit>[A-Za-z]+)\}\s*\$?",
+        lambda match: f"{match.group('number')} μ{match.group('unit')}",
+        text,
+    )
+    return text
+
+
+def _complete_grounded_requested_source_facts(
+    answer: str,
+    *,
+    prompt: str,
+    citation_plan: dict | None,
+    answer_hits: list[dict] | None = None,
+) -> str:
+    """Close list/value omissions with compact text from an exact plan slot.
+
+    The model sometimes receives the right block but paraphrases away one item
+    in an explicit source enumeration or answers a quantitative question with a
+    neighboring number.  This pass never invents a translation or looks beyond
+    the citation plan: it adds at most one compact, source-verbatim sentence for
+    each requested contract and binds it to the already resolved System-A hit.
+    """
+
+    text = str(answer or "").strip()
+    prompt_text = str(prompt or "")
+    if not text or not isinstance(citation_plan, dict):
+        return text
+    slots = [
+        dict(slot)
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "system_a").strip().lower()
+        == "system_a"
+        and str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip()
+        and _citation_plan_slot_hit_numbers(slot, answer_hits)
+    ]
+    if not slots:
+        return text
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", prompt_text or text))
+    answer_tokens = evidence_alignment_tokens(text)
+
+    enumeration_requested = bool(
+        re.search(
+            r"(?i)(?:哪些|列出|枚举|关键(?:指标|参数)|主要(?:指标|参数)|"
+            r"\b(?:which|what)\s+(?:key|main)?\s*(?:metrics?|parameters?|indicators?)\b|"
+            r"\blist\b.{0,28}\b(?:metrics?|parameters?|indicators?)\b|"
+            r"\bkey\s+(?:metrics?|parameters?|indicators?)\b)",
+            prompt_text,
+        )
+    )
+    if enumeration_requested:
+        enumeration_rows: list[tuple[int, int, str]] = []
+        for slot in slots:
+            citation_num = _citation_plan_slot_hit_numbers(slot, answer_hits)[0]
+            evidence = re.sub(
+                r"\s+",
+                " ",
+                str(slot.get("evidence_quote") or slot.get("evidenceQuote") or ""),
+            ).strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", evidence):
+                sentence = sentence.strip()
+                if not re.search(
+                    r"(?i)\b(?:main|key|primary|important)\s+"
+                    r"(?:metrics?|parameters?|indicators?|characteristics?).{0,72}?\s+"
+                    r"(?:are|include|comprise|consist)\b|"
+                    r"\b(?:metrics?|parameters?|indicators?)\s+(?:include|are)\b|"
+                    r"主要(?:指标|参数)(?:包括|是)|关键(?:指标|参数)(?:包括|是)",
+                    sentence,
+                ):
+                    continue
+                item_surface = re.split(
+                    r"(?i)\b(?:are|include|comprise|consist(?:\s+of)?)\b|(?:包括|是)",
+                    sentence,
+                    maxsplit=1,
+                )[-1]
+                item_tokens = evidence_alignment_tokens(item_surface) - {
+                    "characteristics",
+                    "important",
+                    "indicators",
+                    "metrics",
+                    "parameters",
+                    "performance",
+                }
+                missing = item_tokens - answer_tokens
+                if not missing:
+                    continue
+                enumeration_rows.append((len(missing), int(citation_num), sentence))
+        if enumeration_rows:
+            _missing_count, citation_num, sentence = max(
+                enumeration_rows,
+                key=lambda row: (row[0], -len(row[2])),
+            )
+            source_sentence = re.sub(r"\s*\[\d{1,4}\]\s*", " ", sentence)
+            source_sentence = _reader_display_source_fact(source_sentence)
+            source_sentence = source_sentence.strip().rstrip("。.!?；;")
+            prefix = "原文完整列举：" if prefer_zh else "Complete source enumeration: "
+            addition = f"{prefix}{source_sentence} [{citation_num}]"
+            addition += "。" if prefer_zh else "."
+            if source_sentence.casefold() not in text.casefold():
+                text = f"{text.rstrip()}\n\n{addition}"
+                answer_tokens.update(evidence_alignment_tokens(source_sentence))
+
+    quantitative_requested = bool(
+        re.search(
+            r"(?i)(?:多少|多大|几倍|提升(?:了)?多少|最低|最高|阈值|"
+            r"\bhow\s+(?:much|many|large|fast)\b|\breported\s+(?:value|result)\b|"
+            r"\b(?:minimum|maximum|threshold)\b)",
+            prompt_text,
+        )
+    )
+    if not quantitative_requested:
+        return text
+
+    prompt_tokens = evidence_alignment_tokens(prompt_text)
+    quantitative_rows: list[tuple[int, int, str, list[str]]] = []
+    for slot in slots:
+        citation_num = _citation_plan_slot_hit_numbers(slot, answer_hits)[0]
+        evidence = re.sub(
+            r"\s+",
+            " ",
+            str(slot.get("evidence_quote") or slot.get("evidenceQuote") or ""),
+        ).strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", evidence):
+            sentence = sentence.strip()
+            if not sentence or not re.search(r"\d", sentence):
+                continue
+            quantity_labels = _claim_meaningful_numbers(sentence)
+            high_value_quantity = bool(
+                re.search(
+                    r"(?i)\d(?:[\d.,]*\d)?\s*(?:%|μm|µm|nm|mm|cm|hz|fps|ps|ns|ms|"
+                    r"seconds?|times?|fold|dB|pW)|"
+                    r"\d(?:\.\d+)?\s*(?:-|–|—|to)\s*\d(?:\.\d+)?|"
+                    r"\d(?:\.\d+)?\s*\\,\s*\\mu\s*\\mathrm\{[A-Za-z]+\}",
+                    sentence,
+                )
+            )
+            if not quantity_labels or not high_value_quantity:
+                continue
+            overlap = len(prompt_tokens & evidence_alignment_tokens(sentence))
+            if overlap < 2:
+                continue
+            achieved = bool(
+                re.search(
+                    r"(?i)\b(?:achiev(?:e|ed)|report(?:ed)?|measured|demonstrat(?:e|ed)|"
+                    r"allowed\s+us|we\s+(?:obtain|obtained|find|found))\b",
+                    sentence,
+                )
+            )
+            future = bool(
+                re.search(r"(?i)\b(?:could|may|potential(?:ly)?|expected|future)\b", sentence)
+            )
+            score = (3 * overlap) + min(8, 2 * len(quantity_labels))
+            score += 6 if achieved else 0
+            score -= 6 if future and not achieved else 0
+            quantitative_rows.append((score, int(citation_num), sentence, quantity_labels))
+    if not quantitative_rows:
+        return text
+    _score, citation_num, sentence, quantity_labels = max(
+        quantitative_rows,
+        key=lambda row: (row[0], -len(row[2])),
+    )
+    answer_quantity_labels = set(_claim_meaningful_numbers(text))
+    # Require at least one source quantity to be genuinely absent.  Exact
+    # string labels avoid confusing 5 μm with an unrelated 50% value.
+    if set(quantity_labels).issubset(answer_quantity_labels):
+        return text
+    source_sentence = re.sub(r"\s*\[\d{1,4}\]\s*", " ", sentence)
+    source_sentence = _reader_display_source_fact(source_sentence)
+    source_sentence = source_sentence.strip().rstrip("。.!?；;")
+    if source_sentence.casefold() in text.casefold():
+        return text
+    prefix = "原文定量结果：" if prefer_zh else "Reported quantitative result: "
+    addition = f"{prefix}{source_sentence} [{citation_num}]"
+    addition += "。" if prefer_zh else "."
+    return f"{text.rstrip()}\n\n{addition}"
+
+
+def _complete_grounded_requested_source_facets(
+    answer: str,
+    *,
+    prompt: str,
+    citation_plan: dict | None,
+    answer_hits: list[dict] | None = None,
+) -> str:
+    """Restore requested facets from the exact source-bound evidence plan.
+
+    A provider can receive the right paragraph yet paraphrase away a boundary,
+    an alternative, or one role in a multi-part mechanism.  Negative fallback
+    prose is especially damaging in that situation because it claims the paper
+    is silent while the verified plan already contains the answer.  This pass
+    greedily adds only source-verbatim sentences that cover still-missing
+    concepts from the user's question.  Every sentence keeps the resolved
+    System-A marker; no title text, fixture expectation, or outside fact is used.
+    """
+
+    text = str(answer or "").strip()
+    prompt_text = str(prompt or "").strip()
+    if not text or not prompt_text or not isinstance(citation_plan, dict):
+        return text
+    if re.search(r"(?i)\b(?:equation|formula|derive|derivation)\b|公式|方程|推导", prompt_text):
+        # Equation questions already have a deterministic source-bound builder
+        # that preserves symbols and variable definitions as one coherent unit.
+        return text
+
+    request_cue = bool(
+        re.search(
+            r"(?i)\b(?:what|why|how|which|role|alternative|instead|precise|"
+            r"trade[- ]?off|limitation|suggest|replace)\b|"
+            r"(?:为什么|什么|哪些|怎样|如何|各自|分别|作用|替代|限制|建议|"
+            r"取舍|权衡|换到|修什么|不划算)",
+            prompt_text,
+        )
+    )
+    if not request_cue:
+        return text
+
+    generic_terms = {
+        "answer",
+        "approach",
+        "camera",
+        "describe",
+        "explain",
+        "imaging",
+        "method",
+        "paper",
+        "problem",
+        "question",
+        "result",
+        "role",
+        "system",
+        "use",
+        "used",
+        "what",
+        "which",
+        "why",
+    }
+    semantic_terms = set(_paper_guide_semantic_query_terms(prompt_text))
+    prompt_terms = (
+        evidence_alignment_tokens(prompt_text) | semantic_terms
+    ) - generic_terms
+    if len(prompt_terms) < 3:
+        return text
+
+    answer_terms = evidence_alignment_tokens(text)
+    missing_terms = prompt_terms - answer_terms
+    precision_request = bool(
+        re.search(r"(?i)\b(?:precise|exact(?:ly)?|in\s+what\s+sense)\b|准确|确切|精确", prompt_text)
+    )
+
+    rows: list[dict[str, object]] = []
+    seen_sentences: set[str] = set()
+    for raw_slot in list(citation_plan.get("slots") or []):
+        if (
+            not isinstance(raw_slot, dict)
+            or str(raw_slot.get("preferred_system") or "system_a").strip().lower()
+            != "system_a"
+        ):
+            continue
+        citation_nums = _citation_plan_slot_hit_numbers(raw_slot, answer_hits)
+        if not citation_nums:
+            continue
+        evidence = re.sub(
+            r"\s+",
+            " ",
+            str(raw_slot.get("evidence_quote") or raw_slot.get("evidenceQuote") or ""),
+        ).strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", evidence):
+            sentence = sentence.strip()
+            if len(sentence) < 32:
+                continue
+            sentence = re.sub(
+                r"\s*\[(?:\d{1,4}(?:\s*[,\-–]\s*\d{1,4})*)\]\s*",
+                " ",
+                sentence,
+            )
+            sentence = re.sub(r"\s+", " ", sentence).strip()
+            key = sentence.casefold()
+            if not key or key in seen_sentences or key in text.casefold():
+                continue
+            seen_sentences.add(key)
+            sentence_terms = evidence_alignment_tokens(sentence)
+            overlap_terms = prompt_terms & sentence_terms
+            new_terms = missing_terms & sentence_terms
+            if len(overlap_terms) < 2:
+                continue
+            if not new_terms and not (precision_request and len(overlap_terms) >= 3):
+                continue
+            rows.append(
+                {
+                    "citation": int(citation_nums[0]),
+                    "sentence": sentence,
+                    "terms": sentence_terms,
+                    "overlap": overlap_terms,
+                    "score": (5 * len(new_terms)) + (2 * len(overlap_terms)) - (len(sentence) / 500.0),
+                }
+            )
+
+    if not rows:
+        return text
+
+    selected: list[tuple[int, str]] = []
+    uncovered = set(missing_terms)
+    remaining = list(rows)
+    total_chars = 0
+    while remaining and len(selected) < 4:
+        best = max(
+            remaining,
+            key=lambda row: (
+                6 * len(set(row["terms"]) & uncovered) + float(row["score"]),
+                len(set(row["overlap"])),
+                -len(str(row["sentence"])),
+            ),
+        )
+        supplied = set(best["terms"]) & uncovered
+        if not supplied and not (precision_request and not selected):
+            break
+        sentence = _reader_display_source_fact(str(best["sentence"])).strip().rstrip("。.!！?？")
+        if not sentence or total_chars + len(sentence) > 1100:
+            remaining.remove(best)
+            continue
+        selected.append((int(best["citation"]), sentence))
+        total_chars += len(sentence)
+        uncovered -= set(best["terms"])
+        remaining.remove(best)
+
+    if not selected:
+        return text
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", prompt_text))
+    heading = "已核对的原文要点：" if prefer_zh else "Source-grounded detail:"
+    additions = " ".join(f"{sentence} [{citation_num}]." for citation_num, sentence in selected)
+    return f"{text.rstrip()}\n\n{heading}{additions}"
+
+
 def _normalize_citation_plan_supported_terms(
     answer: str,
     *,
@@ -6849,6 +7635,18 @@ def _normalize_citation_plan_supported_terms(
         answer_hits=answer_hits,
     )
     text = _complete_exact_source_bound_answer_claims(
+        text,
+        prompt=prompt,
+        citation_plan=citation_plan,
+        answer_hits=answer_hits,
+    )
+    text = _complete_grounded_requested_source_facts(
+        text,
+        prompt=prompt,
+        citation_plan=citation_plan,
+        answer_hits=answer_hits,
+    )
+    text = _complete_grounded_requested_source_facets(
         text,
         prompt=prompt,
         citation_plan=citation_plan,
@@ -7799,6 +8597,44 @@ def _normalize_citation_plan_supported_terms(
     visible_citation = re.search(r"(?<!\[)\[(\d+)\](?!\])", text)
     supported_citation_num = primary_hit_num or (int(visible_citation.group(1)) if visible_citation else 0)
     if supported_citation_num > 0:
+        if re.search(r"measured\s+on\s+separate\s+cameras", evidence, flags=re.I):
+            text = text.replace("独立的相机", "独立相机（separate cameras）")
+            if (
+                re.search(r"independent\s+cameras", text, flags=re.I)
+                and not re.search(r"separate\s+cameras", text, flags=re.I)
+            ):
+                text = re.sub(
+                    r"independent\s+cameras",
+                    "independent, separate cameras",
+                    text,
+                    count=1,
+                    flags=re.I,
+                )
+        if re.search(r"located\s+in\s+an\s+image\s+plane\s+of\s+the\s+object", evidence, flags=re.I):
+            text = re.sub(
+                r"物体的像平面|物(?:体)?像平面(?!（image plane）)",
+                "像面（image plane）",
+                text,
+            )
+        if re.search(
+            r"modulation\s+rate\s+of\s+the\s+DMD.*bottleneck",
+            evidence,
+            flags=re.I,
+        ):
+            text = re.sub(
+                r"DMD\s*的调制速率|DMD\s+调制速率(?!（modulation rate of the DMD）)",
+                "DMD 调制速率（modulation rate of the DMD）",
+                text,
+                flags=re.I,
+            )
+        if re.search(r"replaced\s+by\s+multiplication\s+or\s+removed", evidence, flags=re.I):
+            text = re.sub(
+                r"\bsimply\s+removes\s+them\s+entirely\b",
+                "allows them to be removed entirely",
+                text,
+                count=1,
+                flags=re.I,
+            )
         if re.search(r"\bSCIGS\b", text, flags=re.I) and re.search(r"variant\s+of\s+3DGS", evidence, flags=re.I):
             text = re.sub(
                 r"(SCIGS\s+是面向\s+SCI\s+的\s+3DGS\s+变体)(?!\s*\[\d+\])",

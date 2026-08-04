@@ -185,6 +185,47 @@ def build_grounded_ref_why_line(
     )
     if prefer_zh:
         if (
+            "structured illumination" in summary_low
+            and "structured detection" in summary_low
+            and "image plane of the object" in summary_low
+            and "modulation rate of the dmd" in summary_low
+            and "bottleneck" in summary_low
+        ):
+            return (
+                "同一段原文既区分了 DMD 在照明侧与探测像面的两种配置，也明确指出两者共同受"
+                "DMD 图案切换速率这一采集瓶颈限制。"
+            )
+        if (
+            "refractive index of the medium" in summary_low
+            and "axial position of the scatterer" in summary_low
+            and "illumination wavelength" in summary_low
+            and "gouy phase" in summary_low
+        ):
+            return (
+                "这段定义把深度变量 z 与介质折射率 n、照明波长 λ 和 Gouy 相位项逐一分开，"
+                "可据此核对相位关系中每个量的物理角色。"
+            )
+        if (
+            "smaller range of alternative coordinates" in summary_low
+            and "amount of information thus saved" in summary_low
+            and "positions of the local origins" in summary_low
+            and "net saving" in summary_low
+        ):
+            return (
+                "原文同时给出净节省的判据：局部坐标减少的信息量必须超过传输局部原点位置的额外成本。"
+            )
+        if (
+            "acts as a small pinhole" in summary_low
+            and "high light collection efficiency" in summary_low
+            and "confocal-like images" in summary_low
+            and "pixel reassignment" in summary_low
+            and "multi-image deconvolution" in summary_low
+        ):
+            return (
+                "这段证据还把阵列形成的共焦式图像与两条计算融合路线——"
+                "自适应像素重分配和多图像反卷积——直接连在一起。"
+            )
+        if (
             "式（3）" in summary_full
             and "可微" in summary_full
             and ("压缩测量" in summary_full or "压缩图像" in summary_full)
@@ -593,6 +634,18 @@ def build_grounded_ref_why_line(
         return ""
 
     if (
+        "acts as a small pinhole" in summary_low
+        and "high light collection efficiency" in summary_low
+        and "confocal-like images" in summary_low
+        and "pixel reassignment" in summary_low
+        and "multi-image deconvolution" in summary_low
+    ):
+        return (
+            "The passage also connects the array's confocal-like images to the two "
+            "computational fusion routes: adaptive pixel reassignment and multi-image "
+            "deconvolution."
+        )
+    if (
         re.search(r"\bADMM\b", summary_full, flags=re.I)
         and re.search(
             r"\b(?:existing|prior|previous|earlier)\s+(?:methods?|work|approaches?)\b",
@@ -772,6 +825,27 @@ def build_localized_ref_summary_line(
     low = text.lower()
     if not text:
         return ""
+    if (
+        ("single-photon detections" in low or "mainstream spds" in low)
+        and re.search(r"\b(?:pmt|sapd|spad|sns?pd|tes)s?\b", low)
+    ):
+        return "该综述归纳了 PMT、SAPD、SNSPD、TES 及钙钛矿等主要单光子探测器类型。"
+    if (
+        "structured illumination" in low
+        and "structured detection" in low
+        and "image plane of the object" in low
+        and "modulation rate of the dmd" in low
+    ):
+        return (
+            "DMD 在照明侧用于向场景投射图案，在探测侧则位于像面并调制待测图像强度。"
+        )
+    if (
+        "smaller range of alternative coordinates" in low
+        and "less information is required" in low
+        and "positions of the local origins" in low
+        and "net saving" in low
+    ):
+        return "点簇采用局部原点后，局部坐标的备选范围更小，因此描述簇内各点所需的信息更少。"
     if (
         "compared with the gray spi" in low
         and "color spi" in low

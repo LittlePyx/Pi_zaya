@@ -530,6 +530,12 @@ def _is_high_risk_claim(unit: str) -> bool:
     return bool(
         _meaningful_numbers(plain)
         or _RISK_RE.search(plain)
+        or re.search(
+            r"(?:是因为|由于|从而|进而|因而|这使得)|"
+            r"\b(?:because|thereby|therefore|result(?:s|ed)?\s+in)\b",
+            plain,
+            flags=re.IGNORECASE,
+        )
         or _OPTIMIZATION_DETAIL_RE.search(plain)
         or _MASK_COMPRESSION_DETAIL_RE.search(plain)
         or _PAPER_COVERAGE_CLAIM_RE.search(plain)
@@ -640,6 +646,20 @@ def _support_score(
     if not explicit_claim_relations_covered(claim_plain, evidence_text):
         return 0
     explicit_relation_requirements = (
+        (
+            re.compile(
+                r"(?=.*位置)(?=.*(?:角度|动量))(?=.*相机)"
+                r"(?=.*(?:牺牲|取舍|权衡))",
+                re.I,
+            ),
+            re.compile(
+                r"(?=.*(?:\bposition\b|位置))"
+                r"(?=.*(?:\bangular\b|\bmomentum\b|角度|动量))"
+                r"(?=.*(?:\bcameras?\b|相机))"
+                r"(?=.*(?:\bsacrific|\btrade[- ]?off\b|牺牲|取舍|权衡))",
+                re.I,
+            ),
+        ),
         (
             re.compile(
                 r"牺牲.{0,32}换取|(?:帧率|时间分辨率).{0,24}(?:空间)?分辨率.{0,12}权衡|"

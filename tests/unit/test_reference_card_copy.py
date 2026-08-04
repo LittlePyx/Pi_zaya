@@ -730,3 +730,65 @@ def test_exact_comparison_evidence_gets_question_specific_relevance_copy() -> No
     assert all(term in hadamard for term in ("HSI", "FSI", "采样率", "PSNR", "SSIM"))
     assert all(term in fdm for term in ("频分复用", "信噪比", "速度", "积分时间"))
     assert all(term in prospects for term in ("波段", "高帧率", "三维", "单像素"))
+
+
+def test_s2ism_array_evidence_gets_distinct_fusion_relevance_copy() -> None:
+    evidence = (
+        "Each element of the detector array acts as a small pinhole, whereas the entire "
+        "array guarantees high light collection efficiency. Thus, the ISM generates a "
+        "set of confocal-like images—one per detector element—which must be "
+        "computationally fused into a single enhanced image. Such a task is traditionally "
+        "performed either by adaptive pixel reassignment or multi-image deconvolution."
+    )
+
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Paper / Abstract",
+        summary_line=evidence,
+    )
+
+    assert "共焦式图像" in why
+    assert "自适应像素重分配" in why
+    assert "多图像反卷积" in why
+
+
+def test_local_origin_evidence_gets_complete_summary_and_cost_condition() -> None:
+    evidence = (
+        "Since the points occupy a smaller range of alternative coordinates on the local "
+        "axes than on arbitrary axes, less information is required for their specification. "
+        "If the amount of information thus saved is greater than the amount needed to specify "
+        "the positions of the local origins, a net saving will result."
+    )
+
+    summary = build_localized_ref_summary_line(prefer_zh=True, evidence_text=evidence)
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Perception as economical description",
+        summary_line=evidence,
+    )
+
+    assert "备选范围" in summary and "信息更少" in summary
+    assert "局部原点" in why and "额外成本" in why
+
+
+def test_spi_configuration_evidence_separates_guide_from_shared_bottleneck() -> None:
+    evidence = (
+        "The DMD can project patterns of light onto a scene, termed structured illumination, "
+        "or structure detected image intensities, called structured detection. For the latter, "
+        "the DMD is located in an image plane of the object. The modulation rate of the DMD "
+        "is the acquisition-time bottleneck."
+    )
+
+    summary = build_localized_ref_summary_line(prefer_zh=True, evidence_text=evidence)
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Camera architecture",
+        summary_line=evidence,
+    )
+
+    assert "照明侧" in summary and "探测侧" in summary and "像面" in summary
+    assert "共同" in why and "采集瓶颈" in why
+    assert summary != why

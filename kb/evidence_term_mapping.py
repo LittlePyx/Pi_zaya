@@ -75,6 +75,11 @@ def specific_method_identities(value: object) -> set[str]:
         identities.add("fsi")
     if re.search(r"\binterferometric\s+image\s+scanning\s+microscopy\b", surface_low):
         identities.add("iism")
+    if re.search(
+        r"\bquantum\s+correlation\s+light[-\s]?field\s+microscope\b",
+        surface_low,
+    ):
+        identities.add("qclfm")
     return identities
 
 
@@ -127,6 +132,8 @@ _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (r"探测器尺寸", ("detector", "size")),
     (r"探测器积分时间|积分时间", ("detector", "integration", "time")),
     (r"位置.{0,8}角度|角度.{0,8}位置", ("position", "angular", "information")),
+    (r"独立(?:的)?相机|不同(?:的)?相机|分别.{0,10}相机", ("separate", "cameras", "measured")),
+    (r"景深", ("depth", "field", "dof")),
     (r"重聚焦|重新对焦|离焦", ("digital", "refocusing", "focus")),
     (r"光线追迹|光线追踪", ("ray", "tracing")),
     (r"波传播|波动传播", ("wave", "propagation")),
@@ -198,9 +205,17 @@ _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (r"空间域", ("spatial", "domain")),
     (r"变换域", ("transform", "domain")),
     (r"暗计数", ("dark", "count")),
+    (r"探测效率", ("detection", "efficiency")),
+    (r"时间抖动|时序抖动", ("time", "jitter")),
     (r"后脉冲", ("afterpulsing", "afterpulse")),
     (r"串扰", ("crosstalk",)),
     (r"死区时间", ("dead", "time")),
+    (r"银(?:层|膜|掩模)?|银质|\bAg\b", ("silver", "ag")),
+    (r"铬(?:层|膜|掩模)?|铬质|\bCr\b", ("chromium", "cr")),
+    (r"反射率|反光率", ("reflectivity", "reflectance")),
+    (r"透射率|透光率", ("transmissivity", "transmittance")),
+    (r"互补(?:图案|模式)", ("complementary", "patterns")),
+    (r"对比度", ("contrast",)),
     (r"泊松", ("poisson",)),
     (
         r"(?:照明图案|投影端).{0,24}(?:散射|非理想聚焦|模糊)|非理想聚焦",

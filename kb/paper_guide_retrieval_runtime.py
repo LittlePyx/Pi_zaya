@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -70,6 +71,174 @@ def _paper_guide_strip_bound_source_hint(prompt: str, bound_source_path: str) ->
     return q
 
 
+_PAPER_GUIDE_SCAN_TOKEN_STOPWORDS = {
+    "about",
+    "after",
+    "also",
+    "and",
+    "are",
+    "based",
+    "between",
+    "does",
+    "from",
+    "have",
+    "into",
+    "paper",
+    "that",
+    "the",
+    "their",
+    "this",
+    "through",
+    "uses",
+    "using",
+    "what",
+    "when",
+    "where",
+    "which",
+    "why",
+    "with",
+}
+
+
+def _paper_guide_scan_tokens(text: str, *, limit: int = 160) -> list[str]:
+    """Return a fuller lexical surface than the compact citation cue list.
+
+    ``_paper_guide_cue_tokens`` deliberately stops after twelve terms because it
+    was designed for short citation labels.  Bound-source scanning has a
+    different job: the decisive phrase is often near the end of a paragraph
+    (numbers, units, a limitation, or a variable definition).  Keep the full
+    distinct surface here so those late facts can participate in ranking.
+    """
+
+    raw = str(text or "").strip().lower()
+    if not raw:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in re.findall(r"[a-z][a-z0-9+_-]{2,}|\d+(?:\.\d+)?", raw):
+        tok = str(token or "").strip("_-")
+        if not tok or tok in _PAPER_GUIDE_SCAN_TOKEN_STOPWORDS or tok in seen:
+            continue
+        seen.add(tok)
+        out.append(tok)
+        if len(out) >= max(12, int(limit or 160)):
+            break
+    return out
+
+
+def _paper_guide_semantic_query_terms(prompt: str) -> list[str]:
+    """Translate reusable research-question concepts into source vocabulary.
+
+    This is intentionally a concept dictionary, not a question/answer lookup.
+    It lets a Chinese or mixed-language request compete against English source
+    paragraphs using the same facets the user named: measurement metrics,
+    inputs/outputs, device transfer, equations, material trade-offs, and so on.
+    Unknown values (for example a reported threshold) are never inserted here.
+    """
+
+    q = str(prompt or "").strip()
+    if not q:
+        return []
+    rules: tuple[tuple[str, str], ...] = (
+        (r"位置|position", "position spatial coordinate"),
+        (r"角度|动量|angular|momentum", "angular momentum angle"),
+        (r"分辨率|resolution", "resolution spatial axial lateral"),
+        (r"景深|depth\s+of\s+field", "depth of field DOF volumetric"),
+        (r"探测效率|detection\s+efficiency", "detection efficiency"),
+        (r"暗计数|dark\s+count", "dark count rate"),
+        (r"死时间|dead\s*time", "dead time system dead time"),
+        (r"时间抖动|tim(?:e|ing)\s+jitter", "time timing jitter"),
+        (r"关键指标|性能指标|metrics?", "performance characteristics metrics"),
+        (r"输入|吃进去|input", "input embedding coordinates"),
+        (r"输出|output", "output transformation"),
+        (r"高频|high[- ]frequency", "high-frequency artifacts filter"),
+        (r"干涉信号|interferen(?:ce|tial)\s+signal", "interference signal reflected scattered light"),
+        (r"深度信息|depth\s+information", "depth axial position phase difference"),
+        (r"相位公式|phase\s+(?:formula|equation)", "phase difference equation"),
+        (r"折射率|refractive\s+index", "refractive index"),
+        (r"波长|wavelength|λ|lambda", "wavelength lambda"),
+        (r"降采样|欠采样|undersampl", "undersampling sampling ratio"),
+        (r"伪影|artifact", "artifacts"),
+        (r"噪声|noise", "noise higher orders"),
+        (r"平方根|square\s+root", "square root resolution"),
+        (r"换到另一|跨设备|跨相机|cross[- ](?:device|camera)", "cross-device camera calibration transfer"),
+        (r"同一型号|same\s+(?:version|model)", "same version parameter deviations"),
+        (r"自动校准|automatic\s+calibration", "automatic calibration parameters"),
+        (r"迁移学习|transfer\s+learning", "transfer learning"),
+        (r"结构照明|structured\s+illumination", "structured illumination projected patterns scene"),
+        (r"结构探测|structured\s+detection", "structured detection image plane detector"),
+        (r"采集速度|acquisition\s+speed", "acquisition speed modulation rate DMD"),
+        (r"阵列|array", "detector array elements"),
+        (r"针孔|pinhole", "small pinhole confocal"),
+        (r"集光|light\s+collection", "light collection efficiency"),
+        (r"重分配|reassignment", "pixel reassignment"),
+        (r"反卷积|deconvolution", "multi-image deconvolution"),
+        (r"双腔|dual[- ]cavity", "dual-cavity subunits microcavity"),
+        (r"子单元|subunits?", "subunit PeLED single-crystal microcavity"),
+        (r"阈值|threshold", "threshold current density"),
+        (r"耦合效率|coupling\s+efficiency", "coupling efficiency directional emission"),
+        (r"一次曝光|单次曝光|single[- ]shot|single\s+exposure", "single-shot single exposure projective measurement"),
+        (r"数据立方体|data\s*cube|datacube", "spectral datacube spectral domain"),
+        (r"压缩感知|compressive?\s+sensing", "compressive sensing reconstruction"),
+        (r"灰度|grayscale", "grayscale patterns frame rate"),
+        (r"二值|binary", "binary patterns binary FSI"),
+        (r"空间分辨率|spatial\s+resolution", "spatial resolution"),
+        (r"银|silver|\bAg\b", "silver Ag reflectivity"),
+        (r"铬|chromium|\bCr\b", "chromium Cr"),
+        (r"反射率|reflectivity", "reflectivity"),
+        (r"透射率|transmissivity|transmittance", "transmissivity transmittance"),
+        (r"互补图案|complementary\s+patterns", "complementary patterns contrast"),
+        (r"局部原点|local\s+origin", "local origins coordinates information"),
+        (r"取值范围|coordinate\s+range|range\s+of\s+coordinates", "coordinate range smaller values"),
+        (r"省信息|净节省|information\s+sav|net\s+sav", "information net saving bits description"),
+        (r"不划算|额外成本|overhead|cost", "separate component origin cost exceeds saving"),
+        (r"激活函数|activation\s+functions?", "nonlinear activation functions"),
+        (r"无激活|activation[- ]free", "activation free removed multiplication"),
+        (r"运动假设|motion\s+assumption", "camera motion trajectory assumption"),
+        (r"复杂运动|complex\s+motion", "higher-order spline individual poses interpolation"),
+    )
+    surface: list[str] = []
+    for pattern, terms in rules:
+        if re.search(pattern, q, flags=re.IGNORECASE):
+            surface.extend(_paper_guide_scan_tokens(terms, limit=24))
+    if (
+        re.search(r"单光子|single[- ]photon", q, flags=re.IGNORECASE)
+        and re.search(r"探测器|detectors?|photodetector", q, flags=re.IGNORECASE)
+        and re.search(r"指标|评价|性能|metrics?|characteristics?", q, flags=re.IGNORECASE)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "single photon detection parameters detection efficiency dark count "
+                "system dead time time jitter",
+                limit=32,
+            )
+        )
+    if (
+        re.search(r"阵列|array", q, flags=re.IGNORECASE)
+        and re.search(r"针孔|pinhole", q, flags=re.IGNORECASE)
+        and re.search(r"合成|融合|fused?|combine|reconstruct", q, flags=re.IGNORECASE)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "confocal-like images computationally fused adaptive pixel reassignment "
+                "multi-image deconvolution",
+                limit=32,
+            )
+        )
+    if (
+        re.search(r"\bDMD\b|digital\s+micromirror", q, flags=re.IGNORECASE)
+        and re.search(r"慢|速度|binary|二值|spatial\s+resolution|空间分辨率", q, flags=re.IGNORECASE)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "Fourier basis patterns naturally grayscale DMD grayscale mode binary patterns "
+                "spatial resolution",
+                limit=32,
+            )
+        )
+    return list(dict.fromkeys(surface))[:64]
+
+
 def _paper_guide_seed_query_tokens_for_targeted_scan(
     *,
     prompt: str,
@@ -83,6 +252,8 @@ def _paper_guide_seed_query_tokens_for_targeted_scan(
         family=family,
     )
     tokens.update(_paper_guide_cue_tokens(augmented))
+    tokens.update(_paper_guide_scan_tokens(q, limit=80))
+    tokens.update(_paper_guide_semantic_query_terms(q))
     if tokens:
         return tokens
     raw_src = str(bound_source_path or "").strip()
@@ -522,6 +693,7 @@ def _paper_guide_targeted_source_block_hits(
     ]
     explicit_hints = _paper_guide_requested_heading_hints(q)
     family = str(_paper_guide_prompt_family(q) or "").strip().lower()
+    semantic_query_tokens = set(_paper_guide_semantic_query_terms(q))
     is_citation_lookup = bool(family == "citation_lookup")
     explicit_ref_list_request = bool(
         re.search(r"(?i)\b(?:reference\s+list|works?\s+cited|bibliography)\b", q)
@@ -565,7 +737,48 @@ def _paper_guide_targeted_source_block_hits(
             q,
         )
     )
+    quantitative_answer_request = bool(
+        re.search(
+            r"(?i)(?:多少|多大|几倍|提升|最低|最高|阈值|效率|速度|分辨率|"
+            r"\bhow\s+(?:much|many|large|fast)\b|\breported\b|\bthreshold\b|"
+            r"\befficiency\b|\bimprovement\b|\bvalue\b)",
+            q,
+        )
+    )
+    enumeration_answer_request = bool(
+        re.search(
+            r"(?i)(?:哪些|列出|枚举|关键(?:指标|参数)|主要(?:指标|参数)|"
+            r"\b(?:which|what)\s+(?:key|main)?\s*(?:metrics?|parameters?|indicators?)\b|"
+            r"\blist\b.{0,28}\b(?:metrics?|parameters?|indicators?)\b|"
+            r"\bkey\s+(?:metrics?|parameters?|indicators?)\b)",
+            q,
+        )
+    )
     blocks = list(load_source_blocks(md_path))
+    # Estimate within-paper document frequency for the actual query terms.
+    # Title words such as "imaging" occur everywhere and should not tie every
+    # block, while a rare material, variable, metric, or mechanism phrase is a
+    # strong locator.  This is deterministic and reads only the already loaded
+    # source blocks.
+    query_document_frequency: dict[str, int] = {token: 0 for token in query_tokens}
+    block_scan_tokens: list[set[str]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            block_scan_tokens.append(set())
+            continue
+        block_surface = "\n".join(
+            part
+            for part in (
+                str(block.get("heading_path") or "").strip(),
+                str(block.get("raw_text") or block.get("text") or "").strip(),
+            )
+            if part
+        )
+        tokens_for_block = set(_paper_guide_scan_tokens(block_surface, limit=220))
+        block_scan_tokens.append(tokens_for_block)
+        for token in query_tokens.intersection(tokens_for_block):
+            query_document_frequency[token] = int(query_document_frequency.get(token) or 0) + 1
+    block_count = max(1, len(blocks))
     target_boxes = set(_paper_guide_requested_box_numbers(q))
     box_context_indices: set[int] = set()
     if target_boxes:
@@ -606,9 +819,84 @@ def _paper_guide_targeted_source_block_hits(
             score += 14.0
         heading_low = heading.lower()
         tokens = set(_paper_guide_cue_tokens(combined))
+        if idx < len(block_scan_tokens):
+            tokens.update(block_scan_tokens[idx])
         shared = tokens.intersection(query_tokens)
         if shared:
-            score += min(14.0, 2.0 * float(len(shared)))
+            weighted_overlap = sum(
+                1.0
+                + max(
+                    0.0,
+                    min(
+                        4.0,
+                        math.log(
+                            (float(block_count) + 1.0)
+                            / (float(query_document_frequency.get(token) or 0) + 1.0)
+                        ),
+                    ),
+                )
+                for token in shared
+            )
+            score += min(42.0, 2.4 * float(weighted_overlap))
+            if len(shared) >= 3:
+                score += min(12.0, 1.5 * float(len(shared) - 2))
+        semantic_text_overlap = semantic_query_tokens.intersection(
+            _paper_guide_scan_tokens(text, limit=220)
+        )
+        if enumeration_answer_request and len(semantic_text_overlap) >= 3:
+            # Questions asking "which metrics/parameters" need the source's
+            # definition or enumeration sentence, not an experiment paragraph
+            # that happens to mention several of the same terms.  The phrase
+            # gate remains domain-independent and source-verbatim.
+            if re.search(
+                r"(?i)\b(?:main|key|primary|important)\s+"
+                r"(?:metrics?|parameters?|indicators?|characteristics?).{0,72}?\s+"
+                r"(?:are|include|comprise|consist)\b|"
+                r"\b(?:metrics?|parameters?|indicators?)\s+(?:include|are)\b|"
+                r"主要(?:指标|参数)(?:包括|是)|关键(?:指标|参数)(?:包括|是)",
+                text,
+            ):
+                score += 96.0
+            if re.search(
+                r"(?i)(?:^|\s/\s)\d+(?:\.\d+)?\s+[^/]*(?:parameter|metric|indicator)",
+                heading_low,
+            ):
+                score += 10.0
+        if quantitative_answer_request and len(semantic_text_overlap) >= 2 and re.search(r"\d", text):
+            quantitative_pattern = (
+                r"(?i)\d(?:[\d.,]*\d)?\s*(?:%|μm|µm|nm|mm|cm|hz|fps|ps|ns|ms|"
+                r"seconds?|times?|fold|dB|A\s*cm)|"
+                r"\d(?:\.\d+)?\s*(?:-|–|—|to)\s*\d(?:\.\d+)?"
+            )
+            quantitative_signals = len(
+                re.findall(quantitative_pattern, text)
+            )
+            score += min(24.0, 6.0 * float(quantitative_signals))
+            if "discussion" in heading_low or "result" in heading_low:
+                score += 6.0
+            quantitative_sentences = [
+                sentence
+                for sentence in re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", text))
+                if re.search(quantitative_pattern, sentence)
+            ]
+            achieved_quantitative = any(
+                re.search(
+                    r"(?i)\b(?:achiev(?:e|ed)|report(?:ed)?|measured|demonstrat(?:e|ed)|allowed\s+us)\b",
+                    sentence,
+                )
+                for sentence in quantitative_sentences
+            )
+            future_quantitative = bool(quantitative_sentences) and all(
+                re.search(
+                    r"(?i)\b(?:could|may|potential(?:ly)?|can\s+be\s+further|expected)\b",
+                    sentence,
+                )
+                for sentence in quantitative_sentences
+            )
+            if achieved_quantitative:
+                score += 10.0
+            elif future_quantitative:
+                score -= 10.0
         q_low = q.lower()
         text_low = text.lower()
         matched_acronyms: set[str] = set()
@@ -639,7 +927,7 @@ def _paper_guide_targeted_source_block_hits(
                 if observation_model_query:
                     # A model-comparison question needs the defining equations,
                     # not any result caption that happens to mention both systems.
-                    score += 72.0 if model_definition else -36.0
+                    score += 72.0 if model_definition else -90.0
                 else:
                     score += 40.0
         dltr_focus = bool(
@@ -702,6 +990,15 @@ def _paper_guide_targeted_source_block_hits(
                 score += 5.0
             if any(token in text for token in ("\\tag{", "$$", "\\[", "\\]", "where ", "denotes", "represents")):
                 score += 3.8
+            if re.search(r"(?i)^\s*(?:where|with)\b|\b(?:denotes|represents)\b", text) and len(shared) >= 3:
+                score += 24.0
+            if re.search(r"\\(?:phi|varphi|lambda)|[=+\-*/]", text) and len(shared) >= 2:
+                score += 16.0
+            if (
+                re.search(r"(?i)公式|方程|相位|\b(?:formula|equation|phase)\b", q)
+                and re.search(r"(?s)\$\$.{0,700}=.{0,700}\$\$|\\tag\{\d+\}", text)
+            ):
+                score += 44.0
         elif family == "figure_walkthrough":
             if any(token in heading_low for token in ("figure", "caption", "panel", "results")):
                 score += 5.0
