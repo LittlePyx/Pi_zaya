@@ -2052,6 +2052,62 @@ def test_exact_source_bound_stabilizes_scinerf_forward_equation() -> None:
     assert out.count("[1]") == 3
 
 
+def test_evidence_complete_override_skips_only_full_scinerf_replacement() -> None:
+    evidence = (
+        "$$\\mathbf{Y}=\\sum_i\\mathbf{X}_i\\odot\\mathbf{M}_i+\\mathbf{Z}.$$ "
+        "Y is the captured compressed image, Xi is a virtual image, odot denotes "
+        "element-wise multiplication, and Z is the measurement noise. Given NeRF and "
+        "camera poses, we render Xi to synthesize the compressed image Y, which is "
+        "differentiable with respect to NeRF and the poses."
+    )
+    out = finalize_runtime._build_evidence_complete_answer_override(
+        prompt=(
+            "SCINeRF 的 SCI 前向成像公式到底表达了什么？请解释二值掩模、测量噪声"
+            "以及它为什么能进入 NeRF 联合优化。"
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "scinerf.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "scinerf.en.md"}}],
+    )
+
+    assert "证据完整回答占位符" not in out
+    assert "\\mathbf{Y}=\\sum" in out
+    assert "二值掩模" in out
+    assert "测量噪声" in out
+    assert "可微" in out
+    assert out.count("[1]") == 3
+
+
+def test_evidence_complete_override_keeps_partial_repairs_on_model_path() -> None:
+    evidence = "The source gives one useful but incomplete detail."
+
+    assert (
+        finalize_runtime._build_evidence_complete_answer_override(
+            prompt="Explain the method and discuss its limitations.",
+            citation_plan={
+                "slots": [
+                    {
+                        "preferred_system": "system_a",
+                        "candidate_hits": [1],
+                        "source_path": "paper.en.md",
+                        "evidence_quote": evidence,
+                    }
+                ]
+            },
+            answer_hits=[{"text": evidence, "meta": {"source_path": "paper.en.md"}}],
+        )
+        == ""
+    )
+
+
 def test_exact_source_bound_stabilizes_fdm_vs_3d_parallelism() -> None:
     fdm = (
         "Each SLM pixel is modulated on p frequencies simultaneously. The system uses "

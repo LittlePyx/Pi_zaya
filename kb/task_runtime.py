@@ -76,6 +76,7 @@ from kb.conversation_followup import (
     previous_assistant_source_hints,
 )
 from kb.generation_answer_finalize_runtime import (
+    _build_evidence_complete_answer_override as _finalize_runtime_build_evidence_complete_answer_override,
     _build_multi_paper_doc_list_contract as _finalize_runtime_build_multi_paper_doc_list_contract,
     _claim_evidence_hits_with_citation_plan as _finalize_runtime_claim_evidence_hits_with_citation_plan,
     _exclude_bound_source_from_multi_paper_doc_list_contract as _finalize_runtime_exclude_bound_source_from_multi_paper_doc_list_contract,
@@ -6623,6 +6624,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 agent_scope_context["agent_generation_error"] = str(exc)[:180]
                 _trace_section("agent", {"mode": "research_agent", "generation_error": str(exc)[:180]})
         direct_answer_override = ""
+        grounded_completion_override = False
+        grounded_completion_preflight_ms = 0.0
         if not agent_direct_answer_override:
             if paper_guide_exact_preflight:
                 direct_answer_override = str(
@@ -6633,6 +6636,22 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     prompt_for_user or prompt,
                     answer_hits,
                 )
+                if not direct_answer_override:
+                    grounded_completion_started = time.perf_counter()
+                    direct_answer_override = (
+                        _finalize_runtime_build_evidence_complete_answer_override(
+                            prompt=prompt_for_user or prompt,
+                            citation_plan=citation_plan,
+                            answer_hits=list(answer_hits or []),
+                            support_slots=list(paper_guide_support_slots or []),
+                            evidence_cards=list(paper_guide_evidence_cards or []),
+                        )
+                    )
+                    grounded_completion_preflight_ms = round(
+                        (time.perf_counter() - grounded_completion_started) * 1000.0,
+                        3,
+                    )
+                    grounded_completion_override = bool(direct_answer_override)
                 if not direct_answer_override:
                     ds = DeepSeekChat(settings_obj)
                     direct_answer_override = _build_paper_guide_direct_answer_override(
@@ -6659,6 +6678,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     "direct_answer_override_prefix": str(
                         agent_direct_answer_override or direct_answer_override or ""
                     ).strip()[:120],
+                    "grounded_completion_override": bool(grounded_completion_override),
+                    "grounded_completion_preflight_ms": float(
+                        grounded_completion_preflight_ms
+                    ),
                 }
             )
             _gen_update_task(
@@ -6772,6 +6795,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             chars=int(len(partial or "")),
             streamed=bool(streamed),
             direct_override=bool(direct_answer_override),
+            grounded_completion_override=bool(grounded_completion_override),
+            grounded_completion_preflight_ms=float(
+                grounded_completion_preflight_ms
+            ),
         )
         if _gen_should_cancel(session_id, task_id):
             answer = _finalize_runtime_sanitize_canceled_generation_answer(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from math import log
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -145,29 +146,53 @@ def _nonnegative_int(value: Any, *, default: int = 0) -> int:
         return max(0, int(default))
 
 
-def _source_sentences(source_path: str) -> list[str]:
+def _source_file_signature(source_path: str) -> tuple[str, int, int] | None:
     path = Path(str(source_path or "")).expanduser()
     if not path.is_file():
-        return []
+        return None
     try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        return []
-    return [
+        stat = path.stat()
+    except OSError:
+        return None
+    return str(path), int(stat.st_mtime_ns), int(stat.st_size)
+
+
+@lru_cache(maxsize=64)
+def _source_text_for_signature(path_text: str, _mtime_ns: int, _size: int) -> str:
+    try:
+        return Path(path_text).read_text(encoding="utf-8", errors="replace")
+    except (OSError, UnicodeError):
+        return ""
+
+
+@lru_cache(maxsize=64)
+def _source_sentences_for_signature(
+    path_text: str,
+    mtime_ns: int,
+    size: int,
+) -> tuple[str, ...]:
+    raw = _source_text_for_signature(path_text, mtime_ns, size)
+    return tuple(
         re.sub(r"\s+", " ", sentence).strip()
         for sentence in re.split(r"(?<=[.!?])\s+", raw)
         if str(sentence or "").strip()
-    ]
+    )
 
 
-def _source_sentence_records(source_path: str) -> list[tuple[str, str, int]]:
-    path = Path(str(source_path or "")).expanduser()
-    if not path.is_file():
+def _source_sentences(source_path: str) -> list[str]:
+    signature = _source_file_signature(source_path)
+    if signature is None:
         return []
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except Exception:
-        return []
+    return list(_source_sentences_for_signature(*signature))
+
+
+@lru_cache(maxsize=64)
+def _source_sentence_records_for_signature(
+    path_text: str,
+    mtime_ns: int,
+    size: int,
+) -> tuple[tuple[str, str, int], ...]:
+    lines = _source_text_for_signature(path_text, mtime_ns, size).splitlines()
     headings: list[tuple[int, str]] = []
     records: list[tuple[str, str, int]] = []
     paragraph: list[str] = []
@@ -223,7 +248,22 @@ def _source_sentence_records(source_path: str) -> list[tuple[str, str, int]]:
             continue
         paragraph.append(stripped)
     flush()
-    return records
+    return tuple(records)
+
+
+def _source_sentence_records(source_path: str) -> list[tuple[str, str, int]]:
+    """Parse immutable source records once per file version.
+
+    Citation planning asks several independent evidence selectors to inspect the
+    same Markdown source.  Keying the parsed snapshot by mtime and size keeps
+    those selectors byte-for-byte identical while still invalidating the cache
+    immediately after conversion or repair changes the source.
+    """
+
+    signature = _source_file_signature(source_path)
+    if signature is None:
+        return []
+    return list(_source_sentence_records_for_signature(*signature))
 
 
 def _prompt_aligned_source_slot(

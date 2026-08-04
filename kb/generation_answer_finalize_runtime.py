@@ -6431,6 +6431,55 @@ def _complete_exact_source_bound_answer_claims(
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def _build_evidence_complete_answer_override(
+    *,
+    prompt: str,
+    citation_plan: dict | None,
+    answer_hits: list[dict] | None,
+    support_slots: list[dict] | None = None,
+    evidence_cards: list[dict] | None = None,
+) -> str:
+    """Return a complete grounded answer only when finalization would replace it.
+
+    A narrow set of research questions has deterministic, source-bound answer
+    builders in ``_complete_exact_source_bound_answer_claims``.  The standard
+    path previously waited for a provider response and then discarded that
+    prose in favor of the deterministic answer.  Probe with a unique sentinel
+    and accept the result only when the completion fully replaces the sentinel;
+    ordinary answer repairs therefore continue through the model path.
+    """
+
+    if not isinstance(citation_plan, dict) or not list(answer_hits or []):
+        return ""
+    refreshed_plan = _citation_plan_with_late_evidence_cards(
+        dict(citation_plan),
+        evidence_cards=list(evidence_cards or []),
+        support_slots=list(support_slots or []),
+        answer_hits=list(answer_hits or []),
+        prompt=prompt,
+    )
+    refreshed_plan = _citation_plan_with_late_target_hits(
+        refreshed_plan,
+        answer_hits=list(answer_hits or []),
+        support_slots=list(support_slots or []),
+        prompt=prompt,
+    )
+    sentinel = (
+        "证据完整回答占位符。"
+        if re.search(r"[\u4e00-\u9fff]", str(prompt or ""))
+        else "Grounded answer completion sentinel."
+    )
+    completed = _complete_exact_source_bound_answer_claims(
+        sentinel,
+        prompt=prompt,
+        citation_plan=refreshed_plan,
+        answer_hits=list(answer_hits or []),
+    )
+    if not completed or sentinel in completed:
+        return ""
+    return completed
+
+
 def _insert_grounded_supplement_after_direct_answer(
     answer: str,
     supplement: str,

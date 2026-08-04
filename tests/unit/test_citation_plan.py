@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import kb.citation_plan as citation_plan
 from kb.citation_plan import (
     _prompt_aligned_source_slot,
     _rank_system_a_answer_hits,
@@ -10,6 +11,35 @@ from kb.citation_plan import (
     build_citation_plan_prompt_block,
     citation_plan_prefers_system_b,
 )
+
+
+def test_source_sentence_records_cache_reuses_and_invalidates_file_versions(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "paper.en.md"
+    source.write_text(
+        "# Paper\n\n<!-- kb_page: 2 -->\n\n## Method\n\nFirst complete evidence sentence.\n",
+        encoding="utf-8",
+    )
+    citation_plan._source_sentence_records_for_signature.cache_clear()
+    citation_plan._source_text_for_signature.cache_clear()
+
+    first = citation_plan._source_sentence_records(str(source))
+    before = citation_plan._source_sentence_records_for_signature.cache_info()
+    repeated = citation_plan._source_sentence_records(str(source))
+    after = citation_plan._source_sentence_records_for_signature.cache_info()
+
+    assert repeated == first
+    assert after.hits == before.hits + 1
+
+    source.write_text(
+        "# Paper\n\n<!-- kb_page: 7 -->\n\n## Results\n\nSecond, longer evidence sentence after repair.\n",
+        encoding="utf-8",
+    )
+    refreshed = citation_plan._source_sentence_records(str(source))
+
+    assert refreshed != first
+    assert any(page == 7 and "Second, longer" in text for _heading, text, page in refreshed)
 
 
 def test_hsi_fsi_source_focus_updates_stale_retrieval_page(tmp_path: Path) -> None:
