@@ -56,7 +56,11 @@ from kb.generation_answer_finalize_runtime import (
     _build_multi_paper_doc_list_contract as _references_build_multi_paper_doc_list_contract,
 )
 from kb.evidence_term_mapping import evidence_alignment_tokens
-from kb.evidence_text import compound_claim_evidence_excerpt, pick_readable_evidence_text
+from kb.evidence_text import (
+    clean_display_text,
+    compound_claim_evidence_excerpt,
+    pick_readable_evidence_text,
+)
 from kb.citation_card_polish import (
     citation_card_polish_cache_key,
     citation_card_polish_enabled,
@@ -1858,6 +1862,30 @@ def _answer_citation_details_by_user(*, store, conv_id: str) -> dict[int, list[d
     return details
 
 
+def _clean_answer_citation_overlay_quote(value: Any, *, heading_path: str = "") -> str:
+    """Remove display Markdown without weakening the stored evidence passage."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    max_len = max(CITATION_CARD_EVIDENCE_MAX_LEN, len(raw) + 1)
+    cleaned = clean_display_text(raw, max_len=max_len)
+    if not cleaned:
+        return ""
+    if re.match(r"^\s{0,3}#{1,6}\s+", raw):
+        heading = str(heading_path or "").strip()
+        heading_leaf = heading.split(" / ")[-1].strip() if heading else ""
+        if heading_leaf:
+            cleaned = re.sub(
+                rf"^{re.escape(heading_leaf)}(?:\s*[:：.\-–—]\s*|\s+)",
+                "",
+                cleaned,
+                count=1,
+                flags=re.I,
+            ).strip()
+    return cleaned
+
+
 def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload: dict | None) -> dict:
     """Make reference cards describe the evidence actually used by the answer."""
 
@@ -1979,8 +2007,21 @@ def _overlay_refs_payload_with_answer_citations(*, store, conv_id: str, payload:
                 prefer_zh=prefer_zh,
                 prompt=prompt,
             )
-            evidence_quote = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
-            reader_evidence_quote = _reader_quote(reader_detail) or evidence_quote
+            evidence_quote = _clean_answer_citation_overlay_quote(
+                detail.get("evidence_quote") or detail.get("summary_line") or "",
+                heading_path=str(
+                    detail.get("heading_path") or detail.get("location_label") or ""
+                ),
+            )
+            reader_evidence_quote = _clean_answer_citation_overlay_quote(
+                _reader_quote(reader_detail) or evidence_quote,
+                heading_path=str(
+                    reader_detail.get("heading_path")
+                    or reader_detail.get("location_label")
+                    or detail.get("heading_path")
+                    or ""
+                ),
+            )
             source_path = str(detail.get("source_path") or "").strip()
             source_name = str(detail.get("source_name") or detail.get("card_title") or "").strip()
             heading_path = str(detail.get("heading_path") or detail.get("location_label") or "").strip()

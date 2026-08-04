@@ -5256,3 +5256,70 @@ def test_answer_citation_overlay_prefers_prompt_aligned_primary_within_one_sourc
     assert primary["page_start"] == 1
     assert "120 nm" in primary["snippet"]
     assert hit["ui_meta"]["reader_open"]["headingPath"] == "Paper / Abstract"
+
+
+def test_answer_citation_overlay_removes_inline_markdown_heading_from_evidence(monkeypatch) -> None:
+    source_path = r"F:\db\s2ism\s2ism.en.md"
+    raw_evidence = (
+        "## Abstract Fast detector arrays enable image scanning microscopy, which overcomes "
+        "the trade-off between spatial resolution and signal-to-noise ratio."
+    )
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv"
+            return [
+                {
+                    "id": 80,
+                    "role": "user",
+                    "content": "s2ISM 的 trade-off 是什么？",
+                },
+                {
+                    "id": 81,
+                    "role": "assistant",
+                    "content": "它平衡空间分辨率、光学切片和信噪比 [1]。",
+                    "meta": {
+                        "paper_guide_contracts": {
+                            "render_packet": {
+                                "cite_details": [
+                                    {
+                                        "citation_route": "system_a",
+                                        "answer_hit_num": 1,
+                                        "source_path": source_path,
+                                        "source_name": "s2ISM.pdf",
+                                        "heading_path": "Paper / Abstract",
+                                        "answer_claim": "空间分辨率、光学切片和信噪比",
+                                        "evidence_quote": raw_evidence,
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                },
+            ]
+
+    payload = {
+        80: {
+            "prompt": "s2ISM 的 trade-off 是什么？",
+            "hits": [
+                {
+                    "text": "stale",
+                    "meta": {"source_path": source_path},
+                    "ui_meta": {"source_path": source_path},
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "zh")
+
+    hit = references_router._overlay_refs_payload_with_answer_citations(
+        store=Store(),
+        conv_id="conv",
+        payload=payload,
+    )[80]["hits"][0]
+
+    primary = hit["ui_meta"]["primary_evidence"]
+    reader_open = hit["ui_meta"]["reader_open"]
+    assert primary["snippet"].startswith("Fast detector arrays")
+    assert reader_open["snippet"].startswith("Fast detector arrays")
+    assert "## Abstract" not in str(hit)

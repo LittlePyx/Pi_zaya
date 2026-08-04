@@ -2086,6 +2086,36 @@ def test_evidence_complete_override_skips_only_full_scinerf_replacement() -> Non
     assert out.count("[1]") == 3
 
 
+def test_evidence_complete_override_keeps_scinerf_physics_inside_training() -> None:
+    evidence = (
+        "We explore Snapshot Compressive Imaging for recovering the underlying 3D scene "
+        "representation from a single temporal compressed image. Specifically, we formulate "
+        "the physical imaging process of SCI as part of the training of NeRF, allowing us "
+        "to capture complex scene structures."
+    )
+
+    out = finalize_runtime._build_evidence_complete_answer_override(
+        prompt="SCINeRF 不是先解码视频再跑 NeRF 吗？SCI 的物理成像过程在哪里进入训练？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "scinerf.en.md",
+                    "heading_path": "Abstract",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "scinerf.en.md"}}],
+    )
+
+    assert "不是“先把压缩图像解码成视频" in out
+    assert "physical imaging process of SCI" in out
+    assert "NeRF 训练（training of NeRF）" in out
+    assert out.count("[1]") == 2
+
+
 def test_evidence_complete_override_keeps_partial_repairs_on_model_path() -> None:
     evidence = "The source gives one useful but incomplete detail."
 
@@ -2106,6 +2136,69 @@ def test_evidence_complete_override_keeps_partial_repairs_on_model_path() -> Non
         )
         == ""
     )
+
+
+def test_evidence_complete_override_explains_sph_temporal_phase_stepping() -> None:
+    evidence = (
+        "Two major factors limit the throughput of SPH in current practice: the phase "
+        "stepping inherent in holography requires a few patterns for each order. Instead "
+        "of actively performing phase shifting, a beat frequency is introduced between "
+        "the signal beam and the reference beam, thereby realizing phase stepping naturally "
+        "in time by exploiting the framework of heterodyne holography."
+    )
+
+    out = finalize_runtime._build_evidence_complete_answer_override(
+        prompt="这篇单像素压缩全息怎么提高吞吐量？为什么不再主动做相移？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "sph.en.md",
+                    "heading_path": "Introduction",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "sph.en.md"}}],
+    )
+
+    assert "beat frequency（拍频）" in out
+    assert "heterodyne holography（外差全息）" in out
+    assert "phase stepping naturally in time" in out
+    assert out.count("[1]") == 3
+
+
+def test_evidence_complete_override_keeps_spi_prospects_conditions_and_examples() -> None:
+    evidence = (
+        "As the approach suits a wide variety of detector technologies, images can be "
+        "collected at wavelengths outside the reach of FPA technology or at high frame "
+        "rates or in three dimensions. Promising applications include the visualization "
+        "of hazardous gas leaks and 3D situation awareness for autonomous vehicles."
+    )
+
+    out = finalize_runtime._build_evidence_complete_answer_override(
+        prompt="什么场景真的值得用单像素相机，而不是普通面阵相机？有哪些应用？",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "prospects.en.md",
+                    "heading_path": "Abstract",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "prospects.en.md"}}],
+    )
+
+    assert "wavelengths（波长/波段）" in out
+    assert "high frame rates（高帧率）" in out
+    assert "three dimensions（三维/3D）" in out
+    assert "hazardous gas leaks（危险气体泄漏）" in out
+    assert "autonomous vehicles（自动驾驶车辆）" in out
+    assert out.count("[1]") == 2
 
 
 def test_exact_source_bound_stabilizes_fdm_vs_3d_parallelism() -> None:
@@ -2264,6 +2357,60 @@ def test_late_target_hits_separates_dl_benefit_and_risk_passages(tmp_path: Path)
     surface = "\n".join(str(slot.get("evidence_quote") or "") for slot in slots)
     assert "reconstruction quality" in surface
     assert "limited generalization" in surface
+    risk_slot = next(
+        slot for slot in slots if "limited generalization" in str(slot.get("evidence_quote") or "")
+    )
+    assert "Strategy and Advantages" in str(risk_slot.get("heading_path") or "")
+
+
+def test_late_target_hits_prefers_rich_dl_challenges_for_english_prompt() -> None:
+    benefit = (
+        "Deep learning has exceptional reconstruction quality and fast reconstruction speed."
+    )
+    strategy = (
+        "Data-driven strategies have prolonged training duration and limited generalization."
+    )
+    challenges = (
+        "The limitations include reliance on extensive datasets, limited interpretability, "
+        "susceptibility to overfitting, and limited generalization during training."
+    )
+    hits = [
+        {
+            "text": challenges,
+            "meta": {
+                "source_path": "review.en.md",
+                "heading_path": "6. Challenges and Outlooks",
+            },
+        },
+        {
+            "text": strategy,
+            "meta": {
+                "source_path": "review.en.md",
+                "heading_path": "4. Strategy and Advantages / Data-Driven Strategy",
+            },
+        },
+        {
+            "text": benefit,
+            "meta": {"source_path": "review.en.md", "heading_path": "Abstract"},
+        },
+    ]
+
+    rebuilt = finalize_runtime._citation_plan_with_late_target_hits(
+        {"budget": {"system_a": 2, "system_b": 0}, "slots": []},
+        answer_hits=hits,
+        prompt=(
+            "What practical improvements does deep learning bring, and what limitations "
+            "should I keep in mind?"
+        ),
+    )
+    risk_slot = next(
+        slot
+        for slot in list(rebuilt.get("slots") or [])
+        if "limited generalization" in str(slot.get("evidence_quote") or "")
+    )
+
+    assert risk_slot["candidate_hits"] == [1]
+    assert risk_slot["heading_path"] == "6. Challenges and Outlooks"
 
 
 def test_normalize_supported_iism_marker_across_private_public_source_paths():

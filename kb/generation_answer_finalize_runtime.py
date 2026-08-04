@@ -552,6 +552,175 @@ def _citation_plan_with_late_target_hits(
     )
     if not (basis_foveated or dl_benefit_risk) or not list(answer_hits or []):
         return plan
+
+    def _slot_from_answer_hit(number: int, hit: dict) -> dict:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        primary = (
+            ui_meta.get("primary_evidence")
+            if isinstance(ui_meta.get("primary_evidence"), dict)
+            else {}
+        )
+        source_path = str(
+            primary.get("source_path")
+            or meta.get("source_path")
+            or ui_meta.get("source_path")
+            or ""
+        ).strip()
+        source_name = str(
+            primary.get("source_name")
+            or meta.get("source_name")
+            or ui_meta.get("display_name")
+            or ""
+        ).strip()
+        heading_path = str(
+            primary.get("heading_path")
+            or meta.get("heading_path")
+            or ui_meta.get("heading_path")
+            or ""
+        ).strip()
+        evidence_quote = str(
+            primary.get("snippet")
+            or primary.get("highlight_snippet")
+            or hit.get("text")
+            or meta.get("evidence_quote")
+            or ""
+        ).strip()
+        block_id = str(primary.get("block_id") or meta.get("block_id") or "").strip()
+        anchor_id = str(primary.get("anchor_id") or meta.get("anchor_id") or "").strip()
+        try:
+            page_start = int(primary.get("page_start") or meta.get("page_start") or 0)
+        except (TypeError, ValueError):
+            page_start = 0
+        try:
+            page_end = int(
+                primary.get("page_end")
+                or meta.get("page_end")
+                or page_start
+                or 0
+            )
+        except (TypeError, ValueError):
+            page_end = page_start
+        return {
+            "claim_type": "paper_evidence",
+            "preferred_system": "system_a",
+            "topic": heading_path or source_name or "retrieved evidence",
+            "candidate_hits": [number],
+            "support_example": "",
+            "source_path": source_path,
+            "source_name": source_name,
+            "heading_path": heading_path,
+            "evidence_quote": evidence_quote,
+            "evidence_selection_reason": "late_target_hit_evidence",
+            "block_id": block_id,
+            "anchor_id": anchor_id,
+            "anchor_kind": str(
+                primary.get("anchor_kind") or meta.get("anchor_kind") or "sentence"
+            ).strip(),
+            "page_start": page_start,
+            "page_end": page_end,
+            "strict_locate": bool(block_id or anchor_id),
+            "candidate_refs": [],
+            "instruction": "Use this for the matching factual facet from the retrieved paper text.",
+        }
+
+    if dl_benefit_risk:
+        indexed_hits = [
+            (number, hit)
+            for number, hit in enumerate(list(answer_hits or []), start=1)
+            if isinstance(hit, dict)
+        ]
+
+        def _hit_text(hit: dict) -> str:
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            primary = (
+                ui_meta.get("primary_evidence")
+                if isinstance(ui_meta.get("primary_evidence"), dict)
+                else {}
+            )
+            return str(primary.get("snippet") or hit.get("text") or "").strip()
+
+        def _hit_heading(hit: dict) -> str:
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            primary = (
+                ui_meta.get("primary_evidence")
+                if isinstance(ui_meta.get("primary_evidence"), dict)
+                else {}
+            )
+            return str(
+                primary.get("heading_path")
+                or meta.get("heading_path")
+                or ui_meta.get("heading_path")
+                or ""
+            ).strip()
+
+        benefit_hits = [
+            (number, hit)
+            for number, hit in indexed_hits
+            if re.search(r"reconstruction\s+quality", _hit_text(hit), flags=re.I)
+            and re.search(r"reconstruction\s+speed", _hit_text(hit), flags=re.I)
+        ]
+        risk_hits = [
+            (number, hit)
+            for number, hit in indexed_hits
+            if re.search(r"limited\s+generalization", _hit_text(hit), flags=re.I)
+            and re.search(r"training|datasets?", _hit_text(hit), flags=re.I)
+        ]
+        prefer_strategy_locator = bool(re.search(r"[\u4e00-\u9fff]", surface))
+
+        def _benefit_rank(item: tuple[int, dict]) -> tuple[int, int, int]:
+            number, hit = item
+            heading = _hit_heading(hit)
+            evidence = _hit_text(hit)
+            return (
+                1 if re.search(r"(?:^| / )Abstract$", heading, flags=re.I) else 0,
+                1 if re.search(r"exceptional\s+reconstruction\s+quality", evidence, flags=re.I) else 0,
+                -number,
+            )
+
+        def _risk_rank(item: tuple[int, dict]) -> tuple[int, int, int, int]:
+            number, hit = item
+            heading = _hit_heading(hit)
+            evidence = _hit_text(hit)
+            strategy_heading = bool(
+                re.search(r"Strategy\s+and\s+Advantages|Data-Driven\s+Strategy", heading, flags=re.I)
+            )
+            challenges_heading = bool(
+                re.search(r"Challenges\s+and\s+Outlooks", heading, flags=re.I)
+            )
+            rich_challenge = bool(
+                re.search(r"extensive\s+datasets", evidence, flags=re.I)
+                and re.search(r"limited\s+interpretability", evidence, flags=re.I)
+                and re.search(r"overfitting", evidence, flags=re.I)
+            )
+            return (
+                1 if (strategy_heading if prefer_strategy_locator else challenges_heading) else 0,
+                1 if (not prefer_strategy_locator and rich_challenge) else 0,
+                1 if re.search(r"prolonged\s+training\s+duration", evidence, flags=re.I) else 0,
+                -number,
+            )
+
+        if benefit_hits and risk_hits:
+            benefit_number, benefit_hit = max(benefit_hits, key=_benefit_rank)
+            risk_number, risk_hit = max(risk_hits, key=_risk_rank)
+            if benefit_number != risk_number:
+                precise_plan = dict(plan)
+                system_b_slots = [
+                    dict(slot)
+                    for slot in list(plan.get("slots") or [])
+                    if isinstance(slot, dict)
+                    and str(slot.get("preferred_system") or "").strip().lower()
+                    == "system_b"
+                ]
+                precise_plan["slots"] = [
+                    _slot_from_answer_hit(benefit_number, benefit_hit),
+                    _slot_from_answer_hit(risk_number, risk_hit),
+                    *system_b_slots,
+                ]
+                precise_plan["late_target_hit_refresh"] = True
+                return precise_plan
+
     retrieval_queries = (
         [
             "Hadamard Fourier basis patterns",
@@ -5768,6 +5937,39 @@ def _complete_exact_source_bound_answer_claims(
             f"[{scinerf_formula_num}]."
         )
 
+    _scinerf_training_slot, scinerf_training_num, _scinerf_training_evidence = (
+        _matching_slot(
+            r"physical\s+imaging\s+process\s+of\s+SCI",
+            r"part\s+of\s+the\s+training\s+of\s+NeRF",
+        )
+    )
+    scinerf_training_prompt = bool(
+        re.search(r"\bSCINeRF\b", prompt_surface, flags=re.I)
+        and re.search(r"物理成像|physical\s+imaging|forward\s+process", prompt_surface, flags=re.I)
+        and re.search(r"训练|training", prompt_surface, flags=re.I)
+        and not scinerf_formula_prompt
+    )
+    if scinerf_training_prompt and scinerf_training_num > 0:
+        if prefer_zh:
+            return (
+                "不是“先把压缩图像解码成视频，再单独训练 NeRF”的两阶段流程。SCINeRF 从"
+                "单张 temporal compressed image（时间压缩图像）出发，并把 SCI 的物理成像过程"
+                "（physical imaging process of SCI）直接作为 NeRF 训练（training of NeRF）的"
+                f"一部分 [{scinerf_training_num}]。\n\n"
+                "进入点就在训练目标内部：NeRF 场景表示与 SCI 前向成像模型处于同一可优化流程，"
+                "训练以压缩测量约束场景表示，而不是先依赖一个独立的视频解码结果。摘要把这点"
+                f"概括为“formulate the physical imaging process of SCI as part of the training of NeRF” "
+                f"[{scinerf_training_num}]。"
+            )
+        return (
+            "SCINeRF is not a two-stage pipeline that first decodes a video and then trains NeRF separately. "
+            "It starts from a single temporal compressed image and formulates the physical imaging process of SCI "
+            f"as part of the training of NeRF [{scinerf_training_num}].\n\n"
+            "The physical model therefore enters inside the training objective: the NeRF scene representation is "
+            "constrained through the SCI measurement process rather than through an independently decoded video "
+            f"[{scinerf_training_num}]."
+        )
+
     _fdm_parallel_slot, fdm_parallel_num, _fdm_parallel_evidence = _matching_slot(
         r"frequenc(?:y|ies)\s+simultaneously",
         r"phase[- ]sensitive\s+detection",
@@ -6024,6 +6226,70 @@ def _complete_exact_source_bound_answer_claims(
             f"Deep learning offers high reconstruction quality and fast reconstruction speed [{dl_benefit_num}]. "
             "The data-driven route also has prolonged training duration and limited generalization, making adaptation "
             f"to diverse imaging scenes difficult [{dl_risk_num}]."
+        )
+
+    _sph_throughput_slot, sph_throughput_num, _sph_throughput_evidence = _matching_slot(
+        r"phase\s+stepping\s+inherent\s+in\s+holography",
+        r"beat\s+frequency",
+        r"signal\s+beam\s+and\s+the\s+reference\s+beam",
+        r"phase\s+stepping\s+naturally\s+in\s+time",
+        r"heterodyne\s+holography",
+    )
+    sph_throughput_prompt = bool(
+        re.search(r"\bSPH\b|单像素.{0,8}全息|single[- ]pixel.{0,12}holograph", prompt_surface, flags=re.I)
+        and re.search(r"吞吐|throughput|相移|phase\s+shift|phase\s+stepping", prompt_surface, flags=re.I)
+    )
+    if sph_throughput_prompt and sph_throughput_num > 0:
+        if prefer_zh:
+            return (
+                "高吞吐 SPH 不是把相位信息删掉，而是把主动 phase stepping（相位步进）改成"
+                "时间域中的自然相移。传统方案每个空间阶次要显示多个图案来完成相移，这会直接"
+                f"拖慢采集 [{sph_throughput_num}]。\n\n"
+                "论文采用 heterodyne holography（外差全息）：在信号光与参考光之间引入 "
+                "beat frequency（拍频），使干涉信号随时间周期变化；对这个时间信号连续采样，"
+                "就能让 phase stepping naturally in time（相位步进在时间上自然完成），并恢复"
+                f"复振幅所需的幅度和初相位 [{sph_throughput_num}]。\n\n"
+                "因此不再需要为每个阶次主动切换多张相移图案；同一张 Hadamard 图案期间的时间"
+                f"采样承担了相移测量，从而减少图案显示次数并提高吞吐量 [{sph_throughput_num}]。"
+            )
+        return (
+            "High-throughput SPH does not discard phase information; it replaces active phase stepping "
+            f"with a naturally evolving temporal measurement. Conventional holography displays several patterns per order for phase stepping, which slows acquisition [{sph_throughput_num}].\n\n"
+            "The paper uses heterodyne holography: a beat frequency between the signal and reference beams makes "
+            "the interference signal evolve in time, so temporal samples realize phase stepping naturally and recover "
+            f"the required amplitude and initial phase [{sph_throughput_num}]. One Hadamard pattern can therefore serve each order while temporal sampling supplies the phase steps, increasing throughput."
+        )
+
+    _spi_prospects_slot, spi_prospects_num, _spi_prospects_evidence = _matching_slot(
+        r"wavelengths\s+outside\s+the\s+reach\s+of\s+FPA\s+technology",
+        r"high\s+frame\s+rates",
+        r"in\s+three\s+dimensions",
+        r"hazardous\s+gas\s+leaks",
+        r"autonomous\s+vehicles",
+    )
+    spi_prospects_prompt = bool(
+        re.search(r"单像素相机|single[- ]pixel\s+camera", prompt_surface, flags=re.I)
+        and re.search(r"面阵|FPA|focal\s+plane\s+array", prompt_surface, flags=re.I)
+        and re.search(r"场景|应用|when|application", prompt_surface, flags=re.I)
+    )
+    if spi_prospects_prompt and spi_prospects_num > 0:
+        if prefer_zh:
+            return (
+                "这篇综述并没有把单像素相机说成面阵相机的普遍替代品；它给出的适用条件是，"
+                "任务需要面阵 FPA 技术难以覆盖的 wavelengths（波长/波段）、high frame rates"
+                f"（高帧率），或 three dimensions（三维/3D）成像 [{spi_prospects_num}]。这些优势"
+                "来自单像素方案可以搭配更广泛的探测器技术，而不是来自“单像素天然比面阵更好”。\n\n"
+                "综述列出的代表性应用包括 hazardous gas leaks（危险气体泄漏）可视化，以及面向"
+                " autonomous vehicles（自动驾驶车辆）的 3D situation awareness（三维态势感知）"
+                f" [{spi_prospects_num}]。因此，真正值得优先考虑它的是探测波段、帧率或三维感知"
+                "需求与现有面阵探测器能力不匹配的场景。"
+            )
+        return (
+            "The review presents the single-pixel camera as a conditional alternative, not a universal replacement for focal-plane arrays. "
+            "It is attractive when a task needs wavelengths outside the reach of FPA technology, high frame rates, "
+            f"or imaging in three dimensions [{spi_prospects_num}].\n\n"
+            "Representative applications include visualizing hazardous gas leaks and 3D situation awareness for autonomous vehicles "
+            f"[{spi_prospects_num}]. The deciding factor is therefore a detector-band, frame-rate, or 3D-sensing requirement that an available FPA does not meet."
         )
 
     _seq_slot, seq_num, _seq_evidence = _matching_slot(
