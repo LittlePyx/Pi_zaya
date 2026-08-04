@@ -367,6 +367,7 @@ test('dirty drawer close paths offer continue, discard, and save without silent 
   await page.locator('.kb-lib-meta-actions').getByRole('button', { name: /取\s*消/ }).click()
   await expect(unsavedDialog(page)).toBeVisible()
   await unsavedDialog(page).getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(unsavedDialog(page)).toBeHidden()
   await expect(note).toHaveValue('Keep editing this note')
 
   await page.locator('.ant-drawer-close').click()
@@ -379,9 +380,15 @@ test('dirty drawer close paths offer continue, discard, and save without silent 
   await page.getByTestId('library-meta-note').fill('Save from escape path')
   await page.keyboard.press('Escape')
   await expect(unsavedDialog(page)).toBeVisible()
+  const saveResponse = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && response.url().includes('/api/library/meta/update')
+  ))
   await unsavedDialog(page).getByRole('button', { name: '保存并关闭', exact: true }).click()
-  await expect(metadataDrawer(page)).toBeHidden()
+  await saveResponse
   await expect.poll(() => backend.metaUpdates().length).toBe(1)
+  await expect(unsavedDialog(page)).toBeHidden()
+  await expect(metadataDrawer(page)).toBeHidden()
   expect(backend.metaUpdates()[0]?.note).toBe('Save from escape path')
 
   await openMetadataDrawer(page)
@@ -389,5 +396,6 @@ test('dirty drawer close paths offer continue, discard, and save without silent 
   await page.locator('.ant-drawer-mask').click({ position: { x: 20, y: 20 } })
   await expect(unsavedDialog(page)).toBeVisible()
   await unsavedDialog(page).getByRole('button', { name: '继续编辑', exact: true }).click()
+  await expect(unsavedDialog(page)).toBeHidden()
   await expect(page.getByTestId('library-meta-note')).toHaveValue('Mask close keeps draft')
 })
