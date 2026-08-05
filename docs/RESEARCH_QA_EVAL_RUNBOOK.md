@@ -1,6 +1,6 @@
 # Research QA Eval Runbook
 
-Updated: 2026-08-05
+Updated: 2026-08-06
 
 ## Purpose
 
@@ -237,6 +237,51 @@ ordinary QA generation code changed in this feature, so treat this as visible
 provider/model long-tail variance rather than claiming a latency improvement.
 The evidence-matrix-specific acceptance, including its phase timings and 5/5
 matrix-backed brief audit, is documented in `docs/EVIDENCE_MATRIX_RUNBOOK.md`.
+
+## 2026-08-06 Matrix-Brief Synthesis Tail-Latency Acceptance
+
+The follow-up optimization is isolated to verified evidence-matrix briefs. The
+ordinary research QA path keeps its existing full-answer repair and fallback
+behavior. Matrix briefs instead build a source-balanced eight-item claim plan,
+ask the model for exactly one sentence per plan item, audit every sentence, and
+preserve only fully supported claims. A matrix claim now fails if any visible
+citation does not match, a publication year belongs to another cited source, a
+contrast clause is unsupported, or the answer exceeds the eight-claim brief
+contract. Missing source coverage is supplemented from the verified matrix;
+otherwise the existing source-balanced extractive fallback remains available.
+Any targeted repair is disclosed in the saved brief and UI.
+
+The prior five-matrix live report had a median/max of 8,135/8,295 ms, with one
+direct model synthesis and four extractive fallbacks. A phased diagnostic on
+the basis-selection case measured 5,302 ms for the first model answer and
+2,944 ms for the old second whole-answer rewrite. The accepted run in
+`test_results/evidence_matrix_brief_latency/20260806_022537/live_report.json`
+had a median/max of 3,963/4,065 ms. All five briefs passed: four were direct
+model synthesis, one preserved seven supported model claims after a 5.6 ms
+targeted repair, and none used extractive fallback. The final audit supported
+35/35 claims, represented every selected source, resolved every citation, and
+used no unexpected source.
+
+The unchanged product gates passed after the final implementation:
+
+1. Full-library live QA: 29/29 in
+   `test_results/research_qa_matrix_brief_latency_final_full_library/20260806_020615`.
+2. Paid-model smoke: 5/5 in
+   `test_results/research_qa_matrix_brief_latency_final_live_smoke/20260806_021111`.
+3. Deterministic full-library retrieval: 29/29 in
+   `test_results/research_qa_matrix_brief_latency_final_retrieval/20260806_021158`.
+4. Source validation: 41/41; reviewed replay: 6/6.
+5. Backend suite: 4,321 passed with 43 configuration-dependent skips; frontend
+   ESLint, two production builds, 119/119 executed smoke tests with two skips,
+   109/109 core tests, and 4/4 public-surface tests passed.
+
+The final 29-question run reported first-visible p50/p95/max of
+3,461/4,891/6,514 ms, answer-complete p50/p95/max of
+5,342/12,611/15,240 ms, and UI-ready p50/p95/max of
+9,398/15,703/16,576 ms. These ordinary-QA tail values are higher than the prior
+matrix acceptance even though its generation path did not change; keep them
+visible as provider/model variance rather than claiming an ordinary-QA latency
+improvement from the matrix-brief optimization.
 
 ## Outputs
 

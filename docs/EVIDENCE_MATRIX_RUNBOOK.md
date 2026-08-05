@@ -127,3 +127,56 @@ smoke, 29/29 deterministic retrieval, 41/41 source validation, 6/6 reviewed
 replay, 4,317 backend tests with 43 skips, and 119/119 executed Playwright smoke
 tests with two configuration-dependent skips. ESLint and the production build
 passed.
+
+## 2026-08-06 Matrix-Brief Tail-Latency Acceptance
+
+The original five real matrix briefs were safe but slow: the accepted baseline
+in `test_results/evidence_matrix/20260806_012452/live_brief_report.json` had a
+median of 8,135 ms and maximum of 8,295 ms. Only one brief passed as direct
+model synthesis; four spent time on a second whole-answer model rewrite and
+then used a source-balanced extractive fallback. A detailed basis-selection
+diagnostic measured 5,302 ms for initial synthesis plus 2,944 ms for the second
+rewrite, or 8,511 ms before fallback.
+
+The optimized path keeps the evidence contract and replaces the second
+whole-answer rewrite with these stages:
+
+1. Build up to eight source-balanced claim-plan items from grounded matrix
+   cells, prioritizing method, experiment, key result, metric, and limitation.
+2. Generate exactly one source-attributed sentence per plan item, with one
+   citation marker and no plan-external claims.
+3. Audit every visible citation, source year, contrast clause, claim count, and
+   selected-source coverage.
+4. If needed, preserve supported model sentences, remove only failed or
+   out-of-contract sentences, and supplement only a missing selected source
+   from its verified matrix evidence. The UI displays the preserved, removed,
+   and supplemented counts. If that result still fails, use the existing
+   explicit extractive fallback.
+
+The final real-model report is
+`test_results/evidence_matrix_brief_latency/20260806_022537/live_report.json`.
+All five briefs passed the strict final audit with 35/35 supported claims, no
+source gap, no unexpected source, and no unresolved citation. Four passed on
+the first model synthesis; the microscopy brief removed one unsupported
+contrast clause in a 5.6 ms targeted repair while preserving seven supported
+model claims. No brief used extractive fallback.
+
+| Measure | Prior accepted baseline | Final accepted run |
+|---|---:|---:|
+| Total median | 8,135 ms | 3,963 ms |
+| Total maximum | 8,295 ms | 4,065 ms |
+| Direct model synthesis | 1/5 | 4/5 |
+| Targeted sentence repair | 0/5 | 1/5 |
+| Extractive fallback | 4/5 | 0/5 |
+| Final evidence audit | 5/5 | 5/5 |
+
+The final run's claim-plan stage stayed below 1 ms, initial citation audit was
+below 3 ms, and the only targeted repair took 5.6 ms. The latency reduction
+comes from removing the failed second model call, not from lowering retrieval,
+source coverage, citation, or support gates.
+
+Unchanged product gates also passed: 29/29 live full-library QA, 5/5 paid-model
+smoke, 29/29 deterministic retrieval, 41/41 source validation, 6/6 reviewed
+replay, and 4,321 backend tests with 43 configuration-dependent skips. Frontend
+ESLint, production build, 119/119 executed smoke tests with two skips, 109/109
+core tests, and 4/4 public-surface tests passed.

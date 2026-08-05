@@ -1073,6 +1073,7 @@ def _finalize_grounded_answer(
     web_used: bool = False,
     temperature: float = 0.2,
     max_tokens: int = 1200,
+    defer_quality_gate_repair: bool = False,
 ) -> dict[str, Any]:
     raw_clean = clean_assistant_answer_presentation_text(answer).strip()
     debug_removed = bool(str(answer or "").strip() and str(answer or "").strip() != raw_clean)
@@ -1084,6 +1085,16 @@ def _finalize_grounded_answer(
         gate["warnings"] = list(dict.fromkeys(list(gate.get("warnings") or []) + ["trace_debug_removed"]))
     if gate["ok"]:
         return {"answer": gate["answer"], "quality_gate": {"status": "passed", **{k: gate[k] for k in ("reasons", "warnings")}}}
+    if defer_quality_gate_repair:
+        return {
+            "answer": gate["answer"],
+            "quality_gate": {
+                "status": "failed",
+                "reasons": list(gate.get("reasons") or []),
+                "warnings": list(gate.get("warnings") or []),
+                "verification": gate.get("verification") if isinstance(gate.get("verification"), dict) else {},
+            },
+        }
     repaired = ""
     repair_error = ""
     try:
@@ -1153,6 +1164,7 @@ def generate_grounded_answer(
     agent_notes: dict[str, Any] | None = None,
     temperature: float = 0.2,
     max_tokens: int = 1200,
+    defer_quality_gate_repair: bool = False,
 ) -> dict[str, Any]:
     source_blend = _source_blend(agent_notes)
     if not hits:
@@ -1272,6 +1284,7 @@ def generate_grounded_answer(
                     web_used=True,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    defer_quality_gate_repair=defer_quality_gate_repair,
                 )
                 return {
                     "answer": finalized["answer"],
@@ -1345,6 +1358,7 @@ def generate_grounded_answer(
             web_used=False,
             temperature=temperature,
             max_tokens=max_tokens,
+            defer_quality_gate_repair=defer_quality_gate_repair,
         )
         return {
             "answer": finalized["answer"],

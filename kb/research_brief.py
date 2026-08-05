@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,12 @@ from typing import Any
 _MAX_BRIEF_SOURCES = 8
 _MAX_EVIDENCE_TEXT = 1_800
 _CITATION_RE = re.compile(r"(?<!\[)\[(\d+(?:\s*(?:,|-)\s*\d+)*)\](?!\])")
+_MATRIX_UNVERIFIABLE_BOUNDARY_RE = re.compile(
+    r"\b(?:not|never)\s+(?:directly\s+)?(?:comparable|compared|reported|stated|provided|available)\b"
+    r"|\bno\s+(?:retrieved|available|selected)\s+(?:snippet|evidence|source)"
+    r"|(?:不可直接比较|未报告|未说明|未提供|没有可用证据)",
+    flags=re.IGNORECASE,
+)
 
 
 def _text(value: object, *, limit: int = 2_000) -> str:
@@ -317,9 +324,13 @@ def research_brief_quality(
     verification = trace.get("verification") if isinstance(trace.get("verification"), dict) else {}
     summary = trace.get("summary") if isinstance(trace.get("summary"), dict) else {}
     generation_quality_gate = str(summary.get("quality_gate_status") or "").strip().lower()
-    generation_mode = (
-        "extractive_fallback" if generation_quality_gate == "fallback" else "model_synthesis"
-    )
+    claim_repair = summary.get("claim_repair") if isinstance(summary.get("claim_repair"), dict) else {}
+    if generation_quality_gate == "fallback":
+        generation_mode = "extractive_fallback"
+    elif generation_quality_gate == "repaired" and bool(claim_repair.get("attempted")):
+        generation_mode = "model_synthesis_repaired"
+    else:
+        generation_mode = "model_synthesis"
     total_claims = _safe_int(verification.get("total_claims") or summary.get("total_claims"))
     supported_claims = _safe_int(verification.get("supported_claims") or summary.get("supported_claims"))
     unsupported_claims = _safe_int(
@@ -374,6 +385,9 @@ def research_brief_quality(
         reasons.append("no_visible_citations")
     if unresolved_citations:
         reasons.append("unresolved_citations")
+    quality_warnings = list(summary.get("quality_gate_warnings") or [])
+    if generation_mode == "extractive_fallback":
+        quality_warnings.append("extractive_fallback")
     quality = {
         "contract_version": 1,
         "query_scope": query_scope,
@@ -392,11 +406,24 @@ def research_brief_quality(
         ],
         "generation_quality_gate": generation_quality_gate,
         "generation_mode": generation_mode,
-        "warnings": ["extractive_fallback"] if generation_mode == "extractive_fallback" else [],
+        "claim_repair": claim_repair,
+        "warnings": list(dict.fromkeys(str(item) for item in quality_warnings if str(item or "").strip())),
         "reasons": reasons,
         "edited_after_verification": False,
     }
     return ("verified" if not reasons else "needs_review"), quality
+
+
+def _matrix_source_key(item: dict[str, Any]) -> str:
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else item
+    return _first_text(meta, "source_path", "source_name", limit=1_200).replace("\\", "/").lower()
+
+
+def _matrix_extractive_sentence(hit: dict[str, Any], citation_number: int) -> str:
+    sentence = re.sub(r"\[[0-9][0-9,\-\s]*\]", " ", _text(hit.get("text"), limit=520))
+    sentence = re.sub(r"[*_`|]+", " ", sentence)
+    sentence = re.sub(r"\s+", " ", sentence).strip(" -:;,.。；：")
+    return f"{sentence} [{citation_number}]." if sentence else ""
 
 
 def _matrix_extractive_brief_answer(prompt: str, hits: list[dict[str, Any]]) -> str:
@@ -406,19 +433,262 @@ def _matrix_extractive_brief_answer(prompt: str, hits: list[dict[str, Any]]) -> 
     for index, hit in enumerate(hits, start=1):
         if not isinstance(hit, dict):
             continue
-        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-        source_key = _first_text(meta, "source_path", "source_name", limit=1_200).replace("\\", "/").lower()
+        source_key = _matrix_source_key(hit)
         if not source_key or source_key in seen_sources:
             continue
         seen_sources.add(source_key)
-        sentence = re.sub(r"\[[0-9][0-9,\-\s]*\]", " ", _text(hit.get("text"), limit=520))
-        sentence = re.sub(r"[*_`|]+", " ", sentence)
-        sentence = re.sub(r"\s+", " ", sentence).strip(" -:;,.。；：")
+        sentence = _matrix_extractive_sentence(hit, index)
         if sentence:
-            lines.append(f"- {sentence} [{index}].")
+            lines.append(f"- {sentence}")
         if len(seen_sources) >= 8:
             break
     return "\n".join(lines).strip()
+
+
+def _matrix_claim_plan(hits: list[dict[str, Any]], *, limit: int = 8) -> list[dict[str, Any]]:
+    field_order = {
+        "method": 0,
+        "dataset_or_experiment": 1,
+        "key_result": 2,
+        "metric": 3,
+        "limitation": 4,
+    }
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    source_order: list[str] = []
+    for citation_number, hit in enumerate(hits, start=1):
+        if not isinstance(hit, dict):
+            continue
+        source_key = _matrix_source_key(hit)
+        if not source_key:
+            continue
+        if source_key not in grouped:
+            grouped[source_key] = []
+            source_order.append(source_key)
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        evidence = re.sub(r"\[[0-9][0-9,\-\s]*\]", " ", _text(hit.get("text"), limit=420))
+        evidence = re.sub(r"\s+", " ", evidence).strip()
+        evidence_terms = {
+            token.lower()
+            for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}", evidence)
+            if token.lower() not in {"cdot", "times"}
+        }
+        if len(evidence_terms) < 2:
+            continue
+        grouped[source_key].append(
+            {
+                "citation": citation_number,
+                "source_name": _first_text(meta, "source_name", "title", limit=180),
+                "field": _first_text(meta, "matrix_field", limit=80),
+                "evidence": evidence,
+            }
+        )
+    for candidates in grouped.values():
+        candidates.sort(key=lambda item: (field_order.get(str(item.get("field") or ""), 99), int(item["citation"])))
+    plan: list[dict[str, Any]] = []
+    depth = 0
+    max_items = max(1, int(limit))
+    while len(plan) < max_items:
+        added = False
+        for source_key in source_order:
+            candidates = grouped[source_key]
+            if depth < len(candidates):
+                plan.append(candidates[depth])
+                added = True
+                if len(plan) >= max_items:
+                    break
+        if not added:
+            break
+        depth += 1
+    return plan
+
+
+def _matrix_generation_prompt(prompt: str, claim_plan: list[dict[str, Any]]) -> str:
+    plan_lines = [
+        f"- [{int(item.get('citation') or 0)}] {item.get('source_name') or 'source'} | "
+        f"{item.get('field') or 'evidence'} | {item.get('evidence') or ''}"
+        for item in claim_plan
+    ]
+    return (
+        f"{prompt}\n\n"
+        "Verified evidence-matrix brief contract:\n"
+        "- Use only these optional section headings: Executive findings; Methods and experimental comparison; "
+        "Quantitative evidence; Disagreements or boundary conditions. Do not add an overall title.\n"
+        f"- Write exactly {len(claim_plan)} bullets: one bullet for each source-balanced claim-plan item below, in "
+        "plan order. Do not add facts from snippets outside the plan or use a plan item twice.\n"
+        "- Each bullet must be exactly one complete sentence and end with its supporting numeric citation marker. "
+        "Spell out 'versus'; do not use the abbreviation 'vs.'.\n"
+        "- Use exactly one numeric citation marker in each bullet. Compare sources through adjacent source-specific "
+        "bullets rather than combining multiple sources in one sentence.\n"
+        "- Name the method or paper associated with that citation. If its source name contains a publication year, "
+        "use only that exact year and never transfer a year between sources.\n"
+        "- Include at least one supported bullet for every source named in the claim plan. A cross-source sentence must "
+        "cite evidence for every paper-specific clause.\n"
+        "- Do not assert that evidence or a comparison is absent. Omit unsupported gaps, recommendations, and general "
+        "background. Use only facts in the claim plan and retrieved snippets.\n\n"
+        "Source-balanced claim plan:\n"
+        + "\n".join(plan_lines)
+    ).strip()
+
+
+def _matrix_verified_sources(verification: dict[str, Any]) -> set[str]:
+    sources: set[str] = set()
+    for claim in list(verification.get("claims") or []):
+        if not isinstance(claim, dict) or not bool(claim.get("supported")):
+            continue
+        for matched in list(claim.get("matched_sources") or []):
+            if not isinstance(matched, dict):
+                continue
+            key = _first_text(matched, "source_path", "source_name", limit=1_200).replace("\\", "/").lower()
+            if key:
+                sources.add(key)
+    return sources
+
+
+def _matrix_claim_fully_bound(claim: dict[str, Any]) -> bool:
+    claim_text = str(claim.get("claim_text") or claim.get("text") or "")
+    if _MATRIX_UNVERIFIABLE_BOUNDARY_RE.search(claim_text):
+        return False
+    claim_years = set(re.findall(r"\b(?:19|20)\d{2}\b", claim_text))
+    citation_numbers = {_safe_int(item) for item in list(claim.get("citation_numbers") or []) if _safe_int(item) > 0}
+    if claim_years:
+        matched_years = {
+            year
+            for item in list(claim.get("matched_sources") or [])
+            if isinstance(item, dict)
+            for year in re.findall(
+                r"\b(?:19|20)\d{2}\b",
+                f"{item.get('source_name') or ''} {item.get('source_path') or ''}",
+            )
+        }
+        if not claim_years.issubset(matched_years):
+            return False
+    matched_numbers = {
+        _safe_int(item.get("citation_index"))
+        for item in list(claim.get("matched_sources") or [])
+        if isinstance(item, dict) and _safe_int(item.get("citation_index")) > 0
+    }
+    if not bool(claim.get("supported") and citation_numbers and citation_numbers.issubset(matched_numbers)):
+        return False
+    contrast_clauses = [
+        clause.strip()
+        for clause in re.split(
+            r"\s+(?:whereas|while|although|though|however|but)\s+|[;；]",
+            claim_text,
+            flags=re.IGNORECASE,
+        )
+        if clause.strip()
+    ]
+    if len(contrast_clauses) <= 1:
+        return True
+    evidence_terms = {
+        token.lower()
+        for item in list(claim.get("matched_sources") or [])
+        if isinstance(item, dict)
+        for token in re.findall(
+            r"[A-Za-z][A-Za-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}",
+            str(item.get("evidence_preview") or ""),
+        )
+    }
+    return all(
+        len(
+            {
+                token.lower()
+                for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}", clause)
+            }
+            & evidence_terms
+        )
+        >= 2
+        for clause in contrast_clauses
+    )
+
+
+def _matrix_all_claims_fully_bound(verification: dict[str, Any]) -> bool:
+    claims = [
+        claim
+        for claim in list(verification.get("claims") or [])
+        if isinstance(claim, dict) and str(claim.get("claim_kind") or "local_claim") == "local_claim"
+    ]
+    return bool(claims and all(_matrix_claim_fully_bound(claim) for claim in claims))
+
+
+def _matrix_answer_passes(verification: dict[str, Any], expected_sources: set[str]) -> bool:
+    return bool(
+        _safe_int(verification.get("total_claims")) > 0
+        and _safe_int(verification.get("total_claims")) <= 8
+        and _safe_int(verification.get("unsupported_claims")) == 0
+        and str(verification.get("evidence_status") or "").lower() == "grounded"
+        and _matrix_all_claims_fully_bound(verification)
+        and expected_sources.issubset(_matrix_verified_sources(verification))
+    )
+
+
+def _repair_matrix_candidate(
+    answer: str,
+    hits: list[dict[str, Any]],
+    verification: dict[str, Any],
+    expected_sources: set[str],
+    *,
+    prefer_zh: bool,
+) -> tuple[str, dict[str, Any]]:
+    from kb.agent.tools import verify_answer_citations
+    from kb.agent.verifier import classify_answer_claims
+
+    local_rows = [
+        row
+        for row in list(verification.get("claims") or [])
+        if isinstance(row, dict) and str(row.get("claim_kind") or "local_claim") == "local_claim"
+    ]
+    row_index = 0
+    kept_claims: list[str] = []
+    seen_claims: set[str] = set()
+    for item in classify_answer_claims(answer, answer_mode="evidence_grounded"):
+        if item.kind != "local_claim":
+            continue
+        row = local_rows[row_index] if row_index < len(local_rows) else {}
+        row_index += 1
+        text = re.sub(r"\s+", " ", str(item.text or "")).strip()
+        key = text.lower()
+        if _matrix_claim_fully_bound(row) and text and key not in seen_claims:
+            kept_claims.append(text)
+            seen_claims.add(key)
+        if len(kept_claims) >= 8:
+            break
+
+    repaired_lines = ["## 证据" if prefer_zh else "## Evidence"]
+    repaired_lines.extend(f"- {claim}" for claim in kept_claims)
+    interim_answer = "\n".join(repaired_lines).strip()
+    interim_verification = verify_answer_citations(
+        interim_answer,
+        hits,
+        answer_mode="evidence_grounded",
+    )["verification"]
+    missing_sources = expected_sources - _matrix_verified_sources(interim_verification)
+    supplemented = 0
+    seen_sources: set[str] = set()
+    for citation_number, hit in enumerate(hits, start=1):
+        source_key = _matrix_source_key(hit)
+        if not source_key or source_key in seen_sources or source_key not in missing_sources:
+            continue
+        seen_sources.add(source_key)
+        sentence = _matrix_extractive_sentence(hit, citation_number)
+        if sentence:
+            repaired_lines.append(f"- {sentence}")
+            supplemented += 1
+    fully_bound_count = len([row for row in local_rows if _matrix_claim_fully_bound(row)])
+    removed_invalid = max(0, len(local_rows) - fully_bound_count)
+    removed_out_of_contract = max(0, fully_bound_count - len(kept_claims))
+    return "\n".join(repaired_lines).strip(), {
+        "attempted": True,
+        "candidate_model_claims": len(local_rows),
+        "preserved_model_claims": len(kept_claims),
+        "removed_claims_total": removed_invalid + removed_out_of_contract,
+        "removed_unsupported_claims": removed_invalid,
+        "removed_out_of_contract_claims": removed_out_of_contract,
+        "removed_strict_gate_claims": len(
+            [row for row in local_rows if bool(row.get("supported")) and not _matrix_claim_fully_bound(row)]
+        ),
+        "supplemented_source_claims": supplemented,
+    }
 
 
 def generate_research_brief_from_matrix(
@@ -431,8 +701,12 @@ def generate_research_brief_from_matrix(
     from kb.agent.tools import generate_grounded_answer, verify_answer_citations
     from kb.evidence_matrix import evidence_matrix_hits
 
+    total_started = time.perf_counter()
+    plan_started = time.perf_counter()
     hits = evidence_matrix_hits(matrix_record, limit=20)
     rows = [item for item in list(matrix_record.get("rows") or []) if isinstance(item, dict)]
+    claim_plan = _matrix_claim_plan(hits)
+    plan_ms = round((time.perf_counter() - plan_started) * 1000, 2)
     agent_notes = {
         "answer_contract": "research_brief",
         "evidence_gate": {
@@ -442,46 +716,74 @@ def generate_research_brief_from_matrix(
         },
         "evidence_matrix": rows[:8],
     }
+    generation_prompt = _matrix_generation_prompt(prompt, claim_plan)
+    generation_started = time.perf_counter()
     generated = generate_grounded_answer(
-        prompt,
+        generation_prompt,
         hits,
         settings=settings,
         agent_notes=agent_notes,
         temperature=0.1,
         max_tokens=max_tokens,
+        defer_quality_gate_repair=True,
     )
+    generation_ms = round((time.perf_counter() - generation_started) * 1000, 2)
     answer = str(generated.get("answer") or "").strip()
     gate = generated.get("quality_gate") if isinstance(generated.get("quality_gate"), dict) else {}
+    verification_started = time.perf_counter()
     verification_payload = verify_answer_citations(answer, hits, answer_mode="evidence_grounded")
     verification = (
         verification_payload.get("verification")
         if isinstance(verification_payload.get("verification"), dict)
         else {}
     )
-
-    cited_numbers = _citation_numbers(answer)
-    cited_sources = {
-        _first_text(
-            hits[number - 1].get("meta") if isinstance(hits[number - 1].get("meta"), dict) else {},
-            "source_path",
-            "source_name",
-            limit=1_200,
-        ).replace("\\", "/").lower()
-        for number in cited_numbers
-        if 0 < number <= len(hits)
-    }
+    initial_verification_ms = round((time.perf_counter() - verification_started) * 1000, 2)
     expected_sources = {
         _first_text(row, "source_path", "source_name", limit=1_200).replace("\\", "/").lower()
         for row in rows
         if _first_text(row, "source_path", "source_name", limit=1_200)
     }
-    needs_fallback = bool(
-        str(gate.get("status") or "").lower() not in {"passed", "repaired", "fallback"}
-        or _safe_int(verification.get("total_claims")) <= 0
-        or _safe_int(verification.get("unsupported_claims")) > 0
-        or not expected_sources.issubset(cited_sources)
-    )
-    if needs_fallback:
+    repair_info: dict[str, Any] = {
+        "attempted": False,
+        "candidate_model_claims": 0,
+        "preserved_model_claims": 0,
+        "removed_claims_total": 0,
+        "removed_unsupported_claims": 0,
+        "removed_out_of_contract_claims": 0,
+        "removed_strict_gate_claims": 0,
+        "supplemented_source_claims": 0,
+    }
+    repair_ms = 0.0
+    direct_pass = bool(str(gate.get("status") or "").lower() == "passed" and _matrix_answer_passes(verification, expected_sources))
+    if not direct_pass:
+        repair_started = time.perf_counter()
+        answer, repair_info = _repair_matrix_candidate(
+            answer,
+            hits,
+            verification,
+            expected_sources,
+            prefer_zh=bool(re.search(r"[\u4e00-\u9fff]", str(prompt or ""))),
+        )
+        verification_payload = verify_answer_citations(answer, hits, answer_mode="evidence_grounded")
+        verification = (
+            verification_payload.get("verification")
+            if isinstance(verification_payload.get("verification"), dict)
+            else {}
+        )
+        repair_ms = round((time.perf_counter() - repair_started) * 1000, 2)
+        if (
+            generated.get("llm_used") is True
+            and _safe_int(repair_info.get("preserved_model_claims")) > 0
+            and _matrix_answer_passes(verification, expected_sources)
+        ):
+            gate = {
+                "status": "repaired",
+                "reasons": list(dict.fromkeys(list(gate.get("reasons") or []) + ["matrix_claim_repair"])),
+                "warnings": ["targeted_claim_repair"],
+            }
+        else:
+            gate = {"status": "fallback", "reasons": ["matrix_source_coverage_or_support_gate"], "warnings": []}
+    if str(gate.get("status") or "").lower() == "fallback":
         answer = _matrix_extractive_brief_answer(prompt, hits)
         gate = {
             "status": "fallback",
@@ -494,7 +796,8 @@ def generate_research_brief_from_matrix(
             if isinstance(verification_payload.get("verification"), dict)
             else {}
         )
-    errors = [str(generated.get("error") or "").strip()] if generated.get("error") and not needs_fallback else []
+    errors: list[str] = []
+    total_ms = round((time.perf_counter() - total_started) * 1000, 2)
     summary = {
         "query_scope": "basket",
         "quality_gate_status": str(gate.get("status") or ""),
@@ -502,6 +805,14 @@ def generate_research_brief_from_matrix(
         "quality_gate_warnings": list(gate.get("warnings") or []),
         "matrix_id": str(matrix_record.get("id") or ""),
         "matrix_revision": int(matrix_record.get("revision") or 1),
+        "claim_repair": repair_info,
+        "phase_timings_ms": {
+            "claim_plan": plan_ms,
+            "model_synthesis": generation_ms,
+            "initial_verification": initial_verification_ms,
+            "targeted_claim_repair": repair_ms,
+            "total": total_ms,
+        },
         **{
             key: verification.get(key)
             for key in (
@@ -522,7 +833,7 @@ def generate_research_brief_from_matrix(
             "source_matrix_id": str(matrix_record.get("id") or ""),
             "source_matrix_revision": int(matrix_record.get("revision") or 1),
         },
-        "plan": [],
+        "plan": claim_plan,
         "steps": [
             {
                 "tool": "generate_grounded_answer",
@@ -530,15 +841,29 @@ def generate_research_brief_from_matrix(
                 "observation": "Generated the brief only from the verified project evidence matrix.",
                 "output": {"quality_gate": gate},
                 "error": "",
-                "elapsed_ms": 0,
+                "elapsed_ms": int(round(generation_ms)),
             },
+            *(
+                [
+                    {
+                        "tool": "repair_matrix_claims",
+                        "status": "done",
+                        "observation": "Preserved supported model claims and supplemented only missing matrix sources.",
+                        "output": repair_info,
+                        "error": "",
+                        "elapsed_ms": int(round(repair_ms)),
+                    }
+                ]
+                if bool(repair_info.get("attempted"))
+                else []
+            ),
             {
                 "tool": "verify_answer_citations",
                 "status": "done",
                 "observation": str(verification_payload.get("observation") or ""),
                 "output": verification,
                 "error": "",
-                "elapsed_ms": 0,
+                "elapsed_ms": int(round(initial_verification_ms)),
             },
         ],
         "verification": verification,
@@ -554,6 +879,9 @@ def generate_research_brief_from_matrix(
                 "evidence_matrix_rows": len(rows),
                 "source_count": len(expected_sources),
                 "local_evidence_hit_count": len(hits),
+                "model_synthesis_ms": generation_ms,
+                "targeted_claim_repair_ms": repair_ms,
+                "total_ms": total_ms,
             },
         },
         "status": "done" if not errors else "failed",

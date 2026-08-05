@@ -916,6 +916,8 @@ export const S = {
   research_brief_verified_body: '{supported}/{total} substantive claims verified; editing the body requires a new audit.',
   research_brief_extract_fallback_title: 'Safe extractive fallback used',
   research_brief_extract_fallback_body: 'The model synthesis did not pass the evidence gate, so this version shows source-balanced evidence sentences instead of hiding unsupported output.',
+  research_brief_claim_repair_title: 'Targeted evidence repair applied',
+  research_brief_claim_repair_body: 'The audit retained {preserved} supported model claims, removed {removed} unsupported or out-of-contract claims, and added {supplemented} source-grounded evidence sentences.',
   research_brief_review_title: 'This brief needs review',
   research_brief_review_body: 'Some claims do not yet meet the traceable-evidence contract.',
   research_brief_no_evidence: 'This version has no locatable evidence',

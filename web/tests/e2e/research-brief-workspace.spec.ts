@@ -213,6 +213,12 @@ async function installBackend(page: Page) {
           supported_claims: 1,
           unsupported_claims: 0,
           support_ratio: 1,
+          generation_mode: 'model_synthesis_repaired',
+          claim_repair: {
+            preserved_model_claims: 3,
+            removed_unsupported_claims: 1,
+            supplemented_source_claims: 0,
+          },
           reasons: [],
         },
         revision: 1,
@@ -295,6 +301,8 @@ test('project basket becomes a versioned, audited, exportable research brief', a
   await page.getByTestId('research-brief-generate').click()
 
   await expect(page.getByText('Evidence audit passed')).toBeVisible()
+  await expect(page.getByText('Targeted evidence repair applied')).toBeVisible()
+  await expect(page.getByText(/retained 3 supported model claims, removed 1 unsupported or out-of-contract claim/)).toBeVisible()
   await expect(page.getByTestId('research-brief-preview')).toContainText('selected comparison baseline')
   await expect.poll(() => backend.generatedPayload()).toMatchObject({
     title: 'Imaging comparison brief',

@@ -280,6 +280,9 @@ export function ResearchBriefWorkspace({
 
   const quality = active?.quality || {}
   const qualityReasons = Array.isArray(quality.reasons) ? quality.reasons.map(String) : []
+  const claimRepair = quality.claim_repair && typeof quality.claim_repair === 'object'
+    ? quality.claim_repair as Record<string, unknown>
+    : {}
   const evidence = Array.isArray(active?.evidence) ? active.evidence : []
 
   return (
@@ -396,6 +399,19 @@ export function ResearchBriefWorkspace({
                   showIcon
                   message={S.research_brief_extract_fallback_title}
                   description={S.research_brief_extract_fallback_body}
+                />
+              ) : null}
+              {String(quality.generation_mode || '') === 'model_synthesis_repaired' ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={S.research_brief_claim_repair_title}
+                  description={S.research_brief_claim_repair_body
+                    .replace('{preserved}', String(numeric(claimRepair.preserved_model_claims)))
+                    .replace('{removed}', String(numeric(
+                      claimRepair.removed_claims_total ?? claimRepair.removed_unsupported_claims,
+                    )))
+                    .replace('{supplemented}', String(numeric(claimRepair.supplemented_source_claims)))}
                 />
               ) : null}
               <Tabs

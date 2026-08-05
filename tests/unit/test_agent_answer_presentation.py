@@ -155,6 +155,36 @@ def test_quality_gate_fallback_is_sentence_cited_and_source_diverse(monkeypatch)
     assert verification["evidence_status"] == "grounded"
 
 
+def test_quality_gate_can_defer_repair_to_a_stricter_caller(monkeypatch):
+    captured = {"calls": 0}
+
+    class _Settings:
+        text_api_key = "test-key"
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def chat(self, messages, *, temperature=0.2, max_tokens=1200):
+            captured["calls"] += 1
+            return "An unrelated optimizer improves convergence [1]."
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+    hits = [{"text": "The paper uses coded acquisition.", "meta": {"source_name": "Paper A"}}]
+
+    result = tools.generate_grounded_answer(
+        "Which acquisition method is used?",
+        hits,
+        settings=_Settings(),
+        defer_quality_gate_repair=True,
+    )
+
+    assert captured["calls"] == 1
+    assert result["quality_gate"]["status"] == "failed"
+    assert result["quality_gate"]["verification"]["unsupported_claims"] == 1
+    assert "unrelated optimizer" in result["answer"]
+
+
 def test_quality_gate_rejects_citation_that_does_not_support_claim(monkeypatch):
     class _Settings:
         text_api_key = "test-key"

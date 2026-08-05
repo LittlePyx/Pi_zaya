@@ -917,6 +917,8 @@ export const S = {
   research_brief_verified_body: '已验证 {supported}/{total} 个实质性主张；编辑正文后需重新审计。',
   research_brief_extract_fallback_title: '已使用安全抽取回退',
   research_brief_extract_fallback_body: '模型综合结果未通过证据门禁，因此本版本展示来源均衡的证据原句，不隐藏未获支持的输出。',
+  research_brief_claim_repair_title: '已应用定向证据修复',
+  research_brief_claim_repair_body: '审计保留了 {preserved} 条有证据的模型主张，移除 {removed} 条未获支持或超出简报契约的主张，并补入 {supplemented} 条来源证据句。',
   research_brief_review_title: '这份简报需要复核',
   research_brief_review_body: '部分主张尚未达到可追溯证据标准。',
   research_brief_no_evidence: '当前版本没有可定位证据',
