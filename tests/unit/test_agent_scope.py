@@ -51,6 +51,7 @@ def test_research_agent_basket_scope_filters_hits(monkeypatch, tmp_path):
     captured: dict[str, list[dict]] = {}
 
     def fake_retrieve(*args, **kwargs):
+        captured["source_paths"] = list(kwargs.get("source_paths") or [])
         return {
             "observation": "retrieved",
             "hits": [
@@ -74,5 +75,39 @@ def test_research_agent_basket_scope_filters_hits(monkeypatch, tmp_path):
     )
 
     assert [hit["meta"]["source_name"] for hit in captured["hits"]] == ["Paper B"]
+    assert captured["source_paths"] == ["papers/paper-b.md"]
     assert result["agent_trace"]["context"]["query_scope"] == "basket"
     assert result["agent_trace"]["steps"][0]["output"]["scope_filter"]["after"] == 1
+
+
+def test_retrieve_evidence_balances_explicit_basket_sources(monkeypatch, tmp_path):
+    from kb.agent import tools
+
+    chunks = [
+        {
+            "id": f"a-{index}",
+            "text": f"Common reconstruction mechanism result number {index} for Paper A.",
+            "meta": {"source_path": "papers/paper-a.md", "evidence_ready": True},
+        }
+        for index in range(12)
+    ]
+    chunks.append(
+        {
+            "id": "b-1",
+            "text": "Paper B reports a common reconstruction mechanism with a separate detector.",
+            "meta": {"source_path": "papers/paper-b.md", "evidence_ready": True},
+        }
+    )
+    monkeypatch.setattr(tools, "load_all_chunks", lambda _path: chunks)
+
+    result = tools.retrieve_evidence(
+        "Compare the common reconstruction mechanism and detector result.",
+        db_dir=tmp_path,
+        top_k=4,
+        source_paths=["papers/paper-a.md", "papers/paper-b.md"],
+    )
+
+    sources = [hit["meta"]["source_path"] for hit in result["hits"]]
+    assert sources.count("papers/paper-a.md") == 3
+    assert sources.count("papers/paper-b.md") == 1
+    assert result["requested_source_count"] == 2

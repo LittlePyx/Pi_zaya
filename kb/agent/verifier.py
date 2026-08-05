@@ -9,7 +9,10 @@ from .types import AgentVerification, EvidenceStatus
 
 _CITATION_RE = re.compile(r"(?:\[[0-9][0-9,\-\s]*\]|\[\[CITE:[^\]]+\]\])")
 _NUMERIC_CITATION_RE = re.compile(r"(?<!\[)\[(\d+(?:\s*(?:,|-)\s*\d+)*)\](?!\])")
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?\u3002\uff01\uff1f])\s+|\n+")
+_SENTENCE_SPLIT_RE = re.compile(
+    r"(?<!Fig\.)(?<!Figs\.)(?<!Eq\.)(?<!Eqs\.)(?<!Sec\.)(?<!Secs\.)(?<!Tab\.)(?<!Tabs\.)"
+    r"(?<!e\.g\.)(?<!i\.e\.)(?<!et al\.)(?<=[.!?\u3002\uff01\uff1f])\s+|\n+"
+)
 _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}")
 _SOURCE_NOTICE_RE = re.compile(
@@ -32,6 +35,35 @@ _GENERAL_BACKGROUND_RE = re.compile(
     r"\b(?:generally|in general|typically|often|usually|background|broader literature|"
     r"outside the local|external context|common pattern|commonly)\b"
     r"|(?:\u4e00\u822c\u6765\u8bf4|\u901a\u5e38|\u5e38\u89c1|\u5b66\u672f\u4e0a|\u5916\u90e8|\u80cc\u666f|\u8865\u5145)",
+    flags=re.IGNORECASE,
+)
+_RETRIEVAL_BOUNDARY_RE = re.compile(
+    r"^(?:limits?|limitations?|evidence\s+gaps?)\s*[:\uff1a].{0,180}"
+    r"(?:retrieved|provided|available|current|local|selected).{0,120}"
+    r"(?:evidence|snippets?|sources?).{0,120}"
+    r"(?:cannot|can\s+not|does\s+not|do\s+not|insufficient|missing|absent|unavailable|not\s+provide)"
+    r"|^(?:\u9650\u5236|\u8bc1\u636e\u7f3a\u53e3)\s*[:\uff1a].{0,180}"
+    r"(?:\u68c0\u7d22|\u5f53\u524d|\u73b0\u6709|\u6240\u9009|\u672c\u5730).{0,120}"
+    r"(?:\u8bc1\u636e|\u7247\u6bb5|\u6765\u6e90).{0,120}"
+    r"(?:\u4e0d\u8db3|\u7f3a\u5931|\u65e0\u6cd5|\u672a\u80fd|\u4e0d\u80fd|\u6ca1\u6709)",
+    flags=re.IGNORECASE,
+)
+_PROCEDURAL_NEXT_STEP_RE = re.compile(
+    r"^(?:next\s+steps?|follow[- ]?up)\s*[:\uff1a]\s*"
+    r"(?:inspect|read|check|open|review|verify|compare|look\s+at)\b"
+    r"|^(?:\u4e0b\u4e00\u6b65|\u540e\u7eed)\s*[:\uff1a]\s*"
+    r"(?:\u67e5\u770b|\u68c0\u67e5|\u9605\u8bfb|\u6838\u5bf9|\u6253\u5f00|\u6bd4\u8f83|\u9a8c\u8bc1)",
+    flags=re.IGNORECASE,
+)
+_NONCLAIM_HEADING_RE = re.compile(
+    r"^(?:executive\s+findings?|methods?(?:\s+and\s+experimental\s+comparison)?|"
+    r"quantitative\s+evidence|disagreements?(?:\s+or\s+boundary\s+conditions?)?|"
+    r"research\s+gaps?(?:\s+and\s+next\s+questions?)?|conclusions?|evidence|limits?|"
+    r"next\s+steps?|referenced?\s+sources?|references|"
+    r"\u6838\u5fc3\u7ed3\u8bba|\u65b9\u6cd5\u4e0e\u5b9e\u9a8c\u6761\u4ef6\u5bf9\u6bd4|"
+    r"\u5b9a\u91cf\u8bc1\u636e|\u5206\u6b67\u6216\u9002\u7528\u8fb9\u754c|"
+    r"\u7814\u7a76\u7a7a\u767d\u4e0e\u4e0b\u4e00\u6b65\u95ee\u9898|\u8bc1\u636e|\u9650\u5236|"
+    r"\u4e0b\u4e00\u6b65|\u53c2\u8003\u6587\u732e)\s*[:\uff1a]?$",
     flags=re.IGNORECASE,
 )
 
@@ -58,6 +90,8 @@ def _candidate_answer_parts(answer: str) -> list[str]:
     for part in _SENTENCE_SPLIT_RE.split(text):
         clean = _clean_answer_part(part)
         if not clean:
+            continue
+        if _NONCLAIM_HEADING_RE.fullmatch(clean):
             continue
         if _SOURCE_NOTICE_RE.search(clean):
             chunks.append(clean)
@@ -94,6 +128,10 @@ def classify_answer_claims(answer: str, *, answer_mode: str = "") -> list[Classi
     for part in _candidate_answer_parts(answer):
         if _SOURCE_NOTICE_RE.search(part):
             classified.append(ClassifiedAnswerClaim(text=part, kind="source_notice", reason="source_disclosure"))
+        elif _RETRIEVAL_BOUNDARY_RE.search(part):
+            classified.append(ClassifiedAnswerClaim(text=part, kind="source_notice", reason="retrieval_evidence_boundary"))
+        elif _PROCEDURAL_NEXT_STEP_RE.search(part):
+            classified.append(ClassifiedAnswerClaim(text=part, kind="source_notice", reason="procedural_followup"))
         elif _looks_like_external_background(part, hybrid_external_allowed=hybrid_allowed):
             classified.append(ClassifiedAnswerClaim(text=part, kind="external_background", reason="hybrid_external_context"))
         else:

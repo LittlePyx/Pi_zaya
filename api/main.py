@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
 from api.routers import app as app_router
-from api.routers import auth, chat, generate, library, maintenance, references, settings, user_issues
+from api.routers import auth, chat, generate, library, maintenance, references, research_briefs, settings, user_issues
 from api.security import auth_settings, auth_token_configured, is_public_api_path, request_is_authenticated
 from kb.config import load_settings
 from kb.retriever_cache import warm_retriever_async
@@ -199,5 +199,6 @@ app.include_router(generate.router)
 app.include_router(library.router)
 app.include_router(maintenance.router)
 app.include_router(references.router)
+app.include_router(research_briefs.router)
 app.include_router(settings.router)
 app.include_router(user_issues.router)

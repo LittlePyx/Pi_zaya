@@ -1,8 +1,9 @@
 # Pi_zaya
 
 Pi_zaya is a local-first, evidence-grounded research agent for academic PDFs. It
-helps users read papers, retrieve evidence, trace citations, compare papers, and
-generate verifiable answers with grounded references.
+helps users read papers, retrieve evidence, trace citations, compare papers,
+generate verifiable answers, and turn a project's literature basket into an
+editable research brief with an evidence audit.
 
 This is a production-oriented AI agent / RAG engineering portfolio project, not
 a toy PDF chatbot. It connects PDF conversion, structured indexing, hybrid
@@ -36,6 +37,7 @@ web context.
 | Evidence-based QA | Searches the indexed library, builds a RAG prompt from retrieved snippets, and returns grounded answers. |
 | Citation tracing | Surfaces answer evidence, source cards, reference context, and reader locate targets. |
 | Literature basket | Lets users collect papers and excerpts, keep local research context, and export citations. |
+| Research briefs | Generates project-scoped, versioned Markdown briefs from selected local full text, audits every substantive claim, opens its evidence in the reader, and exports Markdown, DOCX, BibTeX, or RIS. |
 | Research Agent Mode | Adds explicit planning, source policy, evidence matrix, tool-use trace, and sentence-level citation support checks on top of the existing RAG flow. |
 | Quality tooling | Scans conversion quality, runs repair flows, rebuilds indexes, and tracks metadata/reference sync. |
 
@@ -54,6 +56,7 @@ flowchart LR
   E --> M["Paper Comparison Tool"]
   E --> Q["Research Run + Evidence Matrix"]
   E --> V["Claim Verifier"]
+  E --> B["Versioned Research Brief"]
   P --> O["Grounded Answer + Citation Trace UI"]
   R --> O
   X --> O
@@ -61,6 +64,7 @@ flowchart LR
   M --> O
   Q --> O
   V --> O
+  B --> O
 ```
 
 At a high level:
@@ -73,7 +77,10 @@ At a high level:
    library scope.
 4. Research Agent Mode plans tool calls, checks evidence sufficiency, generates
    an answer, and verifies citation support.
-5. The frontend keeps the answer clean while citations, reference cards, reader
+5. A project can turn selected literature-basket sources into a versioned brief;
+   the same claim verifier blocks unsupported, unresolved, missing-source, or
+   out-of-scope evidence from receiving verified status.
+6. The frontend keeps the answer clean while citations, reference cards, reader
    locate targets, and agent traces remain inspectable on demand.
 
 Key backend entry points:
@@ -82,7 +89,9 @@ Key backend entry points:
 - `api/routers/generate.py`: streaming chat generation
 - `api/routers/chat.py`: conversations, messages, uploads, and direct research-agent endpoint
 - `api/routers/library.py`: library, conversion, quality, metadata, and indexing APIs
+- `api/routers/research_briefs.py`: project brief generation, revisions, evidence audit, and export
 - `kb/task_runtime.py`: background generation/conversion runtime
+- `kb/research_brief.py`: brief source normalization, quality contract, bibliography, and exporters
 - `kb/agent/`: lightweight Research Agent layer
 
 Key frontend entry points:
@@ -92,6 +101,7 @@ Key frontend entry points:
 - `web/src/pages/LibraryPage.tsx`: PDF/library workspace
 - `web/src/components/chat/AgentTracePanel.tsx`: Research Agent trace UI
 - `web/src/components/chat/CiteShelf.tsx`: literature basket UI
+- `web/src/components/chat/ResearchBriefWorkspace.tsx`: brief editor, preview, evidence, versions, and exports
 - `web/src/api/*.ts`: typed API contracts
 
 ## Research Agent Mode

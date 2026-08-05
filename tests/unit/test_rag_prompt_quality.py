@@ -57,6 +57,21 @@ def test_build_messages_requires_evidence_aligned_answer_shape_for_hits():
     assert "section: Demo Paper / Methods / Adaptive pixel reassignment" in user
 
 
+def test_build_messages_uses_research_brief_contract_without_duplicate_exports():
+    messages = build_messages(
+        "Compare the selected methods.",
+        history=[],
+        hits=[_hit()],
+        answer_contract="research_brief",
+    )
+
+    system = messages[0]["content"]
+    assert "Research-brief answer shape:" in system
+    assert "no more than eight substantive bullet sentences" in system
+    assert "Do not add a standalone Next Steps, Referenced Sources, or References section" in system
+    assert "Required answer shape:" not in system
+
+
 def test_build_messages_without_hits_requires_no_hit_notice():
     messages = build_messages("What is the best baseline?", history=[], hits=[])
 

@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, message } from 'antd'
-import { BookOutlined, CloseOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, FileSearchOutlined, LoadingOutlined, SaveOutlined, SearchOutlined, SlidersOutlined } from '@ant-design/icons'
+import { BookOutlined, CloseOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, FileSearchOutlined, FileTextOutlined, LoadingOutlined, SaveOutlined, SearchOutlined, SlidersOutlined } from '@ant-design/icons'
 import type { CiteShelfItem } from './citationState'
 import type { ReaderLocateResult } from './reader/readerTypes'
 import type { ShelfMetadataRepairImpact } from '../../api/references'
@@ -83,6 +83,7 @@ interface Props {
   onOpenDiscoverySource?: (item: CiteShelfItem) => void
   onOpenMessage?: (item: CiteShelfItem) => void
   onUseSelectedAsContext?: (items: CiteShelfItem[]) => void
+  onOpenResearchBrief?: (items: CiteShelfItem[]) => void
   onRemove: (key: string) => void
   onUpdateTags: (key: string, tags: string[]) => void
   onUpdateNote: (key: string, note: string) => void
@@ -122,6 +123,7 @@ export function CiteShelf({
   onOpenDiscoverySource,
   onOpenMessage,
   onUseSelectedAsContext,
+  onOpenResearchBrief,
   onRemove,
   onUpdateTags,
   onUpdateNote,
@@ -1439,6 +1441,19 @@ export function CiteShelf({
                 ) : null}
                 {items.length > 0 ? (
                   <div className="kb-shelf-primary-actions">
+                    {onOpenResearchBrief ? (
+                      <button
+                        type="button"
+                        className="kb-shelf-command is-primary"
+                        onClick={() => onOpenResearchBrief(selectedCount > 0 ? selectedItems : items)}
+                        aria-label={S.research_brief_open}
+                        title={S.research_brief_open_tip}
+                        data-testid="citation-shelf-open-research-brief"
+                      >
+                        <FileTextOutlined />
+                        {S.research_brief_open}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="kb-shelf-command"

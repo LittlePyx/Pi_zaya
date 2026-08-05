@@ -178,8 +178,28 @@ def _labels(prefer_zh: bool) -> dict[str, str]:
     }
 
 
-def _system_prompt(prefer_zh: bool) -> str:
+def _system_prompt(prefer_zh: bool, *, answer_contract: str = "") -> str:
     labels = _labels(prefer_zh)
+    research_brief = str(answer_contract or "").strip().lower() == "research_brief"
+    if research_brief:
+        required_shape = (
+            "Research-brief answer shape:\n"
+            "- Follow the brief sections requested by the user. Section headings are labels, not factual claims.\n"
+            "- Write no more than eight substantive bullet sentences in total. Each bullet contains one complete claim "
+            "and ends with all supporting snippet citations.\n"
+            "- Keep paper-specific conditions separate. Do not turn an evidence gap into a factual claim.\n"
+            "- Do not add a standalone Next Steps, Referenced Sources, or References section; the application builds "
+            "the evidence appendix and bibliography from the cited snippets.\n"
+        )
+    else:
+        required_shape = (
+            "Required answer shape:\n"
+            f"{labels['conclusion']}: direct answer in 1-3 sentences, with citations when snippets exist.\n"
+            f"{labels['evidence']}: compact bullets; each bullet pairs one claim with the snippet id(s) that support it.\n"
+            f"{labels['limits']}: what the retrieved evidence cannot prove, or why confidence is limited.\n"
+            f"{labels['next_steps']}: one practical follow-up, such as the section/figure/table to inspect next.\n"
+            f"{labels['refs']}: list only the sources actually cited, with doc, section, page if available, and a short reason.\n"
+        )
     return (
         "You are the user's academic knowledge-base assistant. "
         f"Read the retrieved snippets first, then answer in {labels['answer_lang']}.\n\n"
@@ -191,12 +211,7 @@ def _system_prompt(prefer_zh: bool) -> str:
         "5. For multi-paper questions, compare the papers directly instead of summarizing them one by one.\n"
         "6. Cite only snippets that support the sentence where the citation appears.\n"
         "7. A method mentioned under Related Work is not evidence that the current paper uses it; never infer adoption, implementation, or optimizer choice unless the retrieved method text states it.\n\n"
-        "Required answer shape:\n"
-        f"{labels['conclusion']}: direct answer in 1-3 sentences, with citations when snippets exist.\n"
-        f"{labels['evidence']}: compact bullets; each bullet pairs one claim with the snippet id(s) that support it.\n"
-        f"{labels['limits']}: what the retrieved evidence cannot prove, or why confidence is limited.\n"
-        f"{labels['next_steps']}: one practical follow-up, such as the section/figure/table to inspect next.\n"
-        f"{labels['refs']}: list only the sources actually cited, with doc, section, page if available, and a short reason.\n\n"
+        f"{required_shape}\n"
         "No-hit behavior:\n"
         f"- If there are no retrieved snippets, start with \"{labels['no_hits']}\".\n"
         f"- Then give a clearly labeled general answer, and write \"{labels['no_refs']}\" under {labels['refs']}.\n"
@@ -207,6 +222,8 @@ def build_messages(
     user_query: str,
     history: list[dict],
     hits: list[dict],
+    *,
+    answer_contract: str = "",
 ) -> list[dict]:
     prefer_zh = _has_cjk(user_query)
     labels = _labels(prefer_zh)
@@ -220,4 +237,8 @@ def build_messages(
 
     # Only keep user/assistant roles in history.
     trimmed = [m for m in history if m.get("role") in ("user", "assistant")]
-    return [{"role": "system", "content": _system_prompt(prefer_zh)}, *trimmed, {"role": "user", "content": user}]
+    return [
+        {"role": "system", "content": _system_prompt(prefer_zh, answer_contract=answer_contract)},
+        *trimmed,
+        {"role": "user", "content": user},
+    ]

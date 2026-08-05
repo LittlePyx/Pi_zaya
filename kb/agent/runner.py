@@ -924,6 +924,7 @@ def run_research_agent(
     selected_research_context: dict[str, Any] | None = None,
     current_source_path: str = "",
     current_source_name: str = "",
+    answer_contract: str = "",
 ) -> dict[str, Any]:
     intent = plan_research_intent(query)
     question_type, plan = plan_research_question(query)
@@ -939,10 +940,39 @@ def run_research_agent(
     scope_context["planner_confidence"] = intent.confidence
     scope_context["evidence_need"] = intent.evidence_need
     trace = AgentTrace(question_type=question_type, context=scope_context, plan=plan, status="running")
-    context: dict[str, Any] = {"hits": [], "answer": "", "agent_notes": {}}
+    normalized_answer_contract = str(answer_contract or "").strip().lower()
+    if normalized_answer_contract == "research_brief":
+        scope_context["answer_contract"] = normalized_answer_contract
+    context: dict[str, Any] = {
+        "hits": [],
+        "answer": "",
+        "agent_notes": (
+            {"answer_contract": normalized_answer_contract}
+            if normalized_answer_contract == "research_brief"
+            else {}
+        ),
+    }
     for idx, plan_step in enumerate(list(trace.plan)[: max(1, int(max_steps or 6))]):
         if plan_step.tool == "retrieve_evidence":
-            result = _run_step(trace, idx, retrieve_evidence, query, db_dir=db_dir, settings=settings, top_k=top_k)
+            selected_source_paths = [
+                _clip_context_value(item.get("sourcePath") or item.get("source_path"), max_chars=1200)
+                for item in _selected_context_items(selected_research_context or {})
+                if _clip_context_value(item.get("sourcePath") or item.get("source_path"), max_chars=1200)
+            ]
+            retrieval_kwargs: dict[str, Any] = {
+                "db_dir": db_dir,
+                "settings": settings,
+                "top_k": top_k,
+            }
+            if scope_context.get("query_scope") == "basket":
+                retrieval_kwargs["source_paths"] = selected_source_paths
+            result = _run_step(
+                trace,
+                idx,
+                retrieve_evidence,
+                query,
+                **retrieval_kwargs,
+            )
             raw_hits = [hit for hit in list(result.get("hits") or []) if isinstance(hit, dict)]
             scoped_hits, scope_filter = _filter_hits_by_scope(
                 raw_hits,

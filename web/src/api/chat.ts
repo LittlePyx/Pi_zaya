@@ -622,6 +622,39 @@ export interface CitationShelfSaveBody extends CitationShelfRequest {
   allowEmptyOverwrite?: boolean
 }
 
+export type ResearchBriefQualityStatus = 'verified' | 'needs_review' | 'draft' | string
+
+export interface ResearchBriefRecord {
+  id: string
+  project_id: string
+  source_conv_id?: string | null
+  title: string
+  objective: string
+  content_markdown: string
+  evidence: Array<Record<string, unknown>>
+  bibliography: Array<Record<string, unknown>>
+  agent_trace: Record<string, unknown>
+  quality_status: ResearchBriefQualityStatus
+  quality: Record<string, unknown>
+  revision: number
+  created_at: number
+  updated_at: number
+}
+
+export interface ResearchBriefGenerateBody {
+  title: string
+  objective?: string
+  item_keys?: string[]
+  source_conv_id?: string | null
+  brief_id?: string | null
+  expected_revision?: number | null
+  locale?: string
+  top_k?: number
+  max_tokens?: number
+}
+
+export type ResearchBriefExportFormat = 'markdown' | 'docx' | 'bibtex' | 'ris'
+
 export interface ChatUploadItem {
   kind: 'pdf' | 'image' | 'unknown'
   status: 'saved' | 'duplicate' | 'error' | 'unsupported'
@@ -656,6 +689,36 @@ function citationShelfUrl(opts?: CitationShelfRequest): string {
 function citationShelfItemsUrl(opts?: CitationShelfRequest): string {
   const url = citationShelfUrl(opts)
   return url.replace('/api/chat/citation-shelf', '/api/chat/citation-shelf/items')
+}
+
+function downloadFilename(header: string | null, fallback: string): string {
+  const raw = String(header || '')
+  const match = raw.match(/filename="?([^";]+)"?/i)
+  return match?.[1] || fallback
+}
+
+async function downloadResearchBrief(briefId: string, format: ResearchBriefExportFormat) {
+  const res = await authFetch(
+    `/api/research-briefs/${encodeURIComponent(briefId)}/export?format=${encodeURIComponent(format)}`,
+  )
+  if (!res.ok) throw await responseError(res, 'research brief export failed')
+  const blob = await res.blob()
+  const suffix = format === 'markdown' ? 'md' : (format === 'bibtex' ? 'bib' : format)
+  const filename = downloadFilename(
+    res.headers.get('content-disposition'),
+    `research-brief.${suffix}`,
+  )
+  const href = URL.createObjectURL(blob)
+  try {
+    const link = document.createElement('a')
+    link.href = href
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(href), 2_000)
+  }
 }
 
 export const chatApi = {
@@ -723,6 +786,42 @@ export const chatApi = {
     ),
   runResearchAgent: (body: ResearchAgentRequest) =>
     api.post<ResearchAgentResponse>('/api/chat/research-agent', body),
+  listResearchBriefs: (projectId: string, limit = 80) =>
+    api.get<ResearchBriefRecord[]>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-briefs?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  getResearchBrief: (briefId: string) =>
+    api.get<ResearchBriefRecord>(`/api/research-briefs/${encodeURIComponent(briefId)}`),
+  createResearchBrief: (projectId: string, body: { title: string; objective?: string; content_markdown?: string; source_conv_id?: string | null }) =>
+    api.post<ResearchBriefRecord>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-briefs`,
+      body,
+    ),
+  generateResearchBrief: (projectId: string, body: ResearchBriefGenerateBody) =>
+    api.post<ResearchBriefRecord>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-briefs/generate`,
+      body,
+    ),
+  updateResearchBrief: (
+    briefId: string,
+    body: { expected_revision: number; title?: string; objective?: string; content_markdown?: string },
+  ) => api.patch<ResearchBriefRecord>(`/api/research-briefs/${encodeURIComponent(briefId)}`, body),
+  listResearchBriefRevisions: (briefId: string, limit = 40) =>
+    api.get<ResearchBriefRecord[]>(
+      `/api/research-briefs/${encodeURIComponent(briefId)}/revisions?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  getResearchBriefRevision: (briefId: string, revision: number) =>
+    api.get<ResearchBriefRecord>(
+      `/api/research-briefs/${encodeURIComponent(briefId)}/revisions/${Math.max(1, Math.floor(revision))}`,
+    ),
+  restoreResearchBrief: (briefId: string, revision: number, expectedRevision: number) =>
+    api.post<ResearchBriefRecord>(`/api/research-briefs/${encodeURIComponent(briefId)}/restore`, {
+      revision,
+      expected_revision: expectedRevision,
+    }),
+  deleteResearchBrief: (briefId: string) =>
+    api.delete<{ ok: boolean }>(`/api/research-briefs/${encodeURIComponent(briefId)}`),
+  downloadResearchBrief,
   uploadFiles: async (files: File[], opts?: { quickIngest?: boolean; speedMode?: string; convId?: string | null }) => {
     const fd = new FormData()
     files.forEach((file) => fd.append('files', file))

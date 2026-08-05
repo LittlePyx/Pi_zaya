@@ -452,10 +452,9 @@
 }
 
 .kb-shelf-status-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  align-items: start;
+  gap: 10px;
   margin-top: 18px;
   min-width: 0;
 }
@@ -463,9 +462,9 @@
 .kb-shelf-primary-actions {
   display: flex;
   min-width: 0;
-  flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 9px;
   margin-top: 0;
 }

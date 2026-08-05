@@ -34,43 +34,6 @@ _ANSWER_DEBUG_RE = re.compile(
     r"supported_claims|unsupported_claims|total_claims|question_type)\b",
     flags=re.IGNORECASE,
 )
-_QUALITY_STOPWORDS = {
-    "about",
-    "answer",
-    "background",
-    "based",
-    "before",
-    "between",
-    "citation",
-    "claim",
-    "come",
-    "comes",
-    "context",
-    "does",
-    "evidence",
-    "external",
-    "from",
-    "general",
-    "grounded",
-    "knowledge",
-    "local",
-    "method",
-    "paper",
-    "papers",
-    "retrieved",
-    "says",
-    "show",
-    "shows",
-    "snippet",
-    "snippets",
-    "source",
-    "that",
-    "this",
-    "uses",
-    "with",
-}
-
-
 def _clip(text: Any, limit: int = 180) -> str:
     clean = re.sub(r"\s+", " ", str(text or "")).strip()
     return clean[:limit]
@@ -449,8 +412,95 @@ def _format_agent_notes(agent_notes: dict[str, Any] | None) -> str:
     return text[:5000]
 
 
-def retrieve_evidence(query: str, *, db_dir: str | Path, settings: Any = None, top_k: int = 6) -> dict[str, Any]:
+def _retrieval_source_variants(value: object) -> set[str]:
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return set()
+    variants = {raw.lower()}
+    try:
+        path = Path(raw)
+        variants.add(path.name.lower())
+        variants.add(str(path.expanduser().resolve(strict=False)).replace("\\", "/").lower())
+    except Exception:
+        pass
+    return {item for item in variants if item}
+
+
+def _balanced_scoped_hits(
+    chunks: list[dict[str, Any]],
+    *,
+    source_paths: list[str],
+    query_variants: list[str],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    groups: list[list[dict[str, Any]]] = []
+    for source_path in source_paths:
+        expected = _retrieval_source_variants(source_path)
+        group = [
+            chunk
+            for chunk in chunks
+            if expected
+            & _retrieval_source_variants(
+                (chunk.get("meta") if isinstance(chunk.get("meta"), dict) else {}).get("source_path")
+            )
+        ]
+        if group:
+            groups.append(group)
+    if not groups:
+        return []
+    per_source_limit = max(2, (max(1, int(top_k)) + len(groups) - 1) // len(groups))
+    queries = list(dict.fromkeys(str(item or "").strip() for item in query_variants if str(item or "").strip()))
+    ranked_groups: list[list[dict[str, Any]]] = []
+    for group in groups:
+        retriever = BM25Retriever(group)
+        best_by_id: dict[str, dict[str, Any]] = {}
+        for query in queries:
+            for hit in retriever.search(query, top_k=max(per_source_limit * 4, per_source_limit)):
+                identity = str(hit.get("id") or "").strip() or (
+                    str((hit.get("meta") or {}).get("source_path") or "")
+                    + "\n"
+                    + str(hit.get("text") or "")
+                )
+                previous = best_by_id.get(identity)
+                if previous is None or float(hit.get("score") or 0.0) > float(previous.get("score") or 0.0):
+                    best_by_id[identity] = hit
+        ranked_groups.append(
+            sorted(
+                best_by_id.values(),
+                key=lambda hit: float(hit.get("score") or 0.0),
+                reverse=True,
+            )[:per_source_limit]
+        )
+    balanced: list[dict[str, Any]] = []
+    for rank in range(per_source_limit):
+        for group in ranked_groups:
+            if rank < len(group):
+                balanced.append(group[rank])
+                if len(balanced) >= max(1, int(top_k)):
+                    return balanced
+    return balanced
+
+
+def retrieve_evidence(
+    query: str,
+    *,
+    db_dir: str | Path,
+    settings: Any = None,
+    top_k: int = 6,
+    source_paths: list[str] | None = None,
+) -> dict[str, Any]:
     chunks = load_all_chunks(Path(db_dir))
+    requested_paths = list(dict.fromkeys(str(item or "").strip() for item in list(source_paths or []) if str(item or "").strip()))
+    if requested_paths:
+        allowed = set().union(*(_retrieval_source_variants(item) for item in requested_paths))
+        chunks = [
+            chunk
+            for chunk in chunks
+            if allowed
+            & _retrieval_source_variants(
+                (chunk.get("meta") if isinstance(chunk.get("meta"), dict) else {}).get("source_path")
+            )
+        ]
     retriever = BM25Retriever(chunks)
     hits, scores, used_query, used_translation, query_variants = _search_hits_with_fallback(
         query,
@@ -460,13 +510,25 @@ def retrieve_evidence(query: str, *, db_dir: str | Path, settings: Any = None, t
         allow_translate=True,
         allow_expand=False,
     )
-    hits = list(hits or [])[: max(1, min(20, int(top_k or 6)))]
+    limit = max(1, min(20, int(top_k or 6)))
+    if requested_paths:
+        balanced = _balanced_scoped_hits(
+            chunks,
+            source_paths=requested_paths,
+            query_variants=[*list(query_variants or []), used_query, query],
+            top_k=limit,
+        )
+        if balanced:
+            hits = balanced
+            scores = [float(hit.get("score") or 0.0) for hit in hits]
+    hits = list(hits or [])[:limit]
     return {
         "hits": hits,
         "scores": list(scores or [])[: len(hits)],
         "used_query": used_query,
         "used_translation": bool(used_translation),
         "query_variants": list(query_variants or []),
+        "requested_source_count": len(requested_paths),
         "observation": f"Retrieved {len(hits)} evidence snippet(s).",
     }
 
@@ -660,6 +722,13 @@ def _answer_mode(agent_notes: dict[str, Any] | None) -> str:
     return str(gate.get("answer_mode") or "").strip()
 
 
+def _answer_contract(agent_notes: dict[str, Any] | None) -> str:
+    if not isinstance(agent_notes, dict):
+        return ""
+    value = str(agent_notes.get("answer_contract") or "").strip().lower()
+    return value if value == "research_brief" else ""
+
+
 def _source_blend(agent_notes: dict[str, Any] | None) -> str:
     if not isinstance(agent_notes, dict):
         return ""
@@ -827,40 +896,6 @@ def _hybrid_answer_query(query: str, notes_text: str, *, prefer_web: bool = Fals
     return f"{query}\n\n{policy}"
 
 
-def _quality_terms(value: Any) -> set[str]:
-    return {
-        token.lower()
-        for token in _TOKEN_RE.findall(str(value or ""))
-        if token.lower() not in _QUALITY_STOPWORDS
-    }
-
-
-def _quality_support_terms(hits: list[dict[str, Any]], agent_notes: dict[str, Any] | None) -> set[str]:
-    parts: list[str] = []
-    for hit in list(hits or [])[:8]:
-        if not isinstance(hit, dict):
-            continue
-        meta = _hit_meta(hit)
-        parts.extend(
-            [
-                str(hit.get("text") or ""),
-                str(meta.get("source_name") or ""),
-                str(meta.get("heading_path") or meta.get("top_heading") or ""),
-            ]
-        )
-    if isinstance(agent_notes, dict):
-        for row in _compact_evidence_matrix_rows(agent_notes.get("evidence_matrix")):
-            parts.extend(str(row.get(key) or "") for key in ("paper", "method", "key_result", "limitation", "evidence_quote"))
-    return _quality_terms(" ".join(parts))
-
-
-def _claim_has_any_local_support(claim: Any, hits: list[dict[str, Any]], agent_notes: dict[str, Any] | None) -> bool:
-    claim_terms = _quality_terms(claim)
-    if not claim_terms:
-        return False
-    return bool(claim_terms & _quality_support_terms(hits, agent_notes))
-
-
 def _source_notice_required(answer_mode: str) -> bool:
     return str(answer_mode or "").strip() in {"hybrid_local_external", "external_academic_llm"}
 
@@ -898,11 +933,7 @@ def _answer_quality_gate(
             if not bool(claim.get("citation_present") or claim.get("has_citation")):
                 hard_reasons.append("missing_local_citation")
                 continue
-            if str(claim.get("unsupported_reason") or "") == "missing_evidence_overlap" and not _claim_has_any_local_support(
-                claim.get("claim_text") or claim.get("text"),
-                hits,
-                agent_notes,
-            ):
+            if not bool(claim.get("supported")):
                 hard_reasons.append("unsupported_local_claim")
     deduped = list(dict.fromkeys(hard_reasons))
     return {
@@ -967,7 +998,12 @@ def _repair_answer_once(
         notes_text=notes_text,
         answer_mode=answer_mode,
     )
-    messages = build_messages(repair_query, list(history or []), list(hits or []))
+    messages = build_messages(
+        repair_query,
+        list(history or []),
+        list(hits or []),
+        answer_contract=_answer_contract(agent_notes),
+    )
     repaired = DeepSeekChat(settings).chat(
         messages=messages,
         temperature=min(float(temperature or 0.2), 0.2),
@@ -986,23 +1022,41 @@ def _fallback_quality_gate_answer(
     if not hits:
         return _fallback_general_answer(query, reason=reason, academic=True)
     prefer_zh = _has_cjk(query)
-    if prefer_zh:
-        lines = ["\u6839\u636e\u5f53\u524d\u547d\u4e2d\u7684\u77e5\u8bc6\u5e93\u8bc1\u636e\uff0c\u6211\u53ea\u80fd\u53ef\u9760\u5730\u603b\u7ed3\u4e3a\uff1a"]
-    else:
-        lines = ["Based on the retrieved knowledge-base evidence, I can safely say:"]
-    for idx, hit in enumerate(list(hits or [])[:4], start=1):
-        meta = _hit_meta(hit)
-        source = _source_name(hit) or f"Source {idx}"
-        heading = str(meta.get("heading_path") or meta.get("top_heading") or "").strip()
-        location = f" / {heading}" if heading else ""
-        lines.append(f"- [{idx}] {source}{location}: {_clip(hit.get('text'), 260)}")
-    if isinstance(agent_notes, dict) and _compact_evidence_matrix_rows(agent_notes.get("evidence_matrix")):
-        if prefer_zh:
-            lines.append("\u9650\u5236\uff1a\u4e0a\u9762\u7684\u603b\u7ed3\u53ea\u4fdd\u7559\u8bc1\u636e\u77e9\u9635\u548c\u68c0\u7d22\u7247\u6bb5\u80fd\u652f\u6301\u7684\u5185\u5bb9\u3002")
-        else:
-            lines.append("Limit: this keeps only claims supported by the evidence matrix and retrieved snippets.")
-    elif reason:
-        lines.append(("\u9650\u5236\uff1a" if prefer_zh else "Limit: ") + _clip(reason, 180))
+    lines = ["## \u8bc1\u636e" if prefer_zh else "## Evidence"]
+    selected_hits: list[tuple[int, dict[str, Any]]] = []
+    seen_sources: set[str] = set()
+    indexed_hits = [
+        (index, hit)
+        for index, hit in enumerate(list(hits or []), start=1)
+        if isinstance(hit, dict)
+    ]
+    for index, hit in indexed_hits:
+        source_key = (_source_path(hit) or _source_name(hit)).replace("\\", "/").strip().lower()
+        if source_key and source_key not in seen_sources:
+            seen_sources.add(source_key)
+            selected_hits.append((index, hit))
+        if len(selected_hits) >= 4:
+            break
+    for index, hit in indexed_hits:
+        if len(selected_hits) >= 4:
+            break
+        if any(existing_index == index for existing_index, _ in selected_hits):
+            continue
+        selected_hits.append((index, hit))
+    for index, hit in selected_hits:
+        text = re.sub(r"\[[0-9][0-9,\-\s]*\]", " ", str(hit.get("text") or ""))
+        text = re.sub(r"(?:^|\s)#{1,6}\s*", " ", text)
+        text = re.sub(r"[*_`|]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        candidates = [
+            part.strip(" -:;,.\u3002\uff1b\uff1a")
+            for part in re.split(r"(?<=[.!?\u3002\uff01\uff1f])\s+", text)[:8]
+        ]
+        candidates = [part for part in candidates if len(part) >= 32]
+        sentence = max(candidates, key=len, default=text)
+        sentence = _clip(sentence, 360).rstrip(" -:;,.\u3002\uff1b\uff1a")
+        if sentence:
+            lines.append(f"- {sentence} [{index}].")
     return "\n".join(lines).strip()
 
 
@@ -1068,6 +1122,15 @@ def _finalize_grounded_answer(
     )
     if answer_mode == "hybrid_local_external":
         fallback = _prepend_hybrid_notice(fallback, query, web_used=web_used)
+    verification = gate.get("verification") if isinstance(gate.get("verification"), dict) else {}
+    unsupported_claim_previews = [
+        {
+            "text": _clip(claim.get("claim_text") or claim.get("text"), 180),
+            "reason": str(claim.get("unsupported_reason") or "").strip(),
+        }
+        for claim in list(verification.get("claims") or [])
+        if isinstance(claim, dict) and not bool(claim.get("supported"))
+    ][:4]
     return {
         "answer": fallback,
         "quality_gate": {
@@ -1075,6 +1138,7 @@ def _finalize_grounded_answer(
             "reasons": list(gate.get("reasons") or []),
             "warnings": list(gate.get("warnings") or []),
             "repair_error": repair_error,
+            "unsupported_claim_previews": unsupported_claim_previews,
         },
     }
 
@@ -1183,7 +1247,12 @@ def generate_grounded_answer(
         try:
             notes_text = _format_agent_notes(agent_notes)
             answer_query = _hybrid_answer_query(query, notes_text, prefer_web=True)
-            messages = build_messages(answer_query, list(history or []), list(hits or []))
+            messages = build_messages(
+                answer_query,
+                list(history or []),
+                list(hits or []),
+                answer_contract=_answer_contract(agent_notes),
+            )
             web_result = DeepSeekChat(settings).chat_with_web_search(
                 messages=messages,
                 temperature=float(temperature),
@@ -1241,7 +1310,12 @@ def generate_grounded_answer(
                 "plan steps, tool calls, verification statistics, or JSON:\n"
                 f"{notes_text}"
             )
-        messages = build_messages(answer_query, list(history or []), list(hits or []))
+        messages = build_messages(
+            answer_query,
+            list(history or []),
+            list(hits or []),
+            answer_contract=_answer_contract(agent_notes),
+        )
         answer = DeepSeekChat(settings).chat(
             messages=messages,
             temperature=float(temperature),

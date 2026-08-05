@@ -37,7 +37,7 @@ def test_generate_grounded_answer_can_blend_local_evidence_with_external_context
 
         def chat(self, messages, *, temperature=0.2, max_tokens=1200):
             captured["messages"] = messages
-            return "Local evidence says retrieval is used [1]. Background: retrieval can improve grounding."
+            return "The paper uses retrieval before generation [1]. Background: retrieval can improve grounding."
 
     monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
 
@@ -70,7 +70,7 @@ def test_generate_grounded_answer_can_blend_local_evidence_with_external_context
     assert result["answer_mode"] == "hybrid_local_external"
     assert result["quality_gate"]["status"] == "passed"
     assert "local citations [n] come from the knowledge base" in result["answer"]
-    assert "Local evidence says retrieval is used [1]." in result["answer"]
+    assert "The paper uses retrieval before generation [1]." in result["answer"]
     assert "Hybrid answer source policy" in captured["messages"][-1]["content"]
     assert "`evidence_matrix` as the synthesis scaffold" in captured["messages"][-1]["content"]
     assert '"evidence_matrix"' in captured["messages"][-1]["content"]
@@ -109,6 +109,83 @@ def test_generate_grounded_answer_repairs_missing_local_citation(monkeypatch):
     assert result["quality_gate"]["status"] == "repaired"
     assert "missing_local_citation" in result["quality_gate"]["reasons"]
     assert "Quality gate reasons" in captured["messages"][-1]["content"]
+
+
+def test_quality_gate_fallback_is_sentence_cited_and_source_diverse(monkeypatch):
+    class _Settings:
+        text_api_key = "test-key"
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def chat(self, messages, *, temperature=0.2, max_tokens=1200):
+            return "An unsupported answer without any local citation."
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+    hits = [
+        {
+            "text": "Paper A uses retrieval before generation. It reports a measured result [26].",
+            "meta": {"source_name": "Paper A", "source_path": "paper-a.md"},
+        },
+        {
+            "text": "Paper A evaluates the retrieval stage on an imaging benchmark.",
+            "meta": {"source_name": "Paper A", "source_path": "paper-a.md"},
+        },
+        {
+            "text": "Paper B uses a separate reconstruction process for the selected experiment.",
+            "meta": {"source_name": "Paper B", "source_path": "paper-b.md"},
+        },
+    ]
+
+    result = tools.generate_grounded_answer(
+        "Compare Paper A and Paper B using local evidence only.",
+        hits,
+        settings=_Settings(),
+    )
+    verification = tools.verify_answer_citations(result["answer"], hits)["verification"]
+
+    assert result["quality_gate"]["status"] == "fallback"
+    assert "[1]" in result["answer"]
+    assert "[3]" in result["answer"]
+    assert "[26]" not in result["answer"]
+    assert result["quality_gate"]["unsupported_claim_previews"][0]["reason"] == "missing_citation"
+    assert verification["supported_claims"] == 3
+    assert verification["unsupported_claims"] == 0
+    assert verification["evidence_status"] == "grounded"
+
+
+def test_quality_gate_rejects_citation_that_does_not_support_claim(monkeypatch):
+    class _Settings:
+        text_api_key = "test-key"
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def chat(self, messages, *, temperature=0.2, max_tokens=1200):
+            return "The paper uses neural optimization for reconstruction [1]."
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+    hits = [
+        {
+            "text": "The experiment measures detector noise under low illumination conditions.",
+            "meta": {"source_name": "Paper A", "source_path": "paper-a.md"},
+        }
+    ]
+
+    result = tools.generate_grounded_answer(
+        "How does the paper reconstruct the image?",
+        hits,
+        settings=_Settings(),
+    )
+    verification = tools.verify_answer_citations(result["answer"], hits)["verification"]
+
+    assert result["quality_gate"]["status"] == "fallback"
+    assert "unsupported_local_claim" in result["quality_gate"]["reasons"]
+    assert result["quality_gate"]["unsupported_claim_previews"][0]["reason"] == "citation_evidence_mismatch"
+    assert verification["supported_claims"] == 1
+    assert verification["unsupported_claims"] == 0
 
 
 def test_generate_grounded_answer_skips_llm_without_evidence(monkeypatch):

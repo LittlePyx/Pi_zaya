@@ -178,6 +178,41 @@ The final 29-question run reported first-visible p50/p95/max of
 broader suite than `blind_holdout_v2`, so use it as a quality/coverage release
 gate rather than as a direct latency comparison with the 15-question baseline.
 
+## 2026-08-05 Research-Brief Acceptance
+
+The project research-brief workflow reuses the Research Agent verifier under a
+strict basket scope. It does not accept a brief as `verified` unless every
+audited claim is supported, every selected source contributes evidence, every
+visible citation resolves, and no evidence comes from outside the selected
+literature basket. A cited sentence whose cited snippet does not support the
+claim now fails the generation gate as well as the final audit.
+
+Real acceptance used five two-paper research objectives spanning dynamic 3D
+reconstruction, single-pixel parallelism, basis selection versus foveation,
+denoising taxonomy versus a restoration baseline, and QCLFM versus iISM depth
+signals. All five passed the final evidence audit. Four passed as direct model
+synthesis; the cross-language QCLFM case was explicitly labeled as a safe,
+source-balanced extractive fallback after Chinese synthesis could not pass the
+English-evidence overlap check. Its fallback still verified 4/4 claims and
+covered both selected sources.
+
+The unchanged product QA gates then passed:
+
+1. Full-library live QA: 29/29 in
+   `test_results/research_qa_final_full_library/20260805_110231`.
+2. Paid-model smoke: 5/5 in
+   `test_results/research_qa_final_live_smoke/20260805_110202`.
+3. Deterministic full-library retrieval: 29/29 in
+   `test_results/research_qa_final_retrieval/20260805_110146`.
+4. Source validation: 41/41; reviewed replay: 6/6.
+5. Backend suite: 4309 passed with 43 configuration-dependent skips; frontend
+   ESLint, production build, and the 118-test Playwright smoke suite passed.
+
+The final 29-question run reported first-visible p50/p95/max of
+2504/3871/5021 ms, answer-complete p50/p95/max of 4117/9123/11326 ms, and
+UI-ready p50/p95/max of 7259/11174/12372 ms. This keeps 29/29 coverage while
+reducing the previous accepted UI-ready maximum from 14092 ms to 12372 ms.
+
 ## Outputs
 
 Default output directory:

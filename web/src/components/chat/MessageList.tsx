@@ -42,6 +42,7 @@ import {
 import {
   mergeCiteMeta,
   normalizeCiteDetail,
+  normalizeShelfItemKind,
   normalizeShelfNote,
   normalizeShelfTags,
   shelfProjectScopeId,
@@ -170,6 +171,7 @@ import { AgentTracePanel } from './AgentTracePanel'
 import { ResearchTracePanel } from './ResearchTracePanel'
 import { ResearchContextReceipt } from './ResearchContextReceipt'
 import { EvidenceDrawer } from './EvidenceDrawer'
+import { ResearchBriefWorkspace } from './ResearchBriefWorkspace'
 import { generationRetryPrompt, isGenerationFailureAnswer } from './generationFailureUi'
 
 const { Text } = Typography
@@ -322,6 +324,8 @@ export function MessageList({
   const citationPreview = useCitationPopoverPreview()
   const [evidenceDrawerSource, setEvidenceDrawerSource] = useState<AnswerSourceNoticeViewModel | null>(null)
   const [evidenceDrawerCiteDetails, setEvidenceDrawerCiteDetails] = useState<CiteDetail[]>([])
+  const [researchBriefOpen, setResearchBriefOpen] = useState(false)
+  const [researchBriefSeedItems, setResearchBriefSeedItems] = useState<CiteShelfItem[]>([])
   const citationPolishPrewarmKeysRef = useRef(new Set<string>())
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
@@ -1767,7 +1771,7 @@ export function MessageList({
     }
   }
 
-  const openReaderFromDetail = (detail: CiteDetail) => {
+  const openReaderFromDetail = useCallback((detail: CiteDetail) => {
     if (!onOpenReader) return
     const sourcePath = String(detail.sourcePath || '').trim()
     if (!sourcePath) {
@@ -1796,7 +1800,7 @@ export function MessageList({
     if (!payload) return
     closeCitationPopoverState()
     onOpenReader(payload)
-  }
+  }, [S.reader_missing_path, closeCitationPopoverState, onOpenReader])
 
   const openMessageFromShelfItem = (item: CiteShelfItem) => {
     const targetId = Number(item.traceAssistantMsgId || item.traceUserMsgId || 0)
@@ -1984,6 +1988,69 @@ export function MessageList({
     message.success(S.research_context_followup_toast || 'Ready for a follow-up question')
   }, [S, activeConvId, onResearchContextFollowUp, paperGuideSourceName, paperGuideSourcePath])
 
+  const openResearchBriefWorkspace = useCallback(async (items: CiteShelfItem[]) => {
+    const projectId = String(shelfProjectId || '').trim()
+    if (!projectId) {
+      message.warning(S.research_brief_project_required)
+      return
+    }
+    const requestedItems = dedupeShelfItems(items).slice(0, 8)
+    const unavailableItems = requestedItems.filter((item) => {
+      const kind = normalizeShelfItemKind(item.shelfItemKind)
+      const route = String(item.citationRoute || '').trim().toLowerCase()
+      const requiresMatchedFullText = kind === 'reference' || item.isInpaper || route === 'system_b'
+      const usablePath = requiresMatchedFullText
+        ? String(item.libraryMatchPath || '').trim()
+        : String(item.libraryMatchPath || item.sourcePath || '').trim()
+      return !usablePath
+    })
+    if (unavailableItems.length > 0) {
+      message.warning(S.research_brief_sources_unavailable.replace('{n}', String(unavailableItems.length)))
+      return
+    }
+    const seedItems = requestedItems
+    if (seedItems.length <= 0) {
+      message.warning(S.research_brief_sources_required)
+      return
+    }
+    try {
+      const latest = latestShelfStateRef.current
+      const record = await chatApi.saveCitationShelf({
+        convId: activeConvId || undefined,
+        projectId,
+        scope: 'project',
+        open: latest.open,
+        items: shelfItemsForBackend(latest.items),
+      })
+      shelfBackendRevisionByKeyRef.current[shelfStorageKey(projectId)] = Math.max(0, Number(record.revision || 0))
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_brief_shelf_sync_failed)
+      return
+    }
+    setResearchBriefSeedItems(seedItems)
+    setResearchBriefOpen(true)
+  }, [S, activeConvId, shelfProjectId])
+
+  const openResearchBriefEvidence = useCallback((evidence: Record<string, unknown>) => {
+    const detail = normalizeCiteDetail({
+      num: Number(evidence.citation_number || 0),
+      anchor: String(evidence.anchor_id || evidence.block_id || ''),
+      sourceName: String(evidence.source_name || ''),
+      sourcePath: String(evidence.source_path || ''),
+      title: String(evidence.title || evidence.source_name || ''),
+      headingPath: String(evidence.heading_path || ''),
+      locationLabel: String(evidence.location_label || evidence.heading_path || ''),
+      pageStart: Number(evidence.page_start || 0),
+      pageEnd: Number(evidence.page_end || evidence.page_start || 0),
+      blockId: String(evidence.block_id || ''),
+      anchorId: String(evidence.anchor_id || ''),
+      evidenceQuote: String(evidence.evidence_quote || ''),
+      shelfExcerpt: String(evidence.evidence_quote || ''),
+      isInpaper: false,
+    })
+    if (detail) openReaderFromDetail(detail)
+  }, [openReaderFromDetail])
+
   const shelfNode = (
     <CiteShelf
       open={shelfOpen}
@@ -2018,6 +2085,7 @@ export function MessageList({
       }}
       onOpenMessage={openMessageFromShelfItem}
       onUseSelectedAsContext={onResearchContextPackChange ? useSelectedShelfItemsAsContext : undefined}
+      onOpenResearchBrief={(items) => { void openResearchBriefWorkspace(items) }}
       onRemove={(key) => {
         const willBeEmpty = latestShelfStateRef.current.items.filter((item) => item.key !== key).length <= 0
         if (willBeEmpty) markShelfEmptyBackendSaveIntent(shelfScopeId)
@@ -2497,6 +2565,14 @@ export function MessageList({
         onOpenReader={onOpenReader ? openReaderFromDetail : undefined}
         onAddToShelf={addToShelf}
         S={S}
+      />
+      <ResearchBriefWorkspace
+        open={researchBriefOpen}
+        projectId={String(shelfProjectId || '').trim()}
+        activeConvId={activeConvId}
+        seedItems={researchBriefSeedItems}
+        onClose={() => setResearchBriefOpen(false)}
+        onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
       />
       {renderedShelfNode}
     </>

@@ -93,6 +93,32 @@ def test_split_answer_claims_ignores_tiny_fragments_and_headings():
     ]
 
 
+def test_split_answer_claims_ignores_only_known_section_headings() -> None:
+    assert split_answer_claims("Executive findings\nPaper A reports a result [1].") == [
+        "Paper A reports a result [1]."
+    ]
+    assert split_answer_claims("## Paper A outperforms Paper B\nPaper A reports a result [1].") == [
+        "Paper A outperforms Paper B",
+        "Paper A reports a result [1].",
+    ]
+
+
+def test_verifier_keeps_figure_abbreviation_inside_cited_claim() -> None:
+    result = verify_answer_citations(
+        "Paper A reports the dynamic-scene comparison in Fig. 3 [1].",
+        [
+            {
+                "text": "Paper A reports the dynamic-scene comparison in Fig. 3.",
+                "meta": {"source_name": "Paper A"},
+            },
+            {"text": "Additional evidence.", "meta": {"source_name": "Paper A"}},
+        ],
+    )
+
+    assert result.total_claims == 1
+    assert result.supported_claims == 1
+
+
 def test_verifier_marks_fully_supported_answer_as_grounded():
     result = verify_answer_citations(
         "The retrieval module improves grounding quality [1].",
@@ -105,6 +131,27 @@ def test_verifier_marks_fully_supported_answer_as_grounded():
     assert result.evidence_status == "grounded"
     assert result.evidence_hit_count == 2
     assert result.evidence_status_reasons == []
+
+
+def test_verifier_excludes_strict_retrieval_boundary_and_procedural_followup() -> None:
+    answer = (
+        "Paper A uses retrieval before generation [1].\n\n"
+        "Limits: The retrieved snippets do not provide a direct head-to-head benchmark.\n\n"
+        "Next Steps: Inspect the experimental section and verify the reported table."
+    )
+
+    result = verify_answer_citations(
+        answer,
+        [
+            {"text": "Paper A uses retrieval before generation.", "meta": {"source_name": "Paper A"}},
+            {"text": "Additional retrieved evidence is available.", "meta": {"source_name": "Paper B"}},
+        ],
+    )
+
+    assert result.evidence_status == "grounded"
+    assert result.total_claims == 1
+    assert result.supported_claims == 1
+    assert result.source_notice_count == 2
 
 
 def test_verifier_marks_no_evidence_as_insufficient():

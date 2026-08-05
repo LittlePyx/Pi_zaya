@@ -13,6 +13,9 @@ from kb.path_safety import clean_file_source_path_input
 DEFAULT_ACTIVE_CONVERSATION_LIMIT = 400
 MAX_CITATION_SHELF_ITEMS = 120
 MAX_PROJECT_NAME_LEN = 120
+MAX_RESEARCH_BRIEF_TITLE_LEN = 240
+MAX_RESEARCH_BRIEF_OBJECTIVE_LEN = 4_000
+MAX_RESEARCH_BRIEF_CONTENT_LEN = 160_000
 _SHELF_MAX_ITEM_KEYS = 80
 _SHELF_MAX_DICT_KEYS = 32
 _SHELF_MAX_LIST_ITEMS = 32
@@ -595,6 +598,54 @@ def _project_record(row: sqlite3.Row | dict) -> dict:
     return rec
 
 
+def _research_brief_text(value: object, *, limit: int, multiline: bool = False) -> str:
+    text = str(value or "").replace("\x00", " ")
+    if multiline:
+        text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    else:
+        text = re.sub(r"\s+", " ", text).strip()
+    return text[: max(0, int(limit))]
+
+
+def _research_brief_json(value: object, *, default: object) -> object:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value or "")
+        except Exception:
+            return default
+        return parsed
+    return value if value is not None else default
+
+
+def _research_brief_record(row: sqlite3.Row | dict, *, include_content: bool = True) -> dict:
+    rec = dict(row)
+    evidence = _research_brief_json(rec.pop("evidence_json", "[]"), default=[])
+    bibliography = _research_brief_json(rec.pop("bibliography_json", "[]"), default=[])
+    agent_trace = _research_brief_json(rec.pop("agent_trace_json", "{}"), default={})
+    quality = _research_brief_json(rec.pop("quality_json", "{}"), default={})
+    rec["title"] = _research_brief_text(
+        rec.get("title"),
+        limit=MAX_RESEARCH_BRIEF_TITLE_LEN,
+    )
+    rec["objective"] = _research_brief_text(
+        rec.get("objective"),
+        limit=MAX_RESEARCH_BRIEF_OBJECTIVE_LEN,
+        multiline=True,
+    )
+    rec["content_markdown"] = _research_brief_text(
+        rec.get("content_markdown"),
+        limit=MAX_RESEARCH_BRIEF_CONTENT_LEN,
+        multiline=True,
+    ) if include_content else ""
+    rec["evidence"] = evidence if isinstance(evidence, list) else []
+    rec["bibliography"] = bibliography if isinstance(bibliography, list) else []
+    rec["agent_trace"] = agent_trace if isinstance(agent_trace, dict) else {}
+    rec["quality"] = quality if isinstance(quality, dict) else {}
+    rec["revision"] = max(1, int(rec.get("revision") or 1))
+    rec["quality_status"] = str(rec.get("quality_status") or "draft").strip() or "draft"
+    return rec
+
+
 def _is_default_conversation_title(title: str) -> bool:
     text = str(title or "").strip()
     if not text:
@@ -914,6 +965,55 @@ class ChatStore:
                 "ON citation_shelves(updated_at DESC);"
             )
             conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_briefs (
+                  id TEXT PRIMARY KEY,
+                  project_id TEXT NOT NULL,
+                  source_conv_id TEXT,
+                  title TEXT NOT NULL,
+                  objective TEXT NOT NULL DEFAULT '',
+                  content_markdown TEXT NOT NULL DEFAULT '',
+                  evidence_json TEXT NOT NULL DEFAULT '[]',
+                  bibliography_json TEXT NOT NULL DEFAULT '[]',
+                  agent_trace_json TEXT NOT NULL DEFAULT '{}',
+                  quality_status TEXT NOT NULL DEFAULT 'draft',
+                  quality_json TEXT NOT NULL DEFAULT '{}',
+                  revision INTEGER NOT NULL DEFAULT 1,
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                  FOREIGN KEY(source_conv_id) REFERENCES conversations(id) ON DELETE SET NULL
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_briefs_project_updated "
+                "ON research_briefs(project_id, updated_at DESC);"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_brief_revisions (
+                  brief_id TEXT NOT NULL,
+                  revision INTEGER NOT NULL,
+                  title TEXT NOT NULL,
+                  objective TEXT NOT NULL DEFAULT '',
+                  content_markdown TEXT NOT NULL DEFAULT '',
+                  evidence_json TEXT NOT NULL DEFAULT '[]',
+                  bibliography_json TEXT NOT NULL DEFAULT '[]',
+                  agent_trace_json TEXT NOT NULL DEFAULT '{}',
+                  quality_status TEXT NOT NULL DEFAULT 'draft',
+                  quality_json TEXT NOT NULL DEFAULT '{}',
+                  created_at REAL NOT NULL,
+                  PRIMARY KEY(brief_id, revision),
+                  FOREIGN KEY(brief_id) REFERENCES research_briefs(id) ON DELETE CASCADE
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_brief_revisions_created "
+                "ON research_brief_revisions(brief_id, created_at DESC);"
+            )
+            conn.execute(
                 "DELETE FROM citation_shelves "
                 "WHERE scope = 'conversation' AND scope_id NOT IN (SELECT id FROM conversations)"
             )
@@ -1064,8 +1164,330 @@ class ChatStore:
             conn.execute("UPDATE conversations SET project_id = NULL WHERE project_id = ?", (project_id,))
             self._archive_excess_conversations(conn, project_id=None)
             conn.execute("DELETE FROM citation_shelves WHERE scope = 'project' AND scope_id = ?", (project_id,))
+            conn.execute("DELETE FROM research_briefs WHERE project_id = ?", (project_id,))
             cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         return cur.rowcount > 0
+
+    @staticmethod
+    def _research_brief_json_text(value: object, *, fallback: object) -> str:
+        try:
+            return json.dumps(value, ensure_ascii=False, allow_nan=False, default=str)
+        except Exception:
+            return json.dumps(fallback, ensure_ascii=False)
+
+    @staticmethod
+    def _insert_research_brief_revision(conn: sqlite3.Connection, record: dict) -> None:
+        conn.execute(
+            """
+            INSERT INTO research_brief_revisions (
+              brief_id, revision, title, objective, content_markdown,
+              evidence_json, bibliography_json, agent_trace_json,
+              quality_status, quality_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(record.get("id") or ""),
+                int(record.get("revision") or 1),
+                str(record.get("title") or ""),
+                str(record.get("objective") or ""),
+                str(record.get("content_markdown") or ""),
+                str(record.get("evidence_json") or "[]"),
+                str(record.get("bibliography_json") or "[]"),
+                str(record.get("agent_trace_json") or "{}"),
+                str(record.get("quality_status") or "draft"),
+                str(record.get("quality_json") or "{}"),
+                float(record.get("updated_at") or record.get("created_at") or time.time()),
+            ),
+        )
+
+    def create_research_brief(
+        self,
+        *,
+        project_id: str,
+        title: str,
+        objective: str = "",
+        content_markdown: str = "",
+        source_conv_id: str | None = None,
+        evidence: list[dict] | None = None,
+        bibliography: list[dict] | None = None,
+        agent_trace: dict | None = None,
+        quality_status: str = "draft",
+        quality: dict | None = None,
+    ) -> dict | None:
+        pid = str(project_id or "").strip()
+        if not pid:
+            return None
+        brief_id = uuid.uuid4().hex
+        now = time.time()
+        clean_title = _research_brief_text(
+            title,
+            limit=MAX_RESEARCH_BRIEF_TITLE_LEN,
+        ) or "Untitled research brief"
+        clean_objective = _research_brief_text(
+            objective,
+            limit=MAX_RESEARCH_BRIEF_OBJECTIVE_LEN,
+            multiline=True,
+        )
+        clean_content = _research_brief_text(
+            content_markdown,
+            limit=MAX_RESEARCH_BRIEF_CONTENT_LEN,
+            multiline=True,
+        )
+        evidence_json = self._research_brief_json_text(list(evidence or []), fallback=[])
+        bibliography_json = self._research_brief_json_text(list(bibliography or []), fallback=[])
+        agent_trace_json = self._research_brief_json_text(dict(agent_trace or {}), fallback={})
+        quality_json = self._research_brief_json_text(dict(quality or {}), fallback={})
+        status = str(quality_status or "draft").strip().lower() or "draft"
+        source_cid = str(source_conv_id or "").strip() or None
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            if not self._project_exists(conn, pid):
+                return None
+            if source_cid:
+                source_row = conn.execute(
+                    "SELECT project_id FROM conversations WHERE id = ?",
+                    (source_cid,),
+                ).fetchone()
+                if not source_row or str(source_row["project_id"] or "").strip() != pid:
+                    source_cid = None
+            record = {
+                "id": brief_id,
+                "project_id": pid,
+                "source_conv_id": source_cid,
+                "title": clean_title,
+                "objective": clean_objective,
+                "content_markdown": clean_content,
+                "evidence_json": evidence_json,
+                "bibliography_json": bibliography_json,
+                "agent_trace_json": agent_trace_json,
+                "quality_status": status,
+                "quality_json": quality_json,
+                "revision": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+            conn.execute(
+                """
+                INSERT INTO research_briefs (
+                  id, project_id, source_conv_id, title, objective,
+                  content_markdown, evidence_json, bibliography_json,
+                  agent_trace_json, quality_status, quality_json, revision,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    brief_id,
+                    pid,
+                    source_cid,
+                    clean_title,
+                    clean_objective,
+                    clean_content,
+                    evidence_json,
+                    bibliography_json,
+                    agent_trace_json,
+                    status,
+                    quality_json,
+                    1,
+                    now,
+                    now,
+                ),
+            )
+            self._insert_research_brief_revision(conn, record)
+        return _research_brief_record(record)
+
+    def list_research_briefs(self, project_id: str, *, limit: int = 80) -> list[dict]:
+        pid = str(project_id or "").strip()
+        if not pid:
+            return []
+        lim = max(1, min(300, int(limit or 80)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, project_id, source_conv_id, title, objective,
+                       '' AS content_markdown, '[]' AS evidence_json,
+                       '[]' AS bibliography_json, '{}' AS agent_trace_json,
+                       quality_status, quality_json, revision,
+                       created_at, updated_at
+                FROM research_briefs
+                WHERE project_id = ?
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                (pid, lim),
+            ).fetchall()
+        return [_research_brief_record(row, include_content=False) for row in rows]
+
+    def get_research_brief(self, brief_id: str) -> dict | None:
+        bid = str(brief_id or "").strip()
+        if not bid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, project_id, source_conv_id, title, objective,
+                       content_markdown, evidence_json, bibliography_json,
+                       agent_trace_json, quality_status, quality_json, revision,
+                       created_at, updated_at
+                FROM research_briefs
+                WHERE id = ?
+                """,
+                (bid,),
+            ).fetchone()
+        return _research_brief_record(row) if row else None
+
+    def update_research_brief(
+        self,
+        brief_id: str,
+        *,
+        expected_revision: int | None = None,
+        title: str | None = None,
+        objective: str | None = None,
+        content_markdown: str | None = None,
+        evidence: list[dict] | None = None,
+        bibliography: list[dict] | None = None,
+        agent_trace: dict | None = None,
+        quality_status: str | None = None,
+        quality: dict | None = None,
+    ) -> tuple[dict | None, bool]:
+        bid = str(brief_id or "").strip()
+        if not bid:
+            return None, False
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            row = conn.execute(
+                "SELECT * FROM research_briefs WHERE id = ?",
+                (bid,),
+            ).fetchone()
+            if not row:
+                return None, False
+            current = dict(row)
+            current_revision = max(1, int(current.get("revision") or 1))
+            if expected_revision is not None and int(expected_revision) != current_revision:
+                return _research_brief_record(current), True
+            next_record = dict(current)
+            if title is not None:
+                next_record["title"] = _research_brief_text(
+                    title,
+                    limit=MAX_RESEARCH_BRIEF_TITLE_LEN,
+                ) or str(current.get("title") or "Untitled research brief")
+            if objective is not None:
+                next_record["objective"] = _research_brief_text(
+                    objective,
+                    limit=MAX_RESEARCH_BRIEF_OBJECTIVE_LEN,
+                    multiline=True,
+                )
+            if content_markdown is not None:
+                next_record["content_markdown"] = _research_brief_text(
+                    content_markdown,
+                    limit=MAX_RESEARCH_BRIEF_CONTENT_LEN,
+                    multiline=True,
+                )
+            if evidence is not None:
+                next_record["evidence_json"] = self._research_brief_json_text(list(evidence), fallback=[])
+            if bibliography is not None:
+                next_record["bibliography_json"] = self._research_brief_json_text(list(bibliography), fallback=[])
+            if agent_trace is not None:
+                next_record["agent_trace_json"] = self._research_brief_json_text(dict(agent_trace), fallback={})
+            if quality_status is not None:
+                next_record["quality_status"] = str(quality_status or "draft").strip().lower() or "draft"
+            if quality is not None:
+                next_record["quality_json"] = self._research_brief_json_text(dict(quality), fallback={})
+            next_record["revision"] = current_revision + 1
+            next_record["updated_at"] = time.time()
+            conn.execute(
+                """
+                UPDATE research_briefs
+                SET title = ?, objective = ?, content_markdown = ?,
+                    evidence_json = ?, bibliography_json = ?, agent_trace_json = ?,
+                    quality_status = ?, quality_json = ?, revision = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_record["title"],
+                    next_record["objective"],
+                    next_record["content_markdown"],
+                    next_record["evidence_json"],
+                    next_record["bibliography_json"],
+                    next_record["agent_trace_json"],
+                    next_record["quality_status"],
+                    next_record["quality_json"],
+                    next_record["revision"],
+                    next_record["updated_at"],
+                    bid,
+                ),
+            )
+            self._insert_research_brief_revision(conn, next_record)
+        return _research_brief_record(next_record), False
+
+    def list_research_brief_revisions(self, brief_id: str, *, limit: int = 40) -> list[dict]:
+        bid = str(brief_id or "").strip()
+        if not bid:
+            return []
+        lim = max(1, min(200, int(limit or 40)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT brief_id AS id, revision, title, objective,
+                       '' AS content_markdown, '[]' AS evidence_json,
+                       '[]' AS bibliography_json, '{}' AS agent_trace_json,
+                       quality_status, quality_json, created_at, created_at AS updated_at
+                FROM research_brief_revisions
+                WHERE brief_id = ?
+                ORDER BY revision DESC
+                LIMIT ?
+                """,
+                (bid, lim),
+            ).fetchall()
+        return [_research_brief_record(row, include_content=False) for row in rows]
+
+    def get_research_brief_revision(self, brief_id: str, revision: int) -> dict | None:
+        bid = str(brief_id or "").strip()
+        rev = max(1, int(revision or 1))
+        if not bid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT brief_id AS id, revision, title, objective, content_markdown,
+                       evidence_json, bibliography_json, agent_trace_json,
+                       quality_status, quality_json, created_at, created_at AS updated_at
+                FROM research_brief_revisions
+                WHERE brief_id = ? AND revision = ?
+                """,
+                (bid, rev),
+            ).fetchone()
+        return _research_brief_record(row) if row else None
+
+    def restore_research_brief_revision(
+        self,
+        brief_id: str,
+        revision: int,
+        *,
+        expected_revision: int | None = None,
+    ) -> tuple[dict | None, bool]:
+        historical = self.get_research_brief_revision(brief_id, revision)
+        if historical is None:
+            return None, False
+        return self.update_research_brief(
+            brief_id,
+            expected_revision=expected_revision,
+            title=str(historical.get("title") or ""),
+            objective=str(historical.get("objective") or ""),
+            content_markdown=str(historical.get("content_markdown") or ""),
+            evidence=list(historical.get("evidence") or []),
+            bibliography=list(historical.get("bibliography") or []),
+            agent_trace=dict(historical.get("agent_trace") or {}),
+            quality_status=str(historical.get("quality_status") or "draft"),
+            quality=dict(historical.get("quality") or {}),
+        )
+
+    def delete_research_brief(self, brief_id: str) -> bool:
+        bid = str(brief_id or "").strip()
+        if not bid:
+            return False
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM research_briefs WHERE id = ?", (bid,))
+        return int(cur.rowcount or 0) > 0
 
     def create_conversation(
         self,
