@@ -52,6 +52,7 @@ Primary local URLs:
 |---|---|
 | `api/routers/library.py` | Library, conversion, quality, repair, metadata, and indexing endpoints |
 | `api/routers/chat.py` | Chat API and streaming integration |
+| `api/routers/evidence_matrices.py` | Project evidence-matrix generation, versioning, cell audit, and export |
 | `api/routers/research_briefs.py` | Project research-brief generation, versioning, evidence audit, and export |
 | `api/reference_ui.py` | Backend citation/reference-card payload shaping for React |
 | `kb/converter/pipeline.py` | PDF to Markdown orchestrator |
@@ -62,6 +63,7 @@ Primary local URLs:
 | `kb/reference_index.py` | Reference extraction and Crossref enrichment |
 | `kb/reference_sync.py` | Non-blocking reference metadata sync |
 | `kb/chat_store.py` | SQLite conversations, messages, and retrieval refs |
+| `kb/evidence_matrix.py` | Source-balanced evidence-cell extraction, comparison boundaries, audit, and exporters |
 | `kb/research_brief.py` | Research-brief source selection, evidence quality contract, bibliography, and exporters |
 | `kb/library_store.py` | Library metadata and source tracking |
 
@@ -72,6 +74,7 @@ Primary local URLs:
 | `web/src/pages/ChatPage.tsx` | Main chat experience |
 | `web/src/pages/LibraryPage.tsx` | Library management, conversion, quality center, metadata |
 | `web/src/components/chat/CiteShelf.tsx` | Literature basket / citation shelf UI |
+| `web/src/components/chat/EvidenceMatrixWorkspace.tsx` | Project evidence-matrix editor, audit, revisions, and export UI |
 | `web/src/components/chat/ResearchBriefWorkspace.tsx` | Project research-brief editor, audit, revisions, and export UI |
 | `web/src/api/*.ts` | API clients and response types |
 | `web/src/stores/*.ts` | Zustand stores for chat, library, and settings |

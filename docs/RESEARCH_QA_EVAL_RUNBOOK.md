@@ -213,6 +213,31 @@ The final 29-question run reported first-visible p50/p95/max of
 UI-ready p50/p95/max of 7259/11174/12372 ms. This keeps 29/29 coverage while
 reducing the previous accepted UI-ready maximum from 14092 ms to 12372 ms.
 
+## 2026-08-06 Evidence-Matrix Acceptance
+
+Adding the persistent project evidence matrix did not change the ordinary chat
+generation path. The unchanged gates passed after the implementation:
+
+1. Full-library live QA: 29/29 in
+   `test_results/research_qa_matrix_final_full_library/20260806_012819`.
+2. Paid-model smoke: 5/5 in
+   `test_results/research_qa_matrix_final_live_smoke/20260806_012749`.
+3. Deterministic full-library retrieval: 29/29 in
+   `test_results/research_qa_matrix_final_retrieval/20260806_012651`.
+4. Source validation: 41/41; reviewed replay: 6/6.
+5. Backend suite: 4,317 passed with 43 configuration-dependent skips; frontend
+   ESLint, production build, and the 121-test Playwright smoke suite passed 119
+   executed tests with two configuration-dependent skips.
+
+The final 29-question run reported first-visible p50/p95/max of
+2618/4170/5764 ms, answer-complete p50/p95/max of 4153/11339/13597 ms, and
+UI-ready p50/p95/max of 7672/13531/14681 ms. Quality and coverage stayed 29/29,
+but the real-model p95 and maximum are higher than the 2026-08-05 run. No
+ordinary QA generation code changed in this feature, so treat this as visible
+provider/model long-tail variance rather than claiming a latency improvement.
+The evidence-matrix-specific acceptance, including its phase timings and 5/5
+matrix-backed brief audit, is documented in `docs/EVIDENCE_MATRIX_RUNBOOK.md`.
+
 ## Outputs
 
 Default output directory:

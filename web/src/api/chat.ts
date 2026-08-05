@@ -647,6 +647,7 @@ export interface ResearchBriefGenerateBody {
   item_keys?: string[]
   source_conv_id?: string | null
   brief_id?: string | null
+  matrix_id?: string | null
   expected_revision?: number | null
   locale?: string
   top_k?: number
@@ -654,6 +655,65 @@ export interface ResearchBriefGenerateBody {
 }
 
 export type ResearchBriefExportFormat = 'markdown' | 'docx' | 'bibtex' | 'ris'
+
+export type EvidenceMatrixQualityStatus = 'verified' | 'needs_review' | 'draft' | string
+export type EvidenceMatrixCellField = 'method' | 'dataset_or_experiment' | 'metric' | 'key_result' | 'limitation'
+
+export interface ProjectEvidenceMatrixCell {
+  field: EvidenceMatrixCellField
+  value: string
+  support_status: string
+  evidence_ids: string[]
+  manual_override?: boolean
+}
+
+export interface ProjectEvidenceMatrixRow {
+  id: string
+  source_item_key: string
+  paper: string
+  source_name: string
+  source_path: string
+  authors?: string
+  year?: string
+  doi?: string
+  notes: string
+  source_status: string
+  cells: Partial<Record<EvidenceMatrixCellField, ProjectEvidenceMatrixCell>>
+}
+
+export interface EvidenceMatrixRecord {
+  id: string
+  project_id: string
+  source_conv_id?: string | null
+  title: string
+  objective: string
+  rows: ProjectEvidenceMatrixRow[]
+  evidence: Array<Record<string, unknown>>
+  source_items: Array<Record<string, unknown>>
+  comparison_flags: Array<Record<string, unknown>>
+  quality_status: EvidenceMatrixQualityStatus
+  quality: Record<string, unknown>
+  revision: number
+  created_at: number
+  updated_at: number
+}
+
+export interface EvidenceMatrixGenerateBody {
+  title: string
+  objective?: string
+  item_keys?: string[]
+  source_conv_id?: string | null
+  matrix_id?: string | null
+  expected_revision?: number | null
+}
+
+export interface EvidenceMatrixRowUpdate {
+  row_id: string
+  notes?: string
+  cells?: Array<{ field: EvidenceMatrixCellField; value: string }>
+}
+
+export type EvidenceMatrixExportFormat = 'markdown' | 'csv' | 'xlsx'
 
 export interface ChatUploadItem {
   kind: 'pdf' | 'image' | 'unknown'
@@ -707,6 +767,30 @@ async function downloadResearchBrief(briefId: string, format: ResearchBriefExpor
   const filename = downloadFilename(
     res.headers.get('content-disposition'),
     `research-brief.${suffix}`,
+  )
+  const href = URL.createObjectURL(blob)
+  try {
+    const link = document.createElement('a')
+    link.href = href
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(href), 2_000)
+  }
+}
+
+async function downloadEvidenceMatrix(matrixId: string, format: EvidenceMatrixExportFormat) {
+  const res = await authFetch(
+    `/api/evidence-matrices/${encodeURIComponent(matrixId)}/export?format=${encodeURIComponent(format)}`,
+  )
+  if (!res.ok) throw await responseError(res, 'evidence matrix export failed')
+  const blob = await res.blob()
+  const suffix = format === 'markdown' ? 'md' : format
+  const filename = downloadFilename(
+    res.headers.get('content-disposition'),
+    `evidence-matrix.${suffix}`,
   )
   const href = URL.createObjectURL(blob)
   try {
@@ -822,6 +906,47 @@ export const chatApi = {
   deleteResearchBrief: (briefId: string) =>
     api.delete<{ ok: boolean }>(`/api/research-briefs/${encodeURIComponent(briefId)}`),
   downloadResearchBrief,
+  listEvidenceMatrices: (projectId: string, limit = 80) =>
+    api.get<EvidenceMatrixRecord[]>(
+      `/api/projects/${encodeURIComponent(projectId)}/evidence-matrices?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  getEvidenceMatrix: (matrixId: string) =>
+    api.get<EvidenceMatrixRecord>(`/api/evidence-matrices/${encodeURIComponent(matrixId)}`),
+  createEvidenceMatrix: (projectId: string, body: { title: string; objective?: string; source_conv_id?: string | null }) =>
+    api.post<EvidenceMatrixRecord>(
+      `/api/projects/${encodeURIComponent(projectId)}/evidence-matrices`,
+      body,
+    ),
+  generateEvidenceMatrix: (projectId: string, body: EvidenceMatrixGenerateBody) =>
+    api.post<EvidenceMatrixRecord>(
+      `/api/projects/${encodeURIComponent(projectId)}/evidence-matrices/generate`,
+      body,
+    ),
+  updateEvidenceMatrix: (
+    matrixId: string,
+    body: {
+      expected_revision: number
+      title?: string
+      objective?: string
+      row_updates?: EvidenceMatrixRowUpdate[]
+    },
+  ) => api.patch<EvidenceMatrixRecord>(`/api/evidence-matrices/${encodeURIComponent(matrixId)}`, body),
+  listEvidenceMatrixRevisions: (matrixId: string, limit = 40) =>
+    api.get<EvidenceMatrixRecord[]>(
+      `/api/evidence-matrices/${encodeURIComponent(matrixId)}/revisions?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  getEvidenceMatrixRevision: (matrixId: string, revision: number) =>
+    api.get<EvidenceMatrixRecord>(
+      `/api/evidence-matrices/${encodeURIComponent(matrixId)}/revisions/${Math.max(1, Math.floor(revision))}`,
+    ),
+  restoreEvidenceMatrix: (matrixId: string, revision: number, expectedRevision: number) =>
+    api.post<EvidenceMatrixRecord>(`/api/evidence-matrices/${encodeURIComponent(matrixId)}/restore`, {
+      revision,
+      expected_revision: expectedRevision,
+    }),
+  deleteEvidenceMatrix: (matrixId: string) =>
+    api.delete<{ ok: boolean }>(`/api/evidence-matrices/${encodeURIComponent(matrixId)}`),
+  downloadEvidenceMatrix,
   uploadFiles: async (files: File[], opts?: { quickIngest?: boolean; speedMode?: string; convId?: string | null }) => {
     const fd = new FormData()
     files.forEach((file) => fd.append('files', file))

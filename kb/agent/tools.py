@@ -1024,6 +1024,7 @@ def _fallback_quality_gate_answer(
     prefer_zh = _has_cjk(query)
     lines = ["## \u8bc1\u636e" if prefer_zh else "## Evidence"]
     selected_hits: list[tuple[int, dict[str, Any]]] = []
+    source_limit = 8 if _answer_contract(agent_notes) == "research_brief" else 4
     seen_sources: set[str] = set()
     indexed_hits = [
         (index, hit)
@@ -1035,10 +1036,10 @@ def _fallback_quality_gate_answer(
         if source_key and source_key not in seen_sources:
             seen_sources.add(source_key)
             selected_hits.append((index, hit))
-        if len(selected_hits) >= 4:
+        if len(selected_hits) >= source_limit:
             break
     for index, hit in indexed_hits:
-        if len(selected_hits) >= 4:
+        if len(selected_hits) >= source_limit:
             break
         if any(existing_index == index for existing_index, _ in selected_hits):
             continue

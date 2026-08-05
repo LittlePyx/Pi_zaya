@@ -171,6 +171,7 @@ import { AgentTracePanel } from './AgentTracePanel'
 import { ResearchTracePanel } from './ResearchTracePanel'
 import { ResearchContextReceipt } from './ResearchContextReceipt'
 import { EvidenceDrawer } from './EvidenceDrawer'
+import { EvidenceMatrixWorkspace } from './EvidenceMatrixWorkspace'
 import { ResearchBriefWorkspace } from './ResearchBriefWorkspace'
 import { generationRetryPrompt, isGenerationFailureAnswer } from './generationFailureUi'
 
@@ -326,6 +327,9 @@ export function MessageList({
   const [evidenceDrawerCiteDetails, setEvidenceDrawerCiteDetails] = useState<CiteDetail[]>([])
   const [researchBriefOpen, setResearchBriefOpen] = useState(false)
   const [researchBriefSeedItems, setResearchBriefSeedItems] = useState<CiteShelfItem[]>([])
+  const [researchBriefSourceMatrixId, setResearchBriefSourceMatrixId] = useState('')
+  const [evidenceMatrixOpen, setEvidenceMatrixOpen] = useState(false)
+  const [evidenceMatrixSeedItems, setEvidenceMatrixSeedItems] = useState<CiteShelfItem[]>([])
   const citationPolishPrewarmKeysRef = useRef(new Set<string>())
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
@@ -2028,7 +2032,50 @@ export function MessageList({
       return
     }
     setResearchBriefSeedItems(seedItems)
+    setResearchBriefSourceMatrixId('')
     setResearchBriefOpen(true)
+  }, [S, activeConvId, shelfProjectId])
+
+  const openEvidenceMatrixWorkspace = useCallback(async (items: CiteShelfItem[]) => {
+    const projectId = String(shelfProjectId || '').trim()
+    if (!projectId) {
+      message.warning(S.evidence_matrix_project_required)
+      return
+    }
+    const requestedItems = dedupeShelfItems(items).slice(0, 8)
+    const unavailableItems = requestedItems.filter((item) => {
+      const kind = normalizeShelfItemKind(item.shelfItemKind)
+      const route = String(item.citationRoute || '').trim().toLowerCase()
+      const requiresMatchedFullText = kind === 'reference' || item.isInpaper || route === 'system_b'
+      const usablePath = requiresMatchedFullText
+        ? String(item.libraryMatchPath || '').trim()
+        : String(item.libraryMatchPath || item.sourcePath || '').trim()
+      return !usablePath
+    })
+    if (unavailableItems.length > 0) {
+      message.warning(S.evidence_matrix_sources_unavailable.replace('{n}', String(unavailableItems.length)))
+      return
+    }
+    if (requestedItems.length <= 0) {
+      message.warning(S.research_brief_sources_required)
+      return
+    }
+    try {
+      const latest = latestShelfStateRef.current
+      const record = await chatApi.saveCitationShelf({
+        convId: activeConvId || undefined,
+        projectId,
+        scope: 'project',
+        open: latest.open,
+        items: shelfItemsForBackend(latest.items),
+      })
+      shelfBackendRevisionByKeyRef.current[shelfStorageKey(projectId)] = Math.max(0, Number(record.revision || 0))
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.evidence_matrix_shelf_sync_failed)
+      return
+    }
+    setEvidenceMatrixSeedItems(requestedItems)
+    setEvidenceMatrixOpen(true)
   }, [S, activeConvId, shelfProjectId])
 
   const openResearchBriefEvidence = useCallback((evidence: Record<string, unknown>) => {
@@ -2085,6 +2132,7 @@ export function MessageList({
       }}
       onOpenMessage={openMessageFromShelfItem}
       onUseSelectedAsContext={onResearchContextPackChange ? useSelectedShelfItemsAsContext : undefined}
+      onOpenEvidenceMatrix={(items) => { void openEvidenceMatrixWorkspace(items) }}
       onOpenResearchBrief={(items) => { void openResearchBriefWorkspace(items) }}
       onRemove={(key) => {
         const willBeEmpty = latestShelfStateRef.current.items.filter((item) => item.key !== key).length <= 0
@@ -2571,8 +2619,23 @@ export function MessageList({
         projectId={String(shelfProjectId || '').trim()}
         activeConvId={activeConvId}
         seedItems={researchBriefSeedItems}
+        sourceMatrixId={researchBriefSourceMatrixId}
         onClose={() => setResearchBriefOpen(false)}
         onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
+      />
+      <EvidenceMatrixWorkspace
+        open={evidenceMatrixOpen}
+        projectId={String(shelfProjectId || '').trim()}
+        activeConvId={activeConvId}
+        seedItems={evidenceMatrixSeedItems}
+        onClose={() => setEvidenceMatrixOpen(false)}
+        onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
+        onUseForBrief={(matrix) => {
+          setEvidenceMatrixOpen(false)
+          setResearchBriefSourceMatrixId(matrix.id)
+          setResearchBriefSeedItems(evidenceMatrixSeedItems)
+          setResearchBriefOpen(true)
+        }}
       />
       {renderedShelfNode}
     </>

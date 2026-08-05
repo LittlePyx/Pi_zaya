@@ -399,6 +399,170 @@ def research_brief_quality(
     return ("verified" if not reasons else "needs_review"), quality
 
 
+def _matrix_extractive_brief_answer(prompt: str, hits: list[dict[str, Any]]) -> str:
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", str(prompt or "")))
+    lines = ["## 证据" if prefer_zh else "## Evidence"]
+    seen_sources: set[str] = set()
+    for index, hit in enumerate(hits, start=1):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_key = _first_text(meta, "source_path", "source_name", limit=1_200).replace("\\", "/").lower()
+        if not source_key or source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        sentence = re.sub(r"\[[0-9][0-9,\-\s]*\]", " ", _text(hit.get("text"), limit=520))
+        sentence = re.sub(r"[*_`|]+", " ", sentence)
+        sentence = re.sub(r"\s+", " ", sentence).strip(" -:;,.。；：")
+        if sentence:
+            lines.append(f"- {sentence} [{index}].")
+        if len(seen_sources) >= 8:
+            break
+    return "\n".join(lines).strip()
+
+
+def generate_research_brief_from_matrix(
+    prompt: str,
+    *,
+    matrix_record: dict[str, Any],
+    settings: Any,
+    max_tokens: int = 1_800,
+) -> dict[str, Any]:
+    from kb.agent.tools import generate_grounded_answer, verify_answer_citations
+    from kb.evidence_matrix import evidence_matrix_hits
+
+    hits = evidence_matrix_hits(matrix_record, limit=20)
+    rows = [item for item in list(matrix_record.get("rows") or []) if isinstance(item, dict)]
+    agent_notes = {
+        "answer_contract": "research_brief",
+        "evidence_gate": {
+            "answer_mode": "evidence_grounded",
+            "source_blend": "local_grounded",
+            "source_policy": "local_only",
+        },
+        "evidence_matrix": rows[:8],
+    }
+    generated = generate_grounded_answer(
+        prompt,
+        hits,
+        settings=settings,
+        agent_notes=agent_notes,
+        temperature=0.1,
+        max_tokens=max_tokens,
+    )
+    answer = str(generated.get("answer") or "").strip()
+    gate = generated.get("quality_gate") if isinstance(generated.get("quality_gate"), dict) else {}
+    verification_payload = verify_answer_citations(answer, hits, answer_mode="evidence_grounded")
+    verification = (
+        verification_payload.get("verification")
+        if isinstance(verification_payload.get("verification"), dict)
+        else {}
+    )
+
+    cited_numbers = _citation_numbers(answer)
+    cited_sources = {
+        _first_text(
+            hits[number - 1].get("meta") if isinstance(hits[number - 1].get("meta"), dict) else {},
+            "source_path",
+            "source_name",
+            limit=1_200,
+        ).replace("\\", "/").lower()
+        for number in cited_numbers
+        if 0 < number <= len(hits)
+    }
+    expected_sources = {
+        _first_text(row, "source_path", "source_name", limit=1_200).replace("\\", "/").lower()
+        for row in rows
+        if _first_text(row, "source_path", "source_name", limit=1_200)
+    }
+    needs_fallback = bool(
+        str(gate.get("status") or "").lower() not in {"passed", "repaired", "fallback"}
+        or _safe_int(verification.get("total_claims")) <= 0
+        or _safe_int(verification.get("unsupported_claims")) > 0
+        or not expected_sources.issubset(cited_sources)
+    )
+    if needs_fallback:
+        answer = _matrix_extractive_brief_answer(prompt, hits)
+        gate = {
+            "status": "fallback",
+            "reasons": ["matrix_source_coverage_or_support_gate"],
+            "warnings": ["extractive_fallback"],
+        }
+        verification_payload = verify_answer_citations(answer, hits, answer_mode="evidence_grounded")
+        verification = (
+            verification_payload.get("verification")
+            if isinstance(verification_payload.get("verification"), dict)
+            else {}
+        )
+    errors = [str(generated.get("error") or "").strip()] if generated.get("error") and not needs_fallback else []
+    summary = {
+        "query_scope": "basket",
+        "quality_gate_status": str(gate.get("status") or ""),
+        "quality_gate_reasons": list(gate.get("reasons") or []),
+        "quality_gate_warnings": list(gate.get("warnings") or []),
+        "matrix_id": str(matrix_record.get("id") or ""),
+        "matrix_revision": int(matrix_record.get("revision") or 1),
+        **{
+            key: verification.get(key)
+            for key in (
+                "total_claims",
+                "supported_claims",
+                "unsupported_claims",
+                "support_ratio",
+                "evidence_status",
+            )
+        },
+    }
+    trace = {
+        "mode": "research_agent",
+        "question_type": "multi_paper_comparison",
+        "context": {
+            "query_scope": "basket",
+            "answer_contract": "research_brief",
+            "source_matrix_id": str(matrix_record.get("id") or ""),
+            "source_matrix_revision": int(matrix_record.get("revision") or 1),
+        },
+        "plan": [],
+        "steps": [
+            {
+                "tool": "generate_grounded_answer",
+                "status": "done",
+                "observation": "Generated the brief only from the verified project evidence matrix.",
+                "output": {"quality_gate": gate},
+                "error": "",
+                "elapsed_ms": 0,
+            },
+            {
+                "tool": "verify_answer_citations",
+                "status": "done",
+                "observation": str(verification_payload.get("observation") or ""),
+                "output": verification,
+                "error": "",
+                "elapsed_ms": 0,
+            },
+        ],
+        "verification": verification,
+        "research_run": {
+            "run_id": f"matrix_{str(matrix_record.get('id') or '')[:16]}",
+            "status": "verified" if not errors else "failed",
+            "source_policy": "local_only",
+            "query_scope": "basket",
+            "question": _text(prompt, limit=500),
+            "subtasks": [],
+            "evidence_matrix": rows[:8],
+            "metrics": {
+                "evidence_matrix_rows": len(rows),
+                "source_count": len(expected_sources),
+                "local_evidence_hit_count": len(hits),
+            },
+        },
+        "status": "done" if not errors else "failed",
+        "errors": errors,
+        "summary": summary,
+    }
+    return {"answer": answer, "hits": hits, "agent_trace": trace}
+
+
 def _reference_line(item: dict[str, Any], index: int) -> str:
     authors = _text(item.get("authors"), limit=800)
     year = _text(item.get("year"), limit=40)

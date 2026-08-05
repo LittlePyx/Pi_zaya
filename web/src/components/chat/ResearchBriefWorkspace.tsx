@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons'
 import {
   chatApi,
+  type EvidenceMatrixRecord,
   type ResearchBriefExportFormat,
   type ResearchBriefRecord,
 } from '../../api/chat'
@@ -33,6 +34,7 @@ interface Props {
   projectId: string
   activeConvId?: string | null
   seedItems: CiteShelfItem[]
+  sourceMatrixId?: string
   onClose: () => void
   onOpenEvidence?: (evidence: Record<string, unknown>) => void
 }
@@ -60,11 +62,14 @@ export function ResearchBriefWorkspace({
   projectId,
   activeConvId,
   seedItems,
+  sourceMatrixId = '',
   onClose,
   onOpenEvidence,
 }: Props) {
   const S = useT()
   const [briefs, setBriefs] = useState<ResearchBriefRecord[]>([])
+  const [verifiedMatrices, setVerifiedMatrices] = useState<EvidenceMatrixRecord[]>([])
+  const [selectedMatrixId, setSelectedMatrixId] = useState('')
   const [active, setActive] = useState<ResearchBriefRecord | null>(null)
   const [revisions, setRevisions] = useState<ResearchBriefRecord[]>([])
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null)
@@ -124,10 +129,28 @@ export function ResearchBriefWorkspace({
     }
   }, [S.research_brief_load_failed, applyRecord, loadRevisions, projectId])
 
+  const loadMatrices = useCallback(async () => {
+    if (!projectId) return
+    try {
+      const rows = (await chatApi.listEvidenceMatrices(projectId))
+        .filter((record) => record.quality_status === 'verified')
+      setVerifiedMatrices(rows)
+      setSelectedMatrixId((current) => {
+        const requested = String(sourceMatrixId || '').trim()
+        if (requested && rows.some((row) => row.id === requested)) return requested
+        if (current && rows.some((row) => row.id === current)) return current
+        return rows[0]?.id || ''
+      })
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.evidence_matrix_load_failed)
+    }
+  }, [S.evidence_matrix_load_failed, projectId, sourceMatrixId])
+
   useEffect(() => {
     if (!open || !projectId) return
     void loadBriefs()
-  }, [loadBriefs, open, projectId])
+    void loadMatrices()
+  }, [loadBriefs, loadMatrices, open, projectId])
 
   const dirty = useMemo(() => {
     if (!active) return Boolean(title.trim() || objective.trim() || content.trim())
@@ -155,8 +178,8 @@ export function ResearchBriefWorkspace({
       message.warning(S.research_brief_title_required)
       return
     }
-    if (seedItems.length <= 0) {
-      message.warning(S.research_brief_sources_required)
+    if (!selectedMatrixId) {
+      message.warning(S.research_brief_matrix_required)
       return
     }
     setGenerating(true)
@@ -165,6 +188,7 @@ export function ResearchBriefWorkspace({
         title: title.trim(),
         objective: objective.trim(),
         item_keys: seedItems.map((item) => String(item.key || '').trim()).filter(Boolean),
+        matrix_id: selectedMatrixId,
         source_conv_id: activeConvId || null,
         brief_id: active?.id || null,
         expected_revision: active?.revision || null,
@@ -334,6 +358,20 @@ export function ResearchBriefWorkspace({
                 maxLength={4000}
                 data-testid="research-brief-objective"
               />
+              <Select
+                value={selectedMatrixId || undefined}
+                onChange={setSelectedMatrixId}
+                placeholder={S.research_brief_matrix_placeholder}
+                options={verifiedMatrices.map((matrix) => ({
+                  value: matrix.id,
+                  label: `${matrix.title} · r${matrix.revision}`,
+                }))}
+                status={verifiedMatrices.length <= 0 ? 'warning' : undefined}
+                data-testid="research-brief-source-matrix"
+              />
+              {verifiedMatrices.length <= 0 ? (
+                <Alert type="warning" showIcon message={S.research_brief_matrix_required} />
+              ) : null}
               {active?.quality_status === 'needs_review' ? (
                 <Alert
                   type="warning"

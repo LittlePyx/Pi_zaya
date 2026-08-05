@@ -2,8 +2,9 @@
 
 Pi_zaya is a local-first, evidence-grounded research agent for academic PDFs. It
 helps users read papers, retrieve evidence, trace citations, compare papers,
-generate verifiable answers, and turn a project's literature basket into an
-editable research brief with an evidence audit.
+generate verifiable answers, turn a project's literature basket into a
+persistent cell-level evidence matrix, and create an editable research brief
+from the verified matrix.
 
 This is a production-oriented AI agent / RAG engineering portfolio project, not
 a toy PDF chatbot. It connects PDF conversion, structured indexing, hybrid
@@ -37,7 +38,8 @@ web context.
 | Evidence-based QA | Searches the indexed library, builds a RAG prompt from retrieved snippets, and returns grounded answers. |
 | Citation tracing | Surfaces answer evidence, source cards, reference context, and reader locate targets. |
 | Literature basket | Lets users collect papers and excerpts, keep local research context, and export citations. |
-| Research briefs | Generates project-scoped, versioned Markdown briefs from selected local full text, audits every substantive claim, opens its evidence in the reader, and exports Markdown, DOCX, BibTeX, or RIS. |
+| Evidence matrices | Builds project-scoped, versioned comparisons of methods, experiments, metrics, results, and limitations; every populated factual cell opens its exact local source evidence, while unavailable facts remain empty. Exports Markdown, CSV, or XLSX. |
+| Research briefs | Generates project-scoped, versioned Markdown briefs only from a selected verified evidence matrix in the product workflow, audits every substantive claim, records matrix lineage, opens its evidence in the reader, and exports Markdown, DOCX, BibTeX, or RIS. |
 | Research Agent Mode | Adds explicit planning, source policy, evidence matrix, tool-use trace, and sentence-level citation support checks on top of the existing RAG flow. |
 | Quality tooling | Scans conversion quality, runs repair flows, rebuilds indexes, and tracks metadata/reference sync. |
 
@@ -54,9 +56,10 @@ flowchart LR
   E --> X["Reference Resolver"]
   E --> G["Reading Guide Tool"]
   E --> M["Paper Comparison Tool"]
-  E --> Q["Research Run + Evidence Matrix"]
+  E --> Q["Research Run + Transient Evidence Matrix"]
   E --> V["Claim Verifier"]
-  E --> B["Versioned Research Brief"]
+  L["Project Literature Basket"] --> EM["Persistent Evidence Matrix"]
+  EM --> RB["Versioned Research Brief"]
   P --> O["Grounded Answer + Citation Trace UI"]
   R --> O
   X --> O
@@ -64,7 +67,8 @@ flowchart LR
   M --> O
   Q --> O
   V --> O
-  B --> O
+  EM --> O
+  RB --> O
 ```
 
 At a high level:
@@ -77,10 +81,13 @@ At a high level:
    library scope.
 4. Research Agent Mode plans tool calls, checks evidence sufficiency, generates
    an answer, and verifies citation support.
-5. A project can turn selected literature-basket sources into a versioned brief;
-   the same claim verifier blocks unsupported, unresolved, missing-source, or
-   out-of-scope evidence from receiving verified status.
-6. The frontend keeps the answer clean while citations, reference cards, reader
+5. A project can turn selected literature-basket sources into a persistent,
+   versioned evidence matrix. Each populated factual cell is an extract from the
+   same paper and carries a reader locator; missing evidence stays visibly empty.
+6. A verified matrix can generate a versioned brief using only its audited
+   evidence. The same claim verifier blocks unsupported, unresolved,
+   missing-source, or out-of-scope evidence from receiving verified status.
+7. The frontend keeps the answer clean while citations, reference cards, reader
    locate targets, and agent traces remain inspectable on demand.
 
 Key backend entry points:
@@ -89,8 +96,10 @@ Key backend entry points:
 - `api/routers/generate.py`: streaming chat generation
 - `api/routers/chat.py`: conversations, messages, uploads, and direct research-agent endpoint
 - `api/routers/library.py`: library, conversion, quality, metadata, and indexing APIs
+- `api/routers/evidence_matrices.py`: project evidence-matrix generation, revisions, cell audit, and export
 - `api/routers/research_briefs.py`: project brief generation, revisions, evidence audit, and export
 - `kb/task_runtime.py`: background generation/conversion runtime
+- `kb/evidence_matrix.py`: source-balanced cell extraction, comparison boundaries, audit, and exporters
 - `kb/research_brief.py`: brief source normalization, quality contract, bibliography, and exporters
 - `kb/agent/`: lightweight Research Agent layer
 
@@ -101,6 +110,7 @@ Key frontend entry points:
 - `web/src/pages/LibraryPage.tsx`: PDF/library workspace
 - `web/src/components/chat/AgentTracePanel.tsx`: Research Agent trace UI
 - `web/src/components/chat/CiteShelf.tsx`: literature basket UI
+- `web/src/components/chat/EvidenceMatrixWorkspace.tsx`: persistent matrix editor, evidence, versions, and exports
 - `web/src/components/chat/ResearchBriefWorkspace.tsx`: brief editor, preview, evidence, versions, and exports
 - `web/src/api/*.ts`: typed API contracts
 
@@ -361,7 +371,10 @@ Environment variables and `.env` values take precedence.
 5. Rebuild the knowledge base indexes.
 6. Ask questions from the current paper, selected literature basket, or full library.
 7. Open answer evidence/citation cards in the Reader.
-8. Add important papers or excerpts to the literature basket and export citations.
+8. Add important papers to a project literature basket, generate and review its
+   evidence matrix, and keep honest gaps empty.
+9. Create a verified research brief from the audited matrix, or export the
+   matrix as Markdown, CSV, or XLSX.
 
 ## Demo
 

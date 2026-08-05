@@ -45,6 +45,23 @@ const SHELF_ITEM = {
   note: '',
 }
 
+const VERIFIED_MATRIX = {
+  id: 'matrix-verified-1',
+  project_id: PROJECT.id,
+  source_conv_id: CONVERSATION.id,
+  title: 'Verified imaging evidence',
+  objective: 'Compare methods.',
+  rows: [],
+  evidence: [],
+  source_items: [],
+  comparison_flags: [],
+  quality_status: 'verified',
+  quality: { supported_cell_count: 4, populated_cell_count: 4 },
+  revision: 2,
+  created_at: 8,
+  updated_at: 9,
+}
+
 type Brief = {
   id: string
   project_id: string
@@ -154,6 +171,9 @@ async function installBackend(page: Page) {
   })
   await page.route('**/api/library/quality/sources**', async (route) => {
     await fulfillJson(route, { items: [] })
+  })
+  await page.route(`**/api/projects/${PROJECT.id}/evidence-matrices**`, async (route) => {
+    await fulfillJson(route, [VERIFIED_MATRIX])
   })
 
   await page.route(`**/api/projects/${PROJECT.id}/research-briefs**`, async (route) => {
@@ -280,6 +300,7 @@ test('project basket becomes a versioned, audited, exportable research brief', a
     title: 'Imaging comparison brief',
     source_conv_id: CONVERSATION.id,
     item_keys: [SHELF_ITEM.key],
+    matrix_id: VERIFIED_MATRIX.id,
   })
 
   await page.getByRole('tab', { name: /Evidence/ }).click()

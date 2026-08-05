@@ -3,6 +3,7 @@ from io import BytesIO
 from docx import Document
 
 from kb.research_brief import (
+    generate_research_brief_from_matrix,
     research_brief_bibliography,
     research_brief_bibtex,
     research_brief_context,
@@ -200,3 +201,81 @@ def test_research_brief_exports_keep_evidence_and_reference_identity() -> None:
     assert "Acquisition brief" in text
     assert "Paper A reports the measured result [1]" in text
     assert "Evidence appendix" in text
+
+
+def test_matrix_backed_brief_falls_back_when_model_omits_a_selected_source(monkeypatch) -> None:
+    from kb.agent import tools as agent_tools
+
+    source_items = [
+        {"key": "a", "title": "Paper A", "sourcePath": "F:/papers/a.md"},
+        {"key": "b", "title": "Paper B", "sourcePath": "F:/papers/b.md"},
+    ]
+    rows = []
+    evidence = []
+    for index, item in enumerate(source_items, start=1):
+        evidence_id = f"ev-{index}"
+        quote = f"Paper {chr(64 + index)} uses a measured coded acquisition method."
+        rows.append(
+            {
+                "id": f"row-{index}",
+                "paper": item["title"],
+                "source_name": item["title"],
+                "source_path": item["sourcePath"],
+                "source_status": "active",
+                "cells": {
+                    "method": {
+                        "value": quote,
+                        "support_status": "grounded",
+                        "evidence_ids": [evidence_id],
+                        "manual_override": False,
+                    }
+                },
+            }
+        )
+        evidence.append(
+            {
+                "id": evidence_id,
+                "field": "method",
+                "source_name": item["title"],
+                "source_path": item["sourcePath"],
+                "heading_path": "Method",
+                "evidence_quote": quote,
+                "score": 8.0,
+            }
+        )
+    matrix = {
+        "id": "matrix-a-b",
+        "revision": 3,
+        "quality_status": "verified",
+        "rows": rows,
+        "evidence": evidence,
+        "source_items": source_items,
+    }
+    monkeypatch.setattr(
+        agent_tools,
+        "generate_grounded_answer",
+        lambda *args, **kwargs: {
+            "answer": "Only Paper A is represented [1].",
+            "quality_gate": {"status": "passed", "reasons": [], "warnings": []},
+        },
+    )
+
+    payload = generate_research_brief_from_matrix(
+        "Compare both selected papers.",
+        matrix_record=matrix,
+        settings=object(),
+    )
+
+    assert payload["agent_trace"]["summary"]["quality_gate_status"] == "fallback"
+    assert "[1]" in payload["answer"]
+    assert "[2]" in payload["answer"]
+    matrix_evidence = research_brief_evidence(payload["hits"])
+    status, quality = research_brief_quality(
+        answer=payload["answer"],
+        agent_trace=payload["agent_trace"],
+        selected_items=source_items,
+        evidence=matrix_evidence,
+    )
+    assert status == "verified"
+    assert quality["generation_mode"] == "extractive_fallback"
+    assert quality["selected_sources_without_evidence"] == []

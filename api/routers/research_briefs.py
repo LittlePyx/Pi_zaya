@@ -16,6 +16,7 @@ from kb.research_brief import (
     research_brief_context,
     research_brief_docx,
     research_brief_evidence,
+    generate_research_brief_from_matrix,
     research_brief_markdown,
     research_brief_prompt,
     research_brief_quality,
@@ -58,6 +59,7 @@ class ResearchBriefGenerateBody(BaseModel):
     item_keys: list[str] = Field(default_factory=list, max_length=_MAX_ITEM_KEYS)
     source_conv_id: str | None = Field(None, max_length=120)
     brief_id: str | None = Field(None, max_length=120)
+    matrix_id: str | None = Field(None, max_length=120)
     expected_revision: int | None = Field(None, ge=1)
     locale: str = Field("zh", max_length=16)
     top_k: int = Field(8, ge=2, le=20)
@@ -135,55 +137,76 @@ def generate_research_brief(project_id: str, body: ResearchBriefGenerateBody):
             raise HTTPException(400, "expected_revision is required when regenerating a research brief")
         if int(current.get("revision") or 1) != int(body.expected_revision):
             _conflict_response(current)
-    shelf = store.get_citation_shelf(
-        project_id=project_id,
-        scope="project",
-    )
-    shelf_items = [item for item in list((shelf or {}).get("items") or []) if isinstance(item, dict)]
-    requested_keys = {str(key or "").strip() for key in body.item_keys if str(key or "").strip()}
-    if requested_keys:
-        shelf_by_key = {
-            str(item.get("key") or item.get("id") or "").strip(): item
-            for item in shelf_items
-            if str(item.get("key") or item.get("id") or "").strip()
-        }
-        unavailable_keys = sorted(
-            key
-            for key in requested_keys
-            if key not in shelf_by_key or not select_research_brief_sources([shelf_by_key[key]])
-        )
-        if unavailable_keys:
-            raise HTTPException(
-                400,
-                "selected literature-basket items lack local full-text evidence: "
-                + ", ".join(unavailable_keys[:8]),
-            )
-    selected_items = select_research_brief_sources(
-        shelf_items,
-        item_keys=body.item_keys,
-    )
-    if not selected_items:
-        raise HTTPException(
-            400,
-            "no selected literature-basket item has local full-text evidence",
-        )
     settings = get_settings()
     prompt = research_brief_prompt(body.objective, locale=body.locale)
-    context = research_brief_context(
-        selected_items,
-        conversation_id=str(body.source_conv_id or "").strip(),
-    )
-    payload = run_research_agent(
-        prompt,
-        db_dir=settings.db_dir,
-        settings=settings,
-        top_k=max(body.top_k, len(selected_items)),
-        temperature=0.1,
-        max_tokens=body.max_tokens,
-        query_scope="basket",
-        selected_research_context=context,
-        answer_contract="research_brief",
-    )
+    source_matrix: dict[str, Any] | None = None
+    if body.matrix_id:
+        source_matrix = store.get_evidence_matrix(body.matrix_id)
+        if source_matrix is None or str(source_matrix.get("project_id") or "") != str(project_id or ""):
+            raise HTTPException(404, "evidence matrix not found in project")
+        if str(source_matrix.get("quality_status") or "") != "verified":
+            raise HTTPException(400, "research briefs require a verified evidence matrix")
+        selected_items = [
+            item
+            for item in list(source_matrix.get("source_items") or [])
+            if isinstance(item, dict)
+        ]
+        if not selected_items:
+            raise HTTPException(400, "verified evidence matrix has no source items")
+        payload = generate_research_brief_from_matrix(
+            prompt,
+            matrix_record=source_matrix,
+            settings=settings,
+            max_tokens=body.max_tokens,
+        )
+    else:
+        shelf = store.get_citation_shelf(
+            project_id=project_id,
+            scope="project",
+        )
+        shelf_items = [item for item in list((shelf or {}).get("items") or []) if isinstance(item, dict)]
+        requested_keys = {str(key or "").strip() for key in body.item_keys if str(key or "").strip()}
+        if requested_keys:
+            shelf_by_key = {
+                str(item.get("key") or item.get("id") or "").strip(): item
+                for item in shelf_items
+                if str(item.get("key") or item.get("id") or "").strip()
+            }
+            unavailable_keys = sorted(
+                key
+                for key in requested_keys
+                if key not in shelf_by_key or not select_research_brief_sources([shelf_by_key[key]])
+            )
+            if unavailable_keys:
+                raise HTTPException(
+                    400,
+                    "selected literature-basket items lack local full-text evidence: "
+                    + ", ".join(unavailable_keys[:8]),
+                )
+        selected_items = select_research_brief_sources(
+            shelf_items,
+            item_keys=body.item_keys,
+        )
+        if not selected_items:
+            raise HTTPException(
+                400,
+                "no selected literature-basket item has local full-text evidence",
+            )
+        context = research_brief_context(
+            selected_items,
+            conversation_id=str(body.source_conv_id or "").strip(),
+        )
+        payload = run_research_agent(
+            prompt,
+            db_dir=settings.db_dir,
+            settings=settings,
+            top_k=max(body.top_k, len(selected_items)),
+            temperature=0.1,
+            max_tokens=body.max_tokens,
+            query_scope="basket",
+            selected_research_context=context,
+            answer_contract="research_brief",
+        )
     answer = str(payload.get("answer") or "").strip()
     agent_trace = payload.get("agent_trace") if isinstance(payload.get("agent_trace"), dict) else {}
     evidence = research_brief_evidence(
@@ -196,6 +219,10 @@ def generate_research_brief(project_id: str, body: ResearchBriefGenerateBody):
         selected_items=selected_items,
         evidence=evidence,
     )
+    if source_matrix is not None:
+        quality["source_matrix_id"] = str(source_matrix.get("id") or "")
+        quality["source_matrix_revision"] = int(source_matrix.get("revision") or 1)
+        quality["source_matrix_quality_status"] = str(source_matrix.get("quality_status") or "")
     title = str(body.title or "").strip() or str(body.objective or "").strip()[:_MAX_TITLE_CHARS]
     if body.brief_id:
         record, conflict = store.update_research_brief(

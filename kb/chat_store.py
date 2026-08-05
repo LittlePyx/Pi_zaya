@@ -16,6 +16,8 @@ MAX_PROJECT_NAME_LEN = 120
 MAX_RESEARCH_BRIEF_TITLE_LEN = 240
 MAX_RESEARCH_BRIEF_OBJECTIVE_LEN = 4_000
 MAX_RESEARCH_BRIEF_CONTENT_LEN = 160_000
+MAX_EVIDENCE_MATRIX_TITLE_LEN = 240
+MAX_EVIDENCE_MATRIX_OBJECTIVE_LEN = 4_000
 _SHELF_MAX_ITEM_KEYS = 80
 _SHELF_MAX_DICT_KEYS = 32
 _SHELF_MAX_LIST_ITEMS = 32
@@ -646,6 +648,32 @@ def _research_brief_record(row: sqlite3.Row | dict, *, include_content: bool = T
     return rec
 
 
+def _evidence_matrix_record(row: sqlite3.Row | dict, *, include_content: bool = True) -> dict:
+    rec = dict(row)
+    rows = _research_brief_json(rec.pop("rows_json", "[]"), default=[])
+    evidence = _research_brief_json(rec.pop("evidence_json", "[]"), default=[])
+    source_items = _research_brief_json(rec.pop("source_items_json", "[]"), default=[])
+    comparison_flags = _research_brief_json(rec.pop("comparison_flags_json", "[]"), default=[])
+    quality = _research_brief_json(rec.pop("quality_json", "{}"), default={})
+    rec["title"] = _research_brief_text(
+        rec.get("title"),
+        limit=MAX_EVIDENCE_MATRIX_TITLE_LEN,
+    )
+    rec["objective"] = _research_brief_text(
+        rec.get("objective"),
+        limit=MAX_EVIDENCE_MATRIX_OBJECTIVE_LEN,
+        multiline=True,
+    )
+    rec["rows"] = rows if include_content and isinstance(rows, list) else []
+    rec["evidence"] = evidence if include_content and isinstance(evidence, list) else []
+    rec["source_items"] = source_items if include_content and isinstance(source_items, list) else []
+    rec["comparison_flags"] = comparison_flags if include_content and isinstance(comparison_flags, list) else []
+    rec["quality"] = quality if isinstance(quality, dict) else {}
+    rec["revision"] = max(1, int(rec.get("revision") or 1))
+    rec["quality_status"] = str(rec.get("quality_status") or "draft").strip() or "draft"
+    return rec
+
+
 def _is_default_conversation_title(title: str) -> bool:
     text = str(title or "").strip()
     if not text:
@@ -1014,6 +1042,55 @@ class ChatStore:
                 "ON research_brief_revisions(brief_id, created_at DESC);"
             )
             conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_evidence_matrices (
+                  id TEXT PRIMARY KEY,
+                  project_id TEXT NOT NULL,
+                  source_conv_id TEXT,
+                  title TEXT NOT NULL,
+                  objective TEXT NOT NULL DEFAULT '',
+                  rows_json TEXT NOT NULL DEFAULT '[]',
+                  evidence_json TEXT NOT NULL DEFAULT '[]',
+                  source_items_json TEXT NOT NULL DEFAULT '[]',
+                  comparison_flags_json TEXT NOT NULL DEFAULT '[]',
+                  quality_status TEXT NOT NULL DEFAULT 'draft',
+                  quality_json TEXT NOT NULL DEFAULT '{}',
+                  revision INTEGER NOT NULL DEFAULT 1,
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                  FOREIGN KEY(source_conv_id) REFERENCES conversations(id) ON DELETE SET NULL
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_evidence_matrices_project_updated "
+                "ON research_evidence_matrices(project_id, updated_at DESC);"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_evidence_matrix_revisions (
+                  matrix_id TEXT NOT NULL,
+                  revision INTEGER NOT NULL,
+                  title TEXT NOT NULL,
+                  objective TEXT NOT NULL DEFAULT '',
+                  rows_json TEXT NOT NULL DEFAULT '[]',
+                  evidence_json TEXT NOT NULL DEFAULT '[]',
+                  source_items_json TEXT NOT NULL DEFAULT '[]',
+                  comparison_flags_json TEXT NOT NULL DEFAULT '[]',
+                  quality_status TEXT NOT NULL DEFAULT 'draft',
+                  quality_json TEXT NOT NULL DEFAULT '{}',
+                  created_at REAL NOT NULL,
+                  PRIMARY KEY(matrix_id, revision),
+                  FOREIGN KEY(matrix_id) REFERENCES research_evidence_matrices(id) ON DELETE CASCADE
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_evidence_matrix_revisions_created "
+                "ON research_evidence_matrix_revisions(matrix_id, created_at DESC);"
+            )
+            conn.execute(
                 "DELETE FROM citation_shelves "
                 "WHERE scope = 'conversation' AND scope_id NOT IN (SELECT id FROM conversations)"
             )
@@ -1165,6 +1242,7 @@ class ChatStore:
             self._archive_excess_conversations(conn, project_id=None)
             conn.execute("DELETE FROM citation_shelves WHERE scope = 'project' AND scope_id = ?", (project_id,))
             conn.execute("DELETE FROM research_briefs WHERE project_id = ?", (project_id,))
+            conn.execute("DELETE FROM research_evidence_matrices WHERE project_id = ?", (project_id,))
             cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         return cur.rowcount > 0
 
@@ -1487,6 +1565,296 @@ class ChatStore:
             return False
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM research_briefs WHERE id = ?", (bid,))
+        return int(cur.rowcount or 0) > 0
+
+    @staticmethod
+    def _insert_evidence_matrix_revision(conn: sqlite3.Connection, record: dict) -> None:
+        conn.execute(
+            """
+            INSERT INTO research_evidence_matrix_revisions (
+              matrix_id, revision, title, objective, rows_json, evidence_json,
+              source_items_json, comparison_flags_json, quality_status,
+              quality_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(record.get("id") or ""),
+                int(record.get("revision") or 1),
+                str(record.get("title") or ""),
+                str(record.get("objective") or ""),
+                str(record.get("rows_json") or "[]"),
+                str(record.get("evidence_json") or "[]"),
+                str(record.get("source_items_json") or "[]"),
+                str(record.get("comparison_flags_json") or "[]"),
+                str(record.get("quality_status") or "draft"),
+                str(record.get("quality_json") or "{}"),
+                float(record.get("updated_at") or record.get("created_at") or time.time()),
+            ),
+        )
+
+    def create_evidence_matrix(
+        self,
+        *,
+        project_id: str,
+        title: str,
+        objective: str = "",
+        source_conv_id: str | None = None,
+        rows: list[dict] | None = None,
+        evidence: list[dict] | None = None,
+        source_items: list[dict] | None = None,
+        comparison_flags: list[dict] | None = None,
+        quality_status: str = "draft",
+        quality: dict | None = None,
+    ) -> dict | None:
+        pid = str(project_id or "").strip()
+        if not pid:
+            return None
+        matrix_id = uuid.uuid4().hex
+        now = time.time()
+        clean_title = _research_brief_text(
+            title,
+            limit=MAX_EVIDENCE_MATRIX_TITLE_LEN,
+        ) or "Untitled evidence matrix"
+        clean_objective = _research_brief_text(
+            objective,
+            limit=MAX_EVIDENCE_MATRIX_OBJECTIVE_LEN,
+            multiline=True,
+        )
+        source_cid = str(source_conv_id or "").strip() or None
+        record = {
+            "id": matrix_id,
+            "project_id": pid,
+            "source_conv_id": source_cid,
+            "title": clean_title,
+            "objective": clean_objective,
+            "rows_json": self._research_brief_json_text(list(rows or []), fallback=[]),
+            "evidence_json": self._research_brief_json_text(list(evidence or []), fallback=[]),
+            "source_items_json": self._research_brief_json_text(list(source_items or []), fallback=[]),
+            "comparison_flags_json": self._research_brief_json_text(list(comparison_flags or []), fallback=[]),
+            "quality_status": str(quality_status or "draft").strip().lower() or "draft",
+            "quality_json": self._research_brief_json_text(dict(quality or {}), fallback={}),
+            "revision": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            if not self._project_exists(conn, pid):
+                return None
+            if source_cid:
+                source_row = conn.execute(
+                    "SELECT project_id FROM conversations WHERE id = ?",
+                    (source_cid,),
+                ).fetchone()
+                if not source_row or str(source_row["project_id"] or "").strip() != pid:
+                    record["source_conv_id"] = None
+            conn.execute(
+                """
+                INSERT INTO research_evidence_matrices (
+                  id, project_id, source_conv_id, title, objective, rows_json,
+                  evidence_json, source_items_json, comparison_flags_json,
+                  quality_status, quality_json, revision, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record["id"],
+                    record["project_id"],
+                    record["source_conv_id"],
+                    record["title"],
+                    record["objective"],
+                    record["rows_json"],
+                    record["evidence_json"],
+                    record["source_items_json"],
+                    record["comparison_flags_json"],
+                    record["quality_status"],
+                    record["quality_json"],
+                    record["revision"],
+                    record["created_at"],
+                    record["updated_at"],
+                ),
+            )
+            self._insert_evidence_matrix_revision(conn, record)
+        return _evidence_matrix_record(record)
+
+    def list_evidence_matrices(self, project_id: str, *, limit: int = 80) -> list[dict]:
+        pid = str(project_id or "").strip()
+        if not pid:
+            return []
+        lim = max(1, min(300, int(limit or 80)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, project_id, source_conv_id, title, objective,
+                       '[]' AS rows_json, '[]' AS evidence_json,
+                       '[]' AS source_items_json, '[]' AS comparison_flags_json,
+                       quality_status, quality_json, revision, created_at, updated_at
+                FROM research_evidence_matrices
+                WHERE project_id = ?
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                (pid, lim),
+            ).fetchall()
+        return [_evidence_matrix_record(row, include_content=False) for row in rows]
+
+    def get_evidence_matrix(self, matrix_id: str) -> dict | None:
+        mid = str(matrix_id or "").strip()
+        if not mid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_evidence_matrices WHERE id = ?",
+                (mid,),
+            ).fetchone()
+        return _evidence_matrix_record(row) if row else None
+
+    def update_evidence_matrix(
+        self,
+        matrix_id: str,
+        *,
+        expected_revision: int | None = None,
+        title: str | None = None,
+        objective: str | None = None,
+        rows: list[dict] | None = None,
+        evidence: list[dict] | None = None,
+        source_items: list[dict] | None = None,
+        comparison_flags: list[dict] | None = None,
+        quality_status: str | None = None,
+        quality: dict | None = None,
+    ) -> tuple[dict | None, bool]:
+        mid = str(matrix_id or "").strip()
+        if not mid:
+            return None, False
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            row = conn.execute(
+                "SELECT * FROM research_evidence_matrices WHERE id = ?",
+                (mid,),
+            ).fetchone()
+            if not row:
+                return None, False
+            current = dict(row)
+            current_revision = max(1, int(current.get("revision") or 1))
+            if expected_revision is not None and int(expected_revision) != current_revision:
+                return _evidence_matrix_record(current), True
+            next_record = dict(current)
+            if title is not None:
+                next_record["title"] = _research_brief_text(
+                    title,
+                    limit=MAX_EVIDENCE_MATRIX_TITLE_LEN,
+                ) or str(current.get("title") or "Untitled evidence matrix")
+            if objective is not None:
+                next_record["objective"] = _research_brief_text(
+                    objective,
+                    limit=MAX_EVIDENCE_MATRIX_OBJECTIVE_LEN,
+                    multiline=True,
+                )
+            for key, value, fallback in (
+                ("rows_json", rows, []),
+                ("evidence_json", evidence, []),
+                ("source_items_json", source_items, []),
+                ("comparison_flags_json", comparison_flags, []),
+                ("quality_json", quality, {}),
+            ):
+                if value is not None:
+                    next_record[key] = self._research_brief_json_text(value, fallback=fallback)
+            if quality_status is not None:
+                next_record["quality_status"] = str(quality_status or "draft").strip().lower() or "draft"
+            next_record["revision"] = current_revision + 1
+            next_record["updated_at"] = time.time()
+            conn.execute(
+                """
+                UPDATE research_evidence_matrices
+                SET title = ?, objective = ?, rows_json = ?, evidence_json = ?,
+                    source_items_json = ?, comparison_flags_json = ?,
+                    quality_status = ?, quality_json = ?, revision = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_record["title"],
+                    next_record["objective"],
+                    next_record["rows_json"],
+                    next_record["evidence_json"],
+                    next_record["source_items_json"],
+                    next_record["comparison_flags_json"],
+                    next_record["quality_status"],
+                    next_record["quality_json"],
+                    next_record["revision"],
+                    next_record["updated_at"],
+                    mid,
+                ),
+            )
+            self._insert_evidence_matrix_revision(conn, next_record)
+        return _evidence_matrix_record(next_record), False
+
+    def list_evidence_matrix_revisions(self, matrix_id: str, *, limit: int = 40) -> list[dict]:
+        mid = str(matrix_id or "").strip()
+        if not mid:
+            return []
+        lim = max(1, min(200, int(limit or 40)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT matrix_id AS id, revision, title, objective,
+                       '[]' AS rows_json, '[]' AS evidence_json,
+                       '[]' AS source_items_json, '[]' AS comparison_flags_json,
+                       quality_status, quality_json, created_at, created_at AS updated_at
+                FROM research_evidence_matrix_revisions
+                WHERE matrix_id = ?
+                ORDER BY revision DESC
+                LIMIT ?
+                """,
+                (mid, lim),
+            ).fetchall()
+        return [_evidence_matrix_record(row, include_content=False) for row in rows]
+
+    def get_evidence_matrix_revision(self, matrix_id: str, revision: int) -> dict | None:
+        mid = str(matrix_id or "").strip()
+        rev = max(1, int(revision or 1))
+        if not mid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT matrix_id AS id, revision, title, objective, rows_json,
+                       evidence_json, source_items_json, comparison_flags_json,
+                       quality_status, quality_json, created_at, created_at AS updated_at
+                FROM research_evidence_matrix_revisions
+                WHERE matrix_id = ? AND revision = ?
+                """,
+                (mid, rev),
+            ).fetchone()
+        return _evidence_matrix_record(row) if row else None
+
+    def restore_evidence_matrix_revision(
+        self,
+        matrix_id: str,
+        revision: int,
+        *,
+        expected_revision: int | None = None,
+    ) -> tuple[dict | None, bool]:
+        historical = self.get_evidence_matrix_revision(matrix_id, revision)
+        if historical is None:
+            return None, False
+        return self.update_evidence_matrix(
+            matrix_id,
+            expected_revision=expected_revision,
+            title=str(historical.get("title") or ""),
+            objective=str(historical.get("objective") or ""),
+            rows=list(historical.get("rows") or []),
+            evidence=list(historical.get("evidence") or []),
+            source_items=list(historical.get("source_items") or []),
+            comparison_flags=list(historical.get("comparison_flags") or []),
+            quality_status=str(historical.get("quality_status") or "draft"),
+            quality=dict(historical.get("quality") or {}),
+        )
+
+    def delete_evidence_matrix(self, matrix_id: str) -> bool:
+        mid = str(matrix_id or "").strip()
+        if not mid:
+            return False
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM research_evidence_matrices WHERE id = ?", (mid,))
         return int(cur.rowcount or 0) > 0
 
     def create_conversation(
