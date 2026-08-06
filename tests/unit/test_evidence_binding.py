@@ -809,6 +809,33 @@ def test_authoritative_full_plan_evidence_is_distinct_from_short_locator_snippet
     assert ignored_untrusted_full_plan["suppress_link"] is True
 
 
+def test_canonical_evidence_requires_passage_support_not_only_source_title() -> None:
+    claim = (
+        "补充一点背景：单像素成像本身是用单探测器配合空间光调制器，"
+        "通过测量场景与一系列图案的相关性来重建图像。"
+    )
+    unrelated_subsection = (
+        "In another demonstration, a co-aligned silicon-based camera provided a "
+        "continuous stream of 2D images. This stream was used to choose the optimal "
+        "Hadamard basis subset for sampling 3D image properties."
+    )
+
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": unrelated_subsection},
+        meta={"canonical_answer_evidence": True},
+        heading=(
+            "Principles and prospects for single-pixel imaging / Abstract / "
+            "Acquisition and image reconstruction strategies"
+        ),
+        evidence_quote=unrelated_subsection,
+        source_name="NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+    )
+
+    assert binding["status"] != "grounded"
+    assert binding["suppress_link"] is True
+
+
 def test_cassi_prompt_contract_ignores_stale_bibliography_acronyms() -> None:
     evidence = (
         "The primary features of the system design are two dispersive elements, "

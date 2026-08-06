@@ -654,6 +654,7 @@ def _evidence_matrix_record(row: sqlite3.Row | dict, *, include_content: bool = 
     evidence = _research_brief_json(rec.pop("evidence_json", "[]"), default=[])
     source_items = _research_brief_json(rec.pop("source_items_json", "[]"), default=[])
     comparison_flags = _research_brief_json(rec.pop("comparison_flags_json", "[]"), default=[])
+    comparison_audits = _research_brief_json(rec.pop("comparison_audits_json", "[]"), default=[])
     quality = _research_brief_json(rec.pop("quality_json", "{}"), default={})
     rec["title"] = _research_brief_text(
         rec.get("title"),
@@ -668,6 +669,7 @@ def _evidence_matrix_record(row: sqlite3.Row | dict, *, include_content: bool = 
     rec["evidence"] = evidence if include_content and isinstance(evidence, list) else []
     rec["source_items"] = source_items if include_content and isinstance(source_items, list) else []
     rec["comparison_flags"] = comparison_flags if include_content and isinstance(comparison_flags, list) else []
+    rec["comparison_audits"] = comparison_audits if include_content and isinstance(comparison_audits, list) else []
     rec["quality"] = quality if isinstance(quality, dict) else {}
     rec["revision"] = max(1, int(rec.get("revision") or 1))
     rec["quality_status"] = str(rec.get("quality_status") or "draft").strip() or "draft"
@@ -1053,6 +1055,7 @@ class ChatStore:
                   evidence_json TEXT NOT NULL DEFAULT '[]',
                   source_items_json TEXT NOT NULL DEFAULT '[]',
                   comparison_flags_json TEXT NOT NULL DEFAULT '[]',
+                  comparison_audits_json TEXT NOT NULL DEFAULT '[]',
                   quality_status TEXT NOT NULL DEFAULT 'draft',
                   quality_json TEXT NOT NULL DEFAULT '{}',
                   revision INTEGER NOT NULL DEFAULT 1,
@@ -1078,6 +1081,7 @@ class ChatStore:
                   evidence_json TEXT NOT NULL DEFAULT '[]',
                   source_items_json TEXT NOT NULL DEFAULT '[]',
                   comparison_flags_json TEXT NOT NULL DEFAULT '[]',
+                  comparison_audits_json TEXT NOT NULL DEFAULT '[]',
                   quality_status TEXT NOT NULL DEFAULT 'draft',
                   quality_json TEXT NOT NULL DEFAULT '{}',
                   created_at REAL NOT NULL,
@@ -1090,6 +1094,13 @@ class ChatStore:
                 "CREATE INDEX IF NOT EXISTS idx_research_evidence_matrix_revisions_created "
                 "ON research_evidence_matrix_revisions(matrix_id, created_at DESC);"
             )
+            for table_name in ("research_evidence_matrices", "research_evidence_matrix_revisions"):
+                try:
+                    conn.execute(
+                        f"ALTER TABLE {table_name} ADD COLUMN comparison_audits_json TEXT NOT NULL DEFAULT '[]'"
+                    )
+                except sqlite3.OperationalError:
+                    pass
             conn.execute(
                 "DELETE FROM citation_shelves "
                 "WHERE scope = 'conversation' AND scope_id NOT IN (SELECT id FROM conversations)"
@@ -1573,9 +1584,9 @@ class ChatStore:
             """
             INSERT INTO research_evidence_matrix_revisions (
               matrix_id, revision, title, objective, rows_json, evidence_json,
-              source_items_json, comparison_flags_json, quality_status,
-              quality_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              source_items_json, comparison_flags_json, comparison_audits_json,
+              quality_status, quality_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(record.get("id") or ""),
@@ -1586,6 +1597,7 @@ class ChatStore:
                 str(record.get("evidence_json") or "[]"),
                 str(record.get("source_items_json") or "[]"),
                 str(record.get("comparison_flags_json") or "[]"),
+                str(record.get("comparison_audits_json") or "[]"),
                 str(record.get("quality_status") or "draft"),
                 str(record.get("quality_json") or "{}"),
                 float(record.get("updated_at") or record.get("created_at") or time.time()),
@@ -1603,6 +1615,7 @@ class ChatStore:
         evidence: list[dict] | None = None,
         source_items: list[dict] | None = None,
         comparison_flags: list[dict] | None = None,
+        comparison_audits: list[dict] | None = None,
         quality_status: str = "draft",
         quality: dict | None = None,
     ) -> dict | None:
@@ -1631,6 +1644,7 @@ class ChatStore:
             "evidence_json": self._research_brief_json_text(list(evidence or []), fallback=[]),
             "source_items_json": self._research_brief_json_text(list(source_items or []), fallback=[]),
             "comparison_flags_json": self._research_brief_json_text(list(comparison_flags or []), fallback=[]),
+            "comparison_audits_json": self._research_brief_json_text(list(comparison_audits or []), fallback=[]),
             "quality_status": str(quality_status or "draft").strip().lower() or "draft",
             "quality_json": self._research_brief_json_text(dict(quality or {}), fallback={}),
             "revision": 1,
@@ -1652,9 +1666,9 @@ class ChatStore:
                 """
                 INSERT INTO research_evidence_matrices (
                   id, project_id, source_conv_id, title, objective, rows_json,
-                  evidence_json, source_items_json, comparison_flags_json,
+                  evidence_json, source_items_json, comparison_flags_json, comparison_audits_json,
                   quality_status, quality_json, revision, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["id"],
@@ -1666,6 +1680,7 @@ class ChatStore:
                     record["evidence_json"],
                     record["source_items_json"],
                     record["comparison_flags_json"],
+                    record["comparison_audits_json"],
                     record["quality_status"],
                     record["quality_json"],
                     record["revision"],
@@ -1687,6 +1702,7 @@ class ChatStore:
                 SELECT id, project_id, source_conv_id, title, objective,
                        '[]' AS rows_json, '[]' AS evidence_json,
                        '[]' AS source_items_json, '[]' AS comparison_flags_json,
+                       '[]' AS comparison_audits_json,
                        quality_status, quality_json, revision, created_at, updated_at
                 FROM research_evidence_matrices
                 WHERE project_id = ?
@@ -1719,6 +1735,7 @@ class ChatStore:
         evidence: list[dict] | None = None,
         source_items: list[dict] | None = None,
         comparison_flags: list[dict] | None = None,
+        comparison_audits: list[dict] | None = None,
         quality_status: str | None = None,
         quality: dict | None = None,
     ) -> tuple[dict | None, bool]:
@@ -1754,6 +1771,7 @@ class ChatStore:
                 ("evidence_json", evidence, []),
                 ("source_items_json", source_items, []),
                 ("comparison_flags_json", comparison_flags, []),
+                ("comparison_audits_json", comparison_audits, []),
                 ("quality_json", quality, {}),
             ):
                 if value is not None:
@@ -1766,7 +1784,7 @@ class ChatStore:
                 """
                 UPDATE research_evidence_matrices
                 SET title = ?, objective = ?, rows_json = ?, evidence_json = ?,
-                    source_items_json = ?, comparison_flags_json = ?,
+                    source_items_json = ?, comparison_flags_json = ?, comparison_audits_json = ?,
                     quality_status = ?, quality_json = ?, revision = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -1777,6 +1795,7 @@ class ChatStore:
                     next_record["evidence_json"],
                     next_record["source_items_json"],
                     next_record["comparison_flags_json"],
+                    next_record["comparison_audits_json"],
                     next_record["quality_status"],
                     next_record["quality_json"],
                     next_record["revision"],
@@ -1798,6 +1817,7 @@ class ChatStore:
                 SELECT matrix_id AS id, revision, title, objective,
                        '[]' AS rows_json, '[]' AS evidence_json,
                        '[]' AS source_items_json, '[]' AS comparison_flags_json,
+                       '[]' AS comparison_audits_json,
                        quality_status, quality_json, created_at, created_at AS updated_at
                 FROM research_evidence_matrix_revisions
                 WHERE matrix_id = ?
@@ -1817,7 +1837,7 @@ class ChatStore:
             row = conn.execute(
                 """
                 SELECT matrix_id AS id, revision, title, objective, rows_json,
-                       evidence_json, source_items_json, comparison_flags_json,
+                       evidence_json, source_items_json, comparison_flags_json, comparison_audits_json,
                        quality_status, quality_json, created_at, created_at AS updated_at
                 FROM research_evidence_matrix_revisions
                 WHERE matrix_id = ? AND revision = ?
@@ -1845,6 +1865,7 @@ class ChatStore:
             evidence=list(historical.get("evidence") or []),
             source_items=list(historical.get("source_items") or []),
             comparison_flags=list(historical.get("comparison_flags") or []),
+            comparison_audits=list(historical.get("comparison_audits") or []),
             quality_status=str(historical.get("quality_status") or "draft"),
             quality=dict(historical.get("quality") or {}),
         )

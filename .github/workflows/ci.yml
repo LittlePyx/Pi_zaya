@@ -123,6 +123,9 @@ jobs:
       - name: Check research QA regression fixture
         run: python tools/research_qa/run_research_qa_eval.py --dry-run
 
+      - name: Check evidence comparison regression fixture
+        run: python tools/evidence_matrix/run_comparison_eval.py --dry-run
+
       - name: Check reviewed real-paper answer quality replay
         run: python tools/research_qa/run_research_qa_eval.py --replay docs/research_qa_grounded_replay_v1.jsonl --fail-on-quality
 

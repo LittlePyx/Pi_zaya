@@ -116,7 +116,13 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("wave propagation", re.compile(r"(?i)\bwave\s+propagation\b|\bwave\s+optics\b|\bdiffraction\b|波动光学|波传播|衍射")),
     ("quantum correlation", re.compile(r"(?i)\bquantum\s+correlation\b|\btime[-\s]?correlation\b|量子关联|时间关联|光子对")),
     ("single-pixel imaging", re.compile(r"(?i)\bsingle[-\s]?pixel\b|\bspi\b|单像素")),
-    ("deep learning", re.compile(r"(?i)\bdeep\s+learning\b|\bneural\s+network\b|深度学习|神经网络")),
+    (
+        "deep learning",
+        re.compile(
+            r"(?i)\bdeep\s+learning\b|\bneural\s+network\b|"
+            r"\btransformer\s+networks?\b|深度学习|神经网络"
+        ),
+    ),
     (
         "training and generalization",
         re.compile(
@@ -985,6 +991,24 @@ def _quantity_label(quantity: tuple[str, str, str]) -> str:
     return f"{number} {unit}"
 
 
+def _binding_heading_context(heading: str, source_name: str) -> str:
+    """Remove a repeated document title from a hierarchical heading path."""
+
+    parts = [part.strip() for part in str(heading or "").split(" / ") if part.strip()]
+    if len(parts) < 2:
+        return str(heading or "").strip()
+
+    def _identity_key(value: str) -> str:
+        text = re.sub(r"(?i)\.pdf$", "", str(value or "").strip())
+        return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", text.casefold())
+
+    first_key = _identity_key(parts[0])
+    source_key = _identity_key(source_name)
+    if first_key and source_key and (first_key == source_key or first_key in source_key):
+        return " / ".join(parts[1:])
+    return " / ".join(parts)
+
+
 def _claim_fact_quantities_for_evidence(
     claim: str,
     evidence: str,
@@ -1103,16 +1127,25 @@ def assess_system_a_hit_binding(
         plan_binding_evidence = str(
             (meta or {}).get("citation_plan_full_evidence_quote") or ""
         ).strip()
+    # A hierarchical heading often starts with the paper title. That title
+    # identifies the source, but it is not passage evidence. Keep the repeated
+    # title outside the body-evidence gate while retaining
+    # the full source identity for conflict checks. ``why_line`` may carry an
+    # earlier source-grounded relation produced by the citation planner, so it
+    # remains a secondary binding surface.
+    binding_heading = _binding_heading_context(heading, source_name)
     evidence_body_surface = " ".join(
         [
             str(evidence_quote or ""),
             plan_binding_evidence,
             str((hit or {}).get("text") or ""),
-            str(heading or ""),
+            binding_heading,
             str((meta or {}).get("why_line") or ""),
         ]
     )
-    evidence_surface = " ".join([evidence_body_surface, str(source_name or "")])
+    evidence_surface = " ".join(
+        [evidence_body_surface, str(heading or ""), str(source_name or "")]
+    )
     claim_low = claim.lower()
     evidence_body_low = evidence_body_surface.lower()
     if not explicit_claim_relations_covered(claim, evidence_body_surface):
@@ -1383,6 +1416,7 @@ def assess_system_a_hit_binding(
     if canonical_answer_evidence or verified_prompt_contract or prompt_aligned_plan_evidence:
         fast_claim_domains = _system_a_domain_terms(claim)
         fast_evidence_body_domains = _system_a_domain_terms(evidence_body_surface)
+        fast_body_domain_overlap = fast_claim_domains & fast_evidence_body_domains
         fast_missing_strong_terms = (
             fast_claim_domains & _SYSTEM_A_STRONG_BINDING_TERMS
         ) - fast_evidence_body_domains
@@ -1413,7 +1447,12 @@ def assess_system_a_hit_binding(
             fast_source_identity_overlap or cassi_architecture_identity_overlap
         )
         claim_keywords_fast = _system_a_keyword_terms(claim, limit=48)
-        evidence_keywords_fast = _system_a_keyword_terms(evidence_surface, limit=64)
+        # The source title can confirm which paper a card belongs to, but it
+        # cannot prove that the selected passage supports the answer claim.
+        # Keep every fast-path positive signal scoped to the passage body so a
+        # broad paper title (for example, "single-pixel imaging") cannot make
+        # an unrelated subsection look grounded.
+        evidence_keywords_fast = _system_a_keyword_terms(evidence_body_surface, limit=64)
         keyword_overlap_fast = claim_keywords_fast & evidence_keywords_fast
         claim_identifiers_fast = {
             token.upper()
@@ -1426,7 +1465,7 @@ def assess_system_a_hit_binding(
             token.upper()
             for token in re.findall(
                 r"(?<![A-Za-z0-9])[A-Z][A-Z0-9_-]{2,}(?![A-Za-z0-9])",
-                evidence_surface,
+                evidence_body_surface,
             )
         }
         claim_numbers_fast = set(
@@ -1443,12 +1482,27 @@ def assess_system_a_hit_binding(
         )
         shared_identifiers_fast = claim_identifiers_fast & evidence_identifiers_fast
         shared_numbers_fast = claim_numbers_fast & evidence_numbers_fast
+        informative_alignment_fast = (
+            evidence_alignment_tokens(claim)
+            & evidence_alignment_tokens(evidence_body_surface)
+        ) - {
+            "approach",
+            "based",
+            "image",
+            "method",
+            "paper",
+            "result",
+            "study",
+            "system",
+            "using",
+        }
         if (
             (
                 len(keyword_overlap_fast) >= 2
                 or bool(shared_identifiers_fast)
                 or bool(shared_numbers_fast)
-                or fast_source_identity_overlap
+                or bool(fast_body_domain_overlap)
+                or len(informative_alignment_fast) >= 2
             )
             and not (
                 fast_missing_strong_terms
@@ -1480,7 +1534,13 @@ def assess_system_a_hit_binding(
                 "confidence": 0.9,
                 "suppress_link": False,
                 "reason": reason,
-                "overlap_terms": sorted(keyword_overlap_fast | shared_identifiers_fast | shared_numbers_fast),
+                "overlap_terms": sorted(
+                    keyword_overlap_fast
+                    | shared_identifiers_fast
+                    | shared_numbers_fast
+                    | fast_body_domain_overlap
+                    | informative_alignment_fast
+                ),
                 "missing_terms": [],
             }
     claim_domains = _system_a_domain_terms(claim)

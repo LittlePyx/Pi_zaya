@@ -5302,6 +5302,126 @@ body.kb-reader-resizing .kb-reader-content {
   font-size: 12px;
 }
 
+.kb-evidence-comparison-workspace,
+.kb-evidence-comparison-form,
+.kb-evidence-comparison-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kb-evidence-comparison-form,
+.kb-evidence-comparison-list > article {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.kb-evidence-comparison-pair-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px;
+}
+
+.kb-evidence-comparison-pair-row > label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.kb-evidence-comparison-contract-table {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.kb-evidence-comparison-contract-table > div {
+  display: grid;
+  grid-template-columns: 150px minmax(210px, 1fr) minmax(210px, 1fr) 210px;
+  align-items: center;
+  gap: 8px;
+  min-width: 840px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.kb-evidence-comparison-contract-table > div:last-child {
+  border-bottom: 0;
+}
+
+.kb-evidence-comparison-contract-table > div.is-header {
+  background: var(--panel);
+  color: var(--muted-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.kb-evidence-comparison-contract-table small {
+  color: var(--muted-text);
+}
+
+.kb-evidence-comparison-card-head,
+.kb-evidence-comparison-card-head > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.kb-evidence-comparison-list > article > p {
+  margin: 10px 0;
+  line-height: 1.55;
+}
+
+.kb-evidence-comparison-list > article > small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted-text);
+}
+
+.kb-evidence-comparison-evidence {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.kb-evidence-comparison-evidence button {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text-main);
+  text-align: left;
+}
+
+.kb-evidence-comparison-evidence button:not(:disabled) {
+  cursor: pointer;
+}
+
+.kb-evidence-comparison-evidence span,
+.kb-evidence-comparison-evidence p {
+  margin: 0;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.kb-evidence-comparison-evidence p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
 @media (max-width: 900px) {
   .kb-evidence-matrix-workspace {
     grid-template-columns: 1fr;
@@ -5320,6 +5440,17 @@ body.kb-reader-resizing .kb-reader-content {
   .kb-evidence-matrix-footer,
   .kb-evidence-matrix-filters {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .kb-evidence-comparison-pair-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .kb-evidence-comparison-card-head,
+  .kb-evidence-comparison-card-head > div {
+    align-items: flex-start;
     flex-direction: column;
   }
 }

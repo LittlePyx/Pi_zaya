@@ -5,7 +5,9 @@ from openpyxl import load_workbook
 
 from kb.evidence_matrix import (
     MATRIX_CELL_FIELDS,
+    audit_evidence_comparison,
     build_project_evidence_matrix,
+    evidence_comparison_quality,
     evidence_matrix_csv,
     evidence_matrix_hits,
     evidence_matrix_markdown,
@@ -198,3 +200,144 @@ def test_matrix_tabular_exports_escape_spreadsheet_formulas() -> None:
     assert "'=HYPERLINK" in evidence_matrix_csv(record).decode("utf-8-sig")
     workbook = load_workbook(BytesIO(evidence_matrix_xlsx(record)))
     assert workbook["Evidence Matrix"]["H2"].value.startswith("'=HYPERLINK")
+
+
+def _comparison_rows() -> list[dict]:
+    return [
+        {
+            "id": "row-left",
+            "source_item_key": "left",
+            "paper": "Paper Left",
+            "source_name": "Paper Left",
+            "source_path": "F:/papers/left.md",
+            "source_status": "active",
+            "cells": {},
+        },
+        {
+            "id": "row-right",
+            "source_item_key": "right",
+            "paper": "Paper Right",
+            "source_name": "Paper Right",
+            "source_path": "F:/papers/right.md",
+            "source_status": "active",
+            "cells": {},
+        },
+    ]
+
+
+def _comparison_spec(*, mode: str = "ranking", right_metric: str = "LPIPS", right_result: str = ".0445") -> dict:
+    return {
+        "mode": mode,
+        "left_row_id": "row-left",
+        "right_row_id": "row-right",
+        "dimensions": [
+            {"dimension": "task", "left_value": "SCI image reconstruction", "right_value": "SCI image reconstruction"},
+            {"dimension": "dataset", "left_value": "Cozy2room", "right_value": "Cozy2room"},
+            {
+                "dimension": "evaluation_protocol",
+                "left_value": "static datasets",
+                "right_value": "synthetic datasets",
+                "mapping_confirmed": True,
+            },
+            {"dimension": "metric", "left_value": "LPIPS", "right_value": right_metric},
+        ],
+        "left_target": "SCIGS(ours)",
+        "right_target": "ours",
+        "target_mapping_confirmed": mode == "replication",
+        "left_result": ".0423",
+        "right_result": right_result,
+    }
+
+
+def _comparison_chunks() -> list[dict]:
+    return [
+        _chunk(
+            "F:/papers/left.md",
+            "Experiments / Table 1",
+            "Quantitative SCI image reconstruction comparisons on the static datasets. "
+            "Cozy2room LPIPS ↓ (lower is better): SCIGS(ours) = .0423",
+            41,
+        ),
+        _chunk(
+            "F:/papers/right.md",
+            "Experiments / Table 1",
+            "Quantitative SCI image reconstruction comparisons on the synthetic datasets. "
+            "Cozy2room LPIPS ↓ (lower is better): ours = .0445",
+            42,
+        ),
+    ]
+
+
+def test_comparison_audit_verifies_only_joint_same_source_quantitative_evidence(monkeypatch) -> None:
+    monkeypatch.setattr("kb.evidence_matrix.load_all_chunks", lambda _db_dir: _comparison_chunks())
+
+    audit = audit_evidence_comparison(rows=_comparison_rows(), spec=_comparison_spec(), db_dir="unused")
+
+    assert audit["status"] == "verified"
+    assert audit["metric"] == "lpips"
+    assert audit["metric_direction"] == "lower"
+    assert audit["relation"] == "left_more_favorable"
+    assert audit["preferred_side"] == "left"
+    assert audit["confirmed_conflict"] is False
+    assert audit["user_confirmed_mappings"] == ["evaluation_protocol"]
+    assert {item["side"] for item in audit["evidence"]} == {"left", "right"}
+    assert all(item["source_path"].endswith(f"{item['side']}.md") for item in audit["evidence"])
+    assert "not a general method ranking" in audit["conclusion"]
+
+
+def test_comparison_audit_refuses_metric_mismatch_and_fabricated_result(monkeypatch) -> None:
+    chunks = _comparison_chunks()
+    chunks[1]["text"] = chunks[1]["text"].replace("LPIPS", "SSIM")
+    monkeypatch.setattr("kb.evidence_matrix.load_all_chunks", lambda _db_dir: chunks)
+
+    mismatch = audit_evidence_comparison(
+        rows=_comparison_rows(),
+        spec=_comparison_spec(right_metric="SSIM"),
+        db_dir="unused",
+    )
+    fabricated = audit_evidence_comparison(
+        rows=_comparison_rows(),
+        spec=_comparison_spec(right_result=".9999"),
+        db_dir="unused",
+    )
+
+    assert mismatch["status"] == "not_comparable"
+    assert "metric_mismatch" in mismatch["reasons"]
+    assert "unsupported_or_mismatched_metric" in mismatch["reasons"]
+    assert fabricated["status"] == "not_comparable"
+    assert "right_result_evidence_missing" in fabricated["reasons"]
+    assert fabricated["preferred_side"] == "none"
+
+
+def test_replication_audit_records_only_a_verified_reporting_conflict(monkeypatch) -> None:
+    monkeypatch.setattr("kb.evidence_matrix.load_all_chunks", lambda _db_dir: _comparison_chunks())
+    spec = _comparison_spec(mode="replication")
+    spec["left_target"] = "SCINeRF"
+    spec["right_target"] = "ours"
+    chunks = _comparison_chunks()
+    chunks[0]["text"] = chunks[0]["text"].replace("SCIGS(ours)", "SCINeRF")
+    monkeypatch.setattr("kb.evidence_matrix.load_all_chunks", lambda _db_dir: chunks)
+
+    audit = audit_evidence_comparison(rows=_comparison_rows(), spec=spec, db_dir="unused")
+    summary = evidence_comparison_quality([audit])
+
+    assert audit["status"] == "verified"
+    assert audit["relation"] == "reported_value_conflict"
+    assert audit["confirmed_conflict"] is True
+    assert audit["target_match_type"] == "user_confirmed"
+    assert summary["confirmed_conflicts"][0]["id"] == audit["id"]
+
+
+def test_verified_comparison_adds_source_specific_brief_hits_without_adding_a_cross_source_claim(monkeypatch) -> None:
+    monkeypatch.setattr("kb.evidence_matrix.load_all_chunks", lambda _db_dir: _comparison_chunks())
+    rows = _comparison_rows()
+    audit = audit_evidence_comparison(rows=rows, spec=_comparison_spec(), db_dir="unused")
+
+    hits = evidence_matrix_hits({"rows": rows, "evidence": [], "comparison_audits": [audit]})
+
+    assert len(hits) == 2
+    assert {hit["meta"]["source_path"] for hit in hits} == {"F:/papers/left.md", "F:/papers/right.md"}
+    assert all(hit["meta"]["matrix_field"] == "comparison_result" for hit in hits)
+    assert any("SCIGS(ours) = .0423" in hit["text"] for hit in hits)
+    assert any("ours = .0445" in hit["text"] for hit in hits)
+    assert all("more favorable" not in hit["text"] for hit in hits)

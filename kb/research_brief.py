@@ -449,9 +449,10 @@ def _matrix_claim_plan(hits: list[dict[str, Any]], *, limit: int = 8) -> list[di
     field_order = {
         "method": 0,
         "dataset_or_experiment": 1,
-        "key_result": 2,
-        "metric": 3,
-        "limitation": 4,
+        "comparison_result": 2,
+        "key_result": 3,
+        "metric": 4,
+        "limitation": 5,
     }
     grouped: dict[str, list[dict[str, Any]]] = {}
     source_order: list[str] = []
@@ -715,6 +716,11 @@ def generate_research_brief_from_matrix(
             "source_policy": "local_only",
         },
         "evidence_matrix": rows[:8],
+        "verified_comparison_audits": [
+            item
+            for item in list(matrix_record.get("comparison_audits") or [])
+            if isinstance(item, dict) and str(item.get("status") or "") == "verified"
+        ][:8],
     }
     generation_prompt = _matrix_generation_prompt(prompt, claim_plan)
     generation_started = time.perf_counter()
@@ -805,6 +811,13 @@ def generate_research_brief_from_matrix(
         "quality_gate_warnings": list(gate.get("warnings") or []),
         "matrix_id": str(matrix_record.get("id") or ""),
         "matrix_revision": int(matrix_record.get("revision") or 1),
+        "verified_comparison_count": len(
+            [
+                item
+                for item in list(matrix_record.get("comparison_audits") or [])
+                if isinstance(item, dict) and str(item.get("status") or "") == "verified"
+            ]
+        ),
         "claim_repair": repair_info,
         "phase_timings_ms": {
             "claim_plan": plan_ms,

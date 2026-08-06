@@ -283,6 +283,42 @@ matrix acceptance even though its generation path did not change; keep them
 visible as provider/model variance rather than claiming an ordinary-QA latency
 improvement from the matrix-brief optimization.
 
+## 2026-08-07 Comparison-Audit Release Gate
+
+The first two full-library runs after adding paired matrix comparison audits
+were 28/29. Both exposed the same real defect in
+`foveated-dynamic-supersampling`: the answer and required foveated citation were
+correct, but an extra NatPhoton card stayed empty. Investigation showed a more
+important upstream issue than card copy: the binder had treated the paper title
+"single-pixel imaging" as if it were support in a selected Hadamard-subset
+passage. The fix removes a repeated document title from the positive
+body-evidence surface and requires authoritative fast bindings to have passage-
+level terms, identifiers, numbers, mapped concepts, or domain overlap. A direct
+`transformer network` alias preserves a valid deep-learning training citation
+without relying on the title. The quality gate was not weakened.
+
+The focused rerun then kept only the supported foveated source and passed. The
+final full-library run passed 29/29 at
+`test_results/research_qa_evidence_comparison_final_full_library_fixed/20260807_012052`.
+All answer terms, required documents, citation routes, locators, reference-card
+copy, citation-shelf checks, and System B audits passed. First-visible
+p50/p95/max were 2,517/4,177/4,495 ms; answer-complete were
+4,037/13,467/14,793 ms; evidence-card complete were 6,738/15,321/16,346 ms;
+and UI-ready were 6,738/16,323/17,043 ms. The 5/5 paid-model smoke run passed at
+`test_results/research_qa_evidence_comparison_final_live_smoke/20260807_005509`,
+and unchanged deterministic retrieval passed 29/29 at
+`test_results/research_qa_evidence_comparison_final_retrieval/20260807_005600`.
+Source validation remained 41/41 and reviewed replay remained 6/6.
+The backend suite completed with 4,327 passed and 43 configuration-dependent
+skips; frontend ESLint, production build, 119/119 executed Playwright smoke
+tests with two skips, 109/109 core tests, and 4/4 public-surface tests passed.
+
+The comparison-specific reviewed report is
+`test_results/evidence_comparison/20260807_012534/report.json`: 5/5 outcomes,
+zero false comparisons, exact same-source evidence, and a locator for every
+recorded excerpt. These gates demonstrate that the feature neither narrows the
+29-question library search nor substitutes polished copy for accurate evidence.
+
 ## Outputs
 
 Default output directory:

@@ -38,7 +38,7 @@ web context.
 | Evidence-based QA | Searches the indexed library, builds a RAG prompt from retrieved snippets, and returns grounded answers. |
 | Citation tracing | Surfaces answer evidence, source cards, reference context, and reader locate targets. |
 | Literature basket | Lets users collect papers and excerpts, keep local research context, and export citations. |
-| Evidence matrices | Builds project-scoped, versioned comparisons of methods, experiments, metrics, results, and limitations; every populated factual cell opens its exact local source evidence, while unavailable facts remain empty. Exports Markdown, CSV, or XLSX. |
+| Evidence matrices | Builds project-scoped, versioned comparisons of methods, experiments, metrics, results, and limitations; every populated factual cell opens its exact local source evidence, while unavailable facts remain empty. Explicit paired audits produce a result only after task, dataset, protocol, metric, target, value, and both source excerpts pass the comparison contract. Exports Markdown, CSV, or XLSX. |
 | Research briefs | Generates project-scoped, versioned Markdown briefs only from a selected verified evidence matrix in the product workflow, audits every substantive claim, records matrix lineage, opens its evidence in the reader, and exports Markdown, DOCX, BibTeX, or RIS. |
 | Research Agent Mode | Adds explicit planning, source policy, evidence matrix, tool-use trace, and sentence-level citation support checks on top of the existing RAG flow. |
 | Quality tooling | Scans conversion quality, runs repair flows, rebuilds indexes, and tracks metadata/reference sync. |

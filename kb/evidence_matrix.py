@@ -3,7 +3,9 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import math
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,8 @@ MATRIX_CELL_FIELDS = (
     "key_result",
     "limitation",
 )
+COMPARISON_DIMENSIONS = ("task", "dataset", "evaluation_protocol", "metric")
+COMPARISON_MODES = ("ranking", "replication")
 _MAX_MATRIX_SOURCES = 8
 _MAX_CELL_VALUE = 520
 _MAX_EVIDENCE_QUOTE = 1_200
@@ -70,6 +74,32 @@ _STRONG_METRIC_RE = re.compile(
     r"\b(?:PSNR|SSIM|LPIPS|RMSE|NMSE|MSE|MAE|SNR|FID|F1|AUC|IoU|Dice|FPS|FLOPs)\b"
     r"|\bmAP(?:@[.\d:]+)?\b",
 )
+_COMPARISON_RESULT_RE = re.compile(
+    r"^\s*([-+]?(?:\d+(?:\.\d+)?|\.\d+))\s*(%|dB|ms|s|fps|Hz)?\s*$",
+    re.IGNORECASE,
+)
+_METRIC_ALIASES: dict[str, tuple[tuple[str, ...], str]] = {
+    "psnr": (("psnr", "peak signal to noise ratio", "peak signal-to-noise ratio"), "higher"),
+    "ssim": (("ssim", "structural similarity", "structural similarity index"), "higher"),
+    "lpips": (("lpips", "learned perceptual image patch similarity"), "lower"),
+    "rmse": (("rmse", "root mean square error", "root-mean-square error"), "lower"),
+    "nmse": (("nmse", "normalized mean square error", "normalized mean squared error"), "lower"),
+    "mse": (("mse", "mean square error", "mean squared error"), "lower"),
+    "mae": (("mae", "mean absolute error"), "lower"),
+    "fid": (("fid", "frechet inception distance", "fréchet inception distance"), "lower"),
+    "accuracy": (("accuracy", "top-1 accuracy", "top-5 accuracy"), "higher"),
+    "precision": (("precision",), "higher"),
+    "recall": (("recall",), "higher"),
+    "f1": (("f1", "f1 score", "f1-score"), "higher"),
+    "auc": (("auc", "area under the curve"), "higher"),
+    "iou": (("iou", "intersection over union"), "higher"),
+    "dice": (("dice", "dice score"), "higher"),
+    "map": (("map", "mean average precision"), "higher"),
+    "snr": (("snr", "signal to noise ratio", "signal-to-noise ratio"), "higher"),
+    "fps": (("fps", "frames per second"), "higher"),
+    "latency": (("latency",), "lower"),
+    "runtime": (("runtime", "run time", "execution time"), "lower"),
+}
 _REFERENCE_HEADING_RE = re.compile(
     r"(?:^|[/ >])(?:references?|bibliography|literature cited|works cited)(?:$|[/ >])",
     re.IGNORECASE,
@@ -219,11 +249,22 @@ def _source_chunks(chunks: list[dict[str, Any]], source_path: str) -> list[dict[
     expected = _source_variants(source_path)
     if not expected:
         return []
-    return [
-        chunk
-        for chunk in chunks
-        if isinstance(chunk, dict) and expected & _source_variants(_source_path(chunk))
-    ]
+    matched: list[dict[str, Any]] = []
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        raw = _source_path(chunk).replace("\\", "/")
+        if not raw:
+            continue
+        variants = {raw.lower()}
+        try:
+            path = Path(raw)
+            variants.update({path.name.lower(), path.stem.lower()})
+        except Exception:
+            pass
+        if expected & variants:
+            matched.append(chunk)
+    return matched
 
 
 def _sentence_candidates(value: object) -> list[str]:
@@ -431,6 +472,461 @@ def _comparison_flags(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return flags
 
 
+def _comparison_normal(value: object) -> str:
+    text = _text(value, limit=4_000, multiline=True).casefold()
+    text = re.sub(r"[`*_{}$|]+", " ", text)
+    text = text.replace("↑", " higher ").replace("↓", " lower ")
+    text = re.sub(r"[^\w.%+\-/]+", " ", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _comparison_contains(text: object, value: object) -> bool:
+    haystack = _comparison_normal(text)
+    return _comparison_contains_normal(haystack, value)
+
+
+def _comparison_contains_normal(haystack: str, value: object) -> bool:
+    needle = _comparison_normal(value)
+    if len(needle) < 2 or not haystack:
+        return False
+    if re.fullmatch(r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*(?:%|db|ms|s|fps|hz))?", needle, re.I):
+        return bool(re.search(rf"(?<![\d.]){re.escape(needle)}(?!\d)", haystack, re.I))
+    return needle in haystack
+
+
+def _metric_contract(value: object) -> tuple[str, str]:
+    normalized = _comparison_normal(value)
+    for canonical, (aliases, direction) in _METRIC_ALIASES.items():
+        if any(_comparison_normal(alias) == normalized for alias in aliases):
+            return canonical, direction
+    return "", ""
+
+
+def _comparison_result(value: object) -> tuple[float | None, str]:
+    match = _COMPARISON_RESULT_RE.fullmatch(_text(value, limit=80))
+    if not match:
+        return None, ""
+    try:
+        number = float(match.group(1))
+    except (TypeError, ValueError):
+        return None, ""
+    unit = str(match.group(2) or "").casefold()
+    return (number if math.isfinite(number) else None), unit
+
+
+def _comparison_hit(
+    chunks: list[tuple[dict[str, Any], str]],
+    values: list[str],
+) -> dict[str, Any] | None:
+    required = [value for value in values if _comparison_normal(value)]
+    if not required:
+        return None
+    candidates: list[tuple[tuple[int, int], dict[str, Any]]] = []
+    for hit, normalized_text in chunks:
+        if not all(_comparison_contains_normal(normalized_text, value) for value in required):
+            continue
+        meta = _meta(hit)
+        structured = str(meta.get("structured_kind") or "") in {"table_metric", "table_row"}
+        candidates.append(((0 if structured else 1, len(str(hit.get("text") or ""))), hit))
+    return min(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def _comparison_evidence_id(
+    audit_id: str,
+    side: str,
+    hit: dict[str, Any],
+) -> str:
+    meta = _meta(hit)
+    seed = "|".join(
+        (
+            audit_id,
+            side,
+            _text(hit.get("id") or meta.get("chunk_id"), limit=300),
+            _text(meta.get("block_id") or meta.get("anchor_id"), limit=300),
+        )
+    )
+    return f"cev_{hashlib.sha1(seed.encode('utf-8', errors='ignore')).hexdigest()[:16]}"
+
+
+def _comparison_evidence(
+    *,
+    audit_id: str,
+    side: str,
+    row: dict[str, Any],
+    hit: dict[str, Any],
+    supports: list[str],
+) -> dict[str, Any]:
+    meta = _meta(hit)
+    return {
+        "id": _comparison_evidence_id(audit_id, side, hit),
+        "comparison_audit_id": audit_id,
+        "side": side,
+        "supports": sorted(set(supports)),
+        "source_item_key": _text(row.get("source_item_key"), limit=500),
+        "source_path": _text(row.get("source_path"), limit=1_200),
+        "source_name": _text(row.get("source_name") or row.get("paper"), limit=500),
+        "title": _text(row.get("paper") or row.get("source_name"), limit=800),
+        "heading_path": _text(meta.get("heading_path") or meta.get("top_heading"), limit=800),
+        "location_label": _text(meta.get("location_label") or meta.get("heading_path"), limit=500),
+        "page_start": meta.get("page_start") or meta.get("page") or None,
+        "page_end": meta.get("page_end") or meta.get("page") or None,
+        "block_id": _text(meta.get("block_id"), limit=500),
+        "anchor_id": _text(meta.get("anchor_id") or meta.get("anchor"), limit=500),
+        "evidence_quote": _text(hit.get("text"), limit=_MAX_EVIDENCE_QUOTE, multiline=True),
+        "chunk_id": _text(hit.get("id") or meta.get("chunk_id"), limit=500),
+        "structured_kind": _text(meta.get("structured_kind"), limit=80),
+        "table_metric_direction": _text(meta.get("table_metric_direction"), limit=20),
+    }
+
+
+def _comparison_dimensions(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for item in list(spec.get("dimensions") or []):
+        if not isinstance(item, dict):
+            continue
+        dimension = _text(item.get("dimension"), limit=80)
+        if dimension not in COMPARISON_DIMENSIONS or dimension in result:
+            continue
+        result[dimension] = {
+            "dimension": dimension,
+            "left_value": _text(item.get("left_value"), limit=240),
+            "right_value": _text(item.get("right_value"), limit=240),
+            "mapping_confirmed": bool(item.get("mapping_confirmed")),
+        }
+    return result
+
+
+def audit_evidence_comparison(
+    *,
+    rows: list[dict[str, Any]],
+    spec: dict[str, Any],
+    db_dir: str | Path,
+    corpus_chunks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Audit an explicit, source-paired quantitative comparison without inferring missing facts."""
+    total_started = time.perf_counter()
+    mode = _text(spec.get("mode"), limit=40).lower()
+    if mode not in COMPARISON_MODES:
+        mode = "ranking"
+    left_row_id = _text(spec.get("left_row_id"), limit=120)
+    right_row_id = _text(spec.get("right_row_id"), limit=120)
+    dimensions = _comparison_dimensions(spec)
+    clean_spec = {
+        "mode": mode,
+        "left_row_id": left_row_id,
+        "right_row_id": right_row_id,
+        "dimensions": [dimensions[key] for key in COMPARISON_DIMENSIONS if key in dimensions],
+        "left_target": _text(spec.get("left_target"), limit=240),
+        "right_target": _text(spec.get("right_target"), limit=240),
+        "target_mapping_confirmed": bool(spec.get("target_mapping_confirmed")),
+        "left_result": _text(spec.get("left_result"), limit=80),
+        "right_result": _text(spec.get("right_result"), limit=80),
+    }
+    audit_seed = repr(clean_spec)
+    audit_id = f"cmp_{hashlib.sha1(audit_seed.encode('utf-8', errors='ignore')).hexdigest()[:16]}"
+    by_id = {
+        _text(row.get("id"), limit=120): row
+        for row in rows
+        if isinstance(row, dict) and _text(row.get("id"), limit=120)
+    }
+    left_row = by_id.get(left_row_id)
+    right_row = by_id.get(right_row_id)
+    reasons: list[str] = []
+    if left_row is None:
+        reasons.append("left_row_not_found")
+    if right_row is None:
+        reasons.append("right_row_not_found")
+    if left_row_id and left_row_id == right_row_id:
+        reasons.append("comparison_requires_two_rows")
+    for dimension in COMPARISON_DIMENSIONS:
+        item = dimensions.get(dimension)
+        if not item or not item["left_value"] or not item["right_value"]:
+            reasons.append(f"missing_{dimension}")
+    for key in ("left_target", "right_target", "left_result", "right_result"):
+        if not clean_spec[key]:
+            reasons.append(f"missing_{key}")
+
+    load_started = time.perf_counter()
+    chunks = (
+        [item for item in corpus_chunks if isinstance(item, dict)]
+        if corpus_chunks is not None
+        else [item for item in load_all_chunks(Path(db_dir)) if isinstance(item, dict)]
+        if left_row and right_row
+        else []
+    )
+    load_ms = round((time.perf_counter() - load_started) * 1000, 3)
+    matching_started = time.perf_counter()
+    source_chunks = {
+        "left": _source_chunks(chunks, str((left_row or {}).get("source_path") or "")),
+        "right": _source_chunks(chunks, str((right_row or {}).get("source_path") or "")),
+    }
+    source_indexes = {
+        side: [(hit, _comparison_normal(hit.get("text"))) for hit in hits]
+        for side, hits in source_chunks.items()
+    }
+    evidence: list[dict[str, Any]] = []
+    evidence_by_id: dict[str, dict[str, Any]] = {}
+    evidence_by_side_hit: dict[tuple[str, str], dict[str, Any]] = {}
+    bindings: dict[str, dict[str, str]] = {"left": {}, "right": {}}
+
+    def bind(side: str, row: dict[str, Any] | None, label: str, values: list[str]) -> None:
+        if row is None:
+            return
+        hit = _comparison_hit(source_indexes[side], values)
+        if hit is None:
+            reasons.append(f"{side}_{label}_evidence_missing")
+            return
+        hit_key = _text(hit.get("id") or _meta(hit).get("chunk_id") or id(hit), limit=500)
+        key = (side, hit_key)
+        item = evidence_by_side_hit.get(key)
+        if item is None:
+            item = _comparison_evidence(
+                audit_id=audit_id,
+                side=side,
+                row=row,
+                hit=hit,
+                supports=[label],
+            )
+            evidence_by_side_hit[key] = item
+            evidence.append(item)
+            evidence_by_id[str(item["id"])] = item
+        else:
+            item["supports"] = sorted({*list(item.get("supports") or []), label})
+        bindings[side][label] = str(item["id"])
+
+    left_result_terms = [
+        str(dimensions.get("dataset", {}).get("left_value") or ""),
+        str(dimensions.get("metric", {}).get("left_value") or ""),
+        str(clean_spec["left_target"]),
+        str(clean_spec["left_result"]),
+    ]
+    right_result_terms = [
+        str(dimensions.get("dataset", {}).get("right_value") or ""),
+        str(dimensions.get("metric", {}).get("right_value") or ""),
+        str(clean_spec["right_target"]),
+        str(clean_spec["right_result"]),
+    ]
+    if all(left_result_terms):
+        bind("left", left_row, "result", left_result_terms)
+    if all(right_result_terms):
+        bind("right", right_row, "result", right_result_terms)
+    for dimension in COMPARISON_DIMENSIONS:
+        item = dimensions.get(dimension)
+        if not item:
+            continue
+        for side, row in (("left", left_row), ("right", right_row)):
+            value = str(item[f"{side}_value"])
+            result_evidence = evidence_by_id.get(bindings[side].get("result", ""))
+            if result_evidence and _comparison_contains(result_evidence.get("evidence_quote"), value):
+                result_evidence["supports"] = sorted(
+                    {*list(result_evidence.get("supports") or []), dimension}
+                )
+                bindings[side][dimension] = str(result_evidence["id"])
+            else:
+                bind(side, row, dimension, [value])
+    matching_ms = round((time.perf_counter() - matching_started) * 1000, 3)
+
+    validation_started = time.perf_counter()
+    dimension_audits: list[dict[str, Any]] = []
+    user_confirmed_mappings: list[str] = []
+    for dimension in COMPARISON_DIMENSIONS:
+        item = dimensions.get(dimension)
+        if not item:
+            continue
+        left_value = str(item["left_value"])
+        right_value = str(item["right_value"])
+        if dimension == "metric":
+            left_metric, _left_direction = _metric_contract(left_value)
+            right_metric, _right_direction = _metric_contract(right_value)
+            equivalent = bool(left_metric and left_metric == right_metric)
+            match_type = "controlled_alias" if equivalent else "mismatch"
+        elif _comparison_normal(left_value) == _comparison_normal(right_value):
+            equivalent = True
+            match_type = "exact"
+        elif bool(item["mapping_confirmed"]):
+            equivalent = True
+            match_type = "user_confirmed"
+            user_confirmed_mappings.append(dimension)
+        else:
+            equivalent = False
+            match_type = "mismatch"
+        supported = dimension in bindings["left"] and dimension in bindings["right"]
+        if not equivalent:
+            reasons.append(f"{dimension}_mismatch")
+        dimension_audits.append(
+            {
+                **item,
+                "equivalent": equivalent,
+                "match_type": match_type,
+                "evidence_supported": supported,
+                "left_evidence_id": bindings["left"].get(dimension, ""),
+                "right_evidence_id": bindings["right"].get(dimension, ""),
+            }
+        )
+
+    left_metric, metric_direction = _metric_contract(dimensions.get("metric", {}).get("left_value"))
+    right_metric, right_direction = _metric_contract(dimensions.get("metric", {}).get("right_value"))
+    if not left_metric or left_metric != right_metric or metric_direction != right_direction:
+        reasons.append("unsupported_or_mismatched_metric")
+    result_evidence_ids = {bindings[side].get("result", "") for side in ("left", "right")}
+    observed_directions = {
+        "higher" if "↑" in str(item.get("table_metric_direction") or "") else "lower"
+        for item in evidence
+        if str(item.get("id") or "") in result_evidence_ids
+        and (
+            "↑" in str(item.get("table_metric_direction") or "")
+            or "↓" in str(item.get("table_metric_direction") or "")
+        )
+    }
+    if observed_directions and (len(observed_directions) > 1 or metric_direction not in observed_directions):
+        reasons.append("metric_direction_conflict")
+
+    left_number, left_unit = _comparison_result(clean_spec["left_result"])
+    right_number, right_unit = _comparison_result(clean_spec["right_result"])
+    if left_number is None:
+        reasons.append("left_result_not_numeric")
+    if right_number is None:
+        reasons.append("right_result_not_numeric")
+    if left_unit != right_unit:
+        reasons.append("result_unit_mismatch")
+    if "result" not in bindings["left"]:
+        reasons.append("left_result_not_jointly_supported")
+    if "result" not in bindings["right"]:
+        reasons.append("right_result_not_jointly_supported")
+
+    target_match_type = "not_required"
+    if mode == "replication":
+        if _comparison_normal(clean_spec["left_target"]) == _comparison_normal(clean_spec["right_target"]):
+            target_match_type = "exact"
+        elif clean_spec["target_mapping_confirmed"]:
+            target_match_type = "user_confirmed"
+            user_confirmed_mappings.append("comparison_target")
+        else:
+            target_match_type = "mismatch"
+            reasons.append("comparison_target_mismatch")
+
+    reasons = list(dict.fromkeys(reasons))
+    verified = not reasons
+    preferred_side = "none"
+    relation = "not_comparable"
+    confirmed_conflict = False
+    if verified and left_number is not None and right_number is not None:
+        equal = math.isclose(left_number, right_number, rel_tol=1e-9, abs_tol=1e-12)
+        if mode == "replication":
+            relation = "agreement" if equal else "reported_value_conflict"
+            confirmed_conflict = not equal
+        elif equal:
+            relation = "tie"
+            preferred_side = "tie"
+        else:
+            left_favorable = left_number > right_number if metric_direction == "higher" else left_number < right_number
+            preferred_side = "left" if left_favorable else "right"
+            relation = "left_more_favorable" if left_favorable else "right_more_favorable"
+
+    left_name = _text((left_row or {}).get("paper") or (left_row or {}).get("source_name"), limit=240) or "Left source"
+    right_name = _text((right_row or {}).get("paper") or (right_row or {}).get("source_name"), limit=240) or "Right source"
+    metric_label = _text(dimensions.get("metric", {}).get("left_value"), limit=120) or "metric"
+    dataset_label = _text(dimensions.get("dataset", {}).get("left_value"), limit=120) or "the stated dataset"
+    if not verified:
+        conclusion = "No comparative conclusion: " + ", ".join(reason.replace("_", " ") for reason in reasons[:8]) + "."
+    elif mode == "replication" and confirmed_conflict:
+        conclusion = (
+            f"{left_name} reports {clean_spec['left_result']} and {right_name} reports {clean_spec['right_result']} "
+            f"for {metric_label} on {dataset_label}. The reported values disagree under the audited matched contract; "
+            "this is a reporting conflict, not proof of a broader scientific contradiction."
+        )
+    elif mode == "replication":
+        conclusion = (
+            f"{left_name} and {right_name} both report {clean_spec['left_result']} for {metric_label} on "
+            f"{dataset_label} under the audited matched contract."
+        )
+    elif relation == "tie":
+        conclusion = (
+            f"{left_name} and {right_name} both report {clean_spec['left_result']} for {metric_label} on "
+            f"{dataset_label}; the audited comparison is tied."
+        )
+    else:
+        favored = left_name if preferred_side == "left" else right_name
+        conclusion = (
+            f"{left_name} reports {clean_spec['left_result']} and {right_name} reports {clean_spec['right_result']} "
+            f"for {metric_label} on {dataset_label}; {favored} has the more favorable reported value because "
+            f"{metric_direction} is better. This conclusion is limited to the audited contract and is not a general method ranking."
+        )
+    validation_ms = round((time.perf_counter() - validation_started) * 1000, 3)
+    total_ms = round((time.perf_counter() - total_started) * 1000, 3)
+    return {
+        "id": audit_id,
+        "contract_version": 1,
+        "status": "verified" if verified else "not_comparable",
+        "mode": mode,
+        "input": clean_spec,
+        "left_row_id": left_row_id,
+        "right_row_id": right_row_id,
+        "left_source_name": left_name,
+        "right_source_name": right_name,
+        "dimensions": dimension_audits,
+        "metric": left_metric,
+        "metric_direction": metric_direction,
+        "result_unit": left_unit if left_unit == right_unit else "",
+        "relation": relation,
+        "preferred_side": preferred_side,
+        "target_match_type": target_match_type,
+        "confirmed_conflict": confirmed_conflict,
+        "conclusion": conclusion,
+        "reasons": reasons,
+        "warnings": ["user_confirmed_mapping"] if user_confirmed_mappings else [],
+        "user_confirmed_mappings": sorted(set(user_confirmed_mappings)),
+        "evidence": evidence,
+        "evidence_bindings": bindings,
+        "phase_timings_ms": {
+            "load_corpus": load_ms,
+            "source_evidence_matching": matching_ms,
+            "contract_validation": validation_ms,
+            "total": total_ms,
+        },
+        "created_at": time.time(),
+    }
+
+
+def reaudit_evidence_comparisons(
+    *,
+    rows: list[dict[str, Any]],
+    audits: list[dict[str, Any]],
+    db_dir: str | Path,
+) -> list[dict[str, Any]]:
+    specs = [item.get("input") for item in audits if isinstance(item, dict) and isinstance(item.get("input"), dict)]
+    if not specs:
+        return []
+    chunks = [item for item in load_all_chunks(Path(db_dir)) if isinstance(item, dict)]
+    return [
+        audit_evidence_comparison(rows=rows, spec=dict(spec), db_dir=db_dir, corpus_chunks=chunks)
+        for spec in specs
+    ]
+
+
+def evidence_comparison_quality(audits: list[dict[str, Any]]) -> dict[str, Any]:
+    active = [item for item in audits if isinstance(item, dict)]
+    verified = [item for item in active if str(item.get("status") or "") == "verified"]
+    conflicts = [item for item in verified if bool(item.get("confirmed_conflict"))]
+    return {
+        "comparison_audit_count": len(active),
+        "verified_comparison_count": len(verified),
+        "not_comparable_count": len(active) - len(verified),
+        "confirmed_conflicts": [
+            {
+                "id": str(item.get("id") or ""),
+                "conclusion": str(item.get("conclusion") or ""),
+                "evidence_ids": [
+                    str(evidence.get("id") or "")
+                    for evidence in list(item.get("evidence") or [])
+                    if isinstance(evidence, dict) and str(evidence.get("id") or "")
+                ],
+            }
+            for item in conflicts
+        ],
+    }
+
+
 def build_project_evidence_matrix(
     selected_items: list[dict[str, Any]],
     *,
@@ -526,6 +1022,7 @@ def evidence_matrix_quality(
     evidence: list[dict[str, Any]],
     selected_items: list[dict[str, Any]],
     comparison_flags: list[dict[str, Any]] | None = None,
+    comparison_audits: list[dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     expected_items = list(research_brief_context(selected_items).get("items") or [])[:_MAX_MATRIX_SOURCES]
     expected_sources = {
@@ -607,8 +1104,11 @@ def evidence_matrix_quality(
         else 0.0
     )
     flags = [item for item in list(comparison_flags or []) if isinstance(item, dict)]
+    comparison_summary = evidence_comparison_quality(
+        [item for item in list(comparison_audits or []) if isinstance(item, dict)]
+    )
     quality = {
-        "contract_version": 1,
+        "contract_version": 2,
         "generation_mode": "extractive",
         "selected_source_count": len(expected_sources),
         "row_count": len(rows),
@@ -624,7 +1124,7 @@ def evidence_matrix_quality(
         "sources_without_evidence": sources_without_evidence,
         "unexpected_sources": sorted(set(unexpected_sources + unexpected_evidence)),
         "comparison_flags": flags,
-        "confirmed_conflicts": [],
+        **comparison_summary,
         "reasons": reasons,
         "warnings": ["missing_cells"] if missing_cells else [],
         "edited_after_verification": False,
@@ -636,9 +1136,56 @@ def evidence_matrix_hits(record: dict[str, Any], *, limit: int = 20) -> list[dic
     rows = [item for item in list(record.get("rows") or []) if isinstance(item, dict)]
     evidence = [item for item in list(record.get("evidence") or []) if isinstance(item, dict)]
     evidence_by_id = {str(item.get("id") or ""): item for item in evidence if str(item.get("id") or "")}
+    comparison_hits: list[dict[str, Any]] = []
+    for audit in list(record.get("comparison_audits") or []):
+        if not isinstance(audit, dict) or str(audit.get("status") or "") != "verified":
+            continue
+        spec = audit.get("input") if isinstance(audit.get("input"), dict) else {}
+        dimensions = _comparison_dimensions(spec)
+        direction = _text(audit.get("metric_direction"), limit=40)
+        audit_evidence = {
+            str(item.get("id") or ""): item
+            for item in list(audit.get("evidence") or [])
+            if isinstance(item, dict) and str(item.get("id") or "")
+        }
+        bindings = audit.get("evidence_bindings") if isinstance(audit.get("evidence_bindings"), dict) else {}
+        for side in ("left", "right"):
+            side_bindings = bindings.get(side) if isinstance(bindings.get(side), dict) else {}
+            item = audit_evidence.get(str(side_bindings.get("result") or ""))
+            dataset = _text(dimensions.get("dataset", {}).get(f"{side}_value"), limit=160)
+            metric = _text(dimensions.get("metric", {}).get(f"{side}_value"), limit=120)
+            target = _text(spec.get(f"{side}_target"), limit=240)
+            result = _text(spec.get(f"{side}_result"), limit=80)
+            if not item or not dataset or not metric or not target or not result:
+                continue
+            observation = f"{dataset} {metric} ({direction} is better): {target} = {result}."
+            comparison_hits.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "text": observation,
+                    "score": 10.0,
+                    "meta": {
+                        "source_path": _text(item.get("source_path"), limit=1_200),
+                        "source_name": _text(item.get("source_name"), limit=500),
+                        "title": _text(item.get("title"), limit=800),
+                        "heading_path": _text(item.get("heading_path"), limit=800),
+                        "location_label": _text(item.get("location_label"), limit=500),
+                        "page_start": item.get("page_start"),
+                        "page_end": item.get("page_end"),
+                        "block_id": _text(item.get("block_id"), limit=500),
+                        "anchor_id": _text(item.get("anchor_id"), limit=500),
+                        "matrix_field": "comparison_result",
+                        "comparison_audit_id": _text(audit.get("id"), limit=120),
+                        "comparison_relation": _text(audit.get("relation"), limit=120),
+                        "comparison_source_quote": _text(item.get("evidence_quote"), limit=_MAX_EVIDENCE_QUOTE, multiline=True),
+                    },
+                }
+            )
+    comparison_hits = comparison_hits[: max(0, int(limit))]
+    cell_limit = max(0, int(limit) - len(comparison_hits))
     selected: list[dict[str, Any]] = []
     seen_evidence: set[str] = set()
-    for field in MATRIX_CELL_FIELDS:
+    for field in MATRIX_CELL_FIELDS if cell_limit > 0 else ():
         for row in rows:
             cells = row.get("cells") if isinstance(row.get("cells"), dict) else {}
             cell = cells.get(field) if isinstance(cells.get(field), dict) else {}
@@ -652,9 +1199,9 @@ def evidence_matrix_hits(record: dict[str, Any], *, limit: int = 20) -> list[dic
                 seen_evidence.add(key)
                 selected.append(item)
                 break
-            if len(selected) >= max(1, int(limit)):
+            if len(selected) >= cell_limit:
                 break
-        if len(selected) >= max(1, int(limit)):
+        if len(selected) >= cell_limit:
             break
     hits: list[dict[str, Any]] = []
     for item in selected[: max(1, int(limit))]:
@@ -677,7 +1224,7 @@ def evidence_matrix_hits(record: dict[str, Any], *, limit: int = 20) -> list[dic
                 },
             }
         )
-    return hits
+    return [*hits, *comparison_hits][: max(1, int(limit))]
 
 
 def _cell_value(row: dict[str, Any], field: str) -> str:
@@ -711,6 +1258,25 @@ def evidence_matrix_markdown(record: dict[str, Any]) -> str:
         ]
         escaped = [value.replace("|", "\\|").replace("\n", "<br>") or "—" for value in values]
         lines.append("| " + " | ".join(escaped) + " |")
+    comparisons = [item for item in list(record.get("comparison_audits") or []) if isinstance(item, dict)]
+    if comparisons:
+        lines.extend(["", "## Comparison audits"])
+        for item in comparisons:
+            status = _text(item.get("status"), limit=40) or "not_comparable"
+            mode = _text(item.get("mode"), limit=40) or "ranking"
+            lines.extend(
+                [
+                    "",
+                    f"### {_text(item.get('left_source_name'), limit=240)} / {_text(item.get('right_source_name'), limit=240)}",
+                    "",
+                    f"- Status: {status}",
+                    f"- Mode: {mode}",
+                    f"- Conclusion: {_text(item.get('conclusion'), limit=1_600, multiline=True)}",
+                ]
+            )
+            reasons = [_text(reason, limit=120) for reason in list(item.get("reasons") or []) if _text(reason, limit=120)]
+            if reasons:
+                lines.append(f"- Boundaries: {', '.join(reasons)}")
     evidence = [item for item in list(record.get("evidence") or []) if isinstance(item, dict)]
     if evidence:
         lines.extend(["", "## Evidence appendix"])
@@ -824,6 +1390,36 @@ def evidence_matrix_xlsx(record: dict[str, Any]) -> bytes:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
     evidence_sheet.freeze_panes = "A2"
     evidence_sheet.auto_filter.ref = evidence_sheet.dimensions
+    comparisons = [item for item in list(record.get("comparison_audits") or []) if isinstance(item, dict)]
+    if comparisons:
+        comparison_sheet = workbook.create_sheet("Comparison Audits")
+        comparison_sheet.append(
+            ["ID", "Status", "Mode", "Left source", "Right source", "Metric", "Relation", "Conclusion", "Boundaries"]
+        )
+        for item in comparisons:
+            comparison_sheet.append(
+                [
+                    _tabular_value(item.get("id"), limit=120),
+                    _tabular_value(item.get("status"), limit=80),
+                    _tabular_value(item.get("mode"), limit=80),
+                    _tabular_value(item.get("left_source_name"), limit=500),
+                    _tabular_value(item.get("right_source_name"), limit=500),
+                    _tabular_value(item.get("metric"), limit=120),
+                    _tabular_value(item.get("relation"), limit=120),
+                    _tabular_value(item.get("conclusion"), limit=1_600),
+                    _tabular_value(", ".join(str(reason) for reason in list(item.get("reasons") or [])), limit=1_200),
+                ]
+            )
+        for cell in comparison_sheet[1]:
+            cell.font = Font(color="FFFFFF", bold=True)
+            cell.fill = header_fill
+        for index, width in enumerate([22, 18, 16, 28, 28, 16, 24, 72, 48], start=1):
+            comparison_sheet.column_dimensions[chr(64 + index)].width = width
+        for row in comparison_sheet.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+        comparison_sheet.freeze_panes = "A2"
+        comparison_sheet.auto_filter.ref = comparison_sheet.dimensions
     output = io.BytesIO()
     workbook.save(output)
     return output.getvalue()

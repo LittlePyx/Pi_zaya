@@ -1,6 +1,6 @@
 # Evidence Matrix Runbook
 
-Updated: 2026-08-06
+Updated: 2026-08-07
 
 ## Purpose
 
@@ -9,6 +9,12 @@ reviewable comparison before synthesis. Each paper has cells for method,
 dataset or experiment, metric, key result, and limitation, plus manual notes.
 The matrix is project-scoped, versioned, searchable, editable, and exportable as
 Markdown, CSV, or XLSX.
+
+Verified matrices also support explicit paired comparison audits. A researcher
+names the task, dataset, evaluation protocol, metric, compared target, and
+reported value for each source. The verifier locates those phrases in each
+paper's own local full text and produces a ranking, replication agreement, or
+reporting conflict only when the complete contract passes.
 
 This workflow is intentionally conservative. It must not fill a cell by
 inference, copy evidence from another paper, broaden retrieval beyond the
@@ -29,6 +35,9 @@ cell stays empty.
    marked `needs_review` until the matrix is regenerated from source evidence.
 6. Inspect or restore immutable revisions, export the current revision, or use a
    verified matrix to create a research brief.
+7. Open **Comparisons**, select two sources, and enter the exact phrases and
+   values to audit. Review any user-confirmed semantic mapping, the paired
+   source excerpts, and the explicit comparable/not-comparable result.
 
 ## Evidence Contract
 
@@ -43,10 +52,20 @@ A matrix is `verified` only when all of these checks pass:
 
 Missing cells are explicit and are warnings, not invented facts. They do not
 invalidate an otherwise verified matrix. `completeness` describes extraction
-coverage; it is not evidence quality. `confirmed_conflicts` remains empty unless
-a future verifier can establish comparable conditions and metrics. The current
-implementation emits only informational boundaries when experimental
-conditions or metric surfaces differ.
+coverage; it is not evidence quality. Unreviewed cell differences remain only
+informational boundaries.
+
+A comparison audit is `verified` only when both sources independently contain
+the stated task, dataset, protocol, and controlled metric, and each source has
+one same-source passage that jointly contains its dataset, metric, target, and
+numeric result. Units must match and the metric direction must be known. Task,
+dataset, protocol, and replication-target aliases can be accepted only through
+an explicit user-confirmed mapping; metrics use a controlled alias registry and
+cannot be manually equated. A failed contract is stored as `not_comparable`
+with concrete reasons and never emits a preferred source. A
+`confirmed_conflict` is limited to unequal repeated reports of the same
+user-confirmed target under the complete matched contract; its wording
+explicitly avoids claiming a broader scientific contradiction.
 
 The generator performs source-balanced retrieval: it builds one local BM25
 index per selected paper, queries all five field facets within that paper, and
@@ -71,6 +90,8 @@ creation fails.
 - `GET /api/evidence-matrices/{matrix_id}/revisions`
 - `GET /api/evidence-matrices/{matrix_id}/revisions/{revision}`
 - `POST /api/evidence-matrices/{matrix_id}/restore`
+- `POST /api/evidence-matrices/{matrix_id}/comparison-audits`
+- `DELETE /api/evidence-matrices/{matrix_id}/comparison-audits/{comparison_id}`
 - `GET /api/evidence-matrices/{matrix_id}/export?format=markdown|csv|xlsx`
 
 Refreshing requires `matrix_id` and `expected_revision`. Generation rejects an
@@ -84,6 +105,8 @@ Run the focused backend and UI checks:
 
 ```bash
 python -m pytest -q tests/unit/test_evidence_matrix.py tests/unit/test_chat_store_evidence_matrices.py tests/sanity/test_evidence_matrices_api.py tests/unit/test_research_brief.py tests/sanity/test_research_briefs_api.py
+python tools/evidence_matrix/run_comparison_eval.py --dry-run
+python tools/evidence_matrix/run_comparison_eval.py --db-root db
 cd web
 npm run lint
 npm run build
@@ -96,6 +119,11 @@ same-source exact-quote support and a usable reader locator. Generate five
 matrix-backed research briefs covering different paper pairs and require all
 five to pass source coverage, citation resolution, claim support, and
 out-of-scope evidence checks.
+
+For paired comparisons, the reviewed fixture is
+`docs/evidence_comparison_eval_v1.json`. Require all comparable and
+not-comparable cases to match their reviewed outcome, zero false comparisons,
+same-source exact evidence, and a reader locator on every recorded excerpt.
 
 Then run the unchanged gates in `docs/RESEARCH_QA_EVAL_RUNBOOK.md`: 29-question
 live full-library QA, five-question paid-model smoke, 29-question deterministic
@@ -180,3 +208,40 @@ smoke, 29/29 deterministic retrieval, 41/41 source validation, 6/6 reviewed
 replay, and 4,321 backend tests with 43 configuration-dependent skips. Frontend
 ESLint, production build, 119/119 executed smoke tests with two skips, 109/109
 core tests, and 4/4 public-surface tests passed.
+
+## 2026-08-07 Comparison Audit And Matrix-Build Latency Acceptance
+
+The paired comparison verifier was evaluated on five reviewed cases drawn from
+the real SCIGS and SCINeRF corpus: one LPIPS ranking, one repeated-report
+agreement, and three intentional no-comparison cases covering a dataset
+mismatch, a metric mismatch, and a fabricated result. The final report is
+`test_results/evidence_comparison/20260807_012534/report.json`. All 5/5 matched
+the reviewed outcome, every recorded excerpt was exact same-source evidence
+with a reader locator, and there were zero false comparisons. Corpus loading
+took 35.3 ms; audit median/max were 67.7/69.9 ms, with a 103.1 ms cold median
+estimate. Failed contracts retained their explicit reasons and emitted neither
+a preferred side nor a conflict claim.
+
+The same five real two-paper matrices used by the prior acceptance retained all
+41 supported factual cells. Before the path-matching optimization, matrix build
+median was 1,053.6 ms and evidence-audit median was 7.7 ms. The final five
+builds were 193.6, 188.5, 131.0, 166.3, and 167.1 ms: median 167.1 ms, maximum
+193.6 ms, and an 84.1% lower median. The separate evidence audit remained 7.6
+ms median. The change normalizes each selected source identity once instead of
+resolving the same path for every chunk; it does not reduce the corpus, query
+facets, selected sources, populated cells, or evidence checks.
+
+The product workflow now persists each audit with matrix revision history,
+supports optimistic-concurrency upsert/delete, re-audits saved comparisons on
+refresh, exposes paired evidence and phase timings in the React workspace, and
+includes verified source-specific observations in downstream research briefs.
+It never inserts a cross-source winner sentence into a brief.
+
+The unchanged release gates passed in the final state: 29/29 live full-library
+QA in
+`test_results/research_qa_evidence_comparison_final_full_library_fixed/20260807_012052`,
+5/5 paid-model smoke, 29/29 deterministic retrieval, 41/41 source validation,
+and 6/6 reviewed replay. Frontend ESLint, the production build, 119/119 executed
+Playwright smoke tests with two configuration-dependent skips, 109/109 core
+tests, and 4/4 public-surface tests also passed. The backend suite completed
+with 4,327 passed and 43 configuration-dependent skips.

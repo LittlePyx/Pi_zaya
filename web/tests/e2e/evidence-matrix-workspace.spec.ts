@@ -55,6 +55,7 @@ type Matrix = {
   evidence: Array<Record<string, unknown>>
   source_items: Array<Record<string, unknown>>
   comparison_flags: Array<Record<string, unknown>>
+  comparison_audits: Array<Record<string, unknown>>
   quality_status: string
   quality: Record<string, unknown>
   revision: number
@@ -150,6 +151,22 @@ async function installBackend(page: Page) {
             key_result: { field: 'key_result', value: 'Results reach 31 dB PSNR.', support_status: 'grounded', evidence_ids: ['ev-result'], manual_override: false },
             limitation: { field: 'limitation', value: '', support_status: 'missing', evidence_ids: [], manual_override: false },
           },
+        }, {
+          id: 'row-b',
+          source_item_key: 'matrix-paper-b',
+          paper: 'Paper B',
+          source_name: 'Paper B',
+          source_path: 'db/Library/PaperB.en.md',
+          year: '2024',
+          notes: '',
+          source_status: 'active',
+          cells: {
+            method: { field: 'method', value: 'SCINeRF reconstructs a snapshot compressive image.', support_status: 'grounded', evidence_ids: ['ev-b-method'], manual_override: false },
+            dataset_or_experiment: { field: 'dataset_or_experiment', value: 'The synthetic dataset includes Cozy2room.', support_status: 'grounded', evidence_ids: ['ev-b-dataset'], manual_override: false },
+            metric: { field: 'metric', value: 'The evaluation metric is LPIPS.', support_status: 'grounded', evidence_ids: ['ev-b-metric'], manual_override: false },
+            key_result: { field: 'key_result', value: 'Cozy2room LPIPS is .0445.', support_status: 'grounded', evidence_ids: ['ev-b-result'], manual_override: false },
+            limitation: { field: 'limitation', value: '', support_status: 'missing', evidence_ids: [], manual_override: false },
+          },
         }],
         evidence: [{
           id: 'ev-method',
@@ -162,6 +179,7 @@ async function installBackend(page: Page) {
         }],
         source_items: [{ key: SHELF_ITEM.key, title: 'Paper A', sourcePath: SHELF_ITEM.sourcePath }],
         comparison_flags: [{ code: 'metrics_differ', message: 'Reported metrics differ across sources.' }],
+        comparison_audits: [],
         quality_status: 'verified',
         quality: { supported_cell_count: 3, populated_cell_count: 3, missing_cell_count: 2, reasons: [] },
         revision: 1,
@@ -180,6 +198,53 @@ async function installBackend(page: Page) {
     const url = new URL(request.url())
     if (url.pathname.endsWith('/revisions')) {
       await fulfillJson(route, [...revisions].reverse())
+      return
+    }
+    if (url.pathname.endsWith('/comparison-audits') && request.method() === 'POST') {
+      if (!matrix) {
+        await fulfillJson(route, { detail: 'not found' }, 404)
+        return
+      }
+      const auditPayload = request.postDataJSON() as Record<string, unknown>
+      matrix = {
+        ...matrix,
+        comparison_audits: [{
+          id: 'comparison-1',
+          contract_version: 1,
+          status: 'verified',
+          mode: 'ranking',
+          left_row_id: 'row-a',
+          right_row_id: 'row-b',
+          left_source_name: 'Paper A',
+          right_source_name: 'Paper B',
+          dimensions: auditPayload.dimensions,
+          metric: 'lpips',
+          metric_direction: 'lower',
+          relation: 'left_more_favorable',
+          preferred_side: 'left',
+          confirmed_conflict: false,
+          conclusion: 'Paper A reports .0423 and Paper B reports .0445 for LPIPS on Cozy2room; Paper A has the more favorable reported value because lower is better.',
+          reasons: [],
+          warnings: ['user_confirmed_mapping'],
+          user_confirmed_mappings: ['evaluation_protocol'],
+          evidence: [{
+            id: 'comparison-evidence-a',
+            side: 'left',
+            source_name: 'Paper A',
+            source_path: SHELF_ITEM.sourcePath,
+            supports: ['result'],
+            heading_path: 'Results / Table 1',
+            evidence_quote: 'Cozy2room LPIPS ↓: SCIGS(ours) = .0423',
+          }],
+          phase_timings_ms: { total: 42.5 },
+          created_at: 12,
+        }],
+        quality: { ...matrix.quality, verified_comparison_count: 1 },
+        revision: matrix.revision + 1,
+        updated_at: 12,
+      }
+      revisions.push({ ...matrix })
+      await fulfillJson(route, matrix)
       return
     }
     if (request.method() === 'PATCH') {
@@ -205,7 +270,7 @@ async function installBackend(page: Page) {
         }],
         quality_status: 'needs_review',
         quality: { reasons: ['edited_after_verification'], supported_cell_count: 2, populated_cell_count: 3 },
-        revision: 2,
+        revision: matrix.revision + 1,
         updated_at: 11,
       }
       revisions.push({ ...matrix })
@@ -234,22 +299,42 @@ test('project basket becomes a persistent cell-audited evidence matrix', async (
   await page.getByTestId('evidence-matrix-generate').click()
 
   await expect(page.getByText('Cell-level evidence audit passed')).toBeVisible()
-  await expect(page.getByTestId('project-evidence-matrix-row')).toHaveCount(1)
-  await expect(page.getByTestId('project-evidence-matrix-row')).toContainText('coded optical network')
-  await expect(page.getByTestId('project-evidence-matrix-row').locator('textarea').nth(1)).toHaveValue('')
-  await expect(page.getByTestId('project-evidence-matrix-row').locator('textarea').nth(4)).toHaveValue('')
+  await expect(page.getByTestId('project-evidence-matrix-row')).toHaveCount(2)
+  await expect(page.getByTestId('project-evidence-matrix-row').first()).toContainText('coded optical network')
+  await expect(page.getByTestId('project-evidence-matrix-row').first().locator('textarea').nth(1)).toHaveValue('')
+  await expect(page.getByTestId('project-evidence-matrix-row').first().locator('textarea').nth(4)).toHaveValue('')
   await expect.poll(() => backend.generatedPayload()).toMatchObject({
     title: 'Imaging evidence matrix',
     source_conv_id: CONVERSATION.id,
     item_keys: [SHELF_ITEM.key],
   })
 
-  const row = page.getByTestId('project-evidence-matrix-row')
+  await page.getByRole('tab', { name: /Comparisons/ }).click()
+  const contractRows = page.locator('.kb-evidence-comparison-contract-table').locator(':scope > div')
+  await contractRows.nth(1).locator('input').nth(0).fill('SCI image reconstruction')
+  await contractRows.nth(1).locator('input').nth(1).fill('SCI image reconstruction')
+  await contractRows.nth(2).locator('input').nth(0).fill('Cozy2room')
+  await contractRows.nth(2).locator('input').nth(1).fill('Cozy2room')
+  await contractRows.nth(3).locator('input').nth(0).fill('static datasets')
+  await contractRows.nth(3).locator('input').nth(1).fill('synthetic datasets')
+  await contractRows.nth(3).locator('input[type="checkbox"]').check()
+  await contractRows.nth(4).locator('input').nth(0).fill('LPIPS')
+  await contractRows.nth(4).locator('input').nth(1).fill('LPIPS')
+  const pairRows = page.locator('.kb-evidence-comparison-pair-row')
+  await pairRows.nth(1).locator('input').nth(0).fill('SCIGS(ours)')
+  await pairRows.nth(1).locator('input').nth(1).fill('ours')
+  await pairRows.nth(2).locator('input').nth(0).fill('.0423')
+  await pairRows.nth(2).locator('input').nth(1).fill('.0445')
+  await page.getByTestId('evidence-comparison-audit').click()
+  await expect(page.getByTestId('evidence-comparison-result')).toContainText('more favorable reported value')
+
+  await page.getByRole('tab', { name: /Matrix/ }).click()
+  const row = page.getByTestId('project-evidence-matrix-row').first()
   await row.locator('textarea').nth(0).fill('A human-edited method summary.')
   await row.locator('textarea').nth(5).fill('Keep this note on source refresh.')
   await page.getByTestId('evidence-matrix-save').click()
   await expect(page.getByText('This matrix needs review')).toBeVisible()
-  await expect.poll(() => backend.savedPayload()).toMatchObject({ expected_revision: 1 })
+  await expect.poll(() => backend.savedPayload()).toMatchObject({ expected_revision: 2 })
 
   await page.getByRole('tab', { name: /Evidence/ }).click()
   await expect(page.getByTestId('project-evidence-matrix-evidence')).toContainText('Method / Architecture')

@@ -681,6 +681,59 @@ export interface ProjectEvidenceMatrixRow {
   cells: Partial<Record<EvidenceMatrixCellField, ProjectEvidenceMatrixCell>>
 }
 
+export type EvidenceComparisonDimensionName = 'task' | 'dataset' | 'evaluation_protocol' | 'metric'
+export type EvidenceComparisonMode = 'ranking' | 'replication'
+
+export interface EvidenceComparisonDimensionInput {
+  dimension: EvidenceComparisonDimensionName
+  left_value: string
+  right_value: string
+  mapping_confirmed?: boolean
+}
+
+export interface EvidenceComparisonAudit {
+  id: string
+  contract_version: number
+  status: 'verified' | 'not_comparable' | string
+  mode: EvidenceComparisonMode
+  left_row_id: string
+  right_row_id: string
+  left_source_name: string
+  right_source_name: string
+  dimensions: Array<EvidenceComparisonDimensionInput & {
+    equivalent?: boolean
+    match_type?: string
+    evidence_supported?: boolean
+    left_evidence_id?: string
+    right_evidence_id?: string
+  }>
+  metric: string
+  metric_direction: string
+  relation: string
+  preferred_side: string
+  confirmed_conflict: boolean
+  conclusion: string
+  reasons: string[]
+  warnings: string[]
+  user_confirmed_mappings: string[]
+  evidence: Array<Record<string, unknown>>
+  phase_timings_ms: Record<string, number>
+  created_at: number
+}
+
+export interface EvidenceComparisonAuditBody {
+  expected_revision: number
+  mode: EvidenceComparisonMode
+  left_row_id: string
+  right_row_id: string
+  dimensions: EvidenceComparisonDimensionInput[]
+  left_target: string
+  right_target: string
+  target_mapping_confirmed?: boolean
+  left_result: string
+  right_result: string
+}
+
 export interface EvidenceMatrixRecord {
   id: string
   project_id: string
@@ -691,6 +744,7 @@ export interface EvidenceMatrixRecord {
   evidence: Array<Record<string, unknown>>
   source_items: Array<Record<string, unknown>>
   comparison_flags: Array<Record<string, unknown>>
+  comparison_audits: EvidenceComparisonAudit[]
   quality_status: EvidenceMatrixQualityStatus
   quality: Record<string, unknown>
   revision: number
@@ -931,6 +985,15 @@ export const chatApi = {
       row_updates?: EvidenceMatrixRowUpdate[]
     },
   ) => api.patch<EvidenceMatrixRecord>(`/api/evidence-matrices/${encodeURIComponent(matrixId)}`, body),
+  auditEvidenceComparison: (matrixId: string, body: EvidenceComparisonAuditBody) =>
+    api.post<EvidenceMatrixRecord>(
+      `/api/evidence-matrices/${encodeURIComponent(matrixId)}/comparison-audits`,
+      body,
+    ),
+  deleteEvidenceComparison: (matrixId: string, comparisonId: string, expectedRevision: number) =>
+    api.delete<EvidenceMatrixRecord>(
+      `/api/evidence-matrices/${encodeURIComponent(matrixId)}/comparison-audits/${encodeURIComponent(comparisonId)}?expected_revision=${encodeURIComponent(String(expectedRevision))}`,
+    ),
   listEvidenceMatrixRevisions: (matrixId: string, limit = 40) =>
     api.get<EvidenceMatrixRecord[]>(
       `/api/evidence-matrices/${encodeURIComponent(matrixId)}/revisions?limit=${encodeURIComponent(String(limit))}`,

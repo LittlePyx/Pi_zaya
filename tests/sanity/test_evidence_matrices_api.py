@@ -210,3 +210,104 @@ def test_research_brief_can_use_only_a_verified_matrix(monkeypatch, tmp_path: Pa
     )
     assert rejected.status_code == 400
     assert "verified evidence matrix" in rejected.json()["detail"]
+
+
+def test_comparison_audit_api_versions_persists_and_deletes_audited_result(monkeypatch, tmp_path: Path) -> None:
+    from api.routers import evidence_matrices as matrix_router
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    project_id = store.create_project("Comparison audit")
+    rows = [
+        {
+            "id": "row-left",
+            "source_item_key": "left",
+            "paper": "Paper Left",
+            "source_name": "Paper Left",
+            "source_path": "F:/papers/left.md",
+            "source_status": "active",
+            "cells": {},
+        },
+        {
+            "id": "row-right",
+            "source_item_key": "right",
+            "paper": "Paper Right",
+            "source_name": "Paper Right",
+            "source_path": "F:/papers/right.md",
+            "source_status": "active",
+            "cells": {},
+        },
+    ]
+    matrix = store.create_evidence_matrix(
+        project_id=project_id,
+        title="Audited comparison",
+        rows=rows,
+        source_items=[
+            {"key": "left", "sourcePath": "F:/papers/left.md"},
+            {"key": "right", "sourcePath": "F:/papers/right.md"},
+        ],
+        quality_status="verified",
+        quality={"contract_version": 2, "reasons": []},
+    )
+    assert matrix is not None
+    chunks = [
+        {
+            "id": "left-table",
+            "text": (
+                "Quantitative SCI image reconstruction comparisons on the static datasets. "
+                "Cozy2room LPIPS ↓ (lower is better): SCIGS(ours) = .0423"
+            ),
+            "meta": {"source_path": "F:/papers/left.md", "page": 6, "heading_path": "Table 1"},
+        },
+        {
+            "id": "right-table",
+            "text": (
+                "Quantitative SCI image reconstruction comparisons on the synthetic datasets. "
+                "Cozy2room LPIPS ↓ (lower is better): ours = .0445"
+            ),
+            "meta": {"source_path": "F:/papers/right.md", "page": 6, "heading_path": "Table 1"},
+        },
+    ]
+    monkeypatch.setattr(matrix_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(matrix_router, "get_settings", lambda: SimpleNamespace(db_dir=tmp_path))
+    monkeypatch.setattr("kb.evidence_matrix.load_all_chunks", lambda _db_dir: chunks)
+    client = TestClient(app)
+    body = {
+        "expected_revision": 1,
+        "mode": "ranking",
+        "left_row_id": "row-left",
+        "right_row_id": "row-right",
+        "dimensions": [
+            {"dimension": "task", "left_value": "SCI image reconstruction", "right_value": "SCI image reconstruction"},
+            {"dimension": "dataset", "left_value": "Cozy2room", "right_value": "Cozy2room"},
+            {
+                "dimension": "evaluation_protocol",
+                "left_value": "static datasets",
+                "right_value": "synthetic datasets",
+                "mapping_confirmed": True,
+            },
+            {"dimension": "metric", "left_value": "LPIPS", "right_value": "LPIPS"},
+        ],
+        "left_target": "SCIGS(ours)",
+        "right_target": "ours",
+        "left_result": ".0423",
+        "right_result": ".0445",
+    }
+
+    response = client.post(f"/api/evidence-matrices/{matrix['id']}/comparison-audits", json=body)
+
+    assert response.status_code == 200
+    audited = response.json()
+    assert audited["revision"] == 2
+    assert audited["comparison_audits"][0]["status"] == "verified"
+    assert audited["comparison_audits"][0]["preferred_side"] == "left"
+    assert audited["quality"]["verified_comparison_count"] == 1
+    stale = client.post(f"/api/evidence-matrices/{matrix['id']}/comparison-audits", json=body)
+    assert stale.status_code == 409
+
+    comparison_id = audited["comparison_audits"][0]["id"]
+    deleted = client.delete(
+        f"/api/evidence-matrices/{matrix['id']}/comparison-audits/{comparison_id}?expected_revision=2"
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["revision"] == 3
+    assert deleted.json()["comparison_audits"] == []

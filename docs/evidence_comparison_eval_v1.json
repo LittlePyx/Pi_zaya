@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "description": "Human-reviewed real-corpus gates for paired evidence comparison. Only the first two cases are comparable; the remaining cases must stay explicitly not comparable.",
+  "sources": {
+    "scigs": "db/ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image/ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.en.md",
+    "scinerf": "db/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
+  },
+  "cases": [
+    {
+      "id": "cozy2room-lpips-ranking",
+      "left_source": "scigs",
+      "right_source": "scinerf",
+      "spec": {
+        "mode": "ranking",
+        "dimensions": [
+          {"dimension": "task", "left_value": "SCI image reconstruction", "right_value": "SCI image reconstruction"},
+          {"dimension": "dataset", "left_value": "Cozy2room", "right_value": "Cozy2room"},
+          {"dimension": "evaluation_protocol", "left_value": "static datasets", "right_value": "synthetic datasets", "mapping_confirmed": true},
+          {"dimension": "metric", "left_value": "LPIPS", "right_value": "LPIPS"}
+        ],
+        "left_target": "SCIGS(ours)",
+        "right_target": "ours",
+        "left_result": ".0423",
+        "right_result": ".0445"
+      },
+      "expected": {"status": "verified", "relation": "left_more_favorable", "preferred_side": "left", "confirmed_conflict": false}
+    },
+    {
+      "id": "cozy2room-scinerf-reported-agreement",
+      "left_source": "scigs",
+      "right_source": "scinerf",
+      "spec": {
+        "mode": "replication",
+        "dimensions": [
+          {"dimension": "task", "left_value": "SCI image reconstruction", "right_value": "SCI image reconstruction"},
+          {"dimension": "dataset", "left_value": "Cozy2room", "right_value": "Cozy2room"},
+          {"dimension": "evaluation_protocol", "left_value": "static datasets", "right_value": "synthetic datasets", "mapping_confirmed": true},
+          {"dimension": "metric", "left_value": "LPIPS", "right_value": "LPIPS"}
+        ],
+        "left_target": "SCINeRF[14]",
+        "right_target": "ours",
+        "target_mapping_confirmed": true,
+        "left_result": ".0445",
+        "right_result": ".0445"
+      },
+      "expected": {"status": "verified", "relation": "agreement", "preferred_side": "none", "confirmed_conflict": false}
+    },
+    {
+      "id": "different-dataset-no-ranking",
+      "left_source": "scigs",
+      "right_source": "scinerf",
+      "spec": {
+        "mode": "ranking",
+        "dimensions": [
+          {"dimension": "task", "left_value": "SCI image reconstruction", "right_value": "SCI image reconstruction"},
+          {"dimension": "dataset", "left_value": "Cozy2room", "right_value": "Hotdog"},
+          {"dimension": "evaluation_protocol", "left_value": "static datasets", "right_value": "synthetic datasets", "mapping_confirmed": true},
+          {"dimension": "metric", "left_value": "LPIPS", "right_value": "LPIPS"}
+        ],
+        "left_target": "SCIGS(ours)",
+        "right_target": "ours",
+        "left_result": ".0423",
+        "right_result": ".0310"
+      },
+      "expected": {"status": "not_comparable", "relation": "not_comparable", "preferred_side": "none", "confirmed_conflict": false, "required_reason": "dataset_mismatch"}
+    },
+    {
+      "id": "different-metric-no-ranking",
+      "left_source": "scigs",
+      "right_source": "scinerf",
+      "spec": {
+        "mode": "ranking",
+        "dimensions": [
+          {"dimension": "task", "left_value": "SCI image reconstruction", "right_value": "SCI image reconstruction"},
+          {"dimension": "dataset", "left_value": "Cozy2room", "right_value": "Cozy2room"},
+          {"dimension": "evaluation_protocol", "left_value": "static datasets", "right_value": "synthetic datasets", "mapping_confirmed": true},
+          {"dimension": "metric", "left_value": "LPIPS", "right_value": "SSIM"}
+        ],
+        "left_target": "SCIGS(ours)",
+        "right_target": "ours",
+        "left_result": ".0423",
+        "right_result": ".9492"
+      },
+      "expected": {"status": "not_comparable", "relation": "not_comparable", "preferred_side": "none", "confirmed_conflict": false, "required_reason": "metric_mismatch"}
+    },
+    {
+      "id": "unsupported-value-no-ranking",
+      "left_source": "scigs",
+      "right_source": "scinerf",
+      "spec": {
+        "mode": "ranking",
+        "dimensions": [
+          {"dimension": "task", "left_value": "SCI image reconstruction", "right_value": "SCI image reconstruction"},
+          {"dimension": "dataset", "left_value": "Cozy2room", "right_value": "Cozy2room"},
+          {"dimension": "evaluation_protocol", "left_value": "static datasets", "right_value": "synthetic datasets", "mapping_confirmed": true},
+          {"dimension": "metric", "left_value": "LPIPS", "right_value": "LPIPS"}
+        ],
+        "left_target": "SCIGS(ours)",
+        "right_target": "ours",
+        "left_result": ".0423",
+        "right_result": ".9999"
+      },
+      "expected": {"status": "not_comparable", "relation": "not_comparable", "preferred_side": "none", "confirmed_conflict": false, "required_reason": "right_result_evidence_missing"}
+    }
+  ]
+}

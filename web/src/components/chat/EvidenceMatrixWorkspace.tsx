@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
   Button,
+  Checkbox,
   Input,
   Modal,
   Popconfirm,
@@ -21,6 +22,10 @@ import {
 } from '@ant-design/icons'
 import {
   chatApi,
+  type EvidenceComparisonAudit,
+  type EvidenceComparisonDimensionInput,
+  type EvidenceComparisonDimensionName,
+  type EvidenceComparisonMode,
   type EvidenceMatrixCellField,
   type EvidenceMatrixExportFormat,
   type EvidenceMatrixRecord,
@@ -47,6 +52,19 @@ const CELL_FIELDS: EvidenceMatrixCellField[] = [
   'key_result',
   'limitation',
 ]
+const COMPARISON_DIMENSIONS: EvidenceComparisonDimensionName[] = [
+  'task',
+  'dataset',
+  'evaluation_protocol',
+  'metric',
+]
+
+function emptyComparisonDimensions(): Record<EvidenceComparisonDimensionName, EvidenceComparisonDimensionInput> {
+  return Object.fromEntries(COMPARISON_DIMENSIONS.map((dimension) => [
+    dimension,
+    { dimension, left_value: '', right_value: '', mapping_confirmed: false },
+  ])) as Record<EvidenceComparisonDimensionName, EvidenceComparisonDimensionInput>
+}
 
 function numeric(value: unknown): number {
   const number = Number(value)
@@ -97,6 +115,16 @@ export function EvidenceMatrixWorkspace({
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState<EvidenceMatrixExportFormat | ''>('')
+  const [auditingComparison, setAuditingComparison] = useState(false)
+  const [comparisonMode, setComparisonMode] = useState<EvidenceComparisonMode>('ranking')
+  const [leftComparisonRowId, setLeftComparisonRowId] = useState('')
+  const [rightComparisonRowId, setRightComparisonRowId] = useState('')
+  const [comparisonDimensions, setComparisonDimensions] = useState(emptyComparisonDimensions)
+  const [leftTarget, setLeftTarget] = useState('')
+  const [rightTarget, setRightTarget] = useState('')
+  const [targetMappingConfirmed, setTargetMappingConfirmed] = useState(false)
+  const [leftResult, setLeftResult] = useState('')
+  const [rightResult, setRightResult] = useState('')
 
   const applyRecord = useCallback((record: EvidenceMatrixRecord | null) => {
     setActive(record)
@@ -104,6 +132,14 @@ export function EvidenceMatrixWorkspace({
     setObjective(String(record?.objective || ''))
     setRows(cloneRows(record?.rows || []))
     setSelectedRevision(record ? Number(record.revision || 1) : null)
+    setLeftComparisonRowId(String(record?.rows?.[0]?.id || ''))
+    setRightComparisonRowId(String(record?.rows?.[1]?.id || ''))
+    setComparisonDimensions(emptyComparisonDimensions())
+    setLeftTarget('')
+    setRightTarget('')
+    setTargetMappingConfirmed(false)
+    setLeftResult('')
+    setRightResult('')
   }, [])
 
   const loadRevisions = useCallback(async (matrixId: string) => {
@@ -306,9 +342,84 @@ export function EvidenceMatrixWorkspace({
     }
   }
 
+  const updateComparisonDimension = (
+    dimension: EvidenceComparisonDimensionName,
+    patch: Partial<EvidenceComparisonDimensionInput>,
+  ) => {
+    setComparisonDimensions((current) => ({
+      ...current,
+      [dimension]: { ...current[dimension], ...patch, dimension },
+    }))
+  }
+
+  const auditComparison = async () => {
+    if (!active || active.quality_status !== 'verified') {
+      message.warning(S.evidence_matrix_comparison_requires_verified)
+      return
+    }
+    if (dirty) {
+      message.warning(S.evidence_matrix_comparison_save_first)
+      return
+    }
+    const dimensions = COMPARISON_DIMENSIONS.map((dimension) => comparisonDimensions[dimension])
+    if (
+      !leftComparisonRowId
+      || !rightComparisonRowId
+      || leftComparisonRowId === rightComparisonRowId
+      || dimensions.some((item) => !item.left_value.trim() || !item.right_value.trim())
+      || !leftTarget.trim()
+      || !rightTarget.trim()
+      || !leftResult.trim()
+      || !rightResult.trim()
+    ) {
+      message.warning(S.evidence_matrix_comparison_complete_contract)
+      return
+    }
+    setAuditingComparison(true)
+    try {
+      const record = await chatApi.auditEvidenceComparison(active.id, {
+        expected_revision: active.revision,
+        mode: comparisonMode,
+        left_row_id: leftComparisonRowId,
+        right_row_id: rightComparisonRowId,
+        dimensions,
+        left_target: leftTarget.trim(),
+        right_target: rightTarget.trim(),
+        target_mapping_confirmed: targetMappingConfirmed,
+        left_result: leftResult.trim(),
+        right_result: rightResult.trim(),
+      })
+      const latest = record.comparison_audits?.[record.comparison_audits.length - 1]
+      await refreshListsAfterRecord(record)
+      setTab('comparisons')
+      message.success(
+        latest?.status === 'verified'
+          ? S.evidence_matrix_comparison_verified
+          : S.evidence_matrix_comparison_not_comparable,
+      )
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.evidence_matrix_comparison_failed)
+    } finally {
+      setAuditingComparison(false)
+    }
+  }
+
+  const deleteComparison = async (comparison: EvidenceComparisonAudit) => {
+    if (!active) return
+    try {
+      const record = await chatApi.deleteEvidenceComparison(active.id, comparison.id, active.revision)
+      await refreshListsAfterRecord(record)
+      setTab('comparisons')
+      message.success(S.evidence_matrix_comparison_deleted)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.evidence_matrix_comparison_delete_failed)
+    }
+  }
+
   const evidence = active?.evidence || []
   const quality = active?.quality || {}
   const comparisonFlags = active?.comparison_flags || []
+  const comparisonAudits = active?.comparison_audits || []
   const fieldLabels: Record<EvidenceMatrixCellField, string> = {
     method: S.evidence_matrix_col_method,
     dataset_or_experiment: S.evidence_matrix_col_experiment,
@@ -316,6 +427,16 @@ export function EvidenceMatrixWorkspace({
     key_result: S.evidence_matrix_col_result,
     limitation: S.evidence_matrix_col_limitation,
   }
+  const comparisonDimensionLabels: Record<EvidenceComparisonDimensionName, string> = {
+    task: S.evidence_matrix_comparison_dimension_task,
+    dataset: S.evidence_matrix_comparison_dimension_dataset,
+    evaluation_protocol: S.evidence_matrix_comparison_dimension_protocol,
+    metric: S.evidence_matrix_comparison_dimension_metric,
+  }
+  const comparisonRowOptions = rows.map((row) => ({
+    value: row.id,
+    label: row.paper || row.source_name,
+  }))
 
   return (
     <Modal
@@ -471,6 +592,148 @@ export function EvidenceMatrixWorkspace({
                         {visibleRows.length <= 0 ? <div className="kb-evidence-matrix-empty">{S.evidence_matrix_no_rows}</div> : null}
                       </div>
                     </>
+                  ),
+                },
+                {
+                  key: 'comparisons',
+                  label: `${S.evidence_matrix_comparison_tab} (${comparisonAudits.length})`,
+                  children: (
+                    <div className="kb-evidence-comparison-workspace">
+                      <Alert
+                        type="info"
+                        showIcon
+                        message={S.evidence_matrix_comparison_contract_title}
+                        description={S.evidence_matrix_comparison_contract_body}
+                      />
+                      <div className="kb-evidence-comparison-form">
+                        <div className="kb-evidence-comparison-pair-row">
+                          <label>
+                            <span>{S.evidence_matrix_comparison_mode}</span>
+                            <Select<EvidenceComparisonMode>
+                              value={comparisonMode}
+                              onChange={setComparisonMode}
+                              options={[
+                                { value: 'ranking', label: S.evidence_matrix_comparison_mode_ranking },
+                                { value: 'replication', label: S.evidence_matrix_comparison_mode_replication },
+                              ]}
+                            />
+                          </label>
+                          <label>
+                            <span>{S.evidence_matrix_comparison_left_source}</span>
+                            <Select value={leftComparisonRowId || undefined} onChange={setLeftComparisonRowId} options={comparisonRowOptions} />
+                          </label>
+                          <label>
+                            <span>{S.evidence_matrix_comparison_right_source}</span>
+                            <Select value={rightComparisonRowId || undefined} onChange={setRightComparisonRowId} options={comparisonRowOptions} />
+                          </label>
+                        </div>
+                        <div className="kb-evidence-comparison-contract-table">
+                          <div className="is-header">
+                            <span>{S.evidence_matrix_comparison_dimension}</span>
+                            <span>{S.evidence_matrix_comparison_left_value}</span>
+                            <span>{S.evidence_matrix_comparison_right_value}</span>
+                            <span>{S.evidence_matrix_comparison_mapping}</span>
+                          </div>
+                          {COMPARISON_DIMENSIONS.map((dimension) => (
+                            <div key={dimension}>
+                              <strong>{comparisonDimensionLabels[dimension]}</strong>
+                              <Input
+                                value={comparisonDimensions[dimension].left_value}
+                                onChange={(event) => updateComparisonDimension(dimension, { left_value: event.target.value })}
+                                placeholder={S.evidence_matrix_comparison_exact_phrase}
+                              />
+                              <Input
+                                value={comparisonDimensions[dimension].right_value}
+                                onChange={(event) => updateComparisonDimension(dimension, { right_value: event.target.value })}
+                                placeholder={S.evidence_matrix_comparison_exact_phrase}
+                              />
+                              {dimension === 'metric' ? (
+                                <small>{S.evidence_matrix_comparison_controlled_metric}</small>
+                              ) : (
+                                <Checkbox
+                                  checked={Boolean(comparisonDimensions[dimension].mapping_confirmed)}
+                                  onChange={(event) => updateComparisonDimension(dimension, { mapping_confirmed: event.target.checked })}
+                                >
+                                  {S.evidence_matrix_comparison_confirm_mapping}
+                                </Checkbox>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        <div className="kb-evidence-comparison-pair-row">
+                          <label>
+                            <span>{S.evidence_matrix_comparison_left_target}</span>
+                            <Input value={leftTarget} onChange={(event) => setLeftTarget(event.target.value)} placeholder={S.evidence_matrix_comparison_exact_phrase} />
+                          </label>
+                          <label>
+                            <span>{S.evidence_matrix_comparison_right_target}</span>
+                            <Input value={rightTarget} onChange={(event) => setRightTarget(event.target.value)} placeholder={S.evidence_matrix_comparison_exact_phrase} />
+                          </label>
+                          {comparisonMode === 'replication' ? (
+                            <Checkbox checked={targetMappingConfirmed} onChange={(event) => setTargetMappingConfirmed(event.target.checked)}>
+                              {S.evidence_matrix_comparison_confirm_target}
+                            </Checkbox>
+                          ) : <span />}
+                        </div>
+                        <div className="kb-evidence-comparison-pair-row">
+                          <label>
+                            <span>{S.evidence_matrix_comparison_left_result}</span>
+                            <Input value={leftResult} onChange={(event) => setLeftResult(event.target.value)} placeholder=".0423 / 31 dB" />
+                          </label>
+                          <label>
+                            <span>{S.evidence_matrix_comparison_right_result}</span>
+                            <Input value={rightResult} onChange={(event) => setRightResult(event.target.value)} placeholder=".0445 / 30 dB" />
+                          </label>
+                          <Button
+                            type="primary"
+                            loading={auditingComparison}
+                            disabled={!active || active.quality_status !== 'verified'}
+                            onClick={() => { void auditComparison() }}
+                            data-testid="evidence-comparison-audit"
+                          >
+                            {S.evidence_matrix_comparison_audit}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="kb-evidence-comparison-list">
+                        {comparisonAudits.map((comparison) => (
+                          <article key={comparison.id} data-testid="evidence-comparison-result">
+                            <div className="kb-evidence-comparison-card-head">
+                              <div>
+                                <Tag color={comparison.status === 'verified' ? 'green' : 'orange'}>{comparison.status}</Tag>
+                                {comparison.confirmed_conflict ? <Tag color="red">{S.evidence_matrix_comparison_conflict}</Tag> : null}
+                                <strong>{comparison.left_source_name} / {comparison.right_source_name}</strong>
+                              </div>
+                              <Popconfirm title={S.evidence_matrix_comparison_delete_confirm} onConfirm={() => { void deleteComparison(comparison) }}>
+                                <Button danger size="small" icon={<DeleteOutlined />}>{S.evidence_matrix_comparison_delete}</Button>
+                              </Popconfirm>
+                            </div>
+                            <p>{comparison.conclusion}</p>
+                            {comparison.reasons.length > 0 ? (
+                              <Alert type="warning" showIcon message={S.evidence_matrix_comparison_boundaries} description={comparison.reasons.join(', ')} />
+                            ) : null}
+                            <small>
+                              {S.evidence_matrix_comparison_timing.replace('{ms}', String(numeric(comparison.phase_timings_ms?.total).toFixed(1)))}
+                            </small>
+                            <div className="kb-evidence-comparison-evidence">
+                              {comparison.evidence.map((item, index) => (
+                                <button
+                                  key={String(item.id || index)}
+                                  type="button"
+                                  onClick={() => onOpenEvidence?.(item)}
+                                  disabled={!onOpenEvidence}
+                                >
+                                  <strong>{String(item.source_name || item.source_path || S.default_source_fallback)}</strong>
+                                  <span>{[item.supports, item.heading_path || item.location_label].filter(Boolean).join(' · ')}</span>
+                                  <p>{String(item.evidence_quote || '')}</p>
+                                </button>
+                              ))}
+                            </div>
+                          </article>
+                        ))}
+                        {comparisonAudits.length <= 0 ? <div className="kb-evidence-matrix-empty">{S.evidence_matrix_comparison_empty}</div> : null}
+                      </div>
+                    </div>
                   ),
                 },
                 {
