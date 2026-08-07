@@ -258,6 +258,14 @@ def test_research_brief_exports_keep_evidence_and_reference_identity() -> None:
         "revision": 2,
         "evidence": evidence,
         "bibliography": bibliography,
+        "lineage": {
+            "status": "matrix_updated",
+            "source_matrix_id": "matrix-1",
+            "source_matrix_title": "Acquisition matrix",
+            "source_matrix_revision": 1,
+            "current_matrix_revision": 2,
+            "export_mode": "historical",
+        },
     }
 
     markdown = research_brief_markdown(record)
@@ -265,19 +273,23 @@ def test_research_brief_exports_keep_evidence_and_reference_identity() -> None:
     assert "Evidence appendix" in markdown
     assert "Results / Acquisition" in markdown
     assert "10.1000/paper-a" in markdown
+    assert "freshness: matrix_updated" in markdown
 
     bibtex = research_brief_bibtex(record)
     assert "@article" in bibtex
     assert "10.1000/paper-a" in bibtex
+    assert "% Pi_zaya Matrix lineage:" in bibtex
     ris = research_brief_ris(record)
     assert "TI  - Paper A" in ris
     assert "DO  - 10.1000/paper-a" in ris
+    assert "N1  - Pi_zaya Matrix lineage:" in ris
 
     document = Document(BytesIO(research_brief_docx(record)))
     text = "\n".join(paragraph.text for paragraph in document.paragraphs)
     assert "Acquisition brief" in text
     assert "Paper A reports the measured result [1]" in text
     assert "Evidence appendix" in text
+    assert "freshness: matrix_updated" in text
 
 
 def test_matrix_backed_brief_falls_back_when_model_omits_a_selected_source(monkeypatch) -> None:

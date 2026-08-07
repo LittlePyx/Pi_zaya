@@ -1735,6 +1735,17 @@ def test_exact_source_bound_repairs_cover_scope_architecture_tradeoff_and_iism_c
     assert "编码孔径快照光谱成像" in cassi
     assert "binary-valued aperture） [1]" in cassi
 
+    cassi_uncited = normalize(
+        "CASSI already has two dispersive elements around a binary-valued aperture, "
+        "but the model omitted its evidence marker.",
+        "What is the CASSI dual-disperser architecture?",
+        "Two dispersive elements are arranged in opposition around a binary-valued aperture.",
+    )
+    assert cassi_uncited.startswith(
+        "The verifiable CASSI hardware starts with two dispersive elements arranged "
+        "in opposition around a binary-valued aperture [1]."
+    )
+
     s2ism = normalize(
         "传统 ISM 缓解了分辨率与 SNR 的权衡，但厚样本仍会失败 [1]。",
         "s2ISM 打破了什么三方权衡？",

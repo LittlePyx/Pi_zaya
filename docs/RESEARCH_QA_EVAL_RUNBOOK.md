@@ -1,6 +1,6 @@
 # Research QA Eval Runbook
 
-Updated: 2026-08-06
+Updated: 2026-08-08
 
 ## Purpose
 
@@ -318,6 +318,55 @@ The comparison-specific reviewed report is
 zero false comparisons, exact same-source evidence, and a locator for every
 recorded excerpt. These gates demonstrate that the feature neither narrows the
 29-question library search nor substitutes polished copy for accurate evidence.
+
+## 2026-08-08 Research-Brief Lineage Acceptance
+
+Research briefs now distinguish an immutable historical verification from
+freshness against the latest evidence-matrix revision. The change does not alter
+chat retrieval, answer generation, source selection, citation binding, or the
+evidence-matrix quality contract. A valid older snapshot stays exportable with
+an explicit historical lineage marker; export is blocked only when the source
+matrix, recorded revision, fingerprint integrity, or revision order cannot be
+verified. Updating a stale brief remains bound to the same verified matrix and
+reruns the complete brief generation and evidence audit.
+
+The real lineage replay at
+`test_results/research_brief_lineage/20260808_022355/report.json` passed 5/5
+reviewed matrices. Each case removed one actually cited grounded cell as an
+honest gap while the unchanged matrix contract remained verified. All five
+briefs reported `matrix_updated`, exactly one changed field, and affected
+citation `[1]`; evidence-equivalent revision changes reported
+`current_equivalent`, and missing source matrices blocked export with
+`matrix_missing`. The cases completed in 14.23-25.78 ms. Local detailed lineage
+enrichment measured a 6.61 ms median and 7.10 ms p95, while raw store access
+remained a 3.19 ms median.
+
+The unchanged product gates passed after the final implementation:
+
+1. Full-library live QA: 29/29 in
+   `test_results/research_qa_lineage_final_full_library_pass/20260808_025212`.
+2. Paid-model smoke: 5/5 in
+   `test_results/research_qa_lineage_final_live_smoke/20260808_023315`.
+3. Deterministic full-library retrieval: 29/29 in
+   `test_results/research_qa_lineage_final_retrieval/20260808_022408`.
+4. Source validation: 41/41; reviewed replay: 6/6; reviewed comparison audit:
+   5/5 with zero false comparisons.
+5. Backend suite: 4,331 passed with 43 configuration-dependent skips; frontend
+   ESLint, production build, 120/120 executed Playwright smoke tests with two
+   skips, 109/109 core tests, and 4/4 public-surface tests passed.
+
+The final 29-question run reported first-visible p50/p95/max of
+3,138/4,718/6,330 ms, answer-complete p50/p95/max of
+5,049/11,927/14,572 ms, and UI-ready p50/p95/max of
+8,215/14,849/16,072 ms. The first full-library attempt exposed a real CASSI
+boundary: a model sentence was rebound from the verified Abstract fact to a
+same-paper experimental passage and consequently lost its clickable citation.
+The finalizer now inserts the exact planned Abstract statement when the model
+mentions the two opposing dispersers and binary aperture without citing that
+claim. Unsupported optical-path detail remains subject to the existing removal
+gate. The focused CASSI rerun and the subsequent complete 29-question run both
+passed; no lineage status hides a quality failure or narrows retrieval to
+improve speed.
 
 ## Outputs
 

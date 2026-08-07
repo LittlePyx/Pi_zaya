@@ -50,6 +50,13 @@ function qualityTone(status: string): string {
   return 'default'
 }
 
+function lineageTone(status: string): string {
+  if (status === 'current' || status === 'current_equivalent') return 'green'
+  if (status === 'matrix_updated' || status === 'matrix_updated_unverified' || status === 'matrix_unverified') return 'orange'
+  if (status === 'untracked') return 'default'
+  return 'red'
+}
+
 function localeKey(): string {
   if (typeof document === 'undefined') return 'zh'
   return String(document.documentElement.lang || navigator.language || 'zh').toLowerCase().startsWith('en')
@@ -88,6 +95,8 @@ export function ResearchBriefWorkspace({
     setObjective(String(record?.objective || ''))
     setContent(String(record?.content_markdown || ''))
     setSelectedRevision(record ? Number(record.revision || 1) : null)
+    const matrixId = String(record?.lineage?.source_matrix_id || record?.quality?.source_matrix_id || '').trim()
+    if (matrixId) setSelectedMatrixId(matrixId)
   }, [])
 
   const loadRevisions = useCallback(async (briefId: string) => {
@@ -139,6 +148,7 @@ export function ResearchBriefWorkspace({
         const requested = String(sourceMatrixId || '').trim()
         if (requested && rows.some((row) => row.id === requested)) return requested
         if (current && rows.some((row) => row.id === current)) return current
+        if (current) return current
         return rows[0]?.id || ''
       })
     } catch (error) {
@@ -178,8 +188,16 @@ export function ResearchBriefWorkspace({
       message.warning(S.research_brief_title_required)
       return
     }
-    if (!selectedMatrixId) {
+    const boundMatrixId = String(
+      active?.lineage?.source_matrix_id || active?.quality?.source_matrix_id || '',
+    ).trim()
+    const matrixId = boundMatrixId || selectedMatrixId
+    if (!matrixId) {
       message.warning(S.research_brief_matrix_required)
+      return
+    }
+    if (!verifiedMatrices.some((matrix) => matrix.id === matrixId)) {
+      message.warning(S.research_brief_matrix_not_verified)
       return
     }
     setGenerating(true)
@@ -188,7 +206,7 @@ export function ResearchBriefWorkspace({
         title: title.trim(),
         objective: objective.trim(),
         item_keys: seedItems.map((item) => String(item.key || '').trim()).filter(Boolean),
-        matrix_id: selectedMatrixId,
+        matrix_id: matrixId,
         source_conv_id: activeConvId || null,
         brief_id: active?.id || null,
         expected_revision: active?.revision || null,
@@ -284,6 +302,48 @@ export function ResearchBriefWorkspace({
     ? quality.claim_repair as Record<string, unknown>
     : {}
   const evidence = Array.isArray(active?.evidence) ? active.evidence : []
+  const lineage = active?.lineage
+  const lineageStatus = String(lineage?.status || 'untracked')
+  const lineageImpact = lineage?.impact || {}
+  const lineageRows = Array.isArray(lineageImpact.rows) ? lineageImpact.rows : []
+  const affectedCitations = Array.isArray(lineageImpact.affected_citation_numbers)
+    ? lineageImpact.affected_citation_numbers
+    : []
+  const boundMatrixId = String(lineage?.source_matrix_id || quality.source_matrix_id || '').trim()
+  const matrixOptions = useMemo(() => {
+    const options = verifiedMatrices.map((matrix) => ({
+      value: matrix.id,
+      label: `${matrix.title} · r${matrix.revision}`,
+    }))
+    if (boundMatrixId && !options.some((option) => option.value === boundMatrixId)) {
+      options.push({
+        value: boundMatrixId,
+        label: `${String(lineage?.source_matrix_title || boundMatrixId)} · ${S.research_brief_matrix_not_verified}`,
+      })
+    }
+    return options
+  }, [S.research_brief_matrix_not_verified, boundMatrixId, lineage?.source_matrix_title, verifiedMatrices])
+  const lineageUpdated = lineageStatus === 'matrix_updated' || lineageStatus === 'matrix_updated_unverified'
+  const lineageBlocked = Boolean(lineage && lineage.export_allowed === false)
+  const historicalSnapshot = Boolean(
+    lineage?.historical_verified && !lineage?.latest_verified,
+  )
+  const targetMatrixId = boundMatrixId || selectedMatrixId
+  const canGenerate = Boolean(
+    targetMatrixId && verifiedMatrices.some((matrix) => matrix.id === targetMatrixId),
+  )
+
+  const lineageStatusLabel = lineageStatus === 'current'
+    ? S.research_brief_lineage_current
+    : lineageStatus === 'current_equivalent'
+      ? S.research_brief_lineage_equivalent
+      : lineageUpdated
+        ? S.research_brief_lineage_updated_title
+        : lineageStatus === 'untracked'
+          ? ''
+          : lineageBlocked
+            ? S.research_brief_lineage_blocked_title
+            : S.research_brief_lineage_unverified_title
 
   return (
     <Modal
@@ -315,7 +375,12 @@ export function ResearchBriefWorkspace({
                 onClick={() => void selectBrief(item.id)}
               >
                 <span>{item.title}</span>
-                <small>r{item.revision} · {item.quality_status}</small>
+                <small>
+                  r{item.revision} · {item.quality_status}
+                  {item.lineage && item.lineage.status !== 'current' && item.lineage.status !== 'untracked'
+                    ? ` · ${item.lineage.status}`
+                    : ''}
+                </small>
               </button>
             ))}
             {briefs.length <= 0 && !loading ? (
@@ -333,6 +398,11 @@ export function ResearchBriefWorkspace({
                   <Tag color={qualityTone(String(active?.quality_status || 'draft'))}>
                     {String(active?.quality_status || 'draft')}
                   </Tag>
+                  {active && lineageStatusLabel ? (
+                    <Tag color={lineageTone(lineageStatus)} data-testid="research-brief-lineage-tag">
+                      {lineageStatusLabel}
+                    </Tag>
+                  ) : null}
                   <span>{S.research_brief_source_count.replace('{n}', String(seedItems.length))}</span>
                   {active ? <span>r{active.revision}</span> : null}
                   {dirty ? <span className="is-dirty">{S.research_brief_unsaved}</span> : null}
@@ -341,8 +411,19 @@ export function ResearchBriefWorkspace({
                   <Button icon={<SaveOutlined />} loading={saving} disabled={!dirty} onClick={() => void save()} data-testid="research-brief-save">
                     {S.research_brief_save}
                   </Button>
-                  <Button type="primary" icon={<ReloadOutlined />} loading={generating} onClick={() => void generate()} data-testid="research-brief-generate">
-                    {active ? S.research_brief_regenerate : S.research_brief_generate}
+                  <Button
+                    type="primary"
+                    icon={<ReloadOutlined />}
+                    loading={generating}
+                    disabled={!canGenerate}
+                    onClick={() => void generate()}
+                    data-testid="research-brief-generate"
+                  >
+                    {active && lineageUpdated
+                      ? S.research_brief_update_latest
+                      : active
+                        ? S.research_brief_regenerate
+                        : S.research_brief_generate}
                   </Button>
                 </div>
               </div>
@@ -365,13 +446,14 @@ export function ResearchBriefWorkspace({
                 value={selectedMatrixId || undefined}
                 onChange={setSelectedMatrixId}
                 placeholder={S.research_brief_matrix_placeholder}
-                options={verifiedMatrices.map((matrix) => ({
-                  value: matrix.id,
-                  label: `${matrix.title} · r${matrix.revision}`,
-                }))}
+                options={matrixOptions}
                 status={verifiedMatrices.length <= 0 ? 'warning' : undefined}
+                disabled={Boolean(active && boundMatrixId)}
                 data-testid="research-brief-source-matrix"
               />
+              {active && boundMatrixId ? (
+                <div className="kb-research-brief-matrix-lock">{S.research_brief_matrix_locked}</div>
+              ) : null}
               {verifiedMatrices.length <= 0 ? (
                 <Alert type="warning" showIcon message={S.research_brief_matrix_required} />
               ) : null}
@@ -383,14 +465,86 @@ export function ResearchBriefWorkspace({
                   description={qualityReasons.length > 0 ? qualityReasons.join(', ') : S.research_brief_review_body}
                 />
               ) : null}
+              {active && lineageUpdated ? (
+                <Alert
+                  type={lineageStatus === 'matrix_updated' ? 'warning' : 'error'}
+                  showIcon
+                  message={lineageStatus === 'matrix_updated'
+                    ? S.research_brief_lineage_updated_title
+                    : S.research_brief_lineage_unverified_title}
+                  description={(
+                    <div className="kb-research-brief-lineage-impact" data-testid="research-brief-lineage-impact">
+                      <p>
+                        {(lineageStatus === 'matrix_updated'
+                          ? S.research_brief_lineage_updated_body
+                          : S.research_brief_lineage_unverified_body)
+                          .replace('{saved}', String(lineage?.source_matrix_revision || 0))
+                          .replace('{current}', String(lineage?.current_matrix_revision || 0))}
+                      </p>
+                      <p>
+                        {S.research_brief_lineage_impact
+                          .replace('{rows}', String(numeric(lineageImpact.changed_row_count)))
+                          .replace('{fields}', String(numeric(lineageImpact.changed_field_count)))
+                          .replace('{comparisons}', String(numeric(lineageImpact.changed_comparison_count)))
+                          .replace('{sources}', String(numeric(lineageImpact.changed_source_count)))}
+                      </p>
+                      {lineageRows.length > 0 ? (
+                        <ul>
+                          {lineageRows.slice(0, 6).map((row) => (
+                            <li key={row.row_id}>
+                              {row.source_name}: {row.fields.join(', ')} ({row.change})
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      <p>
+                        {affectedCitations.length > 0
+                          ? S.research_brief_lineage_affected_citations.replace(
+                              '{citations}',
+                              affectedCitations.map((number) => `[${number}]`).join(', '),
+                            )
+                          : S.research_brief_lineage_no_citation_impact}
+                      </p>
+                    </div>
+                  )}
+                />
+              ) : null}
+              {active && lineageStatus === 'current_equivalent' ? (
+                <Alert type="info" showIcon message={S.research_brief_lineage_equivalent} />
+              ) : null}
+              {active && lineageBlocked ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message={S.research_brief_lineage_blocked_title}
+                  description={S.research_brief_lineage_blocked_body}
+                  data-testid="research-brief-lineage-blocked"
+                />
+              ) : null}
+              {active && lineageStatus === 'matrix_unverified' ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={S.research_brief_lineage_unverified_title}
+                  description={S.research_brief_lineage_unverified_body.replace(
+                    '{current}',
+                    String(lineage?.current_matrix_revision || 0),
+                  )}
+                />
+              ) : null}
               {active?.quality_status === 'verified' ? (
                 <Alert
                   type="success"
                   showIcon
-                  message={S.research_brief_verified_title}
-                  description={S.research_brief_verified_body
+                  message={historicalSnapshot
+                    ? S.research_brief_historical_verified_title
+                    : S.research_brief_verified_title}
+                  description={(historicalSnapshot
+                    ? S.research_brief_historical_verified_body
+                    : S.research_brief_verified_body)
                     .replace('{supported}', String(numeric(quality.supported_claims)))
-                    .replace('{total}', String(numeric(quality.total_claims)))}
+                    .replace('{total}', String(numeric(quality.total_claims)))
+                    .replace('{revision}', String(lineage?.source_matrix_revision || 0))}
                 />
               ) : null}
               {String(quality.generation_mode || '') === 'extractive_fallback' ? (
@@ -487,13 +641,16 @@ export function ResearchBriefWorkspace({
                       key={format}
                       icon={<DownloadOutlined />}
                       loading={exporting === format}
-                      disabled={!active || Boolean(exporting && exporting !== format)}
+                      disabled={!active || lineageBlocked || Boolean(exporting && exporting !== format)}
                       onClick={() => void download(format)}
                       data-testid={`research-brief-export-${format}`}
                     >
                       {format === 'markdown' ? 'MD' : format.toUpperCase()}
                     </Button>
                   ))}
+                  {lineageBlocked ? (
+                    <span className="kb-research-brief-export-blocked">{S.research_brief_export_blocked}</span>
+                  ) : null}
                   <Popconfirm
                     title={S.research_brief_delete_confirm}
                     onConfirm={() => void remove()}

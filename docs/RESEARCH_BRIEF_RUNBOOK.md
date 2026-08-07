@@ -1,6 +1,6 @@
 # Research Brief Runbook
 
-Updated: 2026-08-06
+Updated: 2026-08-08
 
 ## Purpose
 
@@ -30,7 +30,12 @@ unsupported claim from diagnostics, or weakening citation matching.
    corresponding source location in the reader.
 8. Edit and save as needed. Each save creates a new revision; restoring an old
    revision also creates a new revision instead of rewriting history.
-9. Export the current revision as Markdown, DOCX, BibTeX, or RIS.
+9. If the source matrix advances, review the displayed row, field, comparison,
+   source, and citation impact, then use **Update from latest matrix**. Existing
+   matrix-backed briefs stay bound to their original matrix; changing matrices
+   requires a new brief.
+10. Export the current revision as Markdown, DOCX, BibTeX, or RIS. Every export
+    records the saved and current matrix revisions plus the freshness state.
 
 ## Quality Contract
 
@@ -62,6 +67,39 @@ quality state is not `verified`. Matrix-backed generation retrieves no evidence
 outside the recorded matrix. The older request shape without `matrix_id`
 remains available for API compatibility, but is not the product's default path.
 
+## Matrix Freshness And Change Impact
+
+Matrix-backed briefs keep two independent truths:
+
+- `historical_verified` means the saved brief passed its evidence audit against
+  the recorded source-matrix revision. A later matrix edit does not rewrite or
+  erase that result.
+- `latest_verified` means the brief is also current against the latest verified
+  matrix contract. It is false when relevant matrix content changed.
+
+The API returns a `lineage` object on list, detail, revision, restore,
+generation, and update responses. Its main states are:
+
+- `current`: the saved and current revisions match and the matrix fingerprint is
+  intact.
+- `current_equivalent`: the matrix revision advanced, but rows, evidence,
+  sources, comparisons, and quality state are contract-equivalent.
+- `matrix_updated`: the latest matrix is verified but evidence-bearing content
+  changed. Detail responses identify changed rows and fields and affected brief
+  citation numbers.
+- `matrix_updated_unverified` or `matrix_unverified`: the current matrix needs
+  review. The saved brief may remain historically verified, but it is not a
+  latest verified result.
+- `matrix_missing`, `source_revision_missing`, `integrity_mismatch`, or
+  `revision_mismatch`: lineage cannot be proved. Export is blocked instead of
+  silently presenting unverifiable provenance.
+
+An ordinary historical export remains available for a valid older revision and
+is visibly labeled `historical`; this preserves reproducibility rather than
+hiding staleness. Same-matrix regeneration requires `brief_id`,
+`expected_revision`, and the bound `matrix_id`. It creates a new brief revision
+using the latest verified matrix and reruns the full claim/evidence audit.
+
 ## Version and Concurrency Rules
 
 Every update, regeneration, and restore uses `expected_revision`. A stale write
@@ -83,14 +121,37 @@ automatic snapshot and is blocked if that backup fails.
 Regeneration requires `brief_id` and `expected_revision`. At most eight selected
 basket keys are accepted per generation request. Matrix-backed generation sends
 `matrix_id`; the saved brief quality record includes `source_matrix_id`,
-`source_matrix_revision`, and `source_matrix_quality_status`.
+`source_matrix_revision`, `source_matrix_quality_status`,
+`source_matrix_title`, and `source_matrix_fingerprint`.
+
+## Real Lineage Replay
+
+The local acceptance runner replays the five reviewed, real evidence matrices.
+For each case it removes one brief-used grounded cell as an honest missing fact,
+recomputes the unchanged matrix quality contract, and verifies that the brief
+becomes stale, names the affected citation, recognizes an evidence-equivalent
+revision, and blocks a missing-matrix export:
+
+```bash
+python tools/research_brief/run_lineage_eval.py
+```
+
+The 2026-08-08 acceptance passed 5/5 cases in
+`test_results/research_brief_lineage/20260808_022355/report.json`. Every updated
+matrix remained verified, each removed cell produced exactly one changed field
+and affected citation `[1]`, revision-only changes reported
+`current_equivalent`, and missing matrices reported `matrix_missing`. Per-case
+evaluation took 14.23-25.78 ms. The extra detailed lineage lookup measured a
+6.61 ms median and 7.10 ms p95 locally; raw brief-store access remained a
+3.19 ms median.
 
 ## Release Checks
 
 Run the focused implementation checks:
 
 ```bash
-python -m pytest -q tests/unit/test_research_brief.py tests/unit/test_chat_store_research_briefs.py tests/unit/test_evidence_matrix.py tests/unit/test_chat_store_evidence_matrices.py tests/sanity/test_research_briefs_api.py tests/sanity/test_evidence_matrices_api.py
+python -m pytest -q tests/unit/test_research_brief.py tests/unit/test_research_brief_lineage.py tests/unit/test_chat_store_research_briefs.py tests/unit/test_evidence_matrix.py tests/unit/test_chat_store_evidence_matrices.py tests/sanity/test_research_briefs_api.py tests/sanity/test_evidence_matrices_api.py
+python tools/research_brief/run_lineage_eval.py
 cd web
 npm run lint
 npm run build

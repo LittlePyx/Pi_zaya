@@ -39,7 +39,7 @@ web context.
 | Citation tracing | Surfaces answer evidence, source cards, reference context, and reader locate targets. |
 | Literature basket | Lets users collect papers and excerpts, keep local research context, and export citations. |
 | Evidence matrices | Builds project-scoped, versioned comparisons of methods, experiments, metrics, results, and limitations; every populated factual cell opens its exact local source evidence, while unavailable facts remain empty. Explicit paired audits produce a result only after task, dataset, protocol, metric, target, value, and both source excerpts pass the comparison contract. Exports Markdown, CSV, or XLSX. |
-| Research briefs | Generates project-scoped, versioned Markdown briefs only from a selected verified evidence matrix in the product workflow, audits every substantive claim, records matrix lineage, opens its evidence in the reader, and exports Markdown, DOCX, BibTeX, or RIS. |
+| Research briefs | Generates project-scoped, versioned Markdown briefs only from a selected verified evidence matrix, audits every substantive claim, distinguishes historically verified snapshots from the latest matrix state, reports changed fields and affected citations, and records that lineage in Markdown, DOCX, BibTeX, or RIS exports. |
 | Research Agent Mode | Adds explicit planning, source policy, evidence matrix, tool-use trace, and sentence-level citation support checks on top of the existing RAG flow. |
 | Quality tooling | Scans conversion quality, runs repair flows, rebuilds indexes, and tracks metadata/reference sync. |
 
@@ -60,6 +60,8 @@ flowchart LR
   E --> V["Claim Verifier"]
   L["Project Literature Basket"] --> EM["Persistent Evidence Matrix"]
   EM --> RB["Versioned Research Brief"]
+  EM --> F["Freshness + Change Impact"]
+  F --> RB
   P --> O["Grounded Answer + Citation Trace UI"]
   R --> O
   X --> O
@@ -87,7 +89,11 @@ At a high level:
 6. A verified matrix can generate a versioned brief using only its audited
    evidence. The same claim verifier blocks unsupported, unresolved,
    missing-source, or out-of-scope evidence from receiving verified status.
-7. The frontend keeps the answer clean while citations, reference cards, reader
+7. When the matrix advances, the brief preserves its historical audit while a
+   lineage check reports whether evidence is equivalent or identifies changed
+   fields and affected citations. Unverifiable lineage blocks export; a safe
+   update stays bound to the same matrix and reruns the complete audit.
+8. The frontend keeps the answer clean while citations, reference cards, reader
    locate targets, and agent traces remain inspectable on demand.
 
 Key backend entry points:
@@ -101,6 +107,7 @@ Key backend entry points:
 - `kb/task_runtime.py`: background generation/conversion runtime
 - `kb/evidence_matrix.py`: source-balanced cell extraction, comparison boundaries, audit, and exporters
 - `kb/research_brief.py`: brief source normalization, quality contract, bibliography, and exporters
+- `kb/research_brief_lineage.py`: matrix fingerprinting, freshness, change impact, and export provenance rules
 - `kb/agent/`: lightweight Research Agent layer
 
 Key frontend entry points:
@@ -373,8 +380,11 @@ Environment variables and `.env` values take precedence.
 7. Open answer evidence/citation cards in the Reader.
 8. Add important papers to a project literature basket, generate and review its
    evidence matrix, and keep honest gaps empty.
-9. Create a verified research brief from the audited matrix, or export the
-   matrix as Markdown, CSV, or XLSX.
+9. Create a verified research brief from the audited matrix. If the matrix
+   changes, review the displayed affected fields/citations and update the bound
+   brief from the latest verified revision before treating it as current.
+10. Export the brief with its lineage marker, or export the matrix as Markdown,
+    CSV, or XLSX.
 
 ## Demo
 

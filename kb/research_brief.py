@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from kb.research_brief_lineage import research_brief_lineage_note
+
 
 _MAX_BRIEF_SOURCES = 8
 _MAX_EVIDENCE_TEXT = 1_800
@@ -260,6 +262,13 @@ def research_brief_evidence(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "block_id": _first_text(meta, "block_id", limit=500),
                 "anchor_id": _first_text(meta, "anchor_id", "anchor", limit=500),
                 "evidence_quote": _text(hit.get("text"), limit=_MAX_EVIDENCE_TEXT),
+                "source_evidence_quote": _first_text(
+                    meta,
+                    "comparison_source_quote",
+                    limit=_MAX_EVIDENCE_TEXT,
+                ),
+                "matrix_field": _first_text(meta, "matrix_field", limit=80),
+                "comparison_audit_id": _first_text(meta, "comparison_audit_id", limit=120),
                 "score": _safe_float(hit.get("score")),
             }
         )
@@ -923,6 +932,9 @@ def research_brief_markdown(record: dict[str, Any]) -> str:
     quality_status = _text(record.get("quality_status"), limit=40) or "draft"
     revision = max(1, int(record.get("revision") or 1))
     lines = [f"# {title}", "", f"> Evidence status: {quality_status}; revision: {revision}."]
+    lineage_note = research_brief_lineage_note(record)
+    if lineage_note:
+        lines.extend(["", f"> {lineage_note}"])
     if objective:
         lines.extend(["", "## Research objective", "", objective])
     if content:
@@ -976,11 +988,16 @@ def research_brief_bibtex(record: dict[str, Any]) -> str:
             if _text(value, limit=2_000)
         )
         blocks.append(f"@article{{{_bibtex_key(item, index)},\n{body}\n}}")
-    return "\n\n".join(blocks).strip() + ("\n" if blocks else "")
+    content = "\n\n".join(blocks).strip()
+    lineage_note = research_brief_lineage_note(record)
+    if lineage_note:
+        content = f"% Pi_zaya {lineage_note}\n\n{content}".strip()
+    return content + ("\n" if content else "")
 
 
 def research_brief_ris(record: dict[str, Any]) -> str:
     blocks: list[str] = []
+    lineage_note = research_brief_lineage_note(record)
     for item in list(record.get("bibliography") or []):
         if not isinstance(item, dict):
             continue
@@ -992,6 +1009,8 @@ def research_brief_ris(record: dict[str, Any]) -> str:
             value = _text(item.get(key), limit=1_000)
             if value:
                 lines.append(f"{tag}  - {value}")
+        if lineage_note:
+            lines.append(f"N1  - Pi_zaya {lineage_note}")
         lines.append("ER  -")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks).strip() + ("\n" if blocks else "")
@@ -1002,6 +1021,9 @@ def research_brief_docx(record: dict[str, Any]) -> bytes:
 
     document = Document()
     document.add_heading(_text(record.get("title"), limit=240) or "Research brief", level=0)
+    lineage_note = research_brief_lineage_note(record)
+    if lineage_note:
+        document.add_paragraph(lineage_note)
     objective = _text(record.get("objective"), limit=4_000)
     if objective:
         document.add_heading("Research objective", level=1)

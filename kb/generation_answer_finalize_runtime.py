@@ -6707,16 +6707,27 @@ def _complete_exact_source_bound_answer_claims(
         r"two\s+dispersive\s+elements",
         r"binary-valued\s+aperture",
     )
+    cassi_contract_cited = any(
+        (
+            re.search(
+                r"两个[^。\n]{0,40}色散元件|two\s+dispersive\s+elements",
+                paragraph,
+                flags=re.I,
+            )
+            and re.search(
+                r"二值(?:编码)?孔径|binary-valued\s+aperture",
+                paragraph,
+                flags=re.I,
+            )
+            and re.search(rf"\[{cassi_num}\]", paragraph)
+        )
+        for paragraph in text.split("\n\n")
+    )
     if (
         cassi_num > 0
         and re.search(r"CASSI|光谱|spectral|双色散", f"{prompt_surface}\n{text}", flags=re.I)
-        and not (
-            re.search(r"两个[^。\n]{0,40}色散元件|two\s+dispersive\s+elements", text, flags=re.I)
-            and re.search(r"二值(?:编码)?孔径|binary-valued\s+aperture", text, flags=re.I)
-        )
+        and not cassi_contract_cited
     ):
-        marker_re = re.compile(rf"\s*\[{cassi_num}\](?!\()")
-        text = marker_re.sub("", text)
         bridge = (
             "CASSI（编码孔径快照光谱成像）的可核验硬件起点是：两个相向布置的色散元件"
             "（two dispersive elements）围绕一个二值编码孔径（binary-valued aperture） "

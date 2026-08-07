@@ -624,6 +624,63 @@ export interface CitationShelfSaveBody extends CitationShelfRequest {
 
 export type ResearchBriefQualityStatus = 'verified' | 'needs_review' | 'draft' | string
 
+export type ResearchBriefLineageStatus =
+  | 'untracked'
+  | 'current'
+  | 'current_equivalent'
+  | 'matrix_updated'
+  | 'matrix_updated_unverified'
+  | 'matrix_unverified'
+  | 'matrix_missing'
+  | 'source_revision_missing'
+  | 'integrity_mismatch'
+  | 'revision_mismatch'
+  | string
+
+export interface ResearchBriefLineageImpact {
+  changed_row_count?: number
+  changed_field_count?: number
+  changed_comparison_count?: number
+  changed_source_count?: number
+  affected_citation_count?: number
+  affected_citation_numbers?: number[]
+  rows?: Array<{
+    row_id: string
+    source_name: string
+    change: string
+    fields: string[]
+  }>
+  comparisons?: Array<{
+    comparison_id: string
+    change: string
+    left_source_name: string
+    right_source_name: string
+  }>
+  sources?: Array<{
+    source_id: string
+    source_name: string
+    change: string
+  }>
+}
+
+export interface ResearchBriefLineage {
+  contract_version: number
+  status: ResearchBriefLineageStatus
+  source_matrix_id: string
+  source_matrix_title: string
+  source_matrix_revision: number
+  current_matrix_revision: number
+  source_matrix_quality_status: string
+  current_matrix_quality_status: string
+  historical_verified: boolean
+  latest_verified: boolean
+  refresh_available: boolean
+  export_allowed: boolean
+  export_mode: string
+  reasons: string[]
+  impact: ResearchBriefLineageImpact
+}
+
 export interface ResearchBriefRecord {
   id: string
   project_id: string
@@ -636,6 +693,7 @@ export interface ResearchBriefRecord {
   agent_trace: Record<string, unknown>
   quality_status: ResearchBriefQualityStatus
   quality: Record<string, unknown>
+  lineage?: ResearchBriefLineage
   revision: number
   created_at: number
   updated_at: number

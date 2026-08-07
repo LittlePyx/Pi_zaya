@@ -74,6 +74,7 @@ type Brief = {
   agent_trace: Record<string, unknown>
   quality_status: string
   quality: Record<string, unknown>
+  lineage?: Record<string, unknown>
   revision: number
   created_at: number
   updated_at: number
@@ -220,8 +221,29 @@ async function installBackend(page: Page) {
             supplemented_source_claims: 0,
           },
           reasons: [],
+          source_matrix_id: VERIFIED_MATRIX.id,
+          source_matrix_title: VERIFIED_MATRIX.title,
+          source_matrix_revision: VERIFIED_MATRIX.revision,
+          source_matrix_quality_status: 'verified',
         },
-        revision: 1,
+        lineage: {
+          contract_version: 1,
+          status: 'current',
+          source_matrix_id: VERIFIED_MATRIX.id,
+          source_matrix_title: VERIFIED_MATRIX.title,
+          source_matrix_revision: VERIFIED_MATRIX.revision,
+          current_matrix_revision: VERIFIED_MATRIX.revision,
+          source_matrix_quality_status: 'verified',
+          current_matrix_quality_status: 'verified',
+          historical_verified: true,
+          latest_verified: true,
+          refresh_available: true,
+          export_allowed: true,
+          export_mode: 'current',
+          reasons: [],
+          impact: {},
+        },
+        revision: Number(generatedPayload.expected_revision || 0) + 1,
         created_at: 10,
         updated_at: 10,
       }
@@ -283,6 +305,49 @@ async function installBackend(page: Page) {
     generatedPayload: () => generatedPayload,
     savedPayload: () => savedPayload,
     exportedFormat: () => exportedFormat,
+    markMatrixUpdated: () => {
+      if (!brief) return
+      brief = {
+        ...brief,
+        quality: {
+          ...brief.quality,
+          source_matrix_revision: 1,
+        },
+        lineage: {
+          contract_version: 1,
+          status: 'matrix_updated',
+          source_matrix_id: VERIFIED_MATRIX.id,
+          source_matrix_title: VERIFIED_MATRIX.title,
+          source_matrix_revision: 1,
+          current_matrix_revision: VERIFIED_MATRIX.revision,
+          source_matrix_quality_status: 'verified',
+          current_matrix_quality_status: 'verified',
+          historical_verified: true,
+          latest_verified: false,
+          refresh_available: true,
+          export_allowed: true,
+          export_mode: 'historical',
+          reasons: ['source_matrix_updated'],
+          impact: {
+            changed_row_count: 1,
+            changed_field_count: 1,
+            changed_comparison_count: 0,
+            changed_source_count: 0,
+            affected_citation_count: 1,
+            affected_citation_numbers: [1],
+            rows: [{
+              row_id: 'row-paper-a',
+              source_name: 'Sparse 3-D transform-domain filtering',
+              change: 'changed',
+              fields: ['key_result'],
+            }],
+            comparisons: [],
+            sources: [],
+          },
+        },
+      }
+      revisions.splice(0, revisions.length, { ...brief })
+    },
   }
 }
 
@@ -329,4 +394,37 @@ test('project basket becomes a versioned, audited, exportable research brief', a
   const download = await downloadPromise
   expect(download.suggestedFilename()).toMatch(/\.md$/)
   expect(backend.exportedFormat()).toBe('markdown')
+})
+
+test('matrix changes keep historical verification visible and update only through the bound matrix', async ({ page }) => {
+  const backend = await installBackend(page)
+  await page.goto(`/?conversation=${CONVERSATION.id}`)
+  await page.getByTestId('citation-shelf-open-research-brief').click()
+  await page.getByTestId('research-brief-new').click()
+  await page.getByTestId('research-brief-title').fill('Lineage-aware brief')
+  await page.getByTestId('research-brief-objective').fill('Keep the brief synchronized with audited evidence.')
+  await page.getByTestId('research-brief-generate').click()
+  await expect(page.getByText('Evidence audit passed')).toBeVisible()
+
+  backend.markMatrixUpdated()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: 'Project research briefs' })).not.toBeVisible()
+  await page.getByTestId('citation-shelf-open-research-brief').click()
+
+  await expect(page.getByTestId('research-brief-lineage-tag')).toHaveText('The upstream evidence matrix changed')
+  await expect(page.getByText('Historical snapshot audit passed')).toBeVisible()
+  await expect(page.getByTestId('research-brief-lineage-impact')).toContainText('1 rows, 1 fields')
+  await expect(page.getByTestId('research-brief-lineage-impact')).toContainText('[1]')
+  await expect(page.getByTestId('research-brief-lineage-impact')).toContainText('key_result')
+  await expect(page.getByTestId('research-brief-source-matrix')).toHaveClass(/ant-select-disabled/)
+  await expect(page.getByTestId('research-brief-generate')).toHaveText('Update from latest matrix')
+
+  await page.getByTestId('research-brief-generate').click()
+  await expect.poll(() => backend.generatedPayload()).toMatchObject({
+    brief_id: 'brief-1',
+    expected_revision: 1,
+    matrix_id: VERIFIED_MATRIX.id,
+  })
+  await expect(page.getByTestId('research-brief-lineage-impact')).not.toBeVisible()
+  await expect(page.getByText('Evidence audit passed')).toBeVisible()
 })

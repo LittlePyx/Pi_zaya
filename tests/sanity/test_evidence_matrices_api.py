@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -201,6 +202,87 @@ def test_research_brief_can_use_only_a_verified_matrix(monkeypatch, tmp_path: Pa
     assert brief["quality_status"] == "verified"
     assert brief["quality"]["source_matrix_id"] == matrix["id"]
     assert brief["quality"]["source_matrix_revision"] == 1
+    assert brief["lineage"]["status"] == "current"
+    assert brief["lineage"]["latest_verified"] is True
+
+    refreshed_rows = deepcopy(rows)
+    refreshed_evidence = deepcopy(evidence)
+    refreshed_rows[0]["cells"]["method"]["value"] = "The method uses a revised coded optical network."
+    refreshed_rows[0]["cells"]["method"]["evidence_ids"] = ["ev-method-r2"]
+    refreshed_evidence[0]["id"] = "ev-method-r2"
+    refreshed_evidence[0]["evidence_quote"] = "The method uses a revised coded optical network."
+    refreshed, conflict = store.update_evidence_matrix(
+        matrix["id"],
+        expected_revision=1,
+        rows=refreshed_rows,
+        evidence=refreshed_evidence,
+        quality_status="verified",
+        quality={"supported_cell_count": 1},
+    )
+    assert conflict is False
+    assert refreshed is not None
+    assert refreshed["revision"] == 2
+
+    stale_brief = client.get(f"/api/research-briefs/{brief['id']}")
+    assert stale_brief.status_code == 200
+    stale_lineage = stale_brief.json()["lineage"]
+    assert stale_lineage["status"] == "matrix_updated"
+    assert stale_lineage["historical_verified"] is True
+    assert stale_lineage["latest_verified"] is False
+    assert stale_lineage["impact"]["changed_field_count"] == 1
+    assert stale_lineage["impact"]["affected_citation_numbers"] == [1]
+
+    historical_export = client.get(f"/api/research-briefs/{brief['id']}/export?format=markdown")
+    assert historical_export.status_code == 200
+    assert "brief source revision: 1" in historical_export.text
+    assert "current matrix revision: 2" in historical_export.text
+    assert "freshness: matrix_updated" in historical_export.text
+
+    regenerated = client.post(
+        f"/api/projects/{project_id}/research-briefs/generate",
+        json={
+            "title": "Matrix brief",
+            "objective": "Compare methods.",
+            "matrix_id": matrix["id"],
+            "brief_id": brief["id"],
+            "expected_revision": 1,
+        },
+    )
+    assert regenerated.status_code == 200
+    regenerated_brief = regenerated.json()
+    assert regenerated_brief["revision"] == 2
+    assert regenerated_brief["quality"]["source_matrix_revision"] == 2
+    assert regenerated_brief["lineage"]["status"] == "current"
+
+    other = store.create_evidence_matrix(
+        project_id=project_id,
+        title="Other verified matrix",
+        rows=refreshed_rows,
+        evidence=refreshed_evidence,
+        source_items=[{"key": "paper-a", "title": "Paper A", "sourcePath": source_path}],
+        quality_status="verified",
+        quality={"supported_cell_count": 1},
+    )
+    assert other is not None
+    switched = client.post(
+        f"/api/projects/{project_id}/research-briefs/generate",
+        json={
+            "title": "Unsafe switch",
+            "matrix_id": other["id"],
+            "brief_id": brief["id"],
+            "expected_revision": 2,
+        },
+    )
+    assert switched.status_code == 400
+    assert "cannot switch evidence matrices" in switched.json()["detail"]
+
+    assert store.delete_evidence_matrix(matrix["id"]) is True
+    missing_lineage = client.get(f"/api/research-briefs/{brief['id']}")
+    assert missing_lineage.status_code == 200
+    assert missing_lineage.json()["lineage"]["status"] == "matrix_missing"
+    blocked_export = client.get(f"/api/research-briefs/{brief['id']}/export?format=markdown")
+    assert blocked_export.status_code == 409
+    assert "lineage cannot be verified" in blocked_export.json()["detail"]
 
     draft = store.create_evidence_matrix(project_id=project_id, title="Draft matrix")
     assert draft is not None

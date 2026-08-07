@@ -5047,6 +5047,34 @@ body.kb-reader-resizing .kb-reader-content {
   color: #d97706;
 }
 
+.kb-research-brief-matrix-lock,
+.kb-research-brief-export-blocked {
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.kb-research-brief-lineage-impact p {
+  margin: 0 0 6px;
+}
+
+.kb-research-brief-lineage-impact p:last-child {
+  margin-bottom: 0;
+}
+
+.kb-research-brief-lineage-impact ul {
+  margin: 4px 0 7px;
+  padding-left: 20px;
+}
+
+.kb-research-brief-lineage-impact li {
+  margin: 2px 0;
+}
+
+.kb-research-brief-export-blocked {
+  max-width: 210px;
+  color: #b91c1c;
+}
+
 .kb-research-brief-textarea {
   min-height: 330px !important;
   resize: vertical;
